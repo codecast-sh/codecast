@@ -695,10 +695,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
                     // inbox's pendingNavigateId watcher resolves them together. Setting them
                     // separately (navigateToSession + a later setState) raced the cache-hit
                     // watcher, which pinned the scroll to the *previous* conversation.
-                    useInboxStore.setState({
-                      pendingNavigateId: bookmark.conversation_id,
-                      pendingScrollToMessageId: bookmark.message_id,
-                    });
+                    store.requestNavigate(bookmark.conversation_id, { scrollToMessageId: bookmark.message_id });
                     const activeTab = store.tabs.find((t: any) => t.id === store.activeTabId);
                     if (activeTab) {
                       store.updateTab(activeTab.id, { path: "/inbox" });

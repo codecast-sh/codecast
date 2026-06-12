@@ -184,7 +184,7 @@ export function NotificationBell() {
       if (base) { router.push(`${base}${entityId}`); setIsOpen(false); return; }
     }
     if (conversationId) {
-      useInboxStore.setState({ pendingNavigateId: conversationId });
+      useInboxStore.getState().requestNavigate(conversationId);
       router.push('/inbox');
     } else {
       router.push('/inbox');

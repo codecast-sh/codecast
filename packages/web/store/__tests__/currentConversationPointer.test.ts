@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { useInboxStore, type InboxSession } from "../inboxStore";
 import { stripStalePointerFromReplay } from "../mutativeMiddleware";
+import { _resetViewNavForTests, declareViewNav } from "../viewNav";
 
 // "Where the user is" lives in two places (see recordCurrentConversationPointer):
 //  - lastFocusedConversationId — THIS client's own position, persisted locally,
@@ -31,6 +32,9 @@ const session = (id: string): InboxSession => ({
 });
 
 function resetStore() {
+  // Fresh view-motion lifetime: the boot-only "adopt" fallback and the
+  // declare-or-revert guard are both module state (see viewNav.ts).
+  _resetViewNavForTests();
   useInboxStore.setState({
     sessions: { convA: session("convA"), convB: session("convB") },
     conversations: {},
@@ -159,6 +163,7 @@ describe("sessions-sync restore fallback", () => {
   });
 
   it("never overrides an existing selection", () => {
+    declareViewNav("gesture"); // raw non-null writes need a declared source
     useInboxStore.setState({
       currentSessionId: "convA",
       lastFocusedConversationId: "convB",

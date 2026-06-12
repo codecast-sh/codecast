@@ -4,6 +4,7 @@ import {
   DISPATCH_TABLE_MAP,
   isProtectedSyncCollection,
 } from "./clientSyncRegistry";
+import { consumeViewNav, noteViewNavApplied, recordNavEvent } from "./viewNav";
 
 type DispatchFn = (action: string, args: any, patches?: any, result?: any) => Promise<any>;
 type IDBWriteFn = (patches: Patch[], state: any) => void;
@@ -91,8 +92,10 @@ function generateAutoPending(
       // Record added to collection → include (keep until server acknowledges)
       if (!result) result = { ...currentPending };
       result[`${storeKey}:${recordId}`] = { type: "include", ts: now };
-    } else if ((patch.op === "replace" || patch.op === "add") && path.length >= 3) {
-      // Field modified on a collection record → protect field value
+    } else if ((patch.op === "replace" || patch.op === "add" || patch.op === "remove") && path.length >= 3) {
+      // Field modified (or cleared — remove op) on a collection record →
+      // protect field value; a cleared field protects as undefined, which
+      // matches the server echo once the null tombstone lands.
       const field = String(path[2]);
       if (!result) result = { ...currentPending };
       result[`${storeKey}:${recordId}:${field}`] = {
@@ -113,9 +116,18 @@ export function groupPatchesByTable(
   const result: Record<string, Record<string, Record<string, any>>> = {};
 
   for (const patch of patches) {
-    if (patch.op !== "replace" && patch.op !== "add") continue;
+    if (patch.op !== "replace" && patch.op !== "add" && patch.op !== "remove") continue;
     const path = patch.path as (string | number)[];
     if (path.length < 1) continue;
+
+    // A cleared field must reach the server as an explicit null tombstone:
+    // mutative encodes `obj.f = undefined` as replace-with-undefined and
+    // `delete obj.f` as a remove op, and sanitizeForConvex drops undefined
+    // keys from the payload — without the null, the clear silently never
+    // syncs (the server-side applyPatches turns null into a field removal).
+    // Field-level removes pass the op gate above; record-level removes
+    // (collection path.length === 2) still fall out at the length checks.
+    const value = patch.value === undefined ? null : patch.value;
 
     const storeKey = String(path[0]);
 
@@ -123,7 +135,7 @@ export function groupPatchesByTable(
     if (fieldMapping && state) {
       result[fieldMapping.table] ??= {};
       result[fieldMapping.table][SINGLETON_KEY] ??= {};
-      result[fieldMapping.table][SINGLETON_KEY][storeKey] = state[storeKey];
+      result[fieldMapping.table][SINGLETON_KEY][storeKey] = state[storeKey] === undefined ? null : state[storeKey];
       continue;
     }
 
@@ -145,12 +157,12 @@ export function groupPatchesByTable(
 
       result[table][docId] ??= {};
       if (nested.length === 0) {
-        result[table][docId][field] = patch.value;
+        result[table][docId][field] = value;
       } else {
         result[table][docId][field] = setNested(
           result[table][docId][field] ?? {},
           nested,
-          patch.value
+          value
         );
       }
     } else {
@@ -159,12 +171,12 @@ export function groupPatchesByTable(
 
       result[table][SINGLETON_KEY] ??= {};
       if (nested.length === 0) {
-        result[table][SINGLETON_KEY][field] = patch.value;
+        result[table][SINGLETON_KEY][field] = value;
       } else {
         result[table][SINGLETON_KEY][field] = setNested(
           result[table][SINGLETON_KEY][field] ?? {},
           nested,
-          patch.value
+          value
         );
       }
     }
@@ -250,6 +262,39 @@ async function dispatchWithRetry(
   }
 }
 
+// The two fields that decide which conversation the user is looking at.
+// Changing either to a different conversation requires a declared
+// ViewNavSource (see viewNav.ts); an undeclared change is reverted and logged
+// instead of applied. Clearing to null is always allowed (it can't teleport
+// anyone) but still audited.
+const VIEW_FIELDS = ["currentSessionId", "pendingNavigateId"] as const;
+type ViewField = (typeof VIEW_FIELDS)[number];
+
+// Shared verdict for both write paths (action patches and raw setState).
+// Returns the fields that must be reverted to their previous values.
+function auditViewWrites(
+  changes: Array<{ field: ViewField; from: string | null; to: string | null }>,
+  actionName: string,
+): ViewField[] {
+  // Consume unconditionally: a token declared by a write that ended up not
+  // changing the view must not linger and authorize a later unrelated write.
+  const source = consumeViewNav();
+  if (changes.length === 0) return [];
+  const revert: ViewField[] = [];
+  for (const { field, from, to } of changes) {
+    if (source) {
+      recordNavEvent({ field, from, to, source });
+      if (field === "currentSessionId") noteViewNavApplied();
+    } else if (to == null) {
+      recordNavEvent({ field, from, to: null, source: `untracked:${actionName}` });
+    } else {
+      recordNavEvent({ field, from, to, source: `untracked:${actionName}`, blocked: "undeclared view change" });
+      revert.push(field);
+    }
+  }
+  return revert;
+}
+
 export function mutativeMiddleware(config: any, opts?: { retryDelays?: number[] }): any {
   const retryDelays = opts?.retryDelays ?? RETRY_DELAYS;
   return (set: any, get: any, api: any) => {
@@ -324,6 +369,19 @@ export function mutativeMiddleware(config: any, opts?: { retryDelays?: number[] 
           }
         }
 
+        // View-motion guard: an undeclared change of the visible conversation
+        // is reverted before it ever renders (see viewNav.ts).
+        const viewChanges = VIEW_FIELDS.filter(
+          (f) => (state as any)[f] !== (finalState as any)[f],
+        ).map((f) => ({ field: f, from: (state as any)[f] ?? null, to: (finalState as any)[f] ?? null }));
+        const revertFields = auditViewWrites(viewChanges, key);
+        if (revertFields.length > 0) {
+          const reverted: Record<string, any> = {};
+          for (const f of revertFields) reverted[f] = (state as any)[f];
+          finalState = { ...finalState, ...reverted };
+          finalPatches = finalPatches.filter((p) => !revertFields.includes(String(p.path[0]) as ViewField));
+        }
+
         set(finalState, true);
 
         if (idbWriteFn && finalPatches.length > 0) {
@@ -389,6 +447,28 @@ export function mutativeMiddleware(config: any, opts?: { retryDelays?: number[] 
     wrapped._dispatch = (action: string, args: any, patches?: any, result?: any) => {
       if (!dispatchFn) return Promise.reject(new Error("Dispatch not wired"));
       return dispatchWithRetry(dispatchFn, action, args, patches, result, dispatchErrorFn, retryDelays);
+    };
+
+    // Police raw setState (writes from outside action()/sync()): the view
+    // fields obey the same declare-or-revert rule as store actions. The
+    // middleware's internal `set` is the pre-wrap reference, so action writes
+    // (already audited via patches above) are not double-counted. Functional
+    // partials are exempt — none touch the view fields; object literals are
+    // the only raw write shape for them in the codebase.
+    const origSetState = api.setState;
+    api.setState = (partial: any, replace?: boolean) => {
+      if (partial && typeof partial === "object") {
+        const prev = get();
+        const touched = VIEW_FIELDS.filter((f) => f in partial && partial[f] !== prev[f]).map(
+          (f) => ({ field: f, from: prev[f] ?? null, to: partial[f] ?? null }),
+        );
+        const revert = auditViewWrites(touched, "setState");
+        if (revert.length > 0) {
+          partial = { ...partial };
+          for (const f of revert) delete partial[f];
+        }
+      }
+      return origSetState(partial, replace);
     };
 
     return wrapped;

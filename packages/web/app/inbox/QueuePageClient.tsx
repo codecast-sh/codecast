@@ -427,9 +427,14 @@ export function QueuePageClient() {
     }
   }, [currentSession?._id, currentSession?.project_path, currentSession?.git_root, currentSession?.agent_type, setCurrentConversation, touchMru]);
 
+  // Machine adoption of a view when none exists. "adopt" is boot-only: the
+  // store rejects it before hydration completes (a live sync racing IDB must
+  // not pick top-of-inbox over the user's restored position) and after any
+  // view has been shown (a mid-session null — e.g. a background stub discard —
+  // must leave the view empty, never teleport to another session).
   useWatchEffect(() => {
     if (currentSessionId || currentSession || showMySessions || viewingDismissedId || pendingInjectId) return;
-    if (sortedSessions.length > 0) setCurrentSession(sortedSessions[0]._id);
+    if (sortedSessions.length > 0) setCurrentSession(sortedSessions[0]._id, "adopt");
   }, [currentSessionId, currentSession, showMySessions, viewingDismissedId, pendingInjectId, sortedSessions, setCurrentSession]);
 
   // Sync URL when current session changes (but not before initial param is resolved)
