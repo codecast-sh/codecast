@@ -72,4 +72,14 @@ crons.interval(
   {}
 );
 
+crons.interval(
+  // pending_api_error flags older than the 48h revive window stop meaning
+  // "current incident" — clear them so the blocked-sessions banner, badges,
+  // and mass-revive selection never count weeks-dead casualties.
+  "sweep stale api-error flags",
+  { hours: 1 },
+  internal.accountSwitch.sweepStaleApiErrorFlags,
+  {}
+);
+
 export default crons;

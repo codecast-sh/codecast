@@ -5,7 +5,7 @@ import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { findConversationByAnyRef } from "./conversationSessionLookup";
 
-async function getAuthenticatedUserId(
+export async function getAuthenticatedUserId(
   ctx: { db: any },
   apiToken?: string
 ): Promise<Id<"users"> | null> {
@@ -157,7 +157,7 @@ export async function updatePendingMessageStatusForDaemon(
 // flips completed→active). Both human sends (sendMessageToSession) and session→
 // session sends (sendSessionMessage) funnel through here so the wake-up rules
 // stay in one place.
-async function enqueuePendingMessage(
+export async function enqueuePendingMessage(
   ctx: { db: any },
   conversation: any,
   fromUserId: Id<"users">,

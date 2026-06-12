@@ -50,6 +50,30 @@ export function resolveAssigneeInfo(
 type SessionAuthor = { name: string; avatar?: string | null } | null;
 
 /**
+ * Is this cached session a TEAMMATE's (injected by viewing/searching), not the
+ * current user's own? The ownership signal is split across the session row and
+ * the conversation meta, and either may be missing — a thin injected row can
+ * carry no user_id at all while conversations[id].is_own (the access resolver's
+ * verdict, written on every view) knows the truth. Every consumer that needs
+ * ownership (author chip, stash/kill semantics) MUST resolve through here;
+ * checking session.user_id alone misses exactly those thin rows.
+ *
+ * Precedence: conv.is_own (definitive) → user_id vs me → source-provided
+ * author_name (team sources null it for own sessions) → assume mine.
+ */
+export function isForeignSession(
+  session: { user_id?: string; author_name?: string | null },
+  conv: { user_id?: string; is_own?: boolean } | null | undefined,
+  myId: string | null | undefined,
+): boolean {
+  if (conv?.is_own === true) return false;
+  if (conv?.is_own === false) return true;
+  const uid = session.user_id ?? conv?.user_id;
+  if (uid && myId) return uid !== myId;
+  return !!session.author_name; // no ownership signal (or "me" unknown) → assume mine
+}
+
+/**
  * Resolve the author of an inbox session FOR DISPLAY — or null when the session
  * is the current user's own (or the author can't be named). The inbox session
  * cache is user-scoped, so a teammate's session only enters it by being OPENED
@@ -78,17 +102,7 @@ export function resolveSessionAuthor(
   teamMembers: Member[] | null | undefined,
 ): SessionAuthor {
   const uid = session.user_id ?? conv?.user_id;
-  const myId = currentUser?._id;
-
-  // Ownership: is_own is the access resolver's verdict — trust it outright.
-  if (conv?.is_own === true) return null;
-  let notMine = conv?.is_own === false;
-  if (!notMine) {
-    if (uid && myId) notMine = uid !== myId;
-    else if (session.author_name) notMine = true; // team sources null author for own sessions
-    else return null; // no ownership signal (or "me" unknown) → assume mine
-  }
-  if (!notMine) return null;
+  if (!isForeignSession(session, conv, currentUser?._id)) return null;
 
   // Display: live roster first (instant rename/avatar), then source fields, then meta.
   const m = uid ? teamMembers?.find((x) => x && x._id === uid) : null;

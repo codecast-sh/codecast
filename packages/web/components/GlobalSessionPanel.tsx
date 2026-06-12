@@ -5,11 +5,13 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useRouter } from "next/navigation";
 import { ConversationDiffLayout } from "./ConversationDiffLayout";
+import { AppLoader } from "./AppLoader";
 import { ConversationData } from "./ConversationView";
 import { FormattedSummary } from "./FormattedSummary";
 import { sessionCardSummary } from "../lib/sessionSummary";
 import { useConversationMessages } from "../hooks/useConversationMessages";
 import { useInboxStore, useTrackedStore, InboxSession, getSessionRenderKey, isConvexId, categorizeSessions, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, isSessionHidden, resolveSessionAuthor, convBucketMap, groupSessionsForLabelView, sortLabels, BucketItem, BucketAssignmentItem } from "../store/inboxStore";
+import { isBlockedConversation, isSubagentConversation } from "@codecast/convex/convex/ccAccountsShared";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
 import { cleanTitle, msgCountColor, formatModel } from "../lib/conversationProcessor";
 import { getLabelColor } from "../lib/labelColors";
@@ -23,7 +25,7 @@ import { toast } from "sonner";
 import { animatedHideSession } from "../store/undoActions";
 import { soundKill } from "../lib/sounds";
 import { formatShortcutLabel } from "../shortcuts";
-import { X, ChevronsLeft, ChevronsRight, List, Clock, Tag } from "lucide-react";
+import { X, ChevronsLeft, ChevronsRight, ChevronRight, List, Clock, Tag, GitFork } from "lucide-react";
 import { LabelChipsRow } from "./LabelChipsRow";
 import { TaskStatusBadge } from "./TaskStatusBadge";
 import { useTipActions, checkMilestone } from "../tips";
@@ -149,15 +151,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
 
   if (!conversation) {
     return (
-      <div className="h-full flex items-center justify-center text-sol-text-dim">
-        <div className="flex items-center gap-2">
-          <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-          </svg>
-          <span className="text-sm">Loading conversation...</span>
-        </div>
-      </div>
+      <AppLoader className="min-h-0 h-full bg-transparent" size={32} />
     );
   }
 
@@ -298,6 +292,10 @@ function ForkCorner({ colorKey }: { colorKey: string }) {
 // — set apart from the plain status dots so a stuck session reads at a glance.
 // Shared by both SessionCard variants.
 function AuthErrorBadge({ kind }: { kind?: string | null }) {
+  // Only the account-is-the-problem kinds get a badge. kind "error" (transient
+  // 529/500 provider failures) self-heals on the next message — badging it
+  // paints a healthy session as blocked.
+  if (kind !== "limit" && kind !== "auth") return null;
   if (kind === "limit") {
     return (
       <span
@@ -322,6 +320,251 @@ function AuthErrorBadge({ kind }: { kind?: string | null }) {
       </svg>
       login
     </span>
+  );
+}
+
+// When several sessions are parked on an API-error banner at once (the classic
+// "the whole fleet hit the Max usage limit together"), surface ONE fleet-level
+// action instead of N per-card errors: nudge them all with "continue" (right
+// after the limit window resets), or switch the machine to another saved CC
+// account and revive them on it. The daemon does the heavy lifting — swaps the
+// keychain credential, recycles the blocked processes (they hold the old
+// account's token in memory), then queues the continues; see
+// convex/accountSwitch.ts. Profiles come from the daemon heartbeat
+// (cast accounts save <name> to create them). Own component so its account
+// query stays out of the hot panel render.
+function BlockedSessionsBanner({
+  blocked,
+  onOpen,
+}: {
+  blocked: InboxSession[];
+  onOpen?: (session: InboxSession) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [includeSubs, setIncludeSubs] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const continueAll = useMutation(api.accountSwitch.continueAllBlocked);
+  const requestSwitch = useMutation(api.accountSwitch.requestAccountSwitch);
+  const acknowledgeMutation = useMutation(api.accountSwitch.acknowledgeBlocked);
+  const router = useRouter();
+  // The X is a durable, cross-device snooze (24h) — a banner that resurrects
+  // on every reload isn't dismissible. Permanent removal is per-session:
+  // acknowledge clears the flag itself.
+  const clientStateInitialized = useInboxStore((st) => st.clientStateInitialized);
+  const snoozedTs = useInboxStore((st) => st.clientState.dismissed?.blocked_sessions_banner ?? 0);
+  const promoDismissed = useInboxStore((st) => st.clientState.dismissed?.cc_accounts_promo ?? false);
+  const updateDismissed = useInboxStore((st) => st.updateClientDismissed);
+  const accountData = useQuery(api.accountSwitch.listAccountProfiles, blocked.length >= 2 ? {} : "skip");
+
+  const snoozed = snoozedTs > 0 && Date.now() - snoozedTs < 24 * 60 * 60 * 1000;
+  if (!clientStateInitialized || blocked.length < 2 || snoozed) return null;
+
+  // Subagent workers default OUT of the acted set: their parent has usually
+  // moved on, so reviving them spends the fresh account on work nobody is
+  // waiting for. Same predicate the server selection uses, so the counts on
+  // the buttons are exactly what the mutations will touch.
+  const subagents = blocked.filter(isSubagentConversation);
+  const acted = includeSubs ? blocked : blocked.filter((sess) => !isSubagentConversation(sess));
+  const authCount = acted.filter((sess) => sess.pending_api_error_kind === "auth").length;
+  const limitCount = acted.length - authCount;
+  // Newest-flagged first — the same order the revive acts on (and the order
+  // that answers "which sessions?" most usefully: fresh casualties on top).
+  const blockedSorted = [...blocked].sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
+
+  // Switch targets: saved profiles that aren't the active account on their
+  // device, deduped by name (the same profile may exist on several machines).
+  const switchTargets: { name: string; email?: string }[] = [];
+  for (const device of accountData?.devices ?? []) {
+    for (const p of device.profiles) {
+      if (p.email && device.active_email && p.email === device.active_email) continue;
+      if (!switchTargets.some((t) => t.name === p.name)) switchTargets.push({ name: p.name, email: p.email });
+    }
+  }
+
+  const handleContinueAll = async () => {
+    setBusy("continue");
+    try {
+      const res = await continueAll({ include_subagents: includeSubs });
+      toast.success(`Queued "continue" to ${res.continued} blocked session${res.continued === 1 ? "" : "s"}`);
+      updateDismissed("blocked_sessions_banner", Date.now());
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to queue continues");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleSwitch = async (profile: string) => {
+    setBusy(profile);
+    try {
+      const res = await requestSwitch({ profile, include_subagents: includeSubs });
+      toast.success(
+        `Switching to "${profile}" — ${res.conversations} blocked session${res.conversations === 1 ? "" : "s"} will restart on it` +
+          (res.unreachable > 0 ? ` (${res.unreachable} unreachable: daemon offline)` : ""),
+      );
+      updateDismissed("blocked_sessions_banner", Date.now());
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Account switch failed");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // The permanent decision: clear the banner flag on these sessions so they
+  // leave the blocked set for good (only a NEW banner re-flags them). Local
+  // store first — the count drops instantly — then one persisting mutation.
+  const handleAcknowledge = async (ids: string[]) => {
+    useInboxStore.getState().markBlockedAcknowledged(ids);
+    try {
+      await acknowledgeMutation({ conversation_ids: ids as any });
+    } catch {
+      // The optimistic clear stands; the next server sync re-flags anything
+      // that genuinely didn't persist.
+    }
+  };
+
+  return (
+    <div className="m-2 rounded-md border border-amber-500/30 bg-amber-500/[0.06] px-3 py-2.5">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <button
+            onClick={() => setExpanded((v) => !v)}
+            className="flex items-center gap-1 text-xs font-semibold text-sol-text hover:text-amber-500 transition-colors"
+            title={expanded ? "Hide the affected sessions" : "Show which sessions are blocked"}
+          >
+            <ChevronRight className={`h-3 w-3 shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`} />
+            {blocked.length} sessions blocked on {authCount > 0 && limitCount === 0 ? "login" : "usage limits"}
+            {subagents.length > 0 && (
+              <span className="font-normal text-sol-text-dim">({subagents.length} subagents)</span>
+            )}
+          </button>
+          <div className="mt-0.5 text-[11px] leading-snug text-sol-text-muted">
+            {limitCount > 0 && <span>{limitCount} hit a usage limit</span>}
+            {limitCount > 0 && authCount > 0 && <span> · </span>}
+            {authCount > 0 && <span>{authCount} signed out</span>}
+            <span>
+              {" "}— continue them all once the limit resets
+              {switchTargets.length > 0 ? ", or switch accounts and resume now" : ""}.
+              {acted.length > 30 ? " Revives run on the 30 most recent per pass." : ""}
+            </span>
+          </div>
+          {subagents.length > 0 && (
+            <label className="mt-1 flex w-fit cursor-pointer items-center gap-1.5 text-[11px] text-sol-text-dim hover:text-sol-text">
+              <input
+                type="checkbox"
+                checked={includeSubs}
+                onChange={(e) => setIncludeSubs(e.target.checked)}
+                className="h-3 w-3 accent-amber-500"
+              />
+              include {subagents.length} subagent worker{subagents.length === 1 ? "" : "s"}
+              <span className="text-sol-text-dim/70">— skipped by default; their parent has likely moved on</span>
+            </label>
+          )}
+        </div>
+        <button
+          onClick={() => updateDismissed("blocked_sessions_banner", Date.now())}
+          className="shrink-0 rounded p-0.5 text-sol-text-dim hover:bg-sol-bg-alt hover:text-sol-text"
+          title="Hide for 24h (use 'Dismiss all permanently' to clear these for good)"
+          aria-label="Snooze this banner"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      {expanded && (
+        <div className="mt-2 max-h-56 overflow-y-auto scrollbar-auto rounded border border-amber-500/15 bg-sol-bg/40 divide-y divide-sol-border/30">
+          {blockedSorted.map((sess) => (
+            <div
+              key={sess._id}
+              className="group flex w-full items-center gap-2 px-2 py-1.5 hover:bg-amber-500/10 transition-colors"
+            >
+              <button
+                onClick={() => onOpen?.(sess)}
+                className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                title="Open this session"
+              >
+                <AuthErrorBadge kind={sess.pending_api_error_kind} />
+                <span className={`min-w-0 flex-1 truncate text-[11px] ${isSubagentConversation(sess) && !includeSubs ? "text-sol-text-dim" : "text-sol-text"}`}>
+                  {cleanTitle(sess.title || "") || "Untitled session"}
+                </span>
+                {isSubagentConversation(sess) && (
+                  <span className="shrink-0 rounded border border-sol-border/50 px-1 text-[9px] text-sol-text-dim" title="Subagent worker — excluded from revive unless included above">
+                    sub
+                  </span>
+                )}
+                <span className="shrink-0 text-[10px] text-sol-text-dim">{getProjectName(sess.git_root, sess.project_path)}</span>
+                <span className="shrink-0 text-[10px] tabular-nums text-sol-text-dim">
+                  {fmtDuration(Date.now() - (sess.updated_at ?? Date.now()))} ago
+                </span>
+              </button>
+              <button
+                onClick={() => handleAcknowledge([sess._id])}
+                className="shrink-0 rounded p-0.5 text-sol-text-dim opacity-0 group-hover:opacity-100 hover:bg-sol-bg-alt hover:text-sol-text transition-opacity"
+                title="Never restart this session — remove it from the blocked set permanently"
+                aria-label="Dismiss this session from the banner permanently"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      {switchTargets.length === 0 && !promoDismissed && accountData !== undefined && (
+        <div className="mt-2 rounded border border-sol-cyan/20 bg-sol-cyan/[0.05] px-2.5 py-2 text-[11px] leading-snug text-sol-text-muted">
+          <span className="font-medium text-sol-text">Tip:</span> save a second Claude account once and
+          next time the limit hits you can switch the whole fleet and revive everything instantly — no
+          waiting for the reset.
+          <div className="mt-1.5 flex items-center gap-2">
+            <button
+              onClick={() => router.push("/settings/claude-accounts")}
+              className="rounded bg-sol-cyan/15 px-2 py-0.5 font-semibold text-sol-cyan hover:bg-sol-cyan/25 transition-colors"
+            >
+              Set up account switching
+            </button>
+            <button
+              onClick={() => updateDismissed("cc_accounts_promo", true)}
+              className="text-sol-text-dim hover:text-sol-text transition-colors"
+            >
+              No thanks
+            </button>
+          </div>
+        </div>
+      )}
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        {acted.length > 0 && switchTargets.map((target) => (
+          <button
+            key={target.name}
+            onClick={() => handleSwitch(target.name)}
+            disabled={busy !== null}
+            title={target.email ? `Switch every new/blocked session to ${target.email}` : undefined}
+            className="rounded bg-amber-500/15 px-2.5 py-1 text-[11px] font-semibold text-amber-500 transition-colors hover:bg-amber-500/25 disabled:opacity-60"
+          >
+            {busy === target.name ? "Switching…" : `Switch to ${target.name} & continue ${acted.length}`}
+          </button>
+        ))}
+        {limitCount > 0 && (
+          <button
+            onClick={handleContinueAll}
+            disabled={busy !== null}
+            title="Send 'continue' to each blocked session (no account change)"
+            className={`rounded px-2.5 py-1 text-[11px] font-semibold transition-colors disabled:opacity-60 ${
+              switchTargets.length > 0
+                ? "text-sol-text-dim hover:text-sol-text"
+                : "bg-amber-500/15 text-amber-500 hover:bg-amber-500/25"
+            }`}
+          >
+            {busy === "continue" ? "Queueing…" : `Continue all ${limitCount}`}
+          </button>
+        )}
+        <button
+          onClick={() => handleAcknowledge(blocked.map((sess) => sess._id))}
+          disabled={busy !== null}
+          title="Never restart these — clear all of them from the blocked set permanently"
+          className="ml-auto rounded px-2 py-1 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors disabled:opacity-60"
+        >
+          Dismiss all {blocked.length} permanently
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -563,9 +806,11 @@ export const SessionCard = memo(function SessionCard({
               ? "bg-sol-cyan/[0.10] border-l border-l-sol-cyan/40"
               : isWorking
                 ? "hover:bg-violet-500/[0.06] border-l border-l-violet-400/25"
-                : isDismissed
-                  ? "opacity-40 hover:opacity-60 hover:bg-violet-500/[0.04]"
-                  : "hover:bg-violet-500/[0.06] border-l border-l-violet-500/15"
+                : isStashed
+                  ? "opacity-75 hover:opacity-100 hover:bg-violet-500/[0.04]"
+                  : isDismissed
+                    ? "opacity-40 hover:opacity-60 hover:bg-violet-500/[0.04]"
+                    : "hover:bg-violet-500/[0.06] border-l border-l-violet-500/15"
         }`}
       >
         {forkColorKey && <ForkCorner colorKey={forkColorKey} />}
@@ -682,9 +927,11 @@ export const SessionCard = memo(function SessionCard({
           ? "bg-sol-cyan/15 border-l-[3px] border-l-sol-cyan shadow-[inset_0_0_16px_rgba(42,161,152,0.12)]"
           : isWorking
             ? "bg-sol-green/[0.04] border-l-2 border-l-sol-green/40 hover:bg-sol-green/[0.08]"
-            : isDismissed
-              ? "opacity-60 hover:opacity-80 hover:bg-sol-bg-alt/80"
-              : "hover:bg-sol-bg-alt/80"
+            : isStashed
+              ? "opacity-85 hover:opacity-100 hover:bg-sol-bg-alt/80"
+              : isDismissed
+                ? "opacity-60 hover:opacity-80 hover:bg-sol-bg-alt/80"
+                : "hover:bg-sol-bg-alt/80"
       }`}
     >
       {forkColorKey && <ForkCorner colorKey={forkColorKey} />}
@@ -696,7 +943,7 @@ export const SessionCard = memo(function SessionCard({
         className="w-full text-left cursor-pointer px-2.5 sm:px-3 py-1.5 sm:py-2"
       >
         <div className={`flex items-center gap-1.5 leading-tight ${
-          isActive ? "text-sm text-sol-text font-semibold" : isWorking ? "text-sm text-sol-text font-medium" : isDismissed ? "text-sm text-sol-text-muted" : "text-sm text-sol-text"
+          isActive ? "text-sm text-sol-text font-semibold" : isWorking ? "text-sm text-sol-text font-medium" : isStashed ? "text-sm text-sol-text" : isDismissed ? "text-sm text-sol-text-muted" : "text-sm text-sol-text"
         }`}>
           <span className="truncate">{isSlashCommand ? <span className="font-mono text-sol-cyan">{displayTitle}</span> : displayTitle}</span>
         </div>
@@ -950,7 +1197,7 @@ export const SessionCard = memo(function SessionCard({
                     </svg>
                   </button>
                 </TooltipTrigger>
-                <TooltipContent side="left">{isStashed ? `Dismiss (${formatShortcutLabel('session.dismiss')})` : "Kill"}</TooltipContent>
+                <TooltipContent side="left">{isStashed ? `Kill (${formatShortcutLabel('session.kill')})` : "Remove from list"}</TooltipContent>
               </Tooltip>
             </TooltipProvider>
           )}
@@ -1242,7 +1489,6 @@ export function SessionListPanel({
     );
     return filtered.sort((a, b) => (b.inbox_stashed_at || b.updated_at || 0) - (a.inbox_stashed_at || a.updated_at || 0));
   }, [filterByChip, stashedList]);
-  const filteredCount = filteredPinned.length + filteredNew.length + filteredNeedsInput.length + filteredWorking.length;
 
   // Stale working set: EVERY non-hidden session untouched for >30d, minus
   // pinned (explicit keep) and the one you're viewing. Stashed sessions are an
@@ -1265,6 +1511,21 @@ export function SessionListPanel({
   const [dismissingStale, setDismissingStale] = useState(false);
   const dismissStaleMutation = useMutation(api.conversations.dismissStaleInboxSessions);
   const showStalePrompt = staleSessions.length > STALE_PROMPT_THRESHOLD && !stalePromptSnoozed;
+
+  // Sessions parked on a limit/auth banner — the fleet-level revive banner's
+  // input. isBlockedConversation is the SAME predicate the server selection
+  // uses (limit/auth kinds only — transient 500s never count — claude only,
+  // dismissed excluded), plus the same 48h window, so the count shown always
+  // matches what a revive would act on.
+  const blockedSessions = useMemo(() => {
+    const since = Date.now() - 48 * 60 * 60 * 1000;
+    return (Object.values(s.sessions) as InboxSession[]).filter(
+      (sess) =>
+        isBlockedConversation({ ...sess, agent_type: sess.agent_type ?? "claude_code" }) &&
+        !isSessionHidden(sess) &&
+        (sess.updated_at ?? 0) > since,
+    );
+  }, [s.sessions]);
 
   const handleDismissStale = useCallback(async () => {
     const ids = staleSessions.map((sess) => sess._id);
@@ -1310,7 +1571,6 @@ export function SessionListPanel({
     list.sort((a, b) => (b.started_at ?? b.updated_at ?? 0) - (a.started_at ?? a.updated_at ?? 0));
     return filterByChip(list);
   }, [sortedSessions, filterByChip, showSubagents, globalSubByParent, activeSessionId]);
-  const headerCount = flatView ? flatByCreation.length : ((s.activeProjectFilter || s.activeBucketFilter) ? filteredCount : activeSessions.length);
   const totalSubagentCount = useMemo(() => {
     let count = 0;
     for (const subs of globalSubByParent.values()) count += subs.length;
@@ -1342,6 +1602,12 @@ export function SessionListPanel({
       toast.error("Session is still being created — try again in a moment");
       return;
     }
+    // A label mid-create (optimistic stub) can't take assignments yet — the
+    // server row supersedes the stub within ~a second.
+    if (bucketId && !isConvexId(bucketId)) {
+      toast.error("Label is still syncing — try again in a moment");
+      return;
+    }
     store.assignSessionToBucket(real, bucketId);
     if (bucketId) {
       const name = store.buckets[bucketId]?.name;
@@ -1361,11 +1627,32 @@ export function SessionListPanel({
   const handleAnimatedStash = useCallback((id: string) => {
     animatedHideSession(id, "stash");
   }, []);
-  // On a stashed card the destructive slot dismisses (server kills the agent on
-  // the transition) — the row moves down into Dismissed.
-  const handleDismissStashed = useCallback((id: string) => {
-    animatedHideSession(id, "dismiss");
+  // On a stashed card the destructive slot kills (server tears the agent down
+  // on the transition) — the row moves down into Killed.
+  const handleKillStashed = useCallback((id: string) => {
+    animatedHideSession(id, "kill");
   }, []);
+  // "Kill all" on the Stashed header — two-step confirm (arm, then fire within
+  // 3s) since it tears down every stashed agent at once. Kills the top-level
+  // rows (each stamps its own children) plus any stashed child whose parent
+  // isn't stashed, so nothing in the bucket survives.
+  const [killAllArmed, setKillAllArmed] = useState(false);
+  const killAllTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleKillAllStashed = useCallback(() => {
+    if (killAllTimerRef.current) clearTimeout(killAllTimerRef.current);
+    if (!killAllArmed) {
+      setKillAllArmed(true);
+      killAllTimerRef.current = setTimeout(() => setKillAllArmed(false), 3000);
+      return;
+    }
+    setKillAllArmed(false);
+    const stashedIds = new Set(filteredStashed.map((sess) => sess._id));
+    const ids = filteredStashed
+      .filter((sess) => !sess.parent_conversation_id || !stashedIds.has(sess.parent_conversation_id))
+      .map((sess) => sess._id);
+    useInboxStore.getState().killSessions(ids);
+    toast.success(`Killed ${ids.length} stashed session${ids.length === 1 ? "" : "s"}`);
+  }, [killAllArmed, filteredStashed]);
 
   // Auto-scroll to active session, retrying when sessions load and revealing hidden sections
   useWatchEffect(() => {
@@ -1406,21 +1693,22 @@ export function SessionListPanel({
         return;
       }
     }
-    if (inList(filteredStashed) && s.clientState.show_stashed === false) {
+    if (inList(filteredStashed) && s.clientState.show_stashed !== true) {
       s.toggleShowStashed();
       return;
     }
-    if (inList(filteredDismissed) && s.clientState.show_dismissed === false) {
+    if (inList(filteredDismissed) && s.clientState.show_dismissed !== true) {
       s.toggleShowDismissed();
     }
   }, [activeSessionId, sortedSessions, s.collapsedSections, s.clientState.show_dismissed, s.clientState.show_stashed, viewMode]);
 
   // Shared renderer for the two hidden buckets at the bottom of the list —
-  // Stashed (set aside, agent alive) above Dismissed (retired, agent killed).
+  // Stashed (set aside, agent alive) above Killed (retired, agent torn down;
+  // the persisted flag keeps its historical name inbox_dismissed_at).
   // Identical chrome; they differ only in the destructive slot: a stashed card
-  // dismisses (moves down a bucket), a dismissed card kills/removes outright.
-  // Stashed hides itself entirely when empty; Dismissed always shows (existing
-  // behavior — it doubles as the "where did my session go" affordance).
+  // kills (moves down a bucket), a killed card's X removes the row outright.
+  // Both hide entirely when empty and render COLLAPSED by default — the
+  // auto-reveal effect above opens one only when the active session is inside.
   const renderHiddenBucket = (opts: {
     label: string;
     items: InboxSession[];
@@ -1428,9 +1716,10 @@ export function SessionListPanel({
     onToggle: () => void;
     variant: "stashed" | "dismissed";
     onKill: (id: string) => void;
+    headerAction?: React.ReactNode;
   }) => {
-    const { label, items, expanded, onToggle, variant, onKill } = opts;
-    if (variant === "stashed" && items.length === 0) return null;
+    const { label, items, expanded, onToggle, variant, onKill, headerAction } = opts;
+    if (items.length === 0) return null;
     const allIds = new Set(items.map((sess) => sess._id));
     const subMap = new Map<string, InboxSession[]>();
     for (const sess of items) {
@@ -1448,17 +1737,20 @@ export function SessionListPanel({
     const topLevel = items.filter((sess) => !subsWithParent.has(sess._id) && !orphanedSub(sess));
     return (
       <div className="border-t border-sol-border/30">
-        <button
-          onClick={onToggle}
-          className="w-full px-3 py-1.5 bg-sol-bg border-b border-sol-border/30 flex items-center justify-between"
-        >
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-sol-text-dim">
-            {label}{items.length > 0 ? ` (${items.length})` : ""}
-          </span>
-          <svg className={`w-3 h-3 transition-transform text-sol-text-dim ${expanded ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-          </svg>
-        </button>
+        <div className="w-full bg-sol-bg border-b border-sol-border/30 flex items-center">
+          <button
+            onClick={onToggle}
+            className="flex-1 min-w-0 px-3 py-1.5 flex items-center justify-between"
+          >
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-sol-text-dim">
+              {label}{items.length > 0 ? ` (${items.length})` : ""}
+            </span>
+            <svg className={`w-3 h-3 transition-transform text-sol-text-dim ${expanded ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+          {headerAction}
+        </div>
         {expanded && topLevel.length > 0 && (
           <div>
             {topLevel.map((session) => (
@@ -1623,9 +1915,6 @@ export function SessionListPanel({
   return (
     <div className="h-full w-full flex flex-col bg-sol-bg-alt overflow-hidden">
       <div className="px-3 py-0.5 sm:py-1 border-b border-sol-border/50 flex-shrink-0 flex items-center gap-2 min-h-[31px] min-w-0">
-        <span className="text-xs font-medium text-sol-text-dim uppercase tracking-wide flex-shrink-0">
-          {headerCount} Session{headerCount !== 1 ? "s" : ""}
-        </span>
         <LabelChipsRow
           bucketCounts={bucketCounts}
           projectCounts={projectCounts}
@@ -1659,14 +1948,14 @@ export function SessionListPanel({
           {totalSubagentCount > 0 && (
             <button
               onClick={() => s.updateClientUI({ show_subagents: !showSubagents })}
-              title={showSubagents ? "Hide subagent sessions" : "Show subagent sessions"}
-              className={`px-1.5 py-0.5 rounded-md text-[10px] tabular-nums whitespace-nowrap transition-colors border ${
+              title={showSubagents ? `Hide ${totalSubagentCount} subagent sessions` : `Show ${totalSubagentCount} subagent sessions`}
+              className={`px-1.5 py-[3px] rounded-md transition-colors border ${
                 showSubagents
                   ? "text-sol-text-dim border-sol-border/40 bg-sol-bg/70 hover:text-sol-text"
                   : "text-sol-text-dim/60 border-transparent hover:text-sol-text hover:border-sol-border/40"
               }`}
             >
-              {totalSubagentCount} sub
+              <GitFork className="w-3 h-3" />
             </button>
           )}
           {s.hiddenSessionCount > 0 && (
@@ -1685,6 +1974,7 @@ export function SessionListPanel({
         </div>
       </div>
       <div ref={scrollContainerRef} className="flex-1 overflow-y-auto scrollbar-auto">
+        <BlockedSessionsBanner blocked={blockedSessions} onOpen={handleSelect} />
         {showStalePrompt && (
           <div className="m-2 rounded-md border border-sol-yellow/30 bg-sol-yellow/[0.06] px-3 py-2.5">
             <div className="flex items-start justify-between gap-2">
@@ -1798,15 +2088,28 @@ export function SessionListPanel({
         {renderHiddenBucket({
           label: "Stashed",
           items: filteredStashed,
-          expanded: s.clientState.show_stashed !== false,
+          expanded: s.clientState.show_stashed === true,
           onToggle: s.toggleShowStashed,
           variant: "stashed",
-          onKill: handleDismissStashed,
+          onKill: handleKillStashed,
+          headerAction: (
+            <button
+              onClick={handleKillAllStashed}
+              className={`mr-2 px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider transition-colors shrink-0 ${
+                killAllArmed
+                  ? "text-sol-bg bg-sol-red hover:bg-sol-red/90"
+                  : "text-sol-text-dim hover:text-sol-red hover:bg-sol-red/10"
+              }`}
+              title="Kill every stashed session"
+            >
+              {killAllArmed ? `kill ${filteredStashed.length}?` : "kill all"}
+            </button>
+          ),
         })}
         {renderHiddenBucket({
-          label: "Dismissed",
+          label: "Killed",
           items: filteredDismissed,
-          expanded: s.clientState.show_dismissed !== false,
+          expanded: s.clientState.show_dismissed === true,
           onToggle: s.toggleShowDismissed,
           variant: "dismissed",
           onKill: handleKillDismissed,

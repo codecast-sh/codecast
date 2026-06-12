@@ -218,6 +218,20 @@ export class SyncService {
     this.apiToken = token;
   }
 
+  // Enqueue a user-authored message onto a conversation's delivery rail (the
+  // same pending_messages path the web composer uses). The daemon calls this
+  // after switch_account recycles a blocked session: the pending message is
+  // what triggers the auto-resume that adopts the freshly swapped credential.
+  async enqueueUserMessage(conversationId: string, content: string, clientId?: string): Promise<void> {
+    await this.throttle();
+    await this.client.mutation("pendingMessages:sendMessageToSession" as any, {
+      conversation_id: conversationId,
+      content,
+      client_id: clientId,
+      api_token: this.apiToken,
+    });
+  }
+
   private async existingMessageUuids(conversationId: string, messageUuids: string[]): Promise<Set<string> | null> {
     if (messageUuids.length === 0) return new Set();
     await this.throttle();
@@ -974,7 +988,7 @@ export class SyncService {
     }
   }
 
-  async getProjectInfo(conversationId: string): Promise<{ project_path: string | null; git_root: string | null; git_remote_url: string | null } | null> {
+  async getProjectInfo(conversationId: string): Promise<{ project_path: string | null; git_root: string | null; git_remote_url: string | null; effort: string | null } | null> {
     try {
       const result = await this.client.query("conversations:getProjectInfo" as any, {
         conversation_id: conversationId,
@@ -985,6 +999,7 @@ export class SyncService {
         project_path: result.project_path ?? null,
         git_root: result.git_root ?? null,
         git_remote_url: result.git_remote_url ?? null,
+        effort: result.effort ?? null,
       };
     } catch (error) {
       if (isAuthError(error)) throw new AuthExpiredError();
