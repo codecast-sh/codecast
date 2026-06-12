@@ -60,6 +60,7 @@ import {
   CLAUDE_UUID_RE,
   chooseClaudeAutoTrim,
   combineClaudeResumeFlags,
+  copyJsonlAsSession,
   extractJsonlPermissionMode,
   isForkArtifactSessionId,
   removeForkArtifactJsonl,
@@ -1513,14 +1514,14 @@ async function executeRemoteCommand(
   // races the owner — e.g. after a move-to-remote the local daemon would resume a
   // local copy and answer in parallel with the remote (split-brain). An OFFLINE
   // owner does NOT skip, so this daemon can reclaim a session whose owner died.
-  const SESSION_COMMANDS = new Set(["resume_session", "kill_session", "send_keys", "escape", "rewind"]);
+  const SESSION_COMMANDS = new Set(["resume_session", "fork_session", "kill_session", "send_keys", "escape", "rewind"]);
   if (SESSION_COMMANDS.has(command) && commandArgs && syncServiceRef) {
     try {
       const convId = JSON.parse(commandArgs)?.conversation_id;
       if (convId) {
         const info = await syncServiceRef.getConversationOwnerInfo(convId);
         if (ownedByAnotherLiveDevice(info)) {
-          log(`[OWNER] skipping ${command} for ${String(convId).slice(0, 12)} — owned by live device ${info.ownerDeviceId.slice(0, 8)}${info.ownerIsRemote ? " (remote)" : ""} (not ${deviceId().slice(0, 8)})`);
+          log(`[OWNER] skipping ${command} for ${String(convId).slice(0, 12)} — owned by live device ${info?.ownerDeviceId.slice(0, 8)}${info?.ownerIsRemote ? " (remote)" : ""} (not ${deviceId().slice(0, 8)})`);
           return; // leave the command for the owner device
         }
       }
@@ -2294,7 +2295,12 @@ async function executeRemoteCommand(
 
         const cache = readConversationCache();
         const reverse = buildReverseConversationCache(cache);
-        const sessionId = reverse[conversationId];
+        // The command can carry the session_id (from the conversation row, or the
+        // client's cached copy of a deleted row) — fall back to it when the local
+        // conversation cache has no mapping (remapped or ghost conversations).
+        const sessionId =
+          reverse[conversationId] ??
+          (typeof parsed.session_id === "string" && parsed.session_id ? parsed.session_id : undefined);
         if (sessionId && !result) {
           const proc = await findSessionProcess(sessionId, detectSessionAgentType(sessionId));
           if (proc) {
@@ -2387,6 +2393,11 @@ async function executeRemoteCommand(
         if (!result) result = sessionId ? "no_process" : "no_session";
         break;
       }
+      // fork_session = resume_session whose JSONL is materialized by the fork
+      // fast path (parsed.fork_fast_path) before the normal resume pipeline
+      // runs. A separate command name only for backward compat: daemons that
+      // predate the fast path must no-op it, not resume-and-reconstitute.
+      case "fork_session":
       case "resume_session": {
         const parsed = commandArgs ? JSON.parse(commandArgs) : {};
         const sessionId = parsed.session_id;
@@ -2436,6 +2447,47 @@ async function executeRemoteCommand(
               break;
             }
             conversationResumeFailures.delete(conversationId);
+          }
+        }
+        // Fork fast path: materialize the new session's JSONL by copying the
+        // parent's local transcript (byte-stable message content → Claude's
+        // prompt cache stays warm), then let the normal resume pipeline take
+        // it from there. Emitted by forkFromMessage the moment the fork is
+        // created — the server-side message copy runs in parallel.
+        if (parsed.fork_fast_path && parsed.parent_session_id && parsed.parent_session_id !== sessionId
+            && !findSessionFile(sessionId)) {
+          let copied = false;
+          const parentFile = findSessionFile(parsed.parent_session_id);
+          if (parentFile && parentFile.agentType === "claude") {
+            try {
+              const newPath = copyJsonlAsSession(parentFile.path, parsed.parent_session_id, sessionId);
+              if (newPath) {
+                // The server copy populates the fork conversation; start the
+                // watcher at EOF so the copied history isn't re-ingested.
+                setPosition(newPath, fs.statSync(newPath).size);
+                // Map session → conversation BEFORE the watcher can see the
+                // file, or it mints a doppelgänger conversation for it.
+                if (conversationId) {
+                  const cache = readConversationCache();
+                  cache[sessionId] = conversationId;
+                  saveConversationCache(cache);
+                  if (conversationCacheRef) conversationCacheRef[sessionId] = conversationId;
+                }
+                copied = true;
+                log(`[REMOTE] Fork fast path: copied parent JSONL ${parsed.parent_session_id.slice(0, 8)} → ${sessionId.slice(0, 8)}`);
+              }
+            } catch (copyErr) {
+              log(`[REMOTE] Fork fast path copy failed for ${sessionId.slice(0, 8)}: ${copyErr instanceof Error ? copyErr.message : String(copyErr)}`);
+            }
+          }
+          if (!copied && parsed.fork_fast_path_strict) {
+            // Parent transcript isn't on this machine. Do NOT fall through to
+            // reconstitution — the server-side message copy may still be in
+            // flight and would rebuild a truncated history. The deferred
+            // command emitted at copy completion handles this fork instead.
+            log(`[REMOTE] Fork fast path unavailable for ${sessionId.slice(0, 8)} (no local parent transcript), deferring to post-copy resume`);
+            result = JSON.stringify({ skipped: true, reason: "fork_fast_path_unavailable" });
+            break;
           }
         }
         restartingSessionIds.set(sessionId, Date.now());
@@ -5895,14 +5947,42 @@ const CHECKBOX_PREFIX = /^\s*(?:\[[ xX*✓✔·]?\]|[□☐☑☒▢▣◻◼◽
 // that must not be scraped as its description.
 const SYNTHETIC_OPTION = /^(?:type something\.?|chat about this)$/i;
 
-// Key-hint footer of a real interactive dialog ("Enter to select · ↑/↓ to navigate ·
-// Esc to cancel"). Arrow hints must be the paired ↑/↓ (or ←/→) form: a loose ↑.*↓
-// scan matches anything from prose to a git ahead/behind statusline, and is how a
-// plain numbered answer once shipped as a poll card.
-const MENU_FOOTER_HINTS = /enter to (confirm|select)|esc(ape)? to (exit|cancel)|↑\s*\/?\s*↓|←\s*\/?\s*→|arrow keys|(?:press\s+)?n\s+to\s+add\s+notes/i;
-// Markers of the idle composer's hint bar — by the time one of these is on screen
+// Key-hint rows of a real interactive dialog footer ("Enter to select · ↑/↓ to
+// navigate · Esc to cancel"). A row qualifies only on a STRONG hint or two weaker
+// ones together: these sessions talk ABOUT terminal UIs, so prose like "←/→ to
+// move between chips" or a lone "Esc to cancel" spec line is routine conversation
+// content, and a loose any-hint scan is how numbered prose answers became poll
+// cards (conv jx795ez, then again conv jx730d3).
+const FOOTER_HINT_STRONG = /enter to (confirm|select)|(?:press\s+)?n\s+to\s+add\s+notes|[↑↓]\s*\/\s*[↑↓]\s*to\s+(navigate|select|choose)|arrow keys to (navigate|select|choose)/i;
+const FOOTER_HINT_WEAK = [/↑\s*\/?\s*↓/, /←\s*\/?\s*→/, /esc(ape)?\s+to\s+(exit|cancel)/i, /tab to switch/i, /arrow keys/i];
+function isMenuFooterRow(line: string): boolean {
+  if (FOOTER_HINT_STRONG.test(line)) return true;
+  let weak = 0;
+  for (const atom of FOOTER_HINT_WEAK) if (atom.test(line)) weak++;
+  return weak >= 2;
+}
+// Markers of the composer's hint bar — by the time one of these is on screen
 // below the "options", we're looking at the prompt area, not a blocking dialog.
-const COMPOSER_BAR = /\?\s+for shortcuts|shift\+tab to cycle|bypass permissions|accept edits on|plan mode on/i;
+const COMPOSER_BAR = /\?\s+for shortcuts|shift\+tab to cycle|bypass permissions|accept edits on|plan mode on|esc to interrupt/i;
+// Rows that exist only while the agent UI is LIVE and unblocked: the working
+// spinner ("✢ Actualizing… (3m 6s · …)" — flush-left glyph) and the composer
+// caret ("❯" bare or with a typed draft). A blocking dialog REPLACES the composer
+// and spinner, so any of these BELOW a candidate menu is structural proof the
+// "menu" is scrolled conversation content, not a live dialog. The caret regex
+// exempts "❯ 1." cursor-on-option rows and the cursor parked on a synthetic row.
+const SPINNER_ROW = /^[✻✶✢✳✽·]\s+\S/;
+const COMPOSER_CARET_ROW = /^\s?❯(?!\s*\d+[.)]\s)(?!\s*(?:Chat about this|Type something))/;
+
+// True when any live-composer row sits below `fromIdx` — the pane is not blocked
+// on a dialog there. Box-art rows are skipped (a dialog's right-hand preview box
+// can contain arbitrary text, including hint-like glyphs).
+function liveComposerBelow(lines: string[], fromIdx: number): boolean {
+  for (let i = fromIdx + 1; i < lines.length; i++) {
+    if (BOX_DRAWING_CHARS.test(lines[i])) continue;
+    if (COMPOSER_BAR.test(lines[i]) || SPINNER_ROW.test(lines[i]) || COMPOSER_CARET_ROW.test(lines[i])) return true;
+  }
+  return false;
+}
 
 // A real menu's footer renders inside the dialog, below the options, separated only
 // by dialog chrome: blank rows, rules, the right-hand preview's box art, indented
@@ -5915,7 +5995,7 @@ const COMPOSER_BAR = /\?\s+for shortcuts|shift\+tab to cycle|bypass permissions|
 export function menuFooterBelowOptions(lines: string[], lastOptionIdx: number): boolean {
   for (let i = lastOptionIdx + 1, cap = Math.min(lines.length, lastOptionIdx + 41); i < cap; i++) {
     if (COMPOSER_BAR.test(lines[i])) return false;
-    if (MENU_FOOTER_HINTS.test(lines[i])) return true;
+    if (isMenuFooterRow(lines[i])) return true;
     const trimmed = lines[i].trim();
     if (!trimmed) continue;
     const dialogish = SEPARATOR_LINE.test(trimmed) || BOX_DRAWING_CHARS.test(lines[i])
@@ -6018,7 +6098,11 @@ export function parseInteractivePrompt(text: string): InteractivePrompt | null {
     }
   }
 
-  if (options.length >= 2 && firstOptionIdx >= 0) {
+  // Structural gate for both paths: a live composer/spinner below the candidate
+  // proves the pane is NOT blocked on a dialog — the "menu"/"hint" is scrolled
+  // conversation content. Content checks alone can't make this call (prose here
+  // routinely contains literal key-hint text).
+  if (options.length >= 2 && firstOptionIdx >= 0 && !liveComposerBelow(lines, lastOptionIdx)) {
     const hasFooter = menuFooterBelowOptions(lines, lastOptionIdx);
     if (hasCursorIndicator || hasFooter) {
       const { header, question } = extractPromptHeading(lines, firstOptionIdx);
@@ -6027,13 +6111,27 @@ export function parseInteractivePrompt(text: string): InteractivePrompt | null {
   }
 
   // Detect confirmation prompts: "Press Enter to continue..." / "Esc to cancel"
-  const joined = lines.slice(-15).join("\n");
+  const tailLines = lines.slice(-15);
+  const joined = tailLines.join("\n");
   const enterMatch = joined.match(/(?:press\s+)?enter\s+to\s+(continue|confirm|proceed|accept)[\s.…]*/i);
   const escMatch = joined.match(/esc(?:ape)?\s+to\s+(cancel|exit|quit|go back)[\s.…]*/i);
-  if (enterMatch) {
-    const contextLines = lines.filter(l => l.trim().length > 0).slice(-8);
-    const headerLine = contextLines.find(l => !/(press|enter|esc|─|━)/i.test(l) && l.trim().length > 5);
-    const question = headerLine?.trim() || "Continue?";
+  if (enterMatch && !tailLines.some(l => COMPOSER_BAR.test(l) || SPINNER_ROW.test(l) || COMPOSER_CARET_ROW.test(l))) {
+    // Question extraction: real interstitials (the usage-limit dialog, trust
+    // prompts) draw a rule as their top edge with the question right below it.
+    // Search only BELOW the last rule in the tail — the old "topmost non-hint
+    // line of the tail" reached above the dialog and shipped unrelated prose
+    // fragments ("singleton merge implementation:") as the card's question.
+    // Two-column dialog rows are flattened by capture-pane, so keep only the
+    // left column (3+ spaces = column gap), and strip bullet/box glyphs.
+    const ruleIdx = tailLines.reduce((acc, l, i) => (/[─━═▔▁]{5,}/.test(l) ? i : acc), -1);
+    let question = "Continue?";
+    for (const raw of tailLines.slice(ruleIdx + 1)) {
+      if (/press|enter|esc/i.test(raw)) continue;     // key-hint rows
+      if (/^\s*[❯>]\s/.test(raw)) continue;           // selection-cursor option rows
+      const cleaned = raw.replace(/[─-╿▔▁]/g, " ").replace(/^\s*[⏺●]\s*/, "")
+        .trim().split(/\s{3,}/)[0]?.trim() ?? "";
+      if (cleaned.length > 5) { question = cleaned; break; }
+    }
     const confirmOptions: Array<{ label: string; description?: string }> = [
       { label: `Continue (${enterMatch[1]})` },
     ];
@@ -8110,6 +8208,10 @@ async function flushManagedHeartbeats(): Promise<void> {
 }
 
 async function runHeartbeatFlush(): Promise<void> {
+  // Capture once so the non-null narrowing holds across the awaits below
+  // (a module-level `let` would re-widen to `SyncService | null` after each).
+  const sync = syncServiceRef;
+  if (!sync) return;
   const ids = [...managedHeartbeatSessions];
   const flushTick = heartbeatFlushCount++;
   const now = Date.now();
@@ -8126,7 +8228,7 @@ async function runHeartbeatFlush(): Promise<void> {
   const batchCount = Math.ceil(payload.length / HEARTBEAT_BATCH_SIZE);
   for (let i = 0; i < payload.length; i += HEARTBEAT_BATCH_SIZE) {
     try {
-      await syncServiceRef.heartbeatManagedSessionsBatch(payload.slice(i, i + HEARTBEAT_BATCH_SIZE));
+      await sync.heartbeatManagedSessionsBatch(payload.slice(i, i + HEARTBEAT_BATCH_SIZE));
     } catch {}
   }
   // One line/tick to confirm the fleet flushes in a handful of transactions
@@ -8141,7 +8243,7 @@ async function runHeartbeatFlush(): Promise<void> {
   const phase = flushTick % HEALTH_CHECK_EVERY_N_HEARTBEATS;
   const due = ids.filter((id) => heartbeatHealthCheckBucket(id, HEALTH_CHECK_EVERY_N_HEARTBEATS) === phase);
   for (const sessionId of due) {
-    try { reconcileStatusFromTranscript(sessionId, syncServiceRef); } catch {}
+    try { reconcileStatusFromTranscript(sessionId, sync); } catch {}
   }
   await runBounded(due, 5, (sessionId) => heartbeatHealthCheck(sessionId).catch(() => {}));
 
@@ -9934,7 +10036,7 @@ async function deliverMessage(
   try {
     const ownerInfo = await syncService.getConversationOwnerInfo(conversationId);
     if (ownedByAnotherLiveDevice(ownerInfo)) {
-      logDelivery(`[OWNER] skipping delivery for ${conversationId.slice(0, 12)} — owned by live device ${ownerInfo.ownerDeviceId.slice(0, 8)}${ownerInfo.ownerIsRemote ? " (remote)" : ""} (not ${deviceId().slice(0, 8)})`);
+      logDelivery(`[OWNER] skipping delivery for ${conversationId.slice(0, 12)} — owned by live device ${ownerInfo?.ownerDeviceId.slice(0, 8)}${ownerInfo?.ownerIsRemote ? " (remote)" : ""} (not ${deviceId().slice(0, 8)})`);
       return false;
     }
     // A remote daemon serves ONLY conversations explicitly moved to it. An

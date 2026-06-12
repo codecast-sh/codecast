@@ -433,6 +433,140 @@ describe("parseInteractivePrompt rejects prose answers with numbered sections", 
   });
 });
 
+// Regression: this codebase's sessions talk ABOUT terminal UIs, so assistant prose
+// routinely contains literal key-hint vocabulary ("Enter to confirm · Esc to cancel",
+// "←/→ to move between chips") and numbered spec lists. Content heuristics cannot
+// separate that from a real menu — but a real blocking dialog REPLACES the composer,
+// so a spinner row ("✢ Actualizing…"), a composer caret ("❯"), or the shortcut bar
+// visible BELOW the candidate options proves the pane is NOT blocked. Two real
+// incidents (conv jx730d3, 2026-06-11): a 4-item chord spec minted a poll, and prose
+// mentioning "enter to confirm"/"esc to cancel" minted a Continue/Cancel card.
+describe("parseInteractivePrompt rejects prose when the live composer is below it", () => {
+  const composerChrome = [
+    "✢ Actualizing… (3m 6s · ↓ 14.4k tokens · thought for 2s)",
+    "  Fable 5 is now consuming usage credits instead of your plan limits. Update C…",
+    "─".repeat(80),
+    "❯ ",
+    "─".repeat(80),
+    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt",
+  ];
+
+  test("numbered chord-spec prose with hint-like rows below → null (the jx730d3 poll)", () => {
+    const pane = [
+      "⏺ Let me re-read the request as a spec:",
+      "",
+      "  1. Global chords — work anywhere in the new-session view, not just when the textarea has focus",
+      "  2. ⌥K (vim up) in addition to ⌥↑ → focus the project picker",
+      "  3. ⌥H/⌥L alongside ←/→ to move between chips",
+      "  4. ⌥J from the picker → commit project and drop down to agent selection; Enter",
+      "",
+      "  Also: ↑/↓ inside the agent list should wrap, and the footer reads Enter to confirm · Esc to cancel",
+      "  like the other pickers. Let me check how the existing picker handles this.",
+      "",
+      ...composerChrome,
+    ].join("\n");
+    expect(parseInteractivePrompt(pane)).toBeNull();
+  });
+
+  test("prose mentioning enter/esc hints with the composer below → no confirmation card (the jx730d3 Continue/Cancel)", () => {
+    const pane = [
+      "⏺ Let me read the AgentSwitcher and find where both components are mounted:",
+      "",
+      "  The picker footer will say press Enter to confirm and Esc to cancel when open.",
+      "",
+      ...composerChrome,
+    ].join("\n");
+    expect(parseInteractivePrompt(pane)).toBeNull();
+  });
+
+  test("markdown-quoted numbered list ('> 1. …' cursor lookalike) with composer below → null", () => {
+    const pane = [
+      "⏺ From the PR description:",
+      "",
+      "  > 1. Add the new picker",
+      "  > 2. Wire the chords",
+      "",
+      "  Looks reasonable. Working on it now.",
+      "",
+      ...composerChrome,
+    ].join("\n");
+    expect(parseInteractivePrompt(pane)).toBeNull();
+  });
+
+  test("a single weak hint atom below options is not a footer even with no composer (cut pane)", () => {
+    // Pane bottom cut right after the prose: no composer chrome captured. The lone
+    // "←/→ …" prose row below the list must not validate the menu by itself.
+    const pane = [
+      "⏺ Spec recap:",
+      "",
+      "  1. Global chords — work anywhere in the view",
+      "  2. Focus the project picker from the prompt",
+      "",
+      "  ⌥H/⌥L alongside ←/→ to move between chips",
+    ].join("\n");
+    expect(parseInteractivePrompt(pane)).toBeNull();
+  });
+
+  test("a REAL menu still parses (no composer below a blocking dialog)", () => {
+    const pane = [
+      "⏺ I need a decision before wiring the chords.",
+      "",
+      "──────────────────────────────────────────────",
+      "□ Chord scope",
+      "",
+      "Should the chords be global or picker-only?",
+      "",
+      "❯ 1. Global",
+      "  2. Picker-only",
+      "",
+      "Enter to select · ↑/↓ to navigate · Esc to cancel",
+    ].join("\n");
+    const prompt = parseInteractivePrompt(pane);
+    expect(prompt).not.toBeNull();
+    expect(prompt!.question).toBe("Should the chords be global or picker-only?");
+    expect(prompt!.options.map(o => o.label)).toEqual(["Global", "Picker-only"]);
+  });
+
+  // Real captured pane (session 63d7b9cf, 2026-06-11): the usage-credit limit
+  // dialog blocks the agent with UNNUMBERED options, so it lands in the
+  // confirmation path. The question must come from below the dialog's ▔ top
+  // rule — the old extraction took the topmost non-hint line of the tail and
+  // shipped "singleton merge implementation:" (assistant prose above the
+  // dialog) as the card's question.
+  test("usage-limit dialog: real confirmation with the dialog's own question", () => {
+    const pane = [
+      "⏺ This is bug-fix work — let me create a task to track it, then find the",
+      "  singleton merge implementation:",
+      "",
+      "  Searched for 3 patterns, read 1 file, ran 3 shell commands",
+      "▔".repeat(80),
+      "   What do you want to do?                       Usage credit balance: $30.01",
+      "",
+      "   ❯ Adjust monthly spend limit: Unlimited              ← or → to set a limit",
+      "     Wait for limit to reset                 Resets 2:50pm (America/New_York)",
+      "",
+      "   Press ← or → to set a limit.",
+      "",
+      "   Enter to confirm · Esc to cancel",
+    ].join("\n");
+    const prompt = parseInteractivePrompt(pane);
+    expect(prompt?.isConfirmation).toBe(true);
+    expect(prompt?.question).toBe("What do you want to do?");
+    expect(prompt?.options.map(o => o.label)).toEqual(["Continue (confirm)", "Cancel (cancel)"]);
+  });
+
+  test("a REAL bare confirmation (no composer anywhere) still parses", () => {
+    const pane = [
+      "⏺ I'm about to delete the file.",
+      "",
+      "Press Enter to continue, Esc to cancel",
+    ].join("\n");
+    const prompt = parseInteractivePrompt(pane);
+    expect(prompt?.isConfirmation).toBe(true);
+    expect(prompt?.options.map(o => o.label)).toEqual(["Continue (continue)", "Cancel (cancel)"]);
+  });
+});
+
 // capture-pane -J fuses a full-width dialog rule onto the text row that follows it,
 // so the usage-limit dialog's question scraped as "▔▔▔…▔ What do you want to do?".
 describe("parseInteractivePrompt strips fused dialog rules from the question", () => {
