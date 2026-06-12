@@ -165,6 +165,19 @@ export function useConversationMessages(
   const paginationStatusRef = useRef(paginationStatus);
   paginationStatusRef.current = paginationStatus;
 
+  // Fork-copy freeze: a freshly forked conversation is seeded locally with the
+  // parent's full message window (doFork), while the server copies messages
+  // oldest-first in background batches. Until fork_status leaves "copying" the
+  // server's window is an incomplete prefix — letting it replace the seeded
+  // list would visibly shrink the conversation and regrow it from the top.
+  // Freeze the paginated sync (and the recovery loop below) for the duration;
+  // the flip to "complete" changes this value, which re-triggers the
+  // useConvexSync effect and applies the latest full server page in one swap.
+  const forkCopying = useInboxStore((s) => {
+    const meta: any = s.conversations[conversationId] ?? s.sessions[conversationId];
+    return meta?.fork_status === "copying";
+  });
+
   // Sync Convex paginated results → Zustand store.
   // Guard: skip setMessages when the message list is unchanged to break the
   // re-render loop (setMessages → Zustand notify → re-render → effect → …).
@@ -173,6 +186,7 @@ export function useConversationMessages(
   useConvexSync(
     useNormalMode && paginationStatus !== "LoadingFirstPage" ? descResults : undefined,
     useCallback((results: any) => {
+      if (forkCopying && (useInboxStore.getState().messages[conversationId]?.length ?? 0) > 0) return;
       const messages: Message[] = [...results].reverse();
       const sig = { id: conversationId, len: messages.length, first: messages[0]?._id, last: messages[messages.length - 1]?._id };
       const prev = lastSyncedRef.current;
@@ -182,7 +196,7 @@ export function useConversationMessages(
         hasMoreAbove: paginationStatusRef.current === "CanLoadMore" || paginationStatusRef.current === "LoadingMore",
         initialized: true,
       });
-    }, [conversationId])
+    }, [conversationId, forkCopying])
   );
 
   // =============================================
@@ -240,6 +254,9 @@ export function useConversationMessages(
       const state = useInboxStore.getState();
       const meta = state.conversations[conversationId] ?? state.sessions[conversationId];
       const local = state.messages[conversationId] ?? [];
+      // While a fork copy is in flight the local seeded window is the complete
+      // view and the server count is a moving partial — nothing to recover.
+      if ((meta as any)?.fork_status === "copying") return;
       const serverCount = (meta as any)?.message_count ?? 0;
       if (serverCount === 0 || local.length >= serverCount) return;
       // Don't pile on while the initial paginated query is still inflight on
@@ -310,10 +327,21 @@ export function useConversationMessages(
   // shadow real session fields like message_count before getConversationWithMeta resolves.
   // Must be memoized: the spread creates a new object every render, which breaks
   // downstream useMemo referential stability and triggers infinite tooltip ref cycles.
-  const storeMeta = useMemo(
-    () => _convMeta && _sessMeta ? { ..._sessMeta, ..._convMeta } : _convMeta ?? _sessMeta,
-    [_convMeta, _sessMeta],
-  );
+  // While a fork copy is in flight, the server reports message_count = fork_copied
+  // (a partial that grows 0→N as batches land); hold the rendered count at the
+  // locally seeded value so loadedStartIndex/"older messages" UI doesn't bounce.
+  const frozenForkCountRef = useRef<{ id: string; count: number } | null>(null);
+  const storeMeta = useMemo(() => {
+    const merged: any = _convMeta && _sessMeta ? { ..._sessMeta, ..._convMeta } : _convMeta ?? _sessMeta;
+    if (merged?.fork_status === "copying") {
+      if (frozenForkCountRef.current?.id !== conversationId) {
+        frozenForkCountRef.current = { id: conversationId, count: merged.message_count ?? 0 };
+      }
+      return { ...merged, message_count: Math.max(frozenForkCountRef.current.count, merged.message_count ?? 0) };
+    }
+    if (frozenForkCountRef.current?.id === conversationId) frozenForkCountRef.current = null;
+    return merged;
+  }, [_convMeta, _sessMeta, conversationId]);
   const storePagination = s.pagination[conversationId];
 
   // Merge server messages with unconfirmed pending messages (local-first)

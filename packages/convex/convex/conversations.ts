@@ -1,6 +1,6 @@
 import { mutation, query, internalMutation, internalQuery, type QueryCtx, type MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
-import { enqueueStartSession } from "./devices";
+import { enqueueStartSession, resolveOwnerDevice } from "./devices";
 import { findConversationBySessionReference } from "./conversationSessionLookup";
 import { paginationOptsValidator } from "convex/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
@@ -10,7 +10,7 @@ import { verifyApiToken } from "./apiTokens";
 import { internal } from "./_generated/api";
 import { resetConversationPendingMessages } from "./pendingMessages";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
-import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
+import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId } from "./daemonCommandUtils";
 import { shouldShowInInbox, isSessionIdle, deriveSessionActivity, classifyWorkState, normalizeWorkStateFilter, trustedAgentStatus, type WorkState } from "./inboxFilters";
 import { filterUserMessages, isImportNotice } from "./userMessagesFilter";
 import {
@@ -3184,6 +3184,20 @@ export const resolveConversation = query({
         .first();
     }
 
+    // Tombstone forwarding: a kill/restart that restored a deleted
+    // conversation stamped its replacement with the dead id — heal stale
+    // links/cards by resolving to the replacement (newest if ever several).
+    if (!conversation) {
+      const restored = await ctx.db
+        .query("conversations")
+        .withIndex("by_restored_from", (q) => q.eq("restored_from_conversation_id", args.id))
+        .collect();
+      conversation = restored.reduce(
+        (a: any, b: any) => ((b.updated_at ?? 0) > (a?.updated_at ?? 0) ? b : a),
+        null,
+      );
+    }
+
     if (!conversation) {
       return { access_level: "not_found" as const, conversation_id: null };
     }
@@ -4303,6 +4317,33 @@ export const _continueFork = internalMutation({
   },
 });
 
+// A fork continues the same thread of work, so it inherits the FORKER's label
+// on the source conversation. Labels are per-user filing (bucket_assignments),
+// which makes this naturally correct for foreign sources too: forking someone
+// else's session inherits nothing unless you had labeled it yourself. Archived
+// labels don't propagate.
+async function inheritLabelAssignment(
+  ctx: { db: any },
+  userId: Id<"users">,
+  sourceConvId: Id<"conversations">,
+  newConvId: Id<"conversations">,
+) {
+  const sourceAssignment = await ctx.db
+    .query("bucket_assignments")
+    .withIndex("by_user_conversation", (q: any) =>
+      q.eq("user_id", userId).eq("conversation_id", sourceConvId))
+    .first();
+  if (!sourceAssignment?.bucket_id) return;
+  const bucket = await ctx.db.get(sourceAssignment.bucket_id);
+  if (!bucket || bucket.archived_at) return;
+  await ctx.db.insert("bucket_assignments", {
+    user_id: userId,
+    conversation_id: newConvId,
+    bucket_id: sourceAssignment.bucket_id,
+    updated_at: Date.now(),
+  });
+}
+
 export const forkConversation = mutation({
   args: {
     share_token: v.string(),
@@ -4363,6 +4404,8 @@ export const forkConversation = mutation({
     await ctx.db.patch(original._id, {
       fork_count: currentForkCount + 1,
     });
+
+    await inheritLabelAssignment(ctx, authUserId, original._id, newConversationId);
 
     // Copy the first batch synchronously so small forks finish in one RTT.
     // If more remains, advanceForkCopy schedules _continueFork to chain
@@ -4429,6 +4472,7 @@ export const forkFromMessage = mutation({
     // subsequent batches.
     let cutoffTimestamp: number;
     let isPartial = false;
+    let atTip = true; // no fork point = snapshot at "now" = the tip
     if (args.message_uuid) {
       // Scope the lookup to THIS conversation. Forks copy messages verbatim,
       // preserving message_uuid (forkCopy.ts), so a given uuid exists in the
@@ -4446,6 +4490,17 @@ export const forkFromMessage = mutation({
       }
       cutoffTimestamp = forkPointMsg.timestamp;
       isPartial = true;
+      // Fork-at-tip: the fork point is the source's newest message, so the
+      // fork's history is the source's transcript verbatim — the daemon can
+      // copy the local JSONL byte-for-byte (keeping Claude's prompt cache
+      // warm) instead of rebuilding from an export.
+      const newestMsg = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_timestamp", (q) =>
+          q.eq("conversation_id", original._id))
+        .order("desc")
+        .first();
+      atTip = !!newestMsg && (newestMsg._id === forkPointMsg._id || forkPointMsg.timestamp >= newestMsg.timestamp);
     } else {
       cutoffTimestamp = now;
     }
@@ -4478,6 +4533,21 @@ export const forkFromMessage = mutation({
       .collect();
     const { teamId: forkTeamId, isPrivate: forkIsPrivate, autoShared: forkAutoShared } =
       resolveTeamForPath(forkMappings, original.git_root || original.project_path, original.team_id);
+
+    // The fork lives where the parent's transcript lives: route daemon commands
+    // to the parent's owner device (it has the JSONL and the checkout). Falls
+    // back to project-root routing when the parent has no live owner.
+    const ownerTarget = await resolveOwnerDevice(ctx, userId, {
+      projectPath: original.project_path,
+      gitRoot: original.git_root,
+      ownerDeviceId: original.owner_device_id ?? null,
+    });
+    // Fast path applies when the fork's history is the parent's transcript
+    // verbatim AND the same claude binary will resume it — the daemon copies
+    // the parent's JSONL instead of waiting for the server copy + rebuild.
+    const isPlainFork = !args.target_agent_type || args.target_agent_type === original.agent_type;
+    const fastPathEligible = atTip && isPlainFork && daemonAgentType === "claude" &&
+      (original.agent_type === "claude_code" || !original.agent_type);
 
     const newConversationId = await ctx.db.insert("conversations", {
       user_id: userId,
@@ -4514,18 +4584,47 @@ export const forkFromMessage = mutation({
       fork_copied: 0,
       fork_copy_cursor: 0,
       fork_cutoff_timestamp: cutoffTimestamp,
+      owner_device_id: ownerTarget ?? undefined,
     });
 
+    const forkDaemonArgs = {
+      fork: true,
+      session_id: forkSessionId,
+      agent_type: daemonAgentType,
+      conversation_id: newConversationId,
+      project_path: original.project_path || original.git_root,
+      // Copy-the-JSONL hints. The deferred (post-copy) command may also use
+      // them: copy-first is cache-stable even when the rebuild would be safe.
+      ...(fastPathEligible ? { fork_fast_path: true, parent_session_id: original.session_id } : {}),
+      _target_device_id: ownerTarget ?? undefined,
+    };
     await ctx.db.patch(newConversationId, {
       short_id: newConversationId.toString().slice(0, 7),
-      fork_daemon_args: JSON.stringify({
-        fork: true,
-        session_id: forkSessionId,
-        agent_type: daemonAgentType,
-        conversation_id: newConversationId,
-        project_path: original.project_path || original.git_root,
-      }),
+      fork_daemon_args: JSON.stringify(forkDaemonArgs),
     });
+
+    // At-tip forks don't need the server-side message copy to start the
+    // session — the daemon copies the parent's local JSONL. Emit immediately
+    // (strict: no export fallback while the copy is mid-flight) so the tmux
+    // session spins up in parallel with the copy. A dedicated command name:
+    // pre-fast-path daemons report "Unknown command" and stay inert instead of
+    // reconstituting a truncated fork from the half-copied export. The
+    // deferred resume_session emitted at copy completion is the safety net
+    // (resuming an already-attached session reuses the live tmux pane).
+    if (fastPathEligible) {
+      await ctx.db.insert("daemon_commands", {
+        user_id: userId,
+        command: "fork_session",
+        args: JSON.stringify({ ...forkDaemonArgs, _target_device_id: undefined, fork_fast_path_strict: true }),
+        created_at: now,
+        target_device_id: ownerTarget ?? undefined,
+      });
+    }
+
+    // Agent-switch continuations inherit too — they're the same thread of
+    // work under a different agent, exactly like the visibility inheritance
+    // above.
+    await inheritLabelAssignment(ctx, userId, original._id, newConversationId);
 
     // Carry the original's git_diff over to the fork's side row (off the hot doc).
     const originalGitDiff = await getConvGitDiff(ctx, original._id);
@@ -7611,129 +7710,283 @@ export const rewindSession = mutation({
   },
 });
 
+// ---------------------------------------------------------------------------
+// Kill / restart recovery.
+//
+// The conversation id a client acts on can be a GHOST: the row was deleted
+// server-side (GC sweeps, cleanup mutations) while the client's never-prune
+// cache keeps rendering it. The underlying agent session is still real — its
+// JSONL transcript (and sometimes tmux) lives on the daemon's machine — so
+// "kill & restart" must keep working. Recovery resolves a live target row for
+// the session instead of dead-ending: prefer the newest live twin bound to the
+// same session_id (the daemon's local conversation cache usually already syncs
+// there), else recreate a minimal row for the daemon to bind to. The context
+// fields (session_id/project_path/agent_type/title) ride in from the client's
+// cached copy, because for a deleted row the server knows nothing.
+// ---------------------------------------------------------------------------
+
+const RESTART_GHOST_ARGS = {
+  session_id: v.optional(v.string()),
+  project_path: v.optional(v.string()),
+  agent_type: v.optional(v.string()),
+  title: v.optional(v.string()),
+};
+
+type RestartGhostContext = {
+  session_id?: string;
+  project_path?: string;
+  agent_type?: string;
+  title?: string;
+};
+
+export async function resolveRestartTarget(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+  conversationId: Id<"conversations">,
+  ghost: RestartGhostContext,
+) {
+  const conv = await ctx.db.get(conversationId);
+  if (conv) {
+    if (conv.user_id !== userId) throw new Error("Not authorized");
+    return { conv, restored: false };
+  }
+  let sessionId = ghost.session_id;
+  if (!sessionId) {
+    // A prior restore already tombstoned this dead id onto its replacement —
+    // recover the session binding from there (covers old clients that send no
+    // ghost context, for any ghost that has been restored once before).
+    const prior = await ctx.db
+      .query("conversations")
+      .withIndex("by_restored_from", (q) => q.eq("restored_from_conversation_id", conversationId.toString()))
+      .collect();
+    const priorTarget = prior
+      .filter((t) => t.user_id === userId)
+      .reduce((a: any, b: any) => ((b.updated_at ?? 0) > (a?.updated_at ?? 0) ? b : a), null);
+    sessionId = priorTarget?.session_id;
+  }
+  if (!sessionId) {
+    // Old clients send no ghost context. The daemon's heartbeat rows can
+    // outlive the conversation row — recover the session from there.
+    const managed = await ctx.db
+      .query("managed_sessions")
+      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conversationId))
+      .collect();
+    const newest = managed
+      .filter((m) => m.user_id === userId)
+      .reduce((a: any, b: any) => ((b.last_heartbeat ?? 0) > (a?.last_heartbeat ?? 0) ? b : a), null);
+    sessionId = newest?.session_id;
+  }
+  if (!sessionId) {
+    // Deleted row and no recoverable session — nothing to bind a daemon
+    // command to. Distinct error so the UI can say what actually happened.
+    throw new Error("conversation_deleted");
+  }
+  // Live twin: pick the NEWEST row for this session. Never .first() — that's
+  // creation order, which resolves to the oldest twin (the foot-gun that made
+  // cleanup delete a live original instead of its doppelgänger; ct-36973).
+  const twins = await ctx.db
+    .query("conversations")
+    .withIndex("by_session_id", (q) => q.eq("session_id", sessionId!))
+    .collect();
+  const owned = twins.filter((t) => t.user_id === userId);
+  if (owned.length > 0) {
+    const twin = owned.reduce((a, b) => ((b.updated_at ?? 0) > (a.updated_at ?? 0) ? b : a));
+    // Restarting is an explicit "bring this back" — resurface it in the inbox,
+    // and tombstone the dead id so stale links resolve here from now on.
+    await ctx.db.patch(twin._id, {
+      status: "active",
+      inbox_dismissed_at: undefined,
+      inbox_killed_at: undefined,
+      restored_from_conversation_id: conversationId.toString(),
+      updated_at: Date.now(),
+    });
+    return { conv: (await ctx.db.get(twin._id))!, restored: true };
+  }
+  // No surviving row anywhere: recreate a minimal one (same in-file creation
+  // idiom as createQuickSession — team/privacy resolution + short_id).
+  const now = Date.now();
+  const mappings = await ctx.db
+    .query("directory_team_mappings")
+    .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+    .collect();
+  const { teamId, isPrivate, autoShared } = resolveTeamForPath(mappings, ghost.project_path, undefined);
+  const agentType =
+    ghost.agent_type === "codex" || ghost.agent_type === "cursor" || ghost.agent_type === "gemini"
+      ? ghost.agent_type
+      : "claude_code";
+  const newId = await ctx.db.insert("conversations", {
+    user_id: userId,
+    team_id: teamId,
+    agent_type: agentType,
+    session_id: sessionId,
+    title: ghost.title,
+    project_path: ghost.project_path,
+    started_at: now,
+    updated_at: now,
+    message_count: 0,
+    is_private: isPrivate,
+    auto_shared: autoShared || undefined,
+    status: "active",
+    restored_from_conversation_id: conversationId.toString(),
+  });
+  await ctx.db.patch(newId, { short_id: newId.toString().slice(0, 7) });
+  return { conv: (await ctx.db.get(newId))!, restored: true };
+}
+
+// Enqueue the kill→resume daemon command pair for a conversation, deduped
+// against an already-pending resume. Shared by restartSession (gentle resume
+// ladder on the daemon) and repairSession (force reconstitution from DB).
+export async function enqueueKillAndResume(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+  conv: { _id: Id<"conversations">; session_id?: string; project_path?: string; git_root?: string; agent_type?: string },
+  opts: { forceReconstitute?: boolean } = {},
+) {
+  const now = Date.now();
+  const pendingCommands = await ctx.db
+    .query("daemon_commands")
+    .withIndex("by_user_pending", (q) => q.eq("user_id", userId).eq("executed_at", undefined))
+    .collect();
+
+  if (hasRecentPendingDaemonCommand(pendingCommands as any, {
+    conversationId: conv._id.toString(),
+    command: "resume_session",
+    now,
+  })) {
+    await resetConversationPendingMessages(ctx, conv._id);
+    return { deduplicated: true };
+  }
+
+  await ctx.db.insert("daemon_commands", {
+    user_id: userId,
+    command: "kill_session",
+    args: JSON.stringify({ conversation_id: conv._id, session_id: conv.session_id }),
+    created_at: now,
+  });
+
+  await ctx.db.insert("daemon_commands", {
+    user_id: userId,
+    command: "resume_session",
+    args: JSON.stringify({
+      session_id: conv.session_id,
+      conversation_id: conv._id,
+      project_path: conv.project_path ?? conv.git_root,
+      agent_type: conv.agent_type === "codex" ? "codex" : conv.agent_type === "gemini" ? "gemini" : conv.agent_type === "cursor" ? "cursor" : "claude",
+      ...(opts.forceReconstitute ? { force_reconstitute: true } : {}),
+    }),
+    created_at: now + 1,
+  });
+
+  await resetConversationPendingMessages(ctx, conv._id);
+  return { deduplicated: false };
+}
+
 export const killSession = mutation({
   args: {
     conversation_id: v.id("conversations"),
     mark_completed: v.optional(v.boolean()),
+    session_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
     const conv = await ctx.db.get(args.conversation_id);
-    if (!conv || conv.user_id !== userId) throw new Error("Not authorized");
+    if (conv && conv.user_id !== userId) throw new Error("Not authorized");
 
+    // Enqueue even when the row is gone: the daemon tears backends down from the
+    // conversation id alone (derived tmux names, local caches) plus the cached
+    // session_id the client passes along.
     await ctx.db.insert("daemon_commands", {
       user_id: userId,
       command: "kill_session",
-      args: JSON.stringify({ conversation_id: args.conversation_id }),
+      args: JSON.stringify({
+        conversation_id: args.conversation_id,
+        session_id: args.session_id ?? conv?.session_id,
+      }),
       created_at: Date.now(),
     });
 
-    const patch: Record<string, any> = { inbox_killed_at: Date.now() };
-    if (args.mark_completed) {
-      patch.status = "completed";
+    if (conv) {
+      const patch: Record<string, any> = { inbox_killed_at: Date.now() };
+      if (args.mark_completed) {
+        patch.status = "completed";
+      }
+      await ctx.db.patch(args.conversation_id, patch);
     }
-    await ctx.db.patch(args.conversation_id, patch);
+    return { existed: !!conv };
   },
 });
 
 export const restartSession = mutation({
   args: {
     conversation_id: v.id("conversations"),
+    ...RESTART_GHOST_ARGS,
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    const conv = await ctx.db.get(args.conversation_id);
-    if (!conv || conv.user_id !== userId) throw new Error("Not authorized");
+    const { conv, restored } = await resolveRestartTarget(ctx, userId, args.conversation_id, args);
     if (!conv.session_id) throw new Error("No session to restart");
 
-    const now = Date.now();
-    const pendingCommands = await ctx.db
-      .query("daemon_commands")
-      .withIndex("by_user_pending", (q) => q.eq("user_id", userId).eq("executed_at", undefined))
-      .collect();
-
-    if (hasRecentPendingDaemonCommand(pendingCommands as any, {
-      conversationId: args.conversation_id.toString(),
-      command: "resume_session",
-      now,
-    })) {
-      await resetConversationPendingMessages(ctx, args.conversation_id);
-      return;
-    }
-
-    await ctx.db.insert("daemon_commands", {
-      user_id: userId,
-      command: "kill_session",
-      args: JSON.stringify({ conversation_id: args.conversation_id }),
-      created_at: now,
-    });
-
-    await ctx.db.insert("daemon_commands", {
-      user_id: userId,
-      command: "resume_session",
-      args: JSON.stringify({
-        session_id: conv.session_id,
-        conversation_id: args.conversation_id,
-        project_path: conv.project_path,
-      }),
-      created_at: now + 1,
-    });
-
-    await resetConversationPendingMessages(ctx, args.conversation_id);
+    await enqueueKillAndResume(ctx, userId, conv);
+    return { conversation_id: conv._id, restored };
   },
 });
 
 export const repairSession = mutation({
   args: {
     conversation_id: v.id("conversations"),
+    ...RESTART_GHOST_ARGS,
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    const conv = await ctx.db.get(args.conversation_id);
-    if (!conv || conv.user_id !== userId) throw new Error("Not authorized");
+    const { conv, restored } = await resolveRestartTarget(ctx, userId, args.conversation_id, args);
     if (!conv.session_id) throw new Error("No session to repair");
 
-    const now = Date.now();
-    const pendingCommands = await ctx.db
+    await enqueueKillAndResume(ctx, userId, conv, { forceReconstitute: true });
+    return { conversation_id: conv._id, restored };
+  },
+});
+
+// Live progress of a kill/restart for the footer: the daemon stamps each
+// command row with executed_at + result/error, so the client can show the real
+// ladder ("stopping" → "resuming" → resumed/reconstituted/started fresh/failed)
+// instead of an indefinite spinner. Scoped to the caller's own commands for one
+// conversation, last few only.
+export const getRestartProgress = query({
+  args: { conversation_id: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+
+    const pending = await ctx.db
       .query("daemon_commands")
       .withIndex("by_user_pending", (q) => q.eq("user_id", userId).eq("executed_at", undefined))
       .collect();
+    const executed = await ctx.db
+      .query("daemon_commands")
+      .withIndex("by_user_pending", (q) => q.eq("user_id", userId).gt("executed_at", 0))
+      .order("desc")
+      .take(50);
 
-    if (hasRecentPendingDaemonCommand(pendingCommands as any, {
-      conversationId: args.conversation_id.toString(),
-      command: "resume_session",
-      now,
-    })) {
-      await resetConversationPendingMessages(ctx, args.conversation_id);
-      return;
-    }
-
-    await ctx.db.insert("daemon_commands", {
-      user_id: userId,
-      command: "kill_session",
-      args: JSON.stringify({ conversation_id: args.conversation_id }),
-      created_at: now,
-    });
-
-    await ctx.db.insert("daemon_commands", {
-      user_id: userId,
-      command: "resume_session",
-      args: JSON.stringify({
-        session_id: conv.session_id,
-        conversation_id: args.conversation_id,
-        project_path: conv.project_path,
-        force_reconstitute: true,
-      }),
-      created_at: now + 1,
-    });
-
-    await resetConversationPendingMessages(ctx, args.conversation_id);
+    return [...pending, ...executed]
+      .filter((c) =>
+        (c.command === "kill_session" || c.command === "resume_session") &&
+        extractDaemonCommandConversationId(c.args) === args.conversation_id,
+      )
+      .sort((a, b) => a.created_at - b.created_at)
+      .slice(-6)
+      .map((c) => ({
+        command: c.command,
+        created_at: c.created_at,
+        executed_at: c.executed_at ?? null,
+        result: c.result ?? null,
+        error: c.error ?? null,
+      }));
   },
 });
 
