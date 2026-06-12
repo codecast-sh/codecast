@@ -1060,6 +1060,94 @@ describe("syncTable sessions — liberal delta cache (never prune by absence)", 
   });
 });
 
+describe("stash/kill a TEAMMATE's injected session forgets it (can't persist server-side)", () => {
+  // A foreign session (user_id ≠ me) only sits in our cache because we opened or
+  // searched a teammate's session (injectSession, never-prune). The server's
+  // applyPatches owner-gate (dispatch.ts) silently DROPS a hide patch on a
+  // conversation we don't own, so inbox_stashed_at/inbox_dismissed_at never
+  // persists; the 5-min optimistic lock lapses and the reconcile clear pass
+  // resurrects it into the active inbox. Stash/kill on a foreign session must
+  // therefore DELETE the injected copy + plant the exclude (durable forget) —
+  // not set a doomed flag. Regression for "old sessions keep popping back up".
+  const ME = "m".repeat(32);
+  const THEM = "u".repeat(32);
+  const FOREIGN = "f0000000000000000000000000000001";
+  const MINE = "a0000000000000000000000000000001";
+  const mk = (id: string, owner: string): InboxSession =>
+    ({ ...baseSession, _id: id, session_id: `s-${id}`, user_id: owner });
+
+  beforeEach(() => {
+    useInboxStore.setState({
+      sessions: { [FOREIGN]: mk(FOREIGN, THEM), [MINE]: mk(MINE, ME) },
+      conversations: {
+        [FOREIGN]: { _id: FOREIGN, user_id: THEM } as any,
+        [MINE]: { _id: MINE, user_id: ME } as any,
+      },
+      currentUser: { _id: ME } as any,
+      pendingMessages: {},
+      pending: {},
+      currentSessionId: null,
+      clientStateInitialized: false,
+      clientState: {},
+    } as any);
+  });
+
+  it("stash deletes the foreign row + plants an exclude (no inbox_stashed_at flag)", () => {
+    useInboxStore.getState().stashSession(FOREIGN);
+    const s = useInboxStore.getState();
+    expect(s.sessions[FOREIGN]).toBeUndefined();
+    expect(s.conversations[FOREIGN]).toBeUndefined();
+    expect(s.pending[`sessions:${FOREIGN}`]?.type).toBe("exclude");
+  });
+
+  it("a later live delta can NOT resurrect the forgotten foreign session", () => {
+    useInboxStore.getState().stashSession(FOREIGN);
+    useInboxStore.getState().syncTable("sessions", [mk(FOREIGN, THEM)], { isDelta: true });
+    expect(useInboxStore.getState().sessions[FOREIGN]).toBeUndefined();
+  });
+
+  it("kill on a foreign session also deletes (we can't enqueue a kill we don't own)", () => {
+    useInboxStore.getState().killSession(FOREIGN);
+    expect(useInboxStore.getState().sessions[FOREIGN]).toBeUndefined();
+  });
+
+  it("our OWN session still stashes via the durable flag (not deleted)", () => {
+    useInboxStore.getState().stashSession(MINE);
+    const s = useInboxStore.getState();
+    expect(s.sessions[MINE]).toBeDefined();
+    expect(s.sessions[MINE].inbox_stashed_at).toBeTruthy();
+  });
+
+  // The prod shape that escaped the user_id-only check: a THIN injected row
+  // (no user_id on the session at all) whose conversations meta carries the
+  // access resolver's verdict. Ownership must resolve through isForeignSession
+  // (session + conv meta), or these rows take the doomed flag path and
+  // resurrect every ~5 minutes forever.
+  it("a thin foreign row (no session.user_id, conv.is_own=false) is deleted + excluded", () => {
+    const THIN = "f0000000000000000000000000000002";
+    useInboxStore.setState({
+      sessions: { ...useInboxStore.getState().sessions, [THIN]: { ...baseSession, _id: THIN, session_id: `s-${THIN}` } },
+      conversations: { ...useInboxStore.getState().conversations, [THIN]: { _id: THIN, is_own: false, user_id: THEM } as any },
+    } as any);
+    useInboxStore.getState().stashSession(THIN);
+    const s = useInboxStore.getState();
+    expect(s.sessions[THIN]).toBeUndefined();
+    expect(s.conversations[THIN]).toBeUndefined();
+    expect(s.pending[`sessions:${THIN}`]?.type).toBe("exclude");
+  });
+
+  it("a thin row with NO ownership signal anywhere is assumed mine (flag path)", () => {
+    const UNKNOWN = "a0000000000000000000000000000002";
+    useInboxStore.setState({
+      sessions: { ...useInboxStore.getState().sessions, [UNKNOWN]: { ...baseSession, _id: UNKNOWN, session_id: `s-${UNKNOWN}` } },
+    } as any);
+    useInboxStore.getState().stashSession(UNKNOWN);
+    const s = useInboxStore.getState();
+    expect(s.sessions[UNKNOWN]).toBeDefined();
+    expect(s.sessions[UNKNOWN].inbox_stashed_at).toBeTruthy();
+  });
+});
+
 describe("archiveDoc stays gone under delta (docs now protected)", () => {
   // docs is a liberal delta cache; archiveDoc deletes the row inside an
   // action(), so the middleware (docs ∈ COLLECTION_SPECS protected) plants a
@@ -1343,7 +1431,7 @@ describe("dismiss is absolute — navigation/injection must not resurrect", () =
   });
 
   it("dismiss then navigate then restore — dismiss survives the round trip", () => {
-    // A Convex-shaped id: dismissSession flags real server sessions but deletes
+    // A Convex-shaped id: killSession flags real server sessions but deletes
     // local-only stubs, and this test pins the flag semantics.
     const realId = "c".repeat(32);
     useInboxStore.setState({
@@ -1359,7 +1447,7 @@ describe("dismiss is absolute — navigation/injection must not resurrect", () =
       pending: {},
     });
 
-    useInboxStore.getState().dismissSession(realId);
+    useInboxStore.getState().killSession(realId);
     expect(isSessionDismissed(useInboxStore.getState().sessions[realId])).toBe(true);
 
     useInboxStore.getState().navigateToSession(realId);
@@ -1410,7 +1498,7 @@ describe("dismiss is absolute — navigation/injection must not resurrect", () =
     });
 
     useInboxStore.getState().stashSession(realId);
-    useInboxStore.getState().dismissSession(realId);
+    useInboxStore.getState().killSession(realId);
     const s = useInboxStore.getState().sessions[realId];
     expect(isSessionDismissed(s)).toBe(true);
     expect(isSessionStashed(s)).toBe(false);
@@ -2605,11 +2693,60 @@ describe("hiding a local-only stub — stash/dismiss mean delete", () => {
     expect(isSessionStashed(s.sessions[real])).toBe(true);
   });
 
-  it("dismissSession deletes a stub the same way", () => {
-    useInboxStore.getState().dismissSession(stub);
+  it("killSession deletes a stub the same way", () => {
+    useInboxStore.getState().killSession(stub);
     const s = useInboxStore.getState();
     expect(s.sessions[stub]).toBeUndefined();
     expect(s.pending[`sessions:${stub}`]?.type).toBe("exclude");
+  });
+});
+
+describe("killSessions — bulk kill from the Stashed bucket", () => {
+  it("moves every id to Killed and clears the stash flag", () => {
+    const a = "a2".repeat(16);
+    const b = "b2".repeat(16);
+    const ts = Date.now() - 1000;
+    useInboxStore.setState({
+      sessions: {
+        [a]: { ...baseSession, _id: a, session_id: a, message_count: 2, inbox_stashed_at: ts },
+        [b]: { ...baseSession, _id: b, session_id: b, message_count: 2, inbox_stashed_at: ts },
+      },
+      conversations: { [a]: { _id: a } as any, [b]: { _id: b } as any },
+      currentSessionId: null,
+      clientState: {},
+      pending: {},
+    } as any);
+
+    useInboxStore.getState().killSessions([a, b]);
+    const s = useInboxStore.getState();
+    for (const id of [a, b]) {
+      expect(isSessionDismissed(s.sessions[id])).toBe(true);
+      expect(isSessionStashed(s.sessions[id])).toBe(false);
+    }
+    const buckets = categorizeSessions(s.sessions, new Set());
+    expect(buckets.stashed).toHaveLength(0);
+    expect(buckets.dismissed.map((x) => x._id).sort()).toEqual([a, b].sort());
+  });
+});
+
+describe("hidden buckets are closed by default", () => {
+  // Open ONLY while the flag is explicitly true: unset (fresh user / cleared
+  // state) must read as closed, and the first toggle must OPEN. The panel
+  // renders `expanded: flag === true`, so these toggles are the whole contract.
+  it("toggleShowStashed: unset -> open -> closed", () => {
+    useInboxStore.setState({ clientState: {} } as any);
+    useInboxStore.getState().toggleShowStashed();
+    expect(useInboxStore.getState().clientState.show_stashed).toBe(true);
+    useInboxStore.getState().toggleShowStashed();
+    expect(useInboxStore.getState().clientState.show_stashed).toBe(false);
+  });
+
+  it("toggleShowDismissed: unset -> open -> closed", () => {
+    useInboxStore.setState({ clientState: {} } as any);
+    useInboxStore.getState().toggleShowDismissed();
+    expect(useInboxStore.getState().clientState.show_dismissed).toBe(true);
+    useInboxStore.getState().toggleShowDismissed();
+    expect(useInboxStore.getState().clientState.show_dismissed).toBe(false);
   });
 });
 
@@ -2936,5 +3073,55 @@ describe("inboxStore fork stub lifecycle", () => {
     expect(s.pendingMessages[STUB]).toBeUndefined();
     expect(s.optimisticForkChildren.length).toBe(0);
     expect(s.currentSessionId).toBe("parent1");
+  });
+});
+
+describe("hidden-reconcile stale override release (ct-36973)", () => {
+  // A dismiss plants a pending field override that normally clears when the
+  // server echoes the same value. But dismissed rows leave the live channel,
+  // so a hide overturned ELSEWHERE (other device / server-side restore) never
+  // produces a matching echo — the override pinned the row hidden forever.
+  // Past the settle window the reconcile's authoritative set must win.
+  const ID = "jx70000000000000000000000000abcd";
+  const seed = (overrideAgeMs: number, dismissedAt = Date.now() - 60_000) => {
+    useInboxStore.setState({
+      sessions: { [ID]: { _id: ID, session_id: "s1", inbox_dismissed_at: dismissedAt, message_count: 5 } as any },
+      conversations: { [ID]: { _id: ID, inbox_dismissed_at: dismissedAt } as any },
+      pending: {
+        [`sessions:${ID}:inbox_dismissed_at`]: { type: "field", value: dismissedAt, ts: Date.now() - overrideAgeMs },
+      } as any,
+    });
+  };
+
+  it("fresh override still wins — an in-flight local dismiss is protected", () => {
+    seed(5_000);
+    const seededAt = (useInboxStore.getState().sessions[ID] as any).inbox_dismissed_at;
+    useInboxStore.getState().applyDismissedReconcile([], true);
+    const s = useInboxStore.getState();
+    expect((s.sessions[ID] as any).inbox_dismissed_at).toBe(seededAt);
+    expect(s.pending[`sessions:${ID}:inbox_dismissed_at`]).toBeDefined();
+  });
+
+  it("stale override releases: server's authoritative un-hide lands and the lock is deleted", () => {
+    seed(10 * 60 * 1000);
+    useInboxStore.getState().applyDismissedReconcile([], true);
+    const s = useInboxStore.getState();
+    expect((s.sessions[ID] as any).inbox_dismissed_at).toBeNull();
+    expect((s.conversations[ID] as any).inbox_dismissed_at).toBeNull();
+    expect(s.pending[`sessions:${ID}:inbox_dismissed_at`]).toBeUndefined();
+  });
+
+  it("stale override also releases for the SET direction (remote re-dismiss lands)", () => {
+    useInboxStore.setState({
+      sessions: { [ID]: { _id: ID, session_id: "s1", inbox_dismissed_at: null, message_count: 5 } as any },
+      conversations: { [ID]: { _id: ID, inbox_dismissed_at: null } as any },
+      pending: {
+        [`sessions:${ID}:inbox_dismissed_at`]: { type: "field", value: null, ts: Date.now() - 10 * 60 * 1000 },
+      } as any,
+    });
+    useInboxStore.getState().applyDismissedReconcile([{ _id: ID, inbox_dismissed_at: 2222 } as any], false);
+    const s = useInboxStore.getState();
+    expect((s.sessions[ID] as any).inbox_dismissed_at).toBe(2222);
+    expect(s.pending[`sessions:${ID}:inbox_dismissed_at`]).toBeUndefined();
   });
 });

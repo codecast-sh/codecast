@@ -11,6 +11,7 @@ import {
   isSessionWaitingForInput,
   isSessionEffectivelyIdle,
   isSessionDismissed,
+  isSessionHidden,
   type InboxSession,
 } from "../../store/inboxStore";
 
@@ -33,7 +34,10 @@ type ClassifiedSession = Session & {
   lastActiveMs: number;
   // Triage state, joined from listInboxSessions (the same data the inbox uses).
   pinned: boolean;
+  // Hidden from the active inbox for either reason; `killed` narrows to the
+  // destructive flavor (inbox_dismissed_at — agent torn down).
   dismissed: boolean;
+  killed: boolean;
   needsInput: boolean;
   workState: WorkState | null;
 };
@@ -349,7 +353,8 @@ function SessionsView() {
 
       const inbox = s.conversation_id ? inboxById.get(String(s.conversation_id)) : undefined;
       const pinned = !!inbox?.is_pinned;
-      const dismissed = inbox ? isSessionDismissed(inbox) : false;
+      const dismissed = inbox ? isSessionHidden(inbox) : false;
+      const killed = inbox ? isSessionDismissed(inbox) : false;
       let needsInput = false;
       let workState: WorkState | null = null;
       if (inbox) {
@@ -364,7 +369,7 @@ function SessionsView() {
 
       return {
         ...s, isAlive, bucket, awakeIdleMs, uptime: now - s.started_at, lastActiveAt,
-        lastActiveMs: now - lastActiveAt, pinned, dismissed, needsInput, workState,
+        lastActiveMs: now - lastActiveAt, pinned, dismissed, killed, needsInput, workState,
       };
     });
   }, [sessions, now, inboxById]);
@@ -469,7 +474,9 @@ function SessionsView() {
     (s: ClassifiedSession) => {
       if (!s.conversation_id) return;
       markBusy(s.session_id);
-      patchConversation(s.conversation_id, { inbox_dismissed_at: s.dismissed ? null : Date.now() });
+      patchConversation(s.conversation_id, s.dismissed
+        ? { inbox_dismissed_at: null, inbox_stashed_at: null }
+        : { inbox_stashed_at: Date.now() });
     },
     [patchConversation, markBusy]
   );
@@ -683,8 +690,8 @@ function SessionsView() {
                         {/* Triage state — the agent's relationship to you. Loud
                             for the actionable states; idle stays quiet. */}
                         {session.dismissed ? (
-                          <span className="text-[11px] font-mono px-1.5 py-0.5 rounded border border-zinc-700/50 text-zinc-500 bg-zinc-800/40 shrink-0" title="dismissed from inbox">
-                            dismissed
+                          <span className="text-[11px] font-mono px-1.5 py-0.5 rounded border border-zinc-700/50 text-zinc-500 bg-zinc-800/40 shrink-0" title={session.killed ? "killed (hidden from inbox, agent torn down)" : "stashed (hidden from inbox, agent alive)"}>
+                            {session.killed ? "killed" : "stashed"}
                           </span>
                         ) : (session.workState === "needs_input" || session.workState === "working") && (
                           <span className={`text-[11px] font-mono px-1.5 py-0.5 rounded border shrink-0 ${WORK_STATE_STYLES[session.workState].cls}`}>
@@ -723,9 +730,9 @@ function SessionsView() {
                                   ? "text-zinc-500 hover:text-emerald-400 hover:bg-emerald-950/20 hover:border-emerald-900/30"
                                   : "text-zinc-600 hover:text-zinc-300 hover:bg-zinc-800/50 hover:border-zinc-700/60"
                               }`}
-                              title={session.dismissed ? "Restore to inbox" : "Dismiss from inbox"}
+                              title={session.dismissed ? "Restore to inbox" : "Stash from inbox (keeps agent running)"}
                             >
-                              {session.dismissed ? "restore" : "dismiss"}
+                              {session.dismissed ? "restore" : "stash"}
                             </button>
                           </>
                         )}

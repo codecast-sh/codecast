@@ -67,10 +67,10 @@ export function useGlobalShortcutActions() {
     }
   }, [isOnInboxPage]));
 
-  // Shared body of the stash/dismiss chords; the only difference is the mode.
-  // The kill that makes dismiss destructive happens SERVER-side on the dismiss
-  // data transition (dispatch.applyPatches), so neither handler asks for it.
-  const hideCurrent = useCallback((mode: "stash" | "dismiss") => {
+  // Shared body of the stash/kill chords; the only difference is the mode.
+  // The kill itself happens SERVER-side on the hide data transition
+  // (dispatch.applyPatches), so neither handler asks for it.
+  const hideCurrent = useCallback((mode: "stash" | "kill") => {
     const store = useInboxStore.getState();
     const currentId = isOnInboxPage ? store.currentSessionId : store.sidePanelSessionId;
     if (!currentId) return;
@@ -87,7 +87,7 @@ export function useGlobalShortcutActions() {
 
   useShortcutAction('session.stash', useCallback(() => hideCurrent("stash"), [hideCurrent]));
 
-  useShortcutAction('session.dismiss', useCallback(() => hideCurrent("dismiss"), [hideCurrent]));
+  useShortcutAction('session.kill', useCallback(() => hideCurrent("kill"), [hideCurrent]));
 
   useShortcutAction('session.deferAdvance', useCallback(() => {
     const store = useInboxStore.getState();

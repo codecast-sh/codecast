@@ -3,6 +3,7 @@ import {
   computeReorderUpdates,
   convBucketMap,
   groupSessionsForLabelView,
+  hydrateMergeValue,
   sortLabels,
   useInboxStore,
   visualOrderSessions,
@@ -45,6 +46,35 @@ describe("convBucketMap", () => {
     const map = convBucketMap(assignments);
     expect(map["c1"]).toBe("b1");
     expect(map["c2"]).toBeUndefined();
+  });
+
+  it("real server rows beat hydrated optimistic stubs for the same conversation", () => {
+    // The bucketassign- stub is immortal on disk (no exclude is ever planted),
+    // so boot hydration unions it back until live sync rekeys it. If the user
+    // re-bucketed the conversation since, the frozen stub must not win —
+    // regardless of object iteration order.
+    const real = convexId("real1");
+    const assignments: Record<string, BucketAssignmentItem> = {
+      "bucketassign-c1": { _id: "bucketassign-c1", conversation_id: "c1", bucket_id: "old-bucket", updated_at: 5 },
+      [real]: { _id: real, conversation_id: "c1", bucket_id: "new-bucket", updated_at: 2 },
+    };
+    expect(convBucketMap(assignments)["c1"]).toBe("new-bucket");
+    // Reversed insertion order — same winner.
+    const reversed: Record<string, BucketAssignmentItem> = {
+      [real]: assignments[real],
+      "bucketassign-c1": assignments["bucketassign-c1"],
+    };
+    expect(convBucketMap(reversed)["c1"]).toBe("new-bucket");
+  });
+
+  it("among rows of equal realness, the newer assignment wins", () => {
+    const r1 = convexId("r1");
+    const r2 = convexId("r2");
+    const assignments: Record<string, BucketAssignmentItem> = {
+      [r1]: { _id: r1, conversation_id: "c1", bucket_id: "older", updated_at: 1 },
+      [r2]: { _id: r2, conversation_id: "c1", bucket_id: "newer", updated_at: 9 },
+    };
+    expect(convBucketMap(assignments)["c1"]).toBe("newer");
   });
 });
 
@@ -321,5 +351,47 @@ describe("computeReorderUpdates", () => {
       gone: bucket("gone", "aaa", { archived_at: 1 }),
     };
     expect(sortLabels(map).map((b) => b.name)).toEqual(["alpha", "beta", "omega"]);
+  });
+});
+
+// Boot hydration for buckets: cached labels must paint on first frame, not
+// after the server round-trips (the label-bar pop-in this guards against —
+// buckets were persisted to IDB but missing from the hand-maintained apply
+// pick lists, so the cached rows were read off disk and dropped).
+describe("bucket cache hydration merge", () => {
+  it("cached buckets land wholesale on a cold store", () => {
+    const cached = { b1: bucket("b1", "fullfunnel"), b2: bucket("b2", "simplify") };
+    const merge = hydrateMergeValue("buckets", cached, {});
+    expect(merge.apply).toBe(true);
+    expect(merge.value).toEqual(cached);
+  });
+
+  it("live rows win per-id; cache backfills the rest (cache as floor)", () => {
+    const cached = { b1: bucket("b1", "old-name"), b2: bucket("b2", "simplify") };
+    const live = { b1: bucket("b1", "renamed-live") };
+    const merge = hydrateMergeValue("buckets", cached, live);
+    expect((merge.value as Record<string, BucketItem>).b1.name).toBe("renamed-live");
+    expect((merge.value as Record<string, BucketItem>).b2.name).toBe("simplify");
+  });
+
+  it("assignments hydrate the same way", () => {
+    const cached: Record<string, BucketAssignmentItem> = {
+      a1: { _id: "a1", conversation_id: "c1", bucket_id: "b1", updated_at: 1 },
+    };
+    const merge = hydrateMergeValue("bucketAssignments", cached, undefined);
+    expect(merge.apply).toBe(true);
+    expect(merge.value).toEqual(cached);
+  });
+
+  it("fill-strategy singletons never clobber a live value", () => {
+    expect(hydrateMergeValue("currentUser", { name: "cached" }, { name: "live" }).apply).toBe(false);
+    expect(hydrateMergeValue("currentUser", { name: "cached" }, null)).toEqual({ apply: true, value: { name: "cached" } });
+    expect(hydrateMergeValue("teamUnreadCount", 5, 2).apply).toBe(false);
+  });
+
+  it("arrays fill only an empty slot; scalars replace", () => {
+    expect(hydrateMergeValue("teams", [{ id: "t1" }], []).apply).toBe(true);
+    expect(hydrateMergeValue("teams", [{ id: "t1" }], [{ id: "live" }]).apply).toBe(false);
+    expect(hydrateMergeValue("activeTabId", "tab_a", "tab_b")).toEqual({ apply: true, value: "tab_a" });
   });
 });
