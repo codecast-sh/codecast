@@ -5,7 +5,7 @@ import { useEffect, useLayoutEffect, useRef, useState, useMemo, useImperativeHan
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useWatchEffect } from "../hooks/useWatchEffect";
-import { useShortcutContext, useShortcutAction, formatShortcutLabel } from "../shortcuts";
+import { useShortcutContext, useShortcutAction, formatShortcutLabel, isMac } from "../shortcuts";
 import { useConvexSync } from "../hooks/useConvexSync";
 import { useShallow } from "zustand/react/shallow";
 import { createPortal } from "react-dom";
@@ -85,7 +85,39 @@ import { entityRemarkPlugins } from "../lib/remarkEntityIds";
 import { parseInboundSessionMessage, isSessionMessage } from "./sessionMessage";
 import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, type ParsedCastCommand } from "./castCommand";
 import { ConversationTree } from "./ConversationTree";
-import { useInboxStore, isConvexId, computeNewDividerIndex, type ForkChild, type InboxSession, type OptimisticImage } from "../store/inboxStore";
+import { useInboxStore, isConvexId, computeNewDividerIndex, convBucketMap, type BucketItem, type ForkChild, type InboxSession, type OptimisticImage } from "../store/inboxStore";
+
+// Context for restoring a server-deleted (ghost) conversation: for a deleted
+// row the server knows nothing, so restartSession/repairSession take the
+// session binding from our cached copy. Shared by every restart call site
+// (composer recovery, auto-restart effect, header dropdown).
+function ghostRestartContextFor(conversationId: string) {
+  const s = useInboxStore.getState();
+  const row: any = s.conversations[conversationId] ?? s.sessions[conversationId];
+  if (!row) return {};
+  return {
+    session_id: row.session_id,
+    project_path: row.project_path ?? row.git_root,
+    agent_type: row.agent_type,
+    title: row.title,
+  };
+}
+
+// restartSession can answer with a DIFFERENT conversation: the ghost's live
+// twin, or a freshly recreated row. Follow it there, and clear the ghost from
+// the cache once we've left it (pruneGhostSessions skips the open session, so
+// the delayed call runs after navigation lands; both calls are no-op safe).
+// Returns true when it redirected.
+function followRestoredConversation(res: any, ghostId: string): boolean {
+  const targetId = res?.conversation_id;
+  if (!res?.restored || !targetId || targetId === ghostId) return false;
+  toast.success("This conversation was deleted on the server — restored its live session");
+  useInboxStore.setState({ pendingNavigateId: targetId });
+  useInboxStore.getState().pruneGhostSessions([ghostId]);
+  setTimeout(() => useInboxStore.getState().pruneGhostSessions([ghostId]), 3000);
+  return true;
+}
+import { getLabelColor } from "../lib/labelColors";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { soundSend } from "../lib/sounds";
 import { useForkNavigationStore } from "../store/forkNavigationStore";
@@ -638,9 +670,20 @@ function FolderGlyph({ className = "w-3 h-3" }: { className?: string }) {
   );
 }
 
-// ⌥-chord matching uses e.code (physical key): on mac, Option+letter rewrites
-// e.key into the composed character ("˚", "∆", …) so e.key never matches "k"/"j".
-const ALT_GLYPH = typeof navigator !== "undefined" && navigator.platform?.includes("Mac") ? "⌥" : "alt+";
+// Picker hint rows render key names as <KeyCap> caps (the keyboard-shortcuts
+// panel component) — never as plain text in the surrounding font.
+function HintKeys({ keys, label }: { keys: string[]; label: string }) {
+  return (
+    <span className="inline-flex items-center gap-1">
+      <span className="inline-flex items-center gap-[2px]">
+        {keys.map((k, i) => <KeyCap key={i} size="xs">{k}</KeyCap>)}
+      </span>
+      <span className="text-sol-text-dim/70">{label}</span>
+    </span>
+  );
+}
+
+const ALT_CAP = isMac ? "⌥" : "Alt";
 
 // Imperative surface each null-state picker hands up to NewSessionView's
 // ⌥-chord router (⌥K/⌥↑ → project picker, ⌥J/⌥↓ → agent row).
@@ -727,9 +770,16 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
     setFilter("");
     setHi(0);
     setPicking(true);
-    requestAnimationFrame(() => pickerRef.current?.focus());
     return true;
   }, []);
+
+  // Focus the filter input AFTER the commit that mounts it. focusPicker is
+  // called from a native window listener (the ⌥-chord router), where React 18
+  // batches the state update past any rAF — an immediate/rAF focus() races the
+  // mount and silently leaves focus where it was.
+  useEffect(() => {
+    if (picking) pickerRef.current?.focus();
+  }, [picking]);
 
   const handleSwitch = useCallback(async (projectPath: string, forceIsolated?: boolean) => {
     const trimmed = projectPath.trim();
@@ -903,14 +953,20 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
             autoComplete="off"
             className="w-28 bg-transparent text-sol-cyan placeholder:text-sol-text-dim outline-none border-0 p-0"
           />
-          <span className="text-sol-text-dim/70">←/→ move · ↵ select · {ALT_GLYPH}J agent · esc back</span>
+          <span className="inline-flex items-center gap-2">
+            <HintKeys keys={["←", "→"]} label="move" />
+            <HintKeys keys={["↵"]} label="select" />
+            <HintKeys keys={[ALT_CAP, "J"]} label="agent" />
+            <HintKeys keys={["Esc"]} label="back" />
+          </span>
         </div>
       ) : recentProjects.length > 0 ? (
         <button
           onClick={focusPicker}
-          className="text-[10px] text-sol-text-dim/60 hover:text-sol-text-dim transition-colors"
+          className="inline-flex items-center gap-2 text-[10px] text-sol-text-dim/60 hover:text-sol-text-dim transition-colors"
         >
-          press {ALT_GLYPH}K to pick a folder · {ALT_GLYPH}J to pick an agent
+          <HintKeys keys={[ALT_CAP, "K"]} label="pick a folder" />
+          <HintKeys keys={[ALT_CAP, "J"]} label="pick an agent" />
         </button>
       ) : null}
 
@@ -994,9 +1050,13 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
     prevFocusRef.current = document.activeElement as HTMLElement | null;
     setHi(Math.max(0, AGENT_OPTIONS.findIndex((a) => a.type === currentAgent)));
     setPicking(true);
-    requestAnimationFrame(() => holderRef.current?.focus());
     return true;
   }, [currentAgent]);
+
+  // Post-commit focus — same race as the project picker's (see note there).
+  useEffect(() => {
+    if (picking) holderRef.current?.focus();
+  }, [picking]);
 
   const handleAgentKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "ArrowRight" || (e.altKey && e.code === "KeyL")) {
@@ -1092,7 +1152,12 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
             aria-label="choose agent"
             className="w-px bg-transparent outline-none border-0 p-0 caret-transparent"
           />
-          <span className="text-sol-text-dim/70">←/→ move · ↵ select · esc back</span>
+          <span className="inline-flex items-center gap-2">
+            <HintKeys keys={["←", "→"]} label="move" />
+            <HintKeys keys={["↵"]} label="select" />
+            <HintKeys keys={[ALT_CAP, "K"]} label="folder" />
+            <HintKeys keys={["Esc"]} label="back" />
+          </span>
         </div>
       )}
 
@@ -1130,6 +1195,63 @@ export interface NewSessionAgentControls {
  * `agentControls` to drive workflow selection from the host; omitted, it manages
  * its own local state (the popup case).
  */
+// Subtle bucket affordance on the new-session surface: invisible when the user
+// has no buckets; otherwise a small pill showing where this session will be
+// filed (defaults to the focused bucket chip). Click opens the same palette
+// picker the Ctrl+Shift+M chord uses.
+function NewSessionBucketPill({ conversation }: { conversation: ConversationData }) {
+  const buckets = useInboxStore((st) => st.buckets);
+  const bucketAssignments = useInboxStore((st) => st.bucketAssignments);
+  const activeBucketFilter = useInboxStore((st) => st.activeBucketFilter);
+  const convId = conversation._id;
+
+  const visibleBuckets = useMemo(
+    () => (Object.values(buckets) as BucketItem[]).filter((b) => !b.archived_at),
+    [buckets],
+  );
+  const assigned = useMemo(() => {
+    const bucketId = convBucketMap(bucketAssignments)[convId];
+    return bucketId ? (buckets[bucketId] ?? null) : null;
+  }, [bucketAssignments, buckets, convId]);
+
+  // A pre-warmed blank opened while a bucket chip is focused files itself there
+  // (the create-time stamp in beginOptimisticSession covers fresh creates; this
+  // covers blanks that existed before the filter was set).
+  useEffect(() => {
+    if (!activeBucketFilter || assigned) return;
+    const store = useInboxStore.getState();
+    const real = store.getConvexId(convId) ?? convId;
+    if (!isConvexId(real)) return;
+    if (convBucketMap(store.bucketAssignments)[real]) return;
+    store.assignSessionToBucket(real, activeBucketFilter);
+  }, [convId, activeBucketFilter, assigned]);
+
+  if (visibleBuckets.length === 0) return null;
+
+  const openPicker = () => {
+    const store = useInboxStore.getState();
+    const session = store.sessions[convId];
+    if (session) store.openPalette({ targets: [session], targetType: "session", mode: "bucket" });
+  };
+  const color = assigned ? getLabelColor(assigned.name) : null;
+  return (
+    <button
+      onClick={openPicker}
+      className="mt-2 flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] text-sol-text-dim/70 hover:text-sol-text-muted hover:bg-sol-bg-alt/60 transition-colors"
+      title="Choose a label for this session"
+    >
+      {assigned && color ? (
+        <>
+          <span className={`w-1.5 h-1.5 rounded-[2px] ${color.dot}`} />
+          <span className={color.text}>{assigned.name}</span>
+        </>
+      ) : (
+        <span>+ label</span>
+      )}
+    </button>
+  );
+}
+
 export function NewSessionView({ conversation, agentControls }: { conversation: ConversationData; agentControls?: NewSessionAgentControls }) {
   const [localShowWorkflow, setLocalShowWorkflow] = useState(false);
   const [localWorkflowId, setLocalWorkflowId] = useState("");
@@ -1186,6 +1308,7 @@ export function NewSessionView({ conversation, agentControls }: { conversation: 
         workflows={ac.workflows}
         handleRef={agentsRef}
       />
+      <NewSessionBucketPill conversation={conversation} />
     </div>
   );
 }
@@ -6835,6 +6958,46 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const autoRestartTriggeredRef = useRef(false);
   const resumeSessionMutation = useMutation(api.users.resumeSession);
   const convCommand = useInboxStore((s) => s.convCommand);
+  // Live kill→resume ladder while a recovery is in flight: the daemon stamps
+  // each command row (executed_at + result/error), so the footer can show what
+  // is actually happening instead of an indefinite spinner. Skip-gated so the
+  // query costs nothing outside recovery.
+  const restartProgress = useQuery(
+    api.conversations.getRestartProgress,
+    (isRestarting || isResuming) && isConvexId(conversationId)
+      ? { conversation_id: conversationId }
+      : "skip",
+  ) as { command: string; created_at: number; executed_at: number | null; result: string | null; error: string | null }[] | null | undefined;
+  // Flips on when a restart request has sat unclaimed long enough that the
+  // owning daemon is probably offline — the one failure the command rows can't
+  // report themselves.
+  const [restartWaitingLong, setRestartWaitingLong] = useState(false);
+  const restartStage = useMemo(() => {
+    if (!restartProgress?.length) return null;
+    const last = [...restartProgress].reverse();
+    const resume = last.find((c) => c.command === "resume_session");
+    const kill = last.find((c) => c.command === "kill_session");
+    if (resume?.executed_at) {
+      if (resume.error) return { label: `Restart failed: ${resume.error}`, tone: "error" as const };
+      try {
+        const r = resume.result ? JSON.parse(resume.result) : null;
+        if (r?.reconstituted) return { label: "Rebuilt session from history — reconnecting…", tone: "active" as const };
+        if (r?.started_fresh) return { label: "Couldn't resume the old session — started a fresh one", tone: "active" as const };
+        if (r?.resumed) return { label: "Session resumed — reconnecting…", tone: "active" as const };
+        if (r?.skipped) return { label: "Session is already starting…", tone: "active" as const };
+      } catch { /* plain-string results fall through to the generic label */ }
+      return { label: "Restarting session…", tone: "active" as const };
+    }
+    if (kill?.executed_at) return { label: "Old session stopped — starting replacement…", tone: "active" as const };
+    if (restartWaitingLong) return { label: "Waiting for the daemon to pick this up — is that device online?", tone: "warn" as const };
+    return { label: "Restart requested — waiting for daemon…", tone: "active" as const };
+  }, [restartProgress, restartWaitingLong]);
+  useWatchEffect(() => {
+    if (!isRestarting && !isResuming) { setRestartWaitingLong(false); return; }
+    if (restartProgress?.some((c) => c.executed_at)) { setRestartWaitingLong(false); return; }
+    const t = setTimeout(() => setRestartWaitingLong(true), 20_000);
+    return () => clearTimeout(t);
+  }, [isRestarting, isResuming, restartProgress]);
   const cancelMessageMutation = useMutation(api.pendingMessages.cancelPendingMessage);
   const addOptimistic = useInboxStore((s) => s.addOptimisticMessage);
   const markAsQueued = useInboxStore((s) => s.markOptimisticAsQueued);
@@ -7239,26 +7402,53 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     }
   }, [onPopulateInput]);
 
+  // Set when a dispatch/restart learned the server row no longer exists: the
+  // cached copy renders fine but every conversation-scoped mutation will fail.
+  const serverDeleted = useInboxStore((s) =>
+    Boolean((s.sessions[conversationId] as any)?.server_deleted || (s.conversations[conversationId] as any)?.server_deleted));
+
+  const ghostRestartContext = useCallback(() => ghostRestartContextFor(conversationId), [conversationId]);
+  const handleRestartResult = useCallback((res: any) => followRestoredConversation(res, conversationId), [conversationId]);
+
   const handleForceResume = useCallback(async (opts?: { auto?: boolean }) => {
     if (isResuming) return;
     setIsResuming(true);
     // Automatic recovery here is always the gentle, non-destructive resume (re-attach + redeliver).
     // The only automatic kill+restart lives in the confirmed-undeliverable effect below; this
     // path kills only on an explicit human click of a dead-message control — never on idleness.
-    const shouldRestart = !opts?.auto && (isExistingMessageDead || messageStatus?.status === "failed" || messageStatus?.status === "undeliverable");
+    // A known-deleted server row skips the gentle attempt: it can only fail, the
+    // restore lives behind restartSession.
+    const shouldRestart = serverDeleted ||
+      (!opts?.auto && (isExistingMessageDead || messageStatus?.status === "failed" || messageStatus?.status === "undeliverable"));
     try {
       if (shouldRestart) {
         setIsRestarting(true);
-        await convCommand(conversationId, "restartSession");
+        handleRestartResult(await convCommand(conversationId, "restartSession", ghostRestartContext()));
       } else {
         await resumeSessionMutation({ conversation_id: conversationId as Id<"conversations"> });
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to resume session");
+      const msg = err instanceof Error ? err.message : String(err);
+      // The server row is gone (cached ghost) — escalate to the restore path,
+      // which targets the live twin / recreates the row before resuming.
+      if (/conversation_deleted|Conversation not found/i.test(msg)) {
+        try {
+          setIsRestarting(true);
+          handleRestartResult(await convCommand(conversationId, "restartSession", ghostRestartContext()));
+          return;
+        } catch (err2) {
+          useInboxStore.getState().markServerDeleted(conversationId);
+          toast.error("This conversation no longer exists on the server and couldn't be restored automatically");
+          setIsResuming(false);
+          setIsRestarting(false);
+          return;
+        }
+      }
+      toast.error(msg || "Failed to resume session");
       setIsResuming(false);
       setIsRestarting(false);
     }
-  }, [conversationId, resumeSessionMutation, convCommand, isResuming, isExistingMessageDead, messageStatus?.status]);
+  }, [conversationId, resumeSessionMutation, convCommand, isResuming, isExistingMessageDead, messageStatus?.status, ghostRestartContext, handleRestartResult, serverDeleted]);
 
   // Stop the (otherwise indefinite) retry loop for a message that genuinely can't land. Resolve
   // the id from either the precise tracker or the conversation-scoped pending row, since a reload
@@ -7323,10 +7513,19 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     autoRestartTriggeredRef.current = true;
     setIsRestarting(true);
     toast("Message couldn't be delivered — restarting session…");
-    convCommand(conversationId, "restartSession")
-      .then(() => setIsResuming(true))
-      .catch(() => { setIsRestarting(false); toast.error("Session restart failed"); });
-  }, [messageStatus?.status, isAgentActive, messageReachedSession, conversationId, convCommand]);
+    convCommand(conversationId, "restartSession", ghostRestartContext())
+      .then((res) => { handleRestartResult(res); setIsResuming(true); })
+      .catch((err) => {
+        setIsRestarting(false);
+        const msg = err instanceof Error ? err.message : String(err);
+        if (/conversation_deleted/i.test(msg)) {
+          useInboxStore.getState().markServerDeleted(conversationId);
+          toast.error("This conversation no longer exists on the server — use Restore to bring its session back");
+        } else {
+          toast.error(`Session restart failed: ${msg}`);
+        }
+      });
+  }, [messageStatus?.status, isAgentActive, messageReachedSession, conversationId, convCommand, ghostRestartContext, handleRestartResult]);
 
   const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -8022,6 +8221,22 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       {lightboxImageIndex === null && <div className="h-16 bg-gradient-to-t from-sol-bg via-sol-bg/80 to-transparent -mt-16 relative" />}
       <div className={`pb-4 pointer-events-auto ${lightboxImageIndex === null ? "bg-sol-bg" : ""}`}>
         <div className="relative">
+          {serverDeleted && !isRestarting && (
+            <div className={`mx-auto px-4 mb-2 ${isExpanded ? "conv-col" : "max-w-md"} ${lightboxImageIndex !== null ? "hidden" : ""}`}>
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-sol-orange/40 bg-sol-orange/10 px-3 py-2">
+                <p className="text-[12px] text-sol-text">
+                  This conversation was deleted on the server — you&apos;re viewing a cached copy.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => handleForceResume()}
+                  className="shrink-0 text-[12px] font-medium text-sol-orange hover:underline"
+                >
+                  Restore session
+                </button>
+              </div>
+            </div>
+          )}
           {(isFocused || shortcutTooltip || showStuckBanner || isSessionStarting || isSessionReady || isInactive || optimisticSending || isSessionDisconnected || (pendingMessageId || existingPending) || (agentStatus && agentStatus !== "idle") || (!agentStatus && (isWaitingForResponse || isThinking || isConversationLive))) && (
             <div className={`mx-auto px-4 mb-1 flex justify-between items-center ${isExpanded ? "conv-col" : "max-w-md"} ${lightboxImageIndex !== null ? "hidden" : ""}`}>
               <p className="text-[11px] text-sol-text-dim/70 pl-1">
@@ -8048,9 +8263,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                 ) : showStuckBanner && sessionId ? (
                   <span className="flex items-center gap-2">
                     {isRestarting ? (
-                      <span className="flex items-center gap-1.5 text-sol-orange">
-                        <span className="w-2 h-2 rounded-full bg-sol-orange animate-pulse" />
-                        Killing &amp; restarting session…
+                      <span className={`flex items-center gap-1.5 ${restartStage?.tone === "error" ? "text-sol-red" : restartStage?.tone === "warn" ? "text-sol-yellow" : "text-sol-orange"}`}>
+                        <span className={`w-2 h-2 rounded-full ${restartStage?.tone === "error" ? "bg-sol-red" : restartStage?.tone === "warn" ? "bg-sol-yellow" : "bg-sol-orange"} ${restartStage?.tone === "error" ? "" : "animate-pulse"}`} />
+                        {restartStage?.label ?? "Killing & restarting session…"}
                       </span>
                     ) : isResuming ? (
                       isSessionStarting ? (
@@ -8061,7 +8276,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                       ) : (
                         <span className="flex items-center gap-1.5 text-sol-yellow">
                           <span className="w-2 h-2 rounded-full bg-sol-yellow animate-pulse" />
-                          Waiting for connection…
+                          {restartStage?.label ?? "Waiting for connection…"}
                         </span>
                       )
                     ) : (
@@ -9064,8 +9279,18 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     });
   }, [conversation?.title, conversation?.project_path, conversation?.git_root, conversation?.agent_type, injectSession]);
 
-  const doFork = useCallback(async (messageUuid: string): Promise<{ forkSessionId: string; conversationId: string } | null> => {
+  // Local-first fork: seed the stub conversation WITH the parent's loaded
+  // message window sliced at the fork point and navigate to it synchronously —
+  // the fork renders fully populated in the same frame as the click. The
+  // server mutation, message copy, and daemon tmux spawn all happen behind it;
+  // the only visible artifact is the session status line above the input
+  // ("Starting session…" → "Ready"). resolveForkSessionId rekeys stub → real id
+  // when the mutation lands, and useConversationMessages freezes the server
+  // message sync while fork_status === "copying" so the half-copied server
+  // window can never clobber the seeded one.
+  const doFork = useCallback(async (messageUuid: string): Promise<{ forkSessionId: string; conversationId: string; ready: Promise<string> } | null> => {
     if (!conversation?._id) return null;
+    const parentId = conversation._id.toString();
     // Must be a valid UUID so the daemon can resume without ID remapping
     const forkSessionId = (typeof crypto !== 'undefined' && crypto.randomUUID)
       ? crypto.randomUUID()
@@ -9073,36 +9298,72 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           const r = Math.random() * 16 | 0;
           return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
         });
+    const now = Date.now();
+    const forkTitle = conversation.title ? `Fork: ${conversation.title}` : "Fork";
+    // Parent's server rows up to and including the fork point. Optimistic/queued
+    // rows are excluded — they aren't in the messages table yet, so the server
+    // copy won't include them either.
+    const parentMsgs = (conversation.messages || []).filter((m: any) => !m._isOptimistic && !m._isQueued);
+    const forkIdx = parentMsgs.findIndex((m: any) => m.message_uuid === messageUuid);
+    const seededMsgs = forkIdx >= 0 ? parentMsgs.slice(0, forkIdx + 1) : parentMsgs;
+    // Count as the user saw it on the parent: messages above the loaded window
+    // plus the seeded slice. Keeps the "N older messages" indicator stable.
+    const seededCount = (conversation.loaded_start_index ?? 0) + seededMsgs.length;
     addOptimisticFork({
       _id: forkSessionId,
       user_id: currentUser?._id?.toString(),
-      title: conversation.title ? `Fork: ${conversation.title}` : "Fork",
-      started_at: Date.now(),
+      title: forkTitle,
+      started_at: now,
       username: conversation.user?.name || conversation.user?.email?.split("@")[0],
       parent_message_uuid: messageUuid,
-      message_count: 0,
+      message_count: seededCount,
       agent_type: conversation.agent_type,
     });
-    forkSetMessages(forkSessionId, []);
-    try {
-      const result = await convCommand(conversation._id.toString(), "forkFromMessage", {
-        message_uuid: messageUuid,
-        session_id: forkSessionId,
-      });
+    // conversations[stub] carries the fork metadata (storeMeta merge prefers it
+    // over the session row); fork_status "copying" arms the message-sync freeze
+    // from the first frame, before the server confirms it.
+    useInboxStore.getState().syncRecord("conversations", forkSessionId, {
+      _id: forkSessionId,
+      session_id: forkSessionId,
+      user_id: currentUser?._id?.toString() ?? "",
+      title: forkTitle,
+      agent_type: conversation.agent_type,
+      project_path: conversation.project_path ?? undefined,
+      git_root: conversation.git_root ?? undefined,
+      started_at: now,
+      updated_at: now,
+      status: "active",
+      message_count: seededCount,
+      forked_from: parentId,
+      parent_message_uuid: messageUuid,
+      fork_status: "copying",
+    });
+    forkSetMessages(forkSessionId, seededMsgs, { hasMoreAbove: !!hasMoreAbove || (conversation.loaded_start_index ?? 0) > 0, initialized: true });
+    // Seeds sessions[stub] and navigates in one action — instant switch.
+    seedForkSession(forkSessionId, {
+      session_id: forkSessionId,
+      title: forkTitle,
+      started_at: now,
+      message_count: seededCount,
+      forked_from: parentId,
+      parent_message_uuid: messageUuid,
+    } as any);
+    const ready = convCommand(parentId, "forkFromMessage", {
+      message_uuid: messageUuid,
+      session_id: forkSessionId,
+    }).then((result) => {
       resolveForkSessionId(forkSessionId, result.conversation_id);
-      seedForkSession(result.conversation_id, {
-        session_id: forkSessionId,
-        title: conversation.title ? `Fork: ${conversation.title}` : "Fork",
-        forked_from: conversation._id.toString(),
-        parent_message_uuid: messageUuid,
-      });
-      toast.success("Forked");
-      return { forkSessionId, conversationId: result.conversation_id };
-    } catch (err) {
+      return result.conversation_id as string;
+    });
+    // Same contract as beginOptimisticSession: a message sent against the stub
+    // resolves through awaitConvexId → pendingSessionCreates and waits here.
+    useInboxStore.getState().trackSessionCreate(forkSessionId, ready);
+    ready.catch((err) => {
+      useInboxStore.getState().discardForkStub(forkSessionId, parentId);
       toast.error(err instanceof Error ? err.message : "Failed to fork");
-      return null;
-    }
-  }, [conversation?._id, conversation?.title, convCommand, forkSetMessages, addOptimisticFork, resolveForkSessionId, seedForkSession, currentUser?._id, conversation?.user]);
+    });
+    return { forkSessionId, conversationId: forkSessionId, ready };
+  }, [conversation?._id, conversation?.title, conversation?.messages, conversation?.loaded_start_index, conversation?.project_path, conversation?.git_root, conversation?.agent_type, hasMoreAbove, convCommand, forkSetMessages, addOptimisticFork, resolveForkSessionId, seedForkSession, currentUser?._id, conversation?.user]);
 
   const handleForkFromMessage = useCallback(async (messageUuid: string) => {
     const tl = timelineRef.current;
@@ -9134,8 +9395,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
     const forkResult = await doFork(lastMsg.message_uuid);
     if (!forkResult) return;
+    // Optimistic bubble lands on the stub instantly (rekeyId carries pending
+    // messages to the real id); the durable send waits for the real Convex id
+    // since the dispatch pipeline can't address a stub.
     const clientId = addOptimisticMsg(forkResult.conversationId, content);
-    sendInlineMessage(forkResult.conversationId, content, undefined, clientId);
+    forkResult.ready
+      .then((realId) => sendInlineMessage(realId, content, undefined, clientId))
+      .catch(() => {}); // fork failure already surfaced by doFork
   }, [conversation, doFork, addOptimisticMsg, sendInlineMessage]);
 
   const isForkLoading = false;
@@ -10760,8 +11026,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const isSessionDisconnected = !!conversation && conversation.status === "active" && !!managedSession && !managedSession.is_connected && !isSessionConnected;
   const sessionAge = now - (conversation?.started_at ?? 0);
   const isNewEmptySession = !!conversation && conversation.status === "active" && (conversation.message_count ?? 0) === 0;
-  const isSessionStarting = isNewEmptySession && !managedSession?.is_connected && sessionAge < 30_000;
-  const isSessionReady = isNewEmptySession && !isSessionStarting && (managedSession?.is_connected || sessionAge >= 30_000) && sessionAge < 120_000;
+  // A fresh fork has messages but no daemon yet — give it the same
+  // "Starting session…" → "Ready" lifecycle above the input as a new session.
+  const isFreshFork = !!conversation && conversation.status === "active" && !!conversation.forked_from && sessionAge < 120_000;
+  const isSessionStarting = (isNewEmptySession || isFreshFork) && !managedSession?.is_connected && sessionAge < 30_000;
+  const isSessionReady = (isNewEmptySession || isFreshFork) && !isSessionStarting && (managedSession?.is_connected || sessionAge >= 30_000) && sessionAge < 120_000;
 
   useWatchEffect(() => {
     if (conversation) {
@@ -11501,9 +11770,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                           if (!convexConvId) return;
                           setTimeout(async () => {
                             try {
-                              await convCommand(convexConvId, "restartSession");
-                              toast.success("Restarting session, retrying pending messages...");
-                            } catch { toast.error("Failed to restart session"); }
+                              const res = await convCommand(convexConvId, "restartSession", ghostRestartContextFor(convexConvId));
+                              if (!followRestoredConversation(res, convexConvId)) {
+                                toast.success("Restarting session, retrying pending messages...");
+                              }
+                            } catch (err) {
+                              toast.error(`Failed to restart session: ${err instanceof Error ? err.message : String(err)}`);
+                            }
                           });
                         }}>
                           <svg className="w-3 h-3 mr-1.5 text-orange-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -11515,9 +11788,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                           if (!convexConvId) return;
                           setTimeout(async () => {
                             try {
-                              await convCommand(convexConvId, "repairSession");
-                              toast.success("Repairing session, retrying pending messages...");
-                            } catch { toast.error("Failed to repair session"); }
+                              const res = await convCommand(convexConvId, "repairSession", ghostRestartContextFor(convexConvId));
+                              if (!followRestoredConversation(res, convexConvId)) {
+                                toast.success("Repairing session, retrying pending messages...");
+                              }
+                            } catch (err) {
+                              toast.error(`Failed to repair session: ${err instanceof Error ? err.message : String(err)}`);
+                            }
                           });
                         }}>
                           <svg className="w-3 h-3 mr-1.5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
