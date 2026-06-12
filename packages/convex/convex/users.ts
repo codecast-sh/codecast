@@ -986,7 +986,11 @@ export const getPublicPinnedSessions = query({
 
 // PUBLIC. The anonymized GitHub-style contribution graph: per-day activity
 // tally across ALL the user's sessions (private ones count as anonymous squares,
-// exactly like GitHub), returning only {date, hours, sessions} — no identities.
+// exactly like GitHub). Each day is only aggregates — hours, session/message
+// counts, and a distinct-project COUNT (never names) — so the same rows power
+// both the contribution grid and the anonymized "ran N sessions on M projects"
+// feed. `projects` is best-effort: only the recent conversations source knows
+// paths, so older days report 0 (render-side: omit, don't show "0 projects").
 // Honors hide_activity, and only runs once the profile is enabled.
 export const getPublicActivityHeatmap = query({
   args: { username: v.string(), days: v.optional(v.number()) },
@@ -1005,15 +1009,23 @@ export const getPublicActivityHeatmap = query({
       { countAll: true }
     );
 
-    const buckets: Record<string, { hours: number; sessions: number }> = {};
+    const buckets: Record<string, { hours: number; sessions: number; msgs: number; projects: Set<string> }> = {};
     for (const iv of intervals) {
       const date = new Date(iv.end).toISOString().split("T")[0];
-      if (!buckets[date]) buckets[date] = { hours: 0, sessions: 0 };
-      buckets[date].sessions++;
-      buckets[date].hours += iv.hours;
+      const b = (buckets[date] ||= { hours: 0, sessions: 0, msgs: 0, projects: new Set() });
+      b.sessions++;
+      b.hours += iv.hours;
+      b.msgs += iv.msgs;
+      if (iv.project) b.projects.add(iv.project);
     }
     return Object.entries(buckets)
-      .map(([date, d]) => ({ date, hours: Math.round(d.hours * 100) / 100, sessions: d.sessions }))
+      .map(([date, d]) => ({
+        date,
+        hours: Math.round(d.hours * 100) / 100,
+        sessions: d.sessions,
+        msgs: Math.round(d.msgs),
+        projects: d.projects.size,
+      }))
       .sort((a, b) => a.date.localeCompare(b.date));
   },
 });
@@ -1195,7 +1207,10 @@ export const getUserAbstractActivity = query({
 // capped duration credit (exactly what the day heatmap has always added) and
 // `end` is the legacy bucketing timestamp; `start` lets granular consumers
 // distribute that credit across the hours the session actually spanned.
-type ActivityInterval = { start: number; end: number; hours: number; msgs: number };
+// `project` is the repo/folder basename — only the recent `conversations`
+// branch knows it (events/insights don't carry a path), so consumers must
+// treat it as best-effort. Used solely for anonymized distinct-project COUNTS.
+type ActivityInterval = { start: number; end: number; hours: number; msgs: number; project?: string | null };
 
 // Hybrid read strategy shared by the day heatmap and the hour punchcard:
 //   - Recent window (last 7 days): stream `conversations` directly.
@@ -1257,6 +1272,7 @@ async function collectUserActivityIntervals(
       end: upd,
       hours: Math.min(durMs, CAP) / HOUR,
       msgs: c.message_count ?? 0,
+      project: basenameOf(c.git_root || c.project_path),
     });
   }
 
@@ -1345,12 +1361,63 @@ export const getUserActivityHeatmap = query({
   },
 });
 
-// Hour-of-day granularity for the profile Timeline tab: each session's credit
-// is distributed across the (local date × hour) cells its interval overlaps,
-// so the punchcard shows *when during the day* work actually happened.
-// `tz_offset_minutes` is the viewer's Date.getTimezoneOffset() — hour-of-day
-// only means something in the viewer's local clock. (One offset is applied to
-// the whole range, so cells across a DST switch can shift by an hour.)
+// Hour-of-day bucketing shared by the authed and public punchcard queries:
+// each session's credit is distributed across the (local date × hour) cells
+// its interval overlaps, so the punchcard shows *when during the day* work
+// actually happened. `tzOffsetMinutes` is the viewer's Date.getTimezoneOffset()
+// — hour-of-day only means something in the viewer's local clock. (One offset
+// is applied to the whole range, so cells across a DST switch can shift by an
+// hour.) Returns only per-cell aggregates — nothing identifying leaks.
+function bucketPunchcardRows(intervals: ActivityInterval[], tzOffsetMinutes: number) {
+  const HOUR = 3600000;
+  const tzShift = tzOffsetMinutes * 60000;
+  const rows: Record<string, { hours: number[]; msgs: number[]; sessions: number[]; day_sessions: number }> = {};
+
+  for (const iv of intervals) {
+    // Bound the distribution loop: a zombie conversation idling for weeks
+    // still only smears its (already 8h-capped) credit over the final 14d.
+    let start = Math.min(iv.start, iv.end);
+    if (iv.end - start > 14 * 24 * HOUR) start = iv.end - 14 * 24 * HOUR;
+    const ls = start - tzShift;
+    const le = iv.end - tzShift;
+    const span = le - ls;
+    const firstCell = Math.floor(ls / HOUR);
+    const lastCell = Math.floor(le / HOUR);
+    const touchedDates = new Set<string>();
+    for (let cell = firstCell; cell <= lastCell; cell++) {
+      const cellStart = cell * HOUR;
+      const frac = span <= 0 ? 1 : (Math.min(le, cellStart + HOUR) - Math.max(ls, cellStart)) / span;
+      if (frac <= 0) continue;
+      const d = new Date(cellStart);
+      const date = d.toISOString().split("T")[0];
+      const hour = d.getUTCHours();
+      const row = (rows[date] ||= {
+        hours: new Array(24).fill(0),
+        msgs: new Array(24).fill(0),
+        sessions: new Array(24).fill(0),
+        day_sessions: 0,
+      });
+      row.hours[hour] += iv.hours * frac;
+      row.msgs[hour] += iv.msgs * frac;
+      row.sessions[hour]++;
+      if (!touchedDates.has(date)) {
+        touchedDates.add(date);
+        row.day_sessions++;
+      }
+    }
+  }
+
+  return Object.entries(rows)
+    .map(([date, r]) => ({
+      date,
+      hours: r.hours.map((h) => Math.round(h * 100) / 100),
+      msgs: r.msgs.map((m) => Math.round(m)),
+      sessions: r.sessions,
+      day_sessions: r.day_sessions,
+    }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+
 export const getUserActivityPunchcard = query({
   args: {
     user_id: v.id("users"),
@@ -1366,54 +1433,35 @@ export const getUserActivityPunchcard = query({
     if (!user || user.hide_activity) return [];
 
     const intervals = await collectUserActivityIntervals(ctx, userId, args, { preferCompleted: true });
+    return bucketPunchcardRows(intervals, args.tz_offset_minutes ?? 0);
+  },
+});
 
-    const HOUR = 3600000;
-    const tzShift = (args.tz_offset_minutes ?? 0) * 60000;
-    const rows: Record<string, { hours: number[]; msgs: number[]; sessions: number[]; day_sessions: number }> = {};
+// PUBLIC. The anonymized hour-of-day punchcard for /u/<handle> profile pages:
+// same countAll aggregation as the public heatmap (every session counts, no
+// identities), distributed across local-clock hour cells like the authed
+// Timeline tab. Gated identically: opt-in profile + activity not hidden.
+export const getPublicActivityPunchcard = query({
+  args: {
+    username: v.string(),
+    days: v.optional(v.number()),
+    tz_offset_minutes: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const handle = args.username.trim().toLowerCase();
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_username", (q) => q.eq("username", handle))
+      .first();
+    if (!user || !user.public_profile_enabled || user.hide_activity) return [];
 
-    for (const iv of intervals) {
-      // Bound the distribution loop: a zombie conversation idling for weeks
-      // still only smears its (already 8h-capped) credit over the final 14d.
-      let start = Math.min(iv.start, iv.end);
-      if (iv.end - start > 14 * 24 * HOUR) start = iv.end - 14 * 24 * HOUR;
-      const ls = start - tzShift;
-      const le = iv.end - tzShift;
-      const span = le - ls;
-      const firstCell = Math.floor(ls / HOUR);
-      const lastCell = Math.floor(le / HOUR);
-      const touchedDates = new Set<string>();
-      for (let cell = firstCell; cell <= lastCell; cell++) {
-        const cellStart = cell * HOUR;
-        const frac = span <= 0 ? 1 : (Math.min(le, cellStart + HOUR) - Math.max(ls, cellStart)) / span;
-        if (frac <= 0) continue;
-        const d = new Date(cellStart);
-        const date = d.toISOString().split("T")[0];
-        const hour = d.getUTCHours();
-        const row = (rows[date] ||= {
-          hours: new Array(24).fill(0),
-          msgs: new Array(24).fill(0),
-          sessions: new Array(24).fill(0),
-          day_sessions: 0,
-        });
-        row.hours[hour] += iv.hours * frac;
-        row.msgs[hour] += iv.msgs * frac;
-        row.sessions[hour]++;
-        if (!touchedDates.has(date)) {
-          touchedDates.add(date);
-          row.day_sessions++;
-        }
-      }
-    }
-
-    return Object.entries(rows)
-      .map(([date, r]) => ({
-        date,
-        hours: r.hours.map((h) => Math.round(h * 100) / 100),
-        msgs: r.msgs.map((m) => Math.round(m)),
-        sessions: r.sessions,
-        day_sessions: r.day_sessions,
-      }))
-      .sort((a, b) => a.date.localeCompare(b.date));
+    const intervals = await collectUserActivityIntervals(
+      ctx,
+      null,
+      { user_id: user._id, days: args.days },
+      { preferCompleted: true, countAll: true }
+    );
+    return bucketPunchcardRows(intervals, args.tz_offset_minutes ?? 0);
   },
 });
 

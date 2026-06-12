@@ -1,5 +1,6 @@
 "use client";
 import { useMemo, useState, useRef, useEffect } from "react";
+import { createPortal } from "react-dom";
 import { useTheme } from "./ThemeProvider";
 
 // Solarized contribution-graph ramps. Shared by the team profile (authed) and
@@ -31,11 +32,17 @@ export function useContainerWidth(initial = 800) {
   return { ref, width };
 }
 
+// Portaled to <body>: x/y are viewport coordinates, but position:fixed resolves
+// against the nearest *transformed* ancestor, not the viewport — and chart
+// sections can sit inside entrance animations (.reveal keeps a fill-mode
+// translateY(0), which still counts as a transform). The portal guarantees an
+// untransformed containing block so the tip always lands at the cursor.
 export function HoverTip({ x, y, children }: { x: number; y: number; children: React.ReactNode }) {
-  return (
+  return createPortal(
     <div className="fixed z-50 px-2 py-1 bg-sol-base03 text-sol-base2 text-[10px] rounded shadow-lg pointer-events-none whitespace-nowrap" style={{ left: x, top: y, transform: "translate(-50%, -100%)" }}>
       {children}
-    </div>
+    </div>,
+    document.body
   );
 }
 
@@ -81,9 +88,16 @@ export function ActivityHeatmap({ data, label = "Agent Activity" }: { data: any[
     const monthLabels: { label: string; col: number }[] = [];
     const mn = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
     let lastM = -1;
+    let lastCol = -Infinity;
     for (let w = 0; w < rows.length; w++) {
       const d = new Date(rows[w][0].date + "T12:00:00");
-      if (d.getMonth() !== lastM) { lastM = d.getMonth(); monthLabels.push({ label: mn[d.getMonth()], col: w }); }
+      if (d.getMonth() === lastM) continue;
+      lastM = d.getMonth();
+      // A month boundary in the first column or two sits on top of the previous
+      // label ("JulAug") — drop the crowded one, keep the newer month.
+      if (w - lastCol < 3) monthLabels.pop();
+      lastCol = w;
+      monthLabels.push({ label: mn[d.getMonth()], col: w });
     }
 
     return { grid: rows, maxHours: max, totalHours: totalH, totalSessions: totalS, months: monthLabels };
