@@ -1,5 +1,5 @@
 // Single source of truth for the commands a daemon can be told to run. Mirrors
-// the daemon_commands.command union in convex/schema.ts exactly — all 18,
+// the daemon_commands.command union in convex/schema.ts exactly — all 21,
 // including "move_to_device".
 //
 // DIVERGENCE NOTE: convex/users.ts sendDaemonCommand currently accepts only 17
@@ -33,6 +33,15 @@ export const DAEMON_COMMANDS = [
   // "Unknown command" and do nothing — falling into their resume_session path
   // would reconstitute from a mid-copy export and truncate the fork's history.
   "fork_session",
+  // Swap the machine's active Claude Code account to a saved profile, tear down
+  // the listed limit/auth-blocked sessions, and enqueue "continue" to each so
+  // the delivery rail resumes them on the new account.
+  "switch_account",
+  // In-place model/effort switch for a RUNNING claude session: the daemon
+  // drives the /model picker (arrows + `s`) so the change stays session-scoped
+  // — the one-shot `/model <x>` and `/effort <x>` forms rewrite the user's
+  // GLOBAL default in ~/.claude/settings.json. Old daemons: "Unknown command".
+  "set_model",
 ] as const;
 
 export type DaemonCommand = (typeof DAEMON_COMMANDS)[number];
