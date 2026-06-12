@@ -30,7 +30,7 @@ import { TmuxMissingBanner } from "./TmuxMissingBanner";
 import { FindBar } from "./FindBar";
 import { KeyboardShortcutsPanel } from "./KeyboardShortcutsHelp";
 import { NewSessionModal } from "./ConversationList";
-import { useInboxStore, useTrackedStore, categorizeSessions, sessionsWithPendingSend } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, categorizeSessions, sessionsWithPendingSend, isSessionHidden } from "../store/inboxStore";
 import { useShortcutAction, useShortcutContext, useGlobalShortcutActions, formatShortcutLabel } from "../shortcuts";
 import { usePrefetch } from "../hooks/usePrefetch";
 import { desktopHeaderClass, setupDesktopDrag, isElectron } from "../lib/desktop";
@@ -247,7 +247,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       return;
     }
     if (sess) {
-      if (sess.inbox_dismissed_at) {
+      if (isSessionHidden(sess)) {
         store.setViewingDismissedId(id);
       } else {
         store.setCurrentSession(id);

@@ -9,7 +9,7 @@ import { ConversationData } from "./ConversationView";
 import { FormattedSummary } from "./FormattedSummary";
 import { sessionCardSummary } from "../lib/sessionSummary";
 import { useConversationMessages } from "../hooks/useConversationMessages";
-import { useInboxStore, useTrackedStore, InboxSession, getSessionRenderKey, isConvexId, categorizeSessions, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, isSessionDismissed, resolveSessionAuthor, convBucketMap, groupSessionsForLabelView, BucketItem, BucketAssignmentItem } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, InboxSession, getSessionRenderKey, isConvexId, categorizeSessions, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, isSessionHidden, resolveSessionAuthor, convBucketMap, groupSessionsForLabelView, BucketItem, BucketAssignmentItem } from "../store/inboxStore";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
 import { cleanTitle, msgCountColor, formatModel } from "../lib/conversationProcessor";
 import { getLabelColor } from "../lib/labelColors";
@@ -20,7 +20,7 @@ import { shareOrigin } from "../lib/utils";
 import { PlanContextPanel } from "./PlanContextPanel";
 import { WorkflowContextPanel } from "./WorkflowContextPanel";
 import { toast } from "sonner";
-import { animatedStashSession } from "../store/undoActions";
+import { animatedHideSession } from "../store/undoActions";
 import { soundKill } from "../lib/sounds";
 import { formatShortcutLabel } from "../shortcuts";
 import { X, ChevronsLeft, ChevronsRight, List, Clock, Tag, Plus } from "lucide-react";
@@ -406,13 +406,17 @@ export const SessionCard = memo(function SessionCard({
   onRestore?: (id: string) => void;
   onKill?: (id: string) => void;
   onNavigateToSession?: (id: string) => void;
-  variant?: "default" | "working" | "dismissed";
+  variant?: "default" | "working" | "dismissed" | "stashed";
   forkColorKey?: string;
 }) {
   const tipActions = useTipActions();
   const project = getProjectName(session.git_root, session.project_path);
   const isWorking = variant === "working";
-  const isDismissed = variant === "dismissed";
+  const isStashed = variant === "stashed";
+  // Stashed cards share the dismissed bucket's muted look — but NOT its
+  // liveness suppression (a stashed agent is still running; see the idle-dot
+  // gate below, which stays keyed on the real dismissed variant).
+  const isDismissed = variant === "dismissed" || isStashed;
   const isSubagent = !!session.is_subagent || !!session.parent_conversation_id || !!session.worktree_name;
   // Local-first "pending working": a message has been sent but the daemon
   // hasn't confirmed delivery yet (status not active). Reading the durable
@@ -808,7 +812,7 @@ export const SessionCard = memo(function SessionCard({
             {session.has_pending && !session.is_unresponsive && !isPendingWorking && (
               <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow animate-pulse" title="Message pending" />
             )}
-            {!isWorking && !isLive && !isDismissed && session.is_idle && !session.pending_api_error && !session.session_error && !session.is_unresponsive && !session.has_pending && !isPendingWorking && session.message_count > 0 && (
+            {!isWorking && !isLive && variant !== "dismissed" && session.is_idle && !session.pending_api_error && !session.session_error && !session.is_unresponsive && !session.has_pending && !isPendingWorking && session.message_count > 0 && (
               <span className="w-1.5 h-1.5 rounded-full bg-sol-text-dim/40 ring-1 ring-sol-text-dim/20" title="Session idle" />
             )}
             {isPendingWorking && (
@@ -924,7 +928,7 @@ export const SessionCard = memo(function SessionCard({
                     </svg>
                   </button>
                 </TooltipTrigger>
-                <TooltipContent side="left">Dismiss ({formatShortcutLabel('session.stash')})</TooltipContent>
+                <TooltipContent side="left">Stash ({formatShortcutLabel('session.stash')})</TooltipContent>
               </Tooltip>
             </TooltipProvider>
           )}
@@ -945,7 +949,7 @@ export const SessionCard = memo(function SessionCard({
                     </svg>
                   </button>
                 </TooltipTrigger>
-                <TooltipContent side="left">Kill ({formatShortcutLabel('session.kill')})</TooltipContent>
+                <TooltipContent side="left">{isStashed ? `Dismiss (${formatShortcutLabel('session.dismiss')})` : "Kill"}</TooltipContent>
               </Tooltip>
             </TooltipProvider>
           )}
@@ -1115,6 +1119,7 @@ export function SessionListPanel({
   const s = useTrackedStore([
     s => s.clientState.ui,
     s => s.clientState.show_dismissed,
+    s => s.clientState.show_stashed,
     s => s.hiddenSessionCount,
     s => s.sessions,
     s => s.sessionsWithQueuedMessages,
@@ -1159,7 +1164,7 @@ export function SessionListPanel({
     () => ({ currentSessionId: activeSessionId ?? s.currentSessionId, pendingCreateIds: new Set(Object.keys(s.pendingSessionCreates)) }),
     [activeSessionId, s.currentSessionId, s.pendingSessionCreates],
   );
-  const { sorted: sortedSessions, pinned, newSessions, needsInput, working, dismissed: dismissedList, subsByParent: globalSubByParent, forksByParent: globalForksByParent, orchestrationGroups: globalOrchestrationGroups } = useMemo(
+  const { sorted: sortedSessions, pinned, newSessions, needsInput, working, stashed: stashedList, dismissed: dismissedList, subsByParent: globalSubByParent, forksByParent: globalForksByParent, orchestrationGroups: globalOrchestrationGroups } = useMemo(
     () => categorizeSessions(s.sessions, s.sessionsWithQueuedMessages, pendingSendIds, blankOpts),
     [s.sessions, s.sessionsWithQueuedMessages, pendingSendIds, blankOpts],
   );
@@ -1232,19 +1237,28 @@ export function SessionListPanel({
     );
     return filtered.sort((a, b) => (b.dismissed_at || b.updated_at || 0) - (a.dismissed_at || a.updated_at || 0));
   }, [filterByChip, dismissedList]);
+  const filteredStashed = useMemo(() => {
+    // Same recency window as Dismissed for the same noise reason.
+    const cutoff = Date.now() - DISMISSED_VISIBLE_MS;
+    const filtered = filterByChip(stashedList).filter(
+      (sess) => (sess.updated_at ?? 0) >= cutoff,
+    );
+    return filtered.sort((a, b) => (b.inbox_stashed_at || b.updated_at || 0) - (a.inbox_stashed_at || a.updated_at || 0));
+  }, [filterByChip, stashedList]);
   const filteredCount = filteredPinned.length + filteredNew.length + filteredNeedsInput.length + filteredWorking.length;
 
-  // Stale working set: EVERY non-dismissed session untouched for >30d, minus
-  // pinned (explicit keep) and the one you're viewing. Computed from the full
-  // session map — NOT the active buckets — on purpose: subagents nested under a
-  // parent are held out of those buckets, but dismissing their parent promotes
-  // them to top-level, so they must be in the dismiss set too or they refill the
-  // inbox after a sweep.
+  // Stale working set: EVERY non-hidden session untouched for >30d, minus
+  // pinned (explicit keep) and the one you're viewing. Stashed sessions are an
+  // explicit keep too — the sweep must not retire what the user deliberately
+  // set aside. Computed from the full session map — NOT the active buckets —
+  // on purpose: subagents nested under a parent are held out of those buckets,
+  // but dismissing their parent promotes them to top-level, so they must be in
+  // the dismiss set too or they refill the inbox after a sweep.
   const staleSessions = useMemo(() => {
     const cutoff = Date.now() - STALE_SESSION_MS;
     return (Object.values(s.sessions) as InboxSession[]).filter(
       (sess) =>
-        !isSessionDismissed(sess) &&
+        !isSessionHidden(sess) &&
         !sess.is_pinned &&
         sess._id !== activeSessionId &&
         (sess.updated_at ?? 0) < cutoff,
@@ -1386,9 +1400,15 @@ export function SessionListPanel({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const scrolledToRef = useRef<string | null>(null);
 
-  // -- Dismiss & enter animations --
-  const handleAnimatedDismiss = useCallback((id: string) => {
-    animatedStashSession(id);
+  // -- Hide & enter animations --
+  // The X on an active card mirrors the Ctrl+Backspace chord: stash (keep alive).
+  const handleAnimatedStash = useCallback((id: string) => {
+    animatedHideSession(id, "stash");
+  }, []);
+  // On a stashed card the destructive slot dismisses (server kills the agent on
+  // the transition) — the row moves down into Dismissed.
+  const handleDismissStashed = useCallback((id: string) => {
+    animatedHideSession(id, "dismiss");
   }, []);
 
   // Auto-scroll to active session, retrying when sessions load and revealing hidden sections
@@ -1430,10 +1450,93 @@ export function SessionListPanel({
         return;
       }
     }
+    if (inList(filteredStashed) && s.clientState.show_stashed === false) {
+      s.toggleShowStashed();
+      return;
+    }
     if (inList(filteredDismissed) && s.clientState.show_dismissed === false) {
       s.toggleShowDismissed();
     }
-  }, [activeSessionId, sortedSessions, s.collapsedSections, s.clientState.show_dismissed, viewMode]);
+  }, [activeSessionId, sortedSessions, s.collapsedSections, s.clientState.show_dismissed, s.clientState.show_stashed, viewMode]);
+
+  // Shared renderer for the two hidden buckets at the bottom of the list —
+  // Stashed (set aside, agent alive) above Dismissed (retired, agent killed).
+  // Identical chrome; they differ only in the destructive slot: a stashed card
+  // dismisses (moves down a bucket), a dismissed card kills/removes outright.
+  // Stashed hides itself entirely when empty; Dismissed always shows (existing
+  // behavior — it doubles as the "where did my session go" affordance).
+  const renderHiddenBucket = (opts: {
+    label: string;
+    items: InboxSession[];
+    expanded: boolean;
+    onToggle: () => void;
+    variant: "stashed" | "dismissed";
+    onKill: (id: string) => void;
+  }) => {
+    const { label, items, expanded, onToggle, variant, onKill } = opts;
+    if (variant === "stashed" && items.length === 0) return null;
+    const allIds = new Set(items.map((sess) => sess._id));
+    const subMap = new Map<string, InboxSession[]>();
+    for (const sess of items) {
+      if (sess.parent_conversation_id && allIds.has(sess.parent_conversation_id)) {
+        if (!subMap.has(sess.parent_conversation_id)) subMap.set(sess.parent_conversation_id, []);
+        subMap.get(sess.parent_conversation_id)!.push(sess);
+      }
+    }
+    for (const subs of subMap.values()) {
+      subs.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
+    }
+    const subsWithParent = new Set(Array.from(subMap.values()).flat().map((sess) => sess._id));
+    const orphanedSub = (sess: InboxSession) =>
+      !subsWithParent.has(sess._id) && sess.parent_conversation_id && s.sessions[sess.parent_conversation_id];
+    const topLevel = items.filter((sess) => !subsWithParent.has(sess._id) && !orphanedSub(sess));
+    return (
+      <div className="border-t border-sol-border/30">
+        <button
+          onClick={onToggle}
+          className="w-full px-3 py-1.5 bg-sol-bg border-b border-sol-border/30 flex items-center justify-between"
+        >
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-sol-text-dim">
+            {label}{items.length > 0 ? ` (${items.length})` : ""}
+          </span>
+          <svg className={`w-3 h-3 transition-transform text-sol-text-dim ${expanded ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+          </svg>
+        </button>
+        {expanded && topLevel.length > 0 && (
+          <div>
+            {topLevel.map((session) => (
+              <div key={session._id} className="border-b border-sol-border/30">
+                <SessionCard
+                  session={session}
+                  isActive={session._id === activeSessionId}
+                  globalIndex={-1}
+                  onSelect={handleSelect}
+                  onRestore={s.restoreSession}
+                  onKill={onKill}
+                  variant={variant}
+                  forkColorKey={globalForksByParent.has(session._id) ? session._id : (session.forked_from ?? undefined)}
+                />
+                {(subMap.get(session._id) ?? []).filter((sub) => showSubagents || sub._id === activeSessionId).map((sub) => (
+                  <SessionCard
+                    key={sub._id}
+                    session={sub}
+                    isActive={sub._id === activeSessionId}
+                    isParentActive={session._id === activeSessionId}
+                    globalIndex={-1}
+                    onSelect={handleSelect}
+                    onRestore={s.restoreSession}
+                    onKill={onKill}
+                    variant={variant}
+                  />
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   const renderSection = (
     label: string,
@@ -1519,7 +1622,7 @@ export function SessionListPanel({
                   isActive={session._id === activeSessionId}
                   globalIndex={0}
                   onSelect={handleSelect}
-                  onDismiss={handleAnimatedDismiss}
+                  onDismiss={handleAnimatedStash}
                   onDefer={s.deferSession}
                   onPin={s.pinSession}
                   variant={sectionVariant || "default"}
@@ -1533,7 +1636,7 @@ export function SessionListPanel({
                     isParentActive={session._id === activeSessionId}
                     globalIndex={0}
                     onSelect={handleSelect}
-                    onDismiss={handleAnimatedDismiss}
+                    onDismiss={handleAnimatedStash}
                     variant={sectionVariant || "default"}
                   />
                 ))}
@@ -1799,7 +1902,7 @@ export function SessionListPanel({
                     isActive={session._id === activeSessionId}
                     globalIndex={0}
                     onSelect={handleSelect}
-                    onDismiss={handleAnimatedDismiss}
+                    onDismiss={handleAnimatedStash}
                     onDefer={s.deferSession}
                     onPin={s.pinSession}
                     variant={"default"}
@@ -1817,67 +1920,22 @@ export function SessionListPanel({
             No active sessions
           </div>
         )}
-        <div className="border-t border-sol-border/30">
-          <button
-            onClick={() => s.toggleShowDismissed()}
-            className="w-full px-3 py-1.5 bg-sol-bg border-b border-sol-border/30 flex items-center justify-between"
-          >
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-sol-text-dim">
-              Dismissed{filteredDismissed.length > 0 ? ` (${filteredDismissed.length})` : ""}
-            </span>
-            <svg className={`w-3 h-3 transition-transform text-sol-text-dim ${s.clientState.show_dismissed === false ? "" : "rotate-180"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-            </svg>
-          </button>
-          {s.clientState.show_dismissed !== false && filteredDismissed.length > 0 && (() => {
-            const allDismissedIds = new Set(filteredDismissed.map((sess) => sess._id));
-            const subMap = new Map<string, InboxSession[]>();
-            for (const sess of filteredDismissed) {
-              if (sess.parent_conversation_id && allDismissedIds.has(sess.parent_conversation_id)) {
-                if (!subMap.has(sess.parent_conversation_id)) subMap.set(sess.parent_conversation_id, []);
-                subMap.get(sess.parent_conversation_id)!.push(sess);
-              }
-            }
-            for (const subs of subMap.values()) {
-              subs.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
-            }
-            const subsWithParent = new Set(Array.from(subMap.values()).flat().map((sess) => sess._id));
-            const orphanedSub = (sess: InboxSession) =>
-              !subsWithParent.has(sess._id) && sess.parent_conversation_id && s.sessions[sess.parent_conversation_id];
-            const topLevel = filteredDismissed.filter((sess) => !subsWithParent.has(sess._id) && !orphanedSub(sess));
-            return (
-            <div>
-              {topLevel.map((session) => (
-                <div key={session._id} className="border-b border-sol-border/30">
-                  <SessionCard
-                    session={session}
-                    isActive={session._id === activeSessionId}
-                    globalIndex={-1}
-                    onSelect={handleSelect}
-                    onRestore={s.unstashSession}
-                    onKill={handleKillDismissed}
-                    variant="dismissed"
-                    forkColorKey={globalForksByParent.has(session._id) ? session._id : (session.forked_from ?? undefined)}
-                  />
-                  {(subMap.get(session._id) ?? []).filter((sub) => showSubagents || sub._id === activeSessionId).map((sub) => (
-                    <SessionCard
-                      key={sub._id}
-                      session={sub}
-                      isActive={sub._id === activeSessionId}
-                      isParentActive={session._id === activeSessionId}
-                      globalIndex={-1}
-                      onSelect={handleSelect}
-                      onRestore={s.unstashSession}
-                      onKill={handleKillDismissed}
-                      variant="dismissed"
-                    />
-                  ))}
-                </div>
-              ))}
-            </div>
-            );
-          })()}
-        </div>
+        {renderHiddenBucket({
+          label: "Stashed",
+          items: filteredStashed,
+          expanded: s.clientState.show_stashed !== false,
+          onToggle: s.toggleShowStashed,
+          variant: "stashed",
+          onKill: handleDismissStashed,
+        })}
+        {renderHiddenBucket({
+          label: "Dismissed",
+          items: filteredDismissed,
+          expanded: s.clientState.show_dismissed !== false,
+          onToggle: s.toggleShowDismissed,
+          variant: "dismissed",
+          onKill: handleKillDismissed,
+        })}
       </div>
       {onCollapse && (
         <div className="flex-shrink-0 border-t border-sol-border/30 flex justify-center py-1">
@@ -2008,7 +2066,7 @@ export const ConversationColumn = memo(function ConversationColumn() {
   }, [s.selectPanelSession]);
 
   const handleSendAndDismiss = useCallback(() => {
-    if (s.sidePanelSessionId) animatedStashSession(s.sidePanelSessionId);
+    if (s.sidePanelSessionId) animatedHideSession(s.sidePanelSessionId, "stash");
   }, [s.sidePanelSessionId]);
 
   if (!session || !s.sidePanelSessionId) return null;

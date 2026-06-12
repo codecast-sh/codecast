@@ -14,7 +14,7 @@ import { isInboxRoute } from "../lib/inboxRouting";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { getLabelColor, DEFAULT_LABELS } from "../lib/labelColors";
 import { toast } from "sonner";
-import { undoableArchiveDoc, undoableStashSession, undoableDeferSession } from "../store/undoActions";
+import { undoableArchiveDoc, undoableHideSession, undoableDeferSession } from "../store/undoActions";
 import { copyToClipboard } from "../lib/utils";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import {
@@ -1119,15 +1119,12 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
         useInboxStore.getState().pinSession(session._id);
         toast.success(session.is_pinned ? "Unpinned" : "Pinned");
         closePalette();
-      } else if (actionKey === "session_kill") {
-        const convexId = useInboxStore.getState().getConvexId(session._id);
-        if (convexId) {
-          useInboxStore.getState().convCommand(convexId, "killSession", { mark_completed: true });
-        }
-        undoableStashSession(session._id, { verb: "Killed" });
+      } else if (actionKey === "session_dismiss") {
+        // The kill rides the dismiss transition server-side (dispatch.applyPatches).
+        undoableHideSession(session._id, "dismiss");
         closePalette();
       } else if (actionKey === "session_stash") {
-        undoableStashSession(session._id);
+        undoableHideSession(session._id, "stash");
         closePalette();
       } else if (actionKey === "session_defer") {
         undoableDeferSession(session._id);
@@ -1204,8 +1201,8 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
     return [
       { key: "session_pin", label: s.is_pinned ? "Unpin session" : "Pin session", icon: s.is_pinned ? PinOff : Pin, shortcutAction: "session.pin" },
       { key: "bucket", label: "Label session...", icon: Tag, shortcutAction: "session.moveToBucket" },
-      { key: "session_kill", label: "Kill session", icon: Square, shortcutAction: "session.kill" },
-      { key: "session_stash", label: "Dismiss session", icon: Archive, shortcutAction: "session.stash" },
+      { key: "session_stash", label: "Stash session", icon: Archive, shortcutAction: "session.stash" },
+      { key: "session_dismiss", label: "Dismiss session (kill)", icon: Square, shortcutAction: "session.dismiss" },
       { key: "session_defer", label: "Defer session", icon: Clock, shortcutAction: "session.deferAdvance" },
       { key: "session_rename", label: "Rename session", icon: Pencil, shortcutAction: "session.rename" },
       { key: "session_copy", label: "Copy session ID", icon: Copy },

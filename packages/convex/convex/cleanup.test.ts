@@ -107,6 +107,10 @@ describe("shouldReapEmpty", () => {
     expect(shouldReapEmpty({}, false)).toBe(true);
     expect(shouldReapEmpty({ inbox_dismissed_at: 123 }, false)).toBe(true);
   });
+  test("a STASHED empty with a live agent is reaped — an empty blank has nothing worth keeping alive", () => {
+    expect(shouldReapEmpty({ inbox_stashed_at: 123 }, true)).toBe(true);
+    expect(shouldReapEmpty({ inbox_stashed_at: 123 }, false)).toBe(true);
+  });
 });
 
 describe("reapEmptyConversation", () => {

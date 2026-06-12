@@ -371,13 +371,13 @@ export function useSyncInboxSessions() {
   useEffect(() => {
     if (!hydrated) return;
     // STABLE window bound for the WHOLE crawl — computed once here, never inside
-    // the server handler. listDismissedSessionsLite range-scans by_user_dismissed
-    // from this lower bound; a per-page Date.now() would shift the range so each
-    // continuation cursor is InvalidCursor, capping the crawl at its first page
-    // (~500 rows) and leaving a heavy account's older dismisses unreconciled —
-    // they then resurface on other tabs/devices. Mirrors the sessions crawl's
-    // `crawlSince`. Must equal the server's INBOX_DISMISSED_WINDOW_MS.
-    const dismissedSince = Date.now() - DISMISS_RECONCILE_WINDOW_MS;
+    // the server handler. The lite queries range-scan their index from this lower
+    // bound; a per-page Date.now() would shift the range so each continuation
+    // cursor is InvalidCursor, capping the crawl at its first page (~500 rows)
+    // and leaving a heavy account's older dismisses unreconciled — they then
+    // resurface on other tabs/devices. Mirrors the sessions crawl's `crawlSince`.
+    // Must equal the server's INBOX_DISMISSED_WINDOW_MS.
+    const hiddenSince = Date.now() - DISMISS_RECONCILE_WINDOW_MS;
     runReconcileCrawl({
       namespace: "dismissed",
       wsKey: sessWsKey,
@@ -386,7 +386,7 @@ export function useSyncInboxSessions() {
       maxPages: 50,
       fetchPage: async (cursor) => {
         const page: any = await convex.query(api.conversations.listDismissedSessionsLite, {
-          since: dismissedSince,
+          since: hiddenSince,
           paginationOpts: { numItems: 1000, cursor },
         });
         return { rows: page.page ?? [], isDone: page.isDone, continueCursor: page.continueCursor };
@@ -396,6 +396,23 @@ export function useSyncInboxSessions() {
       // `complete` is false if the crawl stopped at maxPages, so a truncated set
       // can never wrongly un-dismiss the un-fetched tail.
       onComplete: (all, complete) => useInboxStore.getState().applyDismissedReconcile(all as any, complete),
+    });
+    // Stashed twin — same mechanics, keyed on inbox_stashed_at.
+    runReconcileCrawl({
+      namespace: "stashed",
+      wsKey: sessWsKey,
+      throttleMs: SESSIONS_RECONCILE_THROTTLE_MS,
+      pageDelayMs: SESSIONS_RECONCILE_PAGE_DELAY_MS,
+      maxPages: 50,
+      fetchPage: async (cursor) => {
+        const page: any = await convex.query(api.conversations.listStashedSessionsLite, {
+          since: hiddenSince,
+          paginationOpts: { numItems: 1000, cursor },
+        });
+        return { rows: page.page ?? [], isDone: page.isDone, continueCursor: page.continueCursor };
+      },
+      onPage: (rows) => useInboxStore.getState().applyStashedReconcile(rows as any, false),
+      onComplete: (all, complete) => useInboxStore.getState().applyStashedReconcile(all as any, complete),
     });
   }, [convex, sessWsKey, reconcileNonce, hydrated]); // eslint-disable-line react-hooks/exhaustive-deps
 

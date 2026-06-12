@@ -2,25 +2,18 @@
 
 import { useCallback } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { useMutation } from "convex/react";
-import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
-import { useInboxStore, isConvexId, isSessionWaitingForInput } from "../store/inboxStore";
+import { useInboxStore, isSessionWaitingForInput } from "../store/inboxStore";
 import { isInboxSessionView } from "../lib/inboxRouting";
 import { useShortcutAction } from "./ShortcutProvider";
 import { performUndo, performRedo } from "../store/undoStack";
-import { animatedStashSession, undoableDeferSession, undoablePinSession } from "../store/undoActions";
+import { animatedHideSession, undoableDeferSession, undoablePinSession } from "../store/undoActions";
 import { checkMilestone } from "../tips/useTips";
-import { toast } from "sonner";
-import type { Id } from "@codecast/convex/convex/_generated/dataModel";
-
-const api = _typedApi as any;
 
 export function useGlobalShortcutActions() {
   const pathname = usePathname();
   const router = useRouter();
   const inboxSource = useInboxStore((s) => s.currentConversation?.source);
   const isOnInboxPage = isInboxSessionView(pathname, inboxSource);
-  const killSessionMutation = useMutation(api.conversations.killSession);
 
   useShortcutAction('session.next', useCallback(() => {
     const store = useInboxStore.getState();
@@ -74,11 +67,14 @@ export function useGlobalShortcutActions() {
     }
   }, [isOnInboxPage]));
 
-  useShortcutAction('session.stash', useCallback(() => {
+  // Shared body of the stash/dismiss chords; the only difference is the mode.
+  // The kill that makes dismiss destructive happens SERVER-side on the dismiss
+  // data transition (dispatch.applyPatches), so neither handler asks for it.
+  const hideCurrent = useCallback((mode: "stash" | "dismiss") => {
     const store = useInboxStore.getState();
     const currentId = isOnInboxPage ? store.currentSessionId : store.sidePanelSessionId;
     if (!currentId) return;
-    checkMilestone('m-first-stash');
+    if (mode === "stash") checkMilestone('m-first-stash');
     if (!isOnInboxPage) {
       const ordered = store.visualOrder();
       const idx = ordered.findIndex(s => s._id === currentId);
@@ -86,30 +82,12 @@ export function useGlobalShortcutActions() {
         ?? ordered.find(s => s._id !== currentId);
       if (next) store.selectPanelSession(next._id);
     }
-    animatedStashSession(currentId);
-  }, [isOnInboxPage]));
+    animatedHideSession(currentId, mode);
+  }, [isOnInboxPage]);
 
-  useShortcutAction('session.kill', useCallback(() => {
-    const store = useInboxStore.getState();
-    const currentId = isOnInboxPage ? store.currentSessionId : store.sidePanelSessionId;
-    if (!currentId) return;
-    const convexId = store.getConvexId(currentId);
-    if (convexId && isConvexId(convexId)) {
-      // session_id rides along so the daemon can still tear the backend down
-      // when its local conversation mapping (or the server row) is gone.
-      const sessionId = (store.sessions[currentId] as any)?.session_id;
-      killSessionMutation({ conversation_id: convexId as Id<"conversations">, mark_completed: true, session_id: sessionId })
-        .catch((err) => toast.error(`Kill failed: ${err instanceof Error ? err.message : String(err)}`));
-    }
-    if (!isOnInboxPage) {
-      const ordered = store.visualOrder();
-      const idx = ordered.findIndex(s => s._id === currentId);
-      const next = ordered.slice(idx + 1).find(s => s._id !== currentId)
-        ?? ordered.find(s => s._id !== currentId);
-      if (next) store.selectPanelSession(next._id);
-    }
-    animatedStashSession(currentId, { verb: "Killed" });
-  }, [isOnInboxPage, killSessionMutation]));
+  useShortcutAction('session.stash', useCallback(() => hideCurrent("stash"), [hideCurrent]));
+
+  useShortcutAction('session.dismiss', useCallback(() => hideCurrent("dismiss"), [hideCurrent]));
 
   useShortcutAction('session.deferAdvance', useCallback(() => {
     const store = useInboxStore.getState();
