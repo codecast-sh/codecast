@@ -54,10 +54,17 @@ type Message = {
 };
 
 export function useConversationMessages(
-  conversationId: string,
+  requestedConversationId: string,
   targetMessageId?: string,
   highlightQuery?: string
 ) {
+  // Follow the optimistic-create rekey. When a stub conversation resolves to
+  // its real Convex id, rekeyId deletes the stub rows in the same store
+  // transaction that flips the current-session pointer — but consumers that
+  // render through useDeferredValue (InboxConversation) do one more urgent
+  // pass with the stale stub id. Without resolution that pass finds no rows,
+  // flashes the full-pane loader, and remounts the whole conversation tree.
+  const conversationId = useInboxStore((s) => s.resolveLiveSessionId(requestedConversationId));
   const canQuery = isConvexId(conversationId);
   const convId = conversationId as Id<"conversations">;
 
