@@ -4,6 +4,7 @@ import {
   ZERO_SHA,
   augmentPorcelain,
   contentLinesToMatch,
+  conversationDeepLink,
   formatDefaultBlame,
   formatGitDate,
   parseBlamePorcelain,
@@ -174,6 +175,19 @@ describe("rewriteFugitiveBlame", () => {
       `bcc05bee702a2ae1a58c6dc535b3fd6901a45759 1 1 1\nauthor X\nauthor-time 1\nauthor-tz +0000\nsummary s\nfilename p\n\t{\n`,
     );
     expect(rewriteFugitiveBlame(STANDARD_TWO, oneLine, resolution)).toBe(STANDARD_TWO);
+  });
+});
+
+describe("conversationDeepLink", () => {
+  test("anchors on the originating message when present", () => {
+    expect(
+      conversationDeepLink({ conversation_id: "jx7azjfFULLID", title: "x", message_id: "k17abc" }),
+    ).toBe("https://codecast.sh/conversation/jx7azjfFULLID#msg-k17abc");
+  });
+  test("falls back to the bare conversation url without a message id", () => {
+    expect(conversationDeepLink({ conversation_id: "jx7azjfFULLID", title: "x" })).toBe(
+      "https://codecast.sh/conversation/jx7azjfFULLID",
+    );
   });
 });
 
