@@ -2539,6 +2539,8 @@ export const listRecentSessions = query({
           _id: c._id,
           session_id: c.session_id,
           title: c.title,
+          subtitle: c.subtitle,
+          idle_summary: c.idle_summary,
           updated_at: c.updated_at,
           project_path: c.project_path,
           git_root: c.git_root,
@@ -2641,19 +2643,33 @@ export const searchConversations = query({
       }
     }
 
-    // Titles aren't covered by the message index — search them directly so a
-    // session like "Poll render debug" surfaces even when no message body matches.
+    // Titles and summaries aren't covered by the message index — search them
+    // directly so a session like "Poll render debug" surfaces even when no
+    // message body matches. subtitle (multi-line generated summary) and
+    // idle_summary (one-line blurb) catch sessions the user remembers by their
+    // summary wording rather than their title.
     type ConvDoc = NonNullable<Awaited<ReturnType<typeof ctx.db.get<"conversations">>>>;
     const titleConvs = new Map<string, ConvDoc>();
     if (!userOnly) {
-      const titleHits = await ctx.db
-        .query("conversations")
-        .withSearchIndex("search_title_v2", (q) => q.search("title", searchQuery))
-        .take(50);
-      for (const conv of titleHits) {
+      const fieldHits = await Promise.all([
+        ctx.db
+          .query("conversations")
+          .withSearchIndex("search_title_v2", (q) => q.search("title", searchQuery))
+          .take(50),
+        ctx.db
+          .query("conversations")
+          .withSearchIndex("search_subtitle", (q) => q.search("subtitle", searchQuery))
+          .take(50),
+        ctx.db
+          .query("conversations")
+          .withSearchIndex("search_idle_summary", (q) => q.search("idle_summary", searchQuery))
+          .take(50),
+      ]);
+      for (const conv of fieldHits.flat()) {
         const convId = conv._id.toString();
-        if (conversationMatches.has(convId)) continue;
-        if (!contentMatchesAnyTerm(conv.title || "", terms)) continue;
+        if (conversationMatches.has(convId) || titleConvs.has(convId)) continue;
+        const directFields = `${conv.title || ""} ${conv.subtitle || ""} ${conv.idle_summary || ""}`;
+        if (!contentMatchesAnyTerm(directFields, terms)) continue;
         titleConvs.set(convId, conv);
       }
     }

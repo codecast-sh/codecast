@@ -835,7 +835,10 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
     const out: any[] = [];
     for (let i = 0; i < scan.length && out.length < RECENT_RENDER_CAP; i++) {
       const conv = scan[i];
-      const hay = `${cleanTitle(conv.title || "")} ${conv.project_path || ""} ${conv.authorName || ""}`.toLowerCase();
+      // Summaries are part of the haystack: subtitle (multi-line generated
+      // summary) and idle_summary (one-line blurb) match sessions the user
+      // remembers by what they did, not what they're titled.
+      const hay = `${cleanTitle(conv.title || "")} ${conv.subtitle || ""} ${conv.idle_summary || ""} ${conv.project_path || ""} ${conv.authorName || ""}`.toLowerCase();
       if (hay.includes(q)) out.push(conv);
     }
     return out;

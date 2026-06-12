@@ -7952,6 +7952,8 @@ program
   .option("--abbrev <n>", "Use n hex digits for commit shas")
   .option("--no-sessions", "Skip session resolution (pure git blame output)")
   .option("--touches", "Legacy view: sessions that touched the file (no line attribution)")
+  .option("--log", "Session log: which sessions shaped this file, newest first (:Gclog equivalent)")
+  .option("--quickfix", "With --log: emit `file:line: msg` lines for the vim :Gslog quickfix list")
   .option("--install-fugitive", "Install the vim-fugitive git shim so :Gblame shows sessions")
   .option("-n, --limit <n>", "Number of results (--touches mode)", "20")
   .action(async (file, options) => {
@@ -7983,6 +7985,17 @@ program
 
     if (!path.isAbsolute(filePath)) {
       filePath = path.resolve(process.cwd(), filePath);
+    }
+
+    if (options.log) {
+      try {
+        const { runBlameLog } = await import("./blame.js");
+        await runBlameLog(filePath, { quickfix: options.quickfix, rev: options.rev }, config);
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exit(1);
+      }
+      return;
     }
 
     if (!options.touches) {

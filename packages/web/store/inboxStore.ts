@@ -987,6 +987,49 @@ export function visualOrderSessions(
   return result;
 }
 
+// Canonical label ordering — ONE comparator drives the chip row, the "by
+// label" view's sections, the overflow popover, and keyboard order. Explicit
+// sort_order first (drag-reorder writes it), name as the stable tiebreak for
+// never-ordered labels.
+export function sortLabels(buckets: Record<string, BucketItem>): BucketItem[] {
+  return (Object.values(buckets) as BucketItem[])
+    .filter((b) => !b.archived_at)
+    .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.name.localeCompare(b.name));
+}
+
+// Drag-reorder math. Express the drop as "move ordered[fromIndex] so it ends
+// up at finalIndex", and return the minimal sort_order writes that realize it.
+// Fractional midpoints keep a typical reorder to ONE write; the first-ever
+// reorder (labels still on the name-tiebreak with no explicit orders) and
+// float-precision collapse renumber the whole list onto a fresh ladder.
+const SORT_GAP = 1024;
+export function computeReorderUpdates(
+  ordered: BucketItem[],
+  fromIndex: number,
+  toIndex: number,
+): Array<{ id: string; sort_order: number }> {
+  if (fromIndex < 0 || fromIndex >= ordered.length) return [];
+  const moved = ordered[fromIndex];
+  const rest = ordered.filter((_, i) => i !== fromIndex);
+  const finalIndex = Math.max(0, Math.min(toIndex, rest.length));
+  const result = [...rest.slice(0, finalIndex), moved, ...rest.slice(finalIndex)];
+  if (result.every((b, i) => b._id === ordered[i]._id)) return [];
+  const needsInit = ordered.some((b) => typeof b.sort_order !== "number");
+  if (!needsInit) {
+    const before = result[finalIndex - 1]?.sort_order;
+    const after = result[finalIndex + 1]?.sort_order;
+    const newOrder = before == null
+      ? (after as number) - SORT_GAP
+      : after == null
+        ? before + SORT_GAP
+        : (before + after) / 2;
+    if (Number.isFinite(newOrder) && newOrder !== before && newOrder !== after) {
+      return [{ id: moved._id, sort_order: newOrder }];
+    }
+  }
+  return result.map((b, i) => ({ id: b._id, sort_order: (i + 1) * SORT_GAP }));
+}
+
 // The "by label" grouping, shared by the session panel's render AND keyboard
 // order (visualOrder) so Ctrl+J/K walks exactly what's on screen: manual-label
 // groups first (label sort order), then per-project groups for unlabeled
@@ -1000,9 +1043,7 @@ export function groupSessionsForLabelView(
   labelGroups: Array<{ bucket: BucketItem; items: InboxSession[] }>;
   projectGroups: Array<{ name: string; items: InboxSession[] }>;
 } {
-  const visible = (Object.values(buckets) as BucketItem[])
-    .filter((b) => !b.archived_at)
-    .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.name.localeCompare(b.name));
+  const visible = sortLabels(buckets);
   const byBucket = new Map<string, InboxSession[]>();
   const byProject = new Map<string, InboxSession[]>();
   const seen = new Set<string>();

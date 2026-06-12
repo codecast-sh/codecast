@@ -29,7 +29,7 @@ export const ZERO_SHA = "0".repeat(40);
 // attribute safely, so don't spend request bytes on them.
 const MIN_LINE_MATCH_LEN = 8;
 const MAX_UNCOMMITTED_LINES = 400;
-const MAX_WHO_LABEL = 40;
+const MAX_WHO_LABEL = 48;
 const RESOLVE_TIMEOUT_MS = 5000;
 
 export interface BlameCommitMeta {
@@ -141,11 +141,17 @@ export function formatGitDate(epochSeconds: number, tz: string): string {
   );
 }
 
-// The author-column replacement: session short id + title. Parens would break
-// editor regexes that scan for the `(...)` group, so strip them.
+// The author-column replacement: session short id + the human who ran it +
+// title — e.g. `jx74qbm Samvit Agent prompt guardrails`. Parens would break
+// editor regexes that scan for the `(...)` group, so strip them. First name
+// only keeps the column tight while still showing who owns the work.
 export function sessionLabel(ref: SessionRef): string {
-  const title = ref.title.replace(/[()\r\n\t]/g, " ").replace(/\s+/g, " ").trim();
-  const label = `${ref.conversation_id.slice(0, 7)} ${title}`;
+  const clean = (s: string) => s.replace(/[()\r\n\t]/g, " ").replace(/\s+/g, " ").trim();
+  const title = clean(ref.title);
+  const first = ref.author_name ? clean(ref.author_name).split(" ")[0] : "";
+  const label = first
+    ? `${ref.conversation_id.slice(0, 7)} ${first} ${title}`
+    : `${ref.conversation_id.slice(0, 7)} ${title}`;
   return label.length > MAX_WHO_LABEL ? label.slice(0, MAX_WHO_LABEL - 2) + ".." : label;
 }
 
@@ -593,6 +599,46 @@ augroup CastBlameMaps
   autocmd!
   autocmd FileType fugitiveblame nnoremap <buffer> <silent> <CR> :call <SID>CastBlameOpen()<CR>
 augroup END
+
+" :Gslog — the session-log (:Gclog equivalent): list the sessions that shaped a
+" file, newest first, in the quickfix list. <CR> on an entry opens that
+" conversation. Defaults to the current file; pass a path to log another.
+function! s:CastSessionLog(file) abort
+  let l:file = empty(a:file) ? expand('%:p') : fnamemodify(a:file, ':p')
+  let l:out = systemlist('${castBin} blame --log --quickfix ' . shellescape(l:file))
+  if v:shell_error != 0 || empty(l:out)
+    echo 'cast: no codecast sessions resolved for this file'
+    return
+  endif
+  let l:items = []
+  for l:line in l:out
+    let l:m = matchlist(l:line, '^\\(.\\{-}\\):\\(\\d\\+\\): \\(.*\\)$')
+    if !empty(l:m)
+      call add(l:items, {'filename': l:m[1], 'lnum': str2nr(l:m[2]), 'text': l:m[3]})
+    endif
+  endfor
+  call setqflist([], ' ', {'title': 'cast session log', 'items': l:items})
+  copen
+  nnoremap <buffer> <silent> <CR> :call <SID>CastSessionLogOpen()<CR>
+endfunction
+
+" Open the conversation for the quickfix entry under the cursor (reusing the
+" single-line resolve path); fall back to jumping to the file line.
+function! s:CastSessionLogOpen() abort
+  let l:idx = line('.') - 1
+  let l:items = getqflist()
+  if l:idx < 0 || l:idx >= len(l:items) | return | endif
+  let l:it = l:items[l:idx]
+  let l:file = bufname(l:it.bufnr)
+  let l:url = trim(system('${castBin} __blame_conversation ' . shellescape(l:file) . ' ' . l:it.lnum))
+  if v:shell_error == 0 && l:url =~# '^https\\?://'
+    redraw | echo 'codecast: ' . l:url
+  else
+    execute 'cc' (l:idx + 1)
+  endif
+endfunction
+
+command! -nargs=? -complete=file Gslog call s:CastSessionLog(<q-args>)
 `;
   fs.writeFileSync(vimPath, vimIntegration);
 
@@ -602,8 +648,9 @@ augroup END
   console.log(`Installed vim integration: ${vimPath}`);
   console.log(`\nAdd this to your vimrc (or init.vim), then restart vim:\n`);
   console.log(`    source ~/.codecast/fugitive.vim\n`);
-  console.log(`Then :Git blame (or :Gblame) shows codecast sessions in the author column,`);
-  console.log(`and <CR> on a line opens the conversation that wrote it.`);
+  console.log(`Then:`);
+  console.log(`  :Git blame  — author column shows the codecast session (<CR> opens it)`);
+  console.log(`  :Gslog      — session log for the file, newest first (<CR> opens the conversation)`);
 }
 
 /**
@@ -701,4 +748,133 @@ export async function runBlameConversation(
   } catch {
     // Headless/SSH: printing the url is enough for the editor to surface it.
   }
+}
+
+// ── Session log (`:Gclog` equivalent) ───────────────────────────────────────
+// Group a file's blame by the session that wrote each line: which sessions
+// shaped this file, how much, and when. The session equivalent of `git log
+// --follow <file>` / fugitive's :Gclog.
+
+export interface SessionLogEntry {
+  conversationId: string;
+  shortId: string;
+  label: string;
+  authorName?: string;
+  title: string;
+  lineCount: number;
+  firstLine: number; // smallest line number it owns — where to jump
+  newestTime: number; // most recent author-time across its lines (sort key)
+  oldestTime: number;
+  messageId?: string;
+}
+
+// Fold parsed blame + resolution into one entry per session, newest-touch
+// first. Pure for testability. A line's session is its authoring session
+// (content match) if known, else its committing session (sha match).
+export function groupBlameBySession(
+  parsed: ParsedBlame,
+  resolution: BlameResolution,
+): { entries: SessionLogEntry[]; attributed: number; total: number } {
+  const byConv = new Map<string, SessionLogEntry>();
+  let attributed = 0;
+
+  for (const line of parsed.lines) {
+    const ref = resolution.byLine.get(line.content.trim()) ?? resolution.bySha.get(line.sha);
+    if (!ref) continue;
+    attributed++;
+    const meta = parsed.commits.get(line.sha);
+    const t = meta?.authorTime ? meta.authorTime * 1000 : 0;
+    const existing = byConv.get(ref.conversation_id);
+    if (!existing) {
+      byConv.set(ref.conversation_id, {
+        conversationId: ref.conversation_id,
+        shortId: ref.conversation_id.slice(0, 7),
+        label: sessionLabel(ref),
+        authorName: ref.author_name,
+        title: ref.title,
+        lineCount: 1,
+        firstLine: line.finalLine,
+        newestTime: t,
+        oldestTime: t,
+        messageId: ref.message_id,
+      });
+    } else {
+      existing.lineCount++;
+      existing.firstLine = Math.min(existing.firstLine, line.finalLine);
+      existing.newestTime = Math.max(existing.newestTime, t);
+      existing.oldestTime = existing.oldestTime === 0 ? t : Math.min(existing.oldestTime, t);
+    }
+  }
+
+  const entries = [...byConv.values()].sort(
+    (a, b) => b.newestTime - a.newestTime || b.lineCount - a.lineCount,
+  );
+  return { entries, attributed, total: parsed.lines.length };
+}
+
+function ymd(ms: number): string {
+  if (!ms) return "????-??-??";
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+}
+
+/**
+ * `cast blame --log <file>`: list the sessions that shaped a file, newest
+ * first. Human table by default; `--quickfix` emits `<file>:<line>: <msg>`
+ * lines for the vim :Gslog quickfix integration (each entry's line lets <CR>
+ * resolve+open the conversation via the existing single-line path).
+ */
+export async function runBlameLog(
+  file: string,
+  options: { quickfix?: boolean; rev?: string },
+  config: { auth_token?: string; convex_url?: string },
+): Promise<void> {
+  const absPath = path.isAbsolute(file) ? file : path.resolve(process.cwd(), file);
+  const cwd = path.dirname(absPath);
+
+  let porcelain: string;
+  try {
+    porcelain = (
+      await execGit(["blame", "--porcelain", ...(options.rev ? [options.rev] : []), "--", absPath], cwd)
+    ).stdout;
+  } catch (err: any) {
+    process.stderr.write((err?.message ?? String(err)) + "\n");
+    process.exitCode = 1;
+    return;
+  }
+
+  const parsed = parseBlamePorcelain(porcelain);
+  const resolution = await resolveFromParsed(parsed, absPath, config);
+  const { entries, attributed, total } = groupBlameBySession(parsed, resolution);
+
+  if (options.quickfix) {
+    // Parsed by vim with errorformat `%f:%l: %m`. The path is what the user
+    // passed (relative is fine — vim resolves against cwd).
+    for (const e of entries) {
+      process.stdout.write(
+        `${file}:${e.firstLine}: ${e.label}  ·  ${e.lineCount} lines  ·  ${ymd(e.newestTime)}\n`,
+      );
+    }
+    return;
+  }
+
+  const rel = file.replace(process.env.HOME || "", "~");
+  console.log(`Sessions that shaped ${rel}  (${attributed}/${total} lines attributed)\n`);
+  if (entries.length === 0) {
+    console.log("  (no codecast sessions resolved for this file)");
+    return;
+  }
+  const wAuthor = Math.max(6, ...entries.map((e) => (e.authorName?.split(" ")[0] ?? "").length));
+  for (const e of entries) {
+    const author = (e.authorName?.split(" ")[0] ?? "").padEnd(wAuthor);
+    const title = e.title.length > 44 ? e.title.slice(0, 42) + ".." : e.title;
+    const range = ymd(e.oldestTime) === ymd(e.newestTime) ? ymd(e.newestTime) : `${ymd(e.oldestTime)}→${ymd(e.newestTime)}`;
+    console.log(
+      `  ${e.shortId}  ${author}  ${title.padEnd(44)}  ${String(e.lineCount).padStart(4)} lines  ${range}`,
+    );
+  }
+  console.log(
+    `\n  Open: https://codecast.sh/conversation/${entries[0].conversationId}  (newest; cast read <id>)`,
+  );
 }
