@@ -1,9 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import {
   collectGhostSweepCandidates,
+  collectHiddenResurrectionSuspects,
   GHOST_SWEEP_MIN_AGE_MS,
   STUB_SWEEP_MIN_AGE_MS,
 } from "./ghostSweep";
+import { DISMISS_RECONCILE_WINDOW_MS } from "../store/inboxStore";
 
 // Regression coverage for ct-36579: dismissing a blank now hard-deletes it
 // server-side within seconds (dispatch.applyPatches → reapEmptyConversation),
@@ -88,5 +90,50 @@ describe("collectGhostSweepCandidates", () => {
     );
     expect(stubs).toEqual([oldStub._id]);
     expect(candidates).toEqual([]);
+  });
+});
+
+// Regression coverage for ct-37110: a server-deleted conversation WITH messages
+// is invisible to the blank-only sweep, its dismiss patch is silently dropped
+// by dispatch (no doc to patch), and the dismiss reconcile's clear pass then
+// un-hides it on every crawl — dismissing it can never stick. The suspects
+// collector must hand exactly the would-be-cleared set to the existence verify.
+describe("collectHiddenResurrectionSuspects", () => {
+  const dismissed = (id: string, agoMs: number, extra: Record<string, unknown> = {}) =>
+    ({ _id: id, message_count: 3, inbox_dismissed_at: NOW - agoMs, user_id: ME, ...extra }) as any;
+
+  it("flags a dismissed non-blank row the server's hidden set doesn't contain", () => {
+    const ghost = dismissed(convexId("deletedghost"), 60_000);
+    const suspects = collectHiddenResurrectionSuspects(
+      storeWith([ghost]), "inbox_dismissed_at", new Set(), NOW,
+    );
+    expect(suspects).toEqual([ghost._id]);
+  });
+
+  it("trusts rows the server still reports hidden (no verify needed)", () => {
+    const live = dismissed(convexId("livedismiss"), 60_000);
+    const suspects = collectHiddenResurrectionSuspects(
+      storeWith([live]), "inbox_dismissed_at", new Set([live._id]), NOW,
+    );
+    expect(suspects).toEqual([]);
+  });
+
+  it("skips rows the clear pass wouldn't touch: old hides, foreign rows, stubs, un-hidden rows", () => {
+    const ancient = dismissed(convexId("ancienthide"), DISMISS_RECONCILE_WINDOW_MS + 60_000);
+    const foreign = dismissed(convexId("foreignrow"), 60_000, { user_id: "user0000000000000000000000other0" });
+    const stub = dismissed("local-stub", 60_000);
+    const active = dismissed(convexId("activerow"), 60_000, { inbox_dismissed_at: null });
+    const suspects = collectHiddenResurrectionSuspects(
+      storeWith([ancient, foreign, stub, active]), "inbox_dismissed_at", new Set(), NOW,
+    );
+    expect(suspects).toEqual([]);
+  });
+
+  it("covers the stashed twin via the field parameter", () => {
+    const ghost = { _id: convexId("stashedghost"), message_count: 2, inbox_stashed_at: NOW - 60_000, user_id: ME } as any;
+    const suspects = collectHiddenResurrectionSuspects(
+      storeWith([ghost]), "inbox_stashed_at", new Set(), NOW,
+    );
+    expect(suspects).toEqual([ghost._id]);
   });
 });
