@@ -285,6 +285,11 @@ export default defineSchema({
     // only manages sessions whose owner_device_id matches its own device id.
     // "Move to remote" flips this from the local device to the Mac's device.
     owner_device_id: v.optional(v.string()),
+    // Tombstone forwarding: the id of a DELETED conversation this row replaced
+    // when a kill/restart restored its session (resolveRestartTarget). Lets
+    // resolveConversation heal stale links/cards that still point at the dead
+    // id. A plain string — the referenced row no longer exists.
+    restored_from_conversation_id: v.optional(v.string()),
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_updated", ["user_id", "updated_at"])
@@ -310,6 +315,7 @@ export default defineSchema({
     .index("by_user_profile_pinned", ["user_id", "profile_pinned_at"])
     .index("by_user_dismissed", ["user_id", "inbox_dismissed_at"])
     .index("by_owner_device", ["user_id", "owner_device_id"])
+    .index("by_restored_from", ["restored_from_conversation_id"])
     .searchIndex("search_title_v2", {
       searchField: "title",
       filterFields: ["user_id"],
@@ -415,6 +421,33 @@ export default defineSchema({
     .index("by_user_conversation", ["user_id", "conversation_id"])
     .index("by_message_id", ["message_id"])
     .index("by_user_name", ["user_id", "name"]),
+
+  // Manual session buckets: personal, lightweight named groups for organizing
+  // inbox sessions by workstream. Purely attention-organization for the human —
+  // orthogonal to plans (which carry agent-facing context). Archive = archived_at
+  // set; rows are never hard-deleted so the delta sync cache converges.
+  inbox_buckets: defineTable({
+    user_id: v.id("users"),
+    name: v.string(),
+    color: v.optional(v.string()),
+    sort_order: v.optional(v.number()),
+    archived_at: v.optional(v.number()),
+    created_at: v.number(),
+    updated_at: v.number(),
+  }).index("by_user_id", ["user_id"]),
+
+  // One row per (user, conversation): exclusive bucket membership. Unassign sets
+  // bucket_id null (delta-friendly tombstone) rather than deleting the row, so
+  // every change reaches clients as an upsert. Kept off the conversation row on
+  // purpose: conversations are hot, shared docs; filing is per-user and cold.
+  bucket_assignments: defineTable({
+    user_id: v.id("users"),
+    conversation_id: v.id("conversations"),
+    bucket_id: v.optional(v.id("inbox_buckets")),
+    updated_at: v.number(),
+  })
+    .index("by_user_id", ["user_id"])
+    .index("by_user_conversation", ["user_id", "conversation_id"]),
 
   decisions: defineTable({
     user_id: v.id("users"),

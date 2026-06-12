@@ -51,12 +51,32 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "collection", key: "projects" },
     localFirst: true,
   },
+  buckets: {
+    persistence: { kind: "collection", key: "buckets" },
+    localFirst: true,
+    // Field edits (rename / archive / color / sort) dispatch as generic patches.
+    dispatchTable: { table: "inbox_buckets", kind: "collection" },
+  },
+  // Server writes flow through the assignSessionToBucket side effect (upsert by
+  // user+conversation), not patches — so no dispatchTable here. localFirst keeps
+  // optimistic assignments protected until the server row syncs back.
+  bucketAssignments: {
+    persistence: { kind: "collection", key: "bucketAssignments" },
+    localFirst: true,
+  },
   notifications: {
     localFirst: true,
   },
   clientState: {
     persistence: { kind: "meta", key: "clientState" },
     dispatchTable: { table: "client_state", kind: "singleton" },
+  },
+  // This client's own last-focused conversation — the boot-restore source.
+  // Local-only on purpose (no dispatchTable): the per-user synced pointer
+  // (clientState.current_conversation_id) is writable by every client and kept
+  // poisoning the desktop's restore; this key never leaves the device.
+  lastFocusedConversationId: {
+    persistence: { kind: "meta", key: "lastFocusedConversationId" },
   },
   _lastViewedAt: {
     persistence: { kind: "meta", key: "_lastViewedAt" },

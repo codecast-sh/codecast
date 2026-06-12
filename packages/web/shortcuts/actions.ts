@@ -10,6 +10,7 @@ import { useShortcutAction } from "./ShortcutProvider";
 import { performUndo, performRedo } from "../store/undoStack";
 import { animatedStashSession, undoableDeferSession, undoablePinSession } from "../store/undoActions";
 import { checkMilestone } from "../tips/useTips";
+import { toast } from "sonner";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 
 const api = _typedApi as any;
@@ -94,7 +95,11 @@ export function useGlobalShortcutActions() {
     if (!currentId) return;
     const convexId = store.getConvexId(currentId);
     if (convexId && isConvexId(convexId)) {
-      killSessionMutation({ conversation_id: convexId as Id<"conversations">, mark_completed: true }).catch(() => {});
+      // session_id rides along so the daemon can still tear the backend down
+      // when its local conversation mapping (or the server row) is gone.
+      const sessionId = (store.sessions[currentId] as any)?.session_id;
+      killSessionMutation({ conversation_id: convexId as Id<"conversations">, mark_completed: true, session_id: sessionId })
+        .catch((err) => toast.error(`Kill failed: ${err instanceof Error ? err.message : String(err)}`));
     }
     if (!isOnInboxPage) {
       const ordered = store.visualOrder();
@@ -126,6 +131,13 @@ export function useGlobalShortcutActions() {
     if (currentId) useInboxStore.setState({ renamingSessionId: currentId });
   }, [isOnInboxPage]));
 
+  useShortcutAction('session.moveToBucket', useCallback(() => {
+    const store = useInboxStore.getState();
+    const currentId = isOnInboxPage ? store.currentSessionId : store.sidePanelSessionId;
+    const session = currentId ? store.sessions[currentId] : null;
+    if (session) store.openPalette({ targets: [session], targetType: 'session', mode: 'bucket' });
+  }, [isOnInboxPage]));
+
   useShortcutAction('ui.toggleShortcutsHelp', useCallback(() => {
     useInboxStore.getState().toggleShortcutsPanel();
   }, []));
@@ -138,9 +150,7 @@ export function useGlobalShortcutActions() {
   }, []));
 
   useShortcutAction('inbox.toggleFlatView', useCallback(() => {
-    const store = useInboxStore.getState();
-    const flat = store.clientState.ui?.inbox_flat_view ?? false;
-    store.updateClientUI({ inbox_flat_view: !flat });
+    useInboxStore.getState().cycleInboxViewMode();
   }, []));
 
   useShortcutAction('nav.inbox', useCallback(() => {
@@ -170,8 +180,4 @@ export function useGlobalShortcutActions() {
     return performRedo() || false;
   }, []));
 
-  useShortcutAction('create.open', useCallback(() => {
-    const store = useInboxStore.getState();
-    store.openPalette({ initialQuery: 'Create' });
-  }, []));
 }

@@ -1,12 +1,13 @@
 import { useState, useCallback, useMemo, useRef } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
-import { useShortcutAction } from "../shortcuts";
+import { useShortcutAction, isMac, type ShortcutAction } from "../shortcuts";
+import { KeyCap, MenuKeyCaps } from "./KeyboardShortcutsHelp";
 import { useRouter, usePathname } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Command as CommandPrimitive } from "cmdk";
 import { cleanTitle } from "../lib/conversationProcessor";
-import { useInboxStore, InboxSession, TaskItem, DocItem } from "../store/inboxStore";
+import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem } from "../store/inboxStore";
 import { score } from "../hooks/useMentionQuery";
 import { isElectron } from "../lib/desktop";
 import { isInboxRoute } from "../lib/inboxRouting";
@@ -38,7 +39,6 @@ import {
   Bot,
   Check,
   Search,
-  CornerDownLeft,
   ListTodo,
   Map as MapIcon,
   Square,
@@ -49,16 +49,16 @@ import {
 
 const api = _api as any;
 
-type ActionMode = "status" | "priority" | "labels" | "assign" | "type" | "plan_status" | "agent_run";
+type ActionMode = "status" | "priority" | "labels" | "assign" | "type" | "plan_status" | "agent_run" | "bucket";
 
 const DEFAULT_AGENT_RUN_MESSAGE = "lets do this task";
 
 const PLAN_STATUS_OPTIONS = [
-  { key: "draft", icon: Circle, label: "Draft", color: "text-neutral-500", shortcut: "1" },
-  { key: "active", icon: CircleDot, label: "Active", color: "text-cyan-400", shortcut: "2" },
-  { key: "paused", icon: PauseCircle, label: "Paused", color: "text-yellow-400", shortcut: "3" },
-  { key: "done", icon: CheckCircle2, label: "Done", color: "text-green-400", shortcut: "4" },
-  { key: "abandoned", icon: XCircle, label: "Abandoned", color: "text-neutral-500", shortcut: "5" },
+  { key: "draft", icon: Circle, label: "Draft", color: "text-neutral-500" },
+  { key: "active", icon: CircleDot, label: "Active", color: "text-cyan-400" },
+  { key: "paused", icon: PauseCircle, label: "Paused", color: "text-yellow-400" },
+  { key: "done", icon: CheckCircle2, label: "Done", color: "text-green-400" },
+  { key: "abandoned", icon: XCircle, label: "Abandoned", color: "text-neutral-500" },
 ];
 
 function isTask(item: any): item is TaskItem {
@@ -66,20 +66,20 @@ function isTask(item: any): item is TaskItem {
 }
 
 const STATUS_OPTIONS = [
-  { key: "backlog", icon: CircleDotDashed, label: "Backlog", color: "text-neutral-500", shortcut: "1" },
-  { key: "open", icon: Circle, label: "Open", color: "text-blue-400", shortcut: "2" },
-  { key: "in_progress", icon: CircleDot, label: "In Progress", color: "text-yellow-400", shortcut: "3" },
-  { key: "in_review", icon: CircleDot, label: "In Review", color: "text-violet-400", shortcut: "4" },
-  { key: "done", icon: CheckCircle2, label: "Done", color: "text-green-400", shortcut: "5" },
-  { key: "dropped", icon: XCircle, label: "Dropped", color: "text-neutral-500", shortcut: "6" },
+  { key: "backlog", icon: CircleDotDashed, label: "Backlog", color: "text-neutral-500" },
+  { key: "open", icon: Circle, label: "Open", color: "text-blue-400" },
+  { key: "in_progress", icon: CircleDot, label: "In Progress", color: "text-yellow-400" },
+  { key: "in_review", icon: CircleDot, label: "In Review", color: "text-violet-400" },
+  { key: "done", icon: CheckCircle2, label: "Done", color: "text-green-400" },
+  { key: "dropped", icon: XCircle, label: "Dropped", color: "text-neutral-500" },
 ];
 
 const PRIORITY_OPTIONS = [
-  { key: "urgent", icon: AlertTriangle, label: "Urgent", color: "text-red-400", shortcut: "1" },
-  { key: "high", icon: ArrowUp, label: "High", color: "text-orange-400", shortcut: "2" },
-  { key: "medium", icon: Minus, label: "Medium", color: "text-neutral-400", shortcut: "3" },
-  { key: "low", icon: ArrowDown, label: "Low", color: "text-neutral-500", shortcut: "4" },
-  { key: "none", icon: Minus, label: "None", color: "text-neutral-600", shortcut: "5" },
+  { key: "urgent", icon: AlertTriangle, label: "Urgent", color: "text-red-400" },
+  { key: "high", icon: ArrowUp, label: "High", color: "text-orange-400" },
+  { key: "medium", icon: Minus, label: "Medium", color: "text-neutral-400" },
+  { key: "low", icon: ArrowDown, label: "Low", color: "text-neutral-500" },
+  { key: "none", icon: Minus, label: "None", color: "text-neutral-600" },
 ];
 
 // Status key → {label,color}, derived from the option arrays above so the
@@ -90,12 +90,12 @@ const PLAN_STATUS_META: Record<string, { label: string; color: string }> =
   Object.fromEntries(PLAN_STATUS_OPTIONS.map((o) => [o.key, { label: o.label, color: o.color }]));
 
 const DOC_TYPE_OPTIONS = [
-  { key: "note", label: "Note", shortcut: "1" },
-  { key: "plan", label: "Plan", shortcut: "2" },
-  { key: "design", label: "Design", shortcut: "3" },
-  { key: "spec", label: "Spec", shortcut: "4" },
-  { key: "investigation", label: "Investigation", shortcut: "5" },
-  { key: "handoff", label: "Handoff", shortcut: "6" },
+  { key: "note", label: "Note" },
+  { key: "plan", label: "Plan" },
+  { key: "design", label: "Design" },
+  { key: "spec", label: "Spec" },
+  { key: "investigation", label: "Investigation" },
+  { key: "handoff", label: "Handoff" },
 ];
 
 const AGENT_OPTIONS = [
@@ -179,6 +179,7 @@ function ActionSubmenu({
   targetType,
   onClose,
   onBack,
+  enteredViaRoot,
   teamMembers,
   currentUser,
 }: {
@@ -187,6 +188,10 @@ function ActionSubmenu({
   targetType: "task" | "doc" | "plan" | "session";
   onClose: () => void;
   onBack: () => void;
+  // True when the user drilled in from the root palette (Cmd+K → action row).
+  // Deep links (e.g. Ctrl+Shift+M straight into label mode) have no higher
+  // level to climb back to, so back affordances hide and Esc closes outright.
+  enteredViaRoot?: boolean;
   teamMembers?: any[];
   currentUser?: any;
 }) {
@@ -206,6 +211,8 @@ function ActionSubmenu({
   const assignToAgent = useMutation(api.tasks.assignToAgent);
   const updateTask = useInboxStore((s) => s.updateTask);
   const updateDoc = useInboxStore((s) => s.updateDoc);
+  const buckets = useInboxStore((s) => s.buckets);
+  const bucketAssignments = useInboxStore((s) => s.bucketAssignments);
   const pinDoc = useInboxStore((s) => s.pinDoc);
   const archiveDoc = useInboxStore((s) => s.archiveDoc);
   const router = useRouter();
@@ -259,15 +266,14 @@ function ActionSubmenu({
       const all = [...new Set([...DEFAULT_LABELS, ...currentLabels])];
       const matched = all
         .filter((l) => l.toLowerCase().includes(q))
-        .map((l, i) => ({
+        .map((l) => ({
           key: l,
           label: l,
           active: currentLabels.includes(l),
-          shortcut: i < 9 ? String(i + 1) : undefined,
           dot: getLabelColor(l).dot,
         }));
       if (q && !matched.some((l) => l.key.toLowerCase() === q)) {
-        matched.unshift({ key: q, label: `Create "${q}"`, active: false, shortcut: undefined, dot: getLabelColor(q).dot });
+        matched.unshift({ key: q, label: `Create "${q}"`, active: false, dot: getLabelColor(q).dot });
       }
       return matched;
     }
@@ -283,7 +289,7 @@ function ActionSubmenu({
     if (mode === "agent_run") {
       return AGENT_OPTIONS
         .filter((o) => o.label.toLowerCase().includes(q))
-        .map((a, i) => ({ ...a, type: "agent" as const, image: undefined, shortcut: String(i + 1) }));
+        .map((a) => ({ ...a, type: "agent" as const, image: undefined }));
     }
     if (mode === "plan_status") {
       return PLAN_STATUS_OPTIONS
@@ -293,8 +299,31 @@ function ActionSubmenu({
           active: target?.status === o.key,
         }));
     }
+    if (mode === "bucket") {
+      const convId = target?._id as string | undefined;
+      const currentBucketId = convId
+        ? ((Object.values(bucketAssignments) as BucketAssignmentItem[])
+            .find((a) => a.conversation_id === convId)?.bucket_id ?? null)
+        : null;
+      const all = (Object.values(buckets) as BucketItem[])
+        .filter((b) => !b.archived_at)
+        .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.name.localeCompare(b.name));
+      const matched: any[] = all
+        .filter((b) => b.name.toLowerCase().includes(q))
+        .map((b) => ({ key: b._id, label: b.name, active: b._id === currentBucketId, dot: getLabelColor(b.name).dot }));
+      // Create-from-query, same shape as the labels mode. This is also how the
+      // very FIRST bucket gets made — no dedicated create UI exists anywhere.
+      const trimmed = search.trim();
+      if (trimmed && !all.some((b) => b.name.toLowerCase() === trimmed.toLowerCase())) {
+        matched.unshift({ key: "__create__", label: `Create "${trimmed}"`, active: false, dot: getLabelColor(trimmed).dot });
+      }
+      if (currentBucketId && !trimmed) {
+        matched.push({ key: "__remove__", label: "Remove label", active: false, icon: XCircle, quickKey: "x" });
+      }
+      return matched;
+    }
     return [];
-  }, [mode, search, target, currentLabels, teamMembers, currentUser]);
+  }, [mode, search, target, currentLabels, teamMembers, currentUser, buckets, bucketAssignments]);
 
   useWatchEffect(() => { setHighlightIndex(0); }, [search]);
 
@@ -307,6 +336,47 @@ function ActionSubmenu({
     if (mode === "agent_run") {
       setSelectedAgentKey(item.key);
       setAgentStep("message");
+      return;
+    }
+
+    if (mode === "bucket") {
+      const store = useInboxStore.getState();
+      // Sessions mid-create carry stub ids the server can't act on — resolve to
+      // the real conversation id and skip (with a hint) if it hasn't landed yet.
+      const resolveConvId = (t: any): string | null => {
+        const real = store.getConvexId(t._id) ?? t._id;
+        return isConvexId(real) ? real : null;
+      };
+      const applyBucket = (bucketId: string | null, bucketLabel?: string) => {
+        let applied = 0;
+        for (const t of targets) {
+          const convId = resolveConvId(t);
+          if (!convId) continue;
+          store.assignSessionToBucket(convId, bucketId);
+          applied++;
+        }
+        if (!applied) {
+          toast.error("Session is still being created — try again in a moment");
+          return;
+        }
+        toast.success(bucketId ? `Labeled ${bucketLabel}` : "Label removed");
+      };
+      if (item.key === "__remove__") {
+        applyBucket(null);
+      } else if (item.key === "__create__") {
+        const name = search.trim();
+        store.createBucket({ name }).then((r: any) => {
+          if (!r?._id) return;
+          for (const t of targets) {
+            const convId = resolveConvId(t);
+            if (convId) store.assignSessionToBucket(convId, r._id);
+          }
+          toast.success(`Created label "${name}"`);
+        }).catch(() => toast.error("Couldn't create label"));
+      } else {
+        applyBucket(item.key, item.label);
+      }
+      onClose();
       return;
     }
 
@@ -355,7 +425,7 @@ function ActionSubmenu({
       }
     }
     onClose();
-  }, [items, target, targets, targetType, mode, currentLabels, onClose, updateTask, updatePlan, assignToAgent, updateDoc, teamMembers, router]);
+  }, [items, target, targets, targetType, mode, currentLabels, onClose, updateTask, updatePlan, assignToAgent, updateDoc, teamMembers, router, search]);
 
   // Launch a session per selected task with the chosen agent + initial message.
   const launchAgentRun = useCallback(() => {
@@ -386,9 +456,17 @@ function ActionSubmenu({
   }, [selectedAgentKey, agentMessage, targets, assignToAgent, onClose]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === "Escape" || (e.key === "Backspace" && search === "")) {
+    // Esc from a deep view escapes to GLOBAL (closes the palette), never just
+    // one level — climbing back up is ↑ past the top / Backspace-on-empty,
+    // and only exists when the user came down from the root palette.
+    if (e.key === "Escape") {
       e.preventDefault();
-      onBack();
+      onClose();
+      return;
+    }
+    if (e.key === "Backspace" && search === "") {
+      e.preventDefault();
+      if (enteredViaRoot) onBack(); else onClose();
       return;
     }
     if (e.key === "ArrowDown" || (e.key === "j" && e.ctrlKey)) {
@@ -398,6 +476,10 @@ function ActionSubmenu({
     }
     if (e.key === "ArrowUp" || (e.key === "k" && e.ctrlKey)) {
       e.preventDefault();
+      if (highlightIndex === 0 && enteredViaRoot) {
+        onBack();
+        return;
+      }
       setHighlightIndex((i) => Math.max(i - 1, 0));
       return;
     }
@@ -406,12 +488,23 @@ function ActionSubmenu({
       selectItem(highlightIndex);
       return;
     }
+    // Bare keys only past this point — modifier combos (e.g. browser tab
+    // switching) must pass through untouched.
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    // Rows with a dedicated quick key ("Remove label" → x) match it directly;
+    // digits pick among the numbered rows only.
+    const quickIndex = items.findIndex((it: any) => it.quickKey === e.key);
+    if (quickIndex >= 0) {
+      e.preventDefault();
+      selectItem(quickIndex);
+      return;
+    }
     const num = parseInt(e.key);
-    if (num >= 1 && num <= items.length) {
+    if (num >= 1 && num <= items.length && !(items[num - 1] as any).quickKey) {
       e.preventDefault();
       selectItem(num - 1);
     }
-  }, [items, highlightIndex, selectItem, onBack, search]);
+  }, [items, highlightIndex, selectItem, onBack, onClose, enteredViaRoot, search]);
 
   useWatchEffect(() => {
     const el = listRef.current;
@@ -427,6 +520,7 @@ function ActionSubmenu({
     mode === "assign" ? "Assign to person..." :
     mode === "type" ? "Change document type..." :
     mode === "agent_run" ? "Start agent run — pick an agent..." :
+    mode === "bucket" ? "Label session — type to filter or create..." :
     "Select...";
 
   const itemClass = (i: number) =>
@@ -485,15 +579,16 @@ function ActionSubmenu({
         </div>
         <div className="flex items-center gap-3 px-4 py-2 border-t border-sol-border/30 text-[10px] text-sol-text-dim">
           <span className="flex items-center gap-1">
-            <CornerDownLeft className="w-3 h-3" />
+            <KeyCap size="xs">&#9166;</KeyCap>
             launch
           </span>
           <span className="flex items-center gap-1">
-            <kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/40 font-mono">&#8679;&#9166;</kbd>
+            <KeyCap size="xs">&#8679;</KeyCap>
+            <KeyCap size="xs">&#9166;</KeyCap>
             newline
           </span>
           <span className="flex items-center gap-1">
-            <kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/40 font-mono">esc</kbd>
+            <KeyCap size="xs">Esc</KeyCap>
             back
           </span>
         </div>
@@ -501,15 +596,20 @@ function ActionSubmenu({
     );
   }
 
+  const numberedCount = items.filter((it: any) => !it.quickKey).length;
+
   return (
     <>
       <div className="flex items-center gap-2 px-4 py-2 border-b border-sol-border/30">
-        <button
-          onClick={onBack}
-          className="text-xs px-1.5 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50 text-sol-text-dim hover:text-sol-text transition-colors flex-shrink-0"
-        >
-          &larr;
-        </button>
+        {enteredViaRoot && (
+          <button
+            onClick={onBack}
+            title="Back to actions"
+            className="text-xs px-1.5 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50 text-sol-text-dim hover:text-sol-text transition-colors flex-shrink-0"
+          >
+            &uarr;
+          </button>
+        )}
         <Search className="w-4 h-4 text-sol-text-dim flex-shrink-0" />
         <input
           ref={inputRef}
@@ -545,15 +645,22 @@ function ActionSubmenu({
                 )
               ) : mode === "labels" ? (
                 <span className={`w-3 h-3 rounded-full flex-shrink-0 ${item.dot || "bg-neutral-400"}`} />
+              ) : mode === "bucket" && item.dot ? (
+                // Square swatch: manual buckets read differently from the round
+                // auto-derived label/project dots.
+                <span className={`w-3 h-3 rounded-[3px] flex-shrink-0 ${item.dot}`} />
               ) : Icon ? (
                 <Icon className={`w-4 h-4 flex-shrink-0 ${item.color || ""}`} />
               ) : null}
               <span className="flex-1 text-left">{item.label}</span>
               {item.active && <Check className="w-4 h-4 text-sol-cyan flex-shrink-0" />}
-              {item.shortcut && (
-                <kbd className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-sol-bg-alt border border-sol-border/40 text-sol-text-dim">
-                  {item.shortcut}
-                </kbd>
+              {/* Quick-pick hint: the row's dedicated key when it declares one,
+                  else a digit derived from the same index the handler uses, so
+                  filtering renumbers hint and behavior together. */}
+              {item.quickKey ? (
+                <KeyCap size="xs">{item.quickKey}</KeyCap>
+              ) : (
+                i < 9 && <KeyCap size="xs">{i + 1}</KeyCap>
               )}
               {item.type === "agent" && (
                 <span className="text-[10px] text-sol-text-dim font-mono">&rarr;</span>
@@ -564,20 +671,27 @@ function ActionSubmenu({
       </div>
       <div className="flex items-center gap-3 px-4 py-2 border-t border-sol-border/30 text-[10px] text-sol-text-dim">
         <span className="flex items-center gap-1">
-          <kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/40 font-mono">&uarr;&darr;</kbd>
+          <KeyCap size="xs">&uarr;</KeyCap>
+          <KeyCap size="xs">&darr;</KeyCap>
           navigate
         </span>
         <span className="flex items-center gap-1">
-          <CornerDownLeft className="w-3 h-3" />
+          <KeyCap size="xs">&#9166;</KeyCap>
           select
         </span>
         <span className="flex items-center gap-1">
-          <kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/40 font-mono">esc</kbd>
-          back
+          <KeyCap size="xs">Esc</KeyCap>
+          close
         </span>
-        {items.length > 0 && (
+        {enteredViaRoot && (
           <span className="flex items-center gap-1">
-            <kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/40 font-mono">1-{Math.min(items.length, 9)}</kbd>
+            <KeyCap size="xs">&uarr;</KeyCap>
+            back
+          </span>
+        )}
+        {numberedCount > 0 && (
+          <span className="flex items-center gap-1">
+            <KeyCap size="xs">1-{Math.min(numberedCount, 9)}</KeyCap>
             quick pick
           </span>
         )}
@@ -663,6 +777,9 @@ function matchEntities(
 export function CommandPalette({ standalone = false }: { standalone?: boolean }) {
   const [query, setQuery] = useState("");
   const [actionMode, setActionMode] = useState<ActionMode | null>(null);
+  // Whether the submenu was reached by drilling down from the root palette
+  // (vs deep-linked open, e.g. Ctrl+Shift+M straight into label mode).
+  const [enteredViaRoot, setEnteredViaRoot] = useState(false);
   const router = useRouter();
   const pathname = usePathname();
 
@@ -830,38 +947,41 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
     if (open) {
       setQuery(paletteInitialQuery || "");
       setActionMode(initialMode !== "root" ? initialMode as ActionMode : null);
+      setEnteredViaRoot(false);
     }
   }, [open, initialMode, paletteInitialQuery]);
 
-  // Escape handling
+  // Escape handling — Esc anywhere in the palette escapes to GLOBAL (closes
+  // it), including inside action submenus. Climbing back to the root list is
+  // ↑/Backspace in the submenu, not Esc.
   useWatchEffect(() => {
     if (standalone) return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && open && !actionMode) {
+      if (e.key === "Escape" && open) {
         e.preventDefault();
         closePalette();
       }
     };
     document.addEventListener("keydown", handleKeyDown, true);
     return () => document.removeEventListener("keydown", handleKeyDown, true);
-  }, [open, standalone, actionMode, closePalette]);
+  }, [open, standalone, closePalette]);
 
-  // Standalone palette events (Electron)
+  // Standalone palette events (Electron) — same global-escape rule: Esc hides
+  // the palette window even from inside a submenu.
   useWatchEffect(() => {
     if (!standalone) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
-        if (actionMode) {
-          setActionMode(null);
-        } else if (isElectron()) {
+        setActionMode(null);
+        if (isElectron()) {
           window.__CODECAST_ELECTRON__?.paletteHide?.();
         }
       }
     };
     document.addEventListener("keydown", handleKeyDown, true);
     return () => document.removeEventListener("keydown", handleKeyDown, true);
-  }, [standalone, actionMode]);
+  }, [standalone]);
 
   useWatchEffect(() => {
     if (!standalone || !isElectron()) return;
@@ -947,7 +1067,8 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
     if (!targets.length) return;
     const target = targets[0] as any;
 
-    if (["status", "priority", "labels", "assign", "type", "plan_status", "agent_run"].includes(actionKey)) {
+    if (["status", "priority", "labels", "assign", "type", "plan_status", "agent_run", "bucket"].includes(actionKey)) {
+      setEnteredViaRoot(true);
       setActionMode(actionKey as ActionMode);
       return;
     }
@@ -1042,43 +1163,53 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
     return `${targets.length} ${targetType}s selected`;
   }, [targets, target, targetType, hasTargets]);
 
-  const taskActions = useMemo(() => [
-    { key: "status", label: "Change status...", icon: CircleDot, shortcut: "S" },
-    { key: "priority", label: "Set priority...", icon: ArrowUp, shortcut: "P" },
-    { key: "labels", label: "Add labels...", icon: Tag, shortcut: "L" },
-    { key: "assign", label: "Assign to...", icon: User, shortcut: "A" },
-    { key: "agent_run", label: "Start agent run...", icon: Bot, shortcut: "R" },
-    { key: "copy", label: "Copy task ID", icon: Copy, shortcut: "\u2318." },
-    { key: "drop", label: "Drop task", icon: Trash2, shortcut: "D" },
+  // Rows with a real global binding reference it by registry action \u2014 the hint
+  // is derived (MenuKeyCaps), never typed by hand. Rows without one show none.
+  type ContextActionRow = {
+    key: string;
+    label: string;
+    icon: React.ComponentType<{ className?: string }>;
+    shortcutAction?: ShortcutAction;
+  };
+
+  const taskActions = useMemo((): ContextActionRow[] => [
+    { key: "status", label: "Change status...", icon: CircleDot },
+    { key: "priority", label: "Set priority...", icon: ArrowUp },
+    { key: "labels", label: "Add labels...", icon: Tag },
+    { key: "assign", label: "Assign to...", icon: User },
+    { key: "agent_run", label: "Start agent run...", icon: Bot },
+    { key: "copy", label: "Copy task ID", icon: Copy },
+    { key: "drop", label: "Drop task", icon: Trash2 },
   ], []);
 
-  const docActions = useMemo(() => {
+  const docActions = useMemo((): ContextActionRow[] => {
     const isPinned = target?.pinned;
     return [
-      { key: "type", label: "Change type...", icon: FileText, shortcut: "T" },
-      { key: "pin", label: isPinned ? "Unpin document" : "Pin document", icon: Pin, shortcut: "P" },
-      { key: "labels", label: "Add labels...", icon: Tag, shortcut: "L" },
-      { key: "copy", label: "Copy document ID", icon: Copy, shortcut: "\u2318." },
-      { key: "archive", label: "Archive document", icon: Archive, shortcut: "A" },
+      { key: "type", label: "Change type...", icon: FileText },
+      { key: "pin", label: isPinned ? "Unpin document" : "Pin document", icon: Pin },
+      { key: "labels", label: "Add labels...", icon: Tag },
+      { key: "copy", label: "Copy document ID", icon: Copy },
+      { key: "archive", label: "Archive document", icon: Archive },
     ];
   }, [target?.pinned]);
 
-  const planActions = useMemo(() => [
-    { key: "plan_status", label: "Change status...", icon: CircleDot, shortcut: "S" },
-    { key: "copy", label: "Copy plan ID", icon: Copy, shortcut: "\u2318." },
+  const planActions = useMemo((): ContextActionRow[] => [
+    { key: "plan_status", label: "Change status...", icon: CircleDot },
+    { key: "copy", label: "Copy plan ID", icon: Copy },
   ], []);
 
-  const sessionActions = useMemo(() => {
+  const sessionActions = useMemo((): ContextActionRow[] => {
     if (targetType !== "session" || !target) return [];
     const s = target as InboxSession;
     return [
-      { key: "session_pin", label: s.is_pinned ? "Unpin session" : "Pin session", icon: s.is_pinned ? PinOff : Pin, shortcut: "P" },
-      { key: "session_kill", label: "Kill session", icon: Square, shortcut: "K" },
-      { key: "session_stash", label: "Dismiss session", icon: Archive, shortcut: "D" },
-      { key: "session_defer", label: "Defer session", icon: Clock, shortcut: "F" },
-      { key: "session_rename", label: "Rename session", icon: Pencil, shortcut: "R" },
-      { key: "session_copy", label: "Copy session ID", icon: Copy, shortcut: "\u2318." },
-      { key: "session_newtab", label: "Open in new tab", icon: ExternalLink, shortcut: "O" },
+      { key: "session_pin", label: s.is_pinned ? "Unpin session" : "Pin session", icon: s.is_pinned ? PinOff : Pin, shortcutAction: "session.pin" },
+      { key: "bucket", label: "Label session...", icon: Tag, shortcutAction: "session.moveToBucket" },
+      { key: "session_kill", label: "Kill session", icon: Square, shortcutAction: "session.kill" },
+      { key: "session_stash", label: "Dismiss session", icon: Archive, shortcutAction: "session.stash" },
+      { key: "session_defer", label: "Defer session", icon: Clock, shortcutAction: "session.deferAdvance" },
+      { key: "session_rename", label: "Rename session", icon: Pencil, shortcutAction: "session.rename" },
+      { key: "session_copy", label: "Copy session ID", icon: Copy },
+      { key: "session_newtab", label: "Open in new tab", icon: ExternalLink },
     ];
   }, [targetType, target]);
 
@@ -1110,6 +1241,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
           targetType={targetType!}
           onClose={closePalette}
           onBack={() => setActionMode(null)}
+          enteredViaRoot={enteredViaRoot}
           teamMembers={teamMembers}
           currentUser={currentUser}
         />
@@ -1158,9 +1290,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
             }
           }}
         />
-        <kbd className="px-1.5 py-0.5 text-[10px] font-medium text-sol-text-dim bg-sol-bg-alt rounded border border-sol-border/80 tracking-wide">
-          ESC
-        </kbd>
+        <KeyCap>Esc</KeyCap>
       </div>
 
       <CommandPrimitive.List className="max-h-[min(60vh,480px)] overflow-y-auto overscroll-contain py-1.5 scroll-smooth">
@@ -1186,9 +1316,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
                 >
                   <Icon className="w-4 h-4 flex-shrink-0" />
                   <span className="truncate flex-1">{action.label}</span>
-                  <kbd className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-sol-bg-alt border border-sol-border/40 text-sol-text-dim">
-                    {action.shortcut}
-                  </kbd>
+                  {action.shortcutAction && <MenuKeyCaps action={action.shortcutAction} />}
                 </CommandPrimitive.Item>
               );
             })}
@@ -1360,7 +1488,6 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
           >
             <ListTodo className="w-4 h-4 text-sol-cyan flex-shrink-0" />
             <span className="truncate flex-1">Create Task</span>
-            <kbd className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-sol-bg-alt border border-sol-border/40 text-sol-text-dim">T</kbd>
           </CommandPrimitive.Item>
           <CommandPrimitive.Item
             key="create-plan"
@@ -1370,7 +1497,6 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
           >
             <MapIcon className="w-4 h-4 text-sol-yellow flex-shrink-0" />
             <span className="truncate flex-1">Create Plan</span>
-            <kbd className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-sol-bg-alt border border-sol-border/40 text-sol-text-dim">P</kbd>
           </CommandPrimitive.Item>
         </CommandPrimitive.Group>
 
@@ -1430,7 +1556,10 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
               <span className="truncate flex-1">
                 Open full search for &ldquo;{query.trim().length > 40 ? query.trim().slice(0, 40) + "..." : query.trim()}&rdquo;
               </span>
-              <kbd className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-sol-bg-alt border border-sol-border/40 text-sol-text-dim">&#8984;&#9166;</kbd>
+              <span className="flex items-center gap-[2px]">
+                <KeyCap size="xs">{isMac ? "⌘" : "Ctrl"}</KeyCap>
+                <KeyCap size="xs">&#9166;</KeyCap>
+              </span>
             </CommandPrimitive.Item>
           </CommandPrimitive.Group>
         )}
@@ -1512,25 +1641,24 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
       <div className="px-3 py-2 border-t border-sol-border/60 flex items-center justify-between text-[10px] text-sol-text-dim bg-sol-bg-alt/40">
         <div className="flex items-center gap-3">
           <span className="flex items-center gap-1">
-            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80 text-sol-text-secondary">&#8593;</kbd>
-            <kbd className="px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80 text-sol-text-secondary">&#8595;</kbd>
+            <KeyCap size="xs">&#8593;</KeyCap>
+            <KeyCap size="xs">&#8595;</KeyCap>
             navigate
           </span>
           <span className="flex items-center gap-1">
-            <kbd className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border/80 text-sol-text-secondary">&#9166;</kbd>
+            <KeyCap size="xs">&#9166;</KeyCap>
             open
           </span>
           {query.trim().length >= 2 && (
             <span className="flex items-center gap-1">
-              <kbd className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border/80 text-sol-text-secondary">&#8984;&#9166;</kbd>
+              <KeyCap size="xs">{isMac ? "⌘" : "Ctrl"}</KeyCap>
+              <KeyCap size="xs">&#9166;</KeyCap>
               full search
             </span>
           )}
         </div>
         <span className="flex items-center gap-1">
-          <kbd className="inline-flex items-center gap-0.5 px-1 py-0.5 bg-sol-bg rounded border border-sol-border/80 text-sol-text-secondary">
-            <span className="text-xs">&#8984;</span>K
-          </kbd>
+          <MenuKeyCaps action="palette.toggle" />
           toggle
         </span>
       </div>

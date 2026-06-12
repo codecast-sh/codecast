@@ -380,6 +380,36 @@ export type TaskItem = {
   project_path?: string;
 };
 
+// Manual session buckets: personal named groups for filing inbox sessions by
+// workstream (chips in the session panel header + a "by bucket" grouping mode).
+export type BucketItem = {
+  _id: string;
+  user_id?: string;
+  name: string;
+  color?: string;
+  sort_order?: number;
+  archived_at?: number;
+  created_at: number;
+  updated_at: number;
+};
+
+// One row per (user, conversation); bucket_id null/undefined = unfiled.
+export type BucketAssignmentItem = {
+  _id: string;
+  user_id?: string;
+  conversation_id: string;
+  bucket_id?: string | null;
+  updated_at: number;
+};
+
+// conversation_id → bucket_id lookup, derived at read time from the assignment
+// rows (never stored — see the liveEntities rule on derived snapshots).
+export function convBucketMap(assignments: Record<string, BucketAssignmentItem>): Record<string, string | undefined> {
+  const map: Record<string, string | undefined> = {};
+  for (const a of Object.values(assignments)) map[a.conversation_id] = a.bucket_id ?? undefined;
+  return map;
+}
+
 export type TaskDetail = TaskItem & {
   comments?: any[];
   linked_conversations?: any[];
@@ -474,6 +504,10 @@ export type ClientUI = {
   // Pinned/New/Needs-Input/Working grouping and shows every session as one flat
   // list sorted newest-first by creation time (started_at). Toggled by Ctrl+,.
   inbox_flat_view?: boolean;
+  // Three-way successor to inbox_flat_view: "grouped" (status sections),
+  // "time" (flat by creation), "bucket" (sections per manual bucket). The
+  // boolean is kept coherent (true iff "time") for older readers. Ctrl+, cycles.
+  inbox_view_mode?: "grouped" | "time" | "bucket";
 };
 
 export type ClientLayouts = {
@@ -927,7 +961,14 @@ export function visualOrderSessions(
   sessionsWithQueuedMessages: Set<string>,
   projectFilter?: string | null,
   pendingSendIds: ReadonlySet<string> = EMPTY_PENDING_SEND_IDS,
-  opts: { currentSessionId?: string | null; pendingCreateIds?: ReadonlySet<string> } = {},
+  opts: {
+    currentSessionId?: string | null;
+    pendingCreateIds?: ReadonlySet<string>;
+    // Active bucket chip: scope keyboard nav / advance to the focused bucket,
+    // mirroring the project filter. bucketByConv comes from convBucketMap().
+    bucketFilter?: string | null;
+    bucketByConv?: Record<string, string | undefined>;
+  } = {},
 ): InboxSession[] {
   const { pinned, newSessions, needsInput, working, orchestrationGroups } =
     categorizeSessions(sessions, sessionsWithQueuedMessages, pendingSendIds, opts);
@@ -939,10 +980,55 @@ export function visualOrderSessions(
   for (const section of sections) {
     for (const s of section) {
       if (projectFilter && getProjectName(s.git_root, s.project_path) !== projectFilter) continue;
+      if (opts.bucketFilter && opts.bucketByConv?.[s._id] !== opts.bucketFilter) continue;
       result.push(s);
     }
   }
   return result;
+}
+
+// The "by label" grouping, shared by the session panel's render AND keyboard
+// order (visualOrder) so Ctrl+J/K walks exactly what's on screen: manual-label
+// groups first (label sort order), then per-project groups for unlabeled
+// sessions (projects are auto-derived labels; biggest first, "other" last),
+// newest-activity first within every group.
+export function groupSessionsForLabelView(
+  items: InboxSession[],
+  buckets: Record<string, BucketItem>,
+  bucketByConv: Record<string, string | undefined>,
+): {
+  labelGroups: Array<{ bucket: BucketItem; items: InboxSession[] }>;
+  projectGroups: Array<{ name: string; items: InboxSession[] }>;
+} {
+  const visible = (Object.values(buckets) as BucketItem[])
+    .filter((b) => !b.archived_at)
+    .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.name.localeCompare(b.name));
+  const byBucket = new Map<string, InboxSession[]>();
+  const byProject = new Map<string, InboxSession[]>();
+  const seen = new Set<string>();
+  for (const sess of items) {
+    if (seen.has(sess._id)) continue;
+    seen.add(sess._id);
+    const b = bucketByConv[sess._id];
+    if (b && buckets[b] && !buckets[b].archived_at) {
+      if (!byBucket.has(b)) byBucket.set(b, []);
+      byBucket.get(b)!.push(sess);
+    } else {
+      const project = getProjectName(sess.git_root, sess.project_path);
+      const key = project === "unknown" ? "other" : project;
+      if (!byProject.has(key)) byProject.set(key, []);
+      byProject.get(key)!.push(sess);
+    }
+  }
+  const byActivity = (a: InboxSession, b: InboxSession) => (b.updated_at ?? 0) - (a.updated_at ?? 0);
+  const labelGroups = visible
+    .map((bucket) => ({ bucket, items: (byBucket.get(bucket._id) ?? []).sort(byActivity) }))
+    .filter((g) => g.items.length > 0);
+  const projectGroups = Array.from(byProject.entries())
+    .map(([name, list]) => ({ name, items: list.sort(byActivity) }))
+    .sort((a, b) =>
+      (a.name === "other" ? 1 : 0) - (b.name === "other" ? 1 : 0) || b.items.length - a.items.length);
+  return { labelGroups, projectGroups };
 }
 
 // Quick-create pre-warms a server conversation (and a daemon agent) per summon;
@@ -1003,6 +1089,11 @@ interface InboxStoreState {
   sessions: Record<string, InboxSession>;
   pending: Record<string, PendingEntry>;
   currentSessionId: string | null;
+  // This client's OWN last-focused conversation — persisted locally (IDB meta),
+  // never synced. The boot-restore source of truth; see
+  // recordCurrentConversationPointer for why it exists alongside the per-user
+  // synced pointer.
+  lastFocusedConversationId: string | null;
   showDismissed: boolean;
   collapsedSections: Record<string, boolean>;
   viewingDismissedId: string | null;
@@ -1086,7 +1177,7 @@ interface InboxStoreState {
 
   // -- Dispatch (provided by middleware) --
   _setDispatch: (fn: (action: string, args: any, patches?: any, result?: any) => Promise<any>) => void;
-  _setDispatchError: (fn: (action: string, error: unknown) => void) => void;
+  _setDispatchError: (fn: (action: string, error: unknown, args?: unknown) => void) => void;
   _dispatch: (action: string, args: any, patches?: any, result?: any) => Promise<any>;
   dispatchErrors: number;
 
@@ -1124,6 +1215,7 @@ interface InboxStoreState {
   // deleted (the empty-conversation GC). Plants the exclude pending entries that
   // authorize the IDB row delete and block crawl re-adds.
   pruneGhostSessions: (ids: string[]) => void;
+  markServerDeleted: (convId: string) => void;
 
   // -- Generic sync --
   syncTable: (field: string, incoming: any, opts?: SyncOpts) => void;
@@ -1212,6 +1304,9 @@ interface InboxStoreState {
   addOptimisticFork: (fork: ForkChild) => void;
   pruneOptimisticForks: (serverIds: Set<string>) => void;
   resolveForkSessionId: (sessionId: string, convexId: string) => void;
+  // Roll back a locally seeded fork stub after the server fork failed: drops the
+  // stub's rows and returns focus to the parent conversation.
+  discardForkStub: (stubId: string, parentId?: string) => void;
 
   // -- Client prefs (mutative actions -> auto-dispatch) --
   updateClientUI: (partial: Partial<ClientUI>) => void;
@@ -1240,6 +1335,19 @@ interface InboxStoreState {
   activeProjectPath: string | null;
   activeProjectFilter: string | null;
   setActiveProjectFilter: (name: string | null, path?: string | null) => void;
+
+  // -- Manual session buckets --
+  buckets: Record<string, BucketItem>;
+  bucketAssignments: Record<string, BucketAssignmentItem>;
+  // Mutually exclusive with activeProjectFilter: the chip row is ONE filter.
+  activeBucketFilter: string | null;
+  setActiveBucketFilter: (bucketId: string | null) => void;
+  // Panel view mode with back-compat for the pre-bucket inbox_flat_view bool.
+  inboxViewMode: () => "grouped" | "time" | "bucket";
+  cycleInboxViewMode: () => void;
+  createBucket: (opts: { name: string; color?: string }) => Promise<{ _id: string }>;
+  updateBucket: (id: string, fields: { name?: string; color?: string; sort_order?: number; archived_at?: number | null }) => void;
+  assignSessionToBucket: (conversationId: string, bucketId: string | null) => void;
 
   // -- Sidebar nav expanded sections --
   sidebarNavExpanded: Record<string, boolean>;
@@ -1565,7 +1673,15 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
       }
       if (!draft.currentSessionId && !draft.showMySessions &&
           Object.keys(table).length > 0 && draft.clientStateInitialized) {
-        const persisted = draft.clientState.current_conversation_id;
+        // Prefer this client's OWN last position. The per-user synced pointer
+        // is consulted only by a client that has never had one (fresh
+        // profile): any other client — another device, an agent-driven tab —
+        // can move the synced value, so adopting it on a client with history
+        // is the "jumps to a random session" bug. A client whose own position
+        // is gone from the table falls to the top of the inbox, never to the
+        // synced pointer.
+        const persisted = draft.lastFocusedConversationId
+          ?? draft.clientState.current_conversation_id;
         const sorted = sortSessions(table as Record<string, InboxSession>);
         draft.currentSessionId = (persisted && table[persisted])
           ? persisted : (sorted[0]?._id ?? null);
@@ -1585,6 +1701,11 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   // opts, so without this projects synced as an authoritative snapshot — the one
   // remaining collection that still pruned the cache by absence.
   projects: { isDelta: true },
+  buckets: { isDelta: true },
+  // Optimistic first-assignments add a local stub row keyed `bucketassign-<convId>`;
+  // altKey rekeys that stub onto the server's real (user, conversation) row when
+  // it syncs — the same supersede machinery session create-stubs ride.
+  bucketAssignments: { isDelta: true, altKey: "conversation_id" },
   clientState: {
     kind: "singleton",
     merge: {
@@ -1626,24 +1747,14 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
             }
           }
         }
-        // Adopt the server's "continue where you left off" pointer only when
-        // this client booted with no position of its own: the app root, no
-        // explicit ?s= target. The pointer is per-user and races every other
-        // client (other devices, agent-driven tabs), so navigating an
-        // already-placed client on boot teleports the user mid-work — a
-        // dev-server reload on /tasks or /conversation/<x> must stay put.
-        // Native has no URL: every boot is a root boot, restore as before.
-        const loc = typeof window !== "undefined" ? window.location : undefined;
-        const bootedAtRoot = !loc?.pathname
-          || ((loc.pathname === "/" || loc.pathname === "/inbox")
-            && !new URLSearchParams(loc.search || "").has("s"));
-        if (bootedAtRoot && incoming.current_conversation_id && !draft.currentSessionId) {
-          if (draft.sessions[incoming.current_conversation_id]) {
-            draft.currentSessionId = incoming.current_conversation_id;
-          } else {
-            draft.pendingNavigateId = incoming.current_conversation_id;
-          }
-        }
+        // Deliberately NO position restore here. This branch runs only when a
+        // server sync beats IDB hydration, and the synced per-user pointer is
+        // writable by every client (other devices, agent-driven tabs) — a
+        // boot pull from it teleported the desktop into random sessions
+        // (ct-36620, ct-36951). Restore lives in the hydration block (own
+        // local position first) and the sessions-sync fallback (synced
+        // pointer only for clients with no history); both select, neither
+        // navigates.
       }
     },
   },
@@ -1705,6 +1816,9 @@ function rekeyId(draft: any, oldId: string, newId: string) {
   if (draft.clientState.current_conversation_id === oldId) {
     draft.clientState.current_conversation_id = newId;
   }
+  if (draft.lastFocusedConversationId === oldId) {
+    draft.lastFocusedConversationId = newId;
+  }
   if (draft.currentConversation?.conversationId === oldId) {
     draft.currentConversation.conversationId = newId;
   }
@@ -1713,19 +1827,32 @@ function rekeyId(draft: any, oldId: string, newId: string) {
   }
 }
 
-// Move the cross-device "continue where you left off" pointer
-// (clientState.current_conversation_id — one per-user value synced to every
-// client). Only a client the user is actually looking at may move it. Restore
-// and navigation funnel through the same actions, so an unfocused client
+// Record "where the user is" in two places with one gate:
+//
+// - `lastFocusedConversationId` — THIS client's own memory, persisted locally
+//   (IDB meta), never synced. It is the boot-restore source: each client
+//   returns to its own last position, so no other client can teleport it.
+// - `clientState.current_conversation_id` — the per-user synced pointer, one
+//   value raced by every client (other devices, agent-driven tabs). Consulted
+//   only by clients with no local history (fresh profile), where adopting a
+//   wrong value is harmless.
+//
+// Only a client the user is actually looking at may write either. Restore and
+// navigation funnel through the same actions, so an unfocused client
 // (vite-reloaded background tab, agent/automation-driven tab) would otherwise
-// echo whatever it restored back to the server; with N background tabs that
-// outvotes the user's real position after every dev-server reload and every
-// client converges on one stray conversation. The palette popup is its own
+// echo whatever it restored; with N background tabs that outvotes the user's
+// real position after every dev-server reload. Focus is not a perfect "real
+// user" signal — an agent driving a frontmost Chrome window passes it — which
+// is exactly why restore prefers the local field (the desktop app's Electron
+// profile shares nothing with Chrome). The palette popup is its own
 // always-focused window, so it is excluded explicitly — summoning it must not
 // repoint the user's other clients at the pre-warmed blank session. On native
 // (no `document`) the running app is by definition what the user is looking at.
 function recordCurrentConversationPointer(
-  draft: { clientState: { current_conversation_id?: string } },
+  draft: {
+    clientState: { current_conversation_id?: string };
+    lastFocusedConversationId?: string | null;
+  },
   id: string | undefined,
 ) {
   if (typeof document !== "undefined") {
@@ -1733,6 +1860,7 @@ function recordCurrentConversationPointer(
     if (typeof window !== "undefined" && window.location?.pathname?.startsWith("/palette")) return;
   }
   draft.clientState.current_conversation_id = id;
+  draft.lastFocusedConversationId = id ?? null;
 }
 
 export const useInboxStore = create<InboxStoreState>(
@@ -1742,6 +1870,7 @@ export const useInboxStore = create<InboxStoreState>(
   pending: {},
   dispatchErrors: 0,
   currentSessionId: null,
+  lastFocusedConversationId: null,
   showDismissed: false,
   collapsedSections: {},
   viewingDismissedId: null,
@@ -1887,7 +2016,34 @@ export const useInboxStore = create<InboxStoreState>(
   setActiveProjectFilter: action(function (this: Draft, name: string | null, path?: string | null) {
     this.activeProjectFilter = name;
     this.activeProjectPath = path ?? null;
+    // The chip row is ONE filter: picking a project clears any bucket focus.
+    if (name) this.activeBucketFilter = null;
   }),
+
+  // -- Manual session buckets --
+  buckets: {},
+  bucketAssignments: {},
+  activeBucketFilter: null,
+  setActiveBucketFilter: action(function (this: Draft, bucketId: string | null) {
+    this.activeBucketFilter = bucketId;
+    if (bucketId) {
+      this.activeProjectFilter = null;
+      this.activeProjectPath = null;
+    }
+  }),
+  inboxViewMode: () => {
+    const ui = get().clientState.ui ?? {};
+    return ui.inbox_view_mode ?? (ui.inbox_flat_view ? "time" : "grouped");
+  },
+  cycleInboxViewMode: () => {
+    const state = get();
+    const current = state.inboxViewMode();
+    const hasBuckets = (Object.values(state.buckets) as BucketItem[]).some((b) => !b.archived_at);
+    const cycle: Array<"grouped" | "time" | "bucket"> = hasBuckets ? ["grouped", "time", "bucket"] : ["grouped", "time"];
+    const next = cycle[(cycle.indexOf(current) + 1) % cycle.length];
+    // inbox_flat_view stays coherent so existing flat-view readers keep working.
+    state.updateClientUI({ inbox_view_mode: next, inbox_flat_view: next === "time" });
+  },
 
   // =====================
   // ACTIONS (wrapped by middleware: mutative draft + server dispatch)
@@ -1904,7 +2060,7 @@ export const useInboxStore = create<InboxStoreState>(
     let newSessionId = this.currentSessionId;
     if (this.currentSessionId && allIds.includes(this.currentSessionId)) {
       const removedSet = new Set(allIds);
-      const ordered = visualOrderSessions(this.sessions as Record<string, InboxSession>, this.sessionsWithQueuedMessages, this.activeProjectFilter, sessionsWithPendingSend(this.pendingMessages));
+      const ordered = visualOrderSessions(this.sessions as Record<string, InboxSession>, this.sessionsWithQueuedMessages, this.activeProjectFilter, sessionsWithPendingSend(this.pendingMessages), { bucketFilter: this.activeBucketFilter, bucketByConv: convBucketMap(this.bucketAssignments as Record<string, BucketAssignmentItem>) });
       const idx = ordered.findIndex(s => s._id === this.currentSessionId);
       const next = ordered.slice(idx + 1).find(s => !removedSet.has(s._id))
         ?? ordered.find(s => !removedSet.has(s._id));
@@ -2036,6 +2192,18 @@ export const useInboxStore = create<InboxStoreState>(
       this.pending[`sessions:${id}`] = { type: "exclude", ts: now };
       this.pending[`conversations:${id}`] = { type: "exclude", ts: now };
     }
+  }),
+
+  // Flag a cached conversation whose server row turned out to be deleted (a
+  // dispatch hit "conversation_deleted"). The never-prune cache keeps rendering
+  // it; this flag lets the view say so and offer restore instead of silently
+  // failing. sync() — local bookkeeping only; no server row exists to patch,
+  // and since the server never syncs this conversation again the flag sticks.
+  markServerDeleted: sync(function (this: Draft, convId: string) {
+    const sess = this.sessions[convId] as any;
+    if (sess) sess.server_deleted = true;
+    const conv = this.conversations[convId] as any;
+    if (conv) conv.server_deleted = true;
   }),
 
   switchAgent: action(function (this: Draft, currentId: string, targetAgentType: string) {
@@ -2294,7 +2462,19 @@ export const useInboxStore = create<InboxStoreState>(
       const existing = findReusableBlankSession(store as any, opts);
       if (existing) {
         const pendingCreate = store.pendingSessionCreates[existing];
-        return { stubId: existing, ready: pendingCreate ?? Promise.resolve(existing) };
+        const ready = pendingCreate ?? Promise.resolve(existing);
+        // A reused blank summoned inside a focused bucket files there too —
+        // unless it was already filed somewhere by hand.
+        const bucketAtCreate = store.activeBucketFilter;
+        if (bucketAtCreate) {
+          ready.then((id: string) => {
+            const real = get().getConvexId(id) ?? id;
+            if (isConvexId(real) && !convBucketMap(get().bucketAssignments)[real]) {
+              get().assignSessionToBucket(real, bucketAtCreate);
+            }
+          }).catch(() => {});
+        }
+        return { stubId: existing, ready };
       }
     }
     const stubId = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
@@ -2317,8 +2497,17 @@ export const useInboxStore = create<InboxStoreState>(
       git_root: opts.gitRoot, agent_type: opts.agentType, message_count: 0,
       is_idle: true, has_pending: false, last_user_message: null,
     });
+    // Capture the focused bucket NOW: a session created while a bucket chip is
+    // active belongs to that bucket. Assignment waits for the real id (the
+    // server side effect can't act on stubs).
+    const bucketAtCreate = store.activeBucketFilter;
     const ready = opts.create(stubId).then((convexId: string) => {
-      if (convexId) store.resolveSessionId(stubId, convexId);
+      if (convexId) {
+        store.resolveSessionId(stubId, convexId);
+        if (bucketAtCreate && isConvexId(convexId)) {
+          get().assignSessionToBucket(convexId, bucketAtCreate);
+        }
+      }
       return convexId;
     });
     store.trackSessionCreate(stubId, ready);
@@ -2635,7 +2824,25 @@ export const useInboxStore = create<InboxStoreState>(
     // currentSessionId keeps the blank you're sitting on navigable (j/k from a
     // fresh session); all other never-engaged blanks are hidden from the panel
     // and so excluded from keyboard order too.
-    return visualOrderSessions(get().sessions, get().sessionsWithQueuedMessages, get().activeProjectFilter, sessionsWithPendingSend(get().pendingMessages), { currentSessionId: get().currentSessionId, pendingCreateIds: new Set(Object.keys(get().pendingSessionCreates)) });
+    const bucketByConv = convBucketMap(get().bucketAssignments);
+    const base = visualOrderSessions(get().sessions, get().sessionsWithQueuedMessages, get().activeProjectFilter, sessionsWithPendingSend(get().pendingMessages), { currentSessionId: get().currentSessionId, pendingCreateIds: new Set(Object.keys(get().pendingSessionCreates)), bucketFilter: get().activeBucketFilter, bucketByConv });
+    // Keyboard order follows the ACTIVE view so Ctrl+J/K walks the list the
+    // user is looking at, not the grouped layout's order.
+    const mode = get().inboxViewMode();
+    if (mode === "time") {
+      return [...base].sort((a, b) => (b.started_at ?? b.updated_at ?? 0) - (a.started_at ?? a.updated_at ?? 0));
+    }
+    if (mode === "bucket") {
+      const pinned = base.filter((s) => s.is_pinned);
+      const rest = base.filter((s) => !s.is_pinned);
+      const { labelGroups, projectGroups } = groupSessionsForLabelView(rest, get().buckets, bucketByConv);
+      return [
+        ...pinned,
+        ...labelGroups.flatMap((g) => g.items),
+        ...projectGroups.flatMap((g) => g.items),
+      ];
+    }
+    return base;
   },
 
   // =====================
@@ -2815,7 +3022,7 @@ export const useInboxStore = create<InboxStoreState>(
   markKilling: action(function (this: Draft, id: string) {
     let newSessionId = this.currentSessionId;
     if (this.currentSessionId === id) {
-      const ordered = visualOrderSessions(this.sessions as Record<string, InboxSession>, this.sessionsWithQueuedMessages, this.activeProjectFilter, sessionsWithPendingSend(this.pendingMessages));
+      const ordered = visualOrderSessions(this.sessions as Record<string, InboxSession>, this.sessionsWithQueuedMessages, this.activeProjectFilter, sessionsWithPendingSend(this.pendingMessages), { bucketFilter: this.activeBucketFilter, bucketByConv: convBucketMap(this.bucketAssignments as Record<string, BucketAssignmentItem>) });
       const idx = ordered.findIndex(s => s._id === id);
       const next = ordered.slice(idx + 1).find(s => s._id !== id)
         ?? ordered.find(s => s._id !== id);
@@ -3148,20 +3355,30 @@ export const useInboxStore = create<InboxStoreState>(
 
   resolveForkSessionId: (sessionId: string, convexId: string) => {
     if (sessionId === convexId) return;
+    // Full stub→real rekey (sessions, conversations, messages, drafts, pending,
+    // currentSessionId, …) — the fork stub is navigated to immediately, so every
+    // pointer the new-session stub convention moves must move here too.
+    (get() as any)._rekeySession(sessionId, convexId);
     const state = get();
     const newOptimistic = state.optimisticForkChildren.map((f: ForkChild) =>
       f._id === sessionId ? { ...f, _id: convexId } : f
     );
-    const newMessages = { ...state.messages };
-    if (newMessages[sessionId]) {
-      newMessages[convexId] = newMessages[sessionId];
-      delete newMessages[sessionId];
-    }
-    set({
-      optimisticForkChildren: newOptimistic,
-      messages: newMessages,
-    });
+    set({ optimisticForkChildren: newOptimistic });
   },
+
+  discardForkStub: sync(function (this: Draft, stubId: string, parentId?: string) {
+    delete this.sessions[stubId];
+    delete this.conversations[stubId];
+    delete this.messages[stubId];
+    delete this.pendingMessages[stubId];
+    delete this.pagination[stubId];
+    delete this.drafts[stubId];
+    this.optimisticForkChildren = this.optimisticForkChildren.filter((f: ForkChild) => f._id !== stubId);
+    if (this.currentSessionId === stubId) {
+      this.currentSessionId = parentId ?? null;
+      recordCurrentConversationPointer(this, parentId);
+    }
+  }),
 
   // =====================
   // TASK / DOC STATE
@@ -3275,6 +3492,46 @@ export const useInboxStore = create<InboxStoreState>(
   promoteDocToPlan: asyncAction(function (this: Draft, _docId: string) {}),
   ensurePlanDoc: asyncAction(function (this: Draft, _planShortId: string) {}),
   publishToDirectory: asyncAction(function (this: Draft, _opts: Record<string, any>) {}),
+
+  // -- Manual session buckets --
+  // Create has no optimistic row (rare gesture; the synced row lands fast and
+  // callers await the returned _id to assign immediately after).
+  createBucket: asyncAction(function (this: Draft, _opts: { name: string; color?: string }) {}),
+
+  // Rename / color / sort / archive ride the generic patch path (inbox_buckets
+  // is in dispatch TABLE_CONFIG); fields are auto-protected until server echo.
+  updateBucket: action(function (this: Draft, id: string, fields: { name?: string; color?: string; sort_order?: number; archived_at?: number | null }) {
+    const bucket = this.buckets[id] as any;
+    if (!bucket) return;
+    for (const [k, v] of Object.entries(fields)) {
+      if (v === undefined) continue;
+      bucket[k] = v === null ? undefined : v;
+    }
+    bucket.updated_at = Date.now();
+  }),
+
+  // Exclusive filing: upsert the one assignment row for this conversation.
+  // First-time assignments add a stub row; the bucketAssignments altKey config
+  // rekeys it onto the server row when it syncs. The same-named dispatch side
+  // effect performs the durable upsert. Callers must pass a REAL conversation
+  // id (the server no-ops on stubs and the local stub row would orphan).
+  assignSessionToBucket: action(function (this: Draft, conversationId: string, bucketId: string | null) {
+    const now = Date.now();
+    const existing = (Object.values(this.bucketAssignments) as BucketAssignmentItem[])
+      .find(a => a.conversation_id === conversationId);
+    if (existing) {
+      existing.bucket_id = bucketId ?? undefined;
+      existing.updated_at = now;
+    } else {
+      const stubId = `bucketassign-${conversationId}`;
+      this.bucketAssignments[stubId] = {
+        _id: stubId,
+        conversation_id: conversationId,
+        bucket_id: bucketId ?? undefined,
+        updated_at: now,
+      };
+    }
+  }),
 
   // Doc drag-reparent: optimistically move the node in the local tree (docs is a
   // protected collection, so parent_id/sort_order are field-protected) and
@@ -3757,16 +4014,26 @@ if (PERSISTENCE_AVAILABLE) {
       useInboxStore.setState({ clientStateInitialized: true });
     }
 
-    // Restore selected session from persisted clientState before React effects
-    // can auto-select the first session (QueuePageClient's fallback effect).
+    // Restore the selected session before React effects can auto-select the
+    // first session (QueuePageClient's fallback effect). Prefer this client's
+    // OWN last position (lastFocusedConversationId, local-only); the per-user
+    // synced pointer is a fallback for clients with no local history ONLY —
+    // it is writable by every other client (devices, agent-driven tabs), and
+    // restoring from it here is what kept teleporting the desktop into random
+    // sessions after every dev reload (ct-36951; the round-1 fix gated the
+    // server-sync pull but this hydration path was the live door).
     const st = useInboxStore.getState();
+    const ownId = (cached.lastFocusedConversationId ?? null) as string | null;
+    if (ownId && !st.lastFocusedConversationId) {
+      useInboxStore.setState({ lastFocusedConversationId: ownId });
+    }
     if (!st.currentSessionId) {
-      const persistedId = st.clientState?.current_conversation_id;
-      if (persistedId && st.sessions[persistedId]) {
+      const restoreId = ownId ?? st.clientState?.current_conversation_id;
+      if (restoreId && st.sessions[restoreId]) {
         // The divider anchor (_seenUpToAt) is persisted, so reopening the app to
         // this session naturally shows what arrived while it was closed — no
         // special seeding needed here.
-        useInboxStore.setState({ currentSessionId: persistedId });
+        useInboxStore.setState({ currentSessionId: restoreId });
       }
     }
 

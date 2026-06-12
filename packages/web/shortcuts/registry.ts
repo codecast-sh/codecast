@@ -4,6 +4,7 @@ export type ShortcutAction =
   | 'session.jumpIdle'
   | 'session.jumpPinned'
   | 'session.pin'
+  | 'session.moveToBucket'
   | 'session.stash'
   | 'session.kill'
   | 'session.deferAdvance'
@@ -11,6 +12,10 @@ export type ShortcutAction =
   | 'session.createIsolated'
   | 'session.rename'
   | 'session.mruSwitch'
+  | 'tab.new'
+  | 'tab.close'
+  | 'tab.next'
+  | 'tab.prev'
   | 'ui.zenToggle'
   | 'ui.toggleShortcutsHelp'
   | 'ui.undo'
@@ -45,7 +50,6 @@ export type ShortcutAction =
   | 'compose.focus'
   | 'sidebar.toggleLeft'
   | 'sidebar.toggleRight'
-  | 'create.open'
   | 'diff.prevChange'
   | 'diff.nextChange'
   | 'diff.toggleFileTree'
@@ -97,6 +101,11 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'ctrl+i', action: 'session.jumpIdle', skipInputCheck: true, description: 'Jump to idle session' },
   { key: 'alt+p', mac: 'ctrl+p', action: 'session.jumpPinned', skipInputCheck: true, description: 'Jump to pinned session' },
   { key: 'ctrl+shift+p', action: 'session.pin', skipInputCheck: true, description: 'Pin/unpin session' },
+  // Ctrl+L = Label. Free in-app and in the browser on mac (address bar is
+  // Cmd+L); Ctrl+M stays compose-focus. Non-destructive (opens the label
+  // picker), so a plain `true` bypass is safe from a full composer — unlike
+  // the backspace triage chords below.
+  { key: 'ctrl+l', action: 'session.moveToBucket', skipInputCheck: true, description: 'Label session' },
   // Destructive backspace chords use 'whenEmpty', never true: ctrl+backspace is
   // the OS "delete previous word" key, so an unconditional bypass fired these
   // mid-compose — preventDefault swallowed the keystroke (no visible change)
@@ -111,8 +120,17 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'ctrl+shift+e', action: 'session.rename', skipInputCheck: true, description: 'Rename session' },
   { key: 'ctrl+tab', action: 'session.mruSwitch', skipInputCheck: true, description: 'Switch session (MRU)' },
 
+  { key: 'ctrl+t', mac: 'meta+t', action: 'tab.new', skipInputCheck: true, description: 'New tab' },
+  { key: 'ctrl+w', mac: 'meta+w', action: 'tab.close', skipInputCheck: true, description: 'Close tab' },
+  // shift+bracket arrives as '[' or '{' depending on browser/layout — register
+  // both spellings per action; UI shows the first def.
+  { key: 'ctrl+shift+[', mac: 'meta+shift+[', action: 'tab.prev', skipInputCheck: true, description: 'Previous tab' },
+  { key: 'ctrl+shift+{', mac: 'meta+shift+{', action: 'tab.prev', skipInputCheck: true, description: 'Previous tab' },
+  { key: 'ctrl+shift+]', mac: 'meta+shift+]', action: 'tab.next', skipInputCheck: true, description: 'Next tab' },
+  { key: 'ctrl+shift+}', mac: 'meta+shift+}', action: 'tab.next', skipInputCheck: true, description: 'Next tab' },
+
   { key: 'ctrl+.', action: 'ui.zenToggle', skipInputCheck: true, description: 'Toggle zen mode' },
-  { key: 'ctrl+,', action: 'inbox.toggleFlatView', skipInputCheck: true, description: 'Toggle flat inbox (by creation time)' },
+  { key: 'ctrl+,', action: 'inbox.toggleFlatView', skipInputCheck: true, description: 'Cycle inbox view (grouped / time / label)' },
   { key: '?', action: 'ui.toggleShortcutsHelp', description: 'Toggle shortcuts help' },
   { key: 'ctrl+z', action: 'ui.undo', skipInputCheck: true, description: 'Undo' },
   { key: 'ctrl+shift+z', action: 'ui.redo', skipInputCheck: true, description: 'Redo' },
@@ -155,7 +173,6 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'k', action: 'review.prevFile', when: 'review', description: 'Previous file' },
   { key: 'c', action: 'review.comment', when: 'review', description: 'Comment on line' },
 
-  { key: 'c', action: 'create.open', description: 'Create task or plan' },
 
   { key: '[', action: 'diff.prevChange', when: 'diff', description: 'Previous change' },
   { key: ']', action: 'diff.nextChange', when: 'diff', description: 'Next change' },
@@ -246,7 +263,8 @@ export function formatShortcutParts(def: ShortcutDef): string[] {
 export function formatShortcutLabel(action: ShortcutAction): string | null {
   const defs = getShortcutsForAction(action);
   if (defs.length === 0) return null;
-  return formatShortcutParts(defs[0]).join('');
+  // Mac glyphs (⌘⇧P) read as one unit; word modifiers need separators (Ctrl+Shift+P).
+  return formatShortcutParts(defs[0]).join(isMac ? '' : '+');
 }
 
 export function getShortcutsByContext(when?: string): ShortcutDef[] {
