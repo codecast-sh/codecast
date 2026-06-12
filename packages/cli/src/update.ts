@@ -5,7 +5,7 @@ import { execSync } from "child_process";
 import pkg from "../package.json";
 
 const VERSION = pkg.version;
-const MEMORY_VERSION = "9"; // bumped: --messages content flag (multi-session message stream) + id as filter
+const MEMORY_VERSION = "10"; // bumped: --label filter on search/feed/sessions + --labels/--by-label
 const TASK_VERSION = "1";
 const WORK_VERSION = "6"; // bumped: messaging docs split out into MESSAGING_SNIPPET
 const PLAN_VERSION = "2";

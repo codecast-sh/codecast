@@ -278,6 +278,11 @@
   color: #6c71c4;
 }
 
+.doc-editor .mention-label {
+  background: rgba(211, 54, 130, 0.15);
+  color: #d33682;
+}
+
 /* Rich mention node views */
 .mention-node-wrap {
   display: inline-block;

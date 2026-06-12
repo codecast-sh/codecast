@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { create as mutativeCreate } from "mutative";
+import { groupPatchesByTable } from "../mutativeMiddleware";
 import {
   computeReorderUpdates,
   convBucketMap,
@@ -134,6 +136,23 @@ describe("assignSessionToBucket", () => {
     rows = Object.values(useInboxStore.getState().bucketAssignments);
     expect(rows.length).toBe(1);
     expect(rows[0].bucket_id).toBeUndefined();
+  });
+
+  it("a stub-conversation assignment follows the rekey to the real id (fork label inheritance)", () => {
+    const stubId = "forkstub123";
+    const realId = convexId("forkreal");
+    useInboxStore.getState().assignSessionToBucket(stubId, "bucketA");
+    (useInboxStore.getState() as any)._rekeySession(stubId, realId);
+    const map = convBucketMap(useInboxStore.getState().bucketAssignments);
+    expect(map[stubId]).toBeUndefined();
+    expect(map[realId]).toBe("bucketA");
+  });
+
+  it("discardForkStub removes the stub's assignment row", () => {
+    const stubId = "forkstub456";
+    useInboxStore.getState().assignSessionToBucket(stubId, "bucketA");
+    useInboxStore.getState().discardForkStub(stubId);
+    expect(Object.values(useInboxStore.getState().bucketAssignments).length).toBe(0);
   });
 });
 
@@ -393,5 +412,39 @@ describe("bucket cache hydration merge", () => {
     expect(hydrateMergeValue("teams", [{ id: "t1" }], []).apply).toBe(true);
     expect(hydrateMergeValue("teams", [{ id: "t1" }], [{ id: "live" }]).apply).toBe(false);
     expect(hydrateMergeValue("activeTabId", "tab_a", "tab_b")).toEqual({ apply: true, value: "tab_a" });
+  });
+});
+
+describe("unarchive reaches the server (fullfunnel regression)", () => {
+  // Unarchiving a label sets `archived_at = undefined` in the action draft.
+  // Mutative encodes that as a replace-with-undefined patch (or a remove op
+  // for `delete`), and sanitizeForConvex strips undefined keys from the
+  // dispatch payload — so the clear silently never synced and the bucket
+  // stayed archived server-side while every client showed it live. The
+  // grouped patch must carry an explicit null, which the server's
+  // applyPatches turns into a real field removal.
+  const draftClear = (clear: (d: any) => void) => {
+    const bucketId = convexId("bkt1");
+    const state = {
+      buckets: {
+        [bucketId]: { _id: bucketId, name: "fullfunnel", archived_at: 123, created_at: 1, updated_at: 1 },
+      },
+    };
+    const [, patches] = mutativeCreate(
+      state,
+      (d: any) => clear(d.buckets[bucketId]),
+      { enablePatches: { pathAsArray: true } }
+    );
+    return { bucketId, grouped: groupPatchesByTable(patches as any) };
+  };
+
+  it("a field set to undefined groups as an explicit null tombstone", () => {
+    const { bucketId, grouped } = draftClear((b) => { b.archived_at = undefined; });
+    expect(grouped.inbox_buckets[bucketId].archived_at).toBeNull();
+  });
+
+  it("a field cleared via delete groups as an explicit null tombstone", () => {
+    const { bucketId, grouped } = draftClear((b) => { delete b.archived_at; });
+    expect(grouped.inbox_buckets[bucketId].archived_at).toBeNull();
   });
 });

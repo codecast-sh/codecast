@@ -26,6 +26,8 @@ import {
   buildPathRestampUpdate,
 } from "./privacy";
 import { batchScanConversations, paginateTeamFeed } from "./feedPagination";
+import { resolveLabelConvIds, matchBucketByName } from "./buckets";
+import { projectOverlaps } from "./projectPaths";
 import {
   parseSearchTerms,
   contentMatchesAnyTerm,
@@ -3289,6 +3291,7 @@ export const searchForCLI = query({
     team_id: v.optional(v.id("teams")),
     member_name: v.optional(v.string()),
     mine_only: v.optional(v.boolean()),
+    label: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -3298,6 +3301,13 @@ export const searchForCLI = query({
     const user = await ctx.db.get(authUserId);
     if (!user) {
       return { error: "User not found" };
+    }
+
+    let labelConvIds: Set<string> | null = null;
+    if (args.label) {
+      const resolved = await resolveLabelConvIds(ctx, authUserId, args.label);
+      if ("error" in resolved) return { error: resolved.error };
+      labelConvIds = resolved.convIds;
     }
 
     const userMemberships = await ctx.db
@@ -3427,8 +3437,14 @@ export const searchForCLI = query({
     // Hydrate candidate conversations in parallel (a serial await per candidate
     // was a major latency source), then apply the sync filters before any
     // further reads. Bounded to the best candidates — coverage order means the
-    // tail is the weakest matches anyway.
-    const candidates = rankedMatches.slice(0, Math.max(50, offset + limit * 3));
+    // tail is the weakest matches anyway. The label filter applies before the
+    // bound: it's keyed by conversation id alone, and a small labeled set would
+    // otherwise vanish whenever it falls outside the top candidates.
+    const lci = labelConvIds;
+    const rankedEligible = lci
+      ? rankedMatches.filter((r) => lci.has(r.convId))
+      : rankedMatches;
+    const candidates = rankedEligible.slice(0, Math.max(50, offset + limit * 3));
     const hydratedConvs = await Promise.all(
       candidates.map(({ messages }) => ctx.db.get(messages[0].conversation_id))
     );
@@ -3451,6 +3467,13 @@ export const searchForCLI = query({
 
       // Filter by specific member (or self via --mine)
       if (filterUserId && conv.user_id.toString() !== filterUserId) return;
+
+      // Filter to sessions the caller filed under the given label —
+      // project-bounded by default (the CLI passes cwd unless -g).
+      if (labelConvIds) {
+        if (!labelConvIds.has(conv._id.toString())) return;
+        if (projectPath && !(projectOverlaps(projectPath, conv.project_path) || projectOverlaps(projectPath, conv.git_root))) return;
+      }
 
       if (startTime && conv.updated_at < startTime) return;
       if (endTime && conv.updated_at > endTime) return;
@@ -5088,6 +5111,7 @@ export const feedForCLI = query({
     mine_only: v.optional(v.boolean()),
     live_only: v.optional(v.boolean()),
     state: v.optional(v.string()),
+    label: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -5163,6 +5187,28 @@ export const feedForCLI = query({
       filterUserId = matchingMember._id.toString();
     }
 
+    // Label filter: the labeled set IS the candidate pool. Labels exist to park
+    // old sessions, which the recency-window fetches below would miss, so when a
+    // label is given we hydrate its conversations directly instead.
+    let labelConvIds: Set<string> | null = null;
+    let labeledConvs: NonNullable<Awaited<ReturnType<typeof ctx.db.get<"conversations">>>>[] = [];
+    if (args.label) {
+      const resolved = await resolveLabelConvIds(ctx, authUserId, args.label);
+      if ("error" in resolved) return { error: resolved.error };
+      const hydrated = await Promise.all(
+        [...resolved.convIds].slice(0, 200).map((id) => ctx.db.get(id as Id<"conversations">))
+      );
+      labeledConvs = hydrated.filter((c): c is (typeof labeledConvs)[number] => c !== null);
+      // Labels are project-bounded by default: the CLI passes cwd unless -g.
+      if (args.project_path) {
+        const bound = args.project_path;
+        labeledConvs = labeledConvs.filter((c) =>
+          projectOverlaps(bound, c.project_path) || projectOverlaps(bound, (c as any).git_root)
+        );
+      }
+      labelConvIds = new Set(labeledConvs.map((c) => c._id.toString()));
+    }
+
     let matchingConvIds: Set<string> | null = null;
     let queryMatchedOwnConversations: typeof ownConversations = [];
     let queryMatchedTeamConversations: typeof ownConversations = [];
@@ -5217,11 +5263,13 @@ export const feedForCLI = query({
     const fetchLimit = query
       ? Math.min(offset + limit + 20, 100)
       : Math.min(offset + limit + 50, 200);
-    let ownConversations = await ctx.db
-      .query("conversations")
-      .withIndex("by_user_updated", (q) => q.eq("user_id", authUserId))
-      .order("desc")
-      .take(fetchLimit);
+    let ownConversations = labelConvIds
+      ? labeledConvs.filter((c) => c.user_id.toString() === authUserId.toString())
+      : await ctx.db
+          .query("conversations")
+          .withIndex("by_user_updated", (q) => q.eq("user_id", authUserId))
+          .order("desc")
+          .take(fetchLimit);
 
     // Merge in query-matched conversations that might be older
     if (queryMatchedOwnConversations.length > 0) {
@@ -5238,21 +5286,28 @@ export const feedForCLI = query({
         (u.activity_visibility || "detailed") !== "hidden"
       );
 
-      const teamMemberConvos = await Promise.all(
-        visibleTeamMembers.map(async (member) => {
-          const convos = await ctx.db
-            .query("conversations")
-            .withIndex("by_user_updated", (q) => q.eq("user_id", member._id))
-            .order("desc")
-            .take(10);
-          return convos.filter(c =>
-            c.team_id != null && effectiveTeamIdSet.has(c.team_id.toString()) &&
-            (cliFeedFilters.get(c.team_id!.toString())?.isVisible(c) ?? false)
-          );
-        })
-      );
+      const visibleMemberIds = new Set(visibleTeamMembers.map(u => u._id.toString()));
+      const isVisibleTeamConv = (c: typeof ownConversations[number]) =>
+        c.team_id != null && effectiveTeamIdSet.has(c.team_id.toString()) &&
+        (cliFeedFilters.get(c.team_id!.toString())?.isVisible(c) ?? false);
 
-      teamConversations = teamMemberConvos.flat();
+      if (labelConvIds) {
+        teamConversations = labeledConvs.filter(c =>
+          visibleMemberIds.has(c.user_id.toString()) && isVisibleTeamConv(c)
+        );
+      } else {
+        const teamMemberConvos = await Promise.all(
+          visibleTeamMembers.map(async (member) => {
+            const convos = await ctx.db
+              .query("conversations")
+              .withIndex("by_user_updated", (q) => q.eq("user_id", member._id))
+              .order("desc")
+              .take(10);
+            return convos.filter(isVisibleTeamConv);
+          })
+        );
+        teamConversations = teamMemberConvos.flat();
+      }
 
       // Merge in query-matched team conversations that might be older than top-20
       if (queryMatchedTeamConversations.length > 0) {
@@ -5267,6 +5322,7 @@ export const feedForCLI = query({
     let filteredConversations = [...ownConversations, ...teamConversations]
       .filter((c): c is typeof ownConversations[number] => {
         if (filterUserId && c.user_id.toString() !== filterUserId) return false;
+        if (labelConvIds && !labelConvIds.has(c._id.toString())) return false;
 
         // Team filter: when team is resolved from directory, filter own sessions by team
         if (resolvedTeamId && isOwnConversation(c)) {
@@ -5345,7 +5401,6 @@ export const feedForCLI = query({
         awaitingInput,
         hasPending,
         isUnresponsive: activity.isUnresponsive,
-        isPinned: !!conv.inbox_pinned_at,
         messageCount: conv.message_count || 0,
       });
       workStateMap.set(conv._id.toString(), ws);
@@ -6526,7 +6581,14 @@ function sortInboxRows(results: any[]) {
 async function computeInboxSessions(
   ctx: any,
   userId: Id<"users">,
-  opts: { show_all?: boolean; includeLiveness?: boolean },
+  opts: {
+    show_all?: boolean;
+    includeLiveness?: boolean;
+    // Explicitly-requested conversations (a label's filed set) hydrated into the
+    // candidate pool regardless of the recency window — labels exist to park old
+    // sessions. Deliberately filed, so also exempt from cluster-hiding.
+    extraConvIds?: string[];
+  },
 ): Promise<{ sessions: any[]; hidden_count: number }> {
   // Liveness (agent_status/is_idle/...) is heartbeat-derived and is the reason this
   // query re-runs ~every second. The live web subscription opts OUT (includeLiveness:
@@ -6583,6 +6645,21 @@ async function computeInboxSessions(
   for (const c of pinnedConversations) byId.set(c._id.toString(), c);
   for (const c of dismissedConversations) byId.set(c._id.toString(), c);
   for (const c of stashedConversations) byId.set(c._id.toString(), c);
+
+  // Hydrate explicitly-requested conversations the windows above missed.
+  // Own sessions only (the inbox is "mine"); cap mirrors the window size.
+  const extraIds = new Set(opts.extraConvIds ?? []);
+  let extraBudget = 200;
+  for (const idStr of extraIds) {
+    if (byId.has(idStr) || extraBudget <= 0) continue;
+    let conv: any = null;
+    try { conv = await ctx.db.get(idStr as Id<"conversations">); } catch { conv = null; }
+    if (!conv) continue;
+    if (conv.user_id.toString() !== userId.toString()) continue;
+    if (conv.status !== "active" && conv.status !== "completed") continue;
+    byId.set(idStr, conv);
+    extraBudget--;
+  }
   const conversations = Array.from(byId.values());
 
   const maps = includeLiveness
@@ -6590,10 +6667,12 @@ async function computeInboxSessions(
     : EMPTY_INBOX_MAPS;
 
   // Cluster cutoff hides stale active sessions when there's a clean time gap.
-  // Dismissed/stashed sessions have their own 30d window, so exclude them from
-  // the gap analysis.
+  // Dismissed/stashed sessions have their own 30d window, and explicitly-requested
+  // extras are old by design — exclude both from the gap analysis.
   let clusterCutoff = 0;
-  const activeConvs = conversations.filter((c) => !c.inbox_dismissed_at && !c.inbox_stashed_at);
+  const activeConvs = conversations.filter(
+    (c) => !c.inbox_dismissed_at && !c.inbox_stashed_at && !extraIds.has(c._id.toString())
+  );
   if (activeConvs.length > 0) {
     const sorted = [...activeConvs].sort((a, b) => b.updated_at - a.updated_at);
     for (let i = 1; i < sorted.length; i++) {
@@ -6609,7 +6688,9 @@ async function computeInboxSessions(
   const results: any[] = [];
   for (const conv of conversations) {
     if (!shouldShowInInbox(conv)) continue;
-    const { row, subagentChildren, dismissed, stashed, hidden } = await enrichInboxSessionRow(ctx, conv, maps, now, clusterCutoff);
+    // Explicitly-requested rows are deliberately filed — never cluster-hide them.
+    const cutoff = extraIds.has(conv._id.toString()) ? 0 : clusterCutoff;
+    const { row, subagentChildren, dismissed, stashed, hidden } = await enrichInboxSessionRow(ctx, conv, maps, now, cutoff);
     if (hidden) {
       hiddenCount++;
       if (!opts.show_all) continue;
@@ -6698,12 +6779,73 @@ export const inboxForCLI = query({
     show_all: v.optional(v.boolean()),
     state: v.optional(v.string()),
     limit: v.optional(v.number()),
+    label: v.optional(v.string()),
+    project_path: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) return { error: "Unauthorized" };
 
-    const { sessions, hidden_count } = await computeInboxSessions(ctx, userId, { show_all: !!args.show_all });
+    // Labels (buckets) are the user's personal filing, fetched BEFORE the inbox
+    // so a --label query can hydrate its full filed set below. One fetch serves
+    // the --label filter, the per-row label stamp, and the labels summary the
+    // CLI renders for --labels / --by-label.
+    const allBuckets = await ctx.db
+      .query("inbox_buckets")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .collect();
+    const activeBuckets = allBuckets
+      .filter((b) => !b.archived_at)
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.name.localeCompare(b.name));
+    const assignments = await ctx.db
+      .query("bucket_assignments")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .collect();
+    const bucketNameById = new Map(activeBuckets.map((b) => [b._id.toString(), b.name]));
+    const labelByConv = new Map<string, string>();
+    for (const a of assignments) {
+      const name = a.bucket_id ? bucketNameById.get(a.bucket_id.toString()) : undefined;
+      if (name) labelByConv.set(a.conversation_id.toString(), name);
+    }
+
+    // --label: resolve the filed conversation ids up front. Labels exist to park
+    // old sessions, which the inbox's recency window misses — so the filed set is
+    // hydrated INTO the inbox (extraConvIds) instead of merely filtering it, the
+    // same policy as feedForCLI's resolveLabelConvIds path. Same-named buckets
+    // merge into one label, so collect every matching bucket id.
+    let labelConvIds: Set<string> | null = null;
+    if (args.label) {
+      const matched = matchBucketByName(activeBuckets, args.label);
+      if ("error" in matched) return { error: matched.error };
+      const matchedBucketIds = new Set(
+        activeBuckets.filter((b) => b.name === matched.name).map((b) => b._id.toString())
+      );
+      labelConvIds = new Set(
+        assignments
+          .filter((a) => a.bucket_id && matchedBucketIds.has(a.bucket_id.toString()))
+          .map((a) => a.conversation_id.toString())
+      );
+    }
+
+    let { sessions, hidden_count } = await computeInboxSessions(ctx, userId, {
+      show_all: !!args.show_all,
+      extraConvIds: labelConvIds ? [...labelConvIds] : undefined,
+    });
+
+    // Project bounding (label views): scope the inbox to one project so labels
+    // and their counts reflect the caller's cwd, not their whole filing cabinet.
+    // Overlap in either direction — a cwd deeper inside the repo still claims
+    // the repo's sessions, and a session created in a subdir still counts.
+    if (args.project_path) {
+      const bound = args.project_path;
+      sessions = sessions.filter((s) => projectOverlaps(bound, s.project_path) || projectOverlaps(bound, s.git_root));
+    }
+
+    if (labelConvIds) {
+      // Counts below reflect the label scope, like show_all narrows the whole view.
+      const lci = labelConvIds;
+      sessions = sessions.filter((s) => lci.has(s._id.toString()));
+    }
     const stateFilter = normalizeWorkStateFilter(args.state);
     const ORDER: Record<WorkState, number> = { needs_input: 0, working: 1, idle: 2 };
 
@@ -6725,6 +6867,7 @@ export const inboxForCLI = query({
       awaiting_input: boolean;
       idle_summary: string | null;
       last_user_message: string | null;
+      label: string | null;
       active_plan: { short_id: string; title: string } | null;
       active_task: { short_id: string; title: string } | null;
     }> = [];
@@ -6742,7 +6885,6 @@ export const inboxForCLI = query({
         awaitingInput: s.awaiting_input,
         hasPending: s.has_pending,
         isUnresponsive: s.is_unresponsive,
-        isPinned: s.is_pinned,
         messageCount: s.message_count || 0,
       });
       const is_live = !!s.is_connected;
@@ -6751,6 +6893,7 @@ export const inboxForCLI = query({
       counts[work_state]++;
       if (s.is_pinned) counts.pinned++;
       if (is_live) counts.live++;
+      const rowLabel = labelByConv.get(s._id.toString()) ?? null;
 
       if (stateFilter === "pinned" && !s.is_pinned) continue;
       if (stateFilter === "live" && !is_live) continue;
@@ -6773,6 +6916,7 @@ export const inboxForCLI = query({
         awaiting_input: !!s.awaiting_input,
         idle_summary: s.idle_summary || null,
         last_user_message: s.last_user_message || null,
+        label: rowLabel,
         active_plan: s.active_plan ? { short_id: s.active_plan.short_id, title: s.active_plan.title } : null,
         active_task: s.active_task ? { short_id: s.active_task.short_id, title: s.active_task.title } : null,
       });
@@ -6786,7 +6930,57 @@ export const inboxForCLI = query({
     });
 
     const limit = args.limit ?? 200;
-    return { sessions: rows.slice(0, limit), counts, hidden_count, scope: "mine" };
+
+    // All active labels with counts from the user's FILING (assignments), not
+    // the recency-windowed rows — labels mostly hold parked sessions the window
+    // misses. Same-named buckets merge into one entry. In a project-bounded
+    // view, count only conversations filed in this project (hydrating the few
+    // not already in the inbox window, capped) and drop zero-count labels —
+    // they're other projects' filing.
+    const nameToConvIds = new Map<string, Set<string>>();
+    for (const a of assignments) {
+      const name = a.bucket_id ? bucketNameById.get(a.bucket_id.toString()) : undefined;
+      if (!name) continue;
+      if (!nameToConvIds.has(name)) nameToConvIds.set(name, new Set());
+      nameToConvIds.get(name)!.add(a.conversation_id.toString());
+    }
+    let inBound: ((id: string) => Promise<boolean>) | null = null;
+    if (args.project_path) {
+      const bound = args.project_path;
+      const pathById = new Map<string, { project_path?: string | null; git_root?: string | null } | null>();
+      for (const s of sessions) pathById.set(s._id.toString(), { project_path: s.project_path, git_root: s.git_root });
+      let hydrationBudget = 500;
+      inBound = async (id: string) => {
+        if (!pathById.has(id)) {
+          if (hydrationBudget-- <= 0) return false;
+          let conv: any = null;
+          try { conv = await ctx.db.get(id as Id<"conversations">); } catch { conv = null; }
+          pathById.set(
+            id,
+            conv && conv.user_id.toString() === userId.toString()
+              ? { project_path: conv.project_path, git_root: conv.git_root }
+              : null,
+          );
+        }
+        const p = pathById.get(id);
+        return !!p && (projectOverlaps(bound, p.project_path) || projectOverlaps(bound, p.git_root));
+      };
+    }
+    const labels: Array<{ name: string; count: number }> = [];
+    const seenLabelNames = new Set<string>();
+    for (const b of activeBuckets) {
+      if (seenLabelNames.has(b.name)) continue;
+      seenLabelNames.add(b.name);
+      const ids = nameToConvIds.get(b.name) ?? new Set<string>();
+      let count = 0;
+      for (const id of ids) {
+        if (!inBound || (await inBound(id))) count++;
+      }
+      if (args.project_path && count === 0) continue;
+      labels.push({ name: b.name, count });
+    }
+
+    return { sessions: rows.slice(0, limit), counts, hidden_count, labels, scope: "mine" };
   },
 });
 

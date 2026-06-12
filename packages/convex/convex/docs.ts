@@ -1821,6 +1821,31 @@ export const expandMentions = query({
             results.push({ type: "doc", id: mention.id, markdown: md });
           }
 
+        } else if (mention.type === "label" && mention.id) {
+          // A label (inbox bucket) mention expands to the sessions the user
+          // filed under it, so the agent can pull any of them with cast read.
+          const bucket = await ctx.db.get(mention.id as Id<"inbox_buckets">);
+          if (bucket && String((bucket as any).user_id) === String(userId)) {
+            const assignments = await ctx.db.query("bucket_assignments")
+              .withIndex("by_user_id", (a: any) => a.eq("user_id", userId))
+              .collect();
+            const convIds = assignments
+              .filter((a: any) => String(a.bucket_id) === String(bucket._id))
+              .map((a: any) => a.conversation_id);
+            const convs = (await Promise.all(convIds.slice(0, 30).map((id: any) => ctx.db.get(id))))
+              .filter((c): c is NonNullable<typeof c> => c !== null)
+              .sort((a: any, b: any) => (b.updated_at || 0) - (a.updated_at || 0));
+            let md = `\n\n---\n### Label: ${(bucket as any).name}\n`;
+            md += `${convs.length} session${convs.length === 1 ? "" : "s"} filed under this label\n\n`;
+            for (const s of convs as any[]) {
+              md += `- **${s.title || "Untitled"}** \`${s.short_id}\` (${s.message_count || 0} msgs${s.project_path ? `, ${s.project_path}` : ""})`;
+              if (s.idle_summary) md += ` — ${s.idle_summary.slice(0, 150)}`;
+              md += `\n`;
+            }
+            md += `\n> \`cast sessions --label "${(bucket as any).name}" -a\` for live state · \`cast read <id>\` for a transcript\n---\n`;
+            results.push({ type: "label", id: mention.id, markdown: md });
+          }
+
         } else if (mention.type === "person") {
           results.push({ type: "person", shortId: mention.shortId, id: mention.id, markdown: "" });
         }

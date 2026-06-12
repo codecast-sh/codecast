@@ -10,7 +10,7 @@ import { ConversationData } from "./ConversationView";
 import { FormattedSummary } from "./FormattedSummary";
 import { sessionCardSummary } from "../lib/sessionSummary";
 import { useConversationMessages } from "../hooks/useConversationMessages";
-import { useInboxStore, useTrackedStore, InboxSession, getSessionRenderKey, isConvexId, categorizeSessions, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, isSessionHidden, resolveSessionAuthor, convBucketMap, groupSessionsForLabelView, sortLabels, BucketItem, BucketAssignmentItem } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, InboxSession, getSessionRenderKey, isConvexId, categorizeSessions, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, isSessionHidden, resolveSessionAuthor, convBucketMap, groupSessionsForLabelView, sortLabels, computeChipCounts, BucketItem, BucketAssignmentItem } from "../store/inboxStore";
 import { isBlockedConversation, isSubagentConversation } from "@codecast/convex/convex/ccAccountsShared";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
 import { cleanTitle, msgCountColor, formatModel } from "../lib/conversationProcessor";
@@ -25,7 +25,8 @@ import { toast } from "sonner";
 import { animatedHideSession } from "../store/undoActions";
 import { soundKill } from "../lib/sounds";
 import { formatShortcutLabel } from "../shortcuts";
-import { X, ChevronsLeft, ChevronsRight, ChevronRight, List, Clock, Tag, GitFork } from "lucide-react";
+import { X, ChevronsLeft, ChevronsRight, ChevronRight, ChevronDown, List, Clock, Tag, GitFork } from "lucide-react";
+import { FilterOptionList } from "./FilterDropdown";
 import { LabelChipsRow } from "./LabelChipsRow";
 import { TaskStatusBadge } from "./TaskStatusBadge";
 import { useTipActions, checkMilestone } from "../tips";
@@ -265,6 +266,22 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
 // -- Fork tree color --
 
 const FORK_HUES = [30, 60, 120, 180, 200, 220, 260, 45, 90, 160, 240, 280];
+
+// The corner color is keyed by the ROOT of the fork tree so every session in
+// the same tree — parent, forks, forks-of-forks — renders the same color.
+// Walk forked_from as far as the loaded cache allows; an unloaded ancestor's
+// id is still a key all of its visible descendants agree on.
+function forkTreeRootId(session: InboxSession, sessions: Record<string, InboxSession>): string {
+  let cur = session;
+  const seen = new Set([cur._id]);
+  while (cur.forked_from) {
+    const parent = sessions[cur.forked_from];
+    if (!parent || seen.has(parent._id)) return cur.forked_from;
+    cur = parent;
+    seen.add(cur._id);
+  }
+  return cur._id;
+}
 
 function getForkColor(id: string): string {
   let h = 0;
@@ -1417,41 +1434,27 @@ export function SessionListPanel({
     [s.sessions, s.sessionsWithQueuedMessages, pendingSendIds, blankOpts],
   );
 
+  // Corner shown when the session is in a fork tree (has forks, or is one);
+  // colored by the tree's root so the whole tree matches.
+  const forkColorKeyOf = useCallback(
+    (session: InboxSession) =>
+      session.forked_from || globalForksByParent.has(session._id)
+        ? forkTreeRootId(session, s.sessions)
+        : undefined,
+    [s.sessions, globalForksByParent],
+  );
+
   const orchestrationGroupMembers = useMemo(() => Array.from(globalOrchestrationGroups.values()).flat(), [globalOrchestrationGroups]);
   // Grouped workers are held out of the flat buckets; fold them back in for the
   // header count and project chips so totals stay accurate.
   const activeSessions = useMemo(() => [...pinned, ...newSessions, ...needsInput, ...working, ...orchestrationGroupMembers], [pinned, newSessions, needsInput, working, orchestrationGroupMembers]);
 
-  const projectCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
-    for (const s of activeSessions) {
-      const name = getProjectName(s.git_root, s.project_path);
-      if (name !== "unknown") counts[name] = (counts[name] || 0) + 1;
-    }
-    return Object.entries(counts).sort((a, b) => b[1] - a[1]);
-  }, [activeSessions]);
-
-  const projectPathByName = useMemo(() => {
-    const map: Record<string, string> = {};
-    for (const s of activeSessions) {
-      const name = getProjectName(s.git_root, s.project_path);
-      if (name !== "unknown" && !map[name]) {
-        map[name] = s.git_root || s.project_path || "";
-      }
-    }
-    return map;
-  }, [activeSessions]);
-
   const bucketByConv = useMemo(() => convBucketMap(s.bucketAssignments), [s.bucketAssignments]);
   const visibleBuckets = useMemo(() => sortLabels(s.buckets), [s.buckets]);
-  const bucketCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
-    for (const sess of activeSessions) {
-      const b = bucketByConv[sess._id];
-      if (b) counts[b] = (counts[b] || 0) + 1;
-    }
-    return counts;
-  }, [activeSessions, bucketByConv]);
+  const { bucketCounts, projectCounts, projectPathByName } = useMemo(
+    () => computeChipCounts(activeSessions, bucketByConv),
+    [activeSessions, bucketByConv],
+  );
 
   // ONE filter pipeline for every list the panel renders. Project and bucket
   // chips are mutually exclusive (the setters clear each other) but apply both
@@ -1576,6 +1579,17 @@ export function SessionListPanel({
     for (const subs of globalSubByParent.values()) count += subs.length;
     return count;
   }, [globalSubByParent]);
+
+  const [viewMenuOpen, setViewMenuOpen] = useState(false);
+  const viewMenuRef = useRef<HTMLDivElement>(null);
+  useWatchEffect(() => {
+    if (!viewMenuOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (viewMenuRef.current && !viewMenuRef.current.contains(e.target as Node)) setViewMenuOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [viewMenuOpen]);
 
   // "By label" view: every active non-pinned top-level session grouped by its
   // manual label (orchestration workers folded in); unlabeled sessions group
@@ -1740,16 +1754,18 @@ export function SessionListPanel({
         <div className="w-full bg-sol-bg border-b border-sol-border/30 flex items-center">
           <button
             onClick={onToggle}
-            className="flex-1 min-w-0 px-3 py-1.5 flex items-center justify-between"
+            className="flex-1 min-w-0 pl-3 py-1.5 flex items-center text-left"
           >
             <span className="text-[10px] font-semibold uppercase tracking-wider text-sol-text-dim">
               {label}{items.length > 0 ? ` (${items.length})` : ""}
             </span>
+          </button>
+          {headerAction}
+          <button onClick={onToggle} className="shrink-0 pl-2 pr-3 py-1.5">
             <svg className={`w-3 h-3 transition-transform text-sol-text-dim ${expanded ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
             </svg>
           </button>
-          {headerAction}
         </div>
         {expanded && topLevel.length > 0 && (
           <div>
@@ -1763,7 +1779,7 @@ export function SessionListPanel({
                   onRestore={s.restoreSession}
                   onKill={onKill}
                   variant={variant}
-                  forkColorKey={globalForksByParent.has(session._id) ? session._id : (session.forked_from ?? undefined)}
+                  forkColorKey={forkColorKeyOf(session)}
                 />
                 {(subMap.get(session._id) ?? []).filter((sub) => showSubagents || sub._id === activeSessionId).map((sub) => (
                   <SessionCard
@@ -1874,7 +1890,7 @@ export function SessionListPanel({
                   onDefer={s.deferSession}
                   onPin={s.pinSession}
                   variant={sectionVariant || "default"}
-                  forkColorKey={globalForksByParent.has(session._id) ? session._id : (session.forked_from ?? undefined)}
+                  forkColorKey={forkColorKeyOf(session)}
                 />
                 {visibleSubs.map((sub) => (
                   <SessionCard
@@ -1921,38 +1937,54 @@ export function SessionListPanel({
           projectPathByName={projectPathByName}
           dropSessionOnLabel={dropSessionOnLabel}
         />
-        <div className="flex items-center gap-1.5 flex-shrink-0 ml-auto">
-          {/* View mode: icon segmented control — direct selection, no cycling.
-              Ctrl+, still cycles for keyboard flow. Label segment appears only
-              once at least one label exists. */}
-          <div className="flex items-center rounded-md border border-sol-border/40 bg-sol-bg/70 p-px">
-            {([
-              { mode: "grouped" as const, Icon: List, title: "Grouped by status" },
-              { mode: "time" as const, Icon: Clock, title: "By creation time" },
-              ...(visibleBuckets.length > 0 ? [{ mode: "bucket" as const, Icon: Tag, title: "By label" }] : []),
-            ]).map(({ mode, Icon, title }) => (
-              <button
-                key={mode}
-                onClick={() => s.updateClientUI({ inbox_view_mode: mode, inbox_flat_view: mode === "time" })}
-                title={`${title} (${formatShortcutLabel('inbox.toggleFlatView')})`}
-                className={`px-1.5 py-[3px] rounded-[5px] transition-colors ${
-                  viewMode === mode
-                    ? "bg-sol-cyan/15 text-sol-cyan"
-                    : "text-sol-text-dim/70 hover:text-sol-text"
-                }`}
-              >
-                <Icon className="w-3 h-3" />
-              </button>
-            ))}
-          </div>
+        {/* One pill: a view-mode dropdown (trigger shows the current mode's
+            icon), then a divider, then independent show/hide toggles
+            (subagents, old). Ctrl+, still cycles view modes. */}
+        <div className="flex items-center flex-shrink-0 ml-auto rounded-md border border-sol-border/40 bg-sol-bg/70 p-px">
+          {(() => {
+            const viewModeOptions = [
+              { key: "grouped", label: "By status", icon: List },
+              { key: "time", label: "By time", icon: Clock },
+              ...(visibleBuckets.length > 0 ? [{ key: "bucket", label: "By label", icon: Tag }] : []),
+            ];
+            const current = viewModeOptions.find((o) => o.key === viewMode) ?? viewModeOptions[0];
+            const CurrentIcon = current.icon;
+            return (
+              <div ref={viewMenuRef} className="relative">
+                <button
+                  onClick={() => setViewMenuOpen((o) => !o)}
+                  title={`${current.label} (${formatShortcutLabel('inbox.toggleFlatView')} cycles)`}
+                  className={`flex items-center px-1 py-[3px] rounded-[5px] transition-colors ${
+                    viewMenuOpen ? "bg-sol-cyan/15 text-sol-cyan" : "text-sol-text-dim/70 hover:text-sol-text"
+                  }`}
+                >
+                  <CurrentIcon className="w-3 h-3" />
+                  <ChevronDown className="w-2 h-2 opacity-60" />
+                </button>
+                {viewMenuOpen && (
+                  <div className="absolute top-full right-0 mt-1 w-40 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[60] py-1">
+                    <FilterOptionList
+                      options={viewModeOptions}
+                      value={viewMode}
+                      onChange={(mode) => s.updateClientUI({ inbox_view_mode: mode as "grouped" | "time" | "bucket", inbox_flat_view: mode === "time" })}
+                      onPicked={() => setViewMenuOpen(false)}
+                    />
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+          {(totalSubagentCount > 0 || s.hiddenSessionCount > 0) && (
+            <div className="w-px h-3 bg-sol-border/40" />
+          )}
           {totalSubagentCount > 0 && (
             <button
               onClick={() => s.updateClientUI({ show_subagents: !showSubagents })}
               title={showSubagents ? `Hide ${totalSubagentCount} subagent sessions` : `Show ${totalSubagentCount} subagent sessions`}
-              className={`px-1.5 py-[3px] rounded-md transition-colors border ${
+              className={`px-1 py-[3px] rounded-[5px] transition-colors ${
                 showSubagents
-                  ? "text-sol-text-dim border-sol-border/40 bg-sol-bg/70 hover:text-sol-text"
-                  : "text-sol-text-dim/60 border-transparent hover:text-sol-text hover:border-sol-border/40"
+                  ? "bg-sol-violet/15 text-sol-violet"
+                  : "text-sol-text-dim/70 hover:text-sol-text"
               }`}
             >
               <GitFork className="w-3 h-3" />
@@ -1962,10 +1994,10 @@ export function SessionListPanel({
             <button
               onClick={() => s.updateClientUI({ show_old_sessions: !showAllSessions })}
               title={showAllSessions ? "Hide old sessions" : "Show old sessions"}
-              className={`px-1.5 py-0.5 rounded-md text-[10px] tabular-nums whitespace-nowrap transition-colors border ${
+              className={`px-1 py-[3px] rounded-[5px] text-[10px] leading-none tabular-nums whitespace-nowrap transition-colors ${
                 showAllSessions
-                  ? "text-sol-text-dim border-sol-border/40 bg-sol-bg/70 hover:text-sol-text"
-                  : "text-sol-text-dim/60 border-transparent hover:text-sol-text hover:border-sol-border/40"
+                  ? "bg-sol-cyan/15 text-sol-cyan"
+                  : "text-sol-text-dim/70 hover:text-sol-text"
               }`}
             >
               {s.hiddenSessionCount} old
@@ -2071,7 +2103,7 @@ export function SessionListPanel({
                     onDefer={s.deferSession}
                     onPin={s.pinSession}
                     variant={"default"}
-                    forkColorKey={globalForksByParent.has(session._id) ? session._id : (session.forked_from ?? undefined)}
+                    forkColorKey={forkColorKeyOf(session)}
                   />
                 </div>
               ))}
@@ -2095,10 +2127,10 @@ export function SessionListPanel({
           headerAction: (
             <button
               onClick={handleKillAllStashed}
-              className={`mr-2 px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider transition-colors shrink-0 ${
+              className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider transition-all shrink-0 ${
                 killAllArmed
                   ? "text-sol-bg bg-sol-red hover:bg-sol-red/90"
-                  : "text-sol-text-dim hover:text-sol-red hover:bg-sol-red/10"
+                  : "text-sol-text-dim opacity-40 hover:opacity-100 hover:text-sol-red hover:bg-sol-red/10"
               }`}
               title="Kill every stashed session"
             >

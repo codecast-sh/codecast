@@ -1908,18 +1908,21 @@ cast feed                         # team feed
 cast feed --mine                  # only my sessions
 cast feed -m samvit               # specific member
 cast feed --state needs-input     # filter feed by work state
+cast feed --label api             # sessions I filed under a label (search/sessions take --label too)
 cast read <id> 15:25              # read messages 15-25
 
 # Explore sessions — 3 axes: QUERY (which) × CONTENT (state | --messages) × LIVENESS (snapshot | -w)
 cast sessions                     # state snapshot, grouped most-actionable-first
 cast sessions -w                  # stream state changes live (one line per transition)
 cast sessions --state needs-input # narrow the query (also --team, -m <name>, or a session id)
+cast sessions --labels            # my labels + counts, current project (--by-label groups, --label <name> filters, -g all projects)
 cast sessions --messages -w       # follow MESSAGES across my live sessions (multi-session)
 cast sessions <id> --messages -w  # …focused on one session
 cast sessions --json   |   -w --json   # any view as JSON / NDJSON
-# Monitor + wait-for-idle: background a -w stream (narrow with --state), get woken on a transition (e.g. → idle), then act.
+# Monitor + wait-for-input: background a -w stream (narrow with --state), get woken on a transition (e.g. → needs-input), then act.
 # --state: working | needs-input | idle | pinned | live (also works on cast feed)
-# A PINNED session that goes idle counts as needs-input — pin = "ping me when it's free".
+# needs-input = ball in your court (finished turn, open question, permission prompt, dead with
+# output) — same as the web inbox's NEEDS INPUT. idle = blank sessions with nothing to act on.
 
 # Analysis
 cast diff <id>                    # files changed, commits, tools used
@@ -1935,7 +1938,7 @@ cast decisions list               # view architectural decisions
 cast decisions add "title" --reason "why"
 \`\`\`
 
-Common options: --mine (just me), -m <name> (member), -g (all teams), -s/-e (time range), -p (page), -n (limit)
+Common options: --mine (just me), -m <name> (member), --label <name> (my label), -g (all teams), -s/-e (time range), -p (page), -n (limit)
 ${MEMORY_SNIPPET_END}
 `;
 
@@ -4420,13 +4423,15 @@ program
     "  cast search auth                 # team-wide search\n" +
     "  cast search auth --mine          # only my sessions\n" +
     "  cast search auth -m samvit       # specific member\n" +
-    "  cast search auth -g -s 7d        # all teams, last 7 days"
+    "  cast search auth -g -s 7d        # all teams, last 7 days\n" +
+    "  cast search auth --label api     # only sessions I filed under a label"
   )
   .argument("<query>", "Search query (min 2 characters)")
   .option("-u, --user-only", "Search only user messages (excludes assistant responses)")
   .option("-g, --global", "Search all sessions (not just current team)")
   .option("--mine", "Show only my sessions")
   .option("-m, --member <name>", "Filter by team member name or email")
+  .option("--label <name>", "Filter to sessions filed under one of my labels")
   .option("--keyword", "Use keyword-only search (no semantic matching)")
   .option("--semantic", "Use semantic-only search (no keyword matching)")
   .option("-s, --start <date>", "Start date/time (e.g., 7d, 2w, yesterday)")
@@ -4500,6 +4505,7 @@ program
           mode,
           member_name: options.member,
           mine_only: options.mine || undefined,
+          label: options.label,
         }),
       });
 
@@ -4535,12 +4541,14 @@ program
     "  cast feed -s 7d              # last 7 days\n" +
     "  cast feed -q auth            # filter by keyword\n" +
     "  cast feed --state working    # only sessions the agent is working\n" +
-    "  cast feed --state needs-input # only sessions waiting on a human"
+    "  cast feed --state needs-input # only sessions waiting on a human\n" +
+    "  cast feed --label api        # only sessions I filed under a label"
   )
   .option("-g, --global", "Show all sessions (not just current team)")
   .option("--mine", "Show only my sessions")
   .option("-q, --query <text>", "Filter by keyword (keeps recency order)")
   .option("-m, --member <name>", "Filter by team member name or email")
+  .option("--label <name>", "Filter to sessions filed under one of my labels")
   .option("--state <state>", "Filter by work state: working | needs-input | idle | pinned | live")
   .option("-n, --limit <n>", "Number of conversations per page", "10")
   .option("-p, --page <n>", "Page number (1-indexed)", "1")
@@ -4593,6 +4601,7 @@ program
           member_name: options.member,
           mine_only: options.mine || undefined,
           state: options.state,
+          label: options.label,
           ...(options.live ? { live_only: true } : {}),
         }),
       });
@@ -4621,7 +4630,8 @@ program
     "  CONTENT: work state by default (grouped NEEDS INPUT → WORKING → IDLE), or\n" +
     "           --messages for conversation messages\n" +
     "  LIVENESS: a one-shot snapshot, or -w to stream live\n\n" +
-    "A pinned session gone idle counts as NEEDS INPUT. --json swaps any view to JSON.\n\n" +
+    "NEEDS INPUT = ball in your court (finished turn, open question, permission prompt, dead\n" +
+    "with output) — matches the web inbox. IDLE = blank sessions. --json swaps any view to JSON.\n\n" +
     "Examples:\n" +
     "  cast sessions                  # state snapshot of your sessions\n" +
     "  cast sessions -w               # stream state changes live\n" +
@@ -4629,7 +4639,10 @@ program
     "  cast sessions --team -w        # stream the whole team's state changes\n" +
     "  cast sessions --messages -w    # follow messages across your live sessions\n" +
     "  cast sessions jx7abc --messages -w  # …focused on one session\n" +
-    "  cast sessions jx7abc --messages     # one session's recent messages"
+    "  cast sessions jx7abc --messages     # one session's recent messages\n" +
+    "  cast sessions --labels         # my labels with session counts (current project)\n" +
+    "  cast sessions --labels -g      # …across all projects\n" +
+    "  cast sessions --by-label -a    # group all sessions by label"
   )
   .option("-w, --watch", "Stream live instead of a one-shot snapshot (state changes, or messages with -M)")
   .option("--state <state>", "Filter: needs-input | working | idle | pinned | live")
@@ -4637,6 +4650,9 @@ program
   .option("-g, --global", "All teams (implies --team)")
   .option("-m, --member <name>", "Filter by team member (implies --team)")
   .option("--mine", "Only my sessions within team scope")
+  .option("--label <name>", "Filter to sessions filed under one of my labels (current project; -g for all)")
+  .option("--labels", "List my labels with session counts (current project; -g for all)")
+  .option("--by-label", "Group the snapshot by label (current project; -g for all)")
   .option("-a, --all", "Include idle / dismissed sessions")
   .option("-n, --limit <n>", "Max sessions to show", "200")
   .option("-M, --messages", "Show conversation messages instead of work state (live with -w)")
@@ -4680,7 +4696,9 @@ program
         }
         const r = await cliFetchRead(`${siteUrl}/cli/inbox`, {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ api_token: config.auth_token, state: options.state, show_all: options.all || undefined, limit: 200 }),
+          // Same policy as the state view below: --label is project-bounded
+          // to the cwd unless -g.
+          body: JSON.stringify({ api_token: config.auth_token, state: options.state, show_all: options.all || undefined, label: options.label, project_path: options.label && !options.global ? getRealCwd() : undefined, limit: 200 }),
         });
         const inbox = await r.json();
         if (inbox.error) { console.error(`Error: ${inbox.error}`); process.exit(1); }
@@ -4781,10 +4799,21 @@ program
     }
 
     const limit = parseInt(options.limit) || 200;
-    const teamMode = !!(options.team || options.global || options.member);
+    // Label views (--labels/--by-label) are personal filing, so they never run
+    // through the team feed; -g on them means "all projects" instead of "all teams".
+    const labelView = !!(options.labels || options.byLabel);
+    const teamMode = !labelView && !!(options.team || options.global || options.member);
+    if (labelView && (options.team || options.member)) {
+      console.error("Labels are personal — drop --team/-m to use --labels/--by-label.");
+      process.exit(1);
+    }
+    // Solo label views default to the current project (cwd); -g lifts the bound.
+    const labelProjectPath = !teamMode && (labelView || options.label) && !options.global
+      ? getRealCwd()
+      : undefined;
     const scopeLabel = teamMode
       ? (options.member ? `team: ${options.member}` : options.global ? "all teams" : "team")
-      : "you";
+      : labelProjectPath ? `you · ${labelProjectPath.split("/").pop()}` : "you";
 
     // Reshape the team feed (feedForCLI) into the same {sessions, counts} shape
     // the solo inbox returns, so one renderer/loop serves both scopes.
@@ -4810,7 +4839,7 @@ program
         const response = await cliFetchRead(`${siteUrl}/cli/inbox`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ api_token: config.auth_token, show_all: options.all || undefined, state: options.state, limit }),
+          body: JSON.stringify({ api_token: config.auth_token, show_all: options.all || undefined, state: options.state, label: options.label, project_path: labelProjectPath, limit }),
         });
         result = await response.json();
       } else {
@@ -4824,6 +4853,7 @@ program
             member_name: options.member,
             mine_only: options.mine || undefined,
             state: options.state,
+            label: options.label,
             limit,
           }),
         });
@@ -4839,7 +4869,7 @@ program
       return result;
     };
 
-    const { formatMonitor, formatSessionChangeLine } = await import("./formatter.js");
+    const { formatMonitor, formatSessionChangeLine, formatLabelsList } = await import("./formatter.js");
 
     // Snapshot vs change stream are the two BEHAVIORS; --json is only the format.
     //   no -w : one snapshot of the current state (grouped colored, or full JSON)
@@ -4852,9 +4882,15 @@ program
           console.error(`Error: ${result.error}`);
           process.exit(1);
         }
+        if (options.labels) {
+          console.log(options.json
+            ? JSON.stringify({ labels: result.labels ?? [], counts: result.counts, project: labelProjectPath ?? null })
+            : formatLabelsList(result, { project: labelProjectPath ? labelProjectPath.split("/").pop() : null }));
+          return;
+        }
         console.log(options.json
           ? JSON.stringify(result)
-          : formatMonitor(result, { state: options.state, all: options.all, scopeLabel, command: "cast sessions" }));
+          : formatMonitor(result, { state: options.state, all: options.all, groupByLabel: options.byLabel, scopeLabel, command: "cast sessions" }));
       } catch (error) {
         console.error("sessions failed:", error instanceof Error ? error.message : error);
         process.exit(1);
