@@ -9,7 +9,7 @@ import { ConversationData } from "./ConversationView";
 import { FormattedSummary } from "./FormattedSummary";
 import { sessionCardSummary } from "../lib/sessionSummary";
 import { useConversationMessages } from "../hooks/useConversationMessages";
-import { useInboxStore, useTrackedStore, InboxSession, getSessionRenderKey, isConvexId, categorizeSessions, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, isSessionDismissed, resolveSessionAuthor } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, InboxSession, getSessionRenderKey, isConvexId, categorizeSessions, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, isSessionDismissed, resolveSessionAuthor, convBucketMap, groupSessionsForLabelView, BucketItem, BucketAssignmentItem } from "../store/inboxStore";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
 import { cleanTitle, msgCountColor, formatModel } from "../lib/conversationProcessor";
 import { getLabelColor } from "../lib/labelColors";
@@ -23,7 +23,7 @@ import { toast } from "sonner";
 import { animatedStashSession } from "../store/undoActions";
 import { soundKill } from "../lib/sounds";
 import { formatShortcutLabel } from "../shortcuts";
-import { X, ChevronsLeft, ChevronsRight } from "lucide-react";
+import { X, ChevronsLeft, ChevronsRight, List, Clock, Tag, Plus } from "lucide-react";
 import { TaskStatusBadge } from "./TaskStatusBadge";
 import { useTipActions, checkMilestone } from "../tips";
 
@@ -422,6 +422,14 @@ export const SessionCard = memo(function SessionCard({
   const isPendingSend = useInboxStore((st) => convHasPendingSend(st.pendingMessages[session._id]));
   const isPendingWorking = isPendingSend && !isAgentActive(session);
   const showModelBadge = useInboxStore((st) => st.clientState?.ui?.show_model_badge === true);
+  // The session's user label, if any. Selector returns a string so the card
+  // only re-renders when ITS label changes, not on every assignment-map churn.
+  const sessionLabel = useInboxStore((st) => {
+    const assignment = (Object.values(st.bucketAssignments) as BucketAssignmentItem[])
+      .find((a) => a.conversation_id === session._id);
+    const bucket = assignment?.bucket_id ? st.buckets[assignment.bucket_id] : null;
+    return bucket && !bucket.archived_at ? bucket.name : null;
+  });
   const displayTitle = cleanTitle(session.title || "New Session");
   const isSlashCommand = displayTitle.startsWith("/");
   const cleanedUserMsg = cleanUserMessage(session.last_user_message);
@@ -452,7 +460,13 @@ export const SessionCard = memo(function SessionCard({
   const generateUploadUrl = useMutation(api.images.generateUploadUrl);
   const sendMessage = useMutation(api.pendingMessages.sendMessageToSession);
 
+  // Session-card drags must pass THROUGH cards untouched — stopping them here
+  // would shadow the label-section drop targets behind the card under the
+  // pointer. These handlers exist for image-file drops only.
+  const isSessionDrag = (e: React.DragEvent) => e.dataTransfer.types.includes("codecast/session-id");
+
   const handleFileDragEnter = useCallback((e: React.DragEvent) => {
+    if (isSessionDrag(e)) return;
     e.preventDefault();
     e.stopPropagation();
     dragCounter.current++;
@@ -460,11 +474,13 @@ export const SessionCard = memo(function SessionCard({
   }, []);
 
   const handleFileDragOver = useCallback((e: React.DragEvent) => {
+    if (isSessionDrag(e)) return;
     e.preventDefault();
     e.stopPropagation();
   }, []);
 
   const handleFileDragLeave = useCallback((e: React.DragEvent) => {
+    if (isSessionDrag(e)) return;
     e.preventDefault();
     e.stopPropagation();
     dragCounter.current--;
@@ -472,6 +488,7 @@ export const SessionCard = memo(function SessionCard({
   }, []);
 
   const handleFileDrop = useCallback(async (e: React.DragEvent) => {
+    if (isSessionDrag(e)) return;
     e.preventDefault();
     e.stopPropagation();
     dragCounter.current = 0;
@@ -496,15 +513,45 @@ export const SessionCard = memo(function SessionCard({
     }
   }, [session._id, displayTitle, generateUploadUrl, sendMessage]);
 
+  // Card → label drag. Distinct dataTransfer type so the existing image-file
+  // drop on cards and this session drag can't interfere. The native drag image
+  // would be the full-width card and bury the drop targets — swap it for a
+  // compact pill so the chip/section under the pointer stays visible, and dim
+  // the source card while the drag is live.
+  const [isDraggingCard, setIsDraggingCard] = useState(false);
+  const handleCardDragStart = useCallback((e: React.DragEvent) => {
+    e.dataTransfer.setData("codecast/session-id", session._id);
+    e.dataTransfer.effectAllowed = "move";
+    const ghost = document.createElement("div");
+    ghost.className = "flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-sol-bg text-sol-text border border-sol-cyan/60 shadow-xl";
+    ghost.style.cssText = "position:fixed;top:-1000px;left:-1000px;max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;z-index:9999";
+    const dot = document.createElement("span");
+    dot.className = `w-1.5 h-1.5 rounded-full flex-shrink-0 ${getLabelColor(project).dot}`;
+    const text = document.createElement("span");
+    text.textContent = displayTitle;
+    text.style.cssText = "overflow:hidden;text-overflow:ellipsis";
+    ghost.append(dot, text);
+    document.body.appendChild(ghost);
+    e.dataTransfer.setDragImage(ghost, 18, 14);
+    // The browser snapshots the drag image synchronously on dragstart; the
+    // element only needs to survive this frame.
+    requestAnimationFrame(() => ghost.remove());
+    setIsDraggingCard(true);
+  }, [session._id, displayTitle, project]);
+  const handleCardDragEnd = useCallback(() => setIsDraggingCard(false), []);
+
   if (isSubagent) {
     return (
       <div
         data-session-id={session._id}
+        draggable
+        onDragStart={handleCardDragStart}
+        onDragEnd={handleCardDragEnd}
         onDragEnter={handleFileDragEnter}
         onDragOver={handleFileDragOver}
         onDragLeave={handleFileDragLeave}
         onDrop={handleFileDrop}
-        className={`relative group transition-colors overflow-hidden ${isDragOver ? "ring-1 ring-inset ring-violet-400/40 bg-violet-500/10" : ""} ${
+        className={`relative group transition-all overflow-hidden ${isDraggingCard ? "opacity-35 scale-[0.99]" : ""} ${isDragOver ? "ring-1 ring-inset ring-violet-400/40 bg-violet-500/10" : ""} ${
           isActive
             ? "bg-violet-500/[0.08] border-l-2 border-l-violet-400/60"
             : isParentActive
@@ -618,11 +665,14 @@ export const SessionCard = memo(function SessionCard({
   return (
     <div
       data-session-id={session._id}
+      draggable
+      onDragStart={handleCardDragStart}
+      onDragEnd={handleCardDragEnd}
       onDragEnter={handleFileDragEnter}
       onDragOver={handleFileDragOver}
       onDragLeave={handleFileDragLeave}
       onDrop={handleFileDrop}
-      className={`relative group transition-colors overflow-hidden ${isDragOver ? "ring-1 ring-inset ring-sol-cyan bg-sol-cyan/10" : ""} ${
+      className={`relative group transition-all overflow-hidden ${isDraggingCard ? "opacity-35 scale-[0.99]" : ""} ${isDragOver ? "ring-1 ring-inset ring-sol-cyan bg-sol-cyan/10" : ""} ${
         isActive
           ? "bg-sol-cyan/15 border-l-[3px] border-l-sol-cyan shadow-[inset_0_0_16px_rgba(42,161,152,0.12)]"
           : isWorking
@@ -689,10 +739,18 @@ export const SessionCard = memo(function SessionCard({
               <span className="text-[10px] font-medium text-sol-violet/80 truncate">{author.name.split(" ")[0]}</span>
             </span>
           )}
-          {project !== "unknown" && (
-            <span className={`flex items-center gap-1 min-w-0 text-[10px] font-medium ${getLabelColor(project).text}`}>
-              <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${getLabelColor(project).dot}`} />
-              <span className="truncate">{project}</span>
+          {(project !== "unknown" || sessionLabel) && (
+            // With a user label: label name in the label's color, but the dot
+            // STAYS project-colored — provenance survives the relabel. Hover
+            // reveals project + directory.
+            <span
+              className={`flex items-center gap-1 min-w-0 text-[10px] font-medium ${getLabelColor(sessionLabel ?? project).text}`}
+              title={`${project} · ${session.git_root || session.project_path || "no directory"}`}
+            >
+              {project !== "unknown" && (
+                <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${getLabelColor(project).dot}`} />
+              )}
+              <span className="truncate">{sessionLabel ?? project}</span>
             </span>
           )}
           {session.worktree_name && (
@@ -820,6 +878,22 @@ export const SessionCard = memo(function SessionCard({
               </Tooltip>
             </TooltipProvider>
           )}
+          <TooltipProvider delayDuration={300}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    useInboxStore.getState().openPalette({ targets: [session], targetType: "session", mode: "bucket" });
+                  }}
+                  className="p-1 rounded text-sol-text-dim hover:text-sol-blue transition-colors"
+                >
+                  <Tag className="w-3.5 h-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="left">Label session ({formatShortcutLabel('session.moveToBucket')})</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
           {onDefer && (
             <TooltipProvider delayDuration={300}>
               <Tooltip>
@@ -980,6 +1054,55 @@ const STALE_PROMPT_THRESHOLD = 10;
 // sweep can dismiss thousands, and an unbounded list is noise.
 const DISMISSED_VISIBLE_MS = 45 * 24 * 60 * 60 * 1000;
 
+// Bring a session row into view: smooth, but never a long glide — when the
+// row is more than one panel-height away, jump most of the distance first so
+// the animation stays quick no matter how far the list has scrolled. Hand-rolled
+// rAF tween instead of native behavior:"smooth" because the panel re-renders
+// constantly (heartbeats, section resorts) and Chromium silently cancels native
+// smooth scrolls on any concurrent scroll/layout change. Re-measuring the
+// remaining distance every frame self-corrects through that churn.
+function scrollRowIntoView(container: HTMLElement, el: Element) {
+  const remainingDelta = () => {
+    const c = container.getBoundingClientRect();
+    const r = el.getBoundingClientRect();
+    return r.top < c.top ? r.top - c.top : r.bottom > c.bottom ? r.bottom - c.bottom : 0;
+  };
+  const delta = remainingDelta();
+  if (delta === 0) return;
+  // Hidden/occluded tabs get no animation frames — settle instantly so the
+  // row can't be stranded mid-glide until the tab is next viewed.
+  if (document.visibilityState !== "visible") {
+    container.scrollTop += delta;
+    return;
+  }
+  const maxGlide = container.clientHeight;
+  if (Math.abs(delta) > maxGlide) {
+    container.scrollTop += delta - Math.sign(delta) * maxGlide;
+  }
+  let aborted = false;
+  const abort = () => { aborted = true; };
+  const cleanup = () => {
+    container.removeEventListener("wheel", abort);
+    container.removeEventListener("touchstart", abort);
+  };
+  container.addEventListener("wheel", abort, { passive: true, once: true });
+  container.addEventListener("touchstart", abort, { passive: true, once: true });
+  let frames = 0;
+  const step = () => {
+    // Row unmounted mid-glide (panel remount/resort) — a detached node
+    // measures as all-zeros, so stop rather than chase garbage.
+    if (aborted || !el.isConnected) return cleanup();
+    const remaining = remainingDelta();
+    if (Math.abs(remaining) < 1 || ++frames > 60) {
+      container.scrollTop += remaining;
+      return cleanup();
+    }
+    container.scrollTop += remaining * 0.25;
+    requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
 export function SessionListPanel({
   onSessionSelect,
   activeSessionId,
@@ -997,6 +1120,9 @@ export function SessionListPanel({
     s => s.sessionsWithQueuedMessages,
     s => s.pendingMessages,
     s => s.activeProjectFilter,
+    s => s.activeBucketFilter,
+    s => s.buckets,
+    s => s.bucketAssignments,
     s => s.collapsedSections,
     s => s.currentSessionId,
     s => s.pendingSessionCreates,
@@ -1004,7 +1130,12 @@ export function SessionListPanel({
   const handleKillDismissed = useCallback((id: string) => {
     soundKill();
     if (isConvexId(id)) {
-      useInboxStore.getState().convCommand(id, "killSession", { mark_completed: true });
+      const store = useInboxStore.getState();
+      // session_id rides along so the daemon can still tear the backend down
+      // when its local conversation mapping (or the server row) is gone.
+      const sessionId = (store.sessions[id] as any)?.session_id;
+      store.convCommand(id, "killSession", { mark_completed: true, session_id: sessionId })
+        .catch((err: unknown) => toast.error(`Kill failed: ${err instanceof Error ? err.message : String(err)}`));
     }
     // Route the local removal through markKilling (an action that deletes the row
     // inside a draft) rather than a raw setState. The middleware then plants a
@@ -1058,15 +1189,36 @@ export function SessionListPanel({
     return map;
   }, [activeSessions]);
 
-  const filterByProject = useCallback((items: InboxSession[]) => {
-    if (!s.activeProjectFilter) return items;
-    return items.filter((sess) => getProjectName(sess.git_root, sess.project_path) === s.activeProjectFilter);
-  }, [s.activeProjectFilter]);
+  const bucketByConv = useMemo(() => convBucketMap(s.bucketAssignments), [s.bucketAssignments]);
+  const visibleBuckets = useMemo(() =>
+    (Object.values(s.buckets) as BucketItem[])
+      .filter((b) => !b.archived_at)
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.name.localeCompare(b.name)),
+    [s.buckets]);
+  const bucketCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const sess of activeSessions) {
+      const b = bucketByConv[sess._id];
+      if (b) counts[b] = (counts[b] || 0) + 1;
+    }
+    return counts;
+  }, [activeSessions, bucketByConv]);
 
-  const filteredPinned = useMemo(() => filterByProject(pinned), [filterByProject, pinned]);
-  const filteredNew = useMemo(() => filterByProject(newSessions), [filterByProject, newSessions]);
-  const filteredNeedsInput = useMemo(() => filterByProject(needsInput), [filterByProject, needsInput]);
-  const filteredWorking = useMemo(() => filterByProject(working), [filterByProject, working]);
+  // ONE filter pipeline for every list the panel renders. Project and bucket
+  // chips are mutually exclusive (the setters clear each other) but apply both
+  // defensively. Mid-create stubs pass the bucket filter so the session you
+  // just summoned inside a focused bucket doesn't vanish before assignment.
+  const filterByChip = useCallback((items: InboxSession[]) => {
+    let out = items;
+    if (s.activeProjectFilter) out = out.filter((sess) => getProjectName(sess.git_root, sess.project_path) === s.activeProjectFilter);
+    if (s.activeBucketFilter) out = out.filter((sess) => bucketByConv[sess._id] === s.activeBucketFilter || !isConvexId(sess._id));
+    return out;
+  }, [s.activeProjectFilter, s.activeBucketFilter, bucketByConv]);
+
+  const filteredPinned = useMemo(() => filterByChip(pinned), [filterByChip, pinned]);
+  const filteredNew = useMemo(() => filterByChip(newSessions), [filterByChip, newSessions]);
+  const filteredNeedsInput = useMemo(() => filterByChip(needsInput), [filterByChip, needsInput]);
+  const filteredWorking = useMemo(() => filterByChip(working), [filterByChip, working]);
   const filteredDismissed = useMemo(() => {
     // Only surface dismissed sessions ACTIVE within the window — keyed on last
     // activity (updated_at), NOT when they were dismissed. A bulk cleanup dismisses
@@ -1075,11 +1227,11 @@ export function SessionListPanel({
     // old noise while keeping things you recently worked on but set aside. Hidden
     // ones stay searchable and reachable by direct link.
     const cutoff = Date.now() - DISMISSED_VISIBLE_MS;
-    const filtered = filterByProject(dismissedList).filter(
+    const filtered = filterByChip(dismissedList).filter(
       (sess) => (sess.updated_at ?? 0) >= cutoff,
     );
     return filtered.sort((a, b) => (b.dismissed_at || b.updated_at || 0) - (a.dismissed_at || a.updated_at || 0));
-  }, [filterByProject, dismissedList]);
+  }, [filterByChip, dismissedList]);
   const filteredCount = filteredPinned.length + filteredNew.length + filteredNeedsInput.length + filteredWorking.length;
 
   // Stale working set: EVERY non-dismissed session untouched for >30d, minus
@@ -1127,28 +1279,110 @@ export function SessionListPanel({
   const [expandedSubSessions, setExpandedSubSessions] = useState<Record<string, boolean>>({});
   const showSubagents = s.clientState.ui?.show_subagents ?? true;
   const showAllSessions = s.clientState.ui?.show_old_sessions ?? true;
-  const flatView = s.clientState.ui?.inbox_flat_view ?? false;
+  // Three-way view mode; the legacy boolean is honored when the mode is unset.
+  const viewMode: "grouped" | "time" | "bucket" =
+    s.clientState.ui?.inbox_view_mode ?? ((s.clientState.ui?.inbox_flat_view ?? false) ? "time" : "grouped");
+  const flatView = viewMode === "time";
   // Flat "by creation time" view reuses the already-computed sortedSessions
   // (every non-dismissed session) and only swaps the comparator to newest-first
   // by started_at — the conversation's creation time. It still honors the
   // show_subagents toggle: when subagents are hidden, the same sessions the
-  // grouped view nests away (subsByParent / globalSubByParent) are excluded here.
+  // grouped view nests away (subsByParent / globalSubByParent) are excluded
+  // here — except the selected one, which always renders.
   const flatByCreation = useMemo(() => {
     const subIds = showSubagents
       ? null
       : new Set(Array.from(globalSubByParent.values()).flat().map((sess) => sess._id));
     const list = subIds
-      ? sortedSessions.filter((sess) => !subIds.has(sess._id))
+      ? sortedSessions.filter((sess) => !subIds.has(sess._id) || sess._id === activeSessionId)
       : [...sortedSessions];
     list.sort((a, b) => (b.started_at ?? b.updated_at ?? 0) - (a.started_at ?? a.updated_at ?? 0));
-    return filterByProject(list);
-  }, [sortedSessions, filterByProject, showSubagents, globalSubByParent]);
-  const headerCount = flatView ? flatByCreation.length : (s.activeProjectFilter ? filteredCount : activeSessions.length);
+    return filterByChip(list);
+  }, [sortedSessions, filterByChip, showSubagents, globalSubByParent, activeSessionId]);
+  const headerCount = flatView ? flatByCreation.length : ((s.activeProjectFilter || s.activeBucketFilter) ? filteredCount : activeSessions.length);
   const totalSubagentCount = useMemo(() => {
     let count = 0;
     for (const subs of globalSubByParent.values()) count += subs.length;
     return count;
   }, [globalSubByParent]);
+
+  // "By label" view: every active non-pinned top-level session grouped by its
+  // manual label (orchestration workers folded in); unlabeled sessions group
+  // by PROJECT — projects are a specific kind of label, auto-derived from the
+  // directory. Pinned stays its own top section — pin is urgency, not theme.
+  // The grouping fn is shared with the store's visualOrder so Ctrl+J/K walks
+  // exactly this layout.
+  const bucketView = useMemo(() => {
+    if (viewMode !== "bucket") return null;
+    return groupSessionsForLabelView(
+      [...filteredNew, ...filteredNeedsInput, ...filteredWorking, ...filterByChip(orchestrationGroupMembers)],
+      s.buckets,
+      bucketByConv,
+    );
+  }, [viewMode, filteredNew, filteredNeedsInput, filteredWorking, orchestrationGroupMembers, filterByChip, bucketByConv, s.buckets]);
+
+  // Inline label creation: the + chip swaps to a tiny input; Enter creates.
+  const [creatingLabel, setCreatingLabel] = useState(false);
+  const [newLabelName, setNewLabelName] = useState("");
+  const commitNewLabel = useCallback(() => {
+    const name = newLabelName.trim();
+    setCreatingLabel(false);
+    setNewLabelName("");
+    if (!name) return;
+    useInboxStore.getState().createBucket({ name })
+      .then(() => toast.success(`Created label "${name}"`))
+      .catch(() => toast.error("Couldn't create label"));
+  }, [newLabelName]);
+
+  // Chip hover ✕: deleting a label archives it (tombstone — delta sync can't
+  // propagate hard deletes), which removes it from every session that had it.
+  const deleteLabel = useCallback((bucket: BucketItem) => (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const store = useInboxStore.getState();
+    if (store.activeBucketFilter === bucket._id) store.setActiveBucketFilter(null);
+    store.updateBucket(bucket._id, { archived_at: Date.now() });
+    toast.success(`Deleted label "${bucket.name}"`, {
+      action: { label: "Undo", onClick: () => useInboxStore.getState().updateBucket(bucket._id, { archived_at: null }) },
+    });
+  }, []);
+
+  // Shared drop sink for every label target — chips AND the "by label" view's
+  // sections. bucketId null = remove the label (dropping onto a project group
+  // sends the session back to its own project tier).
+  const dropSessionOnLabel = useCallback((draggedId: string, bucketId: string | null) => {
+    const store = useInboxStore.getState();
+    const real = store.getConvexId(draggedId) ?? draggedId;
+    if (!isConvexId(real)) {
+      toast.error("Session is still being created — try again in a moment");
+      return;
+    }
+    store.assignSessionToBucket(real, bucketId);
+    if (bucketId) {
+      const name = store.buckets[bucketId]?.name;
+      if (name) toast.success(`Labeled ${name}`);
+    } else {
+      toast.success("Label removed");
+    }
+  }, []);
+
+  // Chip drop targets.
+  const [dragOverBucketId, setDragOverBucketId] = useState<string | null>(null);
+  const handleChipDragOver = useCallback((bucketId: string) => (e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes("codecast/session-id")) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    setDragOverBucketId(bucketId);
+  }, []);
+  const handleChipDrop = useCallback((bucketId: string) => (e: React.DragEvent) => {
+    setDragOverBucketId(null);
+    const draggedId = e.dataTransfer.getData("codecast/session-id");
+    if (!draggedId) return;
+    e.preventDefault();
+    dropSessionOnLabel(draggedId, bucketId);
+  }, [dropSessionOnLabel]);
+
+  // Section drop targets ("by label" view): whole group is droppable.
+  const [dragOverSectionKey, setDragOverSectionKey] = useState<string | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const scrolledToRef = useRef<string | null>(null);
 
@@ -1165,19 +1399,31 @@ export function SessionListPanel({
     }
     if (scrolledToRef.current === activeSessionId) return;
 
-    const el = scrollContainerRef.current.querySelector(`[data-session-id="${activeSessionId}"]`);
+    const container = scrollContainerRef.current;
+    const el = container.querySelector(`[data-session-id="${activeSessionId}"]`);
     if (el) {
-      el.scrollIntoView({ block: "nearest" });
+      scrollRowIntoView(container, el);
       scrolledToRef.current = activeSessionId;
       return;
     }
 
-    // Card not rendered — try to reveal it by uncollapsing its section
-    const inList = (items: InboxSession[]) => items.some(i => i._id === activeSessionId);
-    const sections: [InboxSession[], string][] = [
-      [filteredPinned, "pinned"], [filteredNew, "new"],
-      [filteredNeedsInput, "needs_input"], [filteredWorking, "working"],
-    ];
+    // Card not rendered — try to reveal it by uncollapsing its section. A
+    // subagent renders nested under its parent's card, so the parent's
+    // membership decides which section hosts the row.
+    const parentId = s.sessions[activeSessionId]?.parent_conversation_id;
+    const inList = (items: InboxSession[]) => items.some(i => i._id === activeSessionId || (!!parentId && i._id === parentId));
+    const sections: [InboxSession[], string][] = flatView
+      ? [[flatByCreation, "all"]]
+      : viewMode === "bucket" && bucketView
+        ? [
+            [filteredPinned, "pinned"],
+            ...bucketView.labelGroups.map(({ bucket, items }) => [items, `bucket_${bucket._id}`] as [InboxSession[], string]),
+            ...bucketView.projectGroups.map(({ name, items }) => [items, `bucketproj_${name}`] as [InboxSession[], string]),
+          ]
+        : [
+            [filteredPinned, "pinned"], [filteredNew, "new"],
+            [filteredNeedsInput, "needs_input"], [filteredWorking, "working"],
+          ];
     for (const [items, key] of sections) {
       if (inList(items) && s.collapsedSections[key]) {
         s.toggleCollapsedSection(key);
@@ -1187,14 +1433,57 @@ export function SessionListPanel({
     if (inList(filteredDismissed) && s.clientState.show_dismissed === false) {
       s.toggleShowDismissed();
     }
-  }, [activeSessionId, sortedSessions, s.collapsedSections, s.clientState.show_dismissed]);
+  }, [activeSessionId, sortedSessions, s.collapsedSections, s.clientState.show_dismissed, viewMode]);
 
-  const renderSection = (label: string, items: InboxSession[], color: string, sectionVariant?: "working", flat?: boolean) => {
+  const renderSection = (
+    label: string,
+    items: InboxSession[],
+    color: string,
+    sectionVariant?: "working",
+    flat?: boolean,
+    opts?: {
+      // Label/project sections pass an id-based key so a label named e.g.
+      // "Working" can't share collapse state with the status section.
+      key?: string;
+      // Present (even as null) = the whole section is a drop target in the
+      // "by label" view. A label id assigns it; null removes the label
+      // (dropping onto a project group returns the session to its project).
+      dropLabelId?: string | null;
+    },
+  ) => {
     if (items.length === 0) return null;
-    const key = label.toLowerCase().replace(/\s+/g, "_");
+    const key = opts?.key ?? label.toLowerCase().replace(/\s+/g, "_");
     const collapsed = !!s.collapsedSections[key];
+    const isDropTarget = opts !== undefined && "dropLabelId" in (opts ?? {});
+    const isDragOverSection = dragOverSectionKey === key;
+    const dropProps = isDropTarget
+      ? {
+          onDragOver: (e: React.DragEvent) => {
+            if (!e.dataTransfer.types.includes("codecast/session-id")) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = "move";
+            setDragOverSectionKey(key);
+          },
+          onDragLeave: (e: React.DragEvent) => {
+            // Child enter/leave churn fires dragleave constantly; only clear
+            // when the pointer truly left this section's subtree.
+            if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+            setDragOverSectionKey((cur) => (cur === key ? null : cur));
+          },
+          onDrop: (e: React.DragEvent) => {
+            setDragOverSectionKey(null);
+            const draggedId = e.dataTransfer.getData("codecast/session-id");
+            if (!draggedId) return;
+            e.preventDefault();
+            dropSessionOnLabel(draggedId, opts!.dropLabelId ?? null);
+          },
+        }
+      : {};
     return (
-      <div>
+      <div
+        {...dropProps}
+        className={isDragOverSection ? "ring-1 ring-inset ring-sol-cyan/70 bg-sol-cyan/[0.04] transition-colors" : isDropTarget ? "transition-colors" : undefined}
+      >
         <button
           onClick={() => s.toggleCollapsedSection(key)}
           className="w-full px-3 py-1.5 bg-sol-bg border-b border-sol-border/30 flex items-center justify-between"
@@ -1211,9 +1500,17 @@ export function SessionListPanel({
             // In flat view, subagents already appear as their own top-level
             // rows (they're in sortedSessions), so suppress the nested rendering
             // to avoid showing them twice.
-            const subs = flat ? [] : (globalSubByParent.get(session._id) || []);
+            const allSubs = flat ? [] : (globalSubByParent.get(session._id) || []);
+            // The selected subagent always renders — even when subagents are
+            // globally hidden or fall past the "+N more" cutoff. The row being
+            // viewed must never vanish from the list.
+            const subs = showSubagents ? allSubs : allSubs.filter((sub) => sub._id === activeSessionId);
             const subsExpanded = !!expandedSubSessions[session._id];
-            const visibleSubs = subs.length <= 2 ? subs : subsExpanded ? subs : subs.slice(0, 2);
+            let visibleSubs = subs.length <= 2 || subsExpanded ? subs : subs.slice(0, 2);
+            if (visibleSubs.length < subs.length && !visibleSubs.some((sub) => sub._id === activeSessionId)) {
+              const activeSub = subs.find((sub) => sub._id === activeSessionId);
+              if (activeSub) visibleSubs = [...visibleSubs, activeSub];
+            }
             const hiddenCount = subs.length - visibleSubs.length;
             return (
               <div key={session._id} className="border-b border-sol-border/30">
@@ -1228,7 +1525,7 @@ export function SessionListPanel({
                   variant={sectionVariant || "default"}
                   forkColorKey={globalForksByParent.has(session._id) ? session._id : (session.forked_from ?? undefined)}
                 />
-                {showSubagents && visibleSubs.map((sub) => (
+                {visibleSubs.map((sub) => (
                   <SessionCard
                     key={sub._id}
                     session={sub}
@@ -1240,7 +1537,7 @@ export function SessionListPanel({
                     variant={sectionVariant || "default"}
                   />
                 ))}
-                {showSubagents && hiddenCount > 0 && (
+                {hiddenCount > 0 && (
                   <button
                     onClick={() => setExpandedSubSessions((prev) => ({ ...prev, [session._id]: true }))}
                     className="w-full px-2 py-0.5 text-[10px] text-gray-500 hover:text-violet-400 transition-colors text-left pl-[26px]"
@@ -1248,7 +1545,7 @@ export function SessionListPanel({
                     +{hiddenCount} more sub-session{hiddenCount > 1 ? "s" : ""}
                   </button>
                 )}
-                {showSubagents && subsExpanded && subs.length > 2 && (
+                {subsExpanded && subs.length > 2 && (
                   <button
                     onClick={() => setExpandedSubSessions((prev) => ({ ...prev, [session._id]: false }))}
                     className="w-full px-2 py-0.5 text-[10px] text-gray-500 hover:text-violet-400 transition-colors text-left pl-[26px]"
@@ -1270,8 +1567,70 @@ export function SessionListPanel({
         <span className="text-xs font-medium text-sol-text-dim uppercase tracking-wide flex-shrink-0">
           {headerCount} Session{headerCount !== 1 ? "s" : ""}
         </span>
-        {projectCounts.length > 1 && (
-          <div className="flex gap-1 overflow-x-auto min-w-0 pr-3" style={{ scrollbarWidth: 'none', maskImage: 'linear-gradient(to right, black calc(100% - 20px), transparent)', WebkitMaskImage: 'linear-gradient(to right, black calc(100% - 20px), transparent)' }}>
+        <div className="flex gap-1 overflow-x-auto min-w-0 pr-3 items-center" style={{ scrollbarWidth: 'none', maskImage: 'linear-gradient(to right, black calc(100% - 20px), transparent)', WebkitMaskImage: 'linear-gradient(to right, black calc(100% - 20px), transparent)' }}>
+            {/* Manual label chips first (intentional structure), then the
+                automatic project chips. Square swatch = label, round = project.
+                Chips double as drop targets for session-card drags; hover ✕
+                deletes the label from every session that has it. */}
+            {visibleBuckets.map((bucket) => {
+              const bc = getLabelColor(bucket.name);
+              const active = s.activeBucketFilter === bucket._id;
+              const count = bucketCounts[bucket._id] || 0;
+              return (
+                <button
+                  key={bucket._id}
+                  onClick={() => s.setActiveBucketFilter(active ? null : bucket._id)}
+                  onDragOver={handleChipDragOver(bucket._id)}
+                  onDragLeave={() => setDragOverBucketId((cur) => (cur === bucket._id ? null : cur))}
+                  onDrop={handleChipDrop(bucket._id)}
+                  className={`group flex-shrink-0 px-2 py-0.5 rounded-full text-[10px] transition-all flex items-center gap-1 ${
+                    dragOverBucketId === bucket._id
+                      ? `ring-1 ring-sol-cyan ${bc.bg} ${bc.text}`
+                      : active
+                        ? `${bc.bg} ${bc.text} font-medium`
+                        : count === 0
+                          ? "bg-gray-400/10 text-gray-400/60 hover:bg-gray-400/20 hover:text-gray-500"
+                          : "bg-gray-400/10 text-gray-400 hover:bg-gray-400/20 hover:text-gray-500"
+                  }`}
+                  title={`Label: ${bucket.name}`}
+                >
+                  <span className={`w-1.5 h-1.5 rounded-[2px] ${bc.dot} ${active ? "" : "opacity-50"}`} />
+                  {bucket.name}
+                  <span className="ml-0.5 opacity-50 group-hover:hidden tabular-nums">{count}</span>
+                  <span
+                    role="button"
+                    onClick={deleteLabel(bucket)}
+                    title={`Delete label "${bucket.name}"`}
+                    className="ml-0.5 hidden group-hover:inline-flex items-center text-current opacity-60 hover:opacity-100 hover:text-sol-red"
+                  >
+                    <X className="w-2.5 h-2.5" />
+                  </span>
+                </button>
+              );
+            })}
+            {creatingLabel ? (
+              <input
+                autoFocus
+                value={newLabelName}
+                onChange={(e) => setNewLabelName(e.target.value)}
+                onKeyDown={(e) => {
+                  e.stopPropagation();
+                  if (e.key === "Enter") commitNewLabel();
+                  if (e.key === "Escape") { setCreatingLabel(false); setNewLabelName(""); }
+                }}
+                onBlur={() => { setCreatingLabel(false); setNewLabelName(""); }}
+                placeholder="new label…"
+                className="flex-shrink-0 w-24 px-2 py-0.5 rounded-full text-[10px] bg-sol-bg border border-sol-cyan/50 text-sol-text placeholder:text-sol-text-dim/60 outline-none"
+              />
+            ) : (
+              <button
+                onClick={() => setCreatingLabel(true)}
+                title="New label"
+                className="flex-shrink-0 p-1 rounded-full text-sol-text-dim/50 hover:text-sol-cyan hover:bg-sol-cyan/10 transition-colors"
+              >
+                <Plus className="w-2.5 h-2.5" />
+              </button>
+            )}
             {projectCounts.map(([name, count]) => {
               const pc = getLabelColor(name);
               const active = s.activeProjectFilter === name;
@@ -1294,24 +1653,55 @@ export function SessionListPanel({
                 </button>
               );
             })}
+        </div>
+        <div className="flex items-center gap-1.5 flex-shrink-0 ml-auto">
+          {/* View mode: icon segmented control — direct selection, no cycling.
+              Ctrl+, still cycles for keyboard flow. Label segment appears only
+              once at least one label exists. */}
+          <div className="flex items-center rounded-md border border-sol-border/40 bg-sol-bg/70 p-px">
+            {([
+              { mode: "grouped" as const, Icon: List, title: "Grouped by status" },
+              { mode: "time" as const, Icon: Clock, title: "By creation time" },
+              ...(visibleBuckets.length > 0 ? [{ mode: "bucket" as const, Icon: Tag, title: "By label" }] : []),
+            ]).map(({ mode, Icon, title }) => (
+              <button
+                key={mode}
+                onClick={() => s.updateClientUI({ inbox_view_mode: mode, inbox_flat_view: mode === "time" })}
+                title={`${title} (${formatShortcutLabel('inbox.toggleFlatView')})`}
+                className={`px-1.5 py-[3px] rounded-[5px] transition-colors ${
+                  viewMode === mode
+                    ? "bg-sol-cyan/15 text-sol-cyan"
+                    : "text-sol-text-dim/70 hover:text-sol-text"
+                }`}
+              >
+                <Icon className="w-3 h-3" />
+              </button>
+            ))}
           </div>
-        )}
-        <div className="flex items-center gap-2 flex-shrink-0 ml-auto">
-          <button
-            onClick={() => s.updateClientUI({ inbox_flat_view: !flatView })}
-            className="text-[10px] text-sol-text-dim hover:text-sol-cyan transition-colors whitespace-nowrap"
-            title="Sort all sessions by creation time (Ctrl+,)"
-          >
-            {flatView ? "grouped" : "by time"}
-          </button>
           {totalSubagentCount > 0 && (
-            <button onClick={() => s.updateClientUI({ show_subagents: !showSubagents })} className="text-[10px] text-sol-text-dim hover:text-sol-cyan transition-colors whitespace-nowrap">
-              {showSubagents ? `−${totalSubagentCount} sub` : `+${totalSubagentCount} sub`}
+            <button
+              onClick={() => s.updateClientUI({ show_subagents: !showSubagents })}
+              title={showSubagents ? "Hide subagent sessions" : "Show subagent sessions"}
+              className={`px-1.5 py-0.5 rounded-md text-[10px] tabular-nums whitespace-nowrap transition-colors border ${
+                showSubagents
+                  ? "text-sol-text-dim border-sol-border/40 bg-sol-bg/70 hover:text-sol-text"
+                  : "text-sol-text-dim/60 border-transparent hover:text-sol-text hover:border-sol-border/40"
+              }`}
+            >
+              {totalSubagentCount} sub
             </button>
           )}
           {s.hiddenSessionCount > 0 && (
-            <button onClick={() => s.updateClientUI({ show_old_sessions: !showAllSessions })} className="text-[10px] text-sol-text-dim hover:text-sol-cyan transition-colors whitespace-nowrap">
-              {showAllSessions ? `−${s.hiddenSessionCount} old` : `+${s.hiddenSessionCount} old`}
+            <button
+              onClick={() => s.updateClientUI({ show_old_sessions: !showAllSessions })}
+              title={showAllSessions ? "Hide old sessions" : "Show old sessions"}
+              className={`px-1.5 py-0.5 rounded-md text-[10px] tabular-nums whitespace-nowrap transition-colors border ${
+                showAllSessions
+                  ? "text-sol-text-dim border-sol-border/40 bg-sol-bg/70 hover:text-sol-text"
+                  : "text-sol-text-dim/60 border-transparent hover:text-sol-text hover:border-sol-border/40"
+              }`}
+            >
+              {s.hiddenSessionCount} old
             </button>
           )}
         </div>
@@ -1356,15 +1746,32 @@ export function SessionListPanel({
         )}
         {flatView ? (
           renderSection("All", flatByCreation, "text-sol-cyan", undefined, true)
+        ) : viewMode === "bucket" && bucketView ? (
+        <>
+        {!s.activeProjectFilter && !s.activeBucketFilter && <NeedsAttentionSection />}
+        {renderSection("Pinned", filteredPinned, "text-sol-magenta")}
+        {bucketView.labelGroups.map(({ bucket, items }) => (
+          <div key={bucket._id}>
+            {renderSection(bucket.name, items, getLabelColor(bucket.name).text, undefined, undefined, { key: `bucket_${bucket._id}`, dropLabelId: bucket._id })}
+          </div>
+        ))}
+        {/* Unlabeled sessions group by project — the auto-derived label tier.
+            Dropping a card here strips its label (back to its own project). */}
+        {bucketView.projectGroups.map(({ name, items }) => (
+          <div key={`proj-${name}`}>
+            {renderSection(name, items, name === "other" ? "text-sol-text-dim" : getLabelColor(name).text, undefined, undefined, { key: `bucketproj_${name}`, dropLabelId: null })}
+          </div>
+        ))}
+        </>
         ) : (
         <>
-        {!s.activeProjectFilter && <NeedsAttentionSection />}
+        {!s.activeProjectFilter && !s.activeBucketFilter && <NeedsAttentionSection />}
         {renderSection("Pinned", filteredPinned, "text-sol-magenta")}
         {renderSection("New", filteredNew, "text-sol-blue")}
         {renderSection("Needs Input", filteredNeedsInput, "text-sol-yellow")}
         {renderSection("Working", filteredWorking, "text-sol-green", "working")}
         {Array.from(globalOrchestrationGroups.entries()).map(([label, members]) => {
-          const visible = filterByProject(members);
+          const visible = filterByChip(members);
           if (visible.length === 0) return null;
           const key = `grp:${label}`;
           const collapsed = !!s.collapsedSections[key];
@@ -1452,7 +1859,7 @@ export function SessionListPanel({
                     variant="dismissed"
                     forkColorKey={globalForksByParent.has(session._id) ? session._id : (session.forked_from ?? undefined)}
                   />
-                  {showSubagents && subMap.get(session._id)?.map((sub) => (
+                  {(subMap.get(session._id) ?? []).filter((sub) => showSubagents || sub._id === activeSessionId).map((sub) => (
                     <SessionCard
                       key={sub._id}
                       session={sub}

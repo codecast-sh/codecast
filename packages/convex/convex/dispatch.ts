@@ -48,6 +48,14 @@ const TABLE_CONFIG: Record<string, TableConfig> = {
     lookupIndex: "by_user_id",
     immutable: new Set(["_id", "_creationTime", "user_id"]),
   },
+  // Bucket field edits (rename / color / sort_order / archived_at) ride the
+  // generic patch path. Creation and assignment need inserts/upserts, so they
+  // live in SIDE_EFFECTS (createBucket / assignSessionToBucket).
+  inbox_buckets: {
+    kind: "collection",
+    ownerField: "user_id",
+    immutable: new Set(["_id", "_creationTime", "user_id", "created_at"]),
+  },
 };
 
 export const dispatch = mutation({
@@ -281,7 +289,11 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
 
   sendMessage: async (ctx, userId, [convId, content, imageIds, clientId]: [string, string, string[] | undefined, string | undefined]) => {
     const conversation = await ctx.db.get(convId as Id<"conversations">);
-    if (!conversation || conversation.user_id.toString() !== userId.toString()) throw new Error("Unauthorized");
+    // Distinct error for a deleted row: the client may be sending into a cached
+    // ghost (never-prune cache) and needs to surface "restore session", not a
+    // baffling auth failure.
+    if (!conversation) throw new Error("conversation_deleted");
+    if (conversation.user_id.toString() !== userId.toString()) throw new Error("Unauthorized");
 
     if (clientId) {
       const existing = await ctx.db
@@ -736,6 +748,57 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // Creates delegate to the existing webCreate mutations (which own short-id
   // allocation, team resolution, history, etc.) and return their {id,...} so
   // the awaiting caller can navigate to the new record.
+  createBucket: async (ctx, userId, [opts]: [{ name: string; color?: string }]) => {
+    const name = (opts?.name || "").trim();
+    if (!name) throw new Error("Bucket name required");
+    const now = Date.now();
+    const _id = await ctx.db.insert("inbox_buckets", {
+      user_id: userId,
+      name,
+      ...(opts.color ? { color: opts.color } : {}),
+      created_at: now,
+      updated_at: now,
+    });
+    return { _id };
+  },
+
+  // Exclusive per-user filing: upsert the single (user, conversation) row.
+  // bucketId null = unassign (tombstone row, never deleted — delta sync).
+  // Returns the gate it stopped at (or "ok") so a silent no-op is debuggable
+  // from the client (`await store.assignSessionToBucket(...)`).
+  assignSessionToBucket: async (ctx, userId, [convId, bucketId]: [string, string | null]) => {
+    let conv: any = null;
+    let convErr: string | null = null;
+    try {
+      conv = await ctx.db.get(convId as Id<"conversations">);
+    } catch (e: any) {
+      convErr = String(e?.message || e);
+    }
+    if (!conv) return { gate: "conv_not_found", convErr };
+    if (String(conv.user_id) !== String(userId)) return { gate: "conv_not_owned" };
+    if (bucketId) {
+      const bucket = await ctx.db.get(bucketId as Id<"inbox_buckets">).catch(() => null);
+      if (!bucket || String((bucket as any).user_id) !== String(userId)) return { gate: "bucket_not_owned" };
+    }
+    const now = Date.now();
+    const existing = await ctx.db
+      .query("bucket_assignments")
+      .withIndex("by_user_conversation", (q: any) =>
+        q.eq("user_id", userId).eq("conversation_id", convId as Id<"conversations">))
+      .first();
+    if (existing) {
+      await ctx.db.patch(existing._id, { bucket_id: (bucketId ?? undefined) as Id<"inbox_buckets"> | undefined, updated_at: now });
+    } else {
+      await ctx.db.insert("bucket_assignments", {
+        user_id: userId,
+        conversation_id: convId as Id<"conversations">,
+        ...(bucketId ? { bucket_id: bucketId as Id<"inbox_buckets"> } : {}),
+        updated_at: now,
+      });
+    }
+    return { gate: "ok" };
+  },
+
   createDoc: async (ctx, userId, [opts]: [any]) => {
     return await (ctx as any).runMutation(api.docs.webCreate, opts);
   },
