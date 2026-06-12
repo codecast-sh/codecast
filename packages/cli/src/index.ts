@@ -10,6 +10,7 @@ import { spawn, spawnSync, execSync } from "child_process";
 import { fileURLToPath } from "url";
 import { maskToken } from "./redact.js";
 import { cliFetch, cliFetchRead } from "./cliHttp.js";
+import { listProfiles, saveProfile, useProfile, CcAccountError } from "./ccAccounts.js";
 import { CODECAST_STATUS_HOOK } from "./statusHook.js";
 import { AuthServer } from "./authServer.js";
 import { startRelayPoller } from "./authRelay.js";
@@ -44,6 +45,8 @@ import {
   chooseClaudeTailMessagesForTokenBudget,
   resumeModelFlag,
   resumeModelFlagFromFile,
+  resumeEffortFlag,
+  resumeEffortFlagFromFile,
 } from "./jsonlGenerator.js";
 import {
   CLAUDE_UUID_RE,
@@ -2904,6 +2907,125 @@ program
         ? ` ${c.dim}from${c.reset} ${c.cyan}${result.from_short_id}${c.reset}`
         : "";
     console.log(`${c.green}✓${c.reset} sent to ${c.cyan}${result.to_short_id || sessionId}${c.reset}${fromNote}`);
+  });
+
+const accountsCmd = program
+  .command("accounts")
+  .description(
+    "Manage Claude Code account profiles\n\n" +
+    "Log into each account ONCE (claude /login), save it as a profile, then\n" +
+    "switch between them instantly — no browser. Switching swaps the machine's\n" +
+    "global CC credential; running sessions keep their old account until\n" +
+    "restarted (use --continue to restart the limit-blocked ones)."
+  );
+
+accountsCmd
+  .command("ls")
+  .alias("list")
+  .description("List saved account profiles")
+  .action(() => {
+    try {
+      const profiles = listProfiles();
+      if (profiles.length === 0) {
+        console.log(`${c.dim}No saved profiles. Save the current login with:${c.reset} cast accounts save <name>`);
+        return;
+      }
+      for (const p of profiles) {
+        const mark = p.active ? `${c.green}●${c.reset}` : `${c.dim}○${c.reset}`;
+        const tier = p.subscription ? ` ${c.dim}(${p.subscription}${p.tier?.includes("20x") ? " 20x" : ""})${c.reset}` : "";
+        console.log(`${mark} ${c.cyan}${p.name}${c.reset} ${p.email ?? ""}${tier}${p.active ? ` ${c.dim}— active${c.reset}` : ""}`);
+      }
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+  });
+
+accountsCmd
+  .command("save <name>")
+  .description("Snapshot the currently logged-in account as a profile")
+  .action((name: string) => {
+    try {
+      const meta = saveProfile(name);
+      console.log(`${c.green}✓${c.reset} saved ${c.cyan}${name}${c.reset} (${meta.email ?? "unknown email"})`);
+    } catch (err) {
+      console.error(err instanceof CcAccountError ? err.message : String(err));
+      process.exit(1);
+    }
+  });
+
+// A mass revive resumes one claude process per blocked session — past this
+// count, require an explicit --yes so a pile of stale banner flags can't
+// trigger a 50-session resume stampede by accident.
+const REVIVE_CONFIRM_THRESHOLD = 10;
+
+accountsCmd
+  .command("use <name>")
+  .description("Switch the active Claude Code account to a saved profile")
+  .option(
+    "--continue",
+    "also restart every limit/auth-blocked session (last 48h) on the new account and send it a 'continue' (runs via the daemon)"
+  )
+  .option("--yes", "skip the confirmation when many sessions would be revived")
+  .option("--include-subagents", "also revive blocked subagent workers (skipped by default — their parent has usually moved on)")
+  .action(async (name: string, options: any) => {
+    if (options.continue) {
+      // Daemon-orchestrated: swap + kill blocked sessions + enqueue continues,
+      // in that order (killing first keeps the delivery rail from injecting
+      // into a still-alive process that holds the old account's token).
+      const reviveArgs = { profile: name, include_subagents: options.includeSubagents === true };
+      const probe = await cliPost("/cli/accounts/switch", { ...reviveArgs, dry_run: true });
+      const count = probe.conversations ?? 0;
+      const subNote = !options.includeSubagents && (probe.subagents ?? 0) > 0
+        ? ` (${probe.subagents} blocked subagent(s) skipped — add --include-subagents to revive them too)`
+        : "";
+      if (count > REVIVE_CONFIRM_THRESHOLD && !options.yes) {
+        console.log(`${c.yellow}!${c.reset} ${count} blocked session(s) would be restarted + continued (of ${probe.total_blocked ?? count} flagged in the last 48h)${subNote}.`);
+        console.log(`${c.dim}  re-run with --yes to revive all of them, or switch without --continue and nudge sessions individually${c.reset}`);
+        process.exit(1);
+      }
+      const result = await cliPost("/cli/accounts/switch", reviveArgs);
+      const n = result.conversations ?? 0;
+      console.log(
+        `${c.green}✓${c.reset} switch to ${c.cyan}${name}${c.reset} requested on ${result.devices ?? 0} device(s)` +
+        (n > 0 ? `; ${n} blocked session(s) will be restarted + continued` : "; no blocked sessions to revive") +
+        subNote
+      );
+      return;
+    }
+    try {
+      const result = useProfile(name);
+      console.log(`${c.green}✓${c.reset} switched to ${c.cyan}${name}${c.reset}${result.toEmail ? ` (${result.toEmail})` : ""}`);
+      if (result.from) console.log(`${c.dim}  outgoing account re-saved as "${result.from}"${c.reset}`);
+      console.log(`${c.dim}  running sessions keep the old account until restarted — new/resumed ones use ${name}${c.reset}`);
+    } catch (err) {
+      console.error(err instanceof CcAccountError ? err.message : String(err));
+      process.exit(1);
+    }
+  });
+
+accountsCmd
+  .command("continue")
+  .description("Send 'continue' to every session parked on a usage-limit banner (last 48h; no account switch — use after the limit window resets)")
+  .option("--yes", "skip the confirmation when many sessions would be continued")
+  .option("--include-subagents", "also continue blocked subagent workers (skipped by default — their parent has usually moved on)")
+  .action(async (options: any) => {
+    const reviveArgs = { include_subagents: options.includeSubagents === true };
+    const probe = await cliPost("/cli/accounts/continue-blocked", { ...reviveArgs, dry_run: true });
+    const count = probe.would_continue ?? 0;
+    const subNote = !options.includeSubagents && (probe.subagents ?? 0) > 0
+      ? ` (${probe.subagents} blocked subagent(s) skipped — add --include-subagents to include them)`
+      : "";
+    if (count === 0) {
+      console.log(`${c.dim}No sessions are blocked on a usage limit.${subNote}${c.reset}`);
+      return;
+    }
+    if (count > REVIVE_CONFIRM_THRESHOLD && !options.yes) {
+      console.log(`${c.yellow}!${c.reset} ${count} session(s) would get a 'continue'${subNote}. Re-run with --yes to proceed.`);
+      process.exit(1);
+    }
+    const result = await cliPost("/cli/accounts/continue-blocked", reviveArgs);
+    console.log(`${c.green}✓${c.reset} queued 'continue' to ${result.continued} blocked session(s)${subNote}`);
   });
 
 program
@@ -5958,6 +6080,12 @@ function launchClaude(sessionId: string, extraArgs?: string, showArgsHint?: bool
   if (modelFlag) {
     args.push(...modelFlag.trim().split(/\s+/));
   }
+  // Effort twin: re-pin a session-scoped /effort (or picker) switch on resume —
+  // without the flag the resumed session falls back to the global default.
+  const effortFlag = resumeEffortFlagFromFile(claudeSessionPath(resumeId, projectPath), combined || "");
+  if (effortFlag) {
+    args.push(...effortFlag.trim().split(/\s+/));
+  }
 
   if (extraArgs) {
     console.log(`Using: claude ${args.join(" ")}`);
@@ -7953,7 +8081,8 @@ program
   .option("--no-sessions", "Skip session resolution (pure git blame output)")
   .option("--touches", "Legacy view: sessions that touched the file (no line attribution)")
   .option("--log", "Session log: which sessions shaped this file, newest first (:Gclog equivalent)")
-  .option("--quickfix", "With --log: emit `file:line: msg` lines for the vim :Gslog quickfix list")
+  .option("--quickfix", "With --log: emit tab-separated rows for the vim :Gslog quickfix list")
+  .option("--open", "Resolve <file>:<line> to its session and open the conversation in the browser")
   .option("--install-fugitive", "Install the vim-fugitive git shim so :Gblame shows sessions")
   .option("-n, --limit <n>", "Number of results (--touches mode)", "20")
   .action(async (file, options) => {
@@ -7991,6 +8120,24 @@ program
       try {
         const { runBlameLog } = await import("./blame.js");
         await runBlameLog(filePath, { quickfix: options.quickfix, rev: options.rev }, config);
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exit(1);
+      }
+      return;
+    }
+
+    // `cast blame <file>:<line> --open` — resolve the line's session and open
+    // the conversation (used by editor keybindings, e.g. VSCode/Cursor).
+    if (options.open) {
+      if (!lineNumber) {
+        console.error("--open needs a line: cast blame <file>:<line> --open");
+        process.exit(1);
+      }
+      try {
+        const { runBlameConversation } = await import("./blame.js");
+        await runBlameConversation(filePath, lineNumber, config);
+        if (process.exitCode === 1) console.error("No codecast session resolved for that line.");
       } catch (error) {
         console.error(error instanceof Error ? error.message : String(error));
         process.exit(1);
@@ -8247,7 +8394,7 @@ program
           const { jsonl, sessionId } = generateClaudeCodeJsonl(data, { tailMessages });
           writeClaudeCodeSession(jsonl, sessionId, launchCwd.path);
           const resolvedArgs = options.claudeArgs ?? config.claude_args ?? "";
-          const launchCmd = `claude --resume ${sessionId}${resumeModelFlag(jsonl, resolvedArgs)}${resolvedArgs ? " " + resolvedArgs : ""}`;
+          const launchCmd = `claude --resume ${sessionId}${resumeModelFlag(jsonl, resolvedArgs)}${resumeEffortFlag(jsonl, resolvedArgs)}${resolvedArgs ? " " + resolvedArgs : ""}`;
           console.log(`\nResume command:\n  cast resume ${sessionId}`);
           openInNewTab(launchCmd, launchCwd.path);
         }

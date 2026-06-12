@@ -2419,7 +2419,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, version, platform, pid, autostart_enabled, has_tmux, local_project_roots, pending_sync_count, oldest_pending_ms, device_id, device_label, is_remote_device } = body;
+      const { api_token, version, platform, pid, autostart_enabled, has_tmux, local_project_roots, pending_sync_count, oldest_pending_ms, device_id, device_label, is_remote_device, cc_accounts } = body;
 
       if (!api_token || !version || !platform) {
         return new Response(JSON.stringify({ error: "Missing required fields" }), {
@@ -2441,6 +2441,7 @@ http.route({
         device_id,
         device_label,
         is_remote_device,
+        cc_accounts,
       });
 
       if (result.error) {
@@ -3351,5 +3352,11 @@ cliRoute("/cli/workflow-runs/by-external", async (ctx, body) => ctx.runQuery(api
 
 // Session-to-session messaging
 cliRoute("/cli/messages/send", async (ctx, body) => ctx.runMutation(api.pendingMessages.sendSessionMessage, body));
+
+// CC account switching: route the swap + blocked-session revive through the
+// daemon fleet / nudge limit-parked sessions after a window reset.
+cliRoute("/cli/accounts/switch", async (ctx, body) => ctx.runMutation(api.accountSwitch.requestAccountSwitch, body));
+cliRoute("/cli/accounts/continue-blocked", async (ctx, body) => ctx.runMutation(api.accountSwitch.continueAllBlocked, body));
+cliRoute("/cli/accounts/save", async (ctx, body) => ctx.runMutation(api.accountSwitch.saveAccountProfile, body));
 
 export default http;

@@ -80,6 +80,7 @@ const SettingsSync = lazy(() => import("@/app/settings/sync/page"));
 const SettingsProfile = lazy(() => import("@/app/settings/profile/page"));
 const SettingsAccounts = lazy(() => import("@/app/settings/accounts/page"));
 const SettingsAccountsLinkGithub = lazy(() => import("@/app/settings/accounts/link-github/page"));
+const SettingsClaudeAccounts = lazy(() => import("@/app/settings/claude-accounts/page"));
 const SettingsTeam = lazy(() => import("@/app/settings/team/page"));
 const SettingsTeamCreate = lazy(() => import("@/app/settings/team/create/page"));
 const SettingsTeamJoin = lazy(() => import("@/app/settings/team/join/page"));
@@ -192,6 +193,7 @@ export function App() {
               <Route path="profile" element={<E name="SettingsProfile"><SettingsProfile /></E>} />
               <Route path="accounts" element={<E name="SettingsAccounts"><SettingsAccounts /></E>} />
               <Route path="accounts/link-github" element={<E name="SettingsLinkGithub"><SettingsAccountsLinkGithub /></E>} />
+              <Route path="claude-accounts" element={<E name="SettingsClaudeAccounts"><SettingsClaudeAccounts /></E>} />
               <Route path="team" element={<E name="SettingsTeam"><SettingsTeam /></E>} />
               <Route path="team/create" element={<E name="SettingsTeamCreate"><SettingsTeamCreate /></E>} />
               <Route path="team/join" element={<E name="SettingsTeamJoin"><SettingsTeamJoin /></E>} />

@@ -9,6 +9,7 @@ import { watch as chokidarWatch } from "chokidar";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
 import { deviceId, deviceLabel, isRemoteDevice } from "./remote/device.js";
 import { copyCredentialToRemoteAsync, loadRemoteHost, remoteHostsRegistered } from "./remote/session-move.js";
+import { useProfile, saveProfile, getAccountsHeartbeatPayload } from "./ccAccounts.js";
 import { CursorWatcher, type CursorSessionEvent } from "./cursorWatcher.js";
 import { CursorTranscriptWatcher, type CursorTranscriptEvent } from "./cursorTranscriptWatcher.js";
 import { CodexWatcher, type CodexSessionEvent } from "./codexWatcher.js";
@@ -55,6 +56,7 @@ import {
   writeCodexSession,
   chooseClaudeTailMessagesForTokenBudget,
   resumeModelFlagFromFile,
+  resumeEffortFlagFromFile,
 } from "./jsonlGenerator.js";
 import {
   CLAUDE_UUID_RE,
@@ -68,6 +70,8 @@ import {
 } from "./resumeCommand.js";
 import { resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath } from "./projectPathResolver.js";
 import type { AgentStatus } from "@codecast/shared/contracts";
+import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS } from "@codecast/shared/contracts";
+import { parseModelPicker, planModelNavigation, SESSION_ONLY_COMMIT_RE, isSwitchConfirmDialog } from "./modelPicker";
 import type { Config } from "./config/types.js";
 
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
@@ -1336,6 +1340,9 @@ async function sendHeartbeat(): Promise<void> {
         device_id: deviceId(),
         device_label: deviceLabel(),
         is_remote_device: isRemoteDevice(),
+        // Saved CC account profiles (names/emails/tiers only, never tokens) so
+        // the web can render the account switcher. Cached 5 min in-module.
+        cc_accounts: getAccountsHeartbeatPayload() ?? undefined,
         ...syncHealthFields(),
       }),
     });
@@ -1495,6 +1502,137 @@ function ownedByAnotherLiveDevice(
   return !!info?.ownerDeviceId && info.ownerDeviceId !== deviceId() && !!info.ownerOnline;
 }
 
+// Tear down every backend bound to a conversation (app-server thread and/or
+// tmux pane + process tree), stopping heartbeats BEFORE each kill (or
+// heartbeatHealthCheck sees the vanished tmux and RECONSTITUTES the agent),
+// then wipe delivery/resume caches so the next pending message cleanly
+// auto-resumes. Shared by kill_session and switch_account — the latter recycles
+// limit-blocked sessions so a fresh `claude --resume` re-reads the just-swapped
+// account credential. Extracted verbatim from the kill_session command body.
+async function killConversationBackends(
+  conversationId: string,
+  sessionIdHint?: string
+): Promise<{ result?: string; error?: string }> {
+  let result: string | undefined;
+  let error: string | undefined;
+
+  // Tear down every backend bound to this conversation (app-server thread
+  // and/or tmux), then stamp the kill-specific server status. Shared with
+  // start_session so "one backend per conversation" is enforced identically
+  // -- and so a split-brained conversation gets BOTH backends killed, not
+  // just the first one matched.
+  const teardown = await teardownConversationBackendsLive(conversationId, { interruptActiveTurn: true });
+  if (teardown.killedAppServer && teardown.appServerThreadId) {
+    if (syncServiceRef) {
+      syncServiceRef.markSessionCompleted(conversationId).catch(logConvexFailure);
+      sendAgentStatus(syncServiceRef, conversationId, teardown.appServerThreadId, "stopped");
+    }
+    log(`[REMOTE] Killed app-server thread ${teardown.appServerThreadId.slice(0, 8)} for conversation ${conversationId.slice(0, 12)}`);
+    return { result: "killed_app_server" };
+  }
+  if (teardown.killedTmux) {
+    result = "killed_tmux";
+  }
+
+  const cache = readConversationCache();
+  const reverse = buildReverseConversationCache(cache);
+  // The caller can carry the session_id (from the conversation row, or the
+  // client's cached copy of a deleted row) — fall back to it when the local
+  // conversation cache has no mapping (remapped or ghost conversations).
+  const sessionId = reverse[conversationId] ?? sessionIdHint;
+  if (sessionId && !result) {
+    const proc = await findSessionProcess(sessionId, detectSessionAgentType(sessionId));
+    if (proc) {
+      const tmuxTarget = await findTmuxPaneForTty(proc.tty);
+      if (tmuxTarget && validateTmuxTarget(tmuxTarget)) {
+        const tmuxSessionName = tmuxTarget.split(":")[0];
+        await killTmuxSessionAndTree(tmuxSessionName);
+        await reapPidTree(proc.pid); // belt-and-suspenders for anything outside the pane
+        result = "killed_tmux";
+        log(`[REMOTE] Killed tmux ${tmuxSessionName} + process tree for conversation ${conversationId.slice(0, 12)}`);
+      } else {
+        const n = await reapPidTree(proc.pid);
+        if (n > 0) {
+          result = "killed_sigkill";
+          log(`[REMOTE] SIGKILLed pid ${proc.pid} + descendants (${n} procs) for conversation ${conversationId.slice(0, 12)}`);
+        } else {
+          error = `Failed to kill pid ${proc.pid}`;
+        }
+      }
+    }
+  }
+
+  if (sessionId) {
+    const cachedTmux = resumeSessionCache.get(sessionId);
+    if (cachedTmux && validateTmuxTarget(cachedTmux)) {
+      await killTmuxSessionAndTree(cachedTmux);
+      log(`[REMOTE] Killed cached resume tmux ${cachedTmux} (+process tree) for session ${sessionId.slice(0, 8)}`);
+      resumeSessionCache.delete(sessionId);
+      if (!result) result = "killed_tmux";
+    }
+    stopManagedSessionHeartbeat(sessionId);
+    stopCodexPermissionPoller(sessionId);
+    sessionProcessCache.delete(sessionId);
+    resumeInFlight.delete(sessionId);
+    resumeInFlightStarted.delete(sessionId);
+
+    try {
+      const { stdout: tmuxList } = await tmuxExec(["list-sessions", "-F", "#{session_name}"]);
+      for (const tmuxName of tmuxList.trim().split("\n")) {
+        if (!tmuxName || !(await tmuxSessionMatchesFullSessionId(tmuxName, sessionId))) continue;
+        if (!validateTmuxTarget(tmuxName)) continue;
+        const alive = await isTmuxAgentAlive(tmuxName);
+        if (!alive) {
+          await killTmuxSessionAndTree(tmuxName);
+          log(`[REMOTE] Killed zombie tmux session ${tmuxName} (+process tree) for session ${sessionId}`);
+          if (!result) result = "killed_zombie";
+        }
+      }
+    } catch {}
+  }
+
+  // Deterministic last-resort kill. The tmux session name is keyed by
+  // conversation_id (cc-<agent>-<convId.slice(-12)>, see start_session), so a
+  // session is killable from the id ALONE — no lookup tables. This catches an
+  // idle pre-warmed agent that outlived the daemon's in-memory startedSessionTmux
+  // map (e.g. across a daemon restart) and has no live process for findSessionProcess
+  // to match: the lookups above all miss it, yet its tmux is right there under the
+  // derived name. Without this, reaping a dismissed empty pre-warm can't reach such
+  // an agent and it leaks forever (idle, still heartbeating). agentType isn't in the
+  // kill args, so try every prefix; has-session guards each (cheap, idempotent).
+  const convSuffix = conversationId.slice(-12);
+  for (const derivedName of ["claude", "codex", "cursor", "gemini"].map((a) => `cc-${a}-${convSuffix}`)) {
+    if (!validateTmuxTarget(derivedName)) continue;
+    try {
+      await tmuxExec(["has-session", "-t", derivedName], { timeout: 3000 });
+    } catch {
+      continue; // no such session
+    }
+    // CRITICAL: stop tracking the session BEFORE the kill, or heartbeatHealthCheck
+    // sees the vanished tmux and RECONSTITUTES the agent (the daemon keeps managed
+    // sessions warm). The session id lives on the tmux itself (@codecast_session_id),
+    // so we can stop the right heartbeat even when no lookup table maps this
+    // conversation. Mirrors reapOneTerminal's stop-then-kill ordering.
+    const derivedSessionId = (await getTmuxSessionOption(derivedName, "@codecast_session_id"))?.trim() || null;
+    if (derivedSessionId) {
+      stopManagedSessionHeartbeat(derivedSessionId);
+      stopCodexPermissionPoller(derivedSessionId);
+      resumeSessionCache.delete(derivedSessionId);
+    }
+    await killTmuxSessionAndTree(derivedName);
+    log(`[REMOTE] Killed tmux ${derivedName} by derived name (session ${derivedSessionId?.slice(0, 8) ?? "?"}) for conversation ${conversationId.slice(0, 12)}`);
+    if (!result) result = "killed_tmux";
+  }
+
+  // A kill is a clean slate. Wipe per-session/per-conversation caches that
+  // would otherwise block a subsequent resume or silently suppress the next
+  // injected message.
+  await clearConversationDeliveryAndResumeState(conversationId, sessionId, "REMOTE");
+
+  if (!result) result = sessionId ? "no_process" : "no_session";
+  return { result, error };
+}
+
 async function executeRemoteCommand(
   commandId: string,
   command: string,
@@ -1514,7 +1652,7 @@ async function executeRemoteCommand(
   // races the owner — e.g. after a move-to-remote the local daemon would resume a
   // local copy and answer in parallel with the remote (split-brain). An OFFLINE
   // owner does NOT skip, so this daemon can reclaim a session whose owner died.
-  const SESSION_COMMANDS = new Set(["resume_session", "fork_session", "kill_session", "send_keys", "escape", "rewind"]);
+  const SESSION_COMMANDS = new Set(["resume_session", "fork_session", "kill_session", "send_keys", "escape", "rewind", "set_model"]);
   if (SESSION_COMMANDS.has(command) && commandArgs && syncServiceRef) {
     try {
       const convId = JSON.parse(commandArgs)?.conversation_id;
@@ -1702,6 +1840,11 @@ async function executeRemoteCommand(
         const expectedSessionId: string | undefined = parsed.session_id;
         const isolated: boolean = parsed.isolated === true;
         const worktreeName: string | undefined = parsed.worktree_name;
+        // Per-session launch overrides from the web picker (shared-contract
+        // option key + effort level). Unknown values are dropped here, never
+        // passed through to the CLI.
+        const requestedModelKey: string | undefined = typeof parsed.model === "string" ? parsed.model : undefined;
+        const requestedEffort: string | undefined = typeof parsed.effort === "string" ? parsed.effort : undefined;
 
         // A blank-project start (quick-create) defaults to $HOME — fine on the
         // user's own Mac, wrong on a remote box (the session would mislabel as
@@ -1900,6 +2043,21 @@ async function executeRemoteCommand(
           binaryArgs.push(...defaultFlags.split(/\s+/).filter(Boolean));
         }
 
+        // Per-session model/effort, appended AFTER config/default flags so the
+        // per-session choice wins (both CLIs take the last occurrence).
+        const requestedModelOpt = requestedModelKey ? findModelOption(agentType, requestedModelKey) : undefined;
+        if (agentType === "claude") {
+          if (requestedModelOpt?.cliAlias) binaryArgs.push("--model", requestedModelOpt.cliAlias);
+          if (requestedEffort && (CLAUDE_EFFORT_LEVELS as readonly string[]).includes(requestedEffort)) {
+            binaryArgs.push("--effort", requestedEffort);
+          }
+        } else if (agentType === "codex") {
+          if (requestedModelOpt?.cliAlias) binaryArgs.push("-m", requestedModelOpt.cliAlias);
+          if (requestedEffort && (CODEX_EFFORT_LEVELS as readonly string[]).includes(requestedEffort)) {
+            binaryArgs.push("-c", `model_reasoning_effort=${requestedEffort}`);
+          }
+        }
+
         binaryArgs = sanitizeBinaryArgs(binaryArgs);
         const envPrefix = worktreeResult
           ? `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT AGENT_RESOURCE_INDEX=${worktreeResult.portIndex}`
@@ -1918,6 +2076,10 @@ async function executeRemoteCommand(
               sandbox,
               approvalPolicy: codexApprovalPolicy,
               ...(developerInstructions ? { developerInstructions } : {}),
+              ...(requestedModelOpt?.cliAlias ? { model: requestedModelOpt.cliAlias } : {}),
+              ...(requestedEffort && (CODEX_EFFORT_LEVELS as readonly string[]).includes(requestedEffort)
+                ? { config: { model_reasoning_effort: requestedEffort } }
+                : {}),
             });
             codexThreadId = resp.thread.id;
             log(`[codex-app-server] pre-created thread ${codexThreadId.slice(0, 8)} (approvalPolicy=${codexApprovalPolicy})`);
@@ -2200,6 +2362,89 @@ async function executeRemoteCommand(
         log(`[REWIND] Rewind ${stepsBack} steps sent to session ${sessionId.slice(0, 8)}`);
         break;
       }
+      case "set_model": {
+        // In-place model/effort switch for a running claude session: drive the
+        // /model picker and commit with `s` (session-only). Never the one-shot
+        // `/model <x>` / `/effort <x>` forms — those rewrite the user's GLOBAL
+        // default in ~/.claude/settings.json. See modelPicker.ts.
+        const parsed = commandArgs ? JSON.parse(commandArgs) : {};
+        const conversationId = parsed.conversation_id;
+        const modelKey: string | undefined = typeof parsed.model === "string" ? parsed.model : undefined;
+        const effortKey: string | undefined = typeof parsed.effort === "string" ? parsed.effort : undefined;
+        if (!conversationId || (!modelKey && !effortKey)) {
+          error = "Missing conversation_id or model/effort";
+          break;
+        }
+        const modelOpt = modelKey ? findModelOption("claude", modelKey) : undefined;
+        if (modelKey && !modelOpt?.menuMatch) {
+          error = `Unknown model: ${modelKey}`;
+          break;
+        }
+        if (effortKey && !(CLAUDE_EFFORT_LEVELS as readonly string[]).includes(effortKey)) {
+          error = `Unknown effort: ${effortKey}`;
+          break;
+        }
+        let sessionId: string | undefined;
+        {
+          const cache = readConversationCache();
+          sessionId = buildReverseConversationCache(cache)[conversationId];
+        }
+        if (!sessionId) {
+          for (let i = 0; i < 10; i++) {
+            await new Promise(r => setTimeout(r, 500));
+            const freshCache = readConversationCache();
+            sessionId = buildReverseConversationCache(freshCache)[conversationId];
+            if (sessionId) break;
+          }
+        }
+        if (!sessionId) {
+          error = `No session found for conversation ${conversationId}`;
+          break;
+        }
+        const agentType = detectSessionAgentType(sessionId);
+        if (agentType !== "claude") {
+          error = `In-place model switch not supported for ${agentType} sessions`;
+          break;
+        }
+        // Pane resolution, two sources + a short retry. The boot-time liveness
+        // sweep seeds the process cache with tty:"" but a good tmuxTarget
+        // (the deterministic cc-<agent>-<conv> session name), so a tty-only
+        // lookup dead-ends right after a daemon restart (observed live —
+        // "No tmux pane found" with a healthy pane). Prefer the cached
+        // target; fall back to tty mapping; retry briefly for respawn races.
+        let proc: Awaited<ReturnType<typeof findSessionProcess>> = null;
+        let tmuxTarget: string | null = null;
+        for (let i = 0; i < 4 && !tmuxTarget; i++) {
+          if (i > 0) await new Promise((r) => setTimeout(r, 1500));
+          proc = await findSessionProcess(sessionId, agentType);
+          if (!proc) continue;
+          const cachedTarget = sessionProcessCache.get(sessionId)?.tmuxTarget;
+          if (cachedTarget && validateTmuxTarget(cachedTarget)) {
+            tmuxTarget = cachedTarget;
+            break;
+          }
+          if (proc.tty) {
+            const t = await findTmuxPaneForTty(proc.tty);
+            if (t && validateTmuxTarget(t)) tmuxTarget = t;
+          }
+        }
+        if (!proc) {
+          error = `No running process for session ${sessionId.slice(0, 8)}`;
+          break;
+        }
+        if (!tmuxTarget) {
+          error = `No tmux pane found for session ${sessionId.slice(0, 8)}`;
+          break;
+        }
+        try {
+          result = await driveModelPicker(tmuxTarget, { menuMatch: modelOpt?.menuMatch, effort: effortKey });
+          log(`[SET_MODEL] ${result} (session ${sessionId.slice(0, 8)})`);
+        } catch (err) {
+          error = err instanceof Error ? err.message : String(err);
+          log(`[SET_MODEL] failed for ${sessionId.slice(0, 8)}: ${error}`);
+        }
+        break;
+      }
       case "send_keys": {
         const parsed = commandArgs ? JSON.parse(commandArgs) : {};
         const conversationId = parsed.conversation_id;
@@ -2273,124 +2518,86 @@ async function executeRemoteCommand(
           error = "Missing conversation_id";
           break;
         }
+        const killed = await killConversationBackends(
+          conversationId,
+          typeof parsed.session_id === "string" && parsed.session_id ? parsed.session_id : undefined
+        );
+        result = killed.result;
+        error = killed.error;
+        break;
+      }
+      // Swap the machine's active Claude Code account to a saved profile, then
+      // recycle the listed blocked sessions so they resume on the new account.
+      // Order matters: kill BEFORE enqueueing the continues — a still-alive
+      // claude process holds the old account's token in memory, so injecting
+      // first would just re-hit the old account's limit. The pending "continue"
+      // is what triggers the auto-resume that reads the fresh credential.
+      case "switch_account": {
+        const parsed = commandArgs ? JSON.parse(commandArgs) : {};
+        const profile: string | undefined = typeof parsed.profile === "string" && parsed.profile ? parsed.profile : undefined;
+        const conversationIds: string[] = Array.isArray(parsed.conversation_ids) ? parsed.conversation_ids : [];
+        const sessionIds: Record<string, string> =
+          parsed.session_ids && typeof parsed.session_ids === "object" ? parsed.session_ids : {};
+        const sendContinue: boolean = parsed.continue_blocked !== false;
 
-        // Tear down every backend bound to this conversation (app-server thread
-        // and/or tmux), then stamp the kill-specific server status. Shared with
-        // start_session so "one backend per conversation" is enforced identically
-        // -- and so a split-brained conversation gets BOTH backends killed, not
-        // just the first one matched.
-        const teardown = await teardownConversationBackendsLive(conversationId, { interruptActiveTurn: true });
-        if (teardown.killedAppServer && teardown.appServerThreadId) {
-          if (syncServiceRef) {
-            syncServiceRef.markSessionCompleted(conversationId).catch(logConvexFailure);
-            sendAgentStatus(syncServiceRef, conversationId, teardown.appServerThreadId, "stopped");
+        // save_as mode: snapshot the CURRENT login as a named profile (the web
+        // Settings "save as profile" button). Pure save — no swap, no kills.
+        if (typeof parsed.save_as === "string" && parsed.save_as) {
+          try {
+            const meta = saveProfile(parsed.save_as);
+            result = JSON.stringify({ saved: meta.name, email: meta.email ?? null });
+            log(`[ACCOUNTS] Saved active account as profile "${meta.name}"${meta.email ? ` (${meta.email})` : ""}`);
+            // Push the refreshed profile inventory upstream now — the Settings
+            // page is watching for it; don't make it wait a heartbeat cycle.
+            sendHeartbeat().catch(() => {});
+          } catch (err) {
+            error = `Profile save failed: ${err instanceof Error ? err.message : String(err)}`;
           }
-          result = "killed_app_server";
-          log(`[REMOTE] Killed app-server thread ${teardown.appServerThreadId.slice(0, 8)} for conversation ${conversationId.slice(0, 12)}`);
           break;
         }
-        if (teardown.killedTmux) {
-          result = "killed_tmux";
+
+        let switched: string | null = null;
+        if (profile) {
+          try {
+            const switchResult = useProfile(profile);
+            switched = switchResult.to;
+            log(`[ACCOUNTS] Switched CC account to "${profile}"${switchResult.toEmail ? ` (${switchResult.toEmail})` : ""}${switchResult.from ? `, re-saved outgoing as "${switchResult.from}"` : ""}`);
+            // Remotes run on a pushed COPY of this credential — refresh them now
+            // instead of waiting for the 30-min loop.
+            pushCredentialToRemoteHosts("account_switch").catch(() => {});
+            // Surface the new active account in Settings without waiting a beat.
+            sendHeartbeat().catch(() => {});
+          } catch (err) {
+            // Don't tear anything down if the swap itself failed.
+            error = `Account switch failed: ${err instanceof Error ? err.message : String(err)}`;
+            break;
+          }
         }
 
-        const cache = readConversationCache();
-        const reverse = buildReverseConversationCache(cache);
-        // The command can carry the session_id (from the conversation row, or the
-        // client's cached copy of a deleted row) — fall back to it when the local
-        // conversation cache has no mapping (remapped or ghost conversations).
-        const sessionId =
-          reverse[conversationId] ??
-          (typeof parsed.session_id === "string" && parsed.session_id ? parsed.session_id : undefined);
-        if (sessionId && !result) {
-          const proc = await findSessionProcess(sessionId, detectSessionAgentType(sessionId));
-          if (proc) {
-            const tmuxTarget = await findTmuxPaneForTty(proc.tty);
-            if (tmuxTarget && validateTmuxTarget(tmuxTarget)) {
-              const tmuxSessionName = tmuxTarget.split(":")[0];
-              await killTmuxSessionAndTree(tmuxSessionName);
-              await reapPidTree(proc.pid); // belt-and-suspenders for anything outside the pane
-              result = "killed_tmux";
-              log(`[REMOTE] Killed tmux ${tmuxSessionName} + process tree for conversation ${conversationId.slice(0, 12)}`);
-            } else {
-              const n = await reapPidTree(proc.pid);
-              if (n > 0) {
-                result = "killed_sigkill";
-                log(`[REMOTE] SIGKILLed pid ${proc.pid} + descendants (${n} procs) for conversation ${conversationId.slice(0, 12)}`);
-              } else {
-                error = `Failed to kill pid ${proc.pid}`;
-              }
+        let killed = 0;
+        let continued = 0;
+        for (const convId of conversationIds) {
+          try {
+            const out = await killConversationBackends(convId, sessionIds[convId]);
+            if (out.result && out.result !== "no_process" && out.result !== "no_session") killed++;
+          } catch (err) {
+            log(`[ACCOUNTS] Teardown failed for ${String(convId).slice(0, 12)}: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+        if (sendContinue && syncServiceRef) {
+          for (const convId of conversationIds) {
+            try {
+              // client_id keyed by command id: re-running the command can't
+              // double-queue, but a deliberate second switch still can.
+              await syncServiceRef.enqueueUserMessage(convId, "continue", `acct-switch-${commandId}-${convId}`);
+              continued++;
+            } catch (err) {
+              log(`[ACCOUNTS] Continue enqueue failed for ${String(convId).slice(0, 12)}: ${err instanceof Error ? err.message : String(err)}`);
             }
           }
         }
-
-        if (sessionId) {
-          const cachedTmux = resumeSessionCache.get(sessionId);
-          if (cachedTmux && validateTmuxTarget(cachedTmux)) {
-            await killTmuxSessionAndTree(cachedTmux);
-            log(`[REMOTE] Killed cached resume tmux ${cachedTmux} (+process tree) for session ${sessionId.slice(0, 8)}`);
-            resumeSessionCache.delete(sessionId);
-            if (!result) result = "killed_tmux";
-          }
-          stopManagedSessionHeartbeat(sessionId);
-          stopCodexPermissionPoller(sessionId);
-          sessionProcessCache.delete(sessionId);
-          resumeInFlight.delete(sessionId);
-          resumeInFlightStarted.delete(sessionId);
-
-          try {
-            const { stdout: tmuxList } = await tmuxExec(["list-sessions", "-F", "#{session_name}"]);
-            for (const tmuxName of tmuxList.trim().split("\n")) {
-              if (!tmuxName || !(await tmuxSessionMatchesFullSessionId(tmuxName, sessionId))) continue;
-              if (!validateTmuxTarget(tmuxName)) continue;
-              const alive = await isTmuxAgentAlive(tmuxName);
-              if (!alive) {
-                await killTmuxSessionAndTree(tmuxName);
-                log(`[REMOTE] Killed zombie tmux session ${tmuxName} (+process tree) for session ${sessionId}`);
-                if (!result) result = "killed_zombie";
-              }
-            }
-          } catch {}
-        }
-
-        // Deterministic last-resort kill. The tmux session name is keyed by
-        // conversation_id (cc-<agent>-<convId.slice(-12)>, see start_session), so a
-        // session is killable from the id ALONE — no lookup tables. This catches an
-        // idle pre-warmed agent that outlived the daemon's in-memory startedSessionTmux
-        // map (e.g. across a daemon restart) and has no live process for findSessionProcess
-        // to match: the lookups above all miss it, yet its tmux is right there under the
-        // derived name. Without this, reaping a dismissed empty pre-warm can't reach such
-        // an agent and it leaks forever (idle, still heartbeating). agentType isn't in the
-        // kill args, so try every prefix; has-session guards each (cheap, idempotent).
-        const convSuffix = conversationId.slice(-12);
-        for (const derivedName of ["claude", "codex", "cursor", "gemini"].map((a) => `cc-${a}-${convSuffix}`)) {
-          if (!validateTmuxTarget(derivedName)) continue;
-          try {
-            await tmuxExec(["has-session", "-t", derivedName], { timeout: 3000 });
-          } catch {
-            continue; // no such session
-          }
-          // CRITICAL: stop tracking the session BEFORE the kill, or heartbeatHealthCheck
-          // sees the vanished tmux and RECONSTITUTES the agent (the daemon keeps managed
-          // sessions warm). The session id lives on the tmux itself (@codecast_session_id),
-          // so we can stop the right heartbeat even when no lookup table maps this
-          // conversation. Mirrors reapOneTerminal's stop-then-kill ordering.
-          const derivedSessionId = (await getTmuxSessionOption(derivedName, "@codecast_session_id"))?.trim() || null;
-          if (derivedSessionId) {
-            stopManagedSessionHeartbeat(derivedSessionId);
-            stopCodexPermissionPoller(derivedSessionId);
-            resumeSessionCache.delete(derivedSessionId);
-          }
-          await killTmuxSessionAndTree(derivedName);
-          log(`[REMOTE] Killed tmux ${derivedName} by derived name (session ${derivedSessionId?.slice(0, 8) ?? "?"}) for conversation ${conversationId.slice(0, 12)}`);
-          if (!result) result = "killed_tmux";
-        }
-
-        // A kill is a clean slate. Wipe per-session/per-conversation caches that
-        // would otherwise block a subsequent resume or silently suppress the next
-        // injected message.
-        await clearConversationDeliveryAndResumeState(conversationId, sessionId, "REMOTE");
-
-        if (!result) result = sessionId ? "no_process" : "no_session";
+        result = JSON.stringify({ switched, killed, continued });
+        log(`[ACCOUNTS] switch_account done: switched=${switched ?? "none"} killed=${killed}/${conversationIds.length} continued=${continued}`);
         break;
       }
       // fork_session = resume_session whose JSONL is materialized by the fork
@@ -6917,6 +7124,151 @@ async function paneInteractiveQuestion(target: string): Promise<string | null> {
   }
 }
 
+// Paste literal text into a pane via a tmux buffer (bracketed paste — no
+// per-char typing, so CC's slash-command autocomplete never opens). Falls
+// back to send-keys -l. Shared by message injection and the /model driver.
+async function pasteTextIntoPane(target: string, text: string): Promise<void> {
+  const id = `cc-${process.pid}-${Date.now()}`;
+  const tmpFile = `/tmp/${id}`;
+  try {
+    fs.writeFileSync(tmpFile, text);
+    await tmuxExec(["load-buffer", "-b", id, tmpFile]);
+    await tmuxExec(["paste-buffer", "-t", target, "-b", id, "-d"]);
+  } catch {
+    await tmuxExec(["send-keys", "-t", target, "-l", text]);
+  } finally {
+    try { fs.unlinkSync(tmpFile); } catch {}
+  }
+}
+
+// --- /model picker driver ---------------------------------------------------
+// Opens Claude Code's /model picker in the target pane, navigates the model
+// rows with Up/Down, adjusts effort with Right (the row wraps), and commits
+// with `s` — the session-only commit. NEVER sends Enter while the menu is open
+// (Enter saves the highlight as the user's global default) and never presses
+// row digits (digits instant-commit as default too). Closed loop throughout:
+// every keystroke batch is verified against a fresh pane parse.
+
+const PICKER_PROMPT_RE = /[❯›]/;
+const PICKER_BUSY_RE = /⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|Wandering|Vibing|Coasting|Working|thinking/;
+
+async function capturePaneText(target: string, lines: number): Promise<string> {
+  const { stdout } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${lines}`]);
+  return stdout;
+}
+
+export async function driveModelPicker(
+  target: string,
+  opts: { menuMatch?: string; effort?: string },
+): Promise<string> {
+  const waitFor = async <T>(fn: () => Promise<T | null>, ms: number): Promise<T | null> => {
+    const start = Date.now();
+    while (Date.now() - start < ms) {
+      const v = await fn();
+      if (v) return v;
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    return null;
+  };
+
+  // A model switch must never interrupt in-flight work: require an idle prompt
+  // (unlike rewind, no double-Escape interrupt — failing loudly is better than
+  // aborting the user's running turn).
+  const idle = await waitFor(async () => {
+    const tail = (await capturePaneText(target, 15)).split("\n").slice(-15).join("\n");
+    return PICKER_PROMPT_RE.test(tail) && !PICKER_BUSY_RE.test(tail) ? true : null;
+  }, 8000);
+  if (!idle) throw new Error("Session is busy — try again when it's idle");
+
+  // Clear any composer draft (same dance as message injection: a lone C-u is
+  // not reliable on CC 2.1.x), then open the picker.
+  await tmuxExec(["send-keys", "-t", target, "Escape"]);
+  await new Promise((r) => setTimeout(r, 50));
+  for (let i = 0; i < 3; i++) {
+    await tmuxExec(["send-keys", "-t", target, "C-a"]);
+    await new Promise((r) => setTimeout(r, 20));
+    await tmuxExec(["send-keys", "-t", target, "C-k"]);
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  await pasteTextIntoPane(target, "/model");
+  await new Promise((r) => setTimeout(r, 150));
+  await tmuxExec(["send-keys", "-t", target, "Enter"]);
+
+  // Failure cleanup must unwind BOTH layers a commit can be stuck in (cache
+  // confirm dialog over the picker), so Escape twice with a beat between.
+  const closePicker = async () => {
+    await tmuxExec(["send-keys", "-t", target, "Escape"]).catch(() => {});
+    await new Promise((r) => setTimeout(r, 350));
+    await tmuxExec(["send-keys", "-t", target, "Escape"]).catch(() => {});
+  };
+
+  const state0 = await waitFor(async () => {
+    const st = parseModelPicker(await capturePaneText(target, 45));
+    return st.visible ? st : null;
+  }, 5000);
+  if (!state0) {
+    await closePicker();
+    throw new Error("Model picker did not open");
+  }
+
+  try {
+    if (opts.menuMatch) {
+      let delta = planModelNavigation(state0, opts.menuMatch);
+      if (delta === null) throw new Error("Requested model is not in this session's picker");
+      for (let attempt = 0; attempt < 2 && delta !== 0; attempt++) {
+        const key = delta > 0 ? "Down" : "Up";
+        for (let i = 0; i < Math.abs(delta); i++) {
+          await tmuxExec(["send-keys", "-t", target, key]);
+          await new Promise((r) => setTimeout(r, 120));
+        }
+        const st = parseModelPicker(await capturePaneText(target, 45));
+        delta = planModelNavigation(st, opts.menuMatch);
+        if (delta === null) throw new Error("Lost the model picker while navigating");
+      }
+      if (delta !== 0) throw new Error("Could not land on the requested model row");
+    }
+
+    if (opts.effort) {
+      // The effort row wraps (low→medium→high→max→low), so Right-only always
+      // converges within one lap plus slack.
+      let reached = false;
+      for (let i = 0; i < 6; i++) {
+        const st = parseModelPicker(await capturePaneText(target, 45));
+        if (!st.visible) throw new Error("Lost the model picker while adjusting effort");
+        if (st.effort === opts.effort) {
+          reached = true;
+          break;
+        }
+        await tmuxExec(["send-keys", "-t", target, "Right"]);
+        await new Promise((r) => setTimeout(r, 250));
+      }
+      if (!reached) throw new Error(`Could not reach ${opts.effort} effort in the picker`);
+    }
+
+    // `s` = session-only commit (Enter would save as the user's GLOBAL default).
+    await tmuxExec(["send-keys", "-t", target, "-l", "s"]);
+    // On a conversation with history, the commit first pops a cache warning
+    // ("❯ 1. Yes, switch to … / 2. No, go back") — confirm it. Enter is safe
+    // HERE (it accepts the highlighted Yes; the menu underneath is gone).
+    let confirmedDialog = false;
+    const echo = await waitFor(async () => {
+      const tail = (await capturePaneText(target, 20)).split("\n").slice(-12).join("\n");
+      const m = tail.match(SESSION_ONLY_COMMIT_RE);
+      if (m) return m[0];
+      if (!confirmedDialog && isSwitchConfirmDialog(tail)) {
+        confirmedDialog = true;
+        await tmuxExec(["send-keys", "-t", target, "Enter"]);
+      }
+      return null;
+    }, 12000);
+    if (!echo) throw new Error("Picker commit not confirmed (no session-only echo)");
+    return echo;
+  } catch (err) {
+    await closePicker();
+    throw err;
+  }
+}
+
 export async function injectViaTmux(target: string, content: string): Promise<void> {
   return withTmuxLock(target, () => injectViaTmuxInner(target, content));
 }
@@ -6972,19 +7324,7 @@ async function injectViaTmuxInner(target: string, content: string): Promise<void
   const captureLines = Math.max(30, contentLines + Math.ceil(sanitized.length / 60) + 10);
   const contentPrefix = sanitized.slice(0, 40);
 
-  const doPaste = async () => {
-    const id = `cc-${process.pid}-${Date.now()}`;
-    const tmpFile = `/tmp/${id}`;
-    try {
-      fs.writeFileSync(tmpFile, sanitized);
-      await tmuxExec(["load-buffer", "-b", id, tmpFile]);
-      await tmuxExec(["paste-buffer", "-t", target, "-b", id, "-d"]);
-    } catch (err) {
-      await tmuxExec(["send-keys", "-t", target, "-l", sanitized]);
-    } finally {
-      try { fs.unlinkSync(tmpFile); } catch {}
-    }
-  };
+  const doPaste = () => pasteTextIntoPane(target, sanitized);
 
   // Clear any stale input before pasting to prevent draft text from being
   // prepended to the injected message or submitted by the trailing Enter.
@@ -9357,7 +9697,15 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     // appears) can sit well past it. Reads the UUID copy when one was made:
     // the fork-artifact source is deleted above.
     const modelFlag = resumeModelFlagFromFile(resumeJsonlPath, extraFlags);
-    resumeCmd = `claude --resume ${resumeId}${modelFlag}${extraFlags ? " " + extraFlags : ""}`;
+    // Effort twin: transcript switch echoes win; else the conversation row
+    // (a session launched with --effort that never switched in-session leaves
+    // no transcript trace, so without this a restart silently drops it).
+    let effortFlag = resumeEffortFlagFromFile(resumeJsonlPath, extraFlags);
+    if (!effortFlag && !/(^|\s)--effort(\s|=)/.test(extraFlags) && conversationId && syncServiceRef) {
+      const convEffort = (await syncServiceRef.getProjectInfo(conversationId).catch(() => null))?.effort;
+      if (convEffort && /^[a-z]+$/.test(convEffort)) effortFlag = ` --effort ${convEffort}`;
+    }
+    resumeCmd = `claude --resume ${resumeId}${modelFlag}${effortFlag}${extraFlags ? " " + extraFlags : ""}`;
   }
 
   const prefix = agentType === "codex" ? "cx" : agentType === "gemini" ? "gm" : "cc";

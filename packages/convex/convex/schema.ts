@@ -2,6 +2,7 @@ import { defineSchema, defineTable } from "convex/server";
 import { authTables } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { AGENT_STATUSES, DAEMON_COMMANDS } from "@codecast/shared/contracts";
+import { ccAccountsValidator } from "./ccAccountsShared";
 
 // Derived from the single source of truth in @codecast/shared/contracts so the
 // schema, validators, the CLI daemon, and the browser store can never drift.
@@ -181,6 +182,10 @@ export default defineSchema({
     project_hash: v.optional(v.string()),
     project_path: v.optional(v.string()),
     model: v.optional(v.string()),
+    // Last-known effort level (low|medium|high|max), same lifecycle as `model`:
+    // stamped optimistically by the web picker / at create, confirmed by the
+    // rollup parsing "Set effort level to X" / "with X effort" switch echoes.
+    effort: v.optional(v.string()),
     started_at: v.number(),
     updated_at: v.number(),
     message_count: v.number(),
@@ -300,6 +305,9 @@ export default defineSchema({
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_updated", ["user_id", "updated_at"])
+    // Sparse in practice (only banner-parked conversations are true) — lets the
+    // stale-flag sweep find expired pending_api_error rows without a table scan.
+    .index("by_pending_api_error", ["pending_api_error", "updated_at"])
     .index("by_user_git_root", ["user_id", "git_root"])
     .index("by_user_git_remote_url", ["user_id", "git_remote_url"])
     .index("by_user_project_path", ["user_id", "project_path"])
@@ -644,6 +652,9 @@ export default defineSchema({
     status: v.optional(v.union(v.literal("online"), v.literal("offline"))),
     is_remote: v.optional(v.boolean()),
     local_project_roots: v.optional(v.array(v.string())),
+    // Saved CC account profiles on this machine (names/emails/tiers only,
+    // never tokens) — heartbeat-reported, drives the web account switcher.
+    cc_accounts: v.optional(ccAccountsValidator),
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_device", ["user_id", "device_id"]),

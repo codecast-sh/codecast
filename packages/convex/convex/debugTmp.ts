@@ -1,7 +1,31 @@
 // TEMPORARY debug query — safe to delete. Inspects why a conversation keeps
 // reappearing after dismiss: dumps dismiss-relevant fields + recent activity.
-import { internalQuery } from "./_generated/server";
+import { internalQuery, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
+
+// TEMPORARY: insert a switch_account daemon command scoped to ONE conversation
+// — exercises the daemon's swap+kill+continue handler end-to-end without
+// selecting the whole blocked fleet the way requestAccountSwitch does.
+export const insertSwitchAccountForOne = internalMutation({
+  args: { conversation_id: v.id("conversations"), profile: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv) return { error: "not found" };
+    const id = await ctx.db.insert("daemon_commands", {
+      user_id: conv.user_id,
+      command: "switch_account" as const,
+      args: JSON.stringify({
+        profile: args.profile,
+        conversation_ids: [conv._id],
+        session_ids: { [conv._id]: conv.session_id },
+        continue_blocked: true,
+      }),
+      created_at: Date.now(),
+      target_device_id: conv.owner_device_id,
+    });
+    return { command_id: id };
+  },
+});
 
 export const inspectConversation = internalQuery({
   args: { id: v.string() },

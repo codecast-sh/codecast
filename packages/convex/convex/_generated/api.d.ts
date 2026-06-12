@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as accountSwitch from "../accountSwitch.js";
 import type * as admin_mergeUser from "../admin_mergeUser.js";
 import type * as agentTasks from "../agentTasks.js";
 import type * as apiTokens from "../apiTokens.js";
@@ -16,6 +17,7 @@ import type * as blame from "../blame.js";
 import type * as blameCore from "../blameCore.js";
 import type * as bookmarks from "../bookmarks.js";
 import type * as buckets from "../buckets.js";
+import type * as ccAccountsShared from "../ccAccountsShared.js";
 import type * as cleanup from "../cleanup.js";
 import type * as cliAuth from "../cliAuth.js";
 import type * as client_state from "../client_state.js";
@@ -95,6 +97,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  accountSwitch: typeof accountSwitch;
   admin_mergeUser: typeof admin_mergeUser;
   agentTasks: typeof agentTasks;
   apiTokens: typeof apiTokens;
@@ -103,6 +106,7 @@ declare const fullApi: ApiFromModules<{
   blameCore: typeof blameCore;
   bookmarks: typeof bookmarks;
   buckets: typeof buckets;
+  ccAccountsShared: typeof ccAccountsShared;
   cleanup: typeof cleanup;
   cliAuth: typeof cliAuth;
   client_state: typeof client_state;

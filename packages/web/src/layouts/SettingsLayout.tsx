@@ -5,7 +5,7 @@ import { DashboardLayout } from "@/components/DashboardLayout";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Button } from "@/components/ui/button";
 import {
-  Terminal, Bot, RefreshCw, User, KeyRound, Users, Plug, Monitor, Bell, Laptop,
+  Terminal, Bot, RefreshCw, User, KeyRound, Users, Plug, Monitor, Bell, Laptop, UserCog,
 } from "lucide-react";
 import { useIsDesktop } from "@/lib/desktop";
 import { useInboxStore } from "@/store/inboxStore";
@@ -13,6 +13,7 @@ import { useInboxStore } from "@/store/inboxStore";
 const baseTabs = [
   { name: "CLI", path: "/settings/cli", icon: Terminal },
   { name: "Agents", path: "/settings/agents", icon: Bot },
+  { name: "Claude Accounts", path: "/settings/claude-accounts", icon: UserCog },
   { name: "Devices", path: "/settings/devices", icon: Laptop },
   { name: "Sync & Privacy", path: "/settings/sync", icon: RefreshCw },
   { name: "General", path: "/settings/profile", icon: User },

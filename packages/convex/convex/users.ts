@@ -10,6 +10,7 @@ import { verifyApiToken } from "./apiTokens";
 import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
 import { resolveTeamForPath, getProfileVisibilityPredicate, profilePublicSessionVisible } from "./privacy";
 import { resetConversationPendingMessages } from "./pendingMessages";
+import { ccAccountsValidator } from "./ccAccountsShared";
 import { normalizeProjectPath } from "./projectPaths";
 
 export const getCurrentUser = query({
@@ -152,6 +153,8 @@ export const daemonHeartbeat = mutation({
     device_id: v.optional(v.string()),
     device_label: v.optional(v.string()),
     is_remote_device: v.optional(v.boolean()),
+    // CC account inventory (names/emails/tiers, never tokens) for the switcher.
+    cc_accounts: v.optional(ccAccountsValidator),
   },
   handler: async (ctx, args) => {
     // updateLastUsed=true here is the ONLY token-doc refresh: heartbeat is a
@@ -235,6 +238,7 @@ export const daemonHeartbeat = mutation({
         ...(args.local_project_roots !== undefined
           ? { local_project_roots: args.local_project_roots }
           : {}),
+        ...(args.cc_accounts !== undefined ? { cc_accounts: args.cc_accounts } : {}),
       };
       if (existingDevice) {
         await ctx.db.patch(existingDevice._id, devicePatch);
