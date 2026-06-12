@@ -2,6 +2,7 @@ import { useState, useCallback } from "react";
 import { useEventListener } from "../../../hooks/useEventListener";
 import { useMountEffect } from "../../../hooks/useMountEffect";
 import { isElectron } from "../../../lib/desktop";
+import { AppLoader } from "../../../components/AppLoader";
 
 const SHORTCUT_LABELS: Record<string, string> = {
   toggleWindow: "Toggle Main Window",
@@ -115,7 +116,7 @@ export default function DesktopSettingsPage() {
   }
 
   if (!shortcuts) {
-    return <div className="text-sol-text-dim text-sm py-4">Loading...</div>;
+    return <AppLoader className="min-h-0 bg-transparent py-10" size={28} />;
   }
 
   return (

@@ -7,6 +7,7 @@ import { useConvexAuth } from "convex/react";
 import { Button } from "@/components/ui/button";
 import { InstallTabs } from "@/components/install-tabs";
 import { Logo } from "@/components/Logo";
+import { AppLoader } from "@/components/AppLoader";
 import { isDesktop } from "@/lib/desktop";
 import { useWatchEffect } from "@/hooks/useWatchEffect";
 
@@ -127,9 +128,7 @@ export default function LandingPage() {
 
   if (isLoading || desktop) {
     return (
-      <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: '#fdf6e3' }}>
-        <div className="font-mono" style={{ color: '#93a1a1' }}>Loading...</div>
-      </div>
+      <AppLoader className="bg-[#fdf6e3] text-[#93a1a1]" />
     );
   }
 

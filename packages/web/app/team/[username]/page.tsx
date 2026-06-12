@@ -1,6 +1,7 @@
 "use client";
 import { useMemo, useState } from "react";
 import { useQuery, usePaginatedQuery } from "convex/react";
+import { AppLoader } from "../../../components/AppLoader";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { DashboardLayout } from "../../../components/DashboardLayout";
@@ -226,7 +227,7 @@ function UserProfileContent() {
                 : (isOwn ? "No recent activity" : "No recent activity in this workspace")}
             </div>
           )}
-          {feedStatus === "LoadingFirstPage" && <div className="text-[11px] text-sol-base01/20 text-center py-16 animate-pulse">Loading...</div>}
+          {feedStatus === "LoadingFirstPage" && <AppLoader className="min-h-0 bg-transparent py-16" size={28} />}
           {(feedStatus === "CanLoadMore" || feedStatus === "LoadingMore") && (
             <div className="flex justify-center py-5">
               <button

@@ -1,5 +1,6 @@
 import { useState, useCallback } from "react";
 import { useQuery } from "convex/react";
+import { AppLoader } from "./AppLoader";
 import { useRouter } from "next/navigation";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -37,7 +38,7 @@ const STATUS_COLOR: Record<string, string> = {
 function PlanHoverContent({ planId }: { planId: Id<"plans"> }) {
   const plan = useQuery(api.plans.webPlanContext, { plan_id: planId });
 
-  if (!plan) return <div className="text-xs text-sol-text-dim py-2">Loading...</div>;
+  if (!plan) return <AppLoader className="min-h-0 bg-transparent py-4 gap-3" size={20} />;
 
   const pct = plan.progress.total > 0
     ? Math.round((plan.progress.done / plan.progress.total) * 100)

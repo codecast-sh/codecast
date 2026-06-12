@@ -6,6 +6,7 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
 import { mergeLiveTasks, computePlanProgress } from "../lib/liveEntities";
 import { Badge } from "./ui/badge";
+import { AppLoader } from "./AppLoader";
 import { TaskStatusBadge, getExecStatusConfig } from "./TaskStatusBadge";
 import { LivenessDot, ActiveSessionBadge } from "./LivenessDot";
 import { WorkflowContextPanel } from "./WorkflowContextPanel";
@@ -1026,11 +1027,7 @@ export function PlanDetailPanel({ planId }: { planId: string }) {
   }, [liveTasks, plan]);
 
   if (plan === undefined) {
-    return (
-      <div className="flex items-center justify-center h-48 text-sol-text-dim">
-        <span className="text-sm">Loading...</span>
-      </div>
-    );
+    return <AppLoader className="min-h-0 h-48 bg-transparent" size={28} />;
   }
 
   if (plan === null) {
