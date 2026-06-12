@@ -7,6 +7,8 @@ import { useQuery, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Command as CommandPrimitive } from "cmdk";
 import { cleanTitle } from "../lib/conversationProcessor";
+import { commitModelChange, canControlModel, modelOptionKey } from "./ModelEffortPicker";
+import { AGENT_MODEL_CONFIG, modelAgentKey } from "@codecast/shared/contracts";
 import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem } from "../store/inboxStore";
 import { score } from "../hooks/useMentionQuery";
 import { isElectron } from "../lib/desktop";
@@ -45,11 +47,12 @@ import {
   Clock,
   ExternalLink,
   Pencil,
+  Cpu,
 } from "lucide-react";
 
 const api = _api as any;
 
-type ActionMode = "status" | "priority" | "labels" | "assign" | "type" | "plan_status" | "agent_run" | "bucket";
+type ActionMode = "status" | "priority" | "labels" | "assign" | "type" | "plan_status" | "agent_run" | "bucket" | "model";
 
 const DEFAULT_AGENT_RUN_MESSAGE = "lets do this task";
 
@@ -318,9 +321,44 @@ function ActionSubmenu({
         matched.unshift({ key: "__create__", label: `Create "${trimmed}"`, active: false, dot: getLabelColor(trimmed).dot });
       }
       if (currentBucketId && !trimmed) {
-        matched.push({ key: "__remove__", label: "Remove label", active: false, icon: XCircle, quickKey: "x" });
+        // First option, naming the label it clears — when a label is already
+        // assigned, changing/removing it is the likeliest intent. quickKey "0"
+        // extends the digit scheme (1-9 pick, 0 = none) without stealing a
+        // letter from the filter-or-create input — the remove row only exists
+        // while the search is empty, exactly when the next keystroke may be
+        // the first letter of a label name.
+        const currentName = (buckets as Record<string, BucketItem>)[currentBucketId]?.name;
+        matched.unshift({
+          key: "__remove__",
+          label: currentName ? `Remove "${currentName}"` : "Remove label",
+          active: false,
+          icon: XCircle,
+          quickKey: "0",
+        });
       }
       return matched;
+    }
+    if (mode === "model") {
+      // Model + effort options for the target session's agent, one flat
+      // numbered list. The blank/live rail picks which models qualify
+      // (Sonnet 1M is reachable only via the in-place picker).
+      const s0 = target as any;
+      const agentType = s0?.agent_type as string | undefined;
+      const cfg = AGENT_MODEL_CONFIG[modelAgentKey(agentType)];
+      if (!cfg) return [];
+      const blank = (s0?.message_count ?? 0) === 0;
+      const curModelKey = modelOptionKey(s0?.model, agentType);
+      const curEffort = s0?.effort as string | undefined;
+      const rows: any[] = [];
+      for (const m of cfg.models) {
+        if (blank && m.midSessionOnly) continue;
+        rows.push({ key: `model:${m.key}`, label: m.label, sub: m.hint, active: m.key === curModelKey, icon: Cpu });
+      }
+      for (const level of [...(blank ? ["default"] : []), ...cfg.efforts]) {
+        const active = level === "default" ? !curEffort : level === curEffort;
+        rows.push({ key: `effort:${level}`, label: `${level} effort`, active, icon: CircleDot });
+      }
+      return rows.filter((r) => r.label.toLowerCase().includes(q));
     }
     return [];
   }, [mode, search, target, currentLabels, teamMembers, currentUser, buckets, bucketAssignments]);
@@ -336,6 +374,26 @@ function ActionSubmenu({
     if (mode === "agent_run") {
       setSelectedAgentKey(item.key);
       setAgentStep("message");
+      return;
+    }
+
+    if (mode === "model") {
+      const store = useInboxStore.getState();
+      const real = store.getConvexId(target._id) ?? target._id;
+      if (!isConvexId(real)) {
+        toast.error("Session is still being created — try again in a moment");
+        return;
+      }
+      const s0 = target as any;
+      const [kind, value] = String(item.key).split(":");
+      void commitModelChange({
+        conversationId: real,
+        agentType: s0?.agent_type,
+        current: { model: s0?.model, effort: s0?.effort },
+        sel: kind === "model" ? { model: value } : { effort: value },
+        blank: (s0?.message_count ?? 0) === 0,
+      });
+      onClose();
       return;
     }
 
@@ -491,7 +549,7 @@ function ActionSubmenu({
     // Bare keys only past this point — modifier combos (e.g. browser tab
     // switching) must pass through untouched.
     if (e.metaKey || e.ctrlKey || e.altKey) return;
-    // Rows with a dedicated quick key ("Remove label" → x) match it directly;
+    // Rows with a dedicated quick key ("Remove label" → 0) match it directly;
     // digits pick among the numbered rows only.
     const quickIndex = items.findIndex((it: any) => it.quickKey === e.key);
     if (quickIndex >= 0) {
@@ -499,10 +557,15 @@ function ActionSubmenu({
       selectItem(quickIndex);
       return;
     }
+    // Digits address the nth NUMBERED row, skipping quick-key rows, so a
+    // leading "Remove label" (0) doesn't shift the labels off 1..N.
     const num = parseInt(e.key);
-    if (num >= 1 && num <= items.length && !(items[num - 1] as any).quickKey) {
-      e.preventDefault();
-      selectItem(num - 1);
+    if (num >= 1) {
+      const numbered = items.filter((it: any) => !it.quickKey);
+      if (num <= numbered.length) {
+        e.preventDefault();
+        selectItem(items.indexOf(numbered[num - 1]));
+      }
     }
   }, [items, highlightIndex, selectItem, onBack, onClose, enteredViaRoot, search]);
 
@@ -521,6 +584,7 @@ function ActionSubmenu({
     mode === "type" ? "Change document type..." :
     mode === "agent_run" ? "Start agent run — pick an agent..." :
     mode === "bucket" ? "Label session — type to filter or create..." :
+    mode === "model" ? "Change model & effort..." :
     "Select...";
 
   const itemClass = (i: number) =>
@@ -597,6 +661,12 @@ function ActionSubmenu({
   }
 
   const numberedCount = items.filter((it: any) => !it.quickKey).length;
+  // Badge per row: the dedicated quick key, or this row's position among the
+  // NUMBERED rows — mirrors the keydown handler exactly, so the hint can't lie.
+  let badgeNum = 0;
+  const rowBadges = items.map((it: any) =>
+    it.quickKey ? it.quickKey : ++badgeNum <= 9 ? String(badgeNum) : null
+  );
 
   return (
     <>
@@ -654,14 +724,7 @@ function ActionSubmenu({
               ) : null}
               <span className="flex-1 text-left">{item.label}</span>
               {item.active && <Check className="w-4 h-4 text-sol-cyan flex-shrink-0" />}
-              {/* Quick-pick hint: the row's dedicated key when it declares one,
-                  else a digit derived from the same index the handler uses, so
-                  filtering renumbers hint and behavior together. */}
-              {item.quickKey ? (
-                <KeyCap size="xs">{item.quickKey}</KeyCap>
-              ) : (
-                i < 9 && <KeyCap size="xs">{i + 1}</KeyCap>
-              )}
+              {rowBadges[i] && <KeyCap size="xs">{rowBadges[i]}</KeyCap>}
               {item.type === "agent" && (
                 <span className="text-[10px] text-sol-text-dim font-mono">&rarr;</span>
               )}
@@ -1070,7 +1133,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
     if (!targets.length) return;
     const target = targets[0] as any;
 
-    if (["status", "priority", "labels", "assign", "type", "plan_status", "agent_run", "bucket"].includes(actionKey)) {
+    if (["status", "priority", "labels", "assign", "type", "plan_status", "agent_run", "bucket", "model"].includes(actionKey)) {
       setEnteredViaRoot(true);
       setActionMode(actionKey as ActionMode);
       return;
@@ -1122,9 +1185,9 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
         useInboxStore.getState().pinSession(session._id);
         toast.success(session.is_pinned ? "Unpinned" : "Pinned");
         closePalette();
-      } else if (actionKey === "session_dismiss") {
-        // The kill rides the dismiss transition server-side (dispatch.applyPatches).
-        undoableHideSession(session._id, "dismiss");
+      } else if (actionKey === "session_kill") {
+        // The teardown rides the hide transition server-side (dispatch.applyPatches).
+        undoableHideSession(session._id, "kill");
         closePalette();
       } else if (actionKey === "session_stash") {
         undoableHideSession(session._id, "stash");
@@ -1204,8 +1267,11 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
     return [
       { key: "session_pin", label: s.is_pinned ? "Unpin session" : "Pin session", icon: s.is_pinned ? PinOff : Pin, shortcutAction: "session.pin" },
       { key: "bucket", label: "Label session...", icon: Tag, shortcutAction: "session.moveToBucket" },
+      ...(canControlModel(s.agent_type, (s.message_count ?? 0) === 0)
+        ? [{ key: "model", label: "Change model & effort...", icon: Cpu } as ContextActionRow]
+        : []),
       { key: "session_stash", label: "Stash session", icon: Archive, shortcutAction: "session.stash" },
-      { key: "session_dismiss", label: "Dismiss session (kill)", icon: Square, shortcutAction: "session.dismiss" },
+      { key: "session_kill", label: "Kill session", icon: Square, shortcutAction: "session.kill" },
       { key: "session_defer", label: "Defer session", icon: Clock, shortcutAction: "session.deferAdvance" },
       { key: "session_rename", label: "Rename session", icon: Pencil, shortcutAction: "session.rename" },
       { key: "session_copy", label: "Copy session ID", icon: Copy },

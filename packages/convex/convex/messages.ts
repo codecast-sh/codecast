@@ -118,6 +118,36 @@ export function lastKnownModelFromBatch(
   return best?.model ?? null;
 }
 
+// Effort switch echoes come in two shapes: the /effort command prints
+// "Set effort level to high (…)", and the /model picker's session-only commit
+// appends "… with max effort" to its "Set model to …" line. Unlike model,
+// effort has NO per-message field in the transcript — these echoes are the
+// only signal, so the rollup is the sole source for conversations.effort.
+const EFFORT_SWITCH_RE =
+  /<local-command-stdout>[^<]*?(?:Set effort level to (?:\u001b\[\d+m)*(low|medium|high|xhigh|max|auto)\b|with (?:\u001b\[\d+m)*(low|medium|high|xhigh|max)(?:\u001b\[\d+m)* effort)/i;
+export function effortFromSwitchLine(content: string | undefined): string | null {
+  const m = content?.match(EFFORT_SWITCH_RE);
+  if (!m) return null;
+  const level = (m[1] ?? m[2]).toLowerCase();
+  // "auto" means "no explicit level" — clearer to keep the previous value.
+  return level === "auto" ? null : level;
+}
+
+// Newest effort signal in a batch — conversations.effort twin of
+// lastKnownModelFromBatch (user switch lines are the only carriers).
+export function lastKnownEffortFromBatch(
+  messages: Array<{ role: string; content?: string; timestamp?: number }>,
+): string | null {
+  let best: { ts: number; effort: string } | null = null;
+  for (const m of messages) {
+    const effort = m.role === "user" ? effortFromSwitchLine(m.content) : null;
+    if (!effort) continue;
+    const ts = m.timestamp || 0;
+    if (!best || ts >= best.ts) best = { ts, effort };
+  }
+  return best?.effort ?? null;
+}
+
 async function extractDocsFromMessages(
   ctx: any,
   messages: DocExtractionMessage[],
@@ -620,6 +650,10 @@ export const addMessage = mutation({
     if (msgModel && msgModel !== conversation.model) {
       convPatch.model = msgModel;
     }
+    const msgEffort = lastKnownEffortFromBatch([{ role: args.role, content: contentToStore, timestamp: msgTimestamp }]);
+    if (msgEffort && msgEffort !== conversation.effort) {
+      convPatch.effort = msgEffort;
+    }
     if (msgIsBanner !== wasPendingApiError) {
       convPatch.pending_api_error = msgIsBanner;
     }
@@ -628,7 +662,7 @@ export const addMessage = mutation({
       convPatch.pending_api_error_kind = nextBannerKind;
     }
     if (args.role === "user" && contentToStore?.trim()) {
-      convPatch.last_message_preview = redactSecrets(contentToStore).replace(/\[Image[:\s][^\]]*\]/gi, "").trim().slice(0, 200);
+      convPatch.last_message_preview = redactSecrets(contentToStore).replace(/\u001b\[\d+m/g, "").replace(/\[Image[:\s][^\]]*\]/gi, "").trim().slice(0, 200);
       convPatch.last_user_message_at = msgTimestamp;
     } else if (args.role === "user") {
       convPatch.last_user_message_at = msgTimestamp;
@@ -1036,6 +1070,10 @@ export const addMessages = mutation({
       if (batchModel && batchModel !== conversation.model) {
         convPatch.model = batchModel;
       }
+      const batchEffort = lastKnownEffortFromBatch(args.messages);
+      if (batchEffort && batchEffort !== conversation.effort) {
+        convPatch.effort = batchEffort;
+      }
       // Keep the gate flag in lockstep with "newest message is a banner".
       const nextPendingApiError = isBannerMsg(newestMsg);
       if (nextPendingApiError !== wasPendingApiError) {
@@ -1055,7 +1093,7 @@ export const addMessages = mutation({
           convPatch.last_user_message_at = lastUserTs;
         }
         const previewSrc = lastUserContentStored || lastUserMsg.content;
-        const preview = redactSecrets(previewSrc || "").replace(/\[Image[:\s][^\]]*\]/gi, "").trim().slice(0, 200);
+        const preview = redactSecrets(previewSrc || "").replace(/\u001b\[\d+m/g, "").replace(/\[Image[:\s][^\]]*\]/gi, "").trim().slice(0, 200);
         if (preview) {
           convPatch.last_message_preview = preview;
         }

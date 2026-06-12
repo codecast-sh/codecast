@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildExistingMessagePatch, lastKnownModelFromBatch, modelFromSwitchLine } from "./messages";
+import { buildExistingMessagePatch, lastKnownModelFromBatch, modelFromSwitchLine, effortFromSwitchLine, lastKnownEffortFromBatch } from "./messages";
 
 // Per-message model arrives with the transcript sync (parser → daemon →
 // addMessages). For rows synced before the field existed, the existing-uuid
@@ -138,5 +138,57 @@ describe("lastKnownModelFromBatch with /model switch lines", () => {
         { role: "assistant", model: "claude-opus-4-8", timestamp: 200 },
       ]),
     ).toBe("claude-opus-4-8");
+  });
+});
+
+describe("effortFromSwitchLine", () => {
+  const ESC = "\u001b";
+  const effortCmd = (level: string) =>
+    `<local-command-stdout>Set effort level to ${level} (saved as your default for new sessions): Some description</local-command-stdout>`;
+  const pickerCommit = (name: string, level: string) =>
+    `<local-command-stdout>Set model to ${ESC}[1m${name}${ESC}[22m for this session only with ${ESC}[1m${level}${ESC}[22m effort</local-command-stdout>`;
+
+  test("reads the /effort command echo", () => {
+    expect(effortFromSwitchLine(effortCmd("high"))).toBe("high");
+    expect(effortFromSwitchLine(effortCmd("max"))).toBe("max");
+  });
+
+  test("reads the picker session-only commit (ANSI-wrapped)", () => {
+    expect(effortFromSwitchLine(pickerCommit("Sonnet 4.6", "max"))).toBe("max");
+    expect(effortFromSwitchLine(pickerCommit("Fable 5", "low"))).toBe("low");
+  });
+
+  test("model-only switches and prose are not signals", () => {
+    expect(effortFromSwitchLine(`<local-command-stdout>Set model to ${ESC}[1mOpus 4.8${ESC}[22m and saved as your default for new sessions</local-command-stdout>`)).toBeNull();
+    expect(effortFromSwitchLine("please work with max effort")).toBeNull();
+    expect(effortFromSwitchLine(undefined)).toBeNull();
+  });
+
+  test("auto clears rather than stamps", () => {
+    expect(effortFromSwitchLine(effortCmd("auto"))).toBeNull();
+  });
+});
+
+describe("lastKnownEffortFromBatch", () => {
+  const commit = (level: string, name = "Opus 4.8") =>
+    `<local-command-stdout>Set model to ${name} for this session only with ${level} effort</local-command-stdout>`;
+
+  test("newest effort signal wins", () => {
+    expect(
+      lastKnownEffortFromBatch([
+        { role: "user", content: commit("low"), timestamp: 100 },
+        { role: "assistant", content: "done", timestamp: 150 },
+        { role: "user", content: commit("max"), timestamp: 200 },
+      ]),
+    ).toBe("max");
+  });
+
+  test("returns null when the batch has no effort signal", () => {
+    expect(
+      lastKnownEffortFromBatch([
+        { role: "assistant", content: "hi", timestamp: 100 },
+        { role: "user", content: "switch to max effort please", timestamp: 200 },
+      ]),
+    ).toBeNull();
   });
 });
