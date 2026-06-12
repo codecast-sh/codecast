@@ -1,4 +1,4 @@
-import { InboxSession, isConvexId } from "../store/inboxStore";
+import { DISMISS_RECONCILE_WINDOW_MS, InboxSession, isConvexId } from "../store/inboxStore";
 
 // GHOST SWEEP policy — the sessions cache is never-prune, so a conversation
 // hard-deleted server-side would leave a permanent ghost card. The sweep
@@ -57,4 +57,41 @@ export function collectGhostSweepCandidates(
     .map((s) => s._id)
     .slice(0, 200);
   return { stubs, candidates };
+}
+
+// RESURRECTION SUSPECTS — the dismiss/stash reconcile's final CLEAR pass reads
+// "hidden locally but absent from the server's hidden set" as "restored on
+// another device" and un-hides the row. For a conversation hard-deleted
+// server-side that absence means GONE, not restored: the blank-row guard in the
+// clear pass doesn't cover deleted rows WITH messages, dispatch.applyPatches
+// silently drops hide patches on a missing doc (so the user's dismiss can never
+// persist), and the blank-only sweep above never collects them — every dismiss
+// resurrects ~5min later, forever (ct-37110). Before applying a complete
+// reconcile, the caller runs this would-be-cleared set through the same
+// existence verify; confirmed-gone ids are pruned instead of restored.
+//
+// Own rows only: existingConversationIds vouches solely for the caller's
+// conversations, so a teammate's live session would read as "gone" and a prune
+// here would blind this client to it (the sticky exclude outlives the mistake).
+export function collectHiddenResurrectionSuspects(
+  store: {
+    sessions: Record<string, InboxSession>;
+    currentUser?: { _id?: { toString(): string } } | null;
+  },
+  field: "inbox_dismissed_at" | "inbox_stashed_at",
+  serverHiddenIds: ReadonlySet<string>,
+  now: number = Date.now(),
+): string[] {
+  const me = store.currentUser?._id?.toString?.();
+  const cutoff = now - DISMISS_RECONCILE_WINDOW_MS;
+  return Object.values(store.sessions)
+    .filter((s) => {
+      const at = s[field];
+      return isConvexId(s._id)
+        && !!at && at >= cutoff
+        && !serverHiddenIds.has(s._id)
+        && (!s.user_id || !!(me && s.user_id.toString() === me));
+    })
+    .map((s) => s._id)
+    .slice(0, 200);
 }

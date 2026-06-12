@@ -3,13 +3,14 @@ import { useQuery, useMutation, useConvex } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore, InboxSession, isSessionWaitingForInput, isSub, isConvexId, DISMISS_RECONCILE_WINDOW_MS } from "../store/inboxStore";
+import { toast } from "sonner";
 import { soundIdle } from "../lib/sounds";
 import { useConvexSync } from "./useConvexSync";
 import { useRecoveryPoll } from "./useRecoveryPoll";
 import { useEnsureDispatch } from "./useEnsureDispatch";
 import { useWatchEffect } from "./useWatchEffect";
 import { runReconcileCrawl, syncMetaKey } from "./reconcileCrawl";
-import { collectGhostSweepCandidates } from "./ghostSweep";
+import { collectGhostSweepCandidates, collectHiddenResurrectionSuspects } from "./ghostSweep";
 
 // Background reconcile for the inbox session list. The live listInboxSessions
 // subscription returns only the ~200 most-recently-updated sessions, so idle ones
@@ -235,9 +236,11 @@ export function useSyncInboxSessions() {
     lastUserSyncRef.current = Date.now();
   }, [convex]), 45_000);
 
-  // When the current session becomes dismissed elsewhere, hop to its
-  // implementation_session if one exists so the user isn't stranded.
-  // eslint-disable-next-line no-restricted-syntax -- navigation side effect on session list change
+  // When the current session becomes dismissed elsewhere and has an
+  // implementation session, OFFER the hop — never take it. A server sync must
+  // not move the view (that's the "desktop randomly jumps" bug class); the
+  // click on the toast is the gesture that authorizes the navigation.
+  // eslint-disable-next-line no-restricted-syntax -- toast side effect on session list change
   useEffect(() => {
     if (!inboxSessions) return;
     const sessionsList = (inboxSessions as any).sessions ?? inboxSessions;
@@ -251,8 +254,15 @@ export function useSyncInboxSessions() {
       const currentSession = currentSessionId ? sessions[currentSessionId] : null;
       if (currentSession && prev.has(currentSession._id) && !activeIds.has(currentSession._id)) {
         const synced = (sessionsList as any[]).find((s) => s._id.toString() === currentSession._id);
-        if (synced?.implementation_session) {
-          useInboxStore.getState().navigateToSession(synced.implementation_session._id);
+        const implId = synced?.implementation_session?._id;
+        if (implId) {
+          toast.info("This session was handed off to an implementation session", {
+            action: {
+              label: "Open",
+              onClick: () => useInboxStore.getState().navigateToSession(implId),
+            },
+            duration: 10_000,
+          });
         }
       }
     }
@@ -359,6 +369,41 @@ export function useSyncInboxSessions() {
       .catch(() => {});
   }, [convex, reconcileNonce, hydrated]);
 
+  // A COMPLETE reconcile's clear pass un-hides every local row absent from the
+  // server's hidden set — correct for cross-device restores, catastrophic for
+  // conversations hard-deleted server-side (their absence means GONE; un-hiding
+  // resurrects a ghost the user can never dismiss again, because dispatch drops
+  // patches on missing docs). Disambiguate BEFORE applying: verify the
+  // would-be-cleared set's existence and prune confirmed-gone ids (same
+  // verify-then-prune contract as the ghost sweep), then run the reconcile —
+  // its clear pass now only touches rows that really exist. Suspects are empty
+  // in the steady state, so this normally adds no server traffic. On a failed
+  // verify (offline/transient) we still apply: a ghost may transiently
+  // resurrect, and the next crawl re-verifies.
+  const applyHiddenReconcileVerified = useCallback(async (
+    rows: Array<{ _id: string }>,
+    complete: boolean,
+    field: "inbox_dismissed_at" | "inbox_stashed_at",
+    apply: (rows: Array<{ _id: string }>, final: boolean) => void,
+  ) => {
+    if (complete) {
+      const suspects = collectHiddenResurrectionSuspects(
+        useInboxStore.getState(),
+        field,
+        new Set(rows.map((r) => r._id)),
+      );
+      if (suspects.length) {
+        try {
+          const existing: string[] = await convex.query(api.conversations.existingConversationIds, { ids: suspects });
+          const exists = new Set(existing);
+          const gone = suspects.filter((id) => !exists.has(id));
+          if (gone.length) useInboxStore.getState().pruneGhostSessions(gone);
+        } catch {}
+      }
+    }
+    apply(rows, complete);
+  }, [convex]);
+
   // DISMISS RECONCILE — durable cross-device dismiss/un-dismiss propagation.
   // The live listInboxSessions channel only reaches a CONNECTED client, and the
   // session crawl above can't carry a dismiss (dismiss doesn't move updated_at,
@@ -395,7 +440,8 @@ export function useSyncInboxSessions() {
       // CLEAR (un-dismiss propagation) runs ONLY on a provably-complete crawl:
       // `complete` is false if the crawl stopped at maxPages, so a truncated set
       // can never wrongly un-dismiss the un-fetched tail.
-      onComplete: (all, complete) => useInboxStore.getState().applyDismissedReconcile(all as any, complete),
+      onComplete: (all, complete) => applyHiddenReconcileVerified(all as any, complete, "inbox_dismissed_at",
+        (rows, final) => useInboxStore.getState().applyDismissedReconcile(rows as any, final)),
     });
     // Stashed twin — same mechanics, keyed on inbox_stashed_at.
     runReconcileCrawl({
@@ -412,7 +458,8 @@ export function useSyncInboxSessions() {
         return { rows: page.page ?? [], isDone: page.isDone, continueCursor: page.continueCursor };
       },
       onPage: (rows) => useInboxStore.getState().applyStashedReconcile(rows as any, false),
-      onComplete: (all, complete) => useInboxStore.getState().applyStashedReconcile(all as any, complete),
+      onComplete: (all, complete) => applyHiddenReconcileVerified(all as any, complete, "inbox_stashed_at",
+        (rows, final) => useInboxStore.getState().applyStashedReconcile(rows as any, final)),
     });
   }, [convex, sessWsKey, reconcileNonce, hydrated]); // eslint-disable-line react-hooks/exhaustive-deps
 
