@@ -41,10 +41,10 @@ export function getRelativePath(fullPath: string): string {
   return parts.slice(-3).join("/");
 }
 
-// Strip Claude Code's Read line-number gutter ("   42→content" or "42→content").
+// Strip Claude Code's Read line-number gutter ("   42→content" or "   42\tcontent").
 export function stripLineNumbers(content: string): string {
   return content
     .split("\n")
-    .map((line) => line.replace(/^\s*\d+→/, ""))
+    .map((line) => line.replace(/^\s*\d+(?:→|\t)/, ""))
     .join("\n");
 }
