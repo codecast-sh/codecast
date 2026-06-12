@@ -114,11 +114,12 @@ describe("shouldAttemptHandoff", () => {
     expect(shouldAttemptHandoff({ ...PASSING, foreground: false })).toBe(false);
   });
 
-  test("fires on our own hosts (prod + local dev share the backend), not foreign ones", () => {
+  test("fires only on the production host — never local dev (agent tabs live there) or foreign hosts", () => {
     expect(shouldAttemptHandoff({ ...PASSING, host: "codecast.sh" })).toBe(true);
     expect(shouldAttemptHandoff({ ...PASSING, host: "www.codecast.sh" })).toBe(true);
-    expect(shouldAttemptHandoff({ ...PASSING, host: "local.codecast.sh" })).toBe(true);
-    expect(shouldAttemptHandoff({ ...PASSING, host: "localhost:5173" })).toBe(true);
+    expect(shouldAttemptHandoff({ ...PASSING, host: "local.codecast.sh" })).toBe(false);
+    expect(shouldAttemptHandoff({ ...PASSING, host: "localhost:5173" })).toBe(false);
+    expect(shouldAttemptHandoff({ ...PASSING, host: "127.0.0.1:5173" })).toBe(false);
     expect(shouldAttemptHandoff({ ...PASSING, host: "evil.example.com" })).toBe(false);
   });
 

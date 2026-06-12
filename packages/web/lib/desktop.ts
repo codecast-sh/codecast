@@ -1,5 +1,3 @@
-import { isAppHost } from "./entityLinks";
-
 declare global {
   interface Window {
     __CODECAST_ELECTRON__?: {
@@ -102,6 +100,16 @@ function isOAuthCallback(search: string): boolean {
   return sp.has("code") && sp.has("state");
 }
 
+// Auto-handoff fires only from the production host. Dev/local origins
+// (local.codecast.sh, localhost) host agent-driven Chrome tabs — automation
+// that activates a tab in a frontmost window satisfies foreground + fresh
+// navigation, and a deep link from there show()+focus()es the desktop app
+// onto whatever the agent had open. Manual "open in desktop" affordances
+// (buildDesktopDeepLink call sites) are unaffected.
+export function isAutoHandoffHost(host: string): boolean {
+  return /^(www\.)?codecast\.sh$/i.test(host);
+}
+
 // A genuine foreground tab: visible AND the window holds OS focus. The handoff
 // gate requires this so it stays inert in background or automated tabs — e.g.
 // agent/headless browser tabs that load app pages with no human looking. Those
@@ -130,11 +138,12 @@ export type HandoffContext = {
 //
 // Fires only when: not already in the app, synced prefs have loaded, the user
 // owns the app, they haven't opted to stay in the browser, we're the top-level
-// foreground window on one of our own hosts (prod or local dev — they share the
-// backend), this is a fresh navigation (a clicked/typed link, not a reload or
-// back/forward), and the path isn't an auth/share/etc. route. `foreground` is
-// split out because the component re-checks the gate on focus/visibility: a tab
-// opened in the background (cmd-click) hands off only once the user looks at it.
+// foreground window on the PRODUCTION host (never local dev — see
+// isAutoHandoffHost), this is a fresh navigation (a clicked/typed link, not a
+// reload or back/forward), and the path isn't an auth/share/etc. route.
+// `foreground` is split out because the component re-checks the gate on
+// focus/visibility: a tab opened in the background (cmd-click) hands off only
+// once the user looks at it.
 export function shouldAttemptHandoff(c: HandoffContext): boolean {
   if (c.isDesktop) return false;
   if (!c.initialized) return false;
@@ -142,7 +151,7 @@ export function shouldAttemptHandoff(c: HandoffContext): boolean {
   if (c.preferBrowser) return false;
   if (!c.isTopWindow) return false;
   if (!c.foreground) return false;
-  if (!isAppHost(c.host)) return false;
+  if (!isAutoHandoffHost(c.host)) return false;
   if (!c.freshNavigation) return false;
   if (!isHandoffEligiblePath(c.path)) return false;
   if (isOAuthCallback(c.search)) return false;
