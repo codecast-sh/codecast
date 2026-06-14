@@ -10,6 +10,7 @@ import { MenuKeyCaps } from "./KeyboardShortcutsHelp";
 import {
   Settings, Keyboard, SlidersHorizontal, CircleUser, History, Rss, ListChecks,
   FileText, FolderGit2, CalendarClock, ArrowLeftRight, ScrollText, Globe, LogOut,
+  BookOpen, ExternalLink,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -201,6 +202,12 @@ export function UserMenu() {
               trailing={<MenuKeyCaps action="ui.toggleShortcutsHelp" />}
             />
             <MenuItem icon={SlidersHorizontal} label="Agent Config" onClick={() => go("/config")} />
+            <MenuItem
+              icon={BookOpen}
+              label="Documentation"
+              onClick={() => { setOpen(false); window.open("/documentation", "_blank", "noopener"); }}
+              trailing={<ExternalLink className="w-3.5 h-3.5 text-sol-text-dim" />}
+            />
           </div>
 
           <div className="border-t border-sol-border py-1">
