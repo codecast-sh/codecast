@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { mutation, query } from "./functions";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
@@ -1382,6 +1382,29 @@ export const webList = query({
 
     plans.sort((a: any, b: any) => (b.updated_at || 0) - (a.updated_at || 0));
     const result = plans.slice(0, args.limit || 500);
+    return enrichPlansWithLiveness(ctx, userId, result);
+  },
+});
+
+// Change-feed batch fetch: current state for a set of plan ids the user can
+// access (own or team). Same enriched shape as webList (reuses
+// enrichPlansWithLiveness), so the client merges via syncTable("plans"). No
+// status filter — an abandoned/done plan comes back with its status and the
+// client's read-time filter hides it. Inaccessible / gone ids are omitted; the
+// feed drives the prune. See changeFeed.ts.
+export const webGetByIds = query({
+  args: { ids: v.array(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    const result: any[] = [];
+    for (const raw of args.ids.slice(0, 300)) {
+      const id = ctx.db.normalizeId("plans", raw);
+      if (!id) continue;
+      const plan = await ctx.db.get(id);
+      if (!plan || !(await canAccessPlan(ctx, userId, plan))) continue;
+      result.push(plan);
+    }
     return enrichPlansWithLiveness(ctx, userId, result);
   },
 });

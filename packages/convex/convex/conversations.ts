@@ -1,4 +1,4 @@
-import { mutation, query, internalMutation, internalQuery, type QueryCtx, type MutationCtx } from "./_generated/server";
+import { mutation, query, internalMutation, internalQuery, type QueryCtx, type MutationCtx } from "./functions";
 import { v } from "convex/values";
 import { enqueueStartSession, resolveOwnerDevice } from "./devices";
 import { findConversationBySessionReference } from "./conversationSessionLookup";
@@ -7264,6 +7264,35 @@ export const existingConversationIds = query({
       if (conv && conv.user_id.toString() === userId.toString()) out.push(raw);
     }
     return out;
+  },
+});
+
+// Change-feed batch fetch: current inbox-row state for a set of conversation ids
+// the user OWNS (the inbox is owner-only). Returns rows in the EXACT shape of the
+// listInboxSessions base payload (include_liveness:false — liveness stripped so
+// the sessionsLiveness overlay keeps owning it), so the client merges them through
+// the same syncTable("sessions") path. Reuses enrichInboxSessionRow — no
+// presentation filter, so a dismissed/stashed session comes back WITH its flag
+// (the client re-buckets it). Ids that are gone or foreign are simply omitted;
+// the feed's op:"delete" / absence drives the client's prune. See changeFeed.ts.
+export const getInboxSessionsByIds = query({
+  args: { ids: v.array(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { sessions: [] };
+    const now = Date.now();
+    const sessions: any[] = [];
+    for (const raw of args.ids.slice(0, 300)) {
+      const id = ctx.db.normalizeId("conversations", raw);
+      if (!id) continue;
+      const conv = await ctx.db.get(id);
+      if (!conv || conv.user_id.toString() !== userId.toString()) continue;
+      if (conv.status !== "active" && conv.status !== "completed") continue;
+      const { row } = await enrichInboxSessionRow(ctx, conv, EMPTY_INBOX_MAPS, now, 0);
+      stripInboxLiveness(row);
+      sessions.push(row);
+    }
+    return { sessions };
   },
 });
 

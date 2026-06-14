@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { mutation, query, internalMutation, internalQuery } from "./_generated/server";
+import { mutation, query, internalMutation, internalQuery } from "./functions";
 import { Id, type Doc } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { verifyApiToken } from "./apiTokens";
@@ -849,6 +849,57 @@ async function enrichPage(
     };
   });
 }
+
+// Change-feed batch fetch: current state for a set of doc ids the user can
+// access (own or team). Decorates like enrichPage (display_title via
+// extractPlanTitleForWeb, author + plan badges) but DELIBERATELY skips
+// enrichPage's presentation filters: catch-up must deliver an archived doc WITH
+// archived_at set (so the client hides it) and plan-docs too, rather than
+// dropping them. Inaccessible / gone ids are omitted; the feed drives the prune.
+// See changeFeed.ts.
+export const webGetByIds = query({
+  args: { ids: v.array(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { docs: [] };
+    const rows: any[] = [];
+    for (const raw of args.ids.slice(0, 300)) {
+      const id = ctx.db.normalizeId("docs", raw);
+      if (!id) continue;
+      const doc = await ctx.db.get(id);
+      if (!doc || !(await canAccessDoc(ctx, userId, doc))) continue;
+      rows.push(doc);
+    }
+    const userMap = new Map<string, any>();
+    for (const d of rows) {
+      const uid = d.user_id ? String(d.user_id) : null;
+      if (!uid || userMap.has(uid)) continue;
+      const u = await ctx.db.get(uid as Id<"users">);
+      if (u) userMap.set(uid, { name: u.name, image: u.image || (u as any).github_avatar_url, github_username: (u as any).github_username });
+    }
+    const planMap = new Map<string, { short_id: string; status: string }>();
+    const docToPlan = new Map<string, { short_id: string; status: string }>();
+    for (const d of rows) {
+      if (d.plan_id) {
+        const p = await ctx.db.get(d.plan_id as Id<"plans">);
+        if (p) planMap.set(String(d.plan_id), { short_id: (p as any).short_id, status: (p as any).status });
+      } else if (d.doc_type === "plan") {
+        const p = await ctx.db.query("plans").withIndex("by_doc_id", (q: any) => q.eq("doc_id", d._id as string)).first();
+        if (p) docToPlan.set(d._id as string, { short_id: p.short_id, status: p.status as string });
+      }
+    }
+    const docs = rows.map(extractPlanTitleForWeb).map((d: any) => {
+      const author = d.user_id ? userMap.get(String(d.user_id)) : undefined;
+      const plan = d.plan_id ? planMap.get(String(d.plan_id)) : docToPlan.get(d._id as string);
+      return {
+        ...d,
+        ...(author ? { author_name: author.name, author_image: author.image, author_username: author.github_username } : {}),
+        ...(plan ? { plan_short_id: plan.short_id, plan_status: plan.status } : {}),
+      };
+    });
+    return { docs };
+  },
+});
 
 export const webListPaginated = query({
   args: {
