@@ -2883,9 +2883,12 @@ program
 program
   .command("send")
   .description(
-    "Send a message to another session\n\n" +
+    "Send a message to another session — your own or a teammate's\n\n" +
     "The text is injected into the target session as a new turn, attributed to\n" +
-    "this session so the recipient (and the dashboard) can see who sent it.\n\n" +
+    "this session so the recipient (and the dashboard) can see who sent it. You\n" +
+    "can message any session you can see in the feed (your own, or one shared\n" +
+    "with a team you're in). If the target session is offline, the message is\n" +
+    "queued and the cron tells your session if it can't be delivered.\n\n" +
     "Examples:\n" +
     "  cast send jx7c6zk \"can you take the auth half?\"\n" +
     "  cast send jx7c6zk \"done\" --from jx7abcd"
@@ -2909,7 +2912,13 @@ program
       result.from_short_id && result.from_short_id !== "unknown"
         ? ` ${c.dim}from${c.reset} ${c.cyan}${result.from_short_id}${c.reset}`
         : "";
-    console.log(`${c.green}✓${c.reset} sent to ${c.cyan}${result.to_short_id || sessionId}${c.reset}${fromNote}`);
+    const teamNote = result.cross_user ? ` ${c.dim}(teammate's session)${c.reset}` : "";
+    console.log(`${c.green}✓${c.reset} sent to ${c.cyan}${result.to_short_id || sessionId}${c.reset}${fromNote}${teamNote}`);
+    // The send always succeeds (it queues); warn if there's no live daemon to receive it, so the
+    // caller knows it may sit until the session reconnects rather than landing now.
+    if (result.target_live === false) {
+      console.log(`${c.yellow}!${c.reset} ${c.dim}that session has no live daemon right now — queued; you'll be told if it can't be delivered${c.reset}`);
+    }
   });
 
 const accountsCmd = program

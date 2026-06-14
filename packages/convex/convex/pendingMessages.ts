@@ -3,7 +3,8 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
-import { findConversationByAnyRef } from "./conversationSessionLookup";
+import { findConversationByAnyRef, findConversationByAnyRefWhere } from "./conversationSessionLookup";
+import { checkConversationAccess } from "./privacy";
 
 export async function getAuthenticatedUserId(
   ctx: { db: any },
@@ -72,14 +73,26 @@ async function patchPendingMessageStatus(
   return true;
 }
 
+// The owner of a pending message is whoever owns the target conversation — that's the daemon
+// responsible for delivering it. For a self-send owner == sender; for a team send they differ.
+// owner_user_id is denormalized onto the row (backfilled on legacy rows); fall back to the
+// conversation's user_id so an un-backfilled row still routes correctly.
+export function pendingMessageOwnerId(
+  message: { owner_user_id?: Id<"users"> },
+  conversation: { user_id: Id<"users"> }
+): string {
+  return (message.owner_user_id ?? conversation.user_id).toString();
+}
+
 export function canDaemonSeePendingMessage(
-  message: { from_user_id: Id<"users">; status: string },
+  message: { from_user_id: Id<"users">; owner_user_id?: Id<"users">; status: string },
   conversation: { user_id: Id<"users">; owner_device_id?: string },
   userId: Id<"users">,
   deviceId: string
 ): boolean {
-  if (message.from_user_id.toString() !== userId.toString()) return false;
-  if (conversation.user_id.toString() !== userId.toString()) return false;
+  // Delivery is the TARGET owner's job, not the sender's — a teammate's message is delivered by
+  // the owner's daemon. (For a self-send these are the same user.)
+  if (pendingMessageOwnerId(message, conversation) !== userId.toString()) return false;
   if (message.status !== "pending") return false;
   return !conversation.owner_device_id || conversation.owner_device_id === deviceId;
 }
@@ -102,14 +115,15 @@ export async function claimPendingMessageForDaemon(
 
 async function daemonCanMutatePendingMessage(
   ctx: { db: any },
-  message: { conversation_id: Id<"conversations">; from_user_id: Id<"users"> },
+  message: { conversation_id: Id<"conversations">; from_user_id: Id<"users">; owner_user_id?: Id<"users"> },
   userId: Id<"users">,
   deviceId?: string
 ): Promise<boolean> {
   if (!deviceId) return true;
-  if (message.from_user_id.toString() !== userId.toString()) return false;
+  // The mutating daemon must own the TARGET conversation (it's the one delivering the message),
+  // not be the sender — a teammate's send is delivered & status-updated by the owner's daemon.
   const conversation = await ctx.db.get(message.conversation_id);
-  if (!conversation || conversation.user_id.toString() !== userId.toString()) return false;
+  if (!conversation || pendingMessageOwnerId(message, conversation) !== userId.toString()) return false;
   const owner = conversation.owner_device_id as string | undefined;
   if (owner && owner !== deviceId) return false;
   if (!owner) {
@@ -133,6 +147,21 @@ async function daemonCanMutateConversation(
     await ctx.db.patch(conversationId, { owner_device_id: deviceId });
   }
   return true;
+}
+
+// A pending message has two parties with rights over it: the SENDER (from_user_id — can cancel,
+// retry, and read status of their own outgoing message) and the OWNER (whose daemon delivers it
+// and writes its status). For a self-send they're the same user; for a team send they differ.
+// Every non-delivery mutation funnels through this so a teammate's daemon and the original sender
+// can both act, but no unrelated user can.
+async function senderOrOwnerCanAct(
+  ctx: { db: any },
+  message: { conversation_id: Id<"conversations">; from_user_id: Id<"users">; owner_user_id?: Id<"users"> },
+  authUserId: Id<"users">
+): Promise<boolean> {
+  if (message.from_user_id.toString() === authUserId.toString()) return true;
+  const conversation = await ctx.db.get(message.conversation_id);
+  return !!conversation && pendingMessageOwnerId(message, conversation) === authUserId.toString();
 }
 
 export async function updatePendingMessageStatusForDaemon(
@@ -166,6 +195,9 @@ export async function enqueuePendingMessage(
     image_storage_id?: Id<"_storage">;
     image_storage_ids?: Id<"_storage">[];
     client_id?: string;
+    // The sender's own conversation, so the cron can notify the sending session if this message
+    // can't be delivered. Only meaningful for cross-user (team) sends; omitted for self-sends.
+    from_conversation_id?: Id<"conversations">;
   }
 ): Promise<Id<"pending_messages">> {
   if (fields.client_id) {
@@ -182,6 +214,9 @@ export async function enqueuePendingMessage(
   const messageId = await ctx.db.insert("pending_messages", {
     conversation_id: conversation._id,
     from_user_id: fromUserId,
+    // The daemon polls by owner; for a self-send this is the sender, for a team send the teammate.
+    owner_user_id: conversation.user_id,
+    from_conversation_id: fields.from_conversation_id,
     content: fields.content,
     image_storage_id: fields.image_storage_id,
     image_storage_ids: fields.image_storage_ids,
@@ -244,9 +279,91 @@ export function formatSessionMessage(fromShortId: string, body: string): string 
   return `<session-message from="${fromShortId}">\n${body}\n</session-message>`;
 }
 
-// Send a message from one of the user's sessions to another. The text is injected
-// into the target session as a normal user turn (via the existing pending_messages
-// rail), wrapped so both the agent and the UI can attribute it to the sender.
+// True if the conversation has at least one managed session that has beaten its heartbeat
+// recently — i.e. a daemon is alive and could deliver right now. Used to give the sender an
+// immediate "looks offline" hint and to decide whether a stuck cross-user send has truly failed.
+export async function conversationHasLiveSession(
+  ctx: { db: any },
+  conversationId: Id<"conversations">,
+  now: number
+): Promise<boolean> {
+  const sessions = await ctx.db
+    .query("managed_sessions")
+    .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conversationId))
+    .collect();
+  return sessions.some((s: any) => now - (s.last_heartbeat ?? 0) < HEARTBEAT_ALIVE_MS);
+}
+
+// Send a message from one of the user's sessions to another — your own OR a teammate's. The
+// target must be a session you can already see (own it, or it's shared to a team you're in); the
+// access rule is exactly the feed-visibility rule (checkConversationAccess). The text is injected
+// into the target session as a normal user turn (via the existing pending_messages rail), wrapped
+// so both the agent and the UI can attribute it to the sender.
+// The send itself, factored out of the mutation so it can be driven in tests without the auth
+// wrapper. Resolves the target (own-or-team), attributes the sender, queues the message, and
+// reports whether the target currently has a live daemon.
+export async function performSessionSend(
+  ctx: { db: any },
+  authUserId: Id<"users">,
+  args: { to: string; from?: string; body: string; client_id?: string }
+): Promise<{
+  message_id: Id<"pending_messages">;
+  to_short_id: string;
+  from_short_id: string;
+  cross_user: boolean;
+  target_live: boolean;
+}> {
+  const body = (args.body ?? "").trim();
+  if (!body) throw new Error("Message body is empty");
+
+  // Own-or-team: you can message any session the feed would let you see. A merely share-linked
+  // session (no team membership) is NOT sendable — injecting a turn is a stronger right than reading.
+  const target = await findConversationByAnyRefWhere(ctx, args.to, async (conversation) => {
+    const access = await checkConversationAccess(ctx, authUserId, conversation);
+    return access === "owner" || access === "team";
+  });
+  if (!target) {
+    throw new Error(`No session found for "${args.to}" (you can only message your own sessions or sessions shared with your team)`);
+  }
+
+  const isCrossUser = target.user_id.toString() !== authUserId.toString();
+
+  // Resolve the sender to its short_id for attribution. The CLI passes whatever
+  // detectCurrentSessionId found (a Claude session_id) or an explicit --from ref;
+  // an unresolvable/missing sender still delivers, just without a clickable pill.
+  let fromShortId = "unknown";
+  let fromConversationId: Id<"conversations"> | undefined;
+  if (args.from) {
+    const sender = await findConversationByAnyRef(ctx, args.from, authUserId);
+    if (sender) {
+      fromShortId = sender.short_id ?? sender._id.toString().slice(0, 7);
+      fromConversationId = sender._id;
+    } else if (/^jx[a-z0-9]{5,}$/i.test(args.from.trim())) {
+      fromShortId = args.from.trim().slice(0, 7);
+    }
+  }
+
+  const messageId = await enqueuePendingMessage(ctx, target, authUserId, {
+    content: formatSessionMessage(fromShortId, body),
+    client_id: args.client_id,
+    // Only a cross-user send needs the failure-feedback channel. A self-send keeps the original
+    // never-drop semantics (your own busy session will get it when it's idle).
+    from_conversation_id: isCrossUser ? fromConversationId : undefined,
+  });
+
+  // Immediate liveness signal so the CLI can warn "the session looks offline" right away,
+  // rather than the sender only finding out via the cron's delayed notice.
+  const targetLive = await conversationHasLiveSession(ctx, target._id, Date.now());
+
+  return {
+    message_id: messageId,
+    to_short_id: target.short_id ?? target._id.toString().slice(0, 7),
+    from_short_id: fromShortId,
+    cross_user: isCrossUser,
+    target_live: targetLive,
+  };
+}
+
 export const sendSessionMessage = mutation({
   args: {
     to: v.string(),
@@ -260,35 +377,7 @@ export const sendSessionMessage = mutation({
     if (!authUserId) {
       throw new Error("Authentication failed: invalid token or session");
     }
-
-    const body = (args.body ?? "").trim();
-    if (!body) throw new Error("Message body is empty");
-
-    const target = await findConversationByAnyRef(ctx, args.to, authUserId);
-    if (!target) {
-      throw new Error(`No session found for "${args.to}" (you can only message your own sessions)`);
-    }
-
-    // Resolve the sender to its short_id for attribution. The CLI passes whatever
-    // detectCurrentSessionId found (a Claude session_id) or an explicit --from ref;
-    // an unresolvable/missing sender still delivers, just without a clickable pill.
-    let fromShortId = "unknown";
-    if (args.from) {
-      const sender = await findConversationByAnyRef(ctx, args.from, authUserId);
-      if (sender) fromShortId = sender.short_id ?? sender._id.toString().slice(0, 7);
-      else if (/^jx[a-z0-9]{5,}$/i.test(args.from.trim())) fromShortId = args.from.trim().slice(0, 7);
-    }
-
-    const messageId = await enqueuePendingMessage(ctx, target, authUserId, {
-      content: formatSessionMessage(fromShortId, body),
-      client_id: args.client_id,
-    });
-
-    return {
-      message_id: messageId,
-      to_short_id: target.short_id ?? target._id.toString().slice(0, 7),
-      from_short_id: fromShortId,
-    };
+    return await performSessionSend(ctx, authUserId, args);
   },
 });
 
@@ -317,8 +406,8 @@ export const updateMessageStatus = mutation({
       throw new Error("Message not found");
     }
 
-    if (message.from_user_id.toString() !== authUserId.toString()) {
-      throw new Error("Unauthorized: can only update your own messages");
+    if (!(await senderOrOwnerCanAct(ctx, message, authUserId))) {
+      throw new Error("Unauthorized: can only update messages you sent or own");
     }
 
     if (args.device_id) {
@@ -355,8 +444,8 @@ export const retryMessage = mutation({
       throw new Error("Message not found");
     }
 
-    if (message.from_user_id.toString() !== authUserId.toString()) {
-      throw new Error("Unauthorized: can only retry your own messages");
+    if (!(await senderOrOwnerCanAct(ctx, message, authUserId))) {
+      throw new Error("Unauthorized: can only retry messages you sent or own");
     }
 
     if (isTerminalPendingStatus(message.status)) {
@@ -391,8 +480,10 @@ export const cancelPendingMessage = mutation({
     if (!message) {
       throw new Error("Message not found");
     }
-    if (message.from_user_id.toString() !== authUserId.toString()) {
-      throw new Error("Unauthorized: can only cancel your own messages");
+    // Either party can stop it: the sender retracts their outgoing message, or the target owner
+    // clears an unwanted incoming one from a teammate.
+    if (!(await senderOrOwnerCanAct(ctx, message, authUserId))) {
+      throw new Error("Unauthorized: can only cancel messages you sent or own");
     }
 
     await patchPendingMessageStatus(ctx, message, { status: "cancelled" as const });
@@ -489,6 +580,52 @@ export const getPendingMessages = query({
   },
 });
 
+// The set of pending messages THIS daemon should deliver: every still-pending row whose target
+// conversation this user owns and this device may serve.
+//
+// We union two index scans rather than trusting owner_user_id to be set on every row:
+//   - by_owner_status (owner_user_id) — finds teammate sends, where owner != sender.
+//   - by_user_status (from_user_id)   — finds the user's OWN sends even if owner_user_id was never
+//                                        stamped (a self-send's owner is always its sender).
+// An index eq() can't match an unset optional field, so a self-send written by a path that forgot
+// owner_user_id would be invisible to the owner scan alone — silently undeliverable. The legacy
+// from_user_id scan is the safety net that makes delivery independent of that denormalization.
+// canDaemonSeePendingMessage (which falls back owner_user_id ?? conversation.user_id) is the final
+// gate on every candidate, so the union never delivers anything the owner shouldn't see.
+export async function collectDeliverableForOwner(
+  ctx: { db: any },
+  ownerUserId: Id<"users">,
+  deviceId: string
+): Promise<any[]> {
+  const [byOwner, bySender] = await Promise.all([
+    ctx.db
+      .query("pending_messages")
+      .withIndex("by_owner_status", (q: any) =>
+        q.eq("owner_user_id", ownerUserId).eq("status", "pending")
+      )
+      .collect(),
+    ctx.db
+      .query("pending_messages")
+      .withIndex("by_user_status", (q: any) =>
+        q.eq("from_user_id", ownerUserId).eq("status", "pending")
+      )
+      .collect(),
+  ]);
+
+  const owned = [];
+  const seen = new Set<string>();
+  for (const message of [...byOwner, ...bySender]) {
+    const key = message._id.toString();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const conversation = await ctx.db.get(message.conversation_id);
+    if (conversation && canDaemonSeePendingMessage(message, conversation, ownerUserId, deviceId)) {
+      owned.push(message);
+    }
+  }
+  return owned;
+}
+
 export const getPendingMessagesForDaemon = query({
   args: {
     api_token: v.optional(v.string()),
@@ -499,22 +636,7 @@ export const getPendingMessagesForDaemon = query({
     if (!authUserId) {
       throw new Error("Authentication failed: invalid token or session");
     }
-
-    const messages = await ctx.db
-      .query("pending_messages")
-      .withIndex("by_user_status", (q) =>
-        q.eq("from_user_id", authUserId).eq("status", "pending")
-      )
-      .collect();
-
-    const owned = [];
-    for (const message of messages) {
-      const conversation = await ctx.db.get(message.conversation_id);
-      if (conversation && canDaemonSeePendingMessage(message, conversation, authUserId, args.device_id)) {
-        owned.push(message);
-      }
-    }
-    return owned;
+    return await collectDeliverableForOwner(ctx, authUserId, args.device_id);
   },
 });
 
@@ -552,11 +674,17 @@ export const getConversationPendingMessage = query({
       )
       .collect();
 
-    const owned = msgs.filter((m) => m.from_user_id.toString() === authUserId.toString());
-    const msg = owned.find((m) => m.status === "pending")
-      ?? owned.find((m) => m.status === "injected")
-      ?? owned.find((m) => m.status === "failed")
-      ?? owned.find((m) => m.status === "undeliverable")
+    // The owner of this conversation sees the "delivering…" indicator for ANY in-flight message
+    // on it (including one a teammate sent them); the sender also sees their own outgoing one.
+    const conversation = await ctx.db.get(args.conversation_id);
+    const isOwner = conversation?.user_id?.toString() === authUserId.toString();
+    const visible = msgs.filter(
+      (m) => isOwner || m.from_user_id.toString() === authUserId.toString()
+    );
+    const msg = visible.find((m) => m.status === "pending")
+      ?? visible.find((m) => m.status === "injected")
+      ?? visible.find((m) => m.status === "failed")
+      ?? visible.find((m) => m.status === "undeliverable")
       ?? null;
     if (!msg) return null;
     return { created_at: msg.created_at, retry_count: msg.retry_count, status: msg.status as string, content: msg.content };
@@ -579,8 +707,8 @@ export const getMessageStatus = query({
       throw new Error("Message not found");
     }
 
-    if (message.from_user_id.toString() !== authUserId.toString()) {
-      throw new Error("Unauthorized: can only check status of your own messages");
+    if (!(await senderOrOwnerCanAct(ctx, message, authUserId))) {
+      throw new Error("Unauthorized: can only check status of messages you sent or own");
     }
 
     return {
@@ -661,24 +789,107 @@ const HEARTBEAT_ALIVE_MS = 90 * 1000;
 // recovers (becomes idle). This readiness gate is what keeps a backlog from stampeding the daemon
 // into mass resumes (storm) or re-injecting into a busy agent (thrash) — when blocked we simply
 // wait; the second the session is idle, every queued message for it goes.
-async function readyConversationIds(ctx: { db: any }, now: number): Promise<Set<string>> {
-  const live = await ctx.db
+// Returns two sets keyed by conversation id: `live` (a daemon for it beat its heartbeat recently,
+// regardless of what the agent is doing) and `ready` (live AND the agent is idle, so it can take a
+// message right now). The cross-user notifier needs `live` to tell "busy" (alive but not idle —
+// keep waiting) apart from "offline" (no live daemon — the remote isn't responding).
+async function liveAndReadyConversationIds(
+  ctx: { db: any },
+  now: number
+): Promise<{ ready: Set<string>; live: Set<string> }> {
+  const sessions = await ctx.db
     .query("managed_sessions")
     .withIndex("by_heartbeat", (q: any) => q.gt("last_heartbeat", now - HEARTBEAT_ALIVE_MS))
     .collect();
   const ready = new Set<string>();
-  for (const s of live) {
-    if (s.conversation_id && s.agent_status === "idle") {
-      ready.add(s.conversation_id.toString());
-    }
+  const live = new Set<string>();
+  for (const s of sessions) {
+    if (!s.conversation_id) continue;
+    live.add(s.conversation_id.toString());
+    if (s.agent_status === "idle") ready.add(s.conversation_id.toString());
   }
-  return ready;
+  return { ready, live };
+}
+
+// How long a cross-user (team) message may sit undelivered before we tell the sending session.
+// Comfortably past the heartbeat window (90s) so a brief daemon reconnect doesn't read as "offline".
+export const CROSS_USER_NOTIFY_DEADLINE_MS = 3 * 60_000;
+
+export type CrossUserNotify = { kind: "skip" } | { kind: "notify"; giveUp: boolean };
+
+// Pure decision: should the sender be told this cross-user message is stuck, and should we give up?
+// Fires at most once (gated on sender_notified_at). "giveUp" means the target has no live daemon —
+// the remote genuinely isn't responding, so we cancel rather than let it haunt the teammate's inbox
+// forever. If the target is merely busy (alive but not idle) we keep waiting and only tell the
+// sender it's delayed. Self-sends (from == owner) and rows with no sender session are never notified.
+export function planCrossUserNotify(
+  msg: {
+    status: string;
+    created_at: number;
+    sender_notified_at?: number;
+    from_conversation_id?: Id<"conversations">;
+    from_user_id: Id<"users">;
+    owner_user_id?: Id<"users">;
+  },
+  targetLive: boolean,
+  now: number
+): CrossUserNotify {
+  if (msg.status === "delivered" || msg.status === "cancelled") return { kind: "skip" };
+  if (!msg.from_conversation_id) return { kind: "skip" }; // no sender session to notify
+  if (msg.sender_notified_at) return { kind: "skip" }; // already told them once
+  if (!msg.owner_user_id) return { kind: "skip" }; // legacy/unknown owner
+  if (msg.from_user_id.toString() === msg.owner_user_id.toString()) return { kind: "skip" }; // self-send
+  if (now - msg.created_at < CROSS_USER_NOTIFY_DEADLINE_MS) return { kind: "skip" };
+  return { kind: "notify", giveUp: !targetLive };
+}
+
+// Deliver a delivery-failure / delay receipt back into the sender's own session and mark the
+// original so we don't notify again. When the target is offline (giveUp) the original is cancelled.
+async function notifyStuckCrossUserSend(
+  ctx: { db: any },
+  msg: any,
+  giveUp: boolean
+): Promise<void> {
+  const senderConv = await ctx.db.get(msg.from_conversation_id);
+  if (!senderConv) {
+    // Sender's session is gone — nowhere to report; just stop re-evaluating this row.
+    await ctx.db.patch(msg._id, { sender_notified_at: Date.now() });
+    if (giveUp) await patchPendingMessageStatus(ctx, msg, { status: "cancelled" as const });
+    return;
+  }
+  const targetConv = await ctx.db.get(msg.conversation_id);
+  const targetLabel = targetConv?.short_id ?? msg.conversation_id.toString().slice(0, 7);
+  const preview = (msg.content ?? "").replace(/<\/?session-message[^>]*>/g, "").trim().slice(0, 140);
+  const body = giveUp
+    ? `Your message to session ${targetLabel} could not be delivered — it has no live daemon (the session appears offline). The message was dropped, so resend it once the session is back online.\n\n> ${preview}`
+    : `Your message to session ${targetLabel} hasn't been delivered yet — the session is busy. It stays queued and will be delivered automatically the moment the session goes idle; no action needed.\n\n> ${preview}`;
+
+  // The receipt goes into the sender's OWN conversation, so from_user == owner == the sender:
+  // it's a normal self-scoped message (never itself a cross-user send), and enqueue wakes the
+  // sender's session so the agent notices the outcome.
+  await enqueuePendingMessage(ctx, senderConv, msg.from_user_id, {
+    content: formatSessionMessage("codecast", body),
+  });
+  await ctx.db.patch(msg._id, { sender_notified_at: Date.now() });
+  if (giveUp) await patchPendingMessageStatus(ctx, msg, { status: "cancelled" as const });
 }
 
 export const retryStuckMessages = internalMutation({
   handler: async (ctx) => {
-    const now = Date.now();
+    await healAndNotifyStuckMessages(ctx, Date.now());
+  },
+});
 
+// The cron's work, extracted so it can be driven deterministically in tests with a fixed `now`.
+// Two jobs: (1) revive stranded messages once their session is idle (the never-drop backstop),
+// and (2) tell the sending session when a cross-user message is stuck past the deadline.
+export async function healAndNotifyStuckMessages(ctx: { db: any }, now: number): Promise<{
+  revived: number;
+  controlsAcked: number;
+  notified: number;
+  waiting: number;
+}> {
+  {
     // Scan every non-terminal state. `delivered`/`cancelled` are terminal so they're skipped.
     // `pending` is included because a dropped daemon status-write (markInjectedBestEffort) can
     // strand a never-delivered message there with no other backstop; planStuckMessageHeal only
@@ -699,13 +910,23 @@ export const retryStuckMessages = internalMutation({
       candidates.push(...rows);
     }
 
-    const ready = await readyConversationIds(ctx, now);
+    const { ready, live } = await liveAndReadyConversationIds(ctx, now);
 
     let revived = 0;
     let controlsAcked = 0;
     let waiting = 0;
+    let notified = 0;
     const reflag = new Set<Id<"conversations">>();
     for (const msg of candidates) {
+      // Cross-user feedback runs regardless of the target's readiness: a teammate's message stuck
+      // past the deadline should tell the sender whether it's merely delayed (target busy) or
+      // failed (target offline). planCrossUserNotify no-ops on self-sends and already-notified rows.
+      const crossUserNotify = planCrossUserNotify(msg, live.has(msg.conversation_id.toString()), now);
+      if (crossUserNotify.kind === "notify") {
+        await notifyStuckCrossUserSend(ctx, msg, crossUserNotify.giveUp);
+        notified++;
+        if (crossUserNotify.giveUp) continue; // cancelled — nothing more to do with this row
+      }
       // Session not ready to receive (busy / blocked / stopped / gone): leave the message
       // exactly as-is — preserved, never dropped — and revive it once the session is idle.
       if (!ready.has(msg.conversation_id.toString())) {
@@ -728,15 +949,41 @@ export const retryStuckMessages = internalMutation({
       await ctx.db.patch(convId, { has_pending_messages: true });
     }
 
-    if (revived > 0 || controlsAcked > 0) {
-      console.log(`retryStuckMessages: revived ${revived} for idle sessions, acked ${controlsAcked} control msg(s), ${waiting} waiting on a busy/offline session`);
+    if (revived > 0 || controlsAcked > 0 || notified > 0) {
+      console.log(`retryStuckMessages: revived ${revived} for idle sessions, acked ${controlsAcked} control msg(s), notified ${notified} stuck cross-user send(s), ${waiting} waiting on a busy/offline session`);
     }
-  },
-});
+    return { revived, controlsAcked, notified, waiting };
+  }
+}
 
 // Non-terminal states: a message in any of these is still "in flight" and keeps the
 // conversation's has_pending_messages flag true (and the inbox card in "Working").
 const NON_TERMINAL_STATUSES = ["pending", "injected", "failed", "undeliverable"] as const;
+
+// One-time: stamp owner_user_id on rows created before the field existed, so the daemon's
+// by_owner_status poll finds them. Only non-terminal rows matter (terminal ones never deliver).
+// For every legacy row owner == from_user (sends were self-only then), but we read the real
+// conversation owner to be exact. Idempotent — skips rows that already have owner_user_id.
+export const backfillPendingOwnerUserId = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    let stamped = 0;
+    for (const status of NON_TERMINAL_STATUSES) {
+      const rows = await ctx.db
+        .query("pending_messages")
+        .withIndex("by_status", (q: any) => q.eq("status", status))
+        .collect();
+      for (const row of rows) {
+        if (row.owner_user_id) continue;
+        const conversation = await ctx.db.get(row.conversation_id);
+        const ownerId = conversation?.user_id ?? row.from_user_id;
+        await ctx.db.patch(row._id, { owner_user_id: ownerId });
+        stamped++;
+      }
+    }
+    return { stamped };
+  },
+});
 
 // One-time audit: bucket every non-terminal (still-in-flight) pending message by age, so we can
 // see the backlog of strays before flipping on always-deliver. Read-only.
