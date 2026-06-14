@@ -1541,6 +1541,8 @@ interface InboxStoreState {
   // deleted (the empty-conversation GC). Plants the exclude pending entries that
   // authorize the IDB row delete and block crawl re-adds.
   pruneGhostSessions: (ids: string[]) => void;
+  pruneFeedEntities: (collection: "sessions" | "tasks" | "docs" | "plans", ids: string[]) => void;
+  clearFeedExcludes: (collection: "sessions" | "tasks" | "docs" | "plans", ids: string[]) => void;
   markServerDeleted: (convId: string) => void;
 
   // -- Generic sync --
@@ -2759,6 +2761,49 @@ export const useInboxStore = create<InboxStoreState>(
       delete this.pagination[id];
       this.pending[`sessions:${id}`] = { type: "exclude", ts: now };
       this.pending[`conversations:${id}`] = { type: "exclude", ts: now };
+    }
+  }),
+
+  // Change-feed prune: the entity is gone or no longer visible to this user, so
+  // remove it from the never-prune cache and plant an exclude (the exclude is
+  // what authorizes the durable IDB delete; a bare store-shrink is ignored by the
+  // diff and would resurrect on reload). Mirrors pruneGhostSessions' session
+  // guards, generalized to the four feed collections. sync() — applying a
+  // server-side deletion the feed reported; never re-dispatched. The matching
+  // clearFeedExcludes lifts the exclude if the entity ever reappears. See
+  // hooks/useSyncChangeFeed.
+  pruneFeedEntities: sync(function (this: Draft, collection: "sessions" | "tasks" | "docs" | "plans", ids: string[]) {
+    const now = Date.now();
+    for (const id of ids) {
+      if (collection === "sessions") {
+        if (this.currentSessionId === id) continue;
+        if (this.pendingMessages[id]?.length) continue;
+        if (id in this.pendingSessionCreates) continue;
+        delete this.sessions[id];
+        delete this.conversations[id];
+        delete this.messages[id];
+        delete this.pendingMessages[id];
+        delete this.pagination[id];
+        this.pending[`sessions:${id}`] = { type: "exclude", ts: now };
+        this.pending[`conversations:${id}`] = { type: "exclude", ts: now };
+      } else {
+        const coll = (this as any)[collection] as Record<string, any> | undefined;
+        if (coll && id in coll) delete coll[id];
+        this.pending[`${collection}:${id}`] = { type: "exclude", ts: now };
+      }
+    }
+  }),
+
+  // Lift any feed-planted exclude for ids the feed is about to re-upsert. Delta
+  // sync SKIPS excluded ids, so without this a re-shared / restored entity that
+  // reappears in a batch-get would be silently dropped forever. Called just
+  // before the feed's syncTable upsert. sync() — local pending bookkeeping only.
+  clearFeedExcludes: sync(function (this: Draft, collection: "sessions" | "tasks" | "docs" | "plans", ids: string[]) {
+    for (const id of ids) {
+      if (this.pending[`${collection}:${id}`]?.type === "exclude") delete this.pending[`${collection}:${id}`];
+      if (collection === "sessions" && this.pending[`conversations:${id}`]?.type === "exclude") {
+        delete this.pending[`conversations:${id}`];
+      }
     }
   }),
 
