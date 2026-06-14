@@ -2562,6 +2562,29 @@ interface ToolCallChangeSelection {
   range: ToolChangeRange;
 }
 
+// Shared footer action style for expanded blocks (code/markdown/plan): muted
+// icon + small label, cyan on hover — mirrors the long-message footer.
+function FooterIconButton({ onClick, title, label, children }: { onClick: (e: React.MouseEvent) => void; title: string; label?: string; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-cyan transition-colors flex items-center gap-1"
+      title={title}
+    >
+      {children}
+      {label && <span className="hidden sm:inline text-xs text-sol-text-dim">{label}</span>}
+    </button>
+  );
+}
+
+function FullscreenIcon() {
+  return (
+    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15" />
+    </svg>
+  );
+}
+
 function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode, messageId, conversationId, onStartShareSelection, onOpenComments, collapsed, timestamp, images, globalImageMap }: { tool: ToolCall; result?: ToolResult; changeIndex?: number; changeRange?: ToolChangeRange; shareSelectionMode?: boolean; messageId?: string; conversationId?: Id<"conversations">; onStartShareSelection?: (messageId: string) => void; onOpenComments?: () => void; collapsed?: boolean; timestamp?: number; images?: ImageData[]; globalImageMap?: Record<string, ImageData> }) {
   const isApplyPatch = tool.name === "apply_patch";
   const isStandardEdit = tool.name === "Edit" || tool.name === "Write" || tool.name === "file_edit" || tool.name === "file_write";
@@ -2615,13 +2638,17 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
   const MD_COLLAPSED_HEIGHT = 600;
 
   useWatchEffect(() => {
-    if (mdContainerRef.current && !mdExpanded && viewMode === 'rendered') {
-      requestAnimationFrame(() => {
-        if (mdContainerRef.current) {
-          setMdOverflowing(mdContainerRef.current.scrollHeight > MD_COLLAPSED_HEIGHT);
-        }
-      });
-    }
+    if (!mdContainerRef.current || mdExpanded || viewMode !== 'rendered') return;
+    // Measure synchronously (layout is committed by effect time) — rAF never
+    // fires in occluded/background tabs, which left the clamp + footer missing.
+    // The rAF pass re-checks after fonts/images settle.
+    const measure = () => {
+      if (mdContainerRef.current) {
+        setMdOverflowing(mdContainerRef.current.scrollHeight > MD_COLLAPSED_HEIGHT);
+      }
+    };
+    measure();
+    requestAnimationFrame(measure);
   }, [content, mdExpanded, viewMode, expanded]);
 
   useWatchEffect(() => {
@@ -3082,38 +3109,24 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
                 >
                   <MarkdownRenderer content={String(parsedInput.content)} filePath={filePath} />
                   {!mdExpanded && mdOverflowing && (
-                    <div className="absolute bottom-0 left-0 right-0 h-20 pointer-events-none bg-gradient-to-b from-transparent to-[var(--sol-bg-alt)]" />
+                    <div className="absolute bottom-0 left-0 right-0 h-20 pointer-events-none bg-gradient-to-b from-transparent to-[var(--sol-bg-inset)]" />
                   )}
                 </div>
-                {(mdOverflowing || mdExpanded || (onStartShareSelection && messageId && !shareSelectionMode)) && (
-                  <div className="flex items-center gap-3 px-3 py-1.5 border-t border-sol-border/20">
-                    {(mdOverflowing || mdExpanded) && (
-                      <>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); setMdExpanded(v => !v); }}
-                          className="text-[11px] font-medium text-sol-cyan hover:text-sol-cyan/80 transition-colors"
-                        >
-                          {mdExpanded ? "Collapse" : "Expand"}
-                        </button>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); setMdFullscreen(true); }}
-                          className="text-[11px] font-medium text-sol-cyan hover:text-sol-cyan/80 transition-colors"
-                        >
-                          Fullscreen
-                        </button>
-                      </>
-                    )}
-                    {onStartShareSelection && messageId && !shareSelectionMode && (
-                      <button
-                        onClick={(e) => { e.stopPropagation(); onStartShareSelection(messageId); }}
-                        className="text-[11px] font-medium text-sol-cyan hover:text-sol-cyan/80 transition-colors flex items-center gap-1"
-                      >
-                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
-                        </svg>
-                        Share
-                      </button>
-                    )}
+                {(mdOverflowing || mdExpanded) && (
+                  <div className="flex items-center gap-1 px-2 py-1 border-t border-sol-border/20">
+                    <FooterIconButton
+                      onClick={(e) => { e.stopPropagation(); setMdFullscreen(true); }}
+                      title="Fullscreen"
+                      label="Full Screen"
+                    >
+                      <FullscreenIcon />
+                    </FooterIconButton>
+                    <FooterIconButton
+                      onClick={(e) => { e.stopPropagation(); setMdExpanded(v => !v); }}
+                      title={mdExpanded ? "Collapse" : "Expand"}
+                    >
+                      {mdExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                    </FooterIconButton>
                   </div>
                 )}
                 {mdFullscreen && createPortal(
@@ -3208,31 +3221,26 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
                 showLineNumbers
               />
               <div className="flex items-center gap-1 px-2 py-1 border-t border-sol-border/20">
-                <button
+                <FooterIconButton
                   onClick={(e) => { e.stopPropagation(); setCodeFullscreen(true); }}
-                  className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-cyan transition-colors flex items-center gap-1"
                   title="Fullscreen"
+                  label="Full Screen"
                 >
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15" />
-                  </svg>
-                  <span className="hidden sm:inline text-xs text-sol-text-dim">Full Screen</span>
-                </button>
-                <button
+                  <FullscreenIcon />
+                </FooterIconButton>
+                <FooterIconButton
                   onClick={(e) => { e.stopPropagation(); fullWidth.toggle(); }}
-                  className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-cyan transition-colors flex items-center gap-1"
                   title={fullWidth.expanded ? "Normal width" : "Full width"}
+                  label={fullWidth.expanded ? "Normal Width" : "Full Width"}
                 >
                   <MoveHorizontal className="w-4 h-4" />
-                  <span className="hidden sm:inline text-xs text-sol-text-dim">{fullWidth.expanded ? "Normal Width" : "Full Width"}</span>
-                </button>
-                <button
+                </FooterIconButton>
+                <FooterIconButton
                   onClick={(e) => { e.stopPropagation(); setExpanded(false); }}
-                  className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-cyan transition-colors"
                   title="Collapse"
                 >
                   <ChevronUp className="w-4 h-4" />
-                </button>
+                </FooterIconButton>
               </div>
               {codeFullscreen && createPortal(
                 <div className="fixed inset-0 z-[10001] bg-sol-bg overflow-auto" onClick={() => setCodeFullscreen(false)}>
@@ -6526,19 +6534,13 @@ function PlanBlockImpl({ content, timestamp, collapsed, messageId, conversationI
           )}
         </div>
         {(isOverflowing || isExpanded) && (
-          <div className="flex items-center gap-3 mt-2 pt-2 border-t border-sol-border/30">
-            <button
-              onClick={() => setIsExpanded(e => !e)}
-              className="text-[11px] font-medium text-sol-cyan hover:text-sol-cyan/80 transition-colors"
-            >
-              {isExpanded ? "Collapse" : "Expand"}
-            </button>
-            <button
-              onClick={() => setFullscreen(true)}
-              className="text-[11px] font-medium text-sol-cyan hover:text-sol-cyan/80 transition-colors"
-            >
-              Fullscreen
-            </button>
+          <div className="flex items-center gap-1 mt-2 pt-1 border-t border-sol-border/30">
+            <FooterIconButton onClick={() => setFullscreen(true)} title="Fullscreen" label="Full Screen">
+              <FullscreenIcon />
+            </FooterIconButton>
+            <FooterIconButton onClick={() => setIsExpanded(e => !e)} title={isExpanded ? "Collapse" : "Expand"}>
+              {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+            </FooterIconButton>
           </div>
         )}
       </div>
@@ -10035,6 +10037,24 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     const el = stickyTextRef.current;
     setStickyClamped(el ? el.scrollHeight > el.clientHeight + 1 : false);
   }, [activeStickyMsg?.id, activeStickyMsg?.content, stickyMsgVisible, stickyExpanded]);
+
+  // Publish the sticky prompt card's height on the header as --conv-sticky-h so
+  // header-anchored overlays (the files-changed pill) slide below it instead of
+  // overlapping at narrow widths. Imperative write: no re-render on resize.
+  useEffect(() => {
+    const header = headerRef.current;
+    if (!header) return;
+    const el = stickyElRef.current;
+    if (!stickyMsgVisible || !el) {
+      header.style.setProperty("--conv-sticky-h", "0px");
+      return;
+    }
+    const update = () => header.style.setProperty("--conv-sticky-h", `${el.offsetHeight}px`);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [stickyMsgVisible, activeStickyMsg?.id]);
 
   useWatchEffect(() => {
     const currentIds = new Set(timeline.map(item => {
