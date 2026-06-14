@@ -128,7 +128,8 @@ import { useForkNavigationStore } from "../store/forkNavigationStore";
 import { buildCompositeTimeline } from "../lib/compositeTimeline";
 import { useMessageSelection } from "../hooks/useMessageSelection";
 import { BranchSelector } from "./BranchSelector";
-import { ForkTreePanel, ForkTreePopover } from "./ForkTreePanel";
+import { ForkTreePopover, BranchHopHud, type BranchHop } from "./ForkTreePanel";
+import { getForkFamilyOrder, branchDisplayLabel } from "../hooks/useForkTree";
 import { getApplyPatchInput, parseApplyPatchSections } from "../lib/applyPatchParser";
 import { parseFileChangeSummary, parseUnifiedDiffSections } from "../lib/unifiedDiffParser";
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
@@ -9530,9 +9531,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   // (we navigate to them); no overlay state to keep in sync.
   const forkSetMessages = useInboxStore((s) => s.setMessages);
   const resolveForkSessionId = useInboxStore((s) => s.resolveForkSessionId);
-  const forkTreePanelOpen = useForkNavigationStore((s) => s.treePanelOpen);
-  const toggleTreePanel = useForkNavigationStore((s) => s.toggleTreePanel);
   const forkSetSelectedIndex = useForkNavigationStore((s) => s.setSelectedIndex);
+  // Branch map open-state. One surface now: a command-palette-style popover
+  // anchored above the message input (with the header icon and Cmd/Ctrl+B as
+  // the other triggers). The old right-side drawer is gone.
   const [treePopoverOpen, setTreePopoverOpen] = useState(false);
   const treeChipRef = useRef<HTMLButtonElement>(null);
 
@@ -10694,20 +10696,46 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     navigateToSession(convId);
   }, [conversation?._id, navigateToSession]);
 
-  // Tree panel highlight: just the currently-viewed conversation.
-  const activeBranchIdSet = useMemo(
-    () => conversation?._id ? new Set([conversation._id.toString()]) : new Set<string>(),
-    [conversation?._id]
-  );
+  // Single-key branch hopping ([ / ]): walk the fork family in the same DFS
+  // order the branch map shows, wrapping at the ends. The family is computed
+  // on demand from a store snapshot (getForkFamilyOrder) — no subscriptions,
+  // so heartbeat churn never re-renders this component for it. A transient
+  // HUD pill confirms where you landed.
+  const [branchHop, setBranchHop] = useState<BranchHop | null>(null);
+  const handleBranchHopDone = useCallback(() => setBranchHop(null), []);
+  const hopBranch = useCallback((dir: 1 | -1) => {
+    if (!conversation?._id) return false;
+    const flat = getForkFamilyOrder(conversation);
+    if (flat.length < 2) return false;
+    const curId = conversation._id.toString();
+    const idx = flat.findIndex((n) => n.id === curId);
+    const nextIdx = ((idx < 0 ? 0 : idx) + dir + flat.length) % flat.length;
+    const next = flat[nextIdx];
+    if (!next || next.id === curId) return false;
+    navigateToSession(next.id);
+    setBranchHop({ id: next.id, title: branchDisplayLabel(next), index: nextIdx + 1, total: flat.length, live: next.live, ts: Date.now() });
+    return true;
+  }, [conversation, navigateToSession]);
+
+  // Open/close the branch map. Shared by the header icon, the menu item, and
+  // the Cmd/Ctrl+B shortcut. Only meaningful when the conversation actually has
+  // a fork family, and suppressed while a message-fork selection is active.
+  const hasForkFamily =
+    (conversation?.fork_children && conversation.fork_children.length > 0) || !!conversation?.forked_from;
+  const toggleMap = useCallback(() => {
+    if (!isOwner || !hasForkFamily) return;
+    if (forkSelectionIdx !== null) return;
+    setTreePopoverOpen((o) => !o);
+  }, [isOwner, hasForkFamily, forkSelectionIdx]);
 
   useShortcutContext('conversation');
+  useShortcutAction('conv.branchPrev', useCallback(() => hopBranch(-1), [hopBranch]));
+  useShortcutAction('conv.branchNext', useCallback(() => hopBranch(1), [hopBranch]));
   useShortcutAction('conv.toggleTree', useCallback(() => {
-    if (!isOwner) return;
-    if (forkSelectionIdx !== null) return;
-    const hasForks = (conversation?.fork_children && conversation.fork_children.length > 0) || conversation?.forked_from;
-    if (!hasForks) return;
-    toggleTreePanel();
-  }, [isOwner, forkSelectionIdx, toggleTreePanel, conversation?.fork_children, conversation?.forked_from]));
+    if (!isOwner || !hasForkFamily || forkSelectionIdx !== null) return false;
+    setTreePopoverOpen((o) => !o);
+    return true;
+  }, [isOwner, hasForkFamily, forkSelectionIdx]));
 
   useShortcutAction('conv.copyLink', useCallback(() => {
     const url = `${shareOrigin()}/conversation/${conversation?._id}`;
@@ -11980,23 +12008,31 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   </Link>
                 )}
 
-                {((conversation.fork_children?.length ?? 0) > 0 || conversation.forked_from) && (
-                  <button
-                    ref={treeChipRef}
-                    onClick={() => setTreePopoverOpen((o) => !o)}
-                    className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] border transition-colors ${
-                      treePopoverOpen
-                        ? "bg-sol-cyan/20 text-sol-cyan border-sol-cyan/40"
-                        : "bg-sol-cyan/10 text-sol-cyan border-sol-cyan/30 hover:bg-sol-cyan/20"
-                    }`}
-                    title="Branch tree"
-                  >
-                    <Split className="w-3 h-3" />
-                    {(conversation.fork_children?.length ?? 0) > 0 && (
-                      <span className="tabular-nums">{conversation.fork_children!.length}</span>
-                    )}
-                  </button>
-                )}
+                {((conversation.fork_children?.length ?? 0) > 0 || conversation.forked_from) && (() => {
+                  // Family size from the details payload alone (no store sub):
+                  // me + my children, plus parent + my siblings when forked.
+                  const familyCount =
+                    1 +
+                    (conversation.fork_children?.length ?? 0) +
+                    (conversation.forked_from ? 1 + (conversation.fork_siblings?.length ?? 0) : 0);
+                  return (
+                    <button
+                      ref={treeChipRef}
+                      onClick={toggleMap}
+                      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] border transition-colors ${
+                        treePopoverOpen
+                          ? "bg-sol-cyan/20 text-sol-cyan border-sol-cyan/40"
+                          : "bg-sol-cyan/10 text-sol-cyan border-sol-cyan/30 hover:bg-sol-cyan/20"
+                      }`}
+                      title={`Branch map — ${familyCount} branch${familyCount === 1 ? "" : "es"} (${isMac ? "⌘B" : "Ctrl+B"})`}
+                    >
+                      <Split className="w-3 h-3" />
+                      {familyCount > 1 && (
+                        <span className="tabular-nums">{familyCount}</span>
+                      )}
+                    </button>
+                  );
+                })()}
 
                 {conversation.git_branch && (
                   <span
@@ -12392,9 +12428,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     {((conversation.fork_children && conversation.fork_children.length > 0) || conversation.forked_from) && (
                       <>
                         <DropdownMenuSeparator />
-                        <DropdownMenuItem onClick={() => toggleTreePanel()}>
+                        <DropdownMenuItem onClick={() => toggleMap()}>
                           <Split className="w-3 h-3 mr-1.5 text-sol-cyan" />
-                          Fork tree
+                          Branch map
                           <MenuKeyCaps action="conv.toggleTree" />
                         </DropdownMenuItem>
                       </>
@@ -12731,28 +12767,20 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       </div>
 
       {conversation && (
-        <ForkTreePanel
+        <ForkTreePopover
+          conversation={conversation}
           conversationId={conversation._id.toString()}
-          open={forkTreePanelOpen}
-          onClose={toggleTreePanel}
-          activeBranchIds={activeBranchIdSet}
+          open={treePopoverOpen}
+          onClose={() => setTreePopoverOpen(false)}
+          // Anchor above the message input (palette-style); fall back to the
+          // header icon when the composer is hidden (guest / permission gate).
+          anchorEl={messageInputRef.current ?? treeChipRef.current}
+          placement={messageInputRef.current ? "above" : "below"}
           onSwitchToConversation={handleTreeSwitchConversation}
         />
       )}
 
-      {conversation && (
-        <ForkTreePopover
-          conversationId={conversation._id.toString()}
-          open={treePopoverOpen}
-          onClose={() => setTreePopoverOpen(false)}
-          anchorEl={treeChipRef.current}
-          activeBranchIds={activeBranchIdSet}
-          onSwitchToConversation={(convId) => {
-            setTreePopoverOpen(false);
-            handleTreeSwitchConversation(convId);
-          }}
-        />
-      )}
+      <BranchHopHud hop={branchHop} onDone={handleBranchHopDone} />
       </div>
 
       {showMessageInput && conversation && !(pendingPermissions && pendingPermissions.length > 0) && (

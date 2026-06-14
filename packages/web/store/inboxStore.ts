@@ -224,6 +224,10 @@ export type InboxSession = {
   workflow_run_status?: string | null;
   forked_from?: string | null;
   parent_message_uuid?: string | null;
+  // Messages inherited from the parent up to the fork point. Lets the branch
+  // map show this branch's own size (message_count - fork_copied) when the row
+  // is sourced from the session cache rather than the fork-details payload.
+  fork_copied?: number;
   icon?: string;
   icon_color?: string;
   dismissed_at?: number;
