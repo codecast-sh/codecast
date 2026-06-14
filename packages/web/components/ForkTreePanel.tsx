@@ -1,22 +1,29 @@
-import { useQuery } from "convex/react";
 import { AppLoader } from "./AppLoader";
-import { api } from "@codecast/convex/convex/_generated/api";
-import { useRef, useState, useMemo, useCallback } from "react";
+import { useRef, useState, useMemo, useCallback, useEffect } from "react";
 import { createPortal } from "react-dom";
+import { Split, Search, MessageSquare } from "lucide-react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
+import { useInboxStore } from "../store/inboxStore";
+import { useShortcutAction } from "../shortcuts/ShortcutProvider";
+import { KeyCap } from "./KeyboardShortcutsHelp";
+import { relativeTime } from "./BranchSelector";
+import {
+  useForkTree,
+  branchDisplayCount,
+  branchDisplayLabel,
+  branchUnread,
+  type FlatForkNode,
+  type BranchLive,
+  type ForkConversationLike,
+} from "../hooks/useForkTree";
 
-type TreeNode = {
-  id: string;
-  short_id?: string;
-  title: string;
-  message_count: number;
-  parent_message_uuid?: string;
-  started_at: number;
-  status: string;
-  agent_type?: string;
-  is_current: boolean;
-  children: TreeNode[];
-};
+// Branch map: the fork-family navigator. Renders instantly from local store
+// data (see useForkTree), with the server tree merging in silently. It anchors
+// above the message input like a command palette. Keyboard model: type to
+// filter, ↑/↓ move the highlight, Enter (or click) switches to that branch and
+// closes, Esc clears the filter then closes. Each row is labeled by the prompt
+// that STARTED the branch (first message after the fork) so same-titled
+// siblings read apart, with the branch's own message count beside it.
 
 const agentColors: Record<string, string> = {
   claude_code: "text-amber-400",
@@ -32,277 +39,378 @@ const agentLabels: Record<string, string> = {
   gemini: "Gemini",
 };
 
-type FlatNode = { node: TreeNode; depth: number };
-
-function flattenTree(node: TreeNode, depth = 0): FlatNode[] {
-  const result: FlatNode[] = [{ node, depth }];
-  for (const child of node.children) {
-    result.push(...flattenTree(child, depth + 1));
+function LiveDot({ live }: { live?: BranchLive }) {
+  if (live === "working") {
+    return (
+      <span className="relative flex w-2 h-2 flex-shrink-0" title="Agent working">
+        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sol-green opacity-50" />
+        <span className="relative inline-flex rounded-full w-2 h-2 bg-sol-green" />
+      </span>
+    );
   }
-  return result;
+  if (live === "needs_input") {
+    return <span className="w-2 h-2 rounded-full bg-sol-yellow flex-shrink-0" title="Needs input" />;
+  }
+  return <span className="w-2 h-2 rounded-full border border-sol-border flex-shrink-0" title={live ? "Idle" : undefined} />;
 }
 
-function TreeRow({
+// Tree rails: one fixed-width column per ancestor level. guides[i] says the
+// ancestor at depth i has more siblings below (draw a full vertical line);
+// the last column is this node's own elbow (├ or └ plus a horizontal stub).
+function Rails({ guides }: { guides: boolean[] }) {
+  if (guides.length === 0) return null;
+  return (
+    <div className="flex self-stretch flex-shrink-0" aria-hidden>
+      {guides.slice(0, -1).map((g, i) => (
+        <span key={i} className="w-3.5 relative">
+          {g && <span className="absolute left-1/2 top-0 bottom-0 w-px bg-sol-border" />}
+        </span>
+      ))}
+      {/* The elbow points at the label line (first of the two row lines),
+          not the row's vertical center. */}
+      <span className="w-3.5 relative">
+        <span
+          className={`absolute left-1/2 top-0 w-px bg-sol-border ${guides[guides.length - 1] ? "bottom-0" : "h-[15px]"}`}
+        />
+        <span className="absolute left-1/2 top-[15px] w-1.5 h-px bg-sol-border" />
+      </span>
+    </div>
+  );
+}
+
+function BranchRow({
   node,
-  depth = 0,
-  activeBranchIds,
-  onSwitchToConversation,
+  isCurrent,
   isSelected,
+  unread,
+  flatMode,
+  showAgent,
+  showAuthor,
+  onClick,
   onMouseEnter,
   rowRef,
 }: {
-  node: TreeNode;
-  depth?: number;
-  activeBranchIds: Set<string>;
-  onSwitchToConversation: (convId: string) => void;
+  node: FlatForkNode;
+  isCurrent: boolean;
   isSelected: boolean;
+  unread: number;
+  flatMode: boolean;
+  showAgent: boolean;
+  showAuthor: boolean;
+  onClick: () => void;
   onMouseEnter: () => void;
   rowRef?: React.Ref<HTMLButtonElement>;
 }) {
-  const isActive = node.is_current || activeBranchIds.has(node.id);
-  const timeStr = new Date(node.started_at).toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-  });
-
+  const count = branchDisplayCount(node);
+  const label = branchDisplayLabel(node);
+  const isRoot = node.depth === 0;
+  // All-new (never opened): tint the count itself instead of stacking a
+  // duplicate "+N" pill next to the same number (mirrors BranchSelector).
+  const allUnread = unread > 0 && unread >= count;
+  const partialUnread = unread > 0 && unread < count;
   return (
     <button
       ref={rowRef}
-      onClick={() => onSwitchToConversation(node.id)}
+      onClick={onClick}
       onMouseEnter={onMouseEnter}
-      className={`w-full flex items-center gap-2 py-1.5 px-2 rounded text-xs transition-colors text-left ${
-        isSelected
-          ? "bg-sol-cyan/20 ring-1 ring-inset ring-sol-cyan/40 text-sol-cyan"
-          : isActive
-            ? "bg-sol-cyan/15 text-sol-cyan border border-sol-cyan/30"
-            : "hover:bg-sol-bg-alt text-sol-text-secondary"
-      }`}
-      style={{ paddingLeft: `${depth * 14 + 8}px` }}
+      className={`w-full flex items-stretch gap-1.5 pr-2 rounded text-xs text-left transition-colors relative ${
+        isSelected ? "bg-sol-cyan/15" : "hover:bg-sol-bg-alt"
+      } ${isCurrent ? "text-sol-cyan" : "text-sol-text-secondary"}`}
     >
-      {depth > 0 && (
-        <span className="text-sol-text-dim text-[10px] flex-shrink-0">
-          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-          </svg>
+      {isSelected && <span className="absolute left-0 top-0.5 bottom-0.5 w-0.5 rounded-full bg-sol-cyan" />}
+      {!flatMode && <span className="pl-2 flex self-stretch flex-shrink-0"><Rails guides={node.guides} /></span>}
+      <span className={`flex flex-col gap-0.5 py-1.5 flex-1 min-w-0 ${flatMode ? "pl-2" : ""}`}>
+        <span className="flex items-center gap-1.5 min-w-0">
+          <LiveDot live={node.live} />
+          <span className={`truncate ${isCurrent ? "font-medium" : ""}`}>{label}</span>
+          {isCurrent && (
+            <span className="text-[8px] uppercase tracking-wider px-1 py-px rounded bg-sol-cyan/15 text-sol-cyan flex-shrink-0 font-semibold">
+              you
+            </span>
+          )}
+          {isRoot && !isCurrent && (
+            <span className="text-[8px] uppercase tracking-wider px-1 py-px rounded bg-sol-bg-alt text-sol-text-dim flex-shrink-0 font-semibold">
+              root
+            </span>
+          )}
         </span>
-      )}
-      {node.agent_type && (
-        <span className={`text-[9px] font-medium flex-shrink-0 ${agentColors[node.agent_type] || "text-sol-text-dim"}`}>
-          {agentLabels[node.agent_type] || node.agent_type}
+        <span className="flex items-center gap-1.5 pl-3.5 min-w-0 text-[9px] text-sol-text-dim">
+          <span
+            className={`tabular-nums inline-flex items-center gap-0.5 flex-shrink-0 ${
+              allUnread ? "text-sol-cyan font-semibold" : ""
+            }`}
+            title={
+              isRoot
+                ? `${count} message${count === 1 ? "" : "s"}`
+                : `${count} message${count === 1 ? "" : "s"} on this branch since the fork${unread > 0 ? `, ${unread} unread` : ""}`
+            }
+          >
+            <MessageSquare className="w-2.5 h-2.5 opacity-60" />
+            {count}
+          </span>
+          {partialUnread && (
+            <span className="tabular-nums flex-shrink-0 px-1 rounded-full bg-sol-cyan text-sol-bg font-semibold leading-tight">
+              +{unread}
+            </span>
+          )}
+          {showAgent && node.agent_type && (
+            <span className={`font-medium flex-shrink-0 ${agentColors[node.agent_type] || ""}`}>
+              {agentLabels[node.agent_type] || node.agent_type}
+            </span>
+          )}
+          {showAuthor && node.username && (
+            <span className="truncate max-w-[90px]">{node.username}</span>
+          )}
+          {node.updated_at ? <span className="flex-shrink-0 ml-auto">{relativeTime(node.updated_at)}</span> : null}
         </span>
-      )}
-      <span className="truncate flex-1 min-w-0">{node.title}</span>
-      <span className="text-[9px] text-sol-text-dim flex-shrink-0 tabular-nums">
-        {node.message_count}
       </span>
-      <span className="text-[9px] text-sol-text-dim flex-shrink-0">{timeStr}</span>
     </button>
   );
 }
 
-// Shared tree body: fetches the full recursive fork tree, renders it as an
-// indented, keyboard-navigable list, and emits navigation on select. Both the
-// slide-in drawer (ForkTreePanel) and the header-anchored popover
-// (ForkTreePopover) render this so the tree looks and behaves identically.
 function ForkTreeContent({
+  conversation,
   conversationId,
   open,
   onClose,
-  activeBranchIds,
   onSwitchToConversation,
 }: {
+  conversation: ForkConversationLike;
   conversationId: string;
   open: boolean;
   onClose: () => void;
-  activeBranchIds: Set<string>;
   onSwitchToConversation: (convId: string) => void;
 }) {
+  const inputRef = useRef<HTMLInputElement>(null);
   const selectedRef = useRef<HTMLButtonElement>(null);
-  const result = useQuery(
-    api.conversations.getConversationTree,
-    open ? { conversation_id: conversationId } : "skip"
+  const flat = useForkTree(conversation, open);
+  const seenMessageCount = useInboxStore((s) => s._seenMessageCount);
+  const currentUser = useInboxStore((s) => s.currentUser);
+  const [filter, setFilter] = useState("");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  // Per-row metadata earns its width only when it discriminates: the agent
+  // label only in mixed-agent families, the author only when someone else
+  // owns a branch.
+  const showAgent = useMemo(
+    () => new Set(flat.map((n) => n.agent_type).filter(Boolean)).size > 1,
+    [flat],
   );
+  const myNames = useMemo(() => {
+    const names = new Set<string>();
+    if (currentUser?.name) names.add(currentUser.name);
+    if (currentUser?.username) names.add(currentUser.username);
+    return names;
+  }, [currentUser]);
 
-  const tree = result && !("error" in result) ? (result.tree as TreeNode) : null;
-
-  const flatNodes = useMemo(() => (tree ? flattenTree(tree) : []), [tree]);
-
-  const initialIdx = useMemo(() => {
-    const currentIdx = flatNodes.findIndex(
-      (f) => f.node.is_current || activeBranchIds.has(f.node.id)
-    );
-    return currentIdx >= 0 ? currentIdx : 0;
-  }, [flatNodes, activeBranchIds]);
-
-  const [selectedIdx, setSelectedIdx] = useState(initialIdx);
-
+  // Fresh open: clear the filter and select where you are.
   useWatchEffect(() => {
-    if (open) setSelectedIdx(initialIdx);
-  }, [open, initialIdx]);
+    if (open) {
+      setFilter("");
+      setSelectedId(conversationId);
+    }
+  }, [open]);
+
+  const visible = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    if (!q) return flat;
+    return flat.filter(
+      (n) =>
+        branchDisplayLabel(n).toLowerCase().includes(q) ||
+        n.title?.toLowerCase().includes(q) ||
+        n.username?.toLowerCase().includes(q) ||
+        n.git_branch?.toLowerCase().includes(q) ||
+        n.short_id?.toLowerCase().includes(q),
+    );
+  }, [flat, filter]);
+  const flatMode = filter.trim().length > 0;
+
+  const selIdx = useMemo(() => {
+    const i = visible.findIndex((n) => n.id === selectedId);
+    return i >= 0 ? i : 0;
+  }, [visible, selectedId]);
+  const selected: FlatForkNode | undefined = visible[selIdx];
 
   useWatchEffect(() => {
     selectedRef.current?.scrollIntoView({ block: "nearest" });
-  }, [selectedIdx]);
+  }, [selIdx, visible.length]);
 
-  const handleSelect = useCallback(
-    (idx: number) => {
-      const flat = flatNodes[idx];
-      if (flat) onSwitchToConversation(flat.node.id);
+  const move = useCallback(
+    (dir: 1 | -1) => {
+      if (visible.length === 0) return;
+      const next = visible[Math.min(Math.max(selIdx + dir, 0), visible.length - 1)];
+      if (next) setSelectedId(next.id);
     },
-    [flatNodes, onSwitchToConversation]
+    [visible, selIdx],
   );
 
-  useWatchEffect(() => {
-    if (!open) return;
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" || e.key === "t") {
+  // Switch to a branch and close. Highlight (↑/↓) only moves selection; nothing
+  // navigates until you commit with Enter or a click — plain command-palette
+  // semantics, so there's no separate "peek" gesture to learn.
+  const commit = useCallback(
+    (node: FlatForkNode | undefined) => {
+      if (!node) return;
+      if (node.id !== conversationId) onSwitchToConversation(node.id);
+      onClose();
+    },
+    [conversationId, onSwitchToConversation, onClose],
+  );
+
+  // The global dispatcher claims Escape (msg.clearSelection has
+  // skipInputCheck) before our input ever sees it — register our own handler
+  // on the same action while the map is open: first Esc clears the filter,
+  // the next closes the map. Returning true stops the dispatch chain.
+  const escState = useRef({ filter, open });
+  escState.current = { filter, open };
+  useShortcutAction(
+    "msg.clearSelection",
+    useCallback(() => {
+      if (!escState.current.open) return false;
+      if (escState.current.filter) {
+        setFilter("");
+        return true;
+      }
+      onClose();
+      return true;
+    }, [onClose]),
+  );
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        move(1);
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        move(-1);
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        commit(selected);
+      } else if (e.key === "Escape") {
+        // Fallback if the global dispatcher didn't claim it.
         e.preventDefault();
         e.stopPropagation();
-        onClose();
-        return;
+        if (filter) setFilter("");
+        else onClose();
       }
-      if (e.key === "j" || e.key === "ArrowDown") {
-        e.preventDefault();
-        e.stopPropagation();
-        setSelectedIdx((i) => Math.min(i + 1, flatNodes.length - 1));
-        return;
-      }
-      if (e.key === "k" || e.key === "ArrowUp") {
-        e.preventDefault();
-        e.stopPropagation();
-        setSelectedIdx((i) => Math.max(i - 1, 0));
-        return;
-      }
-      if (e.key === "Enter") {
-        e.preventDefault();
-        e.stopPropagation();
-        handleSelect(selectedIdx);
-        return;
-      }
-    };
-    const raf = requestAnimationFrame(() => {
-      document.addEventListener("keydown", handleKey, true);
-    });
-    return () => {
-      cancelAnimationFrame(raf);
-      document.removeEventListener("keydown", handleKey, true);
-    };
-  }, [open, onClose, flatNodes.length, selectedIdx, handleSelect]);
+    },
+    [move, commit, selected, filter, onClose],
+  );
+
+  // The map lives inside the always-mounted conversation shell; refocus when
+  // reopened so typing filters immediately.
+  useEffect(() => {
+    if (open) inputRef.current?.focus();
+  }, [open, conversationId]);
+
+  const branchCount = flat.length;
 
   return (
     <>
-      <div className="flex-1 overflow-y-auto p-2 space-y-0.5 min-h-0">
-        {!tree ? (
+      <div className="flex items-center gap-1.5 px-2 py-1.5 border-b border-sol-border shrink-0">
+        <Search className="w-3 h-3 text-sol-text-dim flex-shrink-0" />
+        <input
+          ref={inputRef}
+          autoFocus
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder={branchCount > 1 ? `Filter ${branchCount} branches…` : "Filter branches…"}
+          className="flex-1 min-w-0 bg-transparent text-xs text-sol-text placeholder:text-sol-text-dim outline-none"
+        />
+      </div>
+      <div className="flex-1 overflow-y-auto p-1.5 min-h-0">
+        {flat.length === 0 ? (
           <AppLoader className="min-h-0 bg-transparent py-8" size={24} />
+        ) : visible.length === 0 ? (
+          <div className="py-6 text-center text-[11px] text-sol-text-dim">No branches match</div>
         ) : (
-          flatNodes.map((flat, idx) => (
-            <TreeRow
-              key={flat.node.id}
-              node={flat.node}
-              depth={flat.depth}
-              activeBranchIds={activeBranchIds}
-              onSwitchToConversation={onSwitchToConversation}
-              isSelected={idx === selectedIdx}
-              onMouseEnter={() => setSelectedIdx(idx)}
-              rowRef={idx === selectedIdx ? selectedRef : undefined}
+          visible.map((node, idx) => (
+            <BranchRow
+              key={node.id}
+              node={node}
+              isCurrent={node.id === conversationId}
+              isSelected={idx === selIdx}
+              unread={branchUnread(node, seenMessageCount[node.id], node.id === conversationId)}
+              flatMode={flatMode}
+              showAgent={showAgent}
+              showAuthor={!!node.username && !myNames.has(node.username)}
+              onClick={() => commit(node)}
+              onMouseEnter={() => setSelectedId(node.id)}
+              rowRef={idx === selIdx ? selectedRef : undefined}
             />
           ))
         )}
       </div>
-      <div className="px-3 py-2 border-t border-sol-border text-[9px] text-sol-text-dim shrink-0 flex items-center gap-3">
-        <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border">j</kbd>/<kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border">k</kbd> navigate</span>
-        <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border">Enter</kbd> switch</span>
-        <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border">t</kbd> close</span>
+      <div className="px-3 py-2 border-t border-sol-border text-[9px] text-sol-text-dim shrink-0 flex items-center gap-3 flex-wrap">
+        <span className="inline-flex items-center gap-1"><KeyCap size="xs">↑</KeyCap><KeyCap size="xs">↓</KeyCap> move</span>
+        <span className="inline-flex items-center gap-1"><KeyCap size="xs">↵</KeyCap> switch</span>
+        <span className="inline-flex items-center gap-1"><KeyCap size="xs">[</KeyCap><KeyCap size="xs">]</KeyCap> hop</span>
+        <span className="inline-flex items-center gap-1"><KeyCap size="xs">Esc</KeyCap> close</span>
       </div>
     </>
   );
 }
 
-export function ForkTreePanel({
-  conversationId,
-  open,
-  onClose,
-  activeBranchIds,
-  onSwitchToConversation,
-}: {
-  conversationId: string;
-  open: boolean;
-  onClose: () => void;
-  activeBranchIds: Set<string>;
-  onSwitchToConversation: (convId: string) => void;
-}) {
-  const panelRef = useRef<HTMLDivElement>(null);
+type PopPos = {
+  left: number;
+  width: number;
+  maxHeight: number;
+  above: boolean;
+  top?: number;
+  bottom?: number;
+};
 
-  useWatchEffect(() => {
-    if (!open) return;
-    const handleClick = (e: MouseEvent) => {
-      if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
-        onClose();
-      }
-    };
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, [open, onClose]);
-
-  if (!open) return null;
-
-  return (
-    <div
-      ref={panelRef}
-      className="absolute right-0 top-0 bottom-0 w-[280px] bg-sol-bg border-l border-sol-border z-30 flex flex-col shadow-xl animate-in slide-in-from-right duration-200"
-    >
-      <div className="flex items-center justify-between px-3 py-2 border-b border-sol-border shrink-0">
-        <span className="text-[10px] text-sol-text-dim font-medium uppercase tracking-wider">
-          Fork Tree
-        </span>
-        <button
-          onClick={onClose}
-          className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text transition-colors"
-        >
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </button>
-      </div>
-      <ForkTreeContent
-        conversationId={conversationId}
-        open={open}
-        onClose={onClose}
-        activeBranchIds={activeBranchIds}
-        onSwitchToConversation={onSwitchToConversation}
-      />
-    </div>
-  );
+function computePopoverPos(anchorEl: HTMLElement, preferAbove: boolean): PopPos {
+  const GAP = 8;
+  const MARGIN = 12;
+  const rect = anchorEl.getBoundingClientRect();
+  const roomAbove = rect.top - MARGIN;
+  const roomBelow = window.innerHeight - rect.bottom - MARGIN;
+  let above = preferAbove;
+  // Flip toward whichever side has room when the preferred side is cramped.
+  if (above && roomAbove < 240 && roomBelow > roomAbove) above = false;
+  else if (!above && roomBelow < 240 && roomAbove > roomBelow) above = true;
+  const width = Math.min(560, Math.max(360, rect.width));
+  const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
+  const maxHeight = Math.min(560, Math.max(200, above ? roomAbove : roomBelow));
+  return above
+    ? { left, width, maxHeight, above, bottom: window.innerHeight - rect.top + GAP }
+    : { left, width, maxHeight, above, top: rect.bottom + GAP };
 }
 
 export function ForkTreePopover({
+  conversation,
   conversationId,
   open,
   onClose,
   anchorEl,
-  activeBranchIds,
+  placement = "above",
   onSwitchToConversation,
 }: {
+  conversation: ForkConversationLike;
   conversationId: string;
   open: boolean;
   onClose: () => void;
   anchorEl: HTMLElement | null;
-  activeBranchIds: Set<string>;
+  placement?: "above" | "below";
   onSwitchToConversation: (convId: string) => void;
 }) {
   const popRef = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(null);
+  const [pos, setPos] = useState<PopPos | null>(null);
 
   useWatchEffect(() => {
     if (!open || !anchorEl) {
       setPos(null);
       return;
     }
-    const width = 340;
-    const rect = anchorEl.getBoundingClientRect();
-    const left = Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8));
-    setPos({ top: rect.bottom + 6, left, width });
-  }, [open, anchorEl]);
+    const update = () => setPos(computePopoverPos(anchorEl, placement === "above"));
+    update();
+    // Keep glued to the input as the window resizes (the conversation column
+    // reflows). The popover is short-lived, so a resize listener is enough.
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, [open, anchorEl, placement]);
 
   useWatchEffect(() => {
     if (!open) return;
@@ -326,12 +434,21 @@ export function ForkTreePopover({
   return createPortal(
     <div
       ref={popRef}
-      style={{ position: "fixed", top: pos.top, left: pos.left, width: pos.width }}
-      className="z-[9999] max-h-[60vh] flex flex-col rounded-lg bg-sol-bg border border-sol-border shadow-xl ring-1 ring-black/5 animate-in fade-in slide-in-from-top-1 duration-150"
+      style={{
+        position: "fixed",
+        left: pos.left,
+        width: pos.width,
+        maxHeight: pos.maxHeight,
+        ...(pos.above ? { bottom: pos.bottom } : { top: pos.top }),
+      }}
+      className={`z-[9999] flex flex-col rounded-lg bg-sol-bg border border-sol-border shadow-2xl ring-1 ring-black/5 animate-in fade-in duration-150 ${
+        pos.above ? "slide-in-from-bottom-1" : "slide-in-from-top-1"
+      }`}
     >
       <div className="flex items-center justify-between px-3 py-2 border-b border-sol-border shrink-0">
-        <span className="text-[10px] text-sol-text-dim font-medium uppercase tracking-wider">
-          Branch tree
+        <span className="text-[10px] text-sol-text-dim font-medium uppercase tracking-wider inline-flex items-center gap-1.5">
+          <Split className="w-3 h-3 text-sol-cyan" />
+          Branch map
         </span>
         <button
           onClick={onClose}
@@ -343,12 +460,51 @@ export function ForkTreePopover({
         </button>
       </div>
       <ForkTreeContent
+        conversation={conversation}
         conversationId={conversationId}
         open={open}
         onClose={onClose}
-        activeBranchIds={activeBranchIds}
         onSwitchToConversation={onSwitchToConversation}
       />
+    </div>,
+    document.body
+  );
+}
+
+// Transient HUD shown by the [ / ] branch-hop shortcuts: confirms where you
+// landed ("3/7 · label") without opening the map. Fades itself out; the parent
+// clears state via onDone.
+export type BranchHop = {
+  id: string;
+  title: string;
+  index: number;
+  total: number;
+  live?: BranchLive;
+  ts: number;
+};
+
+export function BranchHopHud({ hop, onDone }: { hop: BranchHop | null; onDone: () => void }) {
+  useEffect(() => {
+    if (!hop) return;
+    const t = setTimeout(onDone, 1600);
+    return () => clearTimeout(t);
+  }, [hop, onDone]);
+
+  if (!hop) return null;
+
+  return createPortal(
+    <div
+      key={hop.ts}
+      className="fixed top-12 left-1/2 -translate-x-1/2 z-[9999] pointer-events-none animate-in fade-in slide-in-from-top-2 duration-150"
+    >
+      <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-sol-bg border border-sol-border shadow-lg text-xs">
+        <Split className="w-3.5 h-3.5 text-sol-cyan flex-shrink-0" />
+        <span className="text-sol-text-dim tabular-nums flex-shrink-0">
+          {hop.index}/{hop.total}
+        </span>
+        <LiveDot live={hop.live} />
+        <span className="text-sol-text truncate max-w-[280px]">{hop.title}</span>
+      </div>
     </div>,
     document.body
   );

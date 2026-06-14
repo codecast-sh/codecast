@@ -4752,7 +4752,80 @@ export const getConversationTree = query({
       status: string;
       agent_type?: string;
       is_current: boolean;
+      // The prompt that started THIS branch: the first user message after the
+      // fork point. Sibling forks share a title, so this is what actually
+      // tells them apart in the branch map.
+      branch_label?: string;
+      // Messages on this branch after the fork point (the branch's own work,
+      // excluding history inherited from the parent).
+      branch_message_count?: number;
       children: TreeNode[];
+    };
+
+    // First real user prompt out of a small message window, tags/whitespace
+    // stripped. Slash-command wrappers (<command-message>…) reduce to their
+    // inner text, which still reads usefully ("commit and deploy…").
+    const firstUserPrompt = (
+      msgs: Array<{ role: string; content?: unknown }>,
+    ): string | undefined => {
+      const clean = (s: string) => s.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+      for (const m of msgs) {
+        if (m.role === "user" && typeof m.content === "string") {
+          const c = clean(m.content);
+          if (c) return c.slice(0, 140);
+        }
+      }
+      for (const m of msgs) {
+        if (typeof m.content === "string") {
+          const c = clean(m.content);
+          if (c) return c.slice(0, 140);
+        }
+      }
+      return undefined;
+    };
+
+    // Per-branch summary. For a fork we locate the fork point by its uuid (one
+    // indexed lookup), then range-scan ONLY the divergent messages after it —
+    // never the history copied down from the parent. For the root (no fork
+    // point) we summarize from the top. Bounded by .take so a huge branch costs
+    // a constant ~30 reads.
+    const summarizeBranch = async (
+      node: typeof root,
+    ): Promise<{ label?: string; count?: number }> => {
+      const hasForkPoint =
+        !!node.parent_message_uuid && node.parent_message_uuid !== "agent-switch";
+      if (hasForkPoint) {
+        const forkPoint = await ctx.db
+          .query("messages")
+          .withIndex("by_conversation_uuid", (q) =>
+            q.eq("conversation_id", node._id).eq("message_uuid", node.parent_message_uuid!),
+          )
+          .first();
+        if (forkPoint) {
+          const ts = forkPoint.timestamp;
+          const head = await ctx.db
+            .query("messages")
+            .withIndex("by_conversation_timestamp", (q) =>
+              q.eq("conversation_id", node._id).gt("timestamp", ts),
+            )
+            .order("asc")
+            .take(30);
+          // The count is message_count minus the inherited history. fork_copied
+          // is the count copied down; fall back to the raw count for legacy
+          // forks that predate the cursor.
+          const count =
+            typeof node.fork_copied === "number"
+              ? Math.max(0, node.message_count - node.fork_copied)
+              : node.message_count;
+          return { label: firstUserPrompt(head), count };
+        }
+      }
+      const head = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_timestamp", (q) => q.eq("conversation_id", node._id))
+        .order("asc")
+        .take(30);
+      return { label: firstUserPrompt(head), count: node.message_count };
     };
 
     const buildTree = async (node: typeof root): Promise<TreeNode> => {
@@ -4761,7 +4834,10 @@ export const getConversationTree = query({
         .withIndex("by_forked_from", (q) => q.eq("forked_from", node._id))
         .collect();
 
-      const childTrees = await Promise.all(children.map((c) => buildTree(c)));
+      const [summary, childTrees] = await Promise.all([
+        summarizeBranch(node),
+        Promise.all(children.map((c) => buildTree(c))),
+      ]);
 
       return {
         id: node._id.toString(),
@@ -4773,6 +4849,8 @@ export const getConversationTree = query({
         status: node.status,
         agent_type: node.agent_type,
         is_current: node._id.toString() === conv!._id.toString(),
+        branch_label: summary.label,
+        branch_message_count: summary.count,
         children: childTrees,
       };
     };

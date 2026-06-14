@@ -24,7 +24,7 @@ type ForkChild = {
 // Sentinel loadingBranchId for the "main" (parent) chip, which has no fork id.
 const MAIN_BRANCH = "main";
 
-function relativeTime(ts: number): string {
+export function relativeTime(ts: number): string {
   const diff = Date.now() - ts;
   const mins = Math.floor(diff / 60000);
   if (mins < 1) return "just now";
