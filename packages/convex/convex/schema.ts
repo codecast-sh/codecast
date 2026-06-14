@@ -1855,4 +1855,32 @@ export default defineSchema({
   })
     .index("by_name", ["name"]),
 
+  // Cross-entity change feed — the per-user "what changed" log that lets a
+  // client returning online catch up on EVERY change (including deletes) across
+  // conversations, tasks, docs and plans, without re-reading whole lists and
+  // diffing. One row PER ENTITY (not per change): every write upserts the row's
+  // `seq` to now, so the table is bounded by entity count, not change volume.
+  // The write interceptor in functions.ts is the sole writer (see changeLog.ts).
+  //  - entity_id      the entity's _id as a string (entity_type says which table)
+  //  - op             "upsert" (created/changed) | "delete" (hard-deleted)
+  //  - owner_user_id  the entity's user_id — owner-scope catch-up (the inbox)
+  //  - team_id        the entity's team_id when shared — team-scope catch-up
+  //  - seq            Date.now() at write time; the monotonic cursor clients track
+  change_log: defineTable({
+    entity_type: v.union(
+      v.literal("conversations"),
+      v.literal("tasks"),
+      v.literal("docs"),
+      v.literal("plans"),
+    ),
+    entity_id: v.string(),
+    op: v.union(v.literal("upsert"), v.literal("delete")),
+    owner_user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
+    seq: v.number(),
+  })
+    .index("by_entity", ["entity_id"])
+    .index("by_owner_seq", ["owner_user_id", "seq"])
+    .index("by_team_seq", ["team_id", "seq"]),
+
 });

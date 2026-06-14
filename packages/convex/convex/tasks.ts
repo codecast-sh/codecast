@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
-import { internalMutation, mutation, query } from "./_generated/server";
+import { internalMutation, mutation, query } from "./functions";
 import { verifyApiToken } from "./apiTokens";
 import { enqueueStartSession } from "./devices";
 import { Id } from "./_generated/dataModel";
@@ -1306,6 +1306,29 @@ export const webList = query({
 
     await enrichTasks(ctx, result);
     return { items: result, hasMore: false, cursor, isDelta };
+  },
+});
+
+// Change-feed batch fetch: current state for a set of task ids the user can
+// access (own or team). Same enriched row shape as webList (reuses enrichTasks),
+// so the client merges via syncTable("tasks"). No status filter — a dropped task
+// comes back with status:"dropped" and the client's read-time filter hides it.
+// Inaccessible / gone ids are omitted; the feed drives the prune. See changeFeed.ts.
+export const webGetByIds = query({
+  args: { ids: v.array(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { items: [] };
+    const result: any[] = [];
+    for (const raw of args.ids.slice(0, 300)) {
+      const id = ctx.db.normalizeId("tasks", raw);
+      if (!id) continue;
+      const task = await ctx.db.get(id);
+      if (!task || !(await canAccessTask(ctx, userId, task))) continue;
+      result.push(task);
+    }
+    await enrichTasks(ctx, result);
+    return { items: result };
   },
 });
 
