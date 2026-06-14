@@ -1226,14 +1226,17 @@ pre[class*="language-"] {
   margin: 0.28rem 1px;
 }
 
-/* Review batch strip embedded at the top of the composer block (alongside the
-   queued-message and pasted-image strips). Three visual tiers so it doesn't bleed
-   into the composer: a micro-label header, inset quote cards on the page surface
-   (lighter than the composer in light mode, darker in dark — inset either way),
-   and the input below a rule. */
+/* Review batch shelf at the top of the composer block. Hierarchy comes from a
+   single tinted BAND that bleeds to the composer's edges (negative margins mirror
+   the composer's px-4/py-2 padding; top radius hugs its rounded-2xl corners) — a
+   zone of the same block, not a box inside a box. Quotes are plain rail-indented
+   lines on the band; the input sits below on the untinted composer surface. */
 .cc-review-tray {
-  margin-bottom: 0.4rem;
-  border-bottom: 1px solid color-mix(in srgb, var(--sol-cyan) 25%, var(--sol-border));
+  margin: -0.5rem -1rem 0.55rem;
+  padding: 0.4rem 1rem 0.6rem;
+  background: color-mix(in srgb, var(--sol-cyan) 5%, var(--sol-bg));
+  border-bottom: 1px solid color-mix(in srgb, var(--sol-cyan) 22%, var(--sol-border) 60%);
+  border-radius: calc(1rem - 1px) calc(1rem - 1px) 0 0;
   font-size: 0.78rem;
 }
 .cc-review-tray-head {
@@ -1241,7 +1244,7 @@ pre[class*="language-"] {
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
-  padding: 0.25rem 0 0.4rem;
+  padding: 0.1rem 0 0.4rem;
 }
 .cc-review-tray-title {
   display: inline-flex;
@@ -1254,9 +1257,22 @@ pre[class*="language-"] {
   letter-spacing: 0.07em;
   min-width: 0;
 }
-.cc-review-tray-sub {
-  color: var(--sol-text-dim);
+/* Shelf actions stay light: ghost icon+text buttons quieter than the quotes
+   themselves; hover (from the global cc-comment-btn rules) supplies the chrome. */
+.cc-review-tray-actions .cc-comment-btn {
+  padding: 0.15rem 0.45rem;
+  font-weight: 400;
+}
+.cc-review-tray-actions .cc-comment-btn-primary {
+  color: color-mix(in srgb, var(--sol-cyan) 75%, var(--sol-text-dim));
   font-weight: 500;
+}
+/* Armed "Discard N?" state of the Clear button (two-step confirm). */
+.cc-comment-btn-confirm,
+.cc-comment-btn-confirm:hover {
+  color: var(--sol-red);
+  background: color-mix(in srgb, var(--sol-red) 12%, transparent);
+  font-weight: 600;
 }
 .cc-review-tray-actions {
   display: inline-flex;
@@ -1276,30 +1292,27 @@ pre[class*="language-"] {
 .cc-review-tray-list {
   max-height: 9.5rem;
   overflow-y: auto;
-  padding: 0 0 0.6rem;
+  padding: 0 0 0.1rem;
   display: flex;
   flex-direction: column;
-  gap: 0.3rem;
+  gap: 0.45rem;
 }
-/* Each quote is its own inset card: page-surface background with a faint cyan
-   wash and a solid cyan rail, so the batch reads as discrete attached objects
-   sitting on top of the composer rather than text mixed into it. */
 .cc-review-tray-item {
   display: flex;
   align-items: flex-start;
   gap: 0.4rem;
-  padding: 0.35rem 0.45rem 0.35rem 0.6rem;
-  background: color-mix(in srgb, var(--sol-cyan) 5%, var(--sol-bg));
-  border: 1px solid color-mix(in srgb, var(--sol-cyan) 16%, var(--sol-border) 40%);
+  padding: 0.1rem 0 0.1rem 0.6rem;
   border-left: 2px solid color-mix(in srgb, var(--sol-cyan) 70%, var(--sol-border));
-  border-radius: 0.25rem 0.45rem 0.45rem 0.25rem;
 }
 .cc-review-tray-item-main {
   flex: 1 1 auto;
   min-width: 0;
 }
+/* The QUOTE (their words) recedes: smaller, dimmer, italic. The NOTE (your
+   words) leads: full-strength text behind a cyan reply arrow. */
 .cc-review-tray-quote {
-  color: var(--sol-text-muted);
+  color: var(--sol-text-dim);
+  font-size: 0.72rem;
   font-style: italic;
   line-height: 1.4;
   display: -webkit-box;
@@ -1309,10 +1322,17 @@ pre[class*="language-"] {
 }
 .cc-review-tray-note {
   color: var(--sol-text);
-  margin-top: 0.15rem;
+  font-weight: 500;
+  margin-top: 0.2rem;
   white-space: pre-wrap;
   word-break: break-word;
   line-height: 1.4;
+}
+.cc-review-tray-note::before {
+  content: "↳";
+  color: var(--sol-cyan);
+  font-weight: 700;
+  margin-right: 0.35rem;
 }
 .cc-review-tray-x {
   flex: none;
