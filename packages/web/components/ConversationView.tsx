@@ -69,7 +69,7 @@ import {
   DropdownMenuSubContent,
 } from "./ui/dropdown-menu";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
-import { useMutation, useQuery, useConvex, useConvexAuth } from "convex/react";
+import { useMutation, useQuery, useConvex, useConvexAuth, useAction } from "convex/react";
 import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
 import { DynamicRunView, wfStatusMeta, wfFmtTokens } from "./DynamicRunView";
 const api = _typedApi as any;
@@ -135,7 +135,7 @@ import { parseFileChangeSummary, parseUnifiedDiffSections } from "../lib/unified
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
-import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal } from "lucide-react";
+import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText } from "lucide-react";
 import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES, labelMentionItems } from "../hooks/useMentionQuery";
 
@@ -357,9 +357,25 @@ const renderAssistantBody = (content: string) => {
 // the post-deferral switch trace). FIFO-capped so a long-lived tab stays bounded.
 const VIRT_HEIGHT_CACHE = new Map<string, number>();
 const VIRT_HEIGHT_CACHE_MAX = 8000;
-function virtHeightKey(itemKey: string | number, collapsed: boolean): string {
-  return `${itemKey}|${collapsed ? "c" : "e"}`;
+function virtHeightKey(itemKey: string | number, density: MessageFeedDensity): string {
+  return `${itemKey}|${density}`;
 }
+
+// View density for the conversation. The first three render the message feed
+// with progressively less chrome; "story" and "summary" replace the feed with
+// LLM-condensed views backed by storyMode.ts.
+export type ConversationDensity = "full" | "condensed" | "compact" | "story" | "summary";
+type MessageFeedDensity = "full" | "condensed" | "compact";
+const FEED_DENSITY_CYCLE: MessageFeedDensity[] = ["full", "condensed", "compact"];
+// Last-chosen density per conversation, app-session scoped.
+const DENSITY_BY_CONVERSATION = new Map<string, ConversationDensity>();
+const DENSITY_OPTIONS: Array<{ value: ConversationDensity; label: string; description: string; icon: React.ComponentType<{ className?: string }>; ai?: boolean }> = [
+  { value: "full", label: "Full", description: "Everything as it happened", icon: AlignJustify },
+  { value: "condensed", label: "Condensed", description: "Tool activity as one-line receipts", icon: ListCollapse },
+  { value: "compact", label: "Compact", description: "Condensed, plus long replies clipped to their ending", icon: GalleryVerticalEnd },
+  { value: "story", label: "Story", description: "A timeline retelling, each reply condensed in its own voice", icon: GitCommitVertical, ai: true },
+  { value: "summary", label: "Summary", description: "One short narrative of the whole session", icon: BookOpenText, ai: true },
+];
 function recordVirtHeight(key: string, size: number) {
   if (size <= 0) return; // 0-height rows are already exact via the heuristic; don't cache
   if (VIRT_HEIGHT_CACHE.size >= VIRT_HEIGHT_CACHE_MAX && !VIRT_HEIGHT_CACHE.has(key)) {
@@ -5648,6 +5664,197 @@ function linkifyMentions(text: string, map: Record<string, string>): string {
   }).join('');
 }
 
+// ── Story & Summary densities ───────────────────────────────────────────────
+// Both render from storyMode.ts data covering the WHOLE thread (not the
+// paginated message window). Story: a dot timeline of user prompts verbatim and
+// assistant replies condensed by Haiku in the author's own voice; long replies
+// without a cached condensation render as shimmer until generation lands
+// (reactively, via the getStory subscription). Summary: one cached narrative.
+
+type StoryEntryData = { message_id: string; role: "user" | "assistant"; timestamp: number; kind: "verbatim" | "summary" | "pending"; text: string };
+
+function StorySpinner() {
+  return (
+    <svg className="w-3 h-3 animate-spin shrink-0" fill="none" viewBox="0 0 24 24">
+      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+    </svg>
+  );
+}
+
+const StoryEntryRow = memo(function StoryEntryRow({ entry, userName, onJump }: { entry: StoryEntryData; userName?: string; onJump?: (messageId: string, timestamp: number) => void }) {
+  const [expanded, setExpanded] = useState(false);
+  const isUser = entry.role === "user";
+  const text = isUser ? stripSystemTags(entry.text).trim() : entry.text;
+  if (isUser && !text) return null;
+  return (
+    <div className="relative pl-7 pb-6 group/story">
+      <button
+        onClick={onJump ? () => onJump(entry.message_id, entry.timestamp) : undefined}
+        className={`absolute left-0 top-[2px] w-[15px] h-[15px] rounded-full flex items-center justify-center bg-sol-bg ring-1 transition-all ${isUser ? "ring-sol-blue/50" : "ring-sol-border"} hover:ring-sol-cyan`}
+        title="Jump to the full message"
+      >
+        <span className={`block rounded-full ${isUser ? "w-[7px] h-[7px] bg-sol-blue" : "w-[5px] h-[5px] bg-sol-text-dim/70"}`} />
+      </button>
+      <div className="flex items-baseline gap-2 mb-1">
+        <span className={`text-[11px] font-semibold tracking-wide ${isUser ? "text-sol-blue" : "text-sol-text-secondary"}`}>{isUser ? (userName || "You") : "Claude"}</span>
+        <span className="text-[10px] text-sol-text-dim/60">{formatRelativeTime(entry.timestamp)}</span>
+      </div>
+      {entry.kind === "pending" ? (
+        <div className="space-y-1.5 py-0.5 animate-pulse max-w-xl">
+          <div className="h-2.5 rounded bg-sol-border/50 w-11/12" />
+          <div className="h-2.5 rounded bg-sol-border/50 w-2/3" />
+        </div>
+      ) : isUser ? (
+        <div
+          className={`text-sm text-sol-text whitespace-pre-wrap break-words ${expanded ? "" : "line-clamp-3"}`}
+          onClick={expanded ? undefined : () => setExpanded(true)}
+          role={expanded ? undefined : "button"}
+        >
+          {text}
+        </div>
+      ) : (
+        <div className="prose prose-invert prose-sm max-w-none text-sol-text">
+          <MessageMarkdown content={entry.text} />
+        </div>
+      )}
+    </div>
+  );
+});
+
+function StoryTimelineView({ conversationId, userName, onJump }: { conversationId?: Id<"conversations">; userName?: string; onJump?: (messageId: string, timestamp: number) => void }) {
+  const story = useQuery(api.storyMode.getStory, conversationId ? { conversation_id: conversationId } : "skip");
+  const generate = useAction(api.storyMode.generateStorySummaries);
+  const runningRef = useRef(false);
+  const [runNonce, setRunNonce] = useState(0);
+  // Kick generation whenever uncondensed replies exist. One run is capped
+  // server-side; re-arm only after a run that actually produced summaries, so
+  // a failing backend can't loop.
+  useWatchEffect(() => {
+    void runNonce;
+    if (!conversationId || !story || story.pendingCount === 0 || runningRef.current) return;
+    runningRef.current = true;
+    generate({ conversation_id: conversationId })
+      .then((r: { generated: number } | null) => { if (r && r.generated > 0) setRunNonce(n => n + 1); })
+      .catch(() => {})
+      .finally(() => { runningRef.current = false; });
+  }, [conversationId, story?.pendingCount, runNonce]);
+
+  if (!story) return <div className="py-12 text-center text-sm text-sol-text-dim">Loading story…</div>;
+  if (story.entries.length === 0) return <div className="py-12 text-center text-sm text-sol-text-dim">Nothing to retell yet.</div>;
+  return (
+    <div className="py-5">
+      {story.pendingCount > 0 && (
+        <div className="mb-5 flex items-center gap-2 text-[11px] text-sol-text-dim">
+          <StorySpinner />
+          Condensing {story.pendingCount} long {story.pendingCount === 1 ? "reply" : "replies"}…
+        </div>
+      )}
+      <div className="relative">
+        <div className="absolute left-[7px] top-1 bottom-1 w-px bg-sol-border/50" />
+        {story.entries.map((e: StoryEntryData) => (
+          <StoryEntryRow key={e.message_id} entry={e} userName={userName} onJump={onJump} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ThreadSummaryView({ conversationId }: { conversationId?: Id<"conversations"> }) {
+  const data = useQuery(api.storyMode.getThreadSummary, conversationId ? { conversation_id: conversationId } : "skip");
+  const generate = useAction(api.storyMode.generateThreadSummary);
+  const [running, setRunning] = useState(false);
+  const autoFiredRef = useRef<string | null>(null);
+  const run = useCallback(() => {
+    if (!conversationId) return;
+    setRunning(true);
+    generate({ conversation_id: conversationId }).catch(() => {}).finally(() => setRunning(false));
+  }, [conversationId, generate]);
+  // Auto-(re)generate when missing or grown stale — once per conversation per
+  // mount; the Refresh button covers the rest.
+  useWatchEffect(() => {
+    if (!conversationId || !data || !data.stale) return;
+    if (autoFiredRef.current === conversationId) return;
+    autoFiredRef.current = conversationId;
+    run();
+  }, [conversationId, data?.stale, run]);
+
+  if (!data) return <div className="py-12 text-center text-sm text-sol-text-dim">Loading…</div>;
+  if (!data.summary) {
+    return (
+      <div className="py-12 flex flex-col items-center gap-3 text-sm text-sol-text-dim">
+        <div className="flex items-center gap-2"><StorySpinner /> Writing the story of this session…</div>
+        <div className="w-full max-w-md space-y-2 animate-pulse mt-2">
+          <div className="h-2.5 rounded bg-sol-border/50 w-full" />
+          <div className="h-2.5 rounded bg-sol-border/50 w-5/6" />
+          <div className="h-2.5 rounded bg-sol-border/50 w-2/3" />
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="py-6">
+      <div className="prose prose-invert prose-sm max-w-none text-sol-text">
+        <MessageMarkdown content={data.summary} />
+      </div>
+      <div className="mt-6 pt-3 border-t border-sol-border/40 flex items-center gap-3 text-[11px] text-sol-text-dim">
+        <span>
+          As of {data.message_count} messages
+          {data.generated_at ? ` · ${formatRelativeTime(data.generated_at)}` : ""}
+        </span>
+        {running ? (
+          <span className="flex items-center gap-1.5"><StorySpinner /> updating…</span>
+        ) : data.stale ? (
+          <button onClick={run} className="text-sol-cyan/80 hover:text-sol-cyan transition-colors">Refresh</button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+// One subtle gray line standing in for a message's tool activity in the
+// condensed/compact densities: "read 3 files · ran 2 commands". Click to
+// swap in the full tool blocks.
+function describeToolGroup(rawName: string, count: number): string {
+  const n = count;
+  switch (rawName) {
+    case "Read": return n === 1 ? "read 1 file" : `read ${n} files`;
+    case "Edit":
+    case "NotebookEdit": return n === 1 ? "1 edit" : `${n} edits`;
+    case "Write": return n === 1 ? "wrote 1 file" : `wrote ${n} files`;
+    case "Bash": return n === 1 ? "ran 1 command" : `ran ${n} commands`;
+    case "Grep":
+    case "Glob": return n === 1 ? "1 search" : `${n} searches`;
+    case "WebFetch":
+    case "WebSearch": return n === 1 ? "1 web lookup" : `${n} web lookups`;
+    case "Task":
+    case "Agent": return n === 1 ? "ran 1 agent" : `ran ${n} agents`;
+    case "TodoWrite": return "updated todos";
+    default: {
+      const label = formatToolName(rawName) || rawName;
+      return n === 1 ? label : `${label} ×${n}`;
+    }
+  }
+}
+
+const CondensedToolsLine = memo(function CondensedToolsLine({ tools, expanded, onToggle }: { tools: ToolCall[]; expanded: boolean; onToggle: () => void }) {
+  const summary = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const tc of tools) counts.set(tc.name, (counts.get(tc.name) ?? 0) + 1);
+    return [...counts.entries()].map(([name, count]) => describeToolGroup(name, count)).join(" · ");
+  }, [tools]);
+  return (
+    <button
+      onClick={onToggle}
+      className="flex items-center gap-1.5 py-0.5 max-w-full text-[11px] text-sol-text-dim/70 hover:text-sol-text-dim transition-colors"
+      title={expanded ? "Hide tool details" : "Show tool details"}
+    >
+      <ChevronRight className={`w-3 h-3 shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`} />
+      <span className="truncate">{summary}</span>
+    </button>
+  );
+});
+
 function AssistantBlockImpl({
   content,
   timestamp,
@@ -5659,7 +5866,7 @@ function AssistantBlockImpl({
   messageId,
   messageUuid,
   conversationId,
-  collapsed,
+  density = "full",
   childConversationMap,
   childConversations,
   agentNameToChildMap,
@@ -5667,9 +5874,6 @@ function AssistantBlockImpl({
   onOpenComments,
   toolCallChangeSelectionMap,
   isHighlighted,
-  onToggleCollapsed,
-  isSequenceExpanded,
-  showCollapseButton,
   runMessageIds,
   shareSelectionMode,
   isSelectedForShare,
@@ -5699,7 +5903,7 @@ function AssistantBlockImpl({
   messageId: string;
   messageUuid?: string;
   conversationId?: Id<"conversations">;
-  collapsed?: boolean;
+  density?: MessageFeedDensity;
   childConversationMap?: Record<string, string>;
   childConversations?: Array<{ _id: string; title: string; is_subagent?: boolean; first_message_preview?: string }>;
   agentNameToChildMap?: Record<string, string>;
@@ -5707,9 +5911,6 @@ function AssistantBlockImpl({
   onOpenComments?: (messageId: string) => void;
   toolCallChangeSelectionMap?: Record<string, ToolCallChangeSelection>;
   isHighlighted?: boolean;
-  onToggleCollapsed?: () => void;
-  isSequenceExpanded?: boolean;
-  showCollapseButton?: boolean;
   runMessageIds?: string[];
   shareSelectionMode?: boolean;
   isSelectedForShare?: boolean;
@@ -5729,9 +5930,18 @@ function AssistantBlockImpl({
   isConversationActive?: boolean;
   globalImageMap?: Record<string, ImageData>;
 }) {
-  const COLLAPSED_LINES = 2;
   const CONTENT_MAX_HEIGHT = 800;
+  // Compact mode: long replies clip to their last ~1000px (the ending is the
+  // payoff), expandable per message. Slack beyond the cap avoids clamping
+  // content that is barely over it.
+  const COMPACT_MAX_HEIGHT = 1000;
+  const COMPACT_SLACK = 200;
 
+  const condensed = density === "condensed" || density === "compact";
+  const [toolsExpanded, setToolsExpanded] = useState(false);
+  const effectiveCondensed = condensed && !toolsExpanded;
+  const [compactExpanded, setCompactExpanded] = useState(false);
+  const [contentHeight, setContentHeight] = useState(0);
   const [contentExpanded, setContentExpanded] = useState(true);
   const [isOverflowing, setIsOverflowing] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
@@ -5771,14 +5981,17 @@ function AssistantBlockImpl({
   }, [toolResults]);
 
   useWatchEffect(() => {
-    if (!contentRef.current || collapsed) return;
+    if (!contentRef.current) return;
     const el = contentRef.current;
-    const check = () => setIsOverflowing(el.scrollHeight > CONTENT_MAX_HEIGHT);
+    const check = () => {
+      setIsOverflowing(el.scrollHeight > CONTENT_MAX_HEIGHT);
+      setContentHeight(el.scrollHeight);
+    };
     check();
     const obs = new ResizeObserver(check);
     obs.observe(el);
     return () => obs.disconnect();
-  }, [content, collapsed]);
+  }, [content]);
 
   useWatchEffect(() => {
     if (!fullscreen) return;
@@ -5791,14 +6004,6 @@ function AssistantBlockImpl({
   if (!hasContent && !hasThinking && !hasToolCalls && !hasImages) {
     return null;
   }
-
-  const lines = displayContent ? displayContent.split("\n") : [];
-  const getCollapsedContent = () => {
-    if (!collapsed || !displayContent) return { text: displayContent || "", wasTruncated: false };
-    if (lines.length <= COLLAPSED_LINES) return { text: displayContent, wasTruncated: false };
-    return { text: lines.slice(0, COLLAPSED_LINES).join("\n"), wasTruncated: true };
-  };
-  const { text: truncatedContent } = getCollapsedContent();
 
   const handleCopy = () => {
     const text = formatMessagePartsForCopy(displayContent, toolCalls, toolResults);
@@ -5833,15 +6038,12 @@ function AssistantBlockImpl({
     return null;
   }
 
-  // When collapsed and only tool calls (no text content), hide completely -- unless always-visible
   const hasPlanWrite = hasToolCalls && toolCalls?.some(isPlanWriteToolCall);
-  const hasAlwaysVisible = hasPlanWrite || (hasToolCalls && toolCalls?.some(isAlwaysVisibleToolCall));
-  if (collapsed && onlyToolCalls && !hasAlwaysVisible) {
-    return null;
-  }
+  const hiddenToolCalls = condensed ? (toolCalls ?? []).filter(tc => !isAlwaysVisibleToolCall(tc)) : [];
+  const compactClamped = density === "compact" && !compactExpanded && contentHeight > COMPACT_MAX_HEIGHT + COMPACT_SLACK;
 
   return (
-    <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 ${collapsed ? "mb-1" : onlyToolCalls ? "mb-1" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2 message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 rounded-lg p-2 -m-2 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""}`} onClick={shareSelectionMode ? (() => onToggleShareSelection?.(messageId)) : undefined} title={!shouldShowHeader ? formatRelativeTime(timestamp) : undefined}>
+    <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 ${onlyToolCalls ? "mb-1" : condensed ? "mb-4" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2 message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 rounded-lg p-2 -m-2 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""}`} onClick={shareSelectionMode ? (() => onToggleShareSelection?.(messageId)) : undefined} title={!shouldShowHeader ? formatRelativeTime(timestamp) : undefined}>
       {(hasContent || hasToolCalls) && (
         <div className={`absolute ${hasPlanWrite && onlyToolCalls ? "-top-6" : onlyToolCalls ? "top-1" : "-top-2"} right-0 transition-opacity duration-150 flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 group-hover:opacity-100"}`}>
           {/* Respond actions (quote into your reply) live on each block's left
@@ -5917,12 +6119,15 @@ function AssistantBlockImpl({
       )}
 
       <div className={shouldShowHeader || !showHeader ? "pl-8" : "pl-0"}>
-        {!collapsed && hasImages && images?.filter(img => !img.tool_use_id).map((img, i) => <ImageBlock key={i} image={img} />)}
+        {hasImages && images?.filter(img => !img.tool_use_id).map((img, i) => <ImageBlock key={i} image={img} />)}
 
-        {!collapsed && hasThinking && showThinking && <ThinkingBlock content={thinking!} showContent={showThinking} />}
+        {!effectiveCondensed && hasThinking && showThinking && <ThinkingBlock content={thinking!} showContent={showThinking} />}
 
+        {condensed && hiddenToolCalls.length > 0 && (
+          <CondensedToolsLine tools={hiddenToolCalls} expanded={toolsExpanded} onToggle={() => setToolsExpanded(v => !v)} />
+        )}
         {hasToolCalls && toolCalls?.map((tc) => {
-          if (collapsed && !isAlwaysVisibleToolCall(tc)) return null;
+          if (effectiveCondensed && !isAlwaysVisibleToolCall(tc)) return null;
           return (tc.name === "Task" || tc.name === "Agent") ? (
             <TaskToolBlock
               key={tc.id}
@@ -5963,7 +6168,7 @@ function AssistantBlockImpl({
               conversationId={conversationId}
               onStartShareSelection={onStartShareSelection}
               onOpenComments={onOpenComments ? () => onOpenComments(messageId) : undefined}
-              collapsed={collapsed}
+              collapsed={density === "compact"}
               timestamp={timestamp}
               images={images}
               globalImageMap={globalImageMap}
@@ -5973,22 +6178,29 @@ function AssistantBlockImpl({
 
         {hasContent && (
           <>
-            <div className={parsedApiError ? "" : `text-sol-text ${collapsed ? "text-sm whitespace-pre-wrap break-words" : "prose prose-invert prose-sm max-w-none"}`}>
+            <div className={parsedApiError ? "" : "text-sol-text prose prose-invert prose-sm max-w-none"}>
               {parsedApiError ? (
-                <ApiErrorCard error={parsedApiError} compact={!!collapsed} />
-              ) : collapsed ? (
-                <div className="relative overflow-hidden">
-                  <span>{truncatedContent}</span>
-                  {lines.length > COLLAPSED_LINES && (
-                    <div className="absolute bottom-0 left-0 right-0 h-[1.4em] pointer-events-none bg-gradient-to-b from-transparent to-[var(--sol-bg)]" />
-                  )}
-                </div>
+                <ApiErrorCard error={parsedApiError} compact={condensed} />
               ) : (
                 <div
                   ref={contentRef}
                   className="relative"
-                  style={!contentExpanded && isOverflowing ? { maxHeight: CONTENT_MAX_HEIGHT, overflowY: 'hidden' } : undefined}
+                  style={compactClamped
+                    ? { maxHeight: COMPACT_MAX_HEIGHT, overflowY: 'hidden', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }
+                    : (!contentExpanded && isOverflowing ? { maxHeight: CONTENT_MAX_HEIGHT, overflowY: 'hidden' } : undefined)}
                 >
+                  {compactClamped && (
+                    <>
+                      <div className="absolute top-0 left-0 right-0 h-16 pointer-events-none z-10 bg-gradient-to-b from-[var(--sol-bg)] to-transparent" />
+                      <button
+                        onClick={() => setCompactExpanded(true)}
+                        className="absolute top-1.5 left-1/2 -translate-x-1/2 z-20 px-2.5 py-0.5 rounded-full border border-sol-border bg-sol-bg-alt text-[11px] text-sol-text-dim hover:text-sol-cyan hover:border-sol-cyan/50 transition-colors shadow-sm flex items-center gap-1 not-prose"
+                      >
+                        <ChevronUp className="w-3 h-3" />
+                        Show earlier
+                      </button>
+                    </>
+                  )}
                   {conversationId ? (
                     <MessageReview
                       conversationId={conversationId}
@@ -6005,7 +6217,7 @@ function AssistantBlockImpl({
                 </div>
               )}
             </div>
-            {!collapsed && !parsedApiError && (isOverflowing || !contentExpanded) && (
+            {!parsedApiError && !compactClamped && (isOverflowing || !contentExpanded) && (
               <div className="flex items-center gap-1 mt-2">
                 <button
                   onClick={() => setFullscreen(true)}
@@ -6018,7 +6230,7 @@ function AssistantBlockImpl({
                   <span className="hidden sm:inline text-xs text-sol-text-dim">Full Screen</span>
                 </button>
                 <button
-                  onClick={() => setContentExpanded(e => !e)}
+                  onClick={() => density === "compact" && compactExpanded ? setCompactExpanded(false) : setContentExpanded(e => !e)}
                   className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-cyan transition-colors"
                   title={contentExpanded ? "Collapse" : "Expand"}
                 >
@@ -6068,25 +6280,9 @@ function AssistantBlockImpl({
           document.body
         )}
 
-        {collapsed && onToggleCollapsed && (
-          <button
-            onClick={onToggleCollapsed}
-            className="text-xs text-sol-text-dim hover:text-sol-text-muted mt-1 transition-colors"
-          >
-            Expand
-          </button>
-        )}
-        {showCollapseButton && onToggleCollapsed && (
-          <button
-            onClick={onToggleCollapsed}
-            className="text-xs text-sol-text-dim hover:text-sol-text-muted mt-1 transition-colors"
-          >
-            Collapse
-          </button>
-        )}
       </div>
 
-      {onForkFromMessage && messageUuid && !collapsed && !onlyToolCalls && !shareSelectionMode && !(forkChildren && forkChildren.length) && (
+      {onForkFromMessage && messageUuid && !onlyToolCalls && !shareSelectionMode && !(forkChildren && forkChildren.length) && (
         <button
           onClick={() => onForkFromMessage(messageUuid)}
           className="absolute right-2 -bottom-3 z-10 inline-flex items-center gap-1.5 text-[11px] font-medium pl-1.5 pr-2.5 py-1 rounded-md border border-dashed border-sol-border/60 bg-sol-bg text-sol-text-dim shadow-sm opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto hover:text-sol-cyan hover:border-sol-cyan/50 hover:bg-sol-cyan/10 transition-all duration-150"
@@ -8897,7 +9093,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
             <ShortcutHint keys={["Ctrl", "←"]} label="Dismiss session" />
             <ShortcutHint keys={["Esc"]} label="Escape to session" />
             <ShortcutHint keys={["Esc", "Esc"]} label="Send escape" />
-            <ShortcutHint keys={["Cmd", "Shift", "C"]} label="Collapse tool blocks" />
+            <ShortcutHint keys={["Cmd", "Shift", "C"]} label="Cycle view density" />
             <ShortcutHint keys={["Ctrl", "."]} label="Zen mode" />
             <ShortcutHint keys={["Shift", "Tab"]} label="Cycle CC mode" />
             <ShortcutHint keys={["Cmd", "Shift", "L"]} label="Copy link" />
@@ -9033,9 +9229,16 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   // showed the down arrow on a 2px nudge while still parked at the bottom.
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [isScrollable, setIsScrollable] = useState(false);
-  const [collapsed, setCollapsed] = useState(false);
+  const [density, setDensityState] = useState<ConversationDensity>("full");
+  const setDensity = useCallback((d: ConversationDensity) => {
+    setDensityState(d);
+    if (conversation?._id) DENSITY_BY_CONVERSATION.set(conversation._id, d);
+  }, [conversation?._id]);
+  // Feed-rendering density: story/summary swap the feed out entirely, so the
+  // virtualizer (and its height cache keys) only ever sees the first three.
+  const feedDensity: MessageFeedDensity = density === "condensed" || density === "compact" ? density : "full";
+  const condensedFeed = feedDensity !== "full";
   const [showThinking, setShowThinking] = useState(false);
-  const [expandedSequences, setExpandedSequences] = useState<Set<string>>(new Set());
   const [diffExpanded, setDiffExpanded] = useState(false);
   const convex = useConvex();
   const convexConvId = conversation?._id && isConvexId(conversation._id) ? conversation._id as Id<"conversations"> : undefined;
@@ -9156,9 +9359,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     userScrolledRef.current = false;
     setIsNearTop(true);
     setIsNearBottom(true);
-    setCollapsed(false);
+    setDensityState((conversation?._id && DENSITY_BY_CONVERSATION.get(conversation._id)) || "full");
     setShowThinking(false);
-    setExpandedSequences(new Set());
     setDiffExpanded(false);
     setHighlightedMessageId(null);
     setAllMatchingMessageIds([]);
@@ -9942,32 +10144,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return { byCommand, consumed };
   }, [timeline, userMsgKindMap]);
 
-  // Set of assistant message _ids that are the FIRST text-bearing assistant message in
-  // their turn (since the last user message). Used by estimateSize and renderItem to
-  // avoid an O(n) backward scan per row (which compounds to O(n²) during measurement).
-  const assistantFirstTextInTurnSet = useMemo(() => {
-    const set = new Set<string>();
-    let sawAssistantTextInTurn = false;
-    for (let i = 0; i < timeline.length; i++) {
-      const item = timeline[i];
-      if (item.type !== 'message') continue;
-      const m = item.data as Message;
-      if (m.role === 'user') { sawAssistantTextInTurn = false; continue; }
-      if (m.role !== 'assistant') continue;
-      if (m.tool_calls?.some(isAlwaysVisibleToolCall)) {
-        set.add(m._id);
-        continue;
-      }
-      const hasText = !!(m.content && m.content.trim().length > 0);
-      if (!hasText) continue;
-      if (!sawAssistantTextInTurn) {
-        set.add(m._id);
-        sawAssistantTextInTurn = true;
-      }
-    }
-    return set;
-  }, [timeline]);
-
   const sessionSkills = useMemo(() => resolveSessionSkills({
     availableSkills: (currentUser as any)?.available_skills,
     projectPath: conversation?.project_path,
@@ -10307,6 +10483,22 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); clearTimeout(t4); };
   }, [navTrigger, messages, highlightedMessageId]);
 
+  const jumpToStoryMessage = useCallback((messageId: string, timestamp: number) => {
+    setDensity("full");
+    setHighlightedMessageId(messageId);
+    let jumped = false;
+    const attempt = (tries: number) => {
+      const el = containerRef.current?.querySelector(`#msg-${CSS.escape(messageId)}`);
+      if (el) { el.scrollIntoView({ block: "center" }); return; }
+      if (!jumped && tries >= 2 && !loadedIdsRef.current.has(messageId) && onJumpToTimestamp) {
+        jumped = true;
+        onJumpToTimestamp(timestamp);
+      }
+      if (tries < 16) setTimeout(() => attempt(tries + 1), 150);
+    };
+    setTimeout(() => attempt(0), 60);
+  }, [onJumpToTimestamp, setDensity]);
+
   const handleCopyAll = () => {
     if (!convexConvId) {
       toast.error("No messages to copy");
@@ -10436,29 +10628,20 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     // below — accurate estimates are what stop the measure-driven reflow cascade
     // on a switch. measureElement keeps this fresh; streaming/visible rows are
     // measured live so a stale entry only ever affects an off-screen row briefly.
-    const cachedHeight = VIRT_HEIGHT_CACHE.get(virtHeightKey(getItemKey(index), collapsed));
+    const cachedHeight = VIRT_HEIGHT_CACHE.get(virtHeightKey(getItemKey(index), feedDensity));
     if (cachedHeight !== undefined) return cachedHeight;
 
     if (item.type === 'commit') return 80;
 
     const msg = item.data as Message;
-    if (collapsed) {
-      if (msg.role === "system") return 0;
-      if (msg.role === "user") {
-        const kind = userMsgKindMap.get(msg._id);
-        if (kind && kind.kind !== 'normal' && kind.kind !== 'plan' && kind.kind !== 'skill_expansion') return 0;
-      }
+    if (condensedFeed) {
+      // Tool-only assistant rows shrink to a single receipt line (unless an
+      // always-visible block like a poll or plan write keeps them tall).
       if (msg.role === "assistant") {
-        // Always-visible tool calls (AskUserQuestion polls, plan writes) render even
-        // with empty content — renderItem keeps them. estimateSize must agree, or the
-        // virtualizer gives them 0 height and the card never enters the viewport (the
-        // live /model poll vanishing from the web UI was exactly this desync).
+        const hasTextContent = msg.content && msg.content.trim().length > 0;
         if (msg.tool_calls?.some(isAlwaysVisibleToolCall)) return 200;
-        // Only the first text-bearing assistant message in a turn renders (size 80).
-        // All others collapse to 0. Membership check is O(1) thanks to the precomputed set.
-        if (!assistantFirstTextInTurnSet.has(msg._id)) return 0;
+        if (!hasTextContent && (msg.tool_calls?.length || 0) > 0) return 24;
       }
-      return 80;
     }
 
     if (msg.role === "system") return 8;
@@ -10490,7 +10673,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       return 200;
     }
     return 40;
-  }, [timeline, collapsed, userMsgKindMap, assistantFirstTextInTurnSet, commandExpansionMap, getItemKey]);
+  }, [timeline, feedDensity, condensedFeed, userMsgKindMap, commandExpansionMap, getItemKey]);
 
   // Mirror @tanstack/virtual-core's default measureElement, but persist every
   // measured height into VIRT_HEIGHT_CACHE keyed by the stable item key so a
@@ -10509,9 +10692,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       size = cached !== undefined ? cached : (element as HTMLElement)[horizontal ? "offsetWidth" : "offsetHeight"];
     }
     const index = instance.indexFromElement(element);
-    if (index >= 0) recordVirtHeight(virtHeightKey(instance.options.getItemKey(index), collapsed), size);
+    if (index >= 0) recordVirtHeight(virtHeightKey(instance.options.getItemKey(index), feedDensity), size);
     return size;
-  }, [collapsed]);
+  }, [feedDensity]);
 
   const virtualizer = useVirtualizer({
     count: timeline.length,
@@ -11435,7 +11618,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   useEventListener("keydown", (e: KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "c") {
       e.preventDefault();
-      setCollapsed((c) => !c);
+      // Cycle the three local feed densities; the LLM views stay dropdown-only.
+      setDensity(FEED_DENSITY_CYCLE[(FEED_DENSITY_CYCLE.indexOf(feedDensity) + 1) % FEED_DENSITY_CYCLE.length]);
     }
   });
 
@@ -11645,7 +11829,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
     const msg = item.data as Message;
     if (msg.role === "system") {
-      if (collapsed) return null;
       return <SystemBlock key={msg._id} content={msg.content || ""} subtype={msg.subtype} timestamp={msg.timestamp} messageUuid={msg.message_uuid} messageId={msg._id} conversationId={conversation?._id} onStartShareSelection={handleStartShareSelection} />;
     }
 
@@ -11659,39 +11842,33 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         case 'poll_response':
           return null;
         case 'command': {
-          if (collapsed) return null;
           return <CommandMessageBlock key={msg._id} messageId={msg._id} content={msg.content!} expansion={commandExpansionMap.byCommand.get(msg._id)} timestamp={msg.timestamp} userName={conversation?.user?.name || conversation?.user?.email?.split("@")[0]} avatarUrl={conversation?.user?.avatar_url} agentType={conversation?.agent_type} />;
         }
         case 'interrupt':
-          if (collapsed) return null;
           return <InterruptStatusLine key={msg._id} label={kind.tone === 'amber' ? "turn aborted" : undefined} tone={kind.tone} />;
         case 'continuation':
-          if (collapsed) return null;
           return <InterruptStatusLine key={msg._id} label="session continued" tone="sky" />;
         case 'skill_expansion':
-          if (!collapsed && commandExpansionMap.consumed.has(msg._id)) return null;
-          return <SkillExpansionBlock key={msg._id} content={msg.content!} timestamp={msg.timestamp} cmdName={kind.cmdName} collapsed={collapsed} />;
+          if (commandExpansionMap.consumed.has(msg._id)) return null;
+          return <SkillExpansionBlock key={msg._id} content={msg.content!} timestamp={msg.timestamp} cmdName={kind.cmdName} collapsed={condensedFeed} />;
         case 'task_notification':
-          if (collapsed) return null;
           return <TaskNotificationLine key={msg._id} content={msg.content!} timestamp={msg.timestamp} agentNameToChildMap={agentNameToChildMap} />;
         case 'scheduled_task':
-          if (collapsed) return null;
           return <ScheduledTaskBlock key={msg._id} content={msg.content!} timestamp={msg.timestamp} />;
         case 'session_message':
-          if (collapsed) return null;
           return <SessionMessageBlock key={msg._id} from={kind.from} body={kind.body} timestamp={msg.timestamp} pendingStatus={(msg as any)._serverPendingStatus} recipientActive={conversation?.status === "active"} />;
         case 'task_prompt':
           return null;
         case 'compaction_summary':
           return <CompactionSummaryBlock key={msg._id} content={msg.content!} />;
         case 'plan':
-          return <PlanBlock key={msg._id} content={kind.planContent} timestamp={msg.timestamp} collapsed={collapsed} messageId={msg._id} conversationId={conversation?._id} onStartShareSelection={handleStartShareSelection} />;
+          return <PlanBlock key={msg._id} content={kind.planContent} timestamp={msg.timestamp} collapsed={density === "compact"} messageId={msg._id} conversationId={conversation?._id} onStartShareSelection={handleStartShareSelection} />;
         case 'teammate_events':
           return <TeammateEventsBlock key={msg._id} content={msg.content || ""} timestamp={msg.timestamp} />;
         case 'normal': {
           if (!msg.content?.trim() && !msg.images?.some(img => !img.tool_use_id)) return null;
           const userName = conversation?.user?.name || conversation?.user?.email?.split("@")[0];
-          return <UserPrompt key={msg._id} content={msg.content || ""} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={collapsed} userName={userName} avatarUrl={conversation?.user?.avatar_url} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={handleToggleMessageSelection} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={handleBranchSwitch} activeBranchId={activeBranchId} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} mainMessageCount={msg.message_uuid ? conversation?.main_message_counts_by_fork?.[msg.message_uuid] : undefined} />;
+          return <UserPrompt key={msg._id} content={msg.content || ""} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={density === "compact"} userName={userName} avatarUrl={conversation?.user?.avatar_url} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={handleToggleMessageSelection} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={handleBranchSwitch} activeBranchId={activeBranchId} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} mainMessageCount={msg.message_uuid ? conversation?.main_message_counts_by_fork?.[msg.message_uuid] : undefined} />;
         }
       }
     }
@@ -11731,20 +11908,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       const prevMsg = prevItem?.type === 'message' ? (prevItem.data as Message) : null;
       const isFirstInSequence = !prevMsg || prevMsg.role !== "assistant";
 
-      // Find the sequence start ID (first assistant message with text in this sequence)
-      let sequenceStartId = msg._id;
-      for (let i = index - 1; i >= 0; i--) {
-        const checkItem = timeline[i];
-        if (checkItem.type !== 'message') continue;
-        const checkMsg = checkItem.data as Message;
-        if (checkMsg.role === "user") break;
-        if (checkMsg.role === "assistant" && checkMsg.content && checkMsg.content.trim().length > 0) {
-          sequenceStartId = checkMsg._id;
-        }
-      }
-
-      const isSequenceExpanded = expandedSequences.has(sequenceStartId);
-
       // Compute all message IDs in the current run (for sharing)
       const runMessageIds: string[] = [];
       for (let i = index; i >= 0; i--) {
@@ -11764,38 +11927,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         if (checkMsg.role === "assistant") runMessageIds.push(checkMsg._id);
       }
 
-      // In collapsed mode, only render messages if sequence is expanded OR this is the first with text
-      if (collapsed && !isSequenceExpanded) {
-        const hasAlwaysVisible = msg.tool_calls?.some(isAlwaysVisibleToolCall);
-        if (!hasAlwaysVisible) {
-          const hasTextContent = msg.content && msg.content.trim().length > 0;
-
-          // Check if there's an earlier assistant message with text content in this sequence
-          let hasEarlierTextContent = false;
-          for (let i = index - 1; i >= 0; i--) {
-            const checkItem = timeline[i];
-            if (checkItem.type !== 'message') continue;
-            const checkMsg = checkItem.data as Message;
-            if (checkMsg.role === "user") break;
-            if (checkMsg.role === "assistant" && checkMsg.content && checkMsg.content.trim().length > 0) {
-              hasEarlierTextContent = true;
-              break;
-            }
-          }
-
-          // Skip this message if: no text content, or there's earlier text content in sequence
-          if (!hasTextContent || hasEarlierTextContent) {
-            return null;
-          }
-        }
-      }
-
       const relevantToolResults = msg.tool_calls
         ?.map(tc => msg.tool_results?.find((tr) => tr.tool_use_id === tc.id) || globalToolResultMap[tc.id])
         .filter((tr): tr is ToolResult => tr !== undefined);
-
-      // Determine effective collapsed state for this message
-      const effectiveCollapsed = collapsed && !isSequenceExpanded;
 
       return (
         <AssistantBlock
@@ -11810,27 +11944,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           messageId={msg._id}
           messageUuid={msg.message_uuid}
           conversationId={conversation?._id}
-          collapsed={effectiveCollapsed}
+          density={feedDensity}
           childConversationMap={conversation?.child_conversation_map}
           childConversations={conversation?.child_conversations}
           agentNameToChildMap={agentNameToChildMap}
-          showHeader={effectiveCollapsed ? true : (isFirstInSequence || (collapsed && msg._id === sequenceStartId))}
-                   toolCallChangeSelectionMap={toolCallChangeSelectionMap}
+          showHeader={isFirstInSequence}
+          toolCallChangeSelectionMap={toolCallChangeSelectionMap}
           isHighlighted={highlightedMessageId === msg._id}
-          isSequenceExpanded={isSequenceExpanded}
           runMessageIds={runMessageIds}
-          onToggleCollapsed={collapsed ? () => {
-            setExpandedSequences(prev => {
-              const next = new Set(prev);
-              if (next.has(sequenceStartId)) {
-                next.delete(sequenceStartId);
-              } else {
-                next.add(sequenceStartId);
-              }
-              return next;
-            });
-          } : undefined}
-          showCollapseButton={collapsed && isSequenceExpanded && isFirstInSequence}
           shareSelectionMode={shareSelectionMode}
           isSelectedForShare={selectedMessageIds.has(msg._id)}
           onToggleShareSelection={handleToggleMessageSelection}
@@ -12163,22 +12284,36 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   <TooltipContent side="bottom">Search in conversation</TooltipContent>
                 </Tooltip>
 
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      onClick={() => { setCollapsed((c) => !c); setExpandedSequences(new Set()); }}
-                      className={`p-1 rounded hover:bg-sol-bg-alt transition-colors ${collapsed ? "text-sol-cyan" : "text-sol-text-dim hover:text-sol-text-secondary"}`}
-                    >
-                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                        {collapsed
-                          ? <><path d="M15 3h6v6M14 10l6.1-6.1M9 21H3v-6M10 14l-6.1 6.1" /></>
-                          : <><path d="M4 14h6v6M3 21l6.1-6.1M20 10h-6V4M21 3l-6.1 6.1" /></>
-                        }
-                      </svg>
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">{collapsed ? "Expand messages" : "Collapse messages"} ({formatShortcutLabel('conv.collapseAll')})</TooltipContent>
-                </Tooltip>
+                <DropdownMenu>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <DropdownMenuTrigger asChild>
+                        <button className={`p-1 rounded hover:bg-sol-bg-alt transition-colors ${density !== "full" ? "text-sol-cyan" : "text-sol-text-dim hover:text-sol-text-secondary"}`}>
+                          {(() => { const Icon = DENSITY_OPTIONS.find(o => o.value === density)!.icon; return <Icon className="w-3.5 h-3.5" />; })()}
+                        </button>
+                      </DropdownMenuTrigger>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">View density: {DENSITY_OPTIONS.find(o => o.value === density)!.label} ({formatShortcutLabel('conv.collapseAll')} cycles)</TooltipContent>
+                  </Tooltip>
+                  <DropdownMenuContent align="end" className="w-72">
+                    {DENSITY_OPTIONS.map((opt, i) => (
+                      <Fragment key={opt.value}>
+                        {i === 3 && <DropdownMenuSeparator />}
+                        <DropdownMenuItem onSelect={() => setDensity(opt.value)} className="items-start gap-2.5 py-2">
+                          <opt.icon className={`w-4 h-4 mt-0.5 shrink-0 ${density === opt.value ? "text-sol-cyan" : "text-sol-text-dim"}`} />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 text-[13px]">
+                              <span className={density === opt.value ? "text-sol-cyan font-medium" : ""}>{opt.label}</span>
+                              {opt.ai && <span className="text-[9px] uppercase tracking-wider px-1 py-px rounded bg-sol-violet/15 text-sol-violet">AI</span>}
+                            </div>
+                            <div className="text-[11px] text-sol-text-dim leading-snug">{opt.description}</div>
+                          </div>
+                          {density === opt.value && <Check className="w-3.5 h-3.5 shrink-0 mt-0.5 text-sol-cyan" />}
+                        </DropdownMenuItem>
+                      </Fragment>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
 
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -12659,6 +12794,19 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               </div>
             </div>
           )}
+          {(density === "story" || density === "summary") ? (
+            <div className="conv-col mx-auto px-4 sm:px-5 md:px-6">
+              {density === "story" ? (
+                <StoryTimelineView
+                  conversationId={convexConvId}
+                  userName={conversation?.user?.name || conversation?.user?.email?.split("@")[0]}
+                  onJump={jumpToStoryMessage}
+                />
+              ) : (
+                <ThreadSummaryView conversationId={convexConvId} />
+              )}
+            </div>
+          ) : (
           <div
             style={{
               height: virtualizer.getTotalSize(),
@@ -12697,7 +12845,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   }}
                 >
                   {content && (
-                    <div className={`conv-col mx-auto px-4 sm:px-5 md:px-6 ${collapsed ? "py-0.5" : "py-0.5 sm:py-1"} ${isNew ? "animate-message-in" : ""} ${isForkSelected ? "ring-2 ring-sol-cyan/60 bg-sol-cyan/5 rounded-lg" : ""} ${isBelowForkSelection ? "opacity-30 pointer-events-none" : ""} transition-opacity`}>
+                    <div className={`conv-col mx-auto px-4 sm:px-5 md:px-6 ${condensedFeed ? "py-0.5" : "py-0.5 sm:py-1"} ${isNew ? "animate-message-in" : ""} ${isForkSelected ? "ring-2 ring-sol-cyan/60 bg-sol-cyan/5 rounded-lg" : ""} ${isBelowForkSelection ? "opacity-30 pointer-events-none" : ""} transition-opacity`}>
                       {virtualItem.index === firstUnseenIndex && (
                         <div className="flex items-center gap-3 mt-1 mb-3 select-none" aria-label="New messages">
                           <div className="flex-1 h-px" style={{ background: 'linear-gradient(to right, transparent, var(--sol-orange))' }} />
@@ -12730,6 +12878,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               </EdgeMessagesIndicator>
             )}
           </div>
+          )}
           {conversation?.child_conversations && conversation.child_conversations.length > 0 && !hasMoreBelow && (() => {
             const childMap = conversation.child_conversation_map || {};
             const messageUuids = new Set(messages.map(m => m.message_uuid).filter(Boolean));
