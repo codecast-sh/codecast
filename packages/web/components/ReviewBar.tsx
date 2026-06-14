@@ -5,9 +5,9 @@
 // Each row is removable with an ✕; "Edit in input" optionally materializes the
 // batch as editable text in the composer; "Clear" discards it.
 
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { X } from "lucide-react";
+import { X, Trash2, PencilLine } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { useReviewComposer } from "./reviewContext";
 import { cancelReview } from "../lib/reviewActions";
@@ -18,6 +18,15 @@ export function ReviewBar({ conversationId }: { conversationId: string }) {
   const comments = useInboxStore(useShallow((s) => s.reviewComments[conversationId] ?? []));
   const count = comments.length;
 
+  // Clear discards the whole batch, so it arms on first click ("Discard N?") and
+  // only fires on the second; the armed state disarms itself after a beat.
+  const [confirmClear, setConfirmClear] = useState(false);
+  useEffect(() => {
+    if (!confirmClear) return;
+    const t = setTimeout(() => setConfirmClear(false), 4000);
+    return () => clearTimeout(t);
+  }, [confirmClear]);
+
   if (!count) return null;
   const items = sortPendingComments(comments);
 
@@ -27,13 +36,21 @@ export function ReviewBar({ conversationId }: { conversationId: string }) {
           <span className="cc-review-tray-title">
             <span className="cc-review-dot" />
             {count} quote{count !== 1 ? "s" : ""}
-            <span className="cc-review-tray-sub">attached to your reply</span>
           </span>
           <div className="cc-review-tray-actions">
-            <button type="button" className="cc-comment-btn" onClick={() => cancelReview(conversationId)}>
-              Clear
+            <button
+              type="button"
+              className={`cc-comment-btn cc-comment-btn-danger ${confirmClear ? "cc-comment-btn-confirm" : ""}`}
+              onClick={() => {
+                if (confirmClear) cancelReview(conversationId);
+                else setConfirmClear(true);
+              }}
+            >
+              <Trash2 size={11} />
+              {confirmClear ? `Discard ${count}?` : "Clear"}
             </button>
             <button type="button" className="cc-comment-btn cc-comment-btn-primary" onClick={() => composer?.submit()}>
+              <PencilLine size={11} />
               Edit in input
             </button>
           </div>
