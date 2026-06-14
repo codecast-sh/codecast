@@ -8,7 +8,7 @@
 // nonce, and the CLI (which polls /cli/claim-auth alongside its localhost
 // wait) claims it. Rows are single-use and short-lived: deleted on claim,
 // or swept — with their orphaned api_token revoked — after CLI_AUTH_TTL_MS.
-import { mutation, internalMutation } from "./_generated/server";
+import { mutation, internalMutation } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { hashToken } from "./apiTokens";

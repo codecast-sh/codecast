@@ -1,6 +1,6 @@
 // TEMPORARY debug query — safe to delete. Inspects why a conversation keeps
 // reappearing after dismiss: dumps dismiss-relevant fields + recent activity.
-import { internalQuery, internalMutation } from "./_generated/server";
+import { internalQuery, internalMutation } from "./functions";
 import { v } from "convex/values";
 
 // TEMPORARY: insert a switch_account daemon command scoped to ONE conversation

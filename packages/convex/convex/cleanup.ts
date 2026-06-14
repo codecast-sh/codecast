@@ -1,4 +1,4 @@
-import { internalMutation, mutation } from "./_generated/server";
+import { internalMutation, mutation } from "./functions";
 import { v } from "convex/values";
 import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
 
