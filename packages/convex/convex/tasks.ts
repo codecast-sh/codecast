@@ -10,6 +10,7 @@ import { nextShortId } from "./counters";
 import { internal } from "./_generated/api";
 import { isViableInboxParent } from "./inboxFilters";
 import { pickInheritedGitMeta, type GitMetaSource } from "./projectPaths";
+import { enqueuePendingMessage } from "./pendingMessages";
 // Owner-or-team access check for a task. Moved to lib/access.ts (Wave-1
 // auth/access seam). Imported for local use here and re-exported so existing
 // callers keep working unchanged.
@@ -1792,15 +1793,10 @@ export const assignToAgent = mutation({
     const lead = initial_message?.trim();
     const content = lead ? `${lead}\n\n${lines.join("\n")}` : lines.join("\n");
 
-    await ctx.db.insert("pending_messages", {
-      conversation_id: conversationId,
-      from_user_id: userId,
-      content,
-      status: "pending",
-      created_at: now,
-      retry_count: 0,
-    } as any);
-    await ctx.db.patch(conversationId, { has_pending_messages: true } as any);
+    // Single canonical writer: stamps owner_user_id for the daemon's delivery poll and flips
+    // has_pending_messages. The task session is the launcher's own, so owner == sender.
+    const taskConversation = await ctx.db.get(conversationId);
+    await enqueuePendingMessage(ctx, taskConversation, userId, { content });
 
     const daemonAgentType = agent_type === "claude_code" ? "claude" : agent_type === "codex" ? "codex" : agent_type === "cursor" ? "cursor" : "gemini";
     await enqueueStartSession(ctx, userId, {

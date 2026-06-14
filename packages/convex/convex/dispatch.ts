@@ -12,6 +12,7 @@ import { api, internal } from "./_generated/api";
 import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey } from "@codecast/shared/contracts";
 import { conversationHasNoWork, reapEmptyConversation, enqueueKillSessionCommand } from "./cleanup";
 import { canAccessDoc } from "./docs";
+import { enqueuePendingMessage } from "./pendingMessages";
 
 type TableConfig =
   | {
@@ -336,37 +337,14 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     if (!conversation) throw new Error("conversation_deleted");
     if (conversation.user_id.toString() !== userId.toString()) throw new Error("Unauthorized");
 
-    if (clientId) {
-      const existing = await ctx.db
-        .query("pending_messages")
-        .withIndex("by_conversation_status", (q: any) =>
-          q.eq("conversation_id", convId as Id<"conversations">)
-        )
-        .filter((q: any) => q.eq(q.field("client_id"), clientId))
-        .first();
-      if (existing) return existing._id;
-    }
-
-    const messageId = await ctx.db.insert("pending_messages", {
-      conversation_id: convId as Id<"conversations">,
-      from_user_id: userId,
+    // Single canonical writer: dedups on client_id, stamps owner_user_id for the daemon's
+    // delivery poll, and wakes the conversation (un-dismiss, completed→active). The web composer
+    // only ever sends into the user's own conversation (enforced above), so owner == sender.
+    return await enqueuePendingMessage(ctx, conversation, userId, {
       content,
-      image_storage_ids: imageIds?.length ? imageIds as any : undefined,
+      image_storage_ids: imageIds?.length ? (imageIds as any) : undefined,
       client_id: clientId,
-      status: "pending" as const,
-      created_at: Date.now(),
-      retry_count: 0,
     });
-    const now = Date.now();
-    await ctx.db.patch(convId as Id<"conversations">, {
-      updated_at: now,
-      has_pending_messages: true,
-      ...(conversation.status === "completed" ? { status: "active" as const } : {}),
-      ...(conversation.inbox_dismissed_at ? { inbox_dismissed_at: undefined } : {}),
-      ...(conversation.inbox_stashed_at ? { inbox_stashed_at: undefined } : {}),
-      ...(conversation.inbox_killed_at ? { inbox_killed_at: undefined } : {}),
-    });
-    return messageId;
   },
 
   resumeSession: async (ctx, userId, [convId]: [string]) => {

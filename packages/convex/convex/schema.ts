@@ -613,6 +613,19 @@ export default defineSchema({
   pending_messages: defineTable({
     conversation_id: v.id("conversations"),
     from_user_id: v.id("users"),
+    // The user who OWNS the target conversation — i.e. whose daemon delivers this message.
+    // For a self-send (the common case) this equals from_user_id; for a team send (one user
+    // messaging a teammate's session) it's the teammate. Delivery, claiming, and status writes
+    // route on owner; cancel/retry/status-read and failure notifications route on the sender.
+    // Optional only for backward compat with rows created before this field existed (backfilled
+    // to from_user_id, which they're equal to); enqueuePendingMessage always sets it on new rows.
+    owner_user_id: v.optional(v.id("users")),
+    // The sender's own conversation, captured so the cron can tell the sending session when a
+    // cross-user message can't be delivered (the "remote not responding" feedback path).
+    from_conversation_id: v.optional(v.id("conversations")),
+    // Set once when the sender has been told this cross-user message is stuck — keeps the cron
+    // from notifying repeatedly.
+    sender_notified_at: v.optional(v.number()),
     content: v.string(),
     image_storage_id: v.optional(v.id("_storage")),
     image_storage_ids: v.optional(v.array(v.id("_storage"))),
@@ -634,6 +647,9 @@ export default defineSchema({
     .index("by_conversation_id", ["conversation_id"])
     .index("by_conversation_status", ["conversation_id", "status"])
     .index("by_user_status", ["from_user_id", "status"])
+    // The daemon polls by the TARGET owner (owner_user_id), not the sender, so a teammate's
+    // message lands in the right daemon's queue. Replaces by_user_status for delivery routing.
+    .index("by_owner_status", ["owner_user_id", "status"])
     // Lets the global retryStuckMessages cron read ONLY the handful of non-terminal
     // rows instead of `.filter()`-scanning the entire table (which read-conflicts
     // with every addMessages pending-write → OCC stampede → 60s sync timeouts).

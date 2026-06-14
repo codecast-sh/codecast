@@ -43,38 +43,64 @@ export const findConversationBySessionReference = async (
 // Resolve a conversation from whatever reference a human or agent actually has on
 // hand: a `short_id` (the 7-char `jx…` token shown in the UI / feed), a Claude
 // `session_id` (the JSONL UUID the daemon and `detectCurrentSessionId` know), or a
-// raw conversation `_id`. findConversationBySessionReference only knows session_id,
-// so this is the broader entry point for ref-typed inputs (e.g. `cast send <ref>`).
-export const findConversationByAnyRef = async (
+// raw conversation `_id`. The `accept` predicate decides which candidate to keep —
+// short_id collides across users (it's only a 7-char prefix) and a session_id can
+// resolve to someone else's row, so the traversal probes every shape and returns the
+// first conversation `accept` approves. This is the single ref→conversation resolver;
+// callers supply the access rule (own-only, or own-or-team for `cast send`).
+export const findConversationByAnyRefWhere = async (
   ctx: LookupCtx,
   ref: string,
-  authUserId: { toString(): string } | string
+  accept: (conversation: LookupRecord) => boolean | Promise<boolean>
 ): Promise<LookupRecord | null> => {
   const trimmed = (ref ?? "").trim();
   if (!trimmed) return null;
 
   // short_id is exactly the first 7 chars of the conversation id; accept a longer
   // paste by truncating, so a full id pasted as a "short id" still matches.
-  // short_id is only a 7-char prefix, so it can collide across users — take the
-  // candidates and pick the one this user owns rather than a bare .first().
   const shortId = trimmed.slice(0, 7);
   const byShortIdCandidates = await ctx.db
     .query("conversations")
     .withIndex("by_short_id", (q: any) => q.eq("short_id", shortId))
     .take(16);
-  const ownShortIdMatch = byShortIdCandidates.find((c: any) => hasMatchingUser(c, authUserId));
-  if (ownShortIdMatch) return ownShortIdMatch;
+  for (const candidate of byShortIdCandidates) {
+    if (await accept(candidate)) return candidate;
+  }
 
-  const bySession = await findConversationBySessionReference(ctx, trimmed, authUserId);
-  if (bySession) return bySession;
+  // session_id: directly on the conversation, or via the managed_sessions link.
+  const directConversation = await ctx.db
+    .query("conversations")
+    .withIndex("by_session_id", (q: any) => q.eq("session_id", trimmed))
+    .first();
+  if (directConversation && (await accept(directConversation))) return directConversation;
+
+  const managedSession = await ctx.db
+    .query("managed_sessions")
+    .withIndex("by_session_id", (q: any) => q.eq("session_id", trimmed))
+    .first();
+  if (managedSession?.conversation_id) {
+    const linked = await ctx.db.get(managedSession.conversation_id);
+    if (linked && (await accept(linked))) return linked;
+  }
 
   // Last resort: the ref is a full conversation _id.
   try {
     const byId = await ctx.db.get(trimmed as any);
-    if (hasMatchingUser(byId, authUserId)) return byId;
+    if (byId && (await accept(byId))) return byId;
   } catch {
     // not a valid id shape — fall through
   }
 
   return null;
 };
+
+// Own-only resolver: the conversation must belong to the authenticated user. This is the
+// default for every caller except `cast send`'s target lookup (which is team-aware).
+export const findConversationByAnyRef = async (
+  ctx: LookupCtx,
+  ref: string,
+  authUserId: { toString(): string } | string
+): Promise<LookupRecord | null> =>
+  findConversationByAnyRefWhere(ctx, ref, (conversation) =>
+    hasMatchingUser(conversation, authUserId)
+  );
