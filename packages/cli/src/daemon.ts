@@ -44,6 +44,7 @@ import { getVersion, performUpdate, ensureCastAlias } from "./update.js";
 import { ensureMessagingForMemory } from "./snippets.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
 import { performReconciliation, repairDiscrepancies } from "./reconciliation.js";
+import { TEST_SCRATCH_DIRNAME, isTestScratchPath } from "./syncScope.js";
 import { TaskScheduler } from "./taskScheduler.js";
 import { hasTmux } from "./tmux.js";
 import { formatFeedResults } from "./formatter.js";
@@ -3402,19 +3403,11 @@ function isPathExcluded(projectPath: string, excludedPaths?: string): boolean {
   return false;
 }
 
-// Integration tests (daemon.inject-clear.test.ts) drive a REAL claude under a
-// throwaway project dir, so its transcript lands in ~/.claude/projects like any
-// other and would otherwise be synced as a phantom inbox conversation. The dir
-// name carries this marker; the daemon refuses to sync any project whose path
-// contains it. A single lowercase token (no dots or hyphens) so it survives both
-// the exact recorded-cwd resolution AND the lossy dir-name slug decode (where
-// every "/" and "." collapses to "-"). Enforced on every machine regardless of
-// the user's excluded_paths config.
-export const TEST_SCRATCH_DIRNAME = "codecasttestscratch";
-
-export function isTestScratchPath(projectPath: string): boolean {
-  return !!projectPath && projectPath.includes(TEST_SCRATCH_DIRNAME);
-}
+// Sync-scope rules (test-scratch exclusion) live in their own leaf module
+// (./syncScope.js) so the reconciliation loop can share the EXACT same rule
+// without importing this giant daemon module. Imported at the top and re-exported
+// here for backward compatibility with tests that import them from "./daemon.js".
+export { TEST_SCRATCH_DIRNAME, isTestScratchPath };
 
 export function isProjectAllowedToSync(projectPath: string, config: Config): boolean {
   if (isTestScratchPath(projectPath)) {
