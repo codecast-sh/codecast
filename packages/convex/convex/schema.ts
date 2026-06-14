@@ -435,6 +435,30 @@ export default defineSchema({
       filterFields: ["conversation_id"],
     }),
 
+  // Story mode: per-message first-person condensations of long assistant
+  // messages (generated once, messages are immutable) and a whole-thread
+  // narrative summary (regenerated as the conversation grows). Kept out of
+  // the conversations table so list queries don't carry multi-KB markdown.
+  message_summaries: defineTable({
+    conversation_id: v.id("conversations"),
+    message_id: v.id("messages"),
+    // Message timestamp, so the story timeline reads in order without joins.
+    timestamp: v.number(),
+    summary: v.string(),
+    model: v.optional(v.string()),
+  })
+    .index("by_conversation_timestamp", ["conversation_id", "timestamp"])
+    .index("by_message_id", ["message_id"]),
+
+  conversation_summaries: defineTable({
+    conversation_id: v.id("conversations"),
+    summary: v.string(),
+    // message_count at generation time — staleness signal for regeneration.
+    message_count: v.number(),
+    generated_at: v.number(),
+    model: v.optional(v.string()),
+  }).index("by_conversation_id", ["conversation_id"]),
+
   bookmarks: defineTable({
     user_id: v.id("users"),
     conversation_id: v.id("conversations"),

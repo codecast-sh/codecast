@@ -77,6 +77,7 @@ import type * as redact from "../redact.js";
 import type * as reviews from "../reviews.js";
 import type * as searchCore from "../searchCore.js";
 import type * as sessionInsights from "../sessionInsights.js";
+import type * as storyMode from "../storyMode.js";
 import type * as syncCursors from "../syncCursors.js";
 import type * as systemConfig from "../systemConfig.js";
 import type * as taskMining from "../taskMining.js";
@@ -166,6 +167,7 @@ declare const fullApi: ApiFromModules<{
   reviews: typeof reviews;
   searchCore: typeof searchCore;
   sessionInsights: typeof sessionInsights;
+  storyMode: typeof storyMode;
   syncCursors: typeof syncCursors;
   systemConfig: typeof systemConfig;
   taskMining: typeof taskMining;
