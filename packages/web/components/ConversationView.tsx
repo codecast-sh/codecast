@@ -8943,6 +8943,81 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   );
 });
 
+// Scroll a virtualized timeline item to a fixed offset from the container top,
+// settling across re-measures: items above the target report estimated heights
+// until they actually render, so a single scrollToIndex lands off-target. The
+// retry loop first waits for the item's element to mount, nudges scrollTop
+// each frame until the offset holds, then keeps watching for `watchMs` —
+// freshly mounted markdown/images above re-measure for a couple of seconds
+// after the first convergence and would otherwise drag the target away.
+// `onSettled` fires once at the first convergence. The watch aborts the moment
+// the user scrolls, and starting a new settle cancels the previous one.
+let cancelActiveItemSettle: (() => void) | null = null;
+function settleTimelineItemAtOffset(
+  container: HTMLElement,
+  virtualizer: { scrollToIndex: (index: number, opts: { align: "start" }) => void },
+  itemIndex: number,
+  offsetPx: number,
+  opts?: { initialDelayMs?: number; watchMs?: number; onSettled?: () => void },
+) {
+  cancelActiveItemSettle?.();
+  let cancelled = false;
+  const cancel = () => {
+    cancelled = true;
+    container.removeEventListener("wheel", cancel);
+    container.removeEventListener("touchstart", cancel);
+    if (cancelActiveItemSettle === cancel) cancelActiveItemSettle = null;
+  };
+  cancelActiveItemSettle = cancel;
+  container.addEventListener("wheel", cancel, { passive: true });
+  container.addEventListener("touchstart", cancel, { passive: true });
+
+  virtualizer.scrollToIndex(itemIndex, { align: "start" });
+  const scrollElToOffset = (el: Element) => {
+    const elRect = el.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    container.scrollTop += elRect.top - containerRect.top - offsetPx;
+  };
+  const watchMs = opts?.watchMs ?? 2500;
+  let findAttempts = 0;
+  const attempt = () => {
+    if (cancelled) return;
+    findAttempts++;
+    const el = container.querySelector(`[data-index="${itemIndex}"]`);
+    if (el) {
+      scrollElToOffset(el);
+      // Pin the DOM node, not the index: rows are keyed by stable message key,
+      // so the node survives re-renders, while data-index shifts whenever the
+      // loaded window grows (target mode pages in above the anchor).
+      let settleCount = 0;
+      let settledFired = false;
+      const start = performance.now();
+      const settle = () => {
+        if (cancelled) return;
+        settleCount++;
+        if (!el.isConnected) { cancel(); return; }
+        const rect = el.getBoundingClientRect();
+        const containerRect = container.getBoundingClientRect();
+        const off = rect.top - containerRect.top - offsetPx;
+        if (Math.abs(off) > 2) scrollElToOffset(el);
+        if (!settledFired && (Math.abs(off) <= 2 || settleCount >= 15)) {
+          settledFired = true;
+          opts?.onSettled?.();
+        }
+        if (performance.now() - start < watchMs) requestAnimationFrame(settle);
+        else cancel();
+      };
+      requestAnimationFrame(settle);
+    } else if (findAttempts < 20) {
+      virtualizer.scrollToIndex(itemIndex, { align: "start" });
+      requestAnimationFrame(() => setTimeout(attempt, 100));
+    } else {
+      cancel();
+    }
+  };
+  setTimeout(attempt, opts?.initialDelayMs ?? 300);
+}
+
 const CC_MODE_ORDER = ["default", "plan", "acceptEdits", "bypassPermissions", "dontAsk"];
 
 export const ConversationView = forwardRef<ConversationViewHandle, ConversationViewProps>(
@@ -9114,6 +9189,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     prevStickyIdxRef.current = null;
     stickyGapRef.current = null;
     dismissedStickyIdsRef.current = new Set();
+    // A settle-watcher from the previous conversation corrects against stale
+    // data-index rows — kill it before the new conversation paints.
+    cancelActiveItemSettle?.();
   }
 
   // Reset scroll target tracking when targetMessageId changes (same-session navigation)
@@ -10515,6 +10593,19 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     enabled: isOwner,
   });
 
+  // One-shot anchor for a scroll-stable branch switch: captured at chip-click
+  // time, consumed when the target branch renders. Lives in a ref because
+  // ConversationView stays mounted across session switches (no key remount).
+  const branchAnchorRef = useRef<{
+    sourceId: string;
+    targetId: string;
+    messageUuid: string;
+    timestamp: number;
+    offset: number;
+    at: number;
+    jumped: boolean;
+  } | null>(null);
+
   // BranchSelector / tree panel: switching branches is a local, store-driven switch —
   // the same instant path the sidebar uses. navigateToSession sets currentSessionId, the
   // inbox re-renders from cache, and QueuePageClient's URL-sync effect updates the address
@@ -10522,7 +10613,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   // bounce through the redirector page (server resolveConversation + loading skeleton +
   // redirect back to /inbox) — a full reload for data the store already has.
   // null = switch to the conversation's parent (back to "main"); otherwise switch to that fork.
-  const handleBranchSwitch = useCallback((_messageUuid: string, convId: string | null) => {
+  const handleBranchSwitch = useCallback((messageUuid: string, convId: string | null) => {
     let targetId: string | undefined;
     if (convId === null) {
       const parentId = conversation?.forked_from;
@@ -10532,6 +10623,39 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
     if (!targetId) return;
     if (targetId === conversation?._id?.toString()) return;
+    // Scroll-stable switch: branches share an identical message prefix (fork
+    // copy preserves message_uuid + timestamp), so remember where the fork
+    // point sits in the viewport and put its twin back at the same offset
+    // after the switch, instead of opening the target at its live tail.
+    branchAnchorRef.current = null;
+    const tl = timelineRef.current;
+    const anchorIdx = tl.findIndex((it) => it.type === "message" && it.data?.message_uuid === messageUuid);
+    if (anchorIdx >= 0 && conversation?._id) {
+      const container = containerRef.current;
+      let offset = 96;
+      if (container) {
+        const el = container.querySelector(`[data-index="${anchorIdx}"]`);
+        if (el) {
+          const rect = el.getBoundingClientRect();
+          const raw = rect.top - container.getBoundingClientRect().top;
+          // Negative offsets are normal — a tall fork-point message often has
+          // its top above the fold while its chips sit in view; restoring the
+          // raw value is what keeps the visible part stable. Only clamp so the
+          // anchor row keeps a sliver in the viewport (a navigator-driven
+          // switch can anchor on a fully off-screen message).
+          offset = Math.min(Math.max(raw, Math.min(80 - rect.height, 0)), Math.max(container.clientHeight - 160, 0));
+        }
+      }
+      branchAnchorRef.current = {
+        sourceId: conversation._id.toString(),
+        targetId,
+        messageUuid,
+        timestamp: tl[anchorIdx].data.timestamp,
+        offset,
+        at: Date.now(),
+        jumped: false,
+      };
+    }
     // Branches are normally preloaded into the store by the effect above, so this
     // is an instant local switch. Belt-and-suspenders: if the target somehow isn't
     // cached yet (a click landing before the seed flushed), seed it from the chip's
@@ -11038,6 +11162,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       setInitialScrollDone(true);
       return;
     }
+    // A branch switch carries its own scroll anchor (placed by the effect
+    // below) — opening at the live tail would yank the view away from it.
+    if (branchAnchorRef.current?.targetId === conversation?._id?.toString()) {
+      setInitialScrollDone(true);
+      return;
+    }
     const sc = containerRef.current;
     if (sc) {
       paginationCooldownRef.current = Date.now() + 1000;
@@ -11220,49 +11350,59 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       const container = containerRef.current;
       if (!container) return;
 
-      virtualizer.scrollToIndex(itemIndex, { align: "start" });
-
-      const stickyOffset = 50;
-      const scrollElToTop = (el: Element) => {
-        const elRect = el.getBoundingClientRect();
-        const containerRect = container.getBoundingClientRect();
-        container.scrollTop += elRect.top - containerRect.top - stickyOffset;
-      };
-      let findAttempts = 0;
-      const scrollToElement = () => {
-        findAttempts++;
-        const el = container.querySelector(`[data-index="${itemIndex}"]`);
-        if (el) {
-          scrollElToTop(el);
-          let settleCount = 0;
-          const settle = () => {
-            settleCount++;
-            const freshEl = container.querySelector(`[data-index="${itemIndex}"]`);
-            if (freshEl) {
-              const rect = freshEl.getBoundingClientRect();
-              const containerRect = container.getBoundingClientRect();
-              const off = rect.top - containerRect.top - stickyOffset;
-              if (Math.abs(off) > 2) scrollElToTop(freshEl);
-              if (Math.abs(off) <= 2 || settleCount >= 15) {
-                setHighlightedMessageId(targetMessageId);
-                setTimeout(() => setHighlightedMessageId(null), 3000);
-                if (window.location.hash) {
-                  history.replaceState(null, "", window.location.pathname + window.location.search);
-                }
-                return;
-              }
-            }
-            requestAnimationFrame(settle);
-          };
-          requestAnimationFrame(settle);
-        } else if (findAttempts < 20) {
-          virtualizer.scrollToIndex(itemIndex, { align: "start" });
-          requestAnimationFrame(() => setTimeout(scrollToElement, 100));
-        }
-      };
-      setTimeout(scrollToElement, 300);
+      settleTimelineItemAtOffset(container, virtualizer, itemIndex, 50, {
+        onSettled: () => {
+          setHighlightedMessageId(targetMessageId);
+          setTimeout(() => setHighlightedMessageId(null), 3000);
+          if (window.location.hash) {
+            history.replaceState(null, "", window.location.pathname + window.location.search);
+          }
+        },
+      });
     }
   }, [targetMessageId, timeline, virtualizer]);
+
+  // Land a branch switch scroll-stable: once the target conversation renders,
+  // find the fork-point message (same message_uuid — fork copies preserve it)
+  // and restore it to the viewport offset captured at click time. Everything
+  // above the fork point is identical between branches, so the switch reads as
+  // "only the content below the fork changed". If the fork point is outside
+  // the target's loaded window, jump the window to the fork point's timestamp
+  // (also preserved by the copy) and place the anchor when that window lands.
+  // Layout effect so the placement happens in the same commit that gated the
+  // initial snap-to-bottom above — no bottom-flash in between.
+  useLayoutEffect(() => {
+    const anchor = branchAnchorRef.current;
+    if (!anchor) return;
+    if (Date.now() - anchor.at > 15000) {
+      // Stale capture from a switch that never landed — don't ambush a later visit.
+      branchAnchorRef.current = null;
+      return;
+    }
+    const convId = conversation?._id?.toString();
+    if (!convId) return;
+    if (convId !== anchor.targetId) {
+      // Wandered off to an unrelated conversation — drop the anchor.
+      if (convId !== anchor.sourceId) branchAnchorRef.current = null;
+      return;
+    }
+    const itemIndex = timeline.findIndex(
+      (item) => item.type === "message" && item.data.message_uuid === anchor.messageUuid
+    );
+    if (itemIndex >= 0) {
+      branchAnchorRef.current = null;
+      const container = containerRef.current;
+      if (!container) return;
+      setUserScrolled(true);
+      settleTimelineItemAtOffset(container, virtualizer, itemIndex, anchor.offset, { initialDelayMs: 0 });
+    } else if (!anchor.jumped) {
+      anchor.jumped = true;
+      // No window-jump available (embedded views) — fall back to the default landing.
+      if (onJumpToTimestamp) onJumpToTimestamp(anchor.timestamp);
+      else branchAnchorRef.current = null;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversation?._id, timeline, virtualizer, onJumpToTimestamp, setUserScrolled]);
 
   useEventListener("keydown", (e: KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "c") {
