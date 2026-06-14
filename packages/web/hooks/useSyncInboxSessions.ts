@@ -76,18 +76,33 @@ export function useSyncInboxSessions() {
   useEnsureDispatch();
 
   const convex = useConvex();
-  const showAll = useInboxStore((s) => s.clientState.ui?.show_old_sessions ?? true);
+  // The live subscription is pinned to show_all:false — its returned id set IS
+  // the server's authoritative "recent" set, recorded as liveInboxIds for the
+  // client-side "show old sessions" filter. We never vary this arg on the toggle:
+  // (1) the never-prune cache + completeness crawl already hold the "old" rows, so
+  // hiding them is a render decision, not a re-fetch; (2) changing the arg would
+  // re-subscribe from scratch (undefined → cold sync chip) and churn the crawl
+  // wsKey on every toggle. Hide/show is now instant and local — see GlobalSessionPanel.
   // include_liveness:false — heartbeat-derived liveness rides the separate
   // sessionsLiveness overlay below, so this heavy list re-runs only on real
   // conversation changes instead of on every ~1s heartbeat. The overlay merges
   // agent_status/is_idle/... back onto the cached rows per id via syncOverlay.
-  const inboxSessions = useQuery(api.conversations.listInboxSessions, { show_all: showAll, include_liveness: false });
+  const inboxSessions = useQuery(api.conversations.listInboxSessions, { show_all: false, include_liveness: false });
   const sessionLiveness = useQuery(api.conversations.sessionsLiveness, {});
   const clientState = useQuery(api.client_state.get, {});
   const currentUser = useQuery(api.users.getCurrentUser);
   const bgFetchingRef = useRef(new Set<string>());
 
   const syncTable = useInboxStore((s) => s.syncTable);
+  // Record the live (recent) id set, change-guarded so an identical payload
+  // doesn't allocate a new Set and re-render every subscriber. "Old" = cached
+  // top-level sessions absent from this set (filled by the completeness crawl).
+  const applyLiveInboxIds = useCallback((sessions: any[]) => {
+    const next = new Set<string>(sessions.map((x: any) => x._id.toString()));
+    const prev = useInboxStore.getState().liveInboxIds;
+    if (prev.size === next.size && [...next].every((id) => prev.has(id))) return;
+    useInboxStore.setState({ liveInboxIds: next });
+  }, []);
   const pruneDrafts = useMutation(api.client_state.pruneDeadDrafts);
   const prunedRef = useRef(false);
 
@@ -137,12 +152,10 @@ export function useSyncInboxSessions() {
     // which is where liveness actually changes. preserveFields on the sessions
     // config keeps the overlay's values from being clobbered by this null.
     syncTable("sessions", sessions as unknown as InboxSession[]);
-    if (typeof data.hidden_count === "number") {
-      useInboxStore.setState({ hiddenSessionCount: data.hidden_count });
-    }
+    applyLiveInboxIds(sessions);
     bgSyncMessages(sessions);
     lastSyncRef.current = Date.now();
-  }, [syncTable, bgSyncMessages]), { coalesceMs: 300 });
+  }, [syncTable, applyLiveInboxIds, bgSyncMessages]), { coalesceMs: 300 });
 
   // Liveness overlay: a small {convId: {agent_status/is_idle/...}} map merged onto
   // the cached rows (syncOverlay). The ONLY inbox channel that re-runs on heartbeats,
@@ -196,16 +209,14 @@ export function useSyncInboxSessions() {
     // `_probe` makes this a novel query token so Convex round-trips instead of
     // serving the (possibly stalled) cache of the live listInboxSessions
     // subscription — otherwise the "recovery" just re-reads the staleness.
-    const fresh: any = await convex.query(api.conversations.listInboxSessions, { show_all: showAll, include_liveness: false, _probe: Date.now() });
+    const fresh: any = await convex.query(api.conversations.listInboxSessions, { show_all: false, include_liveness: false, _probe: Date.now() });
     if (!fresh) return;
     const sessions = fresh.sessions ?? fresh;
     syncTable("sessions", sessions as unknown as InboxSession[]);
-    if (typeof fresh.hidden_count === "number") {
-      useInboxStore.setState({ hiddenSessionCount: fresh.hidden_count });
-    }
+    applyLiveInboxIds(sessions);
     bgSyncMessages(sessions);
     lastSyncRef.current = Date.now();
-  }, [convex, showAll, syncTable, bgSyncMessages]), 15_000);
+  }, [convex, syncTable, applyLiveInboxIds, bgSyncMessages]), 15_000);
 
   // Liveness can stall independently of the base list — recover it on the same
   // cadence so a frozen subscription doesn't leave every session reading a stale
@@ -288,7 +299,9 @@ export function useSyncInboxSessions() {
   // hydration so it resumes from the restored watermark, durably throttled so a
   // relaunch within the window serves the hydrated cache. Reuses runReconcileCrawl.
   const hydrated = useInboxStore((s) => s.clientStateInitialized);
-  const sessWsKey = `inbox:${showAll}`;
+  // Stable crawl namespace — the live arg no longer varies, so the watermark
+  // never resets on a show/hide-old toggle.
+  const sessWsKey = "inbox";
   const [reconcileNonce, setReconcileNonce] = useState(0);
   useEffect(() => {
     const id = setInterval(() => setReconcileNonce((n) => n + 1), SESSIONS_RECONCILE_THROTTLE_MS);

@@ -10,7 +10,7 @@ import { ConversationData } from "./ConversationView";
 import { FormattedSummary } from "./FormattedSummary";
 import { sessionCardSummary } from "../lib/sessionSummary";
 import { useConversationMessages } from "../hooks/useConversationMessages";
-import { useInboxStore, useTrackedStore, InboxSession, getSessionRenderKey, isConvexId, categorizeSessions, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, isSessionHidden, resolveSessionAuthor, convBucketMap, groupSessionsForLabelView, sortLabels, computeChipCounts, BucketItem, BucketAssignmentItem } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, InboxSession, getSessionRenderKey, isConvexId, categorizeSessions, partitionOldSessions, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, isSessionHidden, resolveSessionAuthor, convBucketMap, groupSessionsForLabelView, sortLabels, computeChipCounts, BucketItem, BucketAssignmentItem } from "../store/inboxStore";
 import { isBlockedConversation, isSubagentConversation } from "@codecast/convex/convex/ccAccountsShared";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
 import { cleanTitle, msgCountColor, formatModel } from "../lib/conversationProcessor";
@@ -25,7 +25,7 @@ import { toast } from "sonner";
 import { animatedHideSession } from "../store/undoActions";
 import { soundKill } from "../lib/sounds";
 import { formatShortcutLabel } from "../shortcuts";
-import { X, ChevronsLeft, ChevronsRight, ChevronRight, ChevronDown, List, Clock, Tag, GitFork } from "lucide-react";
+import { X, ChevronsLeft, ChevronsRight, ChevronRight, ChevronDown, List, Clock, Tag, GitFork, History } from "lucide-react";
 import { FilterOptionList } from "./FilterDropdown";
 import { LabelChipsRow } from "./LabelChipsRow";
 import { TaskStatusBadge } from "./TaskStatusBadge";
@@ -1385,7 +1385,7 @@ export function SessionListPanel({
     s => s.clientState.ui,
     s => s.clientState.show_dismissed,
     s => s.clientState.show_stashed,
-    s => s.hiddenSessionCount,
+    s => s.liveInboxIds,
     s => s.sessions,
     s => s.sessionsWithQueuedMessages,
     s => s.pendingMessages,
@@ -1429,9 +1429,23 @@ export function SessionListPanel({
     () => ({ currentSessionId: activeSessionId ?? s.currentSessionId, pendingCreateIds: new Set(Object.keys(s.pendingSessionCreates)) }),
     [activeSessionId, s.currentSessionId, s.pendingSessionCreates],
   );
+  // "Show old sessions" is a pure client-side filter (default: show). "Old" =
+  // a cached top-level session the live (recent) subscription no longer returns
+  // — the completeness crawl keeps it in the never-prune cache, so hiding it is
+  // a render decision, never a server re-fetch. liveInboxIds is empty until the
+  // first live payload lands; treat that as "nothing to hide yet" so we never
+  // blank the list. Optimistic stubs (non-Convex id), pinned, the open session,
+  // and dismissed/stashed rows are always kept.
+  const showAllSessions = s.clientState.ui?.show_old_sessions ?? true;
+  const focusedId = activeSessionId ?? s.currentSessionId;
+  const { visibleSessions, oldCount } = useMemo(
+    () => partitionOldSessions(s.sessions, s.liveInboxIds, showAllSessions, focusedId),
+    [s.sessions, s.liveInboxIds, showAllSessions, focusedId],
+  );
+
   const { sorted: sortedSessions, pinned, newSessions, needsInput, working, stashed: stashedList, dismissed: dismissedList, subsByParent: globalSubByParent, forksByParent: globalForksByParent, orchestrationGroups: globalOrchestrationGroups } = useMemo(
-    () => categorizeSessions(s.sessions, s.sessionsWithQueuedMessages, pendingSendIds, blankOpts),
-    [s.sessions, s.sessionsWithQueuedMessages, pendingSendIds, blankOpts],
+    () => categorizeSessions(visibleSessions, s.sessionsWithQueuedMessages, pendingSendIds, blankOpts),
+    [visibleSessions, s.sessionsWithQueuedMessages, pendingSendIds, blankOpts],
   );
 
   // Corner shown when the session is in a fork tree (has forks, or is one);
@@ -1563,7 +1577,6 @@ export function SessionListPanel({
   const SECTION_RENDER_STEP = 100;
   const [sectionLimits, setSectionLimits] = useState<Record<string, number>>({});
   const showSubagents = s.clientState.ui?.show_subagents ?? true;
-  const showAllSessions = s.clientState.ui?.show_old_sessions ?? true;
   // Three-way view mode; the legacy boolean is honored when the mode is unset.
   const viewMode: "grouped" | "time" | "bucket" =
     s.clientState.ui?.inbox_view_mode ?? ((s.clientState.ui?.inbox_flat_view ?? false) ? "time" : "grouped");
@@ -2007,7 +2020,7 @@ export function SessionListPanel({
               </div>
             );
           })()}
-          {(totalSubagentCount > 0 || s.hiddenSessionCount > 0) && (
+          {(totalSubagentCount > 0 || oldCount > 0) && (
             <div className="w-px h-3 bg-sol-border/40" />
           )}
           {totalSubagentCount > 0 && (
@@ -2023,17 +2036,17 @@ export function SessionListPanel({
               <GitFork className="w-3 h-3" />
             </button>
           )}
-          {s.hiddenSessionCount > 0 && (
+          {oldCount > 0 && (
             <button
               onClick={() => s.updateClientUI({ show_old_sessions: !showAllSessions })}
-              title={showAllSessions ? "Hide old sessions" : "Show old sessions"}
-              className={`px-1 py-[3px] rounded-[5px] text-[10px] leading-none tabular-nums whitespace-nowrap transition-colors ${
+              title={showAllSessions ? `Hide ${oldCount} old session${oldCount === 1 ? "" : "s"}` : `Show ${oldCount} old session${oldCount === 1 ? "" : "s"}`}
+              className={`px-1 py-[3px] rounded-[5px] transition-colors ${
                 showAllSessions
                   ? "bg-sol-cyan/15 text-sol-cyan"
                   : "text-sol-text-dim/70 hover:text-sol-text"
               }`}
             >
-              {s.hiddenSessionCount} old
+              <History className="w-3 h-3" />
             </button>
           )}
         </div>
