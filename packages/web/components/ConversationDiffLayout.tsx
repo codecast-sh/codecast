@@ -548,7 +548,15 @@ function ChangesBar({ changes }: { changes: FileChange[] }) {
   return (
     <button
       onClick={() => setDiffPanelOpen(true)}
-      className="absolute top-full right-0 mt-2 mr-3 z-30 flex items-center gap-2 px-2.5 py-1 rounded-md bg-sol-bg-alt/80 backdrop-blur-sm border border-sol-border/40 shadow-sm hover:border-sol-border/70 hover:bg-sol-bg-alt/95 transition-all group cursor-pointer select-none"
+      // --conv-sticky-h (set on the conversation header) pushes the pill below the
+      // sticky prompt card so the two never overlap at narrow widths. While pushed
+      // down it sits in the message tick rail's band, so it also shifts left
+      // (min() saturates at 2.5rem for any visible sticky) to clear the rail.
+      style={{
+        top: "calc(100% + var(--conv-sticky-h, 0px))",
+        right: "calc(0.75rem + min(var(--conv-sticky-h, 0px), 2.5rem))",
+      }}
+      className="absolute mt-2 z-30 flex items-center gap-2 px-2.5 py-1 rounded-md bg-sol-bg-alt/80 backdrop-blur-sm border border-sol-border/40 shadow-sm hover:border-sol-border/70 hover:bg-sol-bg-alt/95 transition-all group cursor-pointer select-none"
     >
       <div className="flex items-center gap-1">
         {displayFiles.map((f) => (
