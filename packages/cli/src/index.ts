@@ -23,6 +23,7 @@ import { glob } from "glob";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { encryptToken, decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
 import { getAllSyncRecords, findUnsyncedFiles } from "./syncLedger.js";
+import { isTestScratchPath } from "./syncScope.js";
 import { getLastReconciliation, performReconciliation, repairDiscrepancies } from "./reconciliation.js";
 import { parseSessionFile, extractSlug } from "./parser.js";
 import { SyncService } from "./syncService.js";
@@ -1139,6 +1140,15 @@ function getStuckSyncs(): StuckSync[] {
     } catch {
       continue;
     }
+    // A never-synced record (lastSyncedAt === 0) is NOT a wedged sync — it's a
+    // file the sync loop hasn't (and for out-of-scope files, won't) ever synced.
+    // Reporting it formats epoch 0 as "last sync 20618 days ago" and points the
+    // user at "cast restart", which can't help. Genuine stuck syncs have synced
+    // at least once, so they carry a real timestamp.
+    if (record.lastSyncedAt <= 0) continue;
+    // Files the sync loop refuses to sync (test-scratch transcripts) are never
+    // actionable here — skip them defensively.
+    if (isTestScratchPath(filePath)) continue;
     const unsynced = stats.size - record.lastSyncedPosition;
     if (unsynced < STUCK_SYNC_MIN_BYTES) continue;
     if (stats.mtimeMs <= record.lastSyncedAt) continue;
