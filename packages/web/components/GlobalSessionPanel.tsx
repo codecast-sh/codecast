@@ -1552,6 +1552,16 @@ export function SessionListPanel({
   }, [staleSessions, dismissStaleMutation]);
 
   const [expandedSubSessions, setExpandedSubSessions] = useState<Record<string, boolean>>({});
+  // Cap how many rows each section renders. A section like "Needs Input" can
+  // accumulate thousands of finished sessions (the store never prunes), and
+  // rendering them all materializes tens of thousands of DOM nodes in this
+  // always-mounted panel — every heartbeat then re-reconciles the whole tree,
+  // which is enough to peg the renderer (badly in dev builds). Render a bounded
+  // window with a "show more" expander; the active row is always force-mounted
+  // so auto-scroll and the currently-viewed session never fall off the cap.
+  const SECTION_RENDER_CAP = 50;
+  const SECTION_RENDER_STEP = 100;
+  const [sectionLimits, setSectionLimits] = useState<Record<string, number>>({});
   const showSubagents = s.clientState.ui?.show_subagents ?? true;
   const showAllSessions = s.clientState.ui?.show_old_sessions ?? true;
   // Three-way view mode; the legacy boolean is honored when the mode is unset.
@@ -1862,8 +1872,22 @@ export function SessionListPanel({
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
           </svg>
         </button>
-        {!collapsed && <>
-          {items.map((session) => {
+        {!collapsed && (() => {
+          const limit = sectionLimits[key] ?? SECTION_RENDER_CAP;
+          let visibleItems = items.length > limit ? items.slice(0, limit) : items;
+          // Never let the active row (or the parent hosting the active subagent)
+          // fall past the cap — it must stay mounted for auto-scroll and so the
+          // session being viewed never vanishes from the list.
+          if (visibleItems.length < items.length && activeSessionId) {
+            const needed = items.find(
+              (i) => i._id === activeSessionId
+                || (globalSubByParent.get(i._id) || []).some((sub) => sub._id === activeSessionId),
+            );
+            if (needed && !visibleItems.includes(needed)) visibleItems = [...visibleItems, needed];
+          }
+          const hiddenCount = items.length - visibleItems.length;
+          return (<>
+          {visibleItems.map((session) => {
             // In flat view, subagents already appear as their own top-level
             // rows (they're in sortedSessions), so suppress the nested rendering
             // to avoid showing them twice.
@@ -1923,7 +1947,16 @@ export function SessionListPanel({
               </div>
             );
           })}
-        </>}
+          {hiddenCount > 0 && (
+            <button
+              onClick={() => setSectionLimits((prev) => ({ ...prev, [key]: (prev[key] ?? SECTION_RENDER_CAP) + SECTION_RENDER_STEP }))}
+              className="w-full px-3 py-1.5 text-[10px] font-medium text-sol-text-dim hover:text-sol-cyan transition-colors text-left border-b border-sol-border/30"
+            >
+              Show {Math.min(hiddenCount, SECTION_RENDER_STEP)} more · {hiddenCount} hidden
+            </button>
+          )}
+          </>);
+        })()}
       </div>
     );
   };
@@ -2206,7 +2239,11 @@ export function CollapsedSessionRail({ onSelect }: { onSelect?: (sessionId: stri
         <div className="flex flex-col items-center gap-[6px] pt-3">
           {groups.map((group, gi) => (
             <div key={gi} className={`flex flex-col items-center gap-[6px] ${gi > 0 ? "mt-2" : ""}`}>
-              {group.map((sess) => {
+              {/* Cap dots per group: a section can hold thousands of sessions and
+                  one dot is a tooltip-wrapped button — rendering them all (some
+                  with pulse animations) is the same un-windowed cost the expanded
+                  panel had. The count badge below still conveys the true total. */}
+              {group.slice(0, 80).map((sess) => {
                 const status = getStatusStyle(sess);
                 return (
                   <Tooltip key={sess._id}>
