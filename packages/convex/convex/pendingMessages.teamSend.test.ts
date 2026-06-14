@@ -194,6 +194,33 @@ describe("team send — delivery routing", () => {
   });
 });
 
+describe("delivery routing — backfill independence", () => {
+  test("a legacy self-send with NO owner_user_id is still delivered (by_user_status safety net)", async () => {
+    const { ctx, tables } = world({ now: 1_000_000_000_000 });
+    // Simulate a row written before owner_user_id existed: only from_user_id is set.
+    tables.pending_messages.push({
+      _id: "legacy1",
+      conversation_id: "convBob",
+      from_user_id: "uBob",
+      status: "pending",
+      retry_count: 0,
+      content: "legacy",
+    });
+    const forBob = await collectDeliverableForOwner(ctx as any, "uBob" as any, "devBob");
+    expect(forBob.map((m) => m._id)).toContain("legacy1");
+  });
+
+  test("a cross-user row never surfaces to the SENDER's daemon even via the sender index", async () => {
+    const { ctx, tables } = world({ now: 1_000_000_000_000 });
+    await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "x" });
+    // Alice is the sender; the by_user_status arm finds the row, but canDaemonSee rejects it
+    // because Alice doesn't own the target conversation.
+    const forAlice = await collectDeliverableForOwner(ctx as any, "uAlice" as any, "devAlice");
+    expect(forAlice).toHaveLength(0);
+    void tables;
+  });
+});
+
 describe("remote not responding — feedback to the sending session", () => {
   test("target OFFLINE past the deadline: Alice's session gets a failure receipt and the message is cancelled", async () => {
     const now = 1_000_000_000_000;
