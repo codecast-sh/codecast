@@ -45,11 +45,20 @@ export function quoteToComposer(text: string, populate: PopulateFn): void {
 // clear the batch. The composer's send path calls this to AUTO-ATTACH the quotes
 // to the outgoing message — so the user never has to remember a separate "add to
 // message" step; a plain send carries the quotes. Returns "" when nothing pending.
-export function takeReviewBatch(conversationId: string): string {
+//
+// Pass `messageId` to take only the comments anchored to one review target (e.g.
+// a plan rendered under its own namespaced key) and clear just those, leaving any
+// other pending comments untouched.
+export function takeReviewBatch(conversationId: string, messageId?: string): string {
   const s = useInboxStore.getState();
-  const comments = s.getReviewComments(conversationId).filter((c) => c.body.trim() || c.quote.trim());
-  const text = formatPendingComments(sortPendingComments(comments));
-  if (text) {
+  const taken = s
+    .getReviewComments(conversationId)
+    .filter((c) => (c.body.trim() || c.quote.trim()) && (!messageId || c.messageId === messageId));
+  const text = formatPendingComments(sortPendingComments(taken));
+  if (!text) return "";
+  if (messageId) {
+    taken.forEach((c) => s.removeReviewComment(conversationId, c.id));
+  } else {
     s.clearReviewComments(conversationId);
     s.setReviewTarget(null);
     s.setReviewEditingId(null);

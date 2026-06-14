@@ -1,7 +1,7 @@
 import { test, expect, describe, beforeEach } from "bun:test";
 import { useInboxStore } from "../store/inboxStore";
 import { takeReviewBatch, attachReviewToMessage } from "./reviewActions";
-import type { PendingComment } from "./quoteFormat";
+import { formatPlanFeedback, type PendingComment } from "./quoteFormat";
 
 const CONV = "conv-test";
 
@@ -39,6 +39,30 @@ describe("takeReviewBatch", () => {
   test("returns empty string when nothing meaningful is pending", () => {
     seed([]);
     expect(takeReviewBatch(CONV)).toBe("");
+  });
+
+  test("scoped to a messageId takes only those comments and clears just them (plan review)", () => {
+    // Plan comments live under a namespaced key; an unrelated body comment must survive.
+    seed([
+      { id: "p1", messageId: "m1#plan", blockIndex: 0, quote: "plan line", body: "wrong", createdAt: 0 },
+      { id: "b1", messageId: "m1", blockIndex: 0, quote: "body line", body: "", createdAt: 1 },
+    ]);
+    expect(takeReviewBatch(CONV, "m1#plan")).toBe("> plan line\n\nwrong");
+    const s = useInboxStore.getState();
+    expect(s.reviewComments[CONV]?.map((c) => c.id)).toEqual(["b1"]); // body comment untouched
+  });
+});
+
+describe("formatPlanFeedback", () => {
+  test("wraps the annotation batch in directive rejection framing", () => {
+    const out = formatPlanFeedback("> bad section\n\nfix this");
+    expect(out).toContain("The plan was NOT approved");
+    expect(out).toContain("Do not re-present the same plan unchanged");
+    expect(out.endsWith("> bad section\n\nfix this")).toBe(true);
+  });
+
+  test("falls back to a generic request when the batch is empty", () => {
+    expect(formatPlanFeedback("")).toContain("Plan changes requested.");
   });
 });
 
