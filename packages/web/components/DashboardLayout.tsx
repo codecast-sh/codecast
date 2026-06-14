@@ -544,20 +544,33 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // the panel slides over it instead of reflowing it while the width animates.
   const sidebarElRef = useRef<HTMLDivElement>(null);
   const sidebarAnimTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The collapsed/expanded state we last drove the panel to. We compare against
+  // this — not the library's isCollapsed() — so a toggle always acts, even if the
+  // library's internal size and our store state ever drift apart.
+  const sidebarAppliedRef = useRef<boolean | null>(null);
 
   useWatchEffect(() => {
     const ref = sidebarPanelRef.current;
     const el = sidebarElRef.current;
     if (!ref || !el) return;
-    if (sidebarHidden === ref.isCollapsed()) return;
-    // Only re-measure when expanded; on expand the last frozen width is the target.
+    if (sidebarAppliedRef.current === sidebarHidden) return;
+    const firstSync = sidebarAppliedRef.current === null;
+    sidebarAppliedRef.current = sidebarHidden;
+    // On first mount the panel already renders at the right defaultSize — just
+    // record the state and skip, so nothing animates or resizes on load.
+    if (firstSync && ref.isCollapsed() === sidebarHidden) return;
+    // Freeze content at its current pixel width so text doesn't reflow while the
+    // panel width animates (only meaningful when collapsing from a real width).
     const width = el.getBoundingClientRect().width;
     if (width) el.style.setProperty("--sidebar-frozen-w", `${width}px`);
     el.classList.add("sidebar-animating");
     if (sidebarAnimTimer.current) clearTimeout(sidebarAnimTimer.current);
     sidebarAnimTimer.current = setTimeout(() => el.classList.remove("sidebar-animating"), 320);
+    // Expand by resizing to the persisted width (always ≥ minSize) instead of the
+    // library's expand(): its restored size can land below the collapse/min
+    // midpoint and get clamped straight back to 0, making expand a silent no-op.
     if (sidebarHidden) ref.collapse();
-    else ref.expand();
+    else ref.resize(`${layout.sidebar}%`);
   }, [sidebarHidden]);
 
   // Hover-peek: with the sidebar collapsed, touching the left edge slides it
