@@ -1151,6 +1151,60 @@ export function groupSessionsForLabelView(
   return { labelGroups, projectGroups };
 }
 
+// Resolve the active inbox view mode from client UI state. Shared by the
+// inboxViewMode getter and computeVisualOrder so every consumer agrees on
+// which ordering is on screen.
+export function resolveInboxViewMode(ui: { inbox_view_mode?: "grouped" | "time" | "bucket"; inbox_flat_view?: boolean } | undefined): "grouped" | "time" | "bucket" {
+  return ui?.inbox_view_mode ?? (ui?.inbox_flat_view ? "time" : "grouped");
+}
+
+// The session order AS RENDERED: the grouped base order re-shuffled for the
+// active view mode (time / by-label). Accepts the live store state or a
+// mutative action draft, so keyboard nav (visualOrder) and the dismiss/kill
+// advance-to-next paths (hideSessionInDraft, markKilling) all walk exactly
+// the list the user is looking at. currentSessionId keeps the blank you're
+// sitting on navigable (j/k from a fresh session, dismiss-from-it advances to
+// the row below it); all other never-engaged blanks are hidden from the panel
+// and so excluded from this order too.
+export function computeVisualOrder(state: {
+  sessions: Record<string, InboxSession>;
+  sessionsWithQueuedMessages: Set<string>;
+  activeProjectFilter?: string | null;
+  pendingMessages: Record<string, any[]>;
+  currentSessionId?: string | null;
+  pendingSessionCreates: Record<string, unknown>;
+  activeBucketFilter?: string | null;
+  bucketAssignments: Record<string, BucketAssignmentItem>;
+  buckets: Record<string, BucketItem>;
+  clientState: { ui?: { inbox_view_mode?: "grouped" | "time" | "bucket"; inbox_flat_view?: boolean } };
+}): InboxSession[] {
+  const bucketByConv = convBucketMap(state.bucketAssignments);
+  const base = visualOrderSessions(state.sessions, state.sessionsWithQueuedMessages, state.activeProjectFilter, sessionsWithPendingSend(state.pendingMessages), { currentSessionId: state.currentSessionId, pendingCreateIds: new Set(Object.keys(state.pendingSessionCreates)), bucketFilter: state.activeBucketFilter, bucketByConv });
+  const mode = resolveInboxViewMode(state.clientState.ui);
+  if (mode === "time") {
+    return [...base].sort((a, b) => (b.started_at ?? b.updated_at ?? 0) - (a.started_at ?? a.updated_at ?? 0));
+  }
+  if (mode === "bucket") {
+    const pinned = base.filter((s) => s.is_pinned);
+    const rest = base.filter((s) => !s.is_pinned);
+    const { labelGroups, projectGroups } = groupSessionsForLabelView(rest, state.buckets, bucketByConv);
+    return [
+      ...pinned,
+      ...labelGroups.flatMap((g) => g.items),
+      ...projectGroups.flatMap((g) => g.items),
+    ];
+  }
+  return base;
+}
+
+// Advance past a removed set: the first session below the current one in the
+// on-screen order, wrapping to the top when the current row was last.
+function nextSessionPastRemoved(ordered: InboxSession[], currentId: string, removed: ReadonlySet<string>): InboxSession | undefined {
+  const idx = ordered.findIndex((s) => s._id === currentId);
+  return ordered.slice(idx + 1).find((s) => !removed.has(s._id))
+    ?? ordered.find((s) => !removed.has(s._id));
+}
+
 // Quick-create pre-warms a server conversation (and a daemon agent) per summon;
 // without reuse, every abandoned summon strands an empty "New Session" row in
 // the inbox forever. Reusing the existing blank session for the same
@@ -2190,11 +2244,9 @@ function hideSessionInDraft(draft: any, id: string, mode: "stash" | "kill") {
   const me = draft.currentUser?._id?.toString?.();
   let newSessionId = draft.currentSessionId;
   if (draft.currentSessionId && allIds.includes(draft.currentSessionId)) {
-    const removedSet = new Set(allIds);
-    const ordered = visualOrderSessions(draft.sessions as Record<string, InboxSession>, draft.sessionsWithQueuedMessages, draft.activeProjectFilter, sessionsWithPendingSend(draft.pendingMessages), { bucketFilter: draft.activeBucketFilter, bucketByConv: convBucketMap(draft.bucketAssignments as Record<string, BucketAssignmentItem>) });
-    const idx = ordered.findIndex((s) => s._id === draft.currentSessionId);
-    const next = ordered.slice(idx + 1).find((s) => !removedSet.has(s._id))
-      ?? ordered.find((s) => !removedSet.has(s._id));
+    // Advance in the order the user is LOOKING at (active view mode, same as
+    // j/k), not the default grouped layout's order.
+    const next = nextSessionPastRemoved(computeVisualOrder(draft), draft.currentSessionId, new Set(allIds));
     newSessionId = next?._id ?? null;
   }
   for (const sid of allIds) {
@@ -2422,10 +2474,7 @@ export const useInboxStore = create<InboxStoreState>(
     }
     pushInboxViewHistory(prev, snapshotInboxViewFromDraft(this));
   }),
-  inboxViewMode: () => {
-    const ui = get().clientState.ui ?? {};
-    return ui.inbox_view_mode ?? (ui.inbox_flat_view ? "time" : "grouped");
-  },
+  inboxViewMode: () => resolveInboxViewMode(get().clientState.ui),
   setInboxViewMode: (mode: "grouped" | "time" | "bucket") => {
     const state = get();
     const prev = snapshotInboxViewFromDraft(state);
@@ -3190,30 +3239,7 @@ export const useInboxStore = create<InboxStoreState>(
     return sortSessions(get().sessions).filter((s: InboxSession) => !s.is_subagent && !s.parent_conversation_id);
   },
 
-  visualOrder: () => {
-    // currentSessionId keeps the blank you're sitting on navigable (j/k from a
-    // fresh session); all other never-engaged blanks are hidden from the panel
-    // and so excluded from keyboard order too.
-    const bucketByConv = convBucketMap(get().bucketAssignments);
-    const base = visualOrderSessions(get().sessions, get().sessionsWithQueuedMessages, get().activeProjectFilter, sessionsWithPendingSend(get().pendingMessages), { currentSessionId: get().currentSessionId, pendingCreateIds: new Set(Object.keys(get().pendingSessionCreates)), bucketFilter: get().activeBucketFilter, bucketByConv });
-    // Keyboard order follows the ACTIVE view so Ctrl+J/K walks the list the
-    // user is looking at, not the grouped layout's order.
-    const mode = get().inboxViewMode();
-    if (mode === "time") {
-      return [...base].sort((a, b) => (b.started_at ?? b.updated_at ?? 0) - (a.started_at ?? a.updated_at ?? 0));
-    }
-    if (mode === "bucket") {
-      const pinned = base.filter((s) => s.is_pinned);
-      const rest = base.filter((s) => !s.is_pinned);
-      const { labelGroups, projectGroups } = groupSessionsForLabelView(rest, get().buckets, bucketByConv);
-      return [
-        ...pinned,
-        ...labelGroups.flatMap((g) => g.items),
-        ...projectGroups.flatMap((g) => g.items),
-      ];
-    }
-    return base;
-  },
+  visualOrder: () => computeVisualOrder(get()),
 
   // =====================
   // NAVIGATION
@@ -3448,10 +3474,7 @@ export const useInboxStore = create<InboxStoreState>(
   markKilling: action(function (this: Draft, id: string) {
     let newSessionId = this.currentSessionId;
     if (this.currentSessionId === id) {
-      const ordered = visualOrderSessions(this.sessions as Record<string, InboxSession>, this.sessionsWithQueuedMessages, this.activeProjectFilter, sessionsWithPendingSend(this.pendingMessages), { bucketFilter: this.activeBucketFilter, bucketByConv: convBucketMap(this.bucketAssignments as Record<string, BucketAssignmentItem>) });
-      const idx = ordered.findIndex(s => s._id === id);
-      const next = ordered.slice(idx + 1).find(s => s._id !== id)
-        ?? ordered.find(s => s._id !== id);
+      const next = nextSessionPastRemoved(computeVisualOrder(this), id, new Set([id]));
       newSessionId = next?._id ?? null;
     }
     delete this.sessions[id];
