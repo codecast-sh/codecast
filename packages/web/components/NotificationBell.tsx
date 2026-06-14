@@ -7,6 +7,7 @@ import { useConvexSync } from "../hooks/useConvexSync";
 import { useRouter } from "next/navigation";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore } from "../store/inboxStore";
+import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 
 function timeAgo(timestamp: number): string {
   const seconds = Math.floor((Date.now() - timestamp) / 1000);
@@ -196,6 +197,7 @@ export function NotificationBell() {
 
   return (
     <div className="relative" ref={dropdownRef}>
+      <ShortcutTooltip label="Notifications">
       <button
         onClick={() => setIsOpen(!isOpen)}
         className="relative p-2 text-sol-text hover:text-sol-yellow transition-colors"
@@ -215,6 +217,7 @@ export function NotificationBell() {
           </span>
         )}
       </button>
+      </ShortcutTooltip>
 
       {isOpen && (
         <div className="absolute right-0 mt-2 w-[calc(100vw-1rem)] sm:w-[520px] max-w-[520px] bg-sol-bg border border-sol-border rounded-lg shadow-lg overflow-hidden z-50">

@@ -30,11 +30,11 @@ import { DaemonStatusChip } from "./DaemonStatusChip";
 import { SyncStatusChip } from "./SyncStatusChip";
 import { TmuxMissingBanner } from "./TmuxMissingBanner";
 import { FindBar } from "./FindBar";
-import { KeyboardShortcutsPanel } from "./KeyboardShortcutsHelp";
+import { KeyboardShortcutsPanel, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { SettingsModal } from "./settings/SettingsModal";
 import { NewSessionModal } from "./ConversationList";
 import { useInboxStore, useTrackedStore, categorizeSessions, sessionsWithPendingSend, isSessionHidden } from "../store/inboxStore";
-import { useShortcutAction, useShortcutContext, useGlobalShortcutActions, formatShortcutLabel } from "../shortcuts";
+import { useShortcutAction, useShortcutContext, useGlobalShortcutActions } from "../shortcuts";
 import { usePrefetch } from "../hooks/usePrefetch";
 import { desktopHeaderClass, setupDesktopDrag, isElectron } from "../lib/desktop";
 import { CollapsedSessionRail, SessionListPanel, ConversationColumn } from "./GlobalSessionPanel";
@@ -534,15 +534,55 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   const sessionListPanelRef = usePanelRef();
   const sidebarHidden = !!hideSidebar || isZenMode || sidebarCollapsed || isMobile;
 
+  // Animated collapse/expand: panels are flex-grow sized with no built-in
+  // transition, so we enable one (globals.css `.sidebar-animating`) only for
+  // the duration of a programmatic toggle — drag-resizes stay 1:1. The class is
+  // toggled imperatively (not via React state) so it's in the DOM before
+  // collapse()/expand() writes the new flex-grow in the same task — a state-
+  // driven class would commit a render later and miss the transition. The
+  // content is frozen at its expanded pixel width via --sidebar-frozen-w so
+  // the panel slides over it instead of reflowing it while the width animates.
+  const sidebarElRef = useRef<HTMLDivElement>(null);
+  const sidebarAnimTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useWatchEffect(() => {
     const ref = sidebarPanelRef.current;
-    if (!ref) return;
-    if (sidebarHidden) {
-      if (!ref.isCollapsed()) ref.collapse();
-    } else {
-      if (ref.isCollapsed()) ref.expand();
-    }
+    const el = sidebarElRef.current;
+    if (!ref || !el) return;
+    if (sidebarHidden === ref.isCollapsed()) return;
+    // Only re-measure when expanded; on expand the last frozen width is the target.
+    const width = el.getBoundingClientRect().width;
+    if (width) el.style.setProperty("--sidebar-frozen-w", `${width}px`);
+    el.classList.add("sidebar-animating");
+    if (sidebarAnimTimer.current) clearTimeout(sidebarAnimTimer.current);
+    sidebarAnimTimer.current = setTimeout(() => el.classList.remove("sidebar-animating"), 320);
+    if (sidebarHidden) ref.collapse();
+    else ref.expand();
   }, [sidebarHidden]);
+
+  // Hover-peek: with the sidebar collapsed, touching the left edge slides it
+  // out as an overlay; leaving the overlay slides it back. The Sidebar inside
+  // stays mounted through the exit transition (peekMounted lags peekOpen).
+  const peekEnabled = sidebarCollapsed && !hideSidebar && !isZenMode && !isMobile;
+  const [peekOpen, setPeekOpen] = useState(false);
+  const [peekMounted, setPeekMounted] = useState(false);
+  const peekTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const openPeek = useCallback(() => {
+    if (peekTimer.current) clearTimeout(peekTimer.current);
+    setPeekMounted(true);
+    setPeekOpen(true);
+  }, []);
+  const closePeek = useCallback(() => {
+    setPeekOpen(false);
+    if (peekTimer.current) clearTimeout(peekTimer.current);
+    peekTimer.current = setTimeout(() => setPeekMounted(false), 250);
+  }, []);
+  useWatchEffect(() => {
+    if (!peekEnabled) {
+      setPeekOpen(false);
+      setPeekMounted(false);
+    }
+  }, [peekEnabled]);
 
   useWatchEffect(() => {
     const ref = sessionListPanelRef.current;
@@ -641,35 +681,38 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         <div className="px-2 sm:px-3 py-1 sm:py-1.5 flex items-center gap-1.5 sm:gap-3">
           {/* Left section: Sidebar toggle + nav */}
           <div className="flex items-center gap-1 flex-shrink-0">
-            <button
-              onClick={(e) => { s.updateClientUI({ sidebar_collapsed: !sidebarCollapsed }); tipActions.whisper('sidebar.toggleLeft', e); }}
-              className="hidden md:flex items-center p-1.5 rounded-md text-sol-text-dim/60 hover:text-sol-text-muted transition-colors"
-              title={`${sidebarCollapsed ? "Show sidebar" : "Hide sidebar"} (${formatShortcutLabel('sidebar.toggleLeft')})`}
-            >
-              <PanelLeft className="w-[18px] h-[18px]" />
-            </button>
+            <ShortcutTooltip label={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"} action="sidebar.toggleLeft">
+              <button
+                onClick={(e) => { s.updateClientUI({ sidebar_collapsed: !sidebarCollapsed }); tipActions.whisper('sidebar.toggleLeft', e); }}
+                className="hidden md:flex items-center p-1.5 rounded-md text-sol-text-dim/60 hover:text-sol-text-muted transition-colors"
+              >
+                <PanelLeft className="w-[18px] h-[18px]" />
+              </button>
+            </ShortcutTooltip>
             {isDesktopApp && (
               <div className="flex items-center gap-0.5">
-                <button
-                  onClick={() => window.history.back()}
-                  className="p-1.5 text-sol-text-muted hover:text-sol-text transition-colors rounded hover:bg-sol-bg-alt"
-                  title="Back"
-                  aria-label="Go back"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-                  </svg>
-                </button>
-                <button
-                  onClick={() => window.history.forward()}
-                  className="p-1.5 text-sol-text-muted hover:text-sol-text transition-colors rounded hover:bg-sol-bg-alt"
-                  title="Forward"
-                  aria-label="Go forward"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-                  </svg>
-                </button>
+                <ShortcutTooltip label="Back">
+                  <button
+                    onClick={() => window.history.back()}
+                    className="p-1.5 text-sol-text-muted hover:text-sol-text transition-colors rounded hover:bg-sol-bg-alt"
+                    aria-label="Go back"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+                    </svg>
+                  </button>
+                </ShortcutTooltip>
+                <ShortcutTooltip label="Forward">
+                  <button
+                    onClick={() => window.history.forward()}
+                    className="p-1.5 text-sol-text-muted hover:text-sol-text transition-colors rounded hover:bg-sol-bg-alt"
+                    aria-label="Go forward"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                    </svg>
+                  </button>
+                </ShortcutTooltip>
               </div>
             )}
             <ErrorBoundary name="RecentlyViewedMenu" level="inline">
@@ -716,21 +759,22 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
               <SyncStatusChip />
             </ErrorBoundary>
             <ActiveAgentsBadge isOnInboxPage={isOnInboxPage} />
-            <button
-              onClick={(e) => {
-                const ctx = resolveNewSessionContext();
-                if (ctx.path) {
-                  handleQuickCreate();
-                } else {
-                  s.openNewSession({ projectPath: ctx.path, gitRoot: ctx.gitRoot, agentType: ctx.agentType });
-                }
-                tipActions.whisper('session.create', e);
-              }}
-              className="hidden md:flex items-center justify-center w-7 h-7 rounded-full border border-sol-text-dim/20 bg-sol-text-dim/8 text-sol-text-dim/50 hover:bg-sol-text-dim/15 hover:text-sol-text-dim/70 hover:border-sol-text-dim/30 transition-colors"
-              title={`New session (${formatShortcutLabel('session.create')})`}
-            >
-              <Plus className="w-[18px] h-[18px]" />
-            </button>
+            <ShortcutTooltip label="New session" action="session.create">
+              <button
+                onClick={(e) => {
+                  const ctx = resolveNewSessionContext();
+                  if (ctx.path) {
+                    handleQuickCreate();
+                  } else {
+                    s.openNewSession({ projectPath: ctx.path, gitRoot: ctx.gitRoot, agentType: ctx.agentType });
+                  }
+                  tipActions.whisper('session.create', e);
+                }}
+                className="hidden md:flex items-center justify-center w-7 h-7 rounded-full border border-sol-text-dim/20 bg-sol-text-dim/8 text-sol-text-dim/50 hover:bg-sol-text-dim/15 hover:text-sol-text-dim/70 hover:border-sol-text-dim/30 transition-colors"
+              >
+                <Plus className="w-[18px] h-[18px]" />
+              </button>
+            </ShortcutTooltip>
             <ThemeToggle />
             <ErrorBoundary name="NotificationBell" level="inline">
               <NotificationBell />
@@ -738,13 +782,14 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
             <ErrorBoundary name="UserMenu" level="inline">
               <UserMenu />
             </ErrorBoundary>
-            <button
-              onClick={(e) => { s.toggleSidePanel(); tipActions.whisper('sidebar.toggleRight', e); }}
-              className="flex items-center p-1.5 rounded-md text-sol-text-dim/60 hover:text-sol-text-muted transition-colors"
-              title={`Toggle sessions panel (${formatShortcutLabel('sidebar.toggleRight')})`}
-            >
-              <PanelRight className="w-[18px] h-[18px]" />
-            </button>
+            <ShortcutTooltip label="Toggle sessions panel" action="sidebar.toggleRight">
+              <button
+                onClick={(e) => { s.toggleSidePanel(); tipActions.whisper('sidebar.toggleRight', e); }}
+                className="flex items-center p-1.5 rounded-md text-sol-text-dim/60 hover:text-sol-text-muted transition-colors"
+              >
+                <PanelRight className="w-[18px] h-[18px]" />
+              </button>
+            </ShortcutTooltip>
           </div>
         </div>
       </header>
@@ -762,7 +807,30 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
 
       {/* Content area with sidebar and main. Group is always mounted; sidebar Panel
           collapses imperatively so toggling zen/sidebar/mobile doesn't remount {rightArea}. */}
-      <div className="flex-1 min-h-0 flex">
+      <div className="flex-1 min-h-0 flex relative">
+        {/* Collapsed-sidebar hover peek: edge hotzone + sliding overlay. Scoped to
+            this container so it starts below the header/banners, not the viewport. */}
+        {peekEnabled && (
+          <>
+            <div className="absolute inset-y-0 left-0 w-1.5 z-[80]" onMouseEnter={openPeek} />
+            <div
+              className={`absolute inset-y-0 left-0 z-[85] w-[280px] border-r border-sol-border/50 bg-sol-bg-alt shadow-2xl transition-transform duration-200 ease-out ${peekOpen ? "translate-x-0" : "-translate-x-full pointer-events-none"}`}
+              onMouseLeave={closePeek}
+            >
+              {peekMounted && (
+                <div className="h-full overflow-auto">
+                  <ErrorBoundary name="SidebarPeek" level="panel">
+                    <Sidebar
+                      directoryFilter={directoryFilter}
+                      isMobileOpen={false}
+                      onMobileClose={() => {}}
+                    />
+                  </ErrorBoundary>
+                </div>
+              )}
+            </div>
+          </>
+        )}
         <div className="flex-1 min-w-0">
           <Group
             orientation="horizontal"
@@ -773,6 +841,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
             <Panel
               id="sidebar"
               panelRef={sidebarPanelRef}
+              elementRef={sidebarElRef}
               minSize={180}
               maxSize="50%"
               collapsible
