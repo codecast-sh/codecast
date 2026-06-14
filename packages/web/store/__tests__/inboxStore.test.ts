@@ -3164,3 +3164,69 @@ describe("hidden-reconcile stale override release (ct-36973)", () => {
     expect(s.pending[`sessions:${ID}:inbox_dismissed_at`]).toBeUndefined();
   });
 });
+
+describe("dismiss/kill advances in the ACTIVE view order, like j/k", () => {
+  // Three waiting-for-input sessions whose grouped order and time order
+  // DISAGREE, so the test can tell which ordering the advance used.
+  // Grouped (needsInput: earliest-updated first): A, B, C → next after A = B.
+  // Time view (started_at desc):                  A, C, B → next after A = C.
+  const A = "a".repeat(32);
+  const B = "b".repeat(32);
+  const C = "c".repeat(32);
+  const waiting = (id: string, updated_at: number, started_at: number): InboxSession => ({
+    ...baseSession,
+    _id: id,
+    session_id: `sess-${id.slice(0, 1)}`,
+    message_count: 5,
+    is_idle: true,
+    updated_at,
+    started_at,
+  });
+
+  // seedCurrentSession declares the nav source so the view-motion guard
+  // doesn't revert currentSessionId (undeclared non-null view writes are
+  // reverted in tests exactly as in production).
+  const seed = (viewMode?: "grouped" | "time") => {
+    seedCurrentSession({
+      sessions: {
+        [A]: waiting(A, 100, 200),
+        [B]: waiting(B, 200, 100),
+        [C]: waiting(C, 300, 150),
+      },
+      conversations: {
+        [A]: { _id: A } as any,
+        [B]: { _id: B } as any,
+        [C]: { _id: C } as any,
+      },
+      currentSessionId: A,
+      clientState: viewMode ? { ui: { inbox_view_mode: viewMode } } : {},
+      pending: {},
+      bucketAssignments: {},
+      buckets: {},
+    });
+  };
+
+  it("grouped view: kill advances to the next row of the grouped layout", () => {
+    seed("grouped");
+    useInboxStore.getState().killSession(A);
+    expect(useInboxStore.getState().currentSessionId).toBe(B);
+  });
+
+  it("time view: kill advances to the next row of the time sort, not the grouped order", () => {
+    seed("time");
+    useInboxStore.getState().killSession(A);
+    expect(useInboxStore.getState().currentSessionId).toBe(C);
+  });
+
+  it("time view: stash advances the same way (shared hide path)", () => {
+    seed("time");
+    useInboxStore.getState().stashSession(A);
+    expect(useInboxStore.getState().currentSessionId).toBe(C);
+  });
+
+  it("time view: markKilling advances the same way", () => {
+    seed("time");
+    useInboxStore.getState().markKilling(A);
+    expect(useInboxStore.getState().currentSessionId).toBe(C);
+  });
+});
