@@ -9,6 +9,7 @@ import { HYDRATION_CRITICAL_KEYS, HYDRATION_DEFERRED_KEYS, hydrationMergeStrateg
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
 import { type AgentStatus, ACTIVE_AGENT_STATUSES } from "@codecast/shared/contracts";
+import { isSubagentConversation } from "@codecast/convex/convex/ccAccountsShared";
 
 export type { PendingEntry } from "./syncProtocol";
 
@@ -620,6 +621,50 @@ export function isSessionHidden(
   return !!s.inbox_dismissed_at || !!s.inbox_stashed_at;
 }
 
+// "Old" = a top-level session the LIVE inbox subscription (show_all:false) no
+// longer returns, yet the never-prune cache still holds because the completeness
+// crawl backfilled it. The "show old sessions" toggle filters these out locally
+// — no server re-fetch — so it's instant and never spins the sync chip. Never
+// treat as old: optimistic stubs (no Convex id yet), subagents (they ride their
+// parent), pinned/focused rows, or dismissed/stashed rows (their own buckets).
+export function isOldSession(
+  s: InboxSession,
+  liveInboxIds: Set<string>,
+  focusedId?: string | null,
+): boolean {
+  return (
+    isConvexId(s._id) &&
+    !s.parent_conversation_id &&
+    !s.is_pinned &&
+    !isSessionHidden(s) &&
+    s._id !== focusedId &&
+    !liveInboxIds.has(s._id)
+  );
+}
+
+// Split the cache into the rows the inbox should render and a count of the "old"
+// rows hidden. liveInboxIds is empty until the first live payload lands — treat
+// that as "nothing is old yet" so a cold open never blanks the list. With
+// showAll, keep everything but still report the count (drives the toggle badge).
+export function partitionOldSessions(
+  sessions: Record<string, InboxSession>,
+  liveInboxIds: Set<string>,
+  showAll: boolean,
+  focusedId?: string | null,
+): { visibleSessions: Record<string, InboxSession>; oldCount: number } {
+  if (liveInboxIds.size === 0) return { visibleSessions: sessions, oldCount: 0 };
+  let oldCount = 0;
+  for (const sess of Object.values(sessions)) {
+    if (isOldSession(sess, liveInboxIds, focusedId)) oldCount++;
+  }
+  if (showAll || oldCount === 0) return { visibleSessions: sessions, oldCount };
+  const visibleSessions: Record<string, InboxSession> = {};
+  for (const [id, sess] of Object.entries(sessions)) {
+    if (!isOldSession(sess, liveInboxIds, focusedId)) visibleSessions[id] = sess;
+  }
+  return { visibleSessions, oldCount };
+}
+
 // Window the cross-device dismiss reconcile is authoritative over. Mirrors the
 // server's INBOX_DISMISSED_WINDOW_MS (the range listDismissedSessionsLite scans):
 // the server only reports dismisses within this window, so the client can only
@@ -935,14 +980,27 @@ export function categorizeSessions(
 
   const isTop = (s: InboxSession) => !subsWithParent.has(s._id);
 
+  // A subagent whose parent did NOT nest above it (parent absent from this set).
+  // The server only ever emits a subagent ALONGSIDE its parent, so a parentless
+  // subagent here means the parent was filtered out locally — the "old sessions"
+  // partition dropping an old parent is the common case — or hard-deleted. Such a
+  // row must never be PROMOTED into the flat active buckets: doing so makes it
+  // masquerade as a top-level needs-input card that ignores BOTH the old-sessions
+  // toggle (it has a parent id, so isOldSession skips it) and the subagent toggle
+  // (it isn't in subsByParent, so the nested-subagent filter never sees it). It
+  // rides its parent — nested when the parent is present, hidden otherwise.
+  // (Pinned is exempt below: an explicit pin is a deliberate "keep visible".)
+  const isOrphanSubagent = (s: InboxSession) => isSubagentConversation(s) && !subsWithParent.has(s._id);
+
   // Cluster top-level orchestration workers by plan (or worktree) so a fan-out
   // collapses into one labeled group instead of N loose cards. Only sessions
   // not already nested under a conversation parent and not pinned are eligible;
   // a lone worker (cluster of 1) stays inline. Members are then held out of the
-  // flat buckets below via isFlat.
+  // flat buckets below via isFlat. Orphaned subagents are excluded too — a
+  // parentless worker shouldn't seed or pad a plan cluster.
   const orchestrationGroups = new Map<string, InboxSession[]>();
   for (const s of sorted) {
-    if (!isTop(s) || s.is_pinned) continue;
+    if (!isTop(s) || s.is_pinned || isOrphanSubagent(s)) continue;
     const label = orchestrationGroupLabelOf(s);
     if (!label) continue;
     if (!orchestrationGroups.has(label)) orchestrationGroups.set(label, []);
@@ -954,8 +1012,9 @@ export function categorizeSessions(
   const groupedIds = new Set(
     Array.from(orchestrationGroups.values()).flat().map((s) => s._id),
   );
-  // Flat = top-level AND not folded into an orchestration group.
-  const isFlat = (s: InboxSession) => isTop(s) && !groupedIds.has(s._id);
+  // Flat = top-level, not folded into an orchestration group, and not an
+  // orphaned subagent (those ride their parent — never a loose card here).
+  const isFlat = (s: InboxSession) => isTop(s) && !groupedIds.has(s._id) && !isOrphanSubagent(s);
 
   // A pending send is in-flight work just like a locally-queued message: it
   // pushes the session OUT of needs-input and INTO working. Fold the two sets
@@ -1277,7 +1336,13 @@ interface InboxStoreState {
   pendingHighlightQuery: string | null;
   showMySessions: boolean;
   setShowMySessions: (show: boolean) => void;
-  hiddenSessionCount: number;
+  // Ids the LIVE listInboxSessions subscription (show_all:false) currently
+  // returns — i.e. the server's authoritative "recent" set. The never-prune
+  // sessions cache also holds "old" rows backfilled by the completeness crawl
+  // (which disables cluster-hiding), so "old" can't be a server flag; it's
+  // exactly the cached top-level sessions NOT in this set. The "show old
+  // sessions" toggle filters against it client-side (see GlobalSessionPanel).
+  liveInboxIds: Set<string>;
   // MRU "entered at" per session — bumped only when you switch INTO a session.
   // Drives the Tab switcher order + message eviction. Kept separate from
   // _seenUpToAt so the current session is always strictly the most recent (no
@@ -2315,7 +2380,7 @@ export const useInboxStore = create<InboxStoreState>(
   pendingHighlightQuery: null,
   showMySessions: false,
   setShowMySessions: (show: boolean) => set({ showMySessions: show }),
-  hiddenSessionCount: 0,
+  liveInboxIds: new Set<string>(),
   _lastViewedAt: {},
   _seenUpToAt: {},
   _seenMessageCount: {},

@@ -1,0 +1,124 @@
+import { describe, expect, it } from "bun:test";
+import { isOldSession, partitionOldSessions, categorizeSessions, type InboxSession } from "../inboxStore";
+
+// The "show old sessions" toggle is a pure CLIENT-SIDE filter. "Old" = a
+// top-level session the live (recent) inbox subscription no longer returns but
+// the never-prune cache still holds (the completeness crawl backfilled it).
+// Before this, the toggle only changed a server query arg, which the
+// never-prune cache + crawl undid — so hiding did nothing and toggling spun the
+// sync chip. These tests pin the local classification that replaced it.
+
+// A real Convex id is 32 lowercase base32 chars; isConvexId checks that shape.
+const cid = (n: number) => `j${String(n).padStart(31, "0")}`;
+
+function sess(overrides: Partial<InboxSession> & { _id: string }): InboxSession {
+  return {
+    _id: overrides._id,
+    title: "s",
+    updated_at: 1,
+    message_count: 1,
+    ...overrides,
+  } as InboxSession;
+}
+
+const RECENT = cid(1);
+const OLD = cid(2);
+
+describe("isOldSession", () => {
+  const live = new Set([RECENT]);
+
+  it("a cached top-level session absent from the live set is old", () => {
+    expect(isOldSession(sess({ _id: OLD }), live)).toBe(true);
+  });
+
+  it("a session still in the live set is not old", () => {
+    expect(isOldSession(sess({ _id: RECENT }), live)).toBe(false);
+  });
+
+  it("optimistic stubs (non-Convex id) are never old", () => {
+    expect(isOldSession(sess({ _id: "local-stub-123" }), live)).toBe(false);
+  });
+
+  it("subagents ride their parent, never counted old", () => {
+    expect(isOldSession(sess({ _id: OLD, parent_conversation_id: RECENT }), live)).toBe(false);
+  });
+
+  it("pinned, focused, and dismissed/stashed rows are never old", () => {
+    expect(isOldSession(sess({ _id: OLD, is_pinned: true }), live)).toBe(false);
+    expect(isOldSession(sess({ _id: OLD }), live, OLD)).toBe(false);
+    expect(isOldSession(sess({ _id: OLD, inbox_dismissed_at: 5 }), live)).toBe(false);
+    expect(isOldSession(sess({ _id: OLD, inbox_stashed_at: 5 }), live)).toBe(false);
+  });
+});
+
+describe("partitionOldSessions", () => {
+  const sessions = { [RECENT]: sess({ _id: RECENT }), [OLD]: sess({ _id: OLD }) };
+  const live = new Set([RECENT]);
+
+  it("an empty live set means nothing is old yet — never blank a cold open", () => {
+    const r = partitionOldSessions(sessions, new Set(), false);
+    expect(r.oldCount).toBe(0);
+    expect(Object.keys(r.visibleSessions)).toHaveLength(2);
+  });
+
+  it("show-all keeps every row but still reports the old count for the badge", () => {
+    const r = partitionOldSessions(sessions, live, true);
+    expect(r.oldCount).toBe(1);
+    expect(Object.keys(r.visibleSessions).sort()).toEqual([RECENT, OLD].sort());
+  });
+
+  it("hide drops only the old rows, instantly and without touching the server", () => {
+    const r = partitionOldSessions(sessions, live, false);
+    expect(r.oldCount).toBe(1);
+    expect(Object.keys(r.visibleSessions)).toEqual([RECENT]);
+  });
+
+  it("returns the same map ref when nothing is old (no needless re-render)", () => {
+    const allLive = new Set([RECENT, OLD]);
+    const r = partitionOldSessions(sessions, allLive, false);
+    expect(r.oldCount).toBe(0);
+    expect(r.visibleSessions).toBe(sessions);
+  });
+});
+
+// Regression (ct-37163): hiding old sessions used to ORPHAN-PROMOTE subagents.
+// The server only emits a subagent alongside its parent, so a subagent rides its
+// parent in the cache. partitionOldSessions drops an OLD top-level parent but
+// keeps the child (it has a parent id, so isOldSession skips it). categorizeSessions
+// then saw the child with no parent in the set and promoted it to a loose
+// top-level NEEDS INPUT card — which (a) only appeared when "show old" was OFF
+// (parent gone) and (b) couldn't be hidden by the subagent toggle (it wasn't in
+// subsByParent). The fix: a parentless subagent is never a flat card; it nests
+// when its parent is present, and is dropped otherwise.
+describe("hiding old must not promote a subagent to a loose card (ct-37163)", () => {
+  const PARENT = OLD; // old top-level parent, backfilled by the completeness crawl
+  const CHILD = cid(3); // its subagent — awaiting_input would land it in needsInput if loose
+  const base: Record<string, InboxSession> = {
+    [RECENT]: sess({ _id: RECENT, awaiting_input: true }),
+    [PARENT]: sess({ _id: PARENT, awaiting_input: true }),
+    [CHILD]: sess({ _id: CHILD, parent_conversation_id: PARENT, is_subagent: true, awaiting_input: true }),
+  };
+  const live = new Set([RECENT]); // PARENT + CHILD are absent from the live recent set → "old"
+  const ids = (xs: InboxSession[]) => xs.map((x) => x._id);
+
+  it("show-old ON: the child nests under its parent, never a loose needs-input card", () => {
+    const { visibleSessions } = partitionOldSessions(base, live, true);
+    const cat = categorizeSessions(visibleSessions, new Set());
+    expect(ids(cat.subsByParent.get(PARENT) ?? [])).toContain(CHILD);
+    expect(ids(cat.needsInput)).not.toContain(CHILD);
+  });
+
+  it("show-old OFF: dropping the old parent must NOT surface the orphaned child", () => {
+    const { visibleSessions } = partitionOldSessions(base, live, false);
+    const cat = categorizeSessions(visibleSessions, new Set());
+    expect(ids(cat.needsInput)).not.toContain(PARENT); // old parent hidden
+    expect(ids(cat.needsInput)).not.toContain(CHILD); // child rides it — not promoted
+    expect(ids(cat.working)).not.toContain(CHILD);
+    expect(ids(cat.newSessions)).not.toContain(CHILD);
+  });
+
+  it("a subagent whose parent is entirely absent (hard-deleted) is never promoted", () => {
+    const cat = categorizeSessions({ [RECENT]: base[RECENT], [CHILD]: base[CHILD] }, new Set());
+    expect(ids(cat.needsInput)).not.toContain(CHILD);
+  });
+});
