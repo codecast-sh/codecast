@@ -2,7 +2,7 @@ import { useState, useRef, useCallback } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useShortcutAction } from "../shortcuts";
-import { KeyCap } from "./KeyboardShortcutsHelp";
+import { KeyCap, MenuKeyCaps } from "./KeyboardShortcutsHelp";
 import { useQuery } from "convex/react";
 import { AppLoader } from "./AppLoader";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -78,6 +78,7 @@ function getSnippet(content: string, query: string, maxLen = 400): string {
 
 export function GlobalSearch() {
   const [isOpen, setIsOpen] = useState(false);
+  const [isFocused, setIsFocused] = useState(false);
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -165,6 +166,7 @@ export function GlobalSearch() {
     if (e.key === "Escape") {
       setIsOpen(false);
       setQuery("");
+      inputRef.current?.blur();
     }
   }, document);
 
@@ -206,16 +208,18 @@ export function GlobalSearch() {
   // Group results by session for display
   const groupedResults = searchData?.results || [];
 
+  const isExpanded = isFocused || query.length > 0;
+
   return (
-    <div className="relative flex-1 min-w-[500px] max-w-[800px] mx-8 z-[9999]">
+    <div className="relative w-full min-w-0 z-[9999] flex justify-center">
       <div
-        className={`relative transition-all duration-200 ${
-          isOpen ? "scale-105" : ""
+        className={`relative w-full min-w-0 transition-[max-width] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] ${
+          isExpanded ? "max-w-[680px]" : "max-w-[230px]"
         }`}
       >
         <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
           <svg
-            className="w-4 h-4 text-sol-base00"
+            className={`w-4 h-4 transition-colors duration-200 ${isExpanded ? "text-sol-cyan" : "text-sol-text-dim"}`}
             fill="none"
             stroke="currentColor"
             viewBox="0 0 24 24"
@@ -236,15 +240,22 @@ export function GlobalSearch() {
             setQuery(e.target.value);
             if (!isOpen) setIsOpen(true);
           }}
-          onFocus={() => setIsOpen(true)}
+          onFocus={() => { setIsFocused(true); setIsOpen(true); }}
+          onBlur={() => setIsFocused(false)}
           onKeyDown={handleKeyDown}
-          placeholder="Search conversations..."
-          className="w-full pl-10 pr-16 py-2 bg-sol-base02/60 bg-sol-bg-alt border border-sol-base01/60 border-sol-border rounded-lg text-sm text-sol-base2 text-sol-text placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-amber-500/50 focus:border-amber-500/50 transition-all"
+          placeholder="Search sessions"
+          className={`w-full pl-9 py-1.5 bg-sol-bg-alt border rounded-full text-sm text-sol-text placeholder:text-sol-text-dim truncate cursor-pointer focus:cursor-text focus:outline-none transition-[border-color,box-shadow,padding] duration-200 ${
+            isExpanded
+              ? "pr-3 border-sol-cyan/50 ring-1 ring-sol-cyan/30 shadow-lg shadow-black/10"
+              : "pr-12 border-sol-border hover:border-sol-text-dim/40 hover:bg-sol-bg-highlight"
+          }`}
         />
-        <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
-          <kbd className="hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium text-sol-base00 bg-sol-base02 bg-sol-bg-alt rounded border border-sol-base01 border-sol-border">
-            <span className="text-xs">&#8984;</span>/
-          </kbd>
+        <div
+          className={`absolute inset-y-0 right-0 pr-2.5 flex items-center pointer-events-none transition-opacity duration-150 ${
+            isExpanded ? "opacity-0" : "opacity-100"
+          }`}
+        >
+          <MenuKeyCaps action="search.open" />
         </div>
       </div>
 

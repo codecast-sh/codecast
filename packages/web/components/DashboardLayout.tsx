@@ -700,11 +700,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
 
           {/* Center section: Search */}
           <div className="hidden sm:flex flex-1 justify-center min-w-0">
-            <div className="w-full max-w-md">
-              <ErrorBoundary name="GlobalSearch" level="inline">
-                <GlobalSearch />
-              </ErrorBoundary>
-            </div>
+            <ErrorBoundary name="GlobalSearch" level="inline">
+              <GlobalSearch />
+            </ErrorBoundary>
           </div>
 
           <div className="hidden md:block flex-shrink-0 mx-1" style={{ width: 1, minWidth: 1, height: 20, backgroundColor: "var(--sol-text-dim)", opacity: 0.35 }} />
