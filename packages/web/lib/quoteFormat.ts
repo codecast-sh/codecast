@@ -52,6 +52,24 @@ export function appendToDraft(existing: string, addition: string): string {
   return `${base}\n\n${add}`;
 }
 
+// Wrap the user's plan annotations in directive framing for a plan rejection.
+// When you reject an ExitPlanMode plan, soft phrasing gets ignored — the agent
+// tends to re-present a barely-changed plan — so the feedback leads with a hard
+// "not approved" and explicit rules. `feedback` is the compiled annotation batch
+// (already markdown blockquotes + notes); empty falls back to a generic request.
+export function formatPlanFeedback(feedback: string): string {
+  const body = (feedback || "").trim() || "Plan changes requested.";
+  return [
+    "The plan was NOT approved. Revise it to address ALL of the feedback below before presenting a new plan.",
+    "",
+    "Rules:",
+    "- Do not re-present the same plan unchanged.",
+    "- Keep the plan title (the first `#` heading) unless explicitly asked to change it.",
+    "",
+    body,
+  ].join("\n");
+}
+
 // Stable ordering for a batch: group by the order each message was first
 // commented on, then by block position within a message. Keeps the compiled
 // message reading top-to-bottom like the conversation.

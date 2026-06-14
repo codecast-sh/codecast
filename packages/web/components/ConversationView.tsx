@@ -33,8 +33,8 @@ import { tryRenderCanvas } from "./HtmlSnippet";
 import { useDiffViewerStore } from "../store/diffViewerStore";
 import { isJumpReadyToScroll, shouldLoadOlder, shouldLoadNewer } from "./conversationScroll";
 import { parseInsightBlocks } from "./insightBlocks";
-import { appendToDraft } from "../lib/quoteFormat";
-import { quoteToComposer, submitReview, attachReviewToMessage } from "../lib/reviewActions";
+import { appendToDraft, formatPlanFeedback } from "../lib/quoteFormat";
+import { quoteToComposer, submitReview, attachReviewToMessage, takeReviewBatch } from "../lib/reviewActions";
 import { MessageReview } from "./MessageReview";
 import { SelectionQuoteToolbar } from "./SelectionQuoteToolbar";
 import { ReviewBar } from "./ReviewBar";
@@ -4068,11 +4068,32 @@ function SkillBlock({ tool }: { tool: ToolCall }) {
   );
 }
 
-function PlanModeBlock({ tool, result, onSendMessage }: { tool: ToolCall; result?: ToolResult; onSendMessage?: (content: string) => void }) {
+function PlanModeBlock({ tool, result, conversationId, messageId, onSendMessage }: { tool: ToolCall; result?: ToolResult; conversationId?: string; messageId?: string; onSendMessage?: (content: string) => void }) {
   const isEnter = tool.name === "EnterPlanMode";
   const isExit = tool.name === "ExitPlanMode";
   const isWaitingForApproval = isExit && !result && !!onSendMessage;
   const [sent, setSent] = useState(false);
+
+  // The plan markdown the agent submitted. Rendered as an annotatable document
+  // while it's awaiting approval so the user can quote/comment specific sections
+  // (reusing MessageReview) and send those notes back as the rejection feedback.
+  let plan = "";
+  try { plan = JSON.parse(tool.input)?.plan ?? ""; } catch {}
+
+  // Namespace the plan's review batch under its own key so its comments never
+  // collide with comments on this message's prose body (both render their own
+  // MessageReview with the same messageId otherwise).
+  const reviewKey = conversationId && messageId ? `${messageId}#plan` : undefined;
+  const canReview = isWaitingForApproval && !sent && !!plan && !!conversationId && !!reviewKey;
+  const pendingCount = useInboxStore((s) =>
+    reviewKey ? (s.reviewComments[conversationId!] ?? []).filter((c) => c.messageId === reviewKey).length : 0,
+  );
+
+  const requestChanges = () => {
+    const batch = reviewKey ? takeReviewBatch(conversationId!, reviewKey) : "";
+    setSent(true);
+    onSendMessage!(JSON.stringify({ __cc_poll: true, keys: ["4"], text: formatPlanFeedback(batch), display: "Requested changes" }));
+  };
 
   return (
     <div className="my-0.5">
@@ -4085,27 +4106,48 @@ function PlanModeBlock({ tool, result, onSendMessage }: { tool: ToolCall; result
           {isEnter ? "enter" : "exit"}
         </span>
       </div>
-      {isWaitingForApproval && !sent && (
-        <div className="flex items-center gap-1.5 mt-1.5 ml-0.5 flex-wrap">
-          <button
-            onClick={() => { setSent(true); onSendMessage(JSON.stringify({ __cc_poll: true, keys: ["1"], display: "Start (clear context)" })); }}
-            className="text-[11px] px-2.5 py-1 rounded border border-sol-border/40 bg-sol-bg-alt text-sol-text hover:border-sol-green/40 hover:bg-sol-green/10 hover:text-sol-green transition-colors cursor-pointer"
-          >
-            Start (clear context)
-          </button>
-          <button
-            onClick={() => { setSent(true); onSendMessage(JSON.stringify({ __cc_poll: true, keys: ["3"], display: "Start (keep context)" })); }}
-            className="text-[11px] px-2.5 py-1 rounded border border-sol-border/40 bg-sol-bg-alt text-sol-text hover:border-sol-green/40 hover:bg-sol-green/10 hover:text-sol-green transition-colors cursor-pointer"
-          >
-            Start (keep context)
-          </button>
-          <button
-            onClick={() => { setSent(true); onSendMessage(JSON.stringify({ __cc_poll: true, keys: ["4"], text: "adjust the plan", display: "Adjust plan" })); }}
-            className="text-[11px] px-2.5 py-1 rounded border border-sol-border/40 bg-sol-bg-alt text-sol-text-muted hover:bg-sol-bg-alt/80 transition-colors cursor-pointer"
-          >
-            Adjust plan
-          </button>
+      {canReview && (
+        <div className="mt-2 rounded-lg border border-sol-violet/25 bg-sol-violet/[0.04] px-3.5 py-3 text-sol-text prose prose-invert prose-sm max-w-none">
+          <MessageReview
+            conversationId={conversationId!}
+            messageId={reviewKey!}
+            content={plan}
+            renderBlock={renderAssistantBody}
+          />
         </div>
+      )}
+      {isWaitingForApproval && !sent && (
+        <>
+          <div className="flex items-center gap-1.5 mt-2 ml-0.5 flex-wrap">
+            <button
+              onClick={() => { setSent(true); onSendMessage(JSON.stringify({ __cc_poll: true, keys: ["1"], display: "Start (clear context)" })); }}
+              className="text-[11px] px-2.5 py-1 rounded border border-sol-border/40 bg-sol-bg-alt text-sol-text hover:border-sol-green/40 hover:bg-sol-green/10 hover:text-sol-green transition-colors cursor-pointer"
+            >
+              Start (clear context)
+            </button>
+            <button
+              onClick={() => { setSent(true); onSendMessage(JSON.stringify({ __cc_poll: true, keys: ["3"], display: "Start (keep context)" })); }}
+              className="text-[11px] px-2.5 py-1 rounded border border-sol-border/40 bg-sol-bg-alt text-sol-text hover:border-sol-green/40 hover:bg-sol-green/10 hover:text-sol-green transition-colors cursor-pointer"
+            >
+              Start (keep context)
+            </button>
+            <button
+              onClick={requestChanges}
+              disabled={canReview && pendingCount === 0}
+              title={canReview && pendingCount === 0 ? "Quote a section of the plan first" : undefined}
+              className="text-[11px] px-2.5 py-1 rounded border transition-colors disabled:opacity-40 disabled:cursor-not-allowed enabled:cursor-pointer border-sol-yellow/40 bg-sol-yellow/5 text-sol-yellow enabled:hover:bg-sol-yellow/15 enabled:hover:border-sol-yellow/60"
+            >
+              Request changes{pendingCount > 0 ? ` (${pendingCount})` : ""}
+            </button>
+          </div>
+          {canReview && (
+            <div className="text-[10px] text-sol-text-dim mt-1.5 ml-0.5 italic">
+              {pendingCount > 0
+                ? `${pendingCount} note${pendingCount === 1 ? "" : "s"} will be sent to the agent.`
+                : "Hover any part of the plan to quote it, then request changes."}
+            </div>
+          )}
+        </>
       )}
       {sent && (
         <div className="text-[10px] text-sol-text-dim mt-1 ml-0.5 italic">Message sent</div>
@@ -6153,7 +6195,7 @@ function AssistantBlockImpl({
           ) : tc.name === "Skill" ? (
             <SkillBlock key={tc.id} tool={tc} />
           ) : tc.name === "EnterPlanMode" || tc.name === "ExitPlanMode" ? (
-            <PlanModeBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} onSendMessage={onSendInlineMessage} />
+            <PlanModeBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} conversationId={conversationId} messageId={messageId} onSendMessage={onSendInlineMessage} />
           ) : parseCastCommand(tc) ? (
             <CastCommandBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} />
           ) : (
