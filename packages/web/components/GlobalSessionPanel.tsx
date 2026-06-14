@@ -1966,7 +1966,7 @@ export function SessionListPanel({
                     <FilterOptionList
                       options={viewModeOptions}
                       value={viewMode}
-                      onChange={(mode) => s.updateClientUI({ inbox_view_mode: mode as "grouped" | "time" | "bucket", inbox_flat_view: mode === "time" })}
+                      onChange={(mode) => s.setInboxViewMode(mode as "grouped" | "time" | "bucket")}
                       onPicked={() => setViewMenuOpen(false)}
                     />
                   </div>

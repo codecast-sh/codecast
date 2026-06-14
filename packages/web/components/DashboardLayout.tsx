@@ -5,6 +5,8 @@ import { useEventListener } from "../hooks/useEventListener";
 import { usePathname, useRouter } from "next/navigation";
 import { useLocation } from "react-router";
 import { isNonTabRoute } from "../src/compat/tabRouting";
+import { withApplyingViewHistory, type InboxViewSnapshot } from "../lib/inboxViewHistory";
+import { RecentlyViewedMenu } from "./RecentlyViewedMenu";
 import { useMutation, useConvexAuth } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Panel, Group, Separator, usePanelRef } from "react-resizable-panels";
@@ -457,7 +459,26 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // QueuePageClient's popstate listener, so they're skipped here.
   useMountEffect(() => {
     const onPop = (e: PopStateEvent) => {
-      if ((e.state as { inboxId?: string } | null)?.inboxId) return;
+      const popped = (e.state ?? {}) as { inboxId?: string; inboxView?: InboxViewSnapshot };
+      // Inbox view-settings entries (label/project chips, view mode) — restore
+      // the snapshot through the regular setters, guarded so they don't push
+      // history again while history itself is driving them.
+      if (popped.inboxView) {
+        const v = popped.inboxView;
+        const store = useInboxStore.getState();
+        withApplyingViewHistory(() => {
+          if (v.bucket !== store.activeBucketFilter || v.project !== store.activeProjectFilter) {
+            if (v.bucket) store.setActiveBucketFilter(v.bucket);
+            else if (v.project) store.setActiveProjectFilter(v.project, v.projectPath);
+            else {
+              store.setActiveBucketFilter(null);
+              store.setActiveProjectFilter(null, null);
+            }
+          }
+          if (v.mode && v.mode !== store.inboxViewMode()) store.setInboxViewMode(v.mode);
+        });
+      }
+      if (popped.inboxId) return;
       if (isNonTabRoute(window.location.pathname)) return;
       const store = useInboxStore.getState();
       const id = store.activeTabId;
@@ -651,6 +672,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
                 </button>
               </div>
             )}
+            <ErrorBoundary name="RecentlyViewedMenu" level="inline">
+              <RecentlyViewedMenu onSelectSession={sessionListOnSelect} />
+            </ErrorBoundary>
             {!hideSidebar && (
               <button
                 onClick={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}

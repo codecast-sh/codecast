@@ -30,6 +30,7 @@ export { resolveAssigneeInfo, resolveSessionAuthor, computePlanProgress, mergeLi
 import { deriveDocDisplayTitle, isForeignSession } from "../lib/liveEntities";
 import { DEFAULT_SETTINGS_SECTION, type SettingsSectionId } from "../lib/settingsSections";
 import type { PendingComment } from "../lib/quoteFormat";
+import { pushInboxViewHistory, isApplyingViewHistory, type InboxViewSnapshot } from "../lib/inboxViewHistory";
 
 // Critical UI prefs mirrored to localStorage so they're available
 // synchronously at module load — avoids a layout flash between first paint
@@ -1488,7 +1489,12 @@ interface InboxStoreState {
   setActiveBucketFilter: (bucketId: string | null) => void;
   // Panel view mode with back-compat for the pre-bucket inbox_flat_view bool.
   inboxViewMode: () => "grouped" | "time" | "bucket";
+  setInboxViewMode: (mode: "grouped" | "time" | "bucket") => void;
   cycleInboxViewMode: () => void;
+
+  // -- Recently visited (sessions, chip views, pages) — newest first --
+  recentVisits: RecentVisit[];
+  recordRecentVisit: (visit: Omit<RecentVisit, "ts">) => void;
   createBucket: (opts: { name: string; color?: string }) => Promise<{ _id: string }>;
   updateBucket: (id: string, fields: { name?: string; color?: string; sort_order?: number; archived_at?: number | null }) => void;
   assignSessionToBucket: (conversationId: string, bucketId: string | null) => void;
@@ -1694,6 +1700,48 @@ function recordSessionView(draft: any, id: string, prevId?: string | null) {
     if (typeof seenCount === "number") draft._seenMessageCount[prevId] = seenCount;
   }
   draft._lastViewedAt[id] = now;
+  // Unified recents (header dropdown + palette). Title snapshot is only a
+  // fallback for sessions that later leave the store — display resolves live.
+  const title = draft.sessions[id]?.title ?? draft.conversations[id]?.title;
+  recordVisitInDraft(draft, { kind: "session", key: id, label: title || undefined });
+}
+
+// One ordered list behind every "recently visited" surface: the header
+// dropdown, the command palette's top group. Entries hold ids + a label
+// snapshot; display text resolves live at render (lib/recentVisits).
+//   kind "session" — key is the conversation id
+//   kind "view"    — key "label:<bucketId>" or "project:<name>" (chip filters)
+//   kind "page"    — key "page:<path>" (in-shell tab navigation)
+export type RecentVisit = {
+  kind: "session" | "view" | "page";
+  key: string;
+  ts: number;
+  label?: string;
+  path?: string;
+};
+
+const RECENT_VISITS_CAP = 30;
+
+function recordVisitInDraft(draft: any, visit: Omit<RecentVisit, "ts">) {
+  // History traversal re-applies view filters through the same setters that
+  // record visits — replaying the past must not rewrite the recents order.
+  if (isApplyingViewHistory()) return;
+  const list: RecentVisit[] = draft.recentVisits ?? [];
+  const next = list.filter((v) => v.key !== visit.key);
+  next.unshift({ ...visit, ts: Date.now() });
+  if (next.length > RECENT_VISITS_CAP) next.length = RECENT_VISITS_CAP;
+  draft.recentVisits = next;
+}
+
+// The store's current view settings as a history snapshot (lib/inboxViewHistory).
+function snapshotInboxViewFromDraft(draft: any): InboxViewSnapshot {
+  const ui = draft.clientState?.ui ?? {};
+  return {
+    bucket: draft.activeBucketFilter ?? null,
+    project: draft.activeProjectFilter ?? null,
+    projectPath: draft.activeProjectPath ?? null,
+    mode: ui.inbox_view_mode ?? (ui.inbox_flat_view ? "time" : "grouped"),
+  };
 }
 
 // Index of the timeline row the Slack-style "New" divider sits above, or -1 for
@@ -2349,10 +2397,15 @@ export const useInboxStore = create<InboxStoreState>(
   activeProjectPath: null,
   activeProjectFilter: null,
   setActiveProjectFilter: action(function (this: Draft, name: string | null, path?: string | null) {
+    const prev = snapshotInboxViewFromDraft(this);
     this.activeProjectFilter = name;
     this.activeProjectPath = path ?? null;
     // The chip row is ONE filter: picking a project clears any bucket focus.
-    if (name) this.activeBucketFilter = null;
+    if (name) {
+      this.activeBucketFilter = null;
+      recordVisitInDraft(this, { kind: "view", key: `project:${name}`, label: name, path: path ?? undefined });
+    }
+    pushInboxViewHistory(prev, snapshotInboxViewFromDraft(this));
   }),
 
   // -- Manual session buckets --
@@ -2360,25 +2413,38 @@ export const useInboxStore = create<InboxStoreState>(
   bucketAssignments: {},
   activeBucketFilter: null,
   setActiveBucketFilter: action(function (this: Draft, bucketId: string | null) {
+    const prev = snapshotInboxViewFromDraft(this);
     this.activeBucketFilter = bucketId;
     if (bucketId) {
       this.activeProjectFilter = null;
       this.activeProjectPath = null;
+      recordVisitInDraft(this, { kind: "view", key: `label:${bucketId}`, label: (this.buckets as any)[bucketId]?.name });
     }
+    pushInboxViewHistory(prev, snapshotInboxViewFromDraft(this));
   }),
   inboxViewMode: () => {
     const ui = get().clientState.ui ?? {};
     return ui.inbox_view_mode ?? (ui.inbox_flat_view ? "time" : "grouped");
+  },
+  setInboxViewMode: (mode: "grouped" | "time" | "bucket") => {
+    const state = get();
+    const prev = snapshotInboxViewFromDraft(state);
+    // inbox_flat_view stays coherent so existing flat-view readers keep working.
+    state.updateClientUI({ inbox_view_mode: mode, inbox_flat_view: mode === "time" });
+    pushInboxViewHistory(prev, snapshotInboxViewFromDraft(get()));
   },
   cycleInboxViewMode: () => {
     const state = get();
     const current = state.inboxViewMode();
     const hasBuckets = (Object.values(state.buckets) as BucketItem[]).some((b) => !b.archived_at);
     const cycle: Array<"grouped" | "time" | "bucket"> = hasBuckets ? ["grouped", "time", "bucket"] : ["grouped", "time"];
-    const next = cycle[(cycle.indexOf(current) + 1) % cycle.length];
-    // inbox_flat_view stays coherent so existing flat-view readers keep working.
-    state.updateClientUI({ inbox_view_mode: next, inbox_flat_view: next === "time" });
+    state.setInboxViewMode(cycle[(cycle.indexOf(current) + 1) % cycle.length]);
   },
+
+  recentVisits: [],
+  recordRecentVisit: sync(function (this: Draft, visit: Omit<RecentVisit, "ts">) {
+    recordVisitInDraft(this, visit);
+  }),
 
   // =====================
   // ACTIONS (wrapped by middleware: mutative draft + server dispatch)

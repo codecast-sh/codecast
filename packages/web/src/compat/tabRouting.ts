@@ -110,6 +110,12 @@ export function tabNavigate(path: string, mode: "push" | "replace" = "push") {
   const state = { tabNav: true, tabId };
   if (mode === "push" && path !== current) {
     window.history.pushState(state, "", path);
+    // Real (pushed) page navigations feed the recently-visited rail.
+    // Conversations are recorded as sessions by recordSessionView instead.
+    const clean = path.split("#")[0];
+    if (!clean.startsWith("/conversation/")) {
+      store.recordRecentVisit({ kind: "page", key: `page:${clean}`, path: clean, label: pathLabel(clean) });
+    }
   } else {
     window.history.replaceState(state, "", path);
   }

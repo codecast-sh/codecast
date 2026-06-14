@@ -9,7 +9,10 @@ import { Command as CommandPrimitive } from "cmdk";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { commitModelChange, canControlModel, modelOptionKey } from "./ModelEffortPicker";
 import { AGENT_MODEL_CONFIG, modelAgentKey } from "@codecast/shared/contracts";
-import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, categorizeSessions, sessionsWithPendingSend, convBucketMap, sortLabels, computeChipCounts } from "../store/inboxStore";
+import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, categorizeSessions, sessionsWithPendingSend, convBucketMap, sortLabels, computeChipCounts, RecentVisit } from "../store/inboxStore";
+import { resolveRecentVisits, visitTimeAgo, type ResolvedVisit } from "../lib/recentVisits";
+import { PageIcon } from "./RecentlyViewedMenu";
+import { isNonTabRoute } from "../src/compat/tabRouting";
 import { score } from "../hooks/useMentionQuery";
 import { isElectron } from "../lib/desktop";
 import { isInboxRoute } from "../lib/inboxRouting";
@@ -49,6 +52,8 @@ import {
   Pencil,
   Cpu,
   Filter,
+  MessageSquare,
+  Folder,
 } from "lucide-react";
 
 const api = _api as any;
@@ -856,6 +861,8 @@ const RECENT_RENDER_CAP = 25;
 // closed, so a closed palette doesn't re-render on task/doc/plan sync churn.
 const EMPTY_MENTION_INDEX = { tasks: {}, docs: {}, plans: {} } as const;
 const ENTITY_RENDER_CAP = 8;
+const EMPTY_RECENT_VISITS: RecentVisit[] = [];
+const RECENT_VISITS_RENDER_CAP = 4;
 
 // One matcher for tasks/docs/plans over the globally-synced mention index.
 // Reuses score() (exact > prefix > substring) with a short_id fallback, and
@@ -960,6 +967,17 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
     }
     return Array.from(byId.values()).sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
   }, [recentConversations, storeSessions]);
+
+  // "Recently Visited" — the unified recents rail (sessions, chip views,
+  // pages), same source as the header's RecentlyViewedMenu. Empty-query only:
+  // with a query the dedicated search groups below take over. The standalone
+  // Electron palette window has its own store, so chip-view items (which
+  // mutate THIS window's filters) are meaningless there and skipped.
+  const recentVisits = useInboxStore((s) => (open ? s.recentVisits : EMPTY_RECENT_VISITS));
+  const recentVisitRows = useMemo(
+    () => (open ? resolveRecentVisits(useInboxStore.getState(), RECENT_VISITS_RENDER_CAP, { skipViews: standalone }) : []),
+    [recentVisits, open, standalone],
+  );
 
   // Pre-filter the local cache ourselves so cmdk only ever mounts the matches
   // (RECENT_RENDER_CAP), never the whole cache. With no query we show the most
@@ -1201,6 +1219,30 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
       closePalette();
     },
     [router, pathname, standalone, closePalette]
+  );
+
+  const handleRecentVisitSelect = useCallback(
+    (row: ResolvedVisit) => {
+      if (row.sessionId) {
+        const conv = recentSessions.find((c) => c._id === row.sessionId) ?? { _id: row.sessionId, title: row.title };
+        navigateToSession(conv);
+        return;
+      }
+      if (row.bucketId || row.projectName) {
+        const store = useInboxStore.getState();
+        if (row.bucketId) store.setActiveBucketFilter(row.bucketId);
+        else store.setActiveProjectFilter(row.projectName!, row.projectPath ?? null);
+        if (!store.sidePanelOpen) store.toggleSidePanel();
+        // The chip views live in the session panel; non-tab surfaces
+        // (Settings, auth) don't render it, so head home to the inbox. The
+        // real router URL decides — usePathname can report the carried tab.
+        if (isNonTabRoute(window.location.pathname)) navigate("/inbox");
+        else closePalette();
+        return;
+      }
+      if (row.path) navigate(row.path);
+    },
+    [recentSessions, navigateToSession, navigate, closePalette],
   );
 
   // Root action handlers
@@ -1464,6 +1506,34 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
                 </CommandPrimitive.Item>
               );
             })}
+          </CommandPrimitive.Group>
+        )}
+
+        {!query.trim() && recentVisitRows.length > 0 && (
+          <CommandPrimitive.Group heading="Recently Visited" className={groupClass}>
+            {recentVisitRows.map((row) => (
+              <CommandPrimitive.Item
+                key={`rv-${row.key}`}
+                value={`recently visited ${row.title}|||${row.key}`}
+                onSelect={() => handleRecentVisitSelect(row)}
+                className={itemClass}
+              >
+                {row.sessionId ? (
+                  <MessageSquare className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+                ) : row.bucketId ? (
+                  <Tag className={`w-4 h-4 flex-shrink-0 ${getLabelColor(row.title).text}`} />
+                ) : row.projectName ? (
+                  <Folder className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+                ) : (
+                  <PageIcon path={row.path!} className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+                )}
+                <span className="truncate flex-1">{row.title}</span>
+                {(row.bucketId || row.projectName) && (
+                  <span className="text-[10px] text-sol-text-dim flex-shrink-0">view</span>
+                )}
+                <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{visitTimeAgo(row.ts)}</span>
+              </CommandPrimitive.Item>
+            ))}
           </CommandPrimitive.Group>
         )}
 

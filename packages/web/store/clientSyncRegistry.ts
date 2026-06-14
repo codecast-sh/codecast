@@ -101,6 +101,11 @@ export const CLIENT_SYNC_REGISTRY = {
   _lastViewedAt: {
     persistence: { kind: "meta", key: "_lastViewedAt" },
   },
+  // Recently-visited rail (sessions, chip views, pages) — device-local on
+  // purpose: what you opened on this machine is this machine's history.
+  recentVisits: {
+    persistence: { kind: "meta", key: "recentVisits" },
+  },
   _seenUpToAt: {
     persistence: { kind: "meta", key: "_seenUpToAt" },
   },
