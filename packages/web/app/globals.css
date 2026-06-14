@@ -921,6 +921,23 @@ pre[class*="language-"] {
   cursor: col-resize !important;
 }
 
+/* Sidebar collapse/expand: panels are flex-grow sized (react-resizable-panels),
+   so animating flex-grow slides the panel. The class is applied only for the
+   duration of a programmatic toggle — drag-resizes never animate. The content
+   (panel > library inner div > our wrapper) holds its expanded pixel width
+   (--sidebar-frozen-w, set from JS) so text doesn't reflow mid-animation.
+   !important needed: the library sets overflow inline on both divs. */
+[data-panel].sidebar-animating {
+  transition: flex-grow 280ms cubic-bezier(0.32, 0.72, 0, 1);
+  overflow: hidden !important;
+}
+[data-panel].sidebar-animating > div {
+  overflow: hidden !important;
+}
+[data-panel].sidebar-animating > div > div {
+  width: var(--sidebar-frozen-w, 100%);
+}
+
 /* Window manager: hide input area on unfocused windows */
 .session-window--blurred [data-chat-input] {
   display: none;

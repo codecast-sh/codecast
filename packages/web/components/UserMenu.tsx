@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { useInboxStore } from "../store/inboxStore";
 import { copyToClipboard } from "../lib/utils";
 import { useCurrentUser } from "../hooks/useCurrentUser";
-import { MenuKeyCaps } from "./KeyboardShortcutsHelp";
+import { MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import {
   Settings, Keyboard, SlidersHorizontal, CircleUser, History, Rss, ListChecks,
   FileText, FolderGit2, CalendarClock, ArrowLeftRight, ScrollText, Globe, LogOut,
@@ -159,6 +159,7 @@ export function UserMenu() {
 
   return (
     <div className="relative" ref={menuRef}>
+      <ShortcutTooltip label="Account & settings">
       <button
         onClick={() => setOpen(!open)}
         className="w-8 h-8 rounded-full flex items-center justify-center text-sol-text-muted hover:text-sol-text transition-colors"
@@ -169,6 +170,7 @@ export function UserMenu() {
           <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
         </svg>
       </button>
+      </ShortcutTooltip>
       {urlBarOpen && <UrlBarModal onClose={() => setUrlBarOpen(false)} />}
       {open && (
         <div className="absolute right-0 mt-2 w-60 bg-sol-bg border border-sol-border rounded-lg shadow-lg py-1 z-50">
