@@ -3,7 +3,7 @@ import {
   internalMutation,
   internalQuery,
   type MutationCtx,
-} from "./_generated/server";
+} from "./functions";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";

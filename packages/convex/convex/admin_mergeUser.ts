@@ -1,4 +1,4 @@
-import { internalMutation } from "./_generated/server";
+import { internalMutation } from "./functions";
 import { v } from "convex/values";
 
 // (table, field, indexName | null) — when indexName is present, use the

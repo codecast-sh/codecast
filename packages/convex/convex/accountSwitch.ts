@@ -9,7 +9,7 @@
 // @codecast/shared/contracts/apiErrorBanner), which device executes, and the
 // "continue" enqueue for the no-swap case (limit window reset).
 
-import { mutation, query, internalMutation } from "./_generated/server";
+import { mutation, query, internalMutation } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id, Doc } from "./_generated/dataModel";
