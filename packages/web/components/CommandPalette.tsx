@@ -1569,6 +1569,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
                 </span>
                 <span className="truncate flex-1">{cleanTitle(fav.title || "New Session")}</span>
                 <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{fav.message_count} msgs</span>
+                <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{timeAgo(fav.updated_at)}</span>
               </CommandPrimitive.Item>
             ))}
           </CommandPrimitive.Group>
@@ -1855,6 +1856,7 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
                     ? "title"
                     : `${result.matches?.length || 0} match${(result.matches?.length || 0) !== 1 ? "es" : ""}`}
                 </span>
+                <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{timeAgo(result.updatedAt)}</span>
               </CommandPrimitive.Item>
             ))}
             {searchData?.results?.length === 0 && (
