@@ -1,5 +1,5 @@
 import { AppLoader } from "./AppLoader";
-import { useRef, useState, useMemo, useCallback, useEffect } from "react";
+import { useRef, useState, useMemo, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -188,12 +188,15 @@ function MessageRow({
 type Mode = "branches" | "messages";
 
 function ForkTreeContent({
-  conversation, conversationId, currentBranchId, open, onClose, onSwitchToConversation, onForkFromBranch, onRewindCurrent,
+  conversation, conversationId, currentBranchId, open, initialDrillId, onClose, onSwitchToConversation, onForkFromBranch, onRewindCurrent,
 }: {
   conversation: ForkConversationLike;
   conversationId: string;
   currentBranchId: string;
   open: boolean;
+  // When set, the map opens directly drilled into this branch's messages
+  // (double-Esc into the current branch) instead of the branch list.
+  initialDrillId?: string | null;
   onClose: () => void;
   onSwitchToConversation: (convId: string) => void;
   onForkFromBranch: (branchId: string, messageUuid: string, content: string) => void;
@@ -209,15 +212,26 @@ function ForkTreeContent({
   const [msgSel, setMsgSel] = useState(0);
   const [filter, setFilter] = useState("");
   const [filtering, setFiltering] = useState(false);
+  // Did we reach the message level by drilling from the branch list? Controls
+  // where Esc goes: back to branches if you drilled in, close if you opened
+  // straight into messages (double-Esc).
+  const [drilledFromBranches, setDrilledFromBranches] = useState(false);
 
   const filterRef = useRef<HTMLInputElement>(null);
   const rowRef = useRef<HTMLDivElement | null>(null);
 
-  // Fresh open: reset to the branch level, selected where you are.
+  // Fresh open: either straight into the current branch's messages (double-Esc)
+  // or the branch list (Ctrl+B / icon), selected where you are.
   useWatchEffect(() => {
     if (open) {
-      setMode("branches");
-      setDrillId(null);
+      if (initialDrillId) {
+        setMode("messages");
+        setDrillId(initialDrillId);
+        setDrilledFromBranches(false);
+      } else {
+        setMode("branches");
+        setDrillId(null);
+      }
       setBranchSel(conversationId);
       setFilter("");
       setFiltering(false);
@@ -286,6 +300,7 @@ function ForkTreeContent({
   const drillInto = useCallback((id: string) => {
     setDrillId(id);
     setMode("messages");
+    setDrilledFromBranches(true);
     setFilter("");
     setFiltering(false);
   }, []);
@@ -295,6 +310,13 @@ function ForkTreeContent({
     setFilter("");
     setFiltering(false);
   }, []);
+
+  // Esc from the message level: back to the tree if you drilled in, else close
+  // (you opened straight into messages via double-Esc).
+  const messagesBack = useCallback(() => {
+    if (drilledFromBranches) backToBranches();
+    else onClose();
+  }, [drilledFromBranches, backToBranches, onClose]);
 
   const switchToBranch = useCallback((id: string) => {
     if (id !== conversationId) onSwitchToConversation(id);
@@ -329,7 +351,7 @@ function ForkTreeContent({
       if (k === "/") { stop(); enterFilter(); return; }
       if (k === "Escape") {
         stop();
-        if (mode === "messages") backToBranches();
+        if (mode === "messages") messagesBack();
         else onClose();
         return;
       }
@@ -373,7 +395,7 @@ function ForkTreeContent({
     window.addEventListener("keydown", handler, true);
     return () => window.removeEventListener("keydown", handler, true);
   }, [open, filtering, mode, branchIdx, visibleBranches, selectedBranch, visibleMsgs, msgSel, drillId, selectedMsg,
-      enterFilter, backToBranches, onClose, switchToBranch, drillInto, forkFromMsg, rewindToMsg]);
+      enterFilter, backToBranches, messagesBack, onClose, switchToBranch, drillInto, forkFromMsg, rewindToMsg]);
 
   // Filter input: drives selection while typing.
   const onFilterKey = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -522,12 +544,13 @@ function computePopoverPos(anchorEl: HTMLElement, preferAbove: boolean): PopPos 
 }
 
 export function ForkTreePopover({
-  conversation, conversationId, currentBranchId, open, onClose, anchorEl, placement = "above", onSwitchToConversation, onForkFromBranch, onRewindCurrent,
+  conversation, conversationId, currentBranchId, open, initialDrillId, onClose, anchorEl, placement = "above", onSwitchToConversation, onForkFromBranch, onRewindCurrent,
 }: {
   conversation: ForkConversationLike;
   conversationId: string;
   currentBranchId: string;
   open: boolean;
+  initialDrillId?: string | null;
   onClose: () => void;
   anchorEl: HTMLElement | null;
   placement?: "above" | "below";
@@ -581,35 +604,12 @@ export function ForkTreePopover({
         conversationId={conversationId}
         currentBranchId={currentBranchId}
         open={open}
+        initialDrillId={initialDrillId}
         onClose={onClose}
         onSwitchToConversation={onSwitchToConversation}
         onForkFromBranch={onForkFromBranch}
         onRewindCurrent={onRewindCurrent}
       />
-    </div>,
-    document.body,
-  );
-}
-
-// Transient HUD shown by the [ / ] branch-hop shortcuts: confirms where you
-// landed ("3/7 · label") without opening the map.
-export type BranchHop = { id: string; title: string; index: number; total: number; live?: BranchLive; ts: number };
-
-export function BranchHopHud({ hop, onDone }: { hop: BranchHop | null; onDone: () => void }) {
-  useEffect(() => {
-    if (!hop) return;
-    const t = setTimeout(onDone, 1600);
-    return () => clearTimeout(t);
-  }, [hop, onDone]);
-  if (!hop) return null;
-  return createPortal(
-    <div key={hop.ts} className="fixed top-12 left-1/2 -translate-x-1/2 z-[9999] pointer-events-none animate-in fade-in slide-in-from-top-2 duration-150">
-      <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-sol-bg border border-sol-border shadow-lg text-xs">
-        <Split className="w-3.5 h-3.5 text-sol-cyan flex-shrink-0" />
-        <span className="text-sol-text-dim tabular-nums flex-shrink-0">{hop.index}/{hop.total}</span>
-        <LiveDot live={hop.live} />
-        <span className="text-sol-text truncate max-w-[280px]">{hop.title}</span>
-      </div>
     </div>,
     document.body,
   );
