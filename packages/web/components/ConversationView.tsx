@@ -5930,11 +5930,11 @@ const CompactTurnCard = memo(function CompactTurnCard({ preview, messageCount, t
   );
 });
 
-// Compact feed: a collapsed assistant turn shows the BOTTOM ~300px of its final
+// Compact feed: a collapsed assistant turn shows the BOTTOM ~500px of its final
 // reply (the conclusion) with the top faded out behind a "Show full turn"
 // control. The clipped column is anchored to its bottom so the end stays in
 // view; expanding renders the whole turn at full density.
-const COMPACT_TAIL_HEIGHT = 300;
+const COMPACT_TAIL_HEIGHT = 500;
 const CompactCollapsedTurn = memo(function CompactCollapsedTurn({ content, onExpand }: { content: string; onExpand: () => void }) {
   const body = stripSystemTags(content || "").trim();
   return (
@@ -7199,6 +7199,14 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // never changes on a heartbeat. Subscribing to the whole row re-rendered the input
   // (and its draft textarea) ~1×/s for a live session.
   const composeTeamId = useInboxStore((s) => s.sessions[conversationId]?.team_id);
+  // The mention picker is team-scoped, so it surfaces sessions from sibling repos.
+  // We show a row's project only when it differs from this one — same-repo rows
+  // would just repeat it. This is the current conversation's project basename.
+  const composeProject = useInboxStore((s) => {
+    const sess = s.sessions[conversationId];
+    const p = sess?.project_path || sess?.git_root;
+    return p ? (p.split("/").filter(Boolean).pop() || null) : null;
+  });
   const memberTeams = useInboxStore((s) => s.teams);
   const mentionScope = useMemo(() => {
     const teamId = composeTeamId ? String(composeTeamId) : null;
@@ -7269,6 +7277,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     docType?: string;
     messageCount?: number;
     projectPath?: string;
+    updatedAt?: number;
+    idleSummary?: string;
     goal?: string;
     model?: string;
     image?: string;
@@ -7343,6 +7353,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
             id: m.id,
             shortId: m.shortId,
             image: m.image,
+            messageCount: m.messageCount,
+            projectPath: m.projectPath,
+            updatedAt: m.updatedAt,
+            idleSummary: m.idleSummary,
           });
         }
       }
@@ -7362,6 +7376,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
           id: m.id,
           shortId: m.shortId,
           image: m.image,
+          messageCount: m.messageCount,
+          projectPath: m.projectPath,
+          updatedAt: m.updatedAt,
+          idleSummary: m.idleSummary,
         });
       }
 
@@ -8762,6 +8780,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                         {group.items.map((item, i) => {
                           const globalIdx = group.startIdx + i;
                           const isSelected = globalIdx === clampedAcIndex;
+                          // Session rows: prefer what it's about (idle summary); else show the
+                          // project only when it's a different repo than the current conversation.
+                          const itemProject = item.projectPath?.split("/").filter(Boolean).pop() || null;
+                          const sessionLeft = item.idleSummary || (itemProject && itemProject !== composeProject ? itemProject : null);
                           return (
                             <button
                               key={item.id || item.label}
@@ -8782,9 +8804,24 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                               {item.type === "file" && (
                                 <span className="text-[11px] text-sol-text-dim font-mono flex-shrink-0 truncate max-w-[50%]">{item.label.replace(/\/[^/]+$/, "")}</span>
                               )}
-                              {item.type !== "file" && item.description && (
+                              {item.type === "session" ? (
+                                // Sessions show real metadata, never an id: what it's about
+                                // (idle summary) or a cross-repo project on the left, msgs · age on the right.
+                                <span className="flex items-center gap-1.5 min-w-0 flex-1 text-[11px] text-sol-text-dim">
+                                  {sessionLeft && (
+                                    <span className="truncate">{sessionLeft}</span>
+                                  )}
+                                  {(item.messageCount || item.updatedAt) && (
+                                    <span className="ml-auto flex-shrink-0 flex items-center gap-1 whitespace-nowrap">
+                                      {item.messageCount ? <span>{item.messageCount} msg{item.messageCount === 1 ? "" : "s"}</span> : null}
+                                      {item.messageCount && item.updatedAt ? <span className="opacity-40">·</span> : null}
+                                      {item.updatedAt ? <span>{formatRelativeTime(item.updatedAt)}</span> : null}
+                                    </span>
+                                  )}
+                                </span>
+                              ) : item.type !== "file" && item.description ? (
                                 <span className="text-[11px] text-sol-text-dim font-mono truncate">{item.description}</span>
-                              )}
+                              ) : null}
                             </button>
                           );
                         })}
@@ -10068,18 +10105,49 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
   }, [handleForkFromMessage, conversation, effectiveIsOwner, convCommand, convexConvId]);
 
+  const userMsgKindMap = useMemo(() => {
+    const map = new Map<string, UserMessageKind>();
+    for (let i = 0; i < timeline.length; i++) {
+      const item = timeline[i];
+      if (item.type !== 'message') continue;
+      const msg = item.data as Message;
+      if (msg.role !== 'user') continue;
+      let immediatePrev: Message | null = null;
+      for (let j = i - 1; j >= 0; j--) {
+        if (timeline[j].type === 'message') { immediatePrev = timeline[j].data as Message; break; }
+      }
+      let contextPrev: Message | null = null;
+      for (let j = i - 1; j >= 0; j--) {
+        const p = timeline[j];
+        if (p.type !== 'message') continue;
+        const pm = p.data as Message;
+        if (pm.role === 'user' && pm.tool_results?.length && (!pm.content || !pm.content.trim())) continue;
+        if (pm.role === 'user' && pm.content && isCommandMessage(pm.content)) continue;
+        contextPrev = pm;
+        break;
+      }
+      map.set(msg._id, classifyUserMessage(msg, conversation?.agent_type, immediatePrev, contextPrev));
+    }
+    return map;
+  }, [timeline, conversation?.agent_type]);
+
   // Aggregation for the condensed/compact feeds. Built once per timeline; O(n).
+  //
+  // A "turn" is one assistant response. Its boundary is a REAL user prompt — NOT
+  // every user-role message: in agentic transcripts assistant messages are
+  // separated by user-role tool-result carriers, so resetting on those would
+  // split one turn into one-per-message (the stacked-cards bug). We reset only on
+  // the user-message kinds that actually start a new exchange.
   //
   // CONDENSED works at SEGMENT granularity: a contiguous run of tool activity
   // between two pieces of assistant text folds into ONE receipt rendered inline
-  // where it happened (not hoisted to the turn's end). The run's tools attach to
-  // its "owner" — the text message that opens the run (or the first tool-only
-  // message if the run has no preceding text); the rest of the run's messages
-  // are "absorbed" and render nothing until the turn is expanded.
+  // where it happened. The run's tools attach to its "owner" (the text message
+  // that opens the run, or the first tool-only message); the rest are "absorbed".
   //
   // COMPACT works at TURN granularity (one collapsed card per assistant run), so
-  // we also track each message's turn key, the turn's first message, and stats.
+  // we also track each message's turn key, first/last message, and stats.
   const turnAggregates = useMemo(() => {
+    const TURN_BOUNDARY_KINDS = new Set(['normal', 'command', 'plan', 'session_message']);
     const turnKeyOf = new Map<string, string>();      // msgId -> turn key
     const firstAssistOf = new Map<string, string>();  // turn key -> first assistant msgId
     const lastTextOf = new Map<string, string>();     // turn key -> last text-bearing msgId
@@ -10092,7 +10160,15 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       const item = timeline[i];
       if (item.type !== 'message') continue;
       const msg = item.data as Message;
-      if (msg.role === 'user') { curKey = null; ownerId = null; continue; }
+      if (msg.role === 'user') {
+        // Only a genuine new prompt ends the current turn; tool-result carriers,
+        // interrupts, notifications, etc. are part of the ongoing response.
+        if (TURN_BOUNDARY_KINDS.has(userMsgKindMap.get(msg._id)?.kind ?? 'normal')) {
+          curKey = null;
+          ownerId = null;
+        }
+        continue;
+      }
       if (msg.role !== 'assistant') continue;
       if (isHiddenStubMessage(msg)) continue;
       const hasText = !!(msg.content && stripSystemTags(msg.content).trim().length > 0);
@@ -10129,33 +10205,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       }
     }
     return { turnKeyOf, firstAssistOf, lastTextOf, statsOf, receiptOf, absorbed };
-  }, [timeline]);
-
-  const userMsgKindMap = useMemo(() => {
-    const map = new Map<string, UserMessageKind>();
-    for (let i = 0; i < timeline.length; i++) {
-      const item = timeline[i];
-      if (item.type !== 'message') continue;
-      const msg = item.data as Message;
-      if (msg.role !== 'user') continue;
-      let immediatePrev: Message | null = null;
-      for (let j = i - 1; j >= 0; j--) {
-        if (timeline[j].type === 'message') { immediatePrev = timeline[j].data as Message; break; }
-      }
-      let contextPrev: Message | null = null;
-      for (let j = i - 1; j >= 0; j--) {
-        const p = timeline[j];
-        if (p.type !== 'message') continue;
-        const pm = p.data as Message;
-        if (pm.role === 'user' && pm.tool_results?.length && (!pm.content || !pm.content.trim())) continue;
-        if (pm.role === 'user' && pm.content && isCommandMessage(pm.content)) continue;
-        contextPrev = pm;
-        break;
-      }
-      map.set(msg._id, classifyUserMessage(msg, conversation?.agent_type, immediatePrev, contextPrev));
-    }
-    return map;
-  }, [timeline, conversation?.agent_type]);
+  }, [timeline, userMsgKindMap]);
 
   // Pair each slash-command invocation with its expansion (the body of the command's
   // .md file, emitted by Claude Code as the next user message). They render as one
@@ -10222,7 +10272,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     const sessions: MentionItem[] = Object.values(state.sessions)
       .filter(s => !s.is_subagent && inScope(s))
       .sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0))
-      .map(s => ({ id: s._id, type: "session", label: s.title || "Untitled Session", sublabel: s.idle_summary?.slice(0, 80) || s.session_id, shortId: s.session_id, messageCount: s.message_count, projectPath: s.project_path, agentType: s.agent_type, updatedAt: s.updated_at, idleSummary: s.idle_summary }));
+      // shortId must be the cc id (`jx…`, the 7-char prefix of _id) — not session_id
+      // (the Claude JSONL UUID), which the mention parser can't match and cast can't resolve.
+      // No id rides in sublabel: the picker shows real metadata (project · msgs · time) instead.
+      .map(s => ({ id: s._id, type: "session", label: s.title || "Untitled Session", sublabel: s.idle_summary?.slice(0, 80) || undefined, shortId: s._id.slice(0, 7).toLowerCase(), messageCount: s.message_count, projectPath: s.project_path, agentType: s.agent_type, updatedAt: s.updated_at, idleSummary: s.idle_summary }));
     // Labels are personal filing, not team entities — never team-filtered.
     const labels: MentionItem[] = labelMentionItems(state);
     const all = [...persons, ...labels, ...tasks, ...docs, ...plans, ...sessions];
@@ -10954,6 +11007,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     setMapDrill(null); // open at the branch tree
     setTreePopoverOpen((o) => !o);
   }, [isOwner, hasForkFamily, forkSelectionIdx]);
+
+  // Stable anchor resolver for the branch-map popover: the message-input wrapper
+  // (so the map matches its width and sits on its top edge), or the header icon
+  // when the composer is hidden. Read lazily so the ref is populated.
+  const getMapAnchor = useCallback(
+    () => messageInputRef.current ?? treeChipRef.current,
+    [],
+  );
 
   useShortcutContext('conversation');
   useShortcutAction('conv.toggleTree', useCallback(() => {
@@ -13013,10 +13074,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           currentBranchId={conversation._id.toString()}
           open={treePopoverOpen}
           onClose={() => setTreePopoverOpen(false)}
-          // Anchor above the message input (palette-style); fall back to the
+          // Sit on top of the message input at its exact width; fall back to the
           // header icon when the composer is hidden (guest / permission gate).
-          anchorEl={messageInputRef.current ?? treeChipRef.current}
-          placement={messageInputRef.current ? "above" : "below"}
+          // Resolved lazily in the popover effect so the ref is non-null.
+          getAnchor={getMapAnchor}
           initialDrillId={mapDrill}
           onSwitchToConversation={handleTreeSwitchConversation}
           onForkFromBranch={handleForkFromBranch}
