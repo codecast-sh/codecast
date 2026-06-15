@@ -10,7 +10,7 @@ import { ConversationData } from "./ConversationView";
 import { FormattedSummary } from "./FormattedSummary";
 import { sessionCardSummary } from "../lib/sessionSummary";
 import { useConversationMessages } from "../hooks/useConversationMessages";
-import { useInboxStore, useTrackedStore, InboxSession, getSessionRenderKey, isConvexId, categorizeSessions, partitionOldSessions, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, isSessionHidden, resolveSessionAuthor, convBucketMap, groupSessionsForLabelView, sortLabels, computeChipCounts, BucketItem, BucketAssignmentItem } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, InboxSession, getSessionRenderKey, isConvexId, categorizeSessions, partitionOldSessions, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, isSessionHidden, resolveSessionAuthor, convBucketMap, groupSessionsForLabelView, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem, BucketAssignmentItem } from "../store/inboxStore";
 import { isBlockedConversation, isSubagentConversation } from "@codecast/convex/convex/ccAccountsShared";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
 import { cleanTitle, msgCountColor, formatModel } from "../lib/conversationProcessor";
@@ -25,7 +25,7 @@ import { toast } from "sonner";
 import { animatedHideSession } from "../store/undoActions";
 import { soundKill } from "../lib/sounds";
 import { formatShortcutLabel } from "../shortcuts";
-import { X, ChevronsLeft, ChevronsRight, ChevronRight, ChevronDown, List, Clock, Tag, GitFork, History } from "lucide-react";
+import { X, ChevronsLeft, ChevronsRight, ChevronRight, ChevronDown, List, Clock, Tag, GitFork, History, Star } from "lucide-react";
 import { FilterOptionList } from "./FilterDropdown";
 import { LabelChipsRow } from "./LabelChipsRow";
 import { TaskStatusBadge } from "./TaskStatusBadge";
@@ -1319,6 +1319,9 @@ function NeedsAttentionSection() {
 // touched in over a month, offer to bulk-dismiss them out of the working set.
 const STALE_SESSION_MS = 30 * 24 * 60 * 60 * 1000;
 const STALE_PROMPT_THRESHOLD = 10;
+// Stable empty list so the favorites memo keeps a constant ref when not in the
+// favorites view (a fresh [] each render would defeat downstream memoization).
+const EMPTY_FAVORITES: InboxSession[] = [];
 // The Dismissed bucket only renders sessions dismissed within this window — a bulk
 // sweep can dismiss thousands, and an unbounded list is noise.
 const DISMISSED_VISIBLE_MS = 45 * 24 * 60 * 60 * 1000;
@@ -1396,6 +1399,7 @@ export function SessionListPanel({
     s => s.collapsedSections,
     s => s.currentSessionId,
     s => s.pendingSessionCreates,
+    s => s.showFavorites,
   ]);
   const handleKillDismissed = useCallback((id: string) => {
     soundKill();
@@ -1628,6 +1632,32 @@ export function SessionListPanel({
       bucketByConv,
     );
   }, [viewMode, filteredNew, filteredNeedsInput, filteredWorking, orchestrationGroupMembers, filterByChip, bucketByConv, s.buckets]);
+
+  // Favorites view: the SAME session cache filtered to the kept set, grouped by
+  // project — the shelf's organization ("what is it about"), distinct from the
+  // active desk's status buckets ("what needs me now"). allFavorites (unscoped)
+  // feeds the project chips so every project a favorite lives in is offered;
+  // favoriteGroups is the rendered list, narrowed by the active project chip.
+  // No label tier — everything falls to project groups via the shared grouper.
+  const favoritesView = s.showFavorites;
+  const allFavorites = useMemo(
+    () => (favoritesView ? selectFavoriteSessions(s.sessions, null) : EMPTY_FAVORITES),
+    [favoritesView, s.sessions],
+  );
+  const favoriteGroups = useMemo(() => {
+    if (!favoritesView) return null;
+    const scoped = s.activeProjectFilter
+      ? allFavorites.filter((x) => getProjectName(x.git_root, x.project_path) === s.activeProjectFilter)
+      : allFavorites;
+    const pinned = scoped.filter((x) => x.is_pinned).sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
+    const rest = scoped.filter((x) => !x.is_pinned);
+    const { projectGroups } = groupSessionsForLabelView(rest, {}, {});
+    return { pinned, projectGroups, count: scoped.length };
+  }, [favoritesView, allFavorites, s.activeProjectFilter]);
+  const favChipCounts = useMemo(
+    () => (favoritesView ? computeChipCounts(allFavorites, bucketByConv) : null),
+    [favoritesView, allFavorites, bucketByConv],
+  );
 
   // Shared drop sink for every label target — chips AND the "by label" view's
   // sections. bucketId null = remove the label (dropping onto a project group
@@ -1977,16 +2007,26 @@ export function SessionListPanel({
   return (
     <div className="h-full w-full flex flex-col bg-sol-bg-alt overflow-hidden">
       <div className="px-3 py-0.5 sm:py-1 border-b border-sol-border/50 flex-shrink-0 flex items-center gap-2 min-h-[31px] min-w-0">
+        {favoritesView && (
+          <div className="flex items-center gap-1.5 flex-shrink-0 text-sol-yellow mr-0.5" title="Kept sessions — your long-term shelf">
+            <Star className="w-3.5 h-3.5 fill-current" />
+            <span className="text-[11px] font-semibold uppercase tracking-wider">Favorites</span>
+            {favoriteGroups && favoriteGroups.count > 0 && (
+              <span className="text-[10px] text-sol-text-dim font-medium">{favoriteGroups.count}</span>
+            )}
+          </div>
+        )}
         <LabelChipsRow
-          bucketCounts={bucketCounts}
-          projectCounts={projectCounts}
-          projectPathByName={projectPathByName}
+          bucketCounts={favoritesView ? favChipCounts!.bucketCounts : bucketCounts}
+          projectCounts={favoritesView ? favChipCounts!.projectCounts : projectCounts}
+          projectPathByName={favoritesView ? favChipCounts!.projectPathByName : projectPathByName}
           dropSessionOnLabel={dropSessionOnLabel}
         />
         {/* One pill: a view-mode dropdown (trigger shows the current mode's
             icon), then a divider, then independent show/hide toggles
-            (subagents, old). Ctrl+, still cycles view modes. */}
-        <div className="flex items-center flex-shrink-0 ml-auto rounded-md border border-sol-border/40 bg-sol-bg/70 p-px">
+            (subagents, old). Ctrl+, still cycles view modes. The favorites view
+            is always project-grouped, so the pill is hidden there. */}
+        {!favoritesView && <div className="flex items-center flex-shrink-0 ml-auto rounded-md border border-sol-border/40 bg-sol-bg/70 p-px">
           {(() => {
             const viewModeOptions = [
               { key: "grouped", label: "By status", icon: List },
@@ -2049,9 +2089,38 @@ export function SessionListPanel({
               <History className="w-3 h-3" />
             </button>
           )}
-        </div>
+        </div>}
       </div>
       <div ref={scrollContainerRef} className="flex-1 overflow-y-auto scrollbar-auto">
+        {favoritesView ? (
+          favoriteGroups && favoriteGroups.count > 0 ? (
+            <>
+              {renderSection("Pinned", favoriteGroups.pinned, "text-sol-magenta", undefined, undefined, { key: "favpinned" })}
+              {favoriteGroups.projectGroups.map(({ name, items }) => (
+                <div key={`fav-${name}`}>
+                  {renderSection(name, items, name === "other" ? "text-sol-text-dim" : getLabelColor(name).text, undefined, undefined, { key: `favproj_${name}` })}
+                </div>
+              ))}
+            </>
+          ) : (
+            <div className="px-4 py-12 flex flex-col items-center text-center gap-2">
+              <Star className="w-6 h-6 text-sol-yellow/40" />
+              <div className="text-sm font-medium text-sol-text-muted">
+                {s.activeProjectFilter ? "No favorites in this project" : "No favorites yet"}
+              </div>
+              <div className="text-[11px] text-sol-text-dim max-w-[220px] leading-relaxed">
+                {s.activeProjectFilter
+                  ? "Clear the project filter to see every kept session."
+                  : "Star a conversation to keep it here for later — it stays no matter how old it gets, and it’s one keystroke to jump back in."}
+              </div>
+              {s.activeProjectFilter && (
+                <button onClick={() => s.setActiveProjectFilter(null)} className="mt-1 text-[11px] text-sol-cyan hover:underline">
+                  Show all favorites
+                </button>
+              )}
+            </div>
+          )
+        ) : (<>
         <BlockedSessionsBanner blocked={blockedSessions} onOpen={handleSelect} />
         {showStalePrompt && (
           <div className="m-2 rounded-md border border-sol-yellow/30 bg-sol-yellow/[0.06] px-3 py-2.5">
@@ -2192,6 +2261,7 @@ export function SessionListPanel({
           variant: "dismissed",
           onKill: handleKillDismissed,
         })}
+        </>)}
       </div>
       {onCollapse && (
         <div className="flex-shrink-0 border-t border-sol-border/30 flex justify-center py-1">

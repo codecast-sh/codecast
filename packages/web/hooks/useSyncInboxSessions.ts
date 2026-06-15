@@ -88,6 +88,12 @@ export function useSyncInboxSessions() {
   // conversation changes instead of on every ~1s heartbeat. The overlay merges
   // agent_status/is_idle/... back onto the cached rows per id via syncOverlay.
   const inboxSessions = useQuery(api.conversations.listInboxSessions, { show_all: false, include_liveness: false });
+  // Favorites as full inbox rows, force-loaded regardless of the 30d window so the
+  // Favorites view can resolve a months-old kept session. Merged into the SAME
+  // sessions cache (delta, never-prune) but deliberately NOT into liveInboxIds —
+  // an old favorite reaches the shelf without re-entering the active desk. Liveness
+  // rides the sessionsLiveness overlay below, same as the inbox list.
+  const favoriteSessions = useQuery(api.conversations.listFavoriteSessions, { include_liveness: false });
   const sessionLiveness = useQuery(api.conversations.sessionsLiveness, {});
   const clientState = useQuery(api.client_state.get, {});
   const currentUser = useQuery(api.users.getCurrentUser);
@@ -156,6 +162,16 @@ export function useSyncInboxSessions() {
     bgSyncMessages(sessions);
     lastSyncRef.current = Date.now();
   }, [syncTable, applyLiveInboxIds, bgSyncMessages]), { coalesceMs: 300 });
+
+  // Merge favorites into the session cache WITHOUT touching liveInboxIds — these
+  // rows back the Favorites view and the sidebar peek; they must not be treated
+  // as the live recent set (that would drag old favorites onto the active desk).
+  useConvexSync(favoriteSessions, useCallback((data: any) => {
+    const sessions = data?.sessions ?? data;
+    if (!Array.isArray(sessions)) return;
+    syncTable("sessions", sessions as unknown as InboxSession[]);
+    bgSyncMessages(sessions);
+  }, [syncTable, bgSyncMessages]), { coalesceMs: 500 });
 
   // Liveness overlay: a small {convId: {agent_status/is_idle/...}} map merged onto
   // the cached rows (syncOverlay). The ONLY inbox channel that re-runs on heartbeats,

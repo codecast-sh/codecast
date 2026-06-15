@@ -262,22 +262,39 @@ export const listBookmarks = query({
         const message = await ctx.db.get(bookmark.message_id);
         if (!conversation || !message) return null;
 
+        // Strip image markup so the preview reads as the actual text the user
+        // bookmarked, not "[Image: …]" noise.
+        const preview = (message.content || "")
+          .replace(/\[Image[:\s][^\]]*\]/gi, "")
+          .replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "")
+          .trim()
+          .slice(0, 140);
+
         return {
           _id: bookmark._id,
           conversation_id: bookmark.conversation_id,
           message_id: bookmark.message_id,
           created_at: bookmark.created_at,
+          // Optional human label from the CLI (`cast bookmark --name`); shown as
+          // the primary line when present so a named bookmark is self-describing.
+          name: bookmark.name || null,
+          note: bookmark.note || null,
           conversation_title: conversation.title || "New Session",
           conversation_updated_at: conversation.updated_at,
           conversation_message_count: conversation.message_count || 0,
-          message_preview: message.content?.slice(0, 100) || "",
+          project_path: conversation.project_path,
+          git_root: conversation.git_root,
+          message_preview: preview,
           message_role: message.role,
           message_timestamp: message.timestamp,
         };
       })
     );
 
-    return enriched.filter((b): b is NonNullable<typeof b> => b !== null);
+    // Newest bookmark first — the aggregate view reads as a recency stack.
+    return enriched
+      .filter((b): b is NonNullable<typeof b> => b !== null)
+      .sort((a, b) => b.created_at - a.created_at);
   },
 });
 
