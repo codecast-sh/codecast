@@ -35,6 +35,35 @@ function conversationRenderEqual(a: Record<string, any>, b: Record<string, any>)
   return true;
 }
 
+// conversationRenderEqual stabilizes the conversation OBJECT, but useTrackedStore
+// still WAKES this hook whenever a subscribed row's Object.is identity changes —
+// and syncTable hands the session/conversation rows a fresh identity on every
+// ~1s liveness bump. A bare heartbeat would therefore re-render InboxConversation
+// → ConversationDiffLayout → the (un-memoized) 11k-line ConversationView even
+// though nothing visible changed. Subscribing to a SIGNATURE that ignores
+// LIVENESS_ONLY_CONV_FIELDS makes a bare heartbeat inert at the source: the dep
+// value is unchanged, so the hook never re-renders. Lossless for object-valued
+// fields via a stable per-reference id — a real change to a nested object still
+// flips the signature. Fail-safe denylist: omit a field and you re-render more
+// often, never render stale.
+let __metaRefSeq = 0;
+const __metaRefIds = new WeakMap<object, number>();
+const metaRefId = (o: object): number => {
+  let id = __metaRefIds.get(o);
+  if (id === undefined) { id = ++__metaRefSeq; __metaRefIds.set(o, id); }
+  return id;
+};
+function metaWakeSig(row: Record<string, any> | undefined | null): string {
+  if (!row) return "∅";
+  let sig = "";
+  for (const k in row) {
+    if (LIVENESS_ONLY_CONV_FIELDS.has(k)) continue;
+    const v = row[k];
+    sig += k + ":" + (v !== null && typeof v === "object" ? "#" + metaRefId(v) : String(v)) + ";";
+  }
+  return sig;
+}
+
 type Message = {
   _id: string;
   message_uuid?: string;
@@ -322,8 +351,11 @@ export function useConversationMessages(
   const s = useTrackedStore([
     s => s.messages[conversationId],
     s => s.pendingMessages[conversationId],
-    s => s.conversations[conversationId],
-    s => s.sessions[conversationId],
+    // Wake on render-relevant meta changes only — NOT the ~1s liveness bumps that
+    // would otherwise re-render the whole ConversationView tree 4–5×/sec. The full
+    // rows are still read live from `s` below; these deps just gate re-renders.
+    s => metaWakeSig(s.conversations[conversationId]),
+    s => metaWakeSig(s.sessions[conversationId]),
     s => s.pagination[conversationId],
   ]);
   const storeMessages = s.messages[conversationId] ?? EMPTY_MESSAGES;
