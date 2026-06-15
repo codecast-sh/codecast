@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { Popover, PopoverContent, PopoverAnchor } from "./ui/popover";
 import { stripMarkdown, docContentPreview } from "../lib/notificationText";
-import { parseEntityUrl, ENTITY_ROUTE, type EntityType } from "../lib/entityLinks";
+import { parseEntityUrl, ENTITY_ROUTE, isConvexId, type EntityType } from "../lib/entityLinks";
 import { FormattedSummary } from "./FormattedSummary";
 import { sessionCardSummary } from "../lib/sessionSummary";
 
@@ -76,10 +76,6 @@ export function isEntityId(text: string): boolean {
   return ENTITY_ID_RE.test(text.trim());
 }
 
-// Convex document ids are 32-char base32 strings; short ids are far shorter
-// (ct-…/pl-… or a 7-char jx…). This length threshold cleanly separates them.
-const CONVEX_ID_MIN_LEN = 20;
-
 const TYPE_LABEL: Record<EntityType, string> = {
   task: "Task",
   plan: "Plan",
@@ -103,7 +99,11 @@ function detectEntityType(id: string): EntityType | null {
  * we trim to that when the id is short. doc/project only ever carry Convex ids.
  */
 function entityQueryArgs(type: EntityType, id: string): { short_id?: string; id?: string } {
-  if (id.length >= CONVEX_ID_MIN_LEN) return { id };
+  // Only a genuine 32-char Convex id may be resolved by `{ id }` (db.get). A
+  // longer-than-short-id but non-Convex string (e.g. a garbled /plans/<id> URL)
+  // would otherwise be sent to db.get and throw "Invalid ID length"; routing it
+  // through the by_short_id index instead just resolves to null.
+  if (isConvexId(id)) return { id };
   if (type === "session") return { short_id: id.slice(0, 7).toLowerCase() };
   if (type === "task" || type === "plan") return { short_id: id.toLowerCase() };
   return { id };
@@ -505,7 +505,7 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp }: { shortId?
   // prefix matching lowercase internally.
   const rawId = (idProp ?? shortId ?? "").trim();
   const type: EntityType | null = typeProp ?? detectEntityType(rawId);
-  const looksConvex = rawId.length >= CONVEX_ID_MIN_LEN;
+  const looksConvex = isConvexId(rawId);
   const isTask = type === "task";
   const isPlan = type === "plan";
   const isSession = type === "session";

@@ -7,6 +7,17 @@
 
 export type EntityType = "task" | "plan" | "session" | "doc" | "project";
 
+/**
+ * True only for a full Convex document id: exactly 32 lowercase base32 chars.
+ * Short ids (ct-…/pl-… and 7-char jx… sessions) and any malformed/garbage id
+ * fail this. Callers use it before handing an id to a `db.get`-backed query —
+ * a non-Convex string passed to `ctx.db.get` throws "Invalid ID length" and
+ * crashes the page. Single source of truth, re-exported by the inbox store.
+ */
+export function isConvexId(id: string): boolean {
+  return /^[a-z0-9]{32}$/.test(id);
+}
+
 /** In-app Next.js route prefix for each entity type. */
 export const ENTITY_ROUTE: Record<EntityType, string> = {
   task: "/tasks",

@@ -654,7 +654,10 @@ export const get = query({
         .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id!))
         .first();
     } else if (args.id) {
-      task = await ctx.db.get(args.id as Id<"tasks">);
+      // CLI-supplied id may be malformed; normalizeId returns null rather than
+      // letting ctx.db.get throw "Invalid ID length". (Mirrors tasks.webGet.)
+      const taskId = ctx.db.normalizeId("tasks", args.id);
+      task = taskId ? await ctx.db.get(taskId) : null;
     }
 
     if (!task) return null;
@@ -1565,7 +1568,13 @@ export const webGet = query({
         .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id!))
         .first();
     } else if (args.id) {
-      task = await ctx.db.get(args.id as Id<"tasks">);
+      // ids arrive from clickable pills/links embedded in untrusted message and
+      // doc content; a malformed or cross-table id would make ctx.db.get throw
+      // ("Invalid ID length") and crash the page. normalizeId returns null for
+      // anything that isn't a tasks id, so we degrade to "not found". (Mirrors
+      // docs.webGet.)
+      const taskId = ctx.db.normalizeId("tasks", args.id);
+      task = taskId ? await ctx.db.get(taskId) : null;
     }
 
     if (!task || !(await canAccessTask(ctx, userId, task))) return null;

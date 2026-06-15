@@ -20,10 +20,11 @@ export interface SessionContext {
   source?: "inbox" | "sessions";
 }
 
-const CONVEX_ID_RE = /^[a-z0-9]{32}$/;
-export function isConvexId(id: string): boolean {
-  return CONVEX_ID_RE.test(id);
-}
+// Convex-id check lives in lib/entityLinks (the entity-routing source of truth).
+// Imported for internal use AND re-exported so the many call sites that import
+// `isConvexId` from the store keep working.
+import { isConvexId } from "../lib/entityLinks";
+export { isConvexId };
 
 // Canonical entity-derivation helpers live in lib/liveEntities. Re-exported here
 // so existing call sites that import from the store keep working.

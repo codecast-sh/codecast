@@ -1,5 +1,29 @@
 import { test, expect, describe } from "bun:test";
-import { parseEntityUrl } from "./entityLinks";
+import { parseEntityUrl, isConvexId } from "./entityLinks";
+
+describe("isConvexId", () => {
+  test("accepts a full 32-char Convex id", () => {
+    expect(isConvexId("mh73xedd7ep2nmr082mqnxts2x86kzfy")).toBe(true);
+    expect(isConvexId("jx75sqw53801qvexsvem39mbhh88c8wt")).toBe(true);
+  });
+
+  test("rejects a non-32-char id that the old >=20 heuristic wrongly accepted", () => {
+    // 21 chars: long enough to pass the retired length>=20 test, but not a real
+    // Convex id. Handing this to ctx.db.get throws "Invalid ID length 21" — the
+    // crash this guards against. Must NOT look like a Convex id.
+    expect("abcdefghij0123456789x".length).toBe(21);
+    expect(isConvexId("abcdefghij0123456789x")).toBe(false);
+  });
+
+  test("rejects short ids and junk", () => {
+    expect(isConvexId("ct-33527")).toBe(false);
+    expect(isConvexId("pl-77")).toBe(false);
+    expect(isConvexId("jx75sqw")).toBe(false);
+    expect(isConvexId("")).toBe(false);
+    expect(isConvexId("MH73XEDD7EP2NMR082MQNXTS2X86KZFY")).toBe(false); // uppercase
+    expect(isConvexId("mh73xedd7ep2nmr082mqnxts2x86kzf")).toBe(false); // 31 chars
+  });
+});
 
 describe("parseEntityUrl", () => {
   const CONVEX_ID = "mh73xedd7ep2nmr082mqnxts2x86kzfy";
