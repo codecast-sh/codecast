@@ -8,9 +8,8 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { cleanTitle, msgCountColor } from "../lib/conversationProcessor";
 import { visitTimeAgo } from "../lib/recentVisits";
-import { getLabelColor } from "../lib/labelColors";
 import { shouldShowSession } from "../lib/sessionFilters";
-import { useInboxStore, categorizeSessions, sessionsWithPendingSend, getProjectName } from "../store/inboxStore";
+import { useInboxStore, categorizeSessions, sessionsWithPendingSend } from "../store/inboxStore";
 import { useConvexSync } from "../hooks/useConvexSync";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { TeamIcon } from "./TeamIcon";
@@ -318,25 +317,8 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
       .catch(() => prefetchedBookmarksRef.current.delete(bm._id));
     convex.query(api.conversations.getConversationWithMeta, { conversation_id: bm.conversation_id }).catch(() => {});
   }, [convex]);
-  // The aggregate view: bookmarks clustered by their conversation (most-recently
-  // bookmarked conversation first), so each pointer reads against its source
-  // instead of floating as an orphaned preview line.
-  const groupedBookmarks = useMemo(() => {
-    if (!bookmarks) return [] as Array<{ conversation_id: string; title: string; project: string; items: any[]; latest: number }>;
-    const byConv = new Map<string, { conversation_id: string; title: string; project: string; items: any[]; latest: number }>();
-    for (const bm of bookmarks as any[]) {
-      let g = byConv.get(bm.conversation_id);
-      if (!g) {
-        g = { conversation_id: bm.conversation_id, title: bm.conversation_title || "New Session", project: getProjectName(bm.git_root, bm.project_path), items: [], latest: 0 };
-        byConv.set(bm.conversation_id, g);
-      }
-      g.items.push(bm);
-      g.latest = Math.max(g.latest, bm.created_at ?? 0);
-    }
-    for (const g of byConv.values()) g.items.sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0));
-    return Array.from(byConv.values()).sort((a, b) => b.latest - a.latest);
-  }, [bookmarks]);
   const toggleBookmark = useInboxStore((s) => s.toggleBookmark);
+  const openConversationId = useInboxStore((s) => s.currentSessionId);
   const allSavedViews = useInboxStore((s) => s.clientState.ui?.saved_views);
   const savedViews = useMemo(
     () => allSavedViews?.filter((v: any) => !v.team_id || v.team_id === activeTeamId),
@@ -653,92 +635,84 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
           </div>
         )}
 
-        {!isNarrow && groupedBookmarks.length > 0 && (
+        {!isNarrow && bookmarks && bookmarks.length > 0 && (
           <div className="mt-4">
             <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-4 mb-2 flex items-center">
               <span>Bookmarks</span>
-              <span className="ml-auto text-[10px] tabular-nums text-sol-text-dim/50">{bookmarks.length}</span>
+              <span className="ml-auto text-[10px] tabular-nums text-sol-text-dim/50 normal-case font-normal">{bookmarks.length}</span>
             </div>
-            <div className="space-y-1.5 px-2">
-              {(showAllBookmarks ? groupedBookmarks : groupedBookmarks.slice(0, 6)).map((group) => (
-                <div key={group.conversation_id} className="rounded-md hover:bg-sol-bg-highlight/30 transition-colors py-1">
-                  {/* Conversation anchor — the thread these saved moments hang off. */}
-                  <button
-                    onClick={() => {
-                      const store = useInboxStore.getState();
-                      store.requestNavigate(group.conversation_id, {});
-                      const activeTab = store.tabs.find((t: any) => t.id === store.activeTabId);
-                      if (activeTab) store.updateTab(activeTab.id, { path: "/inbox" });
-                      if (!store.tabs.length) router.push("/inbox");
-                      onMobileClose?.();
-                    }}
-                    className="w-full px-2 flex items-center gap-1.5 min-w-0 text-left group/h"
-                  >
-                    {group.project && group.project !== "unknown" && (
-                      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${getLabelColor(group.project).dot}`} />
-                    )}
-                    <span className="truncate text-[11px] font-semibold text-sol-text-muted group-hover/h:text-sol-text">{cleanTitle(group.title)}</span>
-                    {group.items.length > 1 && (
-                      <span className="ml-auto text-[9px] tabular-nums text-sol-text-dim/40 flex-shrink-0">{group.items.length}</span>
-                    )}
-                  </button>
-                  {/* Saved moments: a thread line with role-colored nodes. */}
-                  <div className="ml-[9px] mt-1 pl-3.5 border-l border-sol-border/60 space-y-0.5">
-                    {group.items.map((bm: any) => (
-                      <div
-                        key={bm._id}
-                        onMouseEnter={() => prefetchBookmark(bm)}
-                        onFocus={() => prefetchBookmark(bm)}
-                        className="relative flex items-center gap-2 pr-2 pl-1.5 py-[3px] rounded hover:bg-sol-bg-highlight/70 transition-colors group cursor-pointer"
-                        onClick={() => {
-                          const store = useInboxStore.getState();
-                          // Pair the navigation target with the scroll target atomically so the
-                          // inbox's pendingNavigateId watcher resolves them together. Setting them
-                          // separately (navigateToSession + a later setState) raced the cache-hit
-                          // watcher, which pinned the scroll to the *previous* conversation.
-                          store.requestNavigate(bm.conversation_id, { scrollToMessageId: bm.message_id });
-                          const activeTab = store.tabs.find((t: any) => t.id === store.activeTabId);
-                          if (activeTab) {
-                            store.updateTab(activeTab.id, { path: "/inbox" });
-                          }
-                          if (!store.tabs.length) router.push("/inbox");
-                          onMobileClose?.();
-                        }}
+            <div className="space-y-0.5">
+              {(showAllBookmarks ? bookmarks : bookmarks.slice(0, 8)).map((bm: any, i: number, arr: any[]) => {
+                const isOpen = bm.conversation_id === openConversationId;
+                // Adjacent bookmarks from the same conversation drop the repeated
+                // conversation line — the row above already named it.
+                const sameConvAsPrev = i > 0 && arr[i - 1].conversation_id === bm.conversation_id;
+                const named = !!bm.name;
+                const primary = bm.name || bm.message_preview || "";
+                const convTitle = cleanTitle(bm.conversation_title || "New Session");
+                return (
+                  <div key={bm._id} className="flex items-stretch group" onMouseEnter={() => prefetchBookmark(bm)} onFocus={() => prefetchBookmark(bm)}>
+                    <button
+                      onClick={() => {
+                        const store = useInboxStore.getState();
+                        // Pair navigation + scroll target atomically so the inbox's
+                        // pendingNavigateId watcher resolves them together (separate sets
+                        // raced the cache-hit watcher, pinning scroll to the previous conv).
+                        store.requestNavigate(bm.conversation_id, { scrollToMessageId: bm.message_id });
+                        const activeTab = store.tabs.find((t: any) => t.id === store.activeTabId);
+                        if (activeTab) store.updateTab(activeTab.id, { path: "/inbox" });
+                        if (!store.tabs.length) router.push("/inbox");
+                        onMobileClose?.();
+                      }}
+                      title={primary || convTitle}
+                      aria-label={`Open bookmark ${named ? `"${bm.name}"` : "message"} in ${convTitle}`}
+                      className={`flex items-start gap-2 px-4 py-1.5 flex-1 min-w-0 text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-sol-cyan/60 ${
+                        isOpen ? "bg-sol-cyan/10 shadow-[inset_2px_0_0_var(--sol-cyan)]" : "hover:bg-sol-bg-highlight/60"
+                      }`}
+                    >
+                      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 mt-[6px] ${bm.message_role === "user" ? "bg-sol-blue" : "bg-sol-violet"}`} title={bm.message_role === "user" ? "Your message" : "Assistant reply"} />
+                      <span className="min-w-0 flex-1">
+                        <span className={`block truncate text-sm leading-snug group-hover:text-sol-text ${named ? "text-sol-text font-medium" : "text-sol-text-muted"}`}>
+                          {named ? (
+                            primary
+                          ) : primary ? (
+                            <><span className="text-sol-text-dim/40 font-serif mr-px">“</span>{primary}</>
+                          ) : (
+                            <span className="italic text-sol-text-dim/70">No preview</span>
+                          )}
+                        </span>
+                        {!sameConvAsPrev && (
+                          <span className="block truncate text-[10px] text-sol-text-dim/55 leading-tight mt-[1px] group-hover:text-sol-text-dim/80 transition-colors">
+                            {convTitle}
+                          </span>
+                        )}
+                      </span>
+                      <span
+                        className="text-[9px] tabular-nums text-sol-text-dim/40 group-hover:text-sol-text-dim flex-shrink-0 mt-[3px] transition-colors"
+                        title={new Date(bm.created_at).toLocaleString()}
                       >
-                        {/* Node sitting ON the thread line; ring cuts the line cleanly. */}
-                        <span className={`absolute -left-[18px] w-[7px] h-[7px] rounded-full ring-2 ring-sol-bg-alt flex-shrink-0 ${bm.message_role === "user" ? "bg-sol-blue" : "bg-sol-violet"}`} title={bm.message_role === "user" ? "you" : "assistant"} />
-                        <span className={`truncate flex-1 min-w-0 text-[12.5px] leading-snug ${bm.name ? "text-sol-text font-medium" : "text-sol-text-muted"} group-hover:text-sol-text`}>
-                          {bm.name || bm.message_preview || <span className="italic opacity-60">empty message</span>}
-                        </span>
-                        {/* Time normally; swaps to the remove control on hover so the row
-                            stays a single clean line and never wraps. */}
-                        <span className="flex-shrink-0 flex items-center justify-end w-9">
-                          <span className="text-[10px] tabular-nums text-sol-text-dim/50 whitespace-nowrap group-hover:hidden">{visitTimeAgo(bm.created_at)}</span>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              toggleBookmark(bm.conversation_id, bm.message_id);
-                            }}
-                            className="hidden group-hover:flex text-sol-text-dim hover:text-sol-red transition-colors"
-                            title="Remove bookmark"
-                            aria-label="Remove bookmark"
-                          >
-                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                            </svg>
-                          </button>
-                        </span>
-                      </div>
-                    ))}
+                        {visitTimeAgo(bm.created_at)}
+                      </span>
+                    </button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); toggleBookmark(bm.conversation_id, bm.message_id); }}
+                      className="px-1.5 flex items-center opacity-0 group-hover:opacity-100 text-sol-text-dim hover:text-sol-red transition-opacity flex-shrink-0"
+                      title="Remove bookmark"
+                      aria-label="Remove bookmark"
+                    >
+                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
                   </div>
-                </div>
-              ))}
-              {groupedBookmarks.length > 6 && (
+                );
+              })}
+              {bookmarks.length > 8 && (
                 <button
                   onClick={() => setShowAllBookmarks(v => !v)}
-                  className="w-full px-2 py-1 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors text-left"
+                  className="w-full px-4 pt-1.5 pb-0.5 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors text-left"
                 >
-                  {showAllBookmarks ? "Show less" : `${groupedBookmarks.length - 6} more conversation${groupedBookmarks.length - 6 === 1 ? "" : "s"}…`}
+                  {showAllBookmarks ? "Show fewer" : `Show ${bookmarks.length - 8} more`}
                 </button>
               )}
             </div>
