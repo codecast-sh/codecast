@@ -33,7 +33,7 @@ import { FindBar } from "./FindBar";
 import { KeyboardShortcutsPanel, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { SettingsModal } from "./settings/SettingsModal";
 import { NewSessionModal } from "./ConversationList";
-import { useInboxStore, useTrackedStore, categorizeSessions, sessionsWithPendingSend, isSessionHidden } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, categorizeSessions, sessionsWithPendingSend, isSessionHidden, getProjectName } from "../store/inboxStore";
 import { useShortcutAction, useShortcutContext, useGlobalShortcutActions } from "../shortcuts";
 import { usePrefetch } from "../hooks/usePrefetch";
 import { desktopHeaderClass, setupDesktopDrag, isElectron } from "../lib/desktop";
@@ -343,23 +343,32 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
 
   const resolveNewSessionContext = useCallback(() => {
     const store = useInboxStore.getState();
-    // Ctrl+N always clones the selected session's project path — the session the
-    // user sees highlighted (sessionListActiveId). No other source is consulted
-    // while a session is selected, so directoryFilter and stale currentConversation
-    // state can never override what the user has in focus.
+    const { activeProjectFilter, activeProjectPath } = store;
+    // Ctrl+N clones the selected session's project path (preserving its worktree /
+    // subdirectory) — the session the user sees highlighted (sessionListActiveId).
+    // But a project-filter chip is an explicit "I'm working in this project": when
+    // one is active, the focused session only wins if it actually lives inside that
+    // project, so a stale focus from elsewhere can't pull a new session out of it.
     const selected = sessionListActiveId
       ? (store.sessions[sessionListActiveId]
           ?? store.conversations[sessionListActiveId])
       : null;
-    if (selected?.project_path) {
+    if (
+      selected?.project_path &&
+      (!activeProjectFilter || getProjectName(selected.git_root, selected.project_path) === activeProjectFilter)
+    ) {
       return {
         path: selected.project_path,
         gitRoot: selected.git_root || selected.project_path,
         agentType: selected.agent_type,
       };
     }
-    // No session selected — only now fall back to dashboard directory filter, then git root.
     const ctx = store.currentConversation;
+    // The project-filter chip the user scoped the inbox to — honor it before the
+    // URL directory filter or the last conversation's git root.
+    if (activeProjectPath) {
+      return { path: activeProjectPath, gitRoot: activeProjectPath, agentType: ctx.agentType };
+    }
     if (directoryFilter) {
       return { path: directoryFilter, gitRoot: ctx.gitRoot || directoryFilter, agentType: ctx.agentType };
     }

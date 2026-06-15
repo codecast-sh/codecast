@@ -783,8 +783,14 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
 
   useWatchEffect(() => {
     if (!isOpen || initializedRef.current) return;
+    // Inherit the inbox's active project filter so a new session defaults to the
+    // project the user has scoped to, before falling back to the most-recent one.
+    const activeProjectPath = useInboxStore.getState().activeProjectPath;
     if (context.projectPath) {
       setProjectPath(context.projectPath);
+      initializedRef.current = true;
+    } else if (activeProjectPath) {
+      setProjectPath(activeProjectPath);
       initializedRef.current = true;
     } else if (frozenProjects?.length) {
       setProjectPath(frozenProjects[0].path);
