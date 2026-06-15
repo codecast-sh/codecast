@@ -1,7 +1,7 @@
 import { test, expect, describe, beforeEach } from "bun:test";
 import { useInboxStore } from "../store/inboxStore";
 import { takeReviewBatch, attachReviewToMessage } from "./reviewActions";
-import { formatPlanFeedback, type PendingComment } from "./quoteFormat";
+import { formatPlanFeedback, formatDocFeedback, formatPendingComments, sortPendingComments, type PendingComment } from "./quoteFormat";
 
 const CONV = "conv-test";
 
@@ -63,6 +63,52 @@ describe("formatPlanFeedback", () => {
 
   test("falls back to a generic request when the batch is empty", () => {
     expect(formatPlanFeedback("")).toContain("Plan changes requested.");
+  });
+});
+
+describe("diff line comments ride the shared batch out to the agent", () => {
+  test("a line comment becomes a file:line blockquote + note on the next reply", () => {
+    // Shape a DiffView line comment writes: messageId = the per-file diff anchor,
+    // blockIndex = the line key, quote = "path:line\n<code>".
+    useInboxStore.getState().addReviewComment(CONV, {
+      id: "lc1",
+      messageId: "diff:tool_7:packages/web/x.ts",
+      blockIndex: 42,
+      quote: "packages/web/x.ts:42\nconst y = bar()",
+      body: "rename y — too vague",
+      createdAt: 1,
+    });
+    expect(attachReviewToMessage(CONV, "")).toBe(
+      "> packages/web/x.ts:42\n> const y = bar()\n\nrename y — too vague",
+    );
+    expect(useInboxStore.getState().reviewComments[CONV]).toBeUndefined(); // consumed
+  });
+});
+
+describe("formatDocFeedback", () => {
+  const batch = formatPendingComments(
+    sortPendingComments([
+      { id: "1", messageId: "doc:d1", blockIndex: 0, quote: "line one", body: "make this clearer", createdAt: 0 },
+      { id: "2", messageId: "doc:d1", blockIndex: 1, quote: "line two", body: "", createdAt: 1 },
+    ]),
+  );
+
+  test("names the doc, gives DB-edit instructions, and lists the annotations", () => {
+    const out = formatDocFeedback("Spec", "d1", batch);
+    expect(out).toContain('Feedback on document "Spec" (doc `d1`)');
+    expect(out).toContain("cast doc edit d1");
+    expect(out).toContain("> line one");
+    expect(out).toContain("make this clearer");
+    expect(out).toContain("> line two");
+  });
+
+  test("appends an optional cover note after the annotations", () => {
+    const out = formatDocFeedback("Spec", "d1", batch, "overall: tighten the intro");
+    expect(out.endsWith("overall: tighten the intro")).toBe(true);
+  });
+
+  test("falls back to a generic request when nothing was annotated", () => {
+    expect(formatDocFeedback("Spec", "d1", "")).toContain("Changes requested.");
   });
 });
 
