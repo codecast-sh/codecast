@@ -7027,197 +7027,6 @@ function CyclingShortcutHint() {
   );
 }
 
-type NavUserMessage = { _id: string; message_uuid?: string; content: string; timestamp: number };
-
-function MessageNavigator({ userMessages, onRewind, onFork, onClose, forkPointMap, onBranchSwitch, activeConversationId }: {
-  userMessages: NavUserMessage[];
-  onRewind: (msg: NavUserMessage, indexFromEnd: number) => void;
-  onFork: (msg: NavUserMessage) => void;
-  onClose: (selectedMsg?: { content: string }) => void;
-  forkPointMap?: Record<string, ForkChild[]>;
-  onBranchSwitch?: (messageUuid: string, convId: string | null) => void;
-  activeConversationId?: string;
-}) {
-  const [selectedIdx, setSelectedIdx] = useState(userMessages.length - 1);
-  const [branchIdx, setBranchIdx] = useState<number>(-1);
-  const listRef = useRef<HTMLDivElement>(null);
-  const escTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const selectedMsg = userMessages[selectedIdx];
-  const forks = selectedMsg?.message_uuid && forkPointMap ? forkPointMap[selectedMsg.message_uuid] || [] : [];
-  const hasBranches = forks.length > 0;
-
-  useWatchEffect(() => {
-    if (!hasBranches || !activeConversationId) { setBranchIdx(-1); return; }
-    const idx = forks.findIndex(f => f._id === activeConversationId);
-    setBranchIdx(idx >= 0 ? idx : -1);
-  }, [selectedIdx, hasBranches, activeConversationId, forks]);
-
-  useMountEffect(() => {
-    return () => { if (escTimerRef.current) clearTimeout(escTimerRef.current); };
-  });
-
-  useWatchEffect(() => {
-    const el = listRef.current?.children[selectedIdx] as HTMLElement | undefined;
-    el?.scrollIntoView({ block: "nearest" });
-  }, [selectedIdx]);
-
-  useWatchEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        e.stopPropagation();
-        if (escTimerRef.current) {
-          clearTimeout(escTimerRef.current);
-          escTimerRef.current = null;
-          onClose(userMessages[selectedIdx]);
-        } else {
-          escTimerRef.current = setTimeout(() => { escTimerRef.current = null; }, 250);
-          onClose();
-        }
-        return;
-      }
-      if (e.key === "j" || e.key === "ArrowDown") {
-        e.preventDefault();
-        e.stopPropagation();
-        setSelectedIdx(i => Math.min(i + 1, userMessages.length - 1));
-        return;
-      }
-      if (e.key === "k" || e.key === "ArrowUp") {
-        e.preventDefault();
-        e.stopPropagation();
-        setSelectedIdx(i => Math.max(i - 1, 0));
-        return;
-      }
-      if ((e.key === "h" || e.key === "ArrowLeft") && hasBranches) {
-        e.preventDefault();
-        e.stopPropagation();
-        setBranchIdx(i => {
-          const newIdx = Math.max(i - 1, -1);
-          const uuid = selectedMsg?.message_uuid;
-          if (uuid && onBranchSwitch) {
-            onBranchSwitch(uuid, newIdx === -1 ? null : forks[newIdx]._id);
-          }
-          return newIdx;
-        });
-        return;
-      }
-      if ((e.key === "l" || e.key === "ArrowRight") && hasBranches) {
-        e.preventDefault();
-        e.stopPropagation();
-        setBranchIdx(i => {
-          const newIdx = Math.min(i + 1, forks.length - 1);
-          const uuid = selectedMsg?.message_uuid;
-          if (uuid && onBranchSwitch) {
-            onBranchSwitch(uuid, newIdx === -1 ? null : forks[newIdx]._id);
-          }
-          return newIdx;
-        });
-        return;
-      }
-      if (e.key === "Enter") {
-        e.preventDefault();
-        e.stopPropagation();
-        const indexFromEnd = userMessages.length - 1 - selectedIdx;
-        onRewind(userMessages[selectedIdx], indexFromEnd);
-        return;
-      }
-      if (e.key === "f" || e.key === "F") {
-        e.preventDefault();
-        e.stopPropagation();
-        onFork(userMessages[selectedIdx]);
-        return;
-      }
-    };
-    window.addEventListener("keydown", handler, true);
-    return () => window.removeEventListener("keydown", handler, true);
-  }, [userMessages, selectedIdx, onRewind, onFork, onClose, hasBranches, forks, selectedMsg, onBranchSwitch]);
-
-  return (
-    <div className="absolute bottom-full left-0 right-0 mb-2 z-50" style={{ maxHeight: "calc(100vh - 200px)" }}>
-      <div className="mx-auto conv-col px-4 h-full flex flex-col">
-        <div className="bg-sol-bg-alt border border-sol-blue/30 rounded-lg shadow-2xl overflow-hidden flex flex-col" style={{ maxHeight: "calc(100vh - 220px)" }}>
-          <div ref={listRef} className="flex-1 overflow-y-auto py-2 relative" style={{ maxHeight: "calc(100vh - 280px)" }}>
-            {userMessages.map((msg, idx) => {
-              const msgForks = msg.message_uuid && forkPointMap ? forkPointMap[msg.message_uuid] || [] : [];
-              const msgHasBranches = msgForks.length > 0;
-              const isSelected = idx === selectedIdx;
-              const isLast = idx === userMessages.length - 1;
-              return (
-                <div key={msg._id} className="relative">
-                  {/* Tree line */}
-                  <div className="absolute left-3 top-0 bottom-0 flex flex-col items-center" style={{ width: "12px" }}>
-                    {/* Vertical line segment */}
-                    <div className={`w-px flex-1 ${msgHasBranches ? "bg-sol-cyan/30" : "bg-sol-blue/15"} ${isLast ? "hidden" : ""}`} />
-                  </div>
-                  {/* Fork node dot */}
-                  {msgHasBranches && (
-                    <div className="absolute left-3 top-1/2 -translate-y-1/2 flex items-center" style={{ width: "12px" }}>
-                      <div className={`w-2 h-2 rounded-full mx-auto ${isSelected ? "bg-sol-cyan shadow-[0_0_6px_rgba(0,205,205,0.5)]" : "bg-sol-cyan/50"}`} />
-                    </div>
-                  )}
-                  {!msgHasBranches && (
-                    <div className="absolute left-3 top-1/2 -translate-y-1/2 flex items-center" style={{ width: "12px" }}>
-                      <div className={`w-1 h-1 rounded-full mx-auto ${isSelected ? "bg-sol-blue/60" : "bg-sol-blue/20"}`} />
-                    </div>
-                  )}
-                  <button
-                    onClick={() => setSelectedIdx(idx)}
-                    onDoubleClick={() => { setSelectedIdx(idx); onRewind(msg, userMessages.length - 1 - idx); }}
-                    className={`w-full text-left pl-8 pr-4 py-2.5 transition-colors flex items-start gap-3 ${
-                      isSelected
-                        ? "bg-sol-blue/20 ring-1 ring-inset ring-sol-blue/50"
-                        : "hover:bg-sol-bg-highlight"
-                    }`}
-                  >
-                    <span className={`text-xs font-mono mt-0.5 shrink-0 w-6 text-right ${isSelected ? "text-sol-blue" : "text-sol-blue/40"}`}>{idx + 1}</span>
-                    <div className="flex-1 min-w-0">
-                      <span className={`text-sm leading-relaxed ${isSelected ? "text-sol-text" : "text-sol-text-secondary"}`} style={{ display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
-                        {safeString(msg.content)}
-                      </span>
-                      {msgHasBranches && isSelected && (
-                        <div className="flex items-center gap-1 mt-1.5">
-                          <span className={`text-[10px] px-1.5 py-0.5 rounded border transition-colors ${branchIdx === -1 ? "bg-sol-cyan/15 text-sol-cyan border-sol-cyan/30" : "text-sol-text-dim border-transparent"}`}>
-                            main
-                          </span>
-                          {msgForks.map((fork, fi) => (
-                            <span
-                              key={fork._id}
-                              className={`text-[10px] px-1.5 py-0.5 rounded border truncate max-w-[120px] transition-colors ${fi === branchIdx ? "bg-sol-cyan/15 text-sol-cyan border-sol-cyan/30" : "text-sol-text-dim border-transparent"}`}
-                            >
-                              {fork.title || fork.short_id || "fork"}
-                            </span>
-                          ))}
-                          <span className="text-[9px] text-sol-blue/30 ml-1">h/l</span>
-                        </div>
-                      )}
-                      {msgHasBranches && !isSelected && (
-                        <div className="flex items-center gap-1 mt-1">
-                          <span className="text-[9px] text-sol-cyan/50">{msgForks.length + 1} branches</span>
-                        </div>
-                      )}
-                    </div>
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-          <div className="px-4 py-2 border-t border-sol-blue/20 flex items-center justify-between">
-            <div className="flex items-center gap-4 text-[11px] text-sol-blue/60">
-              <span className="flex items-center gap-1"><span className="flex items-center gap-[2px]"><KeyCap size="xs">J</KeyCap><span className="text-sol-text-dim/40">/</span><KeyCap size="xs">K</KeyCap></span> navigate</span>
-              <span className="flex items-center gap-1"><span className="flex items-center gap-[2px]"><KeyCap size="xs">H</KeyCap><span className="text-sol-text-dim/40">/</span><KeyCap size="xs">L</KeyCap></span> branches</span>
-              <span className="flex items-center gap-1"><KeyCap size="xs">Enter</KeyCap> rewind</span>
-              <span className="flex items-center gap-1"><KeyCap size="xs">F</KeyCap> fork</span>
-              <span className="flex items-center gap-1"><KeyCap size="xs">Esc</KeyCap> close</span>
-            </div>
-            <span className="text-[10px] text-sol-blue/40">{userMessages.length} message{userMessages.length !== 1 ? "s" : ""}</span>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function GuestJoinCTA() {
   return (
     <div className="bg-sol-bg border-t border-sol-border/30">
@@ -9822,10 +9631,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const forkSetMessages = useInboxStore((s) => s.setMessages);
   const resolveForkSessionId = useInboxStore((s) => s.resolveForkSessionId);
   const forkSetSelectedIndex = useForkNavigationStore((s) => s.setSelectedIndex);
-  // Branch map open-state. One surface now: a command-palette-style popover
-  // anchored above the message input (with the header icon and Cmd/Ctrl+B as
-  // the other triggers). The old right-side drawer is gone.
+  // Branch map open-state. One surface: a command-palette-style popover anchored
+  // above the message input. Ctrl+B / the header icon open it at the branch
+  // tree (mapDrill = null); double-Esc opens it drilled into the current
+  // branch's messages (mapDrill = current conversation id).
   const [treePopoverOpen, setTreePopoverOpen] = useState(false);
+  const [mapDrill, setMapDrill] = useState<string | null>(null);
   const treeChipRef = useRef<HTMLButtonElement>(null);
 
   const timelineRef = useRef<any[]>([]);
@@ -10140,7 +9951,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   );
 
 
-  const [navigatorOpen, setNavigatorOpen] = useState(false);
   const populateInputRef = useRef<((text: string, opts?: { append?: boolean }) => void) | null>(null);
   // Bridge for the quote/comment review UI: lets MessageReview, the selection
   // toolbar, and the review bar push text into the composer without prop-drilling.
@@ -10209,29 +10019,18 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     requestAnimationFrame(() => scrollToBottomFnRef.current());
   }, [setUserScrolled]);
 
+  // Double-Esc opens the unified branch map drilled straight into the current
+  // branch's messages (the old standalone navigator is retired into the map).
   const handleOpenNavigator = useCallback(() => {
+    if (!isOwner || !conversation?._id) return;
     if (navigatorUserMessages && navigatorUserMessages.length > 0) {
-      setNavigatorOpen(true);
+      setMapDrill(conversation._id.toString());
+      setTreePopoverOpen(true);
     }
-  }, [navigatorUserMessages]);
+  }, [isOwner, conversation?._id, navigatorUserMessages]);
 
-  const handleNavigatorRewind = useCallback((msg: NavUserMessage, indexFromEnd: number) => {
-    if (!msg.message_uuid || !conversation) return;
-    setNavigatorOpen(false);
-    handleForkFromMessage(msg.message_uuid);
-    if (effectiveIsOwner && conversation.status === "active" && convexConvId) {
-      convCommand(convexConvId, "rewindSession", { steps_back: indexFromEnd + 1 });
-    }
-  }, [handleForkFromMessage, conversation, effectiveIsOwner, convCommand, convexConvId]);
-
-  const handleNavigatorFork = useCallback((msg: NavUserMessage) => {
-    if (!msg.message_uuid) return;
-    setNavigatorOpen(false);
-    handleForkFromMessage(msg.message_uuid);
-  }, [handleForkFromMessage]);
-
-  // Branch map rewind (Enter in the drilled current-branch messages): same as
-  // the navigator's rewind — fork at that point and rewind the live session.
+  // Branch map rewind (Enter in the drilled current-branch messages): fork at
+  // that point and rewind the live session.
   const handleRewindCurrent = useCallback((messageUuid: string, indexFromEnd: number) => {
     if (!conversation) return;
     handleForkFromMessage(messageUuid);
@@ -10239,13 +10038,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       convCommand(convexConvId, "rewindSession", { steps_back: indexFromEnd + 1 });
     }
   }, [handleForkFromMessage, conversation, effectiveIsOwner, convCommand, convexConvId]);
-
-  const handleNavigatorClose = useCallback((selectedMsg?: { content: string }) => {
-    setNavigatorOpen(false);
-    if (selectedMsg?.content && populateInputRef.current) {
-      populateInputRef.current(selectedMsg.content);
-    }
-  }, []);
 
   // Aggregation for the condensed/compact feeds. Built once per timeline; O(n).
   //
@@ -11127,12 +10919,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const toggleMap = useCallback(() => {
     if (!isOwner || !hasForkFamily) return;
     if (forkSelectionIdx !== null) return;
+    setMapDrill(null); // open at the branch tree
     setTreePopoverOpen((o) => !o);
   }, [isOwner, hasForkFamily, forkSelectionIdx]);
 
   useShortcutContext('conversation');
   useShortcutAction('conv.toggleTree', useCallback(() => {
     if (!isOwner || !hasForkFamily || forkSelectionIdx !== null) return false;
+    setMapDrill(null); // open at the branch tree
     setTreePopoverOpen((o) => !o);
     return true;
   }, [isOwner, hasForkFamily, forkSelectionIdx]));
@@ -13180,6 +12974,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           // header icon when the composer is hidden (guest / permission gate).
           anchorEl={messageInputRef.current ?? treeChipRef.current}
           placement={messageInputRef.current ? "above" : "below"}
+          initialDrillId={mapDrill}
           onSwitchToConversation={handleTreeSwitchConversation}
           onForkFromBranch={handleForkFromBranch}
           onRewindCurrent={handleRewindCurrent}
@@ -13216,17 +13011,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               ) : null}
               <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected || conversation.status !== "active" ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} onSubmitWithIntent={onSubmitWithIntent} />
             </>
-          )}
-          {navigatorOpen && navigatorUserMessages && navigatorUserMessages.length > 0 && (
-            <MessageNavigator
-              userMessages={navigatorUserMessages}
-              onRewind={handleNavigatorRewind}
-              onFork={handleNavigatorFork}
-              onClose={handleNavigatorClose}
-              forkPointMap={forkPointMap}
-              onBranchSwitch={handleBranchSwitch}
-              activeConversationId={conversation._id}
-            />
           )}
         </div>
       )}
