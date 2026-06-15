@@ -5,10 +5,18 @@ import { useMentionQuery } from "../hooks/useMentionQuery";
 import { useImageUpload } from "../hooks/useImageUpload";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { ContextChatInput } from "./ContextChatInput";
-import { ArrowLeft, Edit3, Eye, MoreHorizontal, Copy, Check, X } from "lucide-react";
+import { MessageReview } from "./MessageReview";
+import { MarkdownBlocks } from "./tools/MarkdownRenderer";
+import { DocReviewBar } from "./DocReviewBar";
+import { ArrowLeft, Edit3, Eye, MessageSquareQuote, MoreHorizontal, Copy, Check, X } from "lucide-react";
 import Link from "next/link";
 import { copyToClipboard } from "../lib/utils";
 import { toast } from "sonner";
+
+// Module-level so MessageReview's memo holds (a fresh inline arrow would defeat
+// it). Renders the doc's markdown as a flat run of blocks — each a direct child
+// of MessageReview's measurement container, so every block is hover-quotable.
+const renderDocBlocks = (content: string) => <MarkdownBlocks content={content} />;
 
 interface DocumentDetailLayoutProps {
   docId: string;
@@ -30,6 +38,9 @@ interface DocumentDetailLayoutProps {
   cliEditedAt?: number;
   /** Forwarded to CollabDocEditor — see its `contentReady` doc. */
   contentReady?: boolean;
+  /** The session this doc came from, if any — the default target when sending
+   *  review annotations to an agent. */
+  ownerConversationId?: string;
 }
 
 export function DocumentDetailLayout({
@@ -50,8 +61,11 @@ export function DocumentDetailLayout({
   linkedObjectId,
   cliEditedAt,
   contentReady = true,
+  ownerConversationId,
 }: DocumentDetailLayoutProps) {
   const [isEditing, setIsEditing] = useState(initialEditable);
+  const [reviewing, setReviewing] = useState(false);
+  const reviewKey = `doc:${docId}`;
   const [showMeta, setShowMeta] = useState(false);
   const [copied, setCopied] = useState(false);
   const handleMentionQuery = useMentionQuery();
@@ -98,7 +112,16 @@ export function DocumentDetailLayout({
             {copied ? <Check className="w-3.5 h-3.5 text-sol-green" /> : <Copy className="w-3.5 h-3.5" />}
           </button>
           <button
-            onClick={() => setIsEditing(!isEditing)}
+            onClick={() => { setReviewing((r) => !r); setIsEditing(false); }}
+            className={`p-1.5 rounded-md text-xs flex items-center gap-1 transition-colors ${
+              reviewing ? "text-sol-yellow" : "text-sol-text-dim hover:text-sol-text"
+            }`}
+            title={reviewing ? "Exit review" : "Review: quote sections and send feedback to an agent"}
+          >
+            <MessageSquareQuote className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={() => { setIsEditing(!isEditing); setReviewing(false); }}
             className={`p-1.5 rounded-md text-xs flex items-center gap-1 transition-colors ${
               isEditing
                 ? "text-sol-cyan"
@@ -153,20 +176,31 @@ export function DocumentDetailLayout({
           {leadContent && <div className="mt-2">{leadContent}</div>}
 
           <div className="mt-4">
-            <ErrorBoundary name="DocEditor" level="panel">
-              <CollabDocEditor
-                key={docId}
-                docId={docId}
-                markdownContent={markdownContent}
-                onMentionQuery={handleMentionQuery}
-                onImageUpload={handleImageUpload}
-                editable={isEditing}
-                placeholder={placeholder}
-                getMarkdownRef={getMarkdownRef}
-                cliEditedAt={cliEditedAt}
-                contentReady={contentReady}
-              />
-            </ErrorBoundary>
+            {reviewing ? (
+              <div className="prose prose-invert prose-sm max-w-none text-sol-text">
+                <MessageReview
+                  conversationId={reviewKey}
+                  messageId={reviewKey}
+                  content={markdownContent}
+                  renderBlock={renderDocBlocks}
+                />
+              </div>
+            ) : (
+              <ErrorBoundary name="DocEditor" level="panel">
+                <CollabDocEditor
+                  key={docId}
+                  docId={docId}
+                  markdownContent={markdownContent}
+                  onMentionQuery={handleMentionQuery}
+                  onImageUpload={handleImageUpload}
+                  editable={isEditing}
+                  placeholder={placeholder}
+                  getMarkdownRef={getMarkdownRef}
+                  cliEditedAt={cliEditedAt}
+                  contentReady={contentReady}
+                />
+              </ErrorBoundary>
+            )}
           </div>
 
           {children && (
@@ -180,12 +214,22 @@ export function DocumentDetailLayout({
             {footerContent}
           </div>
         )}
-        <ContextChatInput
-          contextType={contextType}
-          contextTitle={title || "Untitled"}
-          getContextBody={getContextBody}
-          linkedObjectId={linkedObjectId}
-        />
+        {reviewing ? (
+          <DocReviewBar
+            reviewKey={reviewKey}
+            docId={docId}
+            title={title || "Untitled"}
+            ownerConversationId={ownerConversationId}
+            onSent={() => setReviewing(false)}
+          />
+        ) : (
+          <ContextChatInput
+            contextType={contextType}
+            contextTitle={title || "Untitled"}
+            getContextBody={getContextBody}
+            linkedObjectId={linkedObjectId}
+          />
+        )}
         </div>
       </div>
     </div>

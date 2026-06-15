@@ -2624,6 +2624,12 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
 
   const filePath = String(parsedInput.file_path || "");
   const relativePath = getRelativePath(filePath);
+  // Enables inline line comments on the agent's edits (see DiffView). Scoped to a
+  // live conversation; comments land in the shared review batch keyed by the
+  // conversation and ride out on the user's next reply. Per-file anchor so a
+  // multi-file patch keeps each file's comments separate.
+  const lineCommentCtx = (path: string) =>
+    conversationId ? { conversationId: String(conversationId), anchorKey: `diff:${tool.id}:${path}`, filePath: getRelativePath(path) } : undefined;
   const language = getFileExtension(filePath);
   const applyPatchInput = tool.name === "apply_patch" ? getApplyPatchInput(rawToolInput) : "";
   const applyPatchDiffs = useMemo(
@@ -3114,6 +3120,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
               newStr={String(parsedInput.new_string)}
               startLine={startLine}
               language={language}
+              commentContext={lineCommentCtx(filePath)}
             />
           ) : tool.name === "Write" && !!parsedInput.content ? (
             isMarkdown && viewMode === 'rendered' ? (
@@ -3172,6 +3179,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
                 newStr={String(parsedInput.content)}
                 startLine={1}
                 language={language}
+                commentContext={lineCommentCtx(filePath)}
               />
             )
           ) : tool.name === "apply_patch" || tool.name === "fileChange" ? (
@@ -3190,6 +3198,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
                         newStr={diff.newContent}
                         startLine={diffStartLine}
                         language={diffLanguage}
+                        commentContext={lineCommentCtx(diff.filePath)}
                       />
                     </div>
                   );
@@ -3235,6 +3244,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
                 startLine={startLine}
                 language={language}
                 showLineNumbers
+                commentContext={lineCommentCtx(filePath)}
               />
               <div className="flex items-center gap-1 px-2 py-1 border-t border-sol-border/20">
                 <FooterIconButton

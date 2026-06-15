@@ -193,16 +193,27 @@ const MD_COMPONENTS: Components = {
 // memo: props are all primitives (content/filePath/className), so this skips the
 // expensive markdown parse + syntax-highlight whenever the content value is
 // unchanged — even if the parent message block re-renders.
+// The markdown body WITHOUT the wrapping prose div, so each parsed block (h1, p,
+// ul, …) is a direct sibling element. Callers that need to measure or annotate
+// individual blocks (e.g. the quote/comment review rail) render this so the
+// blocks become direct children of their own container; everyone else uses
+// MarkdownRenderer, which wraps these in the prose container.
+export const MarkdownBlocks = memo(function MarkdownBlocks({ content }: { content: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={entityRemarkPlugins}
+      rehypePlugins={MD_REHYPE_PLUGINS}
+      components={MD_COMPONENTS}
+    >
+      {content}
+    </ReactMarkdown>
+  );
+});
+
 export const MarkdownRenderer = memo(function MarkdownRenderer({ content, filePath = '', className = '' }: MarkdownRendererProps) {
   return (
     <div className={`prose prose-invert prose-sm max-w-none ${className}`}>
-      <ReactMarkdown
-        remarkPlugins={entityRemarkPlugins}
-        rehypePlugins={MD_REHYPE_PLUGINS}
-        components={MD_COMPONENTS}
-      >
-        {content}
-      </ReactMarkdown>
+      <MarkdownBlocks content={content} />
     </div>
   );
 });

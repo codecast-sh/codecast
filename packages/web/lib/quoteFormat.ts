@@ -70,6 +70,29 @@ export function formatPlanFeedback(feedback: string): string {
   ].join("\n");
 }
 
+// Wrap a doc's annotations as a feedback message sent to a chosen session. The
+// target agent may not have this doc in context, so we name it and tell the agent
+// how to edit it (docs live in the DB, not the filesystem), then list the quoted
+// notes. `feedback` is the compiled annotation batch; `extra` is optional free
+// text the user typed alongside.
+export function formatDocFeedback(
+  title: string,
+  docId: string,
+  feedback: string,
+  extra?: string,
+): string {
+  const body = (feedback || "").trim();
+  const note = (extra || "").trim();
+  const lines = [
+    `Feedback on document "${title || "Untitled"}" (doc \`${docId}\`).`,
+    `To apply edits use \`cast doc edit ${docId} --old "text to find" --new "replacement"\` (or \`--title\` to rename) — this document lives in the database, not the filesystem; do not use file Read/Write/Edit.`,
+    "",
+    body || "Changes requested.",
+  ];
+  if (note) lines.push("", note);
+  return lines.join("\n");
+}
+
 // Stable ordering for a batch: group by the order each message was first
 // commented on, then by block position within a message. Keeps the compiled
 // message reading top-to-bottom like the conversation.
