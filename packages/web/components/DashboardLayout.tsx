@@ -551,6 +551,11 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // this — not the library's isCollapsed() — so a toggle always acts, even if the
   // library's internal size and our store state ever drift apart.
   const sidebarAppliedRef = useRef<boolean | null>(null);
+  // True while we're imperatively collapsing/expanding the panel. The library
+  // emits a 0-size onResize during that transition; without this flag that event
+  // is misread as a user drag-to-collapse and writes sidebar_collapsed:true,
+  // instantly reverting an expand (the "toggle does nothing" bug).
+  const sidebarProgrammaticRef = useRef(false);
 
   useWatchEffect(() => {
     const ref = sidebarPanelRef.current;
@@ -562,13 +567,17 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     // On first mount the panel already renders at the right defaultSize — just
     // record the state and skip, so nothing animates or resizes on load.
     if (firstSync && ref.isCollapsed() === sidebarHidden) return;
+    sidebarProgrammaticRef.current = true;
     // Freeze content at its current pixel width so text doesn't reflow while the
     // panel width animates (only meaningful when collapsing from a real width).
     const width = el.getBoundingClientRect().width;
     if (width) el.style.setProperty("--sidebar-frozen-w", `${width}px`);
     el.classList.add("sidebar-animating");
     if (sidebarAnimTimer.current) clearTimeout(sidebarAnimTimer.current);
-    sidebarAnimTimer.current = setTimeout(() => el.classList.remove("sidebar-animating"), 320);
+    sidebarAnimTimer.current = setTimeout(() => {
+      el.classList.remove("sidebar-animating");
+      sidebarProgrammaticRef.current = false;
+    }, 360);
     // Expand by resizing to the persisted width (always ≥ minSize) instead of the
     // library's expand(): its restored size can land below the collapse/min
     // midpoint and get clamped straight back to 0, making expand a silent no-op.
@@ -864,13 +873,11 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
               collapsedSize={0}
               defaultSize={sidebarHidden ? 0 : layout.sidebar}
               onResize={(size) => {
-                // Persist a *user drag* down to 0 as a collapse. Gate on our own
-                // applied-state (we currently believe the sidebar is expanded), not
-                // just !sidebarHidden: the library also emits 0-size events while we
-                // drive an expand (panel still at 0, or re-registers mid-render).
-                // Without this guard that event writes sidebar_collapsed:true again
-                // and instantly reverts the expand — making the toggle look dead.
-                if (size.asPercentage === 0 && !sidebarHidden && sidebarAppliedRef.current === false) {
+                // Persist a *user drag* down to 0 as a collapse. Ignore the 0-size
+                // events the library emits while we're imperatively expanding —
+                // those would otherwise rewrite sidebar_collapsed:true and instantly
+                // revert the expand (the "toggle does nothing" bug).
+                if (size.asPercentage === 0 && !sidebarHidden && !sidebarProgrammaticRef.current) {
                   s.updateClientUI({ sidebar_collapsed: true });
                 }
               }}
