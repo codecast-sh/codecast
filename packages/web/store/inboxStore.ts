@@ -661,15 +661,18 @@ export function partitionOldSessions(
   focusedId?: string | null,
 ): { visibleSessions: Record<string, InboxSession>; oldCount: number } {
   if (liveInboxIds.size === 0) return { visibleSessions: sessions, oldCount: 0 };
+  // Single pass: count the old rows and collect the visible ones at once. This
+  // runs on every liveness heartbeat over the whole (never-pruned) session map,
+  // so the previous two-pass version doubled that cost for no reason. When there
+  // are no old rows / showAll is on we return the original `sessions` ref (not the
+  // rebuilt copy) to keep downstream memos referentially stable.
   let oldCount = 0;
-  for (const sess of Object.values(sessions)) {
-    if (isOldSession(sess, liveInboxIds, focusedId)) oldCount++;
-  }
-  if (showAll || oldCount === 0) return { visibleSessions: sessions, oldCount };
   const visibleSessions: Record<string, InboxSession> = {};
   for (const [id, sess] of Object.entries(sessions)) {
-    if (!isOldSession(sess, liveInboxIds, focusedId)) visibleSessions[id] = sess;
+    if (isOldSession(sess, liveInboxIds, focusedId)) oldCount++;
+    else visibleSessions[id] = sess;
   }
+  if (showAll || oldCount === 0) return { visibleSessions: sessions, oldCount };
   return { visibleSessions, oldCount };
 }
 
@@ -687,13 +690,14 @@ export const DISMISS_RECONCILE_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 // short-circuit comparator exactly (pinned → not-deferred → stub-id →
 // new → waiting-for-input → idle), so the resulting order is identical.
 function sessionSortRank(s: InboxSession): [number, number, number, number, number, number] {
+  const c = classifySession(s);
   return [
     s.is_pinned ? 0 : 1,                              // pinned first
     s.is_deferred ? 1 : 0,                            // deferred last
     isConvexId(s._id) ? 1 : 0,                        // optimistic stub ids first
     (s.message_count ?? 0) === 0 ? 0 : 1,            // brand-new (no messages) first
-    isSessionWaitingForInput(s) ? 0 : 1,             // needs-input first
-    isSessionEffectivelyIdle(s) ? 0 : 1,             // idle before active
+    c.waiting ? 0 : 1,                                // needs-input first
+    c.idle ? 0 : 1,                                   // idle before active
   ];
 }
 
@@ -887,6 +891,31 @@ export function isSessionWaitingForInput(
     !session.is_pinned;
 }
 
+// Per-session-object memo for the two costliest classification predicates.
+// categorizeSessions runs on every REAL session change (a single agent flipping
+// working↔idle re-buckets the whole list), and over a never-pruned store that
+// means re-deriving classification for thousands of unchanged rows each time.
+//
+// The win comes from object identity: the liveness overlay (syncOverlay) and
+// applySyncTable both preserve a session row's reference unless one of its fields
+// actually changed, so keying by the row object lets an unchanged session reuse
+// its prior verdict — the recompute then scales with the number of CHANGED rows,
+// not the total store. Both predicates are pure in the session object (no
+// Date.now(), no external set), which is what makes object-identity memoization
+// sound; a changed row arrives as a new object and misses the cache. WeakMap so
+// entries vanish with their session (eviction / replacement) — no leak, no stale
+// key. `waiting` here is the no-in-flight verdict; categorize layers the tiny
+// in-flight set on top (an in-flight send forces a session OUT of needs-input).
+const _classifyCache = new WeakMap<object, { idle: boolean; waiting: boolean }>();
+export function classifySession(s: InboxSession): { idle: boolean; waiting: boolean } {
+  let c = _classifyCache.get(s);
+  if (!c) {
+    c = { idle: isSessionEffectivelyIdle(s), waiting: isSessionWaitingForInput(s) };
+    _classifyCache.set(s, c);
+  }
+  return c;
+}
+
 export function getSessionRenderKey(
   session: Pick<InboxSession, "_id" | "session_id"> | null | undefined,
 ): string | null {
@@ -1034,9 +1063,11 @@ export function categorizeSessions(
     : new Set<string>([...sessionsWithQueuedMessages, ...pendingSendIds]);
   const hasPendingSend = (s: InboxSession) => pendingSendIds.has(s._id);
   // Classify waiting-for-input ONCE per session (it's the costliest predicate and
-  // was evaluated twice below — in the needsInput and working filters).
+  // was evaluated twice below — in the needsInput and working filters). The
+  // memoized verdict (classifySession) is the no-in-flight result; an in-flight
+  // send forces the session OUT of needs-input, so layer that tiny set on top.
   const waitingForInput = new Map<string, boolean>();
-  for (const s of sorted) waitingForInput.set(s._id, isSessionWaitingForInput(s, inFlight));
+  for (const s of sorted) waitingForInput.set(s._id, inFlight.has(s._id) ? false : classifySession(s).waiting);
 
   // Pinning is a manual curation gesture, so the Pinned group gets its own
   // stable order by pin time (oldest pin first, new pins append to the bottom)
@@ -1813,20 +1844,30 @@ function dedupeReplayedMessages(messages: Message[]): Message[] {
   return out;
 }
 
-// Max conversations to keep messages in the Zustand store (in-memory).
-// Others are evicted but remain in IDB for instant reload.
-const MAX_IN_MEMORY_CONVERSATIONS = 50;
+// Max conversations to keep messages for in the in-memory store. Generous on
+// purpose — instant switching across a lot of recent conversations is the point —
+// but bounded, because the store never prunes and message bodies carry inline
+// images. Evicted conversations stay in IDB and reload instantly.
+export const MAX_IN_MEMORY_CONVERSATIONS = 200;
 
-function evictInactiveMessages(draft: any, activeConvId: string) {
+export function evictInactiveMessages(draft: any, activeConvId: string) {
   const loaded = Object.keys(draft.messages);
   if (loaded.length <= MAX_IN_MEMORY_CONVERSATIONS) return;
 
   const currentConvId = draft.currentConversation?.conversationId;
-  // Never evict conversations actively visible in the UI
+  // Never evict whatever is actually on screen...
   const keep = new Set([activeConvId, currentConvId, draft.currentSessionId, draft.sidePanelSessionId, draft.viewingDismissedId].filter(Boolean));
 
-  // Never evict active inbox sessions — clicking them must be instant
-  for (const id of Object.keys(draft.sessions || {})) keep.add(id);
+  // ...nor the small set of currently-live inbox sessions, so switching to an
+  // actively-working agent is instant.
+  //
+  // We deliberately do NOT protect every id in draft.sessions. That map never
+  // prunes (a session you've opened stays forever), so keeping messages for all
+  // of them defeated this LRU entirely: every conversation ever opened was pinned
+  // in memory, letting the store balloon to multiple GB over a few days of use.
+  // The cap above is the real bound; anything past it reloads from IDB on click.
+  const live = draft.liveInboxIds;
+  if (live) for (const id of live) keep.add(id);
 
   // Evict least-recently-viewed first
   // Never evict conversations with pending messages — the user just sent something
