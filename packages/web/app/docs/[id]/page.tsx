@@ -243,6 +243,7 @@ function DocDetailContent() {
           onTitleChange={handleTitleChange}
           backHref="/docs"
           linkedObjectId={doc._id}
+          ownerConversationId={(doc as any).conversation_id}
           placeholder="Start typing or insert using /"
           cliEditedAt={(doc as any).cli_edited_at}
           contentReady={!!detail}
