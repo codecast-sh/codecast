@@ -191,6 +191,8 @@ export function useMentionQuery(scope: MentionScope = { kind: "any" }) {
           type: "session",
           label: sess.title || "Untitled Session",
           sublabel: sess.idle_summary?.slice(0, 80) || undefined,
+          // cc id (`jx…`), the 7-char prefix of _id — see ConversationView mention builder.
+          shortId: sess._id.slice(0, 7).toLowerCase(),
           messageCount: sess.message_count,
           projectPath: sess.project_path,
           status: sess.agent_status,
