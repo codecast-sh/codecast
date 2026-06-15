@@ -5798,7 +5798,7 @@ const BeatRow = memo(function BeatRow({ beat, userName, avatarUrl, showPrompt, a
           {avatarUrl
             ? <img src={avatarUrl} alt="" className="w-4 h-4 rounded-full shrink-0 mt-px" />
             : <span className="text-[10px] font-bold uppercase tracking-wider text-sol-blue shrink-0 mt-0.5">{(userName || "You").slice(0, 1)}</span>}
-          <span className="text-[12.5px] text-sol-text-secondary line-clamp-3 whitespace-pre-wrap break-words leading-snug">{prompt}</span>
+          <span className="text-[12.5px] text-sol-text-secondary whitespace-pre-wrap break-words leading-snug">{prompt}</span>
         </div>
       )}
       <div className="prose prose-invert prose-sm max-w-none text-sol-text/95 leading-relaxed">
@@ -5842,7 +5842,7 @@ function StoryTimelineView({ conversationId, userName, avatarUrl, onJump }: { co
   );
 }
 
-function ThreadSummaryView({ conversationId, onJump }: { conversationId?: Id<"conversations">; onJump?: (messageId: string, timestamp: number) => void }) {
+function ThreadSummaryView({ conversationId, userName, avatarUrl, onJump }: { conversationId?: Id<"conversations">; userName?: string; avatarUrl?: string | null; onJump?: (messageId: string, timestamp: number) => void }) {
   const { items, data, generating, run, loading } = useNarrativeLevel(conversationId, "summary");
   if (loading || (items.length === 0 && (generating || data?.stale)))
     return <div className="py-8"><div className="mb-5 flex items-center gap-2 text-[12px] text-sol-text-dim"><StorySpinner /> Distilling the session…</div><NarrativeSkeleton rows={3} /></div>;
@@ -5852,7 +5852,7 @@ function ThreadSummaryView({ conversationId, onJump }: { conversationId?: Id<"co
       <div className="relative">
         <div className="absolute left-[9px] top-2 bottom-6 w-px bg-gradient-to-b from-sol-violet/50 via-sol-border/60 to-transparent" />
         {items.map((b) => (
-          <BeatRow key={b.anchor_message_id} beat={b} showPrompt={false} accent="violet" onJump={onJump} />
+          <BeatRow key={b.anchor_message_id} beat={b} userName={userName} avatarUrl={avatarUrl} showPrompt accent="violet" onJump={onJump} />
         ))}
       </div>
       <NarrativeFooter data={data} generating={generating} run={run} unit="Summary" />
@@ -5899,7 +5899,7 @@ const CondensedToolsLine = memo(function CondensedToolsLine({ tools, expanded, o
   return (
     <button
       onClick={onToggle}
-      className="not-prose mt-1.5 flex items-center gap-2 max-w-full rounded-md border border-dashed border-sol-border/70 bg-sol-bg-alt/40 pl-2 pr-2.5 py-1 text-[11px] text-sol-text-dim hover:border-sol-cyan/40 hover:text-sol-text-secondary hover:bg-sol-bg-alt/70 transition-colors"
+      className="not-prose mt-1 flex items-center gap-2 max-w-full rounded-md border border-dashed border-sol-border/60 bg-sol-bg-alt/40 pl-2 pr-2.5 py-0.5 text-[11px] text-sol-text-dim hover:border-sol-cyan/40 hover:text-sol-text-secondary hover:bg-sol-bg-alt/70 transition-colors"
       title={expanded ? "Hide tool activity" : "Show tool activity"}
     >
       <Wrench className="w-3 h-3 shrink-0 opacity-70" />
@@ -5927,6 +5927,35 @@ const CompactTurnCard = memo(function CompactTurnCard({ preview, messageCount, t
       {bits.length > 0 && <span className="shrink-0 text-[10.5px] text-sol-text-dim/70 tabular-nums">{bits.join(" · ")}</span>}
       <ChevronDown className="w-3.5 h-3.5 shrink-0 text-sol-text-dim/60 group-hover/turn:text-sol-cyan transition-colors" />
     </button>
+  );
+});
+
+// Compact feed: a collapsed assistant turn shows the BOTTOM ~300px of its final
+// reply (the conclusion) with the top faded out behind a "Show full turn"
+// control. The clipped column is anchored to its bottom so the end stays in
+// view; expanding renders the whole turn at full density.
+const COMPACT_TAIL_HEIGHT = 300;
+const CompactCollapsedTurn = memo(function CompactCollapsedTurn({ content, onExpand }: { content: string; onExpand: () => void }) {
+  const body = stripSystemTags(content || "").trim();
+  return (
+    <div className="relative group/ct pl-8">
+      <div
+        className="relative overflow-hidden flex flex-col justify-end"
+        style={{ maxHeight: COMPACT_TAIL_HEIGHT }}
+      >
+        <div className="prose prose-invert prose-sm max-w-none text-sol-text/90">
+          <MessageMarkdown content={body} />
+        </div>
+      </div>
+      <div className="absolute -top-px left-0 right-0 h-24 pointer-events-none bg-gradient-to-b from-[var(--sol-bg)] via-[var(--sol-bg)] to-transparent" />
+      <button
+        onClick={onExpand}
+        className="not-prose absolute top-1 left-8 inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full border border-sol-border/70 bg-sol-bg-alt text-[11px] font-medium text-sol-text-dim hover:text-sol-cyan hover:border-sol-cyan/50 shadow-sm transition-colors"
+        title="Expand this turn"
+      >
+        <ChevronUp className="w-3 h-3" /> Show full turn
+      </button>
+    </div>
   );
 });
 
@@ -6117,7 +6146,7 @@ function AssistantBlockImpl({
   const hasPlanWrite = hasToolCalls && toolCalls?.some(isPlanWriteToolCall);
 
   return (
-    <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 ${onlyToolCalls ? "mb-1" : condensed ? "mb-4" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2 message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 rounded-lg p-2 -m-2 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""}`} onClick={shareSelectionMode ? (() => onToggleShareSelection?.(messageId)) : undefined} title={!shouldShowHeader ? formatRelativeTime(timestamp) : undefined}>
+    <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 ${onlyToolCalls ? "mb-0.5" : condensed ? "mb-1.5" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2 message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 rounded-lg p-2 -m-2 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""}`} onClick={shareSelectionMode ? (() => onToggleShareSelection?.(messageId)) : undefined} title={!shouldShowHeader ? formatRelativeTime(timestamp) : undefined}>
       {onCollapseTurn && (
         <button
           onClick={onCollapseTurn}
@@ -10053,6 +10082,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const turnAggregates = useMemo(() => {
     const turnKeyOf = new Map<string, string>();      // msgId -> turn key
     const firstAssistOf = new Map<string, string>();  // turn key -> first assistant msgId
+    const lastTextOf = new Map<string, string>();     // turn key -> last text-bearing msgId
     const statsOf = new Map<string, { messages: number; tools: number; preview: string }>();
     const receiptOf = new Map<string, ToolCall[]>();   // owner msgId -> folded hideable tools
     const absorbed = new Set<string>();                // msgId folded into an earlier receipt
@@ -10076,7 +10106,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       }
       turnKeyOf.set(msg._id, curKey);
       const stats = statsOf.get(curKey)!;
-      if (hasText) stats.messages += 1;
+      if (hasText) { stats.messages += 1; lastTextOf.set(curKey, msg._id); }
       stats.tools += tools.length;
       if (!stats.preview && hasText) {
         stats.preview = stripSystemTags(msg.content || "").trim().split("\n")[0].slice(0, 140);
@@ -10098,7 +10128,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         receiptOf.set(msg._id, [...hideable]);
       }
     }
-    return { turnKeyOf, firstAssistOf, statsOf, receiptOf, absorbed };
+    return { turnKeyOf, firstAssistOf, lastTextOf, statsOf, receiptOf, absorbed };
   }, [timeline]);
 
   const userMsgKindMap = useMemo(() => {
@@ -10660,6 +10690,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     if (feedDensity === "compact" && msg.role === "assistant") {
       const turnKey = turnAggregates.turnKeyOf.get(msg._id);
       if (turnKey && !expandedTurns.has(turnKey)) {
+        const lastText = turnAggregates.lastTextOf.get(turnKey);
+        if (lastText) return msg._id === lastText ? COMPACT_TAIL_HEIGHT : 0;
         return turnAggregates.firstAssistOf.get(turnKey) === msg._id ? 64 : 0;
       }
     }
@@ -11941,9 +11973,15 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       // Turn-level behavior for the condensed/compact feeds.
       const turnKey = turnAggregates.turnKeyOf.get(msg._id);
       const turnExpanded = turnKey ? expandedTurns.has(turnKey) : false;
-      // Compact: a collapsed turn shows one card on its first message; the rest
-      // of the turn renders nothing until expanded.
+      // Compact: a collapsed turn shows the bottom ~300px of its final reply with
+      // the top faded out; the rest of the turn renders nothing until expanded. A
+      // turn with no text (tool-only) falls back to a one-line card.
       if (feedDensity === "compact" && turnKey && !turnExpanded) {
+        const lastText = turnAggregates.lastTextOf.get(turnKey);
+        if (lastText) {
+          if (msg._id !== lastText) return null;
+          return <CompactCollapsedTurn key={msg._id} content={msg.content || ""} onExpand={() => toggleTurn(turnKey)} />;
+        }
         if (turnAggregates.firstAssistOf.get(turnKey) !== msg._id) return null;
         const stats = turnAggregates.statsOf.get(turnKey);
         return (
@@ -12851,7 +12889,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   onJump={jumpToStoryMessage}
                 />
               ) : (
-                <ThreadSummaryView conversationId={convexConvId} onJump={jumpToStoryMessage} />
+                <ThreadSummaryView
+                  conversationId={convexConvId}
+                  userName={conversation?.user?.name || conversation?.user?.email?.split("@")[0]}
+                  avatarUrl={conversation?.user?.avatar_url}
+                  onJump={jumpToStoryMessage}
+                />
               )}
             </div>
           ) : (
@@ -12893,7 +12936,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   }}
                 >
                   {content && (
-                    <div className={`conv-col mx-auto px-4 sm:px-5 md:px-6 ${condensedFeed ? "py-0.5" : "py-0.5 sm:py-1"} ${isNew ? "animate-message-in" : ""} ${isForkSelected ? "ring-2 ring-sol-cyan/60 bg-sol-cyan/5 rounded-lg" : ""} ${isBelowForkSelection ? "opacity-30 pointer-events-none" : ""} transition-opacity`}>
+                    <div className={`conv-col mx-auto px-4 sm:px-5 md:px-6 ${condensedFeed ? "py-px" : "py-0.5 sm:py-1"} ${isNew ? "animate-message-in" : ""} ${isForkSelected ? "ring-2 ring-sol-cyan/60 bg-sol-cyan/5 rounded-lg" : ""} ${isBelowForkSelection ? "opacity-30 pointer-events-none" : ""} transition-opacity`}>
                       {virtualItem.index === firstUnseenIndex && (
                         <div className="flex items-center gap-3 mt-1 mb-3 select-none" aria-label="New messages">
                           <div className="flex-1 h-px" style={{ background: 'linear-gradient(to right, transparent, var(--sol-orange))' }} />

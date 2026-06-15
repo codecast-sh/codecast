@@ -161,7 +161,10 @@ export const getStoryInput = internalQuery({
     if (!conv) return null;
     if (!(await canAccessConversation(ctx, args.user_id, conv))) return null;
     const rows = await fetchRows(ctx, args.conversation_id);
-    const turns = buildTurns(rows);
+    // Only stretches with real assistant work make a beat — a prompt with no
+    // reply (rapid-fire user messages, a trailing prompt) has nothing to
+    // condense and would make the model emit a refusal on an empty input.
+    const turns = buildTurns(rows).filter((t) => t.assistant.length > 0);
     return { turns, message_count: conv.message_count ?? rows.length };
   },
 });
@@ -246,7 +249,8 @@ export function parseHeadingBody(text: string): { heading?: string; body?: strin
 }
 
 const CONDENSE_RULES = `- This is a CONDENSATION of my own words, not a summary or report about me. Keep my exact voice and the tense I wrote in — my present-tense working voice ("I'll look at…", "I'm tracing…", "Turns out…", "Now I'll…"). Do NOT rewrite into past-tense retrospect. NEVER write "I was asked to", "The user", or otherwise narrate from the outside. Just say what I'm doing, shorter.
-- Match my structure and markdown: keep it as a few short paragraphs, and keep bullet lists, inline \`code\`, and **bold** where I used them. Do NOT flatten everything into one dense block of prose.
+- Be CONCISE — the tightest version that still carries the substance. Cut every redundant word; don't pad to fill space. Favor a couple of short sentences or a tight list over multiple paragraphs.
+- Keep light markdown where it earns its place (a short list, inline \`code\`, **bold**), matching how I wrote — but don't manufacture structure that wasn't there.
 - Keep the concrete specifics — files, decisions, findings, results. Cut only repetition and filler.`;
 
 const OUTPUT_FORMAT = `Output exactly: a short heading line (3-6 words, no markdown), then a blank line, then the condensed markdown body. Nothing else — no preamble, no JSON, no code fences.`;
@@ -264,6 +268,7 @@ function buildBeatPrompt(group: Turn[]): string {
   return `Below are MY OWN messages from one stretch of a coding session (I am the assistant). Rewrite them as a shorter version of themselves — my condensed notes, in my own words.
 
 ${CONDENSE_RULES}
+- Aim for roughly 40-80 words: a tight paragraph, or a few short bullets. Shorter is better.
 
 ${OUTPUT_FORMAT}
 
@@ -274,10 +279,11 @@ ${myMessages}
 
 function buildPhasePrompt(beats: Beat[]): string {
   const notes = beats.map((b) => `### ${b.heading}\n${b.body}`).join("\n\n");
-  return `Below are condensed notes from several consecutive stretches of MY coding session, in order, in my own voice. Combine them into ONE set of higher-level notes for this whole phase — still my words.
+  return `Below are already-condensed notes from several consecutive stretches of MY coding session, in order, in my own voice. Condense them AGAIN into one higher-level note for this whole phase — still my words.
 
-${CONDENSE_RULES}
-- Pitch this one level higher than the input: the throughline and the key moves of this phase, not every individual step.
+- Keep my voice and present tense ("I'm consolidating…", "I traced…"). NEVER write "I was asked to" or narrate from the outside.
+- This is a condensation of already-condensed notes — go a clear level UP: the throughline and only the few moves that matter, NOT the step-by-step detail. Name the key systems/files, drop the rest.
+- VERY tight: aim for roughly 30-50 words — a sentence or two, or 2-3 short bullets. Noticeably shorter than any single input note.
 
 ${OUTPUT_FORMAT}
 
@@ -300,7 +306,7 @@ async function mapBeats<T>(
         const idx = i + j;
         const anchor = anchorOf(group);
         try {
-          const text = await callHaiku(apiKey, buildPrompt(group), 1100);
+          const text = await callHaiku(apiKey, buildPrompt(group), 700);
           const parsed = text ? parseHeadingBody(text) : null;
           out[idx] = {
             heading: parsed?.heading?.trim() || "",
