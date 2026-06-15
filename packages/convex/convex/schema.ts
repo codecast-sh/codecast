@@ -435,26 +435,20 @@ export default defineSchema({
       filterFields: ["conversation_id"],
     }),
 
-  // Story mode: per-message first-person condensations of long assistant
-  // messages (generated once, messages are immutable) and a whole-thread
-  // narrative summary (regenerated as the conversation grows). Kept out of
-  // the conversations table so list queries don't carry multi-KB markdown.
-  message_summaries: defineTable({
-    conversation_id: v.id("conversations"),
-    message_id: v.id("messages"),
-    // Message timestamp, so the story timeline reads in order without joins.
-    timestamp: v.number(),
-    summary: v.string(),
-    model: v.optional(v.string()),
-  })
-    .index("by_conversation_timestamp", ["conversation_id", "timestamp"])
-    .index("by_message_id", ["message_id"]),
-
+  // Story & Summary densities. Both are chunked first-person retellings cached
+  // as JSON. `story` is an array of beats (each spans several turns); `summary`
+  // is a coarser array of phases built by grouping the beats. Each level tracks
+  // the message_count it was built at so the client knows when to regenerate.
+  // Kept out of the conversations table so list queries don't carry the markdown.
   conversation_summaries: defineTable({
     conversation_id: v.id("conversations"),
-    summary: v.string(),
-    // message_count at generation time — staleness signal for regeneration.
-    message_count: v.number(),
+    story: v.optional(v.string()),
+    summary: v.optional(v.string()),
+    story_message_count: v.optional(v.number()),
+    summary_message_count: v.optional(v.number()),
+    // Legacy field from the first (per-conversation single-summary) design.
+    // Tolerated so old rows validate; superseded by the per-level counts above.
+    message_count: v.optional(v.number()),
     generated_at: v.number(),
     model: v.optional(v.string()),
   }).index("by_conversation_id", ["conversation_id"]),

@@ -135,7 +135,7 @@ import { parseFileChangeSummary, parseUnifiedDiffSections } from "../lib/unified
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
-import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText } from "lucide-react";
+import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench } from "lucide-react";
 import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES, labelMentionItems } from "../hooks/useMentionQuery";
 
@@ -357,8 +357,8 @@ const renderAssistantBody = (content: string) => {
 // the post-deferral switch trace). FIFO-capped so a long-lived tab stays bounded.
 const VIRT_HEIGHT_CACHE = new Map<string, number>();
 const VIRT_HEIGHT_CACHE_MAX = 8000;
-function virtHeightKey(itemKey: string | number, density: MessageFeedDensity): string {
-  return `${itemKey}|${density}`;
+function virtHeightKey(itemKey: string | number, densityKey: string): string {
+  return `${itemKey}|${densityKey}`;
 }
 
 // View density for the conversation. The first three render the message feed
@@ -5707,156 +5707,161 @@ function linkifyMentions(text: string, map: Record<string, string>): string {
 }
 
 // ── Story & Summary densities ───────────────────────────────────────────────
-// Both render from storyMode.ts data covering the WHOLE thread (not the
-// paginated message window). Story: a dot timeline of user prompts verbatim and
-// assistant replies condensed by Haiku in the author's own voice; long replies
-// without a cached condensation render as shimmer until generation lands
-// (reactively, via the getStory subscription). Summary: one cached narrative.
+// Both render storyMode.ts's chunked retelling of the WHOLE thread (not the
+// paginated window). Story is a timeline of BEATS — each beat spans several
+// turns: the user's request at that point, then a first-person narrative of
+// what I did. Summary is the same shape one level up: a few high-level PHASES
+// grouped from the beats. Each item anchors to a real message so you can jump in.
 
-type StoryEntryData = { message_id: string; role: "user" | "assistant"; timestamp: number; kind: "verbatim" | "summary" | "pending"; text: string };
+type StoryBeat = { heading: string; body: string; anchor_prompt: string; anchor_message_id: string; anchor_timestamp: number };
 
 function StorySpinner() {
   return (
-    <svg className="w-3 h-3 animate-spin shrink-0" fill="none" viewBox="0 0 24 24">
+    <svg className="w-3.5 h-3.5 animate-spin shrink-0" fill="none" viewBox="0 0 24 24">
       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
     </svg>
   );
 }
 
-const StoryEntryRow = memo(function StoryEntryRow({ entry, userName, onJump }: { entry: StoryEntryData; userName?: string; onJump?: (messageId: string, timestamp: number) => void }) {
-  const [expanded, setExpanded] = useState(false);
-  const isUser = entry.role === "user";
-  const text = isUser ? stripSystemTags(entry.text).trim() : entry.text;
-  if (isUser && !text) return null;
+// Subscribe to a cached narrative level and auto-(re)generate when missing or
+// stale — once per (conversation, message_count) so a still-stale-mid-run query
+// doesn't re-fire. Refresh button covers later regenerations.
+function useNarrativeLevel(
+  conversationId: Id<"conversations"> | undefined,
+  level: "story" | "summary",
+) {
+  const query = level === "story" ? api.storyMode.getStory : api.storyMode.getSummary;
+  const genAction = level === "story" ? api.storyMode.generateStory : api.storyMode.generateSummary;
+  const data = useQuery(query, conversationId ? { conversation_id: conversationId } : "skip");
+  const generate = useAction(genAction);
+  const [generating, setGenerating] = useState(false);
+  const firedRef = useRef<string | null>(null);
+  const run = useCallback(() => {
+    if (!conversationId) return;
+    setGenerating(true);
+    generate({ conversation_id: conversationId }).catch(() => {}).finally(() => setGenerating(false));
+  }, [conversationId, generate]);
+  useWatchEffect(() => {
+    if (!conversationId || !data || !data.stale) return;
+    const key = `${conversationId}:${data.message_count}`;
+    if (firedRef.current === key) return;
+    firedRef.current = key;
+    run();
+  }, [conversationId, data?.stale, data?.message_count, run]);
+  const items = (data?.items ?? []) as StoryBeat[];
+  return { items, data, generating, run, loading: data === undefined };
+}
+
+function NarrativeSkeleton({ rows }: { rows: number }) {
   return (
-    <div className="relative pl-7 pb-6 group/story">
+    <div className="relative pl-8 animate-pulse">
+      <div className="absolute left-[9px] top-2 bottom-2 w-px bg-sol-border/40" />
+      {Array.from({ length: rows }).map((_, i) => (
+        <div key={i} className="relative pb-8">
+          <div className="absolute -left-[26px] top-1 w-[18px] h-[18px] rounded-full bg-sol-bg ring-2 ring-sol-border/50" />
+          <div className="h-3.5 w-40 rounded bg-sol-border/50 mb-3" />
+          <div className="space-y-1.5">
+            <div className="h-2.5 rounded bg-sol-border/40 w-full" />
+            <div className="h-2.5 rounded bg-sol-border/40 w-5/6" />
+            <div className="h-2.5 rounded bg-sol-border/40 w-2/3" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const BeatRow = memo(function BeatRow({ beat, userName, avatarUrl, showPrompt, accent, onJump }: {
+  beat: StoryBeat;
+  userName?: string;
+  avatarUrl?: string | null;
+  showPrompt: boolean;
+  accent: "blue" | "violet";
+  onJump?: (messageId: string, timestamp: number) => void;
+}) {
+  const prompt = stripSystemTags(beat.anchor_prompt || "").trim();
+  const dotColor = accent === "violet" ? "bg-sol-violet" : "bg-sol-cyan";
+  return (
+    <div className="relative pl-8 pb-8 last:pb-2 group/beat">
       <button
-        onClick={onJump ? () => onJump(entry.message_id, entry.timestamp) : undefined}
-        className={`absolute left-0 top-[2px] w-[15px] h-[15px] rounded-full flex items-center justify-center bg-sol-bg ring-1 transition-all ${isUser ? "ring-sol-blue/50" : "ring-sol-border"} hover:ring-sol-cyan`}
-        title="Jump to the full message"
+        onClick={onJump ? () => onJump(beat.anchor_message_id, beat.anchor_timestamp) : undefined}
+        className={`absolute left-0 top-0.5 w-[18px] h-[18px] rounded-full flex items-center justify-center bg-sol-bg ring-2 ring-sol-border transition-all group-hover/beat:ring-sol-cyan hover:!ring-sol-cyan hover:scale-110`}
+        title="Jump to this point in the conversation"
       >
-        <span className={`block rounded-full ${isUser ? "w-[7px] h-[7px] bg-sol-blue" : "w-[5px] h-[5px] bg-sol-text-dim/70"}`} />
+        <span className={`block w-2 h-2 rounded-full ${dotColor}`} />
       </button>
-      <div className="flex items-baseline gap-2 mb-1">
-        <span className={`text-[11px] font-semibold tracking-wide ${isUser ? "text-sol-blue" : "text-sol-text-secondary"}`}>{isUser ? (userName || "You") : "Claude"}</span>
-        <span className="text-[10px] text-sol-text-dim/60">{formatRelativeTime(entry.timestamp)}</span>
-      </div>
-      {entry.kind === "pending" ? (
-        <div className="space-y-1.5 py-0.5 animate-pulse max-w-xl">
-          <div className="h-2.5 rounded bg-sol-border/50 w-11/12" />
-          <div className="h-2.5 rounded bg-sol-border/50 w-2/3" />
-        </div>
-      ) : isUser ? (
-        <div
-          className={`text-sm text-sol-text whitespace-pre-wrap break-words ${expanded ? "" : "line-clamp-3"}`}
-          onClick={expanded ? undefined : () => setExpanded(true)}
-          role={expanded ? undefined : "button"}
-        >
-          {text}
-        </div>
-      ) : (
-        <div className="prose prose-invert prose-sm max-w-none text-sol-text">
-          <MessageMarkdown content={entry.text} />
+      {beat.heading && (
+        <h3 className="text-[15px] font-semibold text-sol-text leading-snug mb-2 mt-px tracking-tight">{beat.heading}</h3>
+      )}
+      {showPrompt && prompt && (
+        <div className="mb-3 flex items-start gap-2 rounded-lg border-l-2 border-sol-blue/70 bg-sol-blue/[0.07] pl-3 pr-3 py-2">
+          {avatarUrl
+            ? <img src={avatarUrl} alt="" className="w-4 h-4 rounded-full shrink-0 mt-px" />
+            : <span className="text-[10px] font-bold uppercase tracking-wider text-sol-blue shrink-0 mt-0.5">{(userName || "You").slice(0, 1)}</span>}
+          <span className="text-[12.5px] text-sol-text-secondary line-clamp-3 whitespace-pre-wrap break-words leading-snug">{prompt}</span>
         </div>
       )}
+      <div className="prose prose-invert prose-sm max-w-none text-sol-text/95 leading-relaxed">
+        <MessageMarkdown content={beat.body} />
+      </div>
     </div>
   );
 });
 
-function StoryTimelineView({ conversationId, userName, onJump }: { conversationId?: Id<"conversations">; userName?: string; onJump?: (messageId: string, timestamp: number) => void }) {
-  const story = useQuery(api.storyMode.getStory, conversationId ? { conversation_id: conversationId } : "skip");
-  const generate = useAction(api.storyMode.generateStorySummaries);
-  const runningRef = useRef(false);
-  const [runNonce, setRunNonce] = useState(0);
-  // Kick generation whenever uncondensed replies exist. One run is capped
-  // server-side; re-arm only after a run that actually produced summaries, so
-  // a failing backend can't loop.
-  useWatchEffect(() => {
-    void runNonce;
-    if (!conversationId || !story || story.pendingCount === 0 || runningRef.current) return;
-    runningRef.current = true;
-    generate({ conversation_id: conversationId })
-      .then((r: { generated: number } | null) => { if (r && r.generated > 0) setRunNonce(n => n + 1); })
-      .catch(() => {})
-      .finally(() => { runningRef.current = false; });
-  }, [conversationId, story?.pendingCount, runNonce]);
-
-  if (!story) return <div className="py-12 text-center text-sm text-sol-text-dim">Loading story…</div>;
-  if (story.entries.length === 0) return <div className="py-12 text-center text-sm text-sol-text-dim">Nothing to retell yet.</div>;
+function NarrativeFooter({ data, generating, run, unit }: { data: any; generating: boolean; run: () => void; unit: string }) {
   return (
-    <div className="py-5">
-      {story.pendingCount > 0 && (
-        <div className="mb-5 flex items-center gap-2 text-[11px] text-sol-text-dim">
-          <StorySpinner />
-          Condensing {story.pendingCount} long {story.pendingCount === 1 ? "reply" : "replies"}…
-        </div>
-      )}
+    <div className="mt-2 pt-3 border-t border-sol-border/40 flex items-center gap-3 text-[11px] text-sol-text-dim">
+      <span>
+        {data?.message_count ? `Through ${data.message_count} messages` : unit}
+        {data?.generated_at ? ` · ${formatRelativeTime(data.generated_at)}` : ""}
+      </span>
+      {generating ? (
+        <span className="flex items-center gap-1.5"><StorySpinner /> updating…</span>
+      ) : data?.stale ? (
+        <button onClick={run} className="text-sol-cyan/80 hover:text-sol-cyan transition-colors font-medium">Update</button>
+      ) : null}
+    </div>
+  );
+}
+
+function StoryTimelineView({ conversationId, userName, avatarUrl, onJump }: { conversationId?: Id<"conversations">; userName?: string; avatarUrl?: string | null; onJump?: (messageId: string, timestamp: number) => void }) {
+  const { items, data, generating, run, loading } = useNarrativeLevel(conversationId, "story");
+  if (loading || (items.length === 0 && (generating || data?.stale)))
+    return <div className="py-8"><div className="mb-5 flex items-center gap-2 text-[12px] text-sol-text-dim"><StorySpinner /> Composing the story of this session…</div><NarrativeSkeleton rows={4} /></div>;
+  if (items.length === 0) return <div className="py-12 text-center text-sm text-sol-text-dim">Nothing to retell yet.</div>;
+  return (
+    <div className="py-7">
       <div className="relative">
-        <div className="absolute left-[7px] top-1 bottom-1 w-px bg-sol-border/50" />
-        {story.entries.map((e: StoryEntryData) => (
-          <StoryEntryRow key={e.message_id} entry={e} userName={userName} onJump={onJump} />
+        <div className="absolute left-[9px] top-2 bottom-6 w-px bg-gradient-to-b from-sol-border via-sol-border/60 to-transparent" />
+        {items.map((b) => (
+          <BeatRow key={b.anchor_message_id} beat={b} userName={userName} avatarUrl={avatarUrl} showPrompt accent="blue" onJump={onJump} />
         ))}
       </div>
+      <NarrativeFooter data={data} generating={generating} run={run} unit="Story" />
     </div>
   );
 }
 
-function ThreadSummaryView({ conversationId }: { conversationId?: Id<"conversations"> }) {
-  const data = useQuery(api.storyMode.getThreadSummary, conversationId ? { conversation_id: conversationId } : "skip");
-  const generate = useAction(api.storyMode.generateThreadSummary);
-  const [running, setRunning] = useState(false);
-  const autoFiredRef = useRef<string | null>(null);
-  const run = useCallback(() => {
-    if (!conversationId) return;
-    setRunning(true);
-    generate({ conversation_id: conversationId }).catch(() => {}).finally(() => setRunning(false));
-  }, [conversationId, generate]);
-  // Auto-(re)generate when missing or grown stale — once per conversation per
-  // mount; the Refresh button covers the rest.
-  useWatchEffect(() => {
-    if (!conversationId || !data || !data.stale) return;
-    if (autoFiredRef.current === conversationId) return;
-    autoFiredRef.current = conversationId;
-    run();
-  }, [conversationId, data?.stale, run]);
-
-  if (!data) return <div className="py-12 text-center text-sm text-sol-text-dim">Loading…</div>;
-  if (!data.summary) {
-    return (
-      <div className="py-12 flex flex-col items-center gap-3 text-sm text-sol-text-dim">
-        <div className="flex items-center gap-2"><StorySpinner /> Writing the story of this session…</div>
-        <div className="w-full max-w-md space-y-2 animate-pulse mt-2">
-          <div className="h-2.5 rounded bg-sol-border/50 w-full" />
-          <div className="h-2.5 rounded bg-sol-border/50 w-5/6" />
-          <div className="h-2.5 rounded bg-sol-border/50 w-2/3" />
-        </div>
-      </div>
-    );
-  }
+function ThreadSummaryView({ conversationId, onJump }: { conversationId?: Id<"conversations">; onJump?: (messageId: string, timestamp: number) => void }) {
+  const { items, data, generating, run, loading } = useNarrativeLevel(conversationId, "summary");
+  if (loading || (items.length === 0 && (generating || data?.stale)))
+    return <div className="py-8"><div className="mb-5 flex items-center gap-2 text-[12px] text-sol-text-dim"><StorySpinner /> Distilling the session…</div><NarrativeSkeleton rows={3} /></div>;
+  if (items.length === 0) return <div className="py-12 text-center text-sm text-sol-text-dim">Nothing to summarize yet.</div>;
   return (
-    <div className="py-6">
-      <div className="prose prose-invert prose-sm max-w-none text-sol-text">
-        <MessageMarkdown content={data.summary} />
+    <div className="py-7">
+      <div className="relative">
+        <div className="absolute left-[9px] top-2 bottom-6 w-px bg-gradient-to-b from-sol-violet/50 via-sol-border/60 to-transparent" />
+        {items.map((b) => (
+          <BeatRow key={b.anchor_message_id} beat={b} showPrompt={false} accent="violet" onJump={onJump} />
+        ))}
       </div>
-      <div className="mt-6 pt-3 border-t border-sol-border/40 flex items-center gap-3 text-[11px] text-sol-text-dim">
-        <span>
-          As of {data.message_count} messages
-          {data.generated_at ? ` · ${formatRelativeTime(data.generated_at)}` : ""}
-        </span>
-        {running ? (
-          <span className="flex items-center gap-1.5"><StorySpinner /> updating…</span>
-        ) : data.stale ? (
-          <button onClick={run} className="text-sol-cyan/80 hover:text-sol-cyan transition-colors">Refresh</button>
-        ) : null}
-      </div>
+      <NarrativeFooter data={data} generating={generating} run={run} unit="Summary" />
     </div>
   );
 }
 
-// One subtle gray line standing in for a message's tool activity in the
-// condensed/compact densities: "read 3 files · ran 2 commands". Click to
-// swap in the full tool blocks.
+// Aggregate tool counts into a human phrase: "read 3 files · ran 2 commands".
 function describeToolGroup(rawName: string, count: number): string {
   const n = count;
   switch (rawName) {
@@ -5879,20 +5884,49 @@ function describeToolGroup(rawName: string, count: number): string {
   }
 }
 
+// One distinct receipt row standing in for a whole turn's tool activity in the
+// condensed feed: a faint inset chip, clearly NOT prose, e.g.
+// "⚙ read 3 files · ran 2 commands · 1 search". Click to reveal the real tool
+// blocks inline (the chip then reads as a hide toggle).
 const CondensedToolsLine = memo(function CondensedToolsLine({ tools, expanded, onToggle }: { tools: ToolCall[]; expanded: boolean; onToggle: () => void }) {
-  const summary = useMemo(() => {
+  const { summary, total } = useMemo(() => {
     const counts = new Map<string, number>();
     for (const tc of tools) counts.set(tc.name, (counts.get(tc.name) ?? 0) + 1);
-    return [...counts.entries()].map(([name, count]) => describeToolGroup(name, count)).join(" · ");
+    return {
+      summary: [...counts.entries()].map(([name, count]) => describeToolGroup(name, count)).join(" · "),
+      total: tools.length,
+    };
   }, [tools]);
   return (
     <button
       onClick={onToggle}
-      className="flex items-center gap-1.5 py-0.5 max-w-full text-[11px] text-sol-text-dim/70 hover:text-sol-text-dim transition-colors"
-      title={expanded ? "Hide tool details" : "Show tool details"}
+      className="not-prose mt-1.5 flex items-center gap-2 max-w-full rounded-md border border-dashed border-sol-border/70 bg-sol-bg-alt/40 pl-2 pr-2.5 py-1 text-[11px] text-sol-text-dim hover:border-sol-cyan/40 hover:text-sol-text-secondary hover:bg-sol-bg-alt/70 transition-colors"
+      title={expanded ? "Hide tool activity" : "Show tool activity"}
     >
-      <ChevronRight className={`w-3 h-3 shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`} />
-      <span className="truncate">{summary}</span>
+      <Wrench className="w-3 h-3 shrink-0 opacity-70" />
+      <span className="truncate font-medium tracking-tight">{summary}</span>
+      <ChevronRight className={`w-3 h-3 shrink-0 opacity-60 transition-transform ${expanded ? "rotate-90" : ""}`} />
+    </button>
+  );
+});
+
+// Compact feed: a whole collapsed assistant turn shown as one line — Claude
+// glyph, the first sentence of the reply, and a count of what's inside. Click
+// anywhere to expand the turn to full.
+const CompactTurnCard = memo(function CompactTurnCard({ preview, messageCount, toolCount, onExpand }: { preview: string; messageCount: number; toolCount: number; onExpand: () => void }) {
+  const bits: string[] = [];
+  if (messageCount > 1) bits.push(`${messageCount} messages`);
+  if (toolCount > 0) bits.push(`${toolCount} ${toolCount === 1 ? "tool" : "tools"}`);
+  return (
+    <button
+      onClick={onExpand}
+      className="group/turn not-prose w-full flex items-center gap-2.5 rounded-lg border border-sol-border/60 bg-sol-bg-alt/30 hover:bg-sol-bg-alt/70 hover:border-sol-cyan/40 pl-2.5 pr-3 py-2 text-left transition-colors"
+      title="Expand this turn"
+    >
+      <LogoIcon size={15} className="shrink-0 opacity-80" />
+      <span className="flex-1 min-w-0 truncate text-[13px] text-sol-text-secondary">{preview || "Worked on the task"}</span>
+      {bits.length > 0 && <span className="shrink-0 text-[10.5px] text-sol-text-dim/70 tabular-nums">{bits.join(" · ")}</span>}
+      <ChevronDown className="w-3.5 h-3.5 shrink-0 text-sol-text-dim/60 group-hover/turn:text-sol-cyan transition-colors" />
     </button>
   );
 });
@@ -5909,6 +5943,9 @@ function AssistantBlockImpl({
   messageUuid,
   conversationId,
   density = "full",
+  turnExpanded = false,
+  condensedReceipt,
+  onCollapseTurn,
   childConversationMap,
   childConversations,
   agentNameToChildMap,
@@ -5946,6 +5983,9 @@ function AssistantBlockImpl({
   messageUuid?: string;
   conversationId?: Id<"conversations">;
   density?: MessageFeedDensity;
+  turnExpanded?: boolean;
+  condensedReceipt?: { tools: ToolCall[]; expanded: boolean; onToggle: () => void };
+  onCollapseTurn?: () => void;
   childConversationMap?: Record<string, string>;
   childConversations?: Array<{ _id: string; title: string; is_subagent?: boolean; first_message_preview?: string }>;
   agentNameToChildMap?: Record<string, string>;
@@ -5973,17 +6013,12 @@ function AssistantBlockImpl({
   globalImageMap?: Record<string, ImageData>;
 }) {
   const CONTENT_MAX_HEIGHT = 800;
-  // Compact mode: long replies clip to their last ~1000px (the ending is the
-  // payoff), expandable per message. Slack beyond the cap avoids clamping
-  // content that is barely over it.
-  const COMPACT_MAX_HEIGHT = 1000;
-  const COMPACT_SLACK = 200;
 
-  const condensed = density === "condensed" || density === "compact";
-  const [toolsExpanded, setToolsExpanded] = useState(false);
-  const effectiveCondensed = condensed && !toolsExpanded;
-  const [compactExpanded, setCompactExpanded] = useState(false);
-  const [contentHeight, setContentHeight] = useState(0);
+  // Condensed feed: tools fold into a single per-turn receipt row (rendered on
+  // the turn's last message via condensedReceipt). turnExpanded reveals the
+  // real tool blocks inline. Compact-expanded turns arrive as density "full".
+  const condensed = density === "condensed";
+  const effectiveCondensed = condensed && !turnExpanded;
   const [contentExpanded, setContentExpanded] = useState(true);
   const [isOverflowing, setIsOverflowing] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
@@ -6027,7 +6062,6 @@ function AssistantBlockImpl({
     const el = contentRef.current;
     const check = () => {
       setIsOverflowing(el.scrollHeight > CONTENT_MAX_HEIGHT);
-      setContentHeight(el.scrollHeight);
     };
     check();
     const obs = new ResizeObserver(check);
@@ -6081,11 +6115,18 @@ function AssistantBlockImpl({
   }
 
   const hasPlanWrite = hasToolCalls && toolCalls?.some(isPlanWriteToolCall);
-  const hiddenToolCalls = condensed ? (toolCalls ?? []).filter(tc => !isAlwaysVisibleToolCall(tc)) : [];
-  const compactClamped = density === "compact" && !compactExpanded && contentHeight > COMPACT_MAX_HEIGHT + COMPACT_SLACK;
 
   return (
     <div id={`msg-${messageId}`} className={`group relative scroll-mt-20 ${onlyToolCalls ? "mb-1" : condensed ? "mb-4" : "mb-6"} transition-all ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2 message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 rounded-lg p-2 -m-2 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""}`} onClick={shareSelectionMode ? (() => onToggleShareSelection?.(messageId)) : undefined} title={!shouldShowHeader ? formatRelativeTime(timestamp) : undefined}>
+      {onCollapseTurn && (
+        <button
+          onClick={onCollapseTurn}
+          className="mb-2 inline-flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-cyan transition-colors not-prose"
+          title="Collapse this turn"
+        >
+          <ChevronUp className="w-3 h-3" /> Collapse turn
+        </button>
+      )}
       {(hasContent || hasToolCalls) && (
         <div className={`absolute ${hasPlanWrite && onlyToolCalls ? "-top-6" : onlyToolCalls ? "top-1" : "-top-2"} right-0 transition-opacity duration-150 flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 group-hover:opacity-100"}`}>
           {/* Respond actions (quote into your reply) live on each block's left
@@ -6165,9 +6206,6 @@ function AssistantBlockImpl({
 
         {!effectiveCondensed && hasThinking && showThinking && <ThinkingBlock content={thinking!} showContent={showThinking} />}
 
-        {condensed && hiddenToolCalls.length > 0 && (
-          <CondensedToolsLine tools={hiddenToolCalls} expanded={toolsExpanded} onToggle={() => setToolsExpanded(v => !v)} />
-        )}
         {hasToolCalls && toolCalls?.map((tc) => {
           if (effectiveCondensed && !isAlwaysVisibleToolCall(tc)) return null;
           return (tc.name === "Task" || tc.name === "Agent") ? (
@@ -6227,22 +6265,8 @@ function AssistantBlockImpl({
                 <div
                   ref={contentRef}
                   className="relative"
-                  style={compactClamped
-                    ? { maxHeight: COMPACT_MAX_HEIGHT, overflowY: 'hidden', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end' }
-                    : (!contentExpanded && isOverflowing ? { maxHeight: CONTENT_MAX_HEIGHT, overflowY: 'hidden' } : undefined)}
+                  style={!contentExpanded && isOverflowing ? { maxHeight: CONTENT_MAX_HEIGHT, overflowY: 'hidden' } : undefined}
                 >
-                  {compactClamped && (
-                    <>
-                      <div className="absolute top-0 left-0 right-0 h-16 pointer-events-none z-10 bg-gradient-to-b from-[var(--sol-bg)] to-transparent" />
-                      <button
-                        onClick={() => setCompactExpanded(true)}
-                        className="absolute top-1.5 left-1/2 -translate-x-1/2 z-20 px-2.5 py-0.5 rounded-full border border-sol-border bg-sol-bg-alt text-[11px] text-sol-text-dim hover:text-sol-cyan hover:border-sol-cyan/50 transition-colors shadow-sm flex items-center gap-1 not-prose"
-                      >
-                        <ChevronUp className="w-3 h-3" />
-                        Show earlier
-                      </button>
-                    </>
-                  )}
                   {conversationId ? (
                     <MessageReview
                       conversationId={conversationId}
@@ -6259,7 +6283,7 @@ function AssistantBlockImpl({
                 </div>
               )}
             </div>
-            {!parsedApiError && !compactClamped && (isOverflowing || !contentExpanded) && (
+            {!parsedApiError && (isOverflowing || !contentExpanded) && (
               <div className="flex items-center gap-1 mt-2">
                 <button
                   onClick={() => setFullscreen(true)}
@@ -6272,7 +6296,7 @@ function AssistantBlockImpl({
                   <span className="hidden sm:inline text-xs text-sol-text-dim">Full Screen</span>
                 </button>
                 <button
-                  onClick={() => density === "compact" && compactExpanded ? setCompactExpanded(false) : setContentExpanded(e => !e)}
+                  onClick={() => setContentExpanded(e => !e)}
                   className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-cyan transition-colors"
                   title={contentExpanded ? "Collapse" : "Expand"}
                 >
@@ -6287,6 +6311,10 @@ function AssistantBlockImpl({
               </div>
             )}
           </>
+        )}
+
+        {condensedReceipt && (
+          <CondensedToolsLine tools={condensedReceipt.tools} expanded={condensedReceipt.expanded} onToggle={condensedReceipt.onToggle} />
         )}
 
         {fullscreen && createPortal(
@@ -9280,6 +9308,23 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   // virtualizer (and its height cache keys) only ever sees the first three.
   const feedDensity: MessageFeedDensity = density === "condensed" || density === "compact" ? density : "full";
   const condensedFeed = feedDensity !== "full";
+  // Per-turn expansion for the condensed/compact feeds. In condensed it reveals
+  // a turn's hidden tool blocks; in compact it expands a collapsed turn to full.
+  // Keyed by the turn's first-assistant message id. Cleared when the feed
+  // density changes (below) and on conversation switch.
+  const [expandedTurns, setExpandedTurns] = useState<Set<string>>(new Set());
+  const toggleTurn = useCallback((turnKey: string) => {
+    setExpandedTurns(prev => {
+      const next = new Set(prev);
+      if (next.has(turnKey)) next.delete(turnKey); else next.add(turnKey);
+      return next;
+    });
+  }, []);
+  const prevFeedDensityRef = useRef(feedDensity);
+  if (prevFeedDensityRef.current !== feedDensity) {
+    prevFeedDensityRef.current = feedDensity;
+    if (expandedTurns.size) setExpandedTurns(new Set());
+  }
   const [showThinking, setShowThinking] = useState(false);
   const [diffExpanded, setDiffExpanded] = useState(false);
   const convex = useConvex();
@@ -9402,6 +9447,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     setIsNearTop(true);
     setIsNearBottom(true);
     setDensityState((conversation?._id && DENSITY_BY_CONVERSATION.get(conversation._id)) || "full");
+    setExpandedTurns(new Set());
     setShowThinking(false);
     setDiffExpanded(false);
     setHighlightedMessageId(null);
@@ -10136,6 +10182,49 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
   }, []);
 
+  // Turn aggregation for the condensed/compact feeds. A "turn" is one assistant
+  // run between user messages. For each assistant message we record its turn key
+  // (the run's first assistant message id), and per turn we accumulate the
+  // hideable tool calls (folded into one receipt row), the first/last message,
+  // and stats for the compact collapsed card. Built once per timeline; O(n).
+  const turnAggregates = useMemo(() => {
+    const turnKeyOf = new Map<string, string>();      // msgId -> turn key
+    const firstAssistOf = new Map<string, string>();  // turn key -> first assistant msgId
+    const lastAssistOf = new Map<string, string>();   // turn key -> last assistant msgId (visible)
+    const toolsOf = new Map<string, ToolCall[]>();     // turn key -> hideable tools
+    const statsOf = new Map<string, { messages: number; tools: number; preview: string }>();
+    let curKey: string | null = null;
+    for (let i = 0; i < timeline.length; i++) {
+      const item = timeline[i];
+      if (item.type !== 'message') continue;
+      const msg = item.data as Message;
+      if (msg.role === 'user') { curKey = null; continue; }
+      if (msg.role !== 'assistant') continue;
+      if (isHiddenStubMessage(msg)) continue;
+      const hasText = !!(msg.content && stripSystemTags(msg.content).trim().length > 0);
+      const tools = msg.tool_calls ?? [];
+      const hasVisible = hasText || tools.length > 0 || (!!msg.images?.length);
+      if (!hasVisible) continue;
+      if (curKey === null) {
+        curKey = msg._id;
+        toolsOf.set(curKey, []);
+        firstAssistOf.set(curKey, msg._id);
+        statsOf.set(curKey, { messages: 0, tools: 0, preview: "" });
+      }
+      turnKeyOf.set(msg._id, curKey);
+      lastAssistOf.set(curKey, msg._id);
+      const stats = statsOf.get(curKey)!;
+      if (hasText) stats.messages += 1;
+      stats.tools += tools.length;
+      if (!stats.preview && hasText) {
+        stats.preview = stripSystemTags(msg.content || "").trim().split("\n")[0].slice(0, 140);
+      }
+      const hideable = tools.filter(tc => !isAlwaysVisibleToolCall(tc));
+      if (hideable.length) toolsOf.get(curKey)!.push(...hideable);
+    }
+    return { turnKeyOf, firstAssistOf, lastAssistOf, toolsOf, statsOf };
+  }, [timeline]);
+
   const userMsgKindMap = useMemo(() => {
     const map = new Map<string, UserMessageKind>();
     for (let i = 0; i < timeline.length; i++) {
@@ -10662,6 +10751,18 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return `pr-${(item.data as any)._id}`;
   }, [timeline]);
 
+  // Height-cache discriminator. In compact a row's height depends on whether its
+  // turn is expanded, so the key must flip with that — otherwise a toggled turn
+  // reads a stale cached height and the virtualizer mis-lays the list.
+  const rowDensityKey = useCallback((index: number): string => {
+    if (feedDensity !== "compact") return feedDensity;
+    const item = timeline[index];
+    if (item?.type !== "message") return "compact";
+    const msg = item.data as Message;
+    const turnKey = turnAggregates.turnKeyOf.get(msg._id);
+    return turnKey && expandedTurns.has(turnKey) ? "compact:e" : "compact:c";
+  }, [feedDensity, timeline, turnAggregates, expandedTurns]);
+
   const estimateSize = useCallback((index: number) => {
     const item = timeline[index];
     if (!item) return 100;
@@ -10670,12 +10771,20 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     // below — accurate estimates are what stop the measure-driven reflow cascade
     // on a switch. measureElement keeps this fresh; streaming/visible rows are
     // measured live so a stale entry only ever affects an off-screen row briefly.
-    const cachedHeight = VIRT_HEIGHT_CACHE.get(virtHeightKey(getItemKey(index), feedDensity));
+    const cachedHeight = VIRT_HEIGHT_CACHE.get(virtHeightKey(getItemKey(index), rowDensityKey(index)));
     if (cachedHeight !== undefined) return cachedHeight;
 
     if (item.type === 'commit') return 80;
 
     const msg = item.data as Message;
+    // Compact: a collapsed turn is one card on the first assistant message; the
+    // rest of the turn is height 0 until expanded.
+    if (feedDensity === "compact" && msg.role === "assistant") {
+      const turnKey = turnAggregates.turnKeyOf.get(msg._id);
+      if (turnKey && !expandedTurns.has(turnKey)) {
+        return turnAggregates.firstAssistOf.get(turnKey) === msg._id ? 64 : 0;
+      }
+    }
     if (condensedFeed) {
       // Tool-only assistant rows shrink to a single receipt line (unless an
       // always-visible block like a poll or plan write keeps them tall).
@@ -10715,7 +10824,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       return 200;
     }
     return 40;
-  }, [timeline, feedDensity, condensedFeed, userMsgKindMap, commandExpansionMap, getItemKey]);
+  }, [timeline, feedDensity, condensedFeed, userMsgKindMap, commandExpansionMap, getItemKey, rowDensityKey, turnAggregates, expandedTurns]);
 
   // Mirror @tanstack/virtual-core's default measureElement, but persist every
   // measured height into VIRT_HEIGHT_CACHE keyed by the stable item key so a
@@ -10734,9 +10843,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       size = cached !== undefined ? cached : (element as HTMLElement)[horizontal ? "offsetWidth" : "offsetHeight"];
     }
     const index = instance.indexFromElement(element);
-    if (index >= 0) recordVirtHeight(virtHeightKey(instance.options.getItemKey(index), feedDensity), size);
+    if (index >= 0) recordVirtHeight(virtHeightKey(instance.options.getItemKey(index), rowDensityKey(index)), size);
     return size;
-  }, [feedDensity]);
+  }, [rowDensityKey]);
 
   const virtualizer = useVirtualizer({
     count: timeline.length,
@@ -11904,13 +12013,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         case 'compaction_summary':
           return <CompactionSummaryBlock key={msg._id} content={msg.content!} />;
         case 'plan':
-          return <PlanBlock key={msg._id} content={kind.planContent} timestamp={msg.timestamp} collapsed={density === "compact"} messageId={msg._id} conversationId={conversation?._id} onStartShareSelection={handleStartShareSelection} />;
+          return <PlanBlock key={msg._id} content={kind.planContent} timestamp={msg.timestamp} collapsed={false} messageId={msg._id} conversationId={conversation?._id} onStartShareSelection={handleStartShareSelection} />;
         case 'teammate_events':
           return <TeammateEventsBlock key={msg._id} content={msg.content || ""} timestamp={msg.timestamp} />;
         case 'normal': {
           if (!msg.content?.trim() && !msg.images?.some(img => !img.tool_use_id)) return null;
           const userName = conversation?.user?.name || conversation?.user?.email?.split("@")[0];
-          return <UserPrompt key={msg._id} content={msg.content || ""} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={density === "compact"} userName={userName} avatarUrl={conversation?.user?.avatar_url} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={handleToggleMessageSelection} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={handleBranchSwitch} activeBranchId={activeBranchId} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} mainMessageCount={msg.message_uuid ? conversation?.main_message_counts_by_fork?.[msg.message_uuid] : undefined} />;
+          return <UserPrompt key={msg._id} content={msg.content || ""} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={false} userName={userName} avatarUrl={conversation?.user?.avatar_url} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={handleToggleMessageSelection} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={handleBranchSwitch} activeBranchId={activeBranchId} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} mainMessageCount={msg.message_uuid ? conversation?.main_message_counts_by_fork?.[msg.message_uuid] : undefined} />;
         }
       }
     }
@@ -11969,6 +12078,37 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         if (checkMsg.role === "assistant") runMessageIds.push(checkMsg._id);
       }
 
+      // Turn-level behavior for the condensed/compact feeds.
+      const turnKey = turnAggregates.turnKeyOf.get(msg._id);
+      const turnExpanded = turnKey ? expandedTurns.has(turnKey) : false;
+      // Compact: a collapsed turn shows one card on its first message; the rest
+      // of the turn renders nothing until expanded.
+      if (feedDensity === "compact" && turnKey && !turnExpanded) {
+        if (turnAggregates.firstAssistOf.get(turnKey) !== msg._id) return null;
+        const stats = turnAggregates.statsOf.get(turnKey);
+        return (
+          <CompactTurnCard
+            key={msg._id}
+            preview={stats?.preview || ""}
+            messageCount={stats?.messages || 0}
+            toolCount={stats?.tools || 0}
+            onExpand={() => toggleTurn(turnKey)}
+          />
+        );
+      }
+      // An expanded compact turn renders at full density (nothing clipped); the
+      // collapse control sits on its first message.
+      const effectiveDensity: MessageFeedDensity = feedDensity === "compact" ? "full" : feedDensity;
+      const isTurnFirst = turnKey ? turnAggregates.firstAssistOf.get(turnKey) === msg._id : false;
+      const isTurnLast = turnKey ? turnAggregates.lastAssistOf.get(turnKey) === msg._id : false;
+      // Condensed: fold the turn's hideable tools into one receipt row on the
+      // turn's last message (expandable in place).
+      const receiptTools = feedDensity === "condensed" && isTurnLast ? (turnAggregates.toolsOf.get(turnKey!) ?? []) : [];
+      const condensedReceipt = receiptTools.length
+        ? { tools: receiptTools, expanded: turnExpanded, onToggle: () => toggleTurn(turnKey!) }
+        : undefined;
+      const onCollapseTurn = feedDensity === "compact" && turnKey && isTurnFirst ? () => toggleTurn(turnKey) : undefined;
+
       const relevantToolResults = msg.tool_calls
         ?.map(tc => msg.tool_results?.find((tr) => tr.tool_use_id === tc.id) || globalToolResultMap[tc.id])
         .filter((tr): tr is ToolResult => tr !== undefined);
@@ -11986,7 +12126,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           messageId={msg._id}
           messageUuid={msg.message_uuid}
           conversationId={conversation?._id}
-          density={feedDensity}
+          density={effectiveDensity}
+          turnExpanded={turnExpanded}
+          condensedReceipt={condensedReceipt}
+          onCollapseTurn={onCollapseTurn}
           childConversationMap={conversation?.child_conversation_map}
           childConversations={conversation?.child_conversations}
           agentNameToChildMap={agentNameToChildMap}
@@ -12842,10 +12985,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 <StoryTimelineView
                   conversationId={convexConvId}
                   userName={conversation?.user?.name || conversation?.user?.email?.split("@")[0]}
+                  avatarUrl={conversation?.user?.avatar_url}
                   onJump={jumpToStoryMessage}
                 />
               ) : (
-                <ThreadSummaryView conversationId={convexConvId} />
+                <ThreadSummaryView conversationId={convexConvId} onJump={jumpToStoryMessage} />
               )}
             </div>
           ) : (
