@@ -695,6 +695,13 @@ export const SessionCard = memo(function SessionCard({
     const bucket = assignment?.bucket_id ? st.buckets[assignment.bucket_id] : null;
     return bucket && !bucket.archived_at ? bucket.name : null;
   });
+  // Favorited-ness, reliable across sync channels: the per-row flag OR membership
+  // in the authoritative favorites list (toggleFavorite maintains both). Returns a
+  // boolean so the card only re-renders when ITS star flips, not on list churn.
+  const isFavorite = useInboxStore((st) =>
+    !!(st.sessions[session._id] as any)?.is_favorite ||
+    (st.favorites as any[]).some((f) => f._id === session._id),
+  );
   const displayTitle = cleanTitle(session.title || "New Session");
   const isSlashCommand = displayTitle.startsWith("/");
   const cleanedUserMsg = cleanUserMessage(session.last_user_message);
@@ -962,6 +969,16 @@ export const SessionCard = memo(function SessionCard({
         <div className={`flex items-center gap-1.5 leading-tight ${
           isActive ? "text-sm text-sol-text font-semibold" : isWorking ? "text-sm text-sol-text font-medium" : isStashed ? "text-sm text-sol-text" : isDismissed ? "text-sm text-sol-text-muted" : "text-sm text-sol-text"
         }`}>
+          {isFavorite && (
+            <button
+              onClick={(e) => { e.stopPropagation(); useInboxStore.getState().toggleFavorite(session._id); }}
+              className="flex-shrink-0 -ml-0.5 text-amber-400 hover:text-amber-300 transition-colors"
+              title="Unfavorite"
+              aria-label="Unfavorite"
+            >
+              <Star className="w-3.5 h-3.5 fill-current" />
+            </button>
+          )}
           <span className="truncate">{isSlashCommand ? <span className="font-mono text-sol-cyan">{displayTitle}</span> : displayTitle}</span>
         </div>
         {cardSummary && !session.implementation_session && (
@@ -1129,6 +1146,19 @@ export const SessionCard = memo(function SessionCard({
       )}
       {(onDismiss || onDefer || onPin) && (
         <div className={`absolute top-0 bottom-0 right-0 flex flex-col items-center justify-between py-1 opacity-0 group-hover:opacity-100 transition-opacity pl-16 pr-2 ${isActive ? '' : 'bg-gradient-to-r from-transparent via-sol-bg-alt/60 to-sol-bg-alt'}`} style={isActive ? { background: 'linear-gradient(to right, transparent, color-mix(in srgb, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 60%, transparent), color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)))' } : undefined}>
+          <TooltipProvider delayDuration={300}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={(e) => { e.stopPropagation(); useInboxStore.getState().toggleFavorite(session._id); }}
+                  className={`p-1 rounded transition-colors ${isFavorite ? 'text-amber-400' : 'text-sol-text-dim hover:text-amber-400'}`}
+                >
+                  <Star className="w-3.5 h-3.5" fill={isFavorite ? "currentColor" : "none"} />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="left">{isFavorite ? "Unfavorite" : "Favorite"}</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
           {onPin && (
             <TooltipProvider delayDuration={300}>
               <Tooltip>
@@ -2027,7 +2057,21 @@ export function SessionListPanel({
             icon), then a divider, then independent show/hide toggles
             (subagents, old). Ctrl+, still cycles view modes. The favorites view
             is always project-grouped, so the pill is hidden there. */}
-        {!favoritesView && <div className="flex items-center flex-shrink-0 ml-auto rounded-md border border-sol-border/40 bg-sol-bg/70 p-px">
+        <div className="flex items-center flex-shrink-0 ml-auto gap-1.5">
+          {/* Favorites is a MODE of this panel — toggled here on the right, not
+              from the far-left nav. Amber when active. */}
+          <button
+            onClick={() => useInboxStore.getState().setShowFavorites(!favoritesView)}
+            title={favoritesView ? "Back to inbox" : "Show favorites"}
+            className={`flex items-center px-1.5 py-[3px] rounded-md border transition-colors ${
+              favoritesView
+                ? "border-amber-400/40 bg-amber-400/15 text-amber-400"
+                : "border-sol-border/40 bg-sol-bg/70 text-sol-text-dim/70 hover:text-amber-400"
+            }`}
+          >
+            <Star className="w-3.5 h-3.5" fill={favoritesView ? "currentColor" : "none"} />
+          </button>
+          {!favoritesView && <div className="flex items-center flex-shrink-0 rounded-md border border-sol-border/40 bg-sol-bg/70 p-px">
           {(() => {
             const viewModeOptions = [
               { key: "grouped", label: "By status", icon: List },
@@ -2091,6 +2135,7 @@ export function SessionListPanel({
             </button>
           )}
         </div>}
+        </div>
       </div>
       <div ref={scrollContainerRef} className="flex-1 overflow-y-auto scrollbar-auto">
         {favoritesView ? (
