@@ -341,6 +341,12 @@ export interface GenericListViewProps<T> {
   onItemEdit?: (item: T, newTitle: string) => void;
 
   getSearchText?: (item: T) => string;
+  /** Corpus to search when a query is typed, overriding the tab-filtered
+   *  groups/flatItems. Lets a search span items hidden by the active browse tab
+   *  (e.g. a docs search finding a doc whose type isn't the selected tab) instead
+   *  of silently returning "No results". When omitted, search stays scoped to the
+   *  visible groups/flatItems (unchanged behavior). */
+  searchAllItems?: T[];
   /** When set, a subtle "syncing N" whisper renders next to the title while the
    *  reconcile crawl for this scope ("tasks" | "docs") is still streaming in. */
   syncScope?: string;
@@ -382,6 +388,7 @@ export function GenericListView<T>({
   renderPreview,
   onItemEdit,
   getSearchText,
+  searchAllItems,
   syncScope,
   headerExtra,
   displayExtra,
@@ -420,21 +427,28 @@ export function GenericListView<T>({
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
 
+  const searching = !!searchQuery && !!getSearchText;
+  // A search with a `searchAllItems` corpus spans the whole set (ignoring the
+  // active browse tab / grouping) and renders as a flat result list.
+  const crossScopeSearch = searching && !!searchAllItems;
+
   const displayGroups = useMemo((): ListGroup<T>[] | null => {
     if (!groups) return null;
-    if (!searchQuery || !getSearchText) return groups;
+    if (!searching) return groups;
+    if (crossScopeSearch) return null; // flat results from searchAllItems instead
     const q = searchQuery.toLowerCase();
     return groups
-      .map(g => ({ ...g, items: g.items.filter(item => getSearchText(item).toLowerCase().includes(q)) }))
+      .map(g => ({ ...g, items: g.items.filter(item => getSearchText!(item).toLowerCase().includes(q)) }))
       .filter(g => g.items.length > 0);
-  }, [groups, searchQuery, getSearchText]);
+  }, [groups, searching, crossScopeSearch, searchQuery, getSearchText]);
 
   const displayFlatItems = useMemo(() => {
-    if (groups) return flatItems;
-    if (!searchQuery || !getSearchText) return flatItems;
+    if (!searching) return flatItems;
     const q = searchQuery.toLowerCase();
-    return flatItems.filter(item => getSearchText(item).toLowerCase().includes(q));
-  }, [groups, flatItems, searchQuery, getSearchText]);
+    if (crossScopeSearch) return searchAllItems!.filter(item => getSearchText!(item).toLowerCase().includes(q));
+    if (groups) return flatItems; // grouped search handled in displayGroups
+    return flatItems.filter(item => getSearchText!(item).toLowerCase().includes(q));
+  }, [groups, flatItems, searching, crossScopeSearch, searchAllItems, searchQuery, getSearchText]);
 
   const visibleItems = useMemo(() => {
     if (displayGroups) {

@@ -195,6 +195,17 @@ export function DocListContent() {
     return list;
   }, [docsList, docType, labelFilter, projectFilter]);
 
+  // Search corpus that ignores the active type TAB (but keeps explicit source/
+  // project/label scope), so typing a query finds a doc whose type isn't the
+  // selected tab instead of returning a confusing "No results". The type tab
+  // still scopes plain browsing.
+  const searchScopeDocs = useMemo(() => {
+    let list = sourceFilteredDocs;
+    if (labelFilter) list = list.filter((d) => d.labels?.includes(labelFilter));
+    if (projectFilter) list = list.filter((d) => docMatchesProjectFilter(d, projectFilter));
+    return [...list].sort((a, b) => b.updated_at - a.updated_at);
+  }, [sourceFilteredDocs, labelFilter, projectFilter]);
+
   useEffect(() => {
     if (
       sourceFilter === "human" &&
@@ -366,6 +377,7 @@ export function DocListContent() {
       getItemId={(d) => d._id}
       getItemRoute={(d) => `/docs/${d._id}`}
       getSearchText={(d) => (d as any).display_title || d.title || ""}
+      searchAllItems={searchScopeDocs}
       emptyIcon={<FileText className="w-8 h-8 opacity-30" />}
       emptyMessage="No documents found"
       onCreate={async () => {
