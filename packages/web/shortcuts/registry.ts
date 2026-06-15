@@ -32,8 +32,6 @@ export type ShortcutAction =
   | 'find.toggle'
   | 'conv.toggleDiff'
   | 'conv.toggleTree'
-  | 'conv.branchPrev'
-  | 'conv.branchNext'
   | 'conv.copyLink'
   | 'conv.collapseAll'
   | 'conv.toggleThinking'
@@ -162,14 +160,11 @@ export const SHORTCUTS: ShortcutDef[] = [
 
   { key: 'd', action: 'conv.toggleDiff', when: 'conversation', description: 'Toggle diff panel' },
   { key: 't', action: 'conv.toggleTree', when: 'conversation', description: 'Toggle branch map' },
-  // Cmd/Ctrl+B opens the branch map too, and unlike `t` it fires while the
-  // composer is focused — the map lives above the message input, so you reach
-  // for it mid-typing. ('B' for branches.)
-  { key: 'ctrl+b', mac: 'meta+b', action: 'conv.toggleTree', when: 'conversation', skipInputCheck: true, description: 'Toggle branch map' },
-  // Single-key branch hopping through the conversation's fork family, in the
-  // same depth-first order the branch map shows. Wraps at the ends.
-  { key: '[', action: 'conv.branchPrev', when: 'conversation', description: 'Previous branch' },
-  { key: ']', action: 'conv.branchNext', when: 'conversation', description: 'Next branch' },
+  // Ctrl+B opens the branch map, and unlike `t` it fires while the composer is
+  // focused — the map lives above the message input, so you reach for it
+  // mid-typing. ('B' for branches.) Ctrl (not Cmd) for consistency with the
+  // app's other Ctrl chords.
+  { key: 'ctrl+b', action: 'conv.toggleTree', when: 'conversation', skipInputCheck: true, description: 'Toggle branch map' },
   { key: 'h', action: 'conv.toggleThinking', when: 'conversation', description: 'Toggle thinking blocks' },
   { key: 'f', action: 'conv.favorite', when: 'conversation', description: 'Toggle favorite' },
   { key: 'r', action: 'conv.review', when: 'conversation', description: 'Review / comment on a reply' },

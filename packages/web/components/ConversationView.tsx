@@ -128,8 +128,7 @@ import { useForkNavigationStore } from "../store/forkNavigationStore";
 import { buildCompositeTimeline } from "../lib/compositeTimeline";
 import { useMessageSelection } from "../hooks/useMessageSelection";
 import { BranchSelector } from "./BranchSelector";
-import { ForkTreePopover, BranchHopHud, type BranchHop } from "./ForkTreePanel";
-import { getForkFamilyOrder, branchDisplayLabel } from "../hooks/useForkTree";
+import { ForkTreePopover } from "./ForkTreePanel";
 import { getApplyPatchInput, parseApplyPatchSections } from "../lib/applyPatchParser";
 import { parseFileChangeSummary, parseUnifiedDiffSections } from "../lib/unifiedDiffParser";
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
@@ -9972,6 +9971,61 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     await doFork(messageUuid);
   }, [doFork]);
 
+  // Fork from an ARBITRARY branch — the branch map's "fork higher" drill lets you
+  // pick a message in the current branch OR any ancestor/sibling. For the current
+  // conversation we reuse the rich, edit-the-prompt path (handleForkFromMessage);
+  // for another branch the server copies that branch's history up to the chosen
+  // message and the stub fills in as the copy lands.
+  const doForkFrom = useCallback(async (branchId: string, messageUuid: string) => {
+    if (branchId === conversation?._id?.toString()) return doFork(messageUuid);
+    const store = useInboxStore.getState();
+    const src = store.sessions[branchId];
+    const forkSessionId = (typeof crypto !== "undefined" && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+          const r = (Math.random() * 16) | 0;
+          return (c === "x" ? r : (r & 0x3) | 0x8).toString(16);
+        });
+    const now = Date.now();
+    const forkTitle = src?.title ? `Fork: ${src.title}` : "Fork";
+    store.syncRecord("conversations", forkSessionId, {
+      _id: forkSessionId,
+      session_id: forkSessionId,
+      user_id: currentUser?._id?.toString() ?? "",
+      title: forkTitle,
+      agent_type: src?.agent_type,
+      project_path: src?.project_path ?? undefined,
+      git_root: src?.git_root ?? undefined,
+      started_at: now,
+      updated_at: now,
+      status: "active",
+      forked_from: branchId,
+      parent_message_uuid: messageUuid,
+      fork_status: "copying",
+    });
+    seedForkSession(forkSessionId, {
+      session_id: forkSessionId,
+      title: forkTitle,
+      started_at: now,
+      forked_from: branchId,
+      parent_message_uuid: messageUuid,
+      agent_type: src?.agent_type,
+    } as any);
+    const ready = convCommand(branchId, "forkFromMessage", { message_uuid: messageUuid, session_id: forkSessionId })
+      .then((result: any) => { resolveForkSessionId(forkSessionId, result.conversation_id); return result.conversation_id as string; });
+    store.trackSessionCreate(forkSessionId, ready);
+    ready.catch((err: any) => {
+      useInboxStore.getState().discardForkStub(forkSessionId, branchId);
+      toast.error(err instanceof Error ? err.message : "Failed to fork");
+    });
+    return { forkSessionId, conversationId: forkSessionId, ready };
+  }, [conversation?._id, doFork, currentUser?._id, seedForkSession, convCommand, resolveForkSessionId]);
+
+  const handleForkFromBranch = useCallback((branchId: string, messageUuid: string, _content: string) => {
+    if (branchId === conversation?._id?.toString()) { handleForkFromMessage(messageUuid); return; }
+    doForkFrom(branchId, messageUuid);
+  }, [conversation?._id, handleForkFromMessage, doForkFrom]);
+
   const handleForkReply = useCallback(async (content: string) => {
     if (!conversation) return;
     const msgs = conversation.messages || [];
@@ -10174,6 +10228,16 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     setNavigatorOpen(false);
     handleForkFromMessage(msg.message_uuid);
   }, [handleForkFromMessage]);
+
+  // Branch map rewind (Enter in the drilled current-branch messages): same as
+  // the navigator's rewind — fork at that point and rewind the live session.
+  const handleRewindCurrent = useCallback((messageUuid: string, indexFromEnd: number) => {
+    if (!conversation) return;
+    handleForkFromMessage(messageUuid);
+    if (effectiveIsOwner && conversation.status === "active" && convexConvId) {
+      convCommand(convexConvId, "rewindSession", { steps_back: indexFromEnd + 1 });
+    }
+  }, [handleForkFromMessage, conversation, effectiveIsOwner, convCommand, convexConvId]);
 
   const handleNavigatorClose = useCallback((selectedMsg?: { content: string }) => {
     setNavigatorOpen(false);
@@ -11030,30 +11094,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     navigateToSession(convId);
   }, [conversation?._id, navigateToSession]);
 
-  // Single-key branch hopping ([ / ]): walk the fork family in the same DFS
-  // order the branch map shows, wrapping at the ends. The family is computed
-  // on demand from a store snapshot (getForkFamilyOrder) — no subscriptions,
-  // so heartbeat churn never re-renders this component for it. A transient
-  // HUD pill confirms where you landed.
-  const [branchHop, setBranchHop] = useState<BranchHop | null>(null);
-  const handleBranchHopDone = useCallback(() => setBranchHop(null), []);
-  const hopBranch = useCallback((dir: 1 | -1) => {
-    if (!conversation?._id) return false;
-    const flat = getForkFamilyOrder(conversation);
-    if (flat.length < 2) return false;
-    const curId = conversation._id.toString();
-    const idx = flat.findIndex((n) => n.id === curId);
-    const nextIdx = ((idx < 0 ? 0 : idx) + dir + flat.length) % flat.length;
-    const next = flat[nextIdx];
-    if (!next || next.id === curId) return false;
-    navigateToSession(next.id);
-    setBranchHop({ id: next.id, title: branchDisplayLabel(next), index: nextIdx + 1, total: flat.length, live: next.live, ts: Date.now() });
-    return true;
-  }, [conversation, navigateToSession]);
-
   // Open/close the branch map. Shared by the header icon, the menu item, and
-  // the Cmd/Ctrl+B shortcut. Only meaningful when the conversation actually has
-  // a fork family, and suppressed while a message-fork selection is active.
+  // the Ctrl+B shortcut. Only meaningful when the conversation actually has a
+  // fork family, and suppressed while a message-fork selection is active.
   const hasForkFamily =
     (conversation?.fork_children && conversation.fork_children.length > 0) || !!conversation?.forked_from;
   const toggleMap = useCallback(() => {
@@ -11063,8 +11106,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   }, [isOwner, hasForkFamily, forkSelectionIdx]);
 
   useShortcutContext('conversation');
-  useShortcutAction('conv.branchPrev', useCallback(() => hopBranch(-1), [hopBranch]));
-  useShortcutAction('conv.branchNext', useCallback(() => hopBranch(1), [hopBranch]));
   useShortcutAction('conv.toggleTree', useCallback(() => {
     if (!isOwner || !hasForkFamily || forkSelectionIdx !== null) return false;
     setTreePopoverOpen((o) => !o);
@@ -13105,6 +13146,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         <ForkTreePopover
           conversation={conversation}
           conversationId={conversation._id.toString()}
+          currentBranchId={conversation._id.toString()}
           open={treePopoverOpen}
           onClose={() => setTreePopoverOpen(false)}
           // Anchor above the message input (palette-style); fall back to the
@@ -13112,10 +13154,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           anchorEl={messageInputRef.current ?? treeChipRef.current}
           placement={messageInputRef.current ? "above" : "below"}
           onSwitchToConversation={handleTreeSwitchConversation}
+          onForkFromBranch={handleForkFromBranch}
+          onRewindCurrent={handleRewindCurrent}
         />
       )}
 
-      <BranchHopHud hop={branchHop} onDone={handleBranchHopDone} />
       </div>
 
       {showMessageInput && conversation && !(pendingPermissions && pendingPermissions.length > 0) && (
