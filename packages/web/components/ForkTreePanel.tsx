@@ -524,81 +524,44 @@ function ForkTreeContent({
   );
 }
 
-type PopPos = { left: number; width: number; maxHeight: number; above: boolean; top?: number; bottom?: number };
 
-function computePopoverPos(anchorEl: HTMLElement): PopPos {
-  // Sit directly on top of the anchor (the message input), matching its exact
-  // width and connecting tight to its top edge. -1px so the popover's bottom
-  // border overlaps the input's top border into a single seam.
-  const SEAM = 1;
-  const MARGIN = 12;
-  const rect = anchorEl.getBoundingClientRect();
-  const roomAbove = rect.top - MARGIN;
-  const roomBelow = window.innerHeight - rect.bottom - MARGIN;
-  // Prefer above (the input is at the bottom); flip below only if there's no
-  // room above (e.g. anchored to a top-of-screen fallback element).
-  const above = roomAbove >= 220 || roomAbove >= roomBelow;
-  // Match the anchor's width (the message input), with a floor so the tiny
-  // header-icon fallback doesn't render a sliver. Clamp on-screen.
-  const width = Math.max(rect.width, 320);
-  const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
-  const maxHeight = Math.min(560, Math.max(220, above ? roomAbove : roomBelow));
-  return above
-    ? { left, width, maxHeight, above, bottom: window.innerHeight - rect.top - SEAM }
-    : { left, width, maxHeight, above, top: rect.bottom - SEAM };
-}
-
-export function ForkTreePopover({
-  conversation, conversationId, currentBranchId, open, initialDrillId, onClose, getAnchor, onSwitchToConversation, onForkFromBranch, onRewindCurrent,
+// The map's visual box: header + content. Rendered in-flow above the message
+// input (sharing its conv-col container, so widths match and it reads as one
+// piece with the composer), or in a small fixed fallback when there's no input.
+export function ForkMapBox({
+  conversation, conversationId, currentBranchId, open, initialDrillId, className, getIgnore, onClose,
+  onSwitchToConversation, onForkFromBranch, onRewindCurrent,
 }: {
   conversation: ForkConversationLike;
   conversationId: string;
   currentBranchId: string;
   open: boolean;
   initialDrillId?: string | null;
+  className?: string;
+  getIgnore?: () => HTMLElement | null;
   onClose: () => void;
-  // Resolved inside the position effect (post-commit), so a ref that's still
-  // null during render — the message input wrapper — is found correctly.
-  getAnchor: () => HTMLElement | null;
   onSwitchToConversation: (convId: string) => void;
   onForkFromBranch: (branchId: string, messageUuid: string, content: string) => void;
   onRewindCurrent: (messageUuid: string, indexFromEnd: number) => void;
 }) {
-  const popRef = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState<PopPos | null>(null);
-
-  useWatchEffect(() => {
-    if (!open) { setPos(null); return; }
-    const update = () => {
-      const el = getAnchor();
-      setPos(el ? computePopoverPos(el) : null);
-    };
-    update();
-    window.addEventListener("resize", update);
-    return () => window.removeEventListener("resize", update);
-  }, [open, getAnchor]);
-
+  const boxRef = useRef<HTMLDivElement>(null);
+  // Close on a mousedown outside the box (and outside the toggle control, so a
+  // click on the header icon toggles rather than close-then-reopen).
   useWatchEffect(() => {
     if (!open) return;
-    const handleClick = (e: MouseEvent) => {
+    const handle = (e: MouseEvent) => {
       const t = e.target as Node;
-      if (popRef.current?.contains(t)) return;
-      if (getAnchor()?.contains(t)) return;
+      if (boxRef.current?.contains(t)) return;
+      if (getIgnore?.()?.contains(t)) return;
       onClose();
     };
-    const raf = requestAnimationFrame(() => document.addEventListener("mousedown", handleClick));
-    return () => { cancelAnimationFrame(raf); document.removeEventListener("mousedown", handleClick); };
-  }, [open, onClose, getAnchor]);
-
-  if (!open || !pos) return null;
-
-  return createPortal(
+    const raf = requestAnimationFrame(() => document.addEventListener("mousedown", handle));
+    return () => { cancelAnimationFrame(raf); document.removeEventListener("mousedown", handle); };
+  }, [open, onClose, getIgnore]);
+  return (
     <div
-      ref={popRef}
-      style={{ position: "fixed", left: pos.left, width: pos.width, maxHeight: pos.maxHeight, ...(pos.above ? { bottom: pos.bottom } : { top: pos.top }) }}
-      // Round only the corners away from the input so it reads as one piece
-      // connected to the composer's top edge.
-      className={`z-[9999] flex flex-col ${pos.above ? "rounded-t-lg" : "rounded-b-lg"} bg-sol-bg border border-sol-border shadow-2xl ring-1 ring-black/5 animate-in fade-in duration-150 ${pos.above ? "slide-in-from-bottom-1" : "slide-in-from-top-1"}`}
+      ref={boxRef}
+      className={`flex flex-col bg-sol-bg border border-sol-border shadow-2xl ring-1 ring-black/5 overflow-hidden ${className || ""}`}
     >
       <div className="flex items-center justify-between px-3 py-2 border-b border-sol-border shrink-0">
         <span className="text-[10px] text-sol-text-dim font-medium uppercase tracking-wider inline-flex items-center gap-1.5">
@@ -621,6 +584,27 @@ export function ForkTreePopover({
         onForkFromBranch={onForkFromBranch}
         onRewindCurrent={onRewindCurrent}
       />
+    </div>
+  );
+}
+
+// Fallback for when there's no composer to anchor to (e.g. an owner whose input
+// is replaced by a permission prompt). Fixed, centered near the bottom.
+export function ForkMapFallback(props: {
+  conversation: ForkConversationLike;
+  conversationId: string;
+  currentBranchId: string;
+  open: boolean;
+  initialDrillId?: string | null;
+  onClose: () => void;
+  onSwitchToConversation: (convId: string) => void;
+  onForkFromBranch: (branchId: string, messageUuid: string, content: string) => void;
+  onRewindCurrent: (messageUuid: string, indexFromEnd: number) => void;
+}) {
+  if (!props.open) return null;
+  return createPortal(
+    <div className="fixed left-1/2 -translate-x-1/2 bottom-4 z-[9999] w-[min(560px,calc(100vw-32px))] animate-in fade-in slide-in-from-bottom-2 duration-150">
+      <ForkMapBox {...props} className="rounded-lg max-h-[60vh]" />
     </div>,
     document.body,
   );

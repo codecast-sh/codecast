@@ -128,7 +128,7 @@ import { useForkNavigationStore } from "../store/forkNavigationStore";
 import { buildCompositeTimeline } from "../lib/compositeTimeline";
 import { useMessageSelection } from "../hooks/useMessageSelection";
 import { BranchSelector } from "./BranchSelector";
-import { ForkTreePopover } from "./ForkTreePanel";
+import { ForkMapBox, ForkMapFallback } from "./ForkTreePanel";
 import { getApplyPatchInput, parseApplyPatchSections } from "../lib/applyPatchParser";
 import { parseFileChangeSummary, parseUnifiedDiffSections } from "../lib/unifiedDiffParser";
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
@@ -11018,14 +11018,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     setTreePopoverOpen((o) => !o);
   }, [isOwner, hasForkFamily, forkSelectionIdx]);
 
-  // Stable anchor resolver for the branch-map popover: the message-input wrapper
-  // (so the map matches its width and sits on its top edge), or the header icon
-  // when the composer is hidden. Read lazily so the ref is populated.
-  const getMapAnchor = useCallback(
-    () => messageInputRef.current ?? treeChipRef.current,
-    [],
-  );
-
   useShortcutContext('conversation');
   useShortcutAction('conv.toggleTree', useCallback(() => {
     if (!isOwner || !hasForkFamily || forkSelectionIdx !== null) return false;
@@ -13077,18 +13069,18 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         </div>
       </div>
 
-      {conversation && (
-        <ForkTreePopover
+      {/* The branch map renders in-flow above the message input (see the
+          composer block below) so it matches the input's width and reads as one
+          piece. This fixed fallback only covers the rare case where there is no
+          composer to anchor to (owner with a permission prompt instead). */}
+      {conversation && treePopoverOpen && !(showMessageInput && !(pendingPermissions && pendingPermissions.length > 0)) && (
+        <ForkMapFallback
           conversation={conversation}
           conversationId={conversation._id.toString()}
           currentBranchId={conversation._id.toString()}
           open={treePopoverOpen}
-          onClose={() => setTreePopoverOpen(false)}
-          // Sit on top of the message input at its exact width; fall back to the
-          // header icon when the composer is hidden (guest / permission gate).
-          // Resolved lazily in the popover effect so the ref is non-null.
-          getAnchor={getMapAnchor}
           initialDrillId={mapDrill}
+          onClose={() => setTreePopoverOpen(false)}
           onSwitchToConversation={handleTreeSwitchConversation}
           onForkFromBranch={handleForkFromBranch}
           onRewindCurrent={handleRewindCurrent}
@@ -13099,6 +13091,29 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
       {showMessageInput && conversation && !(pendingPermissions && pendingPermissions.length > 0) && (
         <div ref={messageInputRef} className="relative">
+          {/* Branch map, in-flow directly above the composer. Same conv-col
+              column + horizontal padding as the input form, so it matches the
+              input box width exactly and connects to its top edge (bottom of
+              the box overlaps the input's top border via the calc offset). */}
+          {treePopoverOpen && (
+            <div className="absolute left-0 right-0 z-50" style={{ bottom: "calc(100% - 7px)" }}>
+              <div className="mx-auto conv-col px-2 sm:px-4">
+                <ForkMapBox
+                  open
+                  className="rounded-t-2xl border-b-0 max-h-[55vh]"
+                  getIgnore={() => treeChipRef.current}
+                  conversation={conversation}
+                  conversationId={conversation._id.toString()}
+                  currentBranchId={conversation._id.toString()}
+                  initialDrillId={mapDrill}
+                  onClose={() => setTreePopoverOpen(false)}
+                  onSwitchToConversation={handleTreeSwitchConversation}
+                  onForkFromBranch={handleForkFromBranch}
+                  onRewindCurrent={handleRewindCurrent}
+                />
+              </div>
+            </div>
+          )}
           {!effectiveIsOwner ? (
             <NonOwnerMessageInput
               conversation={conversation}
