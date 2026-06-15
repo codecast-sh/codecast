@@ -648,6 +648,7 @@ export const SessionCard = memo(function SessionCard({
   globalIndex,
   onSelect,
   onDismiss,
+  onStash,
   onDefer,
   onPin,
   onRestore,
@@ -662,6 +663,7 @@ export const SessionCard = memo(function SessionCard({
   globalIndex: number;
   onSelect: (session: InboxSession) => void;
   onDismiss?: (id: string) => void;
+  onStash?: (id: string) => void;
   onDefer?: (id: string) => void;
   onPin?: (id: string) => void;
   onRestore?: (id: string) => void;
@@ -969,16 +971,22 @@ export const SessionCard = memo(function SessionCard({
         <div className={`flex items-center gap-1.5 leading-tight ${
           isActive ? "text-sm text-sol-text font-semibold" : isWorking ? "text-sm text-sol-text font-medium" : isStashed ? "text-sm text-sol-text" : isDismissed ? "text-sm text-sol-text-muted" : "text-sm text-sol-text"
         }`}>
-          {isFavorite && (
-            <button
-              onClick={(e) => { e.stopPropagation(); useInboxStore.getState().toggleFavorite(session._id); }}
-              className="flex-shrink-0 -ml-0.5 text-amber-400 hover:text-amber-300 transition-colors"
-              title="Unfavorite"
-              aria-label="Unfavorite"
-            >
-              <Star className="w-3.5 h-3.5 fill-current" />
-            </button>
-          )}
+          {/* The favorite affordance lives here, on the name (not in the action
+              cluster): solid amber when favorited, a faint star that appears on
+              row-hover when not (click to favorite). Always rendered so the slot
+              is reserved and the title never shifts. Toggle also via the `f` key. */}
+          <button
+            onClick={(e) => { e.stopPropagation(); useInboxStore.getState().toggleFavorite(session._id); }}
+            className={`flex-shrink-0 -ml-0.5 transition-all ${
+              isFavorite
+                ? "text-amber-400 hover:text-amber-300"
+                : "text-sol-text-dim/40 opacity-0 group-hover:opacity-100 hover:text-amber-400"
+            }`}
+            title={isFavorite ? "Unfavorite (F)" : "Favorite (F)"}
+            aria-label={isFavorite ? "Unfavorite" : "Favorite"}
+          >
+            <Star className="w-3.5 h-3.5" fill={isFavorite ? "currentColor" : "none"} />
+          </button>
           <span className="truncate">{isSlashCommand ? <span className="font-mono text-sol-cyan">{displayTitle}</span> : displayTitle}</span>
         </div>
         {cardSummary && !session.implementation_session && (
@@ -1144,21 +1152,27 @@ export const SessionCard = memo(function SessionCard({
           </button>
         </div>
       )}
-      {(onDismiss || onDefer || onPin) && (
+      {(onDismiss || onStash || onDefer || onPin) && (
         <div className={`absolute top-0 bottom-0 right-0 flex flex-col items-center justify-between py-1 opacity-0 group-hover:opacity-100 transition-opacity pl-16 pr-2 ${isActive ? '' : 'bg-gradient-to-r from-transparent via-sol-bg-alt/60 to-sol-bg-alt'}`} style={isActive ? { background: 'linear-gradient(to right, transparent, color-mix(in srgb, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 60%, transparent), color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)))' } : undefined}>
-          <TooltipProvider delayDuration={300}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  onClick={(e) => { e.stopPropagation(); useInboxStore.getState().toggleFavorite(session._id); }}
-                  className={`p-1 rounded transition-colors ${isFavorite ? 'text-amber-400' : 'text-sol-text-dim hover:text-amber-400'}`}
-                >
-                  <Star className="w-3.5 h-3.5" fill={isFavorite ? "currentColor" : "none"} />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="left">{isFavorite ? "Unfavorite" : "Favorite"}</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          {/* Dismiss — the PRIMARY remove: done with it, clears to the Dismissed
+              group and stops the (usually idle) agent. Undoable. */}
+          {onDismiss && (
+            <TooltipProvider delayDuration={300}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onDismiss(session._id); }}
+                    className="p-1 rounded text-sol-text-dim hover:text-sol-red hover:bg-sol-red/10 transition-colors"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="left">Dismiss — done, clears the inbox</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
           {onPin && (
             <TooltipProvider delayDuration={300}>
               <Tooltip>
@@ -1210,20 +1224,21 @@ export const SessionCard = memo(function SessionCard({
               </Tooltip>
             </TooltipProvider>
           )}
-          {onDismiss && (
+          {/* Stash — the SECONDARY remove: set aside, agent keeps running. */}
+          {onStash && (
             <TooltipProvider delayDuration={300}>
               <Tooltip>
                 <TooltipTrigger asChild>
                   <button
-                    onClick={(e) => { e.stopPropagation(); onDismiss(session._id); tipActions.whisper('session.stash', e); checkMilestone('m-first-stash'); }}
-                    className="p-1 rounded text-sol-text-dim hover:text-sol-red transition-colors"
+                    onClick={(e) => { e.stopPropagation(); onStash(session._id); tipActions.whisper('session.stash', e); }}
+                    className="p-1 rounded text-sol-text-dim hover:text-sol-yellow transition-colors"
                   >
                     <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7l10 10M17 17h-6m6 0v-6" />
                     </svg>
                   </button>
                 </TooltipTrigger>
-                <TooltipContent side="left">Stash ({formatShortcutLabel('session.stash')})</TooltipContent>
+                <TooltipContent side="left">Stash — set aside, keeps running ({formatShortcutLabel('session.stash')})</TooltipContent>
               </Tooltip>
             </TooltipProvider>
           )}
@@ -1721,9 +1736,16 @@ export function SessionListPanel({
   const scrolledToRef = useRef<string | null>(null);
 
   // -- Hide & enter animations --
-  // The X on an active card mirrors the Ctrl+Backspace chord: stash (keep alive).
+  // Stash: set aside, agent keeps running (Stashed group). The secondary remove.
   const handleAnimatedStash = useCallback((id: string) => {
     animatedHideSession(id, "stash");
+  }, []);
+  // Dismiss: "done with it" — clears the session from the inbox into the Dismissed
+  // group. The server tears the (usually idle) agent down on the inbox_dismissed_at
+  // transition, so this is codecast's kill gesture, surfaced as the PRIMARY remove
+  // action. Undoable via the toast.
+  const handleAnimatedDismiss = useCallback((id: string) => {
+    animatedHideSession(id, "kill");
   }, []);
   // On a stashed card the destructive slot kills (server tears the agent down
   // on the transition) — the row moves down into Killed.
@@ -1984,7 +2006,8 @@ export function SessionListPanel({
                   isActive={session._id === activeSessionId}
                   globalIndex={0}
                   onSelect={handleSelect}
-                  onDismiss={handleAnimatedStash}
+                  onDismiss={handleAnimatedDismiss}
+                  onStash={handleAnimatedStash}
                   onDefer={s.deferSession}
                   onPin={s.pinSession}
                   variant={sectionVariant || "default"}
@@ -1998,7 +2021,8 @@ export function SessionListPanel({
                     isParentActive={session._id === activeSessionId}
                     globalIndex={0}
                     onSelect={handleSelect}
-                    onDismiss={handleAnimatedStash}
+                    onDismiss={handleAnimatedDismiss}
+                    onStash={handleAnimatedStash}
                     variant={sectionVariant || "default"}
                   />
                 ))}
@@ -2260,7 +2284,8 @@ export function SessionListPanel({
                     isActive={session._id === activeSessionId}
                     globalIndex={0}
                     onSelect={handleSelect}
-                    onDismiss={handleAnimatedStash}
+                    onDismiss={handleAnimatedDismiss}
+                    onStash={handleAnimatedStash}
                     onDefer={s.deferSession}
                     onPin={s.pinSession}
                     variant={"default"}
