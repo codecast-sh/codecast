@@ -1179,7 +1179,13 @@ export const webGet = query({
         .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id!))
         .first();
     } else if (args.id) {
-      plan = await ctx.db.get(args.id as Id<"plans">);
+      // ids arrive from clickable pills/links embedded in untrusted message and
+      // doc content; a malformed or cross-table id would make ctx.db.get throw
+      // ("Invalid ID length") and crash the page. normalizeId returns null for
+      // anything that isn't a plans id, so we degrade to "not found". (Mirrors
+      // docs.webGet.)
+      const planId = ctx.db.normalizeId("plans", args.id);
+      plan = planId ? await ctx.db.get(planId) : null;
     }
 
     if (!plan) return null;
