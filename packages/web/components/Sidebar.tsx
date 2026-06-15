@@ -208,6 +208,12 @@ function NavSection({
   icon,
   onMobileClose,
   onAdd,
+  addTitle,
+  views,
+  expanded,
+  onToggle,
+  onSelectView,
+  onRemoveView,
 }: {
   label: string;
   href: string;
@@ -216,7 +222,15 @@ function NavSection({
   icon: React.ReactNode;
   onMobileClose?: () => void;
   onAdd?: () => void;
+  addTitle?: string;
+  views?: any[];
+  expanded?: boolean;
+  onToggle?: () => void;
+  onSelectView?: (view: any) => void;
+  onRemoveView?: (id: string) => void;
 }) {
+  // Only the wide rail nests saved views; the narrow rail stays icon-only.
+  const hasViews = !isNarrow && !!views && views.length > 0;
   return (
     <div>
       <div className={`flex items-center transition-colors motion-reduce:transition-none ${
@@ -233,11 +247,23 @@ function NavSection({
           {icon}
           {!isNarrow && <span>{label}</span>}
         </Link>
+        {hasViews && (
+          <button
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); onToggle?.(); }}
+            className="p-1 text-sol-text-dim hover:text-sol-text transition-colors"
+            title={expanded ? `Hide saved ${label.toLowerCase()} views` : `Show saved ${label.toLowerCase()} views`}
+            aria-expanded={expanded}
+          >
+            <svg className={`w-3 h-3 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+            </svg>
+          </button>
+        )}
         {!isNarrow && onAdd && (
           <button
             onClick={(e) => { e.preventDefault(); e.stopPropagation(); onAdd(); }}
             className="p-1 mr-2 opacity-60 hover:opacity-100 text-sol-text-dim hover:text-sol-text transition-all"
-            title={`New ${label.toLowerCase().replace(/s$/, '')}`}
+            title={addTitle ?? `New ${label.toLowerCase().replace(/s$/, '')}`}
           >
             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
               <path strokeLinecap="round" d="M12 5v14m-7-7h14" />
@@ -245,6 +271,32 @@ function NavSection({
           </button>
         )}
       </div>
+      {/* Saved views for this page — a slide-open list aligned under the row's icon. */}
+      {hasViews && (
+        <div className={`overflow-hidden transition-all duration-200 ease-out ${expanded ? 'max-h-96 opacity-100' : 'max-h-0 opacity-0'}`}>
+          <div className="ml-[27px] my-0.5 border-l border-sol-border/50">
+            {views!.map((view) => (
+              <div key={view.id} className="flex items-center group/v">
+                <button
+                  onClick={() => onSelectView?.(view)}
+                  className="flex items-center pl-4 pr-2 py-1 text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/40 transition-colors flex-1 min-w-0 text-left"
+                >
+                  <span className="truncate text-[13px] min-w-0">{view.name}</span>
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); onRemoveView?.(view.id); }}
+                  className="p-1 mr-1.5 rounded opacity-0 group-hover/v:opacity-100 text-sol-text-dim hover:text-sol-text transition-opacity flex-shrink-0"
+                  title="Remove saved view"
+                >
+                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -326,6 +378,18 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   );
   const deleteView = useInboxStore((s) => s.deleteView);
   const updateClientUI = useInboxStore((s) => s.updateClientUI);
+  // Saved views nest under their page's nav row instead of a separate section.
+  const taskViews = useMemo(() => savedViews?.filter((v: any) => v.page === "tasks") ?? [], [savedViews]);
+  const docViews = useMemo(() => savedViews?.filter((v: any) => v.page === "docs" || v.page === "plans") ?? [], [savedViews]);
+  // They reveal when you open that page (navigation is the default); the chevron
+  // pins a section open or closed regardless of which page you're on.
+  const [viewSectionOverride, setViewSectionOverride] = useState<Record<string, boolean>>({});
+  const applyView = useCallback((view: any) => {
+    const pagePrefsKey = view.page === "tasks" ? "task_view" : view.page === "docs" ? "doc_view" : "plan_view";
+    updateClientUI({ [pagePrefsKey]: view.prefs });
+    router.push(`/${view.page}`);
+    onMobileClose?.();
+  }, [updateClientUI, router, onMobileClose]);
 
   useConvexSync(teamsQuery, useCallback((d: any) => useInboxStore.getState().syncTable("teams", d), []));
   useConvexSync(teamUnreadCountQuery, useCallback((d: any) => useInboxStore.getState().syncTable("teamUnreadCount", d), []));
@@ -500,46 +564,39 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             isNarrow={isNarrow}
             onMobileClose={onMobileClose}
             onAdd={() => openCreateModal("task")}
+            views={taskViews}
+            expanded={viewSectionOverride.tasks ?? isTasks}
+            onToggle={() => setViewSectionOverride((o) => ({ ...o, tasks: !(o.tasks ?? isTasks) }))}
+            onSelectView={applyView}
+            onRemoveView={deleteView}
             icon={
               <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
               </svg>
             }
           />
-          {/* Docs */}
-          <div className={`flex items-center transition-colors motion-reduce:transition-none ${
-            isDocs || isPlans
-              ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
-              : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
-          }`}>
-            <Link
-              href="/docs"
-              onClick={onMobileClose}
-              className={`flex-1 flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 min-w-0`}
-              title="Docs"
-            >
+          <NavSection
+            label="Docs"
+            href="/docs"
+            isActive={isDocs || isPlans}
+            isNarrow={isNarrow}
+            onMobileClose={onMobileClose}
+            addTitle="New page"
+            onAdd={async () => {
+              const result = await createDoc({ title: "", doc_type: "note" });
+              if (result?.id) router.push(`/docs/${result.id}`);
+            }}
+            views={docViews}
+            expanded={viewSectionOverride.docs ?? (isDocs || isPlans)}
+            onToggle={() => setViewSectionOverride((o) => ({ ...o, docs: !(o.docs ?? (isDocs || isPlans)) }))}
+            onSelectView={applyView}
+            onRemoveView={deleteView}
+            icon={
               <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
               </svg>
-              {!isNarrow && <span>Docs</span>}
-            </Link>
-            {!isNarrow && (
-              <button
-                onClick={async (e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  const result = await createDoc({ title: "", doc_type: "note" });
-                  if (result?.id) router.push(`/docs/${result.id}`);
-                }}
-                className="p-1 mr-2 opacity-60 hover:opacity-100 text-sol-text-dim hover:text-sol-text transition-all"
-                title="New page"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                  <path strokeLinecap="round" d="M12 5v14m-7-7h14" />
-                </svg>
-              </button>
-            )}
-          </div>
+            }
+          />
           <Link
             href="/workflows"
             className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none ${
@@ -595,45 +652,6 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             {!isNarrow && <span>Windows</span>}
           </Link>
         </div>
-
-        {!isNarrow && savedViews && savedViews.length > 0 && (
-          <div className="mt-4">
-            <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-4 mb-2">
-              Saved Views
-            </div>
-            <div className="space-y-0.5">
-              {savedViews.map((view: any) => (
-                <div key={view.id} className="flex items-center group">
-                  <button
-                    onClick={() => {
-                      const pagePrefsKey = view.page === "tasks" ? "task_view" : view.page === "docs" ? "doc_view" : "plan_view";
-                      updateClientUI({ [pagePrefsKey]: view.prefs });
-                      router.push(`/${view.page}`);
-                      onMobileClose?.();
-                    }}
-                    className="flex items-center gap-2 px-4 py-1.5 text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60 transition-colors flex-1 min-w-0 text-left"
-                  >
-                    <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${view.page === "tasks" ? "bg-sol-yellow" : view.page === "docs" ? "bg-sol-violet" : "bg-sol-cyan"}`} />
-                    <span className="truncate text-sm min-w-0">{view.name}</span>
-                    <span className="text-[9px] text-sol-text-dim/60 uppercase flex-shrink-0">{view.page}</span>
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      deleteView(view.id);
-                    }}
-                    className="p-1 rounded opacity-0 group-hover:opacity-100 text-sol-text-dim hover:text-sol-text transition-opacity flex-shrink-0 mr-1"
-                    title="Remove saved view"
-                  >
-                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
 
         {!isNarrow && bookmarks && bookmarks.length > 0 && (
           <div className="mt-4">
