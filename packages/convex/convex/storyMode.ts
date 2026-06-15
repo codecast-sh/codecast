@@ -1,46 +1,43 @@
 import { v } from "convex/values";
-import { query, action, internalQuery, internalMutation } from "./_generated/server";
+import { query, action, internalQuery, internalMutation, internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { canAccessConversation } from "./lib/access";
 import { isLowSignalPrompt, sampleEvenly } from "./titleGeneration";
 
-// Story mode condenses a conversation into a first-person timeline: user
-// prompts verbatim, long assistant messages rewritten (shorter, same voice) by
-// Haiku and cached in message_summaries. Summary mode goes one level higher:
-// a single whole-thread narrative cached in conversation_summaries.
+// Story and Summary are chunked first-person retellings of a session. Rather
+// than summarize every message (which just reproduces the conversation at 1:1),
+// the conversation is cut into a handful of BEATS — each beat spans several
+// turns and gets one short narrative in the author's own voice, anchored to the
+// user prompt that opens it. Summary is the same idea one level up: the beats
+// are grouped into a few PHASES. Both are cached as JSON and regenerate when the
+// conversation has grown enough.
 
-// Assistant messages at or under this length read fine as-is — no LLM pass.
-const VERBATIM_MAX = 360;
-// Per-action cap on Haiku calls; the client re-fires while pending remain.
-const MAX_SUMMARIES_PER_RUN = 120;
-const HAIKU_BATCH = 8;
 const SUMMARY_MODEL = "claude-haiku-4-5-20251001";
-// Fetch caps — generous enough for very long threads while bounding the query.
-const MAX_USER_ROWS = 500;
-const MAX_ASSISTANT_ROWS = 1000;
-// Regenerate the thread summary once this many messages arrived since the
-// cached one was written.
-export const THREAD_SUMMARY_STALE_AFTER = 12;
+const MAX_USER_ROWS = 600;
+const MAX_ASSISTANT_ROWS = 1500;
+// Regenerate once this many messages arrived since the cached level was built.
+export const STALE_AFTER = 15;
+// Concurrency for the per-beat Haiku calls.
+const HAIKU_BATCH = 6;
 
-type StoryEntry = {
-  message_id: string;
-  role: "user" | "assistant";
-  timestamp: number;
-  // "verbatim" renders text as the original message, "summary" as a condensed
-  // rewrite, "pending" as a placeholder while generation runs.
-  kind: "verbatim" | "summary" | "pending";
-  text: string;
+export type Beat = {
+  heading: string;
+  body: string;
+  anchor_prompt: string;
+  anchor_message_id: string;
+  anchor_timestamp: number;
 };
+
+function clip(s: string, n: number): string {
+  return s.length <= n ? s : s.slice(0, n) + "…";
+}
 
 function hasStoryText(m: { content?: string; tool_results?: unknown[] }): boolean {
   return !!m.content && m.content.trim().length > 0 && !m.tool_results?.length;
 }
 
-async function fetchStoryMessages(
-  ctx: { db: any },
-  conversationId: string,
-) {
+async function fetchRows(ctx: { db: any }, conversationId: string) {
   const byRole = (role: "user" | "assistant", cap: number) =>
     ctx.db
       .query("messages")
@@ -53,141 +50,169 @@ async function fetchStoryMessages(
     byRole("user", MAX_USER_ROWS),
     byRole("assistant", MAX_ASSISTANT_ROWS),
   ]);
-  return {
-    userRows: userRows.filter((m: any) => hasStoryText(m) && !isLowSignalPrompt(m.content)),
-    assistantRows: assistantRows.filter((m: any) => hasStoryText(m)),
-  };
+  const rows = [
+    ...userRows.filter((m: any) => hasStoryText(m) && !isLowSignalPrompt(m.content)),
+    ...assistantRows.filter((m: any) => hasStoryText(m)),
+  ].sort((a: any, b: any) => a.timestamp - b.timestamp);
+  return rows.map((m: any) => ({ id: m._id as string, role: m.role as string, content: m.content as string, ts: m.timestamp as number }));
 }
 
-async function requireConversationAccess(ctx: any, conversationId: string) {
+type Row = { id: string; role: string; content: string; ts: number };
+type Turn = { promptId: string; promptTs: number; prompt: string; assistant: string[] };
+
+// A turn = one user prompt plus all the assistant text up to the next prompt.
+function buildTurns(rows: Row[]): Turn[] {
+  const turns: Turn[] = [];
+  let cur: Turn | null = null;
+  for (const r of rows) {
+    if (r.role === "user") {
+      cur = { promptId: r.id, promptTs: r.ts, prompt: r.content, assistant: [] };
+      turns.push(cur);
+    } else if (r.role === "assistant") {
+      if (!cur) {
+        cur = { promptId: r.id, promptTs: r.ts, prompt: "", assistant: [] };
+        turns.push(cur);
+      }
+      cur.assistant.push(r.content);
+    }
+  }
+  return turns;
+}
+
+// Split a list into `count` contiguous, near-even groups.
+function chunkInto<T>(items: T[], count: number): T[][] {
+  if (items.length === 0) return [];
+  const n = Math.max(1, Math.min(count, items.length));
+  const per = Math.ceil(items.length / n);
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += per) out.push(items.slice(i, i + per));
+  return out;
+}
+
+// How many beats / phases to target for a session of this size. Sub-linear so a
+// long session reads as a tight story, not a transcript.
+function beatCount(turnCount: number): number {
+  if (turnCount <= 6) return turnCount;
+  return Math.min(16, Math.max(6, Math.round(turnCount / 2.5)));
+}
+function phaseCount(beatCount: number): number {
+  if (beatCount <= 4) return Math.max(1, beatCount);
+  return Math.min(6, Math.max(3, Math.round(beatCount / 3)));
+}
+
+async function requireAccess(ctx: any, conversationId: string) {
   const userId = await getAuthUserId(ctx);
   if (!userId) return null;
-  const conversation = await ctx.db.get(conversationId);
-  if (!conversation) return null;
-  if (!(await canAccessConversation(ctx, userId, conversation))) return null;
-  return conversation;
+  const conv = await ctx.db.get(conversationId);
+  if (!conv) return null;
+  if (!(await canAccessConversation(ctx, userId, conv))) return null;
+  return conv;
+}
+
+// ── Read queries ─────────────────────────────────────────────────────────────
+
+function readLevel(row: any, level: "story" | "summary", currentCount: number) {
+  const raw = row?.[level] as string | undefined;
+  const builtAt = (row?.[`${level}_message_count`] as number | undefined) ?? 0;
+  let items: Beat[] = [];
+  if (raw) {
+    try { items = JSON.parse(raw); } catch { items = []; }
+  }
+  return {
+    items,
+    generated_at: row?.generated_at ?? null,
+    message_count: builtAt,
+    stale: !raw || currentCount - builtAt >= STALE_AFTER,
+  };
 }
 
 export const getStory = query({
   args: { conversation_id: v.id("conversations") },
   handler: async (ctx, args) => {
-    const conversation = await requireConversationAccess(ctx, args.conversation_id);
-    if (!conversation) return null;
-
-    const { userRows, assistantRows } = await fetchStoryMessages(ctx, args.conversation_id);
-    const summaries = await ctx.db
-      .query("message_summaries")
-      .withIndex("by_conversation_timestamp", (q) => q.eq("conversation_id", args.conversation_id))
-      .collect();
-    const summaryByMessage = new Map(summaries.map((s) => [s.message_id as string, s.summary]));
-
-    const entries: StoryEntry[] = [];
-    for (const m of userRows) {
-      entries.push({
-        message_id: m._id,
-        role: "user",
-        timestamp: m.timestamp,
-        kind: "verbatim",
-        text: m.content!.length > 2000 ? m.content!.slice(0, 2000) + "…" : m.content!,
-      });
-    }
-    let pendingCount = 0;
-    for (const m of assistantRows) {
-      const content = m.content!;
-      const cached = summaryByMessage.get(m._id as string);
-      let kind: StoryEntry["kind"];
-      let text: string;
-      if (content.length <= VERBATIM_MAX) {
-        kind = "verbatim";
-        text = content;
-      } else if (cached) {
-        kind = "summary";
-        text = cached;
-      } else {
-        kind = "pending";
-        text = "";
-        pendingCount++;
-      }
-      entries.push({ message_id: m._id, role: "assistant", timestamp: m.timestamp, kind, text });
-    }
-    entries.sort((a, b) => a.timestamp - b.timestamp);
-    return { entries, pendingCount };
-  },
-});
-
-export const getThreadSummary = query({
-  args: { conversation_id: v.id("conversations") },
-  handler: async (ctx, args) => {
-    const conversation = await requireConversationAccess(ctx, args.conversation_id);
-    if (!conversation) return null;
+    const conv = await requireAccess(ctx, args.conversation_id);
+    if (!conv) return null;
     const row = await ctx.db
       .query("conversation_summaries")
       .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
       .unique();
-    const currentCount = conversation.message_count ?? 0;
-    return {
-      summary: row?.summary ?? null,
-      generated_at: row?.generated_at ?? null,
-      message_count: row?.message_count ?? 0,
-      stale: !row || currentCount - row.message_count >= THREAD_SUMMARY_STALE_AFTER,
-    };
+    return readLevel(row, "story", conv.message_count ?? 0);
   },
 });
 
-// ── Generation ──────────────────────────────────────────────────────────────
+export const getSummary = query({
+  args: { conversation_id: v.id("conversations") },
+  handler: async (ctx, args) => {
+    const conv = await requireAccess(ctx, args.conversation_id);
+    if (!conv) return null;
+    const row = await ctx.db
+      .query("conversation_summaries")
+      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
+      .unique();
+    return readLevel(row, "summary", conv.message_count ?? 0);
+  },
+});
 
-export const getSummaryWork = internalQuery({
+// ── Generation inputs ────────────────────────────────────────────────────────
+
+export const getStoryInput = internalQuery({
   args: { conversation_id: v.id("conversations"), user_id: v.id("users") },
   handler: async (ctx, args) => {
-    const conversation = await ctx.db.get(args.conversation_id);
-    if (!conversation) return null;
-    if (!(await canAccessConversation(ctx, args.user_id, conversation))) return null;
-
-    const { assistantRows } = await fetchStoryMessages(ctx, args.conversation_id);
-    const summaries = await ctx.db
-      .query("message_summaries")
-      .withIndex("by_conversation_timestamp", (q) => q.eq("conversation_id", args.conversation_id))
-      .collect();
-    const done = new Set(summaries.map((s) => s.message_id as string));
-    return assistantRows
-      .filter((m: any) => m.content.length > VERBATIM_MAX && !done.has(m._id as string))
-      .slice(0, MAX_SUMMARIES_PER_RUN)
-      .map((m: any) => ({ message_id: m._id, timestamp: m.timestamp, content: m.content as string }));
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv) return null;
+    if (!(await canAccessConversation(ctx, args.user_id, conv))) return null;
+    const rows = await fetchRows(ctx, args.conversation_id);
+    const turns = buildTurns(rows);
+    return { turns, message_count: conv.message_count ?? rows.length };
   },
 });
 
-export const insertMessageSummary = internalMutation({
+export const getCachedStory = internalQuery({
+  args: { conversation_id: v.id("conversations"), user_id: v.id("users") },
+  handler: async (ctx, args) => {
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv) return null;
+    if (!(await canAccessConversation(ctx, args.user_id, conv))) return null;
+    const row = await ctx.db
+      .query("conversation_summaries")
+      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
+      .unique();
+    let beats: Beat[] = [];
+    if (row?.story) { try { beats = JSON.parse(row.story); } catch { beats = []; } }
+    return { beats, message_count: conv.message_count ?? 0 };
+  },
+});
+
+export const writeLevel = internalMutation({
   args: {
     conversation_id: v.id("conversations"),
-    message_id: v.id("messages"),
-    timestamp: v.number(),
-    summary: v.string(),
+    level: v.union(v.literal("story"), v.literal("summary")),
+    json: v.string(),
+    message_count: v.number(),
+    generated_at: v.number(),
   },
   handler: async (ctx, args) => {
-    // Idempotent: concurrent clients may race the same pending message.
     const existing = await ctx.db
-      .query("message_summaries")
-      .withIndex("by_message_id", (q) => q.eq("message_id", args.message_id))
+      .query("conversation_summaries")
+      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
       .unique();
-    if (existing) return;
-    await ctx.db.insert("message_summaries", { ...args, model: SUMMARY_MODEL });
+    const patch: Record<string, unknown> = {
+      [args.level]: args.json,
+      [`${args.level}_message_count`]: args.message_count,
+      generated_at: args.generated_at,
+      model: SUMMARY_MODEL,
+    };
+    if (existing) await ctx.db.patch(existing._id, patch);
+    else await ctx.db.insert("conversation_summaries", { conversation_id: args.conversation_id, ...patch } as any);
   },
 });
+
+// ── Haiku ────────────────────────────────────────────────────────────────────
 
 async function callHaiku(apiKey: string, prompt: string, maxTokens: number): Promise<string | null> {
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: SUMMARY_MODEL,
-      max_tokens: maxTokens,
-      temperature: 0,
-      messages: [{ role: "user", content: prompt }],
-    }),
+    headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+    body: JSON.stringify({ model: SUMMARY_MODEL, max_tokens: maxTokens, temperature: 0, messages: [{ role: "user", content: prompt }] }),
   });
   if (!response.ok) {
     console.error("storyMode Haiku error:", response.status, await response.text());
@@ -198,171 +223,184 @@ async function callHaiku(apiKey: string, prompt: string, maxTokens: number): Pro
   return text ? stripModelPreamble(text) : null;
 }
 
-// Haiku sometimes prefixes the answer with a reasoning block (<analysis>…</analysis>
-// or <thinking>…</thinking>) despite being told to output only the result. Drop a
-// leading such block; leave the genuine answer untouched.
+// Haiku sometimes prefixes a reasoning block despite instructions. Drop a
+// leading <analysis>/<thinking> block; leave a genuine answer untouched.
 export function stripModelPreamble(text: string): string {
   const stripped = text.replace(/^\s*<(analysis|thinking)>[\s\S]*?<\/\1>\s*/i, "");
   return stripped.trim() || text.trim();
 }
 
-// Long messages are condensed from their head and tail — the middle of a very
-// long assistant message is usually detail the rewrite drops anyway.
-function clipForPrompt(content: string): string {
-  if (content.length <= 9000) return content;
-  return content.slice(0, 6500) + "\n…\n" + content.slice(-2000);
-}
-
-function buildMessageSummaryPrompt(content: string): string {
-  return `Below is one message written by an AI coding assistant during a working session. Rewrite it as a much shorter version of itself.
-
-Rules:
-- First person, exactly the same voice and tone as the original author — it must read like the author's own tighter draft, never like a third-party summary ("I fixed X", never "The assistant fixed X").
-- 1-3 sentences for most messages; up to 5 short lines for very long ones.
-- Keep the concrete specifics that matter: file names, decisions, findings, numbers, outcomes.
-- Keep light markdown (inline \`code\`, **bold**) where it helps. No headers. Only use a list if the original is essentially a list.
-- Output ONLY the rewritten message — no preamble, no quotes, no commentary.
-
-<message>
-${clipForPrompt(content)}
-</message>`;
-}
-
-export const generateStorySummaries = action({
-  args: { conversation_id: v.id("conversations") },
-  handler: async (ctx, args): Promise<{ generated: number }> => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) return { generated: 0 };
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      console.error("ANTHROPIC_API_KEY not configured");
-      return { generated: 0 };
-    }
-    const work = await ctx.runQuery(internal.storyMode.getSummaryWork, {
-      conversation_id: args.conversation_id,
-      user_id: userId,
-    });
-    if (!work || work.length === 0) return { generated: 0 };
-
-    let generated = 0;
-    for (let i = 0; i < work.length; i += HAIKU_BATCH) {
-      const batch = work.slice(i, i + HAIKU_BATCH);
-      await Promise.all(
-        batch.map(async (item: { message_id: string; timestamp: number; content: string }) => {
-          try {
-            const text = await callHaiku(apiKey, buildMessageSummaryPrompt(item.content), 600);
-            if (!text) return;
-            await ctx.runMutation(internal.storyMode.insertMessageSummary, {
-              conversation_id: args.conversation_id,
-              message_id: item.message_id as any,
-              timestamp: item.timestamp,
-              summary: text,
-            });
-            generated++;
-          } catch (err) {
-            console.error("storyMode summary failed:", err);
-          }
-        })
-      );
-    }
-    return { generated };
-  },
-});
-
-export const getThreadSummaryInput = internalQuery({
-  args: { conversation_id: v.id("conversations"), user_id: v.id("users") },
-  handler: async (ctx, args) => {
-    const conversation = await ctx.db.get(args.conversation_id);
-    if (!conversation) return null;
-    if (!(await canAccessConversation(ctx, args.user_id, conversation))) return null;
-
-    const { userRows, assistantRows } = await fetchStoryMessages(ctx, args.conversation_id);
-    const summaries = await ctx.db
-      .query("message_summaries")
-      .withIndex("by_conversation_timestamp", (q) => q.eq("conversation_id", args.conversation_id))
-      .collect();
-    const summaryByMessage = new Map(summaries.map((s) => [s.message_id as string, s.summary]));
-
-    const rows = [...userRows, ...assistantRows].sort((a: any, b: any) => a.timestamp - b.timestamp);
-    const lines = rows.map((m: any) => {
-      const text =
-        m.role === "assistant"
-          ? summaryByMessage.get(m._id as string) ?? m.content
-          : m.content;
-      const clipped = text.length > 700 ? text.slice(0, 700) + "…" : text;
-      return `${m.role === "user" ? "User" : "Me"}: ${clipped}`;
-    });
+// Pull {heading, body} out of a model response (may be fenced or prefixed).
+export function extractBeatJson(text: string): { heading?: string; body?: string } | null {
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start === -1 || end <= start) return null;
+  try {
+    const parsed = JSON.parse(text.slice(start, end + 1));
+    if (typeof parsed !== "object" || parsed === null) return null;
     return {
-      lines: sampleEvenly(lines, 120),
-      message_count: conversation.message_count ?? rows.length,
+      heading: typeof parsed.heading === "string" ? parsed.heading : undefined,
+      body: typeof parsed.body === "string" ? parsed.body : undefined,
     };
-  },
-});
-
-export const upsertThreadSummary = internalMutation({
-  args: {
-    conversation_id: v.id("conversations"),
-    summary: v.string(),
-    message_count: v.number(),
-    generated_at: v.number(),
-  },
-  handler: async (ctx, args) => {
-    const existing = await ctx.db
-      .query("conversation_summaries")
-      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
-      .unique();
-    if (existing) {
-      await ctx.db.patch(existing._id, {
-        summary: args.summary,
-        message_count: args.message_count,
-        generated_at: args.generated_at,
-        model: SUMMARY_MODEL,
-      });
-    } else {
-      await ctx.db.insert("conversation_summaries", { ...args, model: SUMMARY_MODEL });
-    }
-  },
-});
-
-function buildThreadSummaryPrompt(lines: string[]): string {
-  return `Below is a working session between a user and an AI coding assistant ("Me" lines are the assistant), in order. Long assistant messages have already been condensed.
-
-Write the story of this session as a short narrative in markdown, in first person from the assistant's perspective, keeping the assistant's voice and tone.
-
-Shape:
-- Open with one or two sentences on what the session set out to do.
-- Then the journey: short paragraphs (or tight bullets where natural) covering the key turns — discoveries, decisions, dead ends, fixes — with concrete file, feature, and system names.
-- Close with where things stand now: what's done, what's open.
-
-Length: scale to how much actually happened — roughly 120 words for a small session, up to 400 for a long winding one. Markdown is fine (a few bold leads or bullets); no top-level title.
-
-Do not think out loud or include any analysis, preamble, or tags. Output ONLY the final narrative markdown, starting with the first sentence of the story.
-
-<session>
-${lines.join("\n\n")}
-</session>`;
+  } catch {
+    return null;
+  }
 }
 
-export const generateThreadSummary = action({
+function buildBeatPrompt(group: Turn[]): string {
+  // One slice of the session: the opening request(s) plus my work. Sample the
+  // assistant text so a dense slice stays within budget.
+  const sections = group.map((t) => {
+    const assistant = sampleEvenly(t.assistant, 6).map((a) => clip(a, 500)).join("\n");
+    return `User: ${clip(t.prompt || "[continued]", 600)}\n${assistant ? "Me:\n" + assistant : ""}`;
+  });
+  return `Below is one slice of a coding session — the user's request(s) and my work in response ("Me"). Retell it as ONE beat of a first-person story, in my own voice and tone.
+
+Return JSON: {"heading": "...", "body": "..."}
+- heading: 3-6 words naming what this slice was about.
+- body: 2-4 sentences covering what I set out to do here and what actually happened — keep concrete file/feature names, decisions, and outcomes. Light markdown (inline \`code\`, **bold**) is fine. No headers, no lists.
+- VOICE: always first person, from MY perspective as the one doing the work ("I traced…", "I fixed…"). The narration is mine throughout — never narrate the user in third person, never open with "The user". If a request matters, fold it in as "I was asked to…" or "X came up, so I…".
+
+Do not add any preamble or tags. Output ONLY the JSON object.
+
+<slice>
+${sections.join("\n\n")}
+</slice>`;
+}
+
+function buildPhasePrompt(beats: Beat[]): string {
+  const text = beats.map((b) => `## ${b.heading}\n${b.body}`).join("\n\n");
+  return `Below are several beats of a coding session's story, in order, written in my first-person voice. Combine them into ONE higher-level phase of the session.
+
+Return JSON: {"heading": "...", "body": "..."}
+- heading: 3-6 words naming this phase of the work.
+- body: 2-3 sentences, same first-person voice, describing the arc across these beats at a higher level — the goal and the throughline, not every step. Light markdown is fine. No headers, no lists.
+
+Do not add any preamble or tags. Output ONLY the JSON object.
+
+<beats>
+${text}
+</beats>`;
+}
+
+async function mapBeats<T>(
+  items: T[][],
+  buildPrompt: (group: T[]) => string,
+  apiKey: string,
+  anchorOf: (group: T[]) => { anchor_prompt: string; anchor_message_id: string; anchor_timestamp: number },
+): Promise<Beat[]> {
+  const out: Beat[] = new Array(items.length);
+  for (let i = 0; i < items.length; i += HAIKU_BATCH) {
+    const slice = items.slice(i, i + HAIKU_BATCH);
+    await Promise.all(
+      slice.map(async (group, j) => {
+        const idx = i + j;
+        const anchor = anchorOf(group);
+        try {
+          const text = await callHaiku(apiKey, buildPrompt(group), 700);
+          const parsed = text ? extractBeatJson(text) : null;
+          out[idx] = {
+            heading: parsed?.heading?.trim() || "",
+            body: parsed?.body?.trim() || "",
+            ...anchor,
+          };
+        } catch (err) {
+          console.error("storyMode beat failed:", err);
+          out[idx] = { heading: "", body: "", ...anchor };
+        }
+      })
+    );
+  }
+  return out.filter((b) => b && b.body);
+}
+
+// ── Generation actions ───────────────────────────────────────────────────────
+
+export const generateStory = action({
   args: { conversation_id: v.id("conversations") },
-  handler: async (ctx, args): Promise<{ ok: boolean }> => {
+  handler: async (ctx, args): Promise<{ ok: boolean; beats: number }> => {
     const userId = await getAuthUserId(ctx);
-    if (!userId) return { ok: false };
+    if (!userId) return { ok: false, beats: 0 };
     const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      console.error("ANTHROPIC_API_KEY not configured");
-      return { ok: false };
-    }
-    const input = await ctx.runQuery(internal.storyMode.getThreadSummaryInput, {
+    if (!apiKey) { console.error("ANTHROPIC_API_KEY not configured"); return { ok: false, beats: 0 }; }
+
+    const input = await ctx.runQuery(internal.storyMode.getStoryInput, { conversation_id: args.conversation_id, user_id: userId });
+    if (!input || input.turns.length === 0) return { ok: false, beats: 0 };
+
+    const groups = chunkInto(input.turns, beatCount(input.turns.length));
+    const beats = await mapBeats(groups, buildBeatPrompt, apiKey, (g) => ({
+      anchor_prompt: g[0].prompt,
+      anchor_message_id: g[0].promptId,
+      anchor_timestamp: g[0].promptTs,
+    }));
+    if (beats.length === 0) return { ok: false, beats: 0 };
+
+    await ctx.runMutation(internal.storyMode.writeLevel, {
       conversation_id: args.conversation_id,
-      user_id: userId,
+      level: "story",
+      json: JSON.stringify(beats),
+      message_count: input.message_count,
+      generated_at: Date.now(),
     });
-    if (!input || input.lines.length === 0) return { ok: false };
-    const text = await callHaiku(apiKey, buildThreadSummaryPrompt(input.lines), 1500);
-    if (!text) return { ok: false };
-    await ctx.runMutation(internal.storyMode.upsertThreadSummary, {
+    return { ok: true, beats: beats.length };
+  },
+});
+
+export const generateSummary = action({
+  args: { conversation_id: v.id("conversations") },
+  handler: async (ctx, args): Promise<{ ok: boolean; phases: number }> => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { ok: false, phases: 0 };
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) { console.error("ANTHROPIC_API_KEY not configured"); return { ok: false, phases: 0 }; }
+
+    // Summary is built FROM the story beats. Ensure they exist first.
+    let cached = await ctx.runQuery(internal.storyMode.getCachedStory, { conversation_id: args.conversation_id, user_id: userId });
+    if (!cached || cached.beats.length === 0) {
+      await ctx.runAction(internal.storyMode.generateStoryInternal, { conversation_id: args.conversation_id, user_id: userId });
+      cached = await ctx.runQuery(internal.storyMode.getCachedStory, { conversation_id: args.conversation_id, user_id: userId });
+    }
+    if (!cached || cached.beats.length === 0) return { ok: false, phases: 0 };
+
+    const groups = chunkInto(cached.beats, phaseCount(cached.beats.length));
+    const phases = await mapBeats(groups, buildPhasePrompt, apiKey, (g) => ({
+      anchor_prompt: g[0].anchor_prompt,
+      anchor_message_id: g[0].anchor_message_id,
+      anchor_timestamp: g[0].anchor_timestamp,
+    }));
+    if (phases.length === 0) return { ok: false, phases: 0 };
+
+    await ctx.runMutation(internal.storyMode.writeLevel, {
       conversation_id: args.conversation_id,
-      summary: text,
+      level: "summary",
+      json: JSON.stringify(phases),
+      message_count: cached.message_count,
+      generated_at: Date.now(),
+    });
+    return { ok: true, phases: phases.length };
+  },
+});
+
+// Internal twin of generateStory so generateSummary can ensure beats exist
+// without a second auth round-trip (it already holds the verified user id).
+export const generateStoryInternal = internalAction({
+  args: { conversation_id: v.id("conversations"), user_id: v.id("users") },
+  handler: async (ctx, args): Promise<{ ok: boolean }> => {
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) return { ok: false };
+    const input = await ctx.runQuery(internal.storyMode.getStoryInput, { conversation_id: args.conversation_id, user_id: args.user_id });
+    if (!input || input.turns.length === 0) return { ok: false };
+    const groups = chunkInto(input.turns, beatCount(input.turns.length));
+    const beats = await mapBeats(groups, buildBeatPrompt, apiKey, (g) => ({
+      anchor_prompt: g[0].prompt,
+      anchor_message_id: g[0].promptId,
+      anchor_timestamp: g[0].promptTs,
+    }));
+    if (beats.length === 0) return { ok: false };
+    await ctx.runMutation(internal.storyMode.writeLevel, {
+      conversation_id: args.conversation_id,
+      level: "story",
+      json: JSON.stringify(beats),
       message_count: input.message_count,
       generated_at: Date.now(),
     });
