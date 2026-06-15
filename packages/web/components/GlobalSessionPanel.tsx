@@ -971,23 +971,23 @@ export const SessionCard = memo(function SessionCard({
         <div className={`flex items-center gap-1.5 leading-tight ${
           isActive ? "text-sm text-sol-text font-semibold" : isWorking ? "text-sm text-sol-text font-medium" : isStashed ? "text-sm text-sol-text" : isDismissed ? "text-sm text-sol-text-muted" : "text-sm text-sol-text"
         }`}>
-          {/* The favorite affordance lives here, on the name (not in the action
-              cluster): solid amber when favorited, a faint star that appears on
-              row-hover when not (click to favorite). Always rendered so the slot
-              is reserved and the title never shifts. Toggle also via the `f` key. */}
+          <span className="truncate min-w-0">{isSlashCommand ? <span className="font-mono text-sol-cyan">{displayTitle}</span> : displayTitle}</span>
+          {/* Favorite affordance — AFTER the title so it never shifts the name.
+              Solid (soft amber) when favorited; otherwise a very subdued star that
+              only surfaces on row-hover and lights up on direct hover. Toggle also
+              via the keyboard shortcut. */}
           <button
             onClick={(e) => { e.stopPropagation(); useInboxStore.getState().toggleFavorite(session._id); }}
-            className={`flex-shrink-0 -ml-0.5 transition-all ${
+            className={`flex-shrink-0 transition-all ${
               isFavorite
-                ? "text-amber-400 hover:text-amber-300"
-                : "text-sol-text-dim/40 opacity-0 group-hover:opacity-100 hover:text-amber-400"
+                ? "text-amber-400/85 hover:text-amber-300"
+                : "text-sol-text-dim/30 opacity-0 group-hover:opacity-50 hover:!opacity-100 hover:!text-amber-400"
             }`}
-            title={isFavorite ? "Unfavorite (F)" : "Favorite (F)"}
+            title={`${isFavorite ? "Unfavorite" : "Favorite"} (${formatShortcutLabel('conv.favorite')})`}
             aria-label={isFavorite ? "Unfavorite" : "Favorite"}
           >
-            <Star className="w-3.5 h-3.5" fill={isFavorite ? "currentColor" : "none"} />
+            <Star className="w-3 h-3" fill={isFavorite ? "currentColor" : "none"} />
           </button>
-          <span className="truncate">{isSlashCommand ? <span className="font-mono text-sol-cyan">{displayTitle}</span> : displayTitle}</span>
         </div>
         {cardSummary && !session.implementation_session && (
           <div className="text-[11px] text-sol-text-muted mt-0.5 line-clamp-2 leading-snug whitespace-pre-line">
@@ -1207,23 +1207,6 @@ export const SessionCard = memo(function SessionCard({
               <TooltipContent side="left">Label session ({formatShortcutLabel('session.moveToBucket')})</TooltipContent>
             </Tooltip>
           </TooltipProvider>
-          {onDefer && (
-            <TooltipProvider delayDuration={300}>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); onDefer(session._id); tipActions.whisper('session.deferAdvance', e); }}
-                    className="p-1 rounded text-sol-text-dim hover:text-sol-yellow transition-colors"
-                  >
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v14m0 0l-6-6m6 6l6-6M5 21h14" />
-                    </svg>
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="left">Defer ({formatShortcutLabel('session.deferAdvance')})</TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-          )}
           {/* Stash — the SECONDARY remove: set aside, agent keeps running. */}
           {onStash && (
             <TooltipProvider delayDuration={300}>
