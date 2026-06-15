@@ -6013,9 +6013,10 @@ function AssistantBlockImpl({
 }) {
   const CONTENT_MAX_HEIGHT = 800;
 
-  // Condensed feed: tools fold into a single per-turn receipt row (rendered on
-  // the turn's last message via condensedReceipt). turnExpanded reveals the
-  // real tool blocks inline. Compact-expanded turns arrive as density "full".
+  // Condensed feed: this message's segment tools fold into one receipt row
+  // (condensedReceipt), rendered inline right after the content where the
+  // activity happened. turnExpanded reveals the real tool blocks inline.
+  // Compact-expanded turns arrive as density "full".
   const condensed = density === "condensed";
   const effectiveCondensed = condensed && !turnExpanded;
   const [contentExpanded, setContentExpanded] = useState(true);
@@ -10246,23 +10247,30 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
   }, []);
 
-  // Turn aggregation for the condensed/compact feeds. A "turn" is one assistant
-  // run between user messages. For each assistant message we record its turn key
-  // (the run's first assistant message id), and per turn we accumulate the
-  // hideable tool calls (folded into one receipt row), the first/last message,
-  // and stats for the compact collapsed card. Built once per timeline; O(n).
+  // Aggregation for the condensed/compact feeds. Built once per timeline; O(n).
+  //
+  // CONDENSED works at SEGMENT granularity: a contiguous run of tool activity
+  // between two pieces of assistant text folds into ONE receipt rendered inline
+  // where it happened (not hoisted to the turn's end). The run's tools attach to
+  // its "owner" — the text message that opens the run (or the first tool-only
+  // message if the run has no preceding text); the rest of the run's messages
+  // are "absorbed" and render nothing until the turn is expanded.
+  //
+  // COMPACT works at TURN granularity (one collapsed card per assistant run), so
+  // we also track each message's turn key, the turn's first message, and stats.
   const turnAggregates = useMemo(() => {
     const turnKeyOf = new Map<string, string>();      // msgId -> turn key
     const firstAssistOf = new Map<string, string>();  // turn key -> first assistant msgId
-    const lastAssistOf = new Map<string, string>();   // turn key -> last assistant msgId (visible)
-    const toolsOf = new Map<string, ToolCall[]>();     // turn key -> hideable tools
     const statsOf = new Map<string, { messages: number; tools: number; preview: string }>();
+    const receiptOf = new Map<string, ToolCall[]>();   // owner msgId -> folded hideable tools
+    const absorbed = new Set<string>();                // msgId folded into an earlier receipt
     let curKey: string | null = null;
+    let ownerId: string | null = null;                 // current segment's receipt owner
     for (let i = 0; i < timeline.length; i++) {
       const item = timeline[i];
       if (item.type !== 'message') continue;
       const msg = item.data as Message;
-      if (msg.role === 'user') { curKey = null; continue; }
+      if (msg.role === 'user') { curKey = null; ownerId = null; continue; }
       if (msg.role !== 'assistant') continue;
       if (isHiddenStubMessage(msg)) continue;
       const hasText = !!(msg.content && stripSystemTags(msg.content).trim().length > 0);
@@ -10271,12 +10279,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       if (!hasVisible) continue;
       if (curKey === null) {
         curKey = msg._id;
-        toolsOf.set(curKey, []);
         firstAssistOf.set(curKey, msg._id);
         statsOf.set(curKey, { messages: 0, tools: 0, preview: "" });
       }
       turnKeyOf.set(msg._id, curKey);
-      lastAssistOf.set(curKey, msg._id);
       const stats = statsOf.get(curKey)!;
       if (hasText) stats.messages += 1;
       stats.tools += tools.length;
@@ -10284,9 +10290,23 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         stats.preview = stripSystemTags(msg.content || "").trim().split("\n")[0].slice(0, 140);
       }
       const hideable = tools.filter(tc => !isAlwaysVisibleToolCall(tc));
-      if (hideable.length) toolsOf.get(curKey)!.push(...hideable);
+      // Segment ownership: a text message opens a new segment and owns its own
+      // tools; a tool-only message folds into the current owner (or becomes one).
+      if (hasText) {
+        ownerId = msg._id;
+        receiptOf.set(msg._id, [...hideable]);
+      } else if (ownerId) {
+        if (hideable.length) receiptOf.get(ownerId)!.push(...hideable);
+        // A message carrying an always-visible block (poll, plan write) must
+        // still render that block — fold its hideable tools into the receipt but
+        // don't absorb the message itself.
+        if (!tools.some(isAlwaysVisibleToolCall)) absorbed.add(msg._id);
+      } else {
+        ownerId = msg._id;
+        receiptOf.set(msg._id, [...hideable]);
+      }
     }
-    return { turnKeyOf, firstAssistOf, lastAssistOf, toolsOf, statsOf };
+    return { turnKeyOf, firstAssistOf, statsOf, receiptOf, absorbed };
   }, [timeline]);
 
   const userMsgKindMap = useMemo(() => {
@@ -10815,16 +10835,18 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return `pr-${(item.data as any)._id}`;
   }, [timeline]);
 
-  // Height-cache discriminator. In compact a row's height depends on whether its
-  // turn is expanded, so the key must flip with that — otherwise a toggled turn
-  // reads a stale cached height and the virtualizer mis-lays the list.
+  // Height-cache discriminator. In compact and condensed a row's height depends
+  // on whether its turn is expanded (compact: card vs full; condensed: absorbed
+  // tool-only rows go 0 → full), so the key must flip with that — otherwise a
+  // toggled turn reads a stale cached height and the virtualizer mis-lays the list.
   const rowDensityKey = useCallback((index: number): string => {
-    if (feedDensity !== "compact") return feedDensity;
+    if (feedDensity === "full") return feedDensity;
     const item = timeline[index];
-    if (item?.type !== "message") return "compact";
+    if (item?.type !== "message") return feedDensity;
     const msg = item.data as Message;
     const turnKey = turnAggregates.turnKeyOf.get(msg._id);
-    return turnKey && expandedTurns.has(turnKey) ? "compact:e" : "compact:c";
+    const expanded = turnKey ? expandedTurns.has(turnKey) : false;
+    return `${feedDensity}:${expanded ? "e" : "c"}`;
   }, [feedDensity, timeline, turnAggregates, expandedTurns]);
 
   const estimateSize = useCallback((index: number) => {
@@ -10849,13 +10871,16 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         return turnAggregates.firstAssistOf.get(turnKey) === msg._id ? 64 : 0;
       }
     }
-    if (condensedFeed) {
-      // Tool-only assistant rows shrink to a single receipt line (unless an
-      // always-visible block like a poll or plan write keeps them tall).
-      if (msg.role === "assistant") {
+    if (feedDensity === "condensed" && msg.role === "assistant") {
+      const turnKey = turnAggregates.turnKeyOf.get(msg._id);
+      const expanded = turnKey ? expandedTurns.has(turnKey) : false;
+      if (!expanded) {
+        // Tool-only messages folded into an earlier segment's receipt vanish.
+        if (turnAggregates.absorbed.has(msg._id)) return 0;
         const hasTextContent = msg.content && msg.content.trim().length > 0;
         if (msg.tool_calls?.some(isAlwaysVisibleToolCall)) return 200;
-        if (!hasTextContent && (msg.tool_calls?.length || 0) > 0) return 24;
+        // A tool-only receipt owner is just the one receipt row.
+        if (!hasTextContent && (turnAggregates.receiptOf.get(msg._id)?.length ?? 0) > 0) return 28;
       }
     }
 
@@ -12137,14 +12162,16 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           />
         );
       }
+      // Condensed: a tool-only message folded into an earlier segment's receipt
+      // renders nothing until the turn is expanded.
+      if (feedDensity === "condensed" && !turnExpanded && turnAggregates.absorbed.has(msg._id)) return null;
       // An expanded compact turn renders at full density (nothing clipped); the
       // collapse control sits on its first message.
       const effectiveDensity: MessageFeedDensity = feedDensity === "compact" ? "full" : feedDensity;
       const isTurnFirst = turnKey ? turnAggregates.firstAssistOf.get(turnKey) === msg._id : false;
-      const isTurnLast = turnKey ? turnAggregates.lastAssistOf.get(turnKey) === msg._id : false;
-      // Condensed: fold the turn's hideable tools into one receipt row on the
-      // turn's last message (expandable in place).
-      const receiptTools = feedDensity === "condensed" && isTurnLast ? (turnAggregates.toolsOf.get(turnKey!) ?? []) : [];
+      // Condensed: this message's segment tools fold into one receipt rendered
+      // inline right after its text — where the activity happened.
+      const receiptTools = feedDensity === "condensed" ? (turnAggregates.receiptOf.get(msg._id) ?? []) : [];
       const condensedReceipt = receiptTools.length
         ? { tools: receiptTools, expanded: turnExpanded, onToggle: () => toggleTurn(turnKey!) }
         : undefined;
