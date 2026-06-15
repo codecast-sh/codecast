@@ -230,6 +230,10 @@ export type InboxSession = {
   fork_copied?: number;
   icon?: string;
   icon_color?: string;
+  // Kept-for-later flag. Drives the Favorites top-level view (a long-term set,
+  // grouped by project) — the same session cache, filtered. Set optimistically
+  // by toggleFavorite and carried on both the inbox and favorites server rows.
+  is_favorite?: boolean;
   dismissed_at?: number;
   team_id?: string | null;
   is_private?: boolean;
@@ -1214,6 +1218,38 @@ export function groupSessionsForLabelView(
   return { labelGroups, projectGroups };
 }
 
+// The Favorites set: kept sessions from the same cache, minus the ones an active
+// desk would hide (orphans/blanks). Optionally narrowed by the active project
+// chip — favorites inherit the inbox's project filter for free.
+export function selectFavoriteSessions(
+  sessions: Record<string, InboxSession>,
+  projectFilter?: string | null,
+): InboxSession[] {
+  const out: InboxSession[] = [];
+  for (const sess of Object.values(sessions)) {
+    if (!sess.is_favorite) continue;
+    if (isSessionHidden(sess)) continue;
+    if (projectFilter && getProjectName(sess.git_root, sess.project_path) !== projectFilter) continue;
+    out.push(sess);
+  }
+  return out;
+}
+
+// Favorites order AS RENDERED: grouped by project (the shelf's default
+// organization — answers "what is it about", not "what needs me now"), pinned
+// favorites first. Reuses the bucket view's project grouping with no label tier
+// so keyboard nav (visualOrder) walks exactly the on-screen order.
+export function favoritesVisualOrder(
+  sessions: Record<string, InboxSession>,
+  projectFilter?: string | null,
+): InboxSession[] {
+  const favs = selectFavoriteSessions(sessions, projectFilter);
+  const pinned = favs.filter((s) => s.is_pinned).sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
+  const rest = favs.filter((s) => !s.is_pinned);
+  const { projectGroups } = groupSessionsForLabelView(rest, {}, {});
+  return [...pinned, ...projectGroups.flatMap((g) => g.items)];
+}
+
 // Resolve the active inbox view mode from client UI state. Shared by the
 // inboxViewMode getter and computeVisualOrder so every consumer agrees on
 // which ordering is on screen.
@@ -1239,8 +1275,14 @@ export function computeVisualOrder(state: {
   activeBucketFilter?: string | null;
   bucketAssignments: Record<string, BucketAssignmentItem>;
   buckets: Record<string, BucketItem>;
+  showFavorites?: boolean;
   clientState: { ui?: { inbox_view_mode?: "grouped" | "time" | "bucket"; inbox_flat_view?: boolean } };
 }): InboxSession[] {
+  // Favorites view walks its own project-grouped order so Ctrl+J/K moves through
+  // the shelf, not the active desk underneath it.
+  if (state.showFavorites) {
+    return favoritesVisualOrder(state.sessions, state.activeProjectFilter);
+  }
   const bucketByConv = convBucketMap(state.bucketAssignments);
   const base = visualOrderSessions(state.sessions, state.sessionsWithQueuedMessages, state.activeProjectFilter, sessionsWithPendingSend(state.pendingMessages), { currentSessionId: state.currentSessionId, pendingCreateIds: new Set(Object.keys(state.pendingSessionCreates)), bucketFilter: state.activeBucketFilter, bucketByConv });
   const mode = resolveInboxViewMode(state.clientState.ui);
@@ -1340,6 +1382,12 @@ interface InboxStoreState {
   pendingHighlightQuery: string | null;
   showMySessions: boolean;
   setShowMySessions: (show: boolean) => void;
+  // The session-list panel is showing the Favorites view (a long-term kept set,
+  // grouped by project) instead of the active inbox. Reuses the same panel,
+  // rows, keyboard nav and project filter — only the source set and grouping
+  // differ. Mutually exclusive with the feed (showMySessions).
+  showFavorites: boolean;
+  setShowFavorites: (show: boolean) => void;
   // Ids the LIVE listInboxSessions subscription (show_all:false) currently
   // returns — i.e. the server's authoritative "recent" set. The never-prune
   // sessions cache also holds "old" rows backfilled by the completeness crawl
@@ -2383,7 +2431,9 @@ export const useInboxStore = create<InboxStoreState>(
   pendingScrollToMessageId: null,
   pendingHighlightQuery: null,
   showMySessions: false,
-  setShowMySessions: (show: boolean) => set({ showMySessions: show }),
+  setShowMySessions: (show: boolean) => set({ showMySessions: show, ...(show ? { showFavorites: false } : {}) }),
+  showFavorites: false,
+  setShowFavorites: (show: boolean) => set({ showFavorites: show, ...(show ? { showMySessions: false } : {}) }),
   liveInboxIds: new Set<string>(),
   _lastViewedAt: {},
   _seenUpToAt: {},

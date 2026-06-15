@@ -3,12 +3,14 @@ import { usePathname, useRouter } from "next/navigation";
 import { useState, useMemo, useCallback, useRef } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { toast } from "sonner";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery, useMutation, useConvex } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { cleanTitle, msgCountColor } from "../lib/conversationProcessor";
+import { visitTimeAgo } from "../lib/recentVisits";
+import { getLabelColor } from "../lib/labelColors";
 import { shouldShowSession } from "../lib/sessionFilters";
-import { useInboxStore, categorizeSessions, sessionsWithPendingSend } from "../store/inboxStore";
+import { useInboxStore, categorizeSessions, sessionsWithPendingSend, getProjectName } from "../store/inboxStore";
 import { useConvexSync } from "../hooks/useConvexSync";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { TeamIcon } from "./TeamIcon";
@@ -272,7 +274,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
     activeTeamId ? { teamId: activeTeamId } : "skip"
   );
   const teamUnreadCount = teamUnreadCountQuery ?? useInboxStore.getState().teamUnreadCount;
-  const toggleFavorite = useInboxStore((s) => s.toggleFavorite);
+  const showFavorites = useInboxStore((s) => s.showFavorites);
   const createDoc = useInboxStore((s) => s.createDoc);
   const createModal = useInboxStore((s) => s.createModal);
   const closeCreateModal = useInboxStore((s) => s.closeCreateModal);
@@ -297,8 +299,45 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const favoritesQuery = useQuery(api.conversations.listFavorites);
   const bookmarksQuery = useQuery(api.bookmarks.listBookmarks);
   const favorites = favoritesQuery ?? useInboxStore.getState().favorites;
-  const [showAllFavorites, setShowAllFavorites] = useState(false);
   const bookmarks = bookmarksQuery ?? useInboxStore.getState().bookmarks;
+  const [showAllBookmarks, setShowAllBookmarks] = useState(false);
+  const convex = useConvex();
+  const prefetchedBookmarksRef = useRef<Set<string>>(new Set());
+  // Warm the Convex cache with the EXACT window + meta the conversation view
+  // requests on click (getMessagesAroundTimestamp with the same 50/50 bounds,
+  // plus the header meta), so opening a bookmark jumps to the message with no
+  // load spinner. Fires on hover; deduped per bookmark.
+  const prefetchBookmark = useCallback((bm: any) => {
+    if (!bm?.message_timestamp || prefetchedBookmarksRef.current.has(bm._id)) return;
+    prefetchedBookmarksRef.current.add(bm._id);
+    convex
+      .query(api.conversations.getMessagesAroundTimestamp, {
+        conversation_id: bm.conversation_id,
+        center_timestamp: bm.message_timestamp,
+        limit_before: 50,
+        limit_after: 50,
+      })
+      .catch(() => prefetchedBookmarksRef.current.delete(bm._id));
+    convex.query(api.conversations.getConversationWithMeta, { conversation_id: bm.conversation_id }).catch(() => {});
+  }, [convex]);
+  // The aggregate view: bookmarks clustered by their conversation (most-recently
+  // bookmarked conversation first), so each pointer reads against its source
+  // instead of floating as an orphaned preview line.
+  const groupedBookmarks = useMemo(() => {
+    if (!bookmarks) return [] as Array<{ conversation_id: string; title: string; project: string; items: any[]; latest: number }>;
+    const byConv = new Map<string, { conversation_id: string; title: string; project: string; items: any[]; latest: number }>();
+    for (const bm of bookmarks as any[]) {
+      let g = byConv.get(bm.conversation_id);
+      if (!g) {
+        g = { conversation_id: bm.conversation_id, title: bm.conversation_title || "New Session", project: getProjectName(bm.git_root, bm.project_path), items: [], latest: 0 };
+        byConv.set(bm.conversation_id, g);
+      }
+      g.items.push(bm);
+      g.latest = Math.max(g.latest, bm.created_at ?? 0);
+    }
+    for (const g of byConv.values()) g.items.sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0));
+    return Array.from(byConv.values()).sort((a, b) => b.latest - a.latest);
+  }, [bookmarks]);
   const toggleBookmark = useInboxStore((s) => s.toggleBookmark);
   const allSavedViews = useInboxStore((s) => s.clientState.ui?.saved_views);
   const savedViews = useMemo(
@@ -423,6 +462,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
         <div>
           <button
             onClick={() => {
+              useInboxStore.getState().setShowFavorites(false);
               if (isInbox) {
                 useInboxStore.getState().setShowMySessions(true);
                 useInboxStore.getState().clearSelection();
@@ -430,7 +470,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
               router.push("/inbox");
             }}
             className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none text-left ${
-              isInbox
+              isInbox && !showFavorites
                 ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
                 : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
             }`}
@@ -446,6 +486,34 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
                   <span className="-ml-0.5 min-w-[20px] h-[20px] px-1.5 flex items-center justify-center text-[11px] font-bold bg-teal-600 text-white rounded-full">
                     {needsInputCount}
                   </span>
+                )}
+              </>
+            )}
+          </button>
+          {/* Favorites — a peer top-level section. Repoints the session-list
+              panel to the kept set (long-term shelf, grouped by project), reusing
+              the same rows, keyboard nav and project filter as the inbox. */}
+          <button
+            onClick={() => {
+              useInboxStore.getState().setShowFavorites(true);
+              router.push("/inbox");
+              onMobileClose?.();
+            }}
+            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none text-left ${
+              showFavorites
+                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-amber-400"
+                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
+            }`}
+            title="Favorites"
+          >
+            <svg className={`w-5 h-5 flex-shrink-0 ${showFavorites ? "text-amber-400" : ""}`} fill={showFavorites ? "currentColor" : "none"} stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+            </svg>
+            {!isNarrow && (
+              <>
+                <span>Favorites</span>
+                {favorites && favorites.length > 0 && (
+                  <span className="-ml-0.5 text-[10px] tabular-nums text-sol-text-dim/70">{favorites.length}</span>
                 )}
               </>
             )}
@@ -618,111 +686,86 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
           </div>
         )}
 
-        {!isNarrow && favorites && favorites.length > 0 && (
-          <div className="mt-4">
-            <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-4 mb-2 flex items-center gap-1.5">
-              <svg className="w-3.5 h-3.5 text-amber-400" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
-              </svg>
-              Favorites
-            </div>
-            <div className="space-y-0.5">
-              {(showAllFavorites ? favorites : favorites.slice(0, 5)).map((fav: any) => (
-                <div key={fav._id} className="flex items-center group">
-                  <a
-                    href={`/conversation/${fav._id}`}
-                    onClick={(e) => {
-                      e.preventDefault();
-                      const store = useInboxStore.getState();
-                      store.navigateToSession(fav._id);
-                      const activeTab = store.tabs.find((t: any) => t.id === store.activeTabId);
-                      if (activeTab) {
-                        store.updateTab(activeTab.id, { path: "/inbox" });
-                      }
-                      if (!store.tabs.length) router.push("/inbox");
-                      onMobileClose?.();
-                    }}
-                    className="flex items-center gap-2 px-4 py-1.5 text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60 transition-colors flex-1 min-w-0 cursor-pointer"
-                  >
-                    <svg className="w-3 h-3 text-amber-400 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
-                      <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
-                    </svg>
-                    <span className="truncate text-sm flex-1">{cleanTitle(fav.title || "New Session")}</span>
-                    {fav.message_count > 0 && <span className={`text-[10px] tabular-nums ${msgCountColor(fav.message_count)}`}>{fav.message_count}</span>}
-                  </a>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      toggleFavorite(fav._id);
-                    }}
-                    className="p-1 rounded opacity-0 group-hover:opacity-100 text-sol-text-dim hover:text-sol-text transition-opacity flex-shrink-0 mr-1"
-                    title="Remove from favorites"
-                  >
-                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
-                </div>
-              ))}
-              {favorites.length > 5 && (
-                <button
-                  onClick={() => setShowAllFavorites(v => !v)}
-                  className="w-full px-4 py-1.5 text-xs text-sol-text-dim hover:text-sol-text transition-colors text-left"
-                >
-                  {showAllFavorites ? "Show less" : `${favorites.length - 5} more…`}
-                </button>
-              )}
-            </div>
-          </div>
-        )}
-
-        {!isNarrow && bookmarks && bookmarks.length > 0 && (
+        {!isNarrow && groupedBookmarks.length > 0 && (
           <div className="mt-4">
             <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-4 mb-2 flex items-center gap-1.5">
               <svg className="w-3.5 h-3.5 text-sol-cyan" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
               </svg>
               Bookmarks
+              <span className="ml-auto text-[10px] tabular-nums text-sol-text-dim/60 normal-case font-normal">{bookmarks.length}</span>
             </div>
-            <div className="space-y-0.5">
-              {bookmarks.slice(0, 8).map((bookmark: any) => (
-                <div
-                  key={bookmark._id}
-                  className="flex items-center gap-2 px-4 py-1.5 text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60 transition-colors group cursor-pointer"
-                  onClick={() => {
-                    const store = useInboxStore.getState();
-                    // Pair the navigation target with the scroll target atomically so the
-                    // inbox's pendingNavigateId watcher resolves them together. Setting them
-                    // separately (navigateToSession + a later setState) raced the cache-hit
-                    // watcher, which pinned the scroll to the *previous* conversation.
-                    store.requestNavigate(bookmark.conversation_id, { scrollToMessageId: bookmark.message_id });
-                    const activeTab = store.tabs.find((t: any) => t.id === store.activeTabId);
-                    if (activeTab) {
-                      store.updateTab(activeTab.id, { path: "/inbox" });
-                    }
-                    if (!store.tabs.length) router.push("/inbox");
-                    onMobileClose?.();
-                  }}
-                >
-                  <svg className={`w-3 h-3 flex-shrink-0 ${bookmark.message_role === "user" ? "text-sol-blue" : "text-sol-violet"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
-                  </svg>
-                  <span className="truncate text-sm flex-1">{bookmark.message_preview || bookmark.conversation_title}</span>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      toggleBookmark(bookmark.conversation_id, bookmark.message_id);
-                    }}
-                    className="opacity-40 group-hover:opacity-100 text-sol-text-dim hover:text-sol-red transition-all flex-shrink-0"
-                    title="Remove bookmark"
-                    aria-label="Remove bookmark"
-                  >
-                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
+            <div className="space-y-2.5">
+              {(showAllBookmarks ? groupedBookmarks : groupedBookmarks.slice(0, 6)).map((group) => (
+                <div key={group.conversation_id}>
+                  <div className="px-4 mb-0.5 flex items-center gap-1.5 min-w-0">
+                    {group.project && group.project !== "unknown" && (
+                      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${getLabelColor(group.project).dot}`} />
+                    )}
+                    <span className="truncate text-[11px] font-semibold text-sol-text-dim">{cleanTitle(group.title)}</span>
+                  </div>
+                  {group.items.map((bm: any) => (
+                    <div
+                      key={bm._id}
+                      onMouseEnter={() => prefetchBookmark(bm)}
+                      onFocus={() => prefetchBookmark(bm)}
+                      className="flex items-start gap-2 px-4 py-1 hover:bg-sol-bg-highlight/60 transition-colors group cursor-pointer"
+                      onClick={() => {
+                        const store = useInboxStore.getState();
+                        // Pair the navigation target with the scroll target atomically so the
+                        // inbox's pendingNavigateId watcher resolves them together. Setting them
+                        // separately (navigateToSession + a later setState) raced the cache-hit
+                        // watcher, which pinned the scroll to the *previous* conversation.
+                        store.requestNavigate(bm.conversation_id, { scrollToMessageId: bm.message_id });
+                        const activeTab = store.tabs.find((t: any) => t.id === store.activeTabId);
+                        if (activeTab) {
+                          store.updateTab(activeTab.id, { path: "/inbox" });
+                        }
+                        if (!store.tabs.length) router.push("/inbox");
+                        onMobileClose?.();
+                      }}
+                    >
+                      <svg className={`w-3 h-3 flex-shrink-0 mt-[3px] ${bm.message_role === "user" ? "text-sol-blue" : "text-sol-violet"}`} fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+                      </svg>
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm text-sol-text-muted group-hover:text-sol-text leading-snug">
+                          {bm.name || bm.message_preview || "Bookmarked message"}
+                        </div>
+                        <div className="flex items-center gap-1 text-[10px] text-sol-text-dim/70 leading-tight">
+                          <span>{bm.message_role === "user" ? "you" : "assistant"}</span>
+                          <span aria-hidden>·</span>
+                          <span>{visitTimeAgo(bm.created_at)}</span>
+                          {bm.name && bm.message_preview && (
+                            <span className="truncate opacity-80">· {bm.message_preview}</span>
+                          )}
+                        </div>
+                      </div>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleBookmark(bm.conversation_id, bm.message_id);
+                        }}
+                        className="opacity-0 group-hover:opacity-100 text-sol-text-dim hover:text-sol-red transition-all flex-shrink-0 mt-[2px]"
+                        title="Remove bookmark"
+                        aria-label="Remove bookmark"
+                      >
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                  ))}
                 </div>
               ))}
+              {groupedBookmarks.length > 6 && (
+                <button
+                  onClick={() => setShowAllBookmarks(v => !v)}
+                  className="w-full px-4 py-1 text-xs text-sol-text-dim hover:text-sol-text transition-colors text-left"
+                >
+                  {showAllBookmarks ? "Show less" : `${groupedBookmarks.length - 6} more conversation${groupedBookmarks.length - 6 === 1 ? "" : "s"}…`}
+                </button>
+              )}
             </div>
           </div>
         )}

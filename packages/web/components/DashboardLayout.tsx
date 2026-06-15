@@ -303,6 +303,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     prevWasInboxRef.current = isOnInboxPage;
     if (wasInbox && !isOnInboxPage) {
       const store = useInboxStore.getState();
+      // The Favorites view is a mode of the inbox's session list; leaving the
+      // inbox drops back to the active desk so the rail isn't stuck on the shelf.
+      if (store.showFavorites) store.setShowFavorites(false);
       if (store.sidePanelUserClosed) return;
       const current = store.currentSessionId;
       if (current) {
