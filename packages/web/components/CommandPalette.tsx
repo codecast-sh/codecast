@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useRef } from "react";
+import { useState, useCallback, useMemo, useRef, memo } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useShortcutAction, isMac, type ShortcutAction } from "../shortcuts";
 import { KeyCap, MenuKeyCaps } from "./KeyboardShortcutsHelp";
@@ -20,7 +20,7 @@ import { useCurrentUser } from "../hooks/useCurrentUser";
 import { getLabelColor, DEFAULT_LABELS } from "../lib/labelColors";
 import { toast } from "sonner";
 import { undoableArchiveDoc, undoableHideSession, undoableDeferSession } from "../store/undoActions";
-import { copyToClipboard } from "../lib/utils";
+import { copyToClipboard, shareOrigin } from "../lib/utils";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import {
   Circle,
@@ -54,6 +54,8 @@ import {
   Filter,
   MessageSquare,
   Folder,
+  Star,
+  Link as LinkIcon,
 } from "lucide-react";
 
 const api = _api as any;
@@ -844,10 +846,6 @@ function ActionSubmenu({
 }
 
 // ─── Unified Command Palette ────────────────────────────────────
-// Stable empty map handed to the sessions selector while the palette is closed, so a
-// closed palette stops subscribing to live session churn (see storeSessions below).
-const EMPTY_SESSIONS: Record<string, any> = {};
-
 // We substring-match the local session cache OURSELVES and hand cmdk only the
 // matches — because cmdk mounts and re-scores every Item it's given on each
 // keystroke, so feeding it the whole cache (thousands of sessions) janks typing.
@@ -919,7 +917,11 @@ function matchEntities(
   return out;
 }
 
-export function CommandPalette({ standalone = false }: { standalone?: boolean }) {
+// Memoized: this overlay is ALWAYS mounted inside DashboardLayout, which
+// re-renders on every heartbeat. Its only prop (`standalone`) is stable, so memo
+// severs the parent-cascade — combined with snapshotting session data at open
+// (above), the palette now re-renders only on its OWN state, not on session churn.
+function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   const [query, setQuery] = useState("");
   const [actionMode, setActionMode] = useState<ActionMode | null>(null);
   // Whether the submenu was reached by drilling down from the root palette
@@ -942,31 +944,52 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
 
   const favorites = useInboxStore((s) => s.favorites);
   const bookmarks = useInboxStore((s) => s.bookmarks);
-  const recentConversations = useQuery(api.conversations.listRecentSessions, open ? {} : "skip") ?? [];
-  // Gate on `open`: while the palette is closed the selector returns a stable empty
-  // reference, so live session updates (every heartbeat / message / switch) no longer
-  // re-render this always-mounted component or re-run its command-list memos below.
-  // Measured: this was ~411ms — ~94% — of a session switch's render cost while CLOSED.
-  const storeSessions = useInboxStore((s) => open ? s.sessions : EMPTY_SESSIONS);
+
+  // The palette is a TRANSIENT overlay, so it SNAPSHOTS session-derived data once
+  // per open rather than subscribing to it live. Every agent heartbeat bumps
+  // updated_at on its conversation, which both mints a fresh `s.sessions` ref AND
+  // pushes a new `listRecentSessions` result ~1-2×/sec — and the old live
+  // subscriptions re-ran a merge+sort over the WHOLE session cache (thousands of
+  // rows) on each one, janking the open palette. Recents going a few seconds stale
+  // while it's up is fine; the search groups below cover anything the snapshot misses.
+
+  // Server recents: gate on open AND "not yet frozen" so the query unsubscribes
+  // after its first result — heartbeat pushes then stop re-rendering the palette.
+  const recentFrozenRef = useRef(false);
+  const recentConversations = useQuery(
+    api.conversations.listRecentSessions,
+    open && !recentFrozenRef.current ? {} : "skip",
+  );
 
   // Globally-synced lightweight index of tasks/docs/plans (title + short_id +
-  // status), populated by DashboardLayout's useSyncMention* hooks. Gated on
-  // `open` like sessions so a closed palette ignores entity-sync churn.
-  const mentionIndex = useInboxStore((s) => open ? s.mentionIndex : EMPTY_MENTION_INDEX);
+  // status), populated by DashboardLayout's useSyncMention* hooks. Captured at
+  // open (already pre-synced) so a closed palette ignores entity-sync churn and an
+  // open one doesn't re-render on it.
+  const mentionIndex = useMemo(
+    () => (open ? useInboxStore.getState().mentionIndex : EMPTY_MENTION_INDEX),
+    [open],
+  );
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
   const effectiveTeamId = (activeTeamId || (currentUser as any)?.team_id) as string | undefined;
 
-  // Merge locally-loaded inbox sessions (own, instant) with the server list
-  // (own + team-visible) so the palette mirrors the inbox and stays responsive.
-  const recentSessions = useMemo(() => {
+  // Merge locally-loaded inbox sessions (own, instant) with the server list (own +
+  // team-visible). Shows local sessions immediately, re-merges once when the server
+  // result lands, then FREEZES — so heartbeat churn can't re-run this whole-cache
+  // sort while the palette is open, and the query above flips to "skip".
+  const [recentSessions, setRecentSessions] = useState<any[]>([]);
+  useWatchEffect(() => {
+    if (!open) { recentFrozenRef.current = false; setRecentSessions([]); return; }
+    if (recentFrozenRef.current) return;
     const byId = new Map<string, any>();
-    for (const c of recentConversations) byId.set(c._id, c);
-    for (const s of Object.values(storeSessions)) {
-      if (s.is_subagent) continue;
-      byId.set(s._id, { ...byId.get(s._id), ...s });
+    for (const c of (recentConversations ?? [])) byId.set(c._id, c);
+    for (const s of Object.values(useInboxStore.getState().sessions)) {
+      if ((s as any).is_subagent) continue;
+      byId.set(s._id, { ...byId.get(s._id), ...(s as any) });
     }
-    return Array.from(byId.values()).sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
-  }, [recentConversations, storeSessions]);
+    setRecentSessions(Array.from(byId.values()).sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0)));
+    // Server query has landed (undefined = still loading) → freeze.
+    if (recentConversations !== undefined) recentFrozenRef.current = true;
+  }, [open, recentConversations]);
 
   // "Recently Visited" — the unified recents rail (sessions, chip views,
   // pages), same source as the header's RecentlyViewedMenu. Empty-query only:
@@ -1302,6 +1325,10 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
         useInboxStore.getState().pinSession(session._id);
         toast.success(session.is_pinned ? "Unpinned" : "Pinned");
         closePalette();
+      } else if (actionKey === "session_favorite") {
+        useInboxStore.getState().toggleFavorite(session._id);
+        toast.success(session.is_favorite ? "Removed from favorites" : "Added to favorites");
+        closePalette();
       } else if (actionKey === "session_kill") {
         // The teardown rides the hide transition server-side (dispatch.applyPatches).
         undoableHideSession(session._id, "kill");
@@ -1315,6 +1342,9 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
       } else if (actionKey === "session_copy") {
         copyToClipboard(session._id);
         toast.success("Copied session ID");
+        closePalette();
+      } else if (actionKey === "session_copylink") {
+        copyToClipboard(`${shareOrigin()}/conversation/${session._id}`).then(() => toast.success("Link copied!"));
         closePalette();
       } else if (actionKey === "session_rename") {
         // Navigate to the session and let them rename inline
@@ -1381,8 +1411,16 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
   const sessionActions = useMemo((): ContextActionRow[] => {
     if (targetType !== "session" || !target) return [];
     const s = target as InboxSession;
+    // Inbox convention: author_name is stamped only for teammates' sessions, so
+    // its absence means this is the user's own session. Favorite is an owner-only
+    // marking (matches the conv.favorite gate in ConversationView), so hide it on
+    // teammates' sessions surfaced via recents/search.
+    const isOwnSession = !(s as any).author_name && (!s.user_id || !currentUser || s.user_id === (currentUser as any)._id);
     return [
       { key: "session_pin", label: s.is_pinned ? "Unpin session" : "Pin session", icon: s.is_pinned ? PinOff : Pin, shortcutAction: "session.pin" },
+      ...(isOwnSession
+        ? [{ key: "session_favorite", label: s.is_favorite ? "Remove from favorites" : "Add to favorites", icon: Star, shortcutAction: "conv.favorite" } as ContextActionRow]
+        : []),
       { key: "bucket", label: "Label session...", icon: Tag, shortcutAction: "session.moveToBucket" },
       ...(canControlModel(s.agent_type, (s.message_count ?? 0) === 0)
         ? [{ key: "model", label: "Change model & effort...", icon: Cpu } as ContextActionRow]
@@ -1392,9 +1430,10 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
       { key: "session_defer", label: "Defer session", icon: Clock, shortcutAction: "session.deferAdvance" },
       { key: "session_rename", label: "Rename session", icon: Pencil, shortcutAction: "session.rename" },
       { key: "session_copy", label: "Copy session ID", icon: Copy },
+      { key: "session_copylink", label: "Copy link", icon: LinkIcon, shortcutAction: "conv.copyLink" },
       { key: "session_newtab", label: "Open in new tab", icon: ExternalLink },
     ];
-  }, [targetType, target]);
+  }, [targetType, target, currentUser]);
 
   const actions = targetType === "task" ? taskActions
     : targetType === "doc" ? docActions
@@ -1917,3 +1956,5 @@ export function CommandPalette({ standalone = false }: { standalone?: boolean })
     </div>
   );
 }
+
+export const CommandPalette = memo(CommandPaletteImpl);
