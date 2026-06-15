@@ -616,10 +616,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
 
         {!isNarrow && savedViews && savedViews.length > 0 && (
           <div className="mt-4">
-            <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-4 mb-2 flex items-center gap-1.5">
-              <svg className="w-3.5 h-3.5 text-sol-cyan" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
-              </svg>
+            <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-4 mb-2">
               Saved Views
             </div>
             <div className="space-y-0.5">
@@ -635,8 +632,8 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
                     className="flex items-center gap-2 px-4 py-1.5 text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60 transition-colors flex-1 min-w-0 text-left"
                   >
                     <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${view.page === "tasks" ? "bg-sol-yellow" : view.page === "docs" ? "bg-sol-violet" : "bg-sol-cyan"}`} />
-                    <span className="truncate text-sm flex-1">{view.name}</span>
-                    <span className="text-[9px] text-sol-text-dim/60 uppercase">{view.page}</span>
+                    <span className="truncate text-sm min-w-0">{view.name}</span>
+                    <span className="text-[9px] text-sol-text-dim/60 uppercase flex-shrink-0">{view.page}</span>
                   </button>
                   <button
                     onClick={(e) => {
@@ -657,12 +654,9 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
         )}
 
         {!isNarrow && groupedBookmarks.length > 0 && (
-          <div className="mt-5 pt-4 border-t border-sol-border/40">
-            <div className="px-4 mb-2.5 flex items-center gap-1.5">
-              <svg className="w-3.5 h-3.5 text-sol-cyan" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
-              </svg>
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-sol-text-muted">Bookmarks</span>
+          <div className="mt-4">
+            <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-4 mb-2 flex items-center">
+              <span>Bookmarks</span>
               <span className="ml-auto text-[10px] tabular-nums text-sol-text-dim/50">{bookmarks.length}</span>
             </div>
             <div className="space-y-1.5 px-2">
