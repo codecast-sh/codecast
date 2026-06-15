@@ -861,9 +861,13 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
               collapsedSize={0}
               defaultSize={sidebarHidden ? 0 : layout.sidebar}
               onResize={(size) => {
-                // If the user drags below minSize, the panel collapses on its own.
-                // Mirror that into store state so the effect doesn't re-expand it.
-                if (size.asPercentage === 0 && !sidebarHidden) {
+                // Persist a *user drag* down to 0 as a collapse. Gate on our own
+                // applied-state (we currently believe the sidebar is expanded), not
+                // just !sidebarHidden: the library also emits 0-size events while we
+                // drive an expand (panel still at 0, or re-registers mid-render).
+                // Without this guard that event writes sidebar_collapsed:true again
+                // and instantly reverts the expand — making the toggle look dead.
+                if (size.asPercentage === 0 && !sidebarHidden && sidebarAppliedRef.current === false) {
                   s.updateClientUI({ sidebar_collapsed: true });
                 }
               }}
