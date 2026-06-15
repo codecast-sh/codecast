@@ -495,7 +495,12 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
               the same rows, keyboard nav and project filter as the inbox. */}
           <button
             onClick={() => {
-              useInboxStore.getState().setShowFavorites(true);
+              const store = useInboxStore.getState();
+              store.setShowFavorites(true);
+              // The favorites list lives in the session-list rail; open it so the
+              // switch is actually visible (otherwise clicking Favorites with the
+              // rail collapsed looks like a no-op).
+              if (!store.sidePanelOpen) store.toggleSidePanel();
               router.push("/inbox");
               onMobileClose?.();
             }}
@@ -695,67 +700,76 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
               Bookmarks
               <span className="ml-auto text-[10px] tabular-nums text-sol-text-dim/60 normal-case font-normal">{bookmarks.length}</span>
             </div>
-            <div className="space-y-2.5">
+            <div className="space-y-3">
               {(showAllBookmarks ? groupedBookmarks : groupedBookmarks.slice(0, 6)).map((group) => (
                 <div key={group.conversation_id}>
-                  <div className="px-4 mb-0.5 flex items-center gap-1.5 min-w-0">
+                  {/* Conversation anchor: each bookmark reads against the thread it
+                      lives in. Project dot ties it to its workspace color. */}
+                  <button
+                    onClick={() => {
+                      const store = useInboxStore.getState();
+                      store.requestNavigate(group.conversation_id, {});
+                      const activeTab = store.tabs.find((t: any) => t.id === store.activeTabId);
+                      if (activeTab) store.updateTab(activeTab.id, { path: "/inbox" });
+                      if (!store.tabs.length) router.push("/inbox");
+                      onMobileClose?.();
+                    }}
+                    className="w-full px-4 mb-1 flex items-center gap-1.5 min-w-0 text-left group/h"
+                  >
                     {group.project && group.project !== "unknown" && (
                       <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${getLabelColor(group.project).dot}`} />
                     )}
-                    <span className="truncate text-[11px] font-semibold text-sol-text-dim">{cleanTitle(group.title)}</span>
-                  </div>
-                  {group.items.map((bm: any) => (
-                    <div
-                      key={bm._id}
-                      onMouseEnter={() => prefetchBookmark(bm)}
-                      onFocus={() => prefetchBookmark(bm)}
-                      className="flex items-start gap-2 px-4 py-1 hover:bg-sol-bg-highlight/60 transition-colors group cursor-pointer"
-                      onClick={() => {
-                        const store = useInboxStore.getState();
-                        // Pair the navigation target with the scroll target atomically so the
-                        // inbox's pendingNavigateId watcher resolves them together. Setting them
-                        // separately (navigateToSession + a later setState) raced the cache-hit
-                        // watcher, which pinned the scroll to the *previous* conversation.
-                        store.requestNavigate(bm.conversation_id, { scrollToMessageId: bm.message_id });
-                        const activeTab = store.tabs.find((t: any) => t.id === store.activeTabId);
-                        if (activeTab) {
-                          store.updateTab(activeTab.id, { path: "/inbox" });
-                        }
-                        if (!store.tabs.length) router.push("/inbox");
-                        onMobileClose?.();
-                      }}
-                    >
-                      <svg className={`w-3 h-3 flex-shrink-0 mt-[3px] ${bm.message_role === "user" ? "text-sol-blue" : "text-sol-violet"}`} fill="currentColor" viewBox="0 0 24 24">
-                        <path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
-                      </svg>
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm text-sol-text-muted group-hover:text-sol-text leading-snug">
-                          {bm.name || bm.message_preview || "Bookmarked message"}
-                        </div>
-                        <div className="flex items-center gap-1 text-[10px] text-sol-text-dim/70 leading-tight">
-                          <span>{bm.message_role === "user" ? "you" : "assistant"}</span>
-                          <span aria-hidden>·</span>
-                          <span>{visitTimeAgo(bm.created_at)}</span>
-                          {bm.name && bm.message_preview && (
-                            <span className="truncate opacity-80">· {bm.message_preview}</span>
-                          )}
-                        </div>
-                      </div>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          toggleBookmark(bm.conversation_id, bm.message_id);
+                    <span className="truncate text-[11px] font-semibold text-sol-text-muted group-hover/h:text-sol-text">{cleanTitle(group.title)}</span>
+                  </button>
+                  <div className="space-y-px">
+                    {group.items.map((bm: any) => (
+                      <div
+                        key={bm._id}
+                        onMouseEnter={() => prefetchBookmark(bm)}
+                        onFocus={() => prefetchBookmark(bm)}
+                        className="flex items-center gap-2 pl-5 pr-3 py-1 rounded-sm hover:bg-sol-bg-highlight/60 transition-colors group cursor-pointer"
+                        onClick={() => {
+                          const store = useInboxStore.getState();
+                          // Pair the navigation target with the scroll target atomically so the
+                          // inbox's pendingNavigateId watcher resolves them together. Setting them
+                          // separately (navigateToSession + a later setState) raced the cache-hit
+                          // watcher, which pinned the scroll to the *previous* conversation.
+                          store.requestNavigate(bm.conversation_id, { scrollToMessageId: bm.message_id });
+                          const activeTab = store.tabs.find((t: any) => t.id === store.activeTabId);
+                          if (activeTab) {
+                            store.updateTab(activeTab.id, { path: "/inbox" });
+                          }
+                          if (!store.tabs.length) router.push("/inbox");
+                          onMobileClose?.();
                         }}
-                        className="opacity-0 group-hover:opacity-100 text-sol-text-dim hover:text-sol-red transition-all flex-shrink-0 mt-[2px]"
-                        title="Remove bookmark"
-                        aria-label="Remove bookmark"
                       >
-                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                        <svg className={`w-2.5 h-2.5 flex-shrink-0 ${bm.message_role === "user" ? "text-sol-blue" : "text-sol-violet"}`} fill="currentColor" viewBox="0 0 24 24">
+                          <path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
                         </svg>
-                      </button>
-                    </div>
-                  ))}
+                        <span className={`truncate flex-1 min-w-0 text-[13px] leading-snug ${bm.name ? "text-sol-text font-medium" : "text-sol-text-muted"} group-hover:text-sol-text`}>
+                          {bm.name || bm.message_preview || <span className="italic opacity-60">empty message</span>}
+                        </span>
+                        {/* Time normally; swaps to the remove control on hover so the row
+                            stays a single clean line and never wraps. */}
+                        <span className="flex-shrink-0 flex items-center justify-end w-9">
+                          <span className="text-[10px] tabular-nums text-sol-text-dim/60 whitespace-nowrap group-hover:hidden">{visitTimeAgo(bm.created_at)}</span>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleBookmark(bm.conversation_id, bm.message_id);
+                            }}
+                            className="hidden group-hover:flex text-sol-text-dim hover:text-sol-red transition-colors"
+                            title="Remove bookmark"
+                            aria-label="Remove bookmark"
+                          >
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                          </button>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               ))}
               {groupedBookmarks.length > 6 && (
