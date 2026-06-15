@@ -230,57 +230,60 @@ export function stripModelPreamble(text: string): string {
   return stripped.trim() || text.trim();
 }
 
-// Pull {heading, body} out of a model response (may be fenced or prefixed).
-export function extractBeatJson(text: string): { heading?: string; body?: string } | null {
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start === -1 || end <= start) return null;
-  try {
-    const parsed = JSON.parse(text.slice(start, end + 1));
-    if (typeof parsed !== "object" || parsed === null) return null;
-    return {
-      heading: typeof parsed.heading === "string" ? parsed.heading : undefined,
-      body: typeof parsed.body === "string" ? parsed.body : undefined,
-    };
-  } catch {
-    return null;
-  }
+// Parse a "heading line, blank line, markdown body" response. Markdown bodies
+// carry their own newlines/structure, so a delimiter format is far more robust
+// than JSON (no escaping of multi-paragraph markdown). The first non-empty line
+// is the heading (any leading '#' stripped); everything after it is the body.
+export function parseHeadingBody(text: string): { heading?: string; body?: string } | null {
+  const lines = text.split("\n");
+  let i = 0;
+  while (i < lines.length && lines[i].trim() === "") i++;
+  if (i >= lines.length) return null;
+  const heading = lines[i].replace(/^#+\s*/, "").replace(/^\*\*|\*\*$/g, "").trim();
+  const body = lines.slice(i + 1).join("\n").trim();
+  if (!body) return null;
+  return { heading, body };
 }
 
+const CONDENSE_RULES = `- This is a CONDENSATION of my own words, not a summary or report about me. Keep my exact voice and the tense I wrote in — my present-tense working voice ("I'll look at…", "I'm tracing…", "Turns out…", "Now I'll…"). Do NOT rewrite into past-tense retrospect. NEVER write "I was asked to", "The user", or otherwise narrate from the outside. Just say what I'm doing, shorter.
+- Match my structure and markdown: keep it as a few short paragraphs, and keep bullet lists, inline \`code\`, and **bold** where I used them. Do NOT flatten everything into one dense block of prose.
+- Keep the concrete specifics — files, decisions, findings, results. Cut only repetition and filler.`;
+
+const OUTPUT_FORMAT = `Output exactly: a short heading line (3-6 words, no markdown), then a blank line, then the condensed markdown body. Nothing else — no preamble, no JSON, no code fences.`;
+
 function buildBeatPrompt(group: Turn[]): string {
-  // One slice of the session: the opening request(s) plus my work. Sample the
-  // assistant text so a dense slice stays within budget.
-  const sections = group.map((t) => {
-    const assistant = sampleEvenly(t.assistant, 6).map((a) => clip(a, 500)).join("\n");
-    return `User: ${clip(t.prompt || "[continued]", 600)}\n${assistant ? "Me:\n" + assistant : ""}`;
-  });
-  return `Below is one slice of a coding session — the user's request(s) and my work in response ("Me"). Retell it as ONE beat of a first-person story, in my own voice and tone.
+  // Feed my own messages across this slice, in order, lightly clipped so their
+  // paragraph/bullet structure survives for the model to mirror. The opening
+  // request is context only — the UI shows it separately, so the body must not
+  // restate it.
+  const myMessages = group
+    .flatMap((t) => t.assistant)
+    .map((a) => clip(a, 900))
+    .join("\n\n");
+  const goal = clip(group[0]?.prompt || "", 300);
+  return `Below are MY OWN messages from one stretch of a coding session (I am the assistant). Rewrite them as a shorter version of themselves — my condensed notes, in my own words.
 
-Return JSON: {"heading": "...", "body": "..."}
-- heading: 3-6 words naming what this slice was about.
-- body: 2-4 sentences covering what I set out to do here and what actually happened — keep concrete file/feature names, decisions, and outcomes. Light markdown (inline \`code\`, **bold**) is fine. No headers, no lists.
-- VOICE: always first person, from MY perspective as the one doing the work ("I traced…", "I fixed…"). The narration is mine throughout — never narrate the user in third person, never open with "The user". If a request matters, fold it in as "I was asked to…" or "X came up, so I…".
+${CONDENSE_RULES}
 
-Do not add any preamble or tags. Output ONLY the JSON object.
+${OUTPUT_FORMAT}
 
-<slice>
-${sections.join("\n\n")}
-</slice>`;
+${goal ? `<context>This stretch was in response to: "${goal}". This is only so you know the goal — do NOT restate or narrate it.</context>\n` : ""}<my-messages>
+${myMessages}
+</my-messages>`;
 }
 
 function buildPhasePrompt(beats: Beat[]): string {
-  const text = beats.map((b) => `## ${b.heading}\n${b.body}`).join("\n\n");
-  return `Below are several beats of a coding session's story, in order, written in my first-person voice. Combine them into ONE higher-level phase of the session.
+  const notes = beats.map((b) => `### ${b.heading}\n${b.body}`).join("\n\n");
+  return `Below are condensed notes from several consecutive stretches of MY coding session, in order, in my own voice. Combine them into ONE set of higher-level notes for this whole phase — still my words.
 
-Return JSON: {"heading": "...", "body": "..."}
-- heading: 3-6 words naming this phase of the work.
-- body: 2-3 sentences, same first-person voice, describing the arc across these beats at a higher level — the goal and the throughline, not every step. Light markdown is fine. No headers, no lists.
+${CONDENSE_RULES}
+- Pitch this one level higher than the input: the throughline and the key moves of this phase, not every individual step.
 
-Do not add any preamble or tags. Output ONLY the JSON object.
+${OUTPUT_FORMAT}
 
-<beats>
-${text}
-</beats>`;
+<notes>
+${notes}
+</notes>`;
 }
 
 async function mapBeats<T>(
@@ -297,8 +300,8 @@ async function mapBeats<T>(
         const idx = i + j;
         const anchor = anchorOf(group);
         try {
-          const text = await callHaiku(apiKey, buildPrompt(group), 700);
-          const parsed = text ? extractBeatJson(text) : null;
+          const text = await callHaiku(apiKey, buildPrompt(group), 1100);
+          const parsed = text ? parseHeadingBody(text) : null;
           out[idx] = {
             heading: parsed?.heading?.trim() || "",
             body: parsed?.body?.trim() || "",
