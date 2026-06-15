@@ -1400,6 +1400,7 @@ export function SessionListPanel({
     s => s.currentSessionId,
     s => s.pendingSessionCreates,
     s => s.showFavorites,
+    s => s.favorites,
   ]);
   const handleKillDismissed = useCallback((id: string) => {
     soundKill();
@@ -1641,8 +1642,8 @@ export function SessionListPanel({
   // No label tier — everything falls to project groups via the shared grouper.
   const favoritesView = s.showFavorites;
   const allFavorites = useMemo(
-    () => (favoritesView ? selectFavoriteSessions(s.sessions, null) : EMPTY_FAVORITES),
-    [favoritesView, s.sessions],
+    () => (favoritesView ? selectFavoriteSessions(s.sessions, null, s.favorites) : EMPTY_FAVORITES),
+    [favoritesView, s.sessions, s.favorites],
   );
   const favoriteGroups = useMemo(() => {
     if (!favoritesView) return null;

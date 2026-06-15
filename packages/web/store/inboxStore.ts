@@ -1249,19 +1249,54 @@ export function groupSessionsForLabelView(
   return { labelGroups, projectGroups };
 }
 
-// The Favorites set: kept sessions from the same cache, minus the ones an active
-// desk would hide (orphans/blanks). Optionally narrowed by the active project
-// chip — favorites inherit the inbox's project filter for free.
+// Thin InboxSession synthesized from a `favorites` list entry (listFavorites) for
+// a kept session that isn't in the cache — an old favorite the inbox window never
+// loaded. Enough for the shelf row + navigation; clicking hydrates the rest.
+function synthesizeFavoriteRow(fav: any): InboxSession {
+  return {
+    _id: fav._id,
+    session_id: fav.session_id ?? "",
+    title: fav.title,
+    updated_at: fav.updated_at ?? 0,
+    message_count: fav.message_count ?? 0,
+    agent_type: fav.agent_type ?? "claude_code",
+    is_favorite: true,
+    is_idle: true,
+    has_pending: false,
+  } as InboxSession;
+}
+
+// The Favorites set, driven off the authoritative `favorites` membership list
+// (listFavorites) — NOT the per-row `is_favorite` flag. Two reasons:
+//   • The flag arrives on cache rows via whichever channel synced them; web and
+//     Convex deploy independently, so a row can be present without the flag set
+//     (root of "badge says 13, shelf shows 0/9"). Membership is reliable.
+//   • Deliberately ignores isSessionHidden — a favorite is dismissed/stashed from
+//     the ACTIVE inbox as it ages; the shelf exists precisely to keep it.
+// Prefers the rich cached row; falls back to a thin synthesized row so an old,
+// never-loaded favorite still appears. Optional project chip inherited free.
 export function selectFavoriteSessions(
   sessions: Record<string, InboxSession>,
   projectFilter?: string | null,
+  favoritesList?: any[],
 ): InboxSession[] {
+  const matchesProject = (s: InboxSession) =>
+    !projectFilter || getProjectName(s.git_root, s.project_path) === projectFilter;
   const out: InboxSession[] = [];
+  const seen = new Set<string>();
+  for (const fav of favoritesList ?? []) {
+    const id = fav?._id;
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    const sess = sessions[id] ?? synthesizeFavoriteRow(fav);
+    if (matchesProject(sess)) out.push(sess);
+  }
+  // Belt and suspenders: any cached row that DOES carry the flag but isn't in the
+  // list yet (list still loading) still shows.
   for (const sess of Object.values(sessions)) {
-    if (!sess.is_favorite) continue;
-    if (isSessionHidden(sess)) continue;
-    if (projectFilter && getProjectName(sess.git_root, sess.project_path) !== projectFilter) continue;
-    out.push(sess);
+    if (!sess.is_favorite || seen.has(sess._id)) continue;
+    seen.add(sess._id);
+    if (matchesProject(sess)) out.push(sess);
   }
   return out;
 }
@@ -1273,8 +1308,9 @@ export function selectFavoriteSessions(
 export function favoritesVisualOrder(
   sessions: Record<string, InboxSession>,
   projectFilter?: string | null,
+  favoritesList?: any[],
 ): InboxSession[] {
-  const favs = selectFavoriteSessions(sessions, projectFilter);
+  const favs = selectFavoriteSessions(sessions, projectFilter, favoritesList);
   const pinned = favs.filter((s) => s.is_pinned).sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
   const rest = favs.filter((s) => !s.is_pinned);
   const { projectGroups } = groupSessionsForLabelView(rest, {}, {});
@@ -1307,12 +1343,13 @@ export function computeVisualOrder(state: {
   bucketAssignments: Record<string, BucketAssignmentItem>;
   buckets: Record<string, BucketItem>;
   showFavorites?: boolean;
+  favorites?: any[];
   clientState: { ui?: { inbox_view_mode?: "grouped" | "time" | "bucket"; inbox_flat_view?: boolean } };
 }): InboxSession[] {
   // Favorites view walks its own project-grouped order so Ctrl+J/K moves through
   // the shelf, not the active desk underneath it.
   if (state.showFavorites) {
-    return favoritesVisualOrder(state.sessions, state.activeProjectFilter);
+    return favoritesVisualOrder(state.sessions, state.activeProjectFilter, state.favorites);
   }
   const bucketByConv = convBucketMap(state.bucketAssignments);
   const base = visualOrderSessions(state.sessions, state.sessionsWithQueuedMessages, state.activeProjectFilter, sessionsWithPendingSend(state.pendingMessages), { currentSessionId: state.currentSessionId, pendingCreateIds: new Set(Object.keys(state.pendingSessionCreates)), bucketFilter: state.activeBucketFilter, bucketByConv });
