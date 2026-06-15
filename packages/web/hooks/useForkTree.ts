@@ -408,14 +408,39 @@ export function useForkTree(conversation: ForkConversationLike, open: boolean) {
   const conversationId = conversation?._id?.toString();
   const sessions = useInboxStore((s) => s.sessions);
   const messages = useInboxStore((s) => s.messages);
+  // The server tree is the only source that knows family members not in the
+  // local cache (a teammate's branch, a sibling created in another session).
+  // It needs a real Convex id — a conversation viewed by its pre-rekey fork
+  // session id (a raw UUID) would skip the query and show only cached branches.
+  // Fall back to the forked_from ancestor's id, which is always a Convex id, so
+  // the query still resolves the whole family.
+  const queryId =
+    conversationId && isConvexId(conversationId)
+      ? conversationId
+      : (typeof conversation?.forked_from === "string" && isConvexId(conversation.forked_from)
+          ? conversation.forked_from
+          : conversation?.forked_from?.toString());
   const serverRes = useQuery(
     api.conversations.getConversationTree,
-    open && conversationId && isConvexId(conversationId)
-      ? { conversation_id: conversationId as any }
-      : "skip",
+    open && queryId && isConvexId(queryId) ? { conversation_id: queryId as any } : "skip",
   );
   const serverTree =
     serverRes && !("error" in serverRes) ? ((serverRes as any).tree as ServerTreeNode) : null;
+
+  // Dev diagnostic: if the map opened but the server tree didn't resolve, the
+  // family falls back to cached branches only — which reads as "missing
+  // branches". Surface why (error vs skipped) so it's debuggable from console.
+  // Gated on the dev-only store global (set at the end of inboxStore.ts).
+  const isDev = typeof window !== "undefined" && !!(window as any).__inboxStore;
+  if (isDev && open) {
+    if (serverRes && "error" in (serverRes as any)) {
+      // eslint-disable-next-line no-console
+      console.warn("[branch-map] getConversationTree error:", (serverRes as any).error, "for", queryId);
+    } else if (!queryId) {
+      // eslint-disable-next-line no-console
+      console.warn("[branch-map] no Convex id to query the fork tree; showing cached branches only", { conversationId });
+    }
+  }
 
   return useMemo(
     () => buildForkFamily(conversation, sessions, serverTree, messages),
