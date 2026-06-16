@@ -10,6 +10,7 @@ import { resolveTeamForPath, isTeamMember, createTeamFeedFilter } from "./privac
 // seam). Imported for local use here and re-exported below so the web mutation
 // and the dispatch side-effect still enforce one rule, not two.
 import { canAccessDoc } from "./lib/access";
+import { packSnapshotContent } from "./lib/docSnapshot";
 export { canAccessDoc };
 
 function generatePlanShortId(): string {
@@ -650,12 +651,18 @@ export const resetSync = mutation({
 
     if (snapshots.length > 0) {
       const latest = snapshots.reduce((a: any, b: any) => a.version > b.version ? a : b);
-      await ctx.db.patch(latest._id, { content: json, version: latest.version + 1 });
+      // Write the compressed form and drop any legacy uncompressed content so the
+      // row carries exactly one representation (see doc_snapshots in schema.ts).
+      await ctx.db.patch(latest._id, {
+        content_gz: packSnapshotContent(json),
+        content: undefined,
+        version: latest.version + 1,
+      });
       for (const s of snapshots) {
         if (s._id !== latest._id) await ctx.db.delete(s._id);
       }
     } else {
-      await ctx.db.insert("doc_snapshots", { id: docId, version: 1, content: json });
+      await ctx.db.insert("doc_snapshots", { id: docId, version: 1, content_gz: packSnapshotContent(json) });
     }
     await ctx.db.patch(args.id, { cli_edited_at: Date.now() });
     return { success: true };
