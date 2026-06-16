@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { categorizeSessions, computeNewDividerIndex, dropLatchedFeedHasMore, feedPagePersistence, getSessionRenderKey, isConvexId, isSessionDismissed, isSessionStashed, orchestrationGroupLabelOf, pendingSendConsumed, resolveAssigneeInfo, resolveSessionAuthor, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
+import { categorizeSessions, computeNewDividerIndex, dropLatchedFeedHasMore, feedPagePersistence, findReusableBlankSession, getSessionRenderKey, isConvexId, isSessionDismissed, isSessionStashed, orchestrationGroupLabelOf, pendingSendConsumed, resolveAssigneeInfo, resolveSessionAuthor, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
 import { isPersistedStoreKey } from "../idbCache";
 import { declareViewNav } from "../viewNav";
 
@@ -2291,6 +2291,25 @@ describe("inboxStore.beginOptimisticSession", () => {
       });
       expect(stubId).not.toBe(REAL_ID);
       await ready;
+    });
+
+    // Regression — the desktop "compose into an existing session" bug. The matcher
+    // is only as correct as the `sessions` snapshot it reads. The palette window
+    // used to hold a stale IDB snapshot (no live subscription), so a row that had
+    // since gained messages still looked blank and the first message landed in
+    // that existing conversation. The window now mounts the live list
+    // (useLiveInboxSessions); piping it through the SAME syncTable flips the reuse
+    // decision the instant the row is revealed non-blank.
+    it("a live-list correction drops a now-nonblank session from reuse", () => {
+      const reuseArgs = { agentType: "claude_code", projectPath: "/repo" };
+      const store = useInboxStore.getState();
+      // Stale snapshot: the row looks like a reusable blank.
+      store.syncTable("sessions", [blank()]);
+      expect(findReusableBlankSession(useInboxStore.getState() as any, reuseArgs)).toBe(REAL_ID);
+      // Live list lands showing it actually has messages — reuse must drop it
+      // rather than route a first message into that existing conversation.
+      store.syncTable("sessions", [blank({ message_count: 4 })]);
+      expect(findReusableBlankSession(useInboxStore.getState() as any, reuseArgs)).toBeNull();
     });
   });
 
