@@ -17,9 +17,50 @@ import { PermissionCard } from '@/components/PermissionCard';
 import { DeviceChip, useRunOnDevice } from '@/components/DevicesSection';
 import { renderInlineMarkdown, MarkdownContent, MarkdownTextBlock, CodeBlockWithCopy, CodeBlockFullscreen, HighlightedCodeText } from '@/components/MarkdownRenderer';
 import { Theme, Spacing } from '@/constants/Theme';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+// A real gradient WITHOUT a native module: expo-linear-gradient's native side
+// ("ExpoLinearGradient") isn't linked into the dev/standalone binaries, so importing
+// it crashes. Instead we fake a smooth vertical fade with a stack of thin views whose
+// color interpolates from colors[0] (top) to the last color (bottom). This is what
+// makes clipped content and image previews fade INTO the background (web-like) rather
+// than getting capped by a hard solid block — the old stub just painted colors[last].
+function parseColor(c: string): [number, number, number, number] {
+  if (c?.startsWith('#')) {
+    let h = c.slice(1);
+    if (h.length === 3) h = h.split('').map((x) => x + x).join('');
+    const r = parseInt(h.slice(0, 2), 16);
+    const g = parseInt(h.slice(2, 4), 16);
+    const b = parseInt(h.slice(4, 6), 16);
+    const a = h.length >= 8 ? parseInt(h.slice(6, 8), 16) / 255 : 1;
+    return [r, g, b, a];
+  }
+  const m = c?.match(/rgba?\(([^)]+)\)/);
+  if (m) {
+    const p = m[1].split(',').map((s) => parseFloat(s.trim()));
+    return [p[0] || 0, p[1] || 0, p[2] || 0, p[3] ?? 1];
+  }
+  return [0, 0, 0, 0];
+}
+
+const GRADIENT_STEPS = 14;
 const LinearGradient = ({ colors, style, children, pointerEvents }: { colors: string[]; style?: any; children?: any; pointerEvents?: string }) => {
-  const bg = colors?.[colors.length - 1] || 'transparent';
-  return <RNView style={[style, { backgroundColor: bg }]} pointerEvents={pointerEvents as any}>{children}</RNView>;
+  const [r1, g1, b1, a1] = parseColor(colors?.[0] ?? 'transparent');
+  const [r2, g2, b2, a2] = parseColor(colors?.[colors.length - 1] ?? 'transparent');
+  return (
+    <RNView style={style} pointerEvents={pointerEvents as any}>
+      <RNView style={StyleSheet.absoluteFill}>
+        {Array.from({ length: GRADIENT_STEPS }).map((_, i) => {
+          const t = i / (GRADIENT_STEPS - 1);
+          const r = Math.round(r1 + (r2 - r1) * t);
+          const g = Math.round(g1 + (g2 - g1) * t);
+          const b = Math.round(b1 + (b2 - b1) * t);
+          const a = a1 + (a2 - a1) * t;
+          return <RNView key={i} style={{ flex: 1, backgroundColor: `rgba(${r},${g},${b},${a})` }} />;
+        })}
+      </RNView>
+      {children}
+    </RNView>
+  );
 };
 
 function Toast({ message, visible }: { message: string; visible: boolean }) {
@@ -238,22 +279,25 @@ function DiffBlock({ oldStr, newStr, filePath }: { oldStr: string; newStr: strin
 
   return (
     <RNView style={{ marginVertical: 2 }}>
-      <ScrollView horizontal showsHorizontalScrollIndicator nestedScrollEnabled>
-        <RNView>
-          {displayOldLines.map((line, i) => (
-            <RNView key={`o${i}`} style={{ flexDirection: 'row', backgroundColor: Theme.red + '12', paddingHorizontal: 6, paddingVertical: 1 }}>
-              <RNText style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.red, width: 14 }}>-</RNText>
-              <HighlightedCodeText content={line} style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
-            </RNView>
-          ))}
-          {displayNewLines.map((line, i) => (
-            <RNView key={`n${i}`} style={{ flexDirection: 'row', backgroundColor: Theme.green + '12', paddingHorizontal: 6, paddingVertical: 1 }}>
-              <RNText style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.green, width: 14 }}>+</RNText>
-              <HighlightedCodeText content={line} style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
-            </RNView>
-          ))}
-        </RNView>
-      </ScrollView>
+      {/* Diff lines WRAP rather than scroll horizontally: on a phone a horizontal
+          ScrollView clipped long edits at the screen edge (unreadable without a
+          tiny scrub) and — nested in the message list with nestedScrollEnabled —
+          reserved a tall empty vertical band. Wrapping shows the whole edit, fills
+          the row background full width, and removes that phantom gap. */}
+      <RNView style={{ borderRadius: 4, overflow: 'hidden' }}>
+        {displayOldLines.map((line, i) => (
+          <RNView key={`o${i}`} style={{ flexDirection: 'row', backgroundColor: Theme.red + '12', paddingHorizontal: 6, paddingVertical: 1 }}>
+            <RNText style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.red, width: 14 }}>-</RNText>
+            <HighlightedCodeText content={line || ' '} style={{ flex: 1, fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
+          </RNView>
+        ))}
+        {displayNewLines.map((line, i) => (
+          <RNView key={`n${i}`} style={{ flexDirection: 'row', backgroundColor: Theme.green + '12', paddingHorizontal: 6, paddingVertical: 1 }}>
+            <RNText style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.green, width: 14 }}>+</RNText>
+            <HighlightedCodeText content={line || ' '} style={{ flex: 1, fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
+          </RNView>
+        ))}
+      </RNView>
       <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 2 }}>
         {isTall && (
           <TouchableOpacity onPress={() => setFullscreen(true)} activeOpacity={0.6} style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
@@ -798,7 +842,7 @@ function TaskToolBlock({ tool, result, childConversationId }: { tool: ToolCall; 
     implementor: Theme.accent,
     'general-purpose': Theme.textMuted,
     'claude-code-guide': Theme.violet,
-    'code-reviewer': Theme.red,
+    'code-reviewer': Theme.orange,
     'code-explorer': Theme.cyan,
     'code-architect': Theme.magenta,
     'code-simplifier': Theme.cyan,
@@ -853,9 +897,16 @@ function TaskToolBlock({ tool, result, childConversationId }: { tool: ToolCall; 
   );
 }
 
-function AskUserQuestionBlock({ tool, result }: { tool: ToolCall; result?: ToolResult }) {
-  let parsedInput: { questions?: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string }>; multiSelect?: boolean }>; answers?: Record<string, string> } = {};
+// Remembers, per tool-call id, the option the user tapped — so the pill stays
+// selected (and locked) across re-renders/remounts before the agent's answer
+// echoes back. Mirrors web's _askUserSentState.
+const _askUserSentState = new Map<string, string>();
+
+function AskUserQuestionBlock({ tool, result, conversationId }: { tool: ToolCall; result?: ToolResult; conversationId?: string }) {
+  let parsedInput: { questions?: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string }>; multiSelect?: boolean; isConfirmation?: boolean }>; answers?: Record<string, string> } = {};
   try { parsedInput = JSON.parse(tool.input); } catch {}
+
+  const [sentLabel, setSentLabel] = useState<string | undefined>(() => _askUserSentState.get(tool.id));
 
   const questions = parsedInput.questions || [];
   if (questions.length === 0) return null;
@@ -870,6 +921,28 @@ function AskUserQuestionBlock({ tool, result }: { tool: ToolCall; result?: ToolR
       answers[match[1]] = match[2];
     }
   }
+
+  // Interactive while the agent is still waiting: no answer yet, a live
+  // conversation to send into, and the user hasn't already tapped. Confirmation
+  // questions map to Enter/Escape; everything else to the 1-based option index
+  // (matches web's poll-key contract that drives the live /poll picker).
+  const isConfirmation = questions[0]?.isConfirmation;
+  const isInteractive = !result && !!conversationId && sentLabel === undefined;
+
+  const handlePick = (j: number, cleanLabel: string) => {
+    if (!conversationId) return;
+    const pollKey = isConfirmation ? (j === 0 ? 'Enter' : 'Escape') : String(j + 1);
+    _askUserSentState.set(tool.id, cleanLabel);
+    setSentLabel(cleanLabel);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    // Local-first: add the optimistic poll message, then dispatch it through the
+    // outbox with that clientId (same two-step the composer uses). This drives
+    // the live /poll picker on the daemon to advance the blocked agent.
+    const content = JSON.stringify({ __cc_poll: true, keys: [pollKey], display: cleanLabel });
+    const store = useInboxStore.getState();
+    const clientId = store.addOptimisticMessage(conversationId, content);
+    store.sendMessage(conversationId, content, undefined, clientId);
+  };
 
   return (
     <RNView style={styles.askQuestionBlock}>
@@ -890,12 +963,13 @@ function AskUserQuestionBlock({ tool, result }: { tool: ToolCall; result?: ToolR
             <RNView style={[styles.optionsRow, hasDescriptions && styles.optionsColumn]}>
               {q.options.map((opt, j) => {
                 const cleanLabel = opt.label.replace(' (Recommended)', '');
-                const isSelected = answer !== undefined && (opt.label === answer || cleanLabel === answer);
+                const isSelected = (answer !== undefined && (opt.label === answer || cleanLabel === answer)) || sentLabel === cleanLabel;
                 const pill = (
                   <RNView
                     style={[
                       styles.optionPill,
-                      isSelected && styles.optionPillSelected
+                      isInteractive && styles.optionPillInteractive,
+                      isSelected && styles.optionPillSelected,
                     ]}
                   >
                     {isSelected && (
@@ -903,19 +977,31 @@ function AskUserQuestionBlock({ tool, result }: { tool: ToolCall; result?: ToolR
                     )}
                     <RNText style={[
                       styles.optionPillText,
-                      isSelected && styles.optionPillTextSelected
+                      isInteractive && styles.optionPillTextInteractive,
+                      isSelected && styles.optionPillTextSelected,
                     ]}>
                       {opt.label}
                     </RNText>
                   </RNView>
                 );
-                if (!opt.description) return <RNView key={j}>{pill}</RNView>;
-                return (
+                const wrapped = isInteractive ? (
+                  <Pressable key={j} onPress={() => handlePick(j, cleanLabel)} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
+                    {opt.description ? (
+                      <RNView style={styles.optionItem}>
+                        {pill}
+                        <RNText style={styles.optionDescription}>{opt.description}</RNText>
+                      </RNView>
+                    ) : pill}
+                  </Pressable>
+                ) : !opt.description ? (
+                  <RNView key={j}>{pill}</RNView>
+                ) : (
                   <RNView key={j} style={styles.optionItem}>
                     {pill}
                     <RNText style={styles.optionDescription}>{opt.description}</RNText>
                   </RNView>
                 );
+                return wrapped;
               })}
               {isCustom && (
                 <RNView style={styles.optionPillCustom}>
@@ -1213,12 +1299,9 @@ function ImageBlock({ image, onPress }: { image: ImageData; onPress?: () => void
           resizeMode="cover"
         />
       </RNView>
-      <RNView style={styles.imageFadeOverlay} pointerEvents="none">
-        <RNView style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.02)' }} />
-        <RNView style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.08)' }} />
-        <RNView style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.2)' }} />
-        <RNView style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)' }} />
-      </RNView>
+      {/* Fade the clipped preview INTO the page background (cream), not to black —
+          a black fade read as a dark smudge on the light theme. */}
+      <LinearGradient colors={[Theme.bg + '00', Theme.bg]} style={styles.imageFadeOverlay} pointerEvents="none" />
       <RNView style={styles.imageExpandHint}>
         <FontAwesome name="expand" size={10} color="rgba(255,255,255,0.8)" />
       </RNView>
@@ -1239,7 +1322,7 @@ function getMidpoint(touches: { pageX: number; pageY: number }[]) {
   };
 }
 
-function GalleryImage({ image, screenWidth, screenHeight, onZoomChange }: { image: ImageData; screenWidth: number; screenHeight: number; onZoomChange?: (zoomed: boolean) => void }) {
+function GalleryImage({ image, screenWidth, screenHeight, onZoomChange, onRequestClose }: { image: ImageData; screenWidth: number; screenHeight: number; onZoomChange?: (zoomed: boolean) => void; onRequestClose?: () => void }) {
   const src = useImageSrc(image);
 
   const scaleVal = useRef(new Animated.Value(1)).current;
@@ -1249,6 +1332,8 @@ function GalleryImage({ image, screenWidth, screenHeight, onZoomChange }: { imag
   const pinchState = useRef({ startDist: 0, startScale: 1, scale: 1 });
   const panState = useRef({ startX: 0, startY: 0, startTx: 0, startTy: 0, tx: 0, ty: 0, isPanning: false });
   const lastTap = useRef(0);
+  // Swipe-down-to-dismiss, armed only while un-zoomed (so it never fights pan).
+  const dismiss = useRef({ startY: 0, dy: 0, active: false });
 
   const setZoomed = useCallback((scale: number) => {
     onZoomChange?.(scale > 1.05);
@@ -1296,6 +1381,10 @@ function GalleryImage({ image, screenWidth, screenHeight, onZoomChange }: { imag
           panState.current.startTx = panState.current.tx;
           panState.current.startTy = panState.current.ty;
           panState.current.isPanning = true;
+        } else {
+          dismiss.current.active = true;
+          dismiss.current.startY = touches[0].pageY;
+          dismiss.current.dy = 0;
         }
       }
     }
@@ -1324,15 +1413,31 @@ function GalleryImage({ image, screenWidth, screenHeight, onZoomChange }: { imag
       translateYVal.setValue(newTy);
       panState.current.tx = newTx;
       panState.current.ty = newTy;
+    } else if (touches.length === 1 && dismiss.current.active) {
+      // Follow the finger downward; ignore upward drag so it can't push the image up.
+      const dy = touches[0].pageY - dismiss.current.startY;
+      dismiss.current.dy = dy;
+      translateYVal.setValue(dy > 0 ? dy : 0);
     }
   }, [scaleVal, translateXVal, translateYVal, setZoomed]);
 
   const handleTouchEnd = useCallback(() => {
     panState.current.isPanning = false;
+    if (dismiss.current.active) {
+      const dy = dismiss.current.dy;
+      dismiss.current.active = false;
+      dismiss.current.dy = 0;
+      if (dy > 120) {
+        onRequestClose?.();
+        return;
+      }
+      // Not far enough — snap the image back into place.
+      Animated.spring(translateYVal, { toValue: 0, useNativeDriver: true, tension: 100, friction: 10 }).start();
+    }
     if (pinchState.current.scale < 1) {
       resetTransform();
     }
-  }, [resetTransform]);
+  }, [resetTransform, onRequestClose, translateYVal]);
 
   if (!src) return <RNView style={{ width: screenWidth, justifyContent: 'center', alignItems: 'center' }}><ActivityIndicator color="#fff" /></RNView>;
   return (
@@ -1396,7 +1501,7 @@ function ImageGallery({ images, initialIndex, visible, onClose }: {
             scrollEnabled={!isZoomed}
             showsHorizontalScrollIndicator={false}
             keyExtractor={(_, i) => String(i)}
-            renderItem={({ item }) => <GalleryImage image={item} screenWidth={screenWidth} screenHeight={screenHeight} onZoomChange={handleZoomChange} />}
+            renderItem={({ item }) => <GalleryImage image={item} screenWidth={screenWidth} screenHeight={screenHeight} onZoomChange={handleZoomChange} onRequestClose={onClose} />}
             onMomentumScrollEnd={(e) => {
               const idx = Math.round(e.nativeEvent.contentOffset.x / screenWidth);
               setCurrentIndex(idx);
@@ -2094,7 +2199,7 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
               <RNText style={styles.languageLabel}>{language}</RNText>
               {isPlan && (
                 <RNView style={{ paddingHorizontal: 5, paddingVertical: 1, borderRadius: 3, backgroundColor: Theme.bgHighlight }}>
-                  <RNText style={{ fontSize: 9, color: Theme.textMuted, fontWeight: '600', fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' }}>PLAN</RNText>
+                  <RNText style={{ fontSize: 9, color: Theme.textMuted, fontWeight: '600', fontFamily: 'JetBrainsMono' }}>PLAN</RNText>
                 </RNView>
               )}
               {canToggleViewMode && (
@@ -2670,7 +2775,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
               return <TaskToolBlock key={tc.id} tool={tc} result={result} childConversationId={message.message_uuid && childConversationMap ? childConversationMap[message.message_uuid] : undefined} />;
             }
             if (tc.name === 'AskUserQuestion') {
-              return <AskUserQuestionBlock key={tc.id} tool={tc} result={result} />;
+              return <AskUserQuestionBlock key={tc.id} tool={tc} result={result} conversationId={conversationId} />;
             }
             if (tc.name === 'TodoWrite') {
               return <TodoWriteBlock key={tc.id} tool={tc} />;
@@ -2694,9 +2799,9 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
               return (
                 <RNView key={tc.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 2 }}>
                   <FontAwesome name="map-o" size={10} color={Theme.violet} />
-                  <RNText style={{ fontSize: 11, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', color: Theme.violet, fontWeight: '600' }}>Plan Mode</RNText>
+                  <RNText style={{ fontSize: 11, fontFamily: 'JetBrainsMono', color: Theme.violet, fontWeight: '600' }}>Plan Mode</RNText>
                   <RNView style={{ paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4, backgroundColor: 'rgba(108, 113, 196, 0.15)', borderWidth: 0.5, borderColor: 'rgba(108, 113, 196, 0.3)' }}>
-                    <RNText style={{ fontSize: 9, color: Theme.violet, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' }}>enter</RNText>
+                    <RNText style={{ fontSize: 9, color: Theme.violet, fontFamily: 'JetBrainsMono' }}>enter</RNText>
                   </RNView>
                 </RNView>
               );
@@ -2705,9 +2810,9 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
               return (
                 <RNView key={tc.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 2 }}>
                   <FontAwesome name="map-o" size={10} color={Theme.violet} />
-                  <RNText style={{ fontSize: 11, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', color: Theme.violet, fontWeight: '600' }}>Plan Mode</RNText>
+                  <RNText style={{ fontSize: 11, fontFamily: 'JetBrainsMono', color: Theme.violet, fontWeight: '600' }}>Plan Mode</RNText>
                   <RNView style={{ paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4, backgroundColor: 'rgba(108, 113, 196, 0.15)', borderWidth: 0.5, borderColor: 'rgba(108, 113, 196, 0.3)' }}>
-                    <RNText style={{ fontSize: 9, color: Theme.violet, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' }}>exit</RNText>
+                    <RNText style={{ fontSize: 9, color: Theme.violet, fontFamily: 'JetBrainsMono' }}>exit</RNText>
                   </RNView>
                 </RNView>
               );
@@ -2768,7 +2873,12 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
 // --- Message input ---
 
 function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<"conversations">; isActive: boolean; draft?: string | null }) {
-  const [message, setMessage] = useState(draft || '');
+  const insets = useSafeAreaInsets();
+  // Seed from the local-first store draft first (survives the stub→real rekey on
+  // freshly-created sessions), then fall back to the server-synced draft prop.
+  const [message, setMessage] = useState(
+    () => useInboxStore.getState().getDraft(conversationId)?.draft_message ?? draft ?? '',
+  );
   const [error, setError] = useState<string | null>(null);
   const [selectedImages, setSelectedImages] = useState<{ uri: string; storageId?: string; uploading: boolean }[]>([]);
   const managedSession = useQuery(
@@ -2779,16 +2889,27 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
   const patchConversation = useMutation(api.conversations.patchConversation);
   const generateUploadUrl = useMutation(api.images.generateUploadUrl);
 
-  const draftRef = useRef(draft || '');
+  const draftRef = useRef(useInboxStore.getState().getDraft(conversationId)?.draft_message ?? draft ?? '');
   useEffect(() => {
     if (!message && !draftRef.current) return;
     if (message === draftRef.current) return;
     draftRef.current = message;
+    // Local-first draft: write through the store so it survives the stub→real
+    // rekey on a freshly-created session (the id is a non-Convex stub for ~1s).
+    // setDraft/clearDraft resolve stub ids; patchConversation would throw an
+    // ArgumentValidationError on a stub id (v.id) and silently lose the draft.
+    const store = useInboxStore.getState();
+    if (message) store.setDraft(conversationId, { draft_message: message });
+    else store.clearDraft(conversationId);
     const t = setTimeout(() => {
-      patchConversation({ id: conversationId, fields: { draft_message: message || null } }).catch(() => {});
+      // Server persistence only once the id is real; the store-resolved draft
+      // is dispatched through the outbox on rekey regardless.
+      if (isConvexId(conversationId as string)) {
+        patchConversation({ id: conversationId, fields: { draft_message: message || null } }).catch(() => {});
+      }
     }, 1000);
     return () => clearTimeout(t);
-  }, [message]);
+  }, [message, conversationId]);
 
   const uploadToStorage = async (uri: string) => {
     const uploadUrl = await generateUploadUrl({});
@@ -2867,18 +2988,21 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
     setMessage('');
     draftRef.current = '';
     setSelectedImages([]);
-    // Clear the draft both on the server and in the local cache. Without the
-    // local clear, the persisted conversation keeps the stale draft and a
-    // restart-right-after-send would re-hydrate it into the composer (cache-first).
+    // Clear the draft both locally and on the server. Without the local clear,
+    // a restart-right-after-send would re-hydrate the stale draft (cache-first).
+    // clearDraft resolves stub ids; the server patch is gated on a real id.
+    store.clearDraft(conversationId);
     store.syncRecord('conversations', conversationId, { draft_message: null });
-    patchConversation({ id: conversationId, fields: { draft_message: null } }).catch(() => {});
+    if (isConvexId(conversationId as string)) {
+      patchConversation({ id: conversationId, fields: { draft_message: null } }).catch(() => {});
+    }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
     store.sendMessage(conversationId, content, storageIds.length ? storageIds : undefined, clientId);
   };
 
   return (
-    <RNView style={styles.inputContainer}>
+    <RNView style={[styles.inputContainer, { paddingBottom: insets.bottom || 12 }]}>
       {error && (
         <RNView style={styles.errorBanner}>
           <RNText style={styles.errorBannerText}>{error}</RNText>
@@ -3166,16 +3290,21 @@ export default function SessionDetailScreen() {
   // local stub id (beginOptimisticSession) for instant render; once the server
   // create resolves, the store rekeys the stub to the real Convex id and DELETES
   // the stub key (rekeyId). getConvexId maps the stub → real via the session_id
-  // seed, flipping from null to the real id at that moment — swap the route so
-  // every v.id("conversations") query activates and the screen keeps live data
-  // instead of reading the now-deleted stub. replace() (not push) keeps back-nav
-  // landing on the inbox, not a dead stub route.
+  // seed, flipping from null to the real id at that moment — swap the screen's
+  // id param so every v.id("conversations") query activates and the screen keeps
+  // live data instead of reading the now-deleted stub.
+  //
+  // Use setParams (NOT router.replace): replace() pushes a new entry onto the
+  // native stack for the same session/[id] screen, which expo-router animates as
+  // a fresh screen — the session visibly "opens a second time" ~1s after create.
+  // setParams mutates the current route's params in place: no stack op, no
+  // remount, no transition. Back-nav still lands on the inbox (the prior entry).
   const resolvedRealId = useInboxStore((s) =>
     isReal ? null : s.getConvexId(id as string) ?? null
   );
   useEffect(() => {
     if (resolvedRealId && resolvedRealId !== id) {
-      router.replace(`/session/${resolvedRealId}`);
+      router.setParams({ id: resolvedRealId });
     }
   }, [resolvedRealId, id, router]);
 
@@ -3323,19 +3452,19 @@ export default function SessionDetailScreen() {
     showToast('Resume command copied');
   }, [conversation?.short_id, conversation?.session_id, conversation?.agent_type, showToast]);
 
-  const toggleFavoriteConversation = useMutation(api.conversations.toggleFavorite);
   const generateShareLink = useMutation(api.conversations.generateShareLink);
-  const setPrivacy = useMutation(api.conversations.setPrivacy);
-  const setTeamVisibility = useMutation(api.conversations.setTeamVisibility);
   const stashSession = useInboxStore((s) => s.stashSession);
+  const toggleFavorite = useInboxStore((s) => s.toggleFavorite);
+  const setPrivacy = useInboxStore((s) => s.setPrivacy);
+  const setTeamVisibility = useInboxStore((s) => s.setTeamVisibility);
 
-  const handleToggleFavorite = useCallback(async () => {
+  const handleToggleFavorite = useCallback(() => {
     if (!id) return;
-    try {
-      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      await toggleFavoriteConversation({ conversation_id: id as Id<"conversations"> });
-    } catch {}
-  }, [id, toggleFavoriteConversation]);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    // Local-first: the star flips synchronously in the store; the server
+    // mutation rides the outbox. No await — the UI never waits on the round-trip.
+    toggleFavorite(id);
+  }, [id, toggleFavorite]);
 
   const handleShareConversation = useCallback(async () => {
     if (!conversation || !id) return;
@@ -3358,13 +3487,15 @@ export default function SessionDetailScreen() {
         const label = options[idx];
         try {
           if (label === 'Make Private') {
-            await setPrivacy({ conversation_id: convId, is_private: true });
+            // Local-first: optimistically flips is_private on the store row so
+            // re-opening the share sheet immediately reflects 'private'.
+            setPrivacy(convId, true);
             showToast('Made private');
           } else if (label === 'Share with Team (Summary)') {
-            await setTeamVisibility({ conversation_id: convId, team_visibility: 'summary' });
+            setTeamVisibility(convId, 'summary');
             showToast('Sharing summary with team');
           } else if (label === 'Share with Team (Full)') {
-            await setTeamVisibility({ conversation_id: convId, team_visibility: 'full' });
+            setTeamVisibility(convId, 'full');
             showToast('Sharing full conversation with team');
           } else if (label === 'Copy Share Link' || label === 'Generate & Copy Share Link') {
             let token = conversation.share_token;
@@ -3642,7 +3773,12 @@ export default function SessionDetailScreen() {
     lastScrollYRef.current = 0;
     floatingHeaderOffsetRef.current = 0;
     floatingHeaderY.setValue(0);
-  }, [id, floatingHeaderHeight, floatingHeaderY]);
+    // Reset per SESSION only. floatingHeaderHeight changes at runtime (search
+    // toggle, meta-row wrap); including it here re-ran this whole reset mid-session,
+    // clobbering userScrolled and prevMessageIdsRef. floatingHeaderY is a stable
+    // ref-held Animated.Value. handleFloatingHeaderLayout clamps the offset on
+    // height change independently.
+  }, [id]);
 
   useEffect(() => {
     return () => {
@@ -3790,8 +3926,11 @@ export default function SessionDetailScreen() {
       }
     }
 
-    // Load older messages when near the top (large offset in inverted list)
-    if (distanceFromTop < 100 && hasMoreAbove && !loadingOlder && !loadCooldownRef.current && initialScrollDone) {
+    // Load older messages when near the top (large offset in inverted list).
+    // Require userScrolled (web's shouldLoadOlder contract): without it, a short
+    // first page whose bottom is also within the trigger band rips through every
+    // page with no user input.
+    if (distanceFromTop < 100 && userScrolled && hasMoreAbove && !loadingOlder && !loadCooldownRef.current && initialScrollDone) {
       handleLoadOlder();
     }
   }, [hasMoreAbove, loadingOlder, handleLoadOlder, initialScrollDone, floatingHeaderHeight, floatingHeaderY, searchVisible, userScrolled]);
@@ -3958,7 +4097,7 @@ export default function SessionDetailScreen() {
                   </Pressable>
                 )}
               </ScrollView>
-              <TouchableOpacity onPress={handleMoreActions} style={styles.moreActionsButton} activeOpacity={0.7}>
+              <TouchableOpacity onPress={handleMoreActions} style={styles.moreActionsButton} activeOpacity={0.7} hitSlop={{ top: 7, bottom: 7, left: 7, right: 7 }}>
                 <Feather name="more-horizontal" size={18} color={Theme.textMuted} />
               </TouchableOpacity>
             </RNView>
@@ -4335,17 +4474,6 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: Theme.bg,
   },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: Theme.bg,
-  },
-  loadingText: {
-    marginTop: 12,
-    fontSize: 15,
-    color: Theme.textMuted,
-  },
   errorContainer: {
     flex: 1,
     justifyContent: 'center',
@@ -4392,13 +4520,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  floatingLinksRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 6,
-    flexWrap: 'wrap',
-  },
   floatingLinkPill: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -4419,26 +4540,11 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '600',
   },
-  metaBadgeModel: {
-    fontSize: 9,
-    color: Theme.textMuted,
-    fontWeight: '600',
-    fontFamily: 'SpaceMono',
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    backgroundColor: Theme.bgAlt,
-    borderRadius: 5,
-  },
   messageCountText: {
     fontSize: 10,
     color: Theme.textMuted,
     fontWeight: '500',
     letterSpacing: 0.2,
-  },
-  activeIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
   },
   activeDot: {
     width: 6,
@@ -4449,21 +4555,6 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.8,
     shadowRadius: 4,
-  },
-  activeText: {
-    fontSize: 12,
-    color: Theme.green + 'CC',
-    fontWeight: '500',
-  },
-  loadMoreButton: {
-    alignItems: 'center',
-    paddingVertical: 14,
-    marginBottom: 8,
-  },
-  loadMoreText: {
-    fontSize: 13,
-    color: Theme.accent,
-    fontWeight: '600',
   },
   messageList: {
     padding: 16,
@@ -4551,99 +4642,6 @@ const styles = StyleSheet.create({
   assistantText: {
     color: Theme.text,
   },
-  linkText: {
-    color: Theme.cyan,
-    textDecorationLine: 'underline',
-  },
-  linkTextUser: {
-    color: Theme.userBubble,
-    textDecorationLine: 'underline',
-  },
-  inlineCode: {
-    fontFamily: 'SpaceMono',
-    fontSize: 13,
-    backgroundColor: 'rgba(0,0,0,0.07)',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 3,
-    color: Theme.red,
-  },
-  inlineCodeUser: {
-    fontFamily: 'SpaceMono',
-    fontSize: 13,
-    backgroundColor: Theme.bgHighlight,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 3,
-    color: Theme.text,
-  },
-  listContainer: {
-    marginVertical: 4,
-    paddingLeft: 4,
-  },
-  listItem: {
-    flexDirection: 'row',
-    marginBottom: 3,
-  },
-  listBullet: {
-    width: 20,
-    textAlign: 'center',
-    opacity: 0.6,
-  },
-  blockquote: {
-    borderLeftWidth: 3,
-    borderLeftColor: Theme.accent,
-    paddingLeft: 10,
-    marginVertical: 6,
-    opacity: 0.85,
-  },
-  blockquoteUser: {
-    borderLeftWidth: 3,
-    borderLeftColor: 'rgba(255,255,255,0.5)',
-    paddingLeft: 10,
-    marginVertical: 6,
-    opacity: 0.85,
-  },
-  blockquoteText: {
-    fontStyle: 'italic',
-  },
-  horizontalRule: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: Theme.borderLight,
-    marginVertical: 12,
-  },
-  codeBlock: {
-    marginVertical: 8,
-    borderRadius: 8,
-    overflow: 'hidden',
-    backgroundColor: '#002b36',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255,255,255,0.1)',
-  },
-  codeHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: 'rgba(0,0,0,0.2)',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: 'rgba(255,255,255,0.08)',
-  },
-  codeLanguage: {
-    fontSize: 10,
-    color: Theme.textDim,
-    fontWeight: '500',
-  },
-  codeContent: {
-    padding: 10,
-  },
-  codeText: {
-    fontFamily: 'SpaceMono',
-    fontSize: 12,
-    lineHeight: 17,
-    color: '#93a1a1',
-  },
   thinkingBlock: {
     marginHorizontal: 14,
     marginVertical: 1,
@@ -4686,23 +4684,6 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#d97706',
     fontWeight: '500',
-  },
-  systemDivider: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginVertical: 16,
-    paddingHorizontal: 8,
-  },
-  systemDividerLine: {
-    flex: 1,
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: Theme.borderLight,
-  },
-  systemDividerText: {
-    fontSize: 11,
-    color: Theme.textMuted0,
-    marginHorizontal: 10,
-    fontStyle: 'italic',
   },
   systemMessage: {
     marginVertical: 6,
@@ -4816,11 +4797,6 @@ const styles = StyleSheet.create({
     color: Theme.textDim,
     fontFamily: 'SpaceMono',
   },
-  toolCallToggle: {
-    fontSize: 8,
-    color: Theme.textDim,
-    marginLeft: 6,
-  },
   toolCallContent: {
     marginTop: 4,
     padding: 6,
@@ -4849,47 +4825,11 @@ const styles = StyleSheet.create({
     fontFamily: 'SpaceMono',
     color: Theme.textMuted,
   },
-  bashCommand: {
-    fontSize: 11,
-    fontFamily: 'SpaceMono',
-    color: Theme.green,
-  },
-  diffSection: {
-    gap: 2,
-  },
-  diffOld: {
-    backgroundColor: Theme.red + '12',
-    borderRadius: 3,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-  },
-  diffOldText: {
-    fontSize: 12,
-    fontFamily: 'SpaceMono',
-    color: Theme.red,
-  },
-  diffNew: {
-    backgroundColor: Theme.green + '12',
-    borderRadius: 3,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-  },
-  diffNewText: {
-    fontSize: 12,
-    fontFamily: 'SpaceMono',
-    color: Theme.green,
-  },
   toolResultBox: {
     flexGrow: 0,
   },
   hScroll: {
     flexGrow: 0,
-  },
-  noOutputText: {
-    fontSize: 12,
-    color: Theme.textDim,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
   },
   languageLabel: {
     fontSize: 10,
@@ -4899,17 +4839,6 @@ const styles = StyleSheet.create({
   toolInputSection: {
     paddingHorizontal: 8,
     paddingVertical: 6,
-  },
-  toolResultSection: {
-    marginTop: 4,
-  },
-  toolSectionLabel: {
-    fontSize: 10,
-    color: Theme.textMuted0,
-    fontWeight: '600',
-    marginBottom: 6,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
   },
   toolCallInput: {
     fontSize: 12,
@@ -4923,18 +4852,12 @@ const styles = StyleSheet.create({
     lineHeight: 17,
     padding: 8,
   },
-  toolCodeText: {
-    fontSize: 12,
-    color: Theme.textSecondary,
-    fontFamily: 'SpaceMono',
-    lineHeight: 17,
-    padding: 8,
-  },
   inputContainer: {
     backgroundColor: Theme.bgAlt,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: Theme.borderLight,
-    paddingBottom: 34,
+    // paddingBottom is set inline from safe-area insets (home indicator clearance
+    // varies by device/orientation); see MessageInput.
   },
   agentStatusBar: {
     flexDirection: 'row',
@@ -5045,9 +4968,9 @@ const styles = StyleSheet.create({
   },
   sendButton: {
     backgroundColor: Theme.blue,
-    minWidth: 40,
-    height: 40,
-    borderRadius: 20,
+    minWidth: 44,
+    height: 44,
+    borderRadius: 22,
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 12,
@@ -5179,6 +5102,10 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: Theme.borderLight + '60',
   },
+  optionPillInteractive: {
+    backgroundColor: Theme.violet + '15',
+    borderColor: Theme.violet + '50',
+  },
   optionPillSelected: {
     backgroundColor: Theme.green + '20',
     borderColor: Theme.green + '60',
@@ -5186,6 +5113,9 @@ const styles = StyleSheet.create({
   optionPillText: {
     fontSize: 12,
     color: Theme.textDim,
+  },
+  optionPillTextInteractive: {
+    color: Theme.violet,
   },
   optionPillTextSelected: {
     color: Theme.green,
@@ -5356,10 +5286,6 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     zIndex: 10,
   },
-  messageImage: {
-    width: '100%',
-    height: 200,
-  },
   imageLoading: {
     height: 60,
     justifyContent: 'center',
@@ -5368,11 +5294,6 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: Theme.borderLight,
-  },
-  imageLoadingText: {
-    fontSize: 11,
-    color: Theme.textMuted0,
-    marginTop: 6,
   },
   toolImagesSection: {
     marginTop: 10,
@@ -5593,22 +5514,6 @@ const styles = StyleSheet.create({
     color: Theme.violet,
     fontWeight: '600',
   },
-  compactionBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    backgroundColor: 'rgba(217,119,6,0.1)',
-    borderRadius: 4,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(217,119,6,0.3)',
-  },
-  compactionBadgeText: {
-    fontSize: 10,
-    color: '#d97706',
-    fontWeight: '600',
-  },
   // Agent dot
   agentDot: {
     width: 6,
@@ -5617,42 +5522,7 @@ const styles = StyleSheet.create({
     marginRight: 4,
   },
   // Table
-  tableRow: {
-    flexDirection: 'row',
-  },
-  tableRowAlt: {
-    backgroundColor: Theme.bgHighlight,
-  },
-  tableHeaderCell: {
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderBottomWidth: 1,
-    borderBottomColor: Theme.borderLight,
-    borderRightWidth: StyleSheet.hairlineWidth,
-    borderRightColor: Theme.borderLight,
-    minWidth: 80,
-    backgroundColor: Theme.bgAlt,
-  },
-  tableHeaderText: {
-    fontWeight: '700',
-    fontSize: 11,
-  },
-  tableCell: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Theme.borderLight,
-    borderRightWidth: StyleSheet.hairlineWidth,
-    borderRightColor: Theme.borderLight,
-    minWidth: 80,
-  },
-  tableCellText: {
-    fontSize: 11,
-  },
   // Code copy button
-  codeCopyButton: {
-    padding: 4,
-  },
   // Model badge in header
   modelBadge: {
     fontSize: 9,
@@ -5718,12 +5588,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   // Thinking label
-  thinkingLabel: {
-    fontSize: 10,
-    color: Theme.textDim,
-    fontWeight: '600',
-    marginRight: 6,
-  },
   // User avatar
   userAvatar: {
     width: 18,
@@ -5840,39 +5704,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-  },
-  durationBadge: {
-    fontSize: 10,
-    color: Theme.textDim,
-    fontFamily: 'SpaceMono',
-  },
-  lineNumberGutter: {
-    paddingRight: 8,
-    marginRight: 8,
-    borderRightWidth: StyleSheet.hairlineWidth,
-    borderRightColor: Theme.borderLight,
-  },
-  lineNumber: {
-    fontSize: 10,
-    fontFamily: 'SpaceMono',
-    color: Theme.textDim,
-    lineHeight: 18,
-    textAlign: 'right',
-    minWidth: 24,
-  },
-  diffLineNumbers: {
-    paddingRight: 6,
-    marginRight: 6,
-    borderRightWidth: StyleSheet.hairlineWidth,
-    borderRightColor: 'rgba(255,255,255,0.1)',
-  },
-  diffLineNum: {
-    fontSize: 9,
-    fontFamily: 'SpaceMono',
-    color: 'rgba(255,255,255,0.3)',
-    lineHeight: 16,
-    textAlign: 'right',
-    minWidth: 20,
   },
   planFullscreen: {
     flex: 1,
@@ -6222,7 +6053,7 @@ const styles = StyleSheet.create({
   },
   usageBadgeText: {
     fontSize: 9,
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    fontFamily: 'JetBrainsMono',
     color: Theme.textDim,
   },
   usageBar: {
@@ -6238,7 +6069,7 @@ const styles = StyleSheet.create({
   },
   usageValue: {
     fontSize: 10,
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    fontFamily: 'JetBrainsMono',
     color: Theme.textMuted,
   },
   usageContextRow: {
@@ -6280,7 +6111,7 @@ const styles = StyleSheet.create({
   },
   taskNotificationId: {
     fontSize: 10,
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    fontFamily: 'JetBrainsMono',
     color: Theme.textDim,
   },
   taskNotificationTime: {
@@ -6302,12 +6133,12 @@ const styles = StyleSheet.create({
   },
   apiErrorCode: {
     fontSize: 14,
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    fontFamily: 'JetBrainsMono',
     fontWeight: '700',
   },
   apiErrorType: {
     fontSize: 11,
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    fontFamily: 'JetBrainsMono',
   },
   apiErrorMessage: {
     fontSize: 12,
@@ -6316,7 +6147,7 @@ const styles = StyleSheet.create({
   },
   apiErrorRequestId: {
     fontSize: 9,
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    fontFamily: 'JetBrainsMono',
     color: Theme.textDim,
     marginTop: 4,
   },
@@ -6373,7 +6204,7 @@ const styles = StyleSheet.create({
   },
   contextPillId: {
     fontSize: 9,
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    fontFamily: 'JetBrainsMono',
     color: Theme.textDim,
   },
 });
