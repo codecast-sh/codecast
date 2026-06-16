@@ -3357,6 +3357,11 @@ cliRoute("/cli/workflow-runs/by-external", async (ctx, body) => ctx.runQuery(api
 // Session-to-session messaging
 cliRoute("/cli/messages/send", async (ctx, body) => ctx.runMutation(api.pendingMessages.sendSessionMessage, body));
 
+// Spawn a fresh, inbox-visible session (cast spawn). `api.spawn` is filled in by
+// codegen on deploy; cast to any so the committed _generated typecheck stays green
+// until then.
+cliRoute("/cli/spawn", async (ctx, body) => ctx.runMutation((api as any).spawn.createSessionFromCli, body));
+
 // CC account switching: route the swap + blocked-session revive through the
 // daemon fleet / nudge limit-parked sessions after a window reset.
 cliRoute("/cli/accounts/switch", async (ctx, body) => ctx.runMutation(api.accountSwitch.requestAccountSwitch, body));
