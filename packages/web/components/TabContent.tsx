@@ -1,5 +1,6 @@
 import { lazy, Suspense, createContext, useContext, useRef, useEffect, useMemo } from "react";
 import { useInboxStore, useTrackedStore, type AppTab } from "../store/inboxStore";
+import { isFullWidthRoute, PageShell } from "../lib/pageLayout";
 
 // -- Tab params context: overrides next/navigation hooks when inside a tab --
 
@@ -114,17 +115,27 @@ function TabPane({ tab, isActive }: { tab: AppTab; isActive: boolean }) {
   if (!matched) return null;
   const Component = matched.component;
 
+  // Full-width pages own their scroll/padding; everything else gets the shared
+  // PageShell so it is padded and centered (the global "always pad views" rule).
+  const page = (
+    <TabParamsCtx.Provider value={ctxValue}>
+      <Suspense>
+        <Component />
+      </Suspense>
+    </TabParamsCtx.Provider>
+  );
+
   return (
     <div
       data-tab-id={tab.id}
       className="h-full"
       style={{ display: isActive ? "block" : "none" }}
     >
-      <TabParamsCtx.Provider value={ctxValue}>
-        <Suspense>
-          <Component />
-        </Suspense>
-      </TabParamsCtx.Provider>
+      {isFullWidthRoute(ctxValue.pathname) ? (
+        page
+      ) : (
+        <PageShell pathname={ctxValue.pathname}>{page}</PageShell>
+      )}
     </div>
   );
 }
