@@ -15,7 +15,7 @@ import { useInboxStore, getProjectName, type InboxSession } from "../store/inbox
 import { cleanTitle } from "../lib/conversationProcessor";
 import { LivenessDot, sessionLivenessState } from "./LivenessDot";
 import { formatPendingComments, sortPendingComments, formatDocFeedback } from "../lib/quoteFormat";
-import { Send, X, Search } from "lucide-react";
+import { Send, X, Search, Plus } from "lucide-react";
 
 const api = _api as any;
 
@@ -37,32 +37,59 @@ export function DocReviewBar({
   const [note, setNote] = useState("");
   const [picking, setPicking] = useState(false);
   const sendMessage = useMutation(api.pendingMessages.sendMessageToSession);
+  const openNewSession = useInboxStore((s) => s.openNewSession);
+
+  // Compile the live annotation batch into the same feedback message both the
+  // existing-session and new-agent paths post.
+  const compileContent = useCallback(() => {
+    const pending = (useInboxStore.getState().reviewComments[reviewKey] ?? []).filter(
+      (c) => c.body.trim() || c.quote.trim(),
+    );
+    const batch = formatPendingComments(sortPendingComments(pending));
+    return formatDocFeedback(title, docId, batch, note);
+  }, [reviewKey, title, docId, note]);
+
+  // Leave review mode and drop the batch — shared epilogue after the feedback
+  // has been routed somewhere (an existing session or a fresh agent).
+  const finishReview = useCallback(() => {
+    useInboxStore.getState().clearReviewComments(reviewKey);
+    setNote("");
+    onSent?.();
+  }, [reviewKey, onSent]);
 
   const send = useCallback(
     async (conversationId: string, sessionTitle: string) => {
-      const pending = (useInboxStore.getState().reviewComments[reviewKey] ?? []).filter(
-        (c) => c.body.trim() || c.quote.trim(),
-      );
-      const batch = formatPendingComments(sortPendingComments(pending));
-      const content = formatDocFeedback(title, docId, batch, note);
+      const content = compileContent();
       setPicking(false);
       try {
         await sendMessage({ conversation_id: conversationId as any, content, client_id: nanoid(10) });
-        useInboxStore.getState().clearReviewComments(reviewKey);
-        setNote("");
+        finishReview();
         toast.success(`Sent to ${cleanTitle(sessionTitle || "session")}`);
-        onSent?.();
       } catch (e: any) {
         toast.error(e?.message?.includes("Unauthorized") ? "You can only send to your own sessions" : "Failed to send feedback");
       }
     },
-    [reviewKey, title, docId, note, sendMessage, onSent],
+    [compileContent, finishReview, sendMessage],
   );
+
+  // Hand the feedback to a brand-new agent: pre-load the new-session palette with
+  // the compiled annotations as its first message, then exit review mode. The
+  // content is now visible/editable in that composer, so closing review here
+  // can't lose it.
+  const sendToNew = useCallback(() => {
+    const content = compileContent();
+    setPicking(false);
+    openNewSession({ firstMessage: content, source: "sessions" });
+    finishReview();
+  }, [compileContent, finishReview, openNewSession]);
 
   return (
     <>
       <div className="sticky bottom-0 z-20 mx-auto max-w-5xl w-full px-10 pb-4 pt-2">
-        <div className="flex items-center gap-2 rounded-lg border border-sol-yellow/30 bg-sol-bg/95 backdrop-blur px-3 py-2 shadow-lg shadow-black/20">
+        <div
+          className="flex items-center gap-2 rounded-lg border border-sol-yellow/30 backdrop-blur px-3 py-2 shadow-lg shadow-black/20"
+          style={{ background: "color-mix(in srgb, var(--sol-bg) 92%, transparent)" }}
+        >
           <span className="text-[11px] font-semibold text-sol-yellow whitespace-nowrap">
             {count > 0 ? `${count} note${count === 1 ? "" : "s"}` : "Review"}
           </span>
@@ -89,6 +116,7 @@ export function DocReviewBar({
           ownerConversationId={ownerConversationId}
           onClose={() => setPicking(false)}
           onPick={send}
+          onPickNew={sendToNew}
         />
       )}
     </>
@@ -101,10 +129,12 @@ function SessionPicker({
   ownerConversationId,
   onClose,
   onPick,
+  onPickNew,
 }: {
   ownerConversationId?: string;
   onClose: () => void;
   onPick: (conversationId: string, title: string) => void;
+  onPickNew: () => void;
 }) {
   const sessions = useInboxStore((s) => s.sessions);
   const currentUserId = useInboxStore((s) => s.currentUser?._id);
@@ -127,16 +157,16 @@ function SessionPicker({
   }, [sessions, currentUserId, q, ownerConversationId]);
 
   return (
-    <div className="fixed inset-0 z-[9999] flex items-start justify-center pt-[12vh] bg-black/40" onClick={onClose}>
+    <div className="fixed inset-0 z-[9999] flex items-start justify-center pt-[12vh] bg-black/50 backdrop-blur-sm" onClick={onClose}>
       <div
-        className="w-[440px] max-h-[min(520px,72vh)] flex flex-col rounded-lg border border-sol-border/60 bg-sol-bg/95 backdrop-blur-xl shadow-2xl shadow-black/40 overflow-hidden"
+        className="w-[440px] max-h-[min(520px,72vh)] flex flex-col rounded-lg border border-sol-border bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="px-3 py-2 border-b border-sol-border/40 flex items-center justify-between">
+        <div className="px-3 py-2 border-b border-sol-border flex items-center justify-between">
           <span className="text-[10px] font-semibold uppercase tracking-wider text-sol-text-dim">Send feedback to…</span>
           <button onClick={onClose} className="text-sol-text-dim hover:text-sol-text"><X className="w-3.5 h-3.5" /></button>
         </div>
-        <div className="px-3 py-2 border-b border-sol-border/30 flex items-center gap-2">
+        <div className="px-3 py-2 border-b border-sol-border flex items-center gap-2">
           <Search className="w-3.5 h-3.5 text-sol-text-dim flex-shrink-0" />
           <input
             autoFocus
@@ -148,7 +178,22 @@ function SessionPicker({
           />
         </div>
         <div className="flex-1 overflow-y-auto py-1 scrollbar-auto">
-          {rows.length === 0 && <div className="px-3 py-6 text-center text-xs text-sol-text-dim">No sessions found</div>}
+          {/* Route the feedback to a brand-new agent instead of an existing
+              session — opens the new-session palette pre-loaded with it. */}
+          <button
+            onClick={onPickNew}
+            className="w-full text-left mx-1 px-3 py-2 rounded-md flex items-center gap-3 border border-transparent hover:bg-sol-cyan/15 hover:border-sol-cyan/30 transition-colors"
+          >
+            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-sol-cyan/15 text-sol-cyan flex-shrink-0">
+              <Plus className="w-3.5 h-3.5" />
+            </span>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm text-sol-text">New agent</div>
+              <div className="text-[11px] text-sol-text-dim truncate">Start a fresh session with this feedback</div>
+            </div>
+          </button>
+          {rows.length > 0 && <div className="my-1 mx-3 border-t border-sol-border" />}
+          {rows.length === 0 && q && <div className="px-3 py-6 text-center text-xs text-sol-text-dim">No sessions found</div>}
           {rows.map((s) => {
             const project = getProjectName(s.git_root, s.project_path);
             const isOwner = s._id === ownerConversationId;
@@ -160,7 +205,7 @@ function SessionPicker({
               >
                 <LivenessDot state={sessionLivenessState(s)} />
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm truncate text-sol-text/90">{cleanTitle(s.title || "New Session")}</div>
+                  <div className="text-sm truncate text-sol-text">{cleanTitle(s.title || "New Session")}</div>
                   {project !== "unknown" && <div className="text-[11px] text-sol-cyan/70 truncate">{project}</div>}
                 </div>
                 {isOwner && <span className="text-[10px] text-sol-yellow/80 flex-shrink-0">this doc</span>}

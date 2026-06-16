@@ -18,6 +18,10 @@ export interface SessionContext {
   gitRoot?: string;
   agentType?: string;
   source?: "inbox" | "sessions";
+  // Pre-fill the new-session composer's first message. Used when a surface wants
+  // to launch a fresh agent already loaded with a prompt — e.g. doc-review
+  // "Send to new agent" seeds the compiled annotations here.
+  firstMessage?: string;
 }
 
 // Convex-id check lives in lib/entityLinks (the entity-routing source of truth).

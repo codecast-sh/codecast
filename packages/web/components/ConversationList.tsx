@@ -800,6 +800,10 @@ export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose:
       const mapped = context.agentType === "claude_code" ? "claude" : context.agentType === "codex" ? "codex" : context.agentType === "cursor" ? "cursor" : "gemini";
       setAgentType(mapped as "claude" | "codex" | "cursor" | "gemini");
     }
+    // A caller can launch the modal pre-loaded with a prompt (e.g. doc-review
+    // "Send to new agent"); it lands in the first-message box, editable before
+    // the user picks a directory and creates.
+    if (context.firstMessage) setFirstMessage(context.firstMessage);
   }, [isOpen, context, frozenProjects]);
 
   useWatchEffect(() => {
