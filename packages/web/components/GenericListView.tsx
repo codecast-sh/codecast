@@ -17,6 +17,7 @@ import {
   Check,
   Search,
   Bookmark,
+  Link2,
   ChevronDown,
   ChevronRight,
   ChevronLeft,
@@ -116,11 +117,16 @@ function DisplayMenu({
   sortOptions,
   onSortChange,
   extra,
+  onCopyLink,
 }: {
   sortBy: string;
   sortOptions: ListSortOption[];
   onSortChange: (v: string) => void;
   extra?: ReactNode;
+  /** When set, the popover gains a "Copy link to this view" row so the current
+   *  filters/sort/tab are shareable even when no filter chip is showing (the
+   *  filter bar — the other home for this action — is hidden with no filters). */
+  onCopyLink?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -165,6 +171,15 @@ function DisplayMenu({
               ))}
             </div>
           </div>
+          {onCopyLink && (
+            <button
+              onClick={() => { onCopyLink(); setOpen(false); }}
+              className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs text-sol-text-muted hover:bg-sol-bg-alt hover:text-sol-text transition-colors border-t border-sol-border/30 pt-2"
+            >
+              <Link2 className="w-3 h-3 flex-shrink-0" />
+              <span className="flex-1 text-left whitespace-nowrap">Copy link to this view</span>
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -317,6 +332,13 @@ export interface GenericListViewProps<T> {
     onSaveView?: (name: string) => void;
   };
 
+  /** Returns a shareable absolute URL encoding the current view (filters, sort,
+   *  active tab). When provided, a "copy link" action appears in the Display
+   *  popover and — when a filter is active — in the filter bar's action cluster.
+   *  The consumer serializes its own URL params (it owns the param schema);
+   *  this component owns the clipboard write + toast. */
+  shareUrl?: () => string;
+
   groups: ListGroup<T>[] | null;
   flatItems: T[];
 
@@ -371,6 +393,7 @@ export function GenericListView<T>({
   sortOptions,
   onSortChange,
   filters,
+  shareUrl,
   groups,
   flatItems,
   renderRow,
@@ -426,6 +449,17 @@ export function GenericListView<T>({
   const [saveViewName, setSaveViewName] = useState("");
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
+
+  const copyViewLink = useCallback(async () => {
+    if (!shareUrl) return;
+    const url = shareUrl();
+    try {
+      await navigator.clipboard.writeText(url);
+      toast.success("Link to this view copied");
+    } catch {
+      toast.error("Couldn't copy link");
+    }
+  }, [shareUrl]);
 
   const searching = !!searchQuery && !!getSearchText;
   // A search with a `searchAllItems` corpus spans the whole set (ignoring the
@@ -755,8 +789,8 @@ export function GenericListView<T>({
           .cq-header row is what adapts (wraps the toolbar below the tabs) as the
           panel narrows — a container can't query its own width, only a child's. */}
       <div className="cq-container border-b border-sol-border/30">
-        <div className="cq-header flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-6 py-3">
-        <div className="flex items-center gap-3 flex-1">
+        <div className="cq-header cq-header-pad flex flex-wrap items-center justify-between gap-x-2 gap-y-2 px-6 py-3">
+        <div className="flex items-center gap-2 min-w-0">
           <h1 className="text-lg font-semibold text-sol-text tracking-tight flex-shrink-0 cq-header-collapse">{title}</h1>
           {syncScope && <SyncProgressBadge scope={syncScope} />}
           {/* Wide header: segmented pill row. Once too tight for one row (≤1210px,
@@ -785,7 +819,7 @@ export function GenericListView<T>({
             />
           </div>
         </div>
-        <div className="cq-header-toolbar flex items-center gap-1.5 ml-auto">
+        <div className="cq-header-toolbar flex flex-wrap items-center justify-end gap-1.5 ml-auto">
           {headerExtra}
           {selectedIds.size > 0 && (
             <span className="text-xs text-sol-cyan">{selectedIds.size} selected</span>
@@ -824,6 +858,7 @@ export function GenericListView<T>({
             sortOptions={sortOptions}
             onSortChange={(v) => { onSortChange(v); setFocusIndex(0); }}
             extra={displayExtra}
+            onCopyLink={shareUrl ? copyViewLink : undefined}
           />
           <button
             onClick={() => openPalette("root")}
@@ -847,7 +882,7 @@ export function GenericListView<T>({
           filters.hasActive, which also counts the source toggle and would leave an
           empty chipless row). The header "Filter" button adds the first one. */}
       {filters && filters.defs.some((d) => d.value) && (
-        <div className="flex items-center flex-wrap gap-x-1.5 gap-y-1.5 px-6 py-2 border-b border-sol-border/20 bg-sol-bg-alt/20">
+        <div className="cq-header-pad flex items-center flex-wrap gap-x-1.5 gap-y-1.5 px-6 py-2 border-b border-sol-border/20 bg-sol-bg-alt/20">
           {/* Active filters as removable chips; everything unset lives behind "+ Filter". */}
           {filters.defs.filter((f) => f.value).map((f) => (
             <FilterDropdown
@@ -862,60 +897,82 @@ export function GenericListView<T>({
             />
           ))}
           <AddFilterMenu defs={filters.defs} />
-          {filters.hasActive && (
-            <button
-              onClick={filters.onClear}
-              className="text-[10px] text-sol-text-dim hover:text-sol-text ml-1 flex items-center gap-1 transition-colors"
-            >
-              <X className="w-3 h-3" /> Clear
-            </button>
-          )}
-          {filters.onSaveView && !savingView && (
-            <button
-              onClick={() => { setSavingView(true); setSaveViewName(""); }}
-              className="text-[10px] text-sol-text-dim hover:text-sol-cyan ml-1 flex items-center gap-1 transition-colors"
-              title="Save current view as a shortcut"
-            >
-              <Bookmark className="w-3 h-3" /> Save View
-            </button>
-          )}
-          {filters.onSaveView && savingView && (
-            <form
-              className="flex items-center gap-1.5 ml-1"
-              onSubmit={(e) => {
-                e.preventDefault();
-                const name = saveViewName.trim();
-                if (name) {
-                  filters.onSaveView!(name);
-                  setSavingView(false);
-                  toast.success(`View "${name}" saved`);
-                }
-              }}
-            >
-              <input
-                autoFocus
-                value={saveViewName}
-                onChange={(e) => setSaveViewName(e.target.value)}
-                placeholder="View name..."
-                className="text-[11px] px-2 py-0.5 rounded bg-sol-bg border border-sol-border/60 text-sol-text outline-none focus:border-sol-cyan w-32"
-                onKeyDown={(e) => { if (e.key === "Escape") setSavingView(false); }}
-              />
+
+          {/* View actions — a tight right-aligned cluster. Each button shows its
+              label at roomy widths and collapses to icon-only (cq-header-collapse)
+              when the bar is narrow, so save / link / clear stay on one row
+              instead of each wrapping to its own line. */}
+          <div className="ml-auto flex items-center gap-0.5">
+            {shareUrl && (
               <button
-                type="submit"
-                disabled={!saveViewName.trim()}
-                className="text-[10px] text-sol-cyan hover:text-sol-cyan/80 disabled:opacity-30 disabled:cursor-default flex items-center gap-0.5"
+                onClick={copyViewLink}
+                title="Copy link to this view"
+                className="flex items-center gap-1 h-6 px-1.5 rounded-md text-[10px] text-sol-text-dim hover:text-sol-cyan hover:bg-sol-cyan/5 transition-colors"
               >
-                <Check className="w-3 h-3" /> Save
+                <Link2 className="w-3 h-3 flex-shrink-0" />
+                <span className="cq-header-collapse">Link</span>
               </button>
+            )}
+            {filters.onSaveView && !savingView && (
               <button
-                type="button"
-                onClick={() => setSavingView(false)}
-                className="text-[10px] text-sol-text-dim hover:text-sol-text"
+                onClick={() => { setSavingView(true); setSaveViewName(""); }}
+                title="Save current view as a shortcut"
+                className="flex items-center gap-1 h-6 px-1.5 rounded-md text-[10px] text-sol-text-dim hover:text-sol-cyan hover:bg-sol-cyan/5 transition-colors"
               >
-                <X className="w-3 h-3" />
+                <Bookmark className="w-3 h-3 flex-shrink-0" />
+                <span className="cq-header-collapse">Save view</span>
               </button>
-            </form>
-          )}
+            )}
+            {filters.onSaveView && savingView && (
+              <form
+                className="flex items-center gap-1.5"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const name = saveViewName.trim();
+                  if (name) {
+                    filters.onSaveView!(name);
+                    setSavingView(false);
+                    toast.success(`View "${name}" saved`);
+                  }
+                }}
+              >
+                <input
+                  autoFocus
+                  value={saveViewName}
+                  onChange={(e) => setSaveViewName(e.target.value)}
+                  placeholder="View name..."
+                  className="text-[11px] px-2 py-0.5 rounded bg-sol-bg border border-sol-border/60 text-sol-text outline-none focus:border-sol-cyan w-28"
+                  onKeyDown={(e) => { if (e.key === "Escape") setSavingView(false); }}
+                />
+                <button
+                  type="submit"
+                  disabled={!saveViewName.trim()}
+                  className="text-[10px] text-sol-cyan hover:text-sol-cyan/80 disabled:opacity-30 disabled:cursor-default flex items-center gap-0.5"
+                  title="Save"
+                >
+                  <Check className="w-3 h-3" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSavingView(false)}
+                  className="text-[10px] text-sol-text-dim hover:text-sol-text"
+                  title="Cancel"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </form>
+            )}
+            {filters.hasActive && (
+              <button
+                onClick={filters.onClear}
+                title="Clear filters"
+                className="flex items-center gap-1 h-6 px-1.5 rounded-md text-[10px] text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors"
+              >
+                <X className="w-3 h-3 flex-shrink-0" />
+                <span className="cq-header-collapse">Clear</span>
+              </button>
+            )}
+          </div>
         </div>
       )}
 

@@ -61,6 +61,13 @@
   .cq-seg-compact { display: flex !important; }
 }
 
+/* At tight container widths the list header + filter bar trade their roomy 24px
+   side padding for 12px, reclaiming ~24px of usable width — enough to keep the
+   toolbar and the view-action cluster on fewer rows before they wrap. */
+@container (max-width: 600px) {
+  .cq-header-pad { padding-left: 0.75rem !important; padding-right: 0.75rem !important; }
+}
+
 .cq-no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
 .cq-no-scrollbar::-webkit-scrollbar { display: none; }
 
