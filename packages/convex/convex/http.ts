@@ -568,7 +568,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, conversation_id, start_line, end_line, full_content } = body;
+      const { api_token, conversation_id, start_line, end_line, full_content, around_message_id, context } = body;
 
       if (!api_token || !conversation_id) {
         return new Response(JSON.stringify({ error: "Missing api_token or conversation_id" }), {
@@ -583,6 +583,8 @@ http.route({
         start_line,
         end_line,
         full_content,
+        around_message_id,
+        context,
       });
 
       if (result.error) {

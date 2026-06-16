@@ -9,6 +9,7 @@ import * as os from "os";
 import { spawn, spawnSync, execSync } from "child_process";
 import { fileURLToPath } from "url";
 import { maskToken } from "./redact.js";
+import { parseConversationRef } from "./conversationRef.js";
 import { cliFetch, cliFetchRead } from "./cliHttp.js";
 import { listProfiles, saveProfile, useProfile, CcAccountError } from "./ccAccounts.js";
 import { CODECAST_STATUS_HOOK } from "./statusHook.js";
@@ -1920,6 +1921,7 @@ cast feed -m samvit               # specific member
 cast feed --state needs-input     # filter feed by work state
 cast feed --label api             # sessions I filed under a label (search/sessions take --label too)
 cast read <id> 15:25              # read messages 15-25
+cast read '<share-url>#msg-<id>'  # read a window around a linked message (-c N for context size)
 
 # Explore sessions — 3 axes: QUERY (which) × CONTENT (state | --messages) × LIVENESS (snapshot | -w)
 cast sessions                     # state snapshot, grouped most-actionable-first
@@ -6252,17 +6254,23 @@ program
     "  cast read jx70ntf 12:               # Read from message 12 to end\n" +
     "  cast read jx70ntf :20               # Read first 20 messages\n" +
     "  cast read jx70ntf 15                # Read single message 15\n" +
-    "  cast read jx70ntf 10:15 --full      # Show full tool call/result content"
+    "  cast read jx70ntf 10:15 --full      # Show full tool call/result content\n" +
+    "  cast read 'https://codecast.sh/conversation/<id>#msg-<msgId>'\n" +
+    "                                      # Read a window around a linked message\n" +
+    "  cast read '<url-with-#msg>' -c 5    # …with 5 messages of context each side"
   )
-  .argument("<conversation-id>", "Conversation ID (can be truncated)")
+  .argument("<conversation-id>", "Conversation ID, or a share URL (a #msg-<id> anchor reads around that message)")
   .argument("[range]", "Message range (e.g., 12:20, 12:, :20, 15)")
   .option("-f, --full", "Show full tool call and tool result content")
+  .option("-c, --context <n>", "Messages to show on each side of a #msg-<id> anchor (default 10)")
   .action(async (conversationId, range, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
       console.error("Not authenticated. Run: cast auth");
       process.exit(1);
     }
+
+    const { conversationId: parsedId, messageId } = parseConversationRef(conversationId);
 
     let startLine: number | undefined;
     let endLine: number | undefined;
@@ -6278,6 +6286,10 @@ program
       }
     }
 
+    // An explicit range wins over the anchor's window, but the anchor is still
+    // sent so the linked message gets highlighted.
+    const contextN = options.context !== undefined ? parseInt(options.context, 10) : undefined;
+
     const siteUrl = config.convex_url.replace(".cloud", ".site");
 
     try {
@@ -6286,10 +6298,12 @@ program
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           api_token: config.auth_token,
-          conversation_id: conversationId,
+          conversation_id: parsedId,
           start_line: startLine,
           end_line: endLine,
           full_content: options.full || undefined,
+          around_message_id: messageId,
+          context: Number.isFinite(contextN) ? contextN : undefined,
         }),
       });
 
@@ -6301,8 +6315,12 @@ program
         process.exit(1);
       }
 
+      if (messageId && result.target_missing) {
+        console.error(`Note: message ${messageId} not found in this conversation — showing the start instead.`);
+      }
+
       const { formatReadResult } = await import("./formatter.js");
-      console.log(formatReadResult(result, { full: options.full }));
+      console.log(formatReadResult(result, { full: options.full, targetLine: result.target_line }));
     } catch (error) {
       console.error("Read failed:", error instanceof Error ? error.message : error);
       process.exit(1);

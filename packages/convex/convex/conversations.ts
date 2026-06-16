@@ -3663,6 +3663,11 @@ export const readConversationMessages = query({
     start_line: v.optional(v.number()),
     end_line: v.optional(v.number()),
     full_content: v.optional(v.boolean()),
+    // Anchor the window on a specific message (its Convex _id, as in the web's
+    // `#msg-<id>` share links). When set without an explicit range, the result
+    // is a window of `context` messages on each side of the anchor.
+    around_message_id: v.optional(v.string()),
+    context: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserIdReadOnly(ctx, args.api_token);
@@ -3737,8 +3742,42 @@ export const readConversationMessages = query({
     const nonEmptyMessages = allMessages.filter(isNonEmptyMessage);
 
     const nonEmptyCount = nonEmptyMessages.length;
-    const startLine = args.start_line ?? 1;
-    const endLine = args.end_line ?? Math.min(nonEmptyCount, 20);
+
+    // When anchored to a specific message (e.g. from a #msg-<id> share link),
+    // resolve it to a line number so we can center the window on it. The id is
+    // the message's Convex _id, matching the web's `msg-<_id>` DOM anchors.
+    let targetLine: number | undefined;
+    let targetMissing = false;
+    if (args.around_message_id) {
+      let targetIdx = nonEmptyMessages.findIndex((m) => m._id === args.around_message_id);
+      if (targetIdx < 0) {
+        // The anchored message may have been filtered out as empty — snap to the
+        // nearest visible message so the window still lands in the right place.
+        const rawIdx = allMessages.findIndex((m) => m._id === args.around_message_id);
+        if (rawIdx >= 0) {
+          let before = 0;
+          for (let i = 0; i < rawIdx; i++) {
+            if (isNonEmptyMessage(allMessages[i])) before++;
+          }
+          targetIdx = Math.min(before, nonEmptyCount - 1);
+        }
+      }
+      if (targetIdx >= 0) targetLine = targetIdx + 1;
+      else targetMissing = true;
+    }
+
+    let startLine: number;
+    let endLine: number;
+    if (targetLine !== undefined && args.start_line === undefined && args.end_line === undefined) {
+      // Window of `context` messages on each side of the anchor, clamped to 24 so
+      // the anchor always stays inside the 50-message cap enforced below.
+      const ctxN = Math.min(24, Math.max(0, args.context ?? 10));
+      startLine = Math.max(1, targetLine - ctxN);
+      endLine = Math.min(nonEmptyCount, targetLine + ctxN);
+    } else {
+      startLine = args.start_line ?? 1;
+      endLine = args.end_line ?? Math.min(nonEmptyCount, 20);
+    }
 
     const startIdx = Math.max(0, startLine - 1);
     const count = Math.min(endLine - startLine + 1, 50);
@@ -3787,6 +3826,10 @@ export const readConversationMessages = query({
         updated_at: new Date(conv.updated_at).toISOString(),
       },
       messages,
+      // Line of the anchored message (1-based) so callers can highlight it.
+      target_line: targetLine,
+      target_message_id: targetLine !== undefined ? args.around_message_id : undefined,
+      target_missing: targetMissing || undefined,
     };
   },
 });

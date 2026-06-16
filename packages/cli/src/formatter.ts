@@ -98,6 +98,7 @@ interface ReadResult {
     updated_at: string;
   };
   messages: ReadMessage[];
+  target_line?: number;
 }
 
 function formatDate(isoDate: string): string {
@@ -307,6 +308,7 @@ export function formatSearchResults(result: SearchResult, options: SearchOptions
 
 interface FormatOptions {
   full?: boolean;
+  targetLine?: number;
 }
 
 export function formatReadResult(result: ReadResult, options: FormatOptions = {}): string {
@@ -323,7 +325,13 @@ export function formatReadResult(result: ReadResult, options: FormatOptions = {}
     `${conv.message_count} msgs`,
     truncatePath(conv.project_path),
   ].filter(Boolean).join(" | ");
-  lines.push(`   ${meta}\n`);
+  lines.push(`   ${meta}`);
+
+  const targetLine = options.targetLine ?? result.target_line;
+  if (targetLine !== undefined) {
+    lines.push(`   ${fmt.muted(`↓ around linked message (line ${targetLine})`)}`);
+  }
+  lines.push("");
 
   for (const msg of result.messages) {
     // Skip empty messages (streaming artifacts)
@@ -334,9 +342,10 @@ export function formatReadResult(result: ReadResult, options: FormatOptions = {}
       continue;
     }
 
+    const isTarget = targetLine !== undefined && msg.line === targetLine;
     const lineNum = String(msg.line).padStart(4);
     const role = formatRole(msg.role);
-    lines.push(`${lineNum}: ${role}`);
+    lines.push(isTarget ? `${fmt.accent("►")}${lineNum.slice(1)}: ${role} ${fmt.accent("← linked")}` : `${lineNum}: ${role}`);
 
     if (hasContent) {
       const indentedContent = msg.content.split("\n").map((l) => "       " + l).join("\n");
