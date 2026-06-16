@@ -9,7 +9,7 @@ type Permission = {
   _id: Id<"pending_permissions">;
   tool_name: string;
   arguments_preview?: string;
-  status: "pending" | "approved" | "denied";
+  status: "pending" | "cancelled" | "approved" | "denied";
   created_at: number;
 };
 
@@ -142,7 +142,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     color: '#fbbf24',
-    fontFamily: 'monospace',
+    fontFamily: 'JetBrainsMono',
     marginBottom: 4,
   },
   argsContainer: {
@@ -154,7 +154,7 @@ const styles = StyleSheet.create({
   argsText: {
     fontSize: 11,
     color: '#999',
-    fontFamily: 'monospace',
+    fontFamily: 'JetBrainsMono',
   },
   buttonContainer: {
     flexDirection: 'row',

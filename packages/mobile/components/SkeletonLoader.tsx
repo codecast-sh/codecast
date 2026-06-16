@@ -39,6 +39,29 @@ export function SessionListSkeleton({ count = 8 }: { count?: number }) {
   );
 }
 
+export function NotificationSkeleton() {
+  return (
+    <RNView style={styles.notificationRow}>
+      <SkeletonPulse style={styles.notificationAvatar} />
+      <RNView style={styles.notificationBody}>
+        <SkeletonPulse style={styles.notificationName} />
+        <SkeletonPulse style={styles.notificationContext} />
+        <SkeletonPulse style={styles.notificationMessage} />
+      </RNView>
+    </RNView>
+  );
+}
+
+export function NotificationListSkeleton({ count = 8 }: { count?: number }) {
+  return (
+    <RNView style={styles.container}>
+      {Array.from({ length: count }).map((_, i) => (
+        <NotificationSkeleton key={i} />
+      ))}
+    </RNView>
+  );
+}
+
 export function MemberSkeleton() {
   return (
     <RNView style={styles.memberRow}>
@@ -88,6 +111,40 @@ const styles = StyleSheet.create({
     width: 20,
     height: 12,
     borderRadius: 3,
+  },
+  notificationRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Theme.bgHighlight,
+  },
+  notificationAvatar: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    marginRight: Spacing.md,
+    marginTop: 2,
+  },
+  notificationBody: {
+    flex: 1,
+    gap: 6,
+  },
+  notificationName: {
+    width: '45%',
+    height: 14,
+    borderRadius: 4,
+  },
+  notificationContext: {
+    width: '60%',
+    height: 11,
+    borderRadius: 3,
+  },
+  notificationMessage: {
+    width: '85%',
+    height: 12,
+    borderRadius: 4,
   },
   memberRow: {
     flexDirection: 'row',

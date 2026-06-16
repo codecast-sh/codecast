@@ -6,14 +6,17 @@ import { useState } from 'react';
 import { useRouter } from 'expo-router';
 import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import { Theme, Spacing } from '@/constants/Theme';
+import { NotificationListSkeleton } from '@/components/SkeletonLoader';
 
 type Notification = {
   _id: Id<"notifications">;
-  type: "mention" | "comment_reply" | "conversation_comment" | "team_invite" | "session_idle" | "permission_request" | "session_error" | "team_session_start" | "task_completed" | "task_failed";
+  type: "mention" | "comment_reply" | "conversation_comment" | "team_invite" | "session_idle" | "permission_request" | "session_error" | "team_session_start" | "task_completed" | "task_failed" | "task_assigned" | "task_status_changed" | "task_commented" | "doc_updated" | "doc_commented" | "plan_status_changed" | "plan_task_completed";
   message: string;
   read: boolean;
   created_at: number;
   conversation_id?: Id<"conversations">;
+  entity_type?: "task" | "doc" | "plan" | "conversation";
+  entity_id?: string;
   actor: {
     _id: Id<"users">;
     name?: string;
@@ -151,18 +154,27 @@ export default function NotificationsScreen() {
     setTimeout(() => setRefreshing(false), 1000);
   };
 
-  const handlePress = async (notification: Notification) => {
+  const handlePress = (notification: Notification) => {
+    // Fire mark-as-read best-effort; don't block navigation on the round-trip.
     if (!notification.read) {
-      await markAsRead({ notificationId: notification._id });
+      markAsRead({ notificationId: notification._id }).catch(() => {});
+    }
+    if (notification.entity_type && notification.entity_id && notification.entity_type !== "conversation") {
+      const routes: Record<string, string> = { task: "/task/", doc: "/doc/", plan: "/plan/" };
+      const base = routes[notification.entity_type];
+      if (base) {
+        router.push(`${base}${notification.entity_id}` as any);
+        return;
+      }
     }
     if (notification.conversation_id) {
       router.push(`/session/${notification.conversation_id}`);
     }
   };
 
-  const handleMarkRead = async (notification: Notification) => {
+  const handleMarkRead = (notification: Notification) => {
     if (!notification.read) {
-      await markAsRead({ notificationId: notification._id });
+      markAsRead({ notificationId: notification._id }).catch(() => {});
     }
   };
 
@@ -210,7 +222,7 @@ export default function NotificationsScreen() {
             tintColor={Theme.textMuted}
           />
         }
-        ListEmptyComponent={notifications === undefined ? null : renderEmpty}
+        ListEmptyComponent={notifications === undefined ? <NotificationListSkeleton /> : renderEmpty}
         contentContainerStyle={(notifications?.length ?? 0) === 0 ? styles.emptyList : styles.listContent}
         showsVerticalScrollIndicator={false}
       />

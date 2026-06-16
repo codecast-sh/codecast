@@ -76,7 +76,7 @@ function AgentLogo({ type, size = 20, bgColor }: { type: AgentType; size?: numbe
 function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: boolean; onClose: () => void; onSessionCreated: (conversationId: string) => void }) {
   const [agentType, setAgentType] = useState<AgentType>("claude");
   const [projectPath, setProjectPath] = useState("");
-  const recentProjects = useQuery(api.users.getRecentProjectPaths, { limit: 6 });
+  const recentProjects = useQuery(api.users.getRecentProjectPaths, visible ? { limit: 6 } : "skip");
 
   useEffect(() => {
     if (visible && !projectPath && recentProjects?.length) {
@@ -121,7 +121,7 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
       <KeyboardAvoidingView style={modalStyles.container} behavior={Platform.OS === "ios" ? "padding" : undefined}>
         <RNView style={modalStyles.header}>
           <RNText style={modalStyles.title}>New Session</RNText>
-          <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+          <TouchableOpacity onPress={onClose} hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}>
             <FontAwesome name="times" size={20} color={Theme.textMuted} />
           </TouchableOpacity>
         </RNView>
@@ -318,7 +318,6 @@ export default function InboxScreen() {
   const stashSession = useInboxStore((s) => s.stashSession);
   const restoreSession = useInboxStore((s) => s.restoreSession);
   const pinSession = useInboxStore((s) => s.pinSession);
-  const deferSession = useInboxStore((s) => s.deferSession);
   const killSession = useMutation(api.conversations.killSession);
 
   const sessionsWithQueuedMessages = useInboxStore((s) => s.sessionsWithQueuedMessages);
@@ -356,11 +355,6 @@ export default function InboxScreen() {
     stashSession(conversationId);
   }, [stashSession]);
 
-  const handleDefer = useCallback((conversationId: string) => {
-    deferSession(conversationId);
-  }, [deferSession]);
-
-
   const handleUndismiss = useCallback((conversationId: string) => {
     restoreSession(conversationId);
   }, [restoreSession]);
@@ -370,9 +364,11 @@ export default function InboxScreen() {
   }, [pinSession]);
 
   const handleSessionLongPress = useCallback((session: InboxSession) => {
+    const favoriteLabel = session.is_favorite ? 'Unfavorite' : 'Favorite';
+    const toggleFavorite = () => useInboxStore.getState().toggleFavorite(session._id);
     const options = [
       session.is_pinned ? 'Unpin' : 'Pin',
-      'Defer',
+      favoriteLabel,
       'Dismiss',
       'Kill Agent',
       'Cancel',
@@ -385,7 +381,7 @@ export default function InboxScreen() {
         { options, cancelButtonIndex, destructiveButtonIndex, title: cleanTitle(session.title) },
         (index) => {
           if (index === 0) handlePin(session._id);
-          else if (index === 1) deferSession(session._id);
+          else if (index === 1) toggleFavorite();
           else if (index === 2) handleDismiss(session._id);
           else if (index === 3) {
             Alert.alert('Kill Agent', 'Stop this agent session?', [
@@ -398,7 +394,7 @@ export default function InboxScreen() {
     } else {
       Alert.alert(cleanTitle(session.title), undefined, [
         { text: session.is_pinned ? 'Unpin' : 'Pin', onPress: () => handlePin(session._id) },
-        { text: 'Defer', onPress: () => deferSession(session._id) },
+        { text: favoriteLabel, onPress: toggleFavorite },
         { text: 'Dismiss', onPress: () => handleDismiss(session._id) },
         { text: 'Kill Agent', style: 'destructive', onPress: () => {
           Alert.alert('Kill Agent', 'Stop this agent session?', [
@@ -409,7 +405,7 @@ export default function InboxScreen() {
         { text: 'Cancel', style: 'cancel' },
       ]);
     }
-  }, [handlePin, handleDismiss, deferSession, killSession]);
+  }, [handlePin, handleDismiss, killSession]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
@@ -522,7 +518,7 @@ export default function InboxScreen() {
             autoCapitalize="none"
           />
           {searchQuery.length > 0 && (
-            <TouchableOpacity onPress={clearSearch} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+            <TouchableOpacity onPress={clearSearch} hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}>
               <FontAwesome name="times-circle" size={16} color={Theme.textMuted0} />
             </TouchableOpacity>
           )}
