@@ -1140,7 +1140,7 @@ export const SessionCard = memo(function SessionCard({
         )}
       </div>
       {onPin && session.is_pinned && (
-        <div className="absolute top-0 right-0 py-1 pr-2 pointer-events-none z-[1]" style={{ paddingLeft: 24, background: isActive ? 'linear-gradient(to right, transparent, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 60%)' : 'linear-gradient(to right, transparent, var(--sol-bg-alt) 60%)' }}>
+        <div className="absolute top-0 right-0 py-1 pr-2 pointer-events-none z-[1] transition-opacity group-hover:opacity-0" style={{ paddingLeft: 24, background: isActive ? 'linear-gradient(to right, transparent, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 60%)' : 'linear-gradient(to right, transparent, var(--sol-bg-alt) 60%)' }}>
           <button
             onClick={(e) => { e.stopPropagation(); onPin(session._id); }}
             className="p-1 rounded text-sol-magenta transition-colors pointer-events-auto"
