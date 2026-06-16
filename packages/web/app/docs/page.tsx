@@ -11,6 +11,7 @@ import { GenericListView, ListGroup, ItemRowState } from "../../components/Gener
 import { SegmentedToggle } from "../../components/SegmentedToggle";
 import { getLabelColor, DEFAULT_LABELS } from "../../lib/labelColors";
 import { docMatchesProjectFilter } from "../../lib/docFilters";
+import { docSearchText } from "../../lib/liveEntities";
 import {
   FileText,
   Pin,
@@ -376,7 +377,7 @@ export function DocListContent() {
       renderRow={renderDocRow}
       getItemId={(d) => d._id}
       getItemRoute={(d) => `/docs/${d._id}`}
-      getSearchText={(d) => (d as any).display_title || d.title || ""}
+      getSearchText={(d) => docSearchText(d as any)}
       searchAllItems={searchScopeDocs}
       emptyIcon={<FileText className="w-8 h-8 opacity-30" />}
       emptyMessage="No documents found"

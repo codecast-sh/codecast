@@ -1394,6 +1394,9 @@ export const webMentionList = query({
           _id: String(d._id),
           title: d.title,
           doc_type: d.doc_type,
+          // Filename/path so the palette can find a file-synced doc by its name,
+          // not just its content-derived title (e.g. "backend/ROADMAP_EXPLAINED.md").
+          source_file: d.source_file ?? null,
           updated_at: d.updated_at,
           team_id: d.team_id ?? null,
           user_id: d.user_id ?? null,
@@ -1514,6 +1517,10 @@ export const mentionSearch = query({
     }
 
     if (types.includes("doc")) {
+      // A file-synced doc is titled from its content heading, not its filename, so
+      // match the source file path too — lets you find a doc by name/path.
+      const docMatches = (d: any) =>
+        d.title?.toLowerCase().includes(q) || d.source_file?.toLowerCase().includes(q);
       let docs;
       if (teamId) {
         docs = await ctx.db
@@ -1521,12 +1528,22 @@ export const mentionSearch = query({
           .withIndex("by_team_id", (d: any) => d.eq("team_id", teamId))
           .order("desc")
           .take(perType * 10);
-        if (q) docs = docs.filter((d: any) => d.title?.toLowerCase().includes(q));
+        if (q) docs = docs.filter(docMatches);
       } else if (q) {
-        docs = await db.raw
+        // The title search index can't see source_file, so union the title-index
+        // hits with filename hits from a bounded recent scan.
+        const byTitle = await db.raw
           .query("docs")
           .withSearchIndex("search_docs_v2", (s: any) => s.search("title", args.query).eq("user_id", userId))
           .take(perType * 5);
+        const byFile = (await db.raw
+          .query("docs")
+          .withIndex("by_user_id", (d: any) => d.eq("user_id", userId))
+          .order("desc")
+          .take(perType * 20))
+          .filter((d: any) => d.source_file?.toLowerCase().includes(q));
+        const seen = new Set(byTitle.map((d: any) => String(d._id)));
+        docs = [...byTitle, ...byFile.filter((d: any) => !seen.has(String(d._id)))];
       } else {
         docs = await db.raw
           .query("docs")
@@ -1539,7 +1556,9 @@ export const mentionSearch = query({
           id: String(doc._id),
           type: "doc",
           label: doc.title,
-          sublabel: doc.doc_type,
+          // Show the filename when the doc is backed by a file, so a name/path
+          // match is legible (the title may not contain what you typed).
+          sublabel: doc.source_file ? (doc.source_file.split("/").pop() || doc.doc_type) : doc.doc_type,
           docType: doc.doc_type,
         });
       }

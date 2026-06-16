@@ -872,6 +872,7 @@ type MentionRecord = {
   short_id?: string;
   goal?: string;
   doc_type?: string;
+  source_file?: string | null;
   status?: string;
   updated_at?: number;
   team_id?: string | null;
@@ -892,7 +893,16 @@ function matchEntities(
     if (teamId ? team && team !== teamId : team) continue;
     const titleRank = score(rec.title || "", q);
     const goalRank = rec.goal ? score(rec.goal, q) : Infinity;
-    let rank = Math.min(titleRank, goalRank);
+    // File-synced docs are titled from their content heading, not their filename;
+    // score the source file too so a doc is findable by name/path. Score the
+    // basename (strong prefix match) and the full path (matches "dir/file.md").
+    let fileRank = Infinity;
+    if (rec.source_file) {
+      const path = rec.source_file.toLowerCase();
+      const base = path.split("/").pop() || path;
+      fileRank = Math.min(score(base, q), score(path, q));
+    }
+    let rank = Math.min(titleRank, goalRank, fileRank);
     if (rank === Infinity) {
       if (!rec.short_id?.toLowerCase().includes(q)) continue;
       rank = 50; // short_id-only hit ranks below any title/goal hit
@@ -1706,6 +1716,9 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
               >
                 <FileText className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
                 <span className="truncate flex-1">{d.title || "Untitled"}</span>
+                {d.source_file && (
+                  <span className="text-[10px] text-sol-text-dim/70 font-mono truncate max-w-[140px] flex-shrink-0">{d.source_file.split("/").pop()}</span>
+                )}
                 <span className="text-[10px] text-sol-text-dim flex-shrink-0 capitalize">{d.doc_type || "note"}</span>
                 <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{timeAgo(d.updated_at)}</span>
               </CommandPrimitive.Item>
