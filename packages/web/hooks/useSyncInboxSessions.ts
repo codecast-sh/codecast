@@ -8,6 +8,7 @@ import { soundIdle } from "../lib/sounds";
 import { useConvexSync } from "./useConvexSync";
 import { useRecoveryPoll } from "./useRecoveryPoll";
 import { useEnsureDispatch } from "./useEnsureDispatch";
+import { useLiveInboxSessions, applyLiveInboxIds } from "./useLiveInboxSessions";
 import { useWatchEffect } from "./useWatchEffect";
 import { runReconcileCrawl, syncMetaKey } from "./reconcileCrawl";
 import { collectGhostSweepCandidates, collectHiddenResurrectionSuspects } from "./ghostSweep";
@@ -76,18 +77,6 @@ export function useSyncInboxSessions() {
   useEnsureDispatch();
 
   const convex = useConvex();
-  // The live subscription is pinned to show_all:false — its returned id set IS
-  // the server's authoritative "recent" set, recorded as liveInboxIds for the
-  // client-side "show old sessions" filter. We never vary this arg on the toggle:
-  // (1) the never-prune cache + completeness crawl already hold the "old" rows, so
-  // hiding them is a render decision, not a re-fetch; (2) changing the arg would
-  // re-subscribe from scratch (undefined → cold sync chip) and churn the crawl
-  // wsKey on every toggle. Hide/show is now instant and local — see GlobalSessionPanel.
-  // include_liveness:false — heartbeat-derived liveness rides the separate
-  // sessionsLiveness overlay below, so this heavy list re-runs only on real
-  // conversation changes instead of on every ~1s heartbeat. The overlay merges
-  // agent_status/is_idle/... back onto the cached rows per id via syncOverlay.
-  const inboxSessions = useQuery(api.conversations.listInboxSessions, { show_all: false, include_liveness: false });
   // Favorites as full inbox rows, force-loaded regardless of the 30d window so the
   // Favorites view can resolve a months-old kept session. Merged into the SAME
   // sessions cache (delta, never-prune) but deliberately NOT into liveInboxIds —
@@ -100,15 +89,6 @@ export function useSyncInboxSessions() {
   const bgFetchingRef = useRef(new Set<string>());
 
   const syncTable = useInboxStore((s) => s.syncTable);
-  // Record the live (recent) id set, change-guarded so an identical payload
-  // doesn't allocate a new Set and re-render every subscriber. "Old" = cached
-  // top-level sessions absent from this set (filled by the completeness crawl).
-  const applyLiveInboxIds = useCallback((sessions: any[]) => {
-    const next = new Set<string>(sessions.map((x: any) => x._id.toString()));
-    const prev = useInboxStore.getState().liveInboxIds;
-    if (prev.size === next.size && [...next].every((id) => prev.has(id))) return;
-    useInboxStore.setState({ liveInboxIds: next });
-  }, []);
   const pruneDrafts = useMutation(api.client_state.pruneDeadDrafts);
   const prunedRef = useRef(false);
 
@@ -151,17 +131,18 @@ export function useSyncInboxSessions() {
     }
   }, [convex]);
 
-  useConvexSync(inboxSessions, useCallback((data: any) => {
-    const sessions = data.sessions ?? data;
-    // This payload carries null liveness (include_liveness:false); the
-    // idle/needs-input sound is driven off the sessionsLiveness overlay below,
-    // which is where liveness actually changes. preserveFields on the sessions
-    // config keeps the overlay's values from being clobbered by this null.
-    syncTable("sessions", sessions as unknown as InboxSession[]);
-    applyLiveInboxIds(sessions);
-    bgSyncMessages(sessions);
-    lastSyncRef.current = Date.now();
-  }, [syncTable, applyLiveInboxIds, bgSyncMessages]), { coalesceMs: 300 });
+  // The base live session list — syncTable + liveInboxIds — is shared with the
+  // standalone palette window via useLiveInboxSessions so both windows feed
+  // findReusableBlankSession the SAME truth. Here we layer on the message
+  // prefetch (instant clicks) and the recovery-poll watermark; the shared payload
+  // carries null liveness (include_liveness:false), so the idle/needs-input sound
+  // stays on the sessionsLiveness overlay below where liveness actually changes.
+  const inboxSessions = useLiveInboxSessions({
+    onSync: (sessions) => {
+      bgSyncMessages(sessions);
+      lastSyncRef.current = Date.now();
+    },
+  });
 
   // Merge favorites into the session cache WITHOUT touching liveInboxIds — these
   // rows back the Favorites view and the sidebar peek; they must not be treated
@@ -232,7 +213,7 @@ export function useSyncInboxSessions() {
     applyLiveInboxIds(sessions);
     bgSyncMessages(sessions);
     lastSyncRef.current = Date.now();
-  }, [convex, syncTable, applyLiveInboxIds, bgSyncMessages]), 15_000);
+  }, [convex, syncTable, bgSyncMessages]), 15_000);
 
   // Liveness can stall independently of the base list — recover it on the same
   // cadence so a frozen subscription doesn't leave every session reading a stale

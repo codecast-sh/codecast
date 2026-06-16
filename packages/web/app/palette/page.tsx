@@ -4,6 +4,7 @@ import { ComposeView } from "../../components/ComposeView";
 import { ShortcutProvider } from "../../shortcuts";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useEnsureDispatch } from "../../hooks/useEnsureDispatch";
+import { useLiveInboxSessions } from "../../hooks/useLiveInboxSessions";
 import { isElectron } from "../../lib/desktop";
 
 export default function PalettePage() {
@@ -31,6 +32,14 @@ function PaletteRoot() {
   // would no-op (asyncAction returns undefined without a dispatch). Wire it so
   // the compose popup can start sessions on its own. Idempotent across windows.
   useEnsureDispatch();
+  // Keep this window's `sessions` cache live (NOT just the cold IDB snapshot).
+  // The compose popup reuses a blank session via findReusableBlankSession; on a
+  // stale snapshot a session that has since gained messages still looks blank, so
+  // the first message lands in that existing conversation. This is the same live
+  // list the in-app New Session reads — minus the heavy recovery/sound/crawl
+  // machinery — so both paths decide reuse from identical truth. It also keeps the
+  // standalone command palette's recent-session list current.
+  useLiveInboxSessions();
 
   const [mode, setMode] = useState<"search" | "compose">("search");
   const [composeNonce, setComposeNonce] = useState(0);
