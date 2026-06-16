@@ -515,6 +515,12 @@ export type SavedView = {
   created_at: number;
 };
 
+// The inbox panel's session-ordering modes. "grouped" = status sections;
+// "recent" = flat, newest-first by last activity (updated_at) — reshuffles as
+// sessions work; "time" = flat, newest-first by creation (started_at) — a
+// stable chronology that doesn't move; "bucket" = sections per manual label.
+export type InboxViewMode = "grouped" | "recent" | "time" | "bucket";
+
 export type ClientUI = {
   theme?: "light" | "dark";
   sidebar_collapsed?: boolean;
@@ -538,10 +544,15 @@ export type ClientUI = {
   // Pinned/New/Needs-Input/Working grouping and shows every session as one flat
   // list sorted newest-first by creation time (started_at). Toggled by Ctrl+,.
   inbox_flat_view?: boolean;
-  // Three-way successor to inbox_flat_view: "grouped" (status sections),
-  // "time" (flat by creation), "bucket" (sections per manual bucket). The
-  // boolean is kept coherent (true iff "time") for older readers. Ctrl+, cycles.
-  inbox_view_mode?: "grouped" | "time" | "bucket";
+  // Successor to inbox_flat_view: see InboxViewMode. The legacy boolean is kept
+  // coherent (true for either flat mode) so older readers still flatten. Ctrl+, cycles.
+  inbox_view_mode?: InboxViewMode;
+  // Per-user manual order for the "time" view: a SPARSE map of conversation id →
+  // sort key, where the key lives in the SAME epoch-ms space as started_at. Rows
+  // absent from the map fall back to their creation time, so un-dragged rows and
+  // brand-new sessions interleave by creation automatically; a drag pins just the
+  // moved row with a single midpoint write. See flatViewComparator / computeManualSortKey.
+  inbox_manual_order?: Record<string, number>;
 };
 
 export type ClientLayouts = {
@@ -1322,18 +1333,119 @@ export function favoritesVisualOrder(
 // Resolve the active inbox view mode from client UI state. Shared by the
 // inboxViewMode getter and computeVisualOrder so every consumer agrees on
 // which ordering is on screen.
-export function resolveInboxViewMode(ui: { inbox_view_mode?: "grouped" | "time" | "bucket"; inbox_flat_view?: boolean } | undefined): "grouped" | "time" | "bucket" {
+export function resolveInboxViewMode(ui: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean } | undefined): InboxViewMode {
   return ui?.inbox_view_mode ?? (ui?.inbox_flat_view ? "time" : "grouped");
 }
 
-// The session order AS RENDERED: the grouped base order re-shuffled for the
-// active view mode (time / by-label). Accepts the live store state or a
-// mutative action draft, so keyboard nav (visualOrder) and the dismiss/kill
-// advance-to-next paths (hideSessionInDraft, markKilling) all walk exactly
-// the list the user is looking at. currentSessionId keeps the blank you're
-// sitting on navigable (j/k from a fresh session, dismiss-from-it advances to
-// the row below it); all other never-engaged blanks are hidden from the panel
-// and so excluded from this order too.
+// A session's creation-time sort key for the "time" view: started_at, falling
+// back to updated_at only when a session has no creation stamp.
+const creationKey = (s: InboxSession) => s.started_at ?? s.updated_at ?? 0;
+
+// Newest-first comparator for the two flat views. "recent" ranks by last
+// activity (updated_at), so the list reshuffles as sessions work; "time" ranks
+// by creation (started_at), a stable chronology. In "time", an optional
+// manualOrder map overrides a row's key (drag-to-reorder); because those keys
+// share the epoch-ms space of started_at, dragged and un-dragged rows sort on
+// one continuous scale. The _id tiebreak keeps equal keys from jittering.
+// Shared by computeVisualOrder (keyboard nav) and the panel's flat render so
+// both agree on row order.
+export function flatViewComparator(mode: "time" | "recent", manualOrder?: Record<string, number>) {
+  return (a: InboxSession, b: InboxSession) => {
+    if (mode === "recent") {
+      return (b.updated_at ?? b.started_at ?? 0) - (a.updated_at ?? a.started_at ?? 0)
+        || b._id.localeCompare(a._id);
+    }
+    const ka = manualOrder?.[a._id] ?? creationKey(a);
+    const kb = manualOrder?.[b._id] ?? creationKey(b);
+    return kb - ka || b._id.localeCompare(a._id);
+  };
+}
+
+// Does a session pass the active project/bucket chip? ONE predicate behind both
+// the panel's filterByChip and the flat-view keyboard order so a chip narrows
+// the rendered list and Ctrl+J/K identically. A mid-create stub (non-Convex id)
+// always passes the bucket chip — the session you just summoned inside a focused
+// bucket must stay reachable before its assignment syncs.
+export function chipMatchesSession(
+  s: InboxSession,
+  opts: { projectFilter?: string | null; bucketFilter?: string | null; bucketByConv: Record<string, string | undefined> },
+): boolean {
+  if (opts.projectFilter && getProjectName(s.git_root, s.project_path) !== opts.projectFilter) return false;
+  if (opts.bucketFilter && opts.bucketByConv[s._id] !== opts.bucketFilter && isConvexId(s._id)) return false;
+  return true;
+}
+
+// The flat (time / recent) view's session list AS RENDERED — the single builder
+// behind BOTH the panel's render and computeVisualOrder (keyboard nav), so the
+// two can never drift. This is the crux of "Ctrl+J/K skips New Session cards
+// outside grouped view": the grouped/bucket views render only the categorized
+// status buckets, which deliberately drop never-engaged pre-warm blanks, but the
+// flat views list EVERY non-hidden session (sortedSessions) — so nav has to walk
+// that same full set or it steps over the blanks the panel is showing. Drops
+// nested subagents when the toggle is off (always keeping the focused one),
+// sorts by the view comparator, then applies the chip predicate.
+export function flatViewSessions(
+  sortedSessions: InboxSession[],
+  subsByParent: Map<string, InboxSession[]>,
+  opts: {
+    mode: "time" | "recent";
+    showSubagents: boolean;
+    focusedId?: string | null;
+    manualOrder?: Record<string, number>;
+    chipMatches?: (s: InboxSession) => boolean;
+    // "recent" only: when set, hold the rows in this frozen id order instead of
+    // the live updated_at sort (see recentFreezeOrder). Sessions absent from the
+    // snapshot — new arrivals — fall to the end in live-recent order; removed
+    // ones simply drop out. Both the panel render and computeVisualOrder pass it,
+    // so the list the user navigates stops moving under the cursor.
+    freezeOrder?: string[] | null;
+  },
+): InboxSession[] {
+  const subIds = opts.showSubagents
+    ? null
+    : new Set(Array.from(subsByParent.values()).flat().map((s) => s._id));
+  const list = subIds
+    ? sortedSessions.filter((s) => !subIds.has(s._id) || s._id === opts.focusedId)
+    : [...sortedSessions];
+  list.sort(flatViewComparator(opts.mode, opts.mode === "time" ? opts.manualOrder : undefined));
+  let ordered = list;
+  if (opts.mode === "recent" && opts.freezeOrder?.length) {
+    const rank = new Map(opts.freezeOrder.map((id, i) => [id, i]));
+    const frozen = opts.freezeOrder.map((id) => list.find((s) => s._id === id)).filter(Boolean) as InboxSession[];
+    const fresh = list.filter((s) => !rank.has(s._id)); // new since the snapshot, still in live order
+    ordered = [...frozen, ...fresh];
+  }
+  return opts.chipMatches ? ordered.filter(opts.chipMatches) : ordered;
+}
+
+// The manual sort key to give a row dropped at `insertIndex` among `orderedKeys`
+// — the effective keys (manual or creation) of the OTHER rows, newest-first,
+// with the dragged row already removed. A midpoint between its new neighbors
+// keeps a reorder to one write; at either end it steps a gap past the edge row.
+// How long after the last Ctrl+J/K before the "recent" view's live updated_at
+// sort resumes (recentFreezeOrder clears). Long enough to span a burst of j/k,
+// short enough that the list feels live again the moment you stop.
+const RECENT_FREEZE_THAW_MS = 1800;
+let recentThawTimer: ReturnType<typeof setTimeout> | null = null;
+
+const MANUAL_ORDER_GAP = 60_000; // 1 minute, in the started_at epoch-ms space
+export function computeManualSortKey(orderedKeys: number[], insertIndex: number): number {
+  const before = orderedKeys[insertIndex - 1]; // the row above (larger key)
+  const after = orderedKeys[insertIndex];      // the row below (smaller key)
+  if (before == null) return (after ?? 0) + MANUAL_ORDER_GAP; // dropped at the very top
+  if (after == null) return before - MANUAL_ORDER_GAP;        // dropped at the very bottom
+  return (before + after) / 2;
+}
+
+// The session order AS RENDERED, re-shuffled for the active view mode. Accepts
+// the live store state or a mutative action draft, so keyboard nav (visualOrder)
+// and the dismiss/kill advance-to-next paths (hideSessionInDraft, markKilling)
+// all walk exactly the list the user is looking at. The grouped and bucket views
+// render only the categorized status buckets, which drop never-engaged pre-warm
+// blanks (currentSessionId keeps the one you're sitting on navigable); the flat
+// (time / recent) views instead list EVERY non-hidden session — blanks included
+// — so those branches build from the same flatViewSessions the panel renders, or
+// Ctrl+J/K would step over the "New Session" cards on screen.
 export function computeVisualOrder(state: {
   sessions: Record<string, InboxSession>;
   sessionsWithQueuedMessages: Set<string>;
@@ -1346,7 +1458,9 @@ export function computeVisualOrder(state: {
   buckets: Record<string, BucketItem>;
   showFavorites?: boolean;
   favorites?: any[];
-  clientState: { ui?: { inbox_view_mode?: "grouped" | "time" | "bucket"; inbox_flat_view?: boolean } };
+  liveInboxIds: Set<string>;
+  recentFreezeOrder?: string[] | null;
+  clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; inbox_manual_order?: Record<string, number>; show_subagents?: boolean; show_old_sessions?: boolean } };
 }): InboxSession[] {
   // Favorites view walks its own project-grouped order so Ctrl+J/K moves through
   // the shelf, not the active desk underneath it.
@@ -1354,11 +1468,43 @@ export function computeVisualOrder(state: {
     return favoritesVisualOrder(state.sessions, state.activeProjectFilter, state.favorites);
   }
   const bucketByConv = convBucketMap(state.bucketAssignments);
-  const base = visualOrderSessions(state.sessions, state.sessionsWithQueuedMessages, state.activeProjectFilter, sessionsWithPendingSend(state.pendingMessages), { currentSessionId: state.currentSessionId, pendingCreateIds: new Set(Object.keys(state.pendingSessionCreates)), bucketFilter: state.activeBucketFilter, bucketByConv });
   const mode = resolveInboxViewMode(state.clientState.ui);
-  if (mode === "time") {
-    return [...base].sort((a, b) => (b.started_at ?? b.updated_at ?? 0) - (a.started_at ?? a.updated_at ?? 0));
+  // Hide "old" sessions before building ANY mode's order, exactly as the panel
+  // does (partitionOldSessions over the same liveInboxIds / show_old flag), so
+  // nav can never walk a row the render dropped. With "show old sessions" off a
+  // stale (not-live) session is hidden on screen — Ctrl+J/K must skip it too, or
+  // the highlight sits still while the selection jumps onto an off-screen old
+  // card. This previously guarded only the flat views; grouped/bucket walked the
+  // full session map and so stepped onto hidden old sessions.
+  const focusedId = state.currentSessionId ?? null;
+  const { visibleSessions } = partitionOldSessions(
+    state.sessions,
+    state.liveInboxIds,
+    state.clientState.ui?.show_old_sessions ?? true,
+    focusedId,
+  );
+  if (mode === "time" || mode === "recent") {
+    // Mirror the panel's flatList exactly (categorize the visible set, share
+    // flatViewSessions) so nav walks every rendered row, blanks included.
+    const { sorted, subsByParent } = categorizeSessions(
+      visibleSessions,
+      state.sessionsWithQueuedMessages,
+      sessionsWithPendingSend(state.pendingMessages),
+      { currentSessionId: focusedId, pendingCreateIds: new Set(Object.keys(state.pendingSessionCreates)) },
+    );
+    return flatViewSessions(sorted, subsByParent, {
+      mode,
+      showSubagents: state.clientState.ui?.show_subagents ?? true,
+      focusedId,
+      manualOrder: state.clientState.ui?.inbox_manual_order,
+      freezeOrder: mode === "recent" ? state.recentFreezeOrder : null,
+      chipMatches: (s) => chipMatchesSession(s, { projectFilter: state.activeProjectFilter, bucketFilter: state.activeBucketFilter, bucketByConv }),
+    });
   }
+  // Grouped/bucket: the categorized status buckets over the SAME visible set, so
+  // old sessions hidden from the render are skipped by nav too. The bucket branch
+  // below splits pinned out and regroups the rest by label/project.
+  const base = visualOrderSessions(visibleSessions, state.sessionsWithQueuedMessages, state.activeProjectFilter, sessionsWithPendingSend(state.pendingMessages), { currentSessionId: state.currentSessionId, pendingCreateIds: new Set(Object.keys(state.pendingSessionCreates)), bucketFilter: state.activeBucketFilter, bucketByConv });
   if (mode === "bucket") {
     const pinned = base.filter((s) => s.is_pinned);
     const rest = base.filter((s) => !s.is_pinned);
@@ -1445,6 +1591,12 @@ interface InboxStoreState {
   lastFocusedConversationId: string | null;
   showDismissed: boolean;
   collapsedSections: Record<string, boolean>;
+  // "recent" view only: a frozen snapshot of the row order, set while the user is
+  // navigating with Ctrl+J/K and cleared after a short idle. Recent sorts by
+  // updated_at, which working sessions bump every heartbeat — without this the
+  // list re-sorts under the cursor and j/k steps through a moving target. null =
+  // live (re-sorts freely). Ephemeral: never persisted or synced.
+  recentFreezeOrder: string[] | null;
   viewingDismissedId: string | null;
   pendingNavigateId: string | null;
   renamingSessionId: string | null;
@@ -1614,6 +1766,11 @@ interface InboxStoreState {
   advanceToNext: () => void;
   navigateUp: () => void;
   navigateDown: () => void;
+  // Snapshot the live "recent" order on the first Ctrl+J/K and re-arm a thaw
+  // timer on each; a no-op outside recent mode. Keeps the list from re-sorting
+  // mid-navigation. See recentFreezeOrder.
+  freezeRecentForNav: () => void;
+  thawRecentOrder: () => void;
   setCurrentSession: (id: string, source?: ViewNavSource) => void;
   clearSelection: () => void;
   setShowDismissed: (show: boolean) => void;
@@ -1731,9 +1888,13 @@ interface InboxStoreState {
   activeBucketFilter: string | null;
   setActiveBucketFilter: (bucketId: string | null) => void;
   // Panel view mode with back-compat for the pre-bucket inbox_flat_view bool.
-  inboxViewMode: () => "grouped" | "time" | "bucket";
-  setInboxViewMode: (mode: "grouped" | "time" | "bucket") => void;
+  inboxViewMode: () => InboxViewMode;
+  setInboxViewMode: (mode: InboxViewMode) => void;
   cycleInboxViewMode: () => void;
+  // Drag-to-reorder in the "time" view: pin `id` at `key` (epoch-ms space).
+  setSessionManualOrder: (id: string, key: number) => void;
+  // Forget all manual pins — the "time" view returns to pure creation order.
+  clearManualOrder: () => void;
 
   // -- Recently visited (sessions, chip views, pages) — newest first --
   recentVisits: RecentVisit[];
@@ -2507,6 +2668,7 @@ export const useInboxStore = create<InboxStoreState>(
   lastFocusedConversationId: null,
   showDismissed: false,
   collapsedSections: {},
+  recentFreezeOrder: null,
   viewingDismissedId: null,
   pendingNavigateId: null,
   renamingSessionId: null,
@@ -2676,19 +2838,31 @@ export const useInboxStore = create<InboxStoreState>(
     pushInboxViewHistory(prev, snapshotInboxViewFromDraft(this));
   }),
   inboxViewMode: () => resolveInboxViewMode(get().clientState.ui),
-  setInboxViewMode: (mode: "grouped" | "time" | "bucket") => {
+  setInboxViewMode: (mode: InboxViewMode) => {
     const state = get();
     const prev = snapshotInboxViewFromDraft(state);
-    // inbox_flat_view stays coherent so existing flat-view readers keep working.
-    state.updateClientUI({ inbox_view_mode: mode, inbox_flat_view: mode === "time" });
+    // inbox_flat_view stays coherent so existing flat-view readers keep working:
+    // both flat modes ("recent"/"time") flatten for an older reader.
+    state.updateClientUI({ inbox_view_mode: mode, inbox_flat_view: mode === "time" || mode === "recent" });
+    // A frozen recent order is meaningless once you leave recent — drop it so a
+    // later return to recent starts live.
+    if (mode !== "recent") state.thawRecentOrder();
     pushInboxViewHistory(prev, snapshotInboxViewFromDraft(get()));
   },
   cycleInboxViewMode: () => {
     const state = get();
     const current = state.inboxViewMode();
     const hasBuckets = (Object.values(state.buckets) as BucketItem[]).some((b) => !b.archived_at);
-    const cycle: Array<"grouped" | "time" | "bucket"> = hasBuckets ? ["grouped", "time", "bucket"] : ["grouped", "time"];
+    const cycle: Array<InboxViewMode> = hasBuckets ? ["grouped", "recent", "time", "bucket"] : ["grouped", "recent", "time"];
     state.setInboxViewMode(cycle[(cycle.indexOf(current) + 1) % cycle.length]);
+  },
+  setSessionManualOrder: (id: string, key: number) => {
+    const current = get().clientState.ui?.inbox_manual_order ?? {};
+    get().updateClientUI({ inbox_manual_order: { ...current, [id]: key } });
+  },
+  clearManualOrder: () => {
+    if (!get().clientState.ui?.inbox_manual_order) return;
+    get().updateClientUI({ inbox_manual_order: {} });
   },
 
   recentVisits: [],
@@ -3501,6 +3675,7 @@ export const useInboxStore = create<InboxStoreState>(
   },
 
   navigateUp: () => {
+    get().freezeRecentForNav();
     const ordered = get().visualOrder();
     if (ordered.length === 0) return;
     const currentId = get().currentSessionId;
@@ -3510,12 +3685,29 @@ export const useInboxStore = create<InboxStoreState>(
   },
 
   navigateDown: () => {
+    get().freezeRecentForNav();
     const ordered = get().visualOrder();
     if (ordered.length === 0) return;
     const currentId = get().currentSessionId;
     const idx = ordered.findIndex((s: InboxSession) => s._id === currentId);
     const newIdx = (idx + 1) % ordered.length;
     get().navigateToSession(ordered[newIdx]._id);
+  },
+
+  freezeRecentForNav: () => {
+    if (resolveInboxViewMode(get().clientState.ui) !== "recent") return;
+    // Snapshot the live order once; later presses within the window just re-arm
+    // the thaw timer so the same frozen order keeps being walked.
+    if (!get().recentFreezeOrder) {
+      set({ recentFreezeOrder: get().visualOrder().map((s: InboxSession) => s._id) });
+    }
+    if (recentThawTimer) clearTimeout(recentThawTimer);
+    recentThawTimer = setTimeout(() => get().thawRecentOrder(), RECENT_FREEZE_THAW_MS);
+  },
+
+  thawRecentOrder: () => {
+    if (recentThawTimer) { clearTimeout(recentThawTimer); recentThawTimer = null; }
+    if (get().recentFreezeOrder) set({ recentFreezeOrder: null });
   },
 
   setCurrentSession: action(function (this: Draft, id: string, source: ViewNavSource = "gesture") {

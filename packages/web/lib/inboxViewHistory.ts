@@ -15,7 +15,7 @@ export type InboxViewSnapshot = {
   bucket: string | null;
   project: string | null;
   projectPath: string | null;
-  mode: "grouped" | "time" | "bucket";
+  mode: "grouped" | "recent" | "time" | "bucket";
 };
 
 let applying = false;

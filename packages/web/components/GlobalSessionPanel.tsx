@@ -10,7 +10,7 @@ import { ConversationData } from "./ConversationView";
 import { FormattedSummary } from "./FormattedSummary";
 import { sessionCardSummary } from "../lib/sessionSummary";
 import { useConversationMessages } from "../hooks/useConversationMessages";
-import { useInboxStore, useTrackedStore, InboxSession, getSessionRenderKey, isConvexId, categorizeSessions, partitionOldSessions, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, isSessionHidden, resolveSessionAuthor, convBucketMap, groupSessionsForLabelView, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem, BucketAssignmentItem } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, categorizeSessions, partitionOldSessions, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, isSessionHidden, resolveSessionAuthor, convBucketMap, groupSessionsForLabelView, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem, BucketAssignmentItem } from "../store/inboxStore";
 import { isBlockedConversation, isSubagentConversation } from "@codecast/convex/convex/ccAccountsShared";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
 import { cleanTitle, msgCountColor, formatModel } from "../lib/conversationProcessor";
@@ -25,7 +25,7 @@ import { toast } from "sonner";
 import { animatedHideSession } from "../store/undoActions";
 import { soundKill } from "../lib/sounds";
 import { formatShortcutLabel } from "../shortcuts";
-import { X, ChevronsLeft, ChevronsRight, ChevronRight, ChevronDown, List, Clock, Tag, GitFork, History, Star } from "lucide-react";
+import { X, ChevronsLeft, ChevronsRight, ChevronRight, ChevronDown, List, Clock, Tag, GitFork, History, Star, Activity } from "lucide-react";
 import { FilterOptionList } from "./FilterDropdown";
 import { LabelChipsRow } from "./LabelChipsRow";
 import { TaskStatusBadge } from "./TaskStatusBadge";
@@ -1429,6 +1429,7 @@ export function SessionListPanel({
     s => s.pendingSessionCreates,
     s => s.showFavorites,
     s => s.favorites,
+    s => s.recentFreezeOrder,
   ]);
   const handleKillDismissed = useCallback((id: string) => {
     soundKill();
@@ -1507,12 +1508,13 @@ export function SessionListPanel({
   // chips are mutually exclusive (the setters clear each other) but apply both
   // defensively. Mid-create stubs pass the bucket filter so the session you
   // just summoned inside a focused bucket doesn't vanish before assignment.
-  const filterByChip = useCallback((items: InboxSession[]) => {
-    let out = items;
-    if (s.activeProjectFilter) out = out.filter((sess) => getProjectName(sess.git_root, sess.project_path) === s.activeProjectFilter);
-    if (s.activeBucketFilter) out = out.filter((sess) => bucketByConv[sess._id] === s.activeBucketFilter || !isConvexId(sess._id));
-    return out;
-  }, [s.activeProjectFilter, s.activeBucketFilter, bucketByConv]);
+  const filterByChip = useCallback(
+    (items: InboxSession[]) =>
+      items.filter((sess) =>
+        chipMatchesSession(sess, { projectFilter: s.activeProjectFilter, bucketFilter: s.activeBucketFilter, bucketByConv }),
+      ),
+    [s.activeProjectFilter, s.activeBucketFilter, bucketByConv],
+  );
 
   const filteredPinned = useMemo(() => filterByChip(pinned), [filterByChip, pinned]);
   const filteredNew = useMemo(() => filterByChip(newSessions), [filterByChip, newSessions]);
@@ -1611,25 +1613,36 @@ export function SessionListPanel({
   const [sectionLimits, setSectionLimits] = useState<Record<string, number>>({});
   const showSubagents = s.clientState.ui?.show_subagents ?? true;
   // Three-way view mode; the legacy boolean is honored when the mode is unset.
-  const viewMode: "grouped" | "time" | "bucket" =
+  const viewMode: InboxViewMode =
     s.clientState.ui?.inbox_view_mode ?? ((s.clientState.ui?.inbox_flat_view ?? false) ? "time" : "grouped");
-  const flatView = viewMode === "time";
-  // Flat "by creation time" view reuses the already-computed sortedSessions
-  // (every non-dismissed session) and only swaps the comparator to newest-first
-  // by started_at — the conversation's creation time. It still honors the
-  // show_subagents toggle: when subagents are hidden, the same sessions the
-  // grouped view nests away (subsByParent / globalSubByParent) are excluded
-  // here — except the selected one, which always renders.
-  const flatByCreation = useMemo(() => {
-    const subIds = showSubagents
-      ? null
-      : new Set(Array.from(globalSubByParent.values()).flat().map((sess) => sess._id));
-    const list = subIds
-      ? sortedSessions.filter((sess) => !subIds.has(sess._id) || sess._id === activeSessionId)
-      : [...sortedSessions];
-    list.sort((a, b) => (b.started_at ?? b.updated_at ?? 0) - (a.started_at ?? a.updated_at ?? 0));
-    return filterByChip(list);
-  }, [sortedSessions, filterByChip, showSubagents, globalSubByParent, activeSessionId]);
+  const flatView = viewMode === "time" || viewMode === "recent";
+  // Manual drag-order overlay, only consulted in "time" mode (see comparator).
+  const manualOrder = s.clientState.ui?.inbox_manual_order;
+  // The two flat views reuse the already-computed sortedSessions (every
+  // non-dismissed session) and only swap the comparator: "recent" ranks by last
+  // activity (updated_at, reshuffles as work happens), "time" by creation
+  // (started_at, a stable chronology, with any manual drag pins overlaid).
+  // Shared flatViewComparator so this render and the keyboard-nav order
+  // (computeVisualOrder) can't drift. It still honors the show_subagents toggle:
+  // when subagents are hidden, the same sessions the grouped view nests away
+  // (subsByParent / globalSubByParent) are excluded here — except the selected
+  // one, which always renders.
+  // Render and keyboard-nav share the same frozen order during recent-mode j/k
+  // (see recentFreezeOrder) so the list can't move out from under the cursor.
+  const recentFreezeOrder = s.recentFreezeOrder;
+  const flatList = useMemo(
+    () =>
+      flatViewSessions(sortedSessions, globalSubByParent, {
+        mode: viewMode === "recent" ? "recent" : "time",
+        showSubagents,
+        focusedId: activeSessionId,
+        manualOrder,
+        freezeOrder: viewMode === "recent" ? recentFreezeOrder : null,
+        chipMatches: (sess) =>
+          chipMatchesSession(sess, { projectFilter: s.activeProjectFilter, bucketFilter: s.activeBucketFilter, bucketByConv }),
+      }),
+    [sortedSessions, showSubagents, globalSubByParent, activeSessionId, viewMode, manualOrder, recentFreezeOrder, s.activeProjectFilter, s.activeBucketFilter, bucketByConv],
+  );
   const totalSubagentCount = useMemo(() => {
     let count = 0;
     for (const subs of globalSubByParent.values()) count += subs.length;
@@ -1715,6 +1728,26 @@ export function SessionListPanel({
 
   // Section drop targets ("by label" view): whole group is droppable.
   const [dragOverSectionKey, setDragOverSectionKey] = useState<string | null>(null);
+
+  // Drag-to-reorder in the "time" view. There's no separate grip handle — the
+  // whole card is already draggable (the card→label "file it" drag, tagged
+  // `codecast/session-id`), and we reuse that same drag here: drop it on a label
+  // chip to file it, or on another row to reorder. `reorderOver` drives the
+  // insertion line between rows; the drop computes one midpoint key and pins the
+  // moved row.
+  const [reorderOver, setReorderOver] = useState<{ id: string; pos: "before" | "after" } | null>(null);
+  const handleReorderDrop = useCallback((draggedId: string, targetId: string, pos: "before" | "after") => {
+    setReorderOver(null);
+    if (draggedId === targetId) return;
+    // flatList is exactly the on-screen "time" order; neighbor keys come from it.
+    const rest = flatList.filter((sess) => sess._id !== draggedId);
+    const restKeys = rest.map((sess) => manualOrder?.[sess._id] ?? sess.started_at ?? sess.updated_at ?? 0);
+    const targetIdx = rest.findIndex((sess) => sess._id === targetId);
+    if (targetIdx < 0) return;
+    const insertIndex = pos === "before" ? targetIdx : targetIdx + 1;
+    const key = computeManualSortKey(restKeys, insertIndex);
+    useInboxStore.getState().setSessionManualOrder(draggedId, key);
+  }, [flatList, manualOrder]);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const scrolledToRef = useRef<string | null>(null);
 
@@ -1779,7 +1812,7 @@ export function SessionListPanel({
     const parentId = s.sessions[activeSessionId]?.parent_conversation_id;
     const inList = (items: InboxSession[]) => items.some(i => i._id === activeSessionId || (!!parentId && i._id === parentId));
     const sections: [InboxSession[], string][] = flatView
-      ? [[flatByCreation, "all"]]
+      ? [[flatList, "all"]]
       : viewMode === "bucket" && bucketView
         ? [
             [filteredPinned, "pinned"],
@@ -1905,6 +1938,8 @@ export function SessionListPanel({
       // "by label" view. A label id assigns it; null removes the label
       // (dropping onto a project group returns the session to its project).
       dropLabelId?: string | null;
+      // "time" view only: each row accepts a dragged session card as a reorder drop.
+      reorderable?: boolean;
     },
   ) => {
     if (items.length === 0) return null;
@@ -1982,8 +2017,37 @@ export function SessionListPanel({
               if (activeSub) visibleSubs = [...visibleSubs, activeSub];
             }
             const hiddenCount = subs.length - visibleSubs.length;
+            const reorderable = !!opts?.reorderable;
+            const reorderHere = reorderable && reorderOver?.id === session._id;
             return (
-              <div key={session._id} className="border-b border-sol-border/30">
+              <div
+                key={session._id}
+                className={`border-b border-sol-border/30${reorderable ? " relative" : ""}`}
+                onDragOver={reorderable ? (e) => {
+                  if (!e.dataTransfer.types.includes("codecast/session-id")) return;
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = "move";
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const pos = e.clientY < rect.top + rect.height / 2 ? "before" : "after";
+                  setReorderOver((cur) => (cur?.id === session._id && cur.pos === pos ? cur : { id: session._id, pos }));
+                } : undefined}
+                onDragLeave={reorderable ? (e) => {
+                  if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+                  setReorderOver((cur) => (cur?.id === session._id ? null : cur));
+                } : undefined}
+                onDragEnd={reorderable ? () => setReorderOver(null) : undefined}
+                onDrop={reorderable ? (e) => {
+                  const draggedId = e.dataTransfer.getData("codecast/session-id");
+                  if (!draggedId) return;
+                  e.preventDefault();
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const pos = e.clientY < rect.top + rect.height / 2 ? "before" : "after";
+                  handleReorderDrop(draggedId, session._id, pos);
+                } : undefined}
+              >
+                {reorderHere && (
+                  <div className={`absolute left-0 right-0 h-0.5 bg-sol-cyan z-10 pointer-events-none ${reorderOver!.pos === "before" ? "top-0" : "bottom-0"}`} />
+                )}
                 <SessionCard
                   session={session}
                   isActive={session._id === activeSessionId}
@@ -2082,6 +2146,7 @@ export function SessionListPanel({
           {(() => {
             const viewModeOptions = [
               { key: "grouped", label: "By status", icon: List },
+              { key: "recent", label: "By latest updated", icon: Activity },
               { key: "time", label: "By time", icon: Clock },
               ...(visibleBuckets.length > 0 ? [{ key: "bucket", label: "By label", icon: Tag }] : []),
             ];
@@ -2100,11 +2165,11 @@ export function SessionListPanel({
                   <ChevronDown className="w-2 h-2 opacity-60" />
                 </button>
                 {viewMenuOpen && (
-                  <div className="absolute top-full right-0 mt-1 w-40 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[60] py-1">
+                  <div className="absolute top-full right-0 mt-1 w-48 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[60] py-1">
                     <FilterOptionList
                       options={viewModeOptions}
                       value={viewMode}
-                      onChange={(mode) => s.setInboxViewMode(mode as "grouped" | "time" | "bucket")}
+                      onChange={(mode) => s.setInboxViewMode(mode as InboxViewMode)}
                       onPicked={() => setViewMenuOpen(false)}
                     />
                   </div>
@@ -2213,7 +2278,7 @@ export function SessionListPanel({
           </div>
         )}
         {flatView ? (
-          renderSection("All", flatByCreation, "text-sol-cyan", undefined, true)
+          renderSection("All", flatList, "text-sol-cyan", undefined, true, { reorderable: viewMode === "time" })
         ) : viewMode === "bucket" && bucketView ? (
         <>
         {!s.activeProjectFilter && !s.activeBucketFilter && <NeedsAttentionSection />}

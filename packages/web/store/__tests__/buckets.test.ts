@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { create as mutativeCreate } from "mutative";
 import { groupPatchesByTable } from "../mutativeMiddleware";
 import {
+  computeManualSortKey,
   computeReorderUpdates,
   convBucketMap,
   groupSessionsForLabelView,
@@ -192,10 +193,12 @@ describe("cycleInboxViewMode", () => {
     });
   });
 
-  it("cycles grouped → time → grouped when no buckets exist", () => {
+  it("cycles grouped → recent → time → grouped when no buckets exist", () => {
     const store = useInboxStore.getState();
     expect(store.inboxViewMode()).toBe("grouped");
     store.cycleInboxViewMode();
+    expect(useInboxStore.getState().inboxViewMode()).toBe("recent");
+    useInboxStore.getState().cycleInboxViewMode();
     expect(useInboxStore.getState().inboxViewMode()).toBe("time");
     useInboxStore.getState().cycleInboxViewMode();
     expect(useInboxStore.getState().inboxViewMode()).toBe("grouped");
@@ -274,6 +277,7 @@ describe("visualOrder follows the active view mode", () => {
       activeBucketFilter: null,
       activeProjectFilter: null,
       currentSessionId: null,
+      liveInboxIds: new Set(),
       clientState: {},
     });
   });
@@ -310,6 +314,124 @@ describe("visualOrder follows the active view mode", () => {
     });
     const order = useInboxStore.getState().visualOrder().map((s) => s._id);
     expect(order).toEqual(["fresh", "mid", "old"]);
+  });
+
+  it("recent mode sorts newest-activity first (updated_at), inverting the creation order", () => {
+    useInboxStore.setState({
+      sessions: {
+        old: session("old", { started_at: 100, updated_at: 500, is_pinned: true }),
+        mid: session("mid", { started_at: 200, updated_at: 100 }),
+        fresh: session("fresh", { started_at: 300, updated_at: 50 }),
+      },
+      clientState: { ui: { inbox_view_mode: "recent" } },
+    });
+    const order = useInboxStore.getState().visualOrder().map((s) => s._id);
+    expect(order).toEqual(["old", "mid", "fresh"]);
+  });
+
+  // Regression: Ctrl+J/K skipped New Session cards outside grouped view. The flat
+  // (time/recent) panel renders EVERY non-hidden session — never-engaged blanks
+  // included — but nav used to walk only the categorized status buckets, which
+  // drop those blanks. A 0-message blank that is not the current session lands in
+  // no status bucket, so it must appear in flat nav (matching the render) yet stay
+  // out of grouped nav (matching the grouped render's deliberate hiding).
+  it("flat (time/recent) mode walks never-engaged blank sessions so Ctrl+J/K can't skip New Session cards", () => {
+    useInboxStore.setState({
+      sessions: {
+        blank: session("blank", { message_count: 0, started_at: 250, updated_at: 250 }),
+        work: session("work", { message_count: 3, started_at: 100, updated_at: 100 }),
+      },
+      clientState: { ui: { inbox_view_mode: "time" } },
+    });
+    expect(useInboxStore.getState().visualOrder().map((s) => s._id)).toEqual(["blank", "work"]);
+    useInboxStore.setState({ clientState: { ui: { inbox_view_mode: "recent" } } });
+    expect(useInboxStore.getState().visualOrder().map((s) => s._id)).toEqual(["blank", "work"]);
+  });
+
+  it("grouped (by status) mode still hides the never-engaged blank — the behavior flat view diverges from", () => {
+    useInboxStore.setState({
+      sessions: {
+        blank: session("blank", { message_count: 0, started_at: 250, updated_at: 250 }),
+        work: session("work", { message_count: 3, started_at: 100, updated_at: 100 }),
+      },
+      clientState: { ui: { inbox_view_mode: "grouped" } },
+    });
+    expect(useInboxStore.getState().visualOrder().map((s) => s._id)).toEqual(["work"]);
+  });
+
+  // Regression: in grouped/bucket view, Ctrl+J/K landed on "old" sessions the
+  // panel hides when "show old sessions" is off, so the highlight sat still while
+  // the selection jumped onto an off-screen card. The panel renders these views
+  // from partitionOldSessions(...).visibleSessions; nav must walk the SAME set.
+  // (isOldSession only applies to real Convex ids, hence the 32-char fixtures.)
+  const LIVE_ID = "live".padEnd(32, "0"); // 32-char Convex-format id, in the live set
+  const OLD_ID = "olds".padEnd(32, "1");  // 32-char id, NOT in the live set → "old"
+  for (const mode of ["grouped", "bucket"] as const) {
+    it(`${mode} mode skips "old" (not-live) sessions when show_old is off, matching the render`, () => {
+      const sessions = {
+        [LIVE_ID]: session(LIVE_ID, { message_count: 3, updated_at: 200, git_root: "/x/web" }),
+        [OLD_ID]: session(OLD_ID, { message_count: 3, updated_at: 100, git_root: "/x/web" }),
+      };
+      // show_old off: the old card is hidden on screen, so nav drops it too.
+      useInboxStore.setState({
+        sessions,
+        liveInboxIds: new Set([LIVE_ID]),
+        clientState: { ui: { inbox_view_mode: mode, show_old_sessions: false } },
+      });
+      expect(useInboxStore.getState().visualOrder().map((s) => s._id)).toEqual([LIVE_ID]);
+      // show_old on: both render and nav include the old session (membership is
+      // the contract here; the intra-status tiebreak differs by mode).
+      useInboxStore.setState({
+        sessions,
+        liveInboxIds: new Set([LIVE_ID]),
+        clientState: { ui: { inbox_view_mode: mode, show_old_sessions: true } },
+      });
+      expect(useInboxStore.getState().visualOrder().map((s) => s._id).sort()).toEqual([LIVE_ID, OLD_ID].sort());
+    });
+  }
+
+  it("time mode: a manual pin overrides creation order; un-pinned rows stay by creation", () => {
+    useInboxStore.setState({
+      sessions: {
+        old: session("old", { started_at: 100, updated_at: 1 }),
+        mid: session("mid", { started_at: 200, updated_at: 1 }),
+        fresh: session("fresh", { started_at: 300, updated_at: 1 }),
+      },
+      // Pin "old" above "fresh": key just over fresh's creation stamp.
+      clientState: { ui: { inbox_view_mode: "time", inbox_manual_order: { old: 100_000 } } },
+    });
+    const order = useInboxStore.getState().visualOrder().map((s) => s._id);
+    expect(order).toEqual(["old", "fresh", "mid"]);
+  });
+
+  it("setSessionManualOrder pins a row and persists the key in the synced ui bag", () => {
+    useInboxStore.setState({
+      sessions: {
+        a: session("a", { started_at: 100, updated_at: 1 }),
+        b: session("b", { started_at: 200, updated_at: 1 }),
+      },
+      clientState: { ui: { inbox_view_mode: "time" } },
+    });
+    useInboxStore.getState().setSessionManualOrder("a", 999_999);
+    expect(useInboxStore.getState().clientState.ui?.inbox_manual_order).toEqual({ a: 999_999 });
+    const order = useInboxStore.getState().visualOrder().map((s) => s._id);
+    expect(order).toEqual(["a", "b"]); // a's pin now outranks b's later creation
+  });
+});
+
+describe("computeManualSortKey", () => {
+  // Keys are newest-first (descending), with the dragged row already removed.
+  it("midpoints between neighbors when dropped in the middle", () => {
+    expect(computeManualSortKey([300, 100], 1)).toBe(200);
+  });
+  it("steps a gap above the top row when dropped first", () => {
+    expect(computeManualSortKey([300, 100], 0)).toBe(300 + 60_000);
+  });
+  it("steps a gap below the bottom row when dropped last", () => {
+    expect(computeManualSortKey([300, 100], 2)).toBe(100 - 60_000);
+  });
+  it("handles an empty remainder (only row)", () => {
+    expect(computeManualSortKey([], 0)).toBe(60_000);
   });
 });
 
