@@ -20,7 +20,7 @@ export default function TeamPage() {
 
   if (!user.team_id) {
     return (
-      <div className="max-w-6xl mx-auto p-6">
+      <div>
         <Card className="p-6 bg-sol-bg border-sol-border">
           <p className="text-sol-base1">You are not part of a team.</p>
         </Card>
@@ -64,7 +64,7 @@ export default function TeamPage() {
     });
 
   return (
-    <div className="max-w-6xl mx-auto p-6">
+    <div>
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-sol-text mb-2">Team Directory</h1>
         <p className="text-sol-base1">

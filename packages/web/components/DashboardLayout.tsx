@@ -49,6 +49,7 @@ import { useSessionSwitcher } from "../hooks/useSessionSwitcher";
 import { SessionSwitcher } from "./SessionSwitcher";
 import { TabBar, pathLabel } from "./TabBar";
 import { TabContent } from "./TabContent";
+import { isFullWidthRoute, PageShell } from "../lib/pageLayout";
 import { useTipActions } from "../tips";
 
 interface DashboardLayoutProps {
@@ -226,7 +227,10 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // there means "I'm done configuring, take me to it", not "peek beside". Keyed off
   // the real router URL because `pathname` lies here (returns the carried tab route).
   const isOnSettingsPage = routerLocation.pathname.startsWith("/settings");
-  const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnRoutinesPage || isOnSchedulesPage || isOnPlansPage || isOnDocsPage || isOnProjectsPage || isOnWindowsPage;
+  // isFullWidthRoute folds in the self-contained full-bleed pages (sessions,
+  // admin) so the non-tab path matches the tab shell; the inbox check stays
+  // explicit because it is source-aware, not just path-based.
+  const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnRoutinesPage || isOnSchedulesPage || isOnPlansPage || isOnDocsPage || isOnProjectsPage || isOnWindowsPage || isFullWidthRoute(pathname ?? "");
 
 
   const showCollapsedRail = !s.sidePanelOpen && !isMobile;
@@ -654,9 +658,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   const pageContent = isFullWidthPage || hasTabs ? (
     <div className="h-full">{content}</div>
   ) : (
-    <div data-main-scroll className="h-full overflow-y-auto px-3 sm:px-6 lg:px-8 py-4">
-      <div className="max-w-4xl mx-auto h-full">{content}</div>
-    </div>
+    <PageShell pathname={pathname ?? ""}>{content}</PageShell>
   );
 
   const mainContent = showConversationColumn ? (

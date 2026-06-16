@@ -198,7 +198,7 @@ export default function NotificationsPage() {
   return (
     <AuthGuard>
       <DashboardLayout>
-        <div className="max-w-2xl mx-auto py-2">
+        <div className="max-w-2xl mx-auto">
           <div className="flex items-center justify-between mb-5">
             <h1 className="text-xl font-semibold text-sol-text">Notifications</h1>
             {unreadCount > 0 && (

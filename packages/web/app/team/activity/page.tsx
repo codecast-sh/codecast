@@ -36,7 +36,7 @@ export default function TeamActivityPage() {
 
   return (
     <DashboardLayout>
-      <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6">
+      <div className="max-w-3xl mx-auto">
         <ErrorBoundary name="ActivityFeed" level="inline">
           <ActivityFeed mode={mode} teamId={teamId} directoryFilter={directoryFilter} />
         </ErrorBoundary>
