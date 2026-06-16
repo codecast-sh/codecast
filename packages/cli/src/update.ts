@@ -12,6 +12,7 @@ const PLAN_VERSION = "2";
 const WORKFLOW_VERSION = "1";
 const MESSAGING_VERSION = "4"; // bumped: messaging snippet tightened (teammate / peer-or-boss)
 const VISUAL_VERSION = "1"; // cast-canvas: inline HTML visual rendering
+const FORKS_VERSION = "1"; // cast fork / cast spawn: branch or spawn sessions into the inbox
 const LATEST_URL = "https://dl.codecast.sh/latest.json";
 const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
 
@@ -118,6 +119,10 @@ export function getMessagingVersion(): string {
 
 export function getVisualVersion(): string {
   return VISUAL_VERSION;
+}
+
+export function getForksVersion(): string {
+  return FORKS_VERSION;
 }
 
 export async function checkForUpdates(force = false): Promise<string | null> {

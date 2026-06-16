@@ -16,7 +16,7 @@ import { AuthServer } from "./authServer.js";
 import { startRelayPoller } from "./authRelay.js";
 import { c, fmt, icons } from "./colors.js";
 import { ensureTmux, tryInstallTmux, tmuxRun } from "./tmux.js";
-import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, ensureCastAlias } from "./update.js";
+import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, ensureCastAlias } from "./update.js";
 import { type SnippetTarget, getSnippetTargets, MESSAGING_SNIPPET_END, installMessagingSnippet, ensureMessagingForMemory } from "./snippets.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
 import { glob } from "glob";
@@ -2112,6 +2112,69 @@ Color with the \`--sol-*\` tokens (\`--sol-text\`, \`--sol-border\`, \`--sol-car
 For data charts, drop \`<div class="cast-chart" data-spec='{"marks":[{"type":"barY","data":[…],"x":"label","y":"value"}],"y":{"grid":true}}'></div>\` — codecast renders the spec with Observable Plot, themed to match. The spec mirrors Plot: \`marks\` (type = a Plot mark like \`lineY\`/\`areaY\`/\`barY\`/\`dot\`/\`cell\`, plus its channels) and \`x\`/\`y\`/\`color\` scale options. \`fill\`/\`stroke\` take a token name (\`"blue"\`) or a data field; pre-aggregate the data.
 ${VISUAL_SNIPPET_END}
 `;
+
+const FORKS_SNIPPET_END = "<!-- /codecast-forks -->";
+const FORKS_SNIPPET = `
+## Forks & Sessions
+
+You can spin work off into your human's inbox as independent sessions — not hidden subagents. The difference is ownership: a subagent (Task tool) reports back to you and you keep its result; a fork or a spawned session lands in the human's inbox for them to review, steer, and continue on their own. Reach for these when the work is theirs to own, or when several directions are worth running at once and seeing side by side. Launch them when the human asks; if spinning them up is your idea, propose it first.
+
+\`\`\`bash
+cast fork "<direction>" ["<direction>" ...]   # branch THIS conversation N ways from here
+cast spawn "<task>" ["<task>" ...]            # start N fresh sessions, no shared history
+\`\`\`
+
+\`cast fork\` branches the current conversation — each branch keeps the full history up to the fork point (the latest user message by default; \`--at <line>\` picks another spot, \`-s <id>\` forks a different session), then pursues its own direction. Use it when the thread splits into distinct paths worth exploring in parallel.
+
+\`cast spawn\` starts fresh sessions with no shared history, in the current project (\`-C <dir>\` for elsewhere). Use it to hand off self-contained work — a parallel audit, a port, a spike — rather than research you'd fold back into your own answer.
+
+Both start working immediately and appear in the inbox. A branch or session only knows what you give it — for forks, plus the history up to the fork point — so seed each with a sharp, self-contained prompt. When you launch several, tell the human what you sent where.
+${FORKS_SNIPPET_END}
+`;
+
+// Generic marked-snippet installer: idempotent header check + end-marker replace,
+// otherwise append. Used for snippets that don't need the bespoke per-section
+// fallback heuristics the older installers carry.
+function installMarkedSnippet(
+  header: string,
+  endMarker: string,
+  snippet: string,
+  update: boolean,
+): { installed: boolean; updated: boolean } {
+  const targets = getSnippetTargets();
+  let anyInstalled = false;
+  let anyUpdated = false;
+
+  for (const target of targets) {
+    if (!fs.existsSync(target.dirPath)) {
+      fs.mkdirSync(target.dirPath, { recursive: true });
+    }
+    let existing = fs.existsSync(target.filePath) ? fs.readFileSync(target.filePath, "utf-8") : "";
+
+    const has = existing.includes(header) && existing.includes(endMarker);
+    if (has && !update) continue;
+
+    if (has) {
+      const start = existing.indexOf(header);
+      const markerIdx = existing.indexOf(endMarker, start);
+      let end = markerIdx !== -1 ? markerIdx + endMarker.length : existing.length;
+      if (existing[end] === "\n") end++;
+      existing = existing.slice(0, start) + existing.slice(end);
+      fs.writeFileSync(target.filePath, existing.trimEnd() + "\n" + snippet, { mode: 0o600 });
+      anyInstalled = true;
+      anyUpdated = true;
+    } else {
+      fs.writeFileSync(target.filePath, existing + snippet, { mode: 0o600 });
+      anyInstalled = true;
+    }
+  }
+
+  return { installed: anyInstalled, updated: anyUpdated };
+}
+
+function installForksSnippet(update = false): { installed: boolean; updated: boolean } {
+  return installMarkedSnippet("## Forks & Sessions", FORKS_SNIPPET_END, FORKS_SNIPPET, update);
+}
 
 // MESSAGING_SNIPPET + MESSAGING_SNIPPET_END live in ./snippets.ts (shared with the daemon).
 
@@ -7413,6 +7476,22 @@ program
         reEnable: "cast messaging install",
       },
       {
+        name: "Forks & Sessions",
+        desc: "Branch or spawn sessions into the inbox",
+        detail:
+          "Adds `cast fork` and `cast spawn` so a session can hand work to your inbox.\n" +
+          "  `cast fork \"a\" \"b\"` branches the current conversation N ways from a message\n" +
+          "  point; `cast spawn \"a\" \"b\"` starts fresh sessions. Both land in your inbox as\n" +
+          "  independent threads to review and continue — unlike subagents, which report\n" +
+          "  back to the agent that launched them.\n" +
+          "  Writes to: CLAUDE.md (adds a ## Forks & Sessions section)",
+        enabledKey: "forks_enabled" as const,
+        versionKey: "forks_version" as const,
+        getVersion: getForksVersion,
+        install: installForksSnippet,
+        reEnable: "cast install",
+      },
+      {
         name: "Tasks & Plans",
         desc: "Work tracking for agents",
         detail:
@@ -8259,24 +8338,29 @@ program
 program
   .command("fork")
   .description(
-    "Fork a conversation from a specific message\n\n" +
-    "Creates a new conversation branching from a specific point.\n" +
-    "Like git branching for conversations.\n\n" +
+    "Fork a conversation into one or more parallel branches\n\n" +
+    "Each branch keeps the full history up to the fork point, then heads off in\n" +
+    "its own direction. Every branch becomes a live session in your inbox — an\n" +
+    "independent thread you can review and continue.\n\n" +
     "Examples:\n" +
-    "  cast fork                            # fork current session\n" +
-    "  cast fork --from 15                  # fork current session from message 15\n" +
-    "  cast fork --from 15 --resume         # fork and open in Claude\n" +
-    "  cast fork abc1234                    # fork specific conversation\n" +
-    "  cast fork abc1234 --from 15          # fork specific conversation from message 15"
+    "  cast fork \"use Redis\" \"use Postgres\" \"keep it in-memory\"  # 3 branches from here\n" +
+    "  cast fork --at 42 \"what if we cache\" \"what if we don't\"   # branch at message 42\n" +
+    "  cast fork \"explore the bold refactor\"                     # one branch\n" +
+    "  cast fork                                                 # legacy: one unseeded fork\n" +
+    "  cast fork -s abc1234 --from 15 --resume                   # fork another session, open it locally"
   )
-  .argument("[id]", "Conversation ID or short ID (auto-detects current session if omitted)")
-  .option("--from <index>", "1-based message index to fork from")
-  .option("--resume", "Open forked conversation in Claude/Codex after creating")
+  .argument("[directions...]", "One seed prompt per branch; each branch starts on it immediately")
+  .option("-s, --session <id>", "Conversation to fork (default: current session)")
+  .option("--at <line>", "Fork at message line N (cast read numbering); default: the latest user message")
+  .option("--tip", "Fork at the very end instead (include everything so far)")
+  .option("--from <index>", "Alias for --at (back-compat)")
+  .option("--json", "Machine-readable output")
+  .option("--resume", "Open forked conversation in Claude/Codex after creating (single, unseeded fork only)")
   .option("--as <agent>", "Agent to resume with (claude or codex)")
   .option("--claude-args <args>", "Additional args to pass to claude")
   .option("--claude-tail <n>", "When resuming in Claude, keep only the last N messages (+ a truncation notice)")
   .option("--claude-full", "When resuming in Claude, do not auto-trim (may create a session too large for /compact)")
-  .action(async (id: string | undefined, options) => {
+  .action(async (rawDirections: string[] | undefined, options: any) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
       console.error("Not authenticated. Run: cast auth");
@@ -8284,6 +8368,20 @@ program
     }
 
     const siteUrl = config.convex_url.replace(".cloud", ".site");
+
+    const directions: string[] = (rawDirections ?? []).map((d) => d.trim()).filter(Boolean);
+    let id: string | undefined = options.session;
+
+    // Back-compat: the old `cast fork <id>` took the conversation as the first
+    // positional. Positionals are now branch directions, so only treat the first
+    // token as a target when it's a bare conversation-id shape AND it's either
+    // alone or paired with a legacy targeting flag (--from/--resume). To fork
+    // another session *with* directions, use -s <id>.
+    const looksLikeConvId = (s: string) => /^jx[a-z0-9]{5,}$/i.test(s) || /^[a-z0-9]{25,}$/i.test(s);
+    if (!id && directions.length > 0 && looksLikeConvId(directions[0]) &&
+        (directions.length === 1 || options.from || options.resume)) {
+      id = directions.shift();
+    }
 
     if (!id) {
       let sessionId: string | null = null;
@@ -8313,7 +8411,7 @@ program
       }
 
       if (!sessionId) {
-        console.error("Could not detect current session. Pass a conversation ID: cast fork <id>");
+        console.error("Could not detect current session. Pass one: cast fork -s <id> \"<direction>\"");
         process.exit(1);
       }
 
@@ -8324,39 +8422,91 @@ program
       });
       const linksResult = await linksResp.json() as any;
       if (!linksResult.conversation_id) {
-        console.error("Could not resolve session to conversation. Try: cast fork <id>");
+        console.error("Could not resolve session to conversation. Try: cast fork -s <id>");
         process.exit(1);
       }
       id = linksResult.conversation_id;
-      console.log(`Detected conversation: ${linksResult.title || id!.slice(0, 7)}`);
+      if (!options.json) console.log(`Detected conversation: ${linksResult.title || id!.slice(0, 7)}`);
     }
 
+    // Resolve the fork anchor (message_uuid). --tip forks at the end; --at/--from
+    // pick a 1-based message line; otherwise the default for a seeded fork is the
+    // latest user message, so each branch carries context through the human's last
+    // instruction but not the agent's in-flight reply. A bare legacy fork (no
+    // directions, no flags) leaves the anchor unset = fork the entire conversation.
     let messageUuid: string | undefined;
-
-    if (options.from) {
-      const fromIndex = parseInt(options.from);
-      if (isNaN(fromIndex) || fromIndex < 1) {
-        console.error("--from must be a positive integer (1-based message index)");
-        process.exit(1);
-      }
-
-      console.log(`Fetching conversation to resolve message ${fromIndex}...`);
+    const explicitIndex = options.at ?? options.from;
+    if (!options.tip && (explicitIndex !== undefined || directions.length > 0)) {
       const data = await fetchExport(siteUrl, config.auth_token!, id!);
-      const userMessages = data.messages.filter((m: any) =>
-        m.role === "user" || m.role === "assistant"
+      if (explicitIndex !== undefined) {
+        const idx = parseInt(String(explicitIndex));
+        if (isNaN(idx) || idx < 1) {
+          console.error("--at must be a positive integer (1-based message line)");
+          process.exit(1);
+        }
+        const seq = data.messages.filter((m: any) => m.role === "user" || m.role === "assistant");
+        if (idx > seq.length) {
+          console.error(`Message line ${idx} out of range (conversation has ${seq.length} messages)`);
+          process.exit(1);
+        }
+        messageUuid = seq[idx - 1].message_uuid;
+        if (!messageUuid) {
+          console.error(`Message ${idx} has no UUID, cannot fork from it`);
+          process.exit(1);
+        }
+      } else {
+        const lastUser = [...data.messages].reverse().find((m: any) => m.role === "user" && m.message_uuid);
+        messageUuid = lastUser?.message_uuid;
+      }
+    }
+
+    // Multi-direction fork: branch once per direction from the same anchor, then
+    // seed each branch with its direction over the same pending-message rail
+    // `cast send` uses. Each lands in the inbox as its own session.
+    if (directions.length > 0) {
+      const roster: { short_id: string; conversation_id: string; direction: string; seeded: boolean }[] = [];
+      for (const direction of directions) {
+        const response = await cliFetch(`${siteUrl}/cli/fork`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ api_token: config.auth_token, conversation_id: id, message_uuid: messageUuid }),
+        });
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+          console.error(`Fork failed for "${direction}": ${body.error || response.statusText}`);
+          process.exit(1);
+        }
+        const result = await response.json() as any;
+        const newShortId = result.short_id || result.conversation_id?.toString().slice(0, 7);
+        // Seed via cliFetch (not cliPost) so a failed seed flags this branch
+        // instead of exiting and abandoning the branches already created.
+        let seeded = false;
+        try {
+          const seedResp = await cliFetch(`${siteUrl}/cli/messages/send`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ api_token: config.auth_token, to: result.conversation_id, from: id, body: direction }),
+          });
+          seeded = seedResp.ok;
+        } catch {}
+        roster.push({ short_id: newShortId, conversation_id: result.conversation_id, direction, seeded });
+      }
+
+      if (options.json) {
+        console.log(JSON.stringify({ forked_from: id, message_uuid: messageUuid ?? null, branches: roster }, null, 2));
+        return;
+      }
+
+      const anchorNote = options.tip ? "at the tip" : messageUuid ? "at the latest user message" : "(entire conversation)";
+      console.log(
+        `${c.green}✓${c.reset} forked ${c.cyan}${id!.toString().slice(0, 7)}${c.reset} ${anchorNote} into ` +
+        `${c.bold}${roster.length}${c.reset} branch${roster.length === 1 ? "" : "es"} — all in your inbox:`
       );
-
-      if (fromIndex > userMessages.length) {
-        console.error(`Message index ${fromIndex} out of range (conversation has ${userMessages.length} messages)`);
-        process.exit(1);
+      for (const b of roster) {
+        const warn = b.seeded ? "" : ` ${c.yellow}(seed not delivered — resend with cast send)${c.reset}`;
+        console.log(`  ${c.cyan}${b.short_id}${c.reset}  ${b.direction}${warn}`);
       }
-
-      const targetMsg = userMessages[fromIndex - 1];
-      messageUuid = targetMsg.message_uuid;
-      if (!messageUuid) {
-        console.error(`Message ${fromIndex} has no UUID, cannot fork from it`);
-        process.exit(1);
-      }
+      return;
     }
 
     try {
@@ -8457,6 +8607,91 @@ program
     } catch (error) {
       console.error("Fork failed:", error instanceof Error ? error.message : error);
       process.exit(1);
+    }
+  });
+
+program
+  .command("spawn")
+  .description(
+    "Start one or more fresh sessions in your inbox\n\n" +
+    "Each session is a new agent with no shared history. It runs on its own and\n" +
+    "reports to your inbox — unlike a subagent, which is a hidden helper that\n" +
+    "reports back to whoever launched it.\n\n" +
+    "Examples:\n" +
+    "  cast spawn \"audit the auth flow\" \"audit the billing flow\"\n" +
+    "  cast spawn -C ~/src/api \"port the v1 routes to v2\"\n" +
+    "  cast spawn --isolated \"refactor the store\" \"rewrite the router\"   # parallel worktrees"
+  )
+  .argument("<prompts...>", "One task per session; each starts working on it immediately")
+  .option("-C, --dir <path>", "Working directory (default: current project)")
+  .option("--agent <type>", "Agent: claude (default), codex, cursor, gemini", "claude")
+  .option("--model <model>", "Model override (e.g. opus, sonnet)")
+  .option("--isolated", "Give each session its own git worktree")
+  .option("--json", "Machine-readable output")
+  .action(async (rawPrompts: string[], options: any) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+
+    const prompts = (rawPrompts ?? []).map((p) => p.trim()).filter(Boolean);
+    if (prompts.length === 0) {
+      console.error("Give at least one task: cast spawn \"<task>\"");
+      process.exit(1);
+    }
+
+    const dir = options.dir ? path.resolve(options.dir.replace(/^~/, process.env.HOME || "~")) : getRealCwd();
+    let gitRoot = dir;
+    try {
+      gitRoot = execSync(`git -C "${dir}" rev-parse --show-toplevel`, {
+        encoding: "utf-8",
+        stdio: ["pipe", "pipe", "ignore"],
+      }).trim();
+    } catch {}
+
+    const agentMap: Record<string, string> = {
+      claude: "claude_code", claude_code: "claude_code", codex: "codex", cursor: "cursor", gemini: "gemini",
+    };
+    const agentType = agentMap[String(options.agent).toLowerCase()] ?? "claude_code";
+
+    const roster: { short_id: string; conversation_id: string; prompt: string }[] = [];
+    for (const prompt of prompts) {
+      const resp = await cliFetch(`${siteUrl}/cli/spawn`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_token: config.auth_token,
+          prompt,
+          project_path: dir,
+          git_root: gitRoot,
+          agent_type: agentType,
+          model: options.model,
+          isolated: options.isolated || undefined,
+        }),
+      });
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+        console.error(`Spawn failed for "${prompt}": ${body.error || resp.statusText}`);
+        process.exit(1);
+      }
+      const result = await resp.json() as any;
+      roster.push({ short_id: result.short_id, conversation_id: result.conversation_id, prompt });
+    }
+
+    if (options.json) {
+      console.log(JSON.stringify({ dir, agent: agentType, sessions: roster }, null, 2));
+      return;
+    }
+
+    const dirNote = dir.replace(process.env.HOME || "~", "~");
+    console.log(
+      `${c.green}✓${c.reset} spawned ${c.bold}${roster.length}${c.reset} session${roster.length === 1 ? "" : "s"} in ` +
+      `${c.dim}${dirNote}${c.reset} — all in your inbox:`
+    );
+    for (const s of roster) {
+      console.log(`  ${c.cyan}${s.short_id}${c.reset}  ${s.prompt}`);
     }
   });
 
