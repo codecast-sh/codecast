@@ -2056,7 +2056,11 @@ cast plan comment <plan_id> "note"         # Add comment (progress by default)
 cast plan comment <plan_id> "x" -d -r "y" # Decision with rationale
 cast plan done/drop <plan_id>             # Close or abandon a plan
 cast doc create "Title" [-c content] [-t type]
-cast doc show/ls/edit/search/comment
+cast doc ls/edit/comment
+cast doc show <id>                          # paginates long docs (200 lines) + prints "next:" hint
+cast doc show <id> -p 2 | 800:1000 | --full # page · line range · whole doc (-n = line gutter)
+cast doc grep <id> '<text>'                 # search inside one doc (grep '^#' = outline)
+cast doc search "<title>"                    # search doc TITLES across the corpus
 \`\`\`
 ${WORK_SNIPPET_END}
 `;
@@ -10755,16 +10759,81 @@ doc
 doc
   .command("show")
   .alias("get")
-  .description("Show a document's content")
+  .description(
+    "Show a document's content (paginated for long docs)\n\n" +
+    "Examples:\n" +
+    "  cast doc show <id>             # first page (200 lines)\n" +
+    "  cast doc show <id> -p 2        # next page\n" +
+    "  cast doc show <id> 100:250     # an explicit line range\n" +
+    "  cast doc show <id> 100:        # line 100 to the end\n" +
+    "  cast doc show <id> :50         # the first 50 lines\n" +
+    "  cast doc show <id> -L 500      # bigger page size\n" +
+    "  cast doc show <id> -n          # with a line-number gutter\n" +
+    "  cast doc show <id> --full      # whole doc, no paging"
+  )
   .argument("<id>", "Document ID")
-  .action(async (id: string) => {
+  .argument("[range]", "Line range (e.g. 100:250, 100:, :50, 42) — overrides --page")
+  .option("-p, --page <n>", "Page number (1-based)", "1")
+  .option("-L, --lines <n>", "Lines per page", "200")
+  .option("-n, --line-numbers", "Prefix each line with its number")
+  .option("--full", "Print the entire document without paging")
+  .action(async (id: string, range: string | undefined, options: any) => {
     const result = await cliPost("/cli/docs/get", { id });
     if (!result) { console.error("Doc not found"); process.exit(1); }
-    console.log(`${c.bold}${result.title}${c.reset} ${c.dim}[${result.doc_type}]${c.reset}`);
+    const lines = (result.content || "").split("\n");
+    const total = lines.length;
+
+    console.log(`${c.bold}${result.title}${c.reset} ${c.dim}[${result.doc_type}] · ${total} lines${c.reset}`);
     if (result.labels?.length) console.log(`Labels: ${result.labels.join(", ")}`);
+
+    const pageSize = Math.max(1, parseInt(options.lines, 10) || 200);
+    let start = 1, end = total, next = "";
+    if (options.full) {
+      // whole doc
+    } else if (range) {
+      if (range.includes(":")) {
+        const [s, e] = range.split(":");
+        if (s) start = Math.max(1, parseInt(s, 10) || 1);
+        if (e) end = Math.min(total, parseInt(e, 10) || total);
+      } else {
+        start = end = Math.min(total, Math.max(1, parseInt(range, 10) || 1));
+      }
+      if (end < start) end = start;
+      if (end < total) next = `cast doc show ${id} ${end + 1}:${end + (end - start + 1)}`;
+    } else {
+      const pages = Math.max(1, Math.ceil(total / pageSize));
+      const page = Math.min(pages, Math.max(1, parseInt(options.page, 10) || 1));
+      start = (page - 1) * pageSize + 1;
+      end = Math.min(total, page * pageSize);
+      if (page < pages) next = `cast doc show ${id} -p ${page + 1}`;
+    }
+
     console.log("");
-    console.log(result.content || "(empty)");
-    if (result.entries?.length) {
+    if (!result.content) {
+      console.log("(empty)");
+    } else {
+      const slice = lines.slice(start - 1, end);
+      if (options.lineNumbers) {
+        slice.forEach((ln: string, i: number) =>
+          console.log(`${c.dim}${String(start + i).padStart(5)}${c.reset}  ${ln}`));
+      } else {
+        console.log(slice.join("\n"));
+      }
+    }
+
+    // Footer: where you are + how to continue. Only when the doc was paged.
+    if (!options.full && (start > 1 || end < total)) {
+      console.log("");
+      const where = `${c.dim}─ lines ${start}-${end} of ${total}${c.reset}`;
+      const hints = next
+        ? `${c.dim} · next: ${c.reset}${c.cyan}${next}${c.reset}`
+        : "";
+      const find = `${c.dim} · search: ${c.reset}${c.cyan}cast doc grep ${id} <text>${c.reset}`;
+      console.log(`${where}${hints}${find}`);
+    }
+
+    // Comments only when the view reaches the end of the doc.
+    if (end >= total && result.entries?.length) {
       const ENTRY_ICONS: Record<string, string> = {
         progress: `${c.blue}↳${c.reset}`,
         decision: `${c.yellow}◆${c.reset}`,
@@ -10850,6 +10919,64 @@ doc
       const icon = DOC_TYPE_ICONS[d.doc_type] || "?";
       console.log(`  ${c.dim}[${icon}]${c.reset} ${c.cyan}${d._id}${c.reset} ${d.title}`);
     }
+  });
+
+doc
+  .command("grep")
+  .alias("find")
+  .description(
+    "Search within one document's body (prints matching lines with line numbers)\n\n" +
+    "Examples:\n" +
+    "  cast doc grep <id> 'scoring'        # every line mentioning scoring\n" +
+    "  cast doc grep <id> 'P0\\.' -i         # regex, case-insensitive\n" +
+    "  cast doc grep <id> markets -C 2     # 2 lines of context each side\n\n" +
+    "Then jump to a hit with: cast doc show <id> <start>:<end>"
+  )
+  .argument("<id>", "Document ID")
+  .argument("<pattern>", "Text or regex to find")
+  .option("-i, --ignore-case", "Case-insensitive match")
+  .option("-C, --context <n>", "Lines of context around each match", "0")
+  .option("-n, --limit <n>", "Max matches to show", "40")
+  .action(async (id: string, pattern: string, options: any) => {
+    const result = await cliPost("/cli/docs/get", { id });
+    if (!result) { console.error("Doc not found"); process.exit(1); }
+    const lines = (result.content || "").split("\n");
+
+    const flags = options.ignoreCase ? "i" : "";
+    let re: RegExp;
+    try {
+      re = new RegExp(pattern, flags);
+    } catch {
+      re = new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), flags);
+    }
+    const reG = new RegExp(re.source, flags + "g");
+    const ctx = Math.max(0, parseInt(options.context, 10) || 0);
+    const limit = Math.max(1, parseInt(options.limit, 10) || 40);
+
+    const hits: number[] = [];
+    for (let i = 0; i < lines.length; i++) if (re.test(lines[i])) hits.push(i);
+
+    console.log(`${c.bold}${result.title}${c.reset} ${c.dim}— ${hits.length} line${hits.length === 1 ? "" : "s"} match /${pattern}/${options.ignoreCase ? "i" : ""}${c.reset}`);
+    if (!hits.length) return;
+    console.log("");
+
+    const shown = hits.slice(0, limit);
+    let lastPrinted = -1;
+    for (const m of shown) {
+      const from = Math.max(0, m - ctx), to = Math.min(lines.length - 1, m + ctx);
+      if (lastPrinted >= 0 && from > lastPrinted + 1) console.log(`${c.dim}  ⋮${c.reset}`);
+      for (let i = Math.max(from, lastPrinted + 1); i <= to; i++) {
+        const isHit = i === m;
+        const num = String(i + 1).padStart(5);
+        const text = isHit ? lines[i].replace(reG, (mm: string) => `${c.yellow}${mm}${c.reset}`) : lines[i];
+        console.log(`${isHit ? c.cyan : c.dim}${num}${c.reset}  ${text}`);
+        lastPrinted = i;
+      }
+    }
+    if (hits.length > shown.length) {
+      console.log(`\n${c.dim}… ${hits.length - shown.length} more match${hits.length - shown.length === 1 ? "" : "es"} (raise --limit)${c.reset}`);
+    }
+    console.log(`\n${c.dim}Read around a hit: ${c.reset}${c.cyan}cast doc show ${id} <start>:<end>${c.reset}`);
   });
 
 doc
