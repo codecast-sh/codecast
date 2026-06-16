@@ -77,7 +77,7 @@ export default function TeamScreen() {
     return teamConversations.conversations.map((c: any) => ({
       ...c,
       author_name: c.author_name ?? null,
-      is_own: c.is_own ?? true,
+      is_own: c.is_own ?? false,
       last_user_message: c.first_user_message || c.message_alternates?.find((m: any) => m.role === 'user')?.content || null,
       idle_summary: c.idle_summary || c.subtitle || null,
     })) as SessionData[];

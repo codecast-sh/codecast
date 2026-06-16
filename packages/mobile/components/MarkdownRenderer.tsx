@@ -6,10 +6,10 @@ import {
   View as RNView,
   Text as RNText,
   Linking,
-  Clipboard,
   Modal,
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
+import { copyToClipboard } from '@/lib/clipboard';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { useRouter } from 'expo-router';
 import { Theme } from '@/constants/Theme';
@@ -166,7 +166,7 @@ export function CodeBlockFullscreen({ content, language, visible, onClose }: { c
             <RNText style={{ fontSize: 10, color: '#657b83' }}>{lines.length} lines</RNText>
           </RNView>
           <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-            <TouchableOpacity onPress={() => { Clipboard.setString(content); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setCopied(true); setTimeout(() => setCopied(false), 1500); }} activeOpacity={0.6}>
+            <TouchableOpacity onPress={() => { copyToClipboard(content); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setCopied(true); setTimeout(() => setCopied(false), 1500); }} activeOpacity={0.6}>
               {copied ? <FontAwesome name="check" size={14} color={Theme.green} /> : <FontAwesome name="clipboard" size={14} color="#657b83" />}
             </TouchableOpacity>
             <TouchableOpacity onPress={onClose} activeOpacity={0.6}>
@@ -197,7 +197,7 @@ export function CodeBlockWithCopy({ content, language }: { content: string; lang
   const [copied, setCopied] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const handleCopy = () => {
-    Clipboard.setString(content);
+    copyToClipboard(content);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
@@ -207,27 +207,22 @@ export function CodeBlockWithCopy({ content, language }: { content: string; lang
   const showLineNumbers = lines.length > 3;
   const isTall = lines.length > 15;
   const displayLines = isTall ? lines.slice(0, CODE_BLOCK_PREVIEW_LINES) : lines;
-  const displayContent = isTall ? displayLines.join('\n') : content;
-
   return (
     <RNView style={{ marginVertical: 2 }}>
-      <RNView style={{ backgroundColor: Theme.bgAlt, borderRadius: 6, borderWidth: StyleSheet.hairlineWidth, borderColor: Theme.borderLight, overflow: 'hidden' }}>
-        <ScrollView horizontal showsHorizontalScrollIndicator nestedScrollEnabled>
-          <RNView style={{ padding: 6 }}>
-            {showLineNumbers ? (
-              <RNView style={{ flexDirection: 'row' }}>
-                <RNView style={{ paddingRight: 8, marginRight: 8, borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: Theme.borderLight }}>
-                  {displayLines.map((_, i) => (
-                    <RNText key={i} style={{ fontSize: 10, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textDim, textAlign: 'right', minWidth: 20 }}>{i + 1}</RNText>
-                  ))}
-                </RNView>
-                <HighlightedCodeText content={displayContent} style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
-              </RNView>
-            ) : (
-              <HighlightedCodeText content={displayContent} style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
+      {/* Code WRAPS instead of scrolling horizontally so long lines stay readable
+          on a phone rather than clipping off-screen. Each line is its own row: the
+          line number sits at the top of a wrapped line (standard soft-wrap layout)
+          and the code fills the remaining width. Dropping the nested horizontal
+          ScrollView also removes the phantom vertical band it reserved in the list. */}
+      <RNView style={{ backgroundColor: Theme.bgAlt, borderRadius: 6, borderWidth: StyleSheet.hairlineWidth, borderColor: Theme.borderLight, overflow: 'hidden', padding: 6 }}>
+        {displayLines.map((line, i) => (
+          <RNView key={i} style={{ flexDirection: 'row' }}>
+            {showLineNumbers && (
+              <RNText style={{ fontSize: 10, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textDim, textAlign: 'right', minWidth: 22, marginRight: 8 }}>{i + 1}</RNText>
             )}
+            <HighlightedCodeText content={line || ' '} style={{ flex: 1, fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
           </RNView>
-        </ScrollView>
+        ))}
       </RNView>
       <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 4 }}>
         {isTall && (
@@ -449,11 +444,13 @@ export const mdStyles = StyleSheet.create({
   inlineCode: {
     fontFamily: 'SpaceMono',
     fontSize: 13,
-    backgroundColor: 'rgba(0,0,0,0.07)',
+    // Neutral text on a subtle surface, matching web (--tw-prose-code = --sol-text
+    // on --sol-bg-alt). The old red read like an error/warning on every snippet.
+    backgroundColor: Theme.bgAlt,
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 3,
-    color: Theme.red,
+    color: Theme.text,
   },
   inlineCodeUser: {
     fontFamily: 'SpaceMono',
@@ -465,8 +462,8 @@ export const mdStyles = StyleSheet.create({
     color: Theme.text,
   },
   mentionPill: {
-    backgroundColor: '#b5890020',
-    color: '#b58900',
+    backgroundColor: Theme.accent + '20',
+    color: Theme.accent,
     fontWeight: '600',
     fontSize: 13,
     paddingHorizontal: 5,
