@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
+import { packSnapshotContent, readSnapshotContent } from "./lib/docSnapshot";
 
 const MAX_DELTA_FETCH = 100;
 const MAX_SNAPSHOT_FETCH = 10;
@@ -53,7 +54,7 @@ export const getSnapshot = query({
       .order("desc")
       .first();
     if (!snapshot) return { content: null };
-    return { content: snapshot.content, version: snapshot.version };
+    return { content: readSnapshotContent(snapshot), version: snapshot.version };
   },
 });
 
@@ -99,10 +100,14 @@ export const submitSnapshot = mutation({
       await ctx.db.insert("doc_snapshots", {
         id: args.id,
         version: args.version,
-        content: args.content,
+        content_gz: packSnapshotContent(args.content),
       });
     } catch (e: any) {
       if (e.message?.includes("duplicate") || e.message?.includes("conflict")) return;
+      // Even gzipped, a pathologically huge doc could still exceed the 1 MiB
+      // limit. Skip the snapshot rather than throwing — the doc stays syncable
+      // via delta replay; only cold-load compaction is lost.
+      if (e.message?.includes("too large")) return;
       throw e;
     }
     if (args.version > 1) {
@@ -132,7 +137,7 @@ export const submitSnapshot = mutation({
               .first();
             if (prevSnapshot) {
               try {
-                oldMentions = extractPersonMentionIds(JSON.parse(prevSnapshot.content));
+                oldMentions = extractPersonMentionIds(JSON.parse(readSnapshotContent(prevSnapshot)));
               } catch {}
             }
           }

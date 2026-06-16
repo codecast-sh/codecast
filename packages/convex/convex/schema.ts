@@ -1643,7 +1643,12 @@ export default defineSchema({
   doc_snapshots: defineTable({
     id: v.string(),
     version: v.number(),
-    content: v.string(),
+    // The full ProseMirror doc serialized as JSON. Stored gzip-compressed in
+    // `content_gz` (text compresses ~5-10x) so large docs stay under Convex's
+    // 1 MiB per-document limit. `content` is the legacy uncompressed form —
+    // still read for rows written before compression; never written anymore.
+    content: v.optional(v.string()),
+    content_gz: v.optional(v.bytes()),
   }).index("id_version", ["id", "version"]),
 
   doc_deltas: defineTable({
