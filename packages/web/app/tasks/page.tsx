@@ -492,8 +492,8 @@ function useTaskUrlState() {
     ? ((searchParams.get("view") || "list") as "list" | "kanban")
     : (taskView?.view ?? "list");
   const sort = hasUrlParams
-    ? ((searchParams.get("sort") || "status") as "status" | "priority" | "created" | "updated" | "plan" | "assignee" | "session" | "project")
-    : ((taskView?.sort || "status") as "status" | "priority" | "created" | "updated" | "plan" | "assignee" | "session" | "project");
+    ? ((searchParams.get("sort") || "status") as "status" | "priority" | "created" | "updated" | "plan" | "assignee" | "session" | "project" | "label")
+    : ((taskView?.sort || "status") as "status" | "priority" | "created" | "updated" | "plan" | "assignee" | "session" | "project" | "label");
   const priority = hasUrlParams
     ? (searchParams.get("priority") || "")
     : (taskView?.priority ?? "");
@@ -828,6 +828,34 @@ export function TaskListContent() {
     return ordered;
   }, [filteredTasks, sortBy, sortWithinGroup, projects]);
 
+  // Group by the task's primary label (labels[0]) — the same representative
+  // label the kanban card shows. A task lands in exactly one bucket so its
+  // _id stays a unique virtualizer key (GenericListView keys rows by id);
+  // tasks with no labels collect in a trailing "No label" group.
+  const labelGroups = useMemo(() => {
+    if (sortBy !== "label") return null;
+    const byLabel: Record<string, { label: string; tasks: TaskItem[] }> = {};
+    const noLabel: TaskItem[] = [];
+    for (const t of filteredTasks) {
+      const primary = t.labels?.[0];
+      if (primary) {
+        if (!byLabel[primary]) byLabel[primary] = { label: primary, tasks: [] };
+        byLabel[primary].tasks.push(t);
+      } else {
+        noLabel.push(t);
+      }
+    }
+    const ordered = Object.values(byLabel)
+      .sort((a, b) => a.label.localeCompare(b.label));
+    if (noLabel.length > 0) {
+      ordered.push({ label: "", tasks: noLabel });
+    }
+    for (const g of ordered) {
+      g.tasks = sortWithinGroup(g.tasks);
+    }
+    return ordered;
+  }, [filteredTasks, sortBy, sortWithinGroup]);
+
   const flatTasks = useMemo(() => {
     if (sortBy === "plan" && planGroups) {
       return planGroups.flatMap((g) => g.tasks);
@@ -840,6 +868,9 @@ export function TaskListContent() {
     }
     if (sortBy === "project" && projectGroups) {
       return projectGroups.flatMap((g) => g.tasks);
+    }
+    if (sortBy === "label" && labelGroups) {
+      return labelGroups.flatMap((g) => g.tasks);
     }
     if (sortBy !== "status") {
       const sorted = [...filteredTasks];
@@ -856,7 +887,7 @@ export function TaskListContent() {
       return acc;
     }, {});
     return STATUS_ORDER.flatMap((s) => grouped[s] || []);
-  }, [filteredTasks, statusFilter, sortBy, planGroups, assigneeGroups, sessionGroups, projectGroups]);
+  }, [filteredTasks, statusFilter, sortBy, planGroups, assigneeGroups, sessionGroups, projectGroups, labelGroups]);
 
   const kanbanGrouped = useMemo(() => {
     return filteredTasks.reduce((acc: Record<string, TaskItem[]>, t) => {
@@ -930,6 +961,29 @@ export function TaskListContent() {
         items: g.tasks,
       }));
     }
+    if (sortBy === "label" && labelGroups) {
+      return labelGroups.map((g) => {
+        const lc = g.label ? getLabelColor(g.label) : null;
+        return {
+          key: g.label || "__no_label",
+          label: g.label || "No label",
+          icon: lc ? (
+            <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${lc.dot}`} />
+          ) : (
+            <Tag className="w-3.5 h-3.5 text-sol-text-dim" />
+          ),
+          extra: g.label ? (
+            <button
+              onClick={(e) => { e.stopPropagation(); setParam({ label: g.label }); }}
+              className="text-[10px] text-sol-cyan hover:underline flex-shrink-0"
+            >
+              Filter
+            </button>
+          ) : undefined,
+          items: g.tasks,
+        };
+      });
+    }
     if ((statusFilter && statusFilter !== "all") || sortBy !== "status") return null;
     return STATUS_ORDER
       .filter((s) => kanbanGrouped[s]?.length)
@@ -938,7 +992,7 @@ export function TaskListContent() {
         const Icon = cfg.icon;
         return { key: s, label: cfg.label, icon: <Icon className={`w-3.5 h-3.5 ${cfg.color}`} />, items: kanbanGrouped[s] };
       });
-  }, [sortBy, planGroups, assigneeGroups, sessionGroups, projectGroups, statusFilter, kanbanGrouped]);
+  }, [sortBy, planGroups, assigneeGroups, sessionGroups, projectGroups, labelGroups, statusFilter, kanbanGrouped, setParam]);
 
   const taskCounts = useMemo(() => {
     const counts: Record<string, number> = { active: 0, all: 0 };
@@ -978,6 +1032,7 @@ export function TaskListContent() {
             { value: "project", label: "Group by project" },
             { value: "plan", label: "Group by plan" },
             { value: "assignee", label: "Group by assignee" },
+            { value: "label", label: "Group by label" },
             { value: "session", label: "Group by session" },
             { value: "priority", label: "Sort by priority" },
             { value: "updated", label: "Sort by updated" },
