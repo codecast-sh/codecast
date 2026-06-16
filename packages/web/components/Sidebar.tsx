@@ -8,6 +8,7 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { cleanTitle, msgCountColor } from "../lib/conversationProcessor";
 import { visitTimeAgo } from "../lib/recentVisits";
+import { getLabelColor } from "../lib/labelColors";
 import { shouldShowSession } from "../lib/sessionFilters";
 import { useInboxStore, categorizeSessions, sessionsWithPendingSend } from "../store/inboxStore";
 import { useConvexSync } from "../hooks/useConvexSync";
@@ -657,9 +658,9 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
           <div className="mt-4">
             <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-4 mb-2 flex items-center">
               <span>Bookmarks</span>
-              <span className="ml-auto text-[10px] tabular-nums text-sol-text-dim/50 normal-case font-normal">{bookmarks.length}</span>
+              <span className="ml-auto inline-flex items-center justify-center min-w-[17px] h-[15px] px-1 rounded-full bg-sol-bg-highlight/70 text-[10px] tabular-nums text-sol-text-dim/70 normal-case font-normal">{bookmarks.length}</span>
             </div>
-            <div className="space-y-0.5">
+            <div className="space-y-1">
               {(showAllBookmarks ? bookmarks : bookmarks.slice(0, 8)).map((bm: any, i: number, arr: any[]) => {
                 const isOpen = bm.conversation_id === openConversationId;
                 // Adjacent bookmarks from the same conversation drop the repeated
@@ -668,8 +669,12 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
                 const named = !!bm.name;
                 const primary = bm.name || bm.message_preview || "";
                 const convTitle = cleanTitle(bm.conversation_title || "New Session");
+                const isUser = bm.message_role === "user";
+                // Each workspace gets a stable hashed color so the eye can sort by project.
+                const proj = bm.project_path ? getShortPath(bm.project_path) : "";
+                const projColor = proj ? getLabelColor(proj) : null;
                 return (
-                  <div key={bm._id} className="flex items-stretch group" onMouseEnter={() => prefetchBookmark(bm)} onFocus={() => prefetchBookmark(bm)}>
+                  <div key={bm._id} className="group relative px-1.5" onMouseEnter={() => prefetchBookmark(bm)} onFocus={() => prefetchBookmark(bm)}>
                     <button
                       onClick={() => {
                         const store = useInboxStore.getState();
@@ -684,37 +689,53 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
                       }}
                       title={primary || convTitle}
                       aria-label={`Open bookmark ${named ? `"${bm.name}"` : "message"} in ${convTitle}`}
-                      className={`flex items-start gap-2 px-4 py-1.5 flex-1 min-w-0 text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-sol-cyan/60 ${
-                        isOpen ? "bg-sol-cyan/10 shadow-[inset_2px_0_0_var(--sol-cyan)]" : "hover:bg-sol-bg-highlight/60"
+                      className={`flex items-stretch gap-2.5 w-full pl-2 pr-2.5 py-1.5 rounded-md text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-sol-cyan/60 ${
+                        isOpen ? "bg-sol-cyan/10" : "hover:bg-sol-bg-highlight/50"
                       }`}
                     >
-                      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 mt-[6px] ${bm.message_role === "user" ? "bg-sol-blue" : "bg-sol-violet"}`} title={bm.message_role === "user" ? "Your message" : "Assistant reply"} />
+                      {/* A saved excerpt, so a quote-bar spine: role-colored, cyan while its conversation is open.
+                          Held at a visible base opacity so it anchors each row, not just on hover. */}
+                      <span
+                        aria-hidden
+                        className={`flex-shrink-0 w-[3px] self-stretch rounded-full transition-colors ${
+                          isOpen ? "bg-sol-cyan/80" : isUser ? "bg-sol-blue/45 group-hover:bg-sol-blue/80" : "bg-sol-violet/45 group-hover:bg-sol-violet/80"
+                        }`}
+                      />
                       <span className="min-w-0 flex-1">
-                        <span className={`block truncate text-sm leading-snug group-hover:text-sol-text ${named ? "text-sol-text font-medium" : "text-sol-text-muted"}`}>
-                          {named ? (
-                            primary
-                          ) : primary ? (
-                            <><span className="text-sol-text-dim/40 font-serif mr-px">“</span>{primary}</>
-                          ) : (
-                            <span className="italic text-sol-text-dim/70">No preview</span>
-                          )}
+                        <span className="flex items-baseline gap-2">
+                          {/* Headline: full-contrast and weighted up for deliberately-named bookmarks so
+                              curated entries out-rank auto-captured previews at a glance. */}
+                          <span className={`min-w-0 flex-1 truncate text-[13px] leading-snug text-sol-text ${named ? "font-semibold" : "font-normal"}`}>
+                            {named && (
+                              <svg aria-hidden viewBox="0 0 24 24" className="inline-block w-2.5 h-2.5 mr-1 -mt-px align-middle text-sol-yellow/90" fill="currentColor">
+                                <path d="M6 3a2 2 0 0 0-2 2v15.5a.5.5 0 0 0 .79.407L12 16l7.21 4.907A.5.5 0 0 0 20 20.5V5a2 2 0 0 0-2-2H6z" />
+                              </svg>
+                            )}
+                            {primary || <span className="italic font-normal text-sol-text-dim/60">No preview</span>}
+                          </span>
+                          <span
+                            className="flex-shrink-0 text-[9.5px] tabular-nums text-sol-text-dim/45 group-hover:text-sol-text-dim/75 transition-colors"
+                            title={new Date(bm.created_at).toLocaleString()}
+                          >
+                            {visitTimeAgo(bm.created_at)}
+                          </span>
                         </span>
                         {!sameConvAsPrev && (
-                          <span className="block truncate text-[10px] text-sol-text-dim/55 leading-tight mt-[1px] group-hover:text-sol-text-dim/80 transition-colors">
-                            {convTitle}
+                          // Source line: deliberately recessed (dimmest text) so it reads as context, not a
+                          // second headline; the project dot carries the only color so the eye groups by project.
+                          <span className="flex items-center gap-1.5 mt-[3px] min-w-0">
+                            {projColor && <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${projColor.dot}`} title={proj} />}
+                            <span className="min-w-0 truncate text-[10px] text-sol-text-dim leading-tight group-hover:text-sol-text-muted transition-colors">
+                              {convTitle}
+                            </span>
                           </span>
                         )}
                       </span>
-                      <span
-                        className="text-[9px] tabular-nums text-sol-text-dim/40 group-hover:text-sol-text-dim flex-shrink-0 mt-[3px] transition-colors"
-                        title={new Date(bm.created_at).toLocaleString()}
-                      >
-                        {visitTimeAgo(bm.created_at)}
-                      </span>
                     </button>
+                    {/* Remove floats over the timestamp on hover so the row never reflows. */}
                     <button
                       onClick={(e) => { e.stopPropagation(); toggleBookmark(bm.conversation_id, bm.message_id); }}
-                      className="px-1.5 flex items-center opacity-0 group-hover:opacity-100 text-sol-text-dim hover:text-sol-red transition-opacity flex-shrink-0"
+                      className="absolute right-3 top-1.5 p-0.5 rounded opacity-0 group-hover:opacity-100 bg-sol-bg-highlight text-sol-text-dim hover:text-sol-red transition-opacity"
                       title="Remove bookmark"
                       aria-label="Remove bookmark"
                     >
@@ -728,9 +749,12 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
               {bookmarks.length > 8 && (
                 <button
                   onClick={() => setShowAllBookmarks(v => !v)}
-                  className="w-full px-4 pt-1.5 pb-0.5 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors text-left"
+                  className="w-full mt-1 px-4 py-1 flex items-center gap-1 text-[10.5px] text-sol-text-dim/70 hover:text-sol-text transition-colors"
                 >
-                  {showAllBookmarks ? "Show fewer" : `Show ${bookmarks.length - 8} more`}
+                  <svg className={`w-2.5 h-2.5 transition-transform ${showAllBookmarks ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                  </svg>
+                  {showAllBookmarks ? "Show fewer" : `${bookmarks.length - 8} more`}
                 </button>
               )}
             </div>
