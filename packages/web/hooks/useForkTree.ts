@@ -404,10 +404,18 @@ export function getForkFamilyOrder(conversation: ForkConversationLike): FlatFork
   return buildForkFamily(conversation, s.sessions, null, s.messages);
 }
 
+// Stable empty map for the closed state (Object.is-stable → no re-render).
+const EMPTY_FORK_MAP: Record<string, any> = {};
+
 export function useForkTree(conversation: ForkConversationLike, open: boolean) {
   const conversationId = conversation?._id?.toString();
-  const sessions = useInboxStore((s) => s.sessions);
-  const messages = useInboxStore((s) => s.messages);
+  // Gate the heavy whole-map subscriptions on `open`. ForkTreePopover stays
+  // mounted for the lifetime of any open conversation, so an ungated `s.messages`
+  // sub re-runs buildForkFamily on every streamed message in EVERY conversation,
+  // and `s.sessions` on every ~1s heartbeat — all to feed a panel that's usually
+  // closed (it returns null until `open`). When closed, return stable empty maps.
+  const sessions = useInboxStore((s) => (open ? s.sessions : EMPTY_FORK_MAP));
+  const messages = useInboxStore((s) => (open ? s.messages : EMPTY_FORK_MAP));
   // The server tree is the only source that knows family members not in the
   // local cache (a teammate's branch, a sibling created in another session).
   // It needs a real Convex id — a conversation viewed by its pre-rekey fork
