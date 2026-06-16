@@ -2,10 +2,14 @@ import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useMemo, useState, useCallback, useRef } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { CornerDownRight } from "lucide-react";
 import { LoadingSkeleton } from "./LoadingSkeleton";
 import { EmptyState } from "./EmptyState";
 import { MarkdownRenderer } from "./tools/MarkdownRenderer";
+import { EntityIdPill } from "./EntityIdPill";
+import { parseInboundSessionMessage, isSessionMessage } from "./sessionMessage";
 
 type FeedMessage = {
   _id: string;
@@ -61,7 +65,64 @@ function getPageNumbers(current: number, total: number): (number | "dots")[] {
   return pages;
 }
 
+// Agent-to-agent message (delivered by `cast send`, stored wrapped in a
+// <session-message from="…"> tag). Rendered with the same cyan "Message from
+// <sender>" chrome the conversation view uses (SessionMessageBlock), so the feed
+// reads like the convos. A plain div (not a Link) because EntityIdPill renders
+// its own <a> for the sender — nesting anchors is invalid — so we navigate via a
+// click handler that yields to any inner link/button.
+function SessionMessageCard({ message }: { message: FeedMessage }) {
+  const router = useRouter();
+  const parsed = parseInboundSessionMessage(message.content);
+  const from = parsed?.from || "unknown";
+  const body = parsed?.body || message.content?.trim() || "";
+
+  return (
+    <div
+      role="link"
+      tabIndex={0}
+      onClick={(e) => {
+        if ((e.target as HTMLElement).closest("a,button")) return;
+        router.push(`/conversation/${message.conversation_id}`);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") router.push(`/conversation/${message.conversation_id}`);
+      }}
+      className="group relative cursor-pointer rounded-lg border border-l-[3px] border-l-sol-cyan/60 border-sol-border/20 bg-sol-cyan/[0.04] px-4 py-3 transition-all duration-150 hover:border-l-sol-cyan hover:bg-sol-cyan/[0.07]"
+    >
+      <div className="flex items-center gap-2 mb-1.5">
+        <CornerDownRight className="w-3.5 h-3.5 shrink-0 text-sol-cyan/70" />
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-sol-cyan/80 shrink-0">
+          message from
+        </span>
+        {from && from !== "unknown" ? (
+          <EntityIdPill shortId={from} />
+        ) : (
+          <span className="text-xs text-sol-text-muted">another session</span>
+        )}
+        <span className="text-[10px] text-sol-text-dim/30">&middot;</span>
+        <span className="text-xs text-sol-text-muted truncate group-hover:text-sol-text transition-colors">
+          {message.conversation_title}
+        </span>
+        <span className="text-[11px] text-sol-text-dim/50 ml-auto shrink-0">
+          {getRelativeTime(message.timestamp)}
+        </span>
+      </div>
+      <div className="line-clamp-4 overflow-hidden">
+        <MarkdownRenderer
+          content={body}
+          className="text-sm !prose-sm [&>*:first-child]:mt-0 [&>*:last-child]:mb-0"
+        />
+      </div>
+    </div>
+  );
+}
+
 function MessageCard({ message }: { message: FeedMessage }) {
+  if (isSessionMessage(message.content)) {
+    return <SessionMessageCard message={message} />;
+  }
+
   const isUser = message.role === "user";
   const content = message.content?.trim() || "";
 
@@ -194,7 +255,7 @@ export function MessageFeed({ filter }: MessageFeedProps) {
   const [loadedMessages, setLoadedMessages] = useState<FeedMessage[]>([]);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [prevFilter, setPrevFilter] = useState(filter);
-  const [showOnlyUser, setShowOnlyUser] = useState(true);
+  const [onlyMine, setOnlyMine] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -229,11 +290,16 @@ export function MessageFeed({ filter }: MessageFeedProps) {
     return deduplicated;
   }, [result?.messages, loadedMessages, cursor]);
 
+  // Base feed: human prompts + agent cross-talk (session-messages, role "user"
+  // but wrapped in a <session-message> tag). Assistant replies are excluded —
+  // the feed is about discrete messages sent to sessions, not model output.
+  // "Mine" narrows to prompts I actually typed: drops the agent-to-agent
+  // cross-talk and any teammates' messages.
   const filteredMessages = useMemo(() => {
-    return showOnlyUser
-      ? allMessages.filter((msg) => msg.role === "user")
-      : allMessages;
-  }, [allMessages, showOnlyUser]);
+    const base = allMessages.filter((msg) => msg.role === "user");
+    if (!onlyMine) return base;
+    return base.filter((msg) => msg.is_own && !isSessionMessage(msg.content));
+  }, [allMessages, onlyMine]);
 
   const totalPages = Math.max(
     1,
@@ -317,19 +383,28 @@ export function MessageFeed({ filter }: MessageFeedProps) {
   return (
     <div ref={containerRef} className="space-y-5 scroll-mt-20">
       <div className="flex items-center justify-between">
-        <button
-          onClick={() => {
-            setShowOnlyUser(!showOnlyUser);
-            setCurrentPage(1);
-          }}
-          className={`px-3 py-1.5 text-sm rounded-lg border transition-colors ${
-            showOnlyUser
-              ? "bg-sol-blue/20 text-sol-blue border-sol-blue/30"
-              : "text-sol-text-muted border-sol-border/40 hover:text-sol-text hover:bg-sol-bg-alt"
-          }`}
-        >
-          User only
-        </button>
+        <div className="inline-flex items-center gap-0.5 rounded-lg border border-sol-border/40 p-0.5">
+          {([
+            { key: false, label: "All" },
+            { key: true, label: "Mine" },
+          ] as const).map((opt) => (
+            <button
+              key={opt.label}
+              onClick={() => {
+                setOnlyMine(opt.key);
+                setCurrentPage(1);
+              }}
+              title={opt.key ? "Only messages I typed (no agent cross-talk)" : "All messages, including agent-to-agent"}
+              className={`px-3 py-1 text-sm rounded-md transition-colors ${
+                onlyMine === opt.key
+                  ? "bg-sol-blue/20 text-sol-blue"
+                  : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt"
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
         <span className="text-xs text-sol-text-dim/50">
           {filteredMessages.length} messages
         </span>
