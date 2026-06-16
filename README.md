@@ -271,6 +271,21 @@ cast schedule add "Review PRs" --every 4h
 cast schedule add "Respond to comments" --on pr_comment
 ```
 
+**Reading long documents.** `cast doc show` paginates instead of dumping the whole
+file, and prints a footer telling you how to get the next page. `cast doc grep`
+searches *within* one doc's body (unlike `cast doc search`, which matches titles
+across the corpus). The natural loop is outline → search → jump-to-range:
+
+```bash
+cast doc grep <id> '^#'           # outline: every heading, with line numbers
+cast doc show <id>                # first page (200 lines) + a "next:" hint
+cast doc show <id> -p 2           # next page
+cast doc show <id> 800:1000       # an explicit line range
+cast doc show <id> 800: -n        # line 800 to the end, with a line-number gutter
+cast doc grep <id> 'scoring' -C 2 # find a term in the body, 2 lines of context
+cast doc show <id> --full         # opt out of paging, dump the whole thing
+```
+
 ### Daemon
 
 ```bash
