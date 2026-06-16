@@ -5,8 +5,10 @@ import { Stack, useRouter, useSegments } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import * as SecureStore from 'expo-secure-store';
 import * as Linking from 'expo-linking';
+import { AppState } from 'react-native';
 import { useEffect, useRef } from 'react';
 import 'react-native-reanimated';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { ConvexProvider } from 'convex/react';
 import { ConvexAuthProvider } from '@convex-dev/auth/react';
 import { useQuery } from 'convex/react';
@@ -43,7 +45,12 @@ SplashScreen.preventAutoHideAsync();
 
 function RootLayout() {
   const [loaded, error] = useFonts({
-    SpaceMono: require('../assets/fonts/SpaceMono-Regular.ttf'),
+    // JetBrains Mono is the mono face on web; use it on mobile too for parity.
+    // The legacy "SpaceMono" key now points at JetBrains Mono so the existing
+    // fontFamily:'SpaceMono' call sites render it without a repo-wide rename.
+    SpaceMono: require('../assets/fonts/JetBrainsMono-Regular.ttf'),
+    JetBrainsMono: require('../assets/fonts/JetBrainsMono-Regular.ttf'),
+    'JetBrainsMono-Bold': require('../assets/fonts/JetBrainsMono-Bold.ttf'),
     ...FontAwesome.font,
   });
 
@@ -58,24 +65,43 @@ function RootLayout() {
   }, [loaded]);
 
   useEffect(() => {
+    if (!loaded) return;
+
+    // Fetch OTA updates in the background, but DON'T reloadAsync() mid-session —
+    // that yanks the user out of whatever they're typing/scrolling, and an eager
+    // unconditional reload maximizes blast radius if an update is bad (see the
+    // OTA dep-skew brick-on-launch history). Instead apply the fetched update the
+    // next time the app goes to the background, the standard expo-updates pattern.
+    let updatePending = false;
+    let cancelled = false;
+
     async function checkForUpdates() {
       if (__DEV__) return;
-
       try {
         const Updates = await import('expo-updates');
         const update = await Updates.checkForUpdateAsync();
-        if (update.isAvailable) {
-          await Updates.fetchUpdateAsync();
-          await Updates.reloadAsync();
-        }
+        if (cancelled || !update.isAvailable) return;
+        await Updates.fetchUpdateAsync();
+        if (!cancelled) updatePending = true;
       } catch (e) {
         console.log('OTA update check failed:', e);
       }
     }
 
-    if (loaded) {
-      checkForUpdates();
-    }
+    const sub = AppState.addEventListener('change', (state) => {
+      if (updatePending && (state === 'background' || state === 'inactive')) {
+        updatePending = false;
+        import('expo-updates')
+          .then((Updates) => Updates.reloadAsync())
+          .catch(() => {});
+      }
+    });
+
+    checkForUpdates();
+    return () => {
+      cancelled = true;
+      sub.remove();
+    };
   }, [loaded]);
 
   if (!loaded) {
@@ -91,26 +117,29 @@ function RootLayoutNav() {
   const colorScheme = useColorScheme();
 
   return (
-    <ConvexProvider client={convex}>
-      <ConvexAuthProvider client={convex} storage={secureStorage}>
-        <AuthProvider>
-          <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-            <AnalyticsIdentify />
-            <AuthGate>
-              <Stack>
-                <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-                <Stack.Screen name="auth/login" options={{ title: 'Login', headerShown: false }} />
-                <Stack.Screen name="auth/signup" options={{ title: 'Sign Up', headerShown: false }} />
-                <Stack.Screen name="session/[id]" options={{ title: 'Conversation' }} />
-                <Stack.Screen name="task/[id]" options={{ title: 'Task' }} />
-                <Stack.Screen name="plan/[id]" options={{ title: 'Plan' }} />
-                <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
-              </Stack>
-            </AuthGate>
-          </ThemeProvider>
-        </AuthProvider>
-      </ConvexAuthProvider>
-    </ConvexProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <ConvexProvider client={convex}>
+        <ConvexAuthProvider client={convex} storage={secureStorage}>
+          <AuthProvider>
+            <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+              <AnalyticsIdentify />
+              <AuthGate>
+                <Stack>
+                  <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+                  <Stack.Screen name="auth/login" options={{ title: 'Login', headerShown: false }} />
+                  <Stack.Screen name="auth/signup" options={{ title: 'Sign Up', headerShown: false }} />
+                  <Stack.Screen name="session/[id]" options={{ title: 'Conversation' }} />
+                  <Stack.Screen name="task/[id]" options={{ title: 'Task' }} />
+                  <Stack.Screen name="plan/[id]" options={{ title: 'Plan' }} />
+                  <Stack.Screen name="doc/[id]" options={{ title: 'Doc' }} />
+                  <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
+                </Stack>
+              </AuthGate>
+            </ThemeProvider>
+          </AuthProvider>
+        </ConvexAuthProvider>
+      </ConvexProvider>
+    </GestureHandlerRootView>
   );
 }
 
