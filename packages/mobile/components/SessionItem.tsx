@@ -1,5 +1,6 @@
-import { StyleSheet, TouchableOpacity, View as RNView, Text as RNText, Animated as RNAnimated } from 'react-native';
+import { StyleSheet, TouchableOpacity, View as RNView, Text as RNText, Animated as RNAnimated, PanResponder } from 'react-native';
 import { useRef, useCallback, useEffect } from 'react';
+import * as Haptics from 'expo-haptics';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Feather from '@expo/vector-icons/Feather';
 import { Theme, Spacing } from '@/constants/Theme';
@@ -153,7 +154,13 @@ export function SessionItem({ session, onPress, onPin, onLongPress }: { session:
   const showAuthor = session.author_name && session.is_own === false;
 
   return (
-    <TouchableOpacity onPress={onPress} onLongPress={onLongPress} delayLongPress={400} style={styles.conversationContent} activeOpacity={0.6}>
+    <TouchableOpacity
+      onPress={onPress}
+      onLongPress={onLongPress ? () => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onLongPress(); } : undefined}
+      delayLongPress={400}
+      style={styles.conversationContent}
+      activeOpacity={0.6}
+    >
       <RNView style={styles.conversationHeader}>
         <RNView style={styles.titleRow}>
           <RNView style={styles.iconWithStatus}>
@@ -211,49 +218,63 @@ export function SwipeableSessionItem({ session, onPress, onDismiss, onPin, onLon
   onLongPress?: () => void;
 }) {
   const translateX = useRef(new RNAnimated.Value(0)).current;
-  const panStartX = useRef(0);
-  const dismissed = useRef(false);
-
   const didSwipe = useRef(false);
 
-  const handleTouchStart = useCallback((e: any) => {
-    panStartX.current = e.nativeEvent.pageX;
-    dismissed.current = false;
-    didSwipe.current = false;
-  }, []);
+  // Keep the latest action callbacks reachable from the once-created responder.
+  const cb = useRef({ onDismiss, onPin });
+  cb.current = { onDismiss, onPin };
 
-  const handleTouchMove = useCallback((e: any) => {
-    const dx = e.nativeEvent.pageX - panStartX.current;
-    if (Math.abs(dx) > 5) didSwipe.current = true;
-    if (dx < 0) translateX.setValue(dx);
-    if (dx > 0) translateX.setValue(dx);
+  const springBack = useCallback((after?: () => void) => {
+    RNAnimated.spring(translateX, {
+      toValue: 0,
+      useNativeDriver: true,
+      tension: 100,
+      friction: 10,
+    }).start(after ? () => after() : undefined);
   }, [translateX]);
 
-  const handleTouchEnd = useCallback(() => {
-    const currentValue = (translateX as any).__getValue();
-    if (currentValue < -100) {
-      dismissed.current = true;
-      RNAnimated.timing(translateX, {
-        toValue: -400,
-        duration: 200,
-        useNativeDriver: true,
-      }).start(() => onDismiss());
-    } else if (currentValue > 80 && onPin) {
-      RNAnimated.spring(translateX, {
-        toValue: 0,
-        useNativeDriver: true,
-        tension: 100,
-        friction: 10,
-      }).start(() => onPin());
-    } else {
-      RNAnimated.spring(translateX, {
-        toValue: 0,
-        useNativeDriver: true,
-        tension: 100,
-        friction: 10,
-      }).start();
-    }
-  }, [translateX, onDismiss, onPin]);
+  // PanResponder (RN core — NOT gesture-handler) is what fixes the "vertical
+  // scroll moves during a horizontal swipe" bug without breaking tap/long-press.
+  // onMoveShouldSetPanResponder claims the touch ONLY once the finger has moved
+  // clearly horizontally; at that moment the parent ScrollView yields the
+  // responder, so it can't scroll. A vertical drag is never claimed (scrolling is
+  // untouched), and a stationary press/tap is never claimed (the inner
+  // TouchableOpacity still fires onPress/onLongPress). A gesture-handler pan, by
+  // contrast, holds the gesture undetermined during a hold and starves long-press.
+  const responder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_e, gs) =>
+        Math.abs(gs.dx) > 8 && Math.abs(gs.dx) > Math.abs(gs.dy) * 1.5,
+      onPanResponderGrant: () => {
+        didSwipe.current = true;
+      },
+      onPanResponderMove: (_e, gs) => {
+        translateX.setValue(gs.dx);
+      },
+      onPanResponderRelease: (_e, gs) => {
+        if (gs.dx < -100) {
+          // tactile confirm at the commit point — a destructive dismiss reads as
+          // accidental without it.
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+          RNAnimated.timing(translateX, {
+            toValue: -400,
+            duration: 200,
+            useNativeDriver: true,
+          }).start(() => cb.current.onDismiss());
+        } else if (gs.dx > 80 && cb.current.onPin) {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+          springBack(cb.current.onPin);
+        } else {
+          springBack();
+        }
+        requestAnimationFrame(() => { didSwipe.current = false; });
+      },
+      onPanResponderTerminate: () => {
+        springBack();
+        requestAnimationFrame(() => { didSwipe.current = false; });
+      },
+    })
+  ).current;
 
   const swipeBehindOpacity = translateX.interpolate({
     inputRange: [-400, -1, 0, 1, 400],
@@ -276,9 +297,7 @@ export function SwipeableSessionItem({ session, onPress, onDismiss, onPin, onLon
       </RNAnimated.View>
       <RNAnimated.View
         style={[styles.conversationItem, { transform: [{ translateX }] }]}
-        onTouchStart={handleTouchStart}
-        onTouchMove={handleTouchMove}
-        onTouchEnd={handleTouchEnd}
+        {...responder.panHandlers}
       >
         <SessionItem session={session} onPress={() => { if (!didSwipe.current) onPress(); }} onPin={onPin} onLongPress={onLongPress} />
       </RNAnimated.View>
