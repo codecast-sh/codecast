@@ -85,8 +85,34 @@ export function captureError(error: Error, context?: Record<string, unknown>) {
 
 const _seenGlobalErrors = new Set<string>();
 
+// Known-benign errors thrown from third-party internals that don't affect the
+// app — surfacing them as "Uncaught" toasts (and Sentry events) is pure noise.
+//
+//  • react-resizable-panels throws "Could not find data for Group with id …"
+//    from its document-level pointerup/pointermove listeners when a divider
+//    drag's module-global state outlives the PanelGroup that owns it (the group
+//    unmounts/remounts while a sibling group keeps the shared, ref-counted
+//    listeners alive — both the tasks and docs DetailSplitLayouts live in the
+//    persistent tab shell). The throw aborts only that one listener call; the
+//    divider and panels keep working. The lookup uses throwOnMissing=true
+//    internally, so we can't fix it short of forking the library (4.11.2 still
+//    has it) — we just decline to report it. See components/DetailSplitLayout.
+const IGNORED_ERROR_PATTERNS: RegExp[] = [
+  /Could not find data for Group with id/,
+];
+
+function isIgnoredError(message: string | undefined): boolean {
+  return !!message && IGNORED_ERROR_PATTERNS.some((re) => re.test(message));
+}
+
 export function setupErrorToasts() {
   window.addEventListener("error", (e) => {
+    const ignoreKey = e.error?.message || e.message;
+    if (isIgnoredError(ignoreKey)) {
+      // Suppress the browser's default "Uncaught" console logging too.
+      e.preventDefault();
+      return;
+    }
     if (!e.error) return;
     const key = e.error?.message || e.message;
     if (_seenGlobalErrors.has(key)) return;
@@ -110,6 +136,10 @@ export function setupErrorToasts() {
   window.addEventListener("unhandledrejection", (e) => {
     const err = e.reason instanceof Error ? e.reason : new Error(String(e.reason));
     const key = err.message;
+    if (isIgnoredError(key)) {
+      e.preventDefault();
+      return;
+    }
     if (_seenGlobalErrors.has(key)) return;
     _seenGlobalErrors.add(key);
     setTimeout(() => _seenGlobalErrors.delete(key), 30_000);
