@@ -2146,8 +2146,8 @@ export function SessionListPanel({
           {(() => {
             const viewModeOptions = [
               { key: "grouped", label: "By status", icon: List },
-              { key: "recent", label: "By latest updated", icon: Activity },
-              { key: "time", label: "By time", icon: Clock },
+              { key: "recent", label: "By updated", icon: Activity },
+              { key: "time", label: "By created", icon: Clock },
               ...(visibleBuckets.length > 0 ? [{ key: "bucket", label: "By label", icon: Tag }] : []),
             ];
             const current = viewModeOptions.find((o) => o.key === viewMode) ?? viewModeOptions[0];
