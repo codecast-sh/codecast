@@ -115,6 +115,7 @@ export type MentionDocItem = {
   _id: string;
   title: string;
   doc_type: string;
+  source_file?: string | null;
   updated_at: number;
   team_id?: string | null;
   user_id?: string | null;

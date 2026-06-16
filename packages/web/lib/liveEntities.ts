@@ -185,3 +185,18 @@ export function deriveDocDisplayTitle(doc: { source?: string; content?: string }
   const m = doc.content.match(/^#\s+(.+)/m);
   return m ? m[1].trim() : undefined;
 }
+
+/**
+ * Client-side searchable text for a doc. A doc synced from a `.md` file is titled
+ * from its first heading, not its filename — so without this, a doc backed by
+ * `backend/ROADMAP_EXPLAINED.md` can't be found by typing its path or filename.
+ * We fold the source file path into the search text; since the full path contains
+ * the basename, both "ROADMAP_EXPLAINED.md" and "backend/ROADMAP_EXPLAINED.md"
+ * match as substrings.
+ */
+export function docSearchText(
+  doc: { display_title?: string; title?: string; source_file?: string | null } | null | undefined,
+): string {
+  if (!doc) return "";
+  return [doc.display_title, doc.title, doc.source_file].filter(Boolean).join(" ");
+}
