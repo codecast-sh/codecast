@@ -539,13 +539,37 @@ function useTaskUrlState() {
     }
   }, [searchParams, router, taskView, updateClientUI, isDetailPage]);
 
-  return { status, view, sort, priority, label, assignee, statuses, sourceFilter, session, setParam };
+  // Serialize the *effective* view (whichever of URL params / store prefs is
+  // live) into an absolute, deep-linkable URL. We can't just copy
+  // window.location: on a fresh load the view reads from the store while the URL
+  // stays bare `/tasks`, so the address bar wouldn't capture the active sort/
+  // filters. Defaults (list view, status grouping) are omitted to keep links tidy.
+  const buildShareUrl = useCallback(() => {
+    const params = new URLSearchParams();
+    const entries: Array<[string, string]> = [
+      ["status", status],
+      ["view", view === "list" ? "" : view],
+      ["sort", sort === "status" ? "" : sort],
+      ["priority", priority],
+      ["label", label],
+      ["assignee", assignee],
+      ["statuses", statuses],
+      ["source", sourceFilter],
+      ["session", session],
+    ];
+    for (const [k, v] of entries) if (v) params.set(k, v);
+    const qs = params.toString();
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    return `${origin}/tasks${qs ? `?${qs}` : ""}`;
+  }, [status, view, sort, priority, label, assignee, statuses, sourceFilter, session]);
+
+  return { status, view, sort, priority, label, assignee, statuses, sourceFilter, session, setParam, buildShareUrl };
 }
 
 export function TaskListContent() {
   const router = useRouter();
   const params = useParams();
-  const { status: urlStatus, view: viewMode, sort: sortBy, priority: priorityFilter, label: labelFilter, assignee: assigneeFilter, statuses: statusesFilter, sourceFilter, session: sessionFilter, setParam } = useTaskUrlState();
+  const { status: urlStatus, view: viewMode, sort: sortBy, priority: priorityFilter, label: labelFilter, assignee: assigneeFilter, statuses: statusesFilter, sourceFilter, session: sessionFilter, setParam, buildShareUrl } = useTaskUrlState();
   const setTaskFilter = useInboxStore((s) => s.setTaskFilter);
   const tasks = useInboxStore((s) => s.tasks);
   const projects = useInboxStore((s) => s.projects);
@@ -1009,6 +1033,7 @@ export function TaskListContent() {
             onClear: () => setParam({ statuses: "", priority: "", label: "", assignee: "", source: "", session: "" }),
             onSaveView: handleSaveView,
           }}
+          shareUrl={buildShareUrl}
           groups={listGroups}
           flatItems={flatTasks}
           disableKeyboard={showCreate}
