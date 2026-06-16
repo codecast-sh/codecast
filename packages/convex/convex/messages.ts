@@ -148,6 +148,85 @@ export function lastKnownEffortFromBatch(
   return best?.effort ?? null;
 }
 
+// Insert or update a file-synced doc for a markdown file an agent wrote. Shared
+// by the Write-tool path and the Bash-heredoc path so both classify the type,
+// derive the title, and dedup identically. Skips short files and no-op patches.
+async function upsertFileSyncDoc(
+  ctx: any,
+  conversation: DocExtractionConversation,
+  conversation_id: Id<"conversations">,
+  filePath: string,
+  content: string,
+  timestamp: number,
+) {
+  if (!filePath.endsWith(".md") || content.length < 200) return;
+  const fileName = filePath.split("/").pop() || filePath;
+  const docType = fileName.toLowerCase().includes("plan") ? "plan" as const
+    : fileName.toLowerCase().includes("design") ? "design" as const
+    : fileName.toLowerCase().includes("spec") ? "spec" as const
+    : classifyDocContent(content);
+  const existing = await ctx.db
+    .query("docs")
+    .withIndex("by_source_file", (q: any) => q.eq("source_file", filePath))
+    .first();
+  if (existing) {
+    if (existing.content === content) return; // idempotent: nothing changed
+    await ctx.db.patch(existing._id, {
+      title: extractTitleFromContent(content),
+      content,
+      doc_type: docType,
+      updated_at: timestamp,
+    });
+  } else {
+    await ctx.db.insert("docs", {
+      user_id: conversation.user_id,
+      team_id: conversation.team_id,
+      title: extractTitleFromContent(content),
+      content,
+      doc_type: docType,
+      source: "file_sync",
+      source_file: filePath,
+      conversation_id,
+      project_path: conversation.project_path,
+      is_private: conversation.is_private,
+      team_visibility: conversation.team_visibility,
+      created_at: timestamp,
+      updated_at: timestamp,
+    });
+  }
+}
+
+// Markdown files written via a Bash heredoc, e.g.
+//   cat > notes.md <<'EOF'\n...\nEOF      or      tee notes.md <<EOF ... EOF
+// (the redirect may sit before or after the `<<`). The content lives inline in
+// the command, so we capture it just like a Write. Files assembled by a script
+// (content never in the command) stay invisible — there's nothing to capture.
+export function extractHeredocMarkdownWrites(command: string): Array<{ file_path: string; content: string }> {
+  const out: Array<{ file_path: string; content: string }> = [];
+  const lines = command.split("\n");
+  const openRe = /<<-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1/;
+  // The target is either a `>`/`>>` redirect or a `tee [flags]` argument.
+  const mdQuoted = `(?:'([^']+\\.md)'|"([^"]+\\.md)"|([^\\s'";|&<>]+\\.md))`;
+  const redirectRe = new RegExp(`>>?\\s*${mdQuoted}`);
+  const teeRe = new RegExp(`\\btee\\b(?:\\s+-\\S+)*\\s+${mdQuoted}`);
+  for (let i = 0; i < lines.length; i++) {
+    const open = lines[i].match(openRe);
+    if (!open) continue;
+    const pathM = lines[i].match(redirectRe) || lines[i].match(teeRe);
+    if (!pathM) continue;
+    const filePath = pathM[1] || pathM[2] || pathM[3];
+    const delim = open[2];
+    const body: string[] = [];
+    let j = i + 1;
+    for (; j < lines.length && lines[j].trim() !== delim; j++) body.push(lines[j]);
+    if (j < lines.length) {
+      out.push({ file_path: filePath, content: body.join("\n") });
+      i = j; // skip past the heredoc body
+    }
+  }
+  return out;
+}
+
 async function extractDocsFromMessages(
   ctx: any,
   messages: DocExtractionMessage[],
@@ -201,50 +280,37 @@ async function extractDocsFromMessages(
     }
     if (msg.tool_calls) {
       for (const tc of msg.tool_calls) {
+        const ts = msg.timestamp || Date.now();
+
+        // Bash heredocs: capture markdown written via `cat > x.md <<EOF ... EOF`.
+        if (tc.name === "Bash") {
+          let input: any;
+          try { input = JSON.parse(tc.input); } catch { continue; }
+          const command: string = input.command || "";
+          if (!command.includes(".md") || !command.includes("<<")) continue;
+          for (const w of extractHeredocMarkdownWrites(command)) {
+            await upsertFileSyncDoc(ctx, conversation, conversation_id, w.file_path, w.content, ts);
+          }
+          continue;
+        }
+
         if (tc.name !== "Write" && tc.name !== "Edit") continue;
         let input: any;
         try { input = JSON.parse(tc.input); } catch { continue; }
         const filePath: string = input.file_path || "";
         if (!filePath.endsWith(".md")) continue;
 
+        if (tc.name === "Write") {
+          await upsertFileSyncDoc(ctx, conversation, conversation_id, filePath, input.content || "", ts);
+          continue;
+        }
+
+        // Edit: patch the existing doc by applying the same find/replace.
         const existing = await ctx.db
           .query("docs")
           .withIndex("by_source_file", (q: any) => q.eq("source_file", filePath))
           .first();
-
-        if (tc.name === "Write") {
-          const content: string = input.content || "";
-          if (content.length < 200) continue;
-          const fileName = filePath.split("/").pop() || filePath;
-          const docType = fileName.toLowerCase().includes("plan") ? "plan" as const
-            : fileName.toLowerCase().includes("design") ? "design" as const
-            : fileName.toLowerCase().includes("spec") ? "spec" as const
-            : classifyDocContent(content);
-          if (existing) {
-            await ctx.db.patch(existing._id, {
-              title: extractTitleFromContent(content),
-              content,
-              doc_type: docType,
-              updated_at: msg.timestamp || Date.now(),
-            });
-          } else {
-            await ctx.db.insert("docs", {
-              user_id: conversation.user_id,
-              team_id: conversation.team_id,
-              title: extractTitleFromContent(content),
-              content,
-              doc_type: docType,
-              source: "file_sync",
-              source_file: filePath,
-              conversation_id,
-              project_path: conversation.project_path,
-              is_private: conversation.is_private,
-              team_visibility: conversation.team_visibility,
-              created_at: msg.timestamp || Date.now(),
-              updated_at: msg.timestamp || Date.now(),
-            });
-          }
-        } else if (tc.name === "Edit" && existing) {
+        if (tc.name === "Edit" && existing) {
           const oldStr: string = input.old_string || "";
           const newStr: string = input.new_string || "";
           if (!oldStr || !existing.content?.includes(oldStr)) continue;
@@ -254,7 +320,7 @@ async function extractDocsFromMessages(
           await ctx.db.patch(existing._id, {
             title: extractTitleFromContent(updatedContent),
             content: updatedContent,
-            updated_at: msg.timestamp || Date.now(),
+            updated_at: ts,
           });
         }
       }
@@ -275,6 +341,10 @@ function hasDocExtractionCandidate(messages: DocExtractionMessage[]): boolean {
     if (msg.tool_calls) {
       for (const tc of msg.tool_calls) {
         if ((tc.name === "Write" || tc.name === "Edit") && typeof tc.input === "string" && tc.input.includes(".md")) {
+          return true;
+        }
+        // Bash heredoc writing a .md file (`cat > x.md <<EOF`).
+        if (tc.name === "Bash" && typeof tc.input === "string" && tc.input.includes(".md") && tc.input.includes("<<")) {
           return true;
         }
       }
