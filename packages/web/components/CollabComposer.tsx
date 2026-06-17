@@ -8,6 +8,7 @@ import { Send, GitFork, Loader2, Check, ShieldQuestion, Lock, Pencil } from "luc
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useInboxStore } from "../store/inboxStore";
+import { isConvexId } from "../lib/entityLinks";
 import type { ConversationData } from "./ConversationView";
 
 // ── Live composer co-presence ────────────────────────────────────────────────
@@ -148,7 +149,13 @@ export const CollabComposer = memo(function CollabComposer({
 }) {
   const { isAuthenticated } = useConvexAuth();
   const convId = conversation._id as Id<"conversations">;
-  const access = useQuery(api.collab.mySendAccess, { conversation_id: convId });
+  // Skip until the conversation is a real server row: a freshly-created
+  // optimistic stub is keyed by its session UUID, which the v.id("conversations")
+  // validator rejects (crashing the page). A stub has no grants to read anyway.
+  const access = useQuery(
+    api.collab.mySendAccess,
+    isConvexId(conversation._id.toString()) ? { conversation_id: convId } : "skip"
+  );
   const requestAccess = useMutation(api.collab.requestSendAccess);
   const sendToSession = useMutation(api.pendingMessages.sendSessionMessage);
 
@@ -328,7 +335,12 @@ export const CollabRequestBanner = memo(function CollabRequestBanner({
   conversationId: string;
 }) {
   const convId = conversationId as Id<"conversations">;
-  const requests = useQuery(api.collab.collabRequests, { conversation_id: convId });
+  // See CollabComposer: skip while the conversation is still an optimistic stub
+  // (session-UUID id) — its v.id("conversations") validator would otherwise throw.
+  const requests = useQuery(
+    api.collab.collabRequests,
+    isConvexId(conversationId) ? { conversation_id: convId } : "skip"
+  );
   const decide = useMutation(api.collab.decideSendAccess);
   const revoke = useMutation(api.collab.revokeSendAccess);
   const [busyId, setBusyId] = useState<string | null>(null);
