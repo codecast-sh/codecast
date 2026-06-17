@@ -85,7 +85,13 @@ export const submitSnapshot = mutation({
       parsed = null;
     }
     const md = parsed ? toMarkdown(parsed).trim() : "";
-    const docForGuard = await ctx.db.get(args.id as Id<"docs">);
+    // The sync id is a real `docs` row id only for the document editor. The chat
+    // composer reuses this same OT backend under a synthetic "compose:<convId>"
+    // id, which is not a docs id — normalizeId returns null for it, so we skip the
+    // docs-table coupling (content patch + mention notifications) entirely. Calling
+    // ctx.db.get with a non-id string would throw.
+    const docId = ctx.db.normalizeId("docs", args.id);
+    const docForGuard = docId ? await ctx.db.get(docId) : null;
     if (
       isRacyEmptySeed({
         version: args.version,
