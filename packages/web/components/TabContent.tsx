@@ -8,6 +8,10 @@ export const TabParamsCtx = createContext<{
   pathname: string;
   params: Record<string, string>;
   searchParams: URLSearchParams;
+  // Whether this is the currently-visible tab. Background tabs stay mounted
+  // (display:none) so their scroll/state survive — a pane uses this to freeze
+  // itself on its own route/params instead of following global view state.
+  isActive: boolean;
 } | null>(null);
 
 export function useTabContext() {
@@ -103,8 +107,9 @@ function TabPane({ tab, isActive }: { tab: AppTab; isActive: boolean }) {
       pathname,
       params: matched?.params ?? {},
       searchParams: new URLSearchParams(queryString ?? ""),
+      isActive,
     };
-  }, [tab.path, matched]);
+  }, [tab.path, matched, isActive]);
 
   // Sync browser URL when this tab is active
   useEffect(() => {
