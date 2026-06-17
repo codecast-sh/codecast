@@ -7,12 +7,14 @@
 //   </session-message>
 
 const SESSION_MESSAGE_RE = /<session-message\s+from="([^"]*)"[^>]*>([\s\S]*?)<\/session-message>/;
+const SESSION_MESSAGE_NAME_RE = /<session-message\s+from="[^"]*"\s+name="([^"]*)"/;
 
-export function parseSessionMessage(text: string): { from: string; body: string } | null {
+export function parseSessionMessage(text: string): { from: string; body: string; name?: string } | null {
   if (!text || typeof text !== "string") return null;
   const match = text.match(SESSION_MESSAGE_RE);
   if (!match) return null;
-  return { from: match[1].trim(), body: match[2].trim() };
+  const name = text.match(SESSION_MESSAGE_NAME_RE)?.[1]?.trim() || undefined;
+  return { from: match[1].trim(), body: match[2].trim(), name };
 }
 
 // Normalize the wrappers/control chars the daemon may prepend before the tag.
@@ -31,7 +33,7 @@ function stripInjectionNoise(text: string): string {
 // and rendering) and the sender/body are needed.
 export function parseInboundSessionMessage(
   rawContent: string | null | undefined,
-): { from: string; body: string } | null {
+): { from: string; body: string; name?: string } | null {
   if (!rawContent) return null;
   const cleaned = stripInjectionNoise(rawContent);
   if (!cleaned.startsWith("<session-message")) return null;
