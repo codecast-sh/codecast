@@ -191,6 +191,25 @@ export function LabelChipsRow({
     (s.activeBucketFilter && hiddenKeys.has(`label:${s.activeBucketFilter}`)) ||
     (s.activeProjectFilter && hiddenKeys.has(`project:${s.activeProjectFilter}`));
 
+  // The first chip that overflows the row's right edge. Unlike the rest of the
+  // hidden chips, this one stays PAINTED — clipped in place where it sits (flush
+  // after the last fully-visible chip) and dissolved into the +N pill by the
+  // row's right-edge mask. So the slack reads as "the list keeps going" — a faded
+  // half-label — instead of going blank. It's the first hidden label/project in
+  // render order (left→right); the inline create "+" never plays this role.
+  const peekKey = useMemo(() => {
+    const ordered: string[] = [];
+    for (const b of visibleBuckets) if (rowBucketIds.has(b._id)) ordered.push(`label:${b._id}`);
+    ordered.push("create");
+    for (const [name] of projectCounts) ordered.push(`project:${name}`);
+    const first = ordered.find((k) => hiddenKeys.has(k));
+    if (!first || first === "create") return null;
+    // The active filter, when hidden, is already pinned separately above — don't
+    // also render it as the faded peek.
+    if (first === `label:${s.activeBucketFilter}` || first === `project:${s.activeProjectFilter}`) return null;
+    return first;
+  }, [visibleBuckets, rowBucketIds, projectCounts, hiddenKeys, s.activeBucketFilter, s.activeProjectFilter]);
+
   // ── Row-level reorder dragover: insertion index from chip midpoints ──────
   const rowDragOver = useCallback((e: React.DragEvent) => {
     if (!e.dataTransfer.types.includes("codecast/label-id")) return;
@@ -335,7 +354,7 @@ export function LabelChipsRow({
         }}
         style={chipShift(index)}
         className={`group flex-shrink-0 px-2 py-0.5 rounded-full text-[10px] flex items-center gap-1 ${
-          hiddenKeys.has(key) ? "invisible pointer-events-none" : ""
+          hiddenKeys.has(key) && key !== peekKey ? "invisible pointer-events-none" : ""
         } ${draggingLabelId === bucket._id ? "opacity-30" : ""} ${
           dragOverBucketId === bucket._id
             ? `ring-1 ring-sol-cyan ${bc.bg} ${bc.text}`
@@ -372,6 +391,12 @@ export function LabelChipsRow({
       <div
         ref={rowRef}
         className="flex gap-1 overflow-hidden min-w-0 items-center"
+        // When a chip overflows, soften the row's right edge so that boundary
+        // chip dissolves into the +N pill instead of ending on a hard clip.
+        style={peekKey ? {
+          WebkitMaskImage: "linear-gradient(to right, #000 calc(100% - 28px), transparent 100%)",
+          maskImage: "linear-gradient(to right, #000 calc(100% - 28px), transparent 100%)",
+        } : undefined}
         onDragOver={rowDragOver}
         onDragLeave={rowDragLeave}
         onDrop={rowDrop}
@@ -418,7 +443,7 @@ export function LabelChipsRow({
               }}
               style={rowHint ? { transform: `translateX(${REORDER_GAP}px)`, transition: "transform 150ms ease" } : { transition: "transform 150ms ease" }}
               className={`flex-shrink-0 px-2 py-0.5 rounded-full text-[10px] flex items-center gap-1 ${
-                hiddenKeys.has(key) ? "invisible pointer-events-none" : ""
+                hiddenKeys.has(key) && key !== peekKey ? "invisible pointer-events-none" : ""
               } ${
                 active
                   ? `${pc.bg} ${pc.text} font-medium`
