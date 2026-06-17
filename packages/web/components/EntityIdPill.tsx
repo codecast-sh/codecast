@@ -232,6 +232,39 @@ function PlanHoverContent({ plan }: { plan: any }) {
   );
 }
 
+// A teammate's avatar for session references: the author's image, or a colored
+// initial circle as fallback. Rendered in the pill and hover header only when a
+// session isn't the current user's (webGet returns author_* for foreign rows).
+function AuthorAvatar({
+  name,
+  avatar,
+  size = 14,
+}: {
+  name?: string | null;
+  avatar?: string | null;
+  size?: number;
+}) {
+  const dim = { width: size, height: size };
+  if (avatar) {
+    return (
+      <img
+        src={avatar}
+        alt={name ?? "author"}
+        className="rounded-full object-cover ring-1 ring-sol-border/60"
+        style={dim}
+      />
+    );
+  }
+  return (
+    <span
+      className="inline-flex items-center justify-center rounded-full bg-sol-blue/20 text-sol-blue font-semibold leading-none ring-1 ring-sol-border/60"
+      style={{ ...dim, fontSize: Math.round(size * 0.55) }}
+    >
+      {(name?.charAt(0) || "?").toUpperCase()}
+    </span>
+  );
+}
+
 function abbrevModel(model?: string | null): string | null {
   if (!model) return null;
   if (model.includes("opus")) return "Opus";
@@ -284,6 +317,8 @@ function SessionHoverContent({ session }: { session: any }) {
   const model = abbrevModel(session.model);
   const projectName = session.project_path?.split("/").pop() ?? null;
   const timeAgo = relativeTime(session.updated_at);
+  // webGet returns author_* only when the session belongs to a teammate.
+  const isForeign = !!(session.author_name || session.author_avatar);
 
   const metaParts = [
     session.message_count != null ? `${session.message_count} msgs` : null,
@@ -295,7 +330,11 @@ function SessionHoverContent({ session }: { session: any }) {
     <div className="space-y-2">
       <div className="flex items-start gap-2">
         <div className="relative flex-shrink-0 mt-0.5">
-          <MessageSquare className="w-3.5 h-3.5 text-sol-blue" />
+          {isForeign ? (
+            <AuthorAvatar name={session.author_name} avatar={session.author_avatar} size={16} />
+          ) : (
+            <MessageSquare className="w-3.5 h-3.5 text-sol-blue" />
+          )}
           {isActive && (
             <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-sol-green border border-sol-bg" />
           )}
@@ -312,6 +351,12 @@ function SessionHoverContent({ session }: { session: any }) {
               <>
                 <span className="text-gray-600">·</span>
                 <span className="text-[10px] text-gray-400">{session.agent_type}</span>
+              </>
+            )}
+            {isForeign && session.author_name && (
+              <>
+                <span className="text-gray-600">·</span>
+                <span className="text-[10px] text-sol-text-muted truncate">{session.author_name}</span>
               </>
             )}
           </div>
@@ -606,7 +651,11 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp }: { shortId?
           className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-mono leading-[1.4] no-underline ${colors} border transition-colors cursor-pointer align-baseline`}
         >
           <span className="relative flex-shrink-0">
-            <Icon className="w-3 h-3" />
+            {isSession && (session?.author_name || session?.author_avatar) ? (
+              <AuthorAvatar name={session.author_name} avatar={session.author_avatar} size={14} />
+            ) : (
+              <Icon className="w-3 h-3" />
+            )}
             {isSession && status === "active" && (
               <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-sol-green" />
             )}
