@@ -125,3 +125,61 @@ describe("drainOutbox retention", () => {
     expect(entry.args).toEqual(["a"]);
   });
 });
+
+// A user-authored send must reach the server eventually — losing one silently
+// drops something the user typed. These pin the "never drop a sendMessage"
+// guarantee and the reconnect re-drive that lands a stranded send without
+// forcing a reload (root of the "pending message stuck forever" repro).
+describe("must-deliver retention (user sends never drop)", () => {
+  it("never gives up on a sendMessage entry, even past the boot cap", () => {
+    const d = outboxFailureDisposition(
+      seedEntry({ action: "sendMessage", attempts: MAX_OUTBOX_BOOT_ATTEMPTS + 3 }),
+    );
+    expect(d.keep).toBe(true);
+    expect(d.entry.attempts).toBe(MAX_OUTBOX_BOOT_ATTEMPTS + 4);
+  });
+
+  it("retains a sendMessage across far more failed boots than the cap", async () => {
+    const { wrapped, outbox } = makeHarness();
+    outbox.set("e1", seedEntry({ action: "sendMessage" }));
+
+    for (let boot = 0; boot < MAX_OUTBOX_BOOT_ATTEMPTS + 4; boot++) {
+      wrapped._setDispatch(() => Promise.reject(new Error("offline")));
+      await settle();
+    }
+
+    expect(outbox.has("e1")).toBe(true);
+    expect(outbox.get("e1")?.action).toBe("sendMessage");
+  });
+});
+
+describe("opportunistic re-drive (_drainOutbox)", () => {
+  it("delivers a stranded send on reconnect without a reload, counting no attempt", async () => {
+    const { wrapped, outbox } = makeHarness();
+    let online = false;
+    const delivered: string[] = [];
+    wrapped._setDispatch((actionName: string) => {
+      if (!online) return Promise.reject(new Error("offline"));
+      delivered.push(actionName);
+      return Promise.resolve("ok");
+    });
+    await settle();
+
+    // A send strands while the socket is down: parked in the outbox.
+    outbox.set("e1", seedEntry({ action: "sendMessage" }));
+
+    // An opportunistic tick while still offline keeps it AS-IS — no attempt
+    // counted, so reconnect churn can't erode a write's boot budget.
+    wrapped._drainOutbox();
+    await settle();
+    expect(outbox.has("e1")).toBe(true);
+    expect(outbox.get("e1")?.attempts ?? 0).toBe(0);
+
+    // Connectivity returns; the next tick lands it — no reload needed.
+    online = true;
+    wrapped._drainOutbox();
+    await settle();
+    expect(delivered).toEqual(["sendMessage"]);
+    expect(outbox.size).toBe(0);
+  });
+});
