@@ -11,6 +11,8 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useTrackedStore } from "../../store/inboxStore";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
+import { MarkdownRenderer } from "../../components/tools/MarkdownRenderer";
+import { copyToClipboard } from "../../lib/utils";
 import {
   SessionConstellation,
   hueFor,
@@ -26,6 +28,7 @@ import {
   CornerDownRight,
   Users,
   Sparkles,
+  Copy,
 } from "lucide-react";
 
 const api = _api as any;
@@ -529,7 +532,6 @@ function MessageCard({
 
   const body = link.body || "";
   const long = body.length > 320;
-  const shown = expanded || !long ? body : body.slice(0, 300).trimEnd() + "…";
 
   return (
     <div
@@ -564,8 +566,16 @@ function MessageCard({
             </span>
           </div>
         </div>
-        <div className="mt-1.5 text-[13px] leading-relaxed text-sol-text-secondary whitespace-pre-wrap break-words">
-          {shown}
+        <div className="mt-1.5 relative">
+          <div className={long && !expanded ? "max-h-28 overflow-hidden" : ""}>
+            <MarkdownRenderer
+              content={body}
+              className="text-[13px] !prose-sm text-sol-text-secondary break-words [&>*:first-child]:mt-0 [&>*:last-child]:mb-0"
+            />
+          </div>
+          {long && !expanded && (
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-sol-card to-transparent" />
+          )}
         </div>
         {long && (
           <button
@@ -580,6 +590,29 @@ function MessageCard({
   );
 }
 
+function CopyCommand({ command }: { command: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={async () => {
+        await copyToClipboard(command);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      }}
+      className="group flex items-center gap-2 w-full max-w-[280px] px-3 py-2 rounded-lg bg-sol-bg-alt border border-sol-border/30 hover:border-sol-border/60 transition-colors font-mono text-[12.5px] text-sol-text"
+      title="Copy command"
+    >
+      <span className="text-sol-text-dim select-none">$</span>
+      <span className="flex-1 text-left truncate">{command}</span>
+      {copied ? (
+        <Check className="w-3.5 h-3.5 text-sol-green flex-shrink-0" />
+      ) : (
+        <Copy className="w-3.5 h-3.5 text-sol-text-dim group-hover:text-sol-text flex-shrink-0" />
+      )}
+    </button>
+  );
+}
+
 function GraphEmpty({ loading }: { loading: boolean }) {
   return (
     <div className="absolute inset-0 flex items-center justify-center">
@@ -589,15 +622,20 @@ function GraphEmpty({ loading }: { loading: boolean }) {
           <span className="text-sm">Tuning in…</span>
         </div>
       ) : (
-        <div className="flex flex-col items-center gap-3 text-center max-w-xs px-6">
+        <div className="flex flex-col items-center gap-3 text-center max-w-sm px-6">
           <div className="w-14 h-14 rounded-2xl bg-sol-bg-alt flex items-center justify-center">
             <Radio className="w-7 h-7 text-sol-text-dim" />
           </div>
           <div className="text-sm font-medium text-sol-text">No crosstalk yet</div>
           <p className="text-[12.5px] text-sol-text-muted leading-relaxed">
-            When one session messages another with{" "}
-            <span className="font-mono text-sol-text-dim">cast send &lt;id&gt; "…"</span>, the
-            conversation lights up here.
+            Crosstalk lights up when your agents message each other. Install the
+            messaging snippet so every session learns the{" "}
+            <span className="font-mono text-sol-text-dim">cast send</span> command:
+          </p>
+          <CopyCommand command="cast messaging install" />
+          <p className="text-[11.5px] text-sol-text-dim leading-relaxed">
+            Then any session can run{" "}
+            <span className="font-mono">cast send &lt;id&gt; "…"</span> — and it shows up here.
           </p>
         </div>
       )}

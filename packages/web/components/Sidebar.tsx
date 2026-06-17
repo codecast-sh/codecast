@@ -328,7 +328,6 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const router = useRouter();
   const isInbox = pathname === "/conversation" || pathname?.startsWith("/conversation/") || pathname === "/inbox" || pathname?.startsWith("/inbox/");
   const isSessions = pathname?.startsWith("/sessions");
-  const isCrosstalk = pathname?.startsWith("/crosstalk");
   const isWindows = pathname?.startsWith("/windows");
   const isTeamActivity = pathname === "/team/activity" || pathname?.startsWith("/team/activity");
   const isTasks = pathname === "/tasks" || pathname?.startsWith("/tasks/");
@@ -648,23 +647,6 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
             </svg>
             {!isNarrow && <span>Sessions</span>}
-          </Link>
-          <Link
-            href="/crosstalk"
-            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none ${
-              isCrosstalk
-                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
-                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
-            }`}
-            title="Crosstalk — messages between sessions"
-          >
-            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
-              <circle cx="18" cy="5" r="2.5" />
-              <circle cx="6" cy="12" r="2.5" />
-              <circle cx="18" cy="19" r="2.5" />
-              <path strokeLinecap="round" d="M8.2 10.8l7.6-4.4M8.2 13.2l7.6 4.4" />
-            </svg>
-            {!isNarrow && <span>Crosstalk</span>}
           </Link>
           <Link
             href="/windows"
