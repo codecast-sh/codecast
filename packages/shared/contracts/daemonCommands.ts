@@ -42,6 +42,10 @@ export const DAEMON_COMMANDS = [
   // — the one-shot `/model <x>` and `/effort <x>` forms rewrite the user's
   // GLOBAL default in ~/.claude/settings.json. Old daemons: "Unknown command".
   "set_model",
+  // User clicked "Update now" on the in-app desktop-update banner: apply the
+  // published desktop release immediately (force quit + swap + relaunch), rather
+  // than waiting for the next app quit. Old daemons: "Unknown command".
+  "desktop_update",
 ] as const;
 
 export type DaemonCommand = (typeof DAEMON_COMMANDS)[number];

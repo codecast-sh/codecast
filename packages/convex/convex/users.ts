@@ -384,6 +384,25 @@ export const sendDaemonCommand = mutation({
   },
 });
 
+// "Update now" from the in-app desktop-update banner. Unlike sendDaemonCommand
+// (admin, targets any user), this lets a signed-in user apply the desktop update
+// to THEIR OWN daemon on demand — the daemon force-applies (quit + swap +
+// relaunch) so an always-open app updates without waiting for a manual quit.
+export const requestDesktopUpdate = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Not authenticated");
+    }
+    await ctx.db.insert("daemon_commands", {
+      user_id: userId,
+      command: "desktop_update",
+      created_at: Date.now(),
+    });
+  },
+});
+
 export const sendDaemonCommandToAll = mutation({
   args: {
     command: v.union(

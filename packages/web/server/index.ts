@@ -89,6 +89,13 @@ app.get("/download/mac", (c) =>
   c.redirect(`${MAC_DMG_URL}?v=${MAC_DMG_VERSION}`, 302)
 );
 
+// Latest published desktop version, same-origin so the in-app update banner can
+// compare it against the running app's version without a cross-origin fetch to
+// the R2 feed. Bumped with every desktop release (alongside MAC_DMG_URL).
+app.get("/api/desktop/latest", (c) =>
+  c.json({ version: MAC_DMG_VERSION })
+);
+
 app.get("/download/:binary", (c) => {
   const binary = c.req.param("binary");
   const url = BINARIES[binary];

@@ -2527,6 +2527,18 @@ async function executeRemoteCommand(
         error = killed.error;
         break;
       }
+      // "Update now" from the in-app banner: apply the published desktop release
+      // immediately (force quit + swap + relaunch) instead of waiting for the
+      // next app quit. Forced, so it stops a running app via SIGTERM/SIGKILL.
+      case "desktop_update": {
+        const applied = await checkForDesktopUpdate((msg) => log(msg), { force: true });
+        if (applied) {
+          result = "desktop_updated";
+        } else {
+          error = "no desktop update applied (already current, app not installed, or unavailable)";
+        }
+        break;
+      }
       // Swap the machine's active Claude Code account to a saved profile, then
       // recycle the listed blocked sessions so they resume on the new account.
       // Order matters: kill BEFORE enqueueing the continues — a still-alive

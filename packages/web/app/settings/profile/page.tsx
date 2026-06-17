@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
+import { isDesktop, getAppVersion, checkDesktopUpdate } from "../../../lib/desktop";
 import { Card } from "../../../components/ui/card";
 import { Input } from "../../../components/ui/input";
 import { Label } from "../../../components/ui/label";
@@ -87,6 +88,7 @@ export default function ProfilePage() {
             </div>
             <ModelBadgeToggle />
           </div>
+          <DesktopVersionRow />
           <DesktopLinksRow />
         </div>
       </Card>
@@ -209,6 +211,33 @@ export default function ProfilePage() {
       </Card>
 
       <PublicProfileSection user={user} />
+    </div>
+  );
+}
+
+// Shows the running desktop app's version + whether an update is waiting. The
+// "Update now" action lives in the global banner (DesktopProvider); here it's a
+// passive at-a-glance readout so you can always see what version you're on.
+function DesktopVersionRow() {
+  const [current, setCurrent] = useState<string | null>(null);
+  const [update, setUpdate] = useState<{ current: string; latest: string } | null>(null);
+  useEffect(() => {
+    if (!isDesktop()) return;
+    getAppVersion().then(setCurrent);
+    checkDesktopUpdate().then(setUpdate);
+  }, []);
+  if (!isDesktop() || !current) return null;
+  return (
+    <div className="flex items-center justify-between">
+      <div>
+        <span className="text-sol-base1">Desktop app</span>
+        <p className="text-xs text-sol-base01 mt-0.5">
+          {update ? `Version ${current} — v${update.latest} available` : `Version ${current} — up to date`}
+        </p>
+      </div>
+      {update && (
+        <span className="text-[11px] rounded-md bg-sol-cyan/15 text-sol-cyan px-2 py-0.5">Update available</span>
+      )}
     </div>
   );
 }

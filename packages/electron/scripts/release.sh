@@ -85,20 +85,13 @@ if [[ "$REMOTE" != "version: $NEW_VERSION" ]]; then
 fi
 echo "  Verified: $REMOTE"
 
-echo ""
-echo "[4/5] Forcing all clients to v$NEW_VERSION..."
-# Pin the server-side minimum desktop version so every daemon converges — even
-# clients that keep the app open (the routine updater defers to those forever).
-# Mirrors deploy.sh's `codecast force-update` for the CLI binary. Best-effort:
-# a release shouldn't unwind if this fails (re-run `cast desktop-force-update`).
-if codecast desktop-force-update "$NEW_VERSION"; then
-  echo "  Pinned min desktop version to $NEW_VERSION"
-else
-  echo "  WARN: could not set min desktop version — run 'cast desktop-force-update $NEW_VERSION' manually"
-fi
+# NOTE: releases do NOT force the fleet to update — clients are prompted in-app
+# (Update now / Later) and otherwise update on next quit. To push a specific
+# version to everyone (quit+relaunch even while open), run it deliberately:
+#   cast desktop-force-update <version>
 
 echo ""
-echo "[5/5] Updating web download URL and committing..."
+echo "[4/4] Updating web download URL and committing..."
 WEB_SERVER="$REPO_ROOT/packages/web/server/index.ts"
 sed -i '' "s|Codecast-${OLD_VERSION}-arm64.dmg|Codecast-${NEW_VERSION}-arm64.dmg|g" "$WEB_SERVER"
 sed -i '' "s|MAC_DMG_VERSION = \"${OLD_VERSION}\"|MAC_DMG_VERSION = \"${NEW_VERSION}\"|g" "$WEB_SERVER"
