@@ -26,6 +26,7 @@ import {
   buildPathRestampUpdate,
 } from "./privacy";
 import { batchScanConversations, paginateTeamFeed } from "./feedPagination";
+import { mergeUserMessageFeed, type FeedCandidate } from "./messageFeed";
 import { resolveLabelConvIds, matchBucketByName } from "./buckets";
 import { projectOverlaps } from "./projectPaths";
 import {
@@ -5200,139 +5201,105 @@ export const getMessageFeed = query({
     }
 
     const limit = args.limit ?? 30;
+    const cursor = args.cursor; // exclusive upper bound on message timestamp
 
-    // Cache for conversation access and info
-    const conversationCache = new Map<string, {
-      hasAccess: boolean;
-      title: string;
-      session_id: string;
-      author_name: string;
-      is_own: boolean;
-    } | null>();
+    // --- 1. Candidate conversations ---------------------------------------
+    // The feed is driven by the conversations the viewer can see, NOT by a
+    // global scan of every message in the system. "my" = the viewer's own
+    // conversations; "team" = those plus teammates' team-visible ones. This
+    // keeps cost proportional to the viewer's own data. The old query walked
+    // the global by_timestamp index in batches of 200 full docs and discarded
+    // everything the viewer couldn't see — catastrophic for "my" (where the
+    // viewer's messages are sparse among everyone's) and it blew the 100MB
+    // read-byte cap, because each message doc carries its tool_results blobs
+    // and a 1024-float embedding.
+    const CONV_CAP = 500; // viewer's own conversations considered
+    const TEAM_MEMBER_CONV_CAP = 50; // recent conversations per teammate
 
-    const checkConversationAccess = async (convId: Id<"conversations">) => {
-      const cached = conversationCache.get(convId);
-      if (cached !== undefined) return cached;
+    type ConvDoc = NonNullable<Awaited<ReturnType<typeof ctx.db.get<"conversations">>>>;
+    const candidates = new Map<
+      string,
+      { conv: ConvDoc; isOwn: boolean; authorName: string }
+    >();
 
-      const conv = await ctx.db.get(convId);
-      if (!conv) {
-        conversationCache.set(convId, null);
-        return null;
-      }
+    const ownAuthor = user.name || user.email?.split("@")[0] || "Unknown";
+    const ownConvs = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_updated", (q) => q.eq("user_id", userId))
+      .order("desc")
+      .take(CONV_CAP);
+    for (const conv of ownConvs) {
+      candidates.set(conv._id.toString(), { conv, isOwn: true, authorName: ownAuthor });
+    }
 
-      const isOwn = conv.user_id.toString() === userId.toString();
-      let hasAccess = false;
+    if (args.filter === "team") {
+      const memberships = await ctx.db
+        .query("team_memberships")
+        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+        .collect();
+      const fetchedMembers = new Set<string>([userId.toString()]);
+      for (const membership of memberships) {
+        const ff = await createTeamFeedFilter(ctx, membership.team_id);
+        for (const member of ff.memberships) {
+          const memberId = member.user_id.toString();
+          if (fetchedMembers.has(memberId)) continue;
+          if ((member.visibility || "summary") === "hidden") continue;
+          fetchedMembers.add(memberId);
 
-      if (args.filter === "my") {
-        hasAccess = isOwn;
-      } else {
-        hasAccess = await canTeamMemberAccess(ctx, userId, conv);
-      }
-
-      if (!hasAccess) {
-        conversationCache.set(convId, null);
-        return null;
-      }
-
-      const convUser = await ctx.db.get(conv.user_id);
-      const info = {
-        hasAccess: true,
-        title: conv.title || (conv.slug ? formatSlugAsTitle(conv.slug) : "New Session"),
-        session_id: conv.session_id,
-        author_name: convUser?.name || convUser?.email?.split("@")[0] || "Unknown",
-        is_own: isOwn,
-      };
-      conversationCache.set(convId, info);
-      return info;
-    };
-
-    // Filter messages by access and content - fetch in batches if needed
-    const filteredMessages: Array<{
-      _id: string;
-      conversation_id: string;
-      role: string;
-      content: string | undefined;
-      timestamp: number;
-      has_tool_calls: boolean;
-      has_tool_results: boolean;
-      convInfo: NonNullable<Awaited<ReturnType<typeof checkConversationAccess>>>;
-    }> = [];
-
-    let currentCursor = args.cursor;
-    let attempts = 0;
-    const maxAttempts = 10; // Limit iterations to avoid timeout
-
-    while (filteredMessages.length < limit + 1 && attempts < maxAttempts) {
-      attempts++;
-
-      // Query messages using timestamp index
-      let msgQuery = ctx.db
-        .query("messages")
-        .withIndex("by_timestamp");
-
-      if (currentCursor !== undefined) {
-        const cursor = currentCursor;
-        msgQuery = msgQuery.filter((q) => q.lt(q.field("timestamp"), cursor));
-      }
-
-      const rawMessages = await msgQuery.order("desc").take(200);
-
-      if (rawMessages.length === 0) break; // No more messages
-
-      for (const msg of rawMessages) {
-        if (filteredMessages.length >= limit + 1) break;
-
-        // Only user/assistant messages
-        if (msg.role !== "user" && msg.role !== "assistant") continue;
-
-        // Skip messages with no meaningful content
-        const hasContent = msg.content && msg.content.trim().length > 10;
-        if (!hasContent) continue;
-
-        const convInfo = await checkConversationAccess(msg.conversation_id);
-        if (!convInfo) continue;
-
-        filteredMessages.push({
-          _id: msg._id,
-          conversation_id: msg.conversation_id,
-          role: msg.role,
-          content: msg.content,
-          timestamp: msg.timestamp,
-          has_tool_calls: (msg.tool_calls && msg.tool_calls.length > 0) || false,
-          has_tool_results: (msg.tool_results && msg.tool_results.length > 0) || false,
-          convInfo,
-        });
-      }
-
-      // Update cursor for next batch
-      if (rawMessages.length > 0) {
-        currentCursor = rawMessages[rawMessages.length - 1].timestamp;
+          const memberUser = await ctx.db.get(member.user_id);
+          const memberAuthor =
+            memberUser?.name || memberUser?.email?.split("@")[0] || "Unknown";
+          const memberConvs = await ctx.db
+            .query("conversations")
+            .withIndex("by_user_updated", (q) => q.eq("user_id", member.user_id))
+            .order("desc")
+            .take(TEAM_MEMBER_CONV_CAP);
+          for (const conv of memberConvs) {
+            if (candidates.has(conv._id.toString())) continue;
+            if (!ff.isVisible(conv as any)) continue;
+            candidates.set(conv._id.toString(), {
+              conv,
+              isOwn: false,
+              authorName: memberAuthor,
+            });
+          }
+        }
       }
     }
 
-    const hasMore = filteredMessages.length > limit;
-    const finalMessages = hasMore ? filteredMessages.slice(0, limit) : filteredMessages;
+    // --- 2. Merge user-role messages across conversations -----------------
+    // Only user-role messages are ever rendered in the feed (the client drops
+    // every other role), so we read just those via by_conversation_role_timestamp
+    // — never touching the large assistant/tool docs the old query paid to read
+    // and throw away. The merge + early-exit lives in messageFeed.ts so it can be
+    // unit-tested; here we just supply the candidates and an index-backed fetcher.
+    const feedCandidates: FeedCandidate[] = [...candidates.values()].map(
+      ({ conv, isOwn, authorName }) => ({
+        conversation_id: conv._id,
+        updated_at: conv.updated_at,
+        title: conv.title || (conv.slug ? formatSlugAsTitle(conv.slug) : "New Session"),
+        session_id: conv.session_id,
+        isOwn,
+        authorName,
+      })
+    );
 
-    const messagesWithConversation = finalMessages.map((msg) => ({
-      _id: msg._id,
-      conversation_id: msg.conversation_id,
-      role: msg.role,
-      content: msg.content,
-      timestamp: msg.timestamp,
-      has_tool_calls: msg.has_tool_calls,
-      has_tool_results: msg.has_tool_results,
-      conversation_title: msg.convInfo.title,
-      conversation_session_id: msg.convInfo.session_id,
-      author_name: msg.convInfo.author_name,
-      is_own: msg.convInfo.is_own,
-    }));
-
-    const nextCursor = hasMore ? finalMessages[finalMessages.length - 1].timestamp : null;
-
-    return {
-      messages: messagesWithConversation,
-      nextCursor,
-    };
+    return await mergeUserMessageFeed({
+      candidates: feedCandidates,
+      cursor,
+      limit,
+      fetchUserMessages: (conversationId, cur, take) =>
+        ctx.db
+          .query("messages")
+          .withIndex("by_conversation_role_timestamp", (q) => {
+            const base = q
+              .eq("conversation_id", conversationId as Id<"conversations">)
+              .eq("role", "user");
+            return cur !== undefined ? base.lt("timestamp", cur) : base;
+          })
+          .order("desc")
+          .take(take),
+    });
   },
 });
 

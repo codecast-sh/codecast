@@ -62,6 +62,7 @@ import type * as lib_access from "../lib/access.js";
 import type * as lib_auth from "../lib/auth.js";
 import type * as lib_docSnapshot from "../lib/docSnapshot.js";
 import type * as managedSessions from "../managedSessions.js";
+import type * as messageFeed from "../messageFeed.js";
 import type * as messages from "../messages.js";
 import type * as migrations from "../migrations.js";
 import type * as notificationRouter from "../notificationRouter.js";
@@ -158,6 +159,7 @@ declare const fullApi: ApiFromModules<{
   "lib/auth": typeof lib_auth;
   "lib/docSnapshot": typeof lib_docSnapshot;
   managedSessions: typeof managedSessions;
+  messageFeed: typeof messageFeed;
   messages: typeof messages;
   migrations: typeof migrations;
   notificationRouter: typeof notificationRouter;
