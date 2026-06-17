@@ -23,6 +23,15 @@ describe("isConvexId", () => {
     expect(isConvexId("MH73XEDD7EP2NMR082MQNXTS2X86KZFY")).toBe(false); // uppercase
     expect(isConvexId("mh73xedd7ep2nmr082mqnxts2x86kzf")).toBe(false); // 31 chars
   });
+
+  test("rejects a session UUID (optimistic-stub conversation id)", () => {
+    // A freshly-created conversation renders from an optimistic stub keyed by its
+    // session UUID until the server row syncs back. The collab queries validate
+    // v.id("conversations"), so the CollabComposer/CollabRequestBanner guards on
+    // isConvexId to skip while the id is still this UUID — otherwise the dashed
+    // value crashes the whole Conversation view at arg validation.
+    expect(isConvexId("3bb57a15-7619-4189-8349-b319813e224b")).toBe(false);
+  });
 });
 
 describe("parseEntityUrl", () => {
