@@ -4718,6 +4718,14 @@ export const useInboxStore = create<InboxStoreState>(
   }),
 
   selectPanelSession: action(function (this: Draft, sessionId: string | null) {
+    // Clicking the session that's already open in the right panel exits it — the
+    // same click that peeks a session beside the page dismisses it on a repeat.
+    // Mirrors the panel's close button (which calls selectPanelSession(null));
+    // we leave sidePanelOpen alone so the session-list rail stays as it was.
+    if (sessionId && sessionId === this.sidePanelSessionId) {
+      this.sidePanelSessionId = null;
+      return;
+    }
     // The side panel is a genuine way of viewing a session (used by the Tab
     // switcher off the inbox page), so record it. Its "previous" is the panel's
     // own session, not the main currentSessionId.
