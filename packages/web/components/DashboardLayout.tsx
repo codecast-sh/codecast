@@ -224,6 +224,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   const isOnDocsPage = pathname === "/docs" || (pathname?.startsWith("/docs/") ?? false);
   const isOnProjectsPage = pathname === "/projects" || (pathname?.startsWith("/projects/") ?? false);
   const isOnWindowsPage = pathname === "/windows";
+  const isOnCrosstalkPage = pathname === "/crosstalk";
   // Settings is a modal-like surface, not a working surface — selecting a session
   // there means "I'm done configuring, take me to it", not "peek beside". Keyed off
   // the real router URL because `pathname` lies here (returns the carried tab route).
@@ -231,7 +232,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // isFullWidthRoute folds in the self-contained full-bleed pages (sessions,
   // admin) so the non-tab path matches the tab shell; the inbox check stays
   // explicit because it is source-aware, not just path-based.
-  const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnRoutinesPage || isOnSchedulesPage || isOnPlansPage || isOnDocsPage || isOnProjectsPage || isOnWindowsPage || isFullWidthRoute(pathname ?? "");
+  const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnRoutinesPage || isOnSchedulesPage || isOnPlansPage || isOnDocsPage || isOnProjectsPage || isOnWindowsPage || isOnCrosstalkPage || isFullWidthRoute(pathname ?? "");
 
 
   const showCollapsedRail = !s.sidePanelOpen && !isMobile;

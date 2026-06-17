@@ -23,6 +23,7 @@ export function pathLabel(path: string): string {
     "/projects": "Projects",
     "/inbox": "Inbox",
     "/feed": "Feed",
+    "/crosstalk": "Crosstalk",
     "/settings": "Settings",
     "/team/activity": "Activity",
   };
