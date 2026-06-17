@@ -1135,16 +1135,28 @@ export function visualOrderSessions(
     // mirroring the project filter. bucketByConv comes from convBucketMap().
     bucketFilter?: string | null;
     bucketByConv?: Record<string, string | undefined>;
+    // Grouped-view collapse: when provided, sessions inside a collapsed status
+    // section or orchestration group are skipped, so Ctrl+J/K only walks cards
+    // the panel is actually rendering. Keys mirror GlobalSessionPanel's
+    // renderSection keys ("pinned"/"new"/"needs_input"/"working", "grp:<label>").
+    collapsedSections?: Record<string, boolean>;
   } = {},
 ): InboxSession[] {
   const { pinned, newSessions, needsInput, working, orchestrationGroups } =
     categorizeSessions(sessions, sessionsWithQueuedMessages, pendingSendIds, opts);
+  const collapsed = opts.collapsedSections;
   const result: InboxSession[] = [];
   // Orchestration-grouped workers are held out of the flat buckets for the
   // grouped inbox view; append them here so flat-list consumers (keyboard nav,
   // the /sessions list) still see every session.
-  const sections = [pinned, newSessions, needsInput, working, ...Array.from(orchestrationGroups.values())];
-  for (const section of sections) {
+  const sections: Array<[InboxSession[], string]> = [
+    [pinned, "pinned"], [newSessions, "new"], [needsInput, "needs_input"], [working, "working"],
+    ...Array.from(orchestrationGroups.entries()).map(
+      ([label, items]) => [items, `grp:${label}`] as [InboxSession[], string],
+    ),
+  ];
+  for (const [section, key] of sections) {
+    if (collapsed?.[key]) continue;
     for (const s of section) {
       if (projectFilter && getProjectName(s.git_root, s.project_path) !== projectFilter) continue;
       if (opts.bucketFilter && opts.bucketByConv?.[s._id] !== opts.bucketFilter) continue;
@@ -1467,6 +1479,7 @@ export function computeVisualOrder(state: {
   favorites?: any[];
   liveInboxIds: Set<string>;
   recentFreezeOrder?: string[] | null;
+  collapsedSections?: Record<string, boolean>;
   clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; inbox_manual_order?: Record<string, number>; show_subagents?: boolean; show_old_sessions?: boolean } };
 }): InboxSession[] {
   // Favorites view walks its own project-grouped order so Ctrl+J/K moves through
@@ -1476,6 +1489,7 @@ export function computeVisualOrder(state: {
   }
   const bucketByConv = convBucketMap(state.bucketAssignments);
   const mode = resolveInboxViewMode(state.clientState.ui);
+  const collapsed = state.collapsedSections ?? {};
   // Hide "old" sessions before building ANY mode's order, exactly as the panel
   // does (partitionOldSessions over the same liveInboxIds / show_old flag), so
   // nav can never walk a row the render dropped. With "show old sessions" off a
@@ -1491,6 +1505,10 @@ export function computeVisualOrder(state: {
     focusedId,
   );
   if (mode === "time" || mode === "recent") {
+    // The flat views render under a single collapsible "All" section; collapsing
+    // it hides every card, so nav must walk nothing (else it lands on a hidden
+    // row and the panel's auto-reveal effect force-expands the section).
+    if (collapsed["all"]) return [];
     // Mirror the panel's flatList exactly (categorize the visible set, share
     // flatViewSessions) so nav walks every rendered row, blanks included.
     const { sorted, subsByParent } = categorizeSessions(
@@ -1511,15 +1529,15 @@ export function computeVisualOrder(state: {
   // Grouped/bucket: the categorized status buckets over the SAME visible set, so
   // old sessions hidden from the render are skipped by nav too. The bucket branch
   // below splits pinned out and regroups the rest by label/project.
-  const base = visualOrderSessions(visibleSessions, state.sessionsWithQueuedMessages, state.activeProjectFilter, sessionsWithPendingSend(state.pendingMessages), { currentSessionId: state.currentSessionId, pendingCreateIds: new Set(Object.keys(state.pendingSessionCreates)), bucketFilter: state.activeBucketFilter, bucketByConv });
+  const base = visualOrderSessions(visibleSessions, state.sessionsWithQueuedMessages, state.activeProjectFilter, sessionsWithPendingSend(state.pendingMessages), { currentSessionId: state.currentSessionId, pendingCreateIds: new Set(Object.keys(state.pendingSessionCreates)), bucketFilter: state.activeBucketFilter, bucketByConv, collapsedSections: mode === "grouped" ? collapsed : undefined });
   if (mode === "bucket") {
-    const pinned = base.filter((s) => s.is_pinned);
+    const pinned = collapsed["pinned"] ? [] : base.filter((s) => s.is_pinned);
     const rest = base.filter((s) => !s.is_pinned);
     const { labelGroups, projectGroups } = groupSessionsForLabelView(rest, state.buckets, bucketByConv);
     return [
       ...pinned,
-      ...labelGroups.flatMap((g) => g.items),
-      ...projectGroups.flatMap((g) => g.items),
+      ...labelGroups.flatMap((g) => (collapsed[`bucket_${g.bucket._id}`] ? [] : g.items)),
+      ...projectGroups.flatMap((g) => (collapsed[`bucketproj_${g.name}`] ? [] : g.items)),
     ];
   }
   return base;
