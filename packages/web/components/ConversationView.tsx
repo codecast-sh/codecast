@@ -138,11 +138,21 @@ import type { MentionItem } from "./editor/MentionList";
 import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench } from "lucide-react";
 import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES, labelMentionItems } from "../hooks/useMentionQuery";
+import { pendingBannerState, isActiveAgentStatus, type LiveAgentStatus } from "../lib/pendingBanner";
 
 // How long a sent message may sit in the optimistic/pending state before the
-// message row surfaces its "Retry — kill & restart" affordance. Normal
-// delivery confirms in a few seconds; anything past this is stuck.
+// message row surfaces a status hint. Normal delivery confirms in a few seconds.
+// Past this we show "queued · agent busy" while the agent is actively working
+// (the daemon defers injection until the turn ends — the message WILL land), and
+// only escalate to "hasn't reached / kill & restart" when the agent is idle.
 const PENDING_RETRY_AFTER_MS = 20_000;
+
+// Extra grace after the agent flips busy→idle before the kill & restart
+// escalation may appear: the daemon injects deferred messages within its next
+// poll once the turn ends, so a message that's been pending behind a long turn
+// shouldn't flash "hasn't reached the agent" the instant the agent goes idle.
+const PENDING_IDLE_GRACE_MS = 8_000;
+
 
 // Live label for a kill+restart in flight, derived from the daemon command
 // rows (conversations.getRestartProgress — the daemon stamps executed_at +
@@ -5328,7 +5338,7 @@ function TeammateMessageCard({ teammateId, color, summary, content }: { teammate
   );
 }
 
-function UserPromptImpl({ content, timestamp, messageId, conversationId, collapsed, userName, avatarUrl, onOpenComments, isHighlighted, shareSelectionMode, isSelectedForShare, onToggleShareSelection, onStartShareSelection, onForkFromMessage, forkChildren, messageUuid, images, onBranchSwitch, activeBranchId, loadingBranchId, isPending, isQueued, mainMessageCount, mainDivergentPreview }: { content: string; timestamp: number; messageId: string; conversationId?: Id<"conversations">; collapsed?: boolean; userName?: string; avatarUrl?: string | null; onOpenComments?: (messageId: string) => void; isHighlighted?: boolean; shareSelectionMode?: boolean; isSelectedForShare?: boolean; onToggleShareSelection?: (messageId: string) => void; onStartShareSelection?: (messageId: string) => void; onForkFromMessage?: (messageUuid: string) => void; forkChildren?: ForkChild[]; messageUuid?: string; images?: ImageData[]; onBranchSwitch?: (messageUuid: string, convId: string | null) => void; activeBranchId?: string | null; loadingBranchId?: string | null; isPending?: boolean; isQueued?: boolean; mainMessageCount?: number; mainDivergentPreview?: string }) {
+function UserPromptImpl({ content, timestamp, messageId, conversationId, collapsed, userName, avatarUrl, onOpenComments, isHighlighted, shareSelectionMode, isSelectedForShare, onToggleShareSelection, onStartShareSelection, onForkFromMessage, forkChildren, messageUuid, images, onBranchSwitch, activeBranchId, loadingBranchId, isPending, isQueued, agentStatus, mainMessageCount, mainDivergentPreview }: { content: string; timestamp: number; messageId: string; conversationId?: Id<"conversations">; collapsed?: boolean; userName?: string; avatarUrl?: string | null; onOpenComments?: (messageId: string) => void; isHighlighted?: boolean; shareSelectionMode?: boolean; isSelectedForShare?: boolean; onToggleShareSelection?: (messageId: string) => void; onStartShareSelection?: (messageId: string) => void; onForkFromMessage?: (messageUuid: string) => void; forkChildren?: ForkChild[]; messageUuid?: string; images?: ImageData[]; onBranchSwitch?: (messageUuid: string, convId: string | null) => void; activeBranchId?: string | null; loadingBranchId?: string | null; isPending?: boolean; isQueued?: boolean; agentStatus?: LiveAgentStatus; mainMessageCount?: number; mainDivergentPreview?: string }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
   const [isTruncated, setIsTruncated] = useState(false);
@@ -5390,6 +5400,25 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
     const t = setTimeout(() => setRetryVisible(true), remaining);
     return () => clearTimeout(t);
   }, [isPending, conversationId, timestamp]);
+  // The agent being alive and processing proves a queued message will be delivered
+  // when the current turn ends — the daemon defers injection until the pane is idle
+  // (ensureTmuxReady), so a long thinking turn legitimately holds the message. Don't
+  // offer "kill & restart" there: it would interrupt and discard live work.
+  const agentActive = isActiveAgentStatus(agentStatus);
+  // Short grace after the agent flips busy→idle before escalating: the daemon
+  // injects the deferred message within its next poll, so we avoid a false
+  // "hasn't reached the agent" flash in the gap between idle and that inject.
+  const [idleGraceElapsed, setIdleGraceElapsed] = useState(false);
+  useWatchEffect(() => {
+    if (!isPending || agentActive) { setIdleGraceElapsed(false); return; }
+    const t = setTimeout(() => setIdleGraceElapsed(true), PENDING_IDLE_GRACE_MS);
+    return () => clearTimeout(t);
+  }, [isPending, agentActive]);
+  const bannerState = pendingBannerState(agentStatus, {
+    retryEligible: retryVisible,
+    restartInFlight: !!retryClickedAt,
+    idleGraceElapsed,
+  });
   // Live restart progress, scoped to THIS click: getRestartProgress returns the
   // last few kill/resume commands for the conversation, which can include rows
   // from an earlier restart — filter to ones stamped at/after the click (10s
@@ -5653,7 +5682,16 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
         />
       )}
 
-      {isPending && retryVisible && (
+      {/* Agent is alive and mid-turn: the message is queued and WILL deliver when
+          the turn ends. Reassure calmly instead of alarming + offering a restart
+          that would interrupt live work. Suppressed once a restart is in flight. */}
+      {isPending && bannerState === "queued" && (
+        <div className="flex items-center gap-2 mt-2 pl-8 text-xs text-sol-text-muted" data-testid="pending-message-queued">
+          <span className="w-1.5 h-1.5 rounded-full bg-amber-400/70 animate-pulse flex-shrink-0" />
+          <span>Queued — will send when the agent finishes its turn</span>
+        </div>
+      )}
+      {isPending && bannerState === "stuck" && (
         <div className="flex items-center flex-wrap gap-2 mt-2 pl-8" data-testid="pending-message-retry">
           {!retryStage && (
             <span className="text-xs text-sol-orange/90">
@@ -11990,7 +12028,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         case 'normal': {
           if (!msg.content?.trim() && !msg.images?.some(img => !img.tool_use_id)) return null;
           const userName = conversation?.user?.name || conversation?.user?.email?.split("@")[0];
-          return <UserPrompt key={msg._id} content={msg.content || ""} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={false} userName={userName} avatarUrl={conversation?.user?.avatar_url} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={handleToggleMessageSelection} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={handleBranchSwitch} activeBranchId={activeBranchId} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} mainMessageCount={msg.message_uuid ? conversation?.main_message_counts_by_fork?.[msg.message_uuid] : undefined} mainDivergentPreview={msg.message_uuid ? conversation?.main_divergent_previews_by_fork?.[msg.message_uuid] : undefined} />;
+          return <UserPrompt key={msg._id} content={msg.content || ""} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={false} userName={userName} avatarUrl={conversation?.user?.avatar_url} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={handleToggleMessageSelection} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={handleBranchSwitch} activeBranchId={activeBranchId} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} agentStatus={isSessionDisconnected || conversation?.status !== "active" ? undefined : (managedSession?.agent_status as LiveAgentStatus | undefined)} mainMessageCount={msg.message_uuid ? conversation?.main_message_counts_by_fork?.[msg.message_uuid] : undefined} mainDivergentPreview={msg.message_uuid ? conversation?.main_divergent_previews_by_fork?.[msg.message_uuid] : undefined} />;
         }
       }
     }
