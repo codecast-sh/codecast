@@ -396,6 +396,9 @@ export const updatePresence = mutation({
     doc_id: v.string(),
     cursor_pos: v.optional(v.number()),
     anchor_pos: v.optional(v.number()),
+    // Composer co-presence only: the sender's live draft, capped so a long message
+    // doesn't bloat the row. Omitted by the document editor.
+    draft_text: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx);
@@ -407,10 +410,12 @@ export const updatePresence = mutation({
       .first();
     const name = user.name || user.email || "Anonymous";
     const color = PRESENCE_COLORS[name.charCodeAt(0) % PRESENCE_COLORS.length];
+    const draft = args.draft_text === undefined ? undefined : args.draft_text.slice(0, 2000);
     if (existing) {
       await ctx.db.patch(existing._id, {
         cursor_pos: args.cursor_pos,
         anchor_pos: args.anchor_pos,
+        draft_text: draft,
         user_name: name,
         user_color: color,
         updated_at: Date.now(),
@@ -423,6 +428,7 @@ export const updatePresence = mutation({
         user_color: color,
         cursor_pos: args.cursor_pos,
         anchor_pos: args.anchor_pos,
+        draft_text: draft,
         updated_at: Date.now(),
       });
     }
@@ -449,6 +455,7 @@ export const getPresence = query({
     user_color: v.string(),
     cursor_pos: v.optional(v.number()),
     anchor_pos: v.optional(v.number()),
+    draft_text: v.optional(v.string()),
     updated_at: v.number(),
   })),
   handler: async (ctx, args) => {
@@ -466,6 +473,7 @@ export const getPresence = query({
         user_color: p.user_color,
         cursor_pos: p.cursor_pos,
         anchor_pos: p.anchor_pos,
+        draft_text: p.draft_text,
         updated_at: p.updated_at,
       }));
   },
