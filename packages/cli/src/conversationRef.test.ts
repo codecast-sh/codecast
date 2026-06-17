@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseConversationRef } from "./conversationRef.js";
+import { parseConversationRef, buildConversationUrl } from "./conversationRef.js";
 
 const CONV = "jx7e3hbj5n0a5xkcnz1s5bmrmd88ecjs";
 const MSG = "k179h3pn6qjgwwzwa927r94kah88ev1e";
@@ -53,5 +53,32 @@ describe("parseConversationRef", () => {
 
   test("empty input is handled gracefully", () => {
     expect(parseConversationRef("")).toEqual({ conversationId: "", messageId: undefined });
+  });
+});
+
+describe("buildConversationUrl", () => {
+  test("conversation id without an anchor", () => {
+    expect(buildConversationUrl({ conversationId: CONV })).toBe(
+      `https://codecast.sh/conversation/${CONV}`,
+    );
+  });
+
+  test("conversation id with a message anchor", () => {
+    expect(buildConversationUrl({ conversationId: CONV, messageId: MSG })).toBe(
+      `https://codecast.sh/conversation/${CONV}#msg-${MSG}`,
+    );
+  });
+
+  test("custom base host, trailing slash trimmed", () => {
+    expect(buildConversationUrl({ conversationId: CONV, messageId: MSG }, "http://localhost:3000/")).toBe(
+      `http://localhost:3000/conversation/${CONV}#msg-${MSG}`,
+    );
+  });
+
+  test("round-trips with parseConversationRef", () => {
+    const ref = { conversationId: CONV, messageId: MSG };
+    expect(parseConversationRef(buildConversationUrl(ref))).toEqual(ref);
+    const noAnchor = { conversationId: CONV, messageId: undefined };
+    expect(parseConversationRef(buildConversationUrl(noAnchor))).toEqual(noAnchor);
   });
 });
