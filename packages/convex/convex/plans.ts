@@ -1448,10 +1448,12 @@ export const webMentionList = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) return { items: [] };
 
-    // Bound the response below Convex's 8192-array limit. See tasks.webMentionList
-    // for the rationale — same shape, same fallback to mentionSearch for stale items.
-    const MAX_TOTAL = 4000;
-    const MAX_PER_TEAM = 1500;
+    // Bound the scan to a small recent slice — the client only renders the
+    // top-6-per-type "recents" (see useMentionQuery); completeness comes from
+    // `mentionSearch`. `.take()` loads whole rows, so large caps risk the 64 MB
+    // isolate cap (see docs.webMentionList for the full rationale).
+    const MAX_TOTAL = 50;
+    const MAX_PER_TEAM = 25;
     const seen = new Set<string>();
     const plans: any[] = [];
     const pushUnique = (p: any) => {

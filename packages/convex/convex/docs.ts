@@ -1341,10 +1341,17 @@ export const webMentionList = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) return { items: [] };
 
-    // Bound the response below Convex's 8192-array limit. See tasks.webMentionList
-    // for the rationale — same shape, same fallback to mentionSearch for stale items.
-    const MAX_TOTAL = 4000;
-    const MAX_PER_TEAM = 1500;
+    // Bound the scan to a small recent slice. The client only renders the
+    // top-6-per-type "recents" (see useMentionQuery); anything beyond that is
+    // served by `mentionSearch`. The old 4000/1500 caps were chosen for the
+    // 8192-array return limit, but the real failure mode is MEMORY: `.take()`
+    // materializes whole `docs` rows — including the heavy `content` body,
+    // the ~8KB `embedding`, and the unbounded `entries[]` timeline (Convex has
+    // no field projection) — so thousands of rows blow the 64 MB isolate cap
+    // and crash the whole app. A small cap keeps the scan well under it while
+    // still giving the client plenty of recent candidates.
+    const MAX_TOTAL = 50;
+    const MAX_PER_TEAM = 25;
     const seen = new Set<string>();
     const docs: any[] = [];
     const pushUnique = (d: any) => {
