@@ -171,7 +171,7 @@ function rmrf(p: string): void {
  */
 export async function checkForDesktopUpdate(
   log: Logger,
-  opts: { force?: boolean } = {},
+  opts: { force?: boolean; minVersion?: string | null } = {},
 ): Promise<boolean> {
   const force = opts.force === true;
   // Only meaningful for a packaged daemon on macOS with the app installed.
@@ -184,6 +184,16 @@ export async function checkForDesktopUpdate(
   try {
     const installed = plistVersion(APP_PLIST);
     if (!installed) return false;
+
+    // Server-pinned floor: when the installed app is below min_desktop_version,
+    // apply even while the app is running (quit + swap + relaunch) so an
+    // always-open client converges — the routine path only swaps when closed.
+    // A manual `--force` does the same. Unlike `--force`, the min-version path
+    // still respects the per-version retry throttle, so a persistently failing
+    // apply can't quit-and-relaunch the app every cycle.
+    const belowMin =
+      !!opts.minVersion && compareVersions(installed, opts.minVersion) < 0;
+    const applyWhileRunning = force || belowMin;
 
     const res = await fetch(DESKTOP_FEED);
     if (!res.ok) return false;
@@ -206,8 +216,9 @@ export async function checkForDesktopUpdate(
 
     // Don't disrupt an in-use app; the swap lands next time it's closed (which
     // includes the moment right after the user clicks the broken "Restart").
-    // When forced, quit it first instead of deferring.
-    if (!(await ensureAppNotRunning(force, log))) {
+    // When forced or below the server-pinned floor, quit it first instead of
+    // deferring so the rollout actually reaches always-open clients.
+    if (!(await ensureAppNotRunning(applyWhileRunning, log))) {
       log(`desktop update: v${version} available (installed v${installed}); deferring — app is running`);
       return false;
     }
@@ -268,7 +279,7 @@ export async function checkForDesktopUpdate(
     }
 
     // Re-check the app didn't launch while we were downloading.
-    if (!(await ensureAppNotRunning(force, log))) {
+    if (!(await ensureAppNotRunning(applyWhileRunning, log))) {
       log("desktop update: app launched mid-download; deferring swap");
       rmrf(WORK_DIR);
       return false;

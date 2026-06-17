@@ -8891,6 +8891,43 @@ program
   });
 
 program
+  .command("desktop-force-update")
+  .description("Set minimum desktop app version to force all clients to update, quitting & relaunching the app if open (admin only)")
+  .argument("<version>", "Minimum desktop version required (e.g., 1.1.78)")
+  .action(async (version) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+
+    if (!/^\d+\.\d+\.\d+$/.test(version)) {
+      console.error("Invalid version format. Use semver (e.g., 1.1.78)");
+      process.exit(1);
+    }
+
+    const syncService = new SyncService({
+      convexUrl: config.convex_url,
+      authToken: config.auth_token,
+      userId: config.user_id,
+    });
+
+    try {
+      await syncService.getClient().mutation(
+        "systemConfig:setMinDesktopVersion" as any,
+        { version, api_token: config.auth_token }
+      );
+      console.log(`Minimum desktop version set to ${version}`);
+      console.log("Remote daemons will apply it within 5 minutes — quitting and relaunching the app if it's open");
+      process.exit(0);
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.error(`Failed to set min desktop version: ${errMsg}`);
+      process.exit(1);
+    }
+  });
+
+program
   .command("reinstall-all")
   .description("Send reinstall command to all daemons below a version (admin only)")
   .option("--below <version>", "Only target daemons below this version")
