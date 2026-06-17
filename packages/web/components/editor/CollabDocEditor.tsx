@@ -20,8 +20,9 @@ import { TableCell } from "@tiptap/extension-table-cell";
 import { TableHeader } from "@tiptap/extension-table-header";
 import { Markdown } from "tiptap-markdown";
 import { common, createLowlight } from "lowlight";
-import { Editor as HeadlessEditor } from "@tiptap/core";
+import { Editor as HeadlessEditor, Extension } from "@tiptap/core";
 import { getVersion, sendableSteps } from "prosemirror-collab";
+import type { ComposeEditorHandle } from "./ComposeEditor";
 import { AppLoader } from "../AppLoader";
 import tippy, { type Instance as TippyInstance } from "tippy.js";
 import { useTiptapSync } from "@convex-dev/prosemirror-sync/tiptap";
@@ -49,6 +50,10 @@ interface CollabDocEditorProps {
   markdownContent: string;
   onMentionQuery: MentionQueryFn;
   onImageUpload?: (file: File) => Promise<string | null>;
+  // When set, pasted/dropped images are routed here (the chat composer's
+  // attachment pipeline) instead of being uploaded and inlined into the doc body.
+  // Takes precedence over onImageUpload. Omitted by /docs.
+  onImagePaste?: (file: File) => void;
   editable?: boolean;
   className?: string;
   placeholder?: string;
@@ -62,6 +67,15 @@ interface CollabDocEditorProps {
    * callers that pass authoritative content synchronously.
    */
   contentReady?: boolean;
+  // ── Compose-mode affordances (the chat composer's expanded "doc" view) ──
+  // When provided, the editor binds Cmd/Ctrl+Enter → onSubmit and Cmd+Shift+E →
+  // onExit, reports content emptiness via onContentChange, and exposes an
+  // imperative handle so the composer can read/clear it on send. `clear()` empties
+  // the shared OT doc, which propagates to every collaborator. Omitted by /docs.
+  onSubmit?: () => void;
+  onExit?: () => void;
+  onContentChange?: (hasContent: boolean) => void;
+  composeHandleRef?: React.MutableRefObject<ComposeEditorHandle | null>;
 }
 
 const MENTION_ROUTE_MAP: Record<string, string> = {
@@ -351,17 +365,41 @@ function EditorInner({
   editable,
   presences,
   getMarkdownRef,
+  composeHandleRef,
+  onContentChange,
 }: {
   docId: string;
   editable: boolean;
   presences: PresenceEntry[];
   getMarkdownRef?: React.MutableRefObject<(() => string) | null>;
+  composeHandleRef?: React.MutableRefObject<ComposeEditorHandle | null>;
+  onContentChange?: (hasContent: boolean) => void;
 }) {
   const { editor } = useCurrentEditor();
 
+  const readMarkdown = () =>
+    editor ? ((editor.storage as any).markdown?.getMarkdown?.() ?? editor.getText()) : "";
+
   if (getMarkdownRef && editor && !editor.isDestroyed) {
-    getMarkdownRef.current = () => (editor.storage as any).markdown.getMarkdown();
+    getMarkdownRef.current = readMarkdown;
   }
+  // Same imperative contract as ComposeEditor so the composer's send/collapse
+  // paths are unchanged. clear() empties the shared doc → propagates via OT.
+  if (composeHandleRef && editor && !editor.isDestroyed) {
+    composeHandleRef.current = {
+      getMarkdown: readMarkdown,
+      focus: () => editor.commands.focus("end"),
+      clear: () => editor.commands.clearContent(),
+    };
+  }
+
+  useMountEffect(() => {
+    if (!editor || !onContentChange) return;
+    const report = () => onContentChange(readMarkdown().trim().length > 0);
+    report();
+    editor.on("update", report);
+    return () => editor.off("update", report);
+  });
   const updatePresence = useMutation(api.docSync.updatePresence);
   const removePresence = useMutation(api.docSync.removePresence);
   const presenceTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -454,6 +492,10 @@ export function CollabDocEditor({
   getMarkdownRef,
   cliEditedAt,
   contentReady = true,
+  onSubmit,
+  onExit,
+  onContentChange,
+  composeHandleRef,
 }: CollabDocEditorProps) {
   const onImageUploadRef = useRef(onImageUpload);
   onImageUploadRef.current = onImageUpload;
@@ -462,6 +504,26 @@ export function CollabDocEditor({
   const presences = useQuery(api.docSync.getPresence, { doc_id: docId }) || [];
   const createdRef = useRef(false);
   const extensionsRef = useRef<any[] | null>(null);
+
+  // Compose keymap: bound to refs so the latest handlers fire without rebuilding
+  // the editor. Created once and only when compose handlers are supplied (the
+  // document editor passes none, so its keymap is unchanged).
+  const onSubmitRef = useRef(onSubmit);
+  onSubmitRef.current = onSubmit;
+  const onExitRef = useRef(onExit);
+  onExitRef.current = onExit;
+  const composeKeymapRef = useRef<Extension | null>(null);
+  if ((onSubmit || onExit) && !composeKeymapRef.current) {
+    composeKeymapRef.current = Extension.create({
+      name: "composeKeymap",
+      addKeyboardShortcuts() {
+        return {
+          "Mod-Enter": () => { onSubmitRef.current?.(); return true; },
+          "Mod-Shift-e": () => { onExitRef.current?.(); return true; },
+        };
+      },
+    });
+  }
 
   if (!extensionsRef.current) {
     extensionsRef.current = buildExtensions(onMentionQuery, placeholder);
@@ -512,7 +574,11 @@ export function CollabDocEditor({
     );
   }
 
-  const allExtensions = [...extensionsRef.current, sync.extension];
+  const allExtensions = [
+    ...extensionsRef.current,
+    sync.extension,
+    ...(composeKeymapRef.current ? [composeKeymapRef.current] : []),
+  ];
 
   return (
     <div className={`doc-editor ${className}`} style={{ position: "relative" }}>
@@ -558,6 +624,8 @@ export function CollabDocEditor({
           editable={editable}
           presences={presences}
           getMarkdownRef={getMarkdownRef}
+          composeHandleRef={composeHandleRef}
+          onContentChange={onContentChange}
         />
         {cliEditedAt && (
           <ExternalEditSync
