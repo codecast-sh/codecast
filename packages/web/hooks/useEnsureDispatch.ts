@@ -53,5 +53,24 @@ export function useEnsureDispatch() {
         if (typeof convId === "string") useInboxStore.getState().markServerDeleted(convId);
       }
     });
+
+    // Re-drive any parked dispatch when the client likely has connectivity
+    // again. The boot drain only fires once on load, so a send the live socket
+    // stranded (in-session retries exhausted with no reload in sight) would sit
+    // undelivered indefinitely. Coming back online, refocusing the tab, and a
+    // slow heartbeat each give it a fresh chance to land — no reload required.
+    if (typeof window === "undefined") return;
+    // _drainOutbox is injected onto the store by mutativeMiddleware (a sibling
+    // of _setDispatch); typed at the call site so the wiring lives entirely here.
+    const drain = () => (useInboxStore.getState() as unknown as { _drainOutbox: () => void })._drainOutbox();
+    const onVisible = () => { if (document.visibilityState === "visible") drain(); };
+    window.addEventListener("online", drain);
+    document.addEventListener("visibilitychange", onVisible);
+    const interval = window.setInterval(drain, 30_000);
+    return () => {
+      window.removeEventListener("online", drain);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.clearInterval(interval);
+    };
   });
 }
