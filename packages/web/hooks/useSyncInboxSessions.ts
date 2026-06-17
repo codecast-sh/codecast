@@ -2,7 +2,7 @@ import { useRef, useCallback, useEffect, useState } from "react";
 import { useQuery, useMutation, useConvex } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { useInboxStore, InboxSession, isSessionWaitingForInput, isSub, isConvexId, DISMISS_RECONCILE_WINDOW_MS } from "../store/inboxStore";
+import { useInboxStore, InboxSession, isSessionWaitingForInput, isSub, isConvexId, ensureHydrated, DISMISS_RECONCILE_WINDOW_MS } from "../store/inboxStore";
 import { toast } from "sonner";
 import { soundIdle } from "../lib/sounds";
 import { useConvexSync } from "./useConvexSync";
@@ -29,6 +29,20 @@ const SESSIONS_RECONCILE_PAGE_DELAY_MS = 60;
 const SESSIONS_RECONCILE_THROTTLE_MS = 30 * 60 * 1000;
 // Ghost-sweep policy (age floors + candidate selection) lives in ./ghostSweep
 // so the selection is unit-testable without this hook's React/Convex imports.
+
+// How many messages to warm for an inbox session we hold nothing for yet: the
+// BOTTOM (newest) page only — exactly the slice the conversation view paints on
+// open, so the click is instant no matter how long the transcript is. The live
+// listMessages subscription backfills to its full 200-window the moment the
+// conversation is actually opened. Kept small on purpose: warming the whole inbox
+// must not drag thousands of (image-bearing) messages into memory — the
+// RAM-balloon trap that the in-memory eviction cap exists to bound.
+const WARM_BOTTOM_PAGE = 60;
+// Cap the cold warms started per sync pass so a freshly-loaded inbox doesn't fire
+// a query for every row at once. Sessions arrive most-actionable-first (server
+// sortInboxRows), so the top of the inbox warms first; the rest drain over the
+// next passes (every real list change + the 15s recovery poll).
+const MAX_COLD_WARM_PER_SYNC = 50;
 
 export function waitingSoundKey(session: InboxSession, queued: Set<string>): string | null {
   if (!isSessionWaitingForInput(session, queued)) return null;
@@ -87,6 +101,13 @@ export function useSyncInboxSessions() {
   const clientState = useQuery(api.client_state.get, {});
   const currentUser = useQuery(api.users.getCurrentUser);
   const bgFetchingRef = useRef(new Set<string>());
+  // message_count we'd be holding if we were caught up to the server, per
+  // conversation. We warm the TAIL (newest page), so we always hold the newest
+  // message — meaning there is nothing newer to fetch until message_count grows
+  // past this. Without it the delta branch below re-fires an (empty)
+  // getNewMessages every sync pass for any conversation we hold only a partial
+  // window of — exactly the per-row query churn the perf work fought to kill.
+  const syncedCountRef = useRef(new Map<string, number>());
 
   const syncTable = useInboxStore((s) => s.syncTable);
   const pruneDrafts = useMutation(api.client_state.pruneDeadDrafts);
@@ -99,20 +120,72 @@ export function useSyncInboxSessions() {
   const lastLivenessSyncRef = useRef(Date.now());
   const lastUserSyncRef = useRef(Date.now());
 
-  // Background-sync messages for inbox sessions so clicks are instant.
-  // When session metadata updates arrive, detect sessions with new messages
-  // and fetch the delta from Convex. Results go into the store + IDB via mergeMessages.
+  // Aggressively warm inbox sessions so opening one is instant. Two cases:
+  //
+  //   Cold (nothing cached): warm the BOTTOM (newest) page via the same
+  //   listMessages query the open path uses — the conversation view renders
+  //   straight from the store, so a warmed session paints with no network wait.
+  //   We deliberately do NOT crawl history forward from the top (the old
+  //   getNewMessages(after:0) path), which warmed the wrong end first and dragged
+  //   whole transcripts into memory.
+  //
+  //   Warm-but-stale (we hold the tail, new messages arrived): append the delta,
+  //   walking forward from our newest cached message. Gated on message_count
+  //   growth so we don't re-query a conversation we're already caught up on.
+  //
+  // Results land in the store + IDB via setMessages/mergeMessages.
   const bgSyncMessages = useCallback((sessions: any[]) => {
     const store = useInboxStore.getState();
+    let coldWarms = 0;
     for (const session of sessions) {
       const id = session._id as string;
       if (!isConvexId(id) || bgFetchingRef.current.has(id)) continue;
+      const serverCount = session.message_count ?? 0;
+      if (serverCount === 0) continue; // brand-new session — nothing to fetch yet
+
       const storedMsgs = store.messages[id];
       const storedCount = storedMsgs?.length ?? 0;
-      const serverCount = session.message_count ?? 0;
-      // Skip if we already have all messages or session is empty
-      if (serverCount === 0 || (storedCount > 0 && storedCount >= serverCount)) continue;
-      const lastTimestamp = storedCount > 0 ? storedMsgs[storedCount - 1].timestamp : 0;
+
+      // --- Cold: warm the newest page only. ---
+      if (storedCount === 0) {
+        if (coldWarms >= MAX_COLD_WARM_PER_SYNC) continue; // drain on later passes
+        coldWarms++;
+        // A previously-opened session may still sit in IDB — restore it for free
+        // (idempotent; no-op if absent or already loading). The network warm below
+        // covers the misses with the freshest tail.
+        ensureHydrated(id);
+        bgFetchingRef.current.add(id);
+        convex
+          .query(api.conversations.listMessages, {
+            conversation_id: id as Id<"conversations">,
+            paginationOpts: { numItems: WARM_BOTTOM_PAGE, cursor: null },
+          })
+          .then((res: any) => {
+            const page = res?.page;
+            // Don't clobber a window the user opened (or IDB restored) meanwhile —
+            // the live subscription owns it from that point on.
+            if (
+              Array.isArray(page) &&
+              page.length > 0 &&
+              (useInboxStore.getState().messages[id]?.length ?? 0) === 0
+            ) {
+              // listMessages is DESC (newest-first); the store holds ASC.
+              useInboxStore.getState().setMessages(id, [...page].reverse(), {
+                hasMoreAbove: !res.isDone,
+                initialized: true,
+              });
+              // We now hold the newest message; only re-sync if the count grows.
+              syncedCountRef.current.set(id, serverCount);
+            }
+          })
+          .finally(() => bgFetchingRef.current.delete(id));
+        continue;
+      }
+
+      // --- Warm but stale: fetch the delta only when genuinely newer messages
+      // exist (count grew past our last sync), walking forward from our newest. ---
+      if (serverCount <= (syncedCountRef.current.get(id) ?? 0)) continue;
+      const lastTimestamp = storedMsgs[storedCount - 1].timestamp;
       bgFetchingRef.current.add(id);
       const fetchPage = async (after: number): Promise<void> => {
         const result = await convex.query(api.conversations.getNewMessages, {
@@ -125,9 +198,9 @@ export function useSyncInboxSessions() {
           await fetchPage(result.last_timestamp);
         }
       };
-      fetchPage(lastTimestamp).finally(() => {
-        bgFetchingRef.current.delete(id);
-      });
+      fetchPage(lastTimestamp)
+        .then(() => syncedCountRef.current.set(id, serverCount))
+        .finally(() => bgFetchingRef.current.delete(id));
     }
   }, [convex]);
 
