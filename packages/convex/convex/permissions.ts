@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
+import { resolveEffectiveTeam } from "./data";
 
 async function getAuthenticatedUserId(
   ctx: { db: any },
@@ -340,3 +341,84 @@ export const getAllRespondedPermissions = query({
     return userPermissions;
   },
 });
+
+type PermissionResourceKind = "docs" | "tasks" | "plans" | "projects" | "conversations";
+
+type ResourceAccessArgs = {
+  record: {
+    user_id?: Id<"users">;
+  } & Record<string, any>;
+  userId: Id<"users">;
+  teamMembershipIds?: readonly unknown[];
+  convMap?: Map<string, any>;
+};
+
+export function canAccessResourceForUser({
+  record,
+  userId,
+  teamMembershipIds = [],
+  convMap = new Map<string, any>(),
+}: ResourceAccessArgs): boolean {
+  if (record.user_id && String(record.user_id) === String(userId)) return true;
+
+  const effectiveTeamId = resolveEffectiveTeam(record, convMap);
+  if (!effectiveTeamId) return false;
+
+  return teamMembershipIds.some((teamId) => String(teamId) === String(effectiveTeamId));
+}
+
+export async function buildPermissionConversationMap(
+  ctx: { db: any },
+  records: Record<string, any>[],
+): Promise<Map<string, any>> {
+  const convIds = new Set<string>();
+  for (const record of records) {
+    if (record.conversation_id) convIds.add(String(record.conversation_id));
+    if (record.created_from_conversation) convIds.add(String(record.created_from_conversation));
+    for (const id of record.related_conversation_ids || []) convIds.add(String(id));
+    for (const id of record.conversation_ids || []) convIds.add(String(id));
+  }
+
+  const convMap = new Map<string, any>();
+  for (const cid of convIds) {
+    const conv = await ctx.db.get(cid as Id<"conversations">);
+    if (!conv) continue;
+    convMap.set(cid, {
+      team_id: conv.team_id,
+      is_private: conv.is_private,
+      auto_shared: conv.auto_shared,
+      team_visibility: conv.team_visibility,
+      git_root: conv.git_root,
+      started_at: conv.started_at,
+      project_path: conv.project_path,
+    });
+  }
+  return convMap;
+}
+
+export async function getUserTeamMembershipIds(
+  ctx: { db: any },
+  userId: Id<"users">,
+): Promise<unknown[]> {
+  const memberships = await ctx.db
+    .query("team_memberships")
+    .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+    .collect();
+  return memberships.map((membership: any) => membership.team_id);
+}
+
+export async function getAccessibleResource(
+  ctx: { db: any },
+  _kind: PermissionResourceKind,
+  id: Id<any>,
+  userId: Id<"users">,
+): Promise<any | null> {
+  const record = await ctx.db.get(id);
+  if (!record) return null;
+
+  const convMap = await buildPermissionConversationMap(ctx, [record]);
+  const teamMembershipIds = await getUserTeamMembershipIds(ctx, userId);
+  return canAccessResourceForUser({ record, userId, teamMembershipIds, convMap })
+    ? record
+    : null;
+}

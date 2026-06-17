@@ -74,6 +74,32 @@ export async function getOnlineLocalRoots(
   return Array.from(roots);
 }
 
+type ClaimDevice = { is_remote?: boolean; last_seen?: number } | null | undefined;
+
+export function planConversationOwnershipClaim(opts: {
+  ownerDeviceId?: string | null;
+  claimantDeviceId: string;
+  ownerDevice?: ClaimDevice;
+  claimantDevice?: ClaimDevice;
+  claimantIsRemote?: boolean;
+  now: number;
+}): { won: true } | { won: false; owner?: string } {
+  const owner = opts.ownerDeviceId ?? undefined;
+  if (owner && owner !== opts.claimantDeviceId) {
+    const ownerOnline =
+      opts.ownerDevice &&
+      !opts.ownerDevice.is_remote &&
+      typeof opts.ownerDevice.last_seen === "number" &&
+      opts.now - opts.ownerDevice.last_seen < DEVICE_ONLINE_MS;
+    if (ownerOnline) return { won: false, owner };
+  }
+  const claimantIsRemote = opts.claimantIsRemote ?? !!opts.claimantDevice?.is_remote;
+  if (owner !== opts.claimantDeviceId && claimantIsRemote) {
+    return { won: false, owner };
+  }
+  return { won: true };
+}
+
 /**
  * Enqueue a `start_session` command routed to the device that owns the session,
  * and stamp that ownership on the conversation so it stays in sync with routing.
