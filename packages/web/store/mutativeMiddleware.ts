@@ -214,11 +214,22 @@ const RETRY_DELAYS = [1000, 2000, 4000];
 // that happen during that same outage.
 export const MAX_OUTBOX_BOOT_ATTEMPTS = 5;
 
+// Actions carrying user-authored content that MUST reach the server — losing
+// one silently drops something the user typed. These are never given up on:
+// they ride the outbox until the server acknowledges them, however many
+// reloads/outages that takes. The boot cap above only bounds low-stakes
+// bookkeeping writes (dismiss, client_state) whose loss is recoverable and
+// which must not slow every page load forever if permanently broken.
+// dispatch.sendMessage dedups on client_id, so unbounded retry is safe.
+export const MUST_DELIVER_ACTIONS = new Set(["sendMessage"]);
+
 // What to do with an outbox entry whose boot-time replay failed: keep it for
-// the next boot with the attempt counted, or give up at the cap.
+// the next boot with the attempt counted, or give up at the cap. User sends
+// are never dropped — see MUST_DELIVER_ACTIONS.
 export function outboxFailureDisposition(entry: OutboxEntry): { keep: boolean; entry: OutboxEntry } {
   const attempts = (entry.attempts ?? 0) + 1;
-  return { keep: attempts < MAX_OUTBOX_BOOT_ATTEMPTS, entry: { ...entry, attempts } };
+  const mustDeliver = MUST_DELIVER_ACTIONS.has(entry.action);
+  return { keep: mustDeliver || attempts < MAX_OUTBOX_BOOT_ATTEMPTS, entry: { ...entry, attempts } };
 }
 
 // Convex rejects `undefined` anywhere in the payload. Action functions are
@@ -310,24 +321,41 @@ export function mutativeMiddleware(config: any, opts?: { retryDelays?: number[] 
       return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     }
 
-    async function drainOutbox() {
+    let draining = false;
+    async function drainOutbox(countAttempts = true) {
       if (!dispatchFn || !outboxLoadFn) return;
-      const entries = await outboxLoadFn();
-      // The outbox exists to survive a reload that lands in the middle of an
-      // in-flight dispatch. A failed replay keeps its entry for the NEXT boot
-      // (attempt counted, capped at MAX_OUTBOX_BOOT_ATTEMPTS) — a reload
-      // during the same outage that stranded the write must not destroy its
-      // only copy.
-      for (const entry of entries) {
-        try {
-          await dispatchWithRetry(dispatchFn, entry.action, entry.args, stripStalePointerFromReplay(entry.patches), entry.result, dispatchErrorFn, retryDelays);
-          outboxRemoveFn?.(entry.id);
-        } catch {
-          // Reported via dispatchErrorFn.
-          const disposition = outboxFailureDisposition(entry);
-          if (disposition.keep) outboxEnqueueFn?.(disposition.entry);
-          else outboxRemoveFn?.(entry.id);
+      // One drain at a time. drainOutbox runs at boot AND on every reconnect /
+      // tab-visible / interval tick, so overlapping passes are easy to trigger;
+      // serializing them keeps a single in-flight entry from being dispatched
+      // twice at once (redelivery is safe — dispatch.sendMessage dedups on
+      // client_id — but pointless work isn't).
+      if (draining) return;
+      draining = true;
+      try {
+        const entries = await outboxLoadFn();
+        // The outbox exists to survive a reload that lands in the middle of an
+        // in-flight dispatch, AND to re-drive a send the live socket stranded:
+        // a flaky connection can exhaust the in-session retry ladder and park
+        // the write here with no boot in sight, so we also drain on reconnect.
+        // A BOOT replay that fails counts an attempt (capped at
+        // MAX_OUTBOX_BOOT_ATTEMPTS for low-stakes writes; user sends never drop
+        // — see outboxFailureDisposition). OPPORTUNISTIC reconnect drains pass
+        // countAttempts=false: a failure there leaves the entry exactly as-is,
+        // so routine reconnect churn can't burn through a write's boot budget.
+        for (const entry of entries) {
+          try {
+            await dispatchWithRetry(dispatchFn, entry.action, entry.args, stripStalePointerFromReplay(entry.patches), entry.result, dispatchErrorFn, retryDelays);
+            outboxRemoveFn?.(entry.id);
+          } catch {
+            // Reported via dispatchErrorFn.
+            if (!countAttempts) continue;
+            const disposition = outboxFailureDisposition(entry);
+            if (disposition.keep) outboxEnqueueFn?.(disposition.entry);
+            else outboxRemoveFn?.(entry.id);
+          }
         }
+      } finally {
+        draining = false;
       }
     }
 
@@ -429,6 +457,11 @@ export function mutativeMiddleware(config: any, opts?: { retryDelays?: number[] 
       // Drain any persisted outbox entries from a prior session.
       drainOutbox();
     };
+
+    // Opportunistic re-drive: re-attempt every parked dispatch without counting
+    // a boot attempt. Wired to reconnect / tab-visible / interval so a send the
+    // live socket stranded reaches the server WITHOUT waiting for a reload.
+    wrapped._drainOutbox = () => { drainOutbox(false); };
 
     wrapped._setIDBWrite = (fn: IDBWriteFn) => {
       idbWriteFn = fn;
