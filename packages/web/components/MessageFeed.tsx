@@ -10,6 +10,7 @@ import { EmptyState } from "./EmptyState";
 import { MarkdownRenderer } from "./tools/MarkdownRenderer";
 import { EntityIdPill } from "./EntityIdPill";
 import { parseInboundSessionMessage, isSessionMessage } from "./sessionMessage";
+import { classifyFeedMessage } from "../lib/conversationProcessor";
 
 type FeedMessage = {
   _id: string;
@@ -25,7 +26,12 @@ type FeedMessage = {
   is_own: boolean;
 };
 
-const PAGE_SIZE = 25;
+// How many real (non-noise) messages to keep on screen before the user has to
+// ask for more. The raw feed can be mostly machine noise, so the loader keeps
+// pulling server batches until this many survive the filter (or history runs out).
+const MIN_VISIBLE = 30;
+// How many to add per "Load older" click / auto-fill step (server page size).
+const SERVER_PAGE = 100;
 
 function getRelativeTime(timestamp: number): string {
   const now = Date.now();
@@ -51,18 +57,6 @@ function getRelativeTime(timestamp: number): string {
     day: "numeric",
     year: "numeric",
   });
-}
-
-function getPageNumbers(current: number, total: number): (number | "dots")[] {
-  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
-  const pages: (number | "dots")[] = [1];
-  const start = Math.max(2, current - 1);
-  const end = Math.min(total - 1, current + 1);
-  if (start > 2) pages.push("dots");
-  for (let i = start; i <= end; i++) pages.push(i);
-  if (end < total - 1) pages.push("dots");
-  pages.push(total);
-  return pages;
 }
 
 // Agent-to-agent message (delivered by `cast send`, stored wrapped in a
@@ -118,130 +112,55 @@ function SessionMessageCard({ message }: { message: FeedMessage }) {
   );
 }
 
-function MessageCard({ message }: { message: FeedMessage }) {
-  if (isSessionMessage(message.content)) {
-    return <SessionMessageCard message={message} />;
-  }
-
-  const isUser = message.role === "user";
-  const content = message.content?.trim() || "";
-
+// A real human prompt. `text` is already cleaned of system wrappers by
+// classifyFeedMessage, so the card never shows raw <task-notification>/<command>
+// noise. The "you" label gets the author's name appended for teammates' messages.
+function MessageCard({ message, text }: { message: FeedMessage; text: string }) {
   return (
     <Link
       href={`/conversation/${message.conversation_id}`}
       className="block group"
     >
-      <div
-        className={`
-          relative rounded-lg border border-l-[3px] px-4 py-3 transition-all duration-150
-          ${isUser
-            ? "border-l-sol-blue/50 border-sol-border/20 bg-sol-bg hover:border-l-sol-blue hover:bg-sol-bg-alt/40"
-            : "border-l-sol-violet/30 border-sol-border/15 bg-sol-bg-alt/20 hover:border-l-sol-violet/60 hover:bg-sol-bg-alt/40"
-          }
-        `}
-      >
+      <div className="relative rounded-lg border border-l-[3px] border-l-sol-blue/50 border-sol-border/20 bg-sol-bg px-4 py-3 transition-all duration-150 hover:border-l-sol-blue hover:bg-sol-bg-alt/40">
         <div className="flex items-center gap-2 mb-1.5">
-          <span
-            className={`text-[10px] font-semibold uppercase tracking-wider ${
-              isUser ? "text-sol-blue" : "text-sol-violet/70"
-            }`}
-          >
-            {isUser ? "you" : "assistant"}
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-sol-blue">
+            {message.is_own ? "you" : message.author_name}
           </span>
           <span className="text-[10px] text-sol-text-dim/30">&middot;</span>
           <span className="text-xs text-sol-text-muted truncate group-hover:text-sol-text transition-colors">
             {message.conversation_title}
           </span>
-          {!message.is_own && (
-            <>
-              <span className="text-[10px] text-sol-text-dim/30">&middot;</span>
-              <span className="text-[11px] text-sol-text-dim">
-                {message.author_name}
-              </span>
-            </>
-          )}
           <span className="text-[11px] text-sol-text-dim/50 ml-auto shrink-0">
             {getRelativeTime(message.timestamp)}
           </span>
         </div>
-        {content && (
-          <div
-            className={`line-clamp-3 overflow-hidden pointer-events-none ${
-              !isUser ? "opacity-60" : ""
-            }`}
-          >
-            <MarkdownRenderer
-              content={content}
-              className="text-sm !prose-sm [&>*:first-child]:mt-0 [&>*:last-child]:mb-0"
-            />
-          </div>
-        )}
+        <div className="line-clamp-3 overflow-hidden pointer-events-none">
+          <MarkdownRenderer
+            content={text}
+            className="text-sm !prose-sm [&>*:first-child]:mt-0 [&>*:last-child]:mb-0"
+          />
+        </div>
       </div>
     </Link>
   );
 }
 
-function PaginationControls({
-  currentPage,
-  totalPages,
-  onPageChange,
-  totalMessages,
+function LoadMoreBar({
+  onLoadMore,
   isLoadingMore,
 }: {
-  currentPage: number;
-  totalPages: number;
-  onPageChange: (page: number) => void;
-  totalMessages: number;
+  onLoadMore: () => void;
   isLoadingMore: boolean;
 }) {
-  const pages = getPageNumbers(currentPage, totalPages);
-  const start = (currentPage - 1) * PAGE_SIZE + 1;
-  const end = Math.min(currentPage * PAGE_SIZE, totalMessages);
-
   return (
-    <div className="flex flex-col items-center gap-3 pt-2 pb-4">
-      <div className="flex items-center gap-1">
-        <button
-          onClick={() => onPageChange(currentPage - 1)}
-          disabled={currentPage === 1}
-          className="px-2.5 py-1.5 text-xs rounded-md text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt disabled:opacity-25 disabled:cursor-not-allowed transition-colors"
-        >
-          &larr; Prev
-        </button>
-        {pages.map((p, i) =>
-          p === "dots" ? (
-            <span
-              key={`dots-${i}`}
-              className="w-8 text-center text-sol-text-dim/40 text-xs select-none"
-            >
-              &middot;&middot;&middot;
-            </span>
-          ) : (
-            <button
-              key={p}
-              onClick={() => onPageChange(p)}
-              className={`w-8 h-8 text-xs rounded-md transition-colors ${
-                p === currentPage
-                  ? "bg-sol-blue/20 text-sol-blue font-semibold"
-                  : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt"
-              }`}
-            >
-              {p}
-            </button>
-          ),
-        )}
-        <button
-          onClick={() => onPageChange(currentPage + 1)}
-          disabled={currentPage === totalPages}
-          className="px-2.5 py-1.5 text-xs rounded-md text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt disabled:opacity-25 disabled:cursor-not-allowed transition-colors"
-        >
-          Next &rarr;
-        </button>
-      </div>
-      <span className="text-[11px] text-sol-text-dim/50">
-        {start}&ndash;{end} of {totalMessages}
-        {isLoadingMore ? "+" : ""} messages
-      </span>
+    <div className="flex justify-center pt-2 pb-6">
+      <button
+        onClick={onLoadMore}
+        disabled={isLoadingMore}
+        className="px-4 py-1.5 text-xs rounded-lg border border-sol-border/40 text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt disabled:opacity-50 disabled:cursor-wait transition-colors"
+      >
+        {isLoadingMore ? "Loading…" : "Load older messages"}
+      </button>
     </div>
   );
 }
@@ -250,25 +169,26 @@ interface MessageFeedProps {
   filter: "my" | "team";
 }
 
+type FeedItem =
+  | { kind: "session"; msg: FeedMessage }
+  | { kind: "text"; msg: FeedMessage; text: string };
+
 export function MessageFeed({ filter }: MessageFeedProps) {
   const [cursor, setCursor] = useState<number | undefined>(undefined);
   const [loadedMessages, setLoadedMessages] = useState<FeedMessage[]>([]);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [prevFilter, setPrevFilter] = useState(filter);
   const [onlyMine, setOnlyMine] = useState(false);
-  const [currentPage, setCurrentPage] = useState(1);
-  const containerRef = useRef<HTMLDivElement>(null);
 
   if (filter !== prevFilter) {
     setPrevFilter(filter);
     setCursor(undefined);
     setLoadedMessages([]);
-    setCurrentPage(1);
   }
 
   const result = useQuery(api.conversations.getMessageFeed, {
     filter,
-    limit: 100,
+    limit: SERVER_PAGE,
     cursor,
   });
 
@@ -290,25 +210,32 @@ export function MessageFeed({ filter }: MessageFeedProps) {
     return deduplicated;
   }, [result?.messages, loadedMessages, cursor]);
 
-  // Base feed: human prompts + agent cross-talk (session-messages, role "user"
-  // but wrapped in a <session-message> tag). Assistant replies are excluded —
-  // the feed is about discrete messages sent to sessions, not model output.
-  // "Mine" narrows to prompts I actually typed: drops the agent-to-agent
-  // cross-talk and any teammates' messages.
-  const filteredMessages = useMemo(() => {
-    const base = allMessages.filter((msg) => msg.role === "user");
-    if (!onlyMine) return base;
-    return base.filter((msg) => msg.is_own && !isSessionMessage(msg.content));
-  }, [allMessages, onlyMine]);
+  // Classify every user-role message once. Session→session cross-talk gets its
+  // own cyan card; machine noise (task notifications, command/skill expansions,
+  // continuations, compaction prompts, tool-output pointers) is dropped; the rest
+  // becomes cleaned display text. This is the SAME structured-message handling the
+  // conversation view does, via the shared classifier in conversationProcessor —
+  // so the feed never dumps raw <task-notification> XML.
+  const displayItems = useMemo<FeedItem[]>(() => {
+    const items: FeedItem[] = [];
+    for (const msg of allMessages) {
+      if (msg.role !== "user") continue;
+      if (isSessionMessage(msg.content)) {
+        items.push({ kind: "session", msg });
+        continue;
+      }
+      const d = classifyFeedMessage(msg.content);
+      if (d.kind === "hidden") continue;
+      items.push({ kind: "text", msg, text: d.text });
+    }
+    return items;
+  }, [allMessages]);
 
-  const totalPages = Math.max(
-    1,
-    Math.ceil(filteredMessages.length / PAGE_SIZE),
-  );
-  const pageMessages = filteredMessages.slice(
-    (currentPage - 1) * PAGE_SIZE,
-    currentPage * PAGE_SIZE,
-  );
+  // "Mine" = prompts I actually typed: drop agent cross-talk and teammates'.
+  const visibleItems = useMemo(() => {
+    if (!onlyMine) return displayItems;
+    return displayItems.filter((it) => it.kind === "text" && it.msg.is_own);
+  }, [displayItems, onlyMine]);
 
   const loadMoreRef = useRef(false);
   const loadMore = useCallback(() => {
@@ -320,24 +247,18 @@ export function MessageFeed({ filter }: MessageFeedProps) {
       setTimeout(() => {
         setIsLoadingMore(false);
         loadMoreRef.current = false;
-      }, 500);
+      }, 400);
     }
   }, [result?.nextCursor, isLoadingMore, allMessages]);
 
+  // Auto-fill: a server page can be almost all machine noise, leaving too few
+  // real messages on screen. Keep pulling until MIN_VISIBLE survive the filter
+  // (or history runs out). Bounded by nextCursor, so it can't run away.
   useWatchEffect(() => {
-    if (currentPage >= totalPages && result?.nextCursor) {
+    if (visibleItems.length < MIN_VISIBLE && result?.nextCursor && !isLoadingMore) {
       loadMore();
     }
-  }, [currentPage, totalPages, result?.nextCursor, loadMore]);
-
-  const handlePageChange = (page: number) => {
-    const clamped = Math.max(1, Math.min(page, totalPages));
-    setCurrentPage(clamped);
-    containerRef.current?.scrollIntoView({
-      behavior: "smooth",
-      block: "start",
-    });
-  };
+  }, [visibleItems.length, result?.nextCursor, isLoadingMore, loadMore]);
 
   const groups = useMemo(() => {
     const now = Date.now();
@@ -348,29 +269,35 @@ export function MessageFeed({ filter }: MessageFeedProps) {
       { label: "This Week", threshold: now - 604800000 },
       { label: "Older", threshold: 0 },
     ];
-    const groupMap = new Map<string, FeedMessage[]>();
+    const groupMap = new Map<string, FeedItem[]>();
     for (const { label } of boundaries) groupMap.set(label, []);
-    for (const msg of pageMessages) {
+    for (const item of visibleItems) {
       for (const { label, threshold } of boundaries) {
-        if (msg.timestamp >= threshold) {
-          groupMap.get(label)!.push(msg);
+        if (item.msg.timestamp >= threshold) {
+          groupMap.get(label)!.push(item);
           break;
         }
       }
     }
-    const grouped: { label: string; items: FeedMessage[] }[] = [];
+    const grouped: { label: string; items: FeedItem[] }[] = [];
     for (const { label } of boundaries) {
       const items = groupMap.get(label)!;
       if (items.length > 0) grouped.push({ label, items });
     }
     return grouped;
-  }, [pageMessages]);
+  }, [visibleItems]);
 
   if (result === undefined && loadedMessages.length === 0) {
     return <LoadingSkeleton />;
   }
 
-  if (filteredMessages.length === 0) {
+  // Still pulling batches to fill the first screen (noise-heavy feed) — show a
+  // skeleton instead of a premature "no messages".
+  if (visibleItems.length === 0 && (isLoadingMore || result?.nextCursor)) {
+    return <LoadingSkeleton />;
+  }
+
+  if (visibleItems.length === 0) {
     return (
       <EmptyState
         title="No messages yet"
@@ -381,7 +308,7 @@ export function MessageFeed({ filter }: MessageFeedProps) {
   }
 
   return (
-    <div ref={containerRef} className="space-y-5 scroll-mt-20">
+    <div className="space-y-5 scroll-mt-20">
       <div className="flex items-center justify-between">
         <div className="inline-flex items-center gap-0.5 rounded-lg border border-sol-border/40 p-0.5">
           {([
@@ -390,10 +317,7 @@ export function MessageFeed({ filter }: MessageFeedProps) {
           ] as const).map((opt) => (
             <button
               key={opt.label}
-              onClick={() => {
-                setOnlyMine(opt.key);
-                setCurrentPage(1);
-              }}
+              onClick={() => setOnlyMine(opt.key)}
               title={opt.key ? "Only messages I typed (no agent cross-talk)" : "All messages, including agent-to-agent"}
               className={`px-3 py-1 text-sm rounded-md transition-colors ${
                 onlyMine === opt.key
@@ -406,7 +330,7 @@ export function MessageFeed({ filter }: MessageFeedProps) {
           ))}
         </div>
         <span className="text-xs text-sol-text-dim/50">
-          {filteredMessages.length} messages
+          {visibleItems.length} message{visibleItems.length === 1 ? "" : "s"}
         </span>
       </div>
 
@@ -418,21 +342,19 @@ export function MessageFeed({ filter }: MessageFeedProps) {
             </h2>
           </div>
           <div className="space-y-2">
-            {group.items.map((msg) => (
-              <MessageCard key={msg._id} message={msg} />
-            ))}
+            {group.items.map((item) =>
+              item.kind === "session" ? (
+                <SessionMessageCard key={item.msg._id} message={item.msg} />
+              ) : (
+                <MessageCard key={item.msg._id} message={item.msg} text={item.text} />
+              ),
+            )}
           </div>
         </div>
       ))}
 
-      {totalPages > 1 && (
-        <PaginationControls
-          currentPage={currentPage}
-          totalPages={totalPages}
-          onPageChange={handlePageChange}
-          totalMessages={filteredMessages.length}
-          isLoadingMore={isLoadingMore}
-        />
+      {result?.nextCursor && (
+        <LoadMoreBar onLoadMore={loadMore} isLoadingMore={isLoadingMore} />
       )}
     </div>
   );
