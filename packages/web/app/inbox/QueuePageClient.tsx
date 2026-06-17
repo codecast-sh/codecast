@@ -5,6 +5,7 @@ import { useEventListener } from "../../hooks/useEventListener";
 import { useShortcutContext } from "../../shortcuts";
 import { useQuery, useMutation } from "convex/react";
 import { useSearchParams } from "next/navigation";
+import { useTabContext } from "../../components/TabContent";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { DashboardLayout } from "../../components/DashboardLayout";
@@ -209,6 +210,13 @@ function InboxShortcuts() {
 
 export function QueuePageClient() {
   const searchParams = useSearchParams();
+  // When this inbox lives inside a tab, only the ACTIVE tab owns global view
+  // state (currentSessionId, the URL, the sidebar highlight). A background tab
+  // stays mounted but renders FROZEN on its own ?s= param so its conversation
+  // and scroll position survive untouched until it's brought forward again.
+  // Outside the tab shell (web standalone), there's no context → always active.
+  const tabCtx = useTabContext();
+  const isActiveTab = tabCtx ? tabCtx.isActive : true;
 
   // Auto-open session panel when entering inbox (DashboardLayout renders it)
   useMountEffect(() => {
@@ -260,28 +268,38 @@ export function QueuePageClient() {
 
   // Select session from URL param -- only when the param actually changes
   const paramSessionId = searchParams.get("s") || null;
+  // Drives global view state from THIS tab's ?s= param — but only while this is
+  // the active tab (a background tab must never reach into global state). It also
+  // doubles as the activation handler: when a backgrounded tab is brought
+  // forward, a sibling may have moved global currentSessionId, so we re-assert
+  // this tab's session even if its param itself didn't change.
   useWatchEffect(() => {
-    if (!paramSessionId || paramSessionId === lastAppliedParamId.current) return;
+    if (!isActiveTab || !paramSessionId) return;
+    const store = useInboxStore.getState();
+    const paramChanged = paramSessionId !== lastAppliedParamId.current;
+    if (!paramChanged && store.currentSessionId === paramSessionId) return;
     if (Object.keys(sessions).length === 0 && !clientStateInitialized) return;
     lastAppliedParamId.current = paramSessionId;
-    // Consume any pending highlight/scroll from the store (set by ConversationPageClient redirect)
-    const store = useInboxStore.getState();
-    if (store.pendingHighlightQuery) {
-      setActiveHighlight(store.pendingHighlightQuery);
-      useInboxStore.setState({ pendingHighlightQuery: null });
-    }
-    if (store.pendingScrollToMessageId) {
-      setScrollTarget({ sessionId: paramSessionId, messageId: store.pendingScrollToMessageId });
-      useInboxStore.setState({ pendingScrollToMessageId: null });
+    if (paramChanged) {
+      // Consume any pending highlight/scroll from the store (set by ConversationPageClient redirect)
+      if (store.pendingHighlightQuery) {
+        setActiveHighlight(store.pendingHighlightQuery);
+        useInboxStore.setState({ pendingHighlightQuery: null });
+      }
+      if (store.pendingScrollToMessageId) {
+        setScrollTarget({ sessionId: paramSessionId, messageId: store.pendingScrollToMessageId });
+        useInboxStore.setState({ pendingScrollToMessageId: null });
+      }
     }
     if (sessions[paramSessionId]) {
+      if (store.showMySessions) setShowMySessions(false);
       navigateToSession(paramSessionId);
       setPendingInjectId(null);
       paramProcessedRef.current = true;
     } else {
       setPendingInjectId(paramSessionId);
     }
-  }, [paramSessionId, sessions, navigateToSession, clientStateInitialized]);
+  }, [paramSessionId, sessions, navigateToSession, clientStateInitialized, isActiveTab, setShowMySessions]);
 
   // Once we have the conversation data, inject it into the queue
   useWatchEffect(() => {
@@ -414,7 +432,18 @@ export function QueuePageClient() {
     ? undefined
     : rawCurrentSession;
 
+  // What THIS pane renders. The active tab follows live global view state; a
+  // background tab freezes on its own ?s= param (its conversation, or the feed
+  // when it has none) so it stays exactly as left — same DOM, same scroll —
+  // regardless of what a sibling tab does to global state.
+  const renderSession = isActiveTab
+    ? currentSession
+    : (paramSessionId ? sessions[paramSessionId] ?? null : null);
+  const renderDismissedSession = isActiveTab ? viewingDismissedSession : null;
+  const renderShowMine = isActiveTab ? showMySessions : !paramSessionId;
+
   useWatchEffect(() => {
+    if (!isActiveTab) return;
     if (currentSession) {
       setCurrentConversation({
         conversationId: currentSession._id,
@@ -425,7 +454,7 @@ export function QueuePageClient() {
       });
       touchMru(currentSession._id);
     }
-  }, [currentSession?._id, currentSession?.project_path, currentSession?.git_root, currentSession?.agent_type, setCurrentConversation, touchMru]);
+  }, [currentSession?._id, currentSession?.project_path, currentSession?.git_root, currentSession?.agent_type, setCurrentConversation, touchMru, isActiveTab]);
 
   // Machine adoption of a view when none exists. "adopt" is boot-only: the
   // store rejects it before hydration completes (a live sync racing IDB must
@@ -433,12 +462,18 @@ export function QueuePageClient() {
   // view has been shown (a mid-session null — e.g. a background stub discard —
   // must leave the view empty, never teleport to another session).
   useWatchEffect(() => {
+    if (!isActiveTab) return;
     if (currentSessionId || currentSession || showMySessions || viewingDismissedId || pendingInjectId) return;
     if (sortedSessions.length > 0) setCurrentSession(sortedSessions[0]._id, "adopt");
-  }, [currentSessionId, currentSession, showMySessions, viewingDismissedId, pendingInjectId, sortedSessions, setCurrentSession]);
+  }, [currentSessionId, currentSession, showMySessions, viewingDismissedId, pendingInjectId, sortedSessions, setCurrentSession, isActiveTab]);
 
-  // Sync URL when current session changes (but not before initial param is resolved)
+  // Sync URL when current session changes (but not before initial param is
+  // resolved). Only the active tab owns the address bar — a background pane must
+  // never write the shared URL to its own frozen session. The active tab's
+  // /conversation/<id> URL is normalized back to /inbox?s=<id> by stampedTabPath
+  // when it's backgrounded, keeping the tab on the inbox route.
   useWatchEffect(() => {
+    if (!isActiveTab) return;
     if (!paramProcessedRef.current) return;
     if (isPopstateRef.current) {
       isPopstateRef.current = false;
@@ -458,10 +493,11 @@ export function QueuePageClient() {
       const switchingSessions = window.location.pathname.startsWith("/conversation/");
       window.history[switchingSessions ? "pushState" : "replaceState"]({ inboxId: targetId }, "", targetPath);
     }
-  }, [currentSession?._id, viewingDismissedId]);
+  }, [currentSession?._id, viewingDismissedId, isActiveTab]);
 
   // Handle browser back/forward
   useEventListener("popstate", (e: PopStateEvent) => {
+    if (!isActiveTab) return;
     const url = new URL(window.location.href);
     const id = e.state?.inboxId
       || url.searchParams.get("s")
@@ -506,7 +542,7 @@ export function QueuePageClient() {
 
   const inboxContent = (
     <>
-      {showMySessions ? (
+      {renderShowMine ? (
         <div className="h-full overflow-y-auto" data-main-scroll>
           <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-8">
             <ErrorBoundary name="ActivityFeed" level="inline">
@@ -514,30 +550,30 @@ export function QueuePageClient() {
             </ErrorBoundary>
           </div>
         </div>
-      ) : viewingDismissedSession ? (
+      ) : renderDismissedSession ? (
         <ErrorBoundary name="Conversation" level="inline">
           <InboxConversation
-            sessionId={viewingDismissedSession._id}
-            isIdle={viewingDismissedSession.is_idle}
+            sessionId={renderDismissedSession._id}
+            isIdle={renderDismissedSession.is_idle}
             onSendAndAdvance={() => setViewingDismissedId(null)}
-            lastUserMessage={viewingDismissedSession.last_user_message}
-            sessionError={viewingDismissedSession.session_error}
+            lastUserMessage={renderDismissedSession.last_user_message}
+            sessionError={renderDismissedSession.session_error}
             onBack={handleBack}
-            targetMessageId={scrollTarget?.sessionId === viewingDismissedSession._id ? scrollTarget.messageId : undefined}
+            targetMessageId={scrollTarget?.sessionId === renderDismissedSession._id ? scrollTarget.messageId : undefined}
             highlightQuery={activeHighlight}
             onClearHighlight={handleClearHighlight}          />
         </ErrorBoundary>
-      ) : currentSession ? (
+      ) : renderSession ? (
         <ErrorBoundary name="Conversation" level="inline">
           <InboxConversation
-            sessionId={currentSession._id}
-            isIdle={currentSession.is_idle}
+            sessionId={renderSession._id}
+            isIdle={renderSession.is_idle}
             onSendAndAdvance={handleSendAndAdvance}
             onSendAndDismiss={handleSendAndDismiss}
-            lastUserMessage={currentSession.last_user_message}
-            sessionError={currentSession.session_error}
+            lastUserMessage={renderSession.last_user_message}
+            sessionError={renderSession.session_error}
             onBack={handleBack}
-            targetMessageId={scrollTarget?.sessionId === currentSession._id ? scrollTarget.messageId : undefined}
+            targetMessageId={scrollTarget?.sessionId === renderSession._id ? scrollTarget.messageId : undefined}
             highlightQuery={activeHighlight}
             onClearHighlight={handleClearHighlight}          />
         </ErrorBoundary>

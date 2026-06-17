@@ -597,6 +597,23 @@ export type AppTab = {
   createdAt: number;
 };
 
+// The path to stamp onto a tab from the live browser URL when switching away.
+// Includes the query string so a tab's deep-link (`/inbox?s=<id>`) survives a
+// switch — stamping only `pathname` was silently dropping it.
+//
+// Crucial detail: the inbox canonicalizes its URL to `/conversation/<id>` while a
+// session is open, but an inbox tab must STAY on the inbox route — otherwise its
+// pane re-matches the standalone `<Conversation>` component on the next show,
+// unmounting the whole subtree (and the scroll position with it). So an inbox tab
+// whose live URL is a `/conversation/<id>` keeps the equivalent `/inbox?s=<id>`.
+export function stampedTabPath(tab: AppTab): string {
+  if (typeof window === "undefined") return tab.path;
+  const live = window.location.pathname + window.location.search;
+  const conv = window.location.pathname.match(/^\/conversation\/([^/?#]+)$/);
+  if (conv && tab.path.split("?")[0] === "/inbox") return `/inbox?s=${conv[1]}`;
+  return live;
+}
+
 export type ClientState = {
   current_conversation_id?: string;
   show_dismissed?: boolean;
@@ -4764,7 +4781,7 @@ export const useInboxStore = create<InboxStoreState>(
         sidePanelSessionId: this.sidePanelSessionId ?? undefined,
         sidePanelOpen: this.sidePanelOpen || undefined,
         sidePanelUserClosed: this.sidePanelUserClosed || undefined,
-        path: typeof window !== "undefined" ? window.location.pathname : t.path,
+        path: stampedTabPath(t),
       } : t);
     }
     const target = this.tabs.find((t: AppTab) => t.id === id);
@@ -4794,7 +4811,7 @@ export const useInboxStore = create<InboxStoreState>(
       sidePanelSessionId: this.sidePanelSessionId ?? undefined,
       sidePanelOpen: this.sidePanelOpen || undefined,
       sidePanelUserClosed: this.sidePanelUserClosed || undefined,
-      path: typeof window !== "undefined" ? window.location.pathname : t.path,
+      path: stampedTabPath(t),
       ...patch,
     } : t);
   }),
