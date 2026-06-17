@@ -4,6 +4,7 @@ import {
   collectHiddenResurrectionSuspects,
   GHOST_SWEEP_MIN_AGE_MS,
   STUB_SWEEP_MIN_AGE_MS,
+  STUB_HEAL_MIN_AGE_MS,
 } from "./ghostSweep";
 import { DISMISS_RECONCILE_WINDOW_MS } from "../store/inboxStore";
 
@@ -90,6 +91,78 @@ describe("collectGhostSweepCandidates", () => {
     );
     expect(stubs).toEqual([oldStub._id]);
     expect(candidates).toEqual([]);
+  });
+
+  // Regression coverage for ct-37441: a "New Session" whose createSession was
+  // given up (offline/outage/rate-limit) strands a stub the user typed into.
+  // It has a pending message (so the blank prune skips it) and no server
+  // conversation (so the message can never deliver) — a permanent stuck ghost.
+  // The heal sweep must re-collect exactly these so they get re-created + re-sent.
+  // A stub that gets healed must carry a path — the heal re-creates from it.
+  const typed = (id: string, ageMs: number, extra: Record<string, unknown> = {}) =>
+    blank(id, ageMs, { project_path: "/Users/me/proj", ...extra });
+
+  it("flags a stranded stub the user typed into (pending message, create given up)", () => {
+    const stranded = typed("stub-stranded", STUB_HEAL_MIN_AGE_MS + 1_000);
+    const { strandedStubs, stubs } = collectGhostSweepCandidates(
+      storeWith([stranded], { pendingMessages: { [stranded._id]: [{ content: "hi" }] } }),
+      NOW,
+    );
+    expect(strandedStubs).toEqual([stranded._id]);
+    // Disjoint from the blank-prune list — a typed-into stub must heal, not prune.
+    expect(stubs).toEqual([]);
+  });
+
+  it("leaves a stranded stub alone while its create is still in flight", () => {
+    const creating = typed("stub-creating", STUB_HEAL_MIN_AGE_MS + 1_000);
+    const { strandedStubs } = collectGhostSweepCandidates(
+      storeWith([creating], {
+        pendingMessages: { [creating._id]: [{ content: "hi" }] },
+        pendingSessionCreates: { [creating._id]: Promise.resolve("x") },
+      }),
+      NOW,
+    );
+    expect(strandedStubs).toEqual([]);
+  });
+
+  it("waits out the heal floor (a normal create / outbox replay gets to settle first)", () => {
+    const young = typed("stub-young-typed", STUB_HEAL_MIN_AGE_MS - 1_000);
+    const { strandedStubs } = collectGhostSweepCandidates(
+      storeWith([young], { pendingMessages: { [young._id]: [{ content: "hi" }] } }),
+      NOW,
+    );
+    expect(strandedStubs).toEqual([]);
+  });
+
+  it("skips a typed-into stub with no project/git path (pathless re-create can't spawn)", () => {
+    const pathless = blank("stub-pathless", STUB_HEAL_MIN_AGE_MS + 1_000); // no project_path/git_root
+    const { strandedStubs } = collectGhostSweepCandidates(
+      storeWith([pathless], { pendingMessages: { [pathless._id]: [{ content: "hi" }] } }),
+      NOW,
+    );
+    expect(strandedStubs).toEqual([]);
+  });
+
+  it("ignores foreign stranded stubs and real (convex-id) conversations", () => {
+    const foreign = typed("stub-foreign", STUB_HEAL_MIN_AGE_MS + 1_000, { user_id: "user0000000000000000000000other0" });
+    const real = typed(convexId("realconvmsg"), STUB_HEAL_MIN_AGE_MS + 1_000);
+    const { strandedStubs } = collectGhostSweepCandidates(
+      storeWith([foreign, real], {
+        pendingMessages: { [foreign._id]: [{ content: "hi" }], [real._id]: [{ content: "hi" }] },
+      }),
+      NOW,
+    );
+    expect(strandedStubs).toEqual([]);
+  });
+
+  it("does not flag a blank stub with no pending message (that is prune territory)", () => {
+    const blankStub = blank("stub-blank", STUB_SWEEP_MIN_AGE_MS + 1_000);
+    const { strandedStubs, stubs } = collectGhostSweepCandidates(
+      storeWith([blankStub]),
+      NOW,
+    );
+    expect(strandedStubs).toEqual([]);
+    expect(stubs).toEqual([blankStub._id]);
   });
 });
 
