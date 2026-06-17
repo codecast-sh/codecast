@@ -668,7 +668,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
           <div className="mt-4">
             <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-4 mb-2 flex items-center">
               <span>Bookmarks</span>
-              <span className="ml-auto inline-flex items-center justify-center min-w-[17px] h-[15px] px-1 rounded-full bg-sol-bg-highlight/70 text-[10px] tabular-nums text-sol-text-dim/70 normal-case font-normal">{bookmarks.length}</span>
+              <span className="ml-auto inline-flex items-center justify-center min-w-[17px] h-[15px] px-1 rounded-full bg-sol-bg-highlight/70 text-[10px] tabular-nums text-sol-text-dim/50 normal-case font-normal">{bookmarks.length}</span>
             </div>
             <div className="space-y-1">
               {(showAllBookmarks ? bookmarks : bookmarks.slice(0, 8)).map((bm: any, i: number, arr: any[]) => {
@@ -724,7 +724,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
                             {primary || <span className="italic font-normal text-sol-text-dim/60">No preview</span>}
                           </span>
                           <span
-                            className="flex-shrink-0 text-[9.5px] tabular-nums text-sol-text-dim/35 group-hover:text-sol-text-dim/65 transition-colors"
+                            className="flex-shrink-0 text-[9.5px] tabular-nums text-[color-mix(in_srgb,var(--sol-text-dim)_28%,transparent)] group-hover:text-sol-text-dim transition-colors"
                             title={new Date(bm.created_at).toLocaleString()}
                           >
                             {visitTimeAgo(bm.created_at)}
@@ -735,7 +735,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
                           // second headline; the project dot carries the only color so the eye groups by project.
                           <span className="flex items-center gap-1.5 mt-[3px] min-w-0">
                             {projColor && <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 opacity-75 ${projColor.dot}`} title={proj} />}
-                            <span className="min-w-0 truncate text-[10px] text-sol-text-dim/65 leading-tight group-hover:text-sol-text-muted transition-colors">
+                            <span className="min-w-0 truncate text-[10px] text-[color-mix(in_srgb,var(--sol-text-dim)_38%,transparent)] leading-tight group-hover:text-sol-text-dim transition-colors">
                               {convTitle}
                             </span>
                           </span>

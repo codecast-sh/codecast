@@ -1139,21 +1139,61 @@ export const SessionCard = memo(function SessionCard({
           </div>
         )}
       </div>
+      {/* The ONE pin a pinned session shows: a persistent, interactive badge anchored
+          top-right. It stays put on hover (z above the toolbar) and the hover toolbar
+          omits its own pin button for pinned rows — so the pin never duplicates or
+          cross-fades into a second copy. */}
       {onPin && session.is_pinned && (
-        <div className="absolute top-0 right-0 py-1 pr-2 pointer-events-none z-[1] transition-opacity group-hover:opacity-0" style={{ paddingLeft: 24, background: isActive ? 'linear-gradient(to right, transparent, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 60%)' : 'linear-gradient(to right, transparent, var(--sol-bg-alt) 60%)' }}>
-          <button
-            onClick={(e) => { e.stopPropagation(); onPin(session._id); }}
-            className="p-1 rounded text-sol-magenta transition-colors pointer-events-auto"
-          >
-            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 17v5" />
-              <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76z" />
-            </svg>
-          </button>
+        <div className="absolute top-0 right-0 py-1 pr-2 pointer-events-none z-[2]" style={{ paddingLeft: 24, background: isActive ? 'linear-gradient(to right, transparent, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 60%)' : 'linear-gradient(to right, transparent, var(--sol-bg-alt) 60%)' }}>
+          <TooltipProvider delayDuration={300}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={(e) => { e.stopPropagation(); onPin(session._id); tipActions.whisper('session.pin', e); }}
+                  className="p-1 rounded text-sol-magenta transition-opacity hover:opacity-70 pointer-events-auto"
+                >
+                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 17v5" />
+                    <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76z" />
+                  </svg>
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="left">Unpin ({formatShortcutLabel('session.pin')})</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </div>
       )}
       {(onDismiss || onStash || onDefer || onPin) && (
         <div className={`absolute top-0 bottom-0 right-0 flex flex-col items-center justify-between py-1 opacity-0 group-hover:opacity-100 transition-opacity pl-16 pr-2 ${isActive ? '' : 'bg-gradient-to-r from-transparent via-sol-bg-alt/60 to-sol-bg-alt'}`} style={isActive ? { background: 'linear-gradient(to right, transparent, color-mix(in srgb, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 60%, transparent), color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)))' } : undefined}>
+          {/* Pin slot, first so it anchors the top of the toolbar. When the row is
+              already pinned, the persistent badge above IS the pin — here we render
+              only an invisible spacer the same size, so the remaining actions sit
+              exactly where they do for an unpinned row and the badge has a clear slot
+              to occupy. When unpinned, this is the live "Pin" affordance. */}
+          {onPin && (
+            session.is_pinned ? (
+              <div className="p-1 pointer-events-none" aria-hidden="true">
+                <div className="w-3.5 h-3.5" />
+              </div>
+            ) : (
+              <TooltipProvider delayDuration={300}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onPin(session._id); tipActions.whisper('session.pin', e); checkMilestone('m-first-pin'); }}
+                      className="p-1 rounded transition-colors text-sol-text-dim hover:text-sol-magenta"
+                    >
+                      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M12 17v5" />
+                        <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76z" />
+                      </svg>
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="left">Pin ({formatShortcutLabel('session.pin')})</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )
+          )}
           {/* Dismiss — the PRIMARY remove: done with it, clears to the Dismissed
               group and stops the (usually idle) agent. Undoable. */}
           {onDismiss && (
@@ -1170,24 +1210,6 @@ export const SessionCard = memo(function SessionCard({
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="left">Dismiss — done, clears the inbox</TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-          )}
-          {onPin && (
-            <TooltipProvider delayDuration={300}>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); onPin(session._id); tipActions.whisper('session.pin', e); if (!session.is_pinned) checkMilestone('m-first-pin'); }}
-                    className={`p-1 rounded transition-colors ${session.is_pinned ? 'text-sol-magenta' : 'text-sol-text-dim hover:text-sol-magenta'}`}
-                  >
-                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill={session.is_pinned ? "currentColor" : "none"} stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M12 17v5" />
-                      <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76z" />
-                    </svg>
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="left">{session.is_pinned ? "Unpin" : "Pin"} ({formatShortcutLabel('session.pin')})</TooltipContent>
               </Tooltip>
             </TooltipProvider>
           )}
@@ -1941,8 +1963,17 @@ export function SessionListPanel({
                 ))}
               </div>
             ))}
+            {hHidden > 0 && (
+              <button
+                onClick={() => setSectionLimits((prev) => ({ ...prev, [hkey]: (prev[hkey] ?? SECTION_RENDER_CAP) + SECTION_RENDER_STEP }))}
+                className="w-full px-3 py-1.5 text-[10px] font-medium text-sol-text-dim hover:text-sol-cyan transition-colors text-left border-b border-sol-border/30"
+              >
+                Show {Math.min(hHidden, SECTION_RENDER_STEP)} more · {hHidden} hidden
+              </button>
+            )}
           </div>
-        )}
+          );
+        })()}
       </div>
     );
   };
@@ -2154,24 +2185,14 @@ export function SessionListPanel({
           dropSessionOnLabel={dropSessionOnLabel}
         />
         {/* One pill: a view-mode dropdown (trigger shows the current mode's
-            icon), then a divider, then independent show/hide toggles
-            (subagents, old). Ctrl+, still cycles view modes. The favorites view
-            is always project-grouped, so the pill is hidden there. */}
+            icon), a divider, the independent show/hide toggles (subagents,
+            old), then — after another divider, at the far end — the favorites
+            mode toggle. Ctrl+, still cycles view modes. In favorites view the
+            view controls hide (favorites is always project-grouped) and the
+            pill collapses to just the amber star, which stays put. */}
         <div className="flex items-center flex-shrink-0 ml-auto gap-1.5">
-          {/* Favorites is a MODE of this panel — toggled here on the right, not
-              from the far-left nav. Amber when active. */}
-          <button
-            onClick={() => useInboxStore.getState().setShowFavorites(!favoritesView)}
-            title={favoritesView ? "Back to inbox" : "Show favorites"}
-            className={`flex items-center px-1.5 py-[3px] rounded-md border transition-colors ${
-              favoritesView
-                ? "border-amber-400/40 bg-amber-400/15 text-amber-400"
-                : "border-sol-border/40 bg-sol-bg/70 text-sol-text-dim/70 hover:text-amber-400"
-            }`}
-          >
-            <Star className="w-3.5 h-3.5" fill={favoritesView ? "currentColor" : "none"} />
-          </button>
-          {!favoritesView && <div className="flex items-center flex-shrink-0 rounded-md border border-sol-border/40 bg-sol-bg/70 p-px">
+          <div className="flex items-center flex-shrink-0 rounded-md border border-sol-border/40 bg-sol-bg/70 p-px">
+          {!favoritesView && <>
           {(() => {
             const viewModeOptions = [
               { key: "grouped", label: "By status", icon: List },
@@ -2235,7 +2256,22 @@ export function SessionListPanel({
               <History className="w-3 h-3" />
             </button>
           )}
-        </div>}
+          <div className="w-px h-3 bg-sol-border/40" />
+          </>}
+          {/* Favorites is a MODE of this panel — toggled at the END of the
+              group, after the old-sessions toggle. Amber when active. */}
+          <button
+            onClick={() => useInboxStore.getState().setShowFavorites(!favoritesView)}
+            title={favoritesView ? "Back to inbox" : "Show favorites"}
+            className={`px-1 py-[3px] rounded-[5px] transition-colors ${
+              favoritesView
+                ? "bg-amber-400/15 text-amber-400"
+                : "text-sol-text-dim/70 hover:text-amber-400"
+            }`}
+          >
+            <Star className="w-3 h-3" fill={favoritesView ? "currentColor" : "none"} />
+          </button>
+        </div>
         </div>
       </div>
       <div ref={scrollContainerRef} className="flex-1 overflow-y-auto scrollbar-auto">
