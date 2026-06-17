@@ -1919,4 +1919,13 @@ export default defineSchema({
     .index("by_owner_seq", ["owner_user_id", "seq"])
     .index("by_team_seq", ["team_id", "seq"]),
 
+}, {
+  // The `messages` table is in the millions of rows, and the default
+  // `schemaValidation: true` re-scans every document on every `convex deploy` —
+  // turning a one-field function change into a multi-minute full-table walk.
+  // Disable the runtime/push-time scan: writes still flow through mutations with
+  // `v.*` arg validators and the schema continues to generate the TypeScript
+  // types, so the validators above remain the source of truth for shape — they
+  // just aren't re-checked against the whole DB on each push.
+  schemaValidation: false,
 });
