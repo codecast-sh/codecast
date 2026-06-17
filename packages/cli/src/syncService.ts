@@ -1334,6 +1334,18 @@ export class SyncService {
     }
   }
 
+  async getMinDesktopVersion(): Promise<string | null> {
+    try {
+      const version = await this.client.query(
+        "systemConfig:getMinDesktopVersion" as any,
+        {}
+      );
+      return version as string | null;
+    } catch {
+      return null;
+    }
+  }
+
   async syncLogs(logs: Array<{
     level: "debug" | "info" | "warn" | "error";
     message: string;

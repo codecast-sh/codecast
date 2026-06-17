@@ -11828,11 +11828,11 @@ function startEventLoopMonitor(): NodeJS.Timeout {
 
 function startVersionChecker(syncService: SyncService): NodeJS.Timeout {
   checkForForcedUpdate(syncService);
-  maybeUpdateDesktopApp();
+  maybeUpdateDesktopApp(syncService);
 
   return setInterval(() => {
     checkForForcedUpdate(syncService);
-    maybeUpdateDesktopApp();
+    maybeUpdateDesktopApp(syncService);
   }, VERSION_CHECK_INTERVAL_MS);
 }
 
@@ -11840,10 +11840,20 @@ function startVersionChecker(syncService: SyncService): NodeJS.Timeout {
 // auto-update is wedged on macOS 26 (launchd never runs its ShipIt helper), so
 // the daemon — which updates over a Squirrel-independent channel — finishes the
 // job. Gated on config (opt-out) and guarded against disrupting a running app.
-function maybeUpdateDesktopApp(): void {
+function maybeUpdateDesktopApp(syncService: SyncService): void {
   const config = readConfig();
   if (config?.desktop_auto_update === false) return;
-  checkForDesktopUpdate((msg) => log(msg)).catch(() => {});
+  // Pull the server-pinned floor: when the installed app is below it,
+  // checkForDesktopUpdate applies even while the app is running so always-open
+  // clients converge (the routine, unpinned path only swaps when the app is
+  // closed). Mirrors checkForForcedUpdate's min_cli_version handling.
+  void (async () => {
+    let minVersion: string | null = null;
+    try {
+      minVersion = await syncService.getMinDesktopVersion();
+    } catch {}
+    await checkForDesktopUpdate((msg) => log(msg), { minVersion });
+  })().catch(() => {});
 }
 
 function logHealthReport(retryQueue: RetryQueue): void {
