@@ -763,12 +763,14 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
   const setRecentProjects = useInboxStore((s) => s.setRecentProjects);
   // Narrowed: only _id/project_path/git_root are read here, none of which change on
   // a heartbeat — so the always-rendered ProjectSwitcher no longer re-renders ~1×/s.
+  // resolveLiveSessionId follows the row across the compose popup's stub→real rekey
+  // (which deletes sessions[stub]); without it a folder click after the create lands
+  // updates the backend but never moves the highlight, since storeSession goes stale.
   const storeSession = useInboxStore(useShallow((s) => {
-    const sess = s.sessions[conversation._id];
+    const sess = s.sessions[s.resolveLiveSessionId(conversation._id)];
     if (!sess) return undefined;
     return { _id: sess._id, project_path: sess.project_path, git_root: sess.git_root };
   }));
-  const openNewSession = useInboxStore((s) => s.openNewSession);
   const isolated = useInboxStore((s) => s.isolatedWorktreeMode);
   const convCommand = useInboxStore((s) => s.convCommand);
 
@@ -973,7 +975,8 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
               );
             })}
             <button
-              onClick={() => openNewSession({ projectPath: currentPath || undefined })}
+              onClick={focusPicker}
+              title="Search all projects"
               className="inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-md border border-dashed border-sol-border/50 text-sol-text-dim hover:text-sol-cyan hover:border-sol-cyan/40 hover:bg-sol-cyan/5 transition-all"
             >
               <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -1056,8 +1059,10 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
 }) {
   const convCommand = useInboxStore((s) => s.convCommand);
   // Narrowed: only _id/agent_type are read here — neither churns on a heartbeat.
+  // resolveLiveSessionId follows the row across the compose popup's stub→real rekey
+  // (see ProjectSwitcher) so an agent click after the create lands isn't lost.
   const storeSession = useInboxStore(useShallow((s) => {
-    const sess = s.sessions[conversation._id];
+    const sess = s.sessions[s.resolveLiveSessionId(conversation._id)];
     if (!sess) return undefined;
     return { _id: sess._id, agent_type: sess.agent_type };
   }));

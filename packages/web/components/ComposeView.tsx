@@ -6,7 +6,6 @@ import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { NewSessionView, MessageInput, ConversationData } from "./ConversationView";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { formatShortcutParts } from "../shortcuts";
-import { soundNewSession } from "../lib/sounds";
 import { isElectron, bridge } from "../lib/desktop";
 import { resolveSessionSkills } from "../lib/sessionSkills";
 import { broadcastComposeOptimistic } from "../lib/composeBridge";
@@ -21,8 +20,14 @@ import { broadcastComposeOptimistic } from "../lib/composeBridge";
  *                  bring Codecast to the front.
  *   - Cmd+Enter  → send & open: start the session and switch into Codecast on
  *                  the new conversation.
+ *
+ * Lifecycle (one contract, two hosts): opening seeds a DEFERRED local stub — no
+ * server session yet. The first send COMMITS it (materialize); every other
+ * dismissal ABANDONS it (abandonStub prunes the un-sent stub). The two hosts —
+ * the in-app overlay (onClose set) and the standalone palette window (Electron) —
+ * differ only in how they dismiss, never in this commit/abandon contract.
  */
-export function ComposeView({ initialQuery }: { initialQuery?: string }) {
+export function ComposeView({ initialQuery, context, onClose }: { initialQuery?: string; context?: { projectPath?: string; gitRoot?: string }; onClose?: () => void }) {
   const router = useRouter();
   const { user: currentUser } = useCurrentUser();
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -33,23 +38,47 @@ export function ComposeView({ initialQuery }: { initialQuery?: string }) {
   // the MAIN window paints the first message optimistically; fire-and-forget
   // (false) needs no cross-window bubble (the app isn't showing the conversation).
   const navIntentRef = useRef(false);
+  // The session create is DEFERRED: opening the popup seeds only a local stub
+  // (beginOptimisticSession deferCreate) so the popup can render and hold a draft
+  // with no server conversation yet. materializeRef fires the real create on the
+  // first send; sentRef records that it happened; stubIdRef is the stub itself.
+  const materializeRef = useRef<(() => Promise<string>) | null>(null);
+  const stubIdRef = useRef<string | null>(null);
+  const sentRef = useRef(false);
+
+  // A ComposeView instance owns ONE deferred stub and ends one of two ways:
+  //   • committed — the first send fires materialize() and sets sentRef.
+  //   • abandoned — abandonStub() prunes the un-sent, server-less stub (and plants
+  //     an IDB exclude so it can't resurrect as a ghost "New session").
+  // abandonStub is the SINGLE un-commit path, run from the only two moments the
+  // popup disappears: unmount, and the palette window hiding while staying
+  // mounted. Idempotent — pruneGhostSessions no-ops once the stub has been sent.
+  const abandonStub = useCallback(() => {
+    if (sentRef.current || !stubIdRef.current) return;
+    useInboxStore.getState().pruneGhostSessions([stubIdRef.current]);
+  }, []);
 
   // One fresh blank session per popup instance (PaletteRoot remounts via key).
   useMountEffect(() => {
     const store = useInboxStore.getState();
     const ctx = store.currentConversation;
-    const path = ctx.projectPath || ctx.gitRoot || store.recentProjects?.[0]?.path;
+    // A caller-supplied project (doc review passes the doc's own project) wins —
+    // it's the explicit target. Otherwise inherit the current conversation, then
+    // the most recent project. All can be empty, in which case the daemon starts
+    // in $HOME and the null-state ProjectSwitcher lets the user pick before send.
+    const path = context?.projectPath || context?.gitRoot || ctx.projectPath || ctx.gitRoot || store.recentProjects?.[0]?.path;
     const agentType = (ctx.agentType || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
 
-    soundNewSession();
-    // Shared optimistic-create path — see store.beginOptimisticSession. reuse:
-    // summon→Escape→summon converges on the SAME blank session (resurfacing its
-    // draft) instead of stranding an empty conversation per summon.
-    const { stubId: sid } = store.beginOptimisticSession({
+    // Shared optimistic-create path — see store.beginOptimisticSession.
+    // deferCreate: opening the popup seeds ONLY a local stub (so the null-state
+    // and message box can render + hold a draft); the server conversation isn't
+    // created until materialize() fires on the first send. Escaping out therefore
+    // strands nothing — no empty "New session" row, no pre-warmed agent, no sound.
+    const { stubId: sid, materialize } = store.beginOptimisticSession({
       agentType,
       projectPath: path,
       gitRoot: path || undefined,
-      reuse: true,
+      deferCreate: true,
       create: (stubId) => store.createSession({
         agent_type: agentType,
         project_path: path,
@@ -57,10 +86,16 @@ export function ComposeView({ initialQuery }: { initialQuery?: string }) {
         session_id: stubId,
       }),
     });
+    materializeRef.current = materialize;
+    stubIdRef.current = sid;
 
     if (initialQuery) store.setDraft(sid, { draft_message: initialQuery });
     setSessionId(sid);
     setSkillCtx({ projectPath: path || undefined, agentType });
+
+    // Unmount (overlay close, or the palette window switching face / navigating
+    // away) abandons the stub when it was never sent.
+    return abandonStub;
   });
 
   // Same resolver the in-conversation input uses. available_skills rides on
@@ -94,21 +129,40 @@ export function ComposeView({ initialQuery }: { initialQuery?: string }) {
     };
   });
 
-  // Escape closes the popup. MessageInput's keydown handler preventDefaults +
-  // stopPropagations Escape (it's a 250ms double-tap-to-clear gesture in a real
-  // conversation), so a normal bubble-phase listener never sees it. Listen in the
-  // CAPTURE phase to close before MessageInput can swallow the key.
+  // Escape only DISMISSES the popup — abandoning the un-sent stub is NOT done here;
+  // it falls out of the dismissal (the overlay unmounts → cleanup abandons; the
+  // palette window hides → the visibilitychange effect below abandons). Listen in
+  // the CAPTURE phase because MessageInput preventDefaults + stops Escape (its
+  // 250ms double-tap-to-clear gesture), so a bubble-phase listener never sees it.
   useMountEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       e.preventDefault();
       e.stopPropagation();
+      // In-app overlay: the host owns dismissal. Standalone palette window: hide
+      // the window (Electron) or step back in history (browser).
+      if (onClose) { onClose(); return; }
       const hide = bridge("paletteHide");
       if (hide) hide();
       else router.back();
     };
     document.addEventListener("keydown", onKeyDown, true);
     return () => document.removeEventListener("keydown", onKeyDown, true);
+  });
+
+  // The standalone palette WINDOW hides (Escape → paletteHide, or click-away →
+  // main's win.on("blur") → hidePalette) WITHOUT unmounting, so the unmount
+  // cleanup never runs. Abandon the un-sent stub the moment the window hides.
+  // Keyed off the Page Visibility API (Electron maps win.hide() → document
+  // hidden), not window blur: the reveal's app.focus({steal}) + window.focus() can
+  // churn focus but never HIDES the window, so this can't abandon a fresh stub
+  // mid-reveal. Electron + standalone only (no onClose): the overlay's host owns
+  // dismissal, and a browser tab switch hides the tab without dismissing the popup.
+  useMountEffect(() => {
+    if (!isElectron() || onClose) return;
+    const onHidden = () => { if (document.hidden) abandonStub(); };
+    document.addEventListener("visibilitychange", onHidden);
+    return () => document.removeEventListener("visibilitychange", onHidden);
   });
 
   // Dismiss the popup the instant the user submits — NEVER gate the hide on the
@@ -118,12 +172,26 @@ export function ComposeView({ initialQuery }: { initialQuery?: string }) {
   // the popup is already gone.
   const handleSubmit = useCallback((navigate: boolean) => {
     if (!sessionId) return;
+    // First send → mark sent (so close-cleanup never prunes this row) and fire the
+    // deferred server create. This runs a tick before MessageInput's own send
+    // awaits awaitConvexId(sessionId), so the in-flight create is already tracked
+    // when the send resolves the stub→real id. Idempotent (once-guarded in store).
+    sentRef.current = true;
+    materializeRef.current?.();
     navIntentRef.current = navigate;
     const store = useInboxStore.getState();
     const resolveConvexId = async () => {
       if (isConvexId(sessionId)) return sessionId;
       return store.getConvexId(sessionId) ?? (await store.awaitConvexId(sessionId).catch(() => undefined));
     };
+    // In-app overlay: dismiss now (the session create + first send finish durably
+    // in the background). "Send & open" then routes onto the new conversation once
+    // its real id resolves; plain Enter leaves the user where they were.
+    if (onClose) {
+      onClose();
+      if (navigate) void resolveConvexId().then((convexId) => { if (convexId) router.push(`/conversation/${convexId}`); });
+      return;
+    }
     if (isElectron()) {
       const submit = bridge("composeSubmit");
       // Enter → fire-and-forget: hide the popup + step out of the app now.
@@ -147,14 +215,14 @@ export function ComposeView({ initialQuery }: { initialQuery?: string }) {
     void resolveConvexId().then((convexId) => {
       if (convexId) router.push(`/conversation/${convexId}`);
     });
-  }, [sessionId, router]);
+  }, [sessionId, router, onClose]);
 
   const conversation = sessionId
     ? ({ _id: sessionId, status: "active" } as unknown as ConversationData)
     : null;
 
   return (
-    <div ref={rootRef} className="w-[720px] max-w-[94vw] h-[520px] max-h-[88vh] rounded-xl border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col animate-in fade-in-0 zoom-in-95 slide-in-from-top-2 duration-150">
+    <div ref={rootRef} className="w-[94vw] h-[88vh] max-w-[960px] max-h-[680px] rounded-xl border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col animate-in fade-in-0 zoom-in-95 slide-in-from-top-2 duration-150">
       <div className="flex-1 min-h-0 flex flex-col px-4 pt-6">
         {conversation && <NewSessionView conversation={conversation} />}
       </div>

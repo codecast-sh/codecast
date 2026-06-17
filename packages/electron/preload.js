@@ -23,6 +23,10 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   paletteNavigate: (path) => ipcRenderer.send("palette-navigate", path),
   paletteHide: () => ipcRenderer.send("palette-hide"),
   paletteNewSession: () => ipcRenderer.send("palette-new-session"),
+  // The palette window reports which face it has painted (compose / search);
+  // main reveals the window only when that matches what it asked for, so the
+  // previous face never flashes before the swap.
+  paletteReady: (mode) => ipcRenderer.send("palette-ready", mode),
   onPaletteShow: (cb) => {
     const handler = () => cb();
     ipcRenderer.on("palette-show", handler);

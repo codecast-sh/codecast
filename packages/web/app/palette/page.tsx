@@ -5,7 +5,7 @@ import { ShortcutProvider } from "../../shortcuts";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useEnsureDispatch } from "../../hooks/useEnsureDispatch";
 import { useLiveInboxSessions } from "../../hooks/useLiveInboxSessions";
-import { isElectron } from "../../lib/desktop";
+import { isElectron, bridge } from "../../lib/desktop";
 
 export default function PalettePage() {
   return (
@@ -66,6 +66,16 @@ function PaletteRoot() {
     window.addEventListener("codecast-compose", handler);
     return () => window.removeEventListener("codecast-compose", handler);
   }, [enterCompose]);
+
+  // Tell the Electron shell the requested face is mounted + painted. The shell
+  // holds the window hidden until this ack (or a short fallback) so it never
+  // flashes the previous face before the swap. rAF defers to after paint; a
+  // no-op in the browser (bridge() returns undefined off-desktop).
+  useWatchEffect(() => {
+    if (!isElectron()) return;
+    const raf = requestAnimationFrame(() => bridge("paletteReady")?.(mode));
+    return () => cancelAnimationFrame(raf);
+  }, [mode, composeNonce]);
 
   if (mode === "compose") {
     return <ComposeView key={composeNonce} initialQuery={composeQuery} />;

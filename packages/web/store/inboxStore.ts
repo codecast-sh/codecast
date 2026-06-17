@@ -13,17 +13,6 @@ import { isSubagentConversation } from "@codecast/convex/convex/ccAccountsShared
 
 export type { PendingEntry } from "./syncProtocol";
 
-export interface SessionContext {
-  projectPath?: string;
-  gitRoot?: string;
-  agentType?: string;
-  source?: "inbox" | "sessions";
-  // Pre-fill the new-session composer's first message. Used when a surface wants
-  // to launch a fresh agent already loaded with a prompt — e.g. doc-review
-  // "Send to new agent" seeds the compiled annotations here.
-  firstMessage?: string;
-}
-
 // Convex-id check lives in lib/entityLinks (the entity-routing source of truth).
 // Imported for internal use AND re-exported so the many call sites that import
 // `isConvexId` from the store keep working.
@@ -1693,16 +1682,26 @@ interface InboxStoreState {
   isolatedWorktreeMode: boolean;
   setIsolatedWorktreeMode: (val: boolean) => void;
 
-  // -- New session modal --
-  newSession: { isOpen: boolean; context: SessionContext };
-  openNewSession: (ctx?: SessionContext) => void;
-  closeNewSession: () => void;
-
   // -- Unified command palette --
   palette: { open: boolean; targets: any[]; targetType: 'task' | 'doc' | 'plan' | 'session' | null; initialMode: string; initialQuery?: string };
   openPalette: (opts?: { targets?: any[]; targetType?: 'task' | 'doc' | 'plan' | 'session'; mode?: string; initialQuery?: string }) => void;
   closePalette: () => void;
   togglePalette: () => void;
+
+  // -- New-session compose popup --
+  // The floating new-session popup (ComposeView), shown as an in-app overlay —
+  // the same surface the command palette's compose mode uses. Every "New Session"
+  // affordance opens this. `initialQuery` pre-fills the composer (e.g. doc-review
+  // "New agent"); `nonce` bumps each open so the overlay remounts on a fresh
+  // blank session. `context` lets a caller seed the new session's project when
+  // there's no current conversation to inherit it from — doc review passes the
+  // doc's own project so the new agent spawns where the doc lives (without it
+  // ComposeView falls back to currentConversation/recents, which are empty on the
+  // docs page → a pathless start the daemon defaults to $HOME). Ephemeral UI
+  // state (raw set), like the palette toggle.
+  compose: { open: boolean; initialQuery?: string; context?: { projectPath?: string; gitRoot?: string }; nonce: number };
+  openCompose: (initialQuery?: string, context?: { projectPath?: string; gitRoot?: string }) => void;
+  closeCompose: () => void;
 
   // -- Create modal --
   createModal: 'task' | 'plan' | 'doc' | null;
@@ -1752,7 +1751,11 @@ interface InboxStoreState {
   // `reuse` makes repeated summons converge on the existing blank session for the
   // same project+agent instead of minting (and pre-warming) a new conversation
   // per summon — see findReusableBlankSession.
-  beginOptimisticSession: (opts: { agentType: string; projectPath?: string; gitRoot?: string; reuse?: boolean; create: (stubId: string) => Promise<string> }) => { stubId: string; ready: Promise<string> };
+  // `deferCreate` seeds the local stub (so the popup can render + bind a draft)
+  // but does NOT fire `create` until the returned `materialize()` runs — the
+  // new-session popup uses it so merely opening doesn't strand a conversation on
+  // Escape. `materialize()` is idempotent and returns the same `ready` promise.
+  beginOptimisticSession: (opts: { agentType: string; projectPath?: string; gitRoot?: string; reuse?: boolean; deferCreate?: boolean; create: (stubId: string) => Promise<string> }) => { stubId: string; ready: Promise<string>; materialize: () => Promise<string> };
   // Verified ghost removal: hard-drop cached session rows the server confirmed
   // deleted (the empty-conversation GC). Plants the exclude pending entries that
   // authorize the IDB row delete and block crawl re-adds.
@@ -2796,16 +2799,6 @@ export const useInboxStore = create<InboxStoreState>(
   currentConversation: {},
   isolatedWorktreeMode: false,
 
-  newSession: { isOpen: false, context: {} },
-
-  openNewSession: (ctx?: SessionContext) => {
-    set({ newSession: { isOpen: true, context: ctx || {} } });
-  },
-
-  closeNewSession: () => {
-    set({ newSession: { isOpen: false, context: {} } });
-  },
-
   palette: { open: false, targets: [], targetType: null, initialMode: 'root' },
 
   openPalette: (opts?: { targets?: any[]; targetType?: 'task' | 'doc' | 'plan' | 'session'; mode?: string; initialQuery?: string }) => {
@@ -2831,6 +2824,14 @@ export const useInboxStore = create<InboxStoreState>(
     } else {
       set({ palette: { open: true, targets: [], targetType: null, initialMode: 'root' } });
     }
+  },
+
+  compose: { open: false, nonce: 0 },
+  openCompose: (initialQuery?: string, context?: { projectPath?: string; gitRoot?: string }) => {
+    set({ compose: { open: true, initialQuery, context, nonce: get().compose.nonce + 1 } });
+  },
+  closeCompose: () => {
+    set({ compose: { ...get().compose, open: false } });
   },
 
   createModal: null,
@@ -3323,7 +3324,7 @@ export const useInboxStore = create<InboxStoreState>(
   // for normal sessions, the createQuickSession mutation when isolated/worktree
   // options are needed). The stub uses the same Math.random id scheme as
   // createSession — never 32 chars, so isConvexId() correctly treats it as local.
-  beginOptimisticSession: (opts: { agentType: string; projectPath?: string; gitRoot?: string; reuse?: boolean; create: (stubId: string) => Promise<string> }) => {
+  beginOptimisticSession: (opts: { agentType: string; projectPath?: string; gitRoot?: string; reuse?: boolean; deferCreate?: boolean; create: (stubId: string) => Promise<string> }) => {
     const store = get();
     // Converge on the existing blank session for this project+agent instead of
     // minting another one — repeated summon/abandon cycles otherwise strand an
@@ -3344,7 +3345,7 @@ export const useInboxStore = create<InboxStoreState>(
             }
           }).catch(() => {});
         }
-        return { stubId: existing, ready };
+        return { stubId: existing, ready, materialize: () => ready };
       }
     }
     const stubId = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
@@ -3371,20 +3372,36 @@ export const useInboxStore = create<InboxStoreState>(
     // active belongs to that bucket. Assignment waits for the real id (the
     // server side effect can't act on stubs).
     const bucketAtCreate = store.activeBucketFilter;
-    const ready = opts.create(stubId).then((convexId: string) => {
-      if (convexId) {
-        store.resolveSessionId(stubId, convexId);
-        if (bucketAtCreate && isConvexId(convexId)) {
-          get().assignSessionToBucket(convexId, bucketAtCreate);
+    // The actual server create — fired now, or deferred to materialize(). Wrapped
+    // in a once-guard so a deferred stub's create fires exactly once no matter how
+    // many times materialize() is called (e.g. typed-then-sent, or both the draft
+    // and submit triggers racing).
+    let fired = false;
+    let readyPromise: Promise<string> | null = null;
+    const fire = (): Promise<string> => {
+      if (fired) return readyPromise as Promise<string>;
+      fired = true;
+      const ready = opts.create(stubId).then((convexId: string) => {
+        if (convexId) {
+          store.resolveSessionId(stubId, convexId);
+          if (bucketAtCreate && isConvexId(convexId)) {
+            get().assignSessionToBucket(convexId, bucketAtCreate);
+          }
         }
-      }
-      return convexId;
-    });
-    store.trackSessionCreate(stubId, ready);
-    // Callers attach their own handling; swallow here so an unobserved create
-    // failure doesn't surface as an unhandled rejection.
-    ready.catch(() => {});
-    return { stubId, ready };
+        return convexId;
+      });
+      store.trackSessionCreate(stubId, ready);
+      // Callers attach their own handling; swallow here so an unobserved create
+      // failure doesn't surface as an unhandled rejection.
+      ready.catch(() => {});
+      readyPromise = ready;
+      return ready;
+    };
+    // Deferred: the stub exists locally but no server conversation is created
+    // until materialize() runs. An abandoned (never-materialized) stub carries no
+    // pendingSessionCreates entry, so pruneGhostSessions can hard-drop it cleanly.
+    const ready = opts.deferCreate ? Promise.resolve(stubId) : fire();
+    return { stubId, ready, materialize: fire };
   },
 
   _applyClientUI: sync(function (this: Draft, partial: Partial<ClientUI>) {

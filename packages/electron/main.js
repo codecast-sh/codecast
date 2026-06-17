@@ -257,8 +257,11 @@ function createWindow() {
 
 function createPaletteWindow() {
   const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().workAreaSize;
-  const winWidth = 740;
-  const winHeight = 580;
+  // The compose card fills this window (94vw × 88vh), so the window IS the box's
+  // size. ~30% wider than the old 740×580, only modestly taller — a proportional
+  // bump made the empty new-session state a cavern, so we grow width more.
+  const winWidth = 1000;
+  const winHeight = 680;
 
   paletteWindow = new BrowserWindow({
     width: winWidth,
@@ -320,7 +323,10 @@ function togglePalette() {
   }
 }
 
-function positionPaletteWindow() {
+// Place the palette window (position only). Does NOT show/focus — that's
+// revealPaletteWindow, run AFTER the renderer reports the right face is painted,
+// so we never flash the previous face during the swap.
+function placePaletteWindow() {
   if (!paletteWindow) return;
   // Capture BEFORE the palette takes focus: was Codecast's own window the one
   // being summoned over? Enter's fire-and-forget hand-back (compose-submit)
@@ -337,6 +343,10 @@ function positionPaletteWindow() {
     Math.round(dx + (sw - winWidth) / 2),
     Math.round(dy + sh * 0.18)
   );
+}
+
+function revealPaletteWindow() {
+  if (!paletteWindow) return;
   paletteWindow.show();
   // When summoned over another app (Chrome, etc.), show()+focus() alone do NOT
   // make this a background app's window the OS "key window" on macOS — so the
@@ -347,10 +357,37 @@ function positionPaletteWindow() {
   paletteWindow.focus();
 }
 
+// Switch the palette window to the requested face (compose/search), then reveal
+// it only once the renderer acks it has painted that face — so the previous face
+// never flashes before the swap. The fallback timer covers older web builds (no
+// ack) and any missed ack, so the window can't get stuck hidden.
+let revealFallbackTimer = null;
+let pendingRevealMode = null; // "compose" | "search" | null
+function showPaletteFace(channel) {
+  if (!paletteWindow) return;
+  placePaletteWindow();
+  pendingRevealMode = channel === "compose-show" ? "compose" : "search";
+  clearTimeout(revealFallbackTimer);
+  const waitingFor = pendingRevealMode;
+  revealFallbackTimer = setTimeout(() => finishReveal(waitingFor), 200);
+  paletteWindow.webContents.send(channel);
+}
+
+function finishReveal(mode) {
+  if (!pendingRevealMode) return;
+  // Reveal only when the renderer painted the face we asked for, so a stale ack
+  // for the previous face can't reveal it mid-swap. `mode` undefined = older web
+  // build whose ack carries no face → trust it (best effort).
+  if (mode && mode !== pendingRevealMode) return;
+  pendingRevealMode = null;
+  clearTimeout(revealFallbackTimer);
+  revealFallbackTimer = null;
+  revealPaletteWindow();
+}
+
 function showPalette() {
   if (!paletteWindow) return;
-  positionPaletteWindow();
-  paletteWindow.webContents.send("palette-show");
+  showPaletteFace("palette-show");
 }
 
 // Summon the same palette window into new-session compose mode. Used by the
@@ -359,16 +396,19 @@ function showCompose() {
   if (!paletteWindow) {
     createPaletteWindow();
     paletteWindow.once("ready-to-show", () => {
-      positionPaletteWindow();
-      paletteWindow.webContents.send("compose-show");
+      showPaletteFace("compose-show");
     });
     return;
   }
-  positionPaletteWindow();
-  paletteWindow.webContents.send("compose-show");
+  showPaletteFace("compose-show");
 }
 
 function hidePalette() {
+  // Always cancel a pending reveal first — a late ack (or the fallback) must not
+  // pop a window the user has already dismissed.
+  pendingRevealMode = null;
+  clearTimeout(revealFallbackTimer);
+  revealFallbackTimer = null;
   if (!paletteWindow || !paletteWindow.isVisible()) return;
   paletteWindow.hide();
 }
@@ -584,6 +624,12 @@ ipcMain.handle("show-notification", (_e, { title, body, data }) => {
 });
 
 // Palette IPC
+// The palette renderer has painted a face (compose/search) — reveal the window
+// if it's the one we asked for.
+ipcMain.on("palette-ready", (_e, mode) => {
+  finishReveal(mode);
+});
+
 ipcMain.on("palette-navigate", (_e, navPath) => {
   hidePalette();
   if (mainWindow) {

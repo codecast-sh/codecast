@@ -1815,7 +1815,9 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                   window.dispatchEvent(new CustomEvent('codecast-compose', { detail: query.trim() }));
                 } else {
                   closePalette();
-                  window.dispatchEvent(new CustomEvent('codecast-new-session'));
+                  // Open the in-app compose popup, carrying the typed text in as
+                  // the first message — same surface, just an overlay.
+                  useInboxStore.getState().openCompose(query.trim());
                 }
               }}
               className={itemClass}
