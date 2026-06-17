@@ -1,16 +1,13 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useRouter } from "next/navigation";
-import { useQuery } from "convex/react";
+import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import {
   isDesktop,
-  isElectron,
   updateBadge,
   onDeepLink,
-  checkForUpdates,
-  onUpdateStatus,
-  restartForUpdate,
+  checkDesktopUpdate,
   notifyNative,
   requestNotificationPermission,
   hasBrowserNotificationPermission,
@@ -28,9 +25,10 @@ export function DesktopProvider() {
   const sessions = useInboxStore((s) => s.sessions);
   const prevCountRef = useRef<number | null>(null);
   const initRef = useRef(false);
-  const [updateStatus, setUpdateStatus] = useState<{ status: string; version?: string; percent?: number } | null>(null);
-  const [dismissed, setDismissed] = useState(false);
-  const dismissedStatusRef = useRef<string | null>(null);
+  const [update, setUpdate] = useState<{ current: string; latest: string } | null>(null);
+  const [updating, setUpdating] = useState(false);
+  const [dismissedVersion, setDismissedVersion] = useState<string | null>(null);
+  const requestDesktopUpdate = useMutation(api.users.requestDesktopUpdate);
 
   useWatchEffect(() => {
     if (!isDesktop()) return;
@@ -132,54 +130,69 @@ export function DesktopProvider() {
     const handleNavigate = (e: Event) => goTo((e as CustomEvent).detail);
     window.addEventListener("codecast-navigate", handleNavigate);
 
-    checkForUpdates().catch(() => {});
-
-    if (isElectron()) {
-      onUpdateStatus((status) => {
-        setUpdateStatus(status);
-        if (status.status !== dismissedStatusRef.current) {
-          setDismissed(false);
-        }
-      });
-    }
   }, [router]);
 
-  if (!updateStatus || dismissed) return null;
+  // Desktop update detection: compare the running app version against the latest
+  // published version (same-origin /api/desktop/latest). Poll on mount, on window
+  // focus, and hourly — Squirrel's own check is dead on macOS 26, so this is the
+  // only reliable signal that an update is waiting.
+  useEffect(() => {
+    if (!isDesktop()) return;
+    let cancelled = false;
+    const check = () => {
+      checkDesktopUpdate().then((u) => {
+        if (cancelled) return;
+        setUpdate(u);
+      });
+    };
+    check();
+    const onFocus = () => check();
+    window.addEventListener("focus", onFocus);
+    const id = window.setInterval(check, 60 * 60 * 1000);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", onFocus);
+      window.clearInterval(id);
+    };
+  }, []);
 
-  const { status, version, percent } = updateStatus;
-  if (status !== "available" && status !== "downloading" && status !== "ready") return null;
+  if (!update || update.latest === dismissedVersion) return null;
 
   return (
     <div className="fixed top-0 left-0 right-0 z-[9998] pointer-events-none">
       <div className="pointer-events-auto mx-auto max-w-xl mt-12 px-3">
         <div className="relative overflow-hidden rounded-lg border border-sol-cyan/30 bg-sol-bg-alt/95 backdrop-blur-md shadow-lg shadow-sol-cyan/5">
-          {status === "downloading" && (
-            <div
-              className="absolute bottom-0 left-0 h-[2px] bg-sol-cyan/60 transition-all duration-300"
-              style={{ width: `${percent ?? 0}%` }}
-            />
-          )}
           <div className="flex items-center gap-3 px-4 py-2.5">
             <div className="w-1.5 h-1.5 rounded-full flex-shrink-0 animate-pulse bg-sol-cyan" />
             <span className="text-xs text-sol-text flex-1">
-              {status === "available" && `v${version} available — downloading`}
-              {status === "downloading" && `Downloading v${version}${percent != null ? ` — ${percent}%` : ""}`}
-              {status === "ready" && `v${version} ready to install`}
+              {updating ? (
+                <>Updating to v{update.latest} — the app will restart…</>
+              ) : (
+                <>
+                  Codecast v{update.latest} is available
+                  <span className="text-sol-text-dim"> · you're on v{update.current}</span>
+                </>
+              )}
             </span>
-            {status === "ready" && (
-              <button
-                onClick={() => restartForUpdate()}
-                className="rounded-md bg-sol-cyan px-3 py-1 text-[11px] font-medium text-sol-bg hover:opacity-90 transition-opacity"
-              >
-                Restart
-              </button>
+            {!updating && (
+              <>
+                <button
+                  onClick={() => {
+                    setUpdating(true);
+                    requestDesktopUpdate({}).catch(() => setUpdating(false));
+                  }}
+                  className="rounded-md bg-sol-cyan px-3 py-1 text-[11px] font-medium text-sol-bg hover:opacity-90 transition-opacity"
+                >
+                  Update now
+                </button>
+                <button
+                  onClick={() => setDismissedVersion(update.latest)}
+                  className="text-[11px] text-sol-text-dim hover:text-sol-text transition-colors"
+                >
+                  Later
+                </button>
+              </>
             )}
-            <button
-              onClick={() => { setDismissed(true); dismissedStatusRef.current = status; }}
-              className="text-sol-text-dim hover:text-sol-text transition-colors text-xs leading-none"
-            >
-              &times;
-            </button>
           </div>
         </div>
       </div>
