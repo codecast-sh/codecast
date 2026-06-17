@@ -145,6 +145,87 @@ export function cleanTitle(title: string): string {
   return title.replace(/<[^>]+>/g, "").replace(/<[^>]*$/, "").trim().slice(0, 50) || "Untitled";
 }
 
+// ── Structured / machine user-messages ──────────────────────────────────────
+// Many "user" role messages aren't things a person typed: task-completion pings,
+// compaction prompts, session continuations, tool-output pointers, skill dumps,
+// interrupts, slash-command expansions. They're context for the model. Every
+// list/preview surface (the message feed, conversation cards) needs the SAME
+// decision about what counts as a real message, so it lives here once.
+
+const TOOL_OUTPUT_POINTER_PREFIXES = [
+  "Read the output file to retrieve the result:",
+  "Full transcript available at:",
+];
+const CONTINUATION_PREFIXES = [
+  "This session is being continued",
+  "Please continue the conversation",
+];
+const INTERRUPT_PREFIXES = ["[Request interrupted", "[Request cancelled"];
+
+/** Strip the machine wrappers (reminders, command tags, caveats) for display
+ * while preserving the human's prose/markdown. Shared with the conversation
+ * view so a message reads the same wherever it's shown. */
+export function stripSystemTags(content: string): string {
+  return content
+    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")
+    .replace(/<task-reminder>[\s\S]*?<\/task-reminder>/g, "")
+    .replace(/<local-command-stdout>[\s\S]*?<\/local-command-stdout>/g, "")
+    .replace(/<local-command-stderr>[\s\S]*?<\/local-command-stderr>/g, "")
+    .replace(/<local-command-caveat>[\s\S]*?<\/local-command-caveat>/g, "")
+    .replace(/<\/?(?:command-(?:name|message|args)|antml:[a-z_]+)[^>]*>/g, "")
+    .replace(/^\s*Caveat:.*$/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+export function isTaskNotification(content: string): boolean {
+  return content.trim().startsWith("<task-notification>");
+}
+
+export function isCompactionPrompt(content: string): boolean {
+  return content.trim().startsWith("Your task is to create a detailed summary");
+}
+
+/** True when a user-role message is machine-generated noise that no person
+ * typed — so feeds and previews hide it instead of dumping the raw XML. */
+export function isNoiseUserMessage(content: string | null | undefined): boolean {
+  if (!content) return true;
+  const raw = content.trim();
+  if (!raw) return true;
+  if (isImportNotice(raw)) return true;
+  if (isTaskNotification(raw)) return true;
+  if (/^<scheduled-task[\s>]/.test(raw)) return true;
+  if (isSkillExpansion(raw)) return true;
+  if (isCompactionPrompt(raw)) return true;
+  if (raw.startsWith("<turn_aborted>")) return true;
+  if (INTERRUPT_PREFIXES.some((p) => raw.startsWith(p))) return true;
+  if (TOOL_OUTPUT_POINTER_PREFIXES.some((p) => raw.startsWith(p))) return true;
+  const noReminders = stripSystemTags(raw);
+  if (CONTINUATION_PREFIXES.some((p) => noReminders.startsWith(p))) return true;
+  // Nothing a person wrote survives stripping the wrappers/tags.
+  if (!cleanContent(raw)) return true;
+  if (isSystemMessage(noReminders)) return true;
+  return false;
+}
+
+export type FeedDisplay = { kind: "hidden" } | { kind: "text"; text: string };
+
+/** Single classifier for list/preview surfaces: returns the cleaned text to
+ * show, or `hidden` for machine noise. Slash commands collapse to "/cmd args".
+ * (Session→session messages are handled separately by their own renderer.) */
+export function classifyFeedMessage(content: string | null | undefined): FeedDisplay {
+  if (isNoiseUserMessage(content)) return { kind: "hidden" };
+  const raw = (content || "").trim();
+  if (isCommandMessage(raw)) return { kind: "text", text: cleanTitle(raw) };
+  const text = stripSystemTags(raw)
+    .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "")
+    .replace(/<teammate-message\s+[^>]*>[\s\S]*?<\/teammate-message>/g, "")
+    .replace(/\[Image[:\s][^\]]*\]/gi, "")
+    .replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "")
+    .trim();
+  return text ? { kind: "text", text } : { kind: "hidden" };
+}
+
 /** Compact display name for a model id: "claude-opus-4-8" → "opus-4-8",
  * "claude-sonnet-4-5-20250929" → "sonnet-4-5-'250929". Non-claude ids pass through. */
 export function formatModel(model?: string): string {
