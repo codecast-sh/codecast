@@ -19,9 +19,10 @@ type ForkChild = {
   status?: string;
   git_branch?: string;
   fork_copied?: number;
+  first_divergent_preview?: string;
 };
 
-// Sentinel loadingBranchId for the "main" (parent) chip, which has no fork id.
+// Sentinel loadingBranchId for the origin-line chip, which has no fork id.
 const MAIN_BRANCH = "main";
 
 export function relativeTime(ts: number): string {
@@ -75,6 +76,7 @@ export function BranchSelector({
   onSwitchBranch,
   loadingBranchId,
   mainMessageCount,
+  mainDivergentPreview,
   onFork,
 }: {
   forkChildren: ForkChild[];
@@ -82,6 +84,7 @@ export function BranchSelector({
   onSwitchBranch: (convId: string | null) => void;
   loadingBranchId?: string | null;
   mainMessageCount?: number;
+  mainDivergentPreview?: string;
   onFork?: () => void;
 }) {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
@@ -107,6 +110,34 @@ export function BranchSelector({
     : 0;
   const hoveredBranchSize = hoveredFork ? branchSizeOf(hoveredFork) : 0;
 
+  // Every continuation of the fork point — the origin line plus each fork — is a
+  // peer branch. They render through one path so none is privileged as "main";
+  // the only distinction is which one is active, and each is labeled by the
+  // prompt that sent it its own way.
+  const branches = [
+    {
+      key: MAIN_BRANCH,
+      id: null as string | null,
+      label: mainDivergentPreview || "original",
+      size: mainMessageCount ?? 0,
+      unread: 0,
+      isActive: !activeBranchId,
+      isLoading: loadingBranchId === MAIN_BRANCH,
+    },
+    ...forkChildren.map((fork) => {
+      const isActive = activeBranchId === fork._id;
+      return {
+        key: fork._id,
+        id: fork._id as string | null,
+        label: fork.first_divergent_preview || fork.title || fork.short_id || "fork",
+        size: branchSizeOf(fork),
+        unread: unreadOf(fork, seenMessageCount[fork._id], isActive),
+        isActive,
+        isLoading: loadingBranchId === fork._id,
+      };
+    }),
+  ];
+
   return (
     <div className="mt-3 ml-8 mr-4">
       <div className="flex items-center gap-1.5 mb-1.5">
@@ -116,45 +147,19 @@ export function BranchSelector({
         </span>
       </div>
       <div className="flex flex-wrap gap-1.5">
-        <button
-          onClick={() => onSwitchBranch(null)}
-          onMouseEnter={() => setHoveredId(MAIN_BRANCH)}
-          onMouseLeave={() => setHoveredId(null)}
-          className={`text-xs px-2.5 py-1 rounded border transition-all flex items-center gap-1.5 ${
-            !activeBranchId
-              ? "bg-sol-cyan/10 text-sol-cyan border-sol-cyan/30 font-medium"
-              : hoveredId === MAIN_BRANCH
-                ? "bg-sol-bg-alt text-sol-text-secondary border-sol-border"
-                : "text-sol-text-dim border-sol-border/50 hover:border-sol-border"
-          }`}
-        >
-          {loadingBranchId === MAIN_BRANCH && <Spinner />}
-          <span>main</span>
-          {mainMessageCount != null && mainMessageCount > 0 && (
-            <span className={`text-[10px] tabular-nums ${!activeBranchId ? "text-sol-cyan/70" : "text-sol-text-dim"}`}>
-              +{mainMessageCount}
-            </span>
-          )}
-        </button>
-
-        {forkChildren.map((fork) => {
-          const isActive = activeBranchId === fork._id;
-          const isLoading = loadingBranchId === fork._id;
-          const label = fork.title || fork.short_id || "fork";
-          const isHovered = hoveredId === fork._id;
-          const branchSize = branchSizeOf(fork);
-          const unread = unreadOf(fork, seenMessageCount[fork._id], isActive);
+        {branches.map(({ key, id, label, size, unread, isActive, isLoading }) => {
+          const isHovered = hoveredId === key;
           // All-new (never opened): tint the size itself. Partially-read: keep a
           // muted size and add a "+N" unread pill so both numbers stay legible.
-          const allUnread = unread > 0 && unread >= branchSize;
-          const partialUnread = unread > 0 && unread < branchSize;
+          const allUnread = unread > 0 && unread >= size;
+          const partialUnread = unread > 0 && unread < size;
 
           return (
-            <div key={fork._id} className="relative">
+            <div key={key} className="relative">
               <button
-                ref={(el) => { buttonRefs.current[fork._id] = el; }}
-                onClick={() => onSwitchBranch(fork._id)}
-                onMouseEnter={() => setHoveredId(fork._id)}
+                ref={(el) => { buttonRefs.current[key] = el; }}
+                onClick={() => onSwitchBranch(id)}
+                onMouseEnter={() => setHoveredId(key)}
                 onMouseLeave={() => setHoveredId(null)}
                 className={`text-xs px-2.5 py-1 rounded border transition-all flex items-center gap-1.5 max-w-[240px] ${
                   isActive
@@ -169,17 +174,17 @@ export function BranchSelector({
                   <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan flex-shrink-0" aria-hidden />
                 )}
                 <span className="truncate">{label}</span>
-                {branchSize > 0 && (
+                {size > 0 && (
                   <span
                     className={`text-[10px] tabular-nums flex-shrink-0 inline-flex items-center gap-0.5 ${
                       allUnread
                         ? "text-sol-cyan font-semibold"
                         : isActive ? "text-sol-cyan/70" : "text-sol-text-dim"
                     }`}
-                    title={`${branchSize} message${branchSize === 1 ? "" : "s"} in this branch since the fork`}
+                    title={`${size} message${size === 1 ? "" : "s"} in this branch since the fork`}
                   >
                     <BranchIcon className="w-2.5 h-2.5 opacity-70" />
-                    {branchSize}
+                    {size}
                   </span>
                 )}
                 {partialUnread && (

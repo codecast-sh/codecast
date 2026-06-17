@@ -509,6 +509,7 @@ export type ConversationData = {
     parent_message_uuid?: string;
     message_count?: number;
     agent_type?: string;
+    first_divergent_preview?: string;
   }>;
   fork_siblings?: Array<{
     _id: string;
@@ -519,8 +520,10 @@ export type ConversationData = {
     parent_message_uuid?: string;
     message_count?: number;
     agent_type?: string;
+    first_divergent_preview?: string;
   }>;
   main_message_counts_by_fork?: Record<string, number>;
+  main_divergent_previews_by_fork?: Record<string, string>;
 };
 
 type CommitFile = {
@@ -5317,7 +5320,7 @@ function TeammateMessageCard({ teammateId, color, summary, content }: { teammate
   );
 }
 
-function UserPromptImpl({ content, timestamp, messageId, conversationId, collapsed, userName, avatarUrl, onOpenComments, isHighlighted, shareSelectionMode, isSelectedForShare, onToggleShareSelection, onStartShareSelection, onForkFromMessage, forkChildren, messageUuid, images, onBranchSwitch, activeBranchId, loadingBranchId, isPending, isQueued, mainMessageCount }: { content: string; timestamp: number; messageId: string; conversationId?: Id<"conversations">; collapsed?: boolean; userName?: string; avatarUrl?: string | null; onOpenComments?: (messageId: string) => void; isHighlighted?: boolean; shareSelectionMode?: boolean; isSelectedForShare?: boolean; onToggleShareSelection?: (messageId: string) => void; onStartShareSelection?: (messageId: string) => void; onForkFromMessage?: (messageUuid: string) => void; forkChildren?: ForkChild[]; messageUuid?: string; images?: ImageData[]; onBranchSwitch?: (messageUuid: string, convId: string | null) => void; activeBranchId?: string | null; loadingBranchId?: string | null; isPending?: boolean; isQueued?: boolean; mainMessageCount?: number }) {
+function UserPromptImpl({ content, timestamp, messageId, conversationId, collapsed, userName, avatarUrl, onOpenComments, isHighlighted, shareSelectionMode, isSelectedForShare, onToggleShareSelection, onStartShareSelection, onForkFromMessage, forkChildren, messageUuid, images, onBranchSwitch, activeBranchId, loadingBranchId, isPending, isQueued, mainMessageCount, mainDivergentPreview }: { content: string; timestamp: number; messageId: string; conversationId?: Id<"conversations">; collapsed?: boolean; userName?: string; avatarUrl?: string | null; onOpenComments?: (messageId: string) => void; isHighlighted?: boolean; shareSelectionMode?: boolean; isSelectedForShare?: boolean; onToggleShareSelection?: (messageId: string) => void; onStartShareSelection?: (messageId: string) => void; onForkFromMessage?: (messageUuid: string) => void; forkChildren?: ForkChild[]; messageUuid?: string; images?: ImageData[]; onBranchSwitch?: (messageUuid: string, convId: string | null) => void; activeBranchId?: string | null; loadingBranchId?: string | null; isPending?: boolean; isQueued?: boolean; mainMessageCount?: number; mainDivergentPreview?: string }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
   const [isTruncated, setIsTruncated] = useState(false);
@@ -5637,6 +5640,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
           onSwitchBranch={(convId) => onBranchSwitch(messageUuid, convId)}
           loadingBranchId={loadingBranchId}
           mainMessageCount={mainMessageCount}
+          mainDivergentPreview={mainDivergentPreview}
           onFork={onForkFromMessage ? () => onForkFromMessage(messageUuid) : undefined}
         />
       )}
@@ -6005,6 +6009,7 @@ function AssistantBlockImpl({
   activeBranchId,
   loadingBranchId,
   mainMessageCount,
+  mainDivergentPreview,
   model,
   onSendInlineMessage,
   isConversationActive,
@@ -6045,6 +6050,7 @@ function AssistantBlockImpl({
   activeBranchId?: string | null;
   loadingBranchId?: string | null;
   mainMessageCount?: number;
+  mainDivergentPreview?: string;
   model?: string;
   onSendInlineMessage?: (content: string) => void;
   isConversationActive?: boolean;
@@ -6410,6 +6416,7 @@ function AssistantBlockImpl({
           onSwitchBranch={(convId) => onBranchSwitch(messageUuid, convId)}
           loadingBranchId={loadingBranchId}
           mainMessageCount={mainMessageCount}
+          mainDivergentPreview={mainDivergentPreview}
           onFork={onForkFromMessage ? () => onForkFromMessage(messageUuid) : undefined}
         />
       )}
@@ -11974,7 +11981,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         case 'normal': {
           if (!msg.content?.trim() && !msg.images?.some(img => !img.tool_use_id)) return null;
           const userName = conversation?.user?.name || conversation?.user?.email?.split("@")[0];
-          return <UserPrompt key={msg._id} content={msg.content || ""} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={false} userName={userName} avatarUrl={conversation?.user?.avatar_url} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={handleToggleMessageSelection} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={handleBranchSwitch} activeBranchId={activeBranchId} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} mainMessageCount={msg.message_uuid ? conversation?.main_message_counts_by_fork?.[msg.message_uuid] : undefined} />;
+          return <UserPrompt key={msg._id} content={msg.content || ""} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={false} userName={userName} avatarUrl={conversation?.user?.avatar_url} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={handleToggleMessageSelection} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={handleBranchSwitch} activeBranchId={activeBranchId} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} mainMessageCount={msg.message_uuid ? conversation?.main_message_counts_by_fork?.[msg.message_uuid] : undefined} mainDivergentPreview={msg.message_uuid ? conversation?.main_divergent_previews_by_fork?.[msg.message_uuid] : undefined} />;
         }
       }
     }
@@ -12113,6 +12120,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           activeBranchId={activeBranchId}
           loadingBranchId={loadingBranchId}
           mainMessageCount={msg.message_uuid ? conversation?.main_message_counts_by_fork?.[msg.message_uuid] : undefined}
+          mainDivergentPreview={msg.message_uuid ? conversation?.main_divergent_previews_by_fork?.[msg.message_uuid] : undefined}
           model={msg.model ?? conversation?.model}
           onSendInlineMessage={handleSendInlineMessage}
           isConversationActive={conversation?.status === "active"}

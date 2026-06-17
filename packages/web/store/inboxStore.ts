@@ -342,6 +342,9 @@ export type ForkChild = {
   status?: string;
   git_branch?: string;
   fork_copied?: number;
+  // First user prompt past the fork point — the divergent message that
+  // distinguishes this branch from its siblings (see mapForkDetails).
+  first_divergent_preview?: string;
 };
 
 

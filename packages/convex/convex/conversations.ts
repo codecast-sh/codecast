@@ -112,10 +112,92 @@ async function getConvGitDiff(
   };
 }
 
+// Compress a raw message body into a short chip/snippet. Strips command/HTML
+// wrappers (e.g. `<command-name>/commit</command-name>`) and collapses
+// whitespace so a branch's divergent prompt reads cleanly in ~one line.
+function previewText(content: string | null | undefined): string | undefined {
+  if (!content) return undefined;
+  const cleaned = content.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  if (!cleaned) return undefined;
+  return cleaned.length > 100 ? cleaned.slice(0, 100) + "…" : cleaned;
+}
+
+// The first *user* prompt on a branch after `afterTs` — i.e. the message that
+// sent this branch its own way. For a fork that's the prompt typed past the
+// fork cutoff; for the origin line it's the next user turn after the fork
+// point. This is what distinguishes otherwise-identical sibling branches.
+// Bounded read (a fork point is followed by an assistant turn + tool rows
+// before the next user prompt, so 10 rows comfortably reaches it).
+async function firstDivergentPreview(
+  ctx: { db: any },
+  conversationId: Id<"conversations">,
+  afterTs: number,
+): Promise<string | undefined> {
+  const rows = await ctx.db
+    .query("messages")
+    .withIndex("by_conversation_timestamp", (q: any) =>
+      q.eq("conversation_id", conversationId).gt("timestamp", afterTs)
+    )
+    .order("asc")
+    .take(10);
+  for (const m of rows) {
+    const hasToolResults = m.tool_results && m.tool_results.length > 0;
+    if (m.role === "user" && !hasToolResults) {
+      const p = previewText(typeof m.content === "string" ? m.content : "");
+      if (p) return p;
+    }
+  }
+  return undefined;
+}
+
+// The origin line is just another sibling branch in the UI, so it needs the
+// same "what prompt sent it this way" snippet the forks carry: its next user
+// turn after the fork point. Which line is "the origin" depends on where each
+// fork anchored — a child forked off THIS conversation (origin = this one),
+// while a sibling forked off our parent (origin = forked_from). Fork-point
+// timestamps come from a uuid lookup (it's shared history) so this needs no
+// loaded message window — callable from the meta-only query.
+async function computeOriginDivergentPreviews(
+  ctx: { db: any },
+  conversation: any,
+  forkChildrenDetails: Array<{ parent_message_uuid?: string }>,
+  forkSiblings: Array<{ parent_message_uuid?: string }>,
+): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  const fill = async (
+    forks: Array<{ parent_message_uuid?: string }>,
+    originLineId: Id<"conversations"> | undefined,
+  ) => {
+    if (!originLineId) return;
+    for (const fork of forks) {
+      const uuid = fork.parent_message_uuid;
+      if (!uuid || out[uuid]) continue;
+      const fp = await ctx.db
+        .query("messages")
+        .withIndex("by_message_uuid", (q: any) => q.eq("message_uuid", uuid))
+        .first();
+      if (!fp) continue;
+      const preview = await firstDivergentPreview(ctx, originLineId, fp.timestamp);
+      if (preview) out[uuid] = preview;
+    }
+  };
+  await fill(forkChildrenDetails, conversation._id);
+  await fill(forkSiblings, conversation.forked_from ?? undefined);
+  return out;
+}
+
 async function mapForkDetails(ctx: { db: any }, forks: any[]) {
   return Promise.all(
     forks.map(async (fork: any) => {
       const forkUser = await ctx.db.get(fork.user_id);
+      // The prompt that defines this branch: first user message past the fork
+      // cutoff. Drives the chip label so siblings read distinctly instead of by
+      // their convergent auto-titles.
+      const first_divergent_preview = await firstDivergentPreview(
+        ctx,
+        fork._id,
+        fork.fork_cutoff_timestamp ?? 0,
+      );
       return {
         _id: fork._id,
         user_id: fork.user_id,
@@ -126,6 +208,7 @@ async function mapForkDetails(ctx: { db: any }, forks: any[]) {
         parent_message_uuid: fork.parent_message_uuid,
         agent_type: fork.agent_type,
         message_count: fork.message_count,
+        first_divergent_preview,
         // Free fields straight off the conversation row — no extra reads. The
         // client subtracts fork_copied (messages inherited from the parent up to
         // the fork point) from message_count to show this branch's *own* size,
@@ -1389,6 +1472,13 @@ export const getConversationWithMeta = query({
       forkSiblings = await getAccessibleForkChildren(ctx, authUserId, conversation.forked_from);
     }
 
+    const mainDivergentPreviewsByFork = await computeOriginDivergentPreviews(
+      ctx,
+      conversation,
+      forkChildrenDetails,
+      forkSiblings,
+    );
+
     let effective_team_visibility = conversation.team_visibility;
     if (!effective_team_visibility && conversation.team_id && isOwner) {
       const membership = await ctx.db
@@ -1431,6 +1521,7 @@ export const getConversationWithMeta = query({
       fork_children: forkChildrenDetails,
       fork_siblings: forkSiblings.length > 0 ? forkSiblings : undefined,
       parent_conversation_id: parentConversationId,
+      main_divergent_previews_by_fork: mainDivergentPreviewsByFork,
       active_plan,
       active_task,
     });
