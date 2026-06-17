@@ -5,6 +5,7 @@ import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { findConversationByAnyRef, findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { checkConversationAccess } from "./privacy";
+import { hasGrantedSendAccess } from "./collab";
 
 export async function getAuthenticatedUserId(
   ctx: { db: any },
@@ -275,8 +276,12 @@ export const sendMessageToSession = mutation({
 // receiving agent (and the web client) can tell who sent it. Keep this tag name
 // in sync with the parser in packages/web/components/ConversationView.tsx
 // (classifyUserMessage / SessionMessageBlock).
-export function formatSessionMessage(fromShortId: string, body: string): string {
-  return `<session-message from="${fromShortId}">\n${body}\n</session-message>`;
+export function formatSessionMessage(fromShortId: string, body: string, fromName?: string): string {
+  // `name` is an optional display label for the sender — used when `from` doesn't
+  // resolve to a clickable session (e.g. a link collaborator with no session of
+  // their own). The parser tolerates the extra attribute, so old readers ignore it.
+  const nameAttr = fromName ? ` name="${fromName.replace(/"/g, "'")}"` : "";
+  return `<session-message from="${fromShortId}"${nameAttr}>\n${body}\n</session-message>`;
 }
 
 // True if the conversation has at least one managed session that has beaten its heartbeat
@@ -317,13 +322,17 @@ export async function performSessionSend(
   if (!body) throw new Error("Message body is empty");
 
   // Own-or-team: you can message any session the feed would let you see. A merely share-linked
-  // session (no team membership) is NOT sendable — injecting a turn is a stronger right than reading.
+  // session is read-only by default — injecting a turn is a stronger right than reading — UNLESS
+  // its owner has granted this user explicit send access for it (collab_grants), the one approved
+  // path for a link recipient to run commands in someone else's session.
   const target = await findConversationByAnyRefWhere(ctx, args.to, async (conversation) => {
     const access = await checkConversationAccess(ctx, authUserId, conversation);
-    return access === "owner" || access === "team";
+    if (access === "owner" || access === "team") return true;
+    if (access === "shared" && (await hasGrantedSendAccess(ctx, conversation._id, authUserId))) return true;
+    return false;
   });
   if (!target) {
-    throw new Error(`No session found for "${args.to}" (you can only message your own sessions or sessions shared with your team)`);
+    throw new Error(`No session found for "${args.to}" (you can only message your own sessions, sessions shared with your team, or sessions whose owner granted you send access)`);
   }
 
   const isCrossUser = target.user_id.toString() !== authUserId.toString();
@@ -343,8 +352,17 @@ export async function performSessionSend(
     }
   }
 
+  // Display name for the sender, shown when `from` has no clickable session (the
+  // common case for a link collaborator). Only needed cross-user — a self-send is
+  // already attributed by its own session pill.
+  let fromName: string | undefined;
+  if (isCrossUser) {
+    const senderUser = await ctx.db.get(authUserId);
+    fromName = senderUser?.name || senderUser?.github_username || undefined;
+  }
+
   const messageId = await enqueuePendingMessage(ctx, target, authUserId, {
-    content: formatSessionMessage(fromShortId, body),
+    content: formatSessionMessage(fromShortId, body, fromName),
     client_id: args.client_id,
     // Only a cross-user send needs the failure-feedback channel. A self-send keeps the original
     // never-drop semantics (your own busy session will get it when it's idle).

@@ -1040,6 +1040,33 @@ export default defineSchema({
     .index("by_conversation_status", ["conversation_id", "status"])
     .index("by_session", ["session_id"]),
 
+  // A signed-in link recipient (someone who opened a shared conversation but is
+  // neither its owner nor a team member) asking to do more than read: to send
+  // messages into the live session — which, since the agent runs whatever it's
+  // told, means running commands on the owner's machine. The owner approves once
+  // per session; the grant then lets performSessionSend accept that user's sends.
+  // Co-writing the draft needs no grant — only firing it into the session does.
+  collab_grants: defineTable({
+    conversation_id: v.id("conversations"),
+    grantee_user_id: v.id("users"),
+    // The conversation owner whose session is acted on — the one who must approve.
+    owner_user_id: v.id("users"),
+    status: v.union(
+      v.literal("requested"),
+      v.literal("granted"),
+      v.literal("denied"),
+      v.literal("revoked")
+    ),
+    // Snapshot of the requester so the approve/deny card renders without a join.
+    grantee_name: v.optional(v.string()),
+    grantee_image: v.optional(v.string()),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_conversation", ["conversation_id"])
+    .index("by_conversation_grantee", ["conversation_id", "grantee_user_id"])
+    .index("by_owner_status", ["owner_user_id", "status"]),
+
   github_webhook_events: defineTable({
     delivery_id: v.string(),
     event_type: v.string(),
@@ -1665,6 +1692,10 @@ export default defineSchema({
     user_color: v.string(),
     cursor_pos: v.optional(v.number()),
     anchor_pos: v.optional(v.number()),
+    // Live draft text for composer co-presence (doc_id "compose:<conversationId>").
+    // Lets each side watch the words the other is forming without a full OT buffer.
+    // Unused by the document editor, which only sends cursor/anchor positions.
+    draft_text: v.optional(v.string()),
     updated_at: v.number(),
   })
     .index("by_doc", ["doc_id"])
