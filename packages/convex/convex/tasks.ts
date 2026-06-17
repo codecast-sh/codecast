@@ -1466,13 +1466,14 @@ export const webMentionList = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
 
-    // Convex caps query return arrays at 8192. Cap aggressively below that —
-    // the mention dropdown only renders ~6–12 results, so older tasks aren't
-    // useful to ship over the wire. Falls back to `mentionSearch` for the
-    // long tail. Per-team cap keeps any single high-volume team from
-    // crowding out smaller teams the user also belongs to.
-    const MAX_TOTAL = 4000;
-    const MAX_PER_TEAM = 1500;
+    // Cap to a small recent slice — the mention dropdown only renders ~6–12
+    // results (top-6-per-type in useMentionQuery), and the long tail is served
+    // by `mentionSearch`. `.take()` loads whole rows, so a small cap keeps the
+    // scan well under both the 8192-array return limit and the 64 MB isolate
+    // memory cap (see docs.webMentionList). Per-team cap keeps any single
+    // high-volume team from crowding out smaller teams the user belongs to.
+    const MAX_TOTAL = 50;
+    const MAX_PER_TEAM = 25;
     const seen = new Set<string>();
     const tasks: any[] = [];
     const pushUnique = (t: any) => {

@@ -126,6 +126,22 @@ export function DashboardLayout(props: DashboardLayoutProps) {
   );
 }
 
+// Eager background-sync hooks isolated into their own component so a failing
+// Convex query (e.g. an OOMing list query) throws HERE and is caught by the
+// inline <ErrorBoundary> that wraps this in DashboardLayoutInner — degrading to
+// "this data didn't prefetch" instead of taking down the entire dashboard.
+// None of these power the core shell/conversation view; they warm stores.
+function DashboardSyncEffects() {
+  useSyncDocs();
+  useSyncMentionTasks();
+  useSyncMentionDocs();
+  useSyncMentionPlans();
+  useSyncInboxSessions();
+  useSyncChangeFeed();
+  useSyncBuckets();
+  return null;
+}
+
 function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   const { isAuthenticated, isLoading: isAuthLoading } = useConvexAuth();
   const isGuest = !isAuthenticated && !isAuthLoading;
@@ -179,13 +195,6 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   const prevWasInboxRef = useRef(false);
   const prevPathnameRef = useRef(pathname);
   usePrefetch();
-  useSyncDocs();
-  useSyncMentionTasks();
-  useSyncMentionDocs();
-  useSyncMentionPlans();
-  useSyncInboxSessions();
-  useSyncChangeFeed();
-  useSyncBuckets();
   const tipActions = useTipActions();
 
   const recalcHeight = useCallback(() => {
@@ -680,6 +689,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
 
   return (
     <div className="bg-sol-bg flex flex-col overflow-hidden" style={{ height: zoomHeight }}>
+      <ErrorBoundary name="DashboardSync" level="inline" fallback={null}>
+        <DashboardSyncEffects />
+      </ErrorBoundary>
       {/* Header spans full width */}
       <header ref={headerRef} className={`flex-shrink-0 border-b border-black/10 bg-sol-bg z-[100] ${desktopClass} ${isZenMode ? "hidden" : ""} relative`}>
         {typeof window !== "undefined" && window.location.hostname.includes("local.") && (
