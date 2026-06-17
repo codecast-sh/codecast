@@ -1115,16 +1115,28 @@ export function visualOrderSessions(
     // mirroring the project filter. bucketByConv comes from convBucketMap().
     bucketFilter?: string | null;
     bucketByConv?: Record<string, string | undefined>;
+    // Grouped-view collapse: when provided, sessions inside a collapsed status
+    // section or orchestration group are skipped, so Ctrl+J/K only walks cards
+    // the panel is actually rendering. Keys mirror GlobalSessionPanel's
+    // renderSection keys ("pinned"/"new"/"needs_input"/"working", "grp:<label>").
+    collapsedSections?: Record<string, boolean>;
   } = {},
 ): InboxSession[] {
   const { pinned, newSessions, needsInput, working, orchestrationGroups } =
     categorizeSessions(sessions, sessionsWithQueuedMessages, pendingSendIds, opts);
+  const collapsed = opts.collapsedSections;
   const result: InboxSession[] = [];
   // Orchestration-grouped workers are held out of the flat buckets for the
   // grouped inbox view; append them here so flat-list consumers (keyboard nav,
   // the /sessions list) still see every session.
-  const sections = [pinned, newSessions, needsInput, working, ...Array.from(orchestrationGroups.values())];
-  for (const section of sections) {
+  const sections: Array<[InboxSession[], string]> = [
+    [pinned, "pinned"], [newSessions, "new"], [needsInput, "needs_input"], [working, "working"],
+    ...Array.from(orchestrationGroups.entries()).map(
+      ([label, items]) => [items, `grp:${label}`] as [InboxSession[], string],
+    ),
+  ];
+  for (const [section, key] of sections) {
+    if (collapsed?.[key]) continue;
     for (const s of section) {
       if (projectFilter && getProjectName(s.git_root, s.project_path) !== projectFilter) continue;
       if (opts.bucketFilter && opts.bucketByConv?.[s._id] !== opts.bucketFilter) continue;
@@ -1307,6 +1319,7 @@ export function computeVisualOrder(state: {
   bucketAssignments: Record<string, BucketAssignmentItem>;
   buckets: Record<string, BucketItem>;
   showFavorites?: boolean;
+  collapsedSections?: Record<string, boolean>;
   clientState: { ui?: { inbox_view_mode?: "grouped" | "time" | "bucket"; inbox_flat_view?: boolean } };
 }): InboxSession[] {
   // Favorites view walks its own project-grouped order so Ctrl+J/K moves through
@@ -1315,19 +1328,26 @@ export function computeVisualOrder(state: {
     return favoritesVisualOrder(state.sessions, state.activeProjectFilter);
   }
   const bucketByConv = convBucketMap(state.bucketAssignments);
-  const base = visualOrderSessions(state.sessions, state.sessionsWithQueuedMessages, state.activeProjectFilter, sessionsWithPendingSend(state.pendingMessages), { currentSessionId: state.currentSessionId, pendingCreateIds: new Set(Object.keys(state.pendingSessionCreates)), bucketFilter: state.activeBucketFilter, bucketByConv });
+  const collapsed = state.collapsedSections ?? {};
   const mode = resolveInboxViewMode(state.clientState.ui);
+  // Skip collapsed sections so Ctrl+J/K only walks rendered cards. Grouped view
+  // collapses status sections / orchestration groups inside visualOrderSessions;
+  // time and bucket re-shape the full base list and apply their own section
+  // collapse below, so they must see every session first.
+  const base = visualOrderSessions(state.sessions, state.sessionsWithQueuedMessages, state.activeProjectFilter, sessionsWithPendingSend(state.pendingMessages), { currentSessionId: state.currentSessionId, pendingCreateIds: new Set(Object.keys(state.pendingSessionCreates)), bucketFilter: state.activeBucketFilter, bucketByConv, collapsedSections: mode === "grouped" ? collapsed : undefined });
   if (mode === "time") {
+    // The time view renders a single collapsible "All" section.
+    if (collapsed["all"]) return [];
     return [...base].sort((a, b) => (b.started_at ?? b.updated_at ?? 0) - (a.started_at ?? a.updated_at ?? 0));
   }
   if (mode === "bucket") {
-    const pinned = base.filter((s) => s.is_pinned);
+    const pinned = collapsed["pinned"] ? [] : base.filter((s) => s.is_pinned);
     const rest = base.filter((s) => !s.is_pinned);
     const { labelGroups, projectGroups } = groupSessionsForLabelView(rest, state.buckets, bucketByConv);
     return [
       ...pinned,
-      ...labelGroups.flatMap((g) => g.items),
-      ...projectGroups.flatMap((g) => g.items),
+      ...labelGroups.flatMap((g) => (collapsed[`bucket_${g.bucket._id}`] ? [] : g.items)),
+      ...projectGroups.flatMap((g) => (collapsed[`bucketproj_${g.name}`] ? [] : g.items)),
     ];
   }
   return base;
