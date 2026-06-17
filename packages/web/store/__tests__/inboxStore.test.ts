@@ -2215,6 +2215,65 @@ describe("inboxStore.beginOptimisticSession", () => {
     expect(await ready).toBe(REAL_ID);
   });
 
+  // deferCreate — the new-session popup (Ctrl+N / the desktop palette) seeds a
+  // local stub on open so the null-state can render, but DEFERS the server create
+  // until the first send. Opening then Escaping out must strand nothing: no empty
+  // "New session" row, no pre-warmed agent.
+  describe("deferCreate", () => {
+    it("seeds the stub locally but fires no create until materialize()", () => {
+      let creates = 0;
+      const { stubId, materialize } = useInboxStore.getState().beginOptimisticSession({
+        agentType: "claude_code",
+        projectPath: "/repo",
+        deferCreate: true,
+        create: async () => { creates++; return REAL_ID; },
+      });
+      const state = useInboxStore.getState();
+      // Local rows exist so the popup renders + can hold a draft...
+      expect(state.conversations[stubId]?.title).toBe("New session");
+      expect(state.sessions[stubId]?.session_id).toBe(stubId);
+      // ...but nothing server-side fired, and there's no tracked create — which is
+      // exactly what lets pruneGhostSessions hard-drop an abandoned stub.
+      expect(creates).toBe(0);
+      expect(state.pendingSessionCreates[stubId]).toBeUndefined();
+      expect(typeof materialize).toBe("function");
+    });
+
+    it("materialize() fires the create exactly once and resolves the real id", async () => {
+      let creates = 0;
+      const { stubId, materialize } = useInboxStore.getState().beginOptimisticSession({
+        agentType: "claude_code",
+        projectPath: "/repo",
+        deferCreate: true,
+        create: async () => { creates++; return REAL_ID; },
+      });
+      const p1 = materialize();
+      // Tracked the instant materialize fires, so a concurrent send (awaitConvexId)
+      // resolves against the in-flight create instead of polling.
+      expect(useInboxStore.getState().pendingSessionCreates[stubId]).toBeDefined();
+      const p2 = materialize(); // idempotent — typed-then-submit must not double-create
+      expect(await p1).toBe(REAL_ID);
+      expect(await p2).toBe(REAL_ID);
+      expect(creates).toBe(1);
+    });
+
+    it("an abandoned (never-materialized) stub is prunable — Escape strands nothing", () => {
+      const { stubId } = useInboxStore.getState().beginOptimisticSession({
+        agentType: "claude_code",
+        projectPath: "/repo",
+        deferCreate: true,
+        create: async () => REAL_ID,
+      });
+      // Closing the popup without ever sending.
+      useInboxStore.getState().pruneGhostSessions([stubId]);
+      const state = useInboxStore.getState();
+      expect(state.sessions[stubId]).toBeUndefined();
+      expect(state.conversations[stubId]).toBeUndefined();
+      // Exclude planted so a cached/IDB copy can't resurrect it as a ghost.
+      expect(state.pending[`sessions:${stubId}`]?.type).toBe("exclude");
+    });
+  });
+
   // reuse: true — quick-create entry points (Ctrl+N, the compose palette)
   // converge on the existing blank session for the project+agent instead of
   // stranding an empty "New Session" conversation per summon.

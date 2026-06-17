@@ -14,6 +14,7 @@ import { UserMenu } from "./UserMenu";
 import { Sidebar } from "./Sidebar";
 import { GlobalSearch } from "./GlobalSearch";
 import { CommandPalette } from "./CommandPalette";
+import { ComposeView } from "./ComposeView";
 import { ThemeToggle } from "./ThemeToggle";
 import { NotificationBell } from "./NotificationBell";
 import { TeamAvatarBar } from "./TeamAvatarBar";
@@ -21,7 +22,7 @@ import { TeamSwitcher } from "./TeamSwitcher";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { soundNewSession } from "../lib/sounds";
 import { subscribeComposeOptimistic } from "../lib/composeBridge";
-import { animateSessionEnter } from "../store/undoActions";
+import { NEW_SESSION_EVENT } from "../lib/utils";
 import { Plus, PanelLeft, PanelRight } from "lucide-react";
 import { SetupPromptBanner } from "./SetupPromptBanner";
 import { DesktopAppBanner } from "./DesktopAppBanner";
@@ -32,7 +33,6 @@ import { TmuxMissingBanner } from "./TmuxMissingBanner";
 import { FindBar } from "./FindBar";
 import { KeyboardShortcutsPanel, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { SettingsModal } from "./settings/SettingsModal";
-import { NewSessionModal } from "./ConversationList";
 import { useInboxStore, useTrackedStore, categorizeSessions, sessionsWithPendingSend, isSessionHidden, getProjectName } from "../store/inboxStore";
 import { useShortcutAction, useShortcutContext, useGlobalShortcutActions } from "../shortcuts";
 import { usePrefetch } from "../hooks/usePrefetch";
@@ -140,7 +140,8 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     s => s.sidePanelSessionId,
     s => s.currentSessionId,
     s => s.viewingDismissedId,
-    s => s.newSession.isOpen,
+    s => s.compose.open,
+    s => s.compose.nonce,
     s => s.tabs.length,
     s => s.activeTabId,
     s => s.tabs.find(t => t.id === s.activeTabId)?.path,
@@ -379,45 +380,18 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     return { path: ctx.gitRoot, gitRoot: ctx.gitRoot, agentType: ctx.agentType };
   }, [directoryFilter, sessionListActiveId]);
 
-  const handleQuickCreate = useCallback(() => {
-    const store = useInboxStore.getState();
-    if (!isOnInboxPage && store.showMySessions) store.setShowMySessions(false);
-    soundNewSession();
-    const { path, gitRoot, agentType: rawAgent } = resolveNewSessionContext();
-    const agentType = (rawAgent || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
-
-    // Shared optimistic-create path — see store.beginOptimisticSession. It tracks the
-    // in-flight create so a message send can await the rekey instead of polling (a slow
-    // roundtrip would otherwise blow waitForConvexId's budget → spurious "not yet created").
-    // reuse: a repeated Ctrl+N lands back on the existing blank session for this
-    // project+agent instead of stranding another empty conversation per press.
-    const { stubId: sessionId } = store.beginOptimisticSession({
-      agentType,
-      projectPath: path,
-      gitRoot: gitRoot || path,
-      reuse: true,
-      create: (stubId) => store.createSession({
-        agent_type: agentType,
-        project_path: path,
-        git_root: gitRoot || path,
-        session_id: stubId,
-      }),
-    });
-    animateSessionEnter(sessionId);
-
-    if (isOnInboxPage || isOnConversationPage) {
-      store.setCurrentSession(sessionId);
-    } else if (store.sidePanelOpen) {
-      useInboxStore.setState({ sidePanelSessionId: sessionId });
-    } else {
-      router.push(`/conversation/${sessionId}?focus=1`);
-    }
-  }, [resolveNewSessionContext, router, isOnInboxPage, isOnConversationPage]);
+  // Every "New Session" affordance opens the floating compose popup (ComposeView
+  // in an overlay) — the same surface the command palette uses. ComposeView owns
+  // the blank-session create + the project/agent picker, so this is just "show
+  // the popup". Reading the action straight off the store keeps it stable.
+  const openCompose = useInboxStore((st) => st.openCompose);
 
   const handleQuickCreateIsolated = useCallback(async () => {
     const { path, gitRoot, agentType: rawAgent } = resolveNewSessionContext();
     if (!path) {
-      s.openNewSession({ source: isOnInboxPage ? "inbox" : "sessions" });
+      // No directory to isolate from — open the popup so the user can pick a
+      // project (and flip the isolated toggle) there.
+      openCompose();
       return;
     }
     soundNewSession();
@@ -436,26 +410,20 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     } else {
       router.push(`/conversation/${conversationId}?focus=1`);
     }
-  }, [resolveNewSessionContext, router, isOnInboxPage, isOnConversationPage, createQuickSession, s.openNewSession]);
+  }, [resolveNewSessionContext, router, isOnInboxPage, isOnConversationPage, createQuickSession, openCompose]);
 
   // Bridge for the Electron global "New Session" shortcut / tray / dock / app
-  // menu and the in-app `codecast-new-session` event. These must do exactly what
-  // the in-app Ctrl+N does: create a blank session and route to it (the inline
-  // project + agent picker). They must NOT pop the modal — the modal
-  // (openNewSession) is reserved for explicit "pick a different directory"
-  // actions like the ProjectSwitcher "other" button. handleQuickCreate is read
-  // through a ref so the once-mounted bridge always calls the latest closure.
-  const quickCreateRef = useRef(handleQuickCreate);
-  useWatchEffect(() => {
-    quickCreateRef.current = handleQuickCreate;
-  }, [handleQuickCreate]);
+  // menu (fired via the NEW_SESSION_EVENT DOM event / __CODECAST_NEW_SESSION).
+  // It does exactly what the in-app Ctrl+N does: open the new-session compose
+  // popup. openCompose is a stable store action, so the once-mounted listener can
+  // call it directly — no ref needed.
   useMountEffect(() => {
-    const open = () => quickCreateRef.current();
+    const open = () => useInboxStore.getState().openCompose();
     (window as any).__CODECAST_NEW_SESSION = open;
-    window.addEventListener('codecast-new-session', open);
+    window.addEventListener(NEW_SESSION_EVENT, open);
     return () => {
       delete (window as any).__CODECAST_NEW_SESSION;
-      window.removeEventListener('codecast-new-session', open);
+      window.removeEventListener(NEW_SESSION_EVENT, open);
     };
   });
 
@@ -512,7 +480,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   useShortcutContext('desktop', isDesktopApp);
   const switcherState = useSessionSwitcher();
 
-  useShortcutAction('session.create', handleQuickCreate);
+  useShortcutAction('session.create', openCompose);
 
   useShortcutAction('session.createIsolated', useCallback(() => {
     handleQuickCreateIsolated();
@@ -800,12 +768,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
             <ShortcutTooltip label="New session" action="session.create">
               <button
                 onClick={(e) => {
-                  const ctx = resolveNewSessionContext();
-                  if (ctx.path) {
-                    handleQuickCreate();
-                  } else {
-                    s.openNewSession({ projectPath: ctx.path, gitRoot: ctx.gitRoot, agentType: ctx.agentType });
-                  }
+                  openCompose();
                   tipActions.whisper('session.create', e);
                 }}
                 className="hidden md:flex items-center justify-center w-7 h-7 rounded-full border border-sol-text-dim/20 bg-sol-text-dim/8 text-sol-text-dim/50 hover:bg-sol-text-dim/15 hover:text-sol-text-dim/70 hover:border-sol-text-dim/30 transition-colors"
@@ -954,10 +917,19 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       <ErrorBoundary name="CommandPalette" level="inline">
         <CommandPalette />
       </ErrorBoundary>
+      {s.compose.open && (
+        <div
+          className="fixed inset-0 z-[200] flex items-start justify-center pt-[12vh] bg-black/50 backdrop-blur-sm"
+          onClick={s.closeCompose}
+        >
+          <div onClick={(e) => e.stopPropagation()}>
+            <ComposeView key={s.compose.nonce} initialQuery={s.compose.initialQuery} context={s.compose.context} onClose={s.closeCompose} />
+          </div>
+        </div>
+      )}
       <ErrorBoundary name="FindBar" level="inline">
         <FindBar />
       </ErrorBoundary>
-      <NewSessionModal isOpen={s.newSession.isOpen} onClose={s.closeNewSession} />
       {switcherState.open && (
         <SessionSwitcher
           sessions={switcherState.mruSessions}

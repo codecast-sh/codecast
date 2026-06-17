@@ -37,7 +37,7 @@ export function DocReviewBar({
   const [note, setNote] = useState("");
   const [picking, setPicking] = useState(false);
   const sendMessage = useMutation(api.pendingMessages.sendMessageToSession);
-  const openNewSession = useInboxStore((s) => s.openNewSession);
+  const openCompose = useInboxStore((s) => s.openCompose);
 
   // Compile the live annotation batch into the same feedback message both the
   // existing-session and new-agent paths post.
@@ -72,16 +72,24 @@ export function DocReviewBar({
     [compileContent, finishReview, sendMessage],
   );
 
-  // Hand the feedback to a brand-new agent: pre-load the new-session palette with
-  // the compiled annotations as its first message, then exit review mode. The
-  // content is now visible/editable in that composer, so closing review here
-  // can't lose it.
+  // Hand the feedback to a brand-new agent: open the new-session compose popup
+  // with the compiled annotations pre-filled as its first message. The popup owns
+  // the blank-session create + project/agent picker, so this is just "open it
+  // pre-loaded", and exiting review mode here can't lose anything — the feedback
+  // lives in the popup's composer.
+  //
+  // Seed it with the DOC's own project (project_path/git_root ride on store.docs at
+  // runtime — webList spreads the full row, the DocItem type just under-declares it).
+  // On the docs page there's no current conversation for the popup to inherit a cwd
+  // from, so without this the new agent would start in $HOME (the daemon's pathless
+  // fallback) instead of where the doc lives.
   const sendToNew = useCallback(() => {
     const content = compileContent();
     setPicking(false);
-    openNewSession({ firstMessage: content, source: "sessions" });
+    const doc = useInboxStore.getState().docs[docId] as { project_path?: string; git_root?: string } | undefined;
+    openCompose(content, { projectPath: doc?.project_path || doc?.git_root });
     finishReview();
-  }, [compileContent, finishReview, openNewSession]);
+  }, [compileContent, finishReview, openCompose, docId]);
 
   return (
     <>

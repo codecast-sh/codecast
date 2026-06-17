@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useState, useMemo, useCallback, useRef } from "react";
+import { useState, useMemo, useCallback, useRef, memo } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { toast } from "sonner";
 import { useQuery, useMutation, useConvex } from "convex/react";
@@ -302,6 +302,27 @@ function NavSection({
   );
 }
 
+// The "needs input" count is the only thing in the Sidebar that depends on the
+// whole sessions map, which gets a fresh identity on every ~1s heartbeat.
+// Isolating it here means a heartbeat re-renders just this 20px badge instead of
+// the entire Sidebar (favorites, bookmarks, recents). Mirrors ActiveAgentsBadge
+// in DashboardLayout. Only mounted in the non-narrow rail, so no work when narrow.
+const NeedsInputCountBadge = memo(function NeedsInputCountBadge() {
+  const inboxSessions = useInboxStore((s) => s.sessions);
+  const sessionsWithQueuedMessages = useInboxStore((s) => s.sessionsWithQueuedMessages);
+  const pendingMessages = useInboxStore((s) => s.pendingMessages);
+  const needsInputCount = useMemo(
+    () => categorizeSessions(inboxSessions, sessionsWithQueuedMessages, sessionsWithPendingSend(pendingMessages)).needsInput.length,
+    [inboxSessions, sessionsWithQueuedMessages, pendingMessages],
+  );
+  if (needsInputCount === 0) return null;
+  return (
+    <span className="-ml-0.5 min-w-[20px] h-[20px] px-1.5 flex items-center justify-center text-[11px] font-bold bg-teal-600 text-white rounded-full">
+      {needsInputCount}
+    </span>
+  );
+});
+
 export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, isNarrow = false }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
@@ -330,14 +351,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const createModal = useInboxStore((s) => s.createModal);
   const closeCreateModal = useInboxStore((s) => s.closeCreateModal);
   const openCreateModal = useInboxStore((s) => s.openCreateModal);
-  const inboxSessions = useInboxStore((s) => s.sessions);
-  const sessionsWithQueuedMessages = useInboxStore((s) => s.sessionsWithQueuedMessages);
-  const pendingMessages = useInboxStore((s) => s.pendingMessages);
-  const needsInputCount = useMemo(
-    () => categorizeSessions(inboxSessions, sessionsWithQueuedMessages, sessionsWithPendingSend(pendingMessages)).needsInput.length,
-    [inboxSessions, sessionsWithQueuedMessages, pendingMessages],
-  );
-  const openNewSession = useInboxStore((s) => s.openNewSession);
+  const openCompose = useInboxStore((s) => s.openCompose);
   const hasUsedDesktop = useInboxStore((s) => s.clientState.dismissed?.has_used_desktop ?? false);
 
   useMountEffect(() => {
@@ -527,11 +541,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             {!isNarrow && (
               <>
                 <span>Inbox</span>
-                {needsInputCount > 0 && (
-                  <span className="-ml-0.5 min-w-[20px] h-[20px] px-1.5 flex items-center justify-center text-[11px] font-bold bg-teal-600 text-white rounded-full">
-                    {needsInputCount}
-                  </span>
-                )}
+                <NeedsInputCountBadge />
               </>
             )}
           </button>
@@ -766,9 +776,9 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-4 mb-2 flex items-center justify-between">
               <span>Workspaces</span>
               <button
-                onClick={() => openNewSession()}
+                onClick={() => openCompose()}
                 className="text-sol-text-dim hover:text-sol-yellow transition-colors"
-                title="New session..."
+                title="New session"
               >
                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
