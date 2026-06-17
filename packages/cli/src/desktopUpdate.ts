@@ -254,11 +254,13 @@ export async function checkForDesktopUpdate(
       }
     }
 
-    // Don't disrupt an in-use app; the swap lands next time it's closed (which
-    // includes the moment right after the user clicks the broken "Restart").
-    // When forced or below the server-pinned floor, quit it first instead of
-    // deferring so the rollout actually reaches always-open clients.
-    if (!(await ensureAppNotRunning(applyWhileRunning, log))) {
+    // Routine path: defer early on an in-use app — the swap lands next time it's
+    // closed, and there's no point downloading ~95MB to throw away. The forced /
+    // below-floor path does NOT stop the app here; it downloads and verifies the
+    // new bundle FIRST, then stops + swaps just-in-time (below). Stopping only
+    // once a good bundle is in hand means a failed download can never leave the
+    // user with no app (and then get throttled out of retrying for hours).
+    if (!applyWhileRunning && isDesktopAppRunning()) {
       log(`desktop update: v${version} available (installed v${installed}); deferring — app is running`);
       return false;
     }
@@ -318,9 +320,11 @@ export async function checkForDesktopUpdate(
       return false;
     }
 
-    // Re-check the app didn't launch while we were downloading.
+    // Bundle is downloaded + verified — only NOW stop the app and swap just in
+    // time. Forced/below-floor: graceful quit → SIGTERM → SIGKILL. Routine: this
+    // bails if the app launched mid-download (we'll swap on a later closed check).
     if (!(await ensureAppNotRunning(applyWhileRunning, log))) {
-      log("desktop update: app launched mid-download; deferring swap");
+      log("desktop update: could not stop the app; deferring swap");
       rmrf(WORK_DIR);
       return false;
     }
