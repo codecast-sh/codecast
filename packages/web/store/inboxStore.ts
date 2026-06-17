@@ -734,6 +734,19 @@ function sessionSortRank(s: InboxSession): [number, number, number, number, numb
   ];
 }
 
+// A session paired with its precomputed sort rank.
+type RankedSession = { s: InboxSession; rank: ReturnType<typeof sessionSortRank> };
+
+// Comparator over precomputed ranks, with _id as the stable tiebreak. Defined
+// once and shared by sortSessions and categorizeSessions so the active-session
+// order lives in exactly one place.
+function compareRankedSessions(a: RankedSession, b: RankedSession): number {
+  for (let i = 0; i < a.rank.length; i++) {
+    if (a.rank[i] !== b.rank[i]) return a.rank[i] - b.rank[i];
+  }
+  return a.s._id < b.s._id ? -1 : a.s._id > b.s._id ? 1 : 0;
+}
+
 export function sortSessions(sessions: Record<string, InboxSession>): InboxSession[] {
   // One O(N) classification pass, then an O(N log N) sort over cheap precomputed
   // keys. The previous version called isSessionWaitingForInput /
@@ -741,15 +754,10 @@ export function sortSessions(sessions: Record<string, InboxSession>): InboxSessi
   // of times per sort — which dominated the constant re-categorize cost the
   // inbox pays on every liveness sync (see Chrome trace: sortSessions hot on
   // every status flip). Output order is byte-identical to the old comparator.
-  const keyed = Object.values(sessions)
+  const keyed: RankedSession[] = Object.values(sessions)
     .filter((s) => !isSessionHidden(s))
     .map((s) => ({ s, rank: sessionSortRank(s) }));
-  keyed.sort((a, b) => {
-    for (let i = 0; i < a.rank.length; i++) {
-      if (a.rank[i] !== b.rank[i]) return a.rank[i] - b.rank[i];
-    }
-    return a.s._id < b.s._id ? -1 : a.s._id > b.s._id ? 1 : 0;
-  });
+  keyed.sort(compareRankedSessions);
   return keyed.map((x) => x.s);
 }
 
@@ -1015,13 +1023,26 @@ export function categorizeSessions(
   pendingSendIds: ReadonlySet<string> = EMPTY_PENDING_SEND_IDS,
   opts: { currentSessionId?: string | null; pendingCreateIds?: ReadonlySet<string> } = {},
 ): CategorizedSessions {
-  const sorted = sortSessions(sessions);
-  const dismissed = Object.values(sessions)
-    .filter(isSessionDismissed)
-    .sort((a, b) => (b.inbox_dismissed_at || 0) - (a.inbox_dismissed_at || 0));
-  const stashed = Object.values(sessions)
-    .filter(isSessionStashed)
-    .sort((a, b) => (b.inbox_stashed_at || 0) - (a.inbox_stashed_at || 0));
+  // Single walk over the whole input, splitting it into the three top-level
+  // slices below in one pass instead of three separate Object.values scans. This
+  // is the per-status-flip hot path over the entire never-pruned store — and the
+  // input still carries every KILLED/STASHED row (they aren't "old", so the
+  // old-session partition keeps them), so collapsing 3×N scans into 1×N is the
+  // cut that matters. Output is identical: active uses the shared rank
+  // comparator; dismissed/stashed keep their newest-first sorts (stable sort over
+  // the same Object.values order).
+  const activeKeyed: RankedSession[] = [];
+  const dismissed: InboxSession[] = [];
+  const stashed: InboxSession[] = [];
+  for (const s of Object.values(sessions)) {
+    if (!isSessionHidden(s)) activeKeyed.push({ s, rank: sessionSortRank(s) });
+    if (isSessionDismissed(s)) dismissed.push(s);
+    if (isSessionStashed(s)) stashed.push(s);
+  }
+  activeKeyed.sort(compareRankedSessions);
+  const sorted = activeKeyed.map((x) => x.s);
+  dismissed.sort((a, b) => (b.inbox_dismissed_at || 0) - (a.inbox_dismissed_at || 0));
+  stashed.sort((a, b) => (b.inbox_stashed_at || 0) - (a.inbox_stashed_at || 0));
   const allIds = new Set(sorted.map((s) => s._id));
 
   const subsByParent = new Map<string, InboxSession[]>();
