@@ -27,6 +27,7 @@ const Conversation = lazy(() => import("@/app/conversation/[id]/page"));
 const ConversationDiff = lazy(() => import("@/app/conversation/[id]/diff/page"));
 const Inbox = lazy(() => import("@/app/inbox/page"));
 const Feed = lazy(() => import("@/app/feed/page"));
+const Crosstalk = lazy(() => import("@/app/crosstalk/page"));
 const Workflows = lazy(() => import("@/app/workflows/dashboard"));
 const Routines = lazy(() => import("@/app/workflows/page"));
 const Schedules = lazy(() => import("@/app/schedules/page"));
@@ -65,6 +66,7 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/projects$/, paramNames: [], component: Projects },
   { pattern: /^\/inbox$/, paramNames: [], component: Inbox },
   { pattern: /^\/feed$/, paramNames: [], component: Feed },
+  { pattern: /^\/crosstalk$/, paramNames: [], component: Crosstalk },
   { pattern: /^\/workflows$/, paramNames: [], component: Workflows },
   { pattern: /^\/routines$/, paramNames: [], component: Routines },
   { pattern: /^\/schedules$/, paramNames: [], component: Schedules },
