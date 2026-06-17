@@ -69,6 +69,19 @@ function compareVersions(a: string, b: string): number {
   return 0;
 }
 
+// Whether to apply the update even while the app is running (quit + swap +
+// relaunch) instead of deferring. A manual `--force` always does; otherwise only
+// when the installed app is below the server-pinned floor (min_desktop_version)
+// — the lever that drags always-open clients forward. Pure so it can be tested
+// without the surrounding fs/network side effects.
+export function shouldApplyWhileRunning(
+  installed: string,
+  opts: { force?: boolean; minVersion?: string | null },
+): boolean {
+  if (opts.force === true) return true;
+  return !!opts.minVersion && compareVersions(installed, opts.minVersion) < 0;
+}
+
 function plistVersion(plistPath: string): string | null {
   try {
     const out = execFileSync(
@@ -191,9 +204,7 @@ export async function checkForDesktopUpdate(
     // A manual `--force` does the same. Unlike `--force`, the min-version path
     // still respects the per-version retry throttle, so a persistently failing
     // apply can't quit-and-relaunch the app every cycle.
-    const belowMin =
-      !!opts.minVersion && compareVersions(installed, opts.minVersion) < 0;
-    const applyWhileRunning = force || belowMin;
+    const applyWhileRunning = shouldApplyWhileRunning(installed, opts);
 
     const res = await fetch(DESKTOP_FEED);
     if (!res.ok) return false;
