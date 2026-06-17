@@ -9,7 +9,7 @@ import * as os from "os";
 import { spawn, spawnSync, execSync } from "child_process";
 import { fileURLToPath } from "url";
 import { maskToken } from "./redact.js";
-import { parseConversationRef } from "./conversationRef.js";
+import { parseConversationRef, buildConversationUrl } from "./conversationRef.js";
 import { cliFetch, cliFetchRead } from "./cliHttp.js";
 import { listProfiles, saveProfile, useProfile, CcAccountError } from "./ccAccounts.js";
 import { CODECAST_STATUS_HOOK } from "./statusHook.js";
@@ -6327,6 +6327,106 @@ program
       console.log(formatReadResult(result, { full: options.full, targetLine: result.target_line }));
     } catch (error) {
       console.error("Read failed:", error instanceof Error ? error.message : error);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("link")
+  .description(
+    "Build a permalink (deep link) to a specific message — the inverse of `cast read`\n\n" +
+    "Feed it the short id + line number that `cast read`/`cast feed` show you, and it\n" +
+    "returns a canonical URL that resolves on the web and in `cast read`.\n\n" +
+    "Examples:\n" +
+    "  cast link jx70ntf 99                # link to message 99 in that conversation\n" +
+    "  cast link jx70ntf                   # link to the conversation (no anchor)\n" +
+    "  cast link 'https://codecast.sh/conversation/<id>#msg-<msgId>'\n" +
+    "                                      # expand a short/partial link to the canonical form\n" +
+    "  cast link jx70ntf 99 --json         # { url, conversation_id, message_id, line }"
+  )
+  .argument("<conversation-id>", "Conversation ID, short id, or a share URL (a #msg-<id> anchor is preserved)")
+  .argument("[line]", "1-based message line to anchor (as shown by `cast read`)")
+  .option("--json", "Output as JSON")
+  .action(async (conversationId, line, options) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+
+    const { conversationId: parsedId, messageId } = parseConversationRef(conversationId);
+
+    const lineNum = line !== undefined ? parseInt(line, 10) : undefined;
+    if (line !== undefined && !Number.isFinite(lineNum)) {
+      console.error(`Error: line must be a number (got "${line}")`);
+      process.exit(1);
+    }
+
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+
+    // Reuse /cli/read to resolve short id → full id and line → message _id. A line
+    // wins over a #msg anchor in the ref; otherwise we resolve the anchor (so a
+    // short link expands to the canonical full-id form). With neither, we still
+    // call read for line 1 just to get the full conversation id.
+    const body: Record<string, unknown> = {
+      api_token: config.auth_token,
+      conversation_id: parsedId,
+    };
+    if (lineNum !== undefined) {
+      body.start_line = lineNum;
+      body.end_line = lineNum;
+    } else if (messageId) {
+      body.around_message_id = messageId;
+      body.context = 0;
+    } else {
+      body.start_line = 1;
+      body.end_line = 1;
+    }
+
+    try {
+      const response = await cliFetchRead(`${siteUrl}/cli/read`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const result = await response.json();
+
+      if (result.error) {
+        const msg = result.details ? `${result.error}: ${result.details}` : result.error;
+        console.error(`Error: ${msg}`);
+        process.exit(1);
+      }
+
+      const fullId: string = result.conversation?.id ?? parsedId;
+
+      let anchorId: string | undefined;
+      let resolvedLine: number | undefined;
+      if (lineNum !== undefined) {
+        const msg = (result.messages ?? []).find((m: any) => m.line === lineNum) ?? result.messages?.[0];
+        if (!msg) {
+          console.error(`Error: no message at line ${lineNum} (conversation has ${result.conversation?.message_count ?? 0} messages)`);
+          process.exit(1);
+        }
+        anchorId = msg.id;
+        resolvedLine = msg.line;
+      } else if (messageId) {
+        if (result.target_missing) {
+          console.error(`Note: message ${messageId} not found in this conversation — linking without an anchor.`);
+        } else {
+          anchorId = result.target_message_id ?? messageId;
+          resolvedLine = result.target_line;
+        }
+      }
+
+      const url = buildConversationUrl({ conversationId: fullId, messageId: anchorId });
+
+      if (options.json) {
+        console.log(JSON.stringify({ url, conversation_id: fullId, message_id: anchorId, line: resolvedLine }, null, 2));
+      } else {
+        console.log(url);
+      }
+    } catch (error) {
+      console.error("Link failed:", error instanceof Error ? error.message : error);
       process.exit(1);
     }
   });

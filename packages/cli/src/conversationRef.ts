@@ -31,3 +31,14 @@ export function parseConversationRef(input: string): ConversationRef {
 
   return { conversationId: s.trim(), messageId };
 }
+
+// The inverse of `parseConversationRef`: assemble a canonical deep link from a
+// conversation id and an optional anchor message id. Round-trips with the parser
+// — `parseConversationRef(buildConversationUrl(ref))` returns `ref` back. The
+// conversation id should be the full Convex `_id` (not the 8-char short id) and
+// the message id the message's Convex `_id`, so the link resolves on the web and
+// in `cast read`.
+export function buildConversationUrl(ref: ConversationRef, base = "https://codecast.sh"): string {
+  const url = `${base.replace(/\/+$/, "")}/conversation/${ref.conversationId}`;
+  return ref.messageId ? `${url}#msg-${ref.messageId}` : url;
+}

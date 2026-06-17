@@ -3907,6 +3907,10 @@ export const readConversationMessages = query({
       };
 
       return {
+        // The message's Convex _id — the anchor the web's `#msg-<id>` deep links
+        // use, so `cast link` can mint a resolvable permalink to a line that
+        // `cast read` just showed.
+        id: m._id,
         line: startIdx + idx + 1,
         role: m.role,
         content: m.content || "",
