@@ -705,7 +705,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
                         <span className="flex items-baseline gap-2">
                           {/* Headline: full-contrast and weighted up for deliberately-named bookmarks so
                               curated entries out-rank auto-captured previews at a glance. */}
-                          <span className={`min-w-0 flex-1 truncate text-[13px] leading-snug text-sol-text ${named ? "font-semibold" : "font-normal"}`}>
+                          <span className={`min-w-0 flex-1 truncate text-[13px] leading-snug text-sol-text-muted group-hover:text-sol-text-secondary transition-colors ${named ? "font-semibold" : "font-normal"}`}>
                             {named && (
                               <svg aria-hidden viewBox="0 0 24 24" className="inline-block w-2.5 h-2.5 mr-1 -mt-px align-middle text-sol-yellow/90" fill="currentColor">
                                 <path d="M6 3a2 2 0 0 0-2 2v15.5a.5.5 0 0 0 .79.407L12 16l7.21 4.907A.5.5 0 0 0 20 20.5V5a2 2 0 0 0-2-2H6z" />
@@ -714,7 +714,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
                             {primary || <span className="italic font-normal text-sol-text-dim/60">No preview</span>}
                           </span>
                           <span
-                            className="flex-shrink-0 text-[9.5px] tabular-nums text-sol-text-dim/45 group-hover:text-sol-text-dim/75 transition-colors"
+                            className="flex-shrink-0 text-[9.5px] tabular-nums text-sol-text-dim/35 group-hover:text-sol-text-dim/65 transition-colors"
                             title={new Date(bm.created_at).toLocaleString()}
                           >
                             {visitTimeAgo(bm.created_at)}
@@ -724,8 +724,8 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
                           // Source line: deliberately recessed (dimmest text) so it reads as context, not a
                           // second headline; the project dot carries the only color so the eye groups by project.
                           <span className="flex items-center gap-1.5 mt-[3px] min-w-0">
-                            {projColor && <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${projColor.dot}`} title={proj} />}
-                            <span className="min-w-0 truncate text-[10px] text-sol-text-dim leading-tight group-hover:text-sol-text-muted transition-colors">
+                            {projColor && <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 opacity-75 ${projColor.dot}`} title={proj} />}
+                            <span className="min-w-0 truncate text-[10px] text-sol-text-dim/65 leading-tight group-hover:text-sol-text-muted transition-colors">
                               {convTitle}
                             </span>
                           </span>
