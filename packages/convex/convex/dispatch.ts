@@ -13,6 +13,7 @@ import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey } from "@codecast/sh
 import { conversationHasNoWork, reapEmptyConversation, enqueueKillSessionCommand } from "./cleanup";
 import { canAccessDoc } from "./docs";
 import { enqueuePendingMessage } from "./pendingMessages";
+import { findConversationBySessionReference } from "./conversationSessionLookup";
 
 type TableConfig =
   | {
@@ -210,9 +211,23 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   },
 
   createSession: async (ctx, userId, [opts]: [{ agent_type?: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string }]) => {
+    const sessionId = opts.session_id || crypto.randomUUID();
+    // Idempotent on (user, session_id). The optimistic web client keys a New
+    // Session by a client-minted stub id and passes it as session_id, then
+    // waits for this conversation to sync back and supersede the stub. That
+    // create can legitimately arrive more than once for the same session_id:
+    // the dispatch outbox re-fires across reloads (MAX_OUTBOX_BOOT_ATTEMPTS),
+    // and the client's stuck-stub heal re-issues it when the first attempt was
+    // given up. Returning the existing row instead of inserting a duplicate
+    // avoids stranding twin conversations (the fork-resume doppelganger class)
+    // and is what makes client-side re-create safe. Skips the rate limit too —
+    // reviving an already-created session shouldn't count against the quota.
+    if (opts.session_id) {
+      const existing = await findConversationBySessionReference(ctx, sessionId, userId);
+      if (existing) return existing._id;
+    }
     await checkRateLimit(ctx as any, userId, "createConversation");
     const now = Date.now();
-    const sessionId = opts.session_id || crypto.randomUUID();
     const agentType = (opts.agent_type || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
 
     const mappings = await ctx.db

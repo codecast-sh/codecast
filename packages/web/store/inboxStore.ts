@@ -1869,6 +1869,14 @@ interface InboxStoreState {
   pendingSessionCreates: Record<string, Promise<string>>;
   trackSessionCreate: (stubId: string, promise: Promise<string>) => void;
   awaitSessionCreate: (stubId: string) => Promise<string> | undefined;
+  // Re-create a stub whose createSession was given up (outbox cap / lost to a
+  // reload), reusing the stub row's own fields. Idempotent client- and
+  // server-side; returns the resolved real id.
+  ensureSessionCreated: (id: string) => Promise<string>;
+  // Re-create a stranded stub AND re-send the messages queued into it while it
+  // had no server conversation. Returns the real id, or null if the create
+  // still hasn't landed. Drives the heal-on-load sweep.
+  healStrandedStub: (stubId: string) => Promise<string | null>;
 
   // -- Fork navigation --
   addOptimisticFork: (fork: ForkChild) => void;
@@ -4232,7 +4240,17 @@ export const useInboxStore = create<InboxStoreState>(
     // the real dispatch error if the server rejects. Polling is the fallback
     // for cases where the promise was lost (e.g. reload mid-flight) or the
     // rekey arrives via listInboxSessions altKey sync instead of the dispatch.
-    const inFlight = get().awaitSessionCreate(id);
+    let inFlight = get().awaitSessionCreate(id);
+    // SELF-HEAL a stranded stub: no real id and no create in flight means the
+    // original createSession was given up (outbox cap) or lost to a reload, so
+    // the conversation was never created server-side and the poll below would
+    // dead-end at "Session not yet created" forever — the stuck-send symptom.
+    // Re-issue the create from the stub's own row; the server is idempotent on
+    // (user, session_id), so this revives the original or mints a fresh one and
+    // the altKey supersede rekeys the stub either way.
+    if (!inFlight && !isConvexId(id) && (get().sessions[id] || get().conversations[id])) {
+      inFlight = get().ensureSessionCreated(id);
+    }
     if (inFlight) {
       let createError: unknown = null;
       try {
@@ -4254,6 +4272,76 @@ export const useInboxStore = create<InboxStoreState>(
       if (r) return r;
     }
     throw new Error("Session not yet created on server");
+  },
+
+  // Re-create a stub whose original createSession was given up, using the
+  // fields the stub row already carries (project/agent ride along so the
+  // daemon spawns in the right place). Idempotent against an in-flight create
+  // (returns it) and against an already-rekeyed stub (returns the real id).
+  // The server dedupes on (user, session_id), so re-issuing is safe even if the
+  // original create actually did land — it just resolves to the same row.
+  ensureSessionCreated: (id: string): Promise<string> => {
+    const s = get();
+    const real = s.getConvexId(id);
+    if (real && isConvexId(real)) return Promise.resolve(real);
+    const existing = s.pendingSessionCreates[id];
+    if (existing) return existing;
+    const stub = (s.sessions[id] || s.conversations[id]) as any;
+    if (!stub || isConvexId(id)) return Promise.resolve(id);
+    // Refuse to re-create a PATHLESS stub. The server would create it and ask
+    // the daemon to start_session with no cwd, which falls back to spawning in
+    // $HOME (daemon start fallback) — an agent running silently outside any
+    // checkout, worse than the honest "not created yet" failure this replaces.
+    // The rare source is a project-less doc's "new agent" (≈30/6095 docs). The
+    // caller (composer) can catch this and route to the project picker; once a
+    // path is set (updateSessionProject) the retry re-creates normally. The
+    // automatic heal-on-load already filters pathless stubs out, so this only
+    // gates the user-triggered awaitConvexId retry.
+    if (!stub.project_path && !stub.git_root) {
+      return Promise.reject(new Error("Pick a project for this session before sending"));
+    }
+    const ready = s.createSession({
+      agent_type: stub.agent_type || "claude_code",
+      project_path: stub.project_path,
+      git_root: stub.git_root,
+      session_id: id,
+    }).then((convexId: string) => {
+      // createSession returns the server conversation id; rekey explicitly so
+      // we don't wait on the listInboxSessions altKey sync. Falls back to the
+      // session_id mapping if the dispatch result was empty.
+      if (convexId && isConvexId(convexId)) get().resolveSessionId(id, convexId);
+      return get().getConvexId(id) ?? (isConvexId(convexId) ? convexId : id);
+    });
+    s.trackSessionCreate(id, ready);
+    ready.catch(() => {});
+    return ready;
+  },
+
+  // Heal a stranded stub the user TYPED INTO: re-create it, then re-send the
+  // messages they queued while it had no server conversation. rekeyId moved
+  // pendingMessages[stub] → pendingMessages[real]; sendMessage is durable and
+  // dedups on client_id, so replaying is idempotent against any later echo.
+  // Image-only messages whose uploads never resolved are skipped (nothing real
+  // to send). Returns the real id, or null when the create still hasn't landed
+  // (offline/daemon down) — the next sweep retries.
+  healStrandedStub: async (stubId: string): Promise<string | null> => {
+    let realId: string;
+    try {
+      realId = await get().ensureSessionCreated(stubId);
+    } catch {
+      return null;
+    }
+    if (!isConvexId(realId)) return null;
+    const pending = get().pendingMessages[realId] || [];
+    for (const m of pending as any[]) {
+      const content = m.content || "";
+      const storageIds = (m.images || [])
+        .map((im: any) => im.storage_id)
+        .filter((sid: any): sid is string => typeof sid === "string");
+      if (!content.trim() && storageIds.length === 0) continue;
+      get().sendMessage(realId, content, storageIds.length ? storageIds : undefined, m._clientId || m._id);
+    }
+    return realId;
   },
 
   // =====================

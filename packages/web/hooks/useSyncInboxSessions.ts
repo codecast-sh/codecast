@@ -440,8 +440,13 @@ export function useSyncInboxSessions() {
     if (Date.now() - lastGhostSweepRef.current < 60 * 1000) return;
     lastGhostSweepRef.current = Date.now();
     const store = useInboxStore.getState();
-    const { stubs, candidates } = collectGhostSweepCandidates(store);
+    const { stubs, candidates, strandedStubs } = collectGhostSweepCandidates(store);
     if (stubs.length) store.pruneGhostSessions(stubs);
+    // Stranded stubs the user typed into: re-create + re-send so a "New Session"
+    // whose create was given up (offline/outage/rate-limit) stops being a
+    // permanently stuck ghost. Idempotent server-side, so a stub mid outbox
+    // replay just resolves to the same row.
+    for (const stubId of strandedStubs) store.healStrandedStub(stubId).catch(() => {});
     if (!candidates.length) return;
     convex.query(api.conversations.existingConversationIds, { ids: candidates })
       .then((existing: string[]) => {
