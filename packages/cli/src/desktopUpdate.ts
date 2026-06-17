@@ -96,9 +96,13 @@ function plistVersion(plistPath: string): string | null {
   }
 }
 
+// Matches ONLY the app's main process (helpers live under Frameworks/… and
+// don't contain this substring; killing main tears them down anyway).
+const APP_PROC_PATTERN = "Codecast.app/Contents/MacOS/Codecast";
+
 function isDesktopAppRunning(): boolean {
   try {
-    execFileSync("/usr/bin/pgrep", ["-f", "Codecast.app/Contents/MacOS/Codecast"], {
+    execFileSync("/usr/bin/pgrep", ["-f", APP_PROC_PATTERN], {
       stdio: ["ignore", "ignore", "ignore"],
     });
     return true; // exit 0 => at least one match
@@ -109,20 +113,45 @@ function isDesktopAppRunning(): boolean {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// Ensure the app isn't running before we swap its bundle. Normally we just
-// defer (return false) so we never disrupt an in-use app; when forced (manual
-// `cast desktop-update`) we quit it first and wait for it to exit.
+// Poll up to `tries` × 500ms for the app process to disappear.
+async function waitForExit(tries: number): Promise<boolean> {
+  for (let i = 0; i < tries && isDesktopAppRunning(); i++) await sleep(500);
+  return !isDesktopAppRunning();
+}
+
+function signalApp(extraArgs: string[]): void {
+  try {
+    execFileSync("/usr/bin/pkill", [...extraArgs, "-f", APP_PROC_PATTERN], {
+      stdio: ["ignore", "ignore", "ignore"],
+    });
+  } catch {}
+}
+
+// Ensure the app isn't running before we swap its bundle. Unforced, we just
+// defer (return false) so we never disrupt an in-use app. Forced, we MUST stop
+// it — and a graceful `quit` can't be trusted: the app keeps itself alive in the
+// dock/tray and silently swallows the quit Apple event (verified on macOS 26),
+// so an osascript-only quit left always-open clients stranded forever. Escalate
+// quit → SIGTERM → SIGKILL so the forced/min-version rollout can't stall.
 async function ensureAppNotRunning(force: boolean, log: Logger): Promise<boolean> {
   if (!isDesktopAppRunning()) return true;
   if (!force) return false;
+
   log("desktop update: quitting running app to apply (forced)");
   try {
     execFileSync("/usr/bin/osascript", ["-e", 'tell application "Codecast" to quit'], {
       stdio: ["ignore", "ignore", "ignore"],
     });
   } catch {}
-  for (let i = 0; i < 20 && isDesktopAppRunning(); i++) await sleep(500);
-  return !isDesktopAppRunning();
+  if (await waitForExit(8)) return true; // graceful, ~4s
+
+  log("desktop update: app ignored quit; sending SIGTERM");
+  signalApp([]);
+  if (await waitForExit(8)) return true; // ~4s
+
+  log("desktop update: app still running; sending SIGKILL");
+  signalApp(["-9"]);
+  return await waitForExit(8); // ~4s
 }
 
 // Parse only the fields we need from latest-mac.yml (avoids a YAML dependency).
