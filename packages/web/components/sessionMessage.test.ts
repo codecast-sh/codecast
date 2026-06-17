@@ -91,4 +91,16 @@ describe("parseInboundSessionMessage", () => {
     expect(parseInboundSessionMessage(null)).toBeNull();
     expect(parseInboundSessionMessage(undefined)).toBeNull();
   });
+
+  test("extracts the optional display name (link collaborator with no session pill)", () => {
+    const raw = '<session-message from="unknown" name="Ada Lovelace">\nship it\n</session-message>';
+    expect(parseInboundSessionMessage(raw)).toEqual({ from: "unknown", body: "ship it", name: "Ada Lovelace" });
+  });
+
+  test("a wrapper without a name still parses (backward compatible)", () => {
+    const raw = formatSessionMessage("jx7c6zk", "hi");
+    const parsed = parseInboundSessionMessage(raw);
+    expect(parsed?.from).toBe("jx7c6zk");
+    expect(parsed?.name).toBeUndefined();
+  });
 });

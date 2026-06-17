@@ -86,6 +86,7 @@ import { EntityIdPill, EntityAwareCode, EntityAwareLink, renderWithMentions } fr
 import { SUMMARY_LABELS, FormattedSummary } from "./FormattedSummary";
 import { entityRemarkPlugins } from "../lib/remarkEntityIds";
 import { parseInboundSessionMessage, isSessionMessage } from "./sessionMessage";
+import { CollabComposer, CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
 import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, type ParsedCastCommand } from "./castCommand";
 import { ConversationTree } from "./ConversationTree";
 import { useInboxStore, isConvexId, computeNewDividerIndex, convBucketMap, type BucketItem, type ForkChild, type InboxSession, type OptimisticImage } from "../store/inboxStore";
@@ -1797,7 +1798,7 @@ type UserMessageKind =
   | { kind: 'continuation' }
   | { kind: 'poll_response' }
   | { kind: 'scheduled_task' }
-  | { kind: 'session_message'; from: string; body: string };
+  | { kind: 'session_message'; from: string; body: string; name?: string };
 
 const STICKY_NOISE_PREFIXES = ["[Request interrupted", "<task-notification>", "Your task is to create a detailed summary", "Full transcript available at:", "[Codecast import]"];
 
@@ -1838,7 +1839,7 @@ function classifyUserMessage(
   const tStripped = stripSystemTags(t).trim();
   if (tNoReminders.startsWith('<scheduled-task')) return { kind: 'scheduled_task' };
   const sessionMsg = parseInboundSessionMessage(t);
-  if (sessionMsg) return { kind: 'session_message', from: sessionMsg.from, body: sessionMsg.body };
+  if (sessionMsg) return { kind: 'session_message', from: sessionMsg.from, body: sessionMsg.body, name: sessionMsg.name };
   if (t.startsWith('{') && t.includes('__cc_poll')) {
     try { if (JSON.parse(t).__cc_poll) return { kind: 'poll_response' }; } catch {}
   }
@@ -4942,7 +4943,7 @@ function ScheduledTaskBlock({ content: rawContent, timestamp }: { content: strin
   );
 }
 
-function SessionMessageBlock({ from, body, timestamp, pendingStatus, recipientActive }: { from: string; body: string; timestamp: number; pendingStatus?: string; recipientActive?: boolean }) {
+function SessionMessageBlock({ from, name, body, timestamp, pendingStatus, recipientActive }: { from: string; name?: string; body: string; timestamp: number; pendingStatus?: string; recipientActive?: boolean }) {
   // pendingStatus set ⇒ this is a server-side pending_messages row that hasn't reached the
   // recipient's transcript yet (queued — typically because the recipient is mid-turn).
   const isPending = !!pendingStatus;
@@ -4960,6 +4961,8 @@ function SessionMessageBlock({ from, body, timestamp, pendingStatus, recipientAc
         <span className={`text-[11px] font-medium tracking-wide uppercase shrink-0 ${isPending ? "text-amber-400/80" : "text-sol-cyan/70"}`}>Message from</span>
         {from && from !== "unknown" ? (
           <EntityIdPill shortId={from} />
+        ) : name ? (
+          <span className="text-xs font-medium text-sol-cyan/90">{name}</span>
         ) : (
           <span className="text-xs text-sol-text-muted">another session</span>
         )}
@@ -7103,10 +7106,11 @@ function NonOwnerMessageInput({ conversation, onForkReply, autoFocusInput }: {
 }) {
   const { isAuthenticated, isLoading } = useConvexAuth();
   if (!isAuthenticated && !isLoading) return <GuestJoinCTA />;
+  // Signed-in non-owner: a grant-aware composer that can co-write, request send
+  // access, send into the live session once granted, or fork as a fallback.
   return (
-    <ForkReplyInput
-      userName={conversation.user?.name || conversation.user?.email?.split("@")[0] || "Teammate"}
-      userAvatar={conversation.user?.avatar_url}
+    <CollabComposer
+      conversation={conversation}
       onForkReply={onForkReply}
       autoFocusInput={autoFocusInput}
     />
@@ -11969,7 +11973,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         case 'scheduled_task':
           return <ScheduledTaskBlock key={msg._id} content={msg.content!} timestamp={msg.timestamp} />;
         case 'session_message':
-          return <SessionMessageBlock key={msg._id} from={kind.from} body={kind.body} timestamp={msg.timestamp} pendingStatus={(msg as any)._serverPendingStatus} recipientActive={conversation?.status === "active"} />;
+          return <SessionMessageBlock key={msg._id} from={kind.from} name={kind.name} body={kind.body} timestamp={msg.timestamp} pendingStatus={(msg as any)._serverPendingStatus} recipientActive={conversation?.status === "active"} />;
         case 'task_prompt':
           return null;
         case 'compaction_summary':
@@ -13130,6 +13134,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             />
           ) : (
             <>
+              {conversation.share_token && (
+                <OwnerComposerPresence conversationId={conversation._id.toString()} />
+              )}
+              <CollabRequestBanner conversationId={conversation._id.toString()} />
               {workflowRun?.status === "paused" && workflowRun.gate_prompt ? (
                 <div className="absolute left-0 right-0 bottom-full flex items-center gap-2 px-4 py-1.5 bg-sol-bg border-t border-sol-magenta/20 text-xs">
                   <span className="text-sol-magenta font-semibold shrink-0">Gate</span>
