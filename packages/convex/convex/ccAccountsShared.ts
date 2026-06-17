@@ -68,6 +68,26 @@ export function isSubagentConversation(conv: {
   return conv.is_subagent === true || !!conv.parent_conversation_id;
 }
 
+// The parent-link fields every inbox session row MUST carry so the client can
+// tell a subagent from a top-level session and nest it under its parent. The
+// client reads exactly these via isSubagentConversation; without them a row
+// looks top-level. Both inbox emission paths spread this — the top-level scan
+// (enrichInboxSessionRow) and the parent's child enumeration — so a subagent
+// self-identifies no matter which path emitted it (the client dedups duplicate
+// _id rows last-wins, and the child enumeration is capped, so the top-level row
+// is sometimes the ONLY emission of a given subagent). Omitting it on the
+// top-level path was the "subagent renders as a flat card" bug (ct-37439).
+// Convex Ids stringify via toString(); a string passes through unchanged.
+export function subagentLinkFields(conv: {
+  is_subagent?: boolean;
+  parent_conversation_id?: { toString(): string } | string | null;
+}): { is_subagent: boolean; parent_conversation_id: string | null } {
+  return {
+    is_subagent: conv.is_subagent === true,
+    parent_conversation_id: conv.parent_conversation_id?.toString() || null,
+  };
+}
+
 // Stale-flag sweep: past the revive window the flag stops meaning "current
 // incident" and just pollutes badges/selection — clear it. New activity on a
 // conversation bumps updated_at and supersedes the banner anyway, so for a
