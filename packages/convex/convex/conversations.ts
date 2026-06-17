@@ -13,6 +13,7 @@ import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId } from "./daemonCommandUtils";
 import { AGENT_MODEL_CONFIG, modelAgentKey } from "@codecast/shared/contracts";
 import { shouldShowInInbox, isSessionIdle, deriveSessionActivity, classifyWorkState, normalizeWorkStateFilter, trustedAgentStatus, type WorkState } from "./inboxFilters";
+import { subagentLinkFields } from "./ccAccountsShared";
 import { filterUserMessages, isImportNotice } from "./userMessagesFilter";
 import {
   isTeamMember,
@@ -6718,6 +6719,11 @@ async function enrichInboxSessionRow(
     is_workflow_primary: conv.is_workflow_primary || false,
     workflow_run_status,
     forked_from: conv.forked_from?.toString() || null,
+    // Parent-link fields so a session emitted via THIS top-level scan self-identifies
+    // as a subagent and nests under its parent (a subagent active in the last 30d is
+    // pulled in here too — recentConversations has no subagent filter). Without them
+    // it renders as a loose flat card. See subagentLinkFields (ct-37439).
+    ...subagentLinkFields(conv),
     parent_message_uuid: conv.parent_message_uuid || null,
     icon: conv.icon,
     icon_color: conv.icon_color,
@@ -6779,8 +6785,11 @@ function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: number, 
     session_error: child.session_error,
     pending_api_error: child.pending_api_error === true,
     pending_api_error_kind: child.pending_api_error_kind ?? null,
-    is_subagent: true,
-    parent_conversation_id: parentId,
+    // Same parent-link fields as the top-level scan (subagentLinkFields), so the
+    // two emission paths stay byte-consistent when the client dedups by _id. This
+    // path is for confirmed children, so is_subagent is forced true (covers the
+    // parent_message_uuid-less child that has no is_subagent flag of its own).
+    ...subagentLinkFields({ is_subagent: true, parent_conversation_id: parentId }),
     worktree_name: child.worktree_name,
     worktree_branch: child.worktree_branch,
     workflow_run_id: null,
