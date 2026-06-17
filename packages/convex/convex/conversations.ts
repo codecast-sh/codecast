@@ -865,6 +865,11 @@ export const webGet = query({
     const isOwner = conv.user_id.toString() === userId.toString();
     if (!isOwner && !(await canTeamMemberAccess(ctx, userId, conv))) return null;
 
+    // Author identity, only for teammates' sessions (own sessions skip the read).
+    // The reference pill/hover use this to show the author's avatar when the
+    // session isn't yours — same name/avatar convention as the inbox feed rows.
+    const owner = isOwner ? null : await ctx.db.get(conv.user_id);
+
     return {
       _id: conv._id,
       short_id: conv.short_id,
@@ -875,6 +880,9 @@ export const webGet = query({
       model: conv.model,
       agent_type: conv.agent_type,
       updated_at: conv.updated_at,
+      is_own: isOwner,
+      author_name: owner ? (owner.name || owner.email?.split("@")[0] || "Unknown") : null,
+      author_avatar: owner ? (owner.image || owner.github_avatar_url || null) : null,
       // Summary/context fields (already on the doc — no extra reads). The pill
       // card coalesces these into a one-line summary + last-message preview so
       // an expanded session reference shows what it's about, not just metadata.
