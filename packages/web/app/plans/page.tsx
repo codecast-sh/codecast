@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useEventListener } from "../../hooks/useEventListener";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -27,7 +27,9 @@ import {
   Zap,
   User,
   Bot,
+  Link2,
 } from "lucide-react";
+import { toast } from "sonner";
 import { LivenessDot, planLivenessState } from "../../components/LivenessDot";
 
 const api = _api as any;
@@ -191,6 +193,33 @@ export default function PlansPage() {
     updateClientUI({ plan_view: { ...planView, source: source || undefined } });
   }, [updateClientUI, planView]);
 
+  // The source toggle is otherwise store-only; honor a shared ?source= deep link
+  // once on mount so the copied "link to this view" round-trips back through here.
+  const seededRef = useRef(false);
+  useEffect(() => {
+    if (seededRef.current) return;
+    seededRef.current = true;
+    const src = searchParams.get("source");
+    if (src && src !== planSource) setPlanSource(src);
+  }, []);
+
+  // Copy a deep-linkable URL for the current view: the source filter plus the
+  // open plan (already carried in the URL as ?plan=). Built from state rather
+  // than window.location because the source toggle doesn't live-sync the URL.
+  const copyViewLink = useCallback(async () => {
+    const params = new URLSearchParams();
+    if (planSource) params.set("source", planSource);
+    if (selectedPlan) params.set("plan", selectedPlan);
+    const qs = params.toString();
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    try {
+      await navigator.clipboard.writeText(`${origin}/plans${qs ? `?${qs}` : ""}`);
+      toast.success("Link to this view copied");
+    } catch {
+      toast.error("Couldn't copy link");
+    }
+  }, [planSource, selectedPlan]);
+
   const workspaceArgs = useWorkspaceArgs();
   const activePlans = useQuery(api.plans.webList,
     workspaceArgs === "skip" ? "skip" : { ...workspaceArgs }
@@ -278,6 +307,13 @@ export default function PlansPage() {
                     All
                   </button>
                 </div>
+                <button
+                  onClick={copyViewLink}
+                  className="p-1 rounded-md text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt transition-colors"
+                  title="Copy link to this view"
+                >
+                  <Link2 className="w-3.5 h-3.5" />
+                </button>
                 <button
                   onClick={() => setShowCreate(!showCreate)}
                   className="p-1 rounded-md text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt transition-colors"

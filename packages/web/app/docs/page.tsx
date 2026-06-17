@@ -24,7 +24,7 @@ import {
 
 const api = _api as any;
 
-export const DOC_TYPE_CONFIG: Record<string, { label: string; color: string; dot: string }> = {
+const DOC_TYPE_CONFIG: Record<string, { label: string; color: string; dot: string }> = {
   note: { label: "Note", color: "text-gray-400", dot: "bg-gray-400" },
   plan: { label: "Plan", color: "text-sol-blue", dot: "bg-sol-blue" },
   design: { label: "Design", color: "text-sol-violet", dot: "bg-sol-violet" },
@@ -87,6 +87,29 @@ export function DocRow({ doc }: { doc: DocItem; state: ItemRowState }) {
   );
 }
 
+// Grouping and sorting are independent axes (mirrors the tasks page). These name
+// the legal values for each so we can migrate the legacy single `sort` param
+// that overloaded the two.
+const DOC_GROUP_VALUES = new Set(["none", "type", "project"]);
+const DOC_SORT_VALUES = new Set(["updated", "created", "title"]);
+function docDefaultDir(sort: string): "asc" | "desc" {
+  return sort === "title" ? "asc" : "desc"; // newest-first for time fields, A→Z for title
+}
+/** Resolve raw group/sort/dir into a valid triple, migrating the legacy `sort`:
+ *  a grouping word ("type"/"project") became `group=that, sort=updated`; a flat
+ *  sort kept `group=none`; docs default to ungrouped, updated-first. */
+function normalizeDocSort(rawGroup: string, rawSort: string, rawDir: string) {
+  let group = DOC_GROUP_VALUES.has(rawGroup) ? rawGroup : "";
+  let sort = DOC_SORT_VALUES.has(rawSort) ? rawSort : "";
+  if (!group) {
+    if (DOC_GROUP_VALUES.has(rawSort)) { group = rawSort; sort = sort || "updated"; }
+    else group = "none";
+  }
+  if (!sort) sort = "updated";
+  const dir: "asc" | "desc" = rawDir === "asc" || rawDir === "desc" ? rawDir : docDefaultDir(sort);
+  return { group, sort, dir };
+}
+
 function useDocUrlState() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -102,14 +125,18 @@ function useDocUrlState() {
     if (seededRef.current || isDetailPage) return;
     seededRef.current = true;
     const t = searchParams.get("type");
+    const g = searchParams.get("group");
     const s = searchParams.get("sort");
+    const d = searchParams.get("dir");
     const p = searchParams.get("project");
     const l = searchParams.get("label");
     const src = searchParams.get("source");
-    if (t || s || p || l || src) {
+    if (t || g || s || d || p || l || src) {
       const prefs: Record<string, any> = {};
       if (t) prefs.doc_type = t;
+      if (g) prefs.group = g;
       if (s) prefs.sort = s;
+      if (d) prefs.dir = d;
       if (p) prefs.project = p;
       if (l) prefs.label = l;
       if (src) prefs.source = src;
@@ -119,7 +146,7 @@ function useDocUrlState() {
 
   // Store is the single source of truth
   const docType = docView?.doc_type ?? "";
-  const sort = (docView?.sort || "updated") as "updated" | "created" | "type" | "project";
+  const { group, sort, dir } = normalizeDocSort(docView?.group || "", docView?.sort || "", docView?.dir || "");
   const project = docView?.project ?? "";
   const label = docView?.label ?? "";
   const source = docView?.source ?? "";
@@ -142,12 +169,43 @@ function useDocUrlState() {
     }
   }, [searchParams, router, docView, updateClientUI, isDetailPage]);
 
-  return { docType, sort, project, label, source, setParam };
+  // Serialize the effective view (store-derived) into a deep-linkable URL. We
+  // can't copy window.location: the store is the source of truth and the URL
+  // only carries params that were explicitly set, so a fresh load reading prefs
+  // from the store would leave the address bar bare. Defaults (updated sort) are
+  // omitted to keep links tidy. Mirrors the tasks-page sharer.
+  const buildShareUrl = useCallback(() => {
+    const params = new URLSearchParams();
+    const entries: Array<[string, string]> = [
+      ["type", docType],
+      // Always emit `group` so its presence marks the new group/sort/dir scheme
+      // (a bare flat-sort word is never mis-migrated as a legacy link). `dir` only
+      // when it deviates from the field's natural default, to keep links tidy.
+      ["group", group],
+      ["sort", sort === "updated" ? "" : sort],
+      ["dir", dir === docDefaultDir(sort) ? "" : dir],
+      ["project", project],
+      ["label", label],
+      ["source", source],
+    ];
+    for (const [k, v] of entries) if (v) params.set(k, v);
+    const qs = params.toString();
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    return `${origin}/docs${qs ? `?${qs}` : ""}`;
+  }, [docType, group, sort, dir, project, label, source]);
+
+  // Picking a sort field resets direction to that field's natural default; the
+  // toggle flips it explicitly.
+  const setGroup = useCallback((g: string) => setParam({ group: g }), [setParam]);
+  const setSort = useCallback((s: string) => setParam({ sort: s, dir: docDefaultDir(s) }), [setParam]);
+  const toggleSortDir = useCallback(() => setParam({ dir: dir === "asc" ? "desc" : "asc" }), [setParam, dir]);
+
+  return { docType, group, sort, dir, project, label, source, setParam, setGroup, setSort, toggleSortDir, buildShareUrl };
 }
 
 export function DocListContent() {
   const params = useParams();
-  const { docType, sort: sortBy, project: projectFilter, label: labelFilter, source: sourceFilter, setParam } = useDocUrlState();
+  const { docType, group, sort, dir, project: projectFilter, label: labelFilter, source: sourceFilter, setParam, setGroup, setSort, toggleSortDir, buildShareUrl } = useDocUrlState();
   const router = useRouter();
   const createDoc = useInboxStore((s) => s.createDoc);
   const docs = useInboxStore((s) => s.docs);
@@ -225,8 +283,24 @@ export function DocListContent() {
     return counts;
   }, [sourceFilteredDocs]);
 
+  // One comparator drives both the flat list and within-group ordering. Ties
+  // fall back to updated_at desc (direction-independent) so equal keys stay put
+  // when the user flips asc/desc.
+  const sortDocs = useCallback((list: DocItem[]) => {
+    const flip = dir === "desc" ? -1 : 1;
+    const title = (d: DocItem) => ((d as any).display_title || d.title || "").toLowerCase();
+    return [...list].sort((a, b) => {
+      let r = 0;
+      if (sort === "created") r = a.created_at - b.created_at;
+      else if (sort === "title") r = title(a).localeCompare(title(b));
+      else r = a.updated_at - b.updated_at;
+      if (r !== 0) return flip * r;
+      return b.updated_at - a.updated_at;
+    });
+  }, [sort, dir]);
+
   const typeGroups = useMemo(() => {
-    if (sortBy !== "type") return null;
+    if (group !== "type") return null;
     const byType: Record<string, DocItem[]> = {};
     for (const d of filteredDocs) {
       const key = d.doc_type || "note";
@@ -235,11 +309,11 @@ export function DocListContent() {
     }
     return DOC_TYPES
       .filter((t) => byType[t]?.length)
-      .map((t) => ({ type: t, docs: byType[t].sort((a, b) => b.updated_at - a.updated_at) }));
-  }, [filteredDocs, sortBy]);
+      .map((t) => ({ type: t, docs: sortDocs(byType[t]) }));
+  }, [filteredDocs, group, sortDocs]);
 
   const projectGroups = useMemo(() => {
-    if (sortBy !== "project") return null;
+    if (group !== "project") return null;
     const byProject: Record<string, { project: ProjectItem | undefined; docs: DocItem[] }> = {};
     const ungrouped: DocItem[] = [];
     for (const d of filteredDocs) {
@@ -254,29 +328,22 @@ export function DocListContent() {
     const ordered = Object.values(byProject)
       .sort((a, b) => (a.project?.title || "").localeCompare(b.project?.title || ""));
     if (ungrouped.length > 0) {
-      ordered.push({ project: undefined, docs: ungrouped.sort((a, b) => b.updated_at - a.updated_at) });
+      ordered.push({ project: undefined, docs: ungrouped });
     }
     for (const g of ordered) {
-      g.docs.sort((a, b) => b.updated_at - a.updated_at);
+      g.docs = sortDocs(g.docs);
     }
     return ordered;
-  }, [filteredDocs, sortBy, projects]);
+  }, [filteredDocs, group, sortDocs, projects]);
 
   const flatDocs = useMemo(() => {
-    if (sortBy === "type" && typeGroups) {
-      return typeGroups.flatMap((g) => g.docs);
-    }
-    if (sortBy === "project" && projectGroups) {
-      return projectGroups.flatMap((g: any) => g.docs);
-    }
-    const sorted = [...filteredDocs];
-    if (sortBy === "created") sorted.sort((a, b) => b.created_at - a.created_at);
-    else sorted.sort((a, b) => b.updated_at - a.updated_at);
-    return sorted;
-  }, [filteredDocs, sortBy, typeGroups, projectGroups]);
+    const active = typeGroups || projectGroups;
+    if (active) return active.flatMap((g: any) => g.docs);
+    return sortDocs(filteredDocs);
+  }, [filteredDocs, sortDocs, typeGroups, projectGroups]);
 
   const listGroups = useMemo((): ListGroup<DocItem>[] | null => {
-    if (sortBy === "type" && typeGroups) {
+    if (group === "type" && typeGroups) {
       return typeGroups.map((g) => {
         const cfg = DOC_TYPE_CONFIG[g.type] || DOC_TYPE_CONFIG.note;
         return {
@@ -287,7 +354,7 @@ export function DocListContent() {
         };
       });
     }
-    if (sortBy === "project" && projectGroups) {
+    if (group === "project" && projectGroups) {
       return projectGroups.map((g: any) => ({
         key: g.project?._id || "__no_project",
         label: g.project?.title || "No project",
@@ -301,7 +368,7 @@ export function DocListContent() {
       }));
     }
     return null;
-  }, [sortBy, typeGroups, projectGroups]);
+  }, [group, typeGroups, projectGroups]);
 
   const renderDocRow = useCallback((doc: DocItem, state: ItemRowState) => (
     <DocRow doc={doc} state={state} />
@@ -322,14 +389,22 @@ export function DocListContent() {
       ]}
       activeTab={docType}
       onTabChange={(tab) => setParam({ type: tab })}
-      sortBy={sortBy}
-      sortOptions={[
-        { value: "updated", label: "Sort by updated" },
-        { value: "created", label: "Sort by created" },
-        { value: "type", label: "Group by type" },
-        { value: "project", label: "Group by project" },
+      groupBy={group}
+      groupOptions={[
+        { value: "none", label: "No grouping" },
+        { value: "type", label: "Type" },
+        { value: "project", label: "Project" },
       ]}
-      onSortChange={(sort) => setParam({ sort })}
+      onGroupChange={setGroup}
+      sortBy={sort}
+      sortOptions={[
+        { value: "updated", label: "Updated" },
+        { value: "created", label: "Created" },
+        { value: "title", label: "Title" },
+      ]}
+      onSortChange={setSort}
+      sortDir={dir}
+      onSortDirChange={toggleSortDir}
       listFooter={hiddenAgentCount > 0 ? (
         <div className="px-6 py-2.5 border-t border-sol-border/15 flex items-center gap-2 text-xs text-sol-text-dim">
           <Bot className="w-3.5 h-3.5 opacity-40" />
@@ -372,6 +447,7 @@ export function DocListContent() {
         onClear: () => setParam({ project: "", label: "", source: "", type: "" }),
         onSaveView: handleSaveView,
       }}
+      shareUrl={buildShareUrl}
       groups={listGroups}
       flatItems={flatDocs}
       renderRow={renderDocRow}

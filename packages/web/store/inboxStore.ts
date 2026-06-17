@@ -480,7 +480,9 @@ export type TaskViewPrefs = {
   status?: string;
   statuses?: string;
   view?: "list" | "kanban";
+  group?: string;
   sort?: string;
+  dir?: string;
   priority?: string;
   label?: string;
   assignee?: string;
@@ -491,7 +493,9 @@ export type TaskViewPrefs = {
 
 export type DocViewPrefs = {
   doc_type?: string;
+  group?: string;
   sort?: string;
+  dir?: string;
   project?: string;
   label?: string;
   source?: string;

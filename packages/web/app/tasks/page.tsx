@@ -56,7 +56,7 @@ import {
 type TaskStatus = "backlog" | "open" | "in_progress" | "in_review" | "done" | "dropped";
 type TaskPriority = "urgent" | "high" | "medium" | "low" | "none";
 
-export const STATUS_CONFIG: Record<TaskStatus, { icon: typeof Circle; label: string; color: string }> = {
+const STATUS_CONFIG: Record<TaskStatus, { icon: typeof Circle; label: string; color: string }> = {
   backlog: { icon: CircleDotDashed, label: "Backlog", color: "text-sol-text-dim" },
   open: { icon: Circle, label: "Open", color: "text-sol-blue" },
   in_progress: { icon: CircleDot, label: "In Progress", color: "text-sol-yellow" },
@@ -65,7 +65,7 @@ export const STATUS_CONFIG: Record<TaskStatus, { icon: typeof Circle; label: str
   dropped: { icon: XCircle, label: "Dropped", color: "text-sol-text-dim" },
 };
 
-export const PRIORITY_CONFIG: Record<TaskPriority, { icon: typeof Minus; label: string; color: string }> = {
+const PRIORITY_CONFIG: Record<TaskPriority, { icon: typeof Minus; label: string; color: string }> = {
   urgent: { icon: AlertTriangle, label: "Urgent", color: "text-sol-red" },
   high: { icon: ArrowUp, label: "High", color: "text-sol-orange" },
   medium: { icon: Minus, label: "Medium", color: "text-sol-text-muted" },
@@ -475,6 +475,37 @@ function KanbanView({
 }
 
 
+// Grouping vs sorting are independent axes (see useTaskUrlState). These name the
+// legal values for each, so we can both validate input and migrate the legacy
+// single `sort` param that overloaded the two.
+const TASK_GROUP_VALUES = new Set(["none", "status", "project", "plan", "assignee", "label", "session"]);
+const TASK_SORT_VALUES = new Set(["priority", "created", "updated", "title"]);
+// Natural direction per sort field — picking a field resets to this so "Created"
+// lands newest-first and "Priority"/"Title" land most-urgent / A→Z without a
+// second click. The user can still flip it with the direction toggle.
+const TASK_SORT_DEFAULT_DIR: Record<string, "asc" | "desc"> = {
+  priority: "asc", title: "asc", created: "desc", updated: "desc",
+};
+function taskDefaultDir(sort: string): "asc" | "desc" {
+  return TASK_SORT_DEFAULT_DIR[sort] ?? "asc";
+}
+/** Resolve raw (URL or stored) group/sort/dir into a valid triple, migrating the
+ *  legacy overloaded `sort`. Legacy values: a grouping word ("plan", "label", …)
+ *  became `group=that, sort=priority`; a flat-sort word ("updated", …) became
+ *  `group=none`; anything else falls to the default `group=status`. */
+function normalizeTaskSort(rawGroup: string, rawSort: string, rawDir: string) {
+  let group = TASK_GROUP_VALUES.has(rawGroup) ? rawGroup : "";
+  let sort = TASK_SORT_VALUES.has(rawSort) ? rawSort : "";
+  if (!group) {
+    if (TASK_GROUP_VALUES.has(rawSort)) { group = rawSort; sort = sort || "priority"; }
+    else if (TASK_SORT_VALUES.has(rawSort)) { group = "none"; }
+    else group = "status";
+  }
+  if (!sort) sort = "priority";
+  const dir: "asc" | "desc" = rawDir === "asc" || rawDir === "desc" ? rawDir : taskDefaultDir(sort);
+  return { group, sort, dir };
+}
+
 function useTaskUrlState() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -491,9 +522,10 @@ function useTaskUrlState() {
   const view = hasUrlParams
     ? ((searchParams.get("view") || "list") as "list" | "kanban")
     : (taskView?.view ?? "list");
-  const sort = hasUrlParams
-    ? ((searchParams.get("sort") || "status") as "status" | "priority" | "created" | "updated" | "plan" | "assignee" | "session" | "project" | "label")
-    : ((taskView?.sort || "status") as "status" | "priority" | "created" | "updated" | "plan" | "assignee" | "session" | "project" | "label");
+  const rawGroup = (hasUrlParams ? searchParams.get("group") : taskView?.group) || "";
+  const rawSort = (hasUrlParams ? searchParams.get("sort") : taskView?.sort) || "";
+  const rawDir = (hasUrlParams ? searchParams.get("dir") : taskView?.dir) || "";
+  const { group, sort, dir } = normalizeTaskSort(rawGroup, rawSort, rawDir);
   const priority = hasUrlParams
     ? (searchParams.get("priority") || "")
     : (taskView?.priority ?? "");
@@ -549,7 +581,13 @@ function useTaskUrlState() {
     const entries: Array<[string, string]> = [
       ["status", status],
       ["view", view === "list" ? "" : view],
-      ["sort", sort === "status" ? "" : sort],
+      // Always emit `group`: its presence tells the reader this is the new
+      // group/sort/dir scheme, so a bare flat-sort word is never mis-migrated as
+      // a legacy "no grouping" link. `dir` only when it deviates from the field's
+      // natural default, and `sort` only when not the default, to keep links tidy.
+      ["group", group],
+      ["sort", sort === "priority" ? "" : sort],
+      ["dir", dir === taskDefaultDir(sort) ? "" : dir],
       ["priority", priority],
       ["label", label],
       ["assignee", assignee],
@@ -561,15 +599,21 @@ function useTaskUrlState() {
     const qs = params.toString();
     const origin = typeof window !== "undefined" ? window.location.origin : "";
     return `${origin}/tasks${qs ? `?${qs}` : ""}`;
-  }, [status, view, sort, priority, label, assignee, statuses, sourceFilter, session]);
+  }, [status, view, group, sort, dir, priority, label, assignee, statuses, sourceFilter, session]);
 
-  return { status, view, sort, priority, label, assignee, statuses, sourceFilter, session, setParam, buildShareUrl };
+  // Grouping and sorting are separate controls. Picking a sort *field* resets the
+  // direction to that field's natural default; the toggle flips it explicitly.
+  const setGroup = useCallback((g: string) => setParam({ group: g }), [setParam]);
+  const setSort = useCallback((s: string) => setParam({ sort: s, dir: taskDefaultDir(s) }), [setParam]);
+  const toggleSortDir = useCallback(() => setParam({ dir: dir === "asc" ? "desc" : "asc" }), [setParam, dir]);
+
+  return { status, view, group, sort, dir, priority, label, assignee, statuses, sourceFilter, session, setParam, setGroup, setSort, toggleSortDir, buildShareUrl };
 }
 
 export function TaskListContent() {
   const router = useRouter();
   const params = useParams();
-  const { status: urlStatus, view: viewMode, sort: sortBy, priority: priorityFilter, label: labelFilter, assignee: assigneeFilter, statuses: statusesFilter, sourceFilter, session: sessionFilter, setParam, buildShareUrl } = useTaskUrlState();
+  const { status: urlStatus, view: viewMode, group, sort, dir, priority: priorityFilter, label: labelFilter, assignee: assigneeFilter, statuses: statusesFilter, sourceFilter, session: sessionFilter, setParam, setGroup, setSort, toggleSortDir, buildShareUrl } = useTaskUrlState();
   const setTaskFilter = useInboxStore((s) => s.setTaskFilter);
   const tasks = useInboxStore((s) => s.tasks);
   const projects = useInboxStore((s) => s.projects);
@@ -586,7 +630,6 @@ export function TaskListContent() {
     setParam({ status: s });
   }, [setTaskFilter, setParam]);
   const setViewMode = useCallback((v: "list" | "kanban") => setParam({ view: v === "list" ? "" : v }), [setParam]);
-  const setSortBy = useCallback((s: string) => setParam({ sort: s === "status" ? "" : s }), [setParam]);
   const handleSaveView = useCallback((name: string) => {
     saveView({ name, page: "tasks", prefs: { ...taskView, status: statusFilter } as TaskViewPrefs });
   }, [saveView, taskView, statusFilter]);
@@ -721,17 +764,33 @@ export function TaskListContent() {
     });
   }, [baseFilteredTasks, sessionFilter, taskHasSession, teamMembers, currentUser]);
 
-  const sortWithinGroup = useCallback((tasks: TaskItem[]) => {
+  // One comparator drives both the flat list and within-group ordering, so the
+  // chosen sort field + direction applies everywhere. Ties fall back to a stable
+  // status→priority→recency chain (direction-independent) so equal keys don't
+  // shuffle when the user flips asc/desc.
+  const sortTasks = useCallback((tasks: TaskItem[]) => {
+    const statusIdx = (s: string) => STATUS_ORDER.indexOf(s as TaskStatus);
+    const prio = (t: TaskItem) => PRIORITY_ORDER[t.priority] ?? 3;
+    const flip = dir === "desc" ? -1 : 1;
     return [...tasks].sort((a, b) => {
-      const statusIdx = (s: string) => STATUS_ORDER.indexOf(s as TaskStatus);
+      let r = 0;
+      if (sort === "priority") r = prio(a) - prio(b);
+      else if (sort === "created") r = a.created_at - b.created_at;
+      else if (sort === "updated") r = a.updated_at - b.updated_at;
+      else if (sort === "title") r = (a.title || "").localeCompare(b.title || "");
+      if (r !== 0) return flip * r;
       const sd = statusIdx(a.status) - statusIdx(b.status);
       if (sd !== 0) return sd;
-      return (PRIORITY_ORDER[a.priority] ?? 3) - (PRIORITY_ORDER[b.priority] ?? 3);
+      const pd = prio(a) - prio(b);
+      if (pd !== 0) return pd;
+      return b.created_at - a.created_at;
     });
-  }, []);
+    // PRIORITY_ORDER / STATUS_ORDER are value-constant; omitted from deps to keep
+    // this callback stable so the group memos don't re-sort every render.
+  }, [sort, dir]);
 
   const planGroups = useMemo(() => {
-    if (sortBy !== "plan") return null;
+    if (group !== "plan") return null;
     const byPlan: Record<string, { plan: TaskItem["plan"]; tasks: TaskItem[] }> = {};
     const unplanned: TaskItem[] = [];
     for (const t of filteredTasks) {
@@ -749,13 +808,13 @@ export function TaskListContent() {
       ordered.push({ plan: undefined, tasks: unplanned });
     }
     for (const g of ordered) {
-      g.tasks = sortWithinGroup(g.tasks);
+      g.tasks = sortTasks(g.tasks);
     }
     return ordered;
-  }, [filteredTasks, sortBy, sortWithinGroup]);
+  }, [filteredTasks, group, sortTasks]);
 
   const assigneeGroups = useMemo(() => {
-    if (sortBy !== "assignee") return null;
+    if (group !== "assignee") return null;
     const byAssignee: Record<string, { info: TaskItem["assignee_info"]; tasks: TaskItem[] }> = {};
     const unassigned: TaskItem[] = [];
     for (const t of filteredTasks) {
@@ -774,13 +833,13 @@ export function TaskListContent() {
       ordered.push({ info: undefined, tasks: unassigned });
     }
     for (const g of ordered) {
-      g.tasks = sortWithinGroup(g.tasks);
+      g.tasks = sortTasks(g.tasks);
     }
     return ordered;
-  }, [filteredTasks, sortBy, sortWithinGroup]);
+  }, [filteredTasks, group, sortTasks]);
 
   const sessionGroups = useMemo(() => {
-    if (sortBy !== "session") return null;
+    if (group !== "session") return null;
     const bySession: Record<string, { session: NonNullable<TaskItem["origin_session"]>; tasks: TaskItem[] }> = {};
     const noSession: TaskItem[] = [];
     for (const t of filteredTasks) {
@@ -799,13 +858,13 @@ export function TaskListContent() {
       ordered.push({ session: { conversation_id: "", session_id: "", title: undefined }, tasks: noSession });
     }
     for (const g of ordered) {
-      g.tasks = sortWithinGroup(g.tasks);
+      g.tasks = sortTasks(g.tasks);
     }
     return ordered;
-  }, [filteredTasks, sortBy, sortWithinGroup]);
+  }, [filteredTasks, group, sortTasks]);
 
   const projectGroups = useMemo(() => {
-    if (sortBy !== "project") return null;
+    if (group !== "project") return null;
     const byProject: Record<string, { project: ProjectItem | undefined; tasks: TaskItem[] }> = {};
     const noProject: TaskItem[] = [];
     for (const t of filteredTasks) {
@@ -823,17 +882,17 @@ export function TaskListContent() {
       ordered.push({ project: undefined, tasks: noProject });
     }
     for (const g of ordered) {
-      g.tasks = sortWithinGroup(g.tasks);
+      g.tasks = sortTasks(g.tasks);
     }
     return ordered;
-  }, [filteredTasks, sortBy, sortWithinGroup, projects]);
+  }, [filteredTasks, group, sortTasks, projects]);
 
   // Group by the task's primary label (labels[0]) — the same representative
   // label the kanban card shows. A task lands in exactly one bucket so its
   // _id stays a unique virtualizer key (GenericListView keys rows by id);
   // tasks with no labels collect in a trailing "No label" group.
   const labelGroups = useMemo(() => {
-    if (sortBy !== "label") return null;
+    if (group !== "label") return null;
     const byLabel: Record<string, { label: string; tasks: TaskItem[] }> = {};
     const noLabel: TaskItem[] = [];
     for (const t of filteredTasks) {
@@ -851,43 +910,33 @@ export function TaskListContent() {
       ordered.push({ label: "", tasks: noLabel });
     }
     for (const g of ordered) {
-      g.tasks = sortWithinGroup(g.tasks);
+      g.tasks = sortTasks(g.tasks);
     }
     return ordered;
-  }, [filteredTasks, sortBy, sortWithinGroup]);
+  }, [filteredTasks, group, sortTasks]);
 
+  // Status grouping is suppressed when a single-status tab is active (every row
+  // would share that status), collapsing to a flat sorted list instead. Each
+  // status bucket is ordered by the active sort field + direction, same as every
+  // other grouping.
+  const statusGroups = useMemo(() => {
+    if (group !== "status") return null;
+    if (statusFilter && statusFilter !== "all") return null;
+    const byStatus: Record<string, TaskItem[]> = {};
+    for (const t of filteredTasks) (byStatus[t.status as string] ??= []).push(t);
+    return STATUS_ORDER
+      .filter((s) => byStatus[s]?.length)
+      .map((s) => ({ status: s, tasks: sortTasks(byStatus[s]) }));
+  }, [group, statusFilter, filteredTasks, sortTasks]);
+
+  // Exactly one *Groups memo is non-null at a time (each gates on `group`), so
+  // the flat list is just that grouping flattened — or, when ungrouped, the whole
+  // filtered set run through the comparator.
   const flatTasks = useMemo(() => {
-    if (sortBy === "plan" && planGroups) {
-      return planGroups.flatMap((g) => g.tasks);
-    }
-    if (sortBy === "assignee" && assigneeGroups) {
-      return assigneeGroups.flatMap((g) => g.tasks);
-    }
-    if (sortBy === "session" && sessionGroups) {
-      return sessionGroups.flatMap((g) => g.tasks);
-    }
-    if (sortBy === "project" && projectGroups) {
-      return projectGroups.flatMap((g) => g.tasks);
-    }
-    if (sortBy === "label" && labelGroups) {
-      return labelGroups.flatMap((g) => g.tasks);
-    }
-    if (sortBy !== "status") {
-      const sorted = [...filteredTasks];
-      if (sortBy === "priority") sorted.sort((a, b) => (PRIORITY_ORDER[a.priority] ?? 3) - (PRIORITY_ORDER[b.priority] ?? 3));
-      else if (sortBy === "created") sorted.sort((a, b) => b.created_at - a.created_at);
-      else if (sortBy === "updated") sorted.sort((a, b) => b.updated_at - a.updated_at);
-      return sorted;
-    }
-    if (statusFilter && statusFilter !== "all") return filteredTasks;
-    const grouped = filteredTasks.reduce((acc: Record<string, TaskItem[]>, t) => {
-      const s = t.status as string;
-      if (!acc[s]) acc[s] = [];
-      acc[s].push(t);
-      return acc;
-    }, {});
-    return STATUS_ORDER.flatMap((s) => grouped[s] || []);
-  }, [filteredTasks, statusFilter, sortBy, planGroups, assigneeGroups, sessionGroups, projectGroups, labelGroups]);
+    const active = planGroups || assigneeGroups || sessionGroups || projectGroups || labelGroups || statusGroups;
+    if (active) return active.flatMap((g: any) => g.tasks);
+    return sortTasks(filteredTasks);
+  }, [filteredTasks, sortTasks, planGroups, assigneeGroups, sessionGroups, projectGroups, labelGroups, statusGroups]);
 
   const kanbanGrouped = useMemo(() => {
     return filteredTasks.reduce((acc: Record<string, TaskItem[]>, t) => {
@@ -899,7 +948,7 @@ export function TaskListContent() {
   }, [filteredTasks]);
 
   const listGroups = useMemo((): ListGroup<TaskItem>[] | null => {
-    if (sortBy === "plan" && planGroups) {
+    if (group === "plan" && planGroups) {
       return planGroups.map((g) => ({
         key: g.plan?._id || "__unplanned",
         label: g.plan?.title || "Unplanned",
@@ -916,7 +965,7 @@ export function TaskListContent() {
         items: g.tasks,
       }));
     }
-    if (sortBy === "assignee" && assigneeGroups) {
+    if (group === "assignee" && assigneeGroups) {
       return assigneeGroups.map((g) => ({
         key: g.info ? g.tasks[0]?.assignee || "__unknown" : "__unassigned",
         label: g.info?.name || "Unassigned",
@@ -933,7 +982,7 @@ export function TaskListContent() {
         items: g.tasks,
       }));
     }
-    if (sortBy === "session" && sessionGroups) {
+    if (group === "session" && sessionGroups) {
       return sessionGroups.map((g) => ({
         key: g.session.session_id || "__no_session",
         label: g.session.session_id
@@ -948,7 +997,7 @@ export function TaskListContent() {
         items: g.tasks,
       }));
     }
-    if (sortBy === "project" && projectGroups) {
+    if (group === "project" && projectGroups) {
       return projectGroups.map((g) => ({
         key: g.project?._id || "__no_project",
         label: g.project?.title || "No project",
@@ -961,7 +1010,7 @@ export function TaskListContent() {
         items: g.tasks,
       }));
     }
-    if (sortBy === "label" && labelGroups) {
+    if (group === "label" && labelGroups) {
       return labelGroups.map((g) => {
         const lc = g.label ? getLabelColor(g.label) : null;
         return {
@@ -984,15 +1033,13 @@ export function TaskListContent() {
         };
       });
     }
-    if ((statusFilter && statusFilter !== "all") || sortBy !== "status") return null;
-    return STATUS_ORDER
-      .filter((s) => kanbanGrouped[s]?.length)
-      .map((s) => {
-        const cfg = STATUS_CONFIG[s];
-        const Icon = cfg.icon;
-        return { key: s, label: cfg.label, icon: <Icon className={`w-3.5 h-3.5 ${cfg.color}`} />, items: kanbanGrouped[s] };
-      });
-  }, [sortBy, planGroups, assigneeGroups, sessionGroups, projectGroups, labelGroups, statusFilter, kanbanGrouped, setParam]);
+    if (!statusGroups) return null;
+    return statusGroups.map(({ status: s, tasks }) => {
+      const cfg = STATUS_CONFIG[s];
+      const Icon = cfg.icon;
+      return { key: s, label: cfg.label, icon: <Icon className={`w-3.5 h-3.5 ${cfg.color}`} />, items: tasks };
+    });
+  }, [group, planGroups, assigneeGroups, sessionGroups, projectGroups, labelGroups, statusGroups, setParam]);
 
   const taskCounts = useMemo(() => {
     const counts: Record<string, number> = { active: 0, all: 0 };
@@ -1026,19 +1073,27 @@ export function TaskListContent() {
           ]}
           activeTab={statusFilter}
           onTabChange={setStatusFilter}
-          sortBy={sortBy}
-          sortOptions={[
-            { value: "status", label: "Group by status" },
-            { value: "project", label: "Group by project" },
-            { value: "plan", label: "Group by plan" },
-            { value: "assignee", label: "Group by assignee" },
-            { value: "label", label: "Group by label" },
-            { value: "session", label: "Group by session" },
-            { value: "priority", label: "Sort by priority" },
-            { value: "updated", label: "Sort by updated" },
-            { value: "created", label: "Sort by created" },
+          groupBy={group}
+          groupOptions={[
+            { value: "none", label: "No grouping" },
+            { value: "status", label: "Status" },
+            { value: "project", label: "Project" },
+            { value: "plan", label: "Plan" },
+            { value: "assignee", label: "Assignee" },
+            { value: "label", label: "Label" },
+            { value: "session", label: "Session" },
           ]}
-          onSortChange={setSortBy}
+          onGroupChange={setGroup}
+          sortBy={sort}
+          sortOptions={[
+            { value: "priority", label: "Priority" },
+            { value: "updated", label: "Updated" },
+            { value: "created", label: "Created" },
+            { value: "title", label: "Title" },
+          ]}
+          onSortChange={setSort}
+          sortDir={dir}
+          onSortDirChange={toggleSortDir}
           filters={{
             hasActive: !!(statusesFilter || priorityFilter || labelFilter || assigneeFilter || sourceFilter || sessionFilter),
             defs: [
