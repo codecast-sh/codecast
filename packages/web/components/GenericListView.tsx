@@ -21,6 +21,8 @@ import {
   ChevronDown,
   ChevronRight,
   ChevronLeft,
+  ArrowUp,
+  ArrowDown,
 } from "lucide-react";
 
 export interface ListTab {
@@ -74,7 +76,7 @@ function TabDropdown({
         {active?.count != null && active.count > 0 && (
           <span className={`text-[10px] tabular-nums text-sol-text-dim ${labelCollapse}`}>{active.count}</span>
         )}
-        <ChevronDown className="w-3 h-3 opacity-60 flex-shrink-0" />
+        <ChevronDown className="w-3 h-3 opacity-60 flex-shrink-0 cq-caret" />
       </button>
       {open && (
         <div className="absolute top-full left-0 mt-1 w-48 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[60] py-1">
@@ -108,20 +110,60 @@ export interface ListSortOption {
   label: string;
 }
 
-/** Linear-style "Display" popover. Folds the grouping control — and any
- *  page-specific display options (e.g. a List/Board switch passed as `extra`) —
- *  behind one button, so the header toolbar stays a single compact row instead
- *  of spilling a wide <select> across it. Same popover pattern as TabDropdown. */
+/** One selectable row inside the Display popover (a grouping or sort choice).
+ *  Picking a row does NOT close the popover — grouping and sorting are two
+ *  independent axes the user often sets in one sitting, so we keep it open and
+ *  let the checkmarks reflect state until they click away. */
+function DisplayOptionRow({
+  label,
+  selected,
+  onClick,
+}: {
+  label: string;
+  selected: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs transition-colors ${
+        selected ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt"
+      }`}
+    >
+      <span className="flex-1 text-left whitespace-nowrap">{label}</span>
+      {selected && <Check className="w-3 h-3 text-sol-cyan flex-shrink-0" />}
+    </button>
+  );
+}
+
+/** Linear-style "Display" popover. Folds two independent controls — Grouping and
+ *  Sorting (with a direction toggle) — plus any page-specific display options
+ *  (e.g. a List/Board switch passed as `extra`) behind one button, so the header
+ *  toolbar stays a single compact row. Same popover pattern as TabDropdown.
+ *
+ *  Grouping is optional: when `groupOptions` is omitted the section is hidden and
+ *  the popover is sort-only. Sorting always shows; the asc/desc toggle appears
+ *  only when the consumer wires `onSortDirChange`. */
 function DisplayMenu({
+  groupBy,
+  groupOptions,
+  onGroupChange,
   sortBy,
   sortOptions,
   onSortChange,
+  sortDir,
+  onSortDirChange,
   extra,
   onCopyLink,
 }: {
+  groupBy?: string;
+  groupOptions?: ListSortOption[];
+  onGroupChange?: (v: string) => void;
   sortBy: string;
   sortOptions: ListSortOption[];
   onSortChange: (v: string) => void;
+  sortDir?: "asc" | "desc";
+  onSortDirChange?: () => void;
   extra?: ReactNode;
   /** When set, the popover gains a "Copy link to this view" row so the current
    *  filters/sort/tab are shareable even when no filter chip is showing (the
@@ -140,6 +182,9 @@ function DisplayMenu({
     return () => document.removeEventListener("mousedown", handler);
   }, [open]);
 
+  const hasGrouping = !!(groupOptions && onGroupChange);
+  const DirIcon = sortDir === "asc" ? ArrowUp : ArrowDown;
+
   return (
     <div ref={ref} className="relative flex-shrink-0">
       <button
@@ -149,25 +194,48 @@ function DisplayMenu({
       >
         <SlidersHorizontal className="w-3 h-3 flex-shrink-0" />
         <span className="cq-header-collapse">Display</span>
-        <ChevronDown className="w-3 h-3 opacity-60 flex-shrink-0" />
+        <ChevronDown className="w-3 h-3 opacity-60 flex-shrink-0 cq-caret" />
       </button>
       {open && (
         <div className="absolute top-full right-0 mt-1 w-56 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[60] p-2 space-y-3">
           {extra && <div className="flex flex-col gap-2">{extra}</div>}
+          {hasGrouping && (
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-sol-text-dim px-1 mb-1">Grouping</div>
+              <div className="space-y-0.5">
+                {groupOptions!.map((o) => (
+                  <DisplayOptionRow
+                    key={o.value}
+                    label={o.label}
+                    selected={o.value === groupBy}
+                    onClick={() => onGroupChange!(o.value)}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
           <div>
-            <div className="text-[10px] uppercase tracking-wider text-sol-text-dim px-1 mb-1">Grouping</div>
+            <div className="flex items-center justify-between px-1 mb-1">
+              <span className="text-[10px] uppercase tracking-wider text-sol-text-dim">Sorting</span>
+              {sortDir && onSortDirChange && (
+                <button
+                  onClick={onSortDirChange}
+                  className="flex items-center gap-1 h-5 px-1.5 rounded text-[10px] text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors"
+                  title={sortDir === "asc" ? "Ascending — click for descending" : "Descending — click for ascending"}
+                >
+                  <DirIcon className="w-3 h-3 flex-shrink-0" />
+                  <span>{sortDir === "asc" ? "Asc" : "Desc"}</span>
+                </button>
+              )}
+            </div>
             <div className="space-y-0.5">
               {sortOptions.map((o) => (
-                <button
+                <DisplayOptionRow
                   key={o.value}
-                  onClick={() => { onSortChange(o.value); setOpen(false); }}
-                  className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs transition-colors ${
-                    o.value === sortBy ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt"
-                  }`}
-                >
-                  <span className="flex-1 text-left whitespace-nowrap">{o.label}</span>
-                  {o.value === sortBy && <Check className="w-3 h-3 text-sol-cyan flex-shrink-0" />}
-                </button>
+                  label={o.label}
+                  selected={o.value === sortBy}
+                  onClick={() => onSortChange(o.value)}
+                />
               ))}
             </div>
           </div>
@@ -250,7 +318,7 @@ function AddFilterMenu({
           title="Add filter"
         >
           <Plus className="w-3 h-3" />
-          <span>Filter</span>
+          <span className="cq-addfilter-label">Filter</span>
         </button>
       )}
       {open && (
@@ -321,9 +389,20 @@ export interface GenericListViewProps<T> {
   activeTab: string;
   onTabChange: (tab: string) => void;
 
+  /** Grouping axis — independent of sort. Omit all three to render a sort-only
+   *  Display popover (no Grouping section). Convention: a `"none"` option value
+   *  means "don't group" (flat list). */
+  groupBy?: string;
+  groupOptions?: ListSortOption[];
+  onGroupChange?: (group: string) => void;
+
   sortBy: string;
   sortOptions: ListSortOption[];
   onSortChange: (sort: string) => void;
+  /** Sort direction. When provided alongside `onSortDirChange`, the Sorting
+   *  section shows an asc/desc toggle. */
+  sortDir?: "asc" | "desc";
+  onSortDirChange?: () => void;
 
   filters?: {
     hasActive: boolean;
@@ -389,9 +468,14 @@ export function GenericListView<T>({
   tabs,
   activeTab,
   onTabChange,
+  groupBy,
+  groupOptions,
+  onGroupChange,
   sortBy,
   sortOptions,
   onSortChange,
+  sortDir,
+  onSortDirChange,
   filters,
   shareUrl,
   groups,
@@ -783,12 +867,21 @@ export function GenericListView<T>({
     </div>
   );
 
+  // The chip-able filter bar renders inside .cq-container (below). When it shows,
+  // the container's own bottom border would land at the bottom of the filter
+  // zone and stack with the next divider (a group header / first row) — at narrow
+  // width, where the action cluster wraps right up against it, that reads as a
+  // doubled line. So the container draws its bottom border only when the filter
+  // bar is hidden; when shown, the filter bar's own top border separates it from
+  // the toolbar and the content below owns the lower edge — one divider, not two.
+  const filterBarShown = !!filters && filters.defs.some((d) => d.value);
+
   return (
     <div className="h-full flex flex-col">
       {/* Header. The outer wrapper is the container-query context; the inner
           .cq-header row is what adapts (wraps the toolbar below the tabs) as the
           panel narrows — a container can't query its own width, only a child's. */}
-      <div className="cq-container border-b border-sol-border/30">
+      <div className={`cq-container ${filterBarShown ? "" : "border-b border-sol-border/30"}`}>
         <div className="cq-header cq-header-pad flex flex-wrap items-center justify-between gap-x-2 gap-y-2 px-6 py-3">
         <div className="flex items-center gap-2 min-w-0">
           <h1 className="text-lg font-semibold text-sol-text tracking-tight flex-shrink-0 cq-header-collapse">{title}</h1>
@@ -854,9 +947,14 @@ export function GenericListView<T>({
           )}
           {filters && <AddFilterMenu defs={filters.defs} variant="header" active={filters.defs.some((d) => d.value)} />}
           <DisplayMenu
+            groupBy={groupBy}
+            groupOptions={groupOptions}
+            onGroupChange={onGroupChange ? (v) => { onGroupChange(v); setFocusIndex(0); } : undefined}
             sortBy={sortBy}
             sortOptions={sortOptions}
             onSortChange={(v) => { onSortChange(v); setFocusIndex(0); }}
+            sortDir={sortDir}
+            onSortDirChange={onSortDirChange ? () => { onSortDirChange(); setFocusIndex(0); } : undefined}
             extra={displayExtra}
             onCopyLink={shareUrl ? copyViewLink : undefined}
           />
@@ -876,13 +974,15 @@ export function GenericListView<T>({
           </button>
         </div>
         </div>
-      </div>
 
-      {/* Filter bar — only present once at least one chip-able filter is set (NOT
-          filters.hasActive, which also counts the source toggle and would leave an
-          empty chipless row). The header "Filter" button adds the first one. */}
-      {filters && filters.defs.some((d) => d.value) && (
-        <div className="cq-header-pad flex items-center flex-wrap gap-x-1.5 gap-y-1.5 px-6 py-2 border-b border-sol-border/20 bg-sol-bg-alt/20">
+        {/* Filter bar — only present once at least one chip-able filter is set (NOT
+            filters.hasActive, which also counts the source toggle and would leave an
+            empty chipless row). The header "Filter" button adds the first one. Kept
+            INSIDE .cq-container so its labels and padding collapse with the panel
+            width — a container query needs a containment ancestor or it falls back to
+            the viewport (which is why these classes did nothing out here before). */}
+        {filterBarShown && (
+          <div className="cq-header-pad cq-filter-bar flex items-center flex-wrap gap-x-1.5 gap-y-1.5 px-6 py-2 border-t border-sol-border/30 bg-sol-bg-alt/20">
           {/* Active filters as removable chips; everything unset lives behind "+ Filter". */}
           {filters.defs.filter((f) => f.value).map((f) => (
             <FilterDropdown
@@ -974,7 +1074,8 @@ export function GenericListView<T>({
             )}
           </div>
         </div>
-      )}
+        )}
+      </div>
 
       {/* Content area */}
       {customContent ? customContent({ openPaletteForItems }) : (

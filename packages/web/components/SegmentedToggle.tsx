@@ -101,7 +101,7 @@ function SegmentedDropdown({
       >
         {ActiveIcon && <ActiveIcon className="w-3.5 h-3.5 flex-shrink-0 text-sol-text-muted" />}
         {active?.label && <span className="font-medium whitespace-nowrap">{active.label}</span>}
-        <ChevronDown className="w-3 h-3 opacity-60 flex-shrink-0" />
+        <ChevronDown className="w-3 h-3 opacity-60 flex-shrink-0 cq-caret" />
       </button>
       {open && (
         <div className="absolute top-full right-0 mt-1 w-44 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[60] py-1">

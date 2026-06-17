@@ -68,6 +68,22 @@
   .cq-header-pad { padding-left: 0.75rem !important; padding-right: 0.75rem !important; }
 }
 
+/* Very narrow panels: keep EACH header bar to a single line that never wraps, so
+   the toolbar and the filter bar stay two lines total (not four). Rather than let
+   a control spill to a second row, we compact the controls to make room: shrink
+   the side padding and the gaps, hide the dropdown carets (cq-caret) and the
+   "+ Filter" word (cq-addfilter-label), and trim the dropdown triggers' padding —
+   then pin both rows to nowrap. Wide layouts (> 440px) are untouched. */
+@container (max-width: 440px) {
+  .cq-header-pad { padding-left: 0.5rem !important; padding-right: 0.5rem !important; }
+  .cq-header { flex-wrap: nowrap !important; column-gap: 0.25rem !important; }
+  .cq-header-toolbar { flex-wrap: nowrap !important; column-gap: 0.125rem !important; }
+  .cq-filter-bar { flex-wrap: nowrap !important; column-gap: 0.25rem !important; }
+  .cq-header-toolbar > div > button { padding-left: 0.375rem !important; padding-right: 0.375rem !important; }
+  .cq-caret { display: none !important; }
+  .cq-addfilter-label { display: none !important; }
+}
+
 .cq-no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
 .cq-no-scrollbar::-webkit-scrollbar { display: none; }
 
