@@ -2090,7 +2090,7 @@ function dedupeReplayedMessages(messages: Message[]): Message[] {
 // purpose — instant switching across a lot of recent conversations is the point —
 // but bounded, because the store never prunes and message bodies carry inline
 // images. Evicted conversations stay in IDB and reload instantly.
-export const MAX_IN_MEMORY_CONVERSATIONS = 200;
+export const MAX_IN_MEMORY_CONVERSATIONS = 400;
 
 export function evictInactiveMessages(draft: any, activeConvId: string) {
   const loaded = Object.keys(draft.messages);
