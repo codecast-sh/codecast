@@ -1610,7 +1610,17 @@ export function SessionListPanel({
   // so auto-scroll and the currently-viewed session never fall off the cap.
   const SECTION_RENDER_CAP = 50;
   const SECTION_RENDER_STEP = 100;
+  // Global ceiling on cards mounted across ALL sections combined. The per-section
+  // cap alone doesn't bound the total — with thousands of sessions spread across
+  // many label/project groups (plus nested subagents) it still reached ~800 cards
+  // / 23k DOM nodes. This budget is consumed in render order (top sections win),
+  // so the whole panel stays bounded no matter how many sessions accumulate. Every
+  // session stays in the store — this only limits how many are MOUNTED at once.
+  const GLOBAL_CARD_BUDGET = 100;
   const [sectionLimits, setSectionLimits] = useState<Record<string, number>>({});
+  const [globalCardExtra, setGlobalCardExtra] = useState(0);
+  // Reset each render; renderSection (a closure over this) consumes it in call order.
+  let globalRenderedCards = 0;
   const showSubagents = s.clientState.ui?.show_subagents ?? true;
   // Three-way view mode; the legacy boolean is honored when the mode is unset.
   const viewMode: InboxViewMode =
@@ -1889,9 +1899,22 @@ export function SessionListPanel({
             </svg>
           </button>
         </div>
-        {expanded && topLevel.length > 0 && (
+        {expanded && topLevel.length > 0 && (() => {
+          // Cap the hidden bucket too — KILLED/STASHED can hold hundreds of rows
+          // when expanded ("show killed/stashed" on). Same per-bucket cap + show-more
+          // as renderSection; keeps the active row mounted past the cap.
+          const hkey = `hidden_${variant}`;
+          const hlimit = sectionLimits[hkey] ?? SECTION_RENDER_CAP;
+          let visibleTop = topLevel.length > hlimit ? topLevel.slice(0, hlimit) : topLevel;
+          if (visibleTop.length < topLevel.length && activeSessionId) {
+            const active = topLevel.find((sess) => sess._id === activeSessionId);
+            if (active && !visibleTop.includes(active)) visibleTop = [...visibleTop, active];
+          }
+          const hHidden = topLevel.length - visibleTop.length;
+          globalRenderedCards += visibleTop.length;
+          return (
           <div>
-            {topLevel.map((session) => (
+            {visibleTop.map((session) => (
               <div key={session._id} className="border-b border-sol-border/30">
                 <SessionCard
                   session={session}
@@ -1987,7 +2010,12 @@ export function SessionListPanel({
           </svg>
         </button>
         {!collapsed && (() => {
-          const limit = sectionLimits[key] ?? SECTION_RENDER_CAP;
+          const sectionCap = sectionLimits[key] ?? SECTION_RENDER_CAP;
+          // Take from the shared global budget (consumed in render order, so the
+          // top-priority sections fill first); the active row is force-kept below
+          // even when the budget is spent.
+          const globalRemaining = Math.max(0, GLOBAL_CARD_BUDGET + globalCardExtra - globalRenderedCards);
+          const limit = Math.min(sectionCap, globalRemaining);
           let visibleItems = items.length > limit ? items.slice(0, limit) : items;
           // Never let the active row (or the parent hosting the active subagent)
           // fall past the cap — it must stay mounted for auto-scroll and so the
@@ -2000,6 +2028,7 @@ export function SessionListPanel({
             if (needed && !visibleItems.includes(needed)) visibleItems = [...visibleItems, needed];
           }
           const hiddenCount = items.length - visibleItems.length;
+          globalRenderedCards += visibleItems.length;
           return (<>
           {visibleItems.map((session) => {
             // In flat view, subagents already appear as their own top-level
@@ -2094,7 +2123,7 @@ export function SessionListPanel({
           })}
           {hiddenCount > 0 && (
             <button
-              onClick={() => setSectionLimits((prev) => ({ ...prev, [key]: (prev[key] ?? SECTION_RENDER_CAP) + SECTION_RENDER_STEP }))}
+              onClick={() => { setSectionLimits((prev) => ({ ...prev, [key]: (prev[key] ?? SECTION_RENDER_CAP) + SECTION_RENDER_STEP })); setGlobalCardExtra((g) => g + SECTION_RENDER_STEP); }}
               className="w-full px-3 py-1.5 text-[10px] font-medium text-sol-text-dim hover:text-sol-cyan transition-colors text-left border-b border-sol-border/30"
             >
               Show {Math.min(hiddenCount, SECTION_RENDER_STEP)} more · {hiddenCount} hidden
