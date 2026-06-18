@@ -802,3 +802,75 @@ describe("per-message model extraction", () => {
     expect(messages[1].model).toBeUndefined();
   });
 });
+
+describe("queued-command attachments (Ctrl+Enter / busy-agent delivery)", () => {
+  // A turn the agent receives while busy is written as type:"attachment" with
+  // attachment.type:"queued_command" — the text lives in attachment.prompt, NOT in
+  // message.content. These used to be dropped, silently losing real user messages.
+  test("emits a queued human prompt as a user message", () => {
+    const entries: ClaudeSessionEntry[] = [
+      {
+        type: "assistant",
+        uuid: "a1",
+        timestamp: "2026-06-18T20:15:00Z",
+        message: { role: "assistant", content: [{ type: "text", text: "working on it" }] },
+      },
+      {
+        type: "attachment",
+        uuid: "queued-1",
+        timestamp: "2026-06-18T20:15:48Z",
+        attachment: {
+          type: "queued_command",
+          prompt: "After you are done: run two workflows over the tasks.",
+          commandMode: "prompt",
+          origin: { kind: "human" },
+        },
+      },
+    ];
+
+    const messages = extractMessages(entries);
+
+    expect(messages).toHaveLength(2);
+    expect(messages[1]).toMatchObject({
+      uuid: "queued-1",
+      role: "user",
+      content: "After you are done: run two workflows over the tasks.",
+    });
+  });
+
+  test("strips leading terminal control bytes from the queued prompt", () => {
+    const entries: ClaudeSessionEntry[] = [
+      {
+        type: "attachment",
+        uuid: "queued-2",
+        timestamp: "2026-06-18T20:15:05Z",
+        // \x01\x0b are bracketed-paste markers captured with the keystrokes.
+        attachment: { type: "queued_command", prompt: "\x01\x0b<session-message from=\"jx75ema\"> hi" },
+      },
+    ];
+
+    const messages = extractMessages(entries);
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0].content).toBe("<session-message from=\"jx75ema\"> hi");
+  });
+
+  test("skips an empty queued prompt and non-queued attachment types", () => {
+    const entries: ClaudeSessionEntry[] = [
+      {
+        type: "attachment",
+        uuid: "queued-empty",
+        timestamp: "2026-06-18T20:15:05Z",
+        attachment: { type: "queued_command", prompt: "   " },
+      },
+      {
+        type: "attachment",
+        uuid: "hook",
+        timestamp: "2026-06-18T20:15:06Z",
+        attachment: { type: "hook_cancelled" },
+      },
+    ];
+
+    expect(extractMessages(entries)).toHaveLength(0);
+  });
+});
