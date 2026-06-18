@@ -413,12 +413,10 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       gitRoot: gitRoot || path || undefined,
       deferCreate: true,
       reuse: true,
-      create: (sid) => store.createSession({
-        agent_type: agentType,
-        project_path: path,
-        git_root: gitRoot || path || undefined,
-        session_id: sid,
-      }),
+      // Source project + agent from the LIVE stub at create time (not these
+      // closure values) so a project/agent switch in NewSessionView before the
+      // first send sticks — same contract as the compose popup.
+      create: (sid) => store.createSessionFromStub(sid, { agentType, projectPath: path, gitRoot: gitRoot || path || undefined }),
     });
     if (isOnInboxPage || isOnConversationPage) {
       store.setCurrentSession(stubId);
