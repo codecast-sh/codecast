@@ -756,11 +756,16 @@ export const addMessage = mutation({
       }
     }
 
-    if (args.api_token || args.role === "user") {
+    // Only record user-message activity when there's a user timestamp to advance.
+    // We deliberately no longer refresh daemon_last_seen here: the 30s
+    // daemonHeartbeat already keeps it within every reader's online threshold
+    // (tightest is 60s), and a message-triggered refresh raced the heartbeat on
+    // the SAME hot user doc — the scheduled_job_mutation_success ⇄ daemonHeartbeat
+    // OCC conflict. Dropping it removes that contention with no liveness change.
+    if (args.role === "user") {
       await ctx.scheduler.runAfter(0, internal.users.updateUserActivity, {
         userId: conversation.user_id,
-        daemonSeen: !!args.api_token,
-        messageTimestamp: args.role === "user" ? msgTimestamp : undefined,
+        messageTimestamp: msgTimestamp,
       });
     }
 
