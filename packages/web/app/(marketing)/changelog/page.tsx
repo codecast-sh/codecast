@@ -158,154 +158,226 @@ function SectionHeader({ ac, Icon, kind, uid }: { ac: string; Icon: LucideIcon; 
   );
 }
 
-// Per-month hero illustration. Each scene is hand-drawn line art (panels,
-// lines, nodes) in the month's accent, depicting that month's headline feature.
-// Generated rather than screenshotted so it stays on-brand and never goes stale.
-const PANEL = SOL.base3;
-function monthScene(id: string, ac: string) {
-  const s2 = `${ac}80`; // secondary line color
-  const dot = (cx: number, cy: number, r = 3.5) => <circle cx={cx} cy={cy} r={r} fill={ac} stroke="none" />;
+// Per-month hero — a realistic mock of that month's headline feature, framed
+// like a product screenshot in the app's dark theme (which pops on the cream
+// page). Built from live HTML, so it's crisp at any size and the month accent
+// threads through. Dark Solarized colors are hardcoded since the marketing page
+// is forced light.
+const INK = "#00212b"; // a touch darker than base03, for code wells
+const SCENE_H = 190;
+
+function Dot({ c }: { c: string }) {
+  return <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: c }} />;
+}
+function Pill({ c, children }: { c: string; children: React.ReactNode }) {
+  return (
+    <span
+      className="text-[9px] font-mono px-1.5 py-0.5 rounded-full shrink-0 whitespace-nowrap"
+      style={{ backgroundColor: `${c}24`, color: c }}
+    >
+      {children}
+    </span>
+  );
+}
+function Avatar({ c, initials }: { c: string; initials: string }) {
+  return (
+    <span
+      className="w-5 h-5 rounded-full inline-flex items-center justify-center text-[8px] font-bold shrink-0"
+      style={{ backgroundColor: c, color: SOL.base03 }}
+    >
+      {initials}
+    </span>
+  );
+}
+
+function monthMock(id: string, ac: string) {
   switch (id) {
-    case "2026-06": // messaging + cast blame
+    case "2026-06": // messaging + comments
       return (
-        <>
-          <circle cx="86" cy="60" r="22" fill={PANEL} />
-          <circle cx="86" cy="53" r="8" fill={ac} stroke="none" />
-          <path d="M72 74 a14 12 0 0 1 28 0" fill={ac} stroke="none" />
-          <circle cx="394" cy="60" r="22" fill={PANEL} />
-          <circle cx="394" cy="53" r="8" fill={s2} stroke="none" />
-          <path d="M380 74 a14 12 0 0 1 28 0" fill={s2} stroke="none" />
-          <line x1="108" y1="60" x2="168" y2="60" strokeDasharray="2 7" />
-          <line x1="312" y1="60" x2="372" y2="60" strokeDasharray="2 7" />
-          <rect x="168" y="32" width="144" height="48" rx="14" fill={PANEL} />
-          <path d="M192 80 l0 16 l18 -16 Z" fill={PANEL} stroke="none" />
-          <line x1="186" y1="50" x2="296" y2="50" stroke={s2} />
-          <line x1="186" y1="64" x2="266" y2="64" stroke={s2} />
-          <rect x="150" y="110" width="180" height="24" rx="6" fill={PANEL} />
-          <line x1="164" y1="122" x2="250" y2="122" stroke={s2} />
-          <rect x="260" y="114" width="58" height="16" rx="4" fill={ac} stroke="none" />
-        </>
+        <div className="flex h-full">
+          <div className="flex-1 min-w-0 p-3.5 space-y-2.5">
+            <div className="flex items-center gap-2">
+              <Avatar c={ac} initials="AI" />
+              <span className="text-[11px]" style={{ color: SOL.base0 }}>Assistant</span>
+              <span className="text-[10px]" style={{ color: SOL.base01 }}>· just now</span>
+            </div>
+            <p className="text-[12px] leading-relaxed" style={{ color: SOL.base1 }}>
+              I&apos;ll cache the session list in the store so the inbox renders instantly instead of refetching on every open.
+            </p>
+            <div className="rounded-md px-2.5 py-1.5 text-[10.5px] font-mono truncate" style={{ backgroundColor: SOL.base02, color: SOL.base0 }}>
+              keepOnScreen + liveInboxIds
+            </div>
+          </div>
+          <div className="w-[150px] shrink-0 p-3 space-y-2" style={{ borderLeft: `1px solid ${SOL.base02}`, backgroundColor: `${SOL.base02}66` }}>
+            <div className="text-[9px] font-mono uppercase tracking-wider" style={{ color: SOL.base01 }}>Comments</div>
+            <div className="flex items-start gap-1.5">
+              <Avatar c={SOL.magenta} initials="SA" />
+              <p className="text-[11px] leading-snug" style={{ color: SOL.base1 }}>
+                <span style={{ color: SOL.base0 }}>sam</span> can we memoize this?
+              </p>
+            </div>
+          </div>
+        </div>
       );
-    case "2026-05": // run on any machine
+    case "2026-05": { // devices
+      const rows = [
+        { Icon: Laptop, name: "MacBook Pro", meta: "local", st: "online", sc: SOL.green },
+        { Icon: Cloud, name: "cloud-vm-1", meta: "us-east", st: "active", sc: SOL.cyan },
+        { Icon: Server, name: "mac-mini-01", meta: "office", st: "online", sc: SOL.green },
+        { Icon: Cpu, name: "sandbox-7f3", meta: "ephemeral", st: "idle", sc: SOL.base01 },
+      ];
       return (
-        <>
-          <rect x="40" y="46" width="96" height="58" rx="7" fill={PANEL} />
-          <path d="M30 113 L146 113 L136 104 L40 104 Z" fill={PANEL} />
-          <line x1="58" y1="64" x2="118" y2="64" stroke={s2} />
-          <line x1="58" y1="77" x2="104" y2="77" stroke={s2} />
-          <line x1="58" y1="90" x2="112" y2="90" stroke={s2} />
-          <rect x="208" y="48" width="66" height="56" rx="8" fill={PANEL} />
-          {dot(224, 63, 3)}<line x1="236" y1="63" x2="262" y2="63" stroke={s2} />
-          {dot(224, 76, 3)}<line x1="236" y1="76" x2="256" y2="76" stroke={s2} />
-          {dot(224, 89, 3)}<line x1="236" y1="89" x2="260" y2="89" stroke={s2} />
-          <rect x="350" y="42" width="76" height="26" rx="6" fill={PANEL} />
-          <rect x="350" y="78" width="76" height="26" rx="6" fill={PANEL} />
-          {dot(364, 55, 3)}<line x1="378" y1="55" x2="412" y2="55" stroke={s2} />
-          {dot(364, 91, 3)}<line x1="378" y1="91" x2="412" y2="91" stroke={s2} />
-          <line x1="146" y1="80" x2="208" y2="78" strokeDasharray="2 7" />
-          <line x1="274" y1="78" x2="350" y2="80" strokeDasharray="2 7" />
-          {dot(300, 79, 5)}
-        </>
+        <div className="p-3 h-full">
+          <div className="flex items-center gap-2 px-1 pb-1.5">
+            <MonitorSmartphone className="w-3.5 h-3.5" style={{ color: SOL.base0 }} />
+            <span className="text-[12px] font-medium" style={{ color: SOL.base2 }}>Devices</span>
+          </div>
+          <div className="space-y-1">
+            {rows.map((r) => (
+              <div key={r.name} className="flex items-center gap-2.5 rounded-md px-2.5 py-1.5">
+                <r.Icon className="w-4 h-4 shrink-0" style={{ color: ac }} />
+                <span className="flex-1 truncate text-[12px] font-mono" style={{ color: SOL.base1 }}>{r.name}</span>
+                <span className="text-[10px]" style={{ color: SOL.base01 }}>{r.meta}</span>
+                <Dot c={r.sc} />
+                <span className="text-[10px] w-10" style={{ color: r.sc }}>{r.st}</span>
+              </div>
+            ))}
+          </div>
+        </div>
       );
+    }
     case "2026-04": // workspaces, tabs, windows
       return (
-        <>
-          <rect x="92" y="26" width="192" height="96" rx="10" fill={PANEL} />
-          <line x1="92" y1="48" x2="284" y2="48" />
-          {dot(106, 37, 3)}
-          <rect x="176" y="50" width="212" height="98" rx="10" fill={PANEL} />
-          <line x1="176" y1="74" x2="388" y2="74" />
-          {dot(190, 62, 3)}
-          <rect x="206" y="56" width="42" height="12" rx="3" fill={ac} opacity="0.22" stroke="none" />
-          <rect x="254" y="56" width="42" height="12" rx="3" fill="none" stroke={s2} />
-          <line x1="192" y1="92" x2="372" y2="92" stroke={s2} />
-          <line x1="192" y1="106" x2="344" y2="106" stroke={s2} />
-          <line x1="192" y1="120" x2="360" y2="120" stroke={s2} />
-        </>
+        <div className="flex flex-col h-full">
+          <div className="flex items-stretch gap-1 px-2 pt-2" style={{ backgroundColor: SOL.base02 }}>
+            {["Fix auth redirect", "Stripe webhooks", "+ new"].map((t, i) => (
+              <div
+                key={t}
+                className="px-2.5 py-1.5 rounded-t-md text-[11px] truncate max-w-[120px]"
+                style={{
+                  backgroundColor: i === 0 ? SOL.base03 : "transparent",
+                  color: i === 0 ? SOL.base2 : SOL.base01,
+                  borderTop: `2px solid ${i === 0 ? ac : "transparent"}`,
+                }}
+              >
+                {t}
+              </div>
+            ))}
+          </div>
+          <div className="flex flex-1 min-h-0">
+            <div className="w-28 shrink-0 p-2.5 space-y-1.5 text-[11px]" style={{ borderRight: `1px solid ${SOL.base02}` }}>
+              <div className="text-[9px] uppercase tracking-wider" style={{ color: SOL.base01 }}>Projects</div>
+              {["codecast", "web", "mobile"].map((p, i) => (
+                <div key={p} className="flex items-center gap-1.5 truncate" style={{ color: i === 0 ? ac : SOL.base0 }}>
+                  <FolderKanban className="w-3 h-3 shrink-0" /> {p}
+                </div>
+              ))}
+            </div>
+            <div className="flex-1 p-3.5 space-y-2.5">
+              <div className="text-[12px]" style={{ color: SOL.base1 }}>Fix auth redirect loop</div>
+              {["85%", "62%", "73%"].map((w, i) => (
+                <span key={i} className="block h-1.5 rounded-full" style={{ width: w, backgroundColor: SOL.base02 }} />
+              ))}
+            </div>
+          </div>
+        </div>
       );
-    case "2026-03": // plans -> orchestration waves
+    case "2026-03": { // plans + orchestration
+      const tasks = [
+        { name: "Stripe checkout flow", st: "done", sc: SOL.green },
+        { name: "Webhook verification", st: "done", sc: SOL.green },
+        { name: "Subscription model", st: "in progress", sc: SOL.blue },
+        { name: "Billing page UI", st: "blocked", sc: SOL.red },
+      ];
       return (
-        <>
-          <rect x="30" y="56" width="64" height="38" rx="9" fill={PANEL} />
-          <line x1="44" y1="70" x2="80" y2="70" stroke={s2} />
-          <line x1="44" y1="80" x2="72" y2="80" stroke={s2} />
-          <path d="M94 75 C 150 75, 150 35, 206 35" />
-          <path d="M94 75 C 150 75, 150 75, 206 75" />
-          <path d="M94 75 C 150 75, 150 115, 206 115" />
-          <rect x="206" y="20" width="60" height="30" rx="8" fill={PANEL} />
-          <rect x="206" y="60" width="60" height="30" rx="8" fill={PANEL} />
-          <rect x="206" y="100" width="60" height="30" rx="8" fill={PANEL} />
-          {dot(220, 35)}{dot(220, 75)}{dot(220, 115)}
-          <path d="M266 35 C 330 35, 330 55, 392 55" />
-          <path d="M266 75 C 330 75, 330 55, 392 55" />
-          <path d="M266 75 C 330 75, 330 95, 392 95" />
-          <path d="M266 115 C 330 115, 330 95, 392 95" />
-          <rect x="392" y="40" width="60" height="30" rx="8" fill={PANEL} />
-          <rect x="392" y="80" width="60" height="30" rx="8" fill={PANEL} />
-          {dot(406, 55)}{dot(406, 95)}
-        </>
+        <div className="p-3.5 h-full">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-[13px] font-medium" style={{ color: SOL.base2 }}>Add payments</span>
+            <Pill c={ac}>active</Pill>
+          </div>
+          <div className="text-[10px] mb-2" style={{ color: SOL.base01 }}>2 of 4 tasks done</div>
+          <div className="h-1.5 rounded-full mb-3.5 overflow-hidden" style={{ backgroundColor: SOL.base02 }}>
+            <div className="h-full rounded-full" style={{ width: "50%", backgroundColor: ac }} />
+          </div>
+          <div className="space-y-2">
+            {tasks.map((t) => (
+              <div key={t.name} className="flex items-center gap-2.5">
+                <Dot c={t.sc} />
+                <span className="flex-1 truncate text-[12px]" style={{ color: SOL.base1 }}>{t.name}</span>
+                <Pill c={t.sc}>{t.st}</Pill>
+              </div>
+            ))}
+          </div>
+        </div>
       );
-    case "2026-02": // mobile inbox + fork
+    }
+    case "2026-02": { // inbox
+      const rows = [
+        { sc: SOL.green, title: "Fix auth redirect loop", agent: "opus", t: "2m" },
+        { sc: SOL.yellow, title: "Stripe webhook retries", agent: "codex", t: "14m" },
+        { sc: SOL.base01, title: "Refactor inbox store", agent: "opus", t: "1h" },
+        { sc: SOL.green, title: "Add dark mode toggle", agent: "opus", t: "3h" },
+      ];
       return (
-        <>
-          <g transform="translate(64,58)">
-            <path d="M8 0 C 26 0, 26 -22, 44 -22 M8 0 C 26 0, 26 22, 44 22" />
-            <circle cx="8" cy="0" r="7" fill={PANEL} />
-            <circle cx="52" cy="-22" r="7" fill={PANEL} />
-            <circle cx="52" cy="22" r="7" fill={PANEL} />
-          </g>
-          <rect x="168" y="16" width="118" height="118" rx="18" fill={PANEL} />
-          <line x1="206" y1="28" x2="248" y2="28" strokeWidth="3" />
-          <rect x="184" y="44" width="86" height="22" rx="6" fill={`${ac}1f`} stroke="none" />
-          {dot(195, 55, 3.5)}
-          <line x1="206" y1="51" x2="262" y2="51" stroke={ac} />
-          <line x1="206" y1="60" x2="246" y2="60" stroke={s2} />
-          <rect x="184" y="72" width="86" height="22" rx="6" fill="none" />
-          <line x1="196" y1="83" x2="262" y2="83" stroke={s2} />
-          <rect x="184" y="100" width="86" height="22" rx="6" fill="none" />
-          <line x1="196" y1="111" x2="262" y2="111" stroke={s2} />
-          <rect x="358" y="42" width="82" height="64" rx="9" fill={PANEL} />
-          <line x1="358" y1="58" x2="440" y2="58" />
-          <line x1="370" y1="74" x2="428" y2="74" stroke={s2} />
-          <line x1="370" y1="88" x2="414" y2="88" stroke={s2} />
-        </>
+        <div className="p-3 h-full">
+          <div className="flex items-center gap-2 px-1 pb-1.5">
+            <Inbox className="w-3.5 h-3.5" style={{ color: SOL.base0 }} />
+            <span className="text-[12px] font-medium" style={{ color: SOL.base2 }}>Inbox</span>
+            <span className="text-[10px]" style={{ color: SOL.base01 }}>4 sessions</span>
+          </div>
+          <div className="space-y-1">
+            {rows.map((r, i) => (
+              <div
+                key={r.title}
+                className="flex items-center gap-2.5 rounded-md px-2.5 py-1.5"
+                style={{
+                  backgroundColor: i === 0 ? SOL.base02 : "transparent",
+                  boxShadow: i === 0 ? `inset 0 0 0 1px ${ac}55` : undefined,
+                }}
+              >
+                <Dot c={r.sc} />
+                <span className="flex-1 truncate text-[12px]" style={{ color: SOL.base1 }}>{r.title}</span>
+                <Pill c={SOL.base0}>{r.agent}</Pill>
+                <span className="text-[10px] tabular-nums w-6 text-right" style={{ color: SOL.base01 }}>{r.t}</span>
+              </div>
+            ))}
+          </div>
+        </div>
       );
-    case "2026-01": // memory / search over past sessions
+    }
+    case "2026-01": // memory / CLI search
       return (
-        <>
-          <rect x="58" y="48" width="150" height="70" rx="10" fill={PANEL} transform="rotate(-6 133 83)" />
-          <rect x="74" y="42" width="150" height="70" rx="10" fill={PANEL} />
-          <line x1="90" y1="62" x2="206" y2="62" stroke={s2} />
-          <line x1="90" y1="76" x2="186" y2="76" stroke={s2} />
-          <line x1="90" y1="90" x2="170" y2="90" stroke={s2} />
-          <circle cx="316" cy="70" r="40" fill={`${ac}12`} />
-          <circle cx="316" cy="70" r="40" />
-          <line x1="346" y1="100" x2="376" y2="130" strokeWidth="6" />
-          <line x1="298" y1="64" x2="336" y2="64" stroke={ac} />
-          <line x1="298" y1="78" x2="326" y2="78" stroke={s2} />
-        </>
+        <div className="p-3.5 h-full font-mono text-[11px] leading-relaxed" style={{ color: SOL.base1 }}>
+          <div><span style={{ color: SOL.green }}>$ </span>cast ask <span style={{ color: SOL.cyan }}>&quot;why did we pick Convex?&quot;</span></div>
+          <div style={{ color: SOL.base01 }}>↳ searching 847 sessions…</div>
+          <div className="mt-1.5">Live queries and a reactive cache, so the inbox</div>
+          <div>updates without manual refetching.</div>
+          <div className="mt-2.5 rounded-md px-2.5 py-1.5 flex items-center gap-2" style={{ backgroundColor: SOL.base02 }}>
+            <span style={{ color: ac }}>jx74qbm</span>
+            <span className="flex-1 truncate" style={{ color: SOL.base0 }}>Pick a backend</span>
+            <span style={{ color: SOL.base01 }}>Jan 12</span>
+          </div>
+        </div>
       );
-    case "2025-12": // capture: terminal -> sync -> dashboard
+    case "2025-12": // conversation viewer
     default:
       return (
-        <>
-          <rect x="30" y="40" width="150" height="78" rx="10" fill={PANEL} />
-          <line x1="30" y1="60" x2="180" y2="60" />
-          {dot(44, 50, 2.5)}{dot(54, 50, 2.5)}
-          <line x1="44" y1="76" x2="60" y2="76" />
-          <line x1="68" y1="76" x2="150" y2="76" stroke={s2} />
-          <line x1="44" y1="90" x2="124" y2="90" stroke={s2} />
-          <line x1="44" y1="104" x2="92" y2="104" stroke={s2} />
-          {dot(212, 79, 3.5)}
-          <circle cx="234" cy="79" r="3.5" fill={`${ac}aa`} stroke="none" />
-          <circle cx="256" cy="79" r="3.5" fill={`${ac}55`} stroke="none" />
-          <rect x="300" y="40" width="150" height="78" rx="10" fill={PANEL} />
-          <line x1="300" y1="60" x2="450" y2="60" />
-          {dot(314, 50, 2.5)}{dot(324, 50, 2.5)}
-          <line x1="314" y1="76" x2="436" y2="76" stroke={s2} />
-          <line x1="314" y1="90" x2="410" y2="90" stroke={s2} />
-          <line x1="314" y1="104" x2="426" y2="104" stroke={s2} />
-        </>
+        <div className="p-3.5 h-full space-y-2">
+          <div className="flex items-center gap-2">
+            <Avatar c={ac} initials="AI" />
+            <span className="text-[11px]" style={{ color: SOL.base0 }}>Assistant</span>
+          </div>
+          <p className="text-[12px]" style={{ color: SOL.base1 }}>Here&apos;s the auth callback handler:</p>
+          <div className="rounded-md p-2.5 font-mono text-[10.5px] leading-relaxed" style={{ backgroundColor: INK, border: `1px solid ${SOL.base02}`, color: SOL.base0 }}>
+            <div><span style={{ color: SOL.violet }}>export function</span> <span style={{ color: SOL.blue }}>handleCallback</span>() {"{"}</div>
+            <div className="pl-3"><span style={{ color: SOL.violet }}>const</span> token = <span style={{ color: SOL.cyan }}>await</span> exchange(code);</div>
+            <div className="pl-3"><span style={{ color: SOL.violet }}>return</span> redirect(<span style={{ color: SOL.green }}>&quot;/inbox&quot;</span>);</div>
+            <div>{"}"}</div>
+          </div>
+          <div className="flex items-center gap-2 text-[10px]" style={{ color: SOL.base01 }}>
+            <FileText className="w-3 h-3" /> Read src/auth/callback.ts
+          </div>
+        </div>
       );
   }
 }
@@ -313,26 +385,22 @@ function monthScene(id: string, ac: string) {
 function MonthHero({ id, ac, label }: { id: string; ac: string; label: string }) {
   return (
     <div
-      className="relative w-full rounded-xl overflow-hidden mb-7"
-      style={{
-        border: `1px solid ${SOL.base2}`,
-        background: `linear-gradient(135deg, ${ac}24, ${ac}0a 55%, ${SOL.base2}66)`,
-      }}
+      className="w-full rounded-xl overflow-hidden mb-7"
+      style={{ border: `1px solid ${SOL.base2}`, boxShadow: `0 12px 32px ${SOL.base01}1f` }}
+      role="img"
+      aria-label={`${label} — interface preview`}
     >
-      <svg
-        viewBox="0 0 480 150"
-        className="block w-full h-auto"
-        style={{ maxHeight: 188 }}
-        role="img"
-        aria-label={`${label} — illustration`}
-        fill="none"
-        stroke={ac}
-        strokeWidth={2.5}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      >
-        {monthScene(id, ac)}
-      </svg>
+      {/* window title bar */}
+      <div className="flex items-center gap-1.5 px-3 py-2" style={{ backgroundColor: SOL.base2 }}>
+        <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: `${SOL.red}99` }} />
+        <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: `${SOL.yellow}99` }} />
+        <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: `${SOL.green}99` }} />
+        <span className="ml-2 text-[10px] font-mono" style={{ color: SOL.base01 }}>codecast.sh</span>
+      </div>
+      {/* dark app interior */}
+      <div className="overflow-hidden" style={{ height: SCENE_H, backgroundColor: SOL.base03 }}>
+        {monthMock(id, ac)}
+      </div>
     </div>
   );
 }
