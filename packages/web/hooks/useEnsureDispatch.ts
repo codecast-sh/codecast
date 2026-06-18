@@ -59,7 +59,10 @@ export function useEnsureDispatch() {
     // stranded (in-session retries exhausted with no reload in sight) would sit
     // undelivered indefinitely. Coming back online, refocusing the tab, and a
     // slow heartbeat each give it a fresh chance to land — no reload required.
-    if (typeof window === "undefined") return;
+    // `window` exists in React Native but has no browser event APIs (and there's
+    // no `document`), so an SSR-style `typeof window === "undefined"` check passes
+    // and then crashes on `window.addEventListener`. Require the real APIs.
+    if (typeof window === "undefined" || typeof document === "undefined" || typeof window.addEventListener !== "function") return;
     // _drainOutbox is injected onto the store by mutativeMiddleware (a sibling
     // of _setDispatch); typed at the call site so the wiring lives entirely here.
     const drain = () => (useInboxStore.getState() as unknown as { _drainOutbox: () => void })._drainOutbox();
