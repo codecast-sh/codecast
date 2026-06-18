@@ -182,4 +182,52 @@ describe("verifyTmuxSubmitAfterPaste", () => {
     expect(res.outcome).toBe("submitted");
     expect(actions).toEqual([]);
   });
+
+  // Mid-turn inject: a follow-up pasted while the agent is still generating lands
+  // in Claude Code's native type-ahead queue — rendered as a `❯ <text>` line above
+  // the live composer with "↓ to manage" in the footer — and submits when the turn
+  // ends. The verifier must read that queued line as proof-of-submit and ack
+  // WITHOUT pressing Enter or re-pasting. Re-pasting a busy pane is precisely the
+  // "paste storm" that once justified waiting for idle (now removed: ensureTmuxReady
+  // reports busy and the caller injects straight into the queue). Panes captured
+  // live from Claude Code 2.1.181; verified end-to-end (the queued message ran and
+  // printed its marker once the turn finished).
+  const QUEUED_PROMPT = "QUEUED_FOLLOWUP: after the sleep, print the words BANANA_PHONE";
+
+  const BUSY_BEFORE_QUEUE_PANE = `
+⏺ I started the command in the background. It will take ~40 seconds.
+
+✻ Brewed for 14s · 1 shell still running
+────────────────────────────────────────
+❯
+────────────────────────────────────────
+  ⏵⏵ bypass permissions on · 1 shell · esc to interrupt
+`;
+
+  const BUSY_WITH_QUEUED_MSG_PANE = `
+⏺ I started the command in the background. It will take ~40 seconds.
+
+✻ Brewed for 14s · 1 shell still running
+
+❯ QUEUED_FOLLOWUP: after the sleep, print the words BANANA_PHONE
+
+· Baking…
+  ⎿  Tip: Use /permissions to pre-approve bash, edit, and MCP tools
+────────────────────────────────────────
+❯
+────────────────────────────────────────
+  ⏵⏵ bypass permissions on · 1 shell · esc to interrupt · ↓ to manage
+`;
+
+  test("busy pane: pasted follow-up queues natively and acks without a paste storm", async () => {
+    const { io, actions } = scriptedIO([BUSY_WITH_QUEUED_MSG_PANE]);
+    const res = await verifyTmuxSubmitAfterPaste(io, {
+      prePaste: BUSY_BEFORE_QUEUE_PANE,
+      pasteConfirmed: true,
+      contentPrefix: QUEUED_PROMPT.slice(0, 40),
+    });
+    expect(res.outcome).toBe("submitted");
+    expect(res.rePasted).toBe(false);
+    expect(actions).toEqual([]); // no Enter into the live box, no re-paste into a busy pane
+  });
 });
