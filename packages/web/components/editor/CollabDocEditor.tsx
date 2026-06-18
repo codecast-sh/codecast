@@ -306,7 +306,12 @@ function CursorOverlay({ presences }: { presences: PresenceEntry[] }) {
     return () => { if (tickRef.current) clearInterval(tickRef.current); };
   });
 
-  if (!editor || !editor.view) return null;
+  // `editor.view` is a Proxy that THROWS on any property access (e.g. `.dom`)
+  // until the ProseMirror view is mounted — so `!editor.view` never short-circuits
+  // (the proxy is always truthy) and the `.dom` read below blows up during the
+  // mount race. `isInitialized` flips true only once editorView exists, and reading
+  // it never touches the proxy. (Sentry: "[tiptap error]: Cannot access view['dom']".)
+  if (!editor || !editor.isInitialized) return null;
 
   const editorEl = editor.view.dom;
   const editorRect = editorEl.getBoundingClientRect();
