@@ -281,8 +281,11 @@ describe("messaging e2e — failure modes", () => {
     }
     const elapsed = Date.now() - start;
 
-    // ensureTmuxReady's STUCK_BUDGET_MS is 8s. Inject must give up by ~10s,
-    // not hang for the full 90s BUSY_WAIT_MS budget.
+    // An unknown/no-prompt pane throws AGENT_UNKNOWN_STATE within
+    // ensureTmuxReady's STUCK_BUDGET_MS (8s), so inject gives up by ~10s rather
+    // than hanging. (A genuinely busy pane no longer waits at all — it injects
+    // into the type-ahead queue — but the HANG shim prints no prompt, so it
+    // classifies "unknown", not "busy".)
     expect(elapsed).toBeLessThan(15_000);
     expect(err).not.toBeNull();
   }, 30_000);

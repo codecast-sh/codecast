@@ -7066,17 +7066,22 @@ async function withTmuxLock<T>(target: string, fn: () => Promise<T>): Promise<T>
   }
 }
 
-// Drives the live UI to "idle" through repeated classify→act→re-classify steps.
-// Throws a structured error (SESSION_EXITED, AGENT_BUSY, AGENT_UNKNOWN_STATE, …)
-// so retryStuckMessages can decide whether to redrive. Per-state actions are
-// hardcoded to safe choices (Escape for both interrupted and rewind — Enter would
-// rewind the conversation), and the stall guard fails fast if our action doesn't
-// change the live state, instead of hammering the same key forever.
-export async function ensureTmuxReady(target: string): Promise<void> {
-  const BUSY_WAIT_MS = 90_000;
+// Drives the live UI to a paste-safe condition through repeated
+// classify→act→re-classify steps, and reports whether the agent is mid-turn so
+// the caller can adapt its paste. Throws a structured error (SESSION_EXITED,
+// AGENT_UNKNOWN_STATE, …) so retryStuckMessages can decide whether to redrive.
+// Per-state actions are hardcoded to safe choices (Escape for both interrupted
+// and rewind — Enter would rewind the conversation), and the stall guard fails
+// fast if our action doesn't change the live state instead of hammering forever.
+//
+// `busy: true` means the agent is generating but its input box (❯) is live for
+// type-ahead — a paste lands in Claude Code's native queue and submits when the
+// turn ends. We do NOT wait for idle: that only ever served to keep the paste
+// path's mandatory leading Escape from interrupting the turn, and the caller now
+// simply skips that Escape when busy (see injectViaTmuxInner).
+export async function ensureTmuxReady(target: string): Promise<{ busy: boolean }> {
   const STUCK_BUDGET_MS = 8_000;
   const startedAt = Date.now();
-  let busyLogged = false;
   let lastCorrectiveState: TmuxLiveState | null = null;
   let sameStateAttempts = 0;
 
@@ -7090,22 +7095,16 @@ export async function ensureTmuxReady(target: string): Promise<void> {
     }
     const state = classifyTmuxLiveState(region);
 
-    if (state === "idle") return;
+    if (state === "idle") return { busy: false };
     if (state === "exited") {
       throw new Error("SESSION_EXITED: agent has exited, refusing to inject into bare shell");
     }
 
-    if (state === "busy") {
-      if (Date.now() - startedAt >= BUSY_WAIT_MS) {
-        throw new Error("AGENT_BUSY: agent did not become idle within wait window, deferring");
-      }
-      if (!busyLogged) {
-        log(`Agent busy in ${target}, waiting up to ${Math.round(BUSY_WAIT_MS / 1000)}s for idle before inject`);
-        busyLogged = true;
-      }
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      continue;
-    }
+    // Mid-turn: inject into the live type-ahead box instead of waiting for idle.
+    // The caller skips the leading Escape on this signal so the turn isn't
+    // interrupted; Claude Code queues the pasted message and submits it when the
+    // turn ends. verifyTmuxSubmitAfterPaste confirms it reached the queue.
+    if (state === "busy") return { busy: true };
 
     // Corrective states: cap total time and bail if our key didn't move the state.
     if (Date.now() - startedAt >= STUCK_BUDGET_MS) {
@@ -7454,10 +7453,12 @@ async function injectViaTmuxInner(target: string, content: string): Promise<void
   const sanitized = content.replace(/\r?\n/g, " ");
 
   // Closed-loop pre-flight: classify the live UI region only (transcript ignored),
-  // dispatch the correct clearing key per state, re-classify, stop when idle. Never
-  // sends a key without first proving which modal it'll act against — that's the
-  // invariant that prevents Escape-at-idle from spuriously opening the Rewind dialog.
-  await ensureTmuxReady(target);
+  // dispatch the correct clearing key per modal, re-classify until paste-safe.
+  // Never sends a key without first proving which modal it'll act against — that's
+  // the invariant that prevents Escape-at-idle from spuriously opening the Rewind
+  // dialog. `busy` = agent mid-turn with a live type-ahead box; we paste into its
+  // native queue rather than waiting for the turn to finish.
+  const { busy } = await ensureTmuxReady(target);
 
   const contentLines = content.split(/\r?\n/).length;
   const captureLines = Math.max(30, contentLines + Math.ceil(sanitized.length / 60) + 10);
@@ -7477,8 +7478,15 @@ async function injectViaTmuxInner(target: string, content: string): Promise<void
   // Cycling C-a (move to start of line) + C-k (kill to end) reliably drains
   // the box, and three cycles handles multi-line drafts too. See
   // daemon.inject-clear.test.ts for the reproduction.
-  await tmuxExec(["send-keys", "-t", target, "Escape"]);
-  await new Promise(resolve => setTimeout(resolve, 50));
+  //
+  // Escape is the one key here that doubles as "interrupt the current turn", so
+  // it is gated on the agent being idle. Mid-turn the type-ahead box holds at most
+  // a fresh draft, which the C-a/C-k drain clears without interrupting — and the
+  // pasted message then rides Claude Code's native queue until the turn ends.
+  if (!busy) {
+    await tmuxExec(["send-keys", "-t", target, "Escape"]);
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
   for (let i = 0; i < 3; i++) {
     await tmuxExec(["send-keys", "-t", target, "C-a"]);
     await new Promise(resolve => setTimeout(resolve, 20));
