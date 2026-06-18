@@ -61,6 +61,7 @@ import {
 } from "./jsonlGenerator.js";
 import {
   CLAUDE_UUID_RE,
+  CLAUDE_AUTO_TRIM_TARGET_TOKENS,
   chooseClaudeAutoTrim,
   combineClaudeResumeFlags,
   copyJsonlAsSession,
@@ -70,8 +71,8 @@ import {
   rewriteSubagentJsonlToUuid,
 } from "./resumeCommand.js";
 import { resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath } from "./projectPathResolver.js";
-import type { AgentStatus } from "@codecast/shared/contracts";
-import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS } from "@codecast/shared/contracts";
+import type { AgentStatus, DeviceSnippetSettings } from "@codecast/shared/contracts";
+import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG } from "@codecast/shared/contracts";
 import { parseModelPicker, planModelNavigation, SESSION_ONLY_COMMIT_RE, isSwitchConfirmDialog } from "./modelPicker";
 import type { Config } from "./config/types.js";
 
@@ -1348,6 +1349,24 @@ async function pushCredentialToRemoteHosts(reason: string): Promise<void> {
   }
 }
 
+// Snapshot this machine's installed agent-feature snippets + stable mode from
+// local config, keyed by canonical slug (the web never sees the slug→config-key
+// mapping). Reported on every heartbeat so the Settings page mirrors what each
+// device actually has — and reflects a `cast install`/`--disable` within ~30s.
+function buildDeviceSettingsPayload(config: Config | null): DeviceSnippetSettings | undefined {
+  if (!config) return undefined;
+  const snippets: Record<string, boolean> = {};
+  for (const s of SNIPPET_CATALOG) {
+    const v = (config as any)[s.enabledKey];
+    if (typeof v === "boolean") snippets[s.slug] = v;
+  }
+  return {
+    snippets,
+    stable_mode: (config as any).stable_mode ?? "off",
+    stable_global: (config as any).stable_global === true,
+  };
+}
+
 async function sendHeartbeat(): Promise<void> {
   const config = readConfig();
   if (!config?.auth_token || !config?.convex_url) {
@@ -1376,6 +1395,9 @@ async function sendHeartbeat(): Promise<void> {
         // Saved CC account profiles (names/emails/tiers only, never tokens) so
         // the web can render the account switcher. Cached 5 min in-module.
         cc_accounts: getAccountsHeartbeatPayload() ?? undefined,
+        // Installed agent-feature snippets + stable mode, so the web Settings
+        // page mirrors (and can toggle) this device's setup.
+        settings: buildDeviceSettingsPayload(config) ?? undefined,
         ...syncHealthFields(),
       }),
     });
@@ -2803,7 +2825,7 @@ async function executeRemoteCommand(
                   ({ jsonl: reconJsonl, sessionId: newSessionId } = generateCodexJsonl(exportData, { sessionId }));
                   reconFilePath = writeCodexSession(reconJsonl, newSessionId);
                 } else {
-                  const TOKEN_BUDGET = 100_000;
+                  const TOKEN_BUDGET = CLAUDE_AUTO_TRIM_TARGET_TOKENS;
                   const tailMessages = chooseClaudeTailMessagesForTokenBudget(exportData, TOKEN_BUDGET);
                   ({ jsonl: reconJsonl, sessionId: newSessionId } = generateClaudeCodeJsonl(exportData, { tailMessages, sessionId }));
                   ({ filePath: reconFilePath } = writeClaudeCodeSession(reconJsonl, newSessionId, cwd));
@@ -3126,6 +3148,29 @@ async function executeRemoteCommand(
           const detail = (moveRes.stderr || moveRes.stdout || "").trim().slice(-500);
           error = `move failed (exit ${moveRes.code})${detail ? `: ${detail}` : ""}`;
           log(`[MOVE] FAILED ${sessionId.slice(0, 8)} -> ${toDeviceId.slice(0, 8)}: ${error}`);
+        }
+        break;
+      }
+      case "apply_snippet": {
+        // Web Settings toggled an agent-feature snippet for THIS device. Run the
+        // very CLI command a human would (`cast install <slug>` / `--disable`),
+        // then heartbeat so the new state round-trips back within seconds.
+        const { snippet, enabled } = commandArgs ? JSON.parse(commandArgs) : {};
+        const known = snippet === "stable" || SNIPPET_CATALOG.some((s) => s.slug === snippet);
+        if (typeof snippet !== "string" || !known) {
+          error = `apply_snippet: unknown snippet ${JSON.stringify(snippet)}`;
+          break;
+        }
+        const cliArgs = enabled ? ["install", snippet] : ["install", snippet, "--disable"];
+        log(`[SNIPPET] ${enabled ? "installing" : "disabling"} ${snippet} (web toggle)`);
+        const res = await runCastCommand(cliArgs, { timeoutMs: 60 * 1000 });
+        if (res.code === 0) {
+          result = JSON.stringify({ snippet, enabled });
+          // Push the freshly-written config state up now, don't wait for the
+          // next ~30s beat — keeps the Settings toggle feeling instant.
+          await sendHeartbeat().catch(() => {});
+        } else {
+          error = `cast install failed (exit ${res.code}): ${(res.stderr || res.stdout || "").trim().slice(-300)}`;
         }
         break;
       }
@@ -10064,7 +10109,7 @@ async function repairAndResumeSession(
         if (isCodexSession) {
           ({ jsonl } = generateCodexJsonl(exportData, { sessionId }));
         } else {
-          const TOKEN_BUDGET = 100_000;
+          const TOKEN_BUDGET = CLAUDE_AUTO_TRIM_TARGET_TOKENS;
           tailMessages = chooseClaudeTailMessagesForTokenBudget(exportData, TOKEN_BUDGET);
           if (shouldMaterializeFreshClaudeSession(failureReason)) {
             const generated = generateClaudeCodeJsonl(exportData, { tailMessages });
@@ -10421,7 +10466,7 @@ async function materializeSession(
         return null;
       }
 
-      const TOKEN_BUDGET = 100_000;
+      const TOKEN_BUDGET = CLAUDE_AUTO_TRIM_TARGET_TOKENS;
       const tailMessages = chooseClaudeTailMessagesForTokenBudget(exportData, TOKEN_BUDGET);
       // Use the conversation's actual session_id so the JSONL matches Convex
       const convSessionId = exportData.conversation.session_id || undefined;

@@ -17,6 +17,7 @@ import {
   normalizeEntityType,
   type EntityType,
 } from "@codecast/shared/entities";
+import { SNIPPET_CATALOG, snippetBySlug, allSnippetSlugs } from "@codecast/shared/contracts";
 import { cliFetch, cliFetchRead } from "./cliHttp.js";
 import { listProfiles, saveProfile, useProfile, CcAccountError } from "./ccAccounts.js";
 import { CODECAST_STATUS_HOOK } from "./statusHook.js";
@@ -5954,10 +5955,6 @@ async function convertAndLaunch(
     const resolvedArgs = extraArgs ?? config.codex_args;
     launchCodex(sessionId, resolvedArgs, showArgsHint, projectPath);
   } else {
-    const CLAUDE_CONTEXT_LIMIT_TOKENS = 200_000;
-    const AUTO_TRIM_THRESHOLD_TOKENS = 120_000;
-    const AUTO_TRIM_TARGET_TOKENS = 100_000;
-
     const estimatedTokens = estimateClaudeImportTokens(data);
     let tailMessages: number | undefined;
     let noTrim = !!claudeFull;
@@ -5971,11 +5968,11 @@ async function convertAndLaunch(
         noTrim = true;
         console.log(`  Claude import trimming disabled (--claude-tail ${claudeTail})`);
       }
-    } else if (!noTrim && estimatedTokens > AUTO_TRIM_THRESHOLD_TOKENS) {
-      tailMessages = chooseClaudeTailMessagesForTokenBudget(data, AUTO_TRIM_TARGET_TOKENS);
+    } else if (!noTrim && estimatedTokens > CLAUDE_AUTO_TRIM_THRESHOLD_TOKENS) {
+      tailMessages = chooseClaudeTailMessagesForTokenBudget(data, CLAUDE_AUTO_TRIM_TARGET_TOKENS);
       console.log(
         `  Claude context window is ~${CLAUDE_CONTEXT_LIMIT_TOKENS.toLocaleString()} tokens; import estimates ~${estimatedTokens.toLocaleString()} tokens.\n` +
-        `  Auto-trimming to last ${tailMessages} messages (target ~${AUTO_TRIM_TARGET_TOKENS.toLocaleString()} tokens) to keep Claude Code /compact usable.\n` +
+        `  Auto-trimming to last ${tailMessages} messages (target ~${CLAUDE_AUTO_TRIM_TARGET_TOKENS.toLocaleString()} tokens) to keep Claude Code /compact usable.\n` +
         `  Disable with --claude-full (or --claude-tail 0).`
       );
     }
@@ -7617,10 +7614,24 @@ program
 
 program
   .command("install")
-  .description("Install or manage all CLAUDE.md snippets")
+  .argument("[snippet]", "install just one snippet by name (e.g. workflows); omit for the interactive wizard")
+  .description(
+    "Install or manage agent capability snippets in your CLAUDE.md / ~/.claude config.\n\n" +
+    "Run with no argument for the interactive wizard, or name one snippet to install\n" +
+    "just that one (non-interactive). Add --disable to turn a snippet off.\n\n" +
+    "Snippets:\n" +
+    SNIPPET_CATALOG.map((s) => `  ${s.slug.padEnd(14)}${s.desc}`).join("\n") +
+    "\n  stable        Inject recent session history into every new conversation\n\n" +
+    "Examples:\n" +
+    "  cast install                      Interactive wizard (all snippets)\n" +
+    "  cast install --all                Install everything, no prompts\n" +
+    "  cast install workflows            Install just the Workflows snippet\n" +
+    "  cast install workflows --disable  Turn the Workflows snippet off\n" +
+    "  cast install --disable            Turn all snippets off"
+  )
   .option("--all", "Enable all snippets without prompting")
-  .option("--disable", "Disable all snippets")
-  .action(async (options) => {
+  .option("--disable", "Disable the named snippet (or all snippets when none is named)")
+  .action(async (snippetArg: string | undefined, options) => {
     const config = readConfig() || {};
     const targets = getSnippetTargets();
     const targetList = targets.map(t => t.label).join(", ");
@@ -7749,6 +7760,44 @@ program
         reEnable: "cast install",
       },
     ];
+
+    // Single-snippet path: `cast install workflows` (+ --disable to turn off).
+    // Non-interactive — this is also exactly what the daemon shells out to when
+    // the web Settings page toggles a snippet for a device (apply_snippet).
+    if (snippetArg) {
+      const key = snippetArg.trim().toLowerCase();
+
+      // Stable mode is a SessionStart hook, not a markdown snippet — a tri-state
+      // (solo/team/off), so it's handled apart from the boolean snippets.
+      if (key === "stable") {
+        const mode = options.disable ? "off" : "solo";
+        applyStableMode(config, mode, (config as any).stable_global === true); // persists config + syncs the hook
+        console.log(mode === "off" ? `${icons.cross} stable mode off` : `${icons.check} stable mode: ${mode}`);
+        return;
+      }
+
+      const desc = snippetBySlug(key);
+      const entry = desc ? snippets.find((s) => s.enabledKey === desc.enabledKey) : undefined;
+      if (!entry) {
+        console.error(`Unknown snippet ${fmt.value(snippetArg)}. Available: ${allSnippetSlugs().join(", ")}, stable`);
+        process.exit(1);
+      }
+
+      if (options.disable) {
+        (config as any)[entry.enabledKey] = false;
+        writeConfig(config);
+        console.log(`${icons.cross} ${entry.name} disabled. Run ${fmt.cmd(`cast install ${desc?.slug ?? key}`)} to re-enable.`);
+        return;
+      }
+
+      const result = entry.install(true);
+      (config as any)[entry.enabledKey] = true;
+      (config as any)[entry.versionKey] = entry.getVersion();
+      writeConfig(config);
+      const verb = result.updated ? "updated" : result.installed ? "installed" : "up to date";
+      console.log(`${icons.check} ${entry.name} — ${verb} in ${targetList}`);
+      return;
+    }
 
     if (options.disable) {
       for (const s of snippets) {
@@ -8750,10 +8799,6 @@ program
           console.log(`\nResume command:\n  ${cmd}`);
           openInNewTab(cmd, launchCwd.path);
         } else {
-          const CLAUDE_CONTEXT_LIMIT_TOKENS = 200_000;
-          const AUTO_TRIM_THRESHOLD_TOKENS = 120_000;
-          const AUTO_TRIM_TARGET_TOKENS = 100_000;
-
           const estimatedTokens = estimateClaudeImportTokens(data);
           let tailMessages: number | undefined;
           let noTrim = !!options.claudeFull;
@@ -8767,11 +8812,11 @@ program
               noTrim = true;
               console.log(`  Claude import trimming disabled (--claude-tail ${options.claudeTail})`);
             }
-          } else if (!noTrim && estimatedTokens > AUTO_TRIM_THRESHOLD_TOKENS) {
-            tailMessages = chooseClaudeTailMessagesForTokenBudget(data, AUTO_TRIM_TARGET_TOKENS);
+          } else if (!noTrim && estimatedTokens > CLAUDE_AUTO_TRIM_THRESHOLD_TOKENS) {
+            tailMessages = chooseClaudeTailMessagesForTokenBudget(data, CLAUDE_AUTO_TRIM_TARGET_TOKENS);
             console.log(
               `  Claude context window is ~${CLAUDE_CONTEXT_LIMIT_TOKENS.toLocaleString()} tokens; import estimates ~${estimatedTokens.toLocaleString()} tokens.\n` +
-              `  Auto-trimming to last ${tailMessages} messages (target ~${AUTO_TRIM_TARGET_TOKENS.toLocaleString()} tokens) to keep Claude Code /compact usable.\n` +
+              `  Auto-trimming to last ${tailMessages} messages (target ~${CLAUDE_AUTO_TRIM_TARGET_TOKENS.toLocaleString()} tokens) to keep Claude Code /compact usable.\n` +
               `  Disable with --claude-full (or --claude-tail 0).`
             );
           }

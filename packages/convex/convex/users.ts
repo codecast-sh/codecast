@@ -11,6 +11,7 @@ import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
 import { resolveTeamForPath, getProfileVisibilityPredicate, profilePublicSessionVisible } from "./privacy";
 import { resetConversationPendingMessages } from "./pendingMessages";
 import { ccAccountsValidator } from "./ccAccountsShared";
+import { deviceSettingsValidator } from "./deviceSettingsShared";
 import { normalizeProjectPath } from "./projectPaths";
 
 export const getCurrentUser = query({
@@ -155,6 +156,8 @@ export const daemonHeartbeat = mutation({
     is_remote_device: v.optional(v.boolean()),
     // CC account inventory (names/emails/tiers, never tokens) for the switcher.
     cc_accounts: v.optional(ccAccountsValidator),
+    // Installed agent-feature snippets (by slug) + stable mode on this device.
+    settings: v.optional(deviceSettingsValidator),
   },
   handler: async (ctx, args) => {
     // updateLastUsed=true here is the ONLY token-doc refresh: heartbeat is a
@@ -239,6 +242,7 @@ export const daemonHeartbeat = mutation({
           ? { local_project_roots: args.local_project_roots }
           : {}),
         ...(args.cc_accounts !== undefined ? { cc_accounts: args.cc_accounts } : {}),
+        ...(args.settings !== undefined ? { settings: args.settings } : {}),
       };
       if (existingDevice) {
         await ctx.db.patch(existingDevice._id, devicePatch);

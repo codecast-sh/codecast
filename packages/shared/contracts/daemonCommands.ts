@@ -46,6 +46,11 @@ export const DAEMON_COMMANDS = [
   // published desktop release immediately (force quit + swap + relaunch), rather
   // than waiting for the next app quit. Old daemons: "Unknown command".
   "desktop_update",
+  // Web Settings toggled an agent-feature snippet for THIS device: run
+  // `cast install <slug>` (or `--disable`) locally, then heartbeat so the new
+  // state round-trips back. args: { snippet: <slug>, enabled: boolean }. Old
+  // daemons: "Unknown command" (the toggle just doesn't take on that machine).
+  "apply_snippet",
 ] as const;
 
 export type DaemonCommand = (typeof DAEMON_COMMANDS)[number];
