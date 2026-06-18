@@ -525,12 +525,15 @@ function ForkTreeContent({
 }
 
 
-// The map's visual box: header + content. Rendered in-flow above the message
-// input (sharing its conv-col container, so widths match and it reads as one
-// piece with the composer), or in a small fixed fallback when there's no input.
+// The map's visual box: header + content. Two visual modes:
+//  - tray: melded INTO the composer box (like the quote ReviewBar) — tinted,
+//    bleeding to the box edges, rounded top, no floating chrome. This is the
+//    default in-composer presentation.
+//  - floating: a standalone bordered card with a shadow — used by the fixed
+//    fallback when there's no composer to meld into.
 export function ForkMapBox({
   conversation, conversationId, currentBranchId, open, initialDrillId, className, getIgnore, onClose,
-  onSwitchToConversation, onForkFromBranch, onRewindCurrent,
+  onSwitchToConversation, onForkFromBranch, onRewindCurrent, tray,
 }: {
   conversation: ForkConversationLike;
   conversationId: string;
@@ -539,6 +542,7 @@ export function ForkMapBox({
   initialDrillId?: string | null;
   className?: string;
   getIgnore?: () => HTMLElement | null;
+  tray?: boolean;
   onClose: () => void;
   onSwitchToConversation: (convId: string) => void;
   onForkFromBranch: (branchId: string, messageUuid: string, content: string) => void;
@@ -558,12 +562,21 @@ export function ForkMapBox({
     const raf = requestAnimationFrame(() => document.addEventListener("mousedown", handle));
     return () => { cancelAnimationFrame(raf); document.removeEventListener("mousedown", handle); };
   }, [open, onClose, getIgnore]);
+  // Tray mode mirrors the quote tray (.cc-review-tray): negative margins bleed it
+  // to the composer box edges (which pads px-4 py-2), a faint cyan tint sets it
+  // apart from the input, and only the top corners round to match the box.
+  const containerCls = tray
+    ? "flex flex-col overflow-hidden -mx-4 -mt-2 mb-2 rounded-t-[calc(1rem-1px)] bg-[color-mix(in_srgb,var(--sol-cyan)_5%,var(--sol-bg))] border-b border-[color-mix(in_srgb,var(--sol-cyan)_22%,var(--sol-border))]"
+    : "flex flex-col bg-sol-bg border border-sol-border shadow-2xl ring-1 ring-black/5 overflow-hidden";
+  const headCls = tray
+    ? "flex items-center justify-between px-3 pt-1.5 pb-1 shrink-0"
+    : "flex items-center justify-between px-3 py-2 border-b border-sol-border shrink-0";
   return (
     <div
       ref={boxRef}
-      className={`flex flex-col bg-sol-bg border border-sol-border shadow-2xl ring-1 ring-black/5 overflow-hidden ${className || ""}`}
+      className={`${containerCls} ${className || ""}`}
     >
-      <div className="flex items-center justify-between px-3 py-2 border-b border-sol-border shrink-0">
+      <div className={headCls}>
         <span className="text-[10px] text-sol-text-dim font-medium uppercase tracking-wider inline-flex items-center gap-1.5">
           <Split className="w-3 h-3 text-sol-cyan" />Branch map
         </span>

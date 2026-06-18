@@ -7236,7 +7236,7 @@ const ForkReplyInput = memo(function ForkReplyInput({ userName, userAvatar, onFo
   );
 });
 
-export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "starting" | "resuming"; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void }) {
+export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend, branchMapNode }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "starting" | "resuming"; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void; branchMapNode?: React.ReactNode }) {
   const sacredKey = sessionId || conversationId;
   const sacredKeyRef = useRef(sacredKey);
   const convIdRef = useRef(conversationId);
@@ -7998,7 +7998,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // them (attachReviewToMessage), so a bare Enter with an empty input is a valid send.
   const reviewCount = useInboxStore((s) => (s.reviewComments[conversationId] ?? []).length);
   const hasContent = (composeMode ? composeHasContent : message.trim().length > 0) || pastedImages.length > 0 || queuedMessages.length > 0;
-  const isExpanded = composeMode || !!onSendAndAdvance || isFocused || message.length > 0 || pastedImages.length > 0 || queuedMessages.length > 0 || reviewCount > 0;
+  const isExpanded = composeMode || !!onSendAndAdvance || isFocused || message.length > 0 || pastedImages.length > 0 || queuedMessages.length > 0 || reviewCount > 0 || !!branchMapNode;
 
   const toggleCompose = useCallback(() => {
     if (composeMode) {
@@ -8914,6 +8914,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                   <span className="text-sol-text-dim">Esc to cancel</span>
                 </div>
               )}
+              {branchMapNode}
               <ReviewBar conversationId={conversationId} />
               {queuedMessages.length > 0 && (
                 <div className="flex flex-col gap-1 pb-2 mb-2 border-b border-sol-border/50">
@@ -13146,29 +13147,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
       {showMessageInput && conversation && !(pendingPermissions && pendingPermissions.length > 0) && (
         <div ref={messageInputRef} className="relative">
-          {/* Branch map, in-flow directly above the composer. Same conv-col
-              column + horizontal padding as the input form, so it matches the
-              input box width exactly and connects to its top edge (bottom of
-              the box overlaps the input's top border via the calc offset). */}
-          {treePopoverOpen && (
-            <div className="absolute left-0 right-0 z-50" style={{ bottom: "calc(100% - 7px)" }}>
-              <div className="mx-auto conv-col px-2 sm:px-4">
-                <ForkMapBox
-                  open
-                  className="rounded-t-2xl border-b-0 max-h-[55vh]"
-                  getIgnore={() => treeChipRef.current}
-                  conversation={conversation}
-                  conversationId={conversation._id.toString()}
-                  currentBranchId={conversation._id.toString()}
-                  initialDrillId={mapDrill}
-                  onClose={() => setTreePopoverOpen(false)}
-                  onSwitchToConversation={handleTreeSwitchConversation}
-                  onForkFromBranch={handleForkFromBranch}
-                  onRewindCurrent={handleRewindCurrent}
-                />
-              </div>
-            </div>
-          )}
+          {/* The branch map is melded INTO the owner composer box (see the
+              branchMapNode prop on MessageInput below), the same way the quote
+              ReviewBar tray is — so it reads as one piece with the input rather
+              than a floating overlay. treePopoverOpen is owner-only, so only the
+              owner branch needs it; the no-composer case is the fixed fallback
+              above. */}
           {!effectiveIsOwner ? (
             <NonOwnerMessageInput
               conversation={conversation}
@@ -13197,7 +13181,22 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   ))}
                 </div>
               ) : null}
-              <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected || conversation.status !== "active" ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} onSubmitWithIntent={onSubmitWithIntent} />
+              <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected || conversation.status !== "active" ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} onSubmitWithIntent={onSubmitWithIntent} branchMapNode={treePopoverOpen ? (
+                <ForkMapBox
+                  tray
+                  open
+                  className="max-h-[55vh]"
+                  getIgnore={() => treeChipRef.current}
+                  conversation={conversation}
+                  conversationId={conversation._id.toString()}
+                  currentBranchId={conversation._id.toString()}
+                  initialDrillId={mapDrill}
+                  onClose={() => setTreePopoverOpen(false)}
+                  onSwitchToConversation={handleTreeSwitchConversation}
+                  onForkFromBranch={handleForkFromBranch}
+                  onRewindCurrent={handleRewindCurrent}
+                />
+              ) : null} />
             </>
           )}
         </div>
