@@ -8,6 +8,10 @@ import {
   updateBadge,
   onDeepLink,
   checkDesktopUpdate,
+  onUpdateStatus,
+  restartForUpdate,
+  checkForUpdate,
+  hasInProcessUpdater,
   notifyNative,
   requestNotificationPermission,
   hasBrowserNotificationPermission,
@@ -27,8 +31,31 @@ export function DesktopProvider() {
   const initRef = useRef(false);
   const [update, setUpdate] = useState<{ current: string; latest: string } | null>(null);
   const [updating, setUpdating] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  const [stalled, setStalled] = useState(false);
+  // Real download progress from Electron's own auto-updater (works when
+  // Squirrel is alive). The daemon-driven "Update now" path can't report a
+  // percentage, so it falls back to the indeterminate bar below.
+  const [ipc, setIpc] = useState<{ status: string; version?: string; percent?: number } | null>(null);
   const [dismissedVersion, setDismissedVersion] = useState<string | null>(null);
   const requestDesktopUpdate = useMutation(api.users.requestDesktopUpdate);
+
+  const startUpdate = () => {
+    setStalled(false);
+    setUpdating(true);
+    setAttempt((a) => a + 1);
+    // Newer desktop builds download in-process and report real progress over
+    // IPC (the `ipc` state below), then swap + relaunch on "Restart". Older
+    // builds lack that, so fall back to the daemon path (silent download +
+    // forced restart) — which still ships via the working CLI auto-update
+    // channel, so it can at least carry the user to a build that has the
+    // in-process updater.
+    if (hasInProcessUpdater()) {
+      checkForUpdate({ manual: false });
+    } else {
+      requestDesktopUpdate({}).catch(() => setUpdating(false));
+    }
+  };
 
   useWatchEffect(() => {
     if (!isDesktop()) return;
@@ -130,6 +157,11 @@ export function DesktopProvider() {
     const handleNavigate = (e: Event) => goTo((e as CustomEvent).detail);
     window.addEventListener("codecast-navigate", handleNavigate);
 
+    // Electron's built-in updater emits real download progress + a "ready"
+    // signal over IPC. Surface it directly when it fires (it's dead on macOS
+    // 26, where the daemon path takes over instead).
+    onUpdateStatus((s) => setIpc(s));
+
   }, [router]);
 
   // Desktop update detection: compare the running app version against the latest
@@ -156,38 +188,108 @@ export function DesktopProvider() {
     };
   }, []);
 
-  if (!update || update.latest === dismissedVersion) return null;
+  // The daemon downloads ~95MB silently then force-restarts the app, so there's
+  // no percentage to show on that path. If the window is still alive well past
+  // when that should have finished, the update likely failed (daemon down,
+  // download/verify error) — surface that instead of a frozen banner.
+  useEffect(() => {
+    if (!updating) {
+      setStalled(false);
+      return;
+    }
+    const id = window.setTimeout(() => setStalled(true), 90_000);
+    return () => window.clearTimeout(id);
+  }, [updating, attempt]);
+
+  const ready = ipc?.status === "ready";
+  const downloading = ipc?.status === "downloading";
+  const latest = ipc?.version ?? update?.latest;
+  const inProgress = updating || downloading;
+
+  // Nothing to surface: no known update (and not mid-update), or this version
+  // was dismissed while idle.
+  if (!ready && !inProgress && (!update || update.latest === dismissedVersion)) return null;
+  if (!latest) return null;
 
   return (
-    <div className="fixed top-0 left-0 right-0 z-[9998] pointer-events-none">
-      <div className="pointer-events-auto mx-auto max-w-xl mt-12 px-3">
-        <div className="relative overflow-hidden rounded-lg border border-sol-cyan/30 bg-sol-bg-alt/95 backdrop-blur-md shadow-lg shadow-sol-cyan/5">
-          <div className="flex items-center gap-3 px-4 py-2.5">
-            <div className="w-1.5 h-1.5 rounded-full flex-shrink-0 animate-pulse bg-sol-cyan" />
-            <span className="text-xs text-sol-text flex-1">
-              {updating ? (
-                <>Updating to v{update.latest} — the app will restart…</>
-              ) : (
-                <>
-                  Codecast v{update.latest} is available
-                  <span className="text-sol-text-dim"> · you're on v{update.current}</span>
-                </>
-              )}
-            </span>
-            {!updating && (
+    <div className="fixed bottom-4 left-4 z-[9998] w-80 max-w-[calc(100vw-2rem)]">
+      <div className="relative overflow-hidden rounded-lg border border-sol-cyan/30 bg-sol-bg-alt/95 backdrop-blur-md shadow-lg shadow-sol-cyan/5">
+        {/* Progress: real % when Electron's updater reports one, else an
+            indeterminate sweep while the daemon works in the background. */}
+        {downloading && (
+          <div
+            className="absolute bottom-0 left-0 h-[2px] bg-sol-cyan transition-all duration-300"
+            style={{ width: `${ipc?.percent ?? 0}%` }}
+          />
+        )}
+        {updating && !stalled && (
+          <div className="absolute bottom-0 left-0 h-[2px] w-1/4 bg-sol-cyan animate-[indeterminateBar_1.3s_ease-in-out_infinite]" />
+        )}
+        <div className="flex items-start gap-3 px-4 py-3">
+          <div
+            className={`mt-1 w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+              stalled ? "bg-sol-orange" : "animate-pulse bg-sol-cyan"
+            }`}
+          />
+          <div className="flex-1 min-w-0">
+            {ready ? (
+              <p className="text-xs text-sol-text">Codecast v{latest} is ready to install</p>
+            ) : stalled ? (
+              <>
+                <p className="text-xs text-sol-text">Update is taking longer than usual</p>
+                <p className="mt-0.5 text-[11px] text-sol-text-dim">
+                  If Codecast doesn&rsquo;t restart shortly, quit and reopen it.
+                </p>
+              </>
+            ) : inProgress ? (
+              <>
+                <p className="text-xs text-sol-text">
+                  {downloading ? `Downloading v${latest}` : `Updating to v${latest}`}
+                  {downloading && ipc?.percent != null ? ` — ${ipc.percent}%` : "…"}
+                </p>
+                <p className="mt-0.5 text-[11px] text-sol-text-dim">
+                  {downloading
+                    ? "Keep working — we’ll prompt you to restart when it’s ready."
+                    : "Downloading in the background — Codecast will restart on its own."}
+                </p>
+              </>
+            ) : (
+              <p className="text-xs text-sol-text">
+                Codecast v{latest} is available
+                {update?.current && (
+                  <span className="text-sol-text-dim"> · you&rsquo;re on v{update.current}</span>
+                )}
+              </p>
+            )}
+          </div>
+          <div className="flex flex-shrink-0 items-center gap-2">
+            {ready && (
+              <button
+                onClick={() => restartForUpdate()}
+                className="rounded-md bg-sol-cyan px-3 py-1 text-[11px] font-medium text-sol-bg transition-opacity hover:opacity-90"
+              >
+                Restart now
+              </button>
+            )}
+            {stalled && (
+              <button
+                onClick={startUpdate}
+                className="rounded-md bg-sol-cyan px-3 py-1 text-[11px] font-medium text-sol-bg transition-opacity hover:opacity-90"
+              >
+                Try again
+              </button>
+            )}
+            {!inProgress && !ready && (
               <>
                 <button
-                  onClick={() => {
-                    setUpdating(true);
-                    requestDesktopUpdate({}).catch(() => setUpdating(false));
-                  }}
-                  className="rounded-md bg-sol-cyan px-3 py-1 text-[11px] font-medium text-sol-bg hover:opacity-90 transition-opacity"
+                  onClick={startUpdate}
+                  className="rounded-md bg-sol-cyan px-3 py-1 text-[11px] font-medium text-sol-bg transition-opacity hover:opacity-90"
                 >
                   Update now
                 </button>
                 <button
-                  onClick={() => setDismissedVersion(update.latest)}
-                  className="text-[11px] text-sol-text-dim hover:text-sol-text transition-colors"
+                  onClick={() => setDismissedVersion(latest)}
+                  className="text-[11px] text-sol-text-dim transition-colors hover:text-sol-text"
                 >
                   Later
                 </button>

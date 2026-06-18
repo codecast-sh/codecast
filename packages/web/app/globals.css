@@ -1421,3 +1421,14 @@ pre[class*="language-"] {
   }
 }
 
+/* Indeterminate progress sweep — used by the desktop update banner while the
+   daemon downloads in the background (no percentage to report). */
+@keyframes indeterminateBar {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(400%);
+  }
+}
+
