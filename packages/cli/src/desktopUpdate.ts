@@ -216,8 +216,15 @@ export async function checkForDesktopUpdate(
   opts: { force?: boolean; minVersion?: string | null } = {},
 ): Promise<boolean> {
   const force = opts.force === true;
-  // Only meaningful for a packaged daemon on macOS with the app installed.
-  if (process.platform !== "darwin" || isDevMode()) return false;
+  // macOS-only. The dev-mode guard stops a developer's source checkout (cast/
+  // daemon running under `bun src/…`) from AUTOMATICALLY swapping the installed
+  // app — but an explicit `force` (the in-app "Update now" button or
+  // `cast desktop-update --force`) is a deliberate human action and must work
+  // even from a dev environment. Without this bypass a dev-mode machine can
+  // never update through any path: the daemon bailed here on the first line,
+  // leaving the in-app banner stuck on "Updating…" forever.
+  if (process.platform !== "darwin") return false;
+  if (isDevMode() && !force) return false;
   if (!fs.existsSync(APP_PATH)) {
     if (force) log("desktop update: /Applications/Codecast.app not found");
     return false;
