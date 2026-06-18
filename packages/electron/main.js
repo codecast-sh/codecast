@@ -147,10 +147,18 @@ app.on("open-url", (e, url) => {
 });
 
 function handleDeepLink(url) {
-  if (!mainWindow) return;
+  if (!mainWindow) { deepLinkUrl = url; return; }
   mainWindow.show();
   mainWindow.focus();
-  mainWindow.webContents.send("deep-link", url);
+  // While the main frame is still loading, the renderer (and the preload buffer
+  // that catches early sends) is about to be torn down and rebuilt — sending
+  // now would land in a soon-to-be-replaced context. Hold it for the page's
+  // did-finish-load, which fires once the new renderer (and its buffer) is live.
+  if (mainWindow.webContents.isLoadingMainFrame()) {
+    deepLinkUrl = url;
+  } else {
+    mainWindow.webContents.send("deep-link", url);
+  }
 }
 
 function getAutoZoomFactor() {
@@ -223,10 +231,6 @@ function createWindow() {
 
   mainWindow.once("ready-to-show", () => {
     mainWindow.show();
-    if (deepLinkUrl) {
-      handleDeepLink(deepLinkUrl);
-      deepLinkUrl = null;
-    }
   });
 
   mainWindow.webContents.on("did-finish-load", () => {
@@ -237,6 +241,15 @@ function createWindow() {
     mainWindow.webContents.executeJavaScript(
       "document.documentElement.classList.add('electron-desktop')"
     );
+    // The page is fully loaded, so the preload's deep-link listener and replay
+    // buffer are live — deliver any link that arrived during boot or a reload.
+    // did-finish-load only fires on a COMPLETE load, so if the first attempt
+    // failed/stalled the link stays pending and rides the retry's load instead.
+    if (deepLinkUrl) {
+      const url = deepLinkUrl;
+      deepLinkUrl = null;
+      mainWindow.webContents.send("deep-link", url);
+    }
   });
 
 

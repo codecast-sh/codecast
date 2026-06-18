@@ -6,12 +6,32 @@ if (zoomArg) {
   if (z && isFinite(z)) webFrame.setZoomFactor(z);
 }
 
+// Deep links must survive the cold-start window. This preload script runs
+// before any page JS, so registering the IPC listener here (not lazily inside
+// onDeepLink) guarantees it's live before main can ever send. Links that land
+// before the page's React handler subscribes are buffered and replayed on
+// subscribe — without this, a deep link sent during boot hits no listener and
+// is silently dropped, leaving the app on whatever it restored (its last
+// conversation). Registering once also avoids the old leak of stacking a new
+// ipcRenderer.on listener every time onDeepLink was called.
+let deepLinkHandler = null;
+let deepLinkBuffer = [];
+ipcRenderer.on("deep-link", (_e, url) => {
+  if (deepLinkHandler) deepLinkHandler(url);
+  else deepLinkBuffer.push(url);
+});
+
 contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   getVersion: () => ipcRenderer.invoke("get-app-version"),
   setBadgeCount: (count) => ipcRenderer.invoke("set-badge-count", count),
   getEnv: () => ipcRenderer.invoke("get-env"),
   onDeepLink: (cb) => {
-    ipcRenderer.on("deep-link", (_e, url) => cb(url));
+    deepLinkHandler = cb;
+    if (deepLinkBuffer.length) {
+      const pending = deepLinkBuffer;
+      deepLinkBuffer = [];
+      for (const url of pending) cb(url);
+    }
   },
   onUpdateStatus: (cb) => {
     ipcRenderer.on("update-status", (_e, status) => cb(status));
