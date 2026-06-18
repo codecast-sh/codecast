@@ -1770,13 +1770,15 @@ interface InboxStoreState {
   resumeSession: (convId: string) => Promise<any>;
   sendEscape: (convId: string) => void;
   convCommand: (convId: string, command: string, extraArgs?: Record<string, any>, optimistic?: Record<string, any>) => Promise<any>;
-  createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string }) => Promise<any>;
+  createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; isolated?: boolean; worktree_name?: string }) => Promise<any>;
   // Create the server session for a DEFERRED stub, sourcing project + agent from
   // the LIVE stub row (the new-session pickers write it via updateSessionProject /
   // setConversationAgent) rather than a begin-time closure. This is what makes a
-  // project/agent switch made BEFORE the first send actually stick. `fallback`
-  // covers a stub that was somehow never seeded. Pairs with
-  // beginOptimisticSession({ deferCreate })'s materialize().
+  // project/agent switch made BEFORE the first send actually stick. Also stamps
+  // the live `isolatedWorktreeMode` so the "isolated worktree" toggle takes effect
+  // at create. `fallback` covers a stub that was somehow never seeded. Pairs with
+  // beginOptimisticSession({ deferCreate })'s materialize() AND the in-app
+  // self-heal create (ensureSessionCreated routes through it too).
   createSessionFromStub: (stubId: string, fallback?: { agentType?: string; projectPath?: string; gitRoot?: string }) => Promise<any>;
   // The one true path for optimistically creating a session: stubs a local
   // conversation synchronously and rekeys it to the real Convex id when `create`
@@ -3410,7 +3412,7 @@ export const useInboxStore = create<InboxStoreState>(
     if (optimistic && this.sessions[convId]) Object.assign(this.sessions[convId], optimistic);
   }),
 
-  createSession: asyncAction(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string }) {
+  createSession: asyncAction(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; isolated?: boolean; worktree_name?: string }) {
     const sessionId = opts.session_id || (Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
     if (!opts.session_id) opts.session_id = sessionId;
     const now = Date.now();
@@ -3434,10 +3436,13 @@ export const useInboxStore = create<InboxStoreState>(
   // session from those. The new-session pickers mutate the stub (updateSessionProject /
   // setConversationAgent), so the row — not the closure captured when the popup
   // opened — is the source of truth; a switch made before the first send must be
-  // what we create with. Mirrors ensureSessionCreated's read-fresh logic, but
-  // without its pathless guard (the compose popup intentionally allows a
-  // project-less stub → the daemon starts in $HOME). Tracking + rekey are done by
-  // beginOptimisticSession's fire(), so this only creates.
+  // what we create with. `isolatedWorktreeMode` is the live toggle (global, same
+  // value ProjectSwitcher reads), folded in here so "isolated worktree" applies at
+  // create — the daemon's start_session makes the git worktree up front. Mirrors
+  // ensureSessionCreated's read-fresh logic, but without its pathless guard (the
+  // compose popup intentionally allows a project-less stub → the daemon starts in
+  // $HOME). Tracking + rekey are done by beginOptimisticSession's fire() (or by
+  // ensureSessionCreated), so this only creates.
   createSessionFromStub: (stubId: string, fallback?: { agentType?: string; projectPath?: string; gitRoot?: string }) => {
     const s = get();
     const cur = (s.sessions[stubId] || s.conversations[stubId]) as any;
@@ -3448,6 +3453,7 @@ export const useInboxStore = create<InboxStoreState>(
       project_path: projectPath,
       git_root: gitRoot || undefined,
       session_id: stubId,
+      ...(s.isolatedWorktreeMode ? { isolated: true } : {}),
     });
   },
 
@@ -4446,12 +4452,10 @@ export const useInboxStore = create<InboxStoreState>(
     if (!stub.project_path && !stub.git_root) {
       return Promise.reject(new Error("Pick a project for this session before sending"));
     }
-    const ready = s.createSession({
-      agent_type: stub.agent_type || "claude_code",
-      project_path: stub.project_path,
-      git_root: stub.git_root,
-      session_id: id,
-    }).then((convexId: string) => {
+    // Route through createSessionFromStub (not a bare createSession) so the live
+    // project/agent + isolated-worktree mode are sourced identically to the
+    // compose popup's materialize — one create-payload builder, two callers.
+    const ready = s.createSessionFromStub(id).then((convexId: string) => {
       // createSession returns the server conversation id; rekey explicitly so
       // we don't wait on the listInboxSessions altKey sync. Falls back to the
       // session_id mapping if the dispatch result was empty.

@@ -210,7 +210,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     });
   },
 
-  createSession: async (ctx, userId, [opts]: [{ agent_type?: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string }]) => {
+  createSession: async (ctx, userId, [opts]: [{ agent_type?: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string }]) => {
     const sessionId = opts.session_id || crypto.randomUUID();
     // Idempotent on (user, session_id). The optimistic web client keys a New
     // Session by a client-minted stub id and passes it as session_id, then
@@ -337,6 +337,12 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       projectPath: resolvedProjectPath || resolvedGitRoot,
       gitRoot: resolvedGitRoot,
       createdAt: now,
+      // Isolated-worktree sessions: forward the launch flag so the daemon's
+      // start_session creates the git worktree up front. This is the SAME path
+      // reconfigureSession/createQuickSession use; without it the "isolated
+      // worktree" toggle silently did nothing until a later project switch.
+      ...(opts.isolated ? { isolated: true } : {}),
+      ...(opts.worktree_name ? { worktreeName: opts.worktree_name } : {}),
       ...(requestedModel ? { model: requestedModel } : {}),
       ...(effortOk ? { effort: opts.effort } : {}),
     });
