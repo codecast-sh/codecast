@@ -74,6 +74,24 @@ function compareVersions(a: string, b: string): number {
 // when the installed app is below the server-pinned floor (min_desktop_version)
 // — the lever that drags always-open clients forward. Pure so it can be tested
 // without the surrounding fs/network side effects.
+// Whether checkForDesktopUpdate should run at all. macOS-only; a developer's
+// source checkout (cast/daemon under `bun src/…` → isDevMode) is skipped for
+// AUTOMATIC checks so it never swaps the installed app behind the dev's back —
+// but an explicit `force` (the in-app "Update now" button or
+// `cast desktop-update --force`) is a deliberate human action and must run even
+// from a dev environment. Without the force bypass a dev-mode machine can never
+// update through any path: every caller bailed here, leaving the in-app banner
+// stuck on "Updating…" forever. Pure so it can be tested without side effects.
+export function shouldAttemptDesktopUpdate(
+  platform: NodeJS.Platform,
+  isDev: boolean,
+  force: boolean,
+): boolean {
+  if (platform !== "darwin") return false;
+  if (isDev && !force) return false;
+  return true;
+}
+
 export function shouldApplyWhileRunning(
   installed: string,
   opts: { force?: boolean; minVersion?: string | null },
@@ -216,15 +234,7 @@ export async function checkForDesktopUpdate(
   opts: { force?: boolean; minVersion?: string | null } = {},
 ): Promise<boolean> {
   const force = opts.force === true;
-  // macOS-only. The dev-mode guard stops a developer's source checkout (cast/
-  // daemon running under `bun src/…`) from AUTOMATICALLY swapping the installed
-  // app — but an explicit `force` (the in-app "Update now" button or
-  // `cast desktop-update --force`) is a deliberate human action and must work
-  // even from a dev environment. Without this bypass a dev-mode machine can
-  // never update through any path: the daemon bailed here on the first line,
-  // leaving the in-app banner stuck on "Updating…" forever.
-  if (process.platform !== "darwin") return false;
-  if (isDevMode() && !force) return false;
+  if (!shouldAttemptDesktopUpdate(process.platform, isDevMode(), force)) return false;
   if (!fs.existsSync(APP_PATH)) {
     if (force) log("desktop update: /Applications/Codecast.app not found");
     return false;
