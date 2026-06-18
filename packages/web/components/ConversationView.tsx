@@ -14,6 +14,7 @@ import ReactMarkdownBase from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import { rehypeSearchHighlight } from "../lib/rehypeSearchHighlight";
 import { compressImage } from "../lib/compressImage";
+import { useStorageImageUrl, hasDecodedSrc, markSrcDecoded } from "../hooks/useStorageImageUrl";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isImportNotice, formatModel } from "../lib/conversationProcessor";
 import { classifyApiErrorBanner } from "@codecast/shared/contracts";
@@ -4499,12 +4500,10 @@ function useSwipeToDismiss(onDismiss: () => void) {
 }
 
 function ImageBlock({ image }: { image: ImageData }) {
-  const storageUrl = useQuery(
-    api.images.getImageUrl,
-    image.storage_id ? { storageId: image.storage_id as Id<"_storage"> } : "skip"
-  );
-  const [loaded, setLoaded] = useState(false);
-  const [errored, setErrored] = useState(false);
+  // Batched + cross-mount-cached URL resolution: one query for all visible
+  // images, and a remount (virtualized scroll) reuses the cached URL instead of
+  // re-subscribing and re-flashing "Loading…".
+  const storageUrl = useStorageImageUrl(image.storage_id);
   const gallery = useImageGallery();
 
   // storageUrl: undefined = still loading, null = not found, string = URL
@@ -4513,7 +4512,7 @@ function ImageBlock({ image }: { image: ImageData }) {
 
   // While uploading we only have the local blob: preview. After the upload
   // resolves we prefer the real storage URL but fall back to the preview until
-  // getImageUrl returns, so the thumbnail never flickers to "Loading…".
+  // the URL resolves, so the thumbnail never flickers to "Loading…".
   const src = image.uploading && image.preview_url
     ? image.preview_url
     : image.storage_id
@@ -4521,6 +4520,11 @@ function ImageBlock({ image }: { image: ImageData }) {
       : image.data
         ? `data:${image.media_type};base64,${image.data}`
         : image.preview_url || undefined;
+
+  // Seed "loaded" from the module cache so an already-decoded image skips the
+  // overlay on remount instead of flashing it while the HTTP-cached bytes decode.
+  const [loaded, setLoaded] = useState(() => hasDecodedSrc(src));
+  const [errored, setErrored] = useState(false);
 
   useWatchEffect(() => {
     if (src && gallery) gallery.register(src);
@@ -4559,7 +4563,7 @@ function ImageBlock({ image }: { image: ImageData }) {
           alt="User provided image"
           className="w-full"
           style={loaded ? undefined : { width: 0, height: 0, overflow: 'hidden', position: 'absolute' }}
-          onLoad={() => setLoaded(true)}
+          onLoad={() => { markSrcDecoded(src); setLoaded(true); }}
           onError={() => setErrored(true)}
         />
       </div>
