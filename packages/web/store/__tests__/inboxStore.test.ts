@@ -2257,6 +2257,59 @@ describe("inboxStore.beginOptimisticSession", () => {
       expect(creates).toBe(1);
     });
 
+    // Swap createSession for a recorder so the (server-dispatching) asyncAction
+    // never fires; createSessionFromStub forwards through get().createSession, so a
+    // plain setState replacement is what it reads — deterministic, no spy/instance
+    // timing to depend on. Restores the original after fn() runs.
+    const captureCreate = (fn: () => void | Promise<void>) => {
+      const orig = useInboxStore.getState().createSession;
+      const calls: any[] = [];
+      useInboxStore.setState({ createSession: ((opts: any) => { calls.push(opts); return Promise.resolve(REAL_ID); }) as any });
+      const done = (async () => fn())().finally(() => useInboxStore.setState({ createSession: orig as any }));
+      return { calls, done };
+    };
+
+    // The compose popup (and Ctrl+N) seed a stub at one project, but the user can
+    // switch projects in the null-state picker BEFORE the first send. That switch
+    // writes the stub row (updateSessionProject); the deferred create must read it
+    // back, not the project captured when the popup opened — otherwise the new
+    // session is created in the wrong directory ("switching projects doesn't stick").
+    it("materialize creates with the SWITCHED project — a switch before the first send sticks", async () => {
+      const store = useInboxStore.getState();
+      const { stubId, materialize } = store.beginOptimisticSession({
+        agentType: "claude_code",
+        projectPath: "/repo",
+        deferCreate: true,
+        // EXACT production wiring (ComposeView / DashboardLayout): the deferred
+        // create sources the project from the live stub via createSessionFromStub,
+        // never the begin-time `path`.
+        create: (sid) => useInboxStore.getState().createSessionFromStub(sid, { agentType: "claude_code", projectPath: "/repo", gitRoot: "/repo" }),
+      });
+      store.updateSessionProject(stubId, "/other-repo");
+      const { calls, done } = captureCreate(() => materialize());
+      await done;
+      expect(calls.length).toBe(1);
+      expect(calls[0]).toMatchObject({ project_path: "/other-repo", git_root: "/other-repo", session_id: stubId });
+    });
+
+    it("createSessionFromStub sources project + agent from the live stub row, not the fallback", async () => {
+      useInboxStore.setState({
+        sessions: { stub1: { _id: "stub1", session_id: "stub1", project_path: "/switched", git_root: "/switched", agent_type: "codex", updated_at: 1, message_count: 0, is_idle: true, has_pending: false } as InboxSession },
+        conversations: {},
+      });
+      const { calls, done } = captureCreate(() => { useInboxStore.getState().createSessionFromStub("stub1", { agentType: "claude_code", projectPath: "/fallback", gitRoot: "/fallback" }); });
+      await done;
+      expect(calls.length).toBe(1);
+      expect(calls[0]).toMatchObject({ project_path: "/switched", git_root: "/switched", agent_type: "codex", session_id: "stub1" });
+    });
+
+    it("createSessionFromStub falls back when the stub row is missing", async () => {
+      useInboxStore.setState({ sessions: {}, conversations: {} });
+      const { calls, done } = captureCreate(() => { useInboxStore.getState().createSessionFromStub("ghost", { agentType: "gemini", projectPath: "/fallback" }); });
+      await done;
+      expect(calls[0]).toMatchObject({ project_path: "/fallback", git_root: "/fallback", agent_type: "gemini", session_id: "ghost" });
+    });
+
     it("an abandoned (never-materialized) stub is prunable — Escape strands nothing", () => {
       const { stubId } = useInboxStore.getState().beginOptimisticSession({
         agentType: "claude_code",

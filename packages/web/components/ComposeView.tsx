@@ -79,12 +79,11 @@ export function ComposeView({ initialQuery, context, onClose }: { initialQuery?:
       projectPath: path,
       gitRoot: path || undefined,
       deferCreate: true,
-      create: (stubId) => store.createSession({
-        agent_type: agentType,
-        project_path: path,
-        git_root: path || undefined,
-        session_id: stubId,
-      }),
+      // Source project + agent from the LIVE stub at create time, NOT this
+      // closure's mount-time `path`/`agentType`: the user may have switched
+      // either in the null-state pickers before sending, and that switch (written
+      // to the stub row) must be what we create with.
+      create: (stubId) => store.createSessionFromStub(stubId, { agentType, projectPath: path, gitRoot: path || undefined }),
     });
     materializeRef.current = materialize;
     stubIdRef.current = sid;

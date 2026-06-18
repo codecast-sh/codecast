@@ -1771,6 +1771,13 @@ interface InboxStoreState {
   sendEscape: (convId: string) => void;
   convCommand: (convId: string, command: string, extraArgs?: Record<string, any>, optimistic?: Record<string, any>) => Promise<any>;
   createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string }) => Promise<any>;
+  // Create the server session for a DEFERRED stub, sourcing project + agent from
+  // the LIVE stub row (the new-session pickers write it via updateSessionProject /
+  // setConversationAgent) rather than a begin-time closure. This is what makes a
+  // project/agent switch made BEFORE the first send actually stick. `fallback`
+  // covers a stub that was somehow never seeded. Pairs with
+  // beginOptimisticSession({ deferCreate })'s materialize().
+  createSessionFromStub: (stubId: string, fallback?: { agentType?: string; projectPath?: string; gitRoot?: string }) => Promise<any>;
   // The one true path for optimistically creating a session: stubs a local
   // conversation synchronously and rekeys it to the real Convex id when `create`
   // resolves. Every new-session entry point funnels through this so a first
@@ -3422,6 +3429,27 @@ export const useInboxStore = create<InboxStoreState>(
       last_user_message: null,
     } as InboxSession;
   }),
+
+  // Read the CURRENT project + agent off the stub row and create the server
+  // session from those. The new-session pickers mutate the stub (updateSessionProject /
+  // setConversationAgent), so the row — not the closure captured when the popup
+  // opened — is the source of truth; a switch made before the first send must be
+  // what we create with. Mirrors ensureSessionCreated's read-fresh logic, but
+  // without its pathless guard (the compose popup intentionally allows a
+  // project-less stub → the daemon starts in $HOME). Tracking + rekey are done by
+  // beginOptimisticSession's fire(), so this only creates.
+  createSessionFromStub: (stubId: string, fallback?: { agentType?: string; projectPath?: string; gitRoot?: string }) => {
+    const s = get();
+    const cur = (s.sessions[stubId] || s.conversations[stubId]) as any;
+    const projectPath = cur?.project_path ?? fallback?.projectPath;
+    const gitRoot = cur?.git_root ?? fallback?.gitRoot ?? projectPath;
+    return s.createSession({
+      agent_type: cur?.agent_type || fallback?.agentType || "claude_code",
+      project_path: projectPath,
+      git_root: gitRoot || undefined,
+      session_id: stubId,
+    });
+  },
 
   // Optimistic session creation, shared by every new-session entry point (the
   // in-app quick-create, the compose popup, and the New Session modal). Seeds a
