@@ -8,10 +8,17 @@ export function animateSessionEnter(id: string) {
   const delays = [0, 20, 50, 100, 200];
   const tryApply = (attempt: number) => {
     const card = document.querySelector(`[data-session-id="${id}"]`);
-    const target = card?.parentElement ?? card;
+    const target = (card?.parentElement ?? card) as HTMLElement | null;
     if (target) {
+      // Drive the collapse off the row's real rendered height (it may hold a
+      // parent card plus subagent cards) so the keyframe never coasts on a short
+      // row or clips a tall one — what the old hardcoded 80px cap did.
+      target.style.setProperty('--row-h', `${target.offsetHeight}px`);
       target.classList.add('session-entering');
-      target.addEventListener('animationend', () => target.classList.remove('session-entering'), { once: true });
+      target.addEventListener('animationend', () => {
+        target.classList.remove('session-entering');
+        target.style.removeProperty('--row-h');
+      }, { once: true });
     } else if (attempt < delays.length - 1) {
       setTimeout(() => tryApply(attempt + 1), delays[attempt + 1]);
     }
@@ -26,6 +33,9 @@ export function animatedHideSession(id: string, mode: HideSessionMode) {
   const card = document.querySelector(`[data-session-id="${id}"]`);
   const wrapper = card?.parentElement;
   if (wrapper) {
+    // Measure the real height (parent + any subagent rows) so the collapse
+    // animates the whole stack, not just the first 80px the old cap allowed.
+    wrapper.style.setProperty('--row-h', `${wrapper.offsetHeight}px`);
     wrapper.classList.add('session-dismissing');
     let done = false;
     const finish = () => {
