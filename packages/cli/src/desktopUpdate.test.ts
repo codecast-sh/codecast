@@ -1,5 +1,31 @@
 import { describe, expect, it } from "bun:test";
-import { shouldApplyWhileRunning } from "./desktopUpdate";
+import { shouldApplyWhileRunning, shouldAttemptDesktopUpdate } from "./desktopUpdate";
+
+// Gate at the very top of checkForDesktopUpdate. The dev-mode skip exists so a
+// developer's source checkout (cast/daemon under `bun src/…`) doesn't auto-swap
+// the installed app — but an explicit force must still work from a dev env,
+// otherwise a dev machine can never update at all (the bug that left the in-app
+// banner stuck on "Updating…" forever).
+describe("shouldAttemptDesktopUpdate", () => {
+  it("only runs on macOS", () => {
+    expect(shouldAttemptDesktopUpdate("linux", false, false)).toBe(false);
+    expect(shouldAttemptDesktopUpdate("win32", false, true)).toBe(false);
+    expect(shouldAttemptDesktopUpdate("darwin", false, false)).toBe(true);
+  });
+
+  it("skips automatic checks in dev mode", () => {
+    expect(shouldAttemptDesktopUpdate("darwin", true, false)).toBe(false);
+  });
+
+  it("an explicit force runs even in dev mode (the unblock)", () => {
+    expect(shouldAttemptDesktopUpdate("darwin", true, true)).toBe(true);
+  });
+
+  it("runs normally when not in dev mode", () => {
+    expect(shouldAttemptDesktopUpdate("darwin", false, true)).toBe(true);
+    expect(shouldAttemptDesktopUpdate("darwin", false, false)).toBe(true);
+  });
+});
 
 // The trigger that makes the rollout reach always-open clients: when the
 // installed app is below the server-pinned floor, the daemon applies WHILE the
