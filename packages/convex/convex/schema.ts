@@ -224,6 +224,16 @@ export default defineSchema({
     fork_copy_cursor: v.optional(v.number()),
     fork_cutoff_timestamp: v.optional(v.number()),
     fork_daemon_args: v.optional(v.string()),
+    // Comment-thread agent reply: this conversation is a hidden fork spawned to
+    // answer in a teammate comment thread. It points back at the parent
+    // conversation, the anchored message (if any), and the placeholder comment to
+    // mirror the reply into; comment_fork_prompt_at separates the agent's new
+    // reply from the copied parent history (any assistant message newer than it
+    // is the reply). Hidden from the feed via is_subagent.
+    comment_fork_parent: v.optional(v.id("conversations")),
+    comment_fork_message_id: v.optional(v.string()),
+    comment_fork_comment_id: v.optional(v.id("comments")),
+    comment_fork_prompt_at: v.optional(v.number()),
     is_favorite: v.optional(v.boolean()),
     short_id: v.optional(v.string()),
     auto_shared: v.optional(v.boolean()),
@@ -569,6 +579,22 @@ export default defineSchema({
     pr_id: v.optional(v.id("pull_requests")),
     file_path: v.optional(v.string()),
     line_number: v.optional(v.number()),
+    // Agent-reply comments: an opt-in "ask the agent to reply" spawns a hidden
+    // fork whose answer is mirrored back into this comment. author_kind="agent"
+    // renders it as the agent; agent_status tracks the reply lifecycle; the fork
+    // it came from is recorded for traceability.
+    author_kind: v.optional(v.union(v.literal("user"), v.literal("agent"))),
+    agent_status: v.optional(v.union(
+      v.literal("thinking"),
+      v.literal("streaming"),
+      v.literal("done"),
+      v.literal("error"),
+    )),
+    fork_conversation_id: v.optional(v.id("conversations")),
+    // Client-generated id for the optimistic store flow: the inboxStore stub
+    // carries it as altKey so the synced server row supersedes the stub, and the
+    // server dedups on it so a dispatch-outbox retry can't double-insert.
+    client_id: v.optional(v.string()),
   })
     .index("by_conversation_id", ["conversation_id"])
     .index("by_message_id", ["message_id"])

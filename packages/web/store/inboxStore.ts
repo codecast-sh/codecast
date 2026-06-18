@@ -25,6 +25,7 @@ export { resolveAssigneeInfo, resolveSessionAuthor, computePlanProgress, mergeLi
 import { deriveDocDisplayTitle, isForeignSession } from "../lib/liveEntities";
 import { DEFAULT_SETTINGS_SECTION, type SettingsSectionId } from "../lib/settingsSections";
 import type { PendingComment } from "../lib/quoteFormat";
+import type { Comment as CommentRow } from "../lib/commentThread";
 import { pushInboxViewHistory, isApplyingViewHistory, type InboxViewSnapshot } from "../lib/inboxViewHistory";
 
 // Critical UI prefs mirrored to localStorage so they're available
@@ -1706,6 +1707,16 @@ interface InboxStoreState {
   clearReviewComments: (conversationId: string) => void;
   getReviewComments: (conversationId: string) => PendingComment[];
 
+  // ── Comment rail (ephemeral UI; teammate comment thread on the right) ──
+  commentRailOpen: boolean | null;            // null = auto (open when comments exist / shared)
+  commentRailAnchor: string | null;           // a pending anchored thread (messageId) to focus
+  commentRailNonce: number;                   // bump to re-trigger focus/scroll to the anchor
+  commentRailWidth: Record<string, number>;   // reserved width (px) per conversation; published by the rail, read by the layout
+  setCommentRailOpen: (open: boolean | null) => void;
+  openCommentThread: (messageId?: string | null) => void;
+  closeCommentRail: () => void;
+  setCommentRailWidth: (conversationId: string, w: number) => void;
+
   currentConversation: CurrentConversationContext;
   isolatedWorktreeMode: boolean;
   setIsolatedWorktreeMode: (val: boolean) => void;
@@ -1977,11 +1988,21 @@ interface InboxStoreState {
   updateBucket: (id: string, fields: { name?: string; color?: string; sort_order?: number; archived_at?: number | null }) => void;
   assignSessionToBucket: (conversationId: string, bucketId: string | null) => void;
 
+  // Teammate comment actions (optimistic → dispatch side-effect → live-query reconcile).
+  addComment: (conversationId: string, content: string, opts?: { messageId?: string; parentCommentId?: string }) => Promise<unknown>;
+  editComment: (commentId: string, content: string) => void;
+  deleteComment: (commentId: string) => Promise<unknown>;
+  askAgentInThread: (conversationId: string, opts?: { messageId?: string }) => Promise<unknown>;
+
   // -- Sidebar nav expanded sections --
   sidebarNavExpanded: Record<string, boolean>;
   toggleSidebarNav: (section: string) => void;
   // Mark a live subscription's cold-open first-load (see `liveLoading`).
   setLiveLoading: (scope: string, loading: boolean) => void;
+
+  // Teammate comments — a synced collection (live query → syncTable), so reads
+  // are instant from cache and writes render optimistically like everything else.
+  comments: Record<string, CommentRow>;
 
   // -- Task / Doc / Plan / Project state --
   tasks: Record<string, TaskItem>;
@@ -2428,6 +2449,10 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   // altKey rekeys that stub onto the server's real (user, conversation) row when
   // it syncs — the same supersede machinery session create-stubs ride.
   bucketAssignments: { isDelta: true, altKey: "conversation_id" },
+  // Teammate comments per conversation. isDelta so syncing one conversation's
+  // thread never prunes another's; altKey "client_id" rekeys an optimistic stub
+  // onto its real server row (the stub carries client_id === its own stub id).
+  comments: { isDelta: true, altKey: "client_id" },
   clientState: {
     kind: "singleton",
     merge: {
@@ -2851,6 +2876,25 @@ export const useInboxStore = create<InboxStoreState>(
   reviewActiveBlock: 0,
   reviewEditingId: null,
   reviewComments: {},
+
+  commentRailOpen: null,
+  commentRailAnchor: null,
+  commentRailNonce: 0,
+  commentRailWidth: {},
+  setCommentRailOpen: (open: boolean | null) => set({ commentRailOpen: open }),
+  // Focus/expand a message's inline anchored thread (the gutter handle). Doesn't
+  // open the global dock — anchored threads live inline at their message.
+  openCommentThread: (messageId: string | null = null) =>
+    set((s: any) => ({ commentRailAnchor: messageId, commentRailNonce: s.commentRailNonce + 1 })),
+  closeCommentRail: () => set({ commentRailOpen: false }),
+  setCommentRailWidth: (conversationId: string, w: number) =>
+    set((s: any) => {
+      if ((s.commentRailWidth[conversationId] ?? 0) === w) return {};
+      const next = { ...s.commentRailWidth };
+      if (w) next[conversationId] = w;
+      else delete next[conversationId];
+      return { commentRailWidth: next };
+    }),
 
   setReviewTarget: (messageId: string | null, blockIndex = 0) =>
     set({ reviewMessageId: messageId, reviewActiveBlock: messageId ? blockIndex : 0 }),
@@ -4560,6 +4604,7 @@ export const useInboxStore = create<InboxStoreState>(
     liveLoading: { ...s.liveLoading, [scope]: loading },
   })),
 
+  comments: {},
   tasks: {},
   taskActiveSessions: {} as Record<string, any>,
   syncProgress: {},
@@ -4720,6 +4765,62 @@ export const useInboxStore = create<InboxStoreState>(
         updated_at: now,
       };
     }
+  }),
+
+  // -- Teammate comments --
+  // Optimistic stub keyed by a client_id; the synced server row supersedes it via
+  // the comments altKey config, and the server dedups on client_id so an outbox
+  // retry can't double-insert. The same-named dispatch side effect does the
+  // durable write (notifications, mentions, github sync) via comments.addComment.
+  addComment: asyncAction(function (this: Draft, conversationId: string, content: string, opts?: { messageId?: string; parentCommentId?: string }) {
+    const body = content.trim();
+    if (!body) return;
+    const clientId = `commentstub-${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
+    const me = (this as any).currentUser;
+    this.comments[clientId] = {
+      _id: clientId,
+      client_id: clientId,
+      conversation_id: conversationId,
+      message_id: opts?.messageId,
+      parent_comment_id: opts?.parentCommentId,
+      content: body,
+      user_id: me?._id ?? "",
+      created_at: Date.now(),
+      author_kind: "user",
+      user: me ? { _id: me._id, name: me.name, github_username: me.github_username, github_avatar_url: me.github_avatar_url, image: me.image } : null,
+    } as CommentRow;
+    return { conversationId, content: body, messageId: opts?.messageId, parentCommentId: opts?.parentCommentId, clientId };
+  }),
+
+  // Edit rides the generic patch path (comments is in dispatch TABLE_CONFIG with
+  // content mutable); the field is auto-protected until the server echo.
+  editComment: action(function (this: Draft, commentId: string, content: string) {
+    const c = this.comments[commentId] as any;
+    if (c) c.content = content;
+  }),
+
+  deleteComment: asyncAction(function (this: Draft, commentId: string) {
+    delete this.comments[commentId];
+    return { commentId };
+  }),
+
+  // Opt-in agent reply: drop an optimistic "thinking" agent comment so the UI
+  // reacts instantly; the side effect spawns/reuses the thread's fork.
+  askAgentInThread: asyncAction(function (this: Draft, conversationId: string, opts?: { messageId?: string }) {
+    const clientId = `commentstub-agent-${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
+    const me = (this as any).currentUser;
+    this.comments[clientId] = {
+      _id: clientId,
+      client_id: clientId,
+      conversation_id: conversationId,
+      message_id: opts?.messageId,
+      content: "",
+      user_id: me?._id ?? "",
+      created_at: Date.now(),
+      author_kind: "agent",
+      agent_status: "thinking",
+    } as CommentRow;
+    return { conversationId, messageId: opts?.messageId, clientId };
   }),
 
   // Doc drag-reparent: optimistically move the node in the local tree (docs is a

@@ -30,6 +30,7 @@ class CacheDB extends Dexie {
   projects!: Dexie.Table<any, string>;
   buckets!: Dexie.Table<any, string>;
   bucketAssignments!: Dexie.Table<any, string>;
+  comments!: Dexie.Table<any, string>;
   meta!: Dexie.Table<{ key: string; value: any }, string>;
   conversationMessages!: Dexie.Table<{ convId: string; messages: any[]; latestTimestamp: number; pagination: any }, string>;
   dispatchOutbox!: Dexie.Table<OutboxEntry, string>;
@@ -95,6 +96,20 @@ class CacheDB extends Dexie {
       projects: "_id",
       buckets: "_id",
       bucketAssignments: "_id",
+      meta: "key",
+      conversationMessages: "convId",
+      dispatchOutbox: "id, ts",
+    });
+    // v7: teammate comments collection.
+    this.version(7).stores({
+      sessions: "_id",
+      tasks: "_id",
+      docs: "_id",
+      plans: "_id",
+      projects: "_id",
+      buckets: "_id",
+      bucketAssignments: "_id",
+      comments: "_id",
       meta: "key",
       conversationMessages: "convId",
       dispatchOutbox: "id, ts",

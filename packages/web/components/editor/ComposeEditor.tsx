@@ -18,11 +18,17 @@ interface ComposeEditorProps {
   onSubmit: () => void;
   onExit: () => void;
   onContentChange?: (hasContent: boolean) => void;
+  // Live markdown on every edit — used by the comment composer to broadcast the
+  // draft as typing presence.
+  onTextChange?: (markdown: string) => void;
+  // Chat composers want Enter to send (Shift+Enter for a newline) instead of the
+  // default Mod-Enter; leave off for the multi-line compose popup.
+  submitOnEnter?: boolean;
   placeholder?: string;
 }
 
 export const ComposeEditor = forwardRef<ComposeEditorHandle, ComposeEditorProps>(
-  ({ initialContent, onMentionQuery, onImagePaste, onSubmit, onExit, onContentChange, placeholder }, ref) => {
+  ({ initialContent, onMentionQuery, onImagePaste, onSubmit, onExit, onContentChange, onTextChange, submitOnEnter, placeholder }, ref) => {
     const onSubmitRef = useRef(onSubmit);
     onSubmitRef.current = onSubmit;
     const onExitRef = useRef(onExit);
@@ -31,12 +37,27 @@ export const ComposeEditor = forwardRef<ComposeEditorHandle, ComposeEditorProps>
     onImagePasteRef.current = onImagePaste;
     const onContentChangeRef = useRef(onContentChange);
     onContentChangeRef.current = onContentChange;
+    const onTextChangeRef = useRef(onTextChange);
+    onTextChangeRef.current = onTextChange;
+    const submitOnEnterRef = useRef(submitOnEnter);
+    submitOnEnterRef.current = submitOnEnter;
 
     const ComposeKeymap = useRef(
       Extension.create({
         name: "composeKeymap",
+        // Beat the StarterKit's default Enter (split paragraph) so submitOnEnter
+        // wins. The mention dropdown intercepts Enter even earlier (a plugin
+        // handleKeyDown), so accepting a suggestion still works.
+        priority: 1000,
         addKeyboardShortcuts() {
           return {
+            // Enter submits when the consumer opts in AND the mention dropdown
+            // isn't open (its own keymap takes Enter first to accept a suggestion).
+            Enter: () => {
+              if (!submitOnEnterRef.current) return false;
+              onSubmitRef.current();
+              return true;
+            },
             "Mod-Enter": () => {
               onSubmitRef.current();
               return true;
@@ -95,6 +116,7 @@ export const ComposeEditor = forwardRef<ComposeEditorHandle, ComposeEditorProps>
       onUpdate: ({ editor: e }) => {
         const md = (e.storage as any).markdown?.getMarkdown() ?? e.getText();
         onContentChangeRef.current?.(md.trim().length > 0);
+        onTextChangeRef.current?.(md);
       },
     });
 

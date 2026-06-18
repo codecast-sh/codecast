@@ -1184,6 +1184,19 @@ export const addMessages = mutation({
         });
       }
 
+      // Comment-thread agent reply: when this conversation is the hidden fork
+      // spawned to answer in a teammate comment thread, mirror its fresh reply
+      // back into the placeholder comment. Single cheap field check skips this for
+      // all ordinary traffic; the mirror runs off this transaction.
+      if (
+        (conversation as { comment_fork_comment_id?: unknown }).comment_fork_comment_id &&
+        args.messages.some((m) => m.role === "assistant" && !!m.content?.trim())
+      ) {
+        await ctx.scheduler.runAfter(0, internal.comments.mirrorAgentReply, {
+          fork_conversation_id: args.conversation_id,
+        });
+      }
+
       const lastUserTs = userMsgs.length > 0
         ? userMsgs.reduce((max, m) => Math.max(max, m.timestamp || 0), 0)
         : 0;
