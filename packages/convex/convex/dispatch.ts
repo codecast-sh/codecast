@@ -59,6 +59,17 @@ const TABLE_CONFIG: Record<string, TableConfig> = {
     ownerField: "user_id",
     immutable: new Set(["_id", "_creationTime", "user_id", "created_at"]),
   },
+  // Comment content edits ride the generic patch path; everything structural is
+  // immutable. Creation, deletion and the agent-reply ask need inserts/forks, so
+  // they live in SIDE_EFFECTS (addComment / deleteComment / askAgentInThread).
+  comments: {
+    kind: "collection",
+    ownerField: "user_id",
+    immutable: new Set([
+      "_id", "_creationTime", "user_id", "conversation_id", "message_id", "created_at",
+      "parent_comment_id", "author_kind", "agent_status", "fork_conversation_id", "client_id",
+    ]),
+  },
 };
 
 export const dispatch = mutation({
@@ -810,6 +821,34 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       updated_at: now,
     });
     return { _id };
+  },
+
+  // Teammate comment create/delete/agent-ask delegate to the public comment
+  // mutations (which carry the notification / mention / fork logic). The store
+  // optimistic stub already painted; the real row supersedes it via client_id.
+  addComment: async (ctx, _userId, _args, result) => {
+    const r = result as { conversationId: string; content: string; messageId?: string; parentCommentId?: string; clientId: string };
+    return ctx.runMutation!(api.comments.addComment, {
+      conversation_id: r.conversationId as Id<"conversations">,
+      content: r.content,
+      message_id: r.messageId ? (r.messageId as Id<"messages">) : undefined,
+      parent_comment_id: r.parentCommentId ? (r.parentCommentId as Id<"comments">) : undefined,
+      client_id: r.clientId,
+    });
+  },
+  deleteComment: async (ctx, _userId, _args, result) => {
+    const r = result as { commentId: string };
+    // A stub id (optimistic create not yet landed) has nothing to delete server-side.
+    if (!r.commentId || r.commentId.startsWith("commentstub")) return;
+    return ctx.runMutation!(api.comments.deleteComment, { comment_id: r.commentId as Id<"comments"> });
+  },
+  askAgentInThread: async (ctx, _userId, _args, result) => {
+    const r = result as { conversationId: string; messageId?: string; clientId: string };
+    return ctx.runMutation!(api.comments.askAgentInThread, {
+      conversation_id: r.conversationId as Id<"conversations">,
+      message_id: r.messageId ? (r.messageId as Id<"messages">) : undefined,
+      client_id: r.clientId,
+    });
   },
 
   // Exclusive per-user filing: upsert the single (user, conversation) row.

@@ -7,59 +7,31 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { Send, GitFork, Loader2, Check, ShieldQuestion, Lock, Pencil } from "lucide-react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
+import { useDocPresence, type PresenceRow } from "../hooks/useDocPresence";
 import { useInboxStore } from "../store/inboxStore";
 import { isConvexId } from "../lib/entityLinks";
 import { PresenceFacepile } from "./PresenceFacepile";
 import type { ConversationData } from "./ConversationView";
 
 // ── Live composer co-presence ────────────────────────────────────────────────
-// Reuses the document-editor presence backend (doc_presence) under a synthetic
-// "compose:<conversationId>" id, so each side sees who else is in the box and the
-// words they're forming — the "type with me" signal — with no shared OT buffer.
-// Broadcast is gated: a collaborator always announces themselves; the owner only
-// announces once a collaborator has actually appeared, so a solo session writes
-// nothing.
-
-type PresenceRow = {
-  user_id: string;
-  user_name: string;
-  user_color: string;
-  draft_text?: string;
-};
+// Thin wrapper over the shared doc_presence hook (hooks/useDocPresence) keyed by a
+// synthetic "compose:<conversationId>" id, so each side sees who else is in the box
+// and the words they're forming — the "type with me" signal. Broadcast is gated by
+// the hook: a collaborator always announces themselves (forceBroadcast); the owner
+// only announces once a collaborator has actually appeared, so a solo session
+// writes nothing.
 
 function useComposerPresence(
   conversationId: string,
   draftText: string,
   opts: { enabled: boolean; forceBroadcast: boolean }
 ): PresenceRow[] {
-  const docId = `compose:${conversationId}`;
-  const update = useMutation(api.docSync.updatePresence);
-  const remove = useMutation(api.docSync.removePresence);
-  // getPresence requires auth — skip it until we're signed in, or it errors during
-  // the auth-loading window.
-  const present = (useQuery(api.docSync.getPresence, opts.enabled ? { doc_id: docId } : "skip") ?? []) as PresenceRow[];
-  const shouldBroadcast = opts.enabled && (opts.forceBroadcast || present.length > 0);
-
-  const draftRef = useRef(draftText);
-  draftRef.current = draftText;
-
-  // Heartbeat while broadcasting (keeps the row inside the 30s stale window),
-  // and clear it on exit so the other side sees us leave promptly.
-  useEffect(() => {
-    if (!shouldBroadcast) return;
-    update({ doc_id: docId, draft_text: draftRef.current }).catch(() => {});
-    const iv = setInterval(() => update({ doc_id: docId, draft_text: draftRef.current }).catch(() => {}), 3000);
-    return () => { clearInterval(iv); remove({ doc_id: docId }).catch(() => {}); };
-  }, [shouldBroadcast, docId, update, remove]);
-
-  // Snappier than the heartbeat: push shortly after the draft changes.
-  useEffect(() => {
-    if (!shouldBroadcast) return;
-    const t = setTimeout(() => update({ doc_id: docId, draft_text: draftRef.current }).catch(() => {}), 250);
-    return () => clearTimeout(t);
-  }, [draftText, shouldBroadcast, docId, update]);
-
-  return present;
+  return useDocPresence({
+    docId: `compose:${conversationId}`,
+    draftText,
+    enabled: opts.enabled,
+    forceBroadcast: opts.forceBroadcast,
+  });
 }
 
 function CollabPresenceBar({ present }: { present: PresenceRow[] }) {

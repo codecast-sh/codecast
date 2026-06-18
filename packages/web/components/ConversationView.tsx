@@ -41,6 +41,9 @@ import { MessageReview } from "./MessageReview";
 import { SelectionQuoteToolbar } from "./SelectionQuoteToolbar";
 import { ReviewBar } from "./ReviewBar";
 import { ReviewComposerContext } from "./reviewContext";
+import { CommentDock } from "./comments/CommentDock";
+import { InlineMessageComments } from "./comments/InlineMessageComments";
+import { useConversationCommentsSync } from "../hooks/useConversationComments";
 import { parseScheduleCadence } from "./scheduleCadence";
 
 function copyMessageLink(conversationId: string | undefined, messageId: string) {
@@ -6423,6 +6426,11 @@ function AssistantBlockImpl({
           </>
         )}
 
+        {/* Teammate comments anchored to this message, inline at the message. */}
+        {conversationId && messageId && (
+          <InlineMessageComments conversationId={conversationId.toString()} messageId={messageId} />
+        )}
+
         {condensedReceipt && (
           <CondensedToolsLine tools={condensedReceipt.tools} expanded={condensedReceipt.expanded} onToggle={condensedReceipt.onToggle} />
         )}
@@ -9435,6 +9443,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   const { user: currentUser } = useCurrentUser();
   const effectiveIsOwner = isOwner;
+  // Width reserved on the right by the teammate comment rail (per-conversation, so
+  // multiple tab panes don't fight). Pads the transcript/composer and nudges the
+  // scroll affordances left so nothing hides under the panel.
+  const commentRailW = useInboxStore((s) => (conversation ? s.commentRailWidth[conversation._id] ?? 0 : 0));
+  // Pipe this conversation's comment thread into the inbox cache once; the dock
+  // and the inline per-message threads all read from the store.
+  useConversationCommentsSync(conversation?._id?.toString());
   const effectiveConversationId = conversation?._id;
 
   const handleSendInlineMessage = useCallback(async (content: string) => {
@@ -12157,7 +12172,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     <HighlightContext.Provider value={highlightQuery}>
     <ImageGalleryProvider>
     <ReviewComposerContext.Provider value={reviewComposer}>
-    <main className="relative flex flex-col bg-sol-bg h-full" onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
+    <main className="relative flex flex-col bg-sol-bg h-full" style={{ paddingRight: commentRailW || undefined, transition: "padding-right 160ms ease" }} onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
       {isDragging && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-sol-bg/80 backdrop-blur-sm" style={{ animation: "fadeIn 150ms ease-out" }}>
           <div className="border-2 border-dashed border-sol-cyan rounded-xl p-12 text-center">
@@ -13176,7 +13191,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       )}
 
       {timeline.length > 0 && (
-        <div className="absolute right-3 sm:right-8 z-30 flex items-stretch gap-2.5" style={{ bottom: Math.max(messageInputHeight + 16, 115) }}>
+        <div className="absolute right-3 sm:right-8 z-30 flex items-stretch gap-2.5" style={{ bottom: Math.max(messageInputHeight + 16, 115), transform: commentRailW ? `translateX(-${commentRailW}px)` : undefined, transition: "transform 160ms ease" }}>
           <div className="flex flex-col gap-2">
               <button
                 onClick={() => {
@@ -13308,6 +13323,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         </div>
       )}
       <SelectionQuoteToolbar conversationId={conversation?._id ?? ""} />
+      {conversation && (
+        <CommentDock
+          conversationId={conversation._id.toString()}
+          bottomOffset={Math.max(messageInputHeight + 16, 96)}
+        />
+      )}
     </main>
     </ReviewComposerContext.Provider>
     </ImageGalleryProvider>
