@@ -6,7 +6,7 @@ type ContentBlock =
   | { type: "image"; source: { type: string; media_type: string; data: string } };
 
 export interface ClaudeSessionEntry {
-  type: "user" | "assistant" | "human" | "summary" | "file-history-snapshot" | "system" | "queue-operation";
+  type: "user" | "assistant" | "human" | "summary" | "file-history-snapshot" | "system" | "queue-operation" | "attachment";
   subtype?: "local_command" | "stop_hook_summary" | "compact_boundary";
   uuid?: string;
   parentUuid?: string;
@@ -26,6 +26,15 @@ export interface ClaudeSessionEntry {
   isMeta?: boolean;
   isCompactSummary?: boolean;
   isVisibleInTranscriptOnly?: boolean;
+  // A message the user queues with Ctrl+Enter (or that codecast's daemon injects
+  // while the agent is mid-turn) is written as type:"attachment" with this shape —
+  // the prompt text lives in `attachment.prompt`, NOT in `message.content`.
+  attachment?: {
+    type?: string;
+    prompt?: string;
+    commandMode?: string;
+    origin?: { kind?: string };
+  };
 }
 
 export interface ToolCall {
@@ -78,6 +87,14 @@ export function parseSessionLine(line: string): ClaudeSessionEntry | null {
 // guard also drops it from older JSONL files written before the flag existed.
 export const CODECAST_IMPORT_NOTICE_PREFIX = "[Codecast import]";
 
+// Queued prompts sometimes carry leading terminal control bytes (e.g. \x01\x0b,
+// bracketed-paste markers) captured with the keystrokes. Strip a leading run of
+// control chars — keeping tab/newline — so the synced content is clean and still
+// content-matches its pending-message row on the server.
+function stripControlPrefix(text: string): string {
+  return text.replace(/^[\x00-\x08\x0b-\x1f]+/, "");
+}
+
 export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] {
   const messages: ParsedMessage[] = [];
   // A slash command's expansion (the command's .md body) is flagged isMeta by Claude Code,
@@ -102,6 +119,24 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
     }
 
     if (entry.type === "queue-operation") continue;
+
+    // A user turn the agent received while busy is recorded as type:"attachment"
+    // with attachment.type:"queued_command" (text in attachment.prompt) instead of a
+    // normal type:"user" entry. Idle turns land as type:"user" and sync fine; queued
+    // ones used to fall through the user/assistant skip below and get silently dropped
+    // — losing real user prompts (e.g. anything sent with Ctrl+Enter). Emit them as
+    // user messages. The server's addMessages dedups by uuid, then by content+timestamp,
+    // then against the pending-message row, so a queued turn that ALSO arrived as a
+    // normal echo (idle redelivery) never double-syncs.
+    if (entry.type === "attachment") {
+      if (entry.attachment?.type === "queued_command") {
+        const prompt = stripControlPrefix(entry.attachment.prompt ?? "");
+        if (prompt.trim()) {
+          messages.push({ uuid: entry.uuid, role: "user", content: prompt, timestamp });
+        }
+      }
+      continue;
+    }
 
     const isUserEntry = entry.type === "user" || entry.type === "human";
     const isCommandExpansion = isUserEntry && entry.isMeta === true && prevWasCommandInvocation;
