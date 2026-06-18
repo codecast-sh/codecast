@@ -1,5 +1,11 @@
 import { test, expect, describe } from "bun:test";
-import { parseEntityUrl, isConvexId } from "./entityLinks";
+import {
+  parseEntityUrl,
+  isConvexId,
+  buildEntityUrl,
+  inferEntityTypeFromShortId,
+  normalizeEntityType,
+} from "./entityLinks";
 
 describe("isConvexId", () => {
   test("accepts a full 32-char Convex id", () => {
@@ -87,5 +93,52 @@ describe("parseEntityUrl", () => {
     expect(parseEntityUrl("")).toBeNull();
     expect(parseEntityUrl(undefined)).toBeNull();
     expect(parseEntityUrl("not a url")).toBeNull();
+  });
+});
+
+describe("buildEntityUrl", () => {
+  const CONVEX_ID = "mh73xedd7ep2nmr082mqnxts2x86kzfy";
+
+  test("each entity type maps to its public route", () => {
+    expect(buildEntityUrl("task", "ct-37187")).toBe("https://codecast.sh/tasks/ct-37187");
+    expect(buildEntityUrl("plan", "pl-42")).toBe("https://codecast.sh/plans/pl-42");
+    expect(buildEntityUrl("session", CONVEX_ID)).toBe(`https://codecast.sh/conversation/${CONVEX_ID}`);
+    expect(buildEntityUrl("doc", CONVEX_ID)).toBe(`https://codecast.sh/docs/${CONVEX_ID}`);
+    expect(buildEntityUrl("project", "proj-1")).toBe("https://codecast.sh/projects/proj-1");
+  });
+
+  test("accepts url-segment aliases and a custom base (trailing slash trimmed)", () => {
+    expect(buildEntityUrl("conversation", CONVEX_ID)).toBe(`https://codecast.sh/conversation/${CONVEX_ID}`);
+    expect(buildEntityUrl("tasks", "ct-1", "http://localhost:3000/")).toBe("http://localhost:3000/tasks/ct-1");
+  });
+
+  test("round-trips with parseEntityUrl", () => {
+    const url = buildEntityUrl("task", CONVEX_ID)!;
+    expect(parseEntityUrl(url)).toEqual({ type: "task", id: CONVEX_ID });
+  });
+
+  test("unknown type yields null", () => {
+    expect(buildEntityUrl("widget", "x")).toBeNull();
+  });
+});
+
+describe("inferEntityTypeFromShortId", () => {
+  test("recognizes ct-/pl- prefixes, nothing else", () => {
+    expect(inferEntityTypeFromShortId("ct-37187")).toBe("task");
+    expect(inferEntityTypeFromShortId("pl-42")).toBe("plan");
+    // 7-char session short ids and full Convex ids have no distinguishing prefix.
+    expect(inferEntityTypeFromShortId("jx70ntf")).toBeNull();
+    expect(inferEntityTypeFromShortId("mh73xedd7ep2nmr082mqnxts2x86kzfy")).toBeNull();
+    expect(inferEntityTypeFromShortId("")).toBeNull();
+  });
+});
+
+describe("normalizeEntityType", () => {
+  test("canonical types and aliases normalize; junk is null", () => {
+    expect(normalizeEntityType("session")).toBe("session");
+    expect(normalizeEntityType("conversation")).toBe("session");
+    expect(normalizeEntityType("tasks")).toBe("task");
+    expect(normalizeEntityType("docs")).toBe("doc");
+    expect(normalizeEntityType("widget")).toBeNull();
   });
 });
