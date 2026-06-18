@@ -55,7 +55,6 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
   // last comment collapses it back to full width automatically. The keyboard
   // layer (r/arrows/c/q) still uses reviewMessageId, but it's optional sugar.
   const engaged = myComments.length > 0;
-  const measureActive = engaged || isReviewTarget;
 
   const containerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -73,6 +72,12 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
   // the rail width to use in margin mode (clamped to the available margin).
   const [railInMargin, setRailInMargin] = useState(false);
   const [railPx, setRailPx] = useState(RAIL_MAX_PX);
+
+  // Measure block offsets while the rail/keyboard nav needs them OR while hovering:
+  // the hover handle must track its block live, because content above can reflow
+  // after the mouse stops (web font load, syntax highlighting, image settle) and a
+  // frozen offset would leave the handle stranded on the block's lower lines.
+  const measureActive = engaged || isReviewTarget || hoverIndex !== null;
 
   // Drop a stuck peek highlight: removing a chip via its Remove button unmounts it
   // before onMouseLeave fires, so clear the peek when its block no longer has any
@@ -110,9 +115,9 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
     }
   }, []);
 
-  // Only measure block offsets while the rail or keyboard nav needs them. Idle
-  // messages (the common case) do no measurement work — the hover affordance
-  // positions itself from the hovered element directly.
+  // Measure block offsets only while needed (rail open, keyboard nav, or hovering).
+  // Idle messages — the common case — do no measurement work; the ResizeObserver
+  // below keeps rects fresh against reflow for the whole time the handle is shown.
   useLayoutEffect(() => {
     if (measureActive) measure();
   }, [content, measureActive, measure]);
@@ -283,7 +288,11 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
           type="button"
           data-cc-gutter
           className="cc-block-quote"
-          style={{ top: hoverTop }}
+          // Prefer the live measured offset (re-measured on reflow) over the
+          // mousemove snapshot, so the handle stays pinned to its block's top
+          // even if content above shifts after the cursor stops. hoverTop is the
+          // first-frame fallback before rects has measured.
+          style={{ top: rects[hoverIndex]?.top ?? hoverTop }}
           title="Quote into your reply"
           aria-label="Quote this block into your reply"
           onMouseEnter={cancelClear}
