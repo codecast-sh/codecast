@@ -202,6 +202,7 @@ const EMPTY_PENDING: any[] = [];
 const EMPTY_MESSAGES: any[] = [];
 const EMPTY_MATCH_IDS: string[] = [];
 const EMPTY_MATCH_INSTANCES: { messageId: string; localIndex: number; timestamp: number }[] = [];
+const EMPTY_QUEUE: string[] = [];
 
 // Skips a Convex query for the first paint after the keyed value (e.g. conversation id)
 // changes, then enables it on the next macrotask. Lets the message list paint before the
@@ -7963,7 +7964,18 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   }, [selectedMessageContent, selectedMessageUuid]);
 
   const isInactive = status && status !== "active" && !pendingMessageId;
-  const [queuedMessages, setQueuedMessages] = useState<string[]>([]);
+  // Queued messages live in the inbox store (persisted to IDB like drafts) so
+  // they survive navigating away and reloads — a queued user message must never
+  // be lost. Read reactively here; write through the store. The wrapper keeps the
+  // prior useState call signature (a new array or a functional updater) so every
+  // existing call site stays unchanged.
+  const queuedMessages = useInboxStore((s) => s.queuedMessages[conversationId]) ?? EMPTY_QUEUE;
+  const setQueuedMessages = useCallback((updater: string[] | ((prev: string[]) => string[])) => {
+    const store = useInboxStore.getState();
+    const prev = store.getQueuedMessages(conversationId);
+    const next = typeof updater === "function" ? updater(prev) : updater;
+    store.setQueuedMessagesFor(conversationId, next);
+  }, [conversationId]);
   const [selectedQueueIndex, setSelectedQueueIndex] = useState<number | null>(null);
   const setSessionHasQueuedMessages = useInboxStore((s) => s.setSessionHasQueuedMessages);
   useWatchEffect(() => {
