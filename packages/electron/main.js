@@ -413,6 +413,21 @@ function hidePalette() {
   paletteWindow.hide();
 }
 
+// Open a FULL new session in the main window (Ctrl+N model): bring the app
+// forward and let the web shell start the deferred session inline (it renders
+// NewSessionView for the empty conversation). This is the primary "New Session"
+// affordance — distinct from the Ctrl+Shift+N palette (showCompose), which is the
+// quick floating summon. The compose palette's "open full" hand-off also lands here.
+function openFullSessionInMain() {
+  hidePalette();
+  if (!mainWindow) return;
+  mainWindow.show();
+  mainWindow.focus();
+  mainWindow.webContents.executeJavaScript(
+    "window.__CODECAST_NEW_SESSION && window.__CODECAST_NEW_SESSION()"
+  );
+}
+
 function navigateMain(navPath) {
   if (!mainWindow) return;
   mainWindow.show();
@@ -454,7 +469,7 @@ function createTray() {
     { label: "Inbox", click: () => navigateMain("/inbox") },
     { label: "Tasks", click: () => navigateMain("/tasks") },
     { type: "separator" },
-    { label: "New Session", click: () => showCompose() },
+    { label: "New Session", click: () => openFullSessionInMain() },
     { label: "Command Palette", click: () => togglePalette() },
     { type: "separator" },
     { label: "Quit Codecast", click: () => app.quit() },
@@ -489,7 +504,7 @@ function buildAppMenu() {
         {
           label: "New Session",
           accelerator: "CommandOrControl+N",
-          click: () => showCompose(),
+          click: () => openFullSessionInMain(),
         },
         { type: "separator" },
         { role: "close" },
@@ -646,14 +661,7 @@ ipcMain.on("palette-hide", () => {
 });
 
 ipcMain.on("palette-new-session", () => {
-  hidePalette();
-  if (mainWindow) {
-    mainWindow.show();
-    mainWindow.focus();
-    mainWindow.webContents.executeJavaScript(
-      "window.__CODECAST_NEW_SESSION && window.__CODECAST_NEW_SESSION()"
-    );
-  }
+  openFullSessionInMain();
 });
 
 // The compose popup reports back after the user sends the first message. The
@@ -745,7 +753,7 @@ app.whenReady().then(() => {
   createPaletteWindow();
   if (app.dock) {
     app.dock.setMenu(Menu.buildFromTemplate([
-      { label: "New Session", click: () => showCompose() },
+      { label: "New Session", click: () => openFullSessionInMain() },
       { label: "Dashboard", click: () => navigateMain("/dashboard") },
       { label: "Inbox", click: () => navigateMain("/inbox") },
     ]));
