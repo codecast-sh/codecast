@@ -10142,11 +10142,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const cachedUserMessages = useInboxStore(
     (s) => (conversation?._id ? s.userMessages[conversation._id] : undefined)
   );
-  const navigatorUserMessages = useMemo(
-    () => (isOwner && conversation?.status === "active" ? cachedUserMessages : undefined),
-    [isOwner, conversation?.status, cachedUserMessages]
-  );
-
   const handleSendEscape = useCallback(() => {
     if (!conversation || !effectiveIsOwner || conversation.status !== "active" || !convexConvId) return;
     convCommand(convexConvId, "sendEscapeToSession");
@@ -10162,11 +10157,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   // branch's messages (the old standalone navigator is retired into the map).
   const handleOpenNavigator = useCallback(() => {
     if (!isOwner || !conversation?._id) return;
-    if (navigatorUserMessages && navigatorUserMessages.length > 0) {
-      setMapDrill(conversation._id.toString());
-      setTreePopoverOpen(true);
-    }
-  }, [isOwner, conversation?._id, navigatorUserMessages]);
+    // Always open — even a disconnected/finished session or one with no user
+    // messages yet drills into its (possibly empty) message list. The drilled
+    // view fetches its own messages, so it doesn't depend on session status.
+    setMapDrill(conversation._id.toString());
+    setTreePopoverOpen(true);
+  }, [isOwner, conversation?._id]);
 
   // Branch map rewind (Enter in the drilled current-branch messages): fork at
   // that point and rewind the live session.
@@ -11070,24 +11066,22 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   }, [conversation?._id, navigateToSession]);
 
   // Open/close the branch map. Shared by the header icon, the menu item, and
-  // the Ctrl+B shortcut. Only meaningful when the conversation actually has a
-  // fork family, and suppressed while a message-fork selection is active.
-  const hasForkFamily =
-    (conversation?.fork_children && conversation.fork_children.length > 0) || !!conversation?.forked_from;
+  // the Ctrl+B shortcut. Always available — even a single-branch session opens
+  // the map (its own branch + drillable message list); only suppressed while a
+  // message-fork selection is active.
   const toggleMap = useCallback(() => {
-    if (!isOwner || !hasForkFamily) return;
-    if (forkSelectionIdx !== null) return;
+    if (!isOwner || forkSelectionIdx !== null) return;
     setMapDrill(null); // open at the branch tree
     setTreePopoverOpen((o) => !o);
-  }, [isOwner, hasForkFamily, forkSelectionIdx]);
+  }, [isOwner, forkSelectionIdx]);
 
   useShortcutContext('conversation');
   useShortcutAction('conv.toggleTree', useCallback(() => {
-    if (!isOwner || !hasForkFamily || forkSelectionIdx !== null) return false;
+    if (!isOwner || forkSelectionIdx !== null) return false;
     setMapDrill(null); // open at the branch tree
     setTreePopoverOpen((o) => !o);
     return true;
-  }, [isOwner, hasForkFamily, forkSelectionIdx]));
+  }, [isOwner, forkSelectionIdx]));
 
   useShortcutAction('conv.copyLink', useCallback(() => {
     const url = `${shareOrigin()}/conversation/${conversation?._id}`;
