@@ -9,6 +9,26 @@ import { performUndo, performRedo } from "../store/undoStack";
 import { animatedHideSession, undoableDeferSession, undoablePinSession } from "../store/undoActions";
 import { checkMilestone } from "../tips/useTips";
 
+// The session a per-session chord (stash/kill/defer/pin/rename/label) acts on:
+// the row the user sees highlighted. On the inbox page that's the
+// dismissed/stashed peek when one is open (viewingDismissedId), else the live
+// current session; off the inbox it's the side panel's selection. This MUST
+// mirror sessionListActiveId in DashboardLayout — without the viewingDismissedId
+// term, peeking a stashed/dismissed session and hitting kill tore down whichever
+// live session was sitting behind the peek (the row visible above it), not the
+// hidden one you were looking at.
+export function focusedActionSessionId(
+  store: Pick<
+    ReturnType<typeof useInboxStore.getState>,
+    "currentSessionId" | "viewingDismissedId" | "sidePanelSessionId"
+  >,
+  isOnInboxPage: boolean,
+): string | null | undefined {
+  return isOnInboxPage
+    ? (store.viewingDismissedId ?? store.currentSessionId)
+    : store.sidePanelSessionId;
+}
+
 export function useGlobalShortcutActions() {
   const pathname = usePathname();
   const router = useRouter();
@@ -59,7 +79,7 @@ export function useGlobalShortcutActions() {
 
   useShortcutAction('session.pin', useCallback(() => {
     const store = useInboxStore.getState();
-    const currentId = isOnInboxPage ? store.currentSessionId : store.sidePanelSessionId;
+    const currentId = focusedActionSessionId(store, isOnInboxPage);
     if (currentId) {
       const session = store.sessions[currentId];
       if (session && !session.is_pinned) checkMilestone('m-first-pin');
@@ -72,7 +92,7 @@ export function useGlobalShortcutActions() {
   // (dispatch.applyPatches), so neither handler asks for it.
   const hideCurrent = useCallback((mode: "stash" | "kill") => {
     const store = useInboxStore.getState();
-    const currentId = isOnInboxPage ? store.currentSessionId : store.sidePanelSessionId;
+    const currentId = focusedActionSessionId(store, isOnInboxPage);
     if (!currentId) return;
     if (mode === "stash") checkMilestone('m-first-stash');
     if (!isOnInboxPage) {
@@ -91,7 +111,7 @@ export function useGlobalShortcutActions() {
 
   useShortcutAction('session.deferAdvance', useCallback(() => {
     const store = useInboxStore.getState();
-    const currentId = isOnInboxPage ? store.currentSessionId : store.sidePanelSessionId;
+    const currentId = focusedActionSessionId(store, isOnInboxPage);
     if (!currentId) return;
     const ordered = store.visualOrder();
     const idx = ordered.findIndex(s => s._id === currentId);
@@ -105,13 +125,13 @@ export function useGlobalShortcutActions() {
 
   useShortcutAction('session.rename', useCallback(() => {
     const store = useInboxStore.getState();
-    const currentId = isOnInboxPage ? store.currentSessionId : store.sidePanelSessionId;
+    const currentId = focusedActionSessionId(store, isOnInboxPage);
     if (currentId) useInboxStore.setState({ renamingSessionId: currentId });
   }, [isOnInboxPage]));
 
   useShortcutAction('session.moveToBucket', useCallback(() => {
     const store = useInboxStore.getState();
-    const currentId = isOnInboxPage ? store.currentSessionId : store.sidePanelSessionId;
+    const currentId = focusedActionSessionId(store, isOnInboxPage);
     const session = currentId ? store.sessions[currentId] : null;
     if (session) store.openPalette({ targets: [session], targetType: 'session', mode: 'bucket' });
   }, [isOnInboxPage]));
