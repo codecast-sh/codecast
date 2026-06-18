@@ -1,10 +1,11 @@
 import { test, expect, describe } from "bun:test";
-import { pendingBannerState, isActiveAgentStatus, type LiveAgentStatus } from "./pendingBanner";
+import { pendingBannerState, isActiveAgentStatus, isBootingAgentStatus, type LiveAgentStatus } from "./pendingBanner";
 
-const opts = (o: Partial<{ retryEligible: boolean; restartInFlight: boolean; idleGraceElapsed: boolean }> = {}) => ({
+const opts = (o: Partial<{ retryEligible: boolean; restartInFlight: boolean; idleGraceElapsed: boolean; bootGraceElapsed: boolean }> = {}) => ({
   retryEligible: true,
   restartInFlight: false,
   idleGraceElapsed: true,
+  bootGraceElapsed: true,
   ...o,
 });
 
@@ -17,6 +18,19 @@ describe("isActiveAgentStatus", () => {
   test("idle / connected / starting / resuming / undefined are NOT active", () => {
     for (const s of ["idle", "connected", "starting", "resuming", undefined] as (LiveAgentStatus | undefined)[]) {
       expect(isActiveAgentStatus(s)).toBe(false);
+    }
+  });
+});
+
+describe("isBootingAgentStatus", () => {
+  test("starting / resuming / connected are booting", () => {
+    for (const s of ["starting", "resuming", "connected"] as LiveAgentStatus[]) {
+      expect(isBootingAgentStatus(s)).toBe(true);
+    }
+  });
+  test("working / idle / undefined are NOT booting", () => {
+    for (const s of ["working", "thinking", "idle", undefined] as (LiveAgentStatus | undefined)[]) {
+      expect(isBootingAgentStatus(s)).toBe(false);
     }
   });
 });
@@ -43,7 +57,20 @@ describe("pendingBannerState", () => {
   test("agent genuinely idle/gone past the grace and still hasn't taken it → escalate to stuck", () => {
     expect(pendingBannerState("idle", opts())).toBe("stuck");
     expect(pendingBannerState(undefined, opts())).toBe("stuck"); // disconnected session has no status
-    expect(pendingBannerState("connected", opts())).toBe("stuck");
+  });
+
+  test("a booting/resuming/connecting session reassures instead of alarming during the boot budget", () => {
+    // The false-alarm incident: a normal cold start / resume flashed "hasn't reached
+    // the agent" + kill & restart at ~20s while the session was still coming up.
+    for (const s of ["starting", "resuming", "connected"] as LiveAgentStatus[]) {
+      expect(pendingBannerState(s, opts({ bootGraceElapsed: false }))).toBe("queued");
+    }
+  });
+
+  test("a session still not processing past the generous boot budget → escalate to stuck", () => {
+    for (const s of ["starting", "resuming", "connected"] as LiveAgentStatus[]) {
+      expect(pendingBannerState(s, opts({ bootGraceElapsed: true }))).toBe("stuck");
+    }
   });
 
   test("a restart already in flight always shows the stuck bar (so its progress keeps rendering)", () => {

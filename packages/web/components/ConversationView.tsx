@@ -130,6 +130,7 @@ import { soundSend } from "../lib/sounds";
 import { useForkNavigationStore } from "../store/forkNavigationStore";
 import { buildCompositeTimeline } from "../lib/compositeTimeline";
 import { useMessageSelection } from "../hooks/useMessageSelection";
+import { useMessageBookmark } from "../hooks/useMessageBookmark";
 import { BranchSelector } from "./BranchSelector";
 import { ForkMapBox, ForkMapFallback } from "./ForkTreePanel";
 import { getApplyPatchInput, parseApplyPatchSections } from "../lib/applyPatchParser";
@@ -140,7 +141,8 @@ import type { MentionItem } from "./editor/MentionList";
 import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench } from "lucide-react";
 import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES, labelMentionItems } from "../hooks/useMentionQuery";
-import { pendingBannerState, isActiveAgentStatus, type LiveAgentStatus } from "../lib/pendingBanner";
+import { pendingBannerState, isActiveAgentStatus, isBootingAgentStatus, type LiveAgentStatus } from "../lib/pendingBanner";
+import { expandEntityMentions } from "../lib/mentionExpansion";
 
 // How long a sent message may sit in the optimistic/pending state before the
 // message row surfaces a status hint. Normal delivery confirms in a few seconds.
@@ -154,6 +156,13 @@ const PENDING_RETRY_AFTER_MS = 20_000;
 // poll once the turn ends, so a message that's been pending behind a long turn
 // shouldn't flash "hasn't reached the agent" the instant the agent goes idle.
 const PENDING_IDLE_GRACE_MS = 8_000;
+
+// A booting / resuming / freshly-connected session legitimately takes far longer
+// than a turn to begin processing the first message, so the per-message banner
+// stays calm ("queued") this long before escalating to the alarming kill & restart.
+// Mirrors the composer banner's startup/resume thresholds so the two agree.
+const PENDING_BOOT_GRACE_MS = 60_000;     // starting / connected: session launch budget
+const PENDING_RESUME_GRACE_MS = 120_000;  // resuming is the slowest path
 
 
 // Live label for a kill+restart in flight, derived from the daemon command
@@ -5410,6 +5419,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
   // (ensureTmuxReady), so a long thinking turn legitimately holds the message. Don't
   // offer "kill & restart" there: it would interrupt and discard live work.
   const agentActive = isActiveAgentStatus(agentStatus);
+  const agentBooting = isBootingAgentStatus(agentStatus);
   // Short grace after the agent flips busy→idle before escalating: the daemon
   // injects the deferred message within its next poll, so we avoid a false
   // "hasn't reached the agent" flash in the gap between idle and that inject.
@@ -5419,10 +5429,25 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
     const t = setTimeout(() => setIdleGraceElapsed(true), PENDING_IDLE_GRACE_MS);
     return () => clearTimeout(t);
   }, [isPending, agentActive]);
+  // While the session is still booting/resuming/connecting, hold off the kill &
+  // restart escalation for a much longer budget (measured from when the message was
+  // sent): a cold launch — and especially a resume — routinely runs past the short
+  // idle grace before the agent flips to "working". Premature escalation here is the
+  // "Message hasn't reached the agent" false alarm that flashes during a normal boot.
+  const [bootGraceElapsed, setBootGraceElapsed] = useState(false);
+  useWatchEffect(() => {
+    if (!isPending || !agentBooting) { setBootGraceElapsed(false); return; }
+    const budget = agentStatus === "resuming" ? PENDING_RESUME_GRACE_MS : PENDING_BOOT_GRACE_MS;
+    const remaining = budget - (Date.now() - timestamp);
+    if (remaining <= 0) { setBootGraceElapsed(true); return; }
+    const t = setTimeout(() => setBootGraceElapsed(true), remaining);
+    return () => clearTimeout(t);
+  }, [isPending, agentBooting, agentStatus, timestamp]);
   const bannerState = pendingBannerState(agentStatus, {
     retryEligible: retryVisible,
     restartInFlight: !!retryClickedAt,
     idleGraceElapsed,
+    bootGraceElapsed,
   });
   // Live restart progress, scoped to THIS click: getRestartProgress returns the
   // last few kill/resume commands for the conversation, which can include rows
@@ -5458,6 +5483,26 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
     setRetryClickedAt(Date.now());
     setRetryWaitingLong(false);
     try {
+      // A still-pending optimistic message may have stranded client-side before
+      // its durable send ever reached the server (e.g. a pre-send enrichment
+      // stalled). Re-issue the send first — it's idempotent on client_id
+      // (messageId IS the optimistic clientId), so it creates the missing
+      // pending row or no-ops against an existing one.
+      if (isPending && isConvexId(conversationId) && content.trim()) {
+        useInboxStore.getState().sendMessage(conversationId, content, undefined, messageId);
+      }
+      // If the session is alive (any heartbeating agent_status — idle, working,
+      // blocked, booting), the re-sent message delivers through the normal
+      // pending rail and the cron healer; there's nothing to restart, and killing
+      // a live session (especially one holding a large context) would needlessly
+      // tear down good work. Only escalate to kill & restart when the session
+      // looks genuinely gone (no live agent_status at all).
+      if (isPending && !!agentStatus) {
+        setRetryState("sent");
+        toast.success("Resending your message…");
+        setTimeout(() => setRetryState("idle"), 30_000);
+        return;
+      }
       const res = await useInboxStore.getState().convCommand(conversationId, "restartSession", ghostRestartContextFor(conversationId));
       if (!followRestoredConversation(res, conversationId)) {
         toast.success("Restarting session — this message will be retried");
@@ -5477,30 +5522,13 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
     isRealMessageId ? { message_id: messageId as Id<"messages"> } : "skip"
   );
 
-  const isBookmarked = useQuery(
-    api.bookmarks.isBookmarked,
-    isRealMessageId ? { message_id: messageId as Id<"messages"> } : "skip"
-  );
-  const toggleBookmark = useMutation(api.bookmarks.toggleBookmark);
+  const { isBookmarked, toggleBookmark: handleToggleBookmark } = useMessageBookmark(conversationId, messageId);
 
   const handleCopy = () => {
     setTimeout(() => { copyToClipboard(content).then(() => toast.success("Copied!")).catch(() => toast.error("Failed to copy")); });
   };
 
   const handleCopyLink = () => copyMessageLink(conversationId, messageId);
-
-  const handleToggleBookmark = async () => {
-    if (!conversationId) return;
-    try {
-      const result = await toggleBookmark({
-        conversation_id: conversationId,
-        message_id: messageId as Id<"messages">,
-      });
-      toast.success(result ? "Bookmarked!" : "Bookmark removed");
-    } catch (err) {
-      toast.error("Failed to toggle bookmark");
-    }
-  };
 
   const handleToggleExpand = () => {
     setIsExpanded(!isExpanded);
@@ -5693,14 +5721,16 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
       {isPending && bannerState === "queued" && (
         <div className="flex items-center gap-2 mt-2 pl-8 text-xs text-sol-text-muted" data-testid="pending-message-queued">
           <span className="w-1.5 h-1.5 rounded-full bg-amber-400/70 animate-pulse flex-shrink-0" />
-          <span>Queued — will send when the agent finishes its turn</span>
+          <span>{isBootingAgentStatus(agentStatus) ? "Starting up — your message will send once the session is ready" : "Queued — will send when the agent finishes its turn"}</span>
         </div>
       )}
       {isPending && bannerState === "stuck" && (
         <div className="flex items-center flex-wrap gap-2 mt-2 pl-8" data-testid="pending-message-retry">
           {!retryStage && (
             <span className="text-xs text-sol-orange/90">
-              {retryState === "idle" ? "Message hasn't reached the agent" : "Restart requested…"}
+              {retryState === "idle"
+                ? "Message hasn't reached the agent"
+                : agentStatus ? "Resending…" : "Restart requested…"}
             </span>
           )}
           {retryStage && (
@@ -5717,7 +5747,9 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
             <svg className={`w-3 h-3 ${retryState !== "idle" ? "animate-spin" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
             </svg>
-            {retryState === "inflight" ? "Restarting…" : retryState === "sent" ? "Restarting…" : retryClickedAt ? "Retry again" : "Retry (kill & restart)"}
+            {retryState === "inflight" || retryState === "sent"
+              ? (agentStatus ? "Resending…" : "Restarting…")
+              : retryClickedAt ? "Retry again" : (agentStatus ? "Resend message" : "Retry (kill & restart)")}
           </button>
         </div>
       )}
@@ -6137,11 +6169,7 @@ function AssistantBlockImpl({
     isRealMessageId ? { message_id: messageId as Id<"messages"> } : "skip"
   );
 
-  const isBookmarked = useQuery(
-    api.bookmarks.isBookmarked,
-    isRealMessageId ? { message_id: messageId as Id<"messages"> } : "skip"
-  );
-  const toggleBookmark = useMutation(api.bookmarks.toggleBookmark);
+  const { isBookmarked, toggleBookmark: handleToggleBookmark } = useMessageBookmark(conversationId, messageId);
 
   const toolResultMap = useMemo(() => {
     const map: Record<string, ToolResult> = {};
@@ -6184,20 +6212,6 @@ function AssistantBlockImpl({
   };
 
   const handleCopyLink = () => copyMessageLink(conversationId, messageId);
-
-
-  const handleToggleBookmark = async () => {
-    if (!conversationId) return;
-    try {
-      const result = await toggleBookmark({
-        conversation_id: conversationId,
-        message_id: messageId as Id<"messages">,
-      });
-      toast.success(result ? "Bookmarked!" : "Bookmark removed");
-    } catch (err) {
-      toast.error("Failed to toggle bookmark");
-    }
-  };
 
   // Show Claude header for first message in sequence (regardless of content type)
   const visibleThinking = hasThinking && showThinking;
@@ -6782,11 +6796,7 @@ function PlanBlockImpl({ content, timestamp, collapsed, messageId, conversationI
   const commentCount = useQuery(api.comments.getCommentCount,
     isRealMessageId ? { message_id: messageId as Id<"messages"> } : "skip"
   );
-  const isBookmarked = useQuery(
-    api.bookmarks.isBookmarked,
-    isRealMessageId ? { message_id: messageId as Id<"messages"> } : "skip"
-  );
-  const toggleBookmark = useMutation(api.bookmarks.toggleBookmark);
+  const { isBookmarked, toggleBookmark: handleToggleBookmark } = useMessageBookmark(conversationId, messageId);
 
   useWatchEffect(() => {
     if (contentRef.current && !isExpanded) {
@@ -6807,19 +6817,6 @@ function PlanBlockImpl({ content, timestamp, collapsed, messageId, conversationI
   };
 
   const handleCopyLink = () => messageId && copyMessageLink(conversationId, messageId);
-
-  const handleToggleBookmark = async () => {
-    if (!conversationId || !messageId) return;
-    try {
-      const result = await toggleBookmark({
-        conversation_id: conversationId,
-        message_id: messageId as Id<"messages">,
-      });
-      toast.success(result ? "Bookmarked!" : "Bookmark removed");
-    } catch {
-      toast.error("Failed to toggle bookmark");
-    }
-  };
 
   const title = content.match(/^#\s+(.+)$/m)?.[1] || "Plan";
 
@@ -7666,48 +7663,14 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const generateUploadUrl = useMutation(api.images.generateUploadUrl);
   const convex = useConvex();
 
-  const expandMentionsInMessage = useCallback(async (text: string): Promise<string> => {
-    const mentionRegex = /@\[([^\]]*?)\s+(ct-\w+|pl-\w+|jx\w+|doc:\w+|label:\w+)\](?:\s*\([^)]*\))?/g;
-    const docMentionLegacyRegex = /@\[([^\]]*?)\](?:\s*\(cast doc read (\w+)\))/g;
-    const mentions: Array<{ type: string; shortId?: string; id?: string; fullMatch: string }> = [];
-    let match: RegExpExecArray | null;
-    const textCopy = text;
-    mentionRegex.lastIndex = 0;
-    while ((match = mentionRegex.exec(textCopy)) !== null) {
-      const id = match[2];
-      if (id.startsWith("doc:")) {
-        mentions.push({ type: "doc", id: id.slice(4), fullMatch: match[0] });
-      } else if (id.startsWith("label:")) {
-        mentions.push({ type: "label", id: id.slice(6), fullMatch: match[0] });
-      } else {
-        const type = id.startsWith("ct-") ? "task" : id.startsWith("pl-") ? "plan" : "session";
-        mentions.push({ type, shortId: id, fullMatch: match[0] });
-      }
-    }
-    docMentionLegacyRegex.lastIndex = 0;
-    while ((match = docMentionLegacyRegex.exec(textCopy)) !== null) {
-      if (match![2] && !mentions.some(m => m.fullMatch === match![0])) {
-        mentions.push({ type: "doc", id: match![2], fullMatch: match![0] });
-      }
-    }
-    if (mentions.length === 0) return text;
-    try {
-      const expanded = await convex.query(api.docs.expandMentions, {
-        mentions: mentions.map(m => ({ type: m.type, shortId: m.shortId, id: m.id })),
-      });
-      let result = text;
-      for (const m of mentions) {
-        const exp = expanded.find((e: any) =>
-          (m.shortId && e.shortId === m.shortId) || (m.id && e.id === m.id)
-        );
-        if (exp?.markdown) {
-          result = result.replace(m.fullMatch, m.fullMatch + exp.markdown);
-        }
-      }
-      return result;
-    } catch {
-      return text;
-    }
+  // Best-effort enrichment, hard-bounded so it can NEVER block the durable send:
+  // a stalled convex.query (reconnecting socket / auth refresh) falls back to the
+  // raw text within the timeout instead of stranding the whole message. See
+  // lib/mentionExpansion.ts for why the cardinal "never drop a send" rule lives here.
+  const expandMentionsInMessage = useCallback((text: string): Promise<string> => {
+    return expandEntityMentions(text, (mentions) =>
+      convex.query(api.docs.expandMentions, { mentions }),
+    );
   }, [convex]);
   pastedImagesRef.current = pastedImages;
 

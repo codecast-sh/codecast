@@ -24,18 +24,34 @@ export type LiveAgentStatus =
 export const isActiveAgentStatus = (s?: LiveAgentStatus): boolean =>
   s === "working" || s === "thinking" || s === "compacting" || s === "permission_blocked";
 
+// Agent states that mean the session is alive but hasn't begun this turn yet: it's
+// launching ("starting"), reattaching after a resume ("resuming"), or up with the
+// prompt visible and about to inject the pending message ("connected"). The daemon
+// flips these to "working" once it pastes the message into the idle pane, so a
+// message sitting behind them is NOT lost — a cold boot or resume just legitimately
+// takes far longer than a turn. Distinct from "idle"/absent, which mean a turn
+// already ended (or the session is gone) without taking the message — the genuine
+// born-dead / dropped-delivery case that warrants a kill & restart.
+export const isBootingAgentStatus = (s?: LiveAgentStatus): boolean =>
+  s === "starting" || s === "resuming" || s === "connected";
+
 export type PendingBannerState = "none" | "queued" | "stuck";
 
-// - "queued": agent alive and processing → reassure, never offer a restart.
-// - "stuck":  agent idle/gone past a grace and still hasn't taken the message,
-//             OR a kill & restart is already in flight → show the restart bar.
+// - "queued": agent alive (processing, or booting/resuming) → reassure, no restart.
+// - "stuck":  agent idle/gone past a grace and still hasn't taken the message, or a
+//             booting session still not processing past a generous boot budget, OR a
+//             kill & restart is already in flight → show the restart bar.
 // - "none":   still within a grace window → show nothing.
 export function pendingBannerState(
   agentStatus: LiveAgentStatus | undefined,
-  opts: { retryEligible: boolean; restartInFlight: boolean; idleGraceElapsed: boolean },
+  opts: { retryEligible: boolean; restartInFlight: boolean; idleGraceElapsed: boolean; bootGraceElapsed: boolean },
 ): PendingBannerState {
   if (opts.restartInFlight) return "stuck";
   if (!opts.retryEligible) return "none";
   if (isActiveAgentStatus(agentStatus)) return "queued";
+  // A live-but-still-booting session reassures rather than alarms: the daemon injects
+  // the pending message and flips to "working" once the pane is ready. Only a session
+  // still not processing well past a generous boot budget is genuinely stuck.
+  if (isBootingAgentStatus(agentStatus)) return opts.bootGraceElapsed ? "stuck" : "queued";
   return opts.idleGraceElapsed ? "stuck" : "none";
 }
