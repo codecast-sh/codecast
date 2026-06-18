@@ -8,7 +8,7 @@ import {
   Send, Fingerprint, Quote, Star, BookOpen, Gauge, MonitorSmartphone, RefreshCw,
   ListFilter, FolderKanban, AppWindow, Share2, Users, Wrench, ListChecks, Workflow,
   Globe, FileText, Activity, Server, Inbox, Smartphone, GitBranch, Monitor, Brain,
-  Github, Cpu, LayoutDashboard, Boxes, Puzzle,
+  Github, Cpu, LayoutDashboard, Boxes, Puzzle, Laptop, Cloud,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { RELEASES, type Accent, type SectionIcon } from "./changelogData";
