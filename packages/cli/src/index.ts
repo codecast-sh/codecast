@@ -10,6 +10,13 @@ import { spawn, spawnSync, execSync } from "child_process";
 import { fileURLToPath } from "url";
 import { maskToken } from "./redact.js";
 import { parseConversationRef, buildConversationUrl } from "./conversationRef.js";
+import {
+  parseEntityUrl,
+  buildEntityUrl,
+  inferEntityTypeFromShortId,
+  normalizeEntityType,
+  type EntityType,
+} from "@codecast/shared/entities";
 import { cliFetch, cliFetchRead } from "./cliHttp.js";
 import { listProfiles, saveProfile, useProfile, CcAccountError } from "./ccAccounts.js";
 import { CODECAST_STATUS_HOOK } from "./statusHook.js";
@@ -1922,6 +1929,7 @@ cast feed --state needs-input     # filter feed by work state
 cast feed --label api             # sessions I filed under a label (search/sessions take --label too)
 cast read <id> 15:25              # read messages 15-25
 cast read '<share-url>#msg-<id>'  # read a window around a linked message (-c N for context size)
+cast link <id> [line]             # mint a deep link to any object (session+line→message, ct-/pl- task/plan, --type doc)
 
 # Explore sessions — 3 axes: QUERY (which) × CONTENT (state | --messages) × LIVENESS (snapshot | -w)
 cast sessions                     # state snapshot, grouped most-actionable-first
@@ -6334,32 +6342,82 @@ program
 program
   .command("link")
   .description(
-    "Build a permalink (deep link) to a specific message — the inverse of `cast read`\n\n" +
-    "Feed it the short id + line number that `cast read`/`cast feed` show you, and it\n" +
-    "returns a canonical URL that resolves on the web and in `cast read`.\n\n" +
+    "Build a permalink (deep link) to any codecast object — the inverse of `cast read`\n\n" +
+    "Works for sessions/messages, tasks, plans, and docs. Feed it a short id, a full\n" +
+    "id, or a pasted URL; for a session you can add a line number (as shown by\n" +
+    "`cast read`) to anchor the exact message. Type is inferred from the id prefix\n" +
+    "(ct-… task, pl-… plan, jx… session); pass --type for full ids or docs.\n\n" +
     "Examples:\n" +
-    "  cast link jx70ntf 99                # link to message 99 in that conversation\n" +
-    "  cast link jx70ntf                   # link to the conversation (no anchor)\n" +
+    "  cast link jx70ntf 99                # link to message 99 in that session\n" +
+    "  cast link jx70ntf                   # link to the session (no anchor)\n" +
+    "  cast link ct-37187                  # link to a task\n" +
+    "  cast link pl-42                     # link to a plan\n" +
+    "  cast link --type doc <doc-id>       # link to a doc (full id, no prefix to infer)\n" +
     "  cast link 'https://codecast.sh/conversation/<id>#msg-<msgId>'\n" +
-    "                                      # expand a short/partial link to the canonical form\n" +
-    "  cast link jx70ntf 99 --json         # { url, conversation_id, message_id, line }"
+    "                                      # expand a short/partial link to canonical form\n" +
+    "  cast link jx70ntf 99 --json         # { url, type, id, message_id, line }"
   )
-  .argument("<conversation-id>", "Conversation ID, short id, or a share URL (a #msg-<id> anchor is preserved)")
-  .argument("[line]", "1-based message line to anchor (as shown by `cast read`)")
+  .argument("<ref>", "Object id (short or full), or a pasted codecast URL (a #msg-<id> anchor is preserved)")
+  .argument("[line]", "1-based message line to anchor (sessions only, as shown by `cast read`)")
+  .option("--type <type>", "Entity type: session | task | plan | doc | project (overrides inference)")
   .option("--json", "Output as JSON")
-  .action(async (conversationId, line, options) => {
+  .action(async (ref, line, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
       console.error("Not authenticated. Run: cast auth");
       process.exit(1);
     }
 
-    const { conversationId: parsedId, messageId } = parseConversationRef(conversationId);
-
     const lineNum = line !== undefined ? parseInt(line, 10) : undefined;
     if (line !== undefined && !Number.isFinite(lineNum)) {
       console.error(`Error: line must be a number (got "${line}")`);
       process.exit(1);
+    }
+
+    // Resolve the entity {type, id} (+ a #msg anchor for sessions). A pasted URL
+    // names its own type; a bare id's type comes from --type, else the id prefix,
+    // else session (the common case and the only type needing id/line resolution).
+    let entityType: EntityType;
+    let rawId: string;
+    let messageId: string | undefined;
+    const fromUrl = parseEntityUrl(ref);
+    if (fromUrl) {
+      entityType = fromUrl.type;
+      rawId = fromUrl.id;
+      if (fromUrl.type === "session") messageId = parseConversationRef(ref).messageId;
+    } else {
+      const cref = parseConversationRef(ref); // splits #msg, strips stray query
+      rawId = cref.conversationId;
+      messageId = cref.messageId;
+      entityType = inferEntityTypeFromShortId(rawId) ?? "session";
+    }
+    if (options.type) {
+      const t = normalizeEntityType(options.type);
+      if (!t) {
+        console.error(`Error: unknown --type "${options.type}" (use session | task | plan | doc | project)`);
+        process.exit(1);
+      }
+      entityType = t;
+    }
+
+    // Non-session objects have no message anchor and no line — a plain URL is the
+    // whole answer, no server round-trip needed.
+    if (entityType !== "session") {
+      if (lineNum !== undefined) {
+        console.error(`Error: a line number only applies to sessions (got --type ${entityType})`);
+        process.exit(1);
+      }
+      const url = buildEntityUrl(entityType, rawId);
+      if (!url) {
+        console.error(`Error: cannot build a link for type "${entityType}"`);
+        process.exit(1);
+      }
+      if (options.json) {
+        console.log(JSON.stringify({ url, type: entityType, id: rawId }, null, 2));
+      } else {
+        console.log(url);
+      }
+      return;
     }
 
     const siteUrl = config.convex_url.replace(".cloud", ".site");
@@ -6370,7 +6428,7 @@ program
     // call read for line 1 just to get the full conversation id.
     const body: Record<string, unknown> = {
       api_token: config.auth_token,
-      conversation_id: parsedId,
+      conversation_id: rawId,
     };
     if (lineNum !== undefined) {
       body.start_line = lineNum;
@@ -6397,21 +6455,21 @@ program
         process.exit(1);
       }
 
-      const fullId: string = result.conversation?.id ?? parsedId;
+      const fullId: string = result.conversation?.id ?? rawId;
 
       let anchorId: string | undefined;
       let resolvedLine: number | undefined;
       if (lineNum !== undefined) {
         const msg = (result.messages ?? []).find((m: any) => m.line === lineNum) ?? result.messages?.[0];
         if (!msg) {
-          console.error(`Error: no message at line ${lineNum} (conversation has ${result.conversation?.message_count ?? 0} messages)`);
+          console.error(`Error: no message at line ${lineNum} (session has ${result.conversation?.message_count ?? 0} messages)`);
           process.exit(1);
         }
         anchorId = msg.id;
         resolvedLine = msg.line;
       } else if (messageId) {
         if (result.target_missing) {
-          console.error(`Note: message ${messageId} not found in this conversation — linking without an anchor.`);
+          console.error(`Note: message ${messageId} not found in this session — linking without an anchor.`);
         } else {
           anchorId = result.target_message_id ?? messageId;
           resolvedLine = result.target_line;
@@ -6421,7 +6479,7 @@ program
       const url = buildConversationUrl({ conversationId: fullId, messageId: anchorId });
 
       if (options.json) {
-        console.log(JSON.stringify({ url, conversation_id: fullId, message_id: anchorId, line: resolvedLine }, null, 2));
+        console.log(JSON.stringify({ url, type: entityType, id: fullId, message_id: anchorId, line: resolvedLine }, null, 2));
       } else {
         console.log(url);
       }

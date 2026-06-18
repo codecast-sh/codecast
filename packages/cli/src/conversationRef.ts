@@ -4,6 +4,8 @@
 // anchors — so pasting a share link to `cast read` can read a window around that
 // exact message.
 
+import { buildEntityUrl, CODECAST_BASE_URL } from "@codecast/shared/entities";
+
 export interface ConversationRef {
   conversationId: string;
   messageId?: string;
@@ -37,8 +39,9 @@ export function parseConversationRef(input: string): ConversationRef {
 // — `parseConversationRef(buildConversationUrl(ref))` returns `ref` back. The
 // conversation id should be the full Convex `_id` (not the 8-char short id) and
 // the message id the message's Convex `_id`, so the link resolves on the web and
-// in `cast read`.
-export function buildConversationUrl(ref: ConversationRef, base = "https://codecast.sh"): string {
-  const url = `${base.replace(/\/+$/, "")}/conversation/${ref.conversationId}`;
+// in `cast read`. The `/conversation/` route comes from the shared entity map so
+// a session is a session everywhere; the `#msg-` anchor is session-only.
+export function buildConversationUrl(ref: ConversationRef, base = CODECAST_BASE_URL): string {
+  const url = buildEntityUrl("session", ref.conversationId, base)!;
   return ref.messageId ? `${url}#msg-${ref.messageId}` : url;
 }
