@@ -36,6 +36,7 @@ import type * as data from "../data.js";
 import type * as debugTmp from "../debugTmp.js";
 import type * as decisions from "../decisions.js";
 import type * as deviceRouting from "../deviceRouting.js";
+import type * as deviceSettingsShared from "../deviceSettingsShared.js";
 import type * as devices from "../devices.js";
 import type * as dispatch from "../dispatch.js";
 import type * as docExtraction from "../docExtraction.js";
@@ -134,6 +135,7 @@ declare const fullApi: ApiFromModules<{
   debugTmp: typeof debugTmp;
   decisions: typeof decisions;
   deviceRouting: typeof deviceRouting;
+  deviceSettingsShared: typeof deviceSettingsShared;
   devices: typeof devices;
   dispatch: typeof dispatch;
   docExtraction: typeof docExtraction;

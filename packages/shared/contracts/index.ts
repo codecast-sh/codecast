@@ -8,3 +8,4 @@ export * from "./daemonCommands";
 export * from "./modelOptions";
 export * from "./workState";
 export * from "./apiErrorBanner";
+export * from "./snippets";
