@@ -523,7 +523,11 @@ export function LabelChipsRow({
             }
           }}
           title={`${hiddenCount + zeroHiddenCount} more — view all labels & projects`}
-          className="flex-shrink-0 px-1.5 py-0.5 rounded-full text-[10px] tabular-nums transition-colors border border-sol-border/50 bg-sol-bg/70 text-sol-text-dim hover:text-sol-text hover:border-sol-border"
+          // ml-auto pins the pill to the row's right edge: when chips don't fill
+          // the width, the slack opens up to its LEFT (chips stay clustered with
+          // the active-filter pin). Collapses to 0 when the row is full, so the
+          // overflow/narrow case is unchanged.
+          className="flex-shrink-0 ml-auto px-1.5 py-0.5 rounded-full text-[10px] tabular-nums transition-colors border border-sol-border/50 bg-sol-bg/70 text-sol-text-dim hover:text-sol-text hover:border-sol-border"
         >
           +{hiddenCount + zeroHiddenCount}
         </button>
