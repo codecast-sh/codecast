@@ -130,6 +130,9 @@ export const CLIENT_SYNC_REGISTRY = {
   drafts: {
     persistence: { kind: "meta", key: "drafts" },
   },
+  queuedMessages: {
+    persistence: { kind: "meta", key: "queuedMessages" },
+  },
   recentProjects: {
     persistence: { kind: "meta", key: "recentProjects" },
     hydration: { phase: "deferred" },

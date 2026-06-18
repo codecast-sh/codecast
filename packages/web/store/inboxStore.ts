@@ -1689,6 +1689,12 @@ interface InboxStoreState {
 
   drafts: Record<string, Record<string, any>>;
 
+  // Queued messages (Ctrl+Enter while the agent is busy): the texts waiting to
+  // be auto-sent when the agent next reaches "needs input". Persisted exactly
+  // like drafts (registered in CLIENT_SYNC_REGISTRY) so they survive navigation
+  // and reload — a user message must never be lost. Keyed by conversation id.
+  queuedMessages: Record<string, string[]>;
+
   // -- Inline review (quote / comment on assistant message blocks) --
   // Ephemeral UI state: which message is in keyboard/inline-review mode, the
   // highlighted block within it, and the batch of pending comments per
@@ -1907,6 +1913,10 @@ interface InboxStoreState {
   moveDraft: (fromId: string, toId: string) => void;
   clearDraft: (id: string) => void;
   clearDraftFinal: (id: string) => void;
+
+  // -- Queued messages --
+  getQueuedMessages: (id: string) => string[];
+  setQueuedMessagesFor: (id: string, list: string[]) => void;
 
   // -- Session ID resolution --
   resolveSessionId: (sessionId: string, convexId: string) => void;
@@ -2871,6 +2881,7 @@ export const useInboxStore = create<InboxStoreState>(
   clientStateInitialized: false,
 
   drafts: {},
+  queuedMessages: {},
 
   reviewMessageId: null,
   reviewActiveBlock: 0,
@@ -4366,6 +4377,27 @@ export const useInboxStore = create<InboxStoreState>(
       client_state: { _: { drafts: { [id]: null } } },
     }).catch(() => {});
   },
+
+  // =====================
+  // QUEUED MESSAGES
+  // =====================
+  // The texts a user queued (Ctrl+Enter) while the agent was busy, waiting to
+  // auto-send when it next reaches "needs input". Local-first like drafts:
+  // sync() writes the IDB-persisted record (no server dispatch), so they
+  // survive navigation and reload. The drain that actually sends them lives in
+  // MessageInput's idle watcher.
+
+  getQueuedMessages: (id: string) => {
+    return get().queuedMessages[id] ?? [];
+  },
+
+  setQueuedMessagesFor: sync(function (this: Draft, id: string, list: string[]) {
+    if (!list || list.length === 0) {
+      delete this.queuedMessages[id];
+    } else {
+      this.queuedMessages[id] = list;
+    }
+  }),
 
   // =====================
   // SESSION ID RESOLUTION
