@@ -648,7 +648,7 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp }: { shortId?
           onClick={closeNow}
           onMouseEnter={openSoon}
           onMouseLeave={closeSoon}
-          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-mono leading-[1.4] no-underline ${colors} border transition-colors cursor-pointer align-baseline`}
+          className={`not-prose inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-mono leading-[1.4] no-underline ${colors} border transition-colors cursor-pointer align-baseline`}
         >
           <span className="relative flex-shrink-0">
             {isSession && (session?.author_name || session?.author_avatar) ? (
