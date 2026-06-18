@@ -10,7 +10,7 @@ import { MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import {
   Settings, Keyboard, SlidersHorizontal, CircleUser, History, Rss, ListChecks,
   FileText, FolderGit2, CalendarClock, ArrowLeftRight, ScrollText, Globe, LogOut,
-  BookOpen, ExternalLink, Radio,
+  BookOpen, ExternalLink, Radio, Newspaper,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -208,6 +208,12 @@ export function UserMenu() {
               icon={BookOpen}
               label="Documentation"
               onClick={() => { setOpen(false); window.open("/documentation", "_blank", "noopener"); }}
+              trailing={<ExternalLink className="w-3.5 h-3.5 text-sol-text-dim" />}
+            />
+            <MenuItem
+              icon={Newspaper}
+              label="Changelog"
+              onClick={() => { setOpen(false); window.open("/changelog", "_blank", "noopener"); }}
               trailing={<ExternalLink className="w-3.5 h-3.5 text-sol-text-dim" />}
             />
           </div>

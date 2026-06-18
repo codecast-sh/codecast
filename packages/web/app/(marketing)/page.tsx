@@ -149,6 +149,9 @@ export default function LandingPage() {
             <Link href="/features" className="font-medium text-sm px-3 py-1.5 hidden sm:block transition-colors" style={{ color: '#657b83' }} onMouseEnter={e => (e.currentTarget.style.color = '#002b36')} onMouseLeave={e => (e.currentTarget.style.color = '#657b83')}>
               CLI
             </Link>
+            <Link href="/changelog" className="font-medium text-sm px-3 py-1.5 hidden sm:block transition-colors" style={{ color: '#657b83' }} onMouseEnter={e => (e.currentTarget.style.color = '#002b36')} onMouseLeave={e => (e.currentTarget.style.color = '#657b83')}>
+              Changelog
+            </Link>
             <Link href="/security" className="font-medium text-sm px-3 py-1.5 hidden sm:block transition-colors" style={{ color: '#657b83' }} onMouseEnter={e => (e.currentTarget.style.color = '#002b36')} onMouseLeave={e => (e.currentTarget.style.color = '#657b83')}>
               Security
             </Link>
@@ -872,6 +875,7 @@ export default function LandingPage() {
               <ul className="space-y-2 text-sm text-[#657b83]">
                 <li><Link href="/documentation" className="hover:text-[#073642]">Documentation</Link></li>
                 <li><Link href="/features" className="hover:text-[#073642]">CLI</Link></li>
+                <li><Link href="/changelog" className="hover:text-[#073642]">Changelog</Link></li>
                 <li><Link href="/download/mac" className="hover:text-[#073642]">Desktop App</Link></li>
                 <li><a href="https://apps.apple.com/app/id6757820850" target="_blank" rel="noopener noreferrer" className="hover:text-[#073642]">iOS App</a></li>
                 <li><Link href="/security" className="hover:text-[#073642]">Security</Link></li>

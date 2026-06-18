@@ -1,125 +1,103 @@
 # Changelog
 
-## v1.1.60 (2026-06-12)
+What we shipped, month by month. Newest first.
 
-Rollup of the v1.1.x series (March–June 2026).
+The rendered version lives at **[/changelog](https://codecast.sh/changelog)**.
+Both this file and the page read from one curated source,
+`packages/web/app/(marketing)/changelog/changelogData.ts`. To refresh after a
+release, run `node scripts/changelog-mine.mjs <YYYY-MM>` to see what shipped,
+then extend that file.
 
-**Sessions & Inbox**
-- Manual session labels: file sessions under your own labels, with label views in the inbox, CLI, and search
-- Stash/kill split — set a session aside without stopping its agent, or kill it outright (killed sessions stay resumable)
-- Model & effort control for new and running sessions, with per-message model tracking and inbox model badges
-- Claude Code account profiles: save logins once, switch instantly, revive limit-blocked sessions on another account
-- Kill & restart recovery for dead or wedged sessions, with verified message delivery and a retry affordance
-- Instant local-first conversation forking with fork chips and `cast tree`
-- Inbox navigation history, recently-viewed list, and tab keyboard shortcuts
+---
 
-**Conversation Viewer**
-- Inline review: quote and comment on assistant replies, batch comments in the composer
-- Markdown render cache and larger page windows — large conversations switch in under a second
-- Per-edit file change materialization with diff links
-- Context tags, @mentions, and doc references rendered as pills with hover previews
+## June 2026: Messaging, comments, and cast blame
+**v1.1.51 – v1.1.67 · Desktop v1.1.80**
 
-**Search, Profiles & Notifications**
-- Revamped search page with keyword and semantic modes
-- Public profile pages at `codecast.sh/<handle>` with activity feed, 180-day heatmap, timeline, and punchcard
-- Entity subscriptions: watch sessions, tasks, plans, or docs and get notified on activity
+This month we built for teams working together. You can message any session
+like a colleague, leave comments on a teammate's work in a side rail, and trace
+any line of code back to the conversation that wrote it with `cast blame`.
 
-**CLI**
-- `cast blame` — git-blame-compatible line-to-session attribution, plus a VS Code/Cursor extension and vim-fugitive integration
-- `cast sessions` — live work-state monitoring with `-w` streaming, matching the web inbox's needs-input semantics
-- `cast send` — session-to-session messaging
-- `cast accounts`, `cast resume --as`, `cast attach`, `cast workspace`, `cast remote`
-- Server-relayed `cast auth` for remote and SSH machines
-- Daemon self-heal restart, health checks, and incremental sync watermarks
+- **Message any session.** `cast send` reaches any session by its short id, old or active. It now routes team-wide, so you can reach a teammate's session too.
+- **`cast blame`.** A drop-in `git blame` whose author column is the session, and person, that wrote each line. Jump from a line to the conversation that produced it. Editor plugins for VS Code, Cursor, and vim-fugitive.
+- **Review and comments.** Quote and comment on an assistant's reply in a right-hand rail; comments stay visible. Inline comments on diff lines in document review.
+- **Organize the inbox.** A Favorites view, manual labels and buckets, and a stash that sets a session aside without stopping its agent.
+- **Reading long conversations.** Density modes collapse turns for skimming; large code blocks render faster; scroll holds steady across session switches.
+- **Faster and more reliable.** Typing no longer drops frames in big lists; user messages don't get dropped (the send queue re-drives on reconnect); per-message model tracking.
 
-**Platform**
-- Scheduled cloud agents page with device affinity and webhook triggers
-- Settings redesigned as an in-place modal
-- Desktop compose palette window and browser→desktop deep-link handoff
-- Mobile tasks tab, plan/task detail screens, push notification improvements
-- Sentry error tracking and PostHog product analytics
+## May 2026: Run sessions on any machine
+**v1.1.34 – v1.1.50 · Desktop v1.1.76**
 
-## v1.0.91 (2026-03-23)
+This month codecast started working across machines. Register a laptop, a cloud
+VM, or a throwaway sandbox, then send a session to whichever one has the code,
+and move a running session between them without losing context. We also spent
+the month hardening sync.
 
-**Web Dashboard**
-- Store refactor with generic list views and command palette overhaul
-- Responsive density controls for task and document panels
-- Error boundaries on all pages with detail split layouts
-- Full-text palette search and standalone compose mode
-- Compose focus and sidebar toggle keyboard shortcuts
+- **Devices and remote sessions.** A Devices settings page to register and manage machines; move an active session from laptop to cloud mid-flight; cloud sandbox and Mac-mini backends.
+- **Sync that recovers itself.** Status flags conversations that have stopped progressing and can repair them; wedged-terminal detection forces a clean restart; a delivery retry loop lands the message or lets you cancel.
+- **Inbox and triage.** Each card shows its terminal session and permission mode; permission-blocked agents show up in Needs Input; task search by query.
+- **Performance.** Heavy libraries load on demand and we precompress assets; the conversation view stops remounting on session switch; core data moved into a local-first cache.
 
-**Backend**
-- Multi-scope digest generation with team-scoped filtering
-- Task triage system with active/suggested/dismissed status
-- Team-scoped digest upsert fix for privacy isolation
+## April 2026: Workspaces, windows, and shared documents
+**v1.1.21 – v1.1.32 · Desktop v1.1.64**
 
-**CLI**
-- Codex app-server for dedicated Codex integration
-- TMux reliability improvements and session lifecycle fixes
-- Subagent description passthrough for session linking
+This month we added structure for bigger work: projects to group sessions,
+browser-style tabs, a window manager for working with sessions side by side,
+and documents that grew into a small knowledge base.
 
-**Desktop**
-- Palette-start-session IPC for compose flow integration
+- **Projects and workspaces.** Group sessions, tasks, and docs by project; switch inline; saved views.
+- **Tabs and windows.** A browser-style tab bar with keyboard shortcuts; multi-window support; tabs keep conversation state alive across switches.
+- **Documents and sharing.** Wiki-style backlinks and a sidebar tree; public share pages for docs and plans; `cast share` and `cast unshare`.
+- **Teams and notifications.** Per-teammate mute controls and notification-type toggles; one comment timeline on plans and docs; team onboarding.
+- **Under the hood.** The CLI now encrypts its auth token at rest (AES-256-GCM); a local message cache loads conversations right away; an HTTP hook server pushes agent status the moment it changes; large-display zoom defaults on desktop.
 
-## v1.0.88 (2026-03-18)
+## March 2026: Plans, workflows, and orchestration
+**v1.0.48 – v1.1.7 · first 1.1 desktop builds**
 
-**Web Dashboard**
-- 3-column layout with resizable SessionListSidebar and ConversationColumn
-- Collaborative document editor with TipTap, ProseMirror sync, and image upload
-- Creation modals for tasks, plans, and docs from sidebar
-- Entity mention autocomplete in message input with rich expansion
-- Shortcut registry with 35+ context-aware keyboard shortcuts
-- Dashboard redesign with project-scoped activity feeds
-- Unified document detail layout and plan page redesign
-- Profile pictures, keyboard nav for messages, doc markdown copy
+Our biggest month so far. We shipped plans and tasks to track multi-session
+work, workflows to chain agent steps and human approvals, and orchestration
+that runs a plan's tasks in parallel across agents. We rebuilt the web app on
+Vite and shipped a collaborative document editor.
 
-**Backend**
-- Plans as rich documents with body content and promote-to-plan flow
-- Conversation comment summaries, task-plan binding, image attachments
-- Entity linking and session insights for palette search
-- Sequential short ID generation for all entities
-- Stale daemon command expiry with 5-minute TTL
+- **Plans, tasks, and orchestration.** Plans with goals and acceptance criteria; tasks with priorities and dependencies; orchestration breaks a plan into tasks and runs them in parallel waves across agents, retrying failures.
+- **Workflows.** Graph-based templates of agent steps, shell commands, conditional branches, and human approval gates; run from the CLI, palette, or an @mention with live progress.
+- **The web app, rebuilt on Vite.** Faster builds; a Cmd+K command palette with full-text search; native desktop notifications that click through to a session.
+- **Collaborative documents.** A rich editor with @mentions, slash commands, images, and real-time sync; promote a plan body into a doc.
+- **Activity, profiles, and subscriptions.** Daily activity feeds with written summaries; profile pages with a 180-day heatmap; watch any entity for notifications.
+- **Self-hosted backend.** Moved to self-hosted infrastructure with daily backups, cutting latency and cost.
 
-**CLI**
-- Summarize tool calls in `cast read` output with `--full` hint
-- Workflow snippet, overview command, plan body support, task `--plan` binding
-- Agent session sync improvements and desktop notification hooks
-- Idle notification throttling and permission tool extraction
-- Session matching accuracy improvements
+## February 2026: Mobile, the inbox, and forking
+**v1.0.31 – v1.0.45 · first desktop build · Mobile v1.0 (App Store)**
 
-**Desktop**
-- Native macOS notifications with click-to-navigate
-- Auto-update mechanism with global command palette shortcuts
+This month we put codecast on more screens. The iOS app caught up to the web
+for reading and steering sessions, the first desktop build went out, and we
+added the inbox: one place that gathers every session waiting on you.
 
-## v1.0.86 (2026-03-10)
+- **The inbox.** One view of idle and waiting sessions, with defer/dismiss keyboard shortcuts and pinning.
+- **Mobile parity.** Full chat rendering on iOS including plans, tasks, and tool calls; camera and photo picker; over-the-air updates.
+- **Forking conversations.** Branch a conversation at any message into its own line; a tree panel and branch selector to navigate forks.
+- **Desktop debut and more agents.** The first native desktop build with a self-restarting daemon watchdog; Gemini CLI sessions recorded alongside Claude Code, Codex, and Cursor; remote control from the web.
 
-**Web Dashboard**
-- Session starting state with extended stuck banner
-- Arrow key jump-to-start/end in conversation navigation
+## January 2026: Memory, teams, and reliable sync
+**v1.0.2 – v1.0.26**
 
-**Backend**
-- Todo sync insight type and desktop dismissed field
+This month we made past sessions useful. The CLI can search your history,
+answer questions about it, and pull up relevant prior work before you start
+something new.
 
-**CLI**
-- Command deduplication and idle detection during session start
+- **Agent memory in the CLI.** `cast search` and `cast feed` find past work; `cast ask` answers natural-language questions; `cast context` pulls up relevant prior sessions; `cast handoff` / `summary` / `decisions` carry knowledge forward.
+- **Teams and sharing.** Belong to multiple teams and switch between them; choose what's visible to teammates down to individual messages; auto-share folders.
+- **GitHub integration.** Commits and pull requests flow in through webhooks; each session collects the files it touched and the PRs it produced.
+- **Reliable sync.** A ledger tracks every message with hourly reconciliation; a health command finds and repairs gaps; the daemon starts on login and restarts itself if it stalls.
 
-## v1.0.85 and earlier
+## December 2025: The first release
+**v1.0**
 
-**Workflows**
-- Visual workflow execution with human gates and free-form text input
-- Run detail permalink pages, gate badges in inbox
-- Primary conversation creation for workflow runs
-- Workflow runner with task context and variable injection
+This is the first release. We shipped a background daemon that watches your
+local session files and streams them to a shared backend as you work, plus a
+web dashboard to read them back. It works with Claude Code, Codex, and Cursor
+today.
 
-**Orchestration**
-- Wave-based parallel task execution across agents
-- Plan decomposition and automated orchestration
-- Retry handling with escalation logging
-- Drive rounds for iterative polish
-
-**Core**
-- Background daemon with multi-agent file watching
-- Real-time sync to self-hosted Convex backend
-- Full-text search with embeddings and vector similarity
-- Team sharing with directory-based auto-share rules
-- API key redaction and optional encryption
+- **The daemon.** Watches Claude Code, Codex, and Cursor session files and syncs them live, with a retry queue. We redact API keys before anything leaves your machine and hash project paths.
+- **The web dashboard.** Full conversations with syntax-highlighted code, collapsible tool calls, images, and diffs; global search; shareable links.
+- **Foundations.** Email/password accounts, private-by-default conversations with team sharing, project grouping, and a virtualized message list for huge conversations.
+- **Built to extend.** A tool registry that renders any agent tool, nested subagent conversations, token-usage tracking, and the warm light theme that sets the look of the app.
