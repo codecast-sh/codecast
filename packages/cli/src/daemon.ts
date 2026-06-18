@@ -389,6 +389,38 @@ function getPermissionFlags(agentType: "claude" | "codex" | "cursor" | "gemini",
   return null;
 }
 
+/**
+ * Build the launch args for a BLANK/fresh agent session (one with no transcript
+ * to resume): the user's configured base args plus the default permission flags
+ * (bypassPermissions by default), de-duplicated.
+ *
+ * Every blank-spawn path MUST funnel through here so a fresh session enters the
+ * SAME permission mode as start_session and auto-resume. A bare `claude` (no
+ * `--permission-mode`) inherits the project's own non-bypass default — which is
+ * `dontAsk`, i.e. silently deny every tool — and that reads to the user as "the
+ * thread started without bypass permissions, but only sometimes" (only when
+ * session creation routes through a blank-fallback path rather than the normal
+ * start/resume). jsonlBypass is always false here: there is no transcript.
+ */
+export function buildBlankLaunchArgs(
+  agentType: "claude" | "codex" | "cursor" | "gemini",
+  config: Config | null | undefined,
+): string[] {
+  const permFlags = getPermissionFlags(agentType, config);
+  if (agentType === "claude") {
+    const flags = combineClaudeResumeFlags(config?.claude_args, permFlags, false);
+    return flags ? flags.split(/\s+/).filter(Boolean) : [];
+  }
+  if (agentType === "codex") {
+    // getPermissionFlags already returns null when codex_args pins an approval
+    // flag, so concatenating can't double up.
+    const flags = [config?.codex_args || "", permFlags || ""].filter(Boolean).join(" ");
+    return flags ? flags.split(/\s+/).filter(Boolean) : [];
+  }
+  // cursor/gemini: no configured args or permission flags yet.
+  return [];
+}
+
 function resolveCodexApprovalPolicy(config?: Config | null): ApprovalPolicy {
   const flags = getPermissionFlags("codex", config);
   const codexArgs = config?.codex_args || "";
@@ -2822,23 +2854,16 @@ async function executeRemoteCommand(
             log(`[REMOTE] Starting blank ${blankAgentType} session in ${cwd}`);
             const shortId = Math.random().toString(36).slice(2, 8);
             const tmuxSession = `cc-${blankAgentType}-${shortId}`;
-            let blankBinary: string;
-            let extraFlags: string;
-            if (blankAgentType === "codex") {
-              blankBinary = "codex";
-              extraFlags = config.codex_args || "";
-            } else if (blankAgentType === "cursor") {
-              blankBinary = "cursor-agent";
-              extraFlags = "";
-            } else if (blankAgentType === "gemini") {
-              blankBinary = "gemini";
-              extraFlags = "";
-            } else {
-              blankBinary = "claude";
-              extraFlags = config.claude_args || "";
-            }
-            const blankArgs = extraFlags ? extraFlags.split(/\s+/).filter(Boolean) : [];
-            const safeBlankArgs = sanitizeBinaryArgs(blankArgs);
+            const blankBinary =
+              blankAgentType === "codex" ? "codex"
+              : blankAgentType === "cursor" ? "cursor-agent"
+              : blankAgentType === "gemini" ? "gemini"
+              : "claude";
+            // Inject the default permission flags exactly like start_session and
+            // auto-resume. Building from config args alone here launched a bare
+            // `claude` that fell into the project's dontAsk default — the agent
+            // came back stranded with every tool denied.
+            const safeBlankArgs = sanitizeBinaryArgs(buildBlankLaunchArgs(blankAgentType, config));
             const blankCmdText = `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT ${[blankBinary, ...safeBlankArgs].join(" ")}`;
             try {
               tmuxExecSync(["new-session", "-d", "-s", tmuxSession, "-c", cwd], { timeout: 5000 });
@@ -10321,9 +10346,11 @@ async function startFreshSessionForDelivery(
 
   const shortId = Math.random().toString(36).slice(2, 8);
   const tmuxSession = `cc-claude-${shortId}`;
-  let extraFlags = config?.claude_args || "";
-  const blankArgs = extraFlags ? extraFlags.split(/\s+/).filter(Boolean) : [];
-  const safeBlankArgs = sanitizeBinaryArgs(blankArgs);
+  // Same permission-flag injection as start_session / auto-resume — a delivery
+  // that spawns a fresh agent must enter bypass, not the project's dontAsk
+  // default (which silently denies every tool until the user manually opens
+  // permissions). This is the path that strands "started without bypass" threads.
+  const safeBlankArgs = sanitizeBinaryArgs(buildBlankLaunchArgs("claude", config));
   const blankCmdText = `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT ${["claude", ...safeBlankArgs].join(" ")}`;
 
   try {
