@@ -26,15 +26,16 @@ const urlCache = new Map<string, string | null>();
 // re-decodes.
 const loadedSrcs = new Set<string>();
 
-// Microtask-batched resolution queue.
+// Batched resolution queue.
 const pendingIds = new Set<string>();
 const waiters = new Map<string, Set<() => void>>();
 let flushScheduled = false;
+const RETRY_DELAY_MS = 1500;
 
-function scheduleFlush(convex: ReturnType<typeof useConvex>) {
+function scheduleFlush(convex: ReturnType<typeof useConvex>, delayMs = 0) {
   if (flushScheduled) return;
   flushScheduled = true;
-  queueMicrotask(async () => {
+  const run = async () => {
     flushScheduled = false;
     const ids = [...pendingIds];
     pendingIds.clear();
@@ -44,22 +45,41 @@ function scheduleFlush(convex: ReturnType<typeof useConvex>) {
         storageIds: ids,
       });
       for (const id of ids) urlCache.set(id, urls[id] ?? null);
+      for (const id of ids) {
+        const fns = waiters.get(id);
+        waiters.delete(id);
+        fns?.forEach((fn) => fn());
+      }
     } catch {
-      // Leave misses uncached so a later mount retries rather than caching a
-      // transient failure forever.
+      // Transient failure (backend blip / deploy): do NOT cache or fire waiters.
+      // Re-queue ids that still have a mounted consumer and retry on a delay, so
+      // the image self-heals instead of sticking on "Loading…" forever (the
+      // effect's deps don't change, so nothing else re-triggers resolution).
+      let anyLive = false;
+      for (const id of ids) {
+        if (waiters.get(id)?.size) {
+          pendingIds.add(id);
+          anyLive = true;
+        }
+      }
+      if (anyLive) scheduleFlush(convex, RETRY_DELAY_MS);
     }
-    for (const id of ids) {
-      const fns = waiters.get(id);
-      waiters.delete(id);
-      fns?.forEach((fn) => fn());
-    }
-  });
+  };
+  if (delayMs > 0) setTimeout(run, delayMs);
+  else queueMicrotask(run);
 }
 
-function requestUrl(convex: ReturnType<typeof useConvex>, storageId: string, onResolved: () => void) {
+// Register interest in a storage id. Returns an unsubscribe that drops this
+// waiter on unmount — so a failed-then-retrying id with no consumers left stops
+// retrying instead of looping forever.
+function requestUrl(
+  convex: ReturnType<typeof useConvex>,
+  storageId: string,
+  onResolved: () => void
+): () => void {
   if (urlCache.has(storageId)) {
     onResolved();
-    return;
+    return () => {};
   }
   pendingIds.add(storageId);
   let set = waiters.get(storageId);
@@ -69,6 +89,10 @@ function requestUrl(convex: ReturnType<typeof useConvex>, storageId: string, onR
   }
   set.add(onResolved);
   scheduleFlush(convex);
+  return () => {
+    set!.delete(onResolved);
+    if (set!.size === 0) waiters.delete(storageId);
+  };
 }
 
 /**
@@ -84,11 +108,12 @@ export function useStorageImageUrl(storageId: string | undefined | null): string
   useEffect(() => {
     if (!storageId || urlCache.has(storageId)) return;
     let cancelled = false;
-    requestUrl(convex, storageId, () => {
+    const unsubscribe = requestUrl(convex, storageId, () => {
       if (!cancelled) forceRender();
     });
     return () => {
       cancelled = true;
+      unsubscribe();
     };
   }, [storageId, convex]);
 
