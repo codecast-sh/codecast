@@ -494,9 +494,59 @@ export const listDevices = query({
         last_seen: d.last_seen,
         is_remote: d.is_remote ?? false,
         local_project_roots: d.local_project_roots ?? [],
+        settings: d.settings ?? undefined,
         online: now - d.last_seen < ONLINE_MS,
       }))
       .sort((a: any, b: any) => b.last_seen - a.last_seen);
+  },
+});
+
+/**
+ * Web Settings page toggled an agent-feature snippet for one device. Enqueue a
+ * device-targeted `apply_snippet` command (the daemon runs `cast install <slug>`
+ * / `--disable` locally, then heartbeats the new state back) and optimistically
+ * patch the device's `settings` so every viewer reflects the toggle instantly —
+ * the next heartbeat reconciles to the device's real state either way.
+ *
+ * The command carries a 5-min TTL, so a toggle only "lands" on a device that
+ * comes online within that window; the web gates toggles on `device.online`.
+ * `snippet: "stable"` maps enabled→solo / disabled→off (the daemon's
+ * `cast install stable [--disable]`); team mode stays a CLI choice.
+ */
+export const setDeviceSnippet = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    device_id: v.string(),
+    snippet: v.string(),
+    enabled: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication required");
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", args.device_id))
+      .first();
+    if (!device) throw new Error("Unknown device");
+
+    const commandId = await ctx.db.insert("daemon_commands", {
+      user_id: userId,
+      command: "apply_snippet" as const,
+      args: JSON.stringify({ snippet: args.snippet, enabled: args.enabled }),
+      created_at: Date.now(),
+      target_device_id: args.device_id,
+    });
+
+    // Optimistic mirror: keep the daemon as source of truth, but show the toggle
+    // immediately rather than waiting a heartbeat cycle.
+    const prev = (device as any).settings ?? {};
+    const next =
+      args.snippet === "stable"
+        ? { ...prev, stable_mode: args.enabled ? "solo" : "off" }
+        : { ...prev, snippets: { ...(prev.snippets ?? {}), [args.snippet]: args.enabled } };
+    await ctx.db.patch(device._id, { settings: next });
+
+    return { command_id: commandId };
   },
 });
 
