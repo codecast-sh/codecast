@@ -817,15 +817,18 @@ pre[class*="language-"] {
   animation: slideInRight 0.2s ease-out;
 }
 
+/* --row-h is set from JS (undoActions.ts) to the row's measured height just
+   before the class is applied, so the collapse spans the real content — a single
+   card or a parent plus its subagent rows — instead of a hardcoded cap. */
 @keyframes sessionEnter {
   from {
     opacity: 0;
-    max-height: 0;
+    height: 0;
     transform: translateY(-6px);
   }
   to {
     opacity: 1;
-    max-height: 80px;
+    height: var(--row-h, 80px);
     transform: translateY(0);
   }
 }
@@ -833,13 +836,12 @@ pre[class*="language-"] {
 @keyframes sessionDismiss {
   from {
     opacity: 1;
-    max-height: 80px;
+    height: var(--row-h, 80px);
   }
   to {
     opacity: 0;
-    max-height: 0;
+    height: 0;
     transform: translateY(-6px);
-    border-color: transparent;
   }
 }
 
