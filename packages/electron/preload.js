@@ -21,6 +21,17 @@ ipcRenderer.on("deep-link", (_e, url) => {
   else deepLinkBuffer.push(url);
 });
 
+// Update status can fire during cold start, before the page's React handler has
+// subscribed. Keep the latest one and replay it on subscribe so the banner
+// never misses a download that already progressed or finished (same reasoning
+// as the deep-link buffer above, but we only care about the most recent state).
+let updateStatusHandler = null;
+let lastUpdateStatus = null;
+ipcRenderer.on("update-status", (_e, status) => {
+  lastUpdateStatus = status;
+  if (updateStatusHandler) updateStatusHandler(status);
+});
+
 contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   getVersion: () => ipcRenderer.invoke("get-app-version"),
   setBadgeCount: (count) => ipcRenderer.invoke("set-badge-count", count),
@@ -34,9 +45,11 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
     }
   },
   onUpdateStatus: (cb) => {
-    ipcRenderer.on("update-status", (_e, status) => cb(status));
+    updateStatusHandler = cb;
+    if (lastUpdateStatus) cb(lastUpdateStatus);
   },
   restartForUpdate: () => ipcRenderer.invoke("restart-for-update"),
+  checkForUpdate: (opts) => ipcRenderer.invoke("check-for-update", opts),
   showNotification: (title, body, data) => ipcRenderer.invoke("show-notification", { title, body, data }),
   getShortcuts: () => ipcRenderer.invoke("get-shortcuts"),
   setShortcut: (key, accelerator) => ipcRenderer.invoke("set-shortcut", key, accelerator),
