@@ -87,6 +87,7 @@ const Privacy = lazy(() => import("@/app/(marketing)/privacy/page"));
 const Security = lazy(() => import("@/app/(marketing)/security/page"));
 const Support = lazy(() => import("@/app/(marketing)/support/page"));
 const Terms = lazy(() => import("@/app/(marketing)/terms/page"));
+const Changelog = lazy(() => import("@/app/(marketing)/changelog/page"));
 
 // Auth
 const Login = lazy(() => import("@/app/login/page"));
@@ -176,6 +177,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "security", component: cast(Security), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "support", component: cast(Support), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "terms", component: cast(Terms), layout: "marketing", guestOk: true, guestKind: "public" },
+  { path: "changelog", component: cast(Changelog), layout: "marketing", guestOk: true, guestKind: "public" },
 
   // -- Auth (bare routes, no AuthGuard → public) --
   { path: "login", component: cast(Login), layout: "auth", guestOk: true, guestKind: "public" },

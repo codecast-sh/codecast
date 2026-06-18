@@ -18,6 +18,7 @@ const Privacy = lazy(() => import("@/app/(marketing)/privacy/page"));
 const Security = lazy(() => import("@/app/(marketing)/security/page"));
 const Support = lazy(() => import("@/app/(marketing)/support/page"));
 const Terms = lazy(() => import("@/app/(marketing)/terms/page"));
+const Changelog = lazy(() => import("@/app/(marketing)/changelog/page"));
 
 const Login = lazy(() => import("@/app/login/page"));
 const Signup = lazy(() => import("@/app/signup/page"));
@@ -119,6 +120,7 @@ export function App() {
               <Route path="security" element={<E name="Security"><Security /></E>} />
               <Route path="support" element={<E name="Support"><Support /></E>} />
               <Route path="terms" element={<E name="Terms"><Terms /></E>} />
+              <Route path="changelog" element={<E name="Changelog"><Changelog /></E>} />
             </Route>
 
             {/* Auth */}

@@ -36,7 +36,7 @@ armChunkReloadGuardReset();
 // who almost certainly won't enter the app (no auth, on a marketing path).
 idle(() => {
   const path = window.location.pathname;
-  const onAppPath = !/^\/($|about|features|documentation|privacy|security|support|terms|login|signup|forgot-password|reset-password)(\/|$)/.test(path);
+  const onAppPath = !/^\/($|about|features|documentation|changelog|privacy|security|support|terms|login|signup|forgot-password|reset-password)(\/|$)/.test(path);
   const hasAuth = (() => {
     try {
       for (let i = 0; i < localStorage.length; i++) {

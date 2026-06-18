@@ -283,6 +283,9 @@ export default function DocsPage() {
             <Link href="/security" className="font-medium text-sm px-3 py-1.5 hidden sm:block" style={{ color: SOL.base00 }}>
               Security
             </Link>
+            <Link href="/changelog" className="font-medium text-sm px-3 py-1.5 hidden sm:block" style={{ color: SOL.base00 }}>
+              Changelog
+            </Link>
             <Link href="/signup">
               <Button className="font-medium text-white text-sm" style={{ backgroundColor: SOL.base03 }}>
                 Get started
