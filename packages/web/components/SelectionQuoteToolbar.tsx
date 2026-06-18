@@ -7,6 +7,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { createReviewComment } from "../lib/reviewActions";
+import { quoteUnitAt } from "../lib/quoteUnits";
 
 type Anchor = { x: number; y: number; messageId: string; blockIndex: number; quote: string };
 
@@ -27,13 +28,12 @@ function resolveSelection(): Anchor | null {
   const messageId = msgEl?.id?.slice(4);
   if (!messageId) return null;
 
-  // Which top-level block does the selection start in? Blocks are the direct
-  // children of the .cc-content column (the region is a flex row of content|rail).
+  // Which quote unit does the selection start in? Units are the top-level blocks
+  // of the .cc-content column, with lists expanded per <li> — see lib/quoteUnits.
+  // The hover handle resolves the same way, so selection and hover indices agree.
   const contentEl = region.querySelector(":scope > .cc-content") as HTMLElement | null;
   if (!contentEl) return null;
-  let blockEl: HTMLElement | null = anchorEl;
-  while (blockEl && blockEl.parentElement !== contentEl) blockEl = blockEl.parentElement;
-  const blockIndex = blockEl ? Math.max(0, Array.from(contentEl.children).indexOf(blockEl)) : 0;
+  const blockIndex = quoteUnitAt(contentEl, anchorEl)?.index ?? 0;
 
   const rect = range.getBoundingClientRect();
   if (!rect || (rect.width === 0 && rect.height === 0)) return null;
