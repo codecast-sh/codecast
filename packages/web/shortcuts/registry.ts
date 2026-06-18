@@ -10,7 +10,7 @@ export type ShortcutAction =
   | 'session.kill'
   | 'session.deferAdvance'
   | 'session.create'
-  | 'session.createIsolated'
+  | 'session.compose'
   | 'session.rename'
   | 'session.mruSwitch'
   | 'tab.new'
@@ -121,8 +121,8 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'ctrl+backspace', action: 'session.stash', skipInputCheck: 'whenEmpty', description: 'Stash session (keep agent running)' },
   { key: 'ctrl+shift+backspace', action: 'session.kill', skipInputCheck: 'whenEmpty', description: 'Kill session' },
   { key: 'shift+backspace', action: 'session.deferAdvance', skipInputCheck: 'whenEmpty', description: 'Defer and advance' },
-  { key: 'ctrl+n', action: 'session.create', skipInputCheck: true, description: 'New session' },
-  { key: 'ctrl+shift+n', action: 'session.createIsolated', skipInputCheck: true, description: 'New isolated session' },
+  { key: 'ctrl+n', action: 'session.create', skipInputCheck: true, description: 'New session (full)' },
+  { key: 'ctrl+shift+n', action: 'session.compose', skipInputCheck: true, description: 'Quick compose (palette)' },
   { key: 'ctrl+shift+e', action: 'session.rename', skipInputCheck: true, description: 'Rename session' },
   { key: 'ctrl+tab', action: 'session.mruSwitch', skipInputCheck: true, description: 'Switch session (MRU)' },
 

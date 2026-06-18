@@ -20,7 +20,6 @@ import { NotificationBell } from "./NotificationBell";
 import { TeamAvatarBar } from "./TeamAvatarBar";
 import { TeamSwitcher } from "./TeamSwitcher";
 import { ErrorBoundary } from "./ErrorBoundary";
-import { soundNewSession } from "../lib/sounds";
 import { subscribeComposeOptimistic } from "../lib/composeBridge";
 import { NEW_SESSION_EVENT } from "../lib/utils";
 import { Plus, PanelLeft, PanelRight } from "lucide-react";
@@ -202,8 +201,6 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     const z = zoomRef.current;
     setZoomHeight(z === 1 ? '100vh' : `calc(100vh / ${z})`);
   }, []);
-
-  const createQuickSession = useMutation(api.conversations.createQuickSession);
 
   useMountEffect(() => {
     setDesktopClass(desktopHeaderClass());
@@ -396,39 +393,52 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // the popup". Reading the action straight off the store keeps it stable.
   const openCompose = useInboxStore((st) => st.openCompose);
 
-  const handleQuickCreateIsolated = useCallback(async () => {
+  // Ctrl+N opens a FULL new session in the main window (not the modal): seed a
+  // DEFERRED blank session and navigate to it. The conversation route renders the
+  // same NewSessionView for the empty timeline, and the first send self-heals the
+  // stub into a real conversation (awaitConvexId → ensureSessionCreated → rekey),
+  // so no eager create — and therefore no "create" sound — until the user sends.
+  // deferCreate + reuse means an abandoned (never-sent) open strands nothing:
+  // repeated Ctrl+N converges on the one blank for this project+agent, which the
+  // ghost sweep reaps. Isolated lives as a toggle inside NewSessionView, so it's
+  // reachable here too without a separate eager-create path. Project can be empty
+  // (the null-state ProjectSwitcher lets the user pick before sending).
+  const handleNewFullSession = useCallback(() => {
     const { path, gitRoot, agentType: rawAgent } = resolveNewSessionContext();
-    if (!path) {
-      // No directory to isolate from — open the popup so the user can pick a
-      // project (and flip the isolated toggle) there.
-      openCompose();
-      return;
-    }
-    soundNewSession();
     const agentType = (rawAgent || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
-    const conversationId = await createQuickSession({
-      agent_type: agentType,
-      project_path: path,
-      git_root: gitRoot || path,
-      isolated: true,
-    });
     const store = useInboxStore.getState();
+    const { stubId } = store.beginOptimisticSession({
+      agentType,
+      projectPath: path,
+      gitRoot: gitRoot || path || undefined,
+      deferCreate: true,
+      reuse: true,
+      create: (sid) => store.createSession({
+        agent_type: agentType,
+        project_path: path,
+        git_root: gitRoot || path || undefined,
+        session_id: sid,
+      }),
+    });
     if (isOnInboxPage || isOnConversationPage) {
-      store.setCurrentSession(conversationId as string);
+      store.setCurrentSession(stubId);
     } else if (store.sidePanelOpen) {
-      useInboxStore.setState({ sidePanelSessionId: conversationId as string });
+      useInboxStore.setState({ sidePanelSessionId: stubId });
     } else {
-      router.push(`/conversation/${conversationId}?focus=1`);
+      router.push(`/conversation/${stubId}?focus=1`);
     }
-  }, [resolveNewSessionContext, router, isOnInboxPage, isOnConversationPage, createQuickSession, openCompose]);
+  }, [resolveNewSessionContext, router, isOnInboxPage, isOnConversationPage]);
 
-  // Bridge for the Electron global "New Session" shortcut / tray / dock / app
-  // menu (fired via the NEW_SESSION_EVENT DOM event / __CODECAST_NEW_SESSION).
-  // It does exactly what the in-app Ctrl+N does: open the new-session compose
-  // popup. openCompose is a stable store action, so the once-mounted listener can
-  // call it directly — no ref needed.
+  // Bridge for the Electron "New Session" affordances (the palette's "open full"
+  // hand-off, the app menu / dock / tray) — fired via the NEW_SESSION_EVENT DOM
+  // event / __CODECAST_NEW_SESSION. Like Ctrl+N, this opens the FULL new session
+  // in the main window (not the modal). handleNewFullSession closes over the
+  // router + route flags, so the once-mounted listener calls it through a ref
+  // kept current each render.
+  const newFullSessionRef = useRef(handleNewFullSession);
+  newFullSessionRef.current = handleNewFullSession;
   useMountEffect(() => {
-    const open = () => useInboxStore.getState().openCompose();
+    const open = () => newFullSessionRef.current();
     (window as any).__CODECAST_NEW_SESSION = open;
     window.addEventListener(NEW_SESSION_EVENT, open);
     return () => {
@@ -490,11 +500,12 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   useShortcutContext('desktop', isDesktopApp);
   const switcherState = useSessionSwitcher();
 
-  useShortcutAction('session.create', openCompose);
+  // Ctrl+N → full session in the main window; Ctrl+Shift+N → the compose palette
+  // (modal overlay here; the always-on-top window on desktop). Isolated-worktree
+  // creation lives as a toggle inside that compose surface.
+  useShortcutAction('session.create', handleNewFullSession);
 
-  useShortcutAction('session.createIsolated', useCallback(() => {
-    handleQuickCreateIsolated();
-  }, [handleQuickCreateIsolated]));
+  useShortcutAction('session.compose', openCompose);
 
   useShortcutAction('zoom.in', useCallback(() => {
     const r = Math.round(Math.min(zoomRef.current + 0.1, 2) * 10) / 10;
