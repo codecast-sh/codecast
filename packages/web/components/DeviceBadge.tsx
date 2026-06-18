@@ -25,6 +25,12 @@ export type Device = {
   last_seen: number;
   is_remote: boolean;
   local_project_roots: string[];
+  /** Installed agent-feature snippets (by slug) + stable mode, heartbeat-reported. */
+  settings?: {
+    snippets?: Record<string, boolean>;
+    stable_mode?: "solo" | "team" | "off";
+    stable_global?: boolean;
+  };
   online: boolean;
 };
 
