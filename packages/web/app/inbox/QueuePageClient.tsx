@@ -268,6 +268,15 @@ export function QueuePageClient() {
 
   // Select session from URL param -- only when the param actually changes
   const paramSessionId = searchParams.get("s") || null;
+  // Whether this tab's `?s=` target is already in the local cache. Used as the
+  // re-assert effect's dependency INSTEAD of the whole `sessions` object: that
+  // object gets a fresh reference on every daemon heartbeat (~4s, the only inbox
+  // channel that re-runs on heartbeats), and depending on it made the effect
+  // below re-fire constantly — snapping the view back to a stale `?s=` every few
+  // seconds. A boolean only flips when the target appears/disappears, so the
+  // effect now runs on the events that actually matter: param change, tab
+  // activation, or the target loading in.
+  const paramSessionLoaded = paramSessionId != null && !!sessions[paramSessionId];
   // Drives global view state from THIS tab's ?s= param — but only while this is
   // the active tab (a background tab must never reach into global state). It also
   // doubles as the activation handler: when a backgrounded tab is brought
@@ -278,7 +287,7 @@ export function QueuePageClient() {
     const store = useInboxStore.getState();
     const paramChanged = paramSessionId !== lastAppliedParamId.current;
     if (!paramChanged && store.currentSessionId === paramSessionId) return;
-    if (Object.keys(sessions).length === 0 && !clientStateInitialized) return;
+    if (Object.keys(store.sessions).length === 0 && !clientStateInitialized) return;
     lastAppliedParamId.current = paramSessionId;
     if (paramChanged) {
       // Consume any pending highlight/scroll from the store (set by ConversationPageClient redirect)
@@ -291,7 +300,7 @@ export function QueuePageClient() {
         useInboxStore.setState({ pendingScrollToMessageId: null });
       }
     }
-    if (sessions[paramSessionId]) {
+    if (store.sessions[paramSessionId]) {
       if (store.showMySessions) setShowMySessions(false);
       navigateToSession(paramSessionId);
       setPendingInjectId(null);
@@ -299,7 +308,7 @@ export function QueuePageClient() {
     } else {
       setPendingInjectId(paramSessionId);
     }
-  }, [paramSessionId, sessions, navigateToSession, clientStateInitialized, isActiveTab, setShowMySessions]);
+  }, [paramSessionId, paramSessionLoaded, navigateToSession, clientStateInitialized, isActiveTab, setShowMySessions]);
 
   // Once we have the conversation data, inject it into the queue
   useWatchEffect(() => {
