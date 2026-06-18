@@ -46,9 +46,21 @@ export function quoteUnitAt(
   return null;
 }
 
-// Vertical offset (px) of a unit's top edge relative to the content column's top.
-// Measured via bounding rects (not offsetTop) so it's correct for a nested <li>,
-// whose offsetParent isn't guaranteed to be `.cc-content`.
+// Vertical offset (px) of a unit's top edge relative to the content column's top,
+// in LAYOUT space — summed up the offsetParent chain rather than read from
+// getBoundingClientRect. This matters under browser zoom (Cmd +/-): bounding rects
+// report screen coordinates already multiplied by the zoom factor, but the inline
+// `top` we set is in the element's own unscaled layout space (the browser scales it
+// again to paint), so a rect value would apply the zoom twice and strand the handle.
+// offsetTop lives in the same layout space as that `top`, so it stays aligned at any
+// zoom. Summing the chain also keeps it correct for a nested <li> whose offsetParent
+// is some positioned wrapper rather than `.cc-content` itself.
 export function unitTop(content: HTMLElement, el: HTMLElement): number {
-  return Math.round(el.getBoundingClientRect().top - content.getBoundingClientRect().top);
+  let top = 0;
+  let node: HTMLElement | null = el;
+  while (node && node !== content) {
+    top += node.offsetTop;
+    node = node.offsetParent as HTMLElement | null;
+  }
+  return top;
 }
