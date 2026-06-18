@@ -76,7 +76,7 @@ const api = _typedApi as any;
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { DeviceBadge, RunOnDeviceItems } from "./DeviceBadge";
 import { PermissionStack } from "./PermissionCard";
-import { copyToClipboard, shareOrigin, canonicalUrl, matchesProjectQuery } from "../lib/utils";
+import { copyToClipboard, shareOrigin, matchesProjectQuery } from "../lib/utils";
 import { MarkdownRenderer, isMarkdownFile, isPlanFile, CollapsibleImage } from "./tools/MarkdownRenderer";
 import { OptionPreview } from "./tools/AskUserQuestionToolView";
 import { useImageGallery, ImageGalleryProvider } from "./ImageGallery";
@@ -12521,7 +12521,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button
-                      onClick={() => { copyToClipboard(canonicalUrl()).then(() => toast.success("Link copied")).catch(() => toast.error("Failed to copy")); }}
+                      onClick={() => { copyToClipboard(`${shareOrigin()}/conversation/${conversation?._id}`).then(() => toast.success("Link copied")).catch(() => toast.error("Failed to copy")); }}
                       className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors"
                     >
                       <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
