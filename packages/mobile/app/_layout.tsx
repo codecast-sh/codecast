@@ -17,7 +17,7 @@ import { useColorScheme } from '@/components/useColorScheme';
 import { convex } from '@/lib/convex';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
-import { initAnalytics, identifyUser, resetUser, Sentry } from '@/lib/analytics';
+import { initAnalytics, identifyUser, resetUser, wrapRoot } from '@/lib/analytics';
 import { api } from '@codecast/convex/convex/_generated/api';
 
 initAnalytics();
@@ -111,7 +111,7 @@ function RootLayout() {
   return <RootLayoutNav />;
 }
 
-export default Sentry.wrap(RootLayout);
+export default wrapRoot(RootLayout);
 
 function RootLayoutNav() {
   const colorScheme = useColorScheme();
