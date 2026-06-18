@@ -8067,6 +8067,14 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       URL.revokeObjectURL(img.previewUrl);
     });
     setPastedImages([]);
+    // Clear the ref synchronously too, exactly as the send clears
+    // `messageRef.current` alongside `setMessage("")`. saveDraftSnapshot reads
+    // this ref (not state) and runs on unmount / key-flip with sendingRef
+    // already reset to false — the compose popup unmounts the same tick it
+    // sends, before any re-render updates the ref, so a stale ref here would
+    // re-persist the just-sent images into the draft, which then rides rekeyId
+    // onto the new conversation and reappears attached in "send & open".
+    pastedImagesRef.current = [];
     setSelectedImageIndex(null);
     setLightboxImageIndex(null);
   }, [pastedImages]);
