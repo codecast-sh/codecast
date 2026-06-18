@@ -20,6 +20,16 @@
 		reverse_proxy {$CONVEX_SITE_UPSTREAM}
 	}
 
+	# Storage (port 3210, same upstream as backend): immutable image bytes gated only
+	# by an unguessable UUID URL. Override the backend's `private` Cache-Control so
+	# shared caches/CDNs can store one copy keyed by the URL.
+	handle /api/storage/* {
+		reverse_proxy {$CONVEX_BACKEND_UPSTREAM} {
+			header_down -Cache-Control
+			header_down Cache-Control "public, max-age=31536000, immutable"
+		}
+	}
+
 	# Everything else -> backend (port 3210): queries, mutations, subscriptions, deploy API
 	handle {
 		reverse_proxy {$CONVEX_BACKEND_UPSTREAM}
