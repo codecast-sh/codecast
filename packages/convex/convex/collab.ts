@@ -46,10 +46,13 @@ export async function hasGrantedSendAccess(
 //  - shared         → signed in, can co-write, must request before sending
 //  - anonymous      → not signed in; read-only until they sign in
 export const mySendAccess = query({
-  args: { conversation_id: v.id("conversations") },
+  // conversation_id is URL-derived; normalize so a legacy/malformed id reads as
+  // "denied" rather than failing v.id() arg validation. (See collabRequests.)
+  args: { conversation_id: v.string() },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
-    const conversation = await ctx.db.get(args.conversation_id);
+    const conversationId = ctx.db.normalizeId("conversations", args.conversation_id);
+    const conversation = conversationId ? await ctx.db.get(conversationId) : null;
     if (!conversation) return { level: "denied" as const };
 
     if (!userId) return { level: "anonymous" as const };
@@ -59,7 +62,7 @@ export const mySendAccess = query({
     if (access === "team") return { level: "team" as const };
     if (access !== "shared") return { level: "denied" as const };
 
-    const grant = await getGrant(ctx, args.conversation_id, userId);
+    const grant = await getGrant(ctx, conversation._id, userId);
     if (!grant) return { level: "shared" as const };
     return { level: grant.status as "requested" | "granted" | "denied" | "revoked", grant_id: grant._id };
   },
@@ -70,13 +73,16 @@ export const mySendAccess = query({
 // for an already-granted grantee. Pings the owner via the existing permission
 // notification so they're prompted even when not watching the conversation.
 export const requestSendAccess = mutation({
-  args: { conversation_id: v.id("conversations") },
+  // conversation_id is URL-derived; normalize so a malformed id surfaces as the
+  // handler's "Conversation not found" rather than an opaque v.id() arg error.
+  args: { conversation_id: v.string() },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Sign in to request send access");
 
-    const conversation = await ctx.db.get(args.conversation_id);
-    if (!conversation) throw new Error("Conversation not found");
+    const conversationId = ctx.db.normalizeId("conversations", args.conversation_id);
+    const conversation = conversationId ? await ctx.db.get(conversationId) : null;
+    if (!conversation || !conversationId) throw new Error("Conversation not found");
 
     const access = await checkConversationAccess(ctx, userId, conversation);
     if (access === "owner") return { level: "owner" as const };
@@ -88,7 +94,7 @@ export const requestSendAccess = mutation({
     const name = user?.name || user?.github_username || user?.email || "A teammate";
     const image = user?.image || user?.github_avatar_url;
 
-    const existing = await getGrant(ctx, args.conversation_id, userId);
+    const existing = await getGrant(ctx, conversationId, userId);
     if (existing?.status === "granted") return { level: "granted" as const, grant_id: existing._id };
 
     const now = Date.now();
@@ -104,7 +110,7 @@ export const requestSendAccess = mutation({
       grantId = existing._id;
     } else {
       grantId = await ctx.db.insert("collab_grants", {
-        conversation_id: args.conversation_id,
+        conversation_id: conversationId,
         grantee_user_id: userId,
         owner_user_id: conversation.user_id,
         status: "requested" as const,
@@ -120,9 +126,9 @@ export const requestSendAccess = mutation({
         event_type: "permission_request" as const,
         actor_user_id: userId,
         entity_type: "conversation" as const,
-        entity_id: args.conversation_id.toString(),
+        entity_id: conversationId.toString(),
         message: `${name} wants to send messages and run commands in this session`,
-        conversation_id: args.conversation_id,
+        conversation_id: conversationId,
         direct_recipient_id: conversation.user_id,
       });
     } catch {}
@@ -176,17 +182,25 @@ export const revokeSendAccess = mutation({
 // The owner's view of who has asked for / holds send access on this session.
 // Drives the inline approve/deny card and the "people who can send" list.
 export const collabRequests = query({
-  args: { conversation_id: v.id("conversations") },
+  // conversation_id comes straight from the URL, so a legacy UUID or otherwise
+  // malformed id would fail v.id() arg validation and surface as a server error
+  // before the handler can degrade gracefully. Accept a string and normalize —
+  // normalizeId returns null for anything that isn't a conversations id, so a
+  // bad id reads as "no requests". (Mirrors plans.get / docs.webGet.)
+  args: { conversation_id: v.string() },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
 
-    const conversation = await ctx.db.get(args.conversation_id);
+    const conversationId = ctx.db.normalizeId("conversations", args.conversation_id);
+    if (!conversationId) return [];
+
+    const conversation = await ctx.db.get(conversationId);
     if (!conversation || conversation.user_id.toString() !== userId.toString()) return [];
 
     const grants = await ctx.db
       .query("collab_grants")
-      .withIndex("by_conversation", (q: any) => q.eq("conversation_id", args.conversation_id))
+      .withIndex("by_conversation", (q: any) => q.eq("conversation_id", conversationId))
       .collect();
 
     return grants
