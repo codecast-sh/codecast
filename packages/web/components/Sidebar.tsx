@@ -7,6 +7,7 @@ import { useQuery, useMutation, useConvex } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { cleanTitle, msgCountColor } from "../lib/conversationProcessor";
+import { compressImage } from "../lib/compressImage";
 import { visitTimeAgo } from "../lib/recentVisits";
 import { getLabelColor } from "../lib/labelColors";
 import { shouldShowSession } from "../lib/sessionFilters";
@@ -90,8 +91,9 @@ function DroppableSessionRow({ conv, onMobileClose }: { conv: any; onMobileClose
     try {
       const storageIds: Id<"_storage">[] = [];
       for (const file of files) {
+        const uploaded = await compressImage(file);
         const uploadUrl = await generateUploadUrl({});
-        const result = await fetch(uploadUrl, { method: "POST", headers: { "Content-Type": file.type }, body: file });
+        const result = await fetch(uploadUrl, { method: "POST", headers: { "Content-Type": uploaded.type }, body: uploaded });
         const { storageId } = await result.json();
         storageIds.push(storageId);
       }
