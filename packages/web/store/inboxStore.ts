@@ -607,7 +607,9 @@ export type AppTab = {
 // unmounting the whole subtree (and the scroll position with it). So an inbox tab
 // whose live URL is a `/conversation/<id>` keeps the equivalent `/inbox?s=<id>`.
 export function stampedTabPath(tab: AppTab): string {
-  if (typeof window === "undefined") return tab.path;
+  // React Native defines `window` but not `window.location`, so guard on the
+  // actual API (a bare `typeof window` check sails through and then throws).
+  if (typeof window === "undefined" || !window.location) return tab.path;
   const live = window.location.pathname + window.location.search;
   const conv = window.location.pathname.match(/^\/conversation\/([^/?#]+)$/);
   if (conv && tab.path.split("?")[0] === "/inbox") return `/inbox?s=${conv[1]}`;
@@ -1636,6 +1638,11 @@ interface InboxStoreState {
   pendingNavigateId: string | null;
   renamingSessionId: string | null;
   pendingScrollToMessageId: string | null;
+  // The bookmarked message's known timestamp, carried alongside the scroll
+  // target so the conversation view can open the window AROUND it on first
+  // paint (the prefetched getMessagesAroundTimestamp is centered on this same
+  // value) instead of loading the live tail first and jumping afterward.
+  pendingScrollToMessageTimestamp: number | null;
   pendingHighlightQuery: string | null;
   showMySessions: boolean;
   setShowMySessions: (show: boolean) => void;
@@ -1848,6 +1855,7 @@ interface InboxStoreState {
     id: string,
     opts?: {
       scrollToMessageId?: string | null;
+      scrollToMessageTimestamp?: number | null;
       highlightQuery?: string | null;
       showMySessions?: boolean;
       source?: ViewNavSource;
@@ -2054,6 +2062,12 @@ interface InboxStoreState {
   teamUnreadCount: number | null;
   favorites: any[];
   bookmarks: any[];
+  // In-flight optimistic bookmark toggles, keyed by message_id → desired state.
+  // Memory-only (unregistered, so never persisted). The bookmarks list sync
+  // re-applies these on top of each server push and clears an entry once the
+  // server agrees, so an unrelated heartbeat re-push of listBookmarks can't
+  // revert a toggle before its own mutation has committed.
+  bookmarkPending: Record<string, { bookmarked: boolean; conversationId: string }>;
 
   // -- Selectors --
   getSession: (id: string) => InboxSession | undefined;
@@ -2462,7 +2476,32 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   teamMembers: { kind: "list" },
   teamUnreadCount: { kind: "scalar" },
   favorites: { kind: "list" },
-  bookmarks: { kind: "list" },
+  bookmarks: {
+    kind: "list",
+    // Local-first reconciliation: a list-kind sync wholesale-replaces the store,
+    // which would clobber an optimistic toggle whose own mutation hasn't
+    // committed yet (listBookmarks re-runs on any heartbeat that bumps a
+    // bookmarked conversation's updated_at). Re-apply each in-flight toggle on
+    // top of the server push; clear it once the server reflects the same state.
+    transform: (state: any, list: any) => {
+      const pending = state.bookmarkPending as Record<string, { bookmarked: boolean; conversationId: string }>;
+      const ids = pending ? Object.keys(pending) : [];
+      if (ids.length === 0) return;
+      const present = new Set((list as any[]).map((b) => b.message_id));
+      let next = state.bookmarks as any[];
+      for (const messageId of ids) {
+        const { bookmarked, conversationId } = pending[messageId];
+        if (present.has(messageId) === bookmarked) {
+          delete pending[messageId]; // server caught up — stop protecting
+          continue;
+        }
+        next = bookmarked
+          ? [{ _id: `temp_${messageId}`, conversation_id: conversationId, message_id: messageId, created_at: Date.now() }, ...next]
+          : next.filter((b) => b.message_id !== messageId);
+      }
+      state.bookmarks = next;
+    },
+  },
 };
 
 // Rename pending protection entries from oldId → newId so field
@@ -2771,6 +2810,7 @@ export const useInboxStore = create<InboxStoreState>(
   pendingNavigateId: null,
   renamingSessionId: null,
   pendingScrollToMessageId: null,
+  pendingScrollToMessageTimestamp: null,
   pendingHighlightQuery: null,
   showMySessions: false,
   setShowMySessions: (show: boolean) => set({ showMySessions: show, ...(show ? { showFavorites: false } : {}) }),
@@ -3306,8 +3346,14 @@ export const useInboxStore = create<InboxStoreState>(
   toggleBookmark: action(function (this: Draft, conversationId: string, messageId: string) {
     const list = this.bookmarks as any[];
     const idx = list.findIndex((b) => b.message_id === messageId);
+    const nowBookmarked = idx === -1;
     if (idx !== -1) list.splice(idx, 1);
-    else list.push({ _id: `temp_${Date.now()}`, conversation_id: conversationId, message_id: messageId, created_at: Date.now() });
+    // Prepend (not push) so a fresh bookmark lands at the top, matching the
+    // server's newest-first ordering — otherwise it would flash at the bottom
+    // until the next sync re-sorts it.
+    else list.unshift({ _id: `temp_${messageId}`, conversation_id: conversationId, message_id: messageId, created_at: Date.now() });
+    if (!this.bookmarkPending) this.bookmarkPending = {};
+    this.bookmarkPending[messageId] = { bookmarked: nowBookmarked, conversationId };
   }),
 
   // Notifications are a protected collection: the optimistic `read` flip is
@@ -3990,6 +4036,7 @@ export const useInboxStore = create<InboxStoreState>(
     id: string,
     opts?: {
       scrollToMessageId?: string | null;
+      scrollToMessageTimestamp?: number | null;
       highlightQuery?: string | null;
       showMySessions?: boolean;
       source?: ViewNavSource;
@@ -3998,6 +4045,7 @@ export const useInboxStore = create<InboxStoreState>(
     declareViewNav(opts?.source ?? "gesture");
     this.pendingNavigateId = id;
     if (opts && "scrollToMessageId" in opts) this.pendingScrollToMessageId = opts.scrollToMessageId ?? null;
+    if (opts && "scrollToMessageTimestamp" in opts) this.pendingScrollToMessageTimestamp = opts.scrollToMessageTimestamp ?? null;
     if (opts && "highlightQuery" in opts) this.pendingHighlightQuery = opts.highlightQuery ?? null;
     if (opts?.showMySessions === false) this.showMySessions = false;
   }),
@@ -4866,6 +4914,7 @@ export const useInboxStore = create<InboxStoreState>(
   teamUnreadCount: null,
   favorites: [],
   bookmarks: [],
+  bookmarkPending: {},
 
   // =====================
   // SELECTORS
