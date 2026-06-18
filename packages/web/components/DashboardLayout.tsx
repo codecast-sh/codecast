@@ -500,9 +500,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   useShortcutContext('desktop', isDesktopApp);
   const switcherState = useSessionSwitcher();
 
-  // Ctrl+N → full session in the main window; Ctrl+Shift+N → the compose palette
-  // (modal overlay here; the always-on-top window on desktop). Isolated-worktree
-  // creation lives as a toggle inside that compose surface.
+  // Ctrl+N / Ctrl+Shift+N → the compose palette (modal overlay here; the
+  // always-on-top window on desktop). Ctrl+Alt+N → a full new session in the main
+  // window. Isolated-worktree creation lives as a toggle inside the compose surface.
   useShortcutAction('session.create', handleNewFullSession);
 
   useShortcutAction('session.compose', openCompose);

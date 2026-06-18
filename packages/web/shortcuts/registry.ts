@@ -121,7 +121,8 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'ctrl+backspace', action: 'session.stash', skipInputCheck: 'whenEmpty', description: 'Stash session (keep agent running)' },
   { key: 'ctrl+shift+backspace', action: 'session.kill', skipInputCheck: 'whenEmpty', description: 'Kill session' },
   { key: 'shift+backspace', action: 'session.deferAdvance', skipInputCheck: 'whenEmpty', description: 'Defer and advance' },
-  { key: 'ctrl+n', action: 'session.create', skipInputCheck: true, description: 'New session (full)' },
+  { key: 'ctrl+n', action: 'session.compose', skipInputCheck: true, description: 'New session' },
+  { key: 'ctrl+alt+n', action: 'session.create', skipInputCheck: true, description: 'New session (full page)' },
   { key: 'ctrl+shift+n', action: 'session.compose', skipInputCheck: true, description: 'Quick compose (palette)' },
   { key: 'ctrl+shift+e', action: 'session.rename', skipInputCheck: true, description: 'Rename session' },
   { key: 'ctrl+tab', action: 'session.mruSwitch', skipInputCheck: true, description: 'Switch session (MRU)' },
@@ -239,7 +240,15 @@ export function matchShortcut(e: KeyboardEvent, def: ShortcutDef): boolean {
   const parsed = parseKeyCombo(combo);
   const eventKey = normalizeEventKey(e);
 
-  if (parsed.key !== eventKey) return false;
+  // macOS composes Option+<letter> into a special character or dead key (⌥N is the
+  // tilde dead key → e.key is "Dead"/"˜", never "n"), so an Alt chord can't be
+  // matched on e.key alone. e.code reports the physical key regardless of the
+  // composed glyph, so fall back to it for plain alphanumeric Alt chords.
+  let keyMatches = parsed.key === eventKey;
+  if (!keyMatches && parsed.alt && /^[a-z0-9]$/.test(parsed.key)) {
+    keyMatches = e.code === `Key${parsed.key.toUpperCase()}` || e.code === `Digit${parsed.key}`;
+  }
+  if (!keyMatches) return false;
   if (parsed.ctrl !== e.ctrlKey) return false;
   if (parsed.meta !== e.metaKey) return false;
   if (parsed.alt !== e.altKey) return false;
