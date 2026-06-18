@@ -85,7 +85,13 @@ type Message = {
 export function useConversationMessages(
   requestedConversationId: string,
   targetMessageId?: string,
-  highlightQuery?: string
+  highlightQuery?: string,
+  // The target message's already-known timestamp (e.g. from a bookmark row).
+  // When supplied, the around-window query can fire on the FIRST render —
+  // centered on this value, matching the hover/eager prefetch — instead of
+  // waiting a round-trip for getMessageTimestamp. That's what turns a bookmark
+  // click into a direct open of the right window rather than tail-then-jump.
+  targetTimestamp?: number
 ) {
   // Follow the optimistic-create rekey. When a stub conversation resolves to
   // its real Convex id, rekeyId deletes the stub rows in the same store
@@ -126,7 +132,7 @@ export function useConversationMessages(
       : "skip"
   );
 
-  const effectiveTargetTimestamp = targetMessageTimestamp?.timestamp ?? highlightMessageResult?.timestamp;
+  const effectiveTargetTimestamp = targetMessageTimestamp?.timestamp ?? targetTimestamp ?? highlightMessageResult?.timestamp;
   const highlightNotFound = !!(cleanedHighlightQuery && highlightMessageResult === null);
   const targetNotFound = !!(effectiveTargetMessageId && targetMessageTimestamp === null);
   const hasTarget = !!(
@@ -501,7 +507,11 @@ export function useConversationMessages(
   // Unified message list: store for normal mode, local state for target mode
   // =============================================
   const rawMessages: Message[] = targetMode
-    ? (targetAroundData?.messages ?? mergedMessages)
+    // Prefer the local target copy; before the init effect copies it over, read
+    // the live around-window query directly so a warm (prefetched) result paints
+    // the right window on the FIRST frame instead of the stale tail. Falls back
+    // to the cached store list only while the around-window is still loading.
+    ? (targetAroundData?.messages ?? aroundData?.messages ?? mergedMessages)
     : mergedMessages;
 
   // =============================================

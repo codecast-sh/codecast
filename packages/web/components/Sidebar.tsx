@@ -2,6 +2,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState, useMemo, useCallback, useRef, memo } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
+import { useWatchEffect } from "../hooks/useWatchEffect";
 import { toast } from "sonner";
 import { useQuery, useMutation, useConvex } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -364,8 +365,9 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   });
 
   const favoritesQuery = useQuery(api.conversations.listFavorites);
-  const bookmarksQuery = useQuery(api.bookmarks.listBookmarks);
-  const bookmarks = bookmarksQuery ?? useInboxStore.getState().bookmarks;
+  // Read bookmarks straight from the store (synced globally in useSyncInboxSessions)
+  // so an optimistic add/remove shows here instantly, with no round-trip.
+  const bookmarks = useInboxStore((s) => s.bookmarks);
   const [showAllBookmarks, setShowAllBookmarks] = useState(false);
   const convex = useConvex();
   const prefetchedBookmarksRef = useRef<Set<string>>(new Set());
@@ -386,6 +388,13 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
       .catch(() => prefetchedBookmarksRef.current.delete(bm._id));
     convex.query(api.conversations.getConversationWithMeta, { conversation_id: bm.conversation_id }).catch(() => {});
   }, [convex]);
+  // Precache the visible bookmarks up front (not just on hover) so the very
+  // first click — or keyboard activation — opens straight to the message
+  // window with no spinner. Deduped per bookmark, so list churn re-runs are free.
+  useWatchEffect(() => {
+    const visible = showAllBookmarks ? bookmarks : bookmarks.slice(0, 8);
+    for (const bm of visible) prefetchBookmark(bm);
+  }, [bookmarks, showAllBookmarks, prefetchBookmark]);
   const toggleBookmark = useInboxStore((s) => s.toggleBookmark);
   const openConversationId = useInboxStore((s) => s.currentSessionId);
   const allSavedViews = useInboxStore((s) => s.clientState.ui?.saved_views);
@@ -411,7 +420,6 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   useConvexSync(teamsQuery, useCallback((d: any) => useInboxStore.getState().syncTable("teams", d), []));
   useConvexSync(teamUnreadCountQuery, useCallback((d: any) => useInboxStore.getState().syncTable("teamUnreadCount", d), []));
   useConvexSync(favoritesQuery, useCallback((d: any) => useInboxStore.getState().syncTable("favorites", d), []));
-  useConvexSync(bookmarksQuery, useCallback((d: any) => useInboxStore.getState().syncTable("bookmarks", d), []));
   const { conversations } =
     useQuery(api.conversations.listConversations, {
       filter: "my",
@@ -693,7 +701,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
                         // Pair navigation + scroll target atomically so the inbox's
                         // pendingNavigateId watcher resolves them together (separate sets
                         // raced the cache-hit watcher, pinning scroll to the previous conv).
-                        store.requestNavigate(bm.conversation_id, { scrollToMessageId: bm.message_id });
+                        store.requestNavigate(bm.conversation_id, { scrollToMessageId: bm.message_id, scrollToMessageTimestamp: bm.message_timestamp });
                         const activeTab = store.tabs.find((t: any) => t.id === store.activeTabId);
                         if (activeTab) store.updateTab(activeTab.id, { path: "/inbox" });
                         if (!store.tabs.length) router.push("/inbox");

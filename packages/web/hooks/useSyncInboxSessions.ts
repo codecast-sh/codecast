@@ -100,6 +100,11 @@ export function useSyncInboxSessions() {
   const sessionLiveness = useQuery(api.conversations.sessionsLiveness, {});
   const clientState = useQuery(api.client_state.get, {});
   const currentUser = useQuery(api.users.getCurrentUser);
+  // Bookmarks sync lives here (not in the Sidebar) so the store's bookmarks
+  // list is populated wherever DashboardLayout mounts — the Sidebar AND every
+  // conversation-view bookmark toggle read their on/off state from this one
+  // local list, making toggles instant and consistent.
+  const bookmarks = useQuery(api.bookmarks.listBookmarks);
   const bgFetchingRef = useRef(new Set<string>());
   // message_count we'd be holding if we were caught up to the server, per
   // conversation. We warm the TAIL (newest page), so we always hold the newest
@@ -269,6 +274,10 @@ export function useSyncInboxSessions() {
   useConvexSync(currentUser, useCallback((data: any) => {
     useInboxStore.getState().syncTable("currentUser", data);
     lastUserSyncRef.current = Date.now();
+  }, []));
+
+  useConvexSync(bookmarks, useCallback((data: any) => {
+    useInboxStore.getState().syncTable("bookmarks", data);
   }, []));
 
   // Recovery heartbeat: a Convex subscription can silently stall after

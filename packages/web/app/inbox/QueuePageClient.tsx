@@ -25,7 +25,7 @@ import { toast } from "sonner";
 import { animatedHideSession } from "../../store/undoActions";
 import { cleanUserMessage } from "../../components/GlobalSessionPanel";
 
-const InboxConversation = memo(function InboxConversation({ sessionId: liveSessionId, isIdle, onSendAndAdvance, onSendAndDismiss, lastUserMessage, sessionError, onBack, targetMessageId, highlightQuery, onClearHighlight }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; onSendAndDismiss?: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string; highlightQuery?: string; onClearHighlight?: () => void }) {
+const InboxConversation = memo(function InboxConversation({ sessionId: liveSessionId, isIdle, onSendAndAdvance, onSendAndDismiss, lastUserMessage, sessionError, onBack, targetMessageId, targetTimestamp, highlightQuery, onClearHighlight }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; onSendAndDismiss?: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string; targetTimestamp?: number; highlightQuery?: string; onClearHighlight?: () => void }) {
   // Non-blocking switch: the heavy work of a session switch is mounting the new
   // conversation's message tree (every block keyed by msg._id unmounts/remounts,
   // re-parsing markdown). Defer the id the BODY renders from so a switch stays
@@ -50,7 +50,7 @@ const InboxConversation = memo(function InboxConversation({ sessionId: liveSessi
     jumpToTimestamp,
     effectiveTargetMessageId,
     isJumpingToTarget,
-  } = useConversationMessages(sessionId, targetMessageId);
+  } = useConversationMessages(sessionId, targetMessageId, undefined, targetTimestamp);
 
   const convCommand = useInboxStore((s) => s.convCommand);
   const setPrivacy = useInboxStore((s) => s.setPrivacy);
@@ -255,7 +255,7 @@ export function QueuePageClient() {
 
   // ID we're trying to navigate to that isn't yet in the queue
   const [pendingInjectId, setPendingInjectId] = useState<string | null>(null);
-  const [scrollTarget, setScrollTarget] = useState<{ sessionId: string; messageId: string } | null>(null);
+  const [scrollTarget, setScrollTarget] = useState<{ sessionId: string; messageId: string; timestamp?: number } | null>(null);
   const [activeHighlight, setActiveHighlight] = useState<string | undefined>(undefined);
 
   const shouldQueryDirect = pendingInjectId && isConvexId(pendingInjectId);
@@ -296,8 +296,8 @@ export function QueuePageClient() {
         useInboxStore.setState({ pendingHighlightQuery: null });
       }
       if (store.pendingScrollToMessageId) {
-        setScrollTarget({ sessionId: paramSessionId, messageId: store.pendingScrollToMessageId });
-        useInboxStore.setState({ pendingScrollToMessageId: null });
+        setScrollTarget({ sessionId: paramSessionId, messageId: store.pendingScrollToMessageId, timestamp: store.pendingScrollToMessageTimestamp ?? undefined });
+        useInboxStore.setState({ pendingScrollToMessageId: null, pendingScrollToMessageTimestamp: null });
       }
     }
     if (store.sessions[paramSessionId]) {
@@ -356,15 +356,17 @@ export function QueuePageClient() {
   // Handle store-based navigation (from CommandPalette, bookmarks, etc.)
   const pendingNavigateId = useInboxStore((s) => s.pendingNavigateId);
   const pendingScrollToMessageId = useInboxStore((s) => s.pendingScrollToMessageId);
+  const pendingScrollToMessageTimestamp = useInboxStore((s) => s.pendingScrollToMessageTimestamp);
   const pendingHighlightQuery = useInboxStore((s) => s.pendingHighlightQuery);
   useWatchEffect(() => {
     if (!pendingNavigateId) return;
     const scrollTarget = pendingScrollToMessageId;
+    const scrollTs = pendingScrollToMessageTimestamp;
     const highlight = pendingHighlightQuery;
-    useInboxStore.setState({ pendingNavigateId: null, pendingScrollToMessageId: null, pendingHighlightQuery: null, showMySessions: false });
+    useInboxStore.setState({ pendingNavigateId: null, pendingScrollToMessageId: null, pendingScrollToMessageTimestamp: null, pendingHighlightQuery: null, showMySessions: false });
     if (highlight) setActiveHighlight(highlight);
     if (scrollTarget) {
-      setScrollTarget({ sessionId: pendingNavigateId, messageId: scrollTarget });
+      setScrollTarget({ sessionId: pendingNavigateId, messageId: scrollTarget, timestamp: scrollTs ?? undefined });
     }
     if (sessions[pendingNavigateId]) {
       setPendingInjectId(null);
@@ -372,7 +374,7 @@ export function QueuePageClient() {
     } else {
       setPendingInjectId(pendingNavigateId);
     }
-  }, [pendingNavigateId, pendingScrollToMessageId, sessions, navigateToSession]);
+  }, [pendingNavigateId, pendingScrollToMessageId, pendingScrollToMessageTimestamp, sessions, navigateToSession]);
 
   // Consume pendingScrollToMessageId / pendingHighlightQuery on cache-hit navigation:
   // navigateToSession sets currentSessionId (or viewingDismissedId for a dismissed
@@ -390,13 +392,14 @@ export function QueuePageClient() {
     if (!viewSessionId) return;
     if (!pendingScrollToMessageId && !pendingHighlightQuery) return;
     const scrollTarget = pendingScrollToMessageId;
+    const scrollTs = pendingScrollToMessageTimestamp;
     const highlight = pendingHighlightQuery;
-    useInboxStore.setState({ pendingScrollToMessageId: null, pendingHighlightQuery: null });
+    useInboxStore.setState({ pendingScrollToMessageId: null, pendingScrollToMessageTimestamp: null, pendingHighlightQuery: null });
     if (highlight) setActiveHighlight(highlight);
     if (scrollTarget) {
-      setScrollTarget({ sessionId: viewSessionId, messageId: scrollTarget });
+      setScrollTarget({ sessionId: viewSessionId, messageId: scrollTarget, timestamp: scrollTs ?? undefined });
     }
-  }, [currentSessionId, viewingDismissedId, pendingNavigateId, pendingScrollToMessageId, pendingHighlightQuery]);
+  }, [currentSessionId, viewingDismissedId, pendingNavigateId, pendingScrollToMessageId, pendingScrollToMessageTimestamp, pendingHighlightQuery]);
 
   const prevSessionRef = useRef(currentSessionId);
   prevSessionRef.current = currentSessionId;
@@ -569,6 +572,7 @@ export function QueuePageClient() {
             sessionError={renderDismissedSession.session_error}
             onBack={handleBack}
             targetMessageId={scrollTarget?.sessionId === renderDismissedSession._id ? scrollTarget.messageId : undefined}
+            targetTimestamp={scrollTarget?.sessionId === renderDismissedSession._id ? scrollTarget.timestamp : undefined}
             highlightQuery={activeHighlight}
             onClearHighlight={handleClearHighlight}          />
         </ErrorBoundary>
@@ -583,6 +587,7 @@ export function QueuePageClient() {
             sessionError={renderSession.session_error}
             onBack={handleBack}
             targetMessageId={scrollTarget?.sessionId === renderSession._id ? scrollTarget.messageId : undefined}
+            targetTimestamp={scrollTarget?.sessionId === renderSession._id ? scrollTarget.timestamp : undefined}
             highlightQuery={activeHighlight}
             onClearHighlight={handleClearHighlight}          />
         </ErrorBoundary>
