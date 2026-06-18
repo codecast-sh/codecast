@@ -10457,18 +10457,34 @@ async function materializeSession(
   return promise;
 }
 
+// Map a storage object's Content-Type to a file extension. The extension must
+// match the actual bytes: clients now upload WebP (compressed) as well as the
+// PNG/JPEG they always have, and the agent that reads this file should see a
+// truthful extension rather than a blanket ".png" (which mislabeled every JPEG).
+function imageExtForContentType(contentType: string | null): string {
+  const ct = (contentType || "").toLowerCase();
+  if (ct.includes("webp")) return "webp";
+  if (ct.includes("jpeg") || ct.includes("jpg")) return "jpg";
+  if (ct.includes("gif")) return "gif";
+  return "png";
+}
+
 async function downloadImage(storageId: string, syncService: SyncService): Promise<string | null> {
-  const destPath = `/tmp/codecast/images/${storageId}.png`;
-  if (fs.existsSync(destPath)) return destPath;
+  const dir = "/tmp/codecast/images";
+  // A prior materialization may have used any extension — reuse it if present.
+  for (const ext of ["png", "webp", "jpg", "jpeg", "gif"]) {
+    const cached = `${dir}/${storageId}.${ext}`;
+    if (fs.existsSync(cached)) return cached;
+  }
 
   const imageUrl = await syncService.getClient().query("images:getImageUrl" as any, { storageId });
   if (!imageUrl) return null;
 
-  const dir = path.dirname(destPath);
   fs.mkdirSync(dir, { recursive: true });
 
   const resp = await fetch(imageUrl);
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  const destPath = `${dir}/${storageId}.${imageExtForContentType(resp.headers.get("content-type"))}`;
   fs.writeFileSync(destPath, Buffer.from(await resp.arrayBuffer()));
   return destPath;
 }

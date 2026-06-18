@@ -9,6 +9,7 @@ import { AppLoader } from "./AppLoader";
 import { ConversationData } from "./ConversationView";
 import { FormattedSummary } from "./FormattedSummary";
 import { sessionCardSummary } from "../lib/sessionSummary";
+import { compressImage } from "../lib/compressImage";
 import { useConversationMessages } from "../hooks/useConversationMessages";
 import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, categorizeSessions, partitionOldSessions, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, isSessionHidden, resolveSessionAuthor, convBucketMap, groupSessionsForLabelView, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem, BucketAssignmentItem } from "../store/inboxStore";
 import { isBlockedConversation, isSubagentConversation } from "@codecast/convex/convex/ccAccountsShared";
@@ -775,8 +776,9 @@ export const SessionCard = memo(function SessionCard({
     try {
       const storageIds: Id<"_storage">[] = [];
       for (const file of files) {
+        const uploaded = await compressImage(file);
         const uploadUrl = await generateUploadUrl({});
-        const result = await fetch(uploadUrl, { method: "POST", headers: { "Content-Type": file.type }, body: file });
+        const result = await fetch(uploadUrl, { method: "POST", headers: { "Content-Type": uploaded.type }, body: uploaded });
         const { storageId } = await result.json();
         storageIds.push(storageId);
       }

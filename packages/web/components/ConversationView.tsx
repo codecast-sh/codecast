@@ -13,6 +13,7 @@ import { createPortal } from "react-dom";
 import ReactMarkdownBase from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import { rehypeSearchHighlight } from "../lib/rehypeSearchHighlight";
+import { compressImage } from "../lib/compressImage";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isImportNotice, formatModel } from "../lib/conversationProcessor";
 import { classifyApiErrorBanner } from "@codecast/shared/contracts";
@@ -8091,11 +8092,14 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     });
     const promise = (async (): Promise<string | null> => {
       try {
+        // Shrink large pastes before they hit the wire (preview above already
+        // rendered from the original blob, so this stays invisible to the user).
+        const uploaded = await compressImage(file);
         const uploadUrl = await generateUploadUrl({});
         const result = await fetch(uploadUrl, {
           method: "POST",
-          headers: { "Content-Type": file.type },
-          body: file,
+          headers: { "Content-Type": uploaded.type },
+          body: uploaded,
         });
         if (!result.ok) throw new Error(`Upload failed: ${result.status} ${result.statusText}`);
         const { storageId } = await result.json();

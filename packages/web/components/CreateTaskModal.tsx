@@ -1,7 +1,8 @@
 import { useState, useCallback, useRef } from "react";
-import { useQuery, useMutation, useConvex } from "convex/react";
+import { useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
+import { useImageUpload } from "../hooks/useImageUpload";
 import { useWorkspaceArgs } from "../hooks/useWorkspaceArgs";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { AssigneeSelect } from "./AssigneeSelect";
@@ -202,8 +203,6 @@ function LabelsChip({ value, onChange }: { value: string[]; onChange: (v: string
 export function CreateTaskModal({ onClose, teamMembers, currentUser }: { onClose: () => void; teamMembers?: any[] | null; currentUser?: any }) {
   const createTask = useInboxStore((s) => s.createTask);
   const workspaceArgs = useWorkspaceArgs();
-  const convex = useConvex();
-  const generateUploadUrl = useMutation(api.images.generateUploadUrl);
 
   const [title, setTitle] = useState("");
   const descriptionRef = useRef("");
@@ -236,13 +235,8 @@ export function CreateTaskModal({ onClose, teamMembers, currentUser }: { onClose
     []
   );
 
-  const handleImageUpload = useCallback(async (file: File): Promise<string | null> => {
-    const uploadUrl = await generateUploadUrl({});
-    const result = await fetch(uploadUrl, { method: "POST", headers: { "Content-Type": file.type }, body: file });
-    const { storageId } = await result.json();
-    const url = await convex.query(api.images.getImageUrl, { storageId });
-    return url || null;
-  }, [generateUploadUrl, convex]);
+  // Shared uploader (handles client-side compression + storage round-trip).
+  const handleImageUpload = useImageUpload();
 
   const handleSubmit = useCallback(async () => {
     if (!title.trim()) return;

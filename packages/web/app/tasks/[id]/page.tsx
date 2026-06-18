@@ -1,6 +1,7 @@
 "use client";
 import { useState, useCallback, useRef } from "react";
 import { copyToClipboard, canonicalUrl } from "../../../lib/utils";
+import { compressImage } from "../../../lib/compressImage";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
@@ -447,8 +448,9 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
     const previewUrl = URL.createObjectURL(file);
     setCommentImages(prev => [...prev, { file, previewUrl, uploading: true }]);
     try {
+      const uploaded = await compressImage(file);
       const uploadUrl = await generateUploadUrl({});
-      const result = await fetch(uploadUrl, { method: "POST", headers: { "Content-Type": file.type }, body: file });
+      const result = await fetch(uploadUrl, { method: "POST", headers: { "Content-Type": uploaded.type }, body: uploaded });
       if (!result.ok) throw new Error(`Upload failed: ${result.status} ${result.statusText}`);
       const { storageId } = await result.json();
       setCommentImages(prev => prev.map(img => img.previewUrl === previewUrl ? { ...img, storageId, uploading: false } : img));
