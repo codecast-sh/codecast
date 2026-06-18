@@ -2120,6 +2120,7 @@ describe("inboxStore.beginOptimisticSession", () => {
       currentSessionId: null,
       pending: {},
       currentConversation: {},
+      isolatedWorktreeMode: false,
     });
   });
 
@@ -2308,6 +2309,44 @@ describe("inboxStore.beginOptimisticSession", () => {
       const { calls, done } = captureCreate(() => { useInboxStore.getState().createSessionFromStub("ghost", { agentType: "gemini", projectPath: "/fallback" }); });
       await done;
       expect(calls[0]).toMatchObject({ project_path: "/fallback", git_root: "/fallback", agent_type: "gemini", session_id: "ghost" });
+    });
+
+    // The "isolated worktree" toggle is a global mode (isolatedWorktreeMode); the
+    // create must fold it in so the daemon makes the git worktree up front. Before
+    // this, the toggle silently did nothing on a new session until a later project
+    // switch (reconfigureSession was the only path passing `isolated`).
+    it("createSessionFromStub forwards isolated when the worktree toggle is on", async () => {
+      useInboxStore.setState({
+        sessions: { stub1: { _id: "stub1", session_id: "stub1", project_path: "/repo", git_root: "/repo", agent_type: "claude_code", updated_at: 1, message_count: 0, is_idle: true, has_pending: false } as InboxSession },
+        isolatedWorktreeMode: true,
+      });
+      const { calls, done } = captureCreate(() => { useInboxStore.getState().createSessionFromStub("stub1"); });
+      await done;
+      expect(calls[0]).toMatchObject({ isolated: true, project_path: "/repo", session_id: "stub1" });
+    });
+
+    it("createSessionFromStub omits isolated when the worktree toggle is off", async () => {
+      useInboxStore.setState({
+        sessions: { stub1: { _id: "stub1", session_id: "stub1", project_path: "/repo", git_root: "/repo", agent_type: "claude_code", updated_at: 1, message_count: 0, is_idle: true, has_pending: false } as InboxSession },
+        isolatedWorktreeMode: false,
+      });
+      const { calls, done } = captureCreate(() => { useInboxStore.getState().createSessionFromStub("stub1"); });
+      await done;
+      expect(calls[0].isolated).toBeUndefined();
+    });
+
+    // The in-app new session (Ctrl+N) self-heals its stub through
+    // ensureSessionCreated, NOT the compose popup's materialize. Routing it through
+    // createSessionFromStub means isolated reaches that path too.
+    it("ensureSessionCreated forwards isolated through the self-heal create path", async () => {
+      useInboxStore.setState({
+        sessions: { stub2: { _id: "stub2", session_id: "stub2", project_path: "/repo", git_root: "/repo", agent_type: "claude_code", updated_at: 1, message_count: 0, is_idle: true, has_pending: false } as InboxSession },
+        isolatedWorktreeMode: true,
+      });
+      const { calls, done } = captureCreate(() => { useInboxStore.getState().ensureSessionCreated("stub2"); });
+      await done;
+      expect(calls.length).toBe(1);
+      expect(calls[0]).toMatchObject({ isolated: true, project_path: "/repo", session_id: "stub2" });
     });
 
     it("an abandoned (never-materialized) stub is prunable — Escape strands nothing", () => {
