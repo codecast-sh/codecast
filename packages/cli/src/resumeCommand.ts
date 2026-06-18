@@ -9,8 +9,14 @@ import {
 
 export const CLAUDE_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export const CLAUDE_AUTO_TRIM_THRESHOLD_TOKENS = 120_000;
-export const CLAUDE_AUTO_TRIM_TARGET_TOKENS = 100_000;
+// Single knob for how much of a long conversation survives reconstitution into a
+// local Claude session. THRESHOLD = "trim if the import is estimated above this";
+// TARGET = "trim down to roughly this". Sized to leave ~40k of headroom under a
+// 200k window (system prompt + tools + the first response), and far more on the
+// 1M-context models, while still keeping the session small enough that /compact
+// works. Every reconstitution/import/fork site imports these — don't redeclare.
+export const CLAUDE_AUTO_TRIM_THRESHOLD_TOKENS = 180_000;
+export const CLAUDE_AUTO_TRIM_TARGET_TOKENS = 160_000;
 export const CLAUDE_CONTEXT_LIMIT_TOKENS = 200_000;
 
 export interface RewriteSubagentJsonlResult {
