@@ -78,19 +78,43 @@ export function estimateClaudeImportTokens(data: ExportResult): number {
   return Math.ceil(total * 1.1);
 }
 
+/**
+ * A genuine human turn — text the person actually typed, not a tool-result
+ * carrier and not a synthetic import notice. These are the highest-signal,
+ * cheapest messages to keep when trimming a long import: they carry the human's
+ * intent across the whole conversation, so we surface every earlier one even
+ * when the bulk of the middle gets dropped. Mirrors the server's own first-user
+ * detection (conversations.ts: role==="user" && no tool_results && non-empty).
+ */
+export function isHumanInstruction(m: ExportedMessage): boolean {
+  if (m.role !== "user" || m.isMeta) return false;
+  if (m.tool_results && m.tool_results.length > 0) return false;
+  const text = m.content?.trim() ?? "";
+  return text.length > 0 && !text.startsWith(CODECAST_IMPORT_NOTICE_PREFIX);
+}
+
 export function chooseClaudeTailMessagesForTokenBudget(data: ExportResult, budgetTokens: number): number {
   if (budgetTokens <= 0) return 0;
   const messages = data.messages;
   if (messages.length === 0) return 0;
 
-  // Reserve a little space for the truncation notice + first user message.
-  const reserved = estimateTokensFromText(CODECAST_IMPORT_NOTICE_PREFIX) + 512;
+  // Reserve room for the import notice plus every earlier human instruction we
+  // prepend — those are surfaced no matter where the tail starts, so they come
+  // out of the budget first. Counting all of them (not just the ones before the
+  // eventual cutoff) is a safe over-estimate: it only shortens the tail slightly,
+  // it never overflows the window.
+  let reserved = estimateTokensFromText(CODECAST_IMPORT_NOTICE_PREFIX) + 512;
+  for (const m of messages) {
+    if (isHumanInstruction(m)) reserved += estimateTokensForMessage(m);
+  }
   const budget = Math.max(0, budgetTokens - reserved);
 
   let used = 0;
   let count = 0;
   for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const t = estimateTokensForMessage(messages[i]);
+    // Human instructions are already paid for in `reserved`; don't double-count
+    // the ones that fall inside the tail.
+    const t = isHumanInstruction(messages[i]) ? 0 : estimateTokensForMessage(messages[i]);
     if (count > 0 && used + t > budget) break;
     used += t;
     count += 1;
@@ -505,26 +529,33 @@ export function generateClaudeCodeJsonl(
   let messages = data.messages;
   const tailMessages = typeof options.tailMessages === "number" ? options.tailMessages : undefined;
   if (tailMessages && tailMessages > 0 && messages.length > tailMessages) {
-    const cutoffIndex = messages.length - tailMessages;
-    const firstUserIndex = messages.findIndex((m) => m.role === "user");
-    const firstUser = firstUserIndex >= 0 ? messages[firstUserIndex] : null;
-    const tail = messages.slice(-tailMessages);
+    const originalCount = messages.length;
+    // The index in data.messages maps 1:1 to `cast read` line numbers (both walk
+    // the same isNonEmptyMessage-filtered, ascending message list), so the numbers
+    // below are directly usable in the notice's `cast read` hint.
+    const cutoffIndex = originalCount - tailMessages; // tail begins here (0-based)
+    const tailStartLine = cutoffIndex + 1;            // 1-based, `cast read` numbering
+    const tail = messages.slice(cutoffIndex);
+    // Keep every earlier human instruction, not just the first — they carry the
+    // human's intent through the whole conversation and cost little.
+    const earlierInstructions = messages.slice(0, cutoffIndex).filter(isHumanInstruction);
 
+    const convRef = data.conversation.id;
+    const kept = earlierInstructions.length;
     const notice: ExportedMessage = {
       role: "user",
       timestamp: data.conversation.started_at,
       isMeta: true,
       content:
-        `${CODECAST_IMPORT_NOTICE_PREFIX} This Claude session was truncated to avoid overly-long context (which can break Claude Code /compact).\n` +
-        `Original: ${messages.length} messages. Included: last ${tailMessages} messages` +
-        (firstUser && firstUserIndex < cutoffIndex ? " + first user message." : "."),
+        `${CODECAST_IMPORT_NOTICE_PREFIX} This session was trimmed to fit Claude's context window ` +
+        `(an over-long session breaks Claude Code /compact). The full conversation is ${originalCount} messages.\n` +
+        `Kept here: ${kept > 0 ? `your ${kept} earlier instruction${kept === 1 ? "" : "s"} (below), then ` : ""}` +
+        `the last ${tailMessages} messages (starting at message ${tailStartLine}).\n` +
+        `Need anything from the omitted middle? Read it with: cast read ${convRef} <from>:<to> ` +
+        `— e.g. \`cast read ${convRef} 1:${Math.max(1, tailStartLine - 1)}\` for everything before the tail.`,
     };
 
-    messages = [notice];
-    if (firstUser && firstUserIndex < cutoffIndex) {
-      messages.push(firstUser);
-    }
-    messages.push(...tail);
+    messages = [notice, ...earlierInstructions, ...tail];
   }
 
   for (const msg of messages) {

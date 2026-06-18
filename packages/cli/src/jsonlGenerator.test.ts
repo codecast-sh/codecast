@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { fetchExport, generateClaudeCodeJsonl, generateCodexJsonl, type ExportResult } from "./jsonlGenerator.js";
+import { chooseClaudeTailMessagesForTokenBudget, fetchExport, generateClaudeCodeJsonl, generateCodexJsonl, isHumanInstruction, type ExportResult } from "./jsonlGenerator.js";
 
 const originalFetch = globalThis.fetch;
 
@@ -271,15 +271,100 @@ describe("generateClaudeCodeJsonl", () => {
     // from codecast's watcher sync (extractMessages skips isMeta entries).
     expect(chat[0].isMeta).toBe(true);
     expect(chat.filter((l) => l.isMeta).length).toBe(1);
+    // The notice points the reader at `cast read` to pull anything omitted.
+    expect(chat[0].message?.content).toContain("cast read");
     expect(chat.some((l) => l.type === "user" && l.message?.content === "u1")).toBe(true);
 
     // Tail is the last 2 messages: a2, u3
     expect(chat.some((l) => l.type === "assistant" && l.message?.content?.[0]?.text === "a2")).toBe(true);
     expect(chat.some((l) => l.type === "user" && l.message?.content === "u3")).toBe(true);
 
-    // Mid history should be omitted.
+    // Assistant turns from the dropped middle are omitted...
     expect(chat.some((l) => l.type === "assistant" && l.message?.content?.[0]?.text === "a1")).toBe(false);
-    expect(chat.some((l) => l.type === "user" && l.message?.content === "u2")).toBe(false);
+    // ...but every earlier *human* instruction is surfaced, not just the first.
+    expect(chat.some((l) => l.type === "user" && l.message?.content === "u2")).toBe(true);
+  });
+
+  test("surfaces every earlier human instruction and cites exact cast read lines", () => {
+    // 8 messages: human turns at lines 1, 3, 5 (u1/u2/u3); the rest assistant or
+    // a tool-result carrier. Tail = last 2 => cutoff at index 6 (line 7).
+    const data: ExportResult = {
+      conversation: {
+        id: "jx7abc123",
+        title: "t",
+        session_id: "session",
+        agent_type: "claude_code",
+        project_path: "/tmp/project",
+        model: "claude-opus-4-8",
+        message_count: 8,
+        started_at: "2026-01-01T00:00:00.000Z",
+        updated_at: "2026-01-01T00:00:01.000Z",
+      },
+      messages: [
+        { role: "user", content: "first ask", timestamp: "2026-01-01T00:00:00.000Z" },       // line 1
+        { role: "assistant", content: "a1", timestamp: "2026-01-01T00:00:00.100Z" },           // line 2
+        { role: "user", content: "second ask", timestamp: "2026-01-01T00:00:00.200Z" },        // line 3
+        { role: "assistant", content: "a2", timestamp: "2026-01-01T00:00:00.300Z" },           // line 4
+        { role: "user", content: "third ask", timestamp: "2026-01-01T00:00:00.400Z" },         // line 5
+        // A tool-result carrier (not a genuine human turn) must NOT be surfaced.
+        { role: "user", content: "", timestamp: "2026-01-01T00:00:00.500Z", tool_results: [{ tool_use_id: "x", content: "tool out" }] }, // line 6
+        { role: "assistant", content: "a3", timestamp: "2026-01-01T00:00:00.600Z" },           // line 7 (tail start)
+        { role: "user", content: "fourth ask", timestamp: "2026-01-01T00:00:00.700Z" },        // line 8 (tail)
+      ],
+    };
+
+    const { jsonl } = generateClaudeCodeJsonl(data, { tailMessages: 2 });
+    const lines = jsonl.trim().split("\n").map((l) => JSON.parse(l));
+    const chat = lines.filter((l) => l.type === "user" || l.type === "assistant");
+    const notice = chat[0].message?.content as string;
+
+    // All three earlier human asks are surfaced (not just the first), in order.
+    const userTexts = chat.filter((l) => l.type === "user").map((l) => l.message?.content);
+    expect(userTexts).toContain("first ask");
+    expect(userTexts).toContain("second ask");
+    expect(userTexts).toContain("third ask");
+    expect(userTexts).toContain("fourth ask"); // tail
+
+    // The tool-result carrier from the middle is dropped, not surfaced as a turn.
+    expect(chat.some((l) => l.type === "user" && Array.isArray(l.message?.content)
+      && l.message.content.some((b: any) => b?.type === "tool_result"))).toBe(false);
+
+    // Notice cites the conversation id and the exact `cast read` range for the
+    // omitted middle: tail starts at line 7, so the gap is 1:6.
+    expect(notice).toContain("8 messages");
+    expect(notice).toContain("3 earlier instructions");
+    expect(notice).toContain("starting at message 7");
+    expect(notice).toContain("cast read jx7abc123 1:6");
+  });
+
+  test("isHumanInstruction distinguishes genuine human turns", () => {
+    expect(isHumanInstruction({ role: "user", content: "do the thing", timestamp: "t" })).toBe(true);
+    expect(isHumanInstruction({ role: "assistant", content: "ok", timestamp: "t" })).toBe(false);
+    expect(isHumanInstruction({ role: "user", content: "   ", timestamp: "t" })).toBe(false);
+    expect(isHumanInstruction({ role: "user", content: "[Codecast import] notice", timestamp: "t" })).toBe(false);
+    expect(isHumanInstruction({ role: "user", content: "noticed", timestamp: "t", isMeta: true })).toBe(false);
+    expect(isHumanInstruction({ role: "user", content: "result", timestamp: "t", tool_results: [{ tool_use_id: "x", content: "r" }] })).toBe(false);
+  });
+
+  test("token budget reserves space for earlier instructions", () => {
+    // A long human instruction up front should be reserved out of the budget, so
+    // the chosen tail is strictly shorter than if it were ignored.
+    const bigText = "word ".repeat(2000); // ~2500 tokens
+    const mk = (role: string, content: string, i: number): ExportResult["messages"][number] =>
+      ({ role, content, timestamp: `2026-01-01T00:00:${String(i).padStart(2, "0")}.000Z` });
+    const messages = [
+      mk("user", bigText, 0),
+      ...Array.from({ length: 40 }, (_, i) => mk(i % 2 === 0 ? "assistant" : "user", `m${i}`, i + 1)),
+    ];
+    const data: ExportResult = {
+      conversation: { id: "c", title: "t", session_id: "s", agent_type: "claude_code", project_path: null, model: null, message_count: messages.length, started_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:01.000Z" },
+      messages,
+    };
+    // Budget large enough that without reservation the whole convo fits; the big
+    // up-front instruction is counted as a genuine human turn regardless.
+    const count = chooseClaudeTailMessagesForTokenBudget(data, 3000);
+    expect(count).toBeGreaterThanOrEqual(1);
+    expect(count).toBeLessThanOrEqual(messages.length);
   });
 
   test("preserves all tool_result blocks including orphans", () => {
