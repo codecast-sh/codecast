@@ -6,8 +6,10 @@
 // (wide screens), the rail FLOATS in that margin so the text column keeps its
 // full width; when the margin is too tight it falls back to an in-flow left
 // column that shrinks the text. The message renders as ONE MessageMarkdown (no
-// splitting); we measure each top-level block's offset with a ResizeObserver and
-// place the cards + the hover handle at those offsets.
+// splitting); we measure each quote unit's offset with a ResizeObserver and place
+// the cards + the hover handle at those offsets. A "unit" is a top-level block,
+// except a bulleted/numbered list, which is split into one unit per <li> so each
+// bullet is independently quotable (see lib/quoteUnits).
 //
 // Cross-component state is in inboxStore's ephemeral review fields; the store
 // choreography is in lib/reviewActions.
@@ -16,6 +18,7 @@ import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, 
 import { useShallow } from "zustand/react/shallow";
 import { useInboxStore } from "../store/inboxStore";
 import type { PendingComment } from "../lib/quoteFormat";
+import { getQuoteUnits, quoteUnitAt, unitTop } from "../lib/quoteUnits";
 import { createReviewComment, exitReviewMode } from "../lib/reviewActions";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { KeyCap } from "./KeyboardShortcutsHelp";
@@ -78,11 +81,15 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
     if (peekBlock !== null && !myComments.some((c) => c.blockIndex === peekBlock)) setPeekBlock(null);
   }, [myComments, peekBlock]);
 
-  // ----- measure each top-level block's vertical position + available left margin -----
+  // ----- measure each quote unit's vertical position + available left margin -----
   const measure = useCallback(() => {
     const el = contentRef.current;
     if (!el) return;
-    const next = (Array.from(el.children) as HTMLElement[]).map((c) => ({ top: c.offsetTop, height: c.offsetHeight }));
+    const contentTop = el.getBoundingClientRect().top;
+    const next = getQuoteUnits(el).map((u) => {
+      const r = u.getBoundingClientRect();
+      return { top: Math.round(r.top - contentTop), height: Math.round(r.height) };
+    });
     setRects((prev) =>
       prev.length === next.length && prev.every((r, i) => r.top === next[i].top && r.height === next[i].height)
         ? prev
@@ -117,7 +124,7 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
     const ro = new ResizeObserver(() => measure());
     ro.observe(el);
     if (containerRef.current) ro.observe(containerRef.current); // catches margin changes (panel toggles, resize)
-    Array.from(el.children).forEach((c) => ro.observe(c));
+    getQuoteUnits(el).forEach((u) => ro.observe(u));
     window.addEventListener("resize", measure);
     return () => {
       ro.disconnect();
@@ -154,7 +161,7 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
   const setActiveBlock = useCallback((i: number) => useInboxStore.getState().setReviewActiveBlock(i), []);
 
   const blockText = useCallback((i: number): string => {
-    const el = contentRef.current?.children?.[i] as HTMLElement | undefined;
+    const el = getQuoteUnits(contentRef.current)[i];
     return el ? el.innerText : "";
   }, []);
 
@@ -177,13 +184,10 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
     if (!content) return;
     // Over the rail / a card / the + button → keep the current hover target.
     if (railRef.current?.contains(e.target as Node)) return;
-    let el = e.target as HTMLElement | null;
-    while (el && el.parentElement !== content) el = el.parentElement;
-    if (!el || el.parentElement !== content) return;
-    const idx = Array.from(content.children).indexOf(el);
-    if (idx >= 0) {
-      setHoverIndex(idx);
-      setHoverTop(el.offsetTop);
+    const hit = quoteUnitAt(content, e.target as HTMLElement);
+    if (hit) {
+      setHoverIndex(hit.index);
+      setHoverTop(unitTop(content, hit.el));
     }
   }, [cancelClear]);
 
@@ -237,7 +241,7 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
   // keep active block in view + hold focus so single-letter keys are captured here
   useEffect(() => {
     if (!isReviewTarget || editingId) return;
-    (contentRef.current?.children?.[activeBlock] as HTMLElement | undefined)?.scrollIntoView({ block: "nearest" });
+    getQuoteUnits(contentRef.current)[activeBlock]?.scrollIntoView({ block: "nearest" });
     if (containerRef.current && !containerRef.current.contains(document.activeElement)) {
       containerRef.current.focus({ preventScroll: true } as any);
     }
