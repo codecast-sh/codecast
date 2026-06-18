@@ -2533,6 +2533,15 @@ function rekeyId(draft: any, oldId: string, newId: string) {
   for (const row of Object.values(draft.bucketAssignments || {}) as BucketAssignmentItem[]) {
     if (row.conversation_id === oldId) row.conversation_id = newId;
   }
+  // A tab persists its session as a `?s=<id>` path (and AppTab.sessionId). Left
+  // pointing at the dead stub, the inbox's re-assert effect would chase a session
+  // that no longer exists — the same param/currentSession drift, just born from a
+  // create instead of an in-pane click.
+  for (const t of draft.tabs) {
+    if (t.sessionId === oldId) t.sessionId = newId;
+    if (t.path === `/inbox?s=${oldId}`) t.path = `/inbox?s=${newId}`;
+    else if (t.path === `/conversation/${oldId}`) t.path = `/conversation/${newId}`;
+  }
 }
 
 // Record "where the user is" in two places with one gate:
@@ -2569,6 +2578,38 @@ function recordCurrentConversationPointer(
   }
   draft.clientState.current_conversation_id = id;
   draft.lastFocusedConversationId = id ?? null;
+}
+
+// Keep the active inbox tab's stored `?s=` in lockstep with the session it shows.
+// That path is the source of `paramSessionId` in the inbox (QueuePageClient reads
+// it through the per-tab navigation context). In-pane session selection used to
+// write currentSessionId + the browser URL but NEVER the tab path, so the two
+// drifted; the inbox's "re-assert my tab's session" effect then snapped the view
+// back to the stale param on every sessions heartbeat (~4s). Aligning the path
+// here makes that effect a no-op and lets a tab remember an in-pane navigation
+// across a tab switch. Only inbox tabs carry `?s=`; /tasks, /docs, etc. are left
+// untouched.
+function syncActiveInboxTabPath(draft: Draft, id: string) {
+  const tabId = draft.activeTabId;
+  if (!tabId) return;
+  const tab = draft.tabs.find((t) => t.id === tabId);
+  if (!tab || tab.path.split("?")[0] !== "/inbox") return;
+  const next = `/inbox?s=${id}`;
+  if (tab.path === next) return;
+  draft.tabs = draft.tabs.map((t) => (t.id === tabId ? { ...t, path: next } : t));
+}
+
+// The single "I am now viewing `id`" commit, shared by every navigation primitive
+// (setCurrentSession / injectSession / navigateToSession). Records the view for
+// the new-divider anchor, moves the current pointer, drops any dismissed-peek,
+// mirrors the per-user pointer, and keeps the active inbox tab's param aligned.
+// Callers still own declareViewNav() — the view-nav source differs per path.
+function commitCurrentSession(draft: Draft, id: string) {
+  recordSessionView(draft, id, draft.currentSessionId);
+  draft.currentSessionId = id;
+  draft.viewingDismissedId = null;
+  recordCurrentConversationPointer(draft, id);
+  syncActiveInboxTabPath(draft, id);
 }
 
 // Shared body of the dismissed/stashed reconciles. Overlays the server's
@@ -3797,10 +3838,7 @@ export const useInboxStore = create<InboxStoreState>(
       return;
     }
     declareViewNav(source);
-    recordSessionView(this, id, this.currentSessionId);
-    this.currentSessionId = id;
-    this.viewingDismissedId = null;
-    recordCurrentConversationPointer(this, id);
+    commitCurrentSession(this, id);
   }),
 
   clearSelection: action(function (this: Draft) {
@@ -3844,10 +3882,7 @@ export const useInboxStore = create<InboxStoreState>(
       this.viewingDismissedId = session._id;
     } else {
       declareViewNav("gesture");
-      recordSessionView(this, session._id, this.currentSessionId);
-      this.currentSessionId = session._id;
-      this.viewingDismissedId = null;
-      recordCurrentConversationPointer(this, session._id);
+      commitCurrentSession(this, session._id);
     }
   }),
 
@@ -3937,10 +3972,7 @@ export const useInboxStore = create<InboxStoreState>(
       if (isSessionHidden(session)) {
         this.viewingDismissedId = id;
       } else {
-        recordSessionView(this, id, this.currentSessionId);
-        this.currentSessionId = id;
-        this.viewingDismissedId = null;
-        recordCurrentConversationPointer(this, id);
+        commitCurrentSession(this, id);
       }
     } else {
       this.pendingNavigateId = id;
