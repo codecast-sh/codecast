@@ -9,7 +9,7 @@ import { Command as CommandPrimitive } from "cmdk";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { commitModelChange, canControlModel, modelOptionKey } from "./ModelEffortPicker";
 import { AGENT_MODEL_CONFIG, modelAgentKey } from "@codecast/shared/contracts";
-import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, categorizeSessions, sessionsWithPendingSend, convBucketMap, sortLabels, computeChipCounts, RecentVisit } from "../store/inboxStore";
+import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, categorizeSessions, sessionsWithPendingSend, convBucketMap, sortLabels, computeChipCounts, getProjectName, RecentVisit } from "../store/inboxStore";
 import { resolveRecentVisits, visitTimeAgo, type ResolvedVisit } from "../lib/recentVisits";
 import { PageIcon } from "./RecentlyViewedMenu";
 import { isNonTabRoute } from "../src/compat/tabRouting";
@@ -861,6 +861,10 @@ const EMPTY_MENTION_INDEX = { tasks: {}, docs: {}, plans: {} } as const;
 const ENTITY_RENDER_CAP = 8;
 const EMPTY_RECENT_VISITS: RecentVisit[] = [];
 const RECENT_VISITS_RENDER_CAP = 4;
+// Closed-palette stable refs: a closed palette must not re-render on
+// bucket/assignment sync churn (it reads these only to label recent rows).
+const EMPTY_BUCKETS: Record<string, BucketItem> = {};
+const EMPTY_BUCKET_ASSIGNMENTS: Record<string, BucketAssignmentItem> = {};
 
 // One matcher for tasks/docs/plans over the globally-synced mention index.
 // Reuses score() (exact > prefix > substring) with a short_id fallback, and
@@ -1011,6 +1015,21 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     () => (open ? resolveRecentVisits(useInboxStore.getState(), RECENT_VISITS_RENDER_CAP, { skipViews: standalone }) : []),
     [recentVisits, open, standalone],
   );
+
+  // A conversation's label (manual bucket) is a derived join, not a stored
+  // field — resolve it live from the same assignment rows the session panel
+  // uses. Gated on `open` so a closed palette ignores filing churn.
+  const buckets = useInboxStore((s) => (open ? s.buckets : EMPTY_BUCKETS));
+  const bucketAssignments = useInboxStore((s) => (open ? s.bucketAssignments : EMPTY_BUCKET_ASSIGNMENTS));
+  const labelForConv = useMemo(() => {
+    const byConv = convBucketMap(bucketAssignments as Record<string, BucketAssignmentItem>);
+    const all = buckets as Record<string, BucketItem>;
+    return (convId: string): BucketItem | null => {
+      const id = byConv[convId];
+      const b = id ? all[id] : undefined;
+      return b && !b.archived_at ? b : null;
+    };
+  }, [buckets, bucketAssignments]);
 
   // Pre-filter the local cache ourselves so cmdk only ever mounts the matches
   // (RECENT_RENDER_CAP), never the whole cache. With no query we show the most
@@ -1673,6 +1692,29 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                   </span>
                 )}
                 <span className="truncate flex-1">{cleanTitle(conv.title || "Untitled")}</span>
+                {(() => {
+                  const bucket = labelForConv(conv._id);
+                  const project = getProjectName(conv.git_root, conv.project_path);
+                  return (
+                    <>
+                      {bucket && (() => {
+                        const bc = getLabelColor(bucket.name);
+                        return (
+                          <span className={`flex-shrink-0 px-1.5 py-0.5 rounded-full text-[10px] flex items-center gap-1 max-w-[120px] ${bc.bg} ${bc.text}`}>
+                            <span className={`w-1.5 h-1.5 rounded-[2px] flex-shrink-0 ${bc.dot}`} />
+                            <span className="truncate">{bucket.name}</span>
+                          </span>
+                        );
+                      })()}
+                      {project !== "unknown" && (
+                        <span className="flex-shrink-0 flex items-center gap-1 text-[10px] text-sol-text-dim max-w-[120px]" title={conv.git_root || conv.project_path || project}>
+                          <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 opacity-60 ${getLabelColor(project).dot}`} />
+                          <span className="truncate">{project}</span>
+                        </span>
+                      )}
+                    </>
+                  );
+                })()}
                 {isTeam && conv.authorName && (
                   <span className="text-[10px] text-sol-text-dim flex-shrink-0">· {conv.authorName}</span>
                 )}
