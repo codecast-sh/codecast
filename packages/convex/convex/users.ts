@@ -94,6 +94,11 @@ export const updateProfile = mutation({
 export const updateUserActivity = internalMutation({
   args: {
     userId: v.id("users"),
+    // Accepted-but-ignored: the message path no longer refreshes daemon_last_seen
+    // (the 30s daemonHeartbeat covers it; a second message-triggered writer raced
+    // it on the hot user doc — the OCC conflict this change removes). Kept in the
+    // validator only so any jobs already scheduled with it at deploy time don't
+    // fail their arg check; drop it once the scheduler queue has drained.
     daemonSeen: v.optional(v.boolean()),
     messageTimestamp: v.optional(v.number()),
   },
@@ -101,14 +106,6 @@ export const updateUserActivity = internalMutation({
     const patch: Record<string, unknown> = {};
     const user = await ctx.db.get(args.userId);
     if (!user) return;
-    if (args.daemonSeen) {
-      // Throttle: this fires on every message sync across all of the user's
-      // sessions, contending on a single hot doc. Only refresh when stale.
-      const DAEMON_SEEN_THROTTLE_MS = 60 * 1000;
-      if (!user.daemon_last_seen || Date.now() - user.daemon_last_seen > DAEMON_SEEN_THROTTLE_MS) {
-        patch.daemon_last_seen = Date.now();
-      }
-    }
     if (args.messageTimestamp) {
       if (!user.last_message_sent_at || args.messageTimestamp > user.last_message_sent_at) {
         if (user.last_message_sent_at) {
