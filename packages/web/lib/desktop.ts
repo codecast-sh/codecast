@@ -6,6 +6,7 @@ declare global {
       onDeepLink: (cb: (url: string) => void) => void;
       onUpdateStatus: (cb: (status: { status: string; version?: string; percent?: number }) => void) => void;
       restartForUpdate: () => Promise<void>;
+      checkForUpdate: (opts?: { manual?: boolean }) => Promise<void>;
       showNotification: (title: string, body: string, data?: { conversationId?: string }) => Promise<void>;
       getShortcuts: () => Promise<Record<string, string>>;
       setShortcut: (key: string, accelerator: string) => Promise<Record<string, string>>;
@@ -253,6 +254,23 @@ export function restartForUpdate() {
   if (isElectron()) {
     bridge("restartForUpdate")?.();
   }
+}
+
+// Ask the desktop app to check the feed now. `manual: true` makes it surface a
+// native "up to date" / "ready" / "failed" notification (undefined on older
+// builds whose preload predates this method — callers fall back gracefully).
+export function checkForUpdate(opts?: { manual?: boolean }) {
+  if (isElectron()) {
+    bridge("checkForUpdate")?.(opts);
+  }
+}
+
+// True on desktop builds that carry the in-process updater (download-with-
+// progress + foreground swap-on-restart). False on the web and on older builds
+// whose preload predates `checkForUpdate` — there the banner falls back to the
+// daemon-driven update path (server mutation → daemon swap).
+export function hasInProcessUpdater(): boolean {
+  return isElectron() && typeof window.__CODECAST_ELECTRON__?.checkForUpdate === "function";
 }
 
 export function desktopHeaderClass(): string {

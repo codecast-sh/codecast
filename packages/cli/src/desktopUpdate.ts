@@ -368,10 +368,15 @@ export async function checkForDesktopUpdate(
     writeState({ appliedVersion: version });
     log(`desktop update: installed v${version}; relaunching`);
 
-    // Relaunch (matches the "Restart" intent that brought the user here).
-    // -g: don't steal focus, in case the user had intentionally quit.
+    // Relaunch. When the user explicitly asked for this (force — the in-app
+    // "Update now" command or `cast desktop-update --force`), bring the app to
+    // the FOREGROUND so the update doesn't look like it silently died: the
+    // foreground app vanished (we killed it) and a background `open -g` relaunch
+    // left nothing visible, which read as a hang. The silent below-floor rollout
+    // (minVersion, no force) still uses -g so it never steals focus uninvited.
     try {
-      execFileSync("/usr/bin/open", ["-g", APP_PATH], { stdio: ["ignore", "ignore", "ignore"] });
+      const openArgs = force ? [APP_PATH] : ["-g", APP_PATH];
+      execFileSync("/usr/bin/open", openArgs, { stdio: ["ignore", "ignore", "ignore"] });
     } catch {}
     return true;
   } catch (e) {
