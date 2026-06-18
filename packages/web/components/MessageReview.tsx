@@ -90,11 +90,9 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
   const measure = useCallback(() => {
     const el = contentRef.current;
     if (!el) return;
-    const contentTop = el.getBoundingClientRect().top;
-    const next = getQuoteUnits(el).map((u) => {
-      const r = u.getBoundingClientRect();
-      return { top: Math.round(r.top - contentTop), height: Math.round(r.height) };
-    });
+    // Layout-space offsets (offsetTop/offsetHeight), not bounding rects, so the
+    // rail cards + hover handle stay aligned under browser zoom — see unitTop.
+    const next = getQuoteUnits(el).map((u) => ({ top: unitTop(el, u), height: u.offsetHeight }));
     setRects((prev) =>
       prev.length === next.length && prev.every((r, i) => r.top === next[i].top && r.height === next[i].height)
         ? prev
