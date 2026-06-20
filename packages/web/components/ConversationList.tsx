@@ -6,6 +6,7 @@ import { useState, useMemo, useRef, useCallback } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { cleanTitle, isSystemMessage, isCommandMessage, isImportNotice } from "../lib/conversationProcessor";
+import { stripTeammateFraming } from "./sessionMessage";
 import { shouldShowSession, isSubagent, isTrivialSubagent, isWarmupSession } from "../lib/sessionFilters";
 import { useConversationsWithError } from "../hooks/useConversationsWithError";
 import { useStableOrder } from "../hooks/useStableOrder";
@@ -387,7 +388,14 @@ export function AgentIcon({ agentType, className = "w-4 h-4" }: { agentType: str
 function ConvSubtitleSection({ conv, expanded }: { conv: Conversation; expanded?: boolean }) {
   const cleanTeammate = (c: string) => {
     if (!c?.includes('<teammate-message')) return c;
-    return c.replace(/<teammate-message\s+[^>]*>[\s\S]*?<\/teammate-message>/g, '').trim();
+    // Remove complete teammate blocks, then any dangling opening tag onward (a truncated
+    // preview drops the closing tag, so the raw body/JSON would otherwise leak), then the
+    // harness's framing prose — leaving only words a human actually wrote (usually none).
+    const noBlocks = c
+      .replace(/<teammate-message\s+[^>]*>[\s\S]*?<\/teammate-message>/g, '')
+      .replace(/<teammate-message[\s\S]*$/, '')
+      .trim();
+    return stripTeammateFraming(noBlocks);
   };
   const clean = (c: string) => cleanTeammate(c)?.replace(/<[^>]+>/g, "").replace(/^\s*Caveat:.*$/gm, "").trim() || "";
   const commandLabel = (c: string) => {

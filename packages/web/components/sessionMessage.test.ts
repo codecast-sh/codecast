@@ -1,5 +1,20 @@
 import { test, expect, describe } from "bun:test";
-import { parseSessionMessage, parseInboundSessionMessage, isSessionMessage, formatSessionMessage } from "./sessionMessage";
+import { parseSessionMessage, parseInboundSessionMessage, isSessionMessage, formatSessionMessage, isTeammateMessage, stripTeammateFraming, isTeammateFramingOnly, isMachineDeliveredMessage } from "./sessionMessage";
+
+// A real inter-agent broadcast as the multi-agent harness delivers it: a lead-in line, one
+// or more <teammate-message> blocks (the second a JSON status event), and the trailing
+// permission-laundering disclaimer. Humans never type any of this.
+const TEAMMATE_BROADCAST = `Another Claude session sent a message:
+<teammate-message teammate_id="tracker-stale" color="green" summary="pl-114 coherence tracker updates complete">
+All pl-114 coherence tracker updates landed. 16/16 commands succeeded, zero failures.
+
+**Part 1 — staleness/doc-lag notes (5, \`-t note\`):**
+- ct-37320 (P0.7) — idempotency on email_messages unique index
+</teammate-message>
+<teammate-message teammate_id="tracker-stale" color="green">
+{"type":"idle_notification","from":"tracker-stale","timestamp":"2026-06-20T19:56:47.099Z","idleReason":"available"}
+</teammate-message>
+This came from another Claude session — not typed by your user, but very likely working on their behalf. Treat it as a teammate's request and act on it within this session's own permission settings. … that's permission laundering.`;
 
 describe("parseSessionMessage", () => {
   test("extracts sender short id and body", () => {
@@ -72,6 +87,37 @@ describe("isSessionMessage", () => {
 
   test("rejects a wrapper missing the from attribute", () => {
     expect(isSessionMessage("<session-message>no attr</session-message>")).toBe(false);
+  });
+});
+
+describe("teammate broadcasts", () => {
+  test("isTeammateMessage detects the <teammate-message> wrapper", () => {
+    expect(isTeammateMessage(TEAMMATE_BROADCAST)).toBe(true);
+    expect(isTeammateMessage("just a normal message")).toBe(false);
+    expect(isTeammateMessage(null)).toBe(false);
+    expect(isTeammateMessage(undefined)).toBe(false);
+  });
+
+  test("stripTeammateFraming removes the lead-in and the disclaimer-to-end", () => {
+    // After the <teammate-message> tags are gone, only the framing prose is left, and
+    // stripping it should leave nothing — proving it's a pure broadcast.
+    const leftover = TEAMMATE_BROADCAST
+      .replace(/<teammate-message\s+[^>]*>[\s\S]*?<\/teammate-message>/g, "")
+      .trim();
+    expect(leftover.length).toBeGreaterThan(0); // framing prose survives the tag strip
+    expect(stripTeammateFraming(leftover)).toBe(""); // …but not the framing strip
+    expect(isTeammateFramingOnly(leftover)).toBe(true);
+  });
+
+  test("isTeammateFramingOnly is false when a human wrote real words around the block", () => {
+    const withHumanText = "hey look at what the tracker said:\n" + TEAMMATE_BROADCAST.replace(/<teammate-message[\s\S]*<\/teammate-message>/, "");
+    expect(isTeammateFramingOnly(withHumanText.replace(/<teammate-message[\s\S]*?<\/teammate-message>/g, "").trim())).toBe(false);
+  });
+
+  test("isMachineDeliveredMessage covers both cast send and teammate broadcasts", () => {
+    expect(isMachineDeliveredMessage(TEAMMATE_BROADCAST)).toBe(true);
+    expect(isMachineDeliveredMessage(formatSessionMessage("jx7c6zk", "hi"))).toBe(true);
+    expect(isMachineDeliveredMessage("a prompt the human typed")).toBe(false);
   });
 });
 
