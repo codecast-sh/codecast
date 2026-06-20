@@ -12,7 +12,7 @@ import { resetConversationPendingMessages } from "./pendingMessages";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId } from "./daemonCommandUtils";
 import { AGENT_MODEL_CONFIG, modelAgentKey } from "@codecast/shared/contracts";
-import { shouldShowInInbox, isSessionIdle, deriveSessionActivity, classifyWorkState, normalizeWorkStateFilter, trustedAgentStatus, type WorkState } from "./inboxFilters";
+import { shouldShowInInbox, isSessionIdle, deriveSessionActivity, classifyWorkState, normalizeWorkStateFilter, trustedAgentStatus, subagentKeepsParentWorking, type WorkState } from "./inboxFilters";
 import { subagentLinkFields } from "./ccAccountsShared";
 import { filterUserMessages, isImportNotice } from "./userMessagesFilter";
 import {
@@ -6654,8 +6654,22 @@ async function enrichInboxSessionRow(
     if (implChild) {
       implementationSession = { _id: implChild._id.toString(), title: implChild.title };
     }
-    if (isIdle && children.some((c: any) => c.is_subagent && c.status === "active" &&
-        (maps.liveConvIds.has(c._id.toString()) || (now - c.updated_at) < 5 * 60 * 1000))) {
+    // Keep an idle parent in "working" only while a subagent child is genuinely
+    // PRODUCING, not merely alive (see subagentKeepsParentWorking). A forked
+    // subagent that finished but whose daemon keeps heartbeating used to pin its
+    // parent in "working" forever. We pass the child's agent_status already
+    // coerced for heartbeat staleness, the same coercion the parent gets below.
+    if (isIdle && children.some((c: any) => {
+      const cid = c._id.toString();
+      return subagentKeepsParentWorking({
+        isSubagent: !!c.is_subagent,
+        convStatus: c.status,
+        updatedAt: c.updated_at,
+        isLive: maps.liveConvIds.has(cid),
+        agentStatus: trustedAgentStatus(maps.agentStatusMap.get(cid), c.updated_at, now),
+        now,
+      });
+    })) {
       isIdle = false;
     }
     for (const c of children) {
