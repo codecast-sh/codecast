@@ -12,6 +12,8 @@ import {
   classifyWorkState,
   normalizeWorkStateFilter,
   trustedAgentStatus,
+  subagentKeepsParentWorking,
+  SUBAGENT_PRODUCING_GRACE_MS,
   STATUS_TRUST_TTL_MS,
   AGENT_IDLE_GRACE_MS,
   type ConversationDoc,
@@ -526,5 +528,61 @@ describe("trustedAgentStatus (stale 'working' trust TTL)", () => {
 
   test("a session frozen in 'working' for hours reads needs_input (finished), not working", () => {
     expect(workStateFor("working", 18 * 60 * 60 * 1000)).toBe("needs_input");
+  });
+});
+
+describe("subagentKeepsParentWorking", () => {
+  const NOW = 10_000_000;
+  const base = {
+    isSubagent: true,
+    convStatus: "active",
+    updatedAt: NOW - 30 * 60 * 1000, // 30m ago: well past the producing grace
+    isLive: false,
+    agentStatus: "idle" as string | undefined,
+    now: NOW,
+  };
+
+  test("non-subagent children never pin the parent", () => {
+    expect(subagentKeepsParentWorking({ ...base, isSubagent: false, isLive: true, agentStatus: "working" })).toBe(false);
+  });
+
+  test("a completed-conversation child never pins the parent", () => {
+    expect(subagentKeepsParentWorking({ ...base, convStatus: "completed", isLive: true, agentStatus: "working" })).toBe(false);
+  });
+
+  // The actual bug: a forked subagent that finished (agent idle) but whose
+  // daemon keeps heartbeating — live, but not producing — must NOT keep its
+  // long-finished parent stuck in "working".
+  test("a live-but-idle subagent does NOT keep the parent working", () => {
+    expect(subagentKeepsParentWorking({ ...base, isLive: true, agentStatus: "idle" })).toBe(false);
+  });
+
+  test("a live subagent whose agent is genuinely active keeps the parent working", () => {
+    expect(subagentKeepsParentWorking({ ...base, isLive: true, agentStatus: "working" })).toBe(true);
+    expect(subagentKeepsParentWorking({ ...base, isLive: true, agentStatus: "thinking" })).toBe(true);
+  });
+
+  test("an active agent_status that isn't live (dead daemon) doesn't pin the parent", () => {
+    expect(subagentKeepsParentWorking({ ...base, isLive: false, agentStatus: "working" })).toBe(false);
+  });
+
+  // Recent output is its own proof of work — covers Task-tool subagents with no
+  // managed session (no agent_status to read, never "live").
+  test("a subagent that produced output within the grace keeps the parent working", () => {
+    expect(subagentKeepsParentWorking({
+      ...base,
+      updatedAt: NOW - (SUBAGENT_PRODUCING_GRACE_MS - 1_000),
+      isLive: false,
+      agentStatus: undefined,
+    })).toBe(true);
+  });
+
+  test("just past the producing grace with no live-active session, the parent settles", () => {
+    expect(subagentKeepsParentWorking({
+      ...base,
+      updatedAt: NOW - (SUBAGENT_PRODUCING_GRACE_MS + 1_000),
+      isLive: false,
+      agentStatus: undefined,
+    })).toBe(false);
   });
 });
