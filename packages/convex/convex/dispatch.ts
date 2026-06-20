@@ -14,6 +14,7 @@ import { conversationHasNoWork, reapEmptyConversation, enqueueKillSessionCommand
 import { canAccessDoc } from "./docs";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { findConversationBySessionReference } from "./conversationSessionLookup";
+import { createBucketForUser, assignConversationToBucketForUser } from "./buckets";
 
 type TableConfig =
   | {
@@ -801,26 +802,8 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // allocation, team resolution, history, etc.) and return their {id,...} so
   // the awaiting caller can navigate to the new record.
   createBucket: async (ctx, userId, [opts]: [{ name: string; color?: string }]) => {
-    const name = (opts?.name || "").trim();
-    if (!name) throw new Error("Bucket name required");
-    const now = Date.now();
-    // New labels append to the END of the user's order (the + button is where
-    // they were born). Never-ordered labels sort at 0, so max+1024 lands after
-    // both those and any explicitly drag-ordered ones.
-    const existing = await ctx.db
-      .query("inbox_buckets")
-      .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
-      .collect();
-    const maxOrder = existing.reduce((m: number, b: any) => Math.max(m, b.sort_order ?? 0), 0);
-    const _id = await ctx.db.insert("inbox_buckets", {
-      user_id: userId,
-      name,
-      sort_order: maxOrder + 1024,
-      ...(opts.color ? { color: opts.color } : {}),
-      created_at: now,
-      updated_at: now,
-    });
-    return { _id };
+    // Shared with the CLI's `cast label create` — see buckets.createBucketForUser.
+    return await createBucketForUser(ctx as any, userId, opts);
   },
 
   // Teammate comment create/delete/agent-ask delegate to the public comment
@@ -869,22 +852,13 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       const bucket = await ctx.db.get(bucketId as Id<"inbox_buckets">).catch(() => null);
       if (!bucket || String((bucket as any).user_id) !== String(userId)) return { gate: "bucket_not_owned" };
     }
-    const now = Date.now();
-    const existing = await ctx.db
-      .query("bucket_assignments")
-      .withIndex("by_user_conversation", (q: any) =>
-        q.eq("user_id", userId).eq("conversation_id", convId as Id<"conversations">))
-      .first();
-    if (existing) {
-      await ctx.db.patch(existing._id, { bucket_id: (bucketId ?? undefined) as Id<"inbox_buckets"> | undefined, updated_at: now });
-    } else {
-      await ctx.db.insert("bucket_assignments", {
-        user_id: userId,
-        conversation_id: convId as Id<"conversations">,
-        ...(bucketId ? { bucket_id: bucketId as Id<"inbox_buckets"> } : {}),
-        updated_at: now,
-      });
-    }
+    // Shared with the CLI's `cast label set/clear` — see buckets.assignConversationToBucketForUser.
+    await assignConversationToBucketForUser(
+      ctx as any,
+      userId,
+      convId as Id<"conversations">,
+      (bucketId ?? null) as Id<"inbox_buckets"> | null
+    );
     return { gate: "ok" };
   },
 

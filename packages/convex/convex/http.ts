@@ -3360,6 +3360,15 @@ cliRoute("/cli/workflow-runs/by-external", async (ctx, body) => ctx.runQuery(api
 // Session-to-session messaging
 cliRoute("/cli/messages/send", async (ctx, body) => ctx.runMutation(api.pendingMessages.sendSessionMessage, body));
 
+// Session labels (personal filing). List the catalog, file/unfile a session,
+// and manage the label catalog itself.
+cliRoute("/cli/labels/list", async (ctx, body) => ctx.runQuery(api.buckets.cliListLabels, body));
+cliRoute("/cli/labels/set", async (ctx, body) => ctx.runMutation(api.buckets.cliSetLabel, body));
+cliRoute("/cli/labels/clear", async (ctx, body) => ctx.runMutation(api.buckets.cliClearLabel, body));
+cliRoute("/cli/labels/create", async (ctx, body) => ctx.runMutation(api.buckets.cliCreateLabel, body));
+cliRoute("/cli/labels/rename", async (ctx, body) => ctx.runMutation(api.buckets.cliRenameLabel, body));
+cliRoute("/cli/labels/remove", async (ctx, body) => ctx.runMutation(api.buckets.cliArchiveLabel, body));
+
 // Spawn a fresh, inbox-visible session (cast spawn). `api.spawn` is filled in by
 // codegen on deploy; cast to any so the committed _generated typecheck stays green
 // until then.
