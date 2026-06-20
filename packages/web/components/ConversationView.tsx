@@ -42,7 +42,6 @@ import { SelectionQuoteToolbar } from "./SelectionQuoteToolbar";
 import { ReviewBar } from "./ReviewBar";
 import { ReviewComposerContext } from "./reviewContext";
 import { CommentDock } from "./comments/CommentDock";
-import { InlineMessageComments } from "./comments/InlineMessageComments";
 import { useConversationCommentsSync } from "../hooks/useConversationComments";
 import { parseScheduleCadence } from "./scheduleCadence";
 
@@ -6450,11 +6449,6 @@ function AssistantBlockImpl({
           </>
         )}
 
-        {/* Teammate comments anchored to this message, inline at the message. */}
-        {conversationId && messageId && (
-          <InlineMessageComments conversationId={conversationId.toString()} messageId={messageId} />
-        )}
-
         {condensedReceipt && (
           <CondensedToolsLine tools={condensedReceipt.tools} expanded={condensedReceipt.expanded} onToggle={condensedReceipt.onToggle} />
         )}
@@ -8597,13 +8591,17 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // When the send is carried entirely by attached quotes, tint the button cyan to
   // match the tray so it reads as "this sends the quotes".
   const quotesOnlySend = !hasContent && reviewCount > 0;
-  const sendBtnClass = `w-8 h-8 rounded-full transition-colors flex items-center justify-center border ${
-    !canSubmit
-      ? "border-sol-border/30 text-sol-text-dim/25 cursor-not-allowed"
-      : quotesOnlySend
-        ? "border-sol-cyan/50 bg-sol-cyan/20 text-sol-cyan hover:bg-sol-cyan/30 hover:border-sol-cyan"
-        : "border-sol-blue/50 bg-sol-blue/20 text-sol-blue hover:bg-sol-blue/30 hover:border-sol-blue hover:text-sol-blue"
-  }`;
+  const sendBtnClass = bareComposer
+    ? `w-6 h-6 rounded-md transition-colors flex items-center justify-center ${
+        !canSubmit ? "text-sol-text-dim/30 cursor-not-allowed" : "text-sol-cyan hover:bg-sol-cyan/10"
+      }`
+    : `w-8 h-8 rounded-full transition-colors flex items-center justify-center border ${
+        !canSubmit
+          ? "border-sol-border/30 text-sol-text-dim/25 cursor-not-allowed"
+          : quotesOnlySend
+            ? "border-sol-cyan/50 bg-sol-cyan/20 text-sol-cyan hover:bg-sol-cyan/30 hover:border-sol-cyan"
+            : "border-sol-blue/50 bg-sol-blue/20 text-sol-blue hover:bg-sol-blue/30 hover:border-sol-blue hover:text-sol-blue"
+      }`;
 
   return (
     <div className={`shrink-0 pointer-events-none sticky bottom-0 ${lightboxImageIndex !== null ? "z-[10002]" : "z-10"}`}>
@@ -8928,7 +8926,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
             );
           })()}
           <form onSubmit={handleSubmit} className={bareComposer ? "w-full" : `mx-auto px-2 sm:px-4 transition-all duration-200 ease-out ${isExpanded ? "conv-col" : "max-w-md"}`}>
-            <div className={`flex flex-col border px-4 py-2 shadow-lg transition-all duration-300 ${isExpanded ? "rounded-2xl" : "rounded-full"} ${composeMode ? "min-h-[40vh]" : ""} bg-sol-bg-alt ${isSelectionActive ? "border-sol-cyan/40 ring-1 ring-sol-cyan/20" : composeMode ? "border-sol-cyan/20" : "border-sol-border"}`}>
+            <div className={`flex flex-col ${bareComposer ? "" : "border"} transition-colors duration-150 ${bareComposer ? "px-2.5 py-0.5 rounded-lg bg-sol-text/[0.04] focus-within:bg-sol-text/[0.07]" : `border px-4 py-2 shadow-lg bg-sol-bg-alt ${isExpanded ? "rounded-2xl" : "rounded-full"}`} ${composeMode ? "min-h-[40vh]" : ""} ${isSelectionActive ? "border-sol-cyan/40 ring-1 ring-sol-cyan/20" : composeMode ? "border-sol-cyan/20" : bareComposer ? "" : "border-sol-border"}`}>
               {isSelectionActive && (
                 <div className="flex items-center gap-2 pb-1.5 mb-1.5 border-b border-sol-cyan/20 text-[10px] text-sol-cyan">
                   <span className="font-medium">Rewriting message</span>
@@ -13361,7 +13359,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       {conversation && (
         <CommentDock
           conversationId={conversation._id.toString()}
-          bottomOffset={Math.max(messageInputHeight + 16, 96)}
+          bottomOffset={Math.max(messageInputHeight + 16, 115) + 104}
         />
       )}
     </main>

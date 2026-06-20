@@ -1,14 +1,15 @@
-import { useRef, useState } from "react";
-import { ArrowUp, Bot, X, Loader2 } from "lucide-react";
+import { X } from "lucide-react";
+import { useInboxStore } from "../../store/inboxStore";
 import { useDocPresence } from "../../hooks/useDocPresence";
-import { useMentionQuery } from "../../hooks/useMentionQuery";
-import { ComposeEditor, type ComposeEditorHandle } from "../editor/ComposeEditor";
+import { MessageInput } from "../ConversationView";
 import { presenceDocId, commentAuthorName, type Comment } from "../../lib/commentThread";
 
-// Composer for one thread. Reuses the conversation's rich ComposeEditor so
-// comments get @-mentions (people, sessions, tasks, docs) for free, broadcasts
-// the live draft as typing presence, sends on Enter, and exposes the opt-in
-// "Ask agent" icon. Replying to a comment threads the next message under it.
+// Composer for one thread. Reuses the conversation's own MessageInput (mentions,
+// image paste, auto-grow, and a submit path that clears the box synchronously) in
+// `bareComposer` mode — no session chrome. The draft lives under an isolated
+// `comment:<thread>` key so it never collides with the conversation's own draft,
+// and we read it back to broadcast typing presence. The agent affordance lives in
+// the thread, not here.
 
 export function CommentComposer({
   conversationId,
@@ -19,9 +20,7 @@ export function CommentComposer({
   currentUserId,
   onCancelReply,
   onSubmit,
-  onAskAgent,
-  agentBusy,
-  placeholder = "Comment… (@ to mention)",
+  placeholder = "Comment…",
   autoFocus,
 }: {
   conversationId: string;
@@ -32,40 +31,21 @@ export function CommentComposer({
   currentUserId?: string;
   onCancelReply?: () => void;
   onSubmit: (content: string) => void | Promise<void>;
-  onAskAgent?: () => void | Promise<void>;
-  agentBusy?: boolean;
   placeholder?: string;
   autoFocus?: boolean;
 }) {
-  const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [editorKey, setEditorKey] = useState(0); // remount to clear after send
-  const editorRef = useRef<ComposeEditorHandle>(null);
-  const mentionQuery = useMentionQuery({ kind: "any" });
+  const draftKey = `comment:${conversationId}:${messageId ?? "global"}`;
+  const draft = useInboxStore((s) => (s.drafts[draftKey]?.draft_message as string | undefined) ?? "");
 
-  // Broadcast the live draft as typing presence while there's content; watch others'.
   const present = useDocPresence({
     docId: presenceDocId(conversationId, messageId),
-    draftText: text,
+    draftText: draft,
     enabled: authed && enabled,
-    forceBroadcast: text.trim().length > 0,
+    forceBroadcast: draft.trim().length > 0,
   });
   const typing = present.filter((p) => p.draft_text && p.draft_text.trim());
 
-  const submit = async () => {
-    const body = (editorRef.current?.getMarkdown() ?? "").trim();
-    if (!body || busy) return;
-    setBusy(true);
-    try {
-      await onSubmit(body);
-      editorRef.current?.clear();
-      setText("");
-      setEditorKey((k) => k + 1);
-      onCancelReply?.();
-    } finally {
-      setBusy(false);
-    }
-  };
+  if (!authed) return <div className="cc-cmt-signedout">Sign in to comment.</div>;
 
   return (
     <div className="cc-cmt-composer">
@@ -94,50 +74,15 @@ export function CommentComposer({
         </div>
       )}
 
-      {authed ? (
-        <div className="cc-cmt-editorbox">
-          <div className="cc-cmt-editor">
-            <ComposeEditor
-              key={editorKey}
-              ref={editorRef}
-              initialContent=""
-              onMentionQuery={mentionQuery}
-              onSubmit={submit}
-              onExit={() => {}}
-              onTextChange={setText}
-              onContentChange={() => {}}
-              submitOnEnter
-              placeholder={placeholder}
-            />
-          </div>
-          <div className="cc-cmt-editor-actions">
-            {onAskAgent && (
-              <button
-                type="button"
-                className={"cc-cmt-agentbtn" + (agentBusy ? " cc-cmt-agentbtn-busy" : "")}
-                disabled={agentBusy || !enabled}
-                title={agentBusy ? "Agent is replying…" : "Ask the agent to reply in this thread"}
-                aria-label="Ask the agent to reply in this thread"
-                onClick={() => onAskAgent()}
-              >
-                {agentBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Bot className="w-3.5 h-3.5" />}
-              </button>
-            )}
-            <button
-              type="button"
-              className="cc-cmt-send"
-              disabled={!text.trim() || busy || !enabled}
-              title="Send (Enter)"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={submit}
-            >
-              {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ArrowUp className="w-3.5 h-3.5" />}
-            </button>
-          </div>
-        </div>
-      ) : (
-        <div className="cc-cmt-signedout">Sign in to comment.</div>
-      )}
+      <div className="cc-cmt-mi">
+        <MessageInput
+          conversationId={draftKey}
+          bareComposer
+          composerPlaceholder={placeholder}
+          autoFocusInput={autoFocus}
+          onGateSend={async (text) => { await onSubmit(text); }}
+        />
+      </div>
     </div>
   );
 }

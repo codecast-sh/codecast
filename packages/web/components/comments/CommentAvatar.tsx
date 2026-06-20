@@ -1,9 +1,8 @@
-import { Bot } from "lucide-react";
+import { AgentIcon } from "../ConversationList";
 
-// Small round avatar for a comment author. Image when we have one, otherwise a
-// colored initial (deterministic hue per name, matching the presence facepile
-// vibe). The agent gets a distinct violet bot chip so its replies read as
-// machine-authored at a glance.
+// Small round avatar for a comment author. The agent renders with the SAME
+// Claude/Codex/etc. icon the conversation uses for assistant messages, so a reply
+// reads as that agent. Users render their image, else a colored initial.
 
 const HUES = ["#268bd2", "#2aa198", "#859900", "#b58900", "#cb4b16", "#d33682", "#6c71c4"];
 
@@ -17,21 +16,19 @@ export function CommentAvatar({
   name,
   image,
   isAgent,
+  agentType,
   size = 22,
 }: {
   name: string;
   image?: string;
   isAgent?: boolean;
+  agentType?: string;
   size?: number;
 }) {
   if (isAgent) {
     return (
-      <span
-        className="cc-cmt-avatar grid place-items-center shrink-0 rounded-full text-sol-violet bg-sol-violet/15 ring-1 ring-sol-violet/30"
-        style={{ width: size, height: size }}
-        title="Agent"
-      >
-        <Bot style={{ width: size * 0.6, height: size * 0.6 }} />
+      <span className="cc-cmt-avatar shrink-0" style={{ width: size, height: size }} title="Agent">
+        <AgentIcon agentType={agentType || "claude_code"} className="w-full h-full rounded-md" />
       </span>
     );
   }
