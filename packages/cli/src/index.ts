@@ -1945,6 +1945,15 @@ cast sessions --json   |   -w --json   # any view as JSON / NDJSON
 # needs-input = ball in your court (finished turn, open question, permission prompt, dead with
 # output) — same as the web inbox's NEEDS INPUT. idle = blank sessions with nothing to act on.
 
+# Labels — personal filing. File a session under a name, then filter by it
+# (cast sessions/feed/search --label <name>). A session carries at most one label.
+cast label set api <id>           # file a session under "api" (creates the label if new)
+cast label set api                # …file the CURRENT session
+cast label ls                     # my labels with session counts
+cast label clear <id>             # unfile a session (drop its label)
+cast label rename api backend     # rename a label (its sessions follow)
+cast label rm api                 # remove a label (its sessions become unlabeled)
+
 # Analysis
 cast diff <id>                    # files changed, commits, tools used
 cast diff --today                 # aggregate today's work
@@ -2144,6 +2153,8 @@ cast spawn "<task>" ["<task>" ...]            # start N fresh sessions, no share
 \`cast spawn\` starts fresh sessions with no shared history, in the current project (\`-C <dir>\` for elsewhere). Use it to hand off self-contained work — a parallel audit, a port, a spike — rather than research you'd fold back into your own answer.
 
 Both start working immediately and appear in the inbox. A branch or session only knows what you give it — for forks, plus the history up to the fork point — so seed each with a sharp, self-contained prompt. When you launch several, tell the human what you sent where.
+
+Labels carry across a fork by default: a branch inherits whatever label you'd filed the parent session under (labels are your personal filing, so this follows your own filing even when you fork a teammate's session), keeping a fork grouped with its source without any flag. Pass \`--label <name>\` to file the new sessions under a label you choose instead — an override for forks, and the only way to file a \`spawn\` (which starts fresh, with nothing to inherit). The label is created if it doesn't exist: \`cast spawn --label rollout "<task>" "<task>"\`, then \`cast sessions --label rollout\` to see the whole fan-out as a group.
 ${FORKS_SNIPPET_END}
 `;
 
@@ -3007,6 +3018,117 @@ program
     if (result.target_live === false) {
       console.log(`${c.yellow}!${c.reset} ${c.dim}that session has no live daemon right now — queued; you'll be told if it can't be delivered${c.reset}`);
     }
+  });
+
+// ── cast label ────────────────────────────────────────────────────────────────
+// Labels are personal filing: a session is filed under at most ONE label, which
+// you can then filter by (cast sessions/feed/search --label <name>). The catalog
+// and the filing live server-side (inbox_buckets / bucket_assignments), shared
+// with the web sessions panel.
+const labelCmd = program
+  .command("label")
+  .alias("labels")
+  .description(
+    "Manage personal session labels\n\n" +
+    "A label is a name you file sessions under, then filter by (cast sessions\n" +
+    "--label <name>). Filing is exclusive — a session carries at most one label.\n" +
+    "Labels are personal; teammates never see yours.\n\n" +
+    "Examples:\n" +
+    "  cast label set api jx7c6zk     # file a session under \"api\" (creates it if new)\n" +
+    "  cast label set api             # …file the CURRENT session\n" +
+    "  cast label ls                  # my labels with session counts\n" +
+    "  cast label clear jx7c6zk       # remove a session's label\n" +
+    "  cast label rm api              # delete the \"api\" label"
+  )
+  .showHelpAfterError(true);
+
+labelCmd
+  .command("ls")
+  .alias("list")
+  .description("List my labels with how many sessions are filed under each")
+  .option("--json", "Output as JSON")
+  .action(async (options: any) => {
+    const result = await cliPost("/cli/labels/list", {});
+    if (options.json) {
+      console.log(JSON.stringify({ labels: result.labels ?? [] }));
+      return;
+    }
+    const { formatLabelsList } = await import("./formatter.js");
+    console.log(formatLabelsList(result));
+  });
+
+function resolveLabelSession(session: string | undefined): string {
+  const sess = session || detectCurrentSessionId();
+  if (!sess) {
+    console.error("No session given and none detected — pass a session short ID (e.g. cast label set api jx7c6zk)");
+    process.exit(1);
+  }
+  return sess;
+}
+
+labelCmd
+  .command("set")
+  .alias("assign")
+  .description("File a session under a label (creates the label if it doesn't exist)")
+  .argument("<name>", "Label name")
+  .argument("[session]", "Session short ID (default: current session)")
+  .option("--color <color>", "Color for a newly-created label")
+  .action(async (name: string, session: string | undefined, options: any) => {
+    const result = await cliPost("/cli/labels/set", {
+      session: resolveLabelSession(session),
+      name,
+      ...(options.color ? { color: options.color } : {}),
+    });
+    const created = result.created_label ? ` ${c.dim}(new label)${c.reset}` : "";
+    console.log(`${c.green}ok${c.reset} filed ${c.cyan}${result.session_short_id}${c.reset} under ${c.yellow}${result.label}${c.reset}${created}`);
+  });
+
+labelCmd
+  .command("clear")
+  .alias("unset")
+  .description("Unfile a session (remove whatever label it's under)")
+  .argument("[session]", "Session short ID (default: current session)")
+  .action(async (session: string | undefined) => {
+    const result = await cliPost("/cli/labels/clear", { session: resolveLabelSession(session) });
+    if (result.prior_label) {
+      console.log(`${c.green}ok${c.reset} unfiled ${c.cyan}${result.session_short_id}${c.reset} from ${c.yellow}${result.prior_label}${c.reset}`);
+    } else {
+      console.log(`${c.dim}${result.session_short_id} had no label${c.reset}`);
+    }
+  });
+
+labelCmd
+  .command("create")
+  .alias("new")
+  .description("Create an empty label up front")
+  .argument("<name>", "Label name")
+  .option("--color <color>", "Optional color")
+  .action(async (name: string, options: any) => {
+    const result = await cliPost("/cli/labels/create", { name, ...(options.color ? { color: options.color } : {}) });
+    if (result.created) console.log(`${c.green}ok${c.reset} created label ${c.yellow}${result.label}${c.reset}`);
+    else console.log(`${c.dim}label ${c.yellow}${result.label}${c.reset}${c.dim} already exists${c.reset}`);
+  });
+
+labelCmd
+  .command("rename")
+  .description("Rename a label (the sessions filed under it follow along)")
+  .argument("<from>", "Existing label name")
+  .argument("<to>", "New label name")
+  .action(async (from: string, to: string) => {
+    const result = await cliPost("/cli/labels/rename", { from, to });
+    console.log(`${c.green}ok${c.reset} renamed ${c.yellow}${result.old}${c.reset} ${c.dim}→${c.reset} ${c.yellow}${result.new}${c.reset}`);
+  });
+
+labelCmd
+  .command("rm")
+  .aliases(["remove", "archive", "delete"])
+  .description("Remove a label (archives it; its sessions become unlabeled)")
+  .argument("<name>", "Label name")
+  .action(async (name: string) => {
+    const result = await cliPost("/cli/labels/remove", { name });
+    const n = result.filed_count ?? 0;
+    const note = n > 0 ? ` ${c.dim}(${n} session${n === 1 ? "" : "s"} now unlabeled)${c.reset}` : "";
+    console.log(`${c.green}ok${c.reset} removed label ${c.yellow}${result.label}${c.reset}${note}`);
   });
 
 const accountsCmd = program
@@ -8564,6 +8686,40 @@ program
     }
   });
 
+// File freshly-created sessions (spawn/fork --label) under a label, reusing the
+// /cli/labels/set endpoint — resolve-or-create happens server-side, and for a
+// fork this overrides whatever label the branch inherited from its parent. The
+// sessions already exist, so a failed call WARNS (with a recoverable hint)
+// instead of aborting. Returns whether a brand-new label was minted, for the
+// caller's success line.
+async function fileSessionsUnderLabel(
+  siteUrl: string,
+  token: string,
+  conversationIds: string[],
+  label: string,
+): Promise<{ createdLabel: boolean; failures: number }> {
+  let createdLabel = false;
+  let failures = 0;
+  for (const convId of conversationIds) {
+    try {
+      const resp = await cliFetch(`${siteUrl}/cli/labels/set`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ api_token: token, session: convId, name: label }),
+      });
+      if (resp.ok) {
+        const r = (await resp.json().catch(() => ({}))) as { created_label?: boolean };
+        if (r.created_label) createdLabel = true;
+      } else {
+        failures++;
+      }
+    } catch {
+      failures++;
+    }
+  }
+  return { createdLabel, failures };
+}
+
 program
   .command("fork")
   .description(
@@ -8583,6 +8739,7 @@ program
   .option("--at <line>", "Fork at message line N (cast read numbering); default: the latest user message")
   .option("--tip", "Fork at the very end instead (include everything so far)")
   .option("--from <index>", "Alias for --at (back-compat)")
+  .option("--label <name>", "File each branch under this label instead of the parent's (created if new; branches inherit the parent label by default)")
   .option("--json", "Machine-readable output")
   .option("--resume", "Open forked conversation in Claude/Codex after creating (single, unseeded fork only)")
   .option("--as <agent>", "Agent to resume with (claude or codex)")
@@ -8721,19 +8878,30 @@ program
         roster.push({ short_id: newShortId, conversation_id: result.conversation_id, direction, seeded });
       }
 
+      let labelResult: { createdLabel: boolean; failures: number } | null = null;
+      if (options.label) {
+        labelResult = await fileSessionsUnderLabel(siteUrl, config.auth_token!, roster.map((b) => b.conversation_id), options.label);
+      }
+
       if (options.json) {
-        console.log(JSON.stringify({ forked_from: id, message_uuid: messageUuid ?? null, branches: roster }, null, 2));
+        console.log(JSON.stringify({ forked_from: id, message_uuid: messageUuid ?? null, label: options.label ?? null, branches: roster }, null, 2));
         return;
       }
 
       const anchorNote = options.tip ? "at the tip" : messageUuid ? "at the latest user message" : "(entire conversation)";
+      const labelNote = options.label
+        ? ` ${c.dim}·${c.reset} filed under ${c.yellow}${options.label}${c.reset}${labelResult?.createdLabel ? ` ${c.dim}(new label)${c.reset}` : ""}`
+        : "";
       console.log(
         `${c.green}✓${c.reset} forked ${c.cyan}${id!.toString().slice(0, 7)}${c.reset} ${anchorNote} into ` +
-        `${c.bold}${roster.length}${c.reset} branch${roster.length === 1 ? "" : "es"} — all in your inbox:`
+        `${c.bold}${roster.length}${c.reset} branch${roster.length === 1 ? "" : "es"} — all in your inbox:${labelNote}`
       );
       for (const b of roster) {
         const warn = b.seeded ? "" : ` ${c.yellow}(seed not delivered — resend with cast send)${c.reset}`;
         console.log(`  ${c.cyan}${b.short_id}${c.reset}  ${b.direction}${warn}`);
+      }
+      if (labelResult?.failures) {
+        console.log(`  ${c.yellow}!${c.reset} ${c.dim}${labelResult.failures} branch${labelResult.failures === 1 ? "" : "es"} not filed — retry with cast label set ${options.label} <id>${c.reset}`);
       }
       return;
     }
@@ -8760,6 +8928,12 @@ program
       const shortId = result.short_id || result.conversation_id?.toString().slice(0, 7);
       console.log(`Forked! New conversation: ${shortId}`);
       console.log(`View: https://codecast.sh/conversation/${result.conversation_id}`);
+
+      if (options.label) {
+        const { createdLabel, failures } = await fileSessionsUnderLabel(siteUrl, config.auth_token!, [result.conversation_id], options.label);
+        if (failures) console.log(`${c.yellow}!${c.reset} could not file under ${options.label} — retry with cast label set ${options.label} ${shortId}`);
+        else console.log(`Filed under ${c.yellow}${options.label}${c.reset}${createdLabel ? ` ${c.dim}(new label)${c.reset}` : ""}`);
+      }
 
       if (options.resume) {
         const targetAgent = options.as?.toLowerCase() || "claude";
@@ -8852,6 +9026,7 @@ program
   .option("--agent <type>", "Agent: claude (default), codex, cursor, gemini", "claude")
   .option("--model <model>", "Model override (e.g. opus, sonnet)")
   .option("--isolated", "Give each session its own git worktree")
+  .option("--label <name>", "File each spawned session under a label (created if new)")
   .option("--json", "Machine-readable output")
   .action(async (rawPrompts: string[], options: any) => {
     const config = readConfig();
@@ -8905,18 +9080,29 @@ program
       roster.push({ short_id: result.short_id, conversation_id: result.conversation_id, prompt });
     }
 
+    let labelResult: { createdLabel: boolean; failures: number } | null = null;
+    if (options.label) {
+      labelResult = await fileSessionsUnderLabel(siteUrl, config.auth_token!, roster.map((s) => s.conversation_id), options.label);
+    }
+
     if (options.json) {
-      console.log(JSON.stringify({ dir, agent: agentType, sessions: roster }, null, 2));
+      console.log(JSON.stringify({ dir, agent: agentType, label: options.label ?? null, sessions: roster }, null, 2));
       return;
     }
 
     const dirNote = dir.replace(process.env.HOME || "~", "~");
+    const labelNote = options.label
+      ? ` ${c.dim}·${c.reset} filed under ${c.yellow}${options.label}${c.reset}${labelResult?.createdLabel ? ` ${c.dim}(new label)${c.reset}` : ""}`
+      : "";
     console.log(
       `${c.green}✓${c.reset} spawned ${c.bold}${roster.length}${c.reset} session${roster.length === 1 ? "" : "s"} in ` +
-      `${c.dim}${dirNote}${c.reset} — all in your inbox:`
+      `${c.dim}${dirNote}${c.reset} — all in your inbox:${labelNote}`
     );
     for (const s of roster) {
       console.log(`  ${c.cyan}${s.short_id}${c.reset}  ${s.prompt}`);
+    }
+    if (labelResult?.failures) {
+      console.log(`  ${c.yellow}!${c.reset} ${c.dim}${labelResult.failures} session${labelResult.failures === 1 ? "" : "s"} not filed — retry with cast label set ${options.label} <id>${c.reset}`);
     }
   });
 

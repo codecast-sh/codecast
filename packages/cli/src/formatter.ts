@@ -993,7 +993,7 @@ export function formatLabelsList(result: MonitorResult, opts?: { project?: strin
   if (labels.length === 0) {
     return opts?.project
       ? `No labels with sessions in ${opts.project} — \`cast sessions --labels -g\` for all projects.`
-      : "No labels yet — create them in the web sessions panel (sessions sidebar → By label).";
+      : "No labels yet — file a session with `cast label set <name> <session>` (or use the web sessions sidebar → By label).";
   }
   const lines: string[] = [];
   const labeled = labels.reduce((n, l) => n + l.count, 0);

@@ -5,14 +5,14 @@ import { execSync } from "child_process";
 import pkg from "../package.json";
 
 const VERSION = pkg.version;
-const MEMORY_VERSION = "10"; // bumped: --label filter on search/feed/sessions + --labels/--by-label
+const MEMORY_VERSION = "11"; // bumped: cast label set/clear/ls/rename/rm (manage session labels)
 const TASK_VERSION = "1";
 const WORK_VERSION = "6"; // bumped: messaging docs split out into MESSAGING_SNIPPET
 const PLAN_VERSION = "2";
 const WORKFLOW_VERSION = "1";
 const MESSAGING_VERSION = "4"; // bumped: messaging snippet tightened (teammate / peer-or-boss)
 const VISUAL_VERSION = "1"; // cast-canvas: inline HTML visual rendering
-const FORKS_VERSION = "1"; // cast fork / cast spawn: branch or spawn sessions into the inbox
+const FORKS_VERSION = "2"; // bumped: --label flag on cast fork / cast spawn + default label inheritance on fork
 const LATEST_URL = "https://dl.codecast.sh/latest.json";
 const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
 
