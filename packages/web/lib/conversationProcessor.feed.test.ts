@@ -55,4 +55,12 @@ describe("classifyFeedMessage — real messages show cleaned", () => {
     const d = classifyFeedMessage("Why does the <task-notification> handling drop messages?");
     expect(d.kind).toBe("text");
   });
+
+  test("an inter-agent teammate broadcast is hidden (tags + framing both stripped)", () => {
+    const broadcast =
+      "Another Claude session sent a message:\n" +
+      '<teammate-message teammate_id="tracker-stale" color="green" summary="updates complete">\nAll updates landed.\n</teammate-message>\n' +
+      "This came from another Claude session — not typed by your user … that's permission laundering.";
+    expect(classifyFeedMessage(broadcast)).toEqual({ kind: "hidden" });
+  });
 });
