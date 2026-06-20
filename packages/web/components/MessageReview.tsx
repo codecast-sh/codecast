@@ -22,6 +22,7 @@ import { getQuoteUnits, quoteUnitAt, unitTop } from "../lib/quoteUnits";
 import { createReviewComment, exitReviewMode } from "../lib/reviewActions";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { KeyCap } from "./KeyboardShortcutsHelp";
+import { RightCommentRail } from "./comments/RightCommentRail";
 
 // Comment-rail sizing (px). When the empty left margin is at least MIN, float the
 // rail there at whatever width fits (up to MAX) so the text column keeps its full
@@ -29,6 +30,12 @@ import { KeyCap } from "./KeyboardShortcutsHelp";
 const RAIL_MAX_PX = 240; // 15rem
 const RAIL_MIN_PX = 168; // ~10.5rem — narrowest still-readable margin rail
 const RAIL_GAP_PX = 40; // gap between rail and text + clearance from the viewport edge
+
+// Right-hand teammate-comment rail (mirror of the left quote rail). Same idea:
+// float in the right margin when it fits; otherwise shrink the text into a right
+// column so the comments still sit beside the message instead of below it.
+const RIGHT_MAX_PX = 300;
+const RIGHT_MIN_PX = 188;
 
 type Rect = { top: number; height: number };
 
@@ -56,6 +63,21 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
   // layer (r/arrows/c/q) still uses reviewMessageId, but it's optional sugar.
   const engaged = myComments.length > 0;
 
+  // Persisted teammate comments on THIS message drive the right rail. A primitive
+  // count keeps the selector cheap (re-renders only when it changes); the anchor
+  // lets the gutter handle open the rail on a message that has none yet.
+  const teamCount = useInboxStore((s) => {
+    const cs = s.comments as Record<string, { conversation_id?: string; message_id?: string }>;
+    let n = 0;
+    for (const id in cs) {
+      const c = cs[id];
+      if (c.conversation_id === conversationId && c.message_id === messageId) n++;
+    }
+    return n;
+  });
+  const teamAnchor = useInboxStore((s) => s.commentRailAnchor === messageId);
+  const rightActive = teamCount > 0 || teamAnchor;
+
   const containerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const railRef = useRef<HTMLDivElement>(null);
@@ -72,12 +94,18 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
   // the rail width to use in margin mode (clamped to the available margin).
   const [railInMargin, setRailInMargin] = useState(false);
   const [railPx, setRailPx] = useState(RAIL_MAX_PX);
+  // Right comment rail placement: "margin" floats in the empty right margin;
+  // "column" shrinks the text into a readable right column (only when the text can
+  // spare the width); "below" drops clean cards under the message when it's too
+  // narrow to sit beside. rightW is the rail/column width.
+  const [rightMode, setRightMode] = useState<"margin" | "column" | "below">("below");
+  const [rightW, setRightW] = useState(RIGHT_MAX_PX);
 
   // Measure block offsets while the rail/keyboard nav needs them OR while hovering:
   // the hover handle must track its block live, because content above can reflow
   // after the mouse stops (web font load, syntax highlighting, image settle) and a
   // frozen offset would leave the handle stranded on the block's lower lines.
-  const measureActive = engaged || isReviewTarget || hoverIndex !== null;
+  const measureActive = engaged || isReviewTarget || hoverIndex !== null || rightActive;
 
   // Drop a stuck peek highlight: removing a chip via its Remove button unmounts it
   // before onMouseLeave fires, so clear the peek when its block no longer has any
@@ -105,11 +133,26 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
     if (region) {
       let scroller: HTMLElement | null = region;
       while (scroller && getComputedStyle(scroller).overflowY === "visible") scroller = scroller.parentElement;
-      const left = scroller ? scroller.getBoundingClientRect().left : 0;
-      const avail = region.getBoundingClientRect().left - left - RAIL_GAP_PX;
+      const rr = region.getBoundingClientRect();
+      const sr = scroller ? scroller.getBoundingClientRect() : null;
+      const left = sr ? sr.left : 0;
+      const avail = rr.left - left - RAIL_GAP_PX;
       const inMargin = avail >= RAIL_MIN_PX;
       setRailInMargin(inMargin);
       if (inMargin) setRailPx(Math.min(RAIL_MAX_PX, Math.round(avail)));
+
+      // Mirror on the right: float in the empty right margin when it fits (the
+      // text keeps full width, exactly like the left quote rail). When there's no
+      // margin — the right edge already carries the toolbar + "files changed" chip
+      // and a squeezed column would collide with them — drop clean cards below so
+      // the message stays readable. (column mode kept in the union for later.)
+      const availR = (sr ? sr.right : window.innerWidth) - rr.right - RAIL_GAP_PX;
+      if (availR >= RIGHT_MIN_PX) {
+        setRightMode("margin");
+        setRightW(Math.min(RIGHT_MAX_PX, Math.round(availR)));
+      } else {
+        setRightMode("below");
+      }
     }
   }, []);
 
@@ -255,8 +298,15 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
   return (
     <div
       ref={containerRef}
-      className={"cc-msg-review" + (engaged ? (railInMargin ? " cc-rail-margin" : " cc-rail-inline") : "")}
-      style={engaged && railInMargin ? ({ "--cc-rail-w": railPx + "px" } as React.CSSProperties) : undefined}
+      className={
+        "cc-msg-review" +
+        (engaged ? (railInMargin ? " cc-rail-margin" : " cc-rail-inline") : "") +
+        (rightActive && rightMode === "column" ? " cc-rright-host-inline" : "")
+      }
+      style={{
+        ...(engaged && railInMargin ? { "--cc-rail-w": railPx + "px" } : {}),
+        ...(rightActive && rightMode !== "below" ? { "--cc-rright-w": rightW + "px" } : {}),
+      } as React.CSSProperties}
       data-review-region={isReviewTarget ? "active" : undefined}
       tabIndex={isReviewTarget ? -1 : undefined}
       onKeyDown={isReviewTarget ? handleKeyDown : undefined}
@@ -352,6 +402,12 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
           ))}
         </div>
       )}
+
+      {/* Teammate comments for this message, mirrored to the RIGHT of the text:
+          floating in the margin when it fits, else a shrink-the-text column. */}
+      {rightActive && (
+        <RightCommentRail conversationId={conversationId} messageId={messageId} mode={rightMode} />
+      )}
     </div>
   );
 }
@@ -391,7 +447,10 @@ const CommentChip = memo(function CommentChip({
       onMouseEnter={onPeek}
       onMouseLeave={onPeekEnd}
     >
-      <CommentAvatar author={author} />
+      {/* Avatar = authorship of a note. A bare quote (no body) is you pointing at
+          the agent's text, not saying something, so it carries no profile pic —
+          only a note, or the editor where you're actively writing one, does. */}
+      {comment.body ? <CommentAvatar author={author} /> : null}
       <div className="cc-comment-main">
         {comment.body ? (
           <div className="cc-comment-body">{comment.body}</div>

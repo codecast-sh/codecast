@@ -1,4 +1,4 @@
-import { memo, useLayoutEffect, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Reply, Pencil, Trash2, Check, X } from "lucide-react";
 import { relTimeShort } from "../../lib/utils";
 import {
@@ -14,12 +14,14 @@ import { CommentMarkdown } from "./CommentMarkdown";
 function CommentCardImpl({
   comment,
   currentUserId,
+  agentType,
   onReply,
   onEdit,
   onDelete,
 }: {
   comment: Comment;
   currentUserId?: string;
+  agentType?: string;
   onReply: (c: Comment) => void;
   onEdit: (commentId: string, content: string) => void | Promise<void>;
   onDelete: (commentId: string) => void | Promise<void>;
@@ -33,6 +35,17 @@ function CommentCardImpl({
   const name = commentAuthorName(comment, currentUserId);
   const avatar = commentAuthorAvatar(comment);
   const thinking = agent && comment.agent_status === "thinking";
+
+  // Live elapsed counter while the agent works — concrete proof it's running (the
+  // first reply pays a real session spin-up, so this can run a while).
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!thinking) return;
+    const iv = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(iv);
+  }, [thinking]);
+  const elapsed = thinking ? Math.max(0, Math.floor((Date.now() - comment.created_at) / 1000)) : 0;
+  const elapsedLabel = elapsed >= 60 ? `${Math.floor(elapsed / 60)}m ${elapsed % 60}s` : `${elapsed}s`;
 
   useLayoutEffect(() => {
     if (!editing) return;
@@ -53,20 +66,18 @@ function CommentCardImpl({
   };
 
   return (
-    <div
-      className={
-        "cc-cmt group" +
-        (agent ? " cc-cmt-agent" : "") +
-        // Dim a user comment only while its optimistic stub is still in flight.
-        (!agent && comment._id.startsWith("commentstub") ? " cc-cmt-optimistic" : "")
-      }
-    >
-      <CommentAvatar name={name} image={avatar} isAgent={agent} />
+    <div className={"cc-cmt group" + (agent ? " cc-cmt-agent" : "")}>
+      <CommentAvatar name={name} image={avatar} isAgent={agent} agentType={agentType} />
       <div className="cc-cmt-main">
         <div className="cc-cmt-head">
           <span className={"cc-cmt-name" + (agent ? " text-sol-violet" : "")}>{name}</span>
           {!thinking && <span className="cc-cmt-time">{relTimeShort(comment.created_at)}</span>}
-          {thinking && <span className="cc-cmt-thinking">thinking<span className="cc-dots"><i>.</i><i>.</i><i>.</i></span></span>}
+          {thinking && (
+            <span className="cc-cmt-thinking">
+              drafting<span className="cc-dots"><i /><i /><i /></span>
+              <span className="cc-cmt-elapsed">{elapsedLabel}</span>
+            </span>
+          )}
 
           {!editing && !thinking && (
             <span className="cc-cmt-actions">

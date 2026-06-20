@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Sparkles } from "lucide-react";
 import { type Comment, type CommentThread as Thread } from "../../lib/commentThread";
 import { CommentCard } from "./CommentCard";
 import { CommentComposer } from "./CommentComposer";
@@ -93,9 +93,15 @@ export function CommentThread({
           onSubmit={(content) =>
             onAdd({ content, messageId: thread.messageId, parentCommentId: replyTo?._id })
           }
-          onAskAgent={onAskAgent ? () => onAskAgent(thread.messageId) : undefined}
-          agentBusy={agentBusy}
         />
+      )}
+
+      {/* Agent reply is its own small, distinct affordance — separate from Send. */}
+      {!collapsed && canWrite && onAskAgent && !agentBusy && (
+        <button type="button" className="cc-thread-askagent" onClick={() => onAskAgent(thread.messageId)}>
+          <Sparkles className="w-3 h-3" />
+          Ask the agent to weigh in
+        </button>
       )}
     </div>
   );
