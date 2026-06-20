@@ -394,18 +394,28 @@ export const DiffView = memo(function DiffView({
   // Line comments (opt-in): grouped by their anchor line so each row can render
   // its own thread. Only subscribes when commentContext is set, so inert diffs
   // (Read results, etc.) pay nothing.
-  const commentsByLine = useInboxStore(
-    useShallow((s) => {
-      if (!commentContext) return EMPTY_LINE_COMMENTS;
-      const mine = (s.reviewComments[commentContext.conversationId] ?? []).filter(
-        (c) => c.messageId === commentContext.anchorKey,
-      );
-      if (mine.length === 0) return EMPTY_LINE_COMMENTS;
-      const map: Record<number, PendingComment[]> = {};
-      for (const c of mine) (map[c.blockIndex] ??= []).push(c);
-      return map;
-    }),
+  //
+  // The store subscription MUST return a flat array, not the grouped map: the map
+  // would hold freshly-allocated sub-arrays every render, which `useShallow`'s
+  // value-by-value comparison can never see as equal, so the useSyncExternalStore
+  // snapshot would never stabilize and React would loop ("Maximum update depth
+  // exceeded"). A flat filtered list shallow-compares by stable comment refs, so
+  // it settles. Group into the map afterward in a plain useMemo.
+  const myComments = useInboxStore(
+    useShallow((s) =>
+      commentContext
+        ? (s.reviewComments[commentContext.conversationId] ?? []).filter(
+            (c) => c.messageId === commentContext.anchorKey,
+          )
+        : EMPTY_COMMENT_LIST,
+    ),
   );
+  const commentsByLine = useMemo(() => {
+    if (myComments.length === 0) return EMPTY_LINE_COMMENTS;
+    const map: Record<number, PendingComment[]> = {};
+    for (const c of myComments) (map[c.blockIndex] ??= []).push(c);
+    return map;
+  }, [myComments]);
   const [editingLine, setEditingLine] = useState<number | null>(null);
 
   const closeEditor = useCallback(() => {
