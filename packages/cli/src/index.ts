@@ -2123,17 +2123,37 @@ const VISUAL_SNIPPET_END = "<!-- /codecast-visual -->";
 const VISUAL_SNIPPET = `
 ## Visual Canvas
 
-Some things are better seen than read. Emit a \`cast-canvas\` block of self-contained HTML/CSS/SVG; it renders inline, expandable to fullscreen, and inherits codecast's font and theme automatically.
+Some results land better seen than read. Emit a \`cast-canvas\` block of self-contained HTML/CSS/SVG and codecast renders it inline — themed to match, expandable to fullscreen.
 
 \`\`\`cast-canvas
 <div> … </div>
 \`\`\`
 
-Reach for it when layout or magnitude is the point — reports, mockups, diagrams, tables, charts. The tell: if you're about to draw a layout in ASCII, render it instead; otherwise default to prose and markdown.
+**Reach for it whenever structure or magnitude carries the meaning**, not only when you'd otherwise draw ASCII. Comparing a few options, a system's data flow, a before/after, a timeline, a set of metrics, where the time or tokens went, a dashboard summarizing a run — all read faster as a designed layout than as paragraphs. Keep markdown for ordinary prose answers; when laying it out is what makes the point land, let the canvas be the centerpiece of your reply, not a footnote.
 
-Color with the \`--sol-*\` tokens (\`--sol-text\`, \`--sol-border\`, \`--sol-card\`, accents like \`--sol-blue\`) so it adapts to light/dark — don't hardcode colors. Static markup only; no scripts. Give it a title via a heading or \`data-canvas-title\` — it shows in the canvas header.
+**Treat it as a real design surface.** You have full CSS and SVG: grid and flexbox for multi-panel layouts, \`color-mix()\` for tints, gradients for depth, cards with \`--sol-card\` backgrounds and \`--sol-border\` rules, hand-drawn SVG for diagrams. Compose deliberately — a title and a one-line takeaway up top, then panels, stat callouts, or a chart beneath — so it reads like a considered report, not a wall of text in a box.
 
-For data charts, drop \`<div class="cast-chart" data-spec='{"marks":[{"type":"barY","data":[…],"x":"label","y":"value"}],"y":{"grid":true}}'></div>\` — codecast renders the spec with Observable Plot, themed to match. The spec mirrors Plot: \`marks\` (type = a Plot mark like \`lineY\`/\`areaY\`/\`barY\`/\`dot\`/\`cell\`, plus its channels) and \`x\`/\`y\`/\`color\` scale options. \`fill\`/\`stroke\` take a token name (\`"blue"\`) or a data field; pre-aggregate the data.
+**Theme with the \`--sol-*\` tokens** so it follows light/dark; never hardcode colors. Text: \`--sol-text\` / \`--sol-text-muted\` / \`--sol-text-dim\`. Surfaces: \`--sol-card\` / \`--sol-bg-alt\` / \`--sol-border\`. Accents: \`--sol-blue\`, \`--sol-green\`, \`--sol-yellow\`, \`--sol-red\`, \`--sol-magenta\`, \`--sol-cyan\`, \`--sol-orange\`, \`--sol-violet\`. For a soft fill, \`color-mix(in srgb, var(--sol-blue) 14%, transparent)\`. Title it with a heading or \`data-canvas-title\` — that shows in the header.
+
+It runs sandboxed: **no scripts, no web fonts, no external resources** (it inherits codecast's mono font). Carry the work with layout, color, SVG, and the built-in chart engine rather than JS.
+
+**Charts are declarative** — you give the data, codecast renders it with Observable Plot (never your JS), themed automatically. Drop a placeholder anywhere, even inside a grid cell:
+
+\`\`\`html
+<div class="cast-chart" data-spec='{"marks":[{"type":"barY","data":[…],"x":"label","y":"value"}],"y":{"grid":true}}'></div>
+\`\`\`
+
+The spec mirrors Plot: \`marks\` (each a Plot mark — \`barY\`, \`lineY\`, \`areaY\`, \`rectY\`, \`dot\`, \`cell\`, \`ruleY\`, \`text\`, … with its channels) plus \`x\`/\`y\`/\`color\`/\`fx\`/\`fy\` scale options. Go past one bar chart:
+- **Layer** marks to combine them — an \`areaY\` beneath a \`lineY\`, a dashed \`ruleY\` for a target, a \`text\` mark to label points.
+- **Multiple series**: set \`fill\` (or \`stroke\`) to a data field and each series takes an accent color; add \`"color":{"legend":true}\` for a key. \`barY\`/\`areaY\` stack automatically.
+- **Small multiples**: facet with \`fx\`/\`fy\` to repeat the chart across a category.
+- \`fill\`/\`stroke\` also accept a color word (\`"green"\`). Pre-aggregate your data — the engine plots what you give it, it doesn't sum.
+
+Revenue against target, three marks layered:
+
+\`\`\`html
+<div class="cast-chart" data-spec='{"y":{"grid":true,"label":"$k"},"marks":[{"type":"areaY","data":[…],"x":"month","y":"rev","fill":"blue","fillOpacity":0.15},{"type":"lineY","data":[…],"x":"month","y":"rev","stroke":"blue"},{"type":"ruleY","data":[120],"stroke":"red","strokeDasharray":"4"}]}'></div>
+\`\`\`
 ${VISUAL_SNIPPET_END}
 `;
 
