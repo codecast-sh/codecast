@@ -56,3 +56,35 @@ export function isSessionMessage(rawContent: string | null | undefined): boolean
 export function formatSessionMessage(fromShortId: string, body: string): string {
   return `<session-message from="${fromShortId}">\n${body}\n</session-message>`;
 }
+
+// --- Teammate broadcasts (inter-agent multi-agent harness) ---------------------------
+// A separate wire format from `cast send`: the harness wraps a message from another agent
+// in <teammate-message teammate_id="…"> tags, plus a fixed boilerplate lead-in ("Another
+// Claude session sent a message:") and trailing disclaimer ("This came from another Claude
+// session — … permission laundering."). Like a session message, this is machine-delivered,
+// not typed by the human, so the "what the human said" surfaces skip it.
+
+const TEAMMATE_FRAMING_LEADIN = /^Another\s+\S+\s+session sent a message:?/i;
+const TEAMMATE_FRAMING_TRAILER = /This came from another\s+\S+\s+session[\s\S]*$/i;
+
+export function isTeammateMessage(rawContent: string | null | undefined): boolean {
+  return !!rawContent && rawContent.includes("<teammate-message");
+}
+
+// Strip the harness's framing boilerplate (machine instruction to the receiving agent, not
+// content). Use on the text left over after the <teammate-message> tags are removed.
+export function stripTeammateFraming(text: string): string {
+  return text.replace(TEAMMATE_FRAMING_LEADIN, "").replace(TEAMMATE_FRAMING_TRAILER, "").trim();
+}
+
+// True when the only non-tag text is that framing — i.e. a pure teammate broadcast with no
+// human-authored words around it.
+export function isTeammateFramingOnly(leftover: string): boolean {
+  return stripTeammateFraming(leftover).length === 0;
+}
+
+// Any user-role message delivered by machinery rather than typed by the human: a
+// cross-session `cast send` message or an inter-agent teammate broadcast.
+export function isMachineDeliveredMessage(rawContent: string | null | undefined): boolean {
+  return isSessionMessage(rawContent) || isTeammateMessage(rawContent);
+}

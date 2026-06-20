@@ -90,7 +90,7 @@ import { PlanBadge, TaskBadge } from "./PlanTaskHoverCard";
 import { EntityIdPill, EntityAwareCode, EntityAwareLink, renderWithMentions } from "./EntityIdPill";
 import { SUMMARY_LABELS, FormattedSummary } from "./FormattedSummary";
 import { entityRemarkPlugins } from "../lib/remarkEntityIds";
-import { parseInboundSessionMessage, isSessionMessage } from "./sessionMessage";
+import { parseInboundSessionMessage, isTeammateFramingOnly, isMachineDeliveredMessage } from "./sessionMessage";
 import { CollabComposer, CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
 import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, type ParsedCastCommand } from "./castCommand";
 import { ConversationTree } from "./ConversationTree";
@@ -141,7 +141,7 @@ import { parseFileChangeSummary, parseUnifiedDiffSections } from "../lib/unified
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
-import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench } from "lucide-react";
+import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench } from "lucide-react";
 import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES, labelMentionItems } from "../hooks/useMentionQuery";
 import { pendingBannerState, isActiveAgentStatus, isBootingAgentStatus, type LiveAgentStatus } from "../lib/pendingBanner";
@@ -1915,8 +1915,16 @@ function classifyUserMessage(
     if (!tStripped) return { kind: 'noise' };
     return { kind: 'compaction_summary' };
   }
-  if (t.includes('<teammate-message') && !t.replace(/<teammate-message\s+[^>]*>[\s\S]*?<\/teammate-message>/g, '').replace(/<task-notification>[\s\S]*?<\/task-notification>/g, '').trim()) {
-    return { kind: 'teammate_events' };
+  if (t.includes('<teammate-message')) {
+    const leftover = t
+      .replace(/<teammate-message\s+[^>]*>[\s\S]*?<\/teammate-message>/g, '')
+      .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, '')
+      .trim();
+    // Pure teammate tags, or tags wrapped only in the harness's framing boilerplate, are
+    // a teammate broadcast — render as a teammate event (no human avatar), not a user turn.
+    if (!leftover || isTeammateFramingOnly(leftover)) {
+      return { kind: 'teammate_events' };
+    }
   }
   const planContent = extractPlanContent(t);
   if (planContent) return { kind: 'plan', planContent };
@@ -5204,16 +5212,22 @@ function TeammateEventsBlock({ content, timestamp }: { content: string; timestam
   const parts = parseTeammateMessages(content);
   return (
     <div className="my-1 space-y-1 pl-8">
-      {parts.map((part, i) => part.type === 'teammate' ? (
-        <TeammateMessageCard key={i} teammateId={part.teammateId} color={part.color} summary={part.summary} content={part.content} />
-      ) : part.content.trim() ? (
-        <span key={i} className="text-xs text-sol-text-dim whitespace-pre-wrap">{part.content}</span>
-      ) : null)}
+      {parts.map((part, i) => {
+        if (part.type === 'teammate') {
+          return <TeammateMessageCard key={i} teammateId={part.teammateId} color={part.color} summary={part.summary} content={part.content} timestamp={timestamp} />;
+        }
+        // Drop the harness's framing boilerplate ("Another Claude session sent a
+        // message:" / the "permission laundering" disclaimer) — it's machine instruction
+        // to the receiving agent, not content. Keep any genuinely incidental prose.
+        const text = part.content.trim();
+        if (!text || isTeammateFramingOnly(text)) return null;
+        return <span key={i} className="text-xs text-sol-text-dim whitespace-pre-wrap">{part.content}</span>;
+      })}
     </div>
   );
 }
 
-function TeammateMessageCard({ teammateId, color, summary, content }: { teammateId: string; color?: string; summary?: string; content: string }) {
+function TeammateMessageCard({ teammateId, color, summary, content, timestamp }: { teammateId: string; color?: string; summary?: string; content: string; timestamp?: number }) {
   const [expanded, setExpanded] = useState(false);
 
   const safeContent = content || '';
@@ -5327,27 +5341,36 @@ function TeammateMessageCard({ teammateId, color, summary, content }: { teammate
 
   const isLong = content.length > 200;
 
+  // Modeled on SessionMessageBlock (the `cast send` card) so a teammate broadcast reads as
+  // "a message from another session", not a turn the human typed — but deliberately distinct
+  // from it: a Users icon + "From teammate" label + the sender's own color, vs. that card's
+  // CornerDownRight + "Message from" + fixed cyan.
   return (
-    <div className={`my-1.5 border-l-2 ${borderColor} pl-3 py-1.5`}>
-      <div className="flex items-center gap-2 mb-1.5">
-        <span className={`px-1.5 py-0.5 rounded border text-[10px] font-mono ${badgeColor}`}>
+    <div className={`my-1.5 rounded border-l-2 ${borderColor} bg-sol-bg-alt/30`}>
+      <div className="flex items-center gap-2 px-3 pt-2 pb-1">
+        <Users className="w-3.5 h-3.5 shrink-0 text-sol-text-dim/60" />
+        <span className="text-[11px] font-medium tracking-wide uppercase shrink-0 text-sol-text-dim/70">From teammate</span>
+        <span className={`px-1.5 py-0.5 rounded border text-[10px] font-mono shrink-0 ${badgeColor}`}>
           {teammateId}
         </span>
         {summary && (
-          <span className="text-[10px] uppercase tracking-wider font-medium text-sol-text-dim/60">
+          <span className="text-[10px] uppercase tracking-wider font-medium text-sol-text-dim/50 truncate">
             {summary}
           </span>
         )}
+        {timestamp != null && (
+          <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+        )}
       </div>
       <div
-        className={`text-sm text-sol-text-secondary break-words leading-relaxed whitespace-pre-wrap ${isLong && !expanded ? "line-clamp-6" : ""}`}
+        className={`px-3 ${isLong ? "pb-1" : "pb-2"} text-sm text-sol-text-secondary break-words leading-relaxed prose prose-invert prose-sm max-w-none ${isLong && !expanded ? "line-clamp-6" : ""}`}
       >
-        {content}
+        <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={MD_COMPONENTS_NO_IMG}>{content}</ReactMarkdown>
       </div>
       {isLong && (
         <button
           onClick={() => setExpanded(!expanded)}
-          className="text-xs text-sol-text-dim hover:text-sol-blue mt-1 transition-colors"
+          className="text-xs text-sol-text-dim hover:text-sol-blue px-3 pb-2 transition-colors"
         >
           {expanded ? "Show less" : "Show more"}
         </button>
@@ -10383,7 +10406,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     if (!serverUserMessages) return new Set<string>();
     const ids = new Set<string>();
     for (const m of serverUserMessages) {
-      if (isSessionMessage(m.content)) continue;
+      if (isMachineDeliveredMessage(m.content)) continue;
       const display = cleanContent(m.content);
       if (display.length > 0 && !isSystemMessage(display)) ids.add(m._id);
     }
