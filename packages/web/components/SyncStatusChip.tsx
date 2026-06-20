@@ -23,9 +23,12 @@ const STALL_MS = 10_000;
  * hasn't delivered yet and clears once they have. Warm in-app navigation never
  * flips it on, because those subscriptions stay resolved after the first load.
  *
- * Two tiers: cyan "syncing" for a normal sync, amber "sync slow" once it drags
- * past STALL_MS so a genuinely slow backend reads differently from a quick one.
- * Styled as a pill to match the daemon/agents chips it sits beside.
+ * Rendered as a bare little spinner (no label) so a routine scope re-subscribe —
+ * e.g. switching the project filter, which re-runs the project-scoped tasks/docs
+ * queries — reads as a light refresh, not a heavy global "syncing" operation. The
+ * spin color carries the one remaining signal: cyan for a normal sync, amber once
+ * it drags past STALL_MS so a genuinely slow backend looks different from a quick
+ * one (the tooltip spells out which).
  */
 // The chip spins iff some live subscription's first payload is still pending.
 // Reads ONLY `liveLoading`, never `syncProgress` (the background reconcile crawl
@@ -59,22 +62,14 @@ export function SyncStatusChip() {
   const color = stalled ? "var(--sol-yellow)" : "var(--sol-cyan)";
   return (
     <div
-      className="hidden md:flex items-center gap-1.5 px-2 py-0.5 rounded-full select-none transition-all duration-300"
-      style={{
-        background: `color-mix(in srgb, ${color} 12%, transparent)`,
-        border: `1px solid color-mix(in srgb, ${color} 28%, transparent)`,
-        boxShadow: `0 0 10px color-mix(in srgb, ${color} 12%, transparent)`,
-      }}
+      className="hidden md:flex items-center select-none transition-opacity duration-300"
       title={
         stalled
           ? "Sync is taking longer than usual — the server may be under load."
           : "Syncing the latest data from the server…"
       }
     >
-      <Loader2 className="w-3 h-3 animate-spin" style={{ color }} />
-      <span className="text-[11px] font-mono font-bold" style={{ color }}>
-        {stalled ? "sync slow" : "syncing"}
-      </span>
+      <Loader2 className="w-3.5 h-3.5 animate-spin" style={{ color }} />
     </div>
   );
 }
