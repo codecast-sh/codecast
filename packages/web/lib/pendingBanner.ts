@@ -37,18 +37,34 @@ export const isBootingAgentStatus = (s?: LiveAgentStatus): boolean =>
 
 export type PendingBannerState = "none" | "queued" | "stuck";
 
-// - "queued": agent alive (processing, or booting/resuming) → reassure, no restart.
+// - "queued": session still booting/resuming/connecting → brief "starting up"
+//             reassurance (the agent has no input box yet). NOT used while the agent
+//             is actively processing — that case shows nothing (see below).
 // - "stuck":  agent idle/gone past a grace and still hasn't taken the message, or a
 //             booting session still not processing past a generous boot budget, OR a
 //             kill & restart is already in flight → show the restart bar.
-// - "none":   still within a grace window → show nothing.
+// - "none":   the message already reached the session (durable delivery proof), is in a
+//             live agent's input queue, or is still within a grace window → show nothing.
 export function pendingBannerState(
   agentStatus: LiveAgentStatus | undefined,
-  opts: { retryEligible: boolean; restartInFlight: boolean; idleGraceElapsed: boolean; bootGraceElapsed: boolean },
+  opts: { retryEligible: boolean; restartInFlight: boolean; idleGraceElapsed: boolean; bootGraceElapsed: boolean; messageReachedSession: boolean },
 ): PendingBannerState {
   if (opts.restartInFlight) return "stuck";
   if (!opts.retryEligible) return "none";
-  if (isActiveAgentStatus(agentStatus)) return "queued";
+  // Durable, server-persisted proof the message physically landed in the session's pane
+  // (pending_messages → "injected"/"delivered"; the daemon resets it to "pending" if the
+  // session dies, so it's only set while a live session genuinely holds the message). This
+  // is authoritative even when the live agent_status is UNKNOWN — a disconnected session, a
+  // non-"active" conversation, or an older CLI that doesn't report agent_status all surface
+  // as undefined, which would otherwise escalate straight to the alarming kill & restart.
+  // Delivery proof trumps a missing heartbeat: never alarm about a message we know arrived.
+  if (opts.messageReachedSession) return "none";
+  // Agent alive and mid-turn: it has a live type-ahead input box, and the daemon has
+  // already pasted the message straight into Claude Code's native queue (ensureTmuxReady's
+  // busy path), so it WILL submit when the turn ends. Show nothing — the pending stripe on
+  // the bubble already signals "not yet echoed", and nagging "queued — will send when the
+  // agent finishes its turn" for a whole multi-minute turn is noise, not information.
+  if (isActiveAgentStatus(agentStatus)) return "none";
   // A live-but-still-booting session reassures rather than alarms: the daemon injects
   // the pending message and flips to "working" once the pane is ready. Only a session
   // still not processing well past a generous boot budget is genuinely stuck.

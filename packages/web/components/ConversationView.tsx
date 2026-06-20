@@ -5469,11 +5469,29 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
     const t = setTimeout(() => setBootGraceElapsed(true), remaining);
     return () => clearTimeout(t);
   }, [isPending, agentBooting, agentStatus, timestamp]);
+  // Durable, server-persisted delivery proof for this conversation's pending message —
+  // the same signal the composer banner trusts (messageReachedSession). The daemon marks
+  // the row "injected" the instant it lands in the tmux pane and resets it to "pending" if
+  // the session dies, so "injected" is only set while a live session genuinely holds the
+  // message. (This query intentionally hides "delivered"/"cancelled" rows; by the time a
+  // message fully delivers, its JSONL echo has cleared the optimistic row and this banner
+  // is gone anyway — "injected" is the state that covers the not-yet-echoed gap.) This is
+  // authoritative even when agentStatus is undefined (disconnected / non-"active"
+  // conversation / older CLI that doesn't report status) — exactly the case where the
+  // per-message banner used to fire a false "hasn't reached the agent" + kill & restart
+  // while the message had, in fact, arrived. Only query while this message is optimistic;
+  // an optimistic row only exists for the local sender.
+  const conversationPending = useQuery(
+    api.pendingMessages.getConversationPendingMessage,
+    isPending && conversationId && isConvexId(conversationId) ? { conversation_id: conversationId } : "skip",
+  );
+  const messageReachedSession = conversationPending?.status === "injected" || conversationPending?.status === "delivered";
   const bannerState = pendingBannerState(agentStatus, {
     retryEligible: retryVisible,
     restartInFlight: !!retryClickedAt,
     idleGraceElapsed,
     bootGraceElapsed,
+    messageReachedSession,
   });
   // Live restart progress, scoped to THIS click: getRestartProgress returns the
   // last few kill/resume commands for the conversation, which can include rows
@@ -5741,13 +5759,14 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
         />
       )}
 
-      {/* Agent is alive and mid-turn: the message is queued and WILL deliver when
-          the turn ends. Reassure calmly instead of alarming + offering a restart
-          that would interrupt live work. Suppressed once a restart is in flight. */}
+      {/* Session still coming up (cold boot / resume): the daemon injects the message
+          and flips to "working" once the pane is ready, so reassure rather than alarm.
+          While the agent is actively processing we show nothing — the message is already
+          sitting in its native input queue (see pendingBannerState). */}
       {isPending && bannerState === "queued" && (
         <div className="flex items-center gap-2 mt-2 pl-8 text-xs text-sol-text-muted" data-testid="pending-message-queued">
           <span className="w-1.5 h-1.5 rounded-full bg-amber-400/70 animate-pulse flex-shrink-0" />
-          <span>{isBootingAgentStatus(agentStatus) ? "Starting up — your message will send once the session is ready" : "Queued — will send when the agent finishes its turn"}</span>
+          <span>Starting up — your message will send once the session is ready</span>
         </div>
       )}
       {isPending && bannerState === "stuck" && (

@@ -1,11 +1,12 @@
 import { test, expect, describe } from "bun:test";
 import { pendingBannerState, isActiveAgentStatus, isBootingAgentStatus, type LiveAgentStatus } from "./pendingBanner";
 
-const opts = (o: Partial<{ retryEligible: boolean; restartInFlight: boolean; idleGraceElapsed: boolean; bootGraceElapsed: boolean }> = {}) => ({
+const opts = (o: Partial<{ retryEligible: boolean; restartInFlight: boolean; idleGraceElapsed: boolean; bootGraceElapsed: boolean; messageReachedSession: boolean }> = {}) => ({
   retryEligible: true,
   restartInFlight: false,
   idleGraceElapsed: true,
   bootGraceElapsed: true,
+  messageReachedSession: false,
   ...o,
 });
 
@@ -36,12 +37,14 @@ describe("isBootingAgentStatus", () => {
 });
 
 describe("pendingBannerState", () => {
-  test("agent busy (the incident: long xhigh thinking turn) → calm 'queued', never a kill & restart", () => {
-    // A message queued behind a long thinking turn must NOT offer to kill the agent.
-    expect(pendingBannerState("thinking", opts())).toBe("queued");
-    expect(pendingBannerState("working", opts())).toBe("queued");
-    expect(pendingBannerState("compacting", opts())).toBe("queued");
-    expect(pendingBannerState("permission_blocked", opts())).toBe("queued");
+  test("agent busy (long turn) → 'none': message is already in the agent's native queue, so no nag and no kill & restart", () => {
+    // The daemon pastes a mid-turn message straight into Claude Code's type-ahead box
+    // (ensureTmuxReady busy path); it submits when the turn ends. Nothing to show, and
+    // certainly no offer to kill the agent.
+    expect(pendingBannerState("thinking", opts())).toBe("none");
+    expect(pendingBannerState("working", opts())).toBe("none");
+    expect(pendingBannerState("compacting", opts())).toBe("none");
+    expect(pendingBannerState("permission_blocked", opts())).toBe("none");
   });
 
   test("within the initial send grace (not yet eligible) → nothing, even if idle", () => {
@@ -57,6 +60,14 @@ describe("pendingBannerState", () => {
   test("agent genuinely idle/gone past the grace and still hasn't taken it → escalate to stuck", () => {
     expect(pendingBannerState("idle", opts())).toBe("stuck");
     expect(pendingBannerState(undefined, opts())).toBe("stuck"); // disconnected session has no status
+  });
+
+  test("durable delivery proof suppresses the alarm even when agent_status is unknown (the 'no crash, old version' false alarm)", () => {
+    // The incident: a delivered message whose conversation reports no live agent_status
+    // (disconnected / non-active / old CLI) flashed "Message hasn't reached the agent" +
+    // kill & restart. pending_messages already proves it landed — never alarm.
+    expect(pendingBannerState(undefined, opts({ messageReachedSession: true }))).toBe("none");
+    expect(pendingBannerState("idle", opts({ messageReachedSession: true }))).toBe("none");
   });
 
   test("a booting/resuming/connecting session reassures instead of alarming during the boot budget", () => {
