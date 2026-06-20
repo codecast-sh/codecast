@@ -17,7 +17,7 @@ import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/t
 import { cleanTitle, msgCountColor, formatModel } from "../lib/conversationProcessor";
 import { getLabelColor } from "../lib/labelColors";
 import { fmtDuration } from "./scheduleCadence";
-import { isSessionMessage } from "./sessionMessage";
+import { isMachineDeliveredMessage } from "./sessionMessage";
 import { SharePopover } from "./SharePopover";
 import { shareOrigin } from "../lib/utils";
 import { PlanContextPanel } from "./PlanContextPanel";
@@ -44,9 +44,9 @@ const NOISE_PATTERNS = [
 
 export function cleanUserMessage(raw: string | null | undefined): string | null {
   if (!raw) return null;
-  // An inbound session→session message (cast send) isn't the user's own prompt —
-  // skip it so it never surfaces as the sticky fallback or the card preview.
-  if (isSessionMessage(raw)) return null;
+  // A machine-delivered message (cast send, or an inter-agent teammate broadcast) isn't the
+  // user's own prompt — skip it so it never surfaces as the sticky fallback or card preview.
+  if (isMachineDeliveredMessage(raw)) return null;
   const cleaned = raw
     .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "")
     .replace(/\[Image[:\s][^\]]*\]/gi, "")
