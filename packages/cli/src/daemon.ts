@@ -3152,25 +3152,38 @@ async function executeRemoteCommand(
         break;
       }
       case "apply_snippet": {
-        // Web Settings toggled an agent-feature snippet for THIS device. Run the
-        // very CLI command a human would (`cast install <slug>` / `--disable`),
-        // then heartbeat so the new state round-trips back within seconds.
-        const { snippet, enabled } = commandArgs ? JSON.parse(commandArgs) : {};
+        // Web "Agent Features" changed a setting for THIS device. Run the very CLI
+        // command a human would, then heartbeat so the new state round-trips back
+        // within seconds. Two shapes: a boolean snippet (`cast install <slug>` /
+        // `--disable`) or the tri-state stable hook (`cast stable <mode>`).
+        const parsed = commandArgs ? JSON.parse(commandArgs) : {};
+        const snippet = parsed.snippet;
         const known = snippet === "stable" || SNIPPET_CATALOG.some((s) => s.slug === snippet);
         if (typeof snippet !== "string" || !known) {
           error = `apply_snippet: unknown snippet ${JSON.stringify(snippet)}`;
           break;
         }
-        const cliArgs = enabled ? ["install", snippet] : ["install", snippet, "--disable"];
-        log(`[SNIPPET] ${enabled ? "installing" : "disabling"} ${snippet} (web toggle)`);
+
+        let cliArgs: string[];
+        let logVerb: string;
+        if (snippet === "stable") {
+          const mode = parsed.mode === "team" || parsed.mode === "off" ? parsed.mode : "solo";
+          cliArgs = ["stable", mode, ...(parsed.global ? ["-g"] : [])];
+          logVerb = `stable=${mode}${parsed.global ? " (all projects)" : ""}`;
+        } else {
+          cliArgs = parsed.enabled ? ["install", snippet] : ["install", snippet, "--disable"];
+          logVerb = `${parsed.enabled ? "installing" : "disabling"} ${snippet}`;
+        }
+
+        log(`[SNIPPET] ${logVerb} (web toggle)`);
         const res = await runCastCommand(cliArgs, { timeoutMs: 60 * 1000 });
         if (res.code === 0) {
-          result = JSON.stringify({ snippet, enabled });
+          result = JSON.stringify({ snippet, ...(snippet === "stable" ? { mode: parsed.mode } : { enabled: parsed.enabled }) });
           // Push the freshly-written config state up now, don't wait for the
-          // next ~30s beat — keeps the Settings toggle feeling instant.
+          // next ~30s beat — keeps the Settings control feeling instant.
           await sendHeartbeat().catch(() => {});
         } else {
-          error = `cast install failed (exit ${res.code}): ${(res.stderr || res.stdout || "").trim().slice(-300)}`;
+          error = `cast ${cliArgs[0]} failed (exit ${res.code}): ${(res.stderr || res.stdout || "").trim().slice(-300)}`;
         }
         break;
       }

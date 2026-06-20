@@ -18,6 +18,7 @@ export type SettingsSectionId =
   | "sync"
   | "integrations"
   | "agents"
+  | "agent-features"
   | "claude-accounts"
   | "cli"
   | "devices"
@@ -34,6 +35,7 @@ const PATH_TO_SECTION: Record<string, SettingsSectionId> = {
   "/settings/sync": "sync",
   "/settings/integrations/github-app": "integrations",
   "/settings/agents": "agents",
+  "/settings/agent-features": "agent-features",
   "/settings/claude-accounts": "claude-accounts",
   "/settings/cli": "cli",
   "/settings/devices": "devices",

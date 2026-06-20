@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useRef } from "react";
 import {
-  Terminal, Bot, RefreshCw, User, KeyRound, Users, Plug, Monitor, Bell, Laptop, UserCog, X,
+  Terminal, Bot, RefreshCw, User, KeyRound, Users, Plug, Monitor, Bell, Laptop, UserCog, Blocks, X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
@@ -20,6 +20,7 @@ const PANELS: Record<SettingsSectionId, React.LazyExoticComponent<React.Componen
   sync: lazy(() => import("../../app/settings/sync/page")),
   integrations: lazy(() => import("../../app/settings/integrations/github-app/page")),
   agents: lazy(() => import("../../app/settings/agents/page")),
+  "agent-features": lazy(() => import("../../app/settings/agent-features/page")),
   "claude-accounts": lazy(() => import("../../app/settings/claude-accounts/page")),
   cli: lazy(() => import("../../app/settings/cli/page")),
   devices: lazy(() => import("../../app/settings/devices/page")),
@@ -53,6 +54,7 @@ const GROUPS: { label: string; sections: SectionDef[] }[] = [
   {
     label: "Machines",
     sections: [
+      { id: "agent-features", label: "Agent Features", icon: Blocks },
       { id: "cli", label: "CLI", icon: Terminal },
       { id: "agents", label: "Agents", icon: Bot },
       { id: "claude-accounts", label: "Claude Accounts", icon: UserCog },
