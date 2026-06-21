@@ -54,6 +54,19 @@ describe("threadItemsToMessages", () => {
     expect(messages[1]!.timestamp).toBeLessThan(messages[2]!.timestamp);
   });
 
+  test("groups adjacent assistant items under the first item id", () => {
+    const items = [
+      { type: "agentMessage", id: "msg-1", text: "First partial.", phase: "commentary" },
+      { type: "agentMessage", id: "msg-2", text: "Second partial.", phase: "final_answer" },
+    ] as any[];
+
+    const messages = threadItemsToMessages(items);
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.uuid).toBe("msg-1");
+    expect(messages[0]?.content).toBe("First partial.\nSecond partial.");
+  });
+
   // Regression: ct-36429. A `userMessage` item is a turn BOUNDARY in the agent-output
   // stream, not a message source: it flushes any buffered assistant text so the next
   // turn starts a fresh bubble, but is NOT itself emitted here. The user's prompt is

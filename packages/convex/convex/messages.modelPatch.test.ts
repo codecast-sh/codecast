@@ -18,6 +18,14 @@ const assistantRow = {
 };
 
 describe("buildExistingMessagePatch model handling", () => {
+  test("patches assistant content for app-server streaming updates", () => {
+    const patch = buildExistingMessagePatch(
+      { ...assistantRow, content: "partial" },
+      { ...assistantRow, content: "partial answer" },
+    );
+    expect(patch).toEqual({ content: "partial answer" });
+  });
+
   test("backfills model onto an existing assistant row that lacks it", () => {
     const patch = buildExistingMessagePatch(assistantRow, {
       ...assistantRow,
