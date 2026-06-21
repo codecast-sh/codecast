@@ -3832,7 +3832,7 @@ async function flushPendingMessagesBatch(
   }
 }
 
-type RawMessage = { uuid?: string; role: string; content: string; timestamp: number; thinking?: string; toolCalls?: any; toolResults?: any; images?: any; subtype?: string; model?: string };
+export type RawMessage = { uuid?: string; role: string; content: string; timestamp: number; thinking?: string; toolCalls?: any; toolResults?: any; images?: any; subtype?: string; model?: string };
 
 // A cached conversation_id can become invalid against the current api_token in two ways:
 // the conversation was deleted (Convex returns "Conversation not found") or the auth token
@@ -8044,12 +8044,23 @@ const codexPermissionRunning = new Set<string>(); // sessionIds with an in-fligh
 let codexAppServerInstance: CodexAppServer | null = null;
 type AppServerThreadEntry = { threadId: string; conversationId: string; cwd?: string; approvalPolicy?: ApprovalPolicy };
 type PersistedAppServerThreadRecord = { threadId: string; updatedAt: number; cwd?: string };
-type AppServerTurnProgress = { threadId: string; items: ThreadItem[]; lastSyncedSignature?: string };
+type AppServerStreamingPartial = { itemId: string; content: string };
+type AppServerPartialMessage = AppServerStreamingPartial;
+type AppServerTurnProgress = {
+  threadId: string;
+  items: ThreadItem[];
+  lastSyncedSignature?: string;
+  partials: Map<string, AppServerPartialMessage>;
+  partialOrder: string[];
+  partialFlushTimer?: ReturnType<typeof setTimeout>;
+  syncChain?: Promise<void>;
+};
 const appServerThreads = new Map<string, AppServerThreadEntry>();
 const appServerConversations = new Map<string, string>();
 const persistedAppServerThreads = new Map<string, PersistedAppServerThreadRecord>();
 const appServerTurnProgress = new Map<string, AppServerTurnProgress>();
 const APP_SERVER_THREAD_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const APP_SERVER_DELTA_FLUSH_MS = 500;
 let rehydratePersistedAppServerThreadsPromise: Promise<void> | null = null;
 
 export function upsertAppServerThreadRegistration(
@@ -8226,10 +8237,29 @@ async function stopLocalSessionBackends(conversationId: string, sessionId: strin
   } catch { /* best-effort */ }
 }
 
+function makeAppServerTurnProgress(threadId: string): AppServerTurnProgress {
+  return {
+    threadId,
+    items: [],
+    partials: new Map(),
+    partialOrder: [],
+  };
+}
+
+function clearAppServerTurnProgress(turnId: string): void {
+  const progress = appServerTurnProgress.get(turnId);
+  if (progress?.partialFlushTimer) {
+    clearTimeout(progress.partialFlushTimer);
+  }
+  appServerTurnProgress.delete(turnId);
+}
+
 function clearLiveAppServerThreadRegistrations(): void {
   appServerThreads.clear();
   appServerConversations.clear();
-  appServerTurnProgress.clear();
+  for (const turnId of appServerTurnProgress.keys()) {
+    clearAppServerTurnProgress(turnId);
+  }
 }
 
 function buildAppServerProgressSignature(messages: RawMessage[]): string {
@@ -8245,6 +8275,114 @@ function buildAppServerProgressSignature(messages: RawMessage[]): string {
   })));
 }
 
+export function buildAppServerStreamingTailMessages(
+  completedItems: ThreadItem[],
+  partials: AppServerStreamingPartial[],
+): RawMessage[] {
+  const items: ThreadItem[] = [...completedItems];
+  for (const partial of partials) {
+    items.push({
+      type: "agentMessage",
+      id: partial.itemId,
+      text: partial.content,
+      phase: null,
+    });
+  }
+  const messages = threadItemsToMessages(items) as RawMessage[];
+  const tail = messages[messages.length - 1];
+  if (!tail) return [];
+  if (
+    tail.role === "assistant" &&
+    !tail.content.trim() &&
+    !tail.thinking?.trim() &&
+    !tail.images?.length &&
+    !tail.toolCalls &&
+    !tail.toolResults
+  ) {
+    return [];
+  }
+  return [tail];
+}
+
+function rememberAppServerPartialStart(progress: AppServerTurnProgress, item: ThreadItem): void {
+  if (item.type !== "agentMessage") return;
+  const existing = progress.partials.get(item.id);
+  if (!existing) {
+    progress.partialOrder.push(item.id);
+  }
+  progress.partials.set(item.id, {
+    itemId: item.id,
+    content: existing?.content ?? item.text ?? "",
+  });
+}
+
+function appendAppServerPartialDelta(progress: AppServerTurnProgress, itemId: string, delta: string): void {
+  if (!delta) return;
+  const existing = progress.partials.get(itemId);
+  if (!existing) {
+    progress.partialOrder.push(itemId);
+  }
+  progress.partials.set(itemId, {
+    itemId,
+    content: (existing?.content ?? "") + delta,
+  });
+}
+
+function removeAppServerPartial(progress: AppServerTurnProgress, itemId: string): void {
+  if (!progress.partials.delete(itemId)) return;
+  progress.partialOrder = progress.partialOrder.filter((id) => id !== itemId);
+  if (progress.partials.size === 0 && progress.partialFlushTimer) {
+    clearTimeout(progress.partialFlushTimer);
+    progress.partialFlushTimer = undefined;
+  }
+}
+
+function buildAppServerPartialMessages(progress: AppServerTurnProgress): RawMessage[] {
+  const partials: AppServerStreamingPartial[] = [];
+  for (const itemId of progress.partialOrder) {
+    const partial = progress.partials.get(itemId);
+    if (!partial) continue;
+    partials.push(partial);
+  }
+  return buildAppServerStreamingTailMessages(progress.items, partials);
+}
+
+function scheduleAppServerPartialSync(
+  turnId: string,
+  conversationId: string,
+  syncService: SyncService,
+  retryQueue: RetryQueue,
+  threadIdForLog: string,
+): void {
+  const progress = appServerTurnProgress.get(turnId);
+  if (!progress || progress.partialFlushTimer) return;
+  progress.partialFlushTimer = setTimeout(() => {
+    const current = appServerTurnProgress.get(turnId);
+    if (current) current.partialFlushTimer = undefined;
+    flushAppServerPartialSync(turnId, conversationId, syncService, retryQueue, threadIdForLog).catch((err) => {
+      log(`[codex-app-server] delta sync failed for thread ${threadIdForLog}: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  }, APP_SERVER_DELTA_FLUSH_MS);
+}
+
+async function flushAppServerPartialSync(
+  turnId: string,
+  conversationId: string,
+  syncService: SyncService,
+  retryQueue: RetryQueue,
+  threadIdForLog: string,
+): Promise<void> {
+  const progress = appServerTurnProgress.get(turnId);
+  if (!progress) return;
+  if (progress.partialFlushTimer) {
+    clearTimeout(progress.partialFlushTimer);
+    progress.partialFlushTimer = undefined;
+  }
+  const messages = buildAppServerPartialMessages(progress);
+  if (messages.length === 0) return;
+  await syncAppServerTurnMessagesIfChanged(turnId, conversationId, messages, syncService, retryQueue, threadIdForLog);
+}
+
 async function syncAppServerTurnMessagesIfChanged(
   turnId: string,
   conversationId: string,
@@ -8256,14 +8394,28 @@ async function syncAppServerTurnMessagesIfChanged(
   if (messages.length === 0) return;
   const progress = appServerTurnProgress.get(turnId);
   if (!progress) return;
-  const signature = buildAppServerProgressSignature(messages);
-  if (progress.lastSyncedSignature === signature) return;
-  const batchResult = await syncMessagesBatch(messages, conversationId, syncService, retryQueue);
-  if (!batchResult.authExpired && !batchResult.conversationNotFound) {
-    progress.lastSyncedSignature = signature;
-    syncStats.messagesSynced += messages.length;
-    syncStats.sessionsActive.add(threadIdForLog);
-    log(`[codex-app-server] live synced ${messages.length} messages for thread ${threadIdForLog}`);
+  const previous = progress.syncChain ?? Promise.resolve();
+  const run = previous.catch(() => {}).then(async () => {
+    const current = appServerTurnProgress.get(turnId);
+    if (!current) return;
+    const signature = buildAppServerProgressSignature(messages);
+    if (current.lastSyncedSignature === signature) return;
+    const batchResult = await syncMessagesBatch(messages, conversationId, syncService, retryQueue);
+    if (!batchResult.authExpired && !batchResult.conversationNotFound) {
+      current.lastSyncedSignature = signature;
+      syncStats.messagesSynced += messages.length;
+      syncStats.sessionsActive.add(threadIdForLog);
+      log(`[codex-app-server] live synced ${messages.length} messages for thread ${threadIdForLog}`);
+    }
+  });
+  const marker = run.then(() => undefined, () => undefined);
+  progress.syncChain = marker;
+  try {
+    await run;
+  } finally {
+    if (progress.syncChain === marker) {
+      progress.syncChain = undefined;
+    }
   }
 }
 
@@ -13767,13 +13919,13 @@ async function main(): Promise<void> {
       }
       sendAgentStatus(syncService, entry.conversationId, threadId, status === "completed" ? "idle" : "working");
     } finally {
-      appServerTurnProgress.delete(turnId);
+      clearAppServerTurnProgress(turnId);
     }
   });
 
   codexAppServerInstance.on("turnStarted", (threadId: string, turnId: string) => {
     const entry = appServerThreads.get(threadId);
-    appServerTurnProgress.set(turnId, { threadId, items: [] });
+    appServerTurnProgress.set(turnId, makeAppServerTurnProgress(threadId));
     if (entry) {
       sendAgentStatus(syncService, entry.conversationId, threadId, "working");
       // Persist early so mid-turn threads survive an app-server crash
@@ -13781,10 +13933,18 @@ async function main(): Promise<void> {
     }
   });
 
+  codexAppServerInstance.on("itemStarted", (threadId: string, turnId: string, item: ThreadItem) => {
+    const entry = appServerThreads.get(threadId);
+    const progress = appServerTurnProgress.get(turnId);
+    if (!entry || !progress) return;
+    rememberAppServerPartialStart(progress, item);
+  });
+
   codexAppServerInstance.on("itemCompleted", (threadId: string, turnId: string, item: ThreadItem) => {
     const entry = appServerThreads.get(threadId);
     const progress = appServerTurnProgress.get(turnId);
     if (!entry || !progress) return;
+    removeAppServerPartial(progress, item.id);
     progress.items.push(item);
     const messages = threadItemsToMessages(progress.items) as RawMessage[];
     syncAppServerTurnMessagesIfChanged(
@@ -13797,6 +13957,20 @@ async function main(): Promise<void> {
     ).catch((err) => {
       log(`[codex-app-server] live sync failed for thread ${threadId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
     });
+  });
+
+  codexAppServerInstance.on("messageDelta", (threadId: string, turnId: string, delta: string, itemId: string) => {
+    const entry = appServerThreads.get(threadId);
+    const progress = appServerTurnProgress.get(turnId);
+    if (!entry || !progress || !itemId) return;
+    appendAppServerPartialDelta(progress, itemId, delta);
+    scheduleAppServerPartialSync(
+      turnId,
+      entry.conversationId,
+      syncService,
+      retryQueue,
+      threadId.slice(0, 8),
+    );
   });
 
   codexAppServerInstance.on("statusChanged", (threadId: string, status: AppServerThreadStatus) => {
