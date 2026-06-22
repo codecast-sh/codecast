@@ -1537,12 +1537,32 @@ export const mentionSearch = query({
         d.title?.toLowerCase().includes(q) || d.source_file?.toLowerCase().includes(q);
       let docs;
       if (teamId) {
+        // Recent team docs by recency — the local-cache window. Raised well past
+        // the old 100 so more of a team's docs are reachable as plain recents
+        // without any search round-trip.
         docs = await ctx.db
           .query("docs")
           .withIndex("by_team_id", (d: any) => d.eq("team_id", teamId))
           .order("desc")
-          .take(perType * 10);
-        if (q) docs = docs.filter(docMatches);
+          .take(perType * 30);
+        if (q) {
+          docs = docs.filter(docMatches);
+          // The recency scan only sees the newest rows; a full-text title lookup
+          // reaches docs far older than any cache window. Without this a team doc
+          // outside the recent set was unfindable by @-mention — unlike team
+          // tasks and sessions, which already union a search-index fallback the
+          // same way (see the task/session branches above).
+          const teamStr = String(teamId);
+          const titleHits = (await ctx.db
+            .query("docs")
+            .withSearchIndex("search_docs_v2", (s: any) => s.search("title", args.query))
+            .take(perType * 20))
+            .filter((d: any) => String(d.team_id || "") === teamStr);
+          const seen = new Set(docs.map((d: any) => String(d._id)));
+          for (const hit of titleHits) {
+            if (!seen.has(String(hit._id))) docs.push(hit);
+          }
+        }
       } else if (q) {
         // The title search index can't see source_file, so union the title-index
         // hits with filename hits from a bounded recent scan.
