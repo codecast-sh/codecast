@@ -6,7 +6,7 @@ import { useEffect, useLayoutEffect, useRef, useState, useMemo, useImperativeHan
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useWatchEffect } from "../hooks/useWatchEffect";
-import { useShortcutContext, useShortcutAction, formatShortcutLabel, isMac } from "../shortcuts";
+import { useShortcutContext, useShortcutAction, isMac } from "../shortcuts";
 import { useConvexSync } from "../hooks/useConvexSync";
 import { useShallow } from "zustand/react/shallow";
 import { createPortal } from "react-dom";
@@ -27,7 +27,7 @@ import type { SkillItem } from "../lib/conversationProcessor";
 import { createReducer, reducer } from "../lib/messageReducer";
 import { UsageDisplay } from "./UsageDisplay";
 import { ErrorBoundary } from "./ErrorBoundary";
-import { KeyCap, MenuKeyCaps } from "./KeyboardShortcutsHelp";
+import { KeyCap, MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { toast } from "sonner";
 import { CodeBlock } from "./CodeBlock";
 import { useFullWidthExpand } from "../hooks/useFullWidthExpand";
@@ -72,7 +72,7 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuSubContent,
 } from "./ui/dropdown-menu";
-import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
+import { TooltipProvider } from "./ui/tooltip";
 import { useMutation, useQuery, useConvex, useConvexAuth, useAction } from "convex/react";
 import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
 import { DynamicRunView, wfStatusMeta, wfFmtTokens } from "./DynamicRunView";
@@ -87,7 +87,7 @@ import { useImageGallery, ImageGalleryProvider } from "./ImageGallery";
 import { MessageSharePopover } from "./MessageSharePopover";
 import { PlanBadge, TaskBadge } from "./PlanTaskHoverCard";
 import { EntityIdPill, EntityAwareCode, EntityAwareLink, renderWithMentions } from "./EntityIdPill";
-import { SUMMARY_LABELS, FormattedSummary } from "./FormattedSummary";
+import { FormattedSummary } from "./FormattedSummary";
 import { entityRemarkPlugins } from "../lib/remarkEntityIds";
 import { parseInboundSessionMessage, isTeammateFramingOnly, isMachineDeliveredMessage } from "./sessionMessage";
 import { CollabComposer, CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
@@ -144,6 +144,8 @@ import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash
 import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES, labelMentionItems } from "../hooks/useMentionQuery";
 import { pendingBannerState, isActiveAgentStatus, isBootingAgentStatus, type LiveAgentStatus } from "../lib/pendingBanner";
+import { sessionStartupState } from "../lib/sessionLifecycle";
+import { messageRowKey } from "../lib/messageRowKey";
 import { expandEntityMentions } from "../lib/mentionExpansion";
 
 // How long a sent message may sit in the optimistic/pending state before the
@@ -4983,7 +4985,7 @@ function ScheduledTaskBlock({ content: rawContent, timestamp }: { content: strin
   );
 }
 
-function SessionMessageBlock({ from, name, body, timestamp, pendingStatus, recipientActive }: { from: string; name?: string; body: string; timestamp: number; pendingStatus?: string; recipientActive?: boolean }) {
+function SessionMessageBlock({ from, name, body, timestamp, pendingStatus, recipientActive, variant = "session", color, summary }: { from: string; name?: string; body: string; timestamp?: number; pendingStatus?: string; recipientActive?: boolean; variant?: "session" | "teammate"; color?: string; summary?: string }) {
   // pendingStatus set ⇒ this is a server-side pending_messages row that hasn't reached the
   // recipient's transcript yet (queued — typically because the recipient is mid-turn).
   const isPending = !!pendingStatus;
@@ -4994,24 +4996,44 @@ function SessionMessageBlock({ from, name, body, timestamp, pendingStatus, recip
     : recipientActive === false
     ? "queued · recipient offline"
     : "queued · recipient busy";
+  // The SAME card renders an inter-agent teammate broadcast — only slightly distinct: a Users
+  // icon + "From teammate" + the sender's own color, vs. cast send's CornerDownRight +
+  // "Message from" + fixed cyan. A teammate's id isn't a real session, so it's a plain badge
+  // (not an EntityIdPill), and its summary attribute rides in the header as a secondary label.
+  const isTeammate = variant === "teammate";
+  const HeaderIcon = isTeammate ? Users : CornerDownRight;
+  const accent = isPending
+    ? "border-amber-500/50 bg-amber-500/5"
+    : isTeammate
+    ? `${agentBorderMap[color || "blue"] || agentBorderMap.blue} bg-sol-bg-alt/30`
+    : "border-sol-cyan/60 bg-sol-cyan/5";
+  const labelText = isPending ? "text-amber-400/80" : isTeammate ? "text-sol-text-dim/70" : "text-sol-cyan/70";
+  const iconText = isPending ? "text-amber-400/70" : isTeammate ? "text-sol-text-dim/60" : "text-sol-cyan/70";
   return (
-    <div className={`mb-2 mx-1 rounded border-l-2 ${isPending ? "border-amber-500/50 bg-amber-500/5" : "border-sol-cyan/60 bg-sol-cyan/5"}`}>
+    <div className={`mb-2 mx-1 rounded border-l-2 ${accent}`}>
       <div className="flex items-center gap-2 px-3 pt-2 pb-1">
-        <CornerDownRight className={`w-3.5 h-3.5 shrink-0 ${isPending ? "text-amber-400/70" : "text-sol-cyan/70"}`} />
-        <span className={`text-[11px] font-medium tracking-wide uppercase shrink-0 ${isPending ? "text-amber-400/80" : "text-sol-cyan/70"}`}>Message from</span>
-        {from && from !== "unknown" ? (
+        <HeaderIcon className={`w-3.5 h-3.5 shrink-0 ${iconText}`} />
+        <span className={`text-[11px] font-medium tracking-wide uppercase shrink-0 ${labelText}`}>{isTeammate ? "From teammate" : "Message from"}</span>
+        {isTeammate ? (
+          <span className={`px-1.5 py-0.5 rounded border text-[10px] font-mono shrink-0 ${agentColorMap[color || "blue"] || agentColorMap.blue}`}>{from}</span>
+        ) : from && from !== "unknown" ? (
           <EntityIdPill shortId={from} />
         ) : name ? (
           <span className="text-xs font-medium text-sol-cyan/90">{name}</span>
         ) : (
           <span className="text-xs text-sol-text-muted">another session</span>
         )}
+        {isTeammate && summary && (
+          <span className="text-[10px] uppercase tracking-wider font-medium text-sol-text-dim/50 truncate">{summary}</span>
+        )}
         {queueLabel && (
           <span className="inline-flex items-center gap-1 text-[10px] font-mono text-amber-400 bg-amber-500/15 border border-amber-500/25 rounded px-1.5 py-0.5 shrink-0">
             <Clock className="w-2.5 h-2.5" />{queueLabel}
           </span>
         )}
-        <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+        {timestamp != null && timestamp > 0 && (
+          <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+        )}
       </div>
       <div className={`px-3 pb-2 text-sm text-sol-text prose prose-invert prose-sm max-w-none ${isPending ? "opacity-70" : ""}`}>
         <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE}
@@ -5146,8 +5168,8 @@ function SkillCard({ name, description, path }: { name?: string; description?: s
   );
 }
 
-// SUMMARY_LABELS and FormattedSummary now live in ./FormattedSummary (imported
-// above) so EntityIdPill can reuse them without an import cycle.
+// SUMMARY_LABELS and FormattedSummary live in ./FormattedSummary so EntityIdPill can reuse
+// them without an import cycle; FormattedSummary is imported above.
 
 type TeammateMessagePart = { type: 'text'; content: string } | { type: 'teammate'; teammateId: string; color?: string; summary?: string; content: string; };
 
@@ -5210,7 +5232,7 @@ const agentBorderMap: Record<string, string> = {
 function TeammateEventsBlock({ content, timestamp }: { content: string; timestamp: number }) {
   const parts = parseTeammateMessages(content);
   return (
-    <div className="my-1 space-y-1 pl-8">
+    <div className="my-1 space-y-1">
       {parts.map((part, i) => {
         if (part.type === 'teammate') {
           return <TeammateMessageCard key={i} teammateId={part.teammateId} color={part.color} summary={part.summary} content={part.content} timestamp={timestamp} />;
@@ -5227,8 +5249,6 @@ function TeammateEventsBlock({ content, timestamp }: { content: string; timestam
 }
 
 function TeammateMessageCard({ teammateId, color, summary, content, timestamp }: { teammateId: string; color?: string; summary?: string; content: string; timestamp?: number }) {
-  const [expanded, setExpanded] = useState(false);
-
   const safeContent = content || '';
   let parsed: any = null;
   try { if (safeContent) parsed = JSON.parse(safeContent); } catch {}
@@ -5310,71 +5330,10 @@ function TeammateMessageCard({ teammateId, color, summary, content, timestamp }:
     );
   }
 
-  const borderColor = agentBorderMap[color || "blue"] || agentBorderMap.blue;
-  const badgeColor = agentColorMap[color || "blue"] || agentColorMap.blue;
-  const summaryKeyword = /summary|idle|away/i;
-  const isSummary = summaryKeyword.test(summary || '') || summaryKeyword.test(teammateId || '') || SUMMARY_LABELS.test(content);
-  SUMMARY_LABELS.lastIndex = 0;
-
-  if (isSummary) {
-    const label = summary || (summaryKeyword.test(teammateId) ? teammateId : undefined);
-    const cleanContent = content.replace(/\s*\.{3,}\s*$/, '').replace(/\s+to\s*$/, '').trim();
-    return (
-      <div className={`my-2 rounded-md border-l-2 ${borderColor} bg-sol-bg-alt/20 pl-4 pr-4 py-3`}>
-        {label && (
-          <div className="flex items-center gap-1.5 mb-2">
-            <svg className="w-2.5 h-2.5 text-sol-text-dim/40 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
-            <span className="text-[10px] uppercase tracking-wider font-medium text-sol-text-dim/50">
-              {label}
-            </span>
-          </div>
-        )}
-        <div className="text-[13px] text-sol-text-secondary break-words leading-[1.6] whitespace-pre-line">
-          <FormattedSummary text={cleanContent} />
-        </div>
-      </div>
-    );
-  }
-
-  const isLong = content.length > 200;
-
-  // Modeled on SessionMessageBlock (the `cast send` card) so a teammate broadcast reads as
-  // "a message from another session", not a turn the human typed — but deliberately distinct
-  // from it: a Users icon + "From teammate" label + the sender's own color, vs. that card's
-  // CornerDownRight + "Message from" + fixed cyan.
+  // A substantive teammate broadcast reuses the cast-send card (SessionMessageBlock) via its
+  // teammate variant — the same format and code, only slightly distinct.
   return (
-    <div className={`my-1.5 rounded border-l-2 ${borderColor} bg-sol-bg-alt/30`}>
-      <div className="flex items-center gap-2 px-3 pt-2 pb-1">
-        <Users className="w-3.5 h-3.5 shrink-0 text-sol-text-dim/60" />
-        <span className="text-[11px] font-medium tracking-wide uppercase shrink-0 text-sol-text-dim/70">From teammate</span>
-        <span className={`px-1.5 py-0.5 rounded border text-[10px] font-mono shrink-0 ${badgeColor}`}>
-          {teammateId}
-        </span>
-        {summary && (
-          <span className="text-[10px] uppercase tracking-wider font-medium text-sol-text-dim/50 truncate">
-            {summary}
-          </span>
-        )}
-        {timestamp != null && (
-          <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
-        )}
-      </div>
-      <div
-        className={`px-3 ${isLong ? "pb-1" : "pb-2"} text-sm text-sol-text-secondary break-words leading-relaxed prose prose-invert prose-sm max-w-none ${isLong && !expanded ? "line-clamp-6" : ""}`}
-      >
-        <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={MD_COMPONENTS_NO_IMG}>{content}</ReactMarkdown>
-      </div>
-      {isLong && (
-        <button
-          onClick={() => setExpanded(!expanded)}
-          className="text-xs text-sol-text-dim hover:text-sol-blue px-3 pb-2 transition-colors"
-        >
-          {expanded ? "Show less" : "Show more"}
-        </button>
-      )}
-    </div>
+    <SessionMessageBlock variant="teammate" from={teammateId} color={color} summary={summary} body={content} timestamp={timestamp} />
   );
 }
 
@@ -9417,10 +9376,18 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const [initialScrollDone, setInitialScrollDone] = useState(false);
 
   // Conversation transition: reset per-session state when staying mounted
-  // across session switches (no key-based remount).
-  const [_trackedConvId, _setTrackedConvId] = useState(conversation?._id);
-  if (_trackedConvId !== conversation?._id) {
-    _setTrackedConvId(conversation?._id);
+  // across session switches (no key-based remount). Tracked by the STABLE
+  // identity (session_id), not _id: an optimistic fork/create rekeys its row
+  // from a stub id to the real Convex id ~1s after creation, and keying this
+  // reset on _id treated that pure id-correction as a fresh conversation —
+  // wiping scroll/density/expansion state and re-running the snap-to-bottom
+  // layout effect, the "flash + scroll up" a beat after forking. session_id is
+  // preserved verbatim across the rekey (the daemon resumes by it), so the same
+  // logical conversation keeps one key while a real switch still changes it.
+  const stableConvKey = conversation?.session_id ?? conversation?._id;
+  const [_trackedConvId, _setTrackedConvId] = useState(stableConvKey);
+  if (_trackedConvId !== stableConvKey) {
+    _setTrackedConvId(stableConvKey);
     _setUserScrolled(false);
     userScrolledRef.current = false;
     setIsNearTop(true);
@@ -10812,7 +10779,16 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const getItemKey = useCallback((index: number) => {
     const item = timeline[index];
     if (!item) return index;
-    if (item.type === 'message') return (item.data as Message)._id;
+    // Key a message row by its STABLE client id (present on both the optimistic
+    // copy as `_clientId` and the server echo as `client_id`, equal by
+    // construction) so the pending→synced handoff reuses the SAME DOM node
+    // instead of unmounting the optimistic row and mounting a fresh server row.
+    // The `_id` flips at that handoff (clientId → Convex id); keying on it makes
+    // the virtualizer destroy+recreate+re-measure the row — a one-frame blank
+    // that, in a brand-new session where this is the only row, reads as the
+    // message disappearing for a beat before it "syncs in". The timeline dedup
+    // keeps only one of the two copies present at a time, so this never collides.
+    if (item.type === 'message') return messageRowKey(item.data as Message);
     if (item.type === 'commit') return `commit-${(item.data as any).sha || (item.data as any)._id}`;
     return `pr-${(item.data as any)._id}`;
   }, [timeline]);
@@ -11816,13 +11792,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversation?._id, timeline, virtualizer, onJumpToTimestamp, setUserScrolled]);
 
-  useEventListener("keydown", (e: KeyboardEvent) => {
-    if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "c") {
-      e.preventDefault();
-      // Cycle the three local feed densities; the LLM views stay dropdown-only.
-      setDensity(FEED_DENSITY_CYCLE[(FEED_DENSITY_CYCLE.indexOf(feedDensity) + 1) % FEED_DENSITY_CYCLE.length]);
-    }
-  });
+  // Cycle the three local feed densities; the LLM views stay dropdown-only.
+  // Bound through the shortcut registry (not a raw keydown) so the key combo, this
+  // handler, and every tooltip / help-panel mention all read from one definition —
+  // rebind 'conv.cycleDensity' once and the binding and its docs move together.
+  useShortcutAction('conv.cycleDensity', useCallback(() => {
+    setDensity(FEED_DENSITY_CYCLE[(FEED_DENSITY_CYCLE.indexOf(feedDensity) + 1) % FEED_DENSITY_CYCLE.length]);
+  }, [feedDensity, setDensity]));
 
   const title = cleanTitle(conversation?.title || "New Session");
   const truncatedTitle = title.length > 60 ? title.slice(0, 57) + "..." : title;
@@ -11859,8 +11835,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   // A fresh fork has messages but no daemon yet — give it the same
   // "Starting session…" → "Ready" lifecycle above the input as a new session.
   const isFreshFork = !!conversation && conversation.status === "active" && !!conversation.forked_from && sessionAge < 120_000;
-  const isSessionStarting = (isNewEmptySession || isFreshFork) && !managedSession?.is_connected && sessionAge < 30_000;
-  const isSessionReady = (isNewEmptySession || isFreshFork) && !isSessionStarting && (managedSession?.is_connected || sessionAge >= 30_000) && sessionAge < 120_000;
+  // Same Starting…/Ready rule the inbox row renders, so the two never disagree
+  // (see lib/sessionLifecycle). The < 120_000 visibility gate keeps the affordance
+  // off an old-but-still-empty session — past it, it's just a normal live session.
+  const isFreshSession = isNewEmptySession || isFreshFork;
+  const sessionStartup = sessionStartupState({ isConnected: managedSession?.is_connected, ageMs: sessionAge });
+  const isSessionStarting = isFreshSession && sessionStartup === "starting";
+  const isSessionReady = isFreshSession && sessionStartup === "ready" && sessionAge < 120_000;
 
   useWatchEffect(() => {
     if (conversation) {
@@ -12238,19 +12219,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           <div className="flex items-center gap-2 min-w-0 select-none">
             <div className="flex items-center gap-2 min-w-0 overflow-hidden flex-1">
             {isZenMode && (
-              <TooltipProvider delayDuration={300}>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      onClick={() => useInboxStore.getState().updateClientUI({ zen_mode: false })}
-                      className="p-1 rounded text-sol-text-dim/20 hover:text-sol-text-dim/50 transition-colors"
-                    >
-                      <Maximize2 className="w-3 h-3 -scale-x-100" />
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">Exit zen mode ({formatShortcutLabel('ui.zenToggle')})</TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
+              <ShortcutTooltip label="Exit zen mode" action="ui.zenToggle" side="bottom">
+                <button
+                  onClick={() => useInboxStore.getState().updateClientUI({ zen_mode: false })}
+                  className="p-1 rounded text-sol-text-dim/20 hover:text-sol-text-dim/50 transition-colors"
+                >
+                  <Maximize2 className="w-3 h-3 -scale-x-100" />
+                </button>
+              </ShortcutTooltip>
             )}
             {headerLeft}
             {isRenaming ? (
@@ -12505,40 +12481,34 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   </div>
                 )}
 
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      onClick={() => {
-                        if (isLocalSearchOpen) {
-                          onClearHighlight();
-                        } else {
-                          if (propHighlightQuery) propClearHighlight?.();
-                          setIsLocalSearchOpen(true);
-                          setLocalSearchQuery("");
-                          setTimeout(() => localSearchInputRef.current?.focus(), 0);
-                        }
-                      }}
-                      className={`p-1 rounded hover:bg-sol-bg-alt transition-colors ${isLocalSearchOpen ? "text-sol-cyan" : "text-sol-text-dim hover:text-sol-text-secondary"}`}
-                    >
-                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                      </svg>
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">Search in conversation</TooltipContent>
-                </Tooltip>
+                <ShortcutTooltip label="Search in conversation" side="bottom">
+                  <button
+                    onClick={() => {
+                      if (isLocalSearchOpen) {
+                        onClearHighlight();
+                      } else {
+                        if (propHighlightQuery) propClearHighlight?.();
+                        setIsLocalSearchOpen(true);
+                        setLocalSearchQuery("");
+                        setTimeout(() => localSearchInputRef.current?.focus(), 0);
+                      }
+                    }}
+                    className={`p-1 rounded hover:bg-sol-bg-alt transition-colors ${isLocalSearchOpen ? "text-sol-cyan" : "text-sol-text-dim hover:text-sol-text-secondary"}`}
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                  </button>
+                </ShortcutTooltip>
 
                 <DropdownMenu>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <DropdownMenuTrigger asChild>
-                        <button className={`p-1 rounded hover:bg-sol-bg-alt transition-colors ${density !== "full" ? "text-sol-cyan" : "text-sol-text-dim hover:text-sol-text-secondary"}`}>
-                          {(() => { const Icon = DENSITY_OPTIONS.find(o => o.value === density)!.icon; return <Icon className="w-3.5 h-3.5" />; })()}
-                        </button>
-                      </DropdownMenuTrigger>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">View density: {DENSITY_OPTIONS.find(o => o.value === density)!.label} ({formatShortcutLabel('conv.collapseAll')} cycles)</TooltipContent>
-                  </Tooltip>
+                  <ShortcutTooltip label={`View density: ${DENSITY_OPTIONS.find(o => o.value === density)!.label}`} action="conv.cycleDensity" hint="cycles" side="bottom">
+                    <DropdownMenuTrigger asChild>
+                      <button className={`p-1 rounded hover:bg-sol-bg-alt transition-colors ${density !== "full" ? "text-sol-cyan" : "text-sol-text-dim hover:text-sol-text-secondary"}`}>
+                        {(() => { const Icon = DENSITY_OPTIONS.find(o => o.value === density)!.icon; return <Icon className="w-3.5 h-3.5" />; })()}
+                      </button>
+                    </DropdownMenuTrigger>
+                  </ShortcutTooltip>
                   <DropdownMenuContent align="end" className="w-72">
                     {DENSITY_OPTIONS.map((opt, i) => (
                       <Fragment key={opt.value}>
@@ -12559,34 +12529,28 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   </DropdownMenuContent>
                 </DropdownMenu>
 
-                <Tooltip>
-                  <TooltipTrigger asChild>
+                <ShortcutTooltip label="Copy link" action="conv.copyLink" side="bottom">
+                  <button
+                    onClick={() => { copyToClipboard(`${shareOrigin()}/conversation/${conversation?._id}`).then(() => toast.success("Link copied")).catch(() => toast.error("Failed to copy")); }}
+                    className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                    </svg>
+                  </button>
+                </ShortcutTooltip>
+
+                {managedSession?.tmux_session && (
+                  <ShortcutTooltip label="Copy tmux attach" side="bottom">
                     <button
-                      onClick={() => { copyToClipboard(`${shareOrigin()}/conversation/${conversation?._id}`).then(() => toast.success("Link copied")).catch(() => toast.error("Failed to copy")); }}
+                      onClick={() => { copyToClipboard(`tmux attach -t '${managedSession.tmux_session}'`).then(() => toast.success("tmux attach copied")).catch(() => toast.error("Failed to copy")); }}
                       className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors"
                     >
                       <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
                       </svg>
                     </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">Copy link</TooltipContent>
-                </Tooltip>
-
-                {managedSession?.tmux_session && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        onClick={() => { copyToClipboard(`tmux attach -t '${managedSession.tmux_session}'`).then(() => toast.success("tmux attach copied")).catch(() => toast.error("Failed to copy")); }}
-                        className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors"
-                      >
-                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                        </svg>
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">Copy tmux attach</TooltipContent>
-                  </Tooltip>
+                  </ShortcutTooltip>
                 )}
 
                 <DropdownMenu>
