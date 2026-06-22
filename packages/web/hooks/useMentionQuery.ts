@@ -94,6 +94,36 @@ export function score(label: string, q: string): number {
   return idx === -1 ? Infinity : 2 + idx;
 }
 
+// Multi-word query support. A single-word query falls straight through to
+// score() so existing ranking is byte-for-byte unchanged. A query with spaces
+// is split into words, and EVERY word must match some word in the text (as an
+// exact/prefix/substring hit), order-independent — so "plain road" finds
+// "...The Roadmap, in Plain Language". Returns Infinity when any required word
+// is absent, so callers drop the candidate exactly as they do for score().
+export function matchScore(text: string, query: string): number {
+  const q = query.trim().toLowerCase();
+  if (!q) return 0;
+  const tokens = q.split(/\s+/).filter(Boolean);
+  if (tokens.length <= 1) return score(text, q);
+  const lower = text.toLowerCase();
+  const words = lower.split(/[\s\-—,.;:/\\]+/).filter(Boolean);
+  let total = 0;
+  for (const tok of tokens) {
+    let best = Infinity;
+    for (const w of words) {
+      if (w === tok) { best = 0; break; }
+      if (w.startsWith(tok)) best = Math.min(best, 1);
+      else if (w.includes(tok)) best = Math.min(best, 2);
+    }
+    if (best === Infinity) {
+      if (lower.includes(tok)) best = 3; // spans a word boundary; still a hit
+      else return Infinity; // a required word is absent → not a match
+    }
+    total += best;
+  }
+  return total;
+}
+
 export function useMentionQuery(scope: MentionScope = { kind: "any" }) {
   const getStore = useInboxStore.getState;
   const scopeKey = scope.kind === "team"
@@ -110,7 +140,7 @@ export function useMentionQuery(scope: MentionScope = { kind: "any" }) {
     const taskItems: Array<{ item: MentionItem; rank: number; updated: number }> = [];
     for (const t of Object.values(idx.tasks)) {
       if (!inScope(t, scope)) continue;
-      const r = q ? score(t.title || "", q) : 0;
+      const r = q ? matchScore(t.title || "", q) : 0;
       if (q && r === Infinity) {
         if (!t.short_id?.toLowerCase().includes(q)) continue;
       }
@@ -132,7 +162,7 @@ export function useMentionQuery(scope: MentionScope = { kind: "any" }) {
     const docItems: Array<{ item: MentionItem; rank: number; updated: number }> = [];
     for (const d of Object.values(idx.docs)) {
       if (!inScope(d, scope)) continue;
-      const r = q ? score(d.title || "", q) : 0;
+      const r = q ? matchScore(d.title || "", q) : 0;
       if (q && r === Infinity) continue;
       docItems.push({
         item: {
@@ -150,8 +180,8 @@ export function useMentionQuery(scope: MentionScope = { kind: "any" }) {
     const planItems: Array<{ item: MentionItem; rank: number; updated: number }> = [];
     for (const p of Object.values(idx.plans)) {
       if (!inScope(p, scope)) continue;
-      const labelHit = q ? score(p.title || "", q) : 0;
-      const goalHit = q && p.goal ? score(p.goal, q) : Infinity;
+      const labelHit = q ? matchScore(p.title || "", q) : 0;
+      const goalHit = q && p.goal ? matchScore(p.goal, q) : Infinity;
       const r = Math.min(labelHit, goalHit);
       if (q && r === Infinity) {
         if (!p.short_id?.toLowerCase().includes(q)) continue;
@@ -181,8 +211,8 @@ export function useMentionQuery(scope: MentionScope = { kind: "any" }) {
             ? sessTeam === scope.teamId
             : !sessTeam;
       if (!inScopeForSession) continue;
-      const titleHit = q ? score(sess.title || "", q) : 0;
-      const summaryHit = q && sess.idle_summary ? score(sess.idle_summary, q) : Infinity;
+      const titleHit = q ? matchScore(sess.title || "", q) : 0;
+      const summaryHit = q && sess.idle_summary ? matchScore(sess.idle_summary, q) : Infinity;
       const r = Math.min(titleHit, summaryHit);
       if (q && r === Infinity) continue;
       sessionItems.push({
@@ -207,7 +237,7 @@ export function useMentionQuery(scope: MentionScope = { kind: "any" }) {
 
     const labelItems: Array<{ item: MentionItem; rank: number; updated: number }> = [];
     for (const item of labelMentionItems(s)) {
-      const r = q ? score(item.label, q) : 0;
+      const r = q ? matchScore(item.label, q) : 0;
       if (q && r === Infinity) continue;
       labelItems.push({ item, rank: r, updated: item.updatedAt || 0 });
     }

@@ -142,11 +142,23 @@ import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
 import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench } from "lucide-react";
 import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor";
-import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES, labelMentionItems } from "../hooks/useMentionQuery";
+import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES, labelMentionItems, matchScore } from "../hooks/useMentionQuery";
 import { pendingBannerState, isActiveAgentStatus, isBootingAgentStatus, type LiveAgentStatus } from "../lib/pendingBanner";
 import { sessionStartupState } from "../lib/sessionLifecycle";
 import { messageRowKey } from "../lib/messageRowKey";
 import { expandEntityMentions } from "../lib/mentionExpansion";
+
+// An @-mention query may contain spaces so multi-word titles are searchable: a
+// first token (possibly empty, so a bare "@" still opens recents) plus up to 4
+// more space-separated words, with an optional trailing space so the popup stays
+// open while you pause mid-phrase. Only an ASCII space extends it — a tab or
+// newline still terminates the mention. The 4-word cap stops it eating a whole
+// sentence, and the dropdown self-hides the instant nothing matches (the items
+// list goes empty), so a stray "@foo bar baz" quietly falls back to prose.
+// MENTION_TRIGGER_RE matches at the cursor (text before the caret, $-anchored);
+// MENTION_QUERY_RE re-extracts the same body from the text after the "@".
+const MENTION_TRIGGER_RE = /@([\w./\\-]*(?: [\w./\\-]+){0,4} ?)$/;
+const MENTION_QUERY_RE = /^[\w./\\-]*(?: [\w./\\-]+){0,4} ?/;
 
 // How long a sent message may sit in the optimistic/pending state before the
 // message row surfaces a status hint. Normal delivery confirms in a few seconds.
@@ -7377,7 +7389,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const acQuery = useMemo(() => {
     if (!acTrigger) return "";
     const rawQuery = message.slice(acTrigger.startPos + 1);
-    return (acTrigger.type === "@" ? rawQuery.match(/^[\w./\\-]*/)?.[0] ?? "" : rawQuery).toLowerCase();
+    return (acTrigger.type === "@" ? (rawQuery.match(MENTION_QUERY_RE)?.[0] ?? "").trim() : rawQuery).toLowerCase();
   }, [acTrigger, message]);
 
   // While an @-mention is being typed, also search the server — it reaches
@@ -7408,9 +7420,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         for (const m of currentMentionItems) {
           if (acQuery) {
             const hit =
-              m.label.toLowerCase().includes(acQuery) ||
+              matchScore(m.label, acQuery) !== Infinity ||
               (m.shortId && m.shortId.toLowerCase().includes(acQuery)) ||
-              (m.sublabel && m.sublabel.toLowerCase().includes(acQuery));
+              (m.sublabel ? matchScore(m.sublabel, acQuery) !== Infinity : false);
             if (!hit) continue;
           }
           const c = perType[m.type] || 0;
@@ -7463,7 +7475,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       const fileMatches = (filePathsRef.current || [])
         .filter(p => {
           const name = p.split("/").pop() || p;
-          return name.toLowerCase().includes(acQuery) || p.toLowerCase().includes(acQuery);
+          return matchScore(name, acQuery) !== Infinity || matchScore(p, acQuery) !== Infinity;
         })
         .slice(0, 8)
         .map(p => ({ label: p, description: undefined, type: "file" as string }));
@@ -7907,7 +7919,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     } else {
       const cursorPos = textareaRef.current?.selectionStart ?? val.length;
       const textBefore = val.slice(0, cursorPos);
-      const atMatch = textBefore.match(/@([\w./\\-]*)$/);
+      const atMatch = textBefore.match(MENTION_TRIGGER_RE);
       if (atMatch) {
         setAcTrigger({ type: "@", startPos: cursorPos - atMatch[0].length });
         setAcIndex(0);
