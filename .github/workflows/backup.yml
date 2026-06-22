@@ -1,9 +1,13 @@
-name: Daily Convex Backup
+name: Daily Convex Backup (RETIRED)
 
+# SUPERSEDED by the Railway `pg-backup` service (infra/pg-backup/), which runs a
+# full pg_dump of the codecast Postgres DB to R2 from INSIDE Railway's network.
+# This GitHub Action ran `convex export` over the public internet, which stopped
+# completing once the DB outgrew the CI time budget (every run since 2026-04-24
+# was cancelled at the timeout). The schedule is removed so it no longer fails
+# nightly; workflow_dispatch is kept only as a manual escape hatch.
 on:
-  schedule:
-    - cron: '0 10 * * *' # 3 AM PT / 10 AM UTC
-  workflow_dispatch: # manual trigger
+  workflow_dispatch: # manual only — backups now run via the Railway pg-backup service
 
 env:
   R2_BUCKET: codecast
