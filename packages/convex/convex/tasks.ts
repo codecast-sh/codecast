@@ -442,7 +442,7 @@ export const snippet = query({
       if (u) userMap.set(uid.toString(), u.name || u.email || "unknown");
     }
 
-    let sessionPlans: { title: string; doc_type: string; content: string }[] = [];
+    let sessionPlans: { title: string; doc_type: string }[] = [];
     let activePlanSnippet = "";
     if (args.conversation_id) {
       const conv = await ctx.db
@@ -450,12 +450,22 @@ export const snippet = query({
         .withIndex("by_session_id", (q) => q.eq("session_id", args.conversation_id!))
         .first();
       if (conv) {
-        const allDocs = await db.query("docs").collect();
-
-        sessionPlans = allDocs
-          .filter((d: any) => !d.archived_at && (d.conversation_id === conv._id || d.project_path === conv.project_path))
-          .slice(0, 5)
-          .map((d: any) => ({ title: d.title, doc_type: d.doc_type, content: (d.content || "").slice(0, 500) }));
+        // Fetch only this conversation's docs through the by_conversation_id
+        // index. Collecting the whole team docs table (every row's full markdown
+        // content — which this snippet never even returns, only titles below)
+        // blew the 64 MB UDF heap for doc-heavy teams. db.get re-applies the
+        // workspace access the scoped db.query() used to provide.
+        const convDocs = await ctx.db
+          .query("docs")
+          .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
+          .collect();
+        for (const d of convDocs) {
+          if (sessionPlans.length >= 5) break;
+          if (d.archived_at) continue;
+          if (await db.get(d._id)) {
+            sessionPlans.push({ title: d.title, doc_type: d.doc_type });
+          }
+        }
 
         if (conv.active_plan_id) {
           const plan = await ctx.db.get(conv.active_plan_id);
@@ -993,16 +1003,19 @@ export const context = query({
       project = await ctx.db.get(task.project_id);
     }
 
-    // Get related docs/plans from linked conversations
+    // Get related docs/plans from linked conversations. Query by conversation_id
+    // so each scan loads only that conversation's docs — collecting the user's
+    // entire docs table (full markdown content and all) per linked conversation
+    // blew the 64 MB UDF heap for prolific doc authors.
     const relatedDocs: { title: string; doc_type: string; content: string }[] = [];
     if (task.conversation_ids) {
       for (const convId of task.conversation_ids.slice(-3)) {
         const docs = await ctx.db
           .query("docs")
-          .withIndex("by_user_id", (q) => q.eq("user_id", task.user_id))
+          .withIndex("by_conversation_id", (q) => q.eq("conversation_id", convId))
           .collect();
         for (const d of docs) {
-          if (d.conversation_id === convId && !d.archived_at) {
+          if (!d.archived_at) {
             relatedDocs.push({ title: d.title, doc_type: d.doc_type, content: d.content || "" });
           }
         }
