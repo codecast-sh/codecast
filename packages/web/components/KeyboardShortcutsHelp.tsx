@@ -130,9 +130,12 @@ export function MenuKeyCaps({ action }: { action: ShortcutAction }) {
 // Rich tooltip for icon buttons: label plus the bound shortcut rendered as
 // KeyCaps (never plain-text key glyphs — see UI conventions). Replaces native
 // `title` attributes, which can't render keycaps and double up with Radix.
-export function ShortcutTooltip({ label, action, side = "bottom", children }: {
+export function ShortcutTooltip({ label, action, hint, side = "bottom", children }: {
   label: ReactNode;
   action?: ShortcutAction;
+  // Optional trailing note rendered dimmed after the keycaps, e.g. "cycles" for a
+  // key that steps through options rather than toggling.
+  hint?: ReactNode;
   side?: "top" | "bottom" | "left" | "right";
   children: ReactNode;
 }) {
@@ -151,6 +154,7 @@ export function ShortcutTooltip({ label, action, side = "bottom", children }: {
               ))}
             </span>
           )}
+          {hint && <span className="text-sol-text-dim">{hint}</span>}
         </TooltipContent>
       </Tooltip>
     </TooltipProvider>
