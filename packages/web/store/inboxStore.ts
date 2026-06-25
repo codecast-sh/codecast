@@ -8,7 +8,7 @@ import { loadCache, writePatchesToIDB, setHydrating, loadConversationMessages, w
 import { HYDRATION_CRITICAL_KEYS, HYDRATION_DEFERRED_KEYS, hydrationMergeStrategy } from "./clientSyncRegistry";
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
-import { type AgentStatus, ACTIVE_AGENT_STATUSES } from "@codecast/shared/contracts";
+import { type AgentStatus, ACTIVE_AGENT_STATUSES, STATUS_TRUST_TTL_MS } from "@codecast/shared/contracts";
 import { isSubagentConversation } from "@codecast/convex/convex/ccAccountsShared";
 
 export type { PendingEntry } from "./syncProtocol";
@@ -1095,12 +1095,32 @@ export function categorizeSessions(
     ? sessionsWithQueuedMessages
     : new Set<string>([...sessionsWithQueuedMessages, ...pendingSendIds]);
   const hasPendingSend = (s: InboxSession) => pendingSendIds.has(s._id);
+  // Safety net for rows the liveness overlay can no longer refresh. The base
+  // session cache never prunes (isDelta) but the sessionsLiveness overlay only
+  // covers the current inbox window, so a session that ages out keeps its
+  // last-synced live status frozen — often a "working" its daemon never un-set.
+  // Because the working bucket is a fallthrough (anything not waiting-for-input
+  // with messages), such a frozen-active row is pinned in WORKING forever.
+  // Mirror the backend's trustedAgentStatus: past the trust TTL with no fresh
+  // activity the status is stale, so a settled session with content belongs in
+  // needs-input. Keyed on updated_at — the one field that stays accurate when
+  // live status is frozen (a genuinely working agent bumps it far more often
+  // than the TTL, so it's never caught). Date.now() here (not in the pure,
+  // memoized classifySession) so the verdict re-evaluates as time passes.
+  const now = Date.now();
+  const isTrustStale = (s: InboxSession) =>
+    s.message_count > 0 && !s.is_pinned && (now - (s.updated_at || 0)) >= STATUS_TRUST_TTL_MS;
   // Classify waiting-for-input ONCE per session (it's the costliest predicate and
   // was evaluated twice below — in the needsInput and working filters). The
   // memoized verdict (classifySession) is the no-in-flight result; an in-flight
   // send forces the session OUT of needs-input, so layer that tiny set on top.
+  // A pending send always wins (the amber pill keeps it in Working), so it's
+  // never overridden by the staleness net.
   const waitingForInput = new Map<string, boolean>();
-  for (const s of sorted) waitingForInput.set(s._id, inFlight.has(s._id) ? false : classifySession(s).waiting);
+  for (const s of sorted) {
+    if (inFlight.has(s._id)) { waitingForInput.set(s._id, false); continue; }
+    waitingForInput.set(s._id, classifySession(s).waiting || isTrustStale(s));
+  }
 
   // Pinning is a manual curation gesture, so the Pinned group gets its own
   // stable order by pin time (oldest pin first, new pins append to the bottom)
