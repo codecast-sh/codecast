@@ -83,7 +83,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signInWithApple = async () => {
-    await handleOAuthSignIn('apple');
+    // Native Sign in with Apple: present Apple's system sheet and hand the
+    // resulting identity token to our `apple-native` Convex provider, which
+    // verifies it server-side. No web browser / OAuth redirect (the old path,
+    // which errored under App Store review). Apple returns the full name + email
+    // ONLY on the first authorization, so we forward them when present.
+    const credential = await AppleAuthentication.signInAsync({
+      requestedScopes: [
+        AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+        AppleAuthentication.AppleAuthenticationScope.EMAIL,
+      ],
+    });
+    if (!credential.identityToken) {
+      throw new Error('No identity token returned from Apple');
+    }
+    const fullName = credential.fullName
+      ? `${credential.fullName.givenName ?? ''} ${credential.fullName.familyName ?? ''}`.trim()
+      : '';
+    // Only forward name/email when Apple actually provided them (first sign-in
+    // only). Convex `Value` rejects `undefined`, so omit the keys rather than
+    // pass undefined.
+    const params: Record<string, string> = { idToken: credential.identityToken };
+    if (credential.email) params.email = credential.email;
+    if (fullName) params.fullName = fullName;
+    await signIn('apple-native', params);
   };
 
   const signInWithEmail = async (email: string, password: string) => {
