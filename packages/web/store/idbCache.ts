@@ -260,7 +260,66 @@ export function setHydrating(v: boolean) {
 
 // -- Per-conversation message cache --
 
+// IDB writes are coalesced per conversation. setMessages fires on nearly every
+// live-sync tick for the focused conversation, and each write serializes the
+// ENTIRE conversation — message bodies carry inline images, so a single put can
+// be multiple MB. Writing the whole thing on every appended message is pure
+// waste: this row is a reload cache, not the live source of truth (the in-memory
+// store is, and it still updates synchronously). We keep only the latest payload
+// per conv and flush on a short trailing timer, collapsing a burst of N ticks
+// into one write. The timer is scheduled once per burst (not reset on each
+// write), so a continuous stream still flushes at most every DEBOUNCE_MS rather
+// than starving. Reads consult the pending buffer first for read-your-writes,
+// and page-hide flushes so an abrupt close still persists the freshest state.
+const _pendingMsgWrites = new Map<string, { messages: any[]; pagination: any }>();
+let _msgWriteTimer: ReturnType<typeof setTimeout> | null = null;
+const MSG_WRITE_DEBOUNCE_MS = 300;
+
+function _latestTs(messages: any[]): number {
+  // Loop, not Math.max(...spread): spreading a long messages array risks a
+  // call-stack overflow, and this now runs once per flush instead of per tick.
+  let latest = 0;
+  for (const m of messages) {
+    const t = m?.timestamp || 0;
+    if (t > latest) latest = t;
+  }
+  return latest;
+}
+
+function _flushMessageWrites() {
+  if (_msgWriteTimer) {
+    clearTimeout(_msgWriteTimer);
+    _msgWriteTimer = null;
+  }
+  if (_pendingMsgWrites.size === 0) return;
+  const batch = Array.from(_pendingMsgWrites.entries());
+  _pendingMsgWrites.clear();
+  for (const [convId, { messages, pagination }] of batch) {
+    db.conversationMessages
+      .put({ convId, messages, pagination, latestTimestamp: _latestTs(messages) })
+      .catch(() => {});
+  }
+}
+
+// Flush any buffered conversation writes immediately (e.g. on page hide).
+export function flushConversationMessages() {
+  _flushMessageWrites();
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("pagehide", _flushMessageWrites);
+  window.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") _flushMessageWrites();
+  });
+}
+
 export async function loadConversationMessages(convId: string): Promise<{ messages: any[]; pagination: any; latestTimestamp: number } | null> {
+  // Read-your-writes: a just-written-but-not-yet-flushed payload is the freshest
+  // truth, so serve it before falling back to the persisted IDB row.
+  const pending = _pendingMsgWrites.get(convId);
+  if (pending) {
+    return { messages: pending.messages, pagination: pending.pagination, latestTimestamp: _latestTs(pending.messages) };
+  }
   try {
     const row = await db.conversationMessages.get(convId);
     if (!row) return null;
@@ -272,10 +331,8 @@ export async function loadConversationMessages(convId: string): Promise<{ messag
 
 export function writeConversationMessages(convId: string, messages: any[], pagination: any) {
   if (_hydrating) return;
-  const latestTimestamp = messages.length > 0
-    ? Math.max(...messages.map((m: any) => m.timestamp || 0))
-    : 0;
-  db.conversationMessages.put({ convId, messages, pagination, latestTimestamp }).catch(() => {});
+  _pendingMsgWrites.set(convId, { messages, pagination });
+  if (!_msgWriteTimer) _msgWriteTimer = setTimeout(_flushMessageWrites, MSG_WRITE_DEBOUNCE_MS);
 }
 
 // -- Dispatch outbox: persist server-bound mutations until acknowledged --
