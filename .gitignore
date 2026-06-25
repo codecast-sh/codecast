@@ -41,9 +41,10 @@ test-results/
 # Convex
 .convex/
 
-# Worktrees
+# Worktrees + workspace state (local), but track the shared workspace manifest
 .conductor/
-.codecast/
+.codecast/*
+!.codecast/workspace.toml
 
 # Daemon files
 daemon.pid
