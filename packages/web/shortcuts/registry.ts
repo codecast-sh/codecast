@@ -33,7 +33,7 @@ export type ShortcutAction =
   | 'conv.toggleDiff'
   | 'conv.toggleTree'
   | 'conv.copyLink'
-  | 'conv.collapseAll'
+  | 'conv.cycleDensity'
   | 'conv.toggleThinking'
   | 'conv.favorite'
   | 'conv.review'
@@ -170,7 +170,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'ctrl+shift+f', mac: 'meta+shift+f', action: 'conv.favorite', when: 'conversation', skipInputCheck: true, description: 'Toggle favorite' },
   { key: 'r', action: 'conv.review', when: 'conversation', description: 'Review / comment on a reply' },
   { key: 'meta+shift+l', action: 'conv.copyLink', when: 'conversation', skipInputCheck: true, description: 'Copy conversation link' },
-  { key: 'ctrl+shift+c', mac: 'meta+shift+c', action: 'conv.collapseAll', when: 'conversation', skipInputCheck: true, description: 'Collapse/expand all' },
+  { key: 'ctrl+shift+c', mac: 'meta+shift+c', action: 'conv.cycleDensity', when: 'conversation', skipInputCheck: true, description: 'Cycle message density' },
 
   { key: 'escape', action: 'msg.clearSelection', when: 'conversation', skipInputCheck: true, description: 'Clear selection' },
   { key: 'alt+j', action: 'msg.next', when: 'conversation', description: 'Next user message' },

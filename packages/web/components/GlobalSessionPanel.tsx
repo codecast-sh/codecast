@@ -14,7 +14,7 @@ import { compressImage } from "../lib/compressImage";
 import { useConversationMessages } from "../hooks/useConversationMessages";
 import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, categorizeSessions, partitionOldSessions, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, isSessionHidden, resolveSessionAuthor, convBucketMap, groupSessionsForLabelView, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem, BucketAssignmentItem } from "../store/inboxStore";
 import { isBlockedConversation, isSubagentConversation } from "@codecast/convex/convex/ccAccountsShared";
-import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
+import { TooltipProvider } from "./ui/tooltip";
 import { cleanTitle, msgCountColor, formatModel } from "../lib/conversationProcessor";
 import { getLabelColor } from "../lib/labelColors";
 import { fmtDuration } from "./scheduleCadence";
@@ -26,7 +26,7 @@ import { WorkflowContextPanel } from "./WorkflowContextPanel";
 import { toast } from "sonner";
 import { animatedHideSession } from "../store/undoActions";
 import { soundKill } from "../lib/sounds";
-import { formatShortcutLabel } from "../shortcuts";
+import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { X, ChevronsLeft, ChevronsRight, ChevronRight, ChevronDown, List, Clock, Tag, GitFork, History, Star, Activity } from "lucide-react";
 import { FilterOptionList } from "./FilterDropdown";
 import { LabelChipsRow } from "./LabelChipsRow";
@@ -851,6 +851,16 @@ export const SessionCard = memo(function SessionCard({
           className="w-full text-left cursor-pointer px-2 py-1"
         >
           <div className="flex items-center gap-1.5">
+            {/* Corner arrow (↳) — marks this row as a child of its parent
+                session. The faint violet left-border alone reads as "indented"
+                only when the parent is directly above; this makes the
+                sub-of-parent relationship explicit even for a subagent floating
+                as its own top-level row (flat view, or parent off-screen). */}
+            <svg className="w-3 h-3 text-violet-400/60 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} role="img" aria-label="Subagent">
+              <title>Subagent — child of its parent session</title>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M14 12l4 4-4 4" />
+            </svg>
             <span className={`truncate text-xs leading-tight flex-1 ${
               isActive ? "text-violet-300 font-medium" : "text-gray-400 font-normal"
             }`}>
@@ -979,18 +989,19 @@ export const SessionCard = memo(function SessionCard({
               Solid (soft amber) when favorited; otherwise a very subdued star that
               only surfaces on row-hover and lights up on direct hover. Toggle also
               via the keyboard shortcut. */}
-          <button
-            onClick={(e) => { e.stopPropagation(); useInboxStore.getState().toggleFavorite(session._id); }}
-            className={`flex-shrink-0 transition-all ${
-              isFavorite
-                ? "text-amber-400/85 hover:text-amber-300"
-                : "text-sol-text-dim/30 opacity-0 group-hover:opacity-50 hover:!opacity-100 hover:!text-amber-400"
-            }`}
-            title={`${isFavorite ? "Unfavorite" : "Favorite"} (${formatShortcutLabel('conv.favorite')})`}
-            aria-label={isFavorite ? "Unfavorite" : "Favorite"}
-          >
-            <Star className="w-3 h-3" fill={isFavorite ? "currentColor" : "none"} />
-          </button>
+          <ShortcutTooltip label={isFavorite ? "Unfavorite" : "Favorite"} action="conv.favorite">
+            <button
+              onClick={(e) => { e.stopPropagation(); useInboxStore.getState().toggleFavorite(session._id); }}
+              className={`flex-shrink-0 transition-all ${
+                isFavorite
+                  ? "text-amber-400/85 hover:text-amber-300"
+                  : "text-sol-text-dim/30 opacity-0 group-hover:opacity-50 hover:!opacity-100 hover:!text-amber-400"
+              }`}
+              aria-label={isFavorite ? "Unfavorite" : "Favorite"}
+            >
+              <Star className="w-3 h-3" fill={isFavorite ? "currentColor" : "none"} />
+            </button>
+          </ShortcutTooltip>
         </div>
         {cardSummary && !session.implementation_session && (
           <div className="text-[11px] text-sol-text-muted mt-0.5 line-clamp-2 leading-snug whitespace-pre-line">
@@ -1161,22 +1172,17 @@ export const SessionCard = memo(function SessionCard({
           cross-fades into a second copy. */}
       {onPin && session.is_pinned && (
         <div className="absolute top-0 right-0 py-1 pr-2 pointer-events-none z-[2]" style={{ paddingLeft: 24, background: isActive ? 'linear-gradient(to right, transparent, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 60%)' : 'linear-gradient(to right, transparent, var(--sol-bg-alt) 60%)' }}>
-          <TooltipProvider delayDuration={300}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  onClick={(e) => { e.stopPropagation(); onPin(session._id); tipActions.whisper('session.pin', e); }}
-                  className="p-1 rounded text-sol-magenta transition-opacity hover:opacity-70 pointer-events-auto"
-                >
-                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M12 17v5" />
-                    <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76z" />
-                  </svg>
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="left">Unpin ({formatShortcutLabel('session.pin')})</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <ShortcutTooltip label="Unpin" action="session.pin" side="left">
+            <button
+              onClick={(e) => { e.stopPropagation(); onPin(session._id); tipActions.whisper('session.pin', e); }}
+              className="p-1 rounded text-sol-magenta transition-opacity hover:opacity-70 pointer-events-auto"
+            >
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 17v5" />
+                <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76z" />
+              </svg>
+            </button>
+          </ShortcutTooltip>
         </div>
       )}
       {(onDismiss || onStash || onDefer || onPin) && (
@@ -1192,114 +1198,84 @@ export const SessionCard = memo(function SessionCard({
                 <div className="w-3.5 h-3.5" />
               </div>
             ) : (
-              <TooltipProvider delayDuration={300}>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); onPin(session._id); tipActions.whisper('session.pin', e); checkMilestone('m-first-pin'); }}
-                      className="p-1 rounded transition-colors text-sol-text-dim hover:text-sol-magenta"
-                    >
-                      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M12 17v5" />
-                        <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76z" />
-                      </svg>
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="left">Pin ({formatShortcutLabel('session.pin')})</TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
+              <ShortcutTooltip label="Pin" action="session.pin" side="left">
+                <button
+                  onClick={(e) => { e.stopPropagation(); onPin(session._id); tipActions.whisper('session.pin', e); checkMilestone('m-first-pin'); }}
+                  className="p-1 rounded transition-colors text-sol-text-dim hover:text-sol-magenta"
+                >
+                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 17v5" />
+                    <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76z" />
+                  </svg>
+                </button>
+              </ShortcutTooltip>
             )
           )}
           {/* Dismiss — the PRIMARY remove: done with it, clears to the Dismissed
               group and stops the (usually idle) agent. Undoable. */}
           {onDismiss && (
-            <TooltipProvider delayDuration={300}>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); onDismiss(session._id); }}
-                    className="p-1 rounded text-sol-text-dim hover:text-sol-red hover:bg-sol-red/10 transition-colors"
-                  >
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="left">Dismiss — done, clears the inbox</TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+            <ShortcutTooltip label="Dismiss — done, clears the inbox" action="session.kill" side="left">
+              <button
+                onClick={(e) => { e.stopPropagation(); onDismiss(session._id); }}
+                className="p-1 rounded text-sol-text-dim hover:text-sol-red hover:bg-sol-red/10 transition-colors"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </ShortcutTooltip>
           )}
-          <TooltipProvider delayDuration={300}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    useInboxStore.getState().openPalette({ targets: [session], targetType: "session", mode: "bucket" });
-                  }}
-                  className="p-1 rounded text-sol-text-dim hover:text-sol-blue transition-colors"
-                >
-                  <Tag className="w-3.5 h-3.5" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="left">Label session ({formatShortcutLabel('session.moveToBucket')})</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <ShortcutTooltip label="Label session" action="session.moveToBucket" side="left">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                useInboxStore.getState().openPalette({ targets: [session], targetType: "session", mode: "bucket" });
+              }}
+              className="p-1 rounded text-sol-text-dim hover:text-sol-blue transition-colors"
+            >
+              <Tag className="w-3.5 h-3.5" />
+            </button>
+          </ShortcutTooltip>
           {/* Stash — the SECONDARY remove: set aside, agent keeps running. */}
           {onStash && (
-            <TooltipProvider delayDuration={300}>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); onStash(session._id); tipActions.whisper('session.stash', e); }}
-                    className="p-1 rounded text-sol-text-dim hover:text-sol-yellow transition-colors"
-                  >
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7l10 10M17 17h-6m6 0v-6" />
-                    </svg>
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="left">Stash — set aside, keeps running ({formatShortcutLabel('session.stash')})</TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+            <ShortcutTooltip label="Stash — set aside, keeps running" action="session.stash" side="left">
+              <button
+                onClick={(e) => { e.stopPropagation(); onStash(session._id); tipActions.whisper('session.stash', e); }}
+                className="p-1 rounded text-sol-text-dim hover:text-sol-yellow transition-colors"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7l10 10M17 17h-6m6 0v-6" />
+                </svg>
+              </button>
+            </ShortcutTooltip>
           )}
         </div>
       )}
       {(onRestore || onKill) && (
         <div className="absolute top-1.5 right-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
           {onKill && (
-            <TooltipProvider delayDuration={300}>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); onKill(session._id); }}
-                    className="p-1 rounded-md text-sol-text-dim hover:text-sol-red bg-sol-bg/95 backdrop-blur-sm shadow-sm border border-sol-border/30"
-                  >
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="left">{isStashed ? `Kill (${formatShortcutLabel('session.kill')})` : "Remove from list"}</TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+            <ShortcutTooltip label={isStashed ? "Kill" : "Remove from list"} action={isStashed ? "session.kill" : undefined} side="left">
+              <button
+                onClick={(e) => { e.stopPropagation(); onKill(session._id); }}
+                className="p-1 rounded-md text-sol-text-dim hover:text-sol-red bg-sol-bg/95 backdrop-blur-sm shadow-sm border border-sol-border/30"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </ShortcutTooltip>
           )}
           {onRestore && (
-            <TooltipProvider delayDuration={300}>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); onRestore(session._id); }}
-                    className="p-1 rounded-md text-sol-text-dim hover:text-sol-cyan bg-sol-bg/95 backdrop-blur-sm shadow-sm border border-sol-border/30"
-                  >
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17L7 7M7 7h6M7 7v6" />
-                    </svg>
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="left">Restore</TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+            <ShortcutTooltip label="Restore" side="left">
+              <button
+                onClick={(e) => { e.stopPropagation(); onRestore(session._id); }}
+                className="p-1 rounded-md text-sol-text-dim hover:text-sol-cyan bg-sol-bg/95 backdrop-blur-sm shadow-sm border border-sol-border/30"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17L7 7M7 7h6M7 7v6" />
+                </svg>
+              </button>
+            </ShortcutTooltip>
           )}
         </div>
       )}
@@ -2220,16 +2196,17 @@ export function SessionListPanel({
             const CurrentIcon = current.icon;
             return (
               <div ref={viewMenuRef} className="relative">
-                <button
-                  onClick={() => setViewMenuOpen((o) => !o)}
-                  title={`${current.label} (${formatShortcutLabel('inbox.toggleFlatView')} cycles)`}
-                  className={`flex items-center px-1 py-[3px] rounded-[5px] transition-colors ${
-                    viewMenuOpen ? "bg-sol-cyan/15 text-sol-cyan" : "text-sol-text-dim/70 hover:text-sol-text"
-                  }`}
-                >
-                  <CurrentIcon className="w-3 h-3" />
-                  <ChevronDown className="w-2 h-2 opacity-60" />
-                </button>
+                <ShortcutTooltip label={current.label} action="inbox.toggleFlatView" hint="cycles" side="bottom">
+                  <button
+                    onClick={() => setViewMenuOpen((o) => !o)}
+                    className={`flex items-center px-1 py-[3px] rounded-[5px] transition-colors ${
+                      viewMenuOpen ? "bg-sol-cyan/15 text-sol-cyan" : "text-sol-text-dim/70 hover:text-sol-text"
+                    }`}
+                  >
+                    <CurrentIcon className="w-3 h-3" />
+                    <ChevronDown className="w-2 h-2 opacity-60" />
+                  </button>
+                </ShortcutTooltip>
                 {viewMenuOpen && (
                   <div className="absolute top-full right-0 mt-1 w-48 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[60] py-1">
                     <FilterOptionList
@@ -2529,16 +2506,13 @@ export function CollapsedSessionRail({ onSelect }: { onSelect?: (sessionId: stri
               {group.slice(0, 80).map((sess) => {
                 const status = getStatusStyle(sess);
                 return (
-                  <Tooltip key={sess._id}>
-                    <TooltipTrigger asChild>
-                      <button
-                        className={`w-1.5 h-1.5 rounded-full flex-shrink-0 transition-all hover:scale-[2] cursor-pointer ${status.pulse ? "animate-pulse" : ""}`}
-                        style={{ backgroundColor: status.bg }}
-                        onClick={(e) => { e.stopPropagation(); handleSelect(sess._id); }}
-                      />
-                    </TooltipTrigger>
-                    <TooltipContent side="left">{cleanTitle(sess.title || "New Session")}</TooltipContent>
-                  </Tooltip>
+                  <ShortcutTooltip key={sess._id} label={cleanTitle(sess.title || "New Session")} side="left">
+                    <button
+                      className={`w-1.5 h-1.5 rounded-full flex-shrink-0 transition-all hover:scale-[2] cursor-pointer ${status.pulse ? "animate-pulse" : ""}`}
+                      style={{ backgroundColor: status.bg }}
+                      onClick={(e) => { e.stopPropagation(); handleSelect(sess._id); }}
+                    />
+                  </ShortcutTooltip>
                 );
               })}
             </div>
