@@ -3094,18 +3094,48 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
           <FontAwesome name="arrow-up" size={16} color="#fff" />
         </TouchableOpacity>
       </RNView>
-      {!isActive && (
-        <RNView style={styles.inactiveSessionBanner}>
-          <RNText style={styles.inactiveSessionCompactText} numberOfLines={1}>
-            Session inactive. Send to auto-resume.
-          </RNText>
-        </RNView>
-      )}
     </RNView>
   );
 }
 
 // --- Main screen with pagination ---
+
+// TEMPORARY (design iteration): a fully-populated mock conversation so the header
+// strip renders every chip type without depending on server data. Reached via the
+// deep link codecast://session/__designmock__ . Remove before shipping.
+const DESIGN_MOCK_ID = '__designmock__';
+const DESIGN_MOCK_STARTED = Date.now() - 21 * 3600 * 1000;
+const DESIGN_MOCK_CONVO: ConversationData = {
+  _id: DESIGN_MOCK_ID,
+  title: 'Counterparty matching strategy optimization',
+  status: 'archived',
+  agent_type: 'claude',
+  model: 'opus-4-8',
+  started_at: DESIGN_MOCK_STARTED,
+  updated_at: DESIGN_MOCK_STARTED,
+  message_count: 16,
+  fork_count: 3,
+  git_branch: 'ashot/apollo-include-similar-titles-fix',
+  git_remote_url: 'https://github.com/ashot/codecast.git',
+  messages: Array.from({ length: 16 }, (_, i) => ({
+    _id: `mock-msg-${i}`,
+    role: i % 2 === 0 ? 'user' : 'assistant',
+    content: i % 2 === 0
+      ? `Mock prompt ${i / 2 + 1}: tighten the counterparty matching heuristic and re-run the similar-titles backfill.`
+      : `Acknowledged. Working on step ${Math.ceil(i / 2)} — scanning the candidate set, scoring by title overlap, and parking the cleanup behind the Phase-0 reworks. This line is padded so the bubble has enough height to make the list scrollable for verifying the header collapse behavior.`,
+    timestamp: DESIGN_MOCK_STARTED + i * 60000,
+    message_uuid: `mock-uuid-${i}`,
+  })) as Message[],
+};
+
+// One shell for every metadata chip in the session header: identical radius,
+// padding, border weight and text size — only the tint color changes, so the
+// strip reads as one designed unit instead of a row of one-off badges.
+const metaChipTint = (color: string) => ({ borderColor: color + '40', backgroundColor: color + '14' });
+
+// Height of the compact custom title bar (back + title + actions), below the
+// safe-area inset. The collapsing metadata strip is positioned just under it.
+const HEADER_BAR_HEIGHT = 44;
 
 function TreeNodeView({ node, depth, router, currentId, onClose }: { node: TreeNode; depth: number; router: any; currentId: string; onClose: () => void }) {
   const isCurrent = node.id === currentId || node.is_current;
@@ -3165,6 +3195,9 @@ export default function SessionDetailScreen() {
   const [jumpingToEnd, setJumpingToEnd] = useState(false);
   const [floatingHeaderHeight, setFloatingHeaderHeight] = useState(52);
   const floatingHeaderY = useRef(new Animated.Value(0)).current;
+  // Opacity twin of the collapse: the metadata strip fades as it slides under
+  // the pinned title bar, so it's cleanly gone (not a sliver) when collapsed.
+  const floatingHeaderOpacity = useRef(new Animated.Value(1)).current;
   const floatingHeaderOffsetRef = useRef(0);
   const lastScrollYRef = useRef(0);
   const activePulse = useRef(new Animated.Value(1)).current;
@@ -3188,7 +3221,8 @@ export default function SessionDetailScreen() {
     jumpToEnd: hookJumpToEnd,
   } = useConversationMessages(id as string, highlightMessageParam || undefined);
 
-  const conversation = (storeConversation as ConversationData | null) ?? undefined;
+  const conversation = (storeConversation as ConversationData | null)
+    ?? (id === DESIGN_MOCK_ID ? DESIGN_MOCK_CONVO : undefined);
 
   // Gate every server query that takes a v.id("conversations") on isConvexId. A
   // freshly created session navigates here under a local stub id (see
@@ -3285,6 +3319,7 @@ export default function SessionDetailScreen() {
 
   const forkFromMessage = useMutation(api.conversations.forkFromMessage);
   const router = useRouter();
+  const insets = useSafeAreaInsets();
 
   // Self-heal a stub URL → real id. A freshly created session lands here under a
   // local stub id (beginOptimisticSession) for instant render; once the server
@@ -3571,6 +3606,7 @@ export default function SessionDetailScreen() {
   }, [searchMatchList, currentMatchIndex, allMessages]);
 
   const latestUsage = useMemo(() => {
+    if (id === DESIGN_MOCK_ID) return { inputTokens: 0, outputTokens: 0, cacheCreation: 0, cacheRead: 0, contextSize: 124000 };
     let latest: UsageData | null = null;
     let latestTs = 0;
     for (const msg of allMessages) {
@@ -3748,7 +3784,8 @@ export default function SessionDetailScreen() {
     const maxOffset = height;
     floatingHeaderOffsetRef.current = Math.max(0, Math.min(floatingHeaderOffsetRef.current, maxOffset));
     floatingHeaderY.setValue(-floatingHeaderOffsetRef.current);
-  }, [floatingHeaderY]);
+    floatingHeaderOpacity.setValue(floatingHeaderOffsetRef.current > 0 ? 0 : 1);
+  }, [floatingHeaderY, floatingHeaderOpacity]);
 
   useEffect(() => {
     if (!conversation || allMessages.length === 0) return;
@@ -3773,6 +3810,7 @@ export default function SessionDetailScreen() {
     lastScrollYRef.current = 0;
     floatingHeaderOffsetRef.current = 0;
     floatingHeaderY.setValue(0);
+    floatingHeaderOpacity.setValue(1);
     // Reset per SESSION only. floatingHeaderHeight changes at runtime (search
     // toggle, meta-row wrap); including it here re-ran this whole reset mid-session,
     // clobbering userScrolled and prevMessageIdsRef. floatingHeaderY is a stable
@@ -3793,7 +3831,8 @@ export default function SessionDetailScreen() {
     if (!searchVisible) return;
     floatingHeaderOffsetRef.current = 0;
     floatingHeaderY.setValue(0);
-  }, [searchVisible, floatingHeaderY]);
+    floatingHeaderOpacity.setValue(1);
+  }, [searchVisible, floatingHeaderY, floatingHeaderOpacity]);
 
   // With inverted FlatList, newest messages are at offset 0 (bottom) automatically.
   // Just mark initial scroll done once we have data.
@@ -3907,23 +3946,26 @@ export default function SessionDetailScreen() {
       setNewMessageCount(0);
     }
 
-    // Floating header: in inverted list, scrolling "up" visually (toward older) increases offset
-    // Invert deltaY for header hide/show since scroll direction is flipped
-    const visualDelta = -deltaY;
-    if (searchVisible) {
+    // Metadata strip collapse (the pinned title bar above it always stays put).
+    // Position-based with hysteresis: once the user scrolls up into history the
+    // strip slides away under the title bar, giving messages the full height;
+    // it returns when they settle back at the newest message. The 40/96 band
+    // keeps it from flickering on tiny scrolls. (Inverted list: offset 0 = newest.)
+    const maxOffset = floatingHeaderHeight;
+    const wantCollapsed = !searchVisible && offset > 96;
+    const wantExpanded = searchVisible || offset <= 40;
+    if (wantExpanded && floatingHeaderOffsetRef.current !== 0) {
       floatingHeaderOffsetRef.current = 0;
-      floatingHeaderY.setValue(0);
-    } else if (offset <= 0) {
-      floatingHeaderOffsetRef.current = 0;
-      floatingHeaderY.setValue(0);
-    } else if (Math.abs(visualDelta) > 0.5) {
-      const maxOffset = floatingHeaderHeight;
-      const nextOffset = Math.max(0, Math.min(floatingHeaderOffsetRef.current + visualDelta, maxOffset));
-      if (Math.abs(nextOffset - floatingHeaderOffsetRef.current) > 0.1) {
-        floatingHeaderOffsetRef.current = nextOffset;
-        const snapped = nextOffset < maxOffset * 0.5 ? 0 : -maxOffset;
-        floatingHeaderY.setValue(snapped);
-      }
+      Animated.parallel([
+        Animated.timing(floatingHeaderY, { toValue: 0, duration: 160, useNativeDriver: true }),
+        Animated.timing(floatingHeaderOpacity, { toValue: 1, duration: 160, useNativeDriver: true }),
+      ]).start();
+    } else if (wantCollapsed && floatingHeaderOffsetRef.current !== maxOffset) {
+      floatingHeaderOffsetRef.current = maxOffset;
+      Animated.parallel([
+        Animated.timing(floatingHeaderY, { toValue: -maxOffset, duration: 160, useNativeDriver: true }),
+        Animated.timing(floatingHeaderOpacity, { toValue: 0, duration: 160, useNativeDriver: true }),
+      ]).start();
     }
 
     // Load older messages when near the top (large offset in inverted list).
@@ -3957,16 +3999,13 @@ export default function SessionDetailScreen() {
   if (conversation === undefined) {
     return (
       <RNView style={styles.container}>
-        <Stack.Screen
-          options={{
-            title: 'Conversation',
-            headerStyle: { backgroundColor: Theme.bgAlt },
-            headerTintColor: Theme.text,
-            headerTitleStyle: { color: Theme.text, fontWeight: '600', fontSize: 17 },
-            headerShadowVisible: false,
-            headerBackButtonDisplayMode: 'minimal',
-          }}
-        />
+        <Stack.Screen options={{ headerShown: false }} />
+        <RNView style={[styles.pinnedHeader, { paddingTop: insets.top, height: insets.top + HEADER_BAR_HEIGHT, position: 'relative' }]}>
+          <TouchableOpacity onPress={() => router.back()} style={styles.headerIconBtn} hitSlop={{ top: 12, bottom: 12, left: 12, right: 4 }} activeOpacity={0.6}>
+            <FontAwesome name="chevron-left" size={20} color={Theme.text} />
+          </TouchableOpacity>
+          <RNText style={styles.headerTitleText} numberOfLines={1}>Conversation</RNText>
+        </RNView>
         <RNView style={styles.skeletonContainer}>
           <RNView style={styles.skeletonHeader}>
             <RNView style={[styles.skeletonBlock, { width: '60%', height: 18 }]} />
@@ -3999,24 +4038,26 @@ export default function SessionDetailScreen() {
 
   return (
     <>
-      <Stack.Screen
-        options={{
-          title: conversation.title || 'Conversation',
-          headerStyle: { backgroundColor: Theme.bgAlt },
-          headerTintColor: Theme.text,
-          headerTitleStyle: { color: Theme.text, fontWeight: '600', fontSize: 17 },
-          headerShadowVisible: false,
-          headerLargeTitle: false,
-          headerBackButtonDisplayMode: 'minimal',
-        }}
-      />
+      <Stack.Screen options={{ headerShown: false }} />
       <KeyboardAvoidingView
         style={styles.container}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
+        keyboardVerticalOffset={0}
       >
+        {/* Compact custom title bar — back + title + actions in one slim band,
+            replacing the tall native nav bar so the top is minimal. It stays
+            pinned while the metadata strip below it collapses on scroll. */}
+        <RNView style={[styles.pinnedHeader, { paddingTop: insets.top, height: insets.top + HEADER_BAR_HEIGHT }]}>
+          <TouchableOpacity onPress={() => router.back()} style={styles.headerIconBtn} hitSlop={{ top: 12, bottom: 12, left: 12, right: 4 }} activeOpacity={0.6}>
+            <FontAwesome name="chevron-left" size={20} color={Theme.text} />
+          </TouchableOpacity>
+          <RNText style={styles.headerTitleText} numberOfLines={1}>{conversation.title || 'Conversation'}</RNText>
+          <TouchableOpacity onPress={handleMoreActions} style={styles.headerIconBtn} hitSlop={{ top: 12, bottom: 12, left: 4, right: 12 }} activeOpacity={0.6}>
+            <Feather name="more-horizontal" size={20} color={Theme.textMuted} />
+          </TouchableOpacity>
+        </RNView>
         <Animated.View
-          style={[styles.floatingSessionHeader, { transform: [{ translateY: floatingHeaderY }] }]}
+          style={[styles.floatingSessionHeader, { top: insets.top + HEADER_BAR_HEIGHT, opacity: floatingHeaderOpacity, transform: [{ translateY: floatingHeaderY }] }]}
           onLayout={(event) => handleFloatingHeaderLayout(event.nativeEvent.layout.height)}
         >
             <RNView style={styles.floatingSessionCard}>
@@ -4028,7 +4069,7 @@ export default function SessionDetailScreen() {
               >
                 {conversation.agent_type && (
                   <RNView style={styles.metaBadgeIcon}>
-                    <AgentLogoSvg agentType={conversation.agent_type} size={24} />
+                    <AgentLogoSvg agentType={conversation.agent_type} size={17} />
                     <RNText style={[styles.metaBadge, { color: agentTypeColor(conversation.agent_type) }]}>
                       {formatAgentType(conversation.agent_type)}
                     </RNText>
@@ -4041,9 +4082,9 @@ export default function SessionDetailScreen() {
                   <Animated.View style={[styles.activeDot, { opacity: activePulse }]} />
                 )}
                 {(conversation.fork_count ?? 0) > 0 && (
-                  <Pressable onPress={() => setTreeModalVisible(true)} style={styles.forkBadge}>
-                    <FontAwesome name="code-fork" size={9} color={Theme.violet} />
-                    <RNText style={styles.forkBadgeText}>{conversation.fork_count}</RNText>
+                  <Pressable onPress={() => setTreeModalVisible(true)} style={[styles.metaChip, metaChipTint(Theme.violet)]}>
+                    <FontAwesome name="code-fork" size={10} color={Theme.violet} />
+                    <RNText style={[styles.metaChipText, { color: Theme.violet }]}>{conversation.fork_count}</RNText>
                   </Pressable>
                 )}
                 {conversation.git_branch && (
@@ -4056,17 +4097,17 @@ export default function SessionDetailScreen() {
                         }
                       }
                     }}
-                    style={styles.gitBranchBadge}
+                    style={[styles.metaChip, metaChipTint(Theme.green)]}
                   >
-                    <FontAwesome name="code-fork" size={9} color={Theme.green} />
-                    <RNText style={styles.gitBranchText} numberOfLines={1}>{conversation.git_branch}</RNText>
+                    <FontAwesome name="code-fork" size={10} color={Theme.green} />
+                    <RNText style={[styles.metaChipText, { color: Theme.green }]} numberOfLines={1}>{conversation.git_branch}</RNText>
                   </Pressable>
                 )}
                 <DeviceChip ownerDeviceId={(conversation as any).owner_device_id} onPress={showRunOnDevice} />
                 {latestUsage && (
-                  <RNView style={styles.usageBadge}>
-                    <FontAwesome name="bar-chart" size={9} color={Theme.textDim} />
-                    <RNText style={styles.usageBadgeText}>
+                  <RNView style={[styles.metaChip, metaChipTint(Theme.textDim)]}>
+                    <FontAwesome name="bar-chart" size={10} color={Theme.textDim} />
+                    <RNText style={[styles.metaChipText, { color: Theme.textDim }]}>
                       {Math.round((latestUsage.contextSize / 200000) * 100)}%
                     </RNText>
                   </RNView>
@@ -4074,10 +4115,10 @@ export default function SessionDetailScreen() {
                 {conversation.parent_conversation_id && (
                   <Pressable
                     onPress={() => router.push(`/session/${conversation.parent_conversation_id}`)}
-                    style={styles.floatingLinkPill}
+                    style={[styles.metaChip, metaChipTint(Theme.violet)]}
                   >
                     <FontAwesome name="level-up" size={10} color={Theme.violet} />
-                    <RNText style={styles.floatingLinkText}>Parent</RNText>
+                    <RNText style={[styles.metaChipText, { color: Theme.violet }]}>Parent</RNText>
                   </Pressable>
                 )}
                 {conversation.forked_from_details && (
@@ -4090,16 +4131,13 @@ export default function SessionDetailScreen() {
                         router.push(`/session/${details.conversation_id}`);
                       }
                     }}
-                    style={styles.floatingLinkPill}
+                    style={[styles.metaChip, metaChipTint(Theme.cyan)]}
                   >
-                    <FontAwesome name="code-fork" size={9} color={Theme.cyan} />
-                    <RNText style={styles.floatingLinkText}>@{conversation.forked_from_details.username}</RNText>
+                    <FontAwesome name="code-fork" size={10} color={Theme.cyan} />
+                    <RNText style={[styles.metaChipText, { color: Theme.cyan }]}>@{conversation.forked_from_details.username}</RNText>
                   </Pressable>
                 )}
               </ScrollView>
-              <TouchableOpacity onPress={handleMoreActions} style={styles.moreActionsButton} activeOpacity={0.7} hitSlop={{ top: 7, bottom: 7, left: 7, right: 7 }}>
-                <Feather name="more-horizontal" size={18} color={Theme.textMuted} />
-              </TouchableOpacity>
             </RNView>
             {searchVisible && (
               <RNView style={[styles.searchBar, styles.floatingSearchBar]}>
@@ -4177,7 +4215,7 @@ export default function SessionDetailScreen() {
           ListHeaderComponent={null}
           ListFooterComponent={
             <>
-              <RNView style={{ height: floatingHeaderHeight }} />
+              <RNView style={{ height: insets.top + HEADER_BAR_HEIGHT + floatingHeaderHeight }} />
               {hasMoreAbove && (
                 <RNView style={styles.loadMoreIndicator}>
                   {loadingOlder ? (
@@ -4379,7 +4417,7 @@ export default function SessionDetailScreen() {
               style={[
                 styles.jumpTopButtonWrap,
                 {
-                  top: floatingHeaderHeight + 4,
+                  top: insets.top + HEADER_BAR_HEIGHT + floatingHeaderHeight + 4,
                   transform: [{ translateY: floatingHeaderY }],
                 },
               ]}
@@ -4486,6 +4524,32 @@ const styles = StyleSheet.create({
     color: Theme.red,
     textAlign: 'center',
   },
+  // Pinned compact title bar (back + title + actions). Sits above the
+  // collapsing metadata strip and stays put while it scrolls away.
+  pinnedHeader: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 70,
+    backgroundColor: Theme.bgAlt,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+    gap: 2,
+  },
+  headerIconBtn: {
+    width: 38,
+    height: 38,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  headerTitleText: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '600',
+    color: Theme.text,
+  },
   floatingSessionHeader: {
     position: 'absolute',
     top: 0,
@@ -4499,49 +4563,40 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: Theme.borderLight,
     paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingVertical: 5,
   },
   sessionMeta: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
     flexWrap: 'nowrap',
-    marginBottom: 2,
     paddingRight: 8,
   },
   metaRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingTop: 6,
   },
-  moreActionsButton: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  floatingLinkPill: {
+  // Shared shell for every metadata chip (fork, branch, device, usage, links).
+  metaChip: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Theme.borderLight,
-    backgroundColor: Theme.bgHighlight,
-    borderRadius: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    borderRadius: 6,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    maxWidth: 160,
   },
-  floatingLinkText: {
+  metaChipText: {
     fontSize: 11,
-    color: Theme.textMuted,
-    fontWeight: '500',
+    fontWeight: '600',
   },
   metaBadge: {
-    fontSize: 10,
+    fontSize: 12,
     fontWeight: '600',
   },
   messageCountText: {
-    fontSize: 10,
+    fontSize: 11,
     color: Theme.textMuted,
     fontWeight: '500',
     letterSpacing: 0.2,
@@ -4880,18 +4935,6 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '600',
   },
-  inactiveSessionBanner: {
-    marginHorizontal: 12,
-    marginBottom: 2,
-    paddingHorizontal: 4,
-    paddingTop: 2,
-    paddingBottom: 4,
-  },
-  inactiveSessionCompactText: {
-    fontSize: 11,
-    color: Theme.textDim,
-    textAlign: 'center',
-  },
   errorBanner: {
     backgroundColor: Theme.red,
     flexDirection: 'row',
@@ -4940,8 +4983,8 @@ const styles = StyleSheet.create({
     borderRadius: 10,
   },
   imageButton: {
-    width: 40,
-    height: 40,
+    width: 34,
+    height: 34,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -4949,31 +4992,31 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-end',
     paddingHorizontal: 12,
-    paddingVertical: 10,
-    gap: 10,
+    paddingVertical: 7,
+    gap: 8,
   },
   textInput: {
     flex: 1,
     backgroundColor: Theme.bg,
-    borderRadius: 20,
-    paddingHorizontal: 16,
-    paddingTop: 10,
-    paddingBottom: 10,
+    borderRadius: 18,
+    paddingHorizontal: 14,
+    paddingTop: 8,
+    paddingBottom: 8,
     color: Theme.text,
     fontSize: 15,
     maxHeight: 100,
-    minHeight: 40,
+    minHeight: 36,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: Theme.borderLight,
   },
   sendButton: {
     backgroundColor: Theme.blue,
-    minWidth: 44,
-    height: 44,
-    borderRadius: 22,
+    minWidth: 36,
+    height: 36,
+    borderRadius: 18,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 12,
+    paddingHorizontal: 10,
   },
   sendButtonDisabled: {
     backgroundColor: Theme.bgHighlight,
@@ -5500,20 +5543,6 @@ const styles = StyleSheet.create({
     color: Theme.violet,
     fontWeight: '500',
   },
-  forkBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    backgroundColor: Theme.violet + '15',
-    borderRadius: 4,
-  },
-  forkBadgeText: {
-    fontSize: 10,
-    color: Theme.violet,
-    fontWeight: '600',
-  },
   // Agent dot
   agentDot: {
     width: 6,
@@ -5754,24 +5783,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     color: Theme.cyan,
-  },
-  gitBranchBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    backgroundColor: Theme.green + '12',
-    borderRadius: 4,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Theme.green + '30',
-    maxWidth: 120,
-  },
-  gitBranchText: {
-    fontSize: 10,
-    color: Theme.green,
-    fontWeight: '500',
-    fontFamily: 'SpaceMono',
   },
   treeModal: {
     flex: 1,
@@ -6039,22 +6050,6 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.4,
     shadowRadius: 6,
     shadowOffset: { width: 0, height: 0 },
-  },
-  usageBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    paddingHorizontal: 5,
-    paddingVertical: 2,
-    borderRadius: 4,
-    backgroundColor: 'rgba(147, 161, 161, 0.1)',
-    borderWidth: 0.5,
-    borderColor: 'rgba(147, 161, 161, 0.2)',
-  },
-  usageBadgeText: {
-    fontSize: 9,
-    fontFamily: 'JetBrainsMono',
-    color: Theme.textDim,
   },
   usageBar: {
     flexDirection: 'row',
