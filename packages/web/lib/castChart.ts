@@ -25,7 +25,51 @@ function resolveColor(v: unknown): unknown {
   return typeof v === "string" && COLOR_WORDS[v] ? COLOR_WORDS[v] : v;
 }
 
-interface MarkSpec { type: string; data?: unknown[]; [k: string]: unknown; }
+// Plot's power features — histograms (binX), density (hexbin), per-category
+// aggregates (groupX), beeswarms (dodgeX), moving averages (windowY) — are
+// TRANSFORMS: functions that wrap a mark's options. JSON can't carry a function,
+// so a mark may instead NAME one declaratively:
+//   { "type":"rectY", "x":"v", "transform": { "kind":"binX", "out": {"y":"count"} } }
+// codecast (never agent code) calls Plot[kind] from this allowlist and folds the
+// mark's own channels into the transform's options. The allowlist keeps a spec
+// from invoking arbitrary Plot exports.
+const TRANSFORM_KINDS = new Set([
+  "bin", "binX", "binY",
+  "group", "groupX", "groupY", "groupZ",
+  "stackX", "stackY",
+  "hexbin", "dodgeX", "dodgeY",
+  "normalizeX", "normalizeY", "windowX", "windowY", "shiftX",
+]);
+
+interface TransformSpec {
+  kind: string;
+  /** Outputs / first positional arg, e.g. {y:"count"} for binX, {r:"count"} for hexbin. */
+  out?: Record<string, unknown>;
+  /** Leading positional arg for transforms that take one (dodge anchor, normalize basis). */
+  param?: unknown;
+  /** Extra transform options (thresholds, binWidth, k, reduce, …). */
+  options?: Record<string, unknown>;
+}
+
+function applyTransform(
+  Plot: typeof PlotNS,
+  t: TransformSpec,
+  channelOpts: Record<string, unknown>,
+): unknown {
+  const fn = TRANSFORM_KINDS.has(t.kind)
+    ? (Plot as unknown as Record<string, unknown>)[t.kind]
+    : undefined;
+  if (typeof fn !== "function") throw new Error(`unknown transform "${t.kind}"`);
+  // The mark's channels (x, fill, …) are the transform's options; `out` supplies
+  // the reduced outputs. Anything in `t.options` is merged in underneath.
+  const options = { ...(t.options ?? {}), ...channelOpts };
+  const lead = t.param !== undefined ? t.param : t.out;
+  return lead !== undefined
+    ? (fn as (a: unknown, o: unknown) => unknown)(lead, options)
+    : (fn as (o: unknown) => unknown)(options);
+}
+
+interface MarkSpec { type: string; data?: unknown[]; transform?: TransformSpec; [k: string]: unknown; }
 interface ChartSpec {
   data?: unknown[]; // default data; marks without their own `data` inherit this
   height?: number;
@@ -65,7 +109,7 @@ async function renderChartInto(el: HTMLElement, fallbackWidth: number): Promise<
   }
   try {
     const marks = (spec.marks ?? []).map((m) => {
-      const { type, data, ...opts } = m;
+      const { type, data, transform, ...opts } = m;
       const fn = (Plot as unknown as Record<string, unknown>)[type];
       if (typeof fn !== "function") throw new Error(`unknown mark "${type}"`);
       if ("stroke" in opts) opts.stroke = resolveColor(opts.stroke);
@@ -77,7 +121,9 @@ async function renderChartInto(el: HTMLElement, fallbackWidth: number): Promise<
       if (opts.fill === undefined && /bar|area|rect|cell/i.test(type)) {
         opts.fill = "var(--sol-blue)";
       }
-      return (fn as (d: unknown, o: unknown) => unknown)(data ?? spec.data ?? [], opts);
+      // A transform (binX, hexbin, groupX, dodgeX, …) wraps the resolved channels.
+      const finalOpts = transform ? applyTransform(Plot, transform, opts) : opts;
+      return (fn as (d: unknown, o: unknown) => unknown)(data ?? spec.data ?? [], finalOpts);
     });
 
     const fig = Plot.plot({
