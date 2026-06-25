@@ -9,6 +9,7 @@ import { AppLoader } from "./AppLoader";
 import { ConversationData } from "./ConversationView";
 import { FormattedSummary } from "./FormattedSummary";
 import { sessionCardSummary } from "../lib/sessionSummary";
+import { sessionStartupState } from "../lib/sessionLifecycle";
 import { compressImage } from "../lib/compressImage";
 import { useConversationMessages } from "../hooks/useConversationMessages";
 import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, categorizeSessions, partitionOldSessions, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, isSessionHidden, resolveSessionAuthor, convBucketMap, groupSessionsForLabelView, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem, BucketAssignmentItem } from "../store/inboxStore";
@@ -1002,26 +1003,39 @@ export const SessionCard = memo(function SessionCard({
             {cleanedUserMsg}
           </div>
         )}
-        {session.message_count === 0 && !session.last_user_message && (
-          session.is_connected ? (
-            <div className="flex items-center gap-1.5 mt-0.5 text-[11px] text-sol-green/70">
-              <span className="w-1.5 h-1.5 rounded-full bg-sol-green/70" />
-              <span>Ready</span>
-            </div>
-          ) : (Date.now() - (session.started_at || session.updated_at)) < 2 * 60 * 1000 ? (
-            <div className="flex items-center gap-1.5 mt-0.5 text-[11px] text-sol-cyan/60">
-              <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-              </svg>
-              <span>Starting...</span>
-            </div>
-          ) : (
+        {session.message_count === 0 && !session.last_user_message && (() => {
+          // Mirror the composer's "Starting… → Ready" lifecycle (see sessionLifecycle).
+          // A blank session often has no daemon heartbeat until its first message, so
+          // we trust elapsed time as the fallback rather than spin forever.
+          const startup = sessionStartupState({
+            isConnected: session.is_connected,
+            ageMs: Date.now() - (session.started_at || session.updated_at),
+          });
+          if (startup === "ready") {
+            return (
+              <div className="flex items-center gap-1.5 mt-0.5 text-[11px] text-sol-green/70">
+                <span className="w-1.5 h-1.5 rounded-full bg-sol-green/70" />
+                <span>Ready</span>
+              </div>
+            );
+          }
+          if (startup === "starting") {
+            return (
+              <div className="flex items-center gap-1.5 mt-0.5 text-[11px] text-sol-cyan/60">
+                <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                <span>Starting...</span>
+              </div>
+            );
+          }
+          return (
             <div className="text-[11px] text-sol-text-dim/60 mt-0.5">
               Waiting for connection
             </div>
-          )
-        )}
+          );
+        })()}
         <div className="flex items-center gap-1.5 mt-1">
           {author && (
             <span className="flex items-center gap-1 flex-shrink-0 max-w-[130px]" title={`${author.name}'s session`}>
