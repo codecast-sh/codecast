@@ -78,10 +78,16 @@ export function isAgentComment(c: Comment): boolean {
   return c.author_kind === "agent";
 }
 
-const AGENT_NAME = "Agent";
+// The agent's product name (short), so a reply reads "Claude"/"Codex" — not "Agent".
+export function agentDisplayName(agentType?: string): string {
+  if (agentType === "codex" || agentType === "codex_cli") return "Codex";
+  if (agentType === "cursor") return "Cursor";
+  if (agentType === "gemini") return "Gemini";
+  return "Claude";
+}
 
-export function commentAuthorName(c: Comment, currentUserId?: string): string {
-  if (isAgentComment(c)) return AGENT_NAME;
+export function commentAuthorName(c: Comment, currentUserId?: string, agentType?: string): string {
+  if (isAgentComment(c)) return agentDisplayName(agentType);
   const u = c.user;
   const name = u?.name || u?.github_username || "";
   if (name) return name;
