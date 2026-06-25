@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { classifyFeedMessage, isNoiseUserMessage } from "./conversationProcessor";
+import { classifyFeedMessage, isNoiseUserMessage, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName } from "./conversationProcessor";
 
 // Regression: the message feed was dumping raw <task-notification> XML and other
 // structured/machine messages as cards. classifyFeedMessage is the single shared
@@ -17,6 +17,7 @@ describe("classifyFeedMessage — structured/noise messages are hidden", () => {
     "session continuation":
       "This session is being continued from a previous conversation that ran out of context.",
     "interrupt": "[Request interrupted by user]",
+    "background agent stopped": 'Background agent "Build P2.6 shadow-soak sweep" was stopped by the user.',
     "codex turn aborted": "<turn_aborted>user aborted</turn_aborted>",
     "tool-output pointer": "Read the output file to retrieve the result: /tmp/x.output",
     "import notice": "[Codecast import] earlier messages were truncated for context.",
@@ -54,6 +55,27 @@ describe("classifyFeedMessage — real messages show cleaned", () => {
   test("a real message that merely mentions task-notification is not hidden", () => {
     const d = classifyFeedMessage("Why does the <task-notification> handling drop messages?");
     expect(d.kind).toBe("text");
+  });
+
+  test("a real message that merely mentions a background agent is not hidden", () => {
+    const d = classifyFeedMessage("Why did the background agent stop unexpectedly?");
+    expect(d.kind).toBe("text");
+    expect(isBackgroundAgentStoppedNotice("Why did the background agent stop unexpectedly?")).toBe(false);
+  });
+});
+
+describe("backgroundAgentStoppedName", () => {
+  test("extracts the quoted agent name from the notice", () => {
+    expect(backgroundAgentStoppedName('Background agent "Build P2.6 shadow-soak sweep" was stopped by the user.'))
+      .toBe("Build P2.6 shadow-soak sweep");
+  });
+
+  test("tolerates a missing trailing period and surrounding whitespace", () => {
+    expect(isBackgroundAgentStoppedNotice('  Background agent "x" was stopped by the user  ')).toBe(true);
+  });
+
+  test("returns null for non-notice content", () => {
+    expect(backgroundAgentStoppedName("just a normal message")).toBeNull();
   });
 
   test("an inter-agent teammate broadcast is hidden (tags + framing both stripped)", () => {
