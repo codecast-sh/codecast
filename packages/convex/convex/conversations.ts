@@ -40,12 +40,19 @@ import {
 } from "./searchCore";
 
 // Single relevance-ranked search-index lookup shared by every message-search
-// surface (web searchMessages, searchForCLI, feedForCLI). One combined lookup
-// instead of a per-term fan-out: per-lookup overhead dominates on long queries
-// (a 7-term query = 7 index scans) and timed out the whole Convex query. BM25
-// already ranks docs matching more/rarer terms first, so a single pool is also
-// the better candidate set for coverage ranking. The take() is the recall/speed
+// surface (web searchConversations, searchForCLI, feedForCLI). One combined
+// lookup instead of a per-term fan-out: per-lookup overhead dominates on long
+// queries (a 7-term query = 7 index scans) and timed out the whole Convex query.
+// BM25 already ranks docs matching more/rarer terms first, so a single pool is
+// also the better candidate set for coverage ranking. The take() is the recall/speed
 // knob: message docs can be large (tool results), so a bigger pool costs bytes.
+//
+// NOTE: `.take()` bounds only what's RETURNED, not what the full-text index
+// SCANS. For a token that appears across a large fraction of the ~3.6M-row
+// messages table (any common word), the search scores the whole posting list and
+// exceeds a query's read budget regardless of the take size — surfacing as a
+// retryable InternalServerError/timeout that the reactive client spins on forever.
+// Lowering this number does not fix that; see ct-37627 for the real fix.
 async function fetchMessageSearchPool(ctx: QueryCtx, terms: ParsedTerms) {
   if (terms.all.length === 0) return [];
   const searchQuery = terms.all.join(" ");
