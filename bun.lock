@@ -18,7 +18,7 @@
     },
     "packages/cli": {
       "name": "@codecast/cli",
-      "version": "1.1.61",
+      "version": "1.1.70",
       "bin": {
         "codecast": "./dist/index.js",
         "cast": "./dist/index.js",
@@ -52,6 +52,7 @@
         "@convex-dev/prosemirror-sync": "^0.2.3",
         "convex": "^1.31.6",
         "fflate": "^0.4.8",
+        "jose": "5.10.0",
         "oslo": "^1.2.1",
         "resend": "^6.6.0",
       },
@@ -63,7 +64,7 @@
     },
     "packages/electron": {
       "name": "@codecast/electron",
-      "version": "1.1.77",
+      "version": "1.1.81",
       "dependencies": {
         "electron-updater": "^6.3.0",
       },
