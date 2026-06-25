@@ -118,29 +118,54 @@ function assertValidTaskStatus(status: string | undefined): asserts status is Ta
   }
 }
 
+// Resolve a free-form assignee ("Jason", "Jason Benn", an email, a github
+// handle) to a team member's user id. Mirrors the feed member resolver in
+// conversations.ts: exact match on github_username/name/email first, then a
+// UNIQUE case-insensitive substring on name/email. Returns null when nothing
+// matches or a substring is ambiguous — it never guesses between two people.
+async function findTeamMemberId(
+  ctx: any,
+  query: string,
+  teamId?: Id<"teams">
+): Promise<Id<"users"> | null> {
+  if (!teamId) return null;
+  const lower = query.toLowerCase();
+  const memberships = await ctx.db
+    .query("team_memberships")
+    .withIndex("by_team_id", (q: any) => q.eq("team_id", teamId))
+    .collect();
+  const members = (await Promise.all(memberships.map((m: any) => ctx.db.get(m.user_id)))).filter(Boolean);
+  const exact = members.find((u: any) =>
+    u.github_username?.toLowerCase() === lower ||
+    u.name?.toLowerCase() === lower ||
+    u.email?.toLowerCase() === lower
+  );
+  if (exact) return exact._id;
+  const partial = members.filter((u: any) =>
+    u.name?.toLowerCase().includes(lower) ||
+    u.email?.toLowerCase().includes(lower)
+  );
+  return partial.length === 1 ? partial[0]._id : null;
+}
+
 export async function resolveAssigneeToUserId(
   ctx: any,
   assignee: string,
   teamId?: Id<"teams">
 ): Promise<Id<"users"> | null> {
   if (!assignee) return null;
-  const direct = await ctx.db.get(assignee as any);
-  if (direct && direct.name !== undefined) return direct._id;
+  // Only call ctx.db.get when the input actually is a document id — it throws
+  // on a malformed id, so a raw name like "Jason Benn" must never reach it.
+  // normalizeId returns null for non-ids instead of throwing.
+  const directId = ctx.db.normalizeId("users", assignee);
+  if (directId) {
+    const direct = await ctx.db.get(directId);
+    if (direct) return direct._id;
+  }
   const lower = assignee.toLowerCase();
   const byGh = await ctx.db.query("users").withIndex("by_github_username", (q: any) => q.eq("github_username", lower)).first();
   if (byGh) return byGh._id;
-  if (!teamId) return null;
-  const memberships = await ctx.db
-    .query("team_memberships")
-    .withIndex("by_team_id", (q: any) => q.eq("team_id", teamId))
-    .collect();
-  for (const m of memberships) {
-    const u = await ctx.db.get(m.user_id);
-    if (u && (u.github_username === assignee || u.name === assignee || u.name?.toLowerCase() === lower)) {
-      return u._id;
-    }
-  }
-  return null;
+  return findTeamMemberId(ctx, assignee, teamId);
 }
 
 export async function resolveAssigneeStr(
@@ -155,7 +180,13 @@ export async function resolveAssigneeStr(
   const lower = assignee.toLowerCase();
   const found = await ctx.db.query("users").withIndex("by_github_username", (q: any) => q.eq("github_username", lower)).first();
   if (found) return found._id.toString();
-  return assignee;
+  // Fall back to a team-member name/email match so friendly names persist a
+  // real user id (consistent with github-handle matches) rather than a bare
+  // string that the UI roster and notification routing can't resolve.
+  const actor = await ctx.db.get(userId);
+  const teamId = (actor?.active_team_id || actor?.team_id) as Id<"teams"> | undefined;
+  const memberId = await findTeamMemberId(ctx, assignee, teamId);
+  return memberId ? memberId.toString() : assignee;
 }
 
 export async function notifySubscribers(
