@@ -4650,6 +4650,29 @@ export const forkFromMessage = mutation({
       }
     }
 
+    // Idempotency on the client-supplied session_id. The fork command rides the
+    // dispatch outbox, which is at-least-once: dispatchWithRetry resends the
+    // SAME args (session_id included) on any client-side error, and the outbox
+    // re-drives on reconnect. Without this guard a delivery that succeeded
+    // server-side but lost its response spawns a SECOND full-copy fork under the
+    // same session_id — the user works in one and the other is left as an empty
+    // "Fork: …" branch. Returning the existing row collapses every redelivery
+    // onto one conversation; the indexed read makes Convex's OCC serialize a
+    // truly-concurrent pair (the loser retries and finds the winner's insert).
+    if (args.session_id) {
+      const existing = await ctx.db
+        .query("conversations")
+        .withIndex("by_session_id", (q) => q.eq("session_id", args.session_id!))
+        .filter((q) => q.eq(q.field("user_id"), userId))
+        .first();
+      if (existing) {
+        return {
+          conversation_id: existing._id,
+          short_id: existing.short_id ?? existing._id.toString().slice(0, 7),
+        };
+      }
+    }
+
     // Resolve cutoff (for partial forks) without scanning the source. The
     // denormalized message_count on the conversation gives us an upper-bound
     // estimate for display; we don't need an exact total to drive the copy
