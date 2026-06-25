@@ -2162,23 +2162,13 @@ Some results land better seen than read. Emit a \`cast-canvas\` block of self-co
 
 It runs sandboxed: **no scripts, no web fonts, no external resources** (it inherits codecast's mono font). Carry the work with layout, color, SVG, and the built-in chart engine rather than JS.
 
-**Charts are declarative** — you give the data, codecast renders it with Observable Plot (never your JS), themed automatically. Drop a placeholder anywhere, even inside a grid cell:
+**Charts are declarative** — describe the data, codecast renders it with Observable Plot (never your JS), themed automatically:
 
 \`\`\`html
 <div class="cast-chart" data-spec='{"marks":[{"type":"barY","data":[…],"x":"label","y":"value"}],"y":{"grid":true}}'></div>
 \`\`\`
 
-The spec mirrors Plot: \`marks\` (each a Plot mark — \`barY\`, \`lineY\`, \`areaY\`, \`rectY\`, \`dot\`, \`cell\`, \`ruleY\`, \`text\`, … with its channels) plus \`x\`/\`y\`/\`color\`/\`fx\`/\`fy\` scale options. Go past one bar chart:
-- **Layer** marks to combine them — an \`areaY\` beneath a \`lineY\`, a dashed \`ruleY\` for a target, a \`text\` mark to label points.
-- **Multiple series**: set \`fill\` (or \`stroke\`) to a data field and each series takes an accent color; add \`"color":{"legend":true}\` for a key. \`barY\`/\`areaY\` stack automatically.
-- **Small multiples**: facet with \`fx\`/\`fy\` to repeat the chart across a category.
-- \`fill\`/\`stroke\` also accept a color word (\`"green"\`). Pre-aggregate your data — the engine plots what you give it, it doesn't sum.
-
-Revenue against target, three marks layered:
-
-\`\`\`html
-<div class="cast-chart" data-spec='{"y":{"grid":true,"label":"$k"},"marks":[{"type":"areaY","data":[…],"x":"month","y":"rev","fill":"blue","fillOpacity":0.15},{"type":"lineY","data":[…],"x":"month","y":"rev","stroke":"blue"},{"type":"ruleY","data":[120],"stroke":"red","strokeDasharray":"4"}]}'></div>
-\`\`\`
+You have **every Observable Plot mark and transform** by name — the whole gallery, not a fixed menu — so fit the form to the data instead of reaching for bars and lines: distributions (\`boxY\`, \`density\`), relationships (\`dot\`, \`hexbin\`), parts of a whole (stacked \`areaY\`/\`barY\`), magnitude grids (\`cell\` heatmaps), flows and fields (\`vector\`, \`arrow\`, \`link\`), and on. Set \`fill\`/\`stroke\` to a field for multi-series (add \`"color":{"legend":true}\`), facet with \`fx\`/\`fy\`, layer marks freely, and let Plot aggregate with a transform — \`"transform":{"kind":"binX","out":{"y":"count"}}\` for a histogram, likewise \`hexbin\`, \`groupX\`, \`dodgeX\`, \`windowY\` — rather than pre-summing.
 ${VISUAL_SNIPPET_END}
 `;
 
