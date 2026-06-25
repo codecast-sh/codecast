@@ -5608,12 +5608,25 @@ export const feedForCLI = query({
     // run this lazily — see below — so the daemon's stable-context feed (no state
     // filter, limit ~10) never pays it for the whole candidate set.
     const workStateMap = new Map<string, WorkState>();
+    // The trust-coerced agent_status per conv, so the displayed `agent_status`
+    // field agrees with the bucketed work_state (a stale "working" shows as the
+    // coerced "idle", never contradicting a needs_input row).
+    const coercedStatusMap = new Map<string, string | undefined>();
     const classifyConv = async (conv: typeof filteredConversations[number]): Promise<WorkState> => {
       const cached = workStateMap.get(conv._id.toString());
       if (cached) return cached;
       const managed = managedMap.get(conv._id.toString());
       const isLive = liveStatusMap.has(conv._id.toString());
-      const agentStatus = managed?.agent_status;
+      // Stop trusting a frozen "active" status once the conversation has gone
+      // quiet past the trust TTL — the SAME coercion enrichInboxSessionRow does
+      // at its enrichment boundary (see trustedAgentStatus). A live daemon that
+      // finished re-asserts its last "working" on every heartbeat; without this
+      // the feed pins the session in WORKING forever even though the inbox /
+      // `cast monitor` (which read the coerced value) long since moved it to
+      // needs-input. This is the one place feedForCLI reads the raw managed
+      // status, so it must coerce here too or the two views drift.
+      const agentStatus = trustedAgentStatus(managed?.agent_status, conv.updated_at, now);
+      coercedStatusMap.set(conv._id.toString(), agentStatus);
       const daemonAlive = agentStatus === "stopped" ? false : isLive;
       const hasPending = !!(conv as any).has_pending_messages;
       const activity = deriveSessionActivity({
@@ -5771,7 +5784,7 @@ export const feedForCLI = query({
         updated_at: new Date(conv.updated_at).toISOString(),
         message_count: conv.message_count || 0,
         agent_type: conv.agent_type,
-        ...(convIsLive ? { is_live: true, agent_status: liveStatusMap.get(conv._id.toString()) || undefined } : {}),
+        ...(convIsLive ? { is_live: true, agent_status: coercedStatusMap.get(conv._id.toString()) || undefined } : {}),
         work_state: workStateMap.get(conv._id.toString()) || "idle",
         is_pinned: !!conv.inbox_pinned_at,
         user: !isOwnConv && owner ? { name: owner.name || null, email: owner.email || null } : undefined,

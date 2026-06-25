@@ -11,10 +11,14 @@ function seedCurrentSession(partial: Record<string, unknown>) {
   useInboxStore.setState(partial as any);
 }
 
+// Fresh by default: a genuinely-working/active session has a recent updated_at.
+// categorizeSessions distrusts an active status that's gone quiet past the trust
+// TTL (see isTrustStale), so a stale sentinel would wrongly sweep these fixtures
+// into needs-input. Tests that want an AGED session override updated_at.
 const baseSession: InboxSession = {
   _id: "conv1",
   session_id: "session-1",
-  updated_at: 1,
+  updated_at: Date.now(),
   agent_type: "claude_code",
   message_count: 0,
   is_idle: true,
@@ -1635,10 +1639,15 @@ describe("syncTable sessions — status flip without updated_at bump", () => {
 
   it("moves a session from Working to Needs Input when only the status changes", () => {
     const store = useInboxStore.getState();
+    // Recent updated_at so the session reads as genuinely working (the staleness
+    // net distrusts an active status gone quiet past the trust TTL). The flip
+    // below keeps this SAME timestamp — the point is re-bucketing on a status
+    // change with no message written / no updated_at bump.
+    const recentTs = Date.now();
     const working = {
       ...baseSession, _id: "conv-flip", session_id: "sess-flip",
       message_count: 5, agent_status: "working" as const, is_idle: false,
-      has_pending: false, updated_at: 1000,
+      has_pending: false, updated_at: recentTs,
     };
     store.syncTable("sessions", [working]);
     let cat = categorizeSessions(useInboxStore.getState().sessions, new Set());
@@ -1647,7 +1656,7 @@ describe("syncTable sessions — status flip without updated_at bump", () => {
     // Agent finished its turn: server recomputes idle/stopped, but writes no new
     // message, so updated_at is UNCHANGED.
     store.syncTable("sessions", [{
-      ...working, agent_status: "idle" as const, is_idle: true, updated_at: 1000,
+      ...working, agent_status: "idle" as const, is_idle: true, updated_at: recentTs,
     }]);
     cat = categorizeSessions(useInboxStore.getState().sessions, new Set());
     expect(cat.needsInput.map((s) => s._id)).toContain("conv-flip");

@@ -1,9 +1,10 @@
 import type { Doc } from "./_generated/dataModel";
-// Single source of truth for the "agent is actively producing" set. Re-exported
-// so existing `from "./inboxFilters"` importers keep working unchanged.
-import { ACTIVE_AGENT_STATUSES } from "@codecast/shared/contracts";
+// Single source of truth for the "agent is actively producing" set and the
+// stale-status trust TTL. Re-exported so existing `from "./inboxFilters"`
+// importers (incl. the tests) keep working unchanged.
+import { ACTIVE_AGENT_STATUSES, STATUS_TRUST_TTL_MS } from "@codecast/shared/contracts";
 
-export { ACTIVE_AGENT_STATUSES };
+export { ACTIVE_AGENT_STATUSES, STATUS_TRUST_TTL_MS };
 
 export type ConversationDoc = Doc<"conversations">;
 
@@ -66,18 +67,15 @@ export const AGENT_IDLE_GRACE_MS = 45 * 1000;
 // store's DEAD_AGENT_STATUSES.
 export const DEAD_AGENT_STATUSES = new Set(["stopped"]);
 
-// How long a daemon-reported "active" status is trusted with no new synced
-// activity on the conversation. When the daemon loses a turn's idle transition
-// (a dropped Stop hook, Codex's sleep-killed idle timer) it re-asserts the last
-// "working" on every heartbeat, and because that heartbeat keeps the managed row
-// "live" the 90s heartbeat-staleness coercion never fires — so the session is
-// pinned in the inbox's WORKING bucket indefinitely. If the conversation has
-// synced NOTHING for this long, the active status is stale and we stop trusting
-// it (see trustedAgentStatus). One hour is ~30x the p99 real tool-execution time
-// (~2 min) — a genuinely working agent emits tool calls far more often, so it
-// never goes this quiet — and AskUserQuestion / permission blocks never reach
-// here as "active" (the caller routes them to needs-input first).
-export const STATUS_TRUST_TTL_MS = 60 * 60 * 1000;
+// STATUS_TRUST_TTL_MS (imported from @codecast/shared/contracts): how long a
+// daemon-reported "active" status is trusted with no new synced activity. When
+// the daemon loses a turn's idle transition (a dropped Stop hook, Codex's
+// sleep-killed idle timer) it re-asserts the last "working" on every heartbeat,
+// and because that heartbeat keeps the managed row "live" the 90s
+// heartbeat-staleness coercion never fires — so the session would be pinned in
+// the inbox's WORKING bucket indefinitely. Past the TTL we stop trusting it (see
+// trustedAgentStatus). AskUserQuestion / permission blocks never reach here as
+// "active" (the caller routes them to needs-input first).
 
 // Collapse a stale "active" status to "idle" so every consumer agrees the agent
 // has finished. The agent_status field is read in three independent places — the

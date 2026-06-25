@@ -10,7 +10,10 @@ import { computeVisualOrder, visualOrderSessions, type InboxSession } from "../i
 const session = (id: string, extra: Partial<InboxSession> = {}): InboxSession => ({
   _id: id,
   session_id: `session-${id}`,
-  updated_at: 1,
+  // Recent: a working fixture (is_idle:false) must read as genuinely working —
+  // categorizeSessions sweeps an active session gone quiet past the trust TTL
+  // into needs-input. All fixtures share one timestamp, so sort order is unchanged.
+  updated_at: Date.now(),
   agent_type: "claude_code",
   message_count: 3,
   is_idle: true,

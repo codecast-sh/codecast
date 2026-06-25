@@ -529,6 +529,33 @@ describe("trustedAgentStatus (stale 'working' trust TTL)", () => {
   test("a session frozen in 'working' for hours reads needs_input (finished), not working", () => {
     expect(workStateFor("working", 18 * 60 * 60 * 1000)).toBe("needs_input");
   });
+
+  // Regression for feedForCLI's classifyConv (powers `cast sessions` / the
+  // global feed): classifying on the RAW managed status — skipping the coercion
+  // — is exactly the bug that pinned long-quiet sessions in WORKING. This locks
+  // in that the feed path must coerce before it classifies, matching the inbox.
+  test("classifying the RAW status without coercion is the working-forever bug", () => {
+    const now = NOW;
+    const updatedAt = now - 12 * 60 * 60 * 1000; // quiet 12h, daemon still heartbeating
+    const rawWorkState = classifyWorkState({
+      agentStatus: "working", // raw managed_sessions.agent_status, re-asserted on heartbeat
+      isIdle: isSessionIdle({
+        agentStatus: "working",
+        agentStatusUpdatedAt: updatedAt,
+        hasPending: false,
+        lastRoleIsUser: false,
+        recentlyUpdated: false,
+        daemonAlive: true,
+        now,
+      }),
+      awaitingInput: false,
+      hasPending: false,
+      isUnresponsive: false,
+      messageCount: 5,
+    });
+    expect(rawWorkState).toBe("working"); // the symptom
+    expect(workStateFor("working", 12 * 60 * 60 * 1000)).toBe("needs_input"); // the coerced fix
+  });
 });
 
 describe("subagentKeepsParentWorking", () => {

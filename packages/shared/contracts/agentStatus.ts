@@ -53,3 +53,17 @@ export const ACTIVE_AGENT_STATUSES: ReadonlySet<string> = new Set<string>([
   "starting",
   "resuming",
 ]);
+
+// How long a daemon-reported ACTIVE status is trusted with no fresh activity on
+// the conversation. A daemon that finished re-asserts its last "working" on
+// every heartbeat; if the conversation has synced nothing for this long the
+// status is stale and must read as finished, not working. Keyed on the
+// conversation's updated_at — the one field that stays accurate even when a
+// row's live status is frozen (e.g. a session that aged out of the liveness
+// overlay's window keeps its last status forever). One hour is ~30x the p99
+// real tool-execution time (~2 min), so a genuinely working agent — which emits
+// tool calls far more often — never goes this quiet. Consumed in two places that
+// must agree: the backend coercion (convex/inboxFilters.ts trustedAgentStatus,
+// the authority for in-window rows) and the web client's bucketing safety net
+// (web/store/inboxStore.ts, which catches aged-out rows the overlay can't refresh).
+export const STATUS_TRUST_TTL_MS = 60 * 60 * 1000;
