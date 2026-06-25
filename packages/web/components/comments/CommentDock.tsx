@@ -30,14 +30,19 @@ function snippetFor(content: string | undefined): string {
   return cleanContent(content).replace(/```[\s\S]*?```/g, " code ").replace(/\s+/g, " ").trim().slice(0, 64) || "a message";
 }
 
-function jumpToMessage(messageId: string) {
+function jumpToMessage(conversationId: string, messageId: string) {
+  const st = useInboxStore.getState();
+  // Navigate + load the message even if it isn't in the current window (the
+  // conversation view honors scrollToMessageId and pages it in); then anchor the
+  // per-message rail there. If it's already on screen, flash it right away.
+  st.requestNavigate(conversationId, { scrollToMessageId: messageId, source: "gesture" });
+  st.openCommentThread(messageId);
   const el = document.getElementById("msg-" + messageId);
-  if (!el) return;
-  el.scrollIntoView({ block: "center", behavior: "smooth" });
-  el.classList.add("cc-msg-flash");
-  setTimeout(() => el.classList.remove("cc-msg-flash"), 1300);
-  // expand the inline thread at that message
-  useInboxStore.getState().openCommentThread(messageId);
+  if (el) {
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    el.classList.add("cc-msg-flash");
+    setTimeout(() => el.classList.remove("cc-msg-flash"), 1300);
+  }
 }
 
 function CommentRailImpl({ conversationId, bottomOffset }: { conversationId: string; bottomOffset: number }) {
@@ -48,6 +53,7 @@ function CommentRailImpl({ conversationId, bottomOffset }: { conversationId: str
   const open = useInboxStore((s) => s.commentRailOpen) === true;
   const setOpen = useInboxStore((s) => s.setCommentRailOpen);
   const setWidth = useInboxStore((s) => s.setCommentRailWidth);
+  const agentType = useInboxStore((s) => ((s.conversations[conversationId] ?? s.sessions[conversationId]) as { agent_type?: string } | undefined)?.agent_type ?? "claude_code");
   const messages = useInboxStore((s) => s.messages[conversationId]) as Array<{ _id: string; content?: string }> | undefined;
 
   const [width, setW] = useState(loadWidth);
@@ -113,7 +119,7 @@ function CommentRailImpl({ conversationId, bottomOffset }: { conversationId: str
               type="button"
               className="cc-railx-anchored-row"
               title="Jump to this message"
-              onClick={() => t.messageId && jumpToMessage(t.messageId)}
+              onClick={() => t.messageId && jumpToMessage(conversationId, t.messageId)}
             >
               <Quote className="w-3 h-3 shrink-0 text-sol-cyan/70" />
               <span className="cc-railx-anchored-snip">{t.messageId ? snippetFor((messages ?? []).find((m) => m._id === t.messageId)?.content) : "a message"}</span>
@@ -143,6 +149,7 @@ function CommentRailImpl({ conversationId, bottomOffset }: { conversationId: str
           onDelete={comments.deleteComment}
           onAskAgent={comments.askAgent}
           agentBusy={globalBusy}
+          agentType={agentType}
         />
       </div>
     </aside>

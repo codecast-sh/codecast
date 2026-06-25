@@ -1500,12 +1500,11 @@ pre[class*="language-"] {
 .cc-cmt:hover {
   background: color-mix(in srgb, var(--sol-text) 3.5%, transparent);
 }
-.cc-cmt-optimistic { opacity: 0.5; }
-.cc-cmt-agent {
-  background: color-mix(in srgb, var(--cc-agent) 6%, transparent);
-}
-.cc-cmt-agent:hover {
-  background: color-mix(in srgb, var(--cc-agent) 10%, transparent);
+/* User comments get the same quiet blue edge user messages have everywhere else;
+   agent comments stay clean — the agent logo + name carry the identity. */
+.cc-cmt-user {
+  border-left: 2px solid color-mix(in srgb, var(--sol-blue) 45%, transparent);
+  padding-left: 0.55rem;
 }
 .cc-cmt-avatar { margin-top: 0.1rem; }
 .cc-cmt-main { flex: 1; min-width: 0; }
@@ -1529,28 +1528,22 @@ pre[class*="language-"] {
 }
 .cc-cmt-thinking {
   font-size: 0.66rem;
-  font-style: italic;
-  color: var(--cc-agent);
+  color: var(--sol-text-dim);
   display: inline-flex;
   align-items: center;
+  gap: 0.25rem;
 }
-.cc-cmt-elapsed {
-  margin-left: 0.35rem;
-  font-style: normal;
-  font-variant-numeric: tabular-nums;
-  font-size: 0.6rem;
-  color: color-mix(in srgb, var(--cc-agent) 55%, var(--sol-text-dim));
-}
+/* Action row below the body — mirrors the left quote chip's buttons. Hidden
+   until hover so a quiet thread stays clean. */
 .cc-cmt-actions {
-  margin-left: auto;
-  display: inline-flex;
-  gap: 0.05rem;
+  display: flex;
+  gap: 0.15rem;
+  margin: 0.1rem 0 0 -0.4rem;
   opacity: 0;
-  transform: translateY(-1px);
   transition: opacity 120ms ease;
-  align-self: center;
 }
-.cc-cmt:hover .cc-cmt-actions { opacity: 1; }
+.cc-cmt:hover .cc-cmt-actions,
+.cc-cmt:focus-within .cc-cmt-actions { opacity: 1; }
 .cc-cmt-act {
   color: var(--sol-text-dim);
   padding: 0.18rem;
@@ -1647,17 +1640,8 @@ pre[class*="language-"] {
   min-width: 1rem; height: 1rem; display: grid; place-items: center; padding: 0 0.25rem; margin-right: 0.2rem;
 }
 
-/* Agent: a quiet, simple text action — separate from Send, brightens on hover. */
-.cc-thread-askagent {
-  align-self: flex-start;
-  display: inline-flex; align-items: center; gap: 0.3rem;
-  margin: 0 0.6rem 0.4rem;
-  font-size: 0.68rem; font-weight: 500;
-  color: var(--sol-text-dim);
-  transition: color 120ms ease;
-}
-.cc-thread-askagent:hover { color: var(--cc-agent); }
-.cc-thread-askagent svg { color: var(--cc-agent); opacity: 0.85; }
+/* Agent action — separate from Send, styled like the shared comment buttons. */
+.cc-thread-askagent-row { display: flex; padding: 0.1rem 0.4rem 0.3rem; }
 
 /* ── Composer (reuses MessageInput in bareComposer mode) ──────────────────── */
 .cc-cmt-composer { flex-shrink: 0; padding: 0.35rem 0.5rem 0.45rem; }
@@ -1680,16 +1664,35 @@ pre[class*="language-"] {
 .cc-cmt-typing-dots i:nth-child(3) { animation-delay: 0.36s; }
 
 .cc-cmt-replyto {
-  display: flex; align-items: center; gap: 0.3rem;
-  font-size: 0.66rem; color: var(--sol-text-muted);
-  padding: 0.12rem 0.4rem; margin-bottom: 0.3rem;
-  border-left: 2px solid color-mix(in srgb, var(--cc-accent) 50%, transparent);
-  background: color-mix(in srgb, var(--cc-accent) 6%, transparent);
+  display: flex; align-items: center; gap: 0.35rem;
+  font-size: 0.68rem; color: var(--sol-text-secondary);
+  padding: 0.2rem 0.45rem; margin-bottom: 0.3rem;
+  border-left: 2px solid var(--cc-accent);
+  background: color-mix(in srgb, var(--cc-accent) 12%, transparent);
   border-radius: 0 6px 6px 0;
 }
+.cc-cmt-replyto b { color: var(--sol-text); font-weight: 600; }
 .cc-cmt-replyto > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.cc-cmt-replyto-x { color: var(--sol-text-dim); }
+.cc-cmt-replyto-x { color: var(--sol-text-dim); display: inline-flex; }
 .cc-cmt-replyto-x:hover { color: var(--sol-text); }
+
+/* "replying to <name>" marker on a threaded reply card. */
+.cc-cmt-replying {
+  display: inline-flex; align-items: center; gap: 0.2rem;
+  font-size: 0.62rem; font-weight: 500; color: var(--sol-text-dim);
+  margin-bottom: 0.08rem;
+}
+.cc-cmt-replying svg { color: var(--cc-accent); opacity: 0.75; }
+
+/* Composer Cancel footer (matches the left editor footer). */
+.cc-cmt-composer-foot { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-top: 0.25rem; }
+/* Ping <agent> button — agent logo + name, clean (no violet, no sparkle). */
+.cc-ping-btn { gap: 0.35rem; }
+.cc-ping-btn:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 8%, transparent); }
+/* Agent variant of the shared comment button — violet, like Ask-agent. */
+.cc-comment-btn-agent { color: color-mix(in srgb, var(--cc-agent) 80%, var(--sol-text-dim)); }
+.cc-comment-btn-agent:hover { color: var(--cc-agent); background: color-mix(in srgb, var(--cc-agent) 12%, transparent); }
+.cc-comment-btn-agent svg { color: var(--cc-agent); }
 
 /* ── Inline anchored thread (pinned at its message in the flow) ───────────── */
 .cc-inline { margin: 0.4rem 0 0.55rem; }
@@ -1844,18 +1847,9 @@ pre[class*="language-"] {
 }
 .cc-rright-composer { padding: 0.15rem 0 0.1rem; }
 .cc-rright-foot {
-  display: flex; align-items: center; gap: 0.75rem;
-  padding: 0.25rem 0.1rem 0.1rem;
+  display: flex; align-items: center; gap: 0.25rem;
+  padding: 0.2rem 0 0.1rem;
 }
-.cc-rright-add, .cc-rright-agent {
-  display: inline-flex; align-items: center; gap: 0.28rem;
-  font-size: 0.66rem; font-weight: 500; color: var(--sol-text-dim);
-  transition: color 120ms ease;
-}
-.cc-rright-add:hover { color: var(--cc-accent); }
-.cc-rright-add svg { color: var(--cc-accent); opacity: 0.8; }
-.cc-rright-agent:hover { color: var(--cc-agent); }
-.cc-rright-agent svg { color: var(--cc-agent); opacity: 0.85; }
 
 /* Flash a transcript message when jumped to from the rail's anchored list. */
 .cc-msg-flash { animation: ccMsgFlash 1.3s ease-out; border-radius: 8px; }

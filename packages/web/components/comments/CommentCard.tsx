@@ -1,5 +1,5 @@
-import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Reply, Pencil, Trash2, Check, X } from "lucide-react";
+import { memo, useLayoutEffect, useRef, useState } from "react";
+import { Reply, Pencil, Trash2, Loader2 } from "lucide-react";
 import { relTimeShort } from "../../lib/utils";
 import {
   type Comment,
@@ -10,11 +10,13 @@ import {
 } from "../../lib/commentThread";
 import { CommentAvatar } from "./CommentAvatar";
 import { CommentMarkdown } from "./CommentMarkdown";
+import { KeyCap } from "../KeyboardShortcutsHelp";
 
 function CommentCardImpl({
   comment,
   currentUserId,
   agentType,
+  replyingToName,
   onReply,
   onEdit,
   onDelete,
@@ -22,6 +24,7 @@ function CommentCardImpl({
   comment: Comment;
   currentUserId?: string;
   agentType?: string;
+  replyingToName?: string;
   onReply: (c: Comment) => void;
   onEdit: (commentId: string, content: string) => void | Promise<void>;
   onDelete: (commentId: string) => void | Promise<void>;
@@ -32,20 +35,9 @@ function CommentCardImpl({
 
   const agent = isAgentComment(comment);
   const mine = isOwnComment(comment, currentUserId);
-  const name = commentAuthorName(comment, currentUserId);
+  const name = commentAuthorName(comment, currentUserId, agentType);
   const avatar = commentAuthorAvatar(comment);
   const thinking = agent && comment.agent_status === "thinking";
-
-  // Live elapsed counter while the agent works — concrete proof it's running (the
-  // first reply pays a real session spin-up, so this can run a while).
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    if (!thinking) return;
-    const iv = setInterval(() => setTick((t) => t + 1), 1000);
-    return () => clearInterval(iv);
-  }, [thinking]);
-  const elapsed = thinking ? Math.max(0, Math.floor((Date.now() - comment.created_at) / 1000)) : 0;
-  const elapsedLabel = elapsed >= 60 ? `${Math.floor(elapsed / 60)}m ${elapsed % 60}s` : `${elapsed}s`;
 
   useLayoutEffect(() => {
     if (!editing) return;
@@ -66,45 +58,15 @@ function CommentCardImpl({
   };
 
   return (
-    <div className={"cc-cmt group" + (agent ? " cc-cmt-agent" : "")}>
+    <div className={"cc-cmt group" + (agent ? " cc-cmt-agent" : " cc-cmt-user")}>
       <CommentAvatar name={name} image={avatar} isAgent={agent} agentType={agentType} />
       <div className="cc-cmt-main">
         <div className="cc-cmt-head">
-          <span className={"cc-cmt-name" + (agent ? " text-sol-violet" : "")}>{name}</span>
-          {!thinking && <span className="cc-cmt-time">{relTimeShort(comment.created_at)}</span>}
-          {thinking && (
-            <span className="cc-cmt-thinking">
-              drafting<span className="cc-dots"><i /><i /><i /></span>
-              <span className="cc-cmt-elapsed">{elapsedLabel}</span>
-            </span>
-          )}
-
-          {!editing && !thinking && (
-            <span className="cc-cmt-actions">
-              <button type="button" className="cc-cmt-act" title="Reply" onClick={() => onReply(comment)}>
-                <Reply className="w-3 h-3" />
-              </button>
-              {mine && (
-                <>
-                  <button
-                    type="button"
-                    className="cc-cmt-act"
-                    title="Edit"
-                    onClick={() => { setDraft(comment.content); setEditing(true); }}
-                  >
-                    <Pencil className="w-3 h-3" />
-                  </button>
-                  <button
-                    type="button"
-                    className="cc-cmt-act cc-cmt-act-danger"
-                    title="Delete"
-                    onClick={() => onDelete(comment._id)}
-                  >
-                    <Trash2 className="w-3 h-3" />
-                  </button>
-                </>
-              )}
-            </span>
+          <span className="cc-cmt-name">{name}</span>
+          {thinking ? (
+            <span className="cc-cmt-thinking"><Loader2 className="w-3 h-3 animate-spin" /> thinking…</span>
+          ) : (
+            <span className="cc-cmt-time">{relTimeShort(comment.created_at)}</span>
           )}
         </div>
 
@@ -125,21 +87,39 @@ function CommentCardImpl({
                 else if (e.key === "Escape") { e.preventDefault(); setEditing(false); setDraft(comment.content); }
               }}
             />
-            <div className="cc-cmt-edit-foot">
-              <button type="button" className="cc-cmt-mini" onMouseDown={(e) => e.preventDefault()} onClick={() => { setEditing(false); setDraft(comment.content); }}>
-                <X className="w-3 h-3" /> Cancel
+            <div className="cc-comment-editor-footer">
+              <button type="button" className="cc-comment-btn" onMouseDown={(e) => e.preventDefault()} onClick={() => { setEditing(false); setDraft(comment.content); }}>
+                Cancel <KeyCap size="xs">Esc</KeyCap>
               </button>
-              <button type="button" className="cc-cmt-mini cc-cmt-mini-primary" onMouseDown={(e) => e.preventDefault()} onClick={saveEdit}>
-                <Check className="w-3 h-3" /> Save
+              <button type="button" className="cc-comment-btn cc-comment-btn-primary" onMouseDown={(e) => e.preventDefault()} onClick={saveEdit}>
+                Save <span className="cc-bar-keys"><KeyCap size="xs">⌘</KeyCap><KeyCap size="xs">↵</KeyCap></span>
               </button>
             </div>
           </div>
-        ) : thinking && !comment.content ? (
-          <div className="cc-cmt-body cc-cmt-shimmer">Drafting a reply from the thread…</div>
-        ) : (
-          <div className="cc-cmt-body">
-            <CommentMarkdown content={comment.content} />
-          </div>
+        ) : thinking && !comment.content ? null : (
+          <>
+            {replyingToName && (
+              <div className="cc-cmt-replying"><Reply className="w-2.5 h-2.5" /> {replyingToName}</div>
+            )}
+            <div className="cc-cmt-body">
+              <CommentMarkdown content={comment.content} />
+            </div>
+            <div className="cc-cmt-actions">
+              <button type="button" className="cc-comment-btn" onClick={() => onReply(comment)}>
+                <Reply className="w-3 h-3" /> Reply
+              </button>
+              {mine && (
+                <>
+                  <button type="button" className="cc-comment-btn" onClick={() => { setDraft(comment.content); setEditing(true); }}>
+                    <Pencil className="w-3 h-3" /> Edit
+                  </button>
+                  <button type="button" className="cc-comment-btn cc-comment-btn-danger" onClick={() => onDelete(comment._id)}>
+                    <Trash2 className="w-3 h-3" /> Remove
+                  </button>
+                </>
+              )}
+            </div>
+          </>
         )}
       </div>
     </div>

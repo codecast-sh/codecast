@@ -1,11 +1,12 @@
 import { memo, useEffect, useState } from "react";
-import { Sparkles, MessageSquarePlus } from "lucide-react";
+import { MessageSquarePlus } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
-import { isAgentComment } from "../../lib/commentThread";
+import { isAgentComment, commentAuthorName, type Comment } from "../../lib/commentThread";
 import { useMessageComments } from "../../hooks/useConversationComments";
 import { CommentCard } from "./CommentCard";
 import { CommentComposer } from "./CommentComposer";
+import { PingAgentButton } from "./PingAgentButton";
 
 // This message's teammate comments, rendered to the RIGHT of the message — the
 // mirror of the left quote rail. MessageReview owns the placement: it floats the
@@ -26,10 +27,20 @@ function RightCommentRailImpl({ conversationId, messageId, mode }: { conversatio
   // composer by anchoring here + bumping the nonce.
   const openNonce = useInboxStore((s) => (s.commentRailAnchor === messageId ? s.commentRailNonce : -1));
   const [composing, setComposing] = useState(false);
+  const [replyTo, setReplyTo] = useState<Comment | null>(null);
   useEffect(() => { if (openNonce >= 0) setComposing(true); }, [openNonce]);
 
   const composeOpen = composing && isAuthenticated;
   const agentBusy = thread.comments.some((c) => isAgentComment(c) && (c.agent_status === "thinking" || c.agent_status === "streaming"));
+
+  const nameById = new Map(thread.comments.map((c) => [c._id, commentAuthorName(c, currentUserId)]));
+
+  const startReply = (c: Comment) => { setReplyTo(c); setComposing(true); };
+  const closeComposer = () => {
+    setComposing(false);
+    setReplyTo(null);
+    if (openNonce >= 0) useInboxStore.getState().openCommentThread(null);
+  };
 
   return (
     <aside className={"cc-rright cc-rright-" + mode}>
@@ -40,7 +51,8 @@ function RightCommentRailImpl({ conversationId, messageId, mode }: { conversatio
             comment={c}
             currentUserId={currentUserId}
             agentType={agentType}
-            onReply={() => setComposing(true)}
+            replyingToName={c.parent_comment_id ? nameById.get(c.parent_comment_id) : undefined}
+            onReply={startReply}
             onEdit={editComment}
             onDelete={deleteComment}
           />
@@ -53,25 +65,30 @@ function RightCommentRailImpl({ conversationId, messageId, mode }: { conversatio
           messageId={messageId}
           enabled
           authed={isAuthenticated}
+          replyTo={replyTo}
           currentUserId={currentUserId}
+          onCancelReply={() => setReplyTo(null)}
+          onClose={closeComposer}
+          onPingAgent={agentBusy ? undefined : () => askAgent(messageId)}
+          agentType={agentType}
           autoFocus
-          placeholder="Reply…"
-          onSubmit={(content) => addComment({ content, messageId })}
+          placeholder={replyTo ? "Reply…" : "Comment…"}
+          onSubmit={(content) => addComment({ content, messageId, parentCommentId: replyTo?._id })}
         />
       )}
 
-      <div className="cc-rright-foot">
-        {isAuthenticated && !composeOpen && (
-          <button type="button" className="cc-rright-add" onClick={() => setComposing(true)}>
-            <MessageSquarePlus className="w-3 h-3" /> Comment
-          </button>
-        )}
-        {isAuthenticated && !agentBusy && (
-          <button type="button" className="cc-rright-agent" onClick={() => askAgent(messageId)}>
-            <Sparkles className="w-3 h-3" /> Ask agent
-          </button>
-        )}
-      </div>
+      {!composeOpen && (
+        <div className="cc-rright-foot">
+          {isAuthenticated && (
+            <button type="button" className="cc-comment-btn" onClick={() => setComposing(true)}>
+              <MessageSquarePlus className="w-3 h-3" /> Comment
+            </button>
+          )}
+          {isAuthenticated && !agentBusy && (
+            <PingAgentButton agentType={agentType} onClick={() => askAgent(messageId)} />
+          )}
+        </div>
+      )}
     </aside>
   );
 }

@@ -2,6 +2,8 @@ import { X } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
 import { useDocPresence } from "../../hooks/useDocPresence";
 import { MessageInput } from "../ConversationView";
+import { KeyCap } from "../KeyboardShortcutsHelp";
+import { PingAgentButton } from "./PingAgentButton";
 import { presenceDocId, commentAuthorName, type Comment } from "../../lib/commentThread";
 
 // Composer for one thread. Reuses the conversation's own MessageInput (mentions,
@@ -19,6 +21,9 @@ export function CommentComposer({
   replyTo,
   currentUserId,
   onCancelReply,
+  onClose,
+  onPingAgent,
+  agentType,
   onSubmit,
   placeholder = "Comment…",
   autoFocus,
@@ -30,6 +35,9 @@ export function CommentComposer({
   replyTo?: Comment | null;
   currentUserId?: string;
   onCancelReply?: () => void;
+  onClose?: () => void;
+  onPingAgent?: () => void;
+  agentType?: string;
   onSubmit: (content: string) => void | Promise<void>;
   placeholder?: string;
   autoFocus?: boolean;
@@ -47,8 +55,16 @@ export function CommentComposer({
 
   if (!authed) return <div className="cc-cmt-signedout">Sign in to comment.</div>;
 
+  // Esc backs out (capture phase, before MessageInput sees it): cancel a reply
+  // first, otherwise close. Enter posts the comment as usual.
+  const onKeyDownCapture = (e: React.KeyboardEvent) => {
+    if (e.key !== "Escape") return;
+    if (replyTo && onCancelReply) { e.preventDefault(); e.stopPropagation(); onCancelReply(); }
+    else if (onClose) { e.preventDefault(); e.stopPropagation(); onClose(); }
+  };
+
   return (
-    <div className="cc-cmt-composer">
+    <div className="cc-cmt-composer" onKeyDownCapture={onKeyDownCapture}>
       {typing.length > 0 && (
         <div className="cc-cmt-typing">
           <span className="cc-cmt-typing-dots"><i /><i /><i /></span>
@@ -80,9 +96,20 @@ export function CommentComposer({
           bareComposer
           composerPlaceholder={placeholder}
           autoFocusInput={autoFocus}
-          onGateSend={async (text) => { await onSubmit(text); }}
+          onGateSend={async (text) => { await onSubmit(text); onCancelReply?.(); }}
         />
       </div>
+
+      {(onPingAgent || onClose) && (
+        <div className="cc-cmt-composer-foot">
+          {onPingAgent ? <PingAgentButton agentType={agentType} onClick={onPingAgent} /> : <span />}
+          {onClose && (
+            <button type="button" className="cc-comment-btn" onMouseDown={(e) => e.preventDefault()} onClick={onClose}>
+              Cancel <KeyCap size="xs">Esc</KeyCap>
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

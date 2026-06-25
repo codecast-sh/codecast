@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
-import { ChevronDown, Sparkles } from "lucide-react";
-import { type Comment, type CommentThread as Thread } from "../../lib/commentThread";
+import { ChevronDown } from "lucide-react";
+import { type Comment, type CommentThread as Thread, commentAuthorName } from "../../lib/commentThread";
 import { CommentCard } from "./CommentCard";
 import { CommentComposer } from "./CommentComposer";
 
@@ -24,6 +24,7 @@ export function CommentThread({
   onDelete,
   onAskAgent,
   agentBusy,
+  agentType,
 }: {
   thread: Thread;
   conversationId: string;
@@ -40,9 +41,12 @@ export function CommentThread({
   onDelete: (commentId: string) => void | Promise<void>;
   onAskAgent?: (messageId?: string) => void | Promise<void>;
   agentBusy?: boolean;
+  agentType?: string;
 }) {
   const [replyTo, setReplyTo] = useState<Comment | null>(null);
   const [collapsed, setCollapsed] = useState(false);
+
+  const nameById = new Map(thread.comments.map((c) => [c._id, commentAuthorName(c, currentUserId, agentType)]));
 
   return (
     <div className={"cc-thread cc-thread-" + variant + (collapsed ? " cc-thread-collapsed" : "")}>
@@ -72,6 +76,8 @@ export function CommentThread({
             key={c._id}
             comment={c}
             currentUserId={currentUserId}
+            agentType={agentType}
+            replyingToName={c.parent_comment_id ? nameById.get(c.parent_comment_id) : undefined}
             onReply={(rc) => setReplyTo(rc)}
             onEdit={onEdit}
             onDelete={onDelete}
@@ -88,20 +94,14 @@ export function CommentThread({
           replyTo={replyTo}
           currentUserId={currentUserId}
           onCancelReply={() => setReplyTo(null)}
+          onPingAgent={onAskAgent && !agentBusy ? () => onAskAgent(thread.messageId) : undefined}
+          agentType={agentType}
           autoFocus={composerAutoFocus}
           placeholder={variant === "anchored" ? "Reply…" : "Comment on this conversation…"}
           onSubmit={(content) =>
             onAdd({ content, messageId: thread.messageId, parentCommentId: replyTo?._id })
           }
         />
-      )}
-
-      {/* Agent reply is its own small, distinct affordance — separate from Send. */}
-      {!collapsed && canWrite && onAskAgent && !agentBusy && (
-        <button type="button" className="cc-thread-askagent" onClick={() => onAskAgent(thread.messageId)}>
-          <Sparkles className="w-3 h-3" />
-          Ask the agent to weigh in
-        </button>
       )}
     </div>
   );
