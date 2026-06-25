@@ -187,6 +187,24 @@ export function isCompactionPrompt(content: string): boolean {
   return content.trim().startsWith("Your task is to create a detailed summary");
 }
 
+// Claude Code injects a synthetic user-role notice when a background agent (a Task
+// tool subagent run in the background) is stopped: `Background agent "<name>" was
+// stopped by the user.` It carries no isMeta flag, so without special handling it
+// renders as a real user turn (avatar + bubble). It's a control event like an
+// interrupt — hide it from previews, render it as a status line in the thread.
+const BACKGROUND_AGENT_STOPPED_RE = /^Background agent "(.*)" was stopped by the user\.?$/;
+
+/** The agent's name if `content` is a background-agent-stopped notice, else null. */
+export function backgroundAgentStoppedName(content: string | null | undefined): string | null {
+  if (!content) return null;
+  const m = content.trim().match(BACKGROUND_AGENT_STOPPED_RE);
+  return m ? m[1] : null;
+}
+
+export function isBackgroundAgentStoppedNotice(content: string | null | undefined): boolean {
+  return !!content && BACKGROUND_AGENT_STOPPED_RE.test(content.trim());
+}
+
 /** True when a user-role message is machine-generated noise that no person
  * typed — so feeds and previews hide it instead of dumping the raw XML. */
 export function isNoiseUserMessage(content: string | null | undefined): boolean {
@@ -199,6 +217,7 @@ export function isNoiseUserMessage(content: string | null | undefined): boolean 
   if (isSkillExpansion(raw)) return true;
   if (isCompactionPrompt(raw)) return true;
   if (raw.startsWith("<turn_aborted>")) return true;
+  if (isBackgroundAgentStoppedNotice(raw)) return true;
   if (INTERRUPT_PREFIXES.some((p) => raw.startsWith(p))) return true;
   if (TOOL_OUTPUT_POINTER_PREFIXES.some((p) => raw.startsWith(p))) return true;
   const noReminders = stripSystemTags(raw);

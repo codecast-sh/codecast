@@ -16,7 +16,7 @@ import { rehypeSearchHighlight } from "../lib/rehypeSearchHighlight";
 import { compressImage } from "../lib/compressImage";
 import { useStorageImageUrl, hasDecodedSrc, markSrcDecoded } from "../hooks/useStorageImageUrl";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isImportNotice, formatModel } from "../lib/conversationProcessor";
+import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName } from "../lib/conversationProcessor";
 import { classifyApiErrorBanner } from "@codecast/shared/contracts";
 import { formatToolName, isPlanWriteToolCall, truncateStr, shortenUrl, getRelativePath, stripLineNumbers } from "@codecast/shared/render";
 import { getBuiltinCommands } from "../lib/builtinCommands";
@@ -1828,6 +1828,7 @@ type UserMessageKind =
   | { kind: 'normal' }
   | { kind: 'command' }
   | { kind: 'interrupt'; tone: 'sky' | 'amber' }
+  | { kind: 'background_agent_stopped'; agentName?: string }
   | { kind: 'skill_expansion'; cmdName?: string }
   | { kind: 'task_notification' }
   | { kind: 'task_prompt' }
@@ -1910,6 +1911,7 @@ function classifyUserMessage(
   if (isStrippedCommand(tNoReminders)) return { kind: 'command' };
   if (agentType === "codex" && isCodexTurnAbortedMessage(t)) return { kind: 'interrupt', tone: 'amber' };
   if (isInterruptMessage(t)) return { kind: 'interrupt', tone: 'sky' };
+  if (isBackgroundAgentStoppedNotice(t)) return { kind: 'background_agent_stopped', agentName: backgroundAgentStoppedName(t) ?? undefined };
   if (isSkillExpansion(t)) return { kind: 'skill_expansion' };
   if (isTaskNotification(t)) {
     const stripped = t.replace(/<task-notification>[\s\S]*?<\/task-notification>/g, '').trim();
@@ -12040,6 +12042,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         }
         case 'interrupt':
           return <InterruptStatusLine key={msg._id} label={kind.tone === 'amber' ? "turn aborted" : undefined} tone={kind.tone} />;
+        case 'background_agent_stopped':
+          return <InterruptStatusLine key={msg._id} label={kind.agentName ? `background agent "${kind.agentName}" stopped` : "background agent stopped"} tone="amber" />;
         case 'continuation':
           return <InterruptStatusLine key={msg._id} label="session continued" tone="sky" />;
         case 'skill_expansion':

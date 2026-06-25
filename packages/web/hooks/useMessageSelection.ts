@@ -35,7 +35,7 @@ export function useMessageSelection({
   const setSelectedIndex = useForkNavigationStore((s) => s.setSelectedIndex);
 
   const getUserMessageIndices = useCallback((): number[] => {
-    const SKIP_PREFIXES = ["[Request interrupted", "This session is being continued", "<task-notification>", "<system-reminder>"];
+    const SKIP_PREFIXES = ["[Request interrupted", "This session is being continued", "<task-notification>", "<system-reminder>", 'Background agent "'];
     const indices: number[] = [];
     for (let i = 0; i < timeline.length; i++) {
       const item = timeline[i];
