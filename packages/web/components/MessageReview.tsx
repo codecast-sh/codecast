@@ -100,6 +100,13 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
   // narrow to sit beside. rightW is the rail/column width.
   const [rightMode, setRightMode] = useState<"margin" | "column" | "below">("below");
   const [rightW, setRightW] = useState(RIGHT_MAX_PX);
+  // In margin mode the rail floats absolutely (top:0) in the right margin. If a
+  // comment thread is TALLER than its (short) message, the rail overflows below
+  // the message — and absolute overflow still grows the scroll CONTAINER's
+  // height, so it paints empty scrollable space under the transcript (most
+  // visible on the last message). Reserve the rail's height as the row's
+  // min-height so the row measures to include it: no overflow, no phantom space.
+  const [rightReserveH, setRightReserveH] = useState(0);
 
   // Measure block offsets while the rail/keyboard nav needs them OR while hovering:
   // the hover handle must track its block live, because content above can reflow
@@ -147,12 +154,14 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
       // and a squeezed column would collide with them — drop clean cards below so
       // the message stays readable. (column mode kept in the union for later.)
       const availR = (sr ? sr.right : window.innerWidth) - rr.right - RAIL_GAP_PX;
-      if (availR >= RIGHT_MIN_PX) {
-        setRightMode("margin");
-        setRightW(Math.min(RIGHT_MAX_PX, Math.round(availR)));
-      } else {
-        setRightMode("below");
-      }
+      const inMarginR = availR >= RIGHT_MIN_PX;
+      setRightMode(inMarginR ? "margin" : "below");
+      if (inMarginR) setRightW(Math.min(RIGHT_MAX_PX, Math.round(availR)));
+      // Reserve the floating margin rail's height so it can't overflow below the
+      // message (see rightReserveH). Only margin mode floats — "below" is in-flow
+      // and already measured, so it needs no reservation.
+      const railEl = region.querySelector(".cc-rright") as HTMLElement | null;
+      setRightReserveH(inMarginR && railEl ? railEl.offsetHeight : 0);
     }
   }, []);
 
@@ -171,6 +180,10 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
     ro.observe(el);
     if (containerRef.current) ro.observe(containerRef.current); // catches margin changes (panel toggles, resize)
     getQuoteUnits(el).forEach((u) => ro.observe(u));
+    // Re-reserve when the comment thread itself grows/shrinks: the rail floats
+    // absolutely, so its size changes don't resize containerRef on their own.
+    const railEl = containerRef.current?.querySelector(".cc-rright");
+    if (railEl) ro.observe(railEl);
     window.addEventListener("resize", measure);
     return () => {
       ro.disconnect();
@@ -306,6 +319,7 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
       style={{
         ...(engaged && railInMargin ? { "--cc-rail-w": railPx + "px" } : {}),
         ...(rightActive && rightMode !== "below" ? { "--cc-rright-w": rightW + "px" } : {}),
+        ...(rightActive && rightMode === "margin" && rightReserveH ? { minHeight: rightReserveH } : {}),
       } as React.CSSProperties}
       data-review-region={isReviewTarget ? "active" : undefined}
       tabIndex={isReviewTarget ? -1 : undefined}
