@@ -81,6 +81,7 @@ export function GlobalSearch() {
   const [isFocused, setIsFocused] = useState(false);
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
+  const [searchIsSlow, setSearchIsSlow] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [userOnly, setUserOnly] = useState(false);
   const [selectedTeamId, setSelectedTeamId] = useState<Id<"teams"> | null>(null);
@@ -116,6 +117,19 @@ export function GlobalSearch() {
       ? { query: debouncedQuery, limit: 30, userOnly, activeTeamId: selectedTeamId ?? undefined }
       : "skip"
   );
+
+  // A broad term scans the whole message history and can exceed Convex's per-query
+  // budget; the reactive client treats that system error as retryable and never
+  // hands it to useQuery, so searchResults stays undefined and the panel would spin
+  // forever. After a grace period, surface a "too broad" hint instead of a bare
+  // spinner. The query stays subscribed — if it does eventually resolve we show
+  // results; this only changes what an unresolved load looks like. (see ct-37627)
+  useWatchEffect(() => {
+    setSearchIsSlow(false);
+    if (debouncedQuery.length < 2 || searchResults !== undefined) return;
+    const timer = setTimeout(() => setSearchIsSlow(true), 9000);
+    return () => clearTimeout(timer);
+  }, [debouncedQuery, searchResults]);
 
   const searchData = searchResults && "results" in searchResults ? searchResults : null;
 
@@ -238,6 +252,9 @@ export function GlobalSearch() {
           value={query}
           onChange={(e) => {
             setQuery(e.target.value);
+            // Clear the slow-search hint the instant the term changes, so it can
+            // never linger from a prior broad query onto a fresh, fast one.
+            setSearchIsSlow(false);
             if (!isOpen) setIsOpen(true);
           }}
           onFocus={() => { setIsFocused(true); setIsOpen(true); }}
@@ -265,7 +282,16 @@ export function GlobalSearch() {
           className="fixed left-1/2 -translate-x-1/2 w-[min(1200px,calc(100vw-2rem))] bg-sol-bg border border-sol-border rounded-xl shadow-2xl shadow-black/50 overflow-hidden z-[9999]"
         >
             {!searchResults ? (
-              <AppLoader className="min-h-0 bg-transparent py-8" size={24} />
+              searchIsSlow ? (
+                <div className="px-4 py-8 text-center">
+                  <p className="text-sm text-sol-text-secondary mb-2">This search is taking a while</p>
+                  <p className="text-xs text-sol-text-dim">
+                    Broad terms scan your whole history and can time out. Try a more specific word, or wrap an exact phrase in quotes.
+                  </p>
+                </div>
+              ) : (
+                <AppLoader className="min-h-0 bg-transparent py-8" size={24} />
+              )
             ) : groupedResults.length === 0 ? (
               <div className="px-4 py-8 text-center">
                 <p className="text-sm text-sol-text-secondary mb-2">No conversations match</p>
