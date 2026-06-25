@@ -2692,12 +2692,14 @@ function recordCurrentConversationPointer(
 // here makes that effect a no-op and lets a tab remember an in-pane navigation
 // across a tab switch. Only inbox tabs carry `?s=`; /tasks, /docs, etc. are left
 // untouched.
-function syncActiveInboxTabPath(draft: Draft, id: string) {
+function syncActiveInboxTabPath(draft: Draft, id: string | null) {
   const tabId = draft.activeTabId;
   if (!tabId) return;
   const tab = draft.tabs.find((t) => t.id === tabId);
   if (!tab || tab.path.split("?")[0] !== "/inbox") return;
-  const next = `/inbox?s=${id}`;
+  // A null selection (dismissed the last session) clears the param to a bare
+  // /inbox, so the re-assert effect reads no target instead of `?s=null`.
+  const next = id ? `/inbox?s=${id}` : "/inbox";
   if (tab.path === next) return;
   draft.tabs = draft.tabs.map((t) => (t.id === tabId ? { ...t, path: next } : t));
 }
@@ -2857,6 +2859,12 @@ function hideSessionInDraft(draft: any, id: string, mode: "stash" | "kill") {
   declareViewNav("gesture");
   draft.currentSessionId = newSessionId;
   recordCurrentConversationPointer(draft, newSessionId ?? undefined);
+  // Keep the active inbox tab's `?s=` in lockstep with the advanced selection,
+  // exactly as commitCurrentSession does for normal navigation. Without this the
+  // tab path stays pointed at the just-hidden session, and the inbox's re-assert
+  // effect snaps the view back onto it (resurfacing the dismissed/killed session
+  // as a peek) the next time it runs — e.g. when the tab is re-activated.
+  syncActiveInboxTabPath(draft, newSessionId);
 }
 
 export const useInboxStore = create<InboxStoreState>(
@@ -4177,6 +4185,10 @@ export const useInboxStore = create<InboxStoreState>(
     declareViewNav("gesture");
     this.currentSessionId = newSessionId;
     recordCurrentConversationPointer(this, newSessionId ?? undefined);
+    // Same lockstep as commitCurrentSession / hideSessionInDraft: advancing the
+    // selection must rewrite the active inbox tab's `?s=`, or the re-assert effect
+    // snaps the view back onto the just-removed session.
+    syncActiveInboxTabPath(this, newSessionId);
   }),
 
 
