@@ -1,5 +1,5 @@
 import { describe, test, expect, mock } from "bun:test";
-import { parseSessionLine, parseLine, parseCodexLine, extractMessages, parseSessionFile, parseCodexSessionFile, type ClaudeSessionEntry } from "./parser.js";
+import { parseSessionLine, parseLine, parseCodexLine, extractMessages, parseSessionFile, parseCodexSessionFile, extractCodexForkRoot, type ClaudeSessionEntry } from "./parser.js";
 
 describe("Parser malformed JSON handling", () => {
   test("parseSessionLine logs warning and returns null for malformed JSON", () => {
@@ -350,6 +350,75 @@ describe("parser - codex images", () => {
     expect(first[0].uuid).toMatch(/^codex-message-/);
     expect(second[0].uuid).toBe(first[0].uuid);
     expect(withEarlierLine[1].uuid).toBe(first[0].uuid);
+  });
+});
+
+describe("extractCodexForkRoot - collapsing resume/fork chains", () => {
+  const meta = (id: string, forkedFrom?: string) =>
+    JSON.stringify({
+      timestamp: "2026-06-21T18:53:54.890Z",
+      type: "session_meta",
+      payload: {
+        id,
+        ...(forkedFrom ? { forked_from_id: forkedFrom } : {}),
+        cwd: "/Users/ashot/src/codecast",
+        originator: "Codex Desktop",
+        source: "vscode",
+      },
+    });
+
+  test("resolves a multi-hop fork chain to its original root", () => {
+    // Codex stacks ancestry newest-first; the file's own session_meta is line 1.
+    const head = [
+      meta("c", "b"),
+      meta("b", "a"),
+      meta("a"), // root: forked from nothing
+    ].join("\n");
+    expect(extractCodexForkRoot(head)).toBe("a");
+  });
+
+  test("every fork in a chain resolves to the SAME root (no duplicates)", () => {
+    const root = meta("a");
+    const child = [meta("b", "a"), root].join("\n");
+    const grandchild = [meta("c", "b"), meta("b", "a"), root].join("\n");
+    // Sibling forked from the same parent as the grandchild's parent.
+    const sibling = [meta("d", "b"), meta("b", "a"), root].join("\n");
+    expect(extractCodexForkRoot(child)).toBe("a");
+    expect(extractCodexForkRoot(grandchild)).toBe("a");
+    expect(extractCodexForkRoot(sibling)).toBe("a");
+  });
+
+  test("returns the file's own id when there is no fork lineage", () => {
+    expect(extractCodexForkRoot(meta("solo"))).toBe("solo");
+  });
+
+  test("stops at the deepest ancestor embedded in a truncated head", () => {
+    // Head only reaches back to b (its parent record isn't present).
+    const head = [meta("c", "b"), meta("b", "a")].join("\n");
+    expect(extractCodexForkRoot(head)).toBe("a");
+    // If even b's record is missing, we can only see c's immediate parent b.
+    const shallower = meta("c", "b");
+    expect(extractCodexForkRoot(shallower)).toBe("b");
+  });
+
+  test("ignores non-session_meta lines and is undefined when none present", () => {
+    const withBody = [
+      meta("c", "b"),
+      meta("b", "a"),
+      meta("a"),
+      JSON.stringify({ type: "event_msg", payload: { type: "token_count" } }),
+      JSON.stringify({ type: "response_item", payload: { type: "message" } }),
+    ].join("\n");
+    expect(extractCodexForkRoot(withBody)).toBe("a");
+    expect(extractCodexForkRoot("")).toBeUndefined();
+    expect(extractCodexForkRoot('{"type":"response_item"}')).toBeUndefined();
+  });
+
+  test("survives a corrupt forked_from cycle without hanging", () => {
+    const head = [meta("a", "b"), meta("b", "a")].join("\n");
+    // Cycle guard: returns deterministically rather than looping forever.
+    const root = extractCodexForkRoot(head);
+    expect(root === "a" || root === "b").toBe(true);
   });
 });
 
@@ -871,6 +940,56 @@ describe("queued-command attachments (Ctrl+Enter / busy-agent delivery)", () => 
       },
     ];
 
+    expect(extractMessages(entries)).toHaveLength(0);
+  });
+
+  // A queued turn that also carries an image stores attachment.prompt as a
+  // content-block ARRAY, not a string. The string-only handler called
+  // prompt.replace(...) on the array, threw, and wedged the WHOLE transcript's
+  // file sync at that byte offset forever (no further messages ever synced).
+  test("emits a multimodal queued prompt (array) with its text and image", () => {
+    const entries: ClaudeSessionEntry[] = [
+      {
+        type: "attachment",
+        uuid: "queued-img",
+        timestamp: "2026-06-18T20:15:48Z",
+        attachment: {
+          type: "queued_command",
+          prompt: [
+            { type: "text", text: "[Image #1] literally right now its fine and not injecting WHY?" },
+            { type: "image", source: { type: "base64", media_type: "image/png", data: "iVBORabc==" } },
+          ],
+          commandMode: "prompt",
+          origin: { kind: "human" },
+        },
+      },
+    ];
+
+    const messages = extractMessages(entries);
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      uuid: "queued-img",
+      role: "user",
+      content: "[Image #1] literally right now its fine and not injecting WHY?",
+    });
+    expect(messages[0].images).toEqual([{ mediaType: "image/png", data: "iVBORabc==" }]);
+  });
+
+  // Belt-and-suspenders: any unexpected non-string, non-array prompt must not throw
+  // (a throw here wedges the entire transcript, as the image case did in prod).
+  test("does not throw on an unexpected prompt shape", () => {
+    const entries: ClaudeSessionEntry[] = [
+      {
+        type: "attachment",
+        uuid: "queued-weird",
+        timestamp: "2026-06-18T20:15:05Z",
+        // Deliberately malformed to exercise the defensive coercion.
+        attachment: { type: "queued_command", prompt: 42 as unknown as string },
+      },
+    ];
+
+    expect(() => extractMessages(entries)).not.toThrow();
     expect(extractMessages(entries)).toHaveLength(0);
   });
 });

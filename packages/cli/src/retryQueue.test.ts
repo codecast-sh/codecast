@@ -105,6 +105,50 @@ describe("RetryQueue", () => {
     expect(successLog).toBeDefined();
   });
 
+  it("drains a backed-off op immediately on connection restore", async () => {
+    // Repro for the "sync stalled (N)" that lingers after a laptop wake: an op
+    // fails while the socket is down, gets pushed into a multi-second network
+    // backoff, and would otherwise wait it out even after the socket returns.
+    let attempts = 0;
+    let online = false;
+    const q = new RetryQueue({
+      initialDelayMs: 1000, // first attempt + backoff base; backoff doubles to ~2s after one failure
+      maxDelayMs: 60_000,
+      maxAttempts: 10,
+      onLog: () => {},
+    });
+    q.setExecutor(async () => {
+      attempts++;
+      if (!online) throw new Error("fetch failed: unable to connect");
+      return true;
+    });
+
+    q.add("addMessage", { content: "test" });
+
+    // First attempt fires (~1s), fails while "offline", and re-arms at ~now+2s.
+    await new Promise((r) => setTimeout(r, 1200));
+    expect(attempts).toBe(1);
+    expect(q.getQueueSize()).toBe(1);
+
+    // Socket comes back. Without the kick the op sits in its ~2s backoff.
+    online = true;
+    q.notifyConnectionRestored();
+
+    // It must retry and drain well inside that backoff window — proof the kick,
+    // not the natural timer, drove the retry.
+    await new Promise((r) => setTimeout(r, 250));
+    expect(attempts).toBe(2);
+    expect(q.getQueueSize()).toBe(0);
+
+    q.stop();
+  });
+
+  it("notifyConnectionRestored is a no-op on an empty queue", () => {
+    const q = new RetryQueue({ onLog: () => {} });
+    expect(() => q.notifyConnectionRestored()).not.toThrow();
+    expect(q.getQueueSize()).toBe(0);
+  });
+
   it("should identify various network error patterns", async () => {
     const networkErrors = [
       "fetch failed",
