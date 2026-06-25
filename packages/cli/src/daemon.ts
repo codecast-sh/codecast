@@ -12,7 +12,7 @@ import { copyCredentialToRemoteAsync, loadRemoteHost, remoteHostsRegistered } fr
 import { useProfile, saveProfile, getAccountsHeartbeatPayload } from "./ccAccounts.js";
 import { CursorWatcher, type CursorSessionEvent } from "./cursorWatcher.js";
 import { CursorTranscriptWatcher, type CursorTranscriptEvent } from "./cursorTranscriptWatcher.js";
-import { CodexWatcher, type CodexSessionEvent } from "./codexWatcher.js";
+import { CodexWatcher, isAppServerManagedCodexSessionHead, type CodexSessionEvent } from "./codexWatcher.js";
 import { watchdogHeartbeatStale, WATCHDOG_HEARTBEAT_FILENAME } from "./supervision.js";
 import {
   CodexAppServer,
@@ -28,7 +28,7 @@ import {
   matchStartedConversation,
 } from "./sessionProcessMatcher.js";
 import { GeminiWatcher, type GeminiSessionEvent } from "./geminiWatcher.js";
-import { parseSessionFile, parseCodexSessionFile, parseGeminiSessionFile, parseCursorTranscriptFile, extractSlug, extractParentUuid, extractSummaryTitle, extractCwd, extractCodexCwd, extractGeminiProjectHash, detectCliFlags, type ParsedMessage } from "./parser.js";
+import { parseSessionFile, parseCodexSessionFile, parseGeminiSessionFile, parseCursorTranscriptFile, extractSlug, extractParentUuid, extractSummaryTitle, extractCwd, extractCodexCwd, extractCodexForkRoot, extractGeminiProjectHash, detectCliFlags, type ParsedMessage } from "./parser.js";
 import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { encryptToken, decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
@@ -3983,6 +3983,61 @@ function readFileHeadAndTail(filePath: string, headBytes: number = 8192, tailByt
   return head + "\n" + tail;
 }
 
+// Codex stacks a rollout's full fork lineage as the leading run of session_meta records
+// (each ~37KB, because base_instructions embeds the whole system prompt), so a fixed-size
+// head read can't reach the chain root. Read complete lines from offset 0 until the first
+// non-session_meta line, returning just that leading block for extractCodexForkRoot. This
+// is position-independent (works on incremental syncs) and bounded by a deep-chain cap.
+function readCodexSessionMetaHead(filePath: string): string {
+  const CHUNK = 256 * 1024;
+  const MAX = 16 * 1024 * 1024;
+  const fd = fs.openSync(filePath, "r");
+  try {
+    let acc = "";
+    let offset = 0;
+    while (offset < MAX) {
+      const buf = Buffer.alloc(CHUNK);
+      const bytesRead = fs.readSync(fd, buf, 0, CHUNK, offset);
+      if (bytesRead === 0) break;
+      acc += buf.subarray(0, bytesRead).toString("utf-8");
+      offset += bytesRead;
+      // Find where the leading session_meta block ends (first complete non-meta line).
+      let cut = 0;
+      let nl = acc.indexOf("\n");
+      let hitBoundary = false;
+      while (nl >= 0) {
+        const line = acc.slice(cut, nl);
+        if (line.trim() && !line.includes('"type":"session_meta"')) {
+          hitBoundary = true;
+          break;
+        }
+        cut = nl + 1;
+        nl = acc.indexOf("\n", cut);
+      }
+      if (hitBoundary) return acc.slice(0, cut);
+      if (bytesRead < CHUNK) break; // EOF: whole file is session_meta (or empty)
+    }
+    return acc;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+// The leading session_meta block is immutable once written, so a rollout file's fork root
+// never changes — cache it per path to avoid re-reading ~200KB on every incremental sync.
+const codexForkRootCache = new Map<string, string | undefined>();
+function resolveCodexForkRoot(filePath: string): string | undefined {
+  if (codexForkRootCache.has(filePath)) return codexForkRootCache.get(filePath);
+  let root: string | undefined;
+  try {
+    root = extractCodexForkRoot(readCodexSessionMetaHead(filePath));
+  } catch {
+    root = undefined;
+  }
+  codexForkRootCache.set(filePath, root);
+  return root;
+}
+
 const bakImageRecoveryDone = new Set<string>();
 
 function recoverImagesFromBackup(
@@ -5395,7 +5450,43 @@ async function processCodexSession(
     }
     const messages = parseCodexSessionFile(newContent);
 
-    let conversationId = conversationCache[sessionId];
+    // Collapse Codex's per-resume fork chain into one conversation: every fork of a logical
+    // session embeds its lineage back to a common root, so we key the conversation off that
+    // root. We register BOTH the live fork id and the root so future forks collapse here and
+    // lookups by the live session id (inject/status/kill) keep resolving.
+    const forkRoot = resolveCodexForkRoot(filePath);
+    const lineageKeys =
+      forkRoot && forkRoot !== sessionId ? [sessionId, forkRoot] : [sessionId];
+    const setConversationCache = (cid: string): void => {
+      let changed = false;
+      for (const k of lineageKeys) {
+        if (conversationCache[k] !== cid) {
+          conversationCache[k] = cid;
+          changed = true;
+        }
+      }
+      if (changed) saveConversationCache(conversationCache);
+    };
+    const clearConversationCache = (): void => {
+      let changed = false;
+      for (const k of lineageKeys) {
+        if (k in conversationCache) {
+          delete conversationCache[k];
+          changed = true;
+        }
+      }
+      if (changed) saveConversationCache(conversationCache);
+    };
+
+    // Prefer the lineage root's conversation over a per-fork entry: the root is the
+    // canonical conversation with the full history, so a fork that was previously (under
+    // the old bug) synced into its own conversation heals back onto the root here, and its
+    // stale per-fork id is re-pointed below. The orphaned duplicate row no longer receives
+    // updates (clean it up separately).
+    let conversationId =
+      (forkRoot ? conversationCache[forkRoot] : undefined) ?? conversationCache[sessionId];
+    // Mirror the resolved conversation onto both the live fork id and the lineage root.
+    if (conversationId) setConversationCache(conversationId);
 
     if (conversationId) {
       let titleContent: string;
@@ -5469,8 +5560,7 @@ async function processCodexSession(
         if (matchedStartedConversation) {
           conversationId = matchedStartedConversation;
           const tmuxEntry = startedSessionTmux.get(matchedStartedConversation);
-          conversationCache[sessionId] = conversationId;
-          saveConversationCache(conversationCache);
+          setConversationCache(conversationId);
           // Reconcile project_path/git_root to the real session cwd (see Claude
           // match branch): the stub's stored path was a guess made before the
           // session existed and may not match where it actually runs.
@@ -5502,9 +5592,8 @@ async function processCodexSession(
             parentMessageUuid: undefined,
             gitInfo: undefined,
           });
-          conversationCache[sessionId] = conversationId;
-          saveConversationCache(conversationCache);
-          log(`Created conversation ${conversationId} for Codex session ${sessionId}`);
+          setConversationCache(conversationId);
+          log(`Created conversation ${conversationId} for Codex session ${sessionId}${forkRoot && forkRoot !== sessionId ? ` (lineage root ${forkRoot.slice(0, 8)})` : ""}`);
 
           if ((global as any).activeSessions) {
             (global as any).activeSessions.set(conversationId, {
@@ -5577,8 +5666,7 @@ async function processCodexSession(
     }
     if (batchResult.conversationNotFound) {
       log(`Conversation ${conversationId} not found, invalidating cache and recreating...`);
-      delete conversationCache[sessionId];
-      saveConversationCache(conversationCache);
+      clearConversationCache();
 
       const firstMsgTimestamp = messages[0]?.timestamp;
       const firstUserMessage = messages.find(msg => msg.role === "user");
@@ -5593,8 +5681,7 @@ async function processCodexSession(
           title,
           startedAt: firstMsgTimestamp,
         });
-        conversationCache[sessionId] = conversationId;
-        saveConversationCache(conversationCache);
+        setConversationCache(conversationId);
         log(`Recreated conversation ${conversationId} for Codex session ${sessionId}`);
 
         await syncService.addMessages({
@@ -11678,22 +11765,10 @@ export function shouldTreatClaudeFileAsStale(
   return fileStat.size > syncRecord.lastSyncedPosition;
 }
 
-export function isAppServerManagedCodexSessionHead(headContent: string): boolean {
-  const firstLine = headContent.split("\n").find((line) => line.trim().length > 0);
-  if (!firstLine) return false;
-
-  try {
-    const parsed = JSON.parse(firstLine) as {
-      type?: string;
-      payload?: { originator?: string; source?: string | { custom?: string } };
-    };
-    if (parsed.type !== "session_meta") return false;
-    if (parsed.payload?.originator === "codecast") return true;
-    return typeof parsed.payload?.source === "object" && parsed.payload.source?.custom === "codecast";
-  } catch {
-    return firstLine.includes('"originator":"codecast"') || firstLine.includes('"source":{"custom":"codecast"}');
-  }
-}
+// Defined in codexWatcher.ts so the `cast status` stuck-sync report (index.ts) can
+// share it without importing the whole daemon module. Re-exported here for existing
+// importers of "./daemon.js" (e.g. daemon.stale.test.ts).
+export { isAppServerManagedCodexSessionHead };
 
 function findStaleCodexSessionFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): string[] {
   const codexSessionsDir = path.join(process.env.HOME || "", ".codex", "sessions");
@@ -14312,7 +14387,12 @@ async function main(): Promise<void> {
         }
       );
       logDelivery("Pending messages subscription established");
-      saveDaemonState({ connected: true });
+      // Registering a subscription does NOT prove the WebSocket is up:
+      // onUpdate() returns synchronously and silently queues on a dead socket,
+      // so asserting connected:true here lies whenever the socket later dies
+      // mid-run (e.g. after a sleep) — the flag stays true through real
+      // outages. The truthful connected/disconnected flag is driven below by
+      // subscribeToConnectionState off the live WebSocket state instead.
       if (reconnectAttempt > 0) {
         sendLogImmediate("info", `[LIFECYCLE] connection_restored: after ${reconnectAttempt} attempts`, { error_code: "connection_restored" });
       }
@@ -14483,6 +14563,41 @@ async function main(): Promise<void> {
   };
 
   setupCommandSubscription();
+
+  // Keep the persisted `connected` flag (what `cast status` shows as
+  // "Convex: connected/disconnected") honest by driving it off the live Convex
+  // WebSocket state. Without this the flag was set once at subscription
+  // registration and only cleared on startup/shutdown, so it couldn't tell a
+  // live socket from one that silently died after a sleep — reading "connected"
+  // straight through a sync outage. subscribeToConnectionState fires on every
+  // transition; ConnectionState also changes on inflight-request counts, so
+  // dedupe to socket up/down edges to avoid churning daemon.state on every
+  // mutation. Seed from the current state so we don't wait for the first change.
+  let lastConnectedWritten: boolean | undefined;
+  const publishConnectionState = (cs: { isWebSocketConnected: boolean }) => {
+    if (cs.isWebSocketConnected === lastConnectedWritten) return;
+    // A genuine false→true edge (not the initial seed from `undefined`) means
+    // the socket just came back after an outage — most commonly a laptop wake.
+    // Recover gracefully instead of letting the UI sit on scary states: drain
+    // the retry backlog now (otherwise queued ops wait out a backoff scheduled
+    // against the dead socket — up to 5 min — and surface as "sync stalled"),
+    // and refresh the heartbeat immediately so `daemon_last_seen` is current and
+    // the web "daemon offline" banner clears at once rather than after the next
+    // 30s tick.
+    const restored = lastConnectedWritten === false && cs.isWebSocketConnected;
+    lastConnectedWritten = cs.isWebSocketConnected;
+    saveDaemonState({ connected: cs.isWebSocketConnected });
+    if (restored) {
+      retryQueueRef?.notifyConnectionRestored();
+      sendHeartbeat().catch(() => {});
+    }
+  };
+  try {
+    publishConnectionState(subscriptionClient.connectionState());
+    subscriptionClient.subscribeToConnectionState(publishConnectionState);
+  } catch (err) {
+    logWarn(`Could not subscribe to Convex connection state: ${err instanceof Error ? err.message : String(err)}`);
+  }
 
   const shutdown = async () => {
     skipRespawn = true;

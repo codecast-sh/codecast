@@ -28,10 +28,12 @@ export interface ClaudeSessionEntry {
   isVisibleInTranscriptOnly?: boolean;
   // A message the user queues with Ctrl+Enter (or that codecast's daemon injects
   // while the agent is mid-turn) is written as type:"attachment" with this shape —
-  // the prompt text lives in `attachment.prompt`, NOT in `message.content`.
+  // the prompt lives in `attachment.prompt`, NOT in `message.content`. A text-only
+  // queued turn stores it as a bare string; a queued turn that also carries an image
+  // stores it as a content-block array (same shape as message.content).
   attachment?: {
     type?: string;
-    prompt?: string;
+    prompt?: string | ContentBlock[];
     commandMode?: string;
     origin?: { kind?: string };
   };
@@ -90,8 +92,12 @@ export const CODECAST_IMPORT_NOTICE_PREFIX = "[Codecast import]";
 // Queued prompts sometimes carry leading terminal control bytes (e.g. \x01\x0b,
 // bracketed-paste markers) captured with the keystrokes. Strip a leading run of
 // control chars — keeping tab/newline — so the synced content is clean and still
-// content-matches its pending-message row on the server.
-function stripControlPrefix(text: string): string {
+// content-matches its pending-message row on the server. Coerce defensively: a
+// non-string slipping in here used to throw and wedge the WHOLE transcript's sync
+// forever (one bad queued-command line froze the file at its byte offset), so this
+// must never throw regardless of what shape the prompt field holds.
+function stripControlPrefix(text: unknown): string {
+  if (typeof text !== "string") return "";
   return text.replace(/^[\x00-\x08\x0b-\x1f]+/, "");
 }
 
@@ -130,9 +136,32 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
     // normal echo (idle redelivery) never double-syncs.
     if (entry.type === "attachment") {
       if (entry.attachment?.type === "queued_command") {
-        const prompt = stripControlPrefix(entry.attachment.prompt ?? "");
-        if (prompt.trim()) {
-          messages.push({ uuid: entry.uuid, role: "user", content: prompt, timestamp });
+        // A text-only queued turn stores prompt as a string; a queued turn with an
+        // image stores it as a content-block array. Pull the text out and keep any
+        // images so the synced turn matches what the user actually sent.
+        const raw = entry.attachment.prompt;
+        const promptImages: ImageBlock[] = [];
+        let promptText = "";
+        if (Array.isArray(raw)) {
+          for (const block of raw) {
+            if (block.type === "text") {
+              promptText += block.text;
+            } else if (block.type === "image" && block.source) {
+              promptImages.push({ mediaType: block.source.media_type, data: block.source.data });
+            }
+          }
+        } else {
+          promptText = raw ?? "";
+        }
+        const prompt = stripControlPrefix(promptText);
+        if (prompt.trim() || promptImages.length > 0) {
+          messages.push({
+            uuid: entry.uuid,
+            role: "user",
+            content: prompt,
+            timestamp,
+            images: promptImages.length > 0 ? promptImages : undefined,
+          });
         }
       }
       continue;
@@ -729,6 +758,43 @@ export function extractCodexSessionId(content: string): string | undefined {
     } catch {}
   }
   return undefined;
+}
+
+// Codex Desktop forks a rollout on every resume/reopen: it writes a new file with a
+// fresh UUID, copies the prior history forward, and stacks one more session_meta record
+// at the top whose `forked_from_id` points at the parent. The whole ancestry is therefore
+// embedded as the leading run of session_meta records (newest first), back to the original
+// session that was forked from nothing. That original is the stable identity for the entire
+// lineage — resolving to it lets the daemon collapse every resume/fork of one logical
+// session into a single conversation instead of minting a duplicate per rollout file.
+//
+// Pass the leading session_meta block (see readCodexSessionMetaHead in the daemon); a file
+// whose head was truncated still resolves consistently because every fork embeds the same
+// ancestry. Returns the file's own id when there is no fork lineage, or undefined when no
+// session_meta is present at all.
+export function extractCodexForkRoot(content: string): string | undefined {
+  const parent = new Map<string, string | undefined>();
+  let ownId: string | undefined;
+  for (const line of content.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line);
+      if (entry.type !== "session_meta") continue;
+      const id: string | undefined = entry.payload?.id;
+      if (!id) continue;
+      if (!ownId) ownId = id; // the file's own session_meta is always first
+      if (!parent.has(id)) parent.set(id, entry.payload?.forked_from_id ?? undefined);
+    } catch {}
+  }
+  if (!ownId) return undefined;
+  // Walk forked_from links to the deepest ancestor recorded in this file.
+  let root = ownId;
+  const seen = new Set<string>();
+  while (parent.get(root) && !seen.has(root)) {
+    seen.add(root);
+    root = parent.get(root)!;
+  }
+  return root;
 }
 
 export interface CursorPrompt {

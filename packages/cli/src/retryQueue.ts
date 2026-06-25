@@ -198,6 +198,30 @@ export class RetryQueue {
     }
   }
 
+  /**
+   * Connection restored after an outage (e.g. the Convex socket reconnected
+   * following a sleep or network drop). Pull every queued op's retry forward to
+   * now so the backlog drains the instant we're back online, instead of waiting
+   * out a backoff that was scheduled against the outage we just recovered from.
+   * Network errors back off up to 5 min, so without this a fully-reconnected
+   * daemon can sit on "sync stalled (N)" for minutes with the socket already
+   * live — which is exactly what `cast status` showed after a laptop wake
+   * (Convex connected, queue not draining).
+   *
+   * A current server-side rate limit is deliberately still honored: we only
+   * pull the per-op retry forward; scheduleNextCheck still respects
+   * rateLimitedUntil, so we never hammer a server that just told us to wait.
+   */
+  notifyConnectionRestored(): void {
+    if (this.queue.size === 0) return;
+    const now = Date.now();
+    for (const op of this.queue.values()) {
+      if (op.nextRetryAt > now) op.nextRetryAt = now;
+    }
+    this.log(`Connection restored — retrying ${this.queue.size} queued operation(s) now`);
+    this.scheduleNextCheck();
+  }
+
   private persist(): void {
     if (!this.persistPath) return;
     try {

@@ -33,6 +33,7 @@ import { getPosition, setPosition } from "./positionTracker.js";
 import { encryptToken, decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
 import { getAllSyncRecords, findUnsyncedFiles } from "./syncLedger.js";
 import { isTestScratchPath } from "./syncScope.js";
+import { isAppServerManagedCodexSessionHead } from "./codexWatcher.js";
 import { getLastReconciliation, performReconciliation, repairDiscrepancies } from "./reconciliation.js";
 import { parseSessionFile, extractSlug } from "./parser.js";
 import { SyncService } from "./syncService.js";
@@ -1137,6 +1138,25 @@ type StuckSync = {
   conversationId?: string;
 };
 
+// Read the first ~2KB (enough for the session_meta line) and decide whether this
+// Codex rollout is app-server-managed. On any read error, treat it as not managed
+// so a genuine wedge is never silently hidden.
+function isAppServerManagedRollout(filePath: string): boolean {
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(filePath, "r");
+    const buf = Buffer.alloc(2048);
+    const bytes = fs.readSync(fd, buf, 0, buf.length, 0);
+    return isAppServerManagedCodexSessionHead(buf.toString("utf-8", 0, bytes));
+  } catch {
+    return false;
+  } finally {
+    if (fd !== undefined) {
+      try { fs.closeSync(fd); } catch { /* ignore */ }
+    }
+  }
+}
+
 function getStuckSyncs(): StuckSync[] {
   const ledger = getAllSyncRecords();
   const now = Date.now();
@@ -1158,6 +1178,11 @@ function getStuckSyncs(): StuckSync[] {
     // Files the sync loop refuses to sync (test-scratch transcripts) are never
     // actionable here — skip them defensively.
     if (isTestScratchPath(filePath)) continue;
+    // Codex rollouts started by codecast are synced live by the app-server path,
+    // which never advances the transcript-file ledger. The watchdog's stale scan
+    // already skips them; without the same skip here they always read as stuck
+    // (file grows past lastSyncedPosition) even though every message is synced.
+    if (filePath.includes("/.codex/sessions/") && isAppServerManagedRollout(filePath)) continue;
     const unsynced = stats.size - record.lastSyncedPosition;
     if (unsynced < STUCK_SYNC_MIN_BYTES) continue;
     if (stats.mtimeMs <= record.lastSyncedAt) continue;
