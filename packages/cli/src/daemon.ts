@@ -6637,12 +6637,42 @@ export function resolveInteractiveQuestions(prompt: InteractivePrompt, sidecar: 
 
 type PollMessage = { keys?: string[]; steps?: Array<{ key: string; text?: string }>; text?: string; display?: string };
 
-function parsePollMessage(content: string): PollMessage | null {
+export function parsePollMessage(content: string): PollMessage | null {
   try {
     const parsed = JSON.parse(content);
-    if (parsed.__cc_poll && (Array.isArray(parsed.keys) || Array.isArray(parsed.steps))) return parsed;
+    if (parsed.__cc_poll && (Array.isArray(parsed.keys) || Array.isArray(parsed.steps) || typeof parsed.text === "string")) return parsed;
   } catch {}
   return null;
+}
+
+// A free-text answer to an AskUserQuestion menu. Claude Code's question menu has no
+// inline text slot, so the only way to enter free text is to decline the whole menu
+// (Escape) and type the answer at the prompt — which discards every menu selection. The
+// web sends such an answer as a top-level `text` with no menu keys; pre-2026-06-27 builds
+// embedded it inside `steps` (one step per `text`). BOTH are a decline: do it ONCE up
+// front, then type. Doing it per-step (the old behavior) declined the menu mid-loop and
+// spilled the remaining option digits into the freshly-reopened prompt box (the "211"
+// bug). The OTHER text shape — menu keys PLUS `poll.text` (e.g. plan feedback, where
+// option 4 opens a feedback field) — is NOT a decline: those keys drive a menu whose
+// final option opens the text input, so the text lands in the field, not at the prompt.
+//
+// Returns the text to type after the decline (newlines flattened — a literal LF reads as
+// Enter in the TUI and submits early, which is why the normal paste path flattens too; the
+// middot keeps multi-answer prose readable on one line), or null when this isn't a decline.
+export function pollDeclineText(poll: PollMessage): string | null {
+  const steps: Array<{ key: string; text?: string }> = poll.steps || (poll.keys || []).map(k => ({ key: k }));
+  const menuSteps = steps.filter(s => !s.text);
+  const embeddedText = steps.filter(s => s.text).map(s => s.text!).join("\n\n");
+  const isDecline = (poll.text != null && menuSteps.length === 0) || (embeddedText !== "" && poll.text == null);
+  if (!isDecline) return null;
+  return (poll.text ?? embeddedText).replace(/\r?\n+/g, "  ·  ").trim();
+}
+
+// The menu-navigation steps of a poll (the option keystrokes), excluding any step that
+// carries embedded free text (those decline the menu — see pollDeclineText).
+export function pollMenuSteps(poll: PollMessage): Array<{ key: string; text?: string }> {
+  const steps: Array<{ key: string; text?: string }> = poll.steps || (poll.keys || []).map(k => ({ key: k }));
+  return steps.filter(s => !s.text);
 }
 
 // The synthetic poll the daemon emits for a live interactive prompt must carry a
@@ -7559,31 +7589,36 @@ export async function injectViaTmux(target: string, content: string): Promise<vo
 async function injectViaTmuxInner(target: string, content: string): Promise<void> {
   const poll = parsePollMessage(content);
   if (poll) {
-    const steps: Array<{ key: string; text?: string }> = poll.steps || (poll.keys || []).map(k => ({ key: k }));
-    for (const step of steps) {
-      if (step.text) {
-        await tmuxExec(["send-keys", "-t", target, "Escape"]);
-        await new Promise(resolve => setTimeout(resolve, 500));
-        await tmuxExec(["send-keys", "-t", target, "-l", step.text]);
+    // A free-text answer can't be entered into Claude Code's AUQ menu — decline the whole
+    // menu once (Escape) and type the answer at the prompt. See pollDeclineText for why.
+    const declineText = pollDeclineText(poll);
+    if (declineText !== null) {
+      await tmuxExec(["send-keys", "-t", target, "Escape"]);
+      await new Promise(resolve => setTimeout(resolve, 500));
+      if (declineText) {
+        await pasteTextIntoPane(target, declineText);
         await new Promise(resolve => setTimeout(resolve, 150));
         await tmuxExec(["send-keys", "-t", target, "Enter"]);
+      }
+      log(`Injected poll free-text answer (declined menu) via tmux to ${target}`);
+      return;
+    }
+
+    for (const step of pollMenuSteps(poll)) {
+      // A bare digit submits a plain AskUserQuestion menu, but an AUQ whose options
+      // carry `preview`s renders side-by-side and the digit ONLY navigates — its
+      // footer reads "Enter to select", so the answer never lands without a follow-up
+      // Enter (verified in tmux on Claude Code 2.1.166). Decide per keypress instead
+      // of guessing: note the on-screen question, send the digit, then look again. If
+      // the SAME question is still up the digit only highlighted, so confirm with
+      // Enter; if the menu is gone (auto-submitted) or advanced to the next question,
+      // a follow-up Enter would be spurious, so skip it.
+      const qBefore = /^\d+$/.test(step.key) ? await paneInteractiveQuestion(target) : null;
+      await tmuxExec(["send-keys", "-t", target, step.key]);
+      await new Promise(resolve => setTimeout(resolve, 500));
+      if (qBefore && (await paneInteractiveQuestion(target)) === qBefore) {
+        await tmuxExec(["send-keys", "-t", target, "Enter"]);
         await new Promise(resolve => setTimeout(resolve, 500));
-      } else {
-        // A bare digit submits a plain AskUserQuestion menu, but an AUQ whose options
-        // carry `preview`s renders side-by-side and the digit ONLY navigates — its
-        // footer reads "Enter to select", so the answer never lands without a follow-up
-        // Enter (verified in tmux on Claude Code 2.1.166). Decide per keypress instead
-        // of guessing: note the on-screen question, send the digit, then look again. If
-        // the SAME question is still up the digit only highlighted, so confirm with
-        // Enter; if the menu is gone (auto-submitted) or advanced to the next question,
-        // a follow-up Enter would be spurious, so skip it.
-        const qBefore = /^\d+$/.test(step.key) ? await paneInteractiveQuestion(target) : null;
-        await tmuxExec(["send-keys", "-t", target, step.key]);
-        await new Promise(resolve => setTimeout(resolve, 500));
-        if (qBefore && (await paneInteractiveQuestion(target)) === qBefore) {
-          await tmuxExec(["send-keys", "-t", target, "Enter"]);
-          await new Promise(resolve => setTimeout(resolve, 500));
-        }
       }
     }
     if (poll.text) {
@@ -7722,45 +7757,39 @@ function buildAppleScript(
   const isIterm = app === "iTerm2";
 
   if (poll) {
-    const steps: Array<{ key: string; text?: string }> = poll.steps || (poll.keys || []).map(k => ({ key: k }));
+    // A free-text answer can't be entered into the AUQ menu: decline it once (Escape),
+    // then type the answer at the prompt (textAction below). Otherwise drive the option
+    // keystrokes. See pollDeclineText — declining per-step spilled the leftover option
+    // digits into the reopened prompt box (the "211" bug).
+    const declineText = pollDeclineText(poll);
+    const menuSteps = pollMenuSteps(poll);
 
     let stepActions: string;
-    if (isIterm) {
-      stepActions = steps.map((step, i) => {
-        const lines: string[] = [];
-        if (step.text) {
-          lines.push(`            tell s to write text (ASCII character 27)`);
-          lines.push("            delay 0.5");
-          const escapedText = step.text.replace(/"/g, '\\"');
-          lines.push(`            tell s to write text "${escapedText}" without newline`);
-          lines.push("            delay 0.15");
-          lines.push(`            tell s to write text ""`);
-        } else {
-          lines.push(`            tell s to write text "${step.key}" without newline`);
-        }
-        if (i < steps.length - 1) lines.push("            delay 0.5");
+    if (declineText !== null) {
+      stepActions = isIterm
+        ? `            tell s to write text (ASCII character 27)`
+        : `          do script (ASCII character 27) in t`;
+    } else if (isIterm) {
+      stepActions = menuSteps.map((step, i) => {
+        const lines = [`            tell s to write text "${step.key}" without newline`];
+        if (i < menuSteps.length - 1) lines.push("            delay 0.5");
         return lines.join("\n");
       }).join("\n");
     } else {
-      stepActions = steps.map((step, i) => {
-        const lines: string[] = [];
-        if (step.text) {
-          lines.push(`          do script (ASCII character 27) in t`);
-          lines.push("          delay 0.5");
-          const escapedText = step.text.replace(/"/g, '\\"');
-          lines.push(`          do script "${escapedText}" in t`);
-        } else {
-          lines.push(`          do script "${step.key}" in t`);
-        }
-        if (i < steps.length - 1) lines.push("          delay 0.5");
+      stepActions = menuSteps.map((step, i) => {
+        const lines = [`          do script "${step.key}" in t`];
+        if (i < menuSteps.length - 1) lines.push("          delay 0.5");
         return lines.join("\n");
       }).join("\n");
     }
 
-    const textAction = poll.text
+    // The text to type at the prompt: the declined free-text answer, or `poll.text` typed
+    // into a field a menu option opened (plan feedback).
+    const promptText = declineText !== null ? declineText : poll.text;
+    const textAction = promptText
       ? isIterm
-        ? `\n            delay 0.3\n            tell s to write text "${poll.text.replace(/"/g, '\\"')}" without newline\n            delay 0.15\n            tell s to write text ""`
-        : `\n          delay 0.3\n          do script "${poll.text.replace(/"/g, '\\"')}" in t`
+        ? `\n            delay 0.3\n            tell s to write text "${promptText.replace(/"/g, '\\"')}" without newline\n            delay 0.15\n            tell s to write text ""`
+        : `\n          delay 0.3\n          do script "${promptText.replace(/"/g, '\\"')}" in t`
       : "";
 
     const script = isIterm
@@ -7915,18 +7944,23 @@ async function injectViaKitty(tty: string, content: string): Promise<void> {
 
   const poll = parsePollMessage(content);
   if (poll) {
-    const steps: Array<{ key: string; text?: string }> = poll.steps || (poll.keys || []).map((k: string) => ({ key: k }));
-    for (const step of steps) {
-      if (step.text) {
-        await execAsync(`kitty @ send-key ${match} escape`);
-        await new Promise(r => setTimeout(r, 500));
-        const escaped = step.text.replace(/'/g, "'\\''");
+    // Free-text answer: decline the AUQ menu once (Escape) and type at the prompt. See
+    // pollDeclineText — doing it per-step spilled leftover option digits into the prompt.
+    const declineText = pollDeclineText(poll);
+    if (declineText !== null) {
+      await execAsync(`kitty @ send-key ${match} escape`);
+      await new Promise(r => setTimeout(r, 500));
+      if (declineText) {
+        const escaped = declineText.replace(/'/g, "'\\''");
         await execAsync(`kitty @ send-text ${match} '${escaped}'`);
         await new Promise(r => setTimeout(r, 150));
         await execAsync(`kitty @ send-key ${match} enter`);
-      } else {
-        await execAsync(`kitty @ send-key ${match} ${mapKeyForKitty(step.key)}`);
       }
+      log(`Injected poll free-text answer (declined menu) via Kitty for TTY ${normalizedTty}`);
+      return;
+    }
+    for (const step of pollMenuSteps(poll)) {
+      await execAsync(`kitty @ send-key ${match} ${mapKeyForKitty(step.key)}`);
       await new Promise(r => setTimeout(r, 500));
     }
     if (poll.text) {
@@ -7978,18 +8012,23 @@ async function injectViaWezTerm(tty: string, content: string): Promise<void> {
 
   const poll = parsePollMessage(content);
   if (poll) {
-    const steps: Array<{ key: string; text?: string }> = poll.steps || (poll.keys || []).map((k: string) => ({ key: k }));
-    for (const step of steps) {
-      if (step.text) {
-        await weztermSendText(paneId, "\x1b"); // Escape
-        await new Promise(r => setTimeout(r, 500));
-        await weztermSendText(paneId, step.text);
+    // Free-text answer: decline the AUQ menu once (Escape) and type at the prompt. See
+    // pollDeclineText — doing it per-step spilled leftover option digits into the prompt.
+    const declineText = pollDeclineText(poll);
+    if (declineText !== null) {
+      await weztermSendText(paneId, "\x1b"); // Escape
+      await new Promise(r => setTimeout(r, 500));
+      if (declineText) {
+        await weztermSendText(paneId, declineText);
         await new Promise(r => setTimeout(r, 150));
         await weztermSendText(paneId, "\r"); // Enter
-      } else {
-        const seq = WEZTERM_KEY_SEQUENCES[step.key];
-        await weztermSendText(paneId, seq || step.key);
       }
+      log(`Injected poll free-text answer (declined menu) via WezTerm for TTY ${normalizedTty}`);
+      return;
+    }
+    for (const step of pollMenuSteps(poll)) {
+      const seq = WEZTERM_KEY_SEQUENCES[step.key];
+      await weztermSendText(paneId, seq || step.key);
       await new Promise(r => setTimeout(r, 500));
     }
     if (poll.text) {

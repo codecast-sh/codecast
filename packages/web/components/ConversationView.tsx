@@ -4257,11 +4257,24 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
     const hasText = sorted.some(k => sels[Number(k)].text);
     const display = sorted.map(k => sels[Number(k)].label).join(", ");
     if (hasText) {
-      const steps = sorted.map(k => {
+      // Claude Code's AskUserQuestion menu only accepts the listed options — there's no
+      // inline free-text slot. So a custom ("Other") answer can't be entered through the
+      // menu, and answering even one question with free text means the menu can't be used
+      // for the others either: the only way to enter free text is to decline the whole
+      // set (Escape) and type at the prompt, which discards every menu pick. Convert all
+      // answers to prose and send it as the daemon's decline-then-type `text` so the agent
+      // still gets every answer. (Driving a digit per question and Escaping for the text
+      // declined the poll mid-loop and spilled the leftover option digits into the
+      // reopened prompt box — the "211" bug, 2026-06-27.)
+      const text = sorted.map(k => {
         const s = sels[Number(k)];
-        return s.text ? { key: s.key, text: s.text } : { key: s.key };
-      });
-      return JSON.stringify({ __cc_poll: true, steps, display });
+        const ans = s.text ?? s.label;
+        if (sorted.length === 1) return ans;
+        const q = questions[Number(k)];
+        const id = (q?.header?.trim()) || q?.question?.replace(/\s+/g, " ").trim().slice(0, 60) || `Q${Number(k) + 1}`;
+        return `${id}: ${ans}`;
+      }).join("\n\n");
+      return JSON.stringify({ __cc_poll: true, text, display });
     }
     return JSON.stringify({ __cc_poll: true, keys: sorted.map(k => sels[Number(k)].key), display });
   };
