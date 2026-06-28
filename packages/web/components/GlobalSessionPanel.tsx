@@ -14,6 +14,7 @@ import { compressImage } from "../lib/compressImage";
 import { useConversationMessages } from "../hooks/useConversationMessages";
 import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, categorizeSessions, partitionOldSessions, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, isSessionHidden, resolveSessionAuthor, convBucketMap, groupSessionsForLabelView, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem, BucketAssignmentItem } from "../store/inboxStore";
 import { isBlockedConversation, isSubagentConversation } from "@codecast/convex/convex/ccAccountsShared";
+import { isStatusTrustStale } from "@codecast/shared/contracts";
 import { TooltipProvider } from "./ui/tooltip";
 import { cleanTitle, msgCountColor, formatModel } from "../lib/conversationProcessor";
 import { getLabelColor } from "../lib/labelColors";
@@ -715,7 +716,13 @@ export const SessionCard = memo(function SessionCard({
   // rather than the section the card lives in, so pinned and flat-view cards —
   // which always render with the "default" variant — still distinguish working
   // from idle instead of showing nothing for a busy pinned session.
-  const isLive = !session.is_idle && session.message_count > 0;
+  // Distrust a frozen live status the same way the bucket does: a row that aged
+  // out of the liveness overlay keeps its last is_idle:false forever, so without
+  // this an agent that finished 15 days ago still pulses green while sitting in
+  // needs-input. Past the trust TTL (keyed on updated_at, which a real working
+  // agent bumps far more often) the pulse goes dark — the dot and the bucket now
+  // read the SAME staleness check, so they can't disagree.
+  const isLive = !session.is_idle && session.message_count > 0 && !isStatusTrustStale(session, Date.now());
 
   // Author of THIS session — shown only when it isn't the current user's own. The
   // inbox cache is user-scoped, so a teammate's session is here only because it was
@@ -878,13 +885,15 @@ export const SessionCard = memo(function SessionCard({
               {session.has_pending && !session.is_unresponsive && (
                 <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow animate-pulse" title="Message pending" />
               )}
-              {!session.is_idle && !session.pending_api_error && !session.session_error && !session.is_unresponsive && !session.has_pending && (
+              {/* Reuse the staleness-aware isLive so an aged-out subagent row
+                  stops pulsing green, matching the main card and the bucket. */}
+              {isLive && !session.pending_api_error && !session.session_error && !session.is_unresponsive && !session.has_pending && (
                 <span className="relative flex h-1.5 w-1.5" title="Live">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sol-green opacity-75" />
                   <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-sol-green" />
                 </span>
               )}
-              {session.is_idle && !session.pending_api_error && !session.session_error && !session.is_unresponsive && !session.has_pending && session.message_count > 0 && (
+              {!isLive && !session.pending_api_error && !session.session_error && !session.is_unresponsive && !session.has_pending && session.message_count > 0 && (
                 <span className="w-1.5 h-1.5 rounded-full bg-gray-500/40 ring-1 ring-gray-500/20" title="Session idle" />
               )}
               {session.message_count > 0 && (
@@ -1129,7 +1138,10 @@ export const SessionCard = memo(function SessionCard({
             {session.has_pending && !session.is_unresponsive && !isPendingWorking && (
               <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow animate-pulse" title="Message pending" />
             )}
-            {!isWorking && !isLive && variant !== "dismissed" && session.is_idle && !session.pending_api_error && !session.session_error && !session.is_unresponsive && !session.has_pending && !isPendingWorking && session.message_count > 0 && (
+            {/* Settled with content gets the gray idle dot. Keyed on !isLive (now
+                staleness-aware) rather than the raw is_idle flag, so a frozen
+                is_idle:false row that's really finished shows idle, not nothing. */}
+            {!isWorking && !isLive && variant !== "dismissed" && !session.pending_api_error && !session.session_error && !session.is_unresponsive && !session.has_pending && !isPendingWorking && session.message_count > 0 && (
               <span className="w-1.5 h-1.5 rounded-full bg-sol-text-dim/40 ring-1 ring-sol-text-dim/20" title="Session idle" />
             )}
             {isPendingWorking && (

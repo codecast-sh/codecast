@@ -8,7 +8,7 @@ import { loadCache, writePatchesToIDB, setHydrating, loadConversationMessages, w
 import { HYDRATION_CRITICAL_KEYS, HYDRATION_DEFERRED_KEYS, hydrationMergeStrategy } from "./clientSyncRegistry";
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
-import { type AgentStatus, ACTIVE_AGENT_STATUSES, STATUS_TRUST_TTL_MS } from "@codecast/shared/contracts";
+import { type AgentStatus, ACTIVE_AGENT_STATUSES, isStatusTrustStale } from "@codecast/shared/contracts";
 import { isSubagentConversation } from "@codecast/convex/convex/ccAccountsShared";
 
 export type { PendingEntry } from "./syncProtocol";
@@ -1129,8 +1129,9 @@ export function categorizeSessions(
   // than the TTL, so it's never caught). Date.now() here (not in the pure,
   // memoized classifySession) so the verdict re-evaluates as time passes.
   const now = Date.now();
-  const isTrustStale = (s: InboxSession) =>
-    s.message_count > 0 && !s.is_pinned && (now - (s.updated_at || 0)) >= STATUS_TRUST_TTL_MS;
+  // Shared staleness core (isStatusTrustStale) + the bucket's own pinned policy:
+  // pinned rows live in the Pinned group regardless, so they're never swept here.
+  const isTrustStale = (s: InboxSession) => isStatusTrustStale(s, now) && !s.is_pinned;
   // Classify waiting-for-input ONCE per session (it's the costliest predicate and
   // was evaluated twice below — in the needsInput and working filters). The
   // memoized verdict (classifySession) is the no-in-flight result; an in-flight

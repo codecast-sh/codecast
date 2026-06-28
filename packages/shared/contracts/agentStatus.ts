@@ -67,3 +67,19 @@ export const ACTIVE_AGENT_STATUSES: ReadonlySet<string> = new Set<string>([
 // the authority for in-window rows) and the web client's bucketing safety net
 // (web/store/inboxStore.ts, which catches aged-out rows the overlay can't refresh).
 export const STATUS_TRUST_TTL_MS = 60 * 60 * 1000;
+
+// Pure staleness predicate over a conversation row: its last activity is older
+// than the trust TTL, so any active live status it still carries (agent_status,
+// is_idle:false) can no longer be believed. This is THE shared test every reader
+// of a row's live status must apply, so the inbox bucket and the UI "working"
+// dot can never disagree about whether a frozen-"working" row is actually
+// working. message_count>0 gates out blank rows (no work to mistrust). Keyed on
+// updated_at — the one field that stays accurate when live status is frozen.
+// Callers layer their own policy on top (the inbox bucket also exempts pinned,
+// which lives in its own group regardless of staleness).
+export function isStatusTrustStale(
+  s: { message_count?: number; updated_at?: number },
+  now: number,
+): boolean {
+  return (s.message_count ?? 0) > 0 && now - (s.updated_at || 0) >= STATUS_TRUST_TTL_MS;
+}
