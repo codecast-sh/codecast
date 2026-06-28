@@ -38,7 +38,7 @@ import { getLastReconciliation, performReconciliation, repairDiscrepancies } fro
 import { parseSessionFile, extractSlug } from "./parser.js";
 import { SyncService } from "./syncService.js";
 import { resolveLocalProjectPath } from "./projectPathResolver.js";
-import { deviceId } from "./remote/device.js";
+import { deviceId, deviceLabel } from "./remote/device.js";
 import {
   buildDaemonPlistXml,
   buildWatchdogPlistXml,
@@ -1484,13 +1484,6 @@ function startDaemon(): void {
   }
 }
 
-function getDeviceName(): string {
-  const os = process.platform;
-  const hostname = require("os").hostname();
-  const platformName = os === "darwin" ? "macOS" : os === "win32" ? "Windows" : "Linux";
-  return `${platformName} - ${hostname}`;
-}
-
 // Shared post-authentication onboarding, run by BOTH the browser flow (runAuth)
 // and the setup-token flow (runLogin). Installs hooks + autostart unconditionally
 // (these must happen on every install), then runs the interactive setup wizard.
@@ -1635,7 +1628,7 @@ async function runAuth(): Promise<void> {
 
   const authServer = new AuthServer({ port: 42424, timeout: 300000 });
   const nonce = authServer.getNonce();
-  const deviceName = encodeURIComponent(getDeviceName());
+  const deviceName = encodeURIComponent(deviceLabel());
 
   // Bind the local callback listener FIRST, then build the URL from the port we
   // actually bound to. If 42424 was taken we move to the next port, and the

@@ -11,6 +11,7 @@
  * session except for which machine runs it.
  */
 
+import { execFileSync } from "node:child_process";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -19,6 +20,7 @@ import * as path from "node:path";
 const MACHINE_KEY_FILE = path.join(os.homedir(), ".codecast", ".machine_key");
 
 let cachedDeviceId: string | null = null;
+let cachedHostname: string | null = null;
 
 /**
  * Stable, opaque device id (16 hex chars) derived from the machine key.
@@ -52,12 +54,71 @@ export function isRemoteDevice(): boolean {
   return process.env.CODECAST_REMOTE_DEVICE === "1";
 }
 
+/**
+ * The machine's stable name.
+ *
+ * On macOS, `os.hostname()` returns the *transient* kernel hostname, which the
+ * OS silently overwrites with whatever name the network hands out — a DHCP
+ * offer or a reverse-DNS lookup of the leased IP. Join a hotspot or share a LAN
+ * with a phone that once held your IP and your Mac starts reporting itself as
+ * "Xiaomi-12-Lite". The names macOS actually keeps for the machine survive
+ * this, so prefer them: the admin-set HostName if present, otherwise the
+ * Bonjour LocalHostName (derived from the Computer Name, never DHCP). Only fall
+ * back to os.hostname() if scutil is unavailable. Cached — hostname is stable
+ * for a process lifetime and the daemon restarts often enough.
+ *
+ * Linux/Windows keep os.hostname() — they don't adopt DHCP names this way.
+ */
+function stableHostname(): string {
+  if (cachedHostname) return cachedHostname;
+  cachedHostname = resolveStableHostname({
+    platform: process.platform,
+    osHostname: () => os.hostname(),
+    scutil: scutilGet,
+  });
+  return cachedHostname;
+}
+
+/**
+ * Pure name-resolution policy (no I/O), so every branch is testable. On macOS,
+ * prefer the admin-set HostName, then the Bonjour LocalHostName; only the
+ * transient os.hostname() is vulnerable to DHCP renaming, so it's the last
+ * resort. Other platforms always use os.hostname().
+ */
+export function resolveStableHostname(deps: {
+  platform: NodeJS.Platform;
+  osHostname: () => string;
+  scutil: (key: "HostName" | "LocalHostName") => string;
+}): string {
+  if (deps.platform !== "darwin") return deps.osHostname();
+  return (
+    deps.scutil("HostName") ||
+    deps.scutil("LocalHostName") ||
+    deps.osHostname()
+  );
+}
+
+/** One scutil name field, or "" if unset/unavailable (e.g. HostName not set → exit 1). */
+function scutilGet(key: "HostName" | "LocalHostName"): string {
+  try {
+    return execFileSync("/usr/sbin/scutil", ["--get", key], {
+      encoding: "utf8",
+      timeout: 2000,
+      // HostName unset is the common case; scutil prints "HostName: not set"
+      // and exits 1. Discard its stderr so that noise never reaches our logs.
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return "";
+  }
+}
+
 /** Human-readable label, e.g. "macOS - Ashots-MacBook". */
 export function deviceLabel(): string {
   const platform = process.platform;
   const name =
     platform === "darwin" ? "macOS" : platform === "win32" ? "Windows" : "Linux";
-  return `${name} - ${os.hostname()}`;
+  return `${name} - ${stableHostname()}`;
 }
 
 /** Platform tag for the devices table. */
