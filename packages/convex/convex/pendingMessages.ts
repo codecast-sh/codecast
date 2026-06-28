@@ -26,15 +26,18 @@ export async function getAuthenticatedUserId(
   return null;
 }
 
-// Interactive-prompt / poll keystroke answers (tagged __cc_poll, mirrors the daemon's
-// parsePollMessage). These are fire-and-forget: they never echo to the agent's JSONL, so the
-// content-matched ack in addMessages can never fire for them. A successful inject IS their
-// delivery — re-injecting them on the stale-injected reset just re-sends menu keystrokes and
-// mis-navigates the agent's prompts.
+// Interactive-prompt / poll answers (tagged __cc_poll, mirrors the daemon's parsePollMessage):
+// keystroke selections (keys/steps) and free-text answers that decline the menu and type at
+// the prompt (text). These are fire-and-forget — a successful inject IS their delivery, so the
+// content-matched ack in addMessages is bypassed and re-injecting them on the stale-injected
+// reset is suppressed. Re-injecting a keystroke poll re-sends menu keys and mis-navigates the
+// agent's prompts; re-injecting a text poll re-declines and re-types a duplicate answer. (A
+// text poll's typed answer DOES echo to the JSONL, unlike a keystroke poll, but the ack still
+// can't match it — the stored content is the JSON envelope, not the typed prose.)
 export function isControlMessage(content: string): boolean {
   try {
     const parsed = JSON.parse(content);
-    return parsed?.__cc_poll === true && (Array.isArray(parsed.keys) || Array.isArray(parsed.steps));
+    return parsed?.__cc_poll === true && (Array.isArray(parsed.keys) || Array.isArray(parsed.steps) || typeof parsed.text === "string");
   } catch {
     return false;
   }
