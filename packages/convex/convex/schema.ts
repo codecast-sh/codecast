@@ -326,11 +326,6 @@ export default defineSchema({
     .index("by_user_private", ["user_id", "is_private"])
     .index("by_team_id", ["team_id"])
     .index("by_team_user_updated", ["team_id", "user_id", "updated_at"])
-    .vectorIndex("by_title_embedding_v2", {
-      vectorField: "title_embedding",
-      dimensions: 1024,
-      filterFields: ["user_id"],
-    })
     .index("by_share_token", ["share_token"])
     .index("by_session_id", ["session_id"])
     .index("by_short_id", ["short_id"])
@@ -438,11 +433,6 @@ export default defineSchema({
     .index("by_conversation_role_timestamp", ["conversation_id", "role", "timestamp"])
     .searchIndex("search_content_v2", {
       searchField: "content",
-      filterFields: ["conversation_id"],
-    })
-    .vectorIndex("by_embedding_v2", {
-      vectorField: "embedding",
-      dimensions: 1024,
       filterFields: ["conversation_id"],
     }),
 
@@ -1690,11 +1680,6 @@ export default defineSchema({
     .searchIndex("search_docs_v2", {
       searchField: "title",
       filterFields: ["user_id", "doc_type", "project_id"],
-    })
-    .vectorIndex("by_doc_embedding_v2", {
-      vectorField: "embedding",
-      dimensions: 1024,
-      filterFields: ["user_id"],
     }),
 
   doc_snapshots: defineTable({
