@@ -12258,7 +12258,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     <HighlightContext.Provider value={highlightQuery}>
     <ImageGalleryProvider>
     <ReviewComposerContext.Provider value={reviewComposer}>
-    <main className="relative flex flex-col bg-sol-bg h-full" style={{ paddingRight: commentRailW || undefined, transition: "padding-right 160ms ease" }} onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
+    <main className="relative flex flex-col bg-sol-bg h-full overflow-x-clip" onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
       {isDragging && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-sol-bg/80 backdrop-blur-sm" style={{ animation: "fadeIn 150ms ease-out" }}>
           <div className="border-2 border-dashed border-sol-cyan rounded-xl p-12 text-center">
@@ -13393,10 +13393,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       )}
       <SelectionQuoteToolbar conversationId={conversation?._id ?? ""} />
       {conversation && (
-        <CommentDock
-          conversationId={conversation._id.toString()}
-          bottomOffset={Math.max(messageInputHeight + 16, 115) + 104}
-        />
+        <CommentDock conversationId={conversation._id.toString()} />
       )}
     </main>
     </ReviewComposerContext.Provider>

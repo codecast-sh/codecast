@@ -22,7 +22,7 @@ import { TeamSwitcher } from "./TeamSwitcher";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { subscribeComposeOptimistic } from "../lib/composeBridge";
 import { NEW_SESSION_EVENT } from "../lib/utils";
-import { Plus, PanelLeft, PanelRight } from "lucide-react";
+import { Plus, PanelLeft, PanelRight, MessageSquare } from "lucide-react";
 import { SetupPromptBanner } from "./SetupPromptBanner";
 import { DesktopAppBanner } from "./DesktopAppBanner";
 import { CliOfflineBanner } from "./CliOfflineBanner";
@@ -36,7 +36,8 @@ import { useInboxStore, useTrackedStore, categorizeSessions, sessionsWithPending
 import { useShortcutAction, useShortcutContext, useGlobalShortcutActions } from "../shortcuts";
 import { usePrefetch } from "../hooks/usePrefetch";
 import { desktopHeaderClass, setupDesktopDrag, isElectron } from "../lib/desktop";
-import { CollapsedSessionRail, SessionListPanel, ConversationColumn } from "./GlobalSessionPanel";
+import { SessionListPanel, ConversationColumn } from "./GlobalSessionPanel";
+import { EdgePeek } from "./EdgePeek";
 import { useSyncInboxSessions } from "../hooks/useSyncInboxSessions";
 import { useSyncChangeFeed } from "../hooks/useSyncChangeFeed";
 import { useSyncBuckets } from "../hooks/useSyncBuckets";
@@ -155,6 +156,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     s => s.sidePanelSessionId,
     s => s.currentSessionId,
     s => s.viewingDismissedId,
+    s => s.commentRailOpen,
     s => s.compose.open,
     s => s.compose.nonce,
     s => s.tabs.length,
@@ -240,8 +242,15 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // explicit because it is source-aware, not just path-based.
   const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnRoutinesPage || isOnSchedulesPage || isOnPlansPage || isOnDocsPage || isOnProjectsPage || isOnWindowsPage || isOnCrosstalkPage || isFullWidthRoute(pathname ?? "");
 
+  // The teammate comment rail is a conversation-scoped overlay, so its header
+  // toggle only makes sense when a conversation is actually on screen.
+  const isViewingConversation = isOnConversationPage || (isOnInboxPage && !!(s.currentSessionId || s.viewingDismissedId));
+  const commentRailOpen = s.commentRailOpen === true;
 
-  const showCollapsedRail = !s.sidePanelOpen && !isMobile;
+
+  // Right session list, collapsed: no persistent rail — a right-edge hover-peek
+  // slides the full list out, mirroring the left sidebar's collapsed behavior.
+  const rightPeekEnabled = !s.sidePanelOpen && !isMobile;
   const showSessionList = s.sidePanelOpen && !isMobile;
   const showMobileSessionList = s.sidePanelOpen && isMobile;
   const showConversationColumn = !!s.sidePanelSessionId && !isOnInboxPage && !isOnConversationPage && !isOnSettingsPage && !isMobile;
@@ -587,29 +596,10 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     else ref.resize(`${layout.sidebar}%`);
   }, [sidebarHidden]);
 
-  // Hover-peek: with the sidebar collapsed, touching the left edge slides it
-  // out as an overlay; leaving the overlay slides it back. The Sidebar inside
-  // stays mounted through the exit transition (peekMounted lags peekOpen).
+  // Hover-peek: with a side panel collapsed, touching the screen edge slides the
+  // full panel out as an overlay (state machine + markup in EdgePeek). Left edge
+  // peeks the sidebar; right edge peeks the session list (rightPeekEnabled above).
   const peekEnabled = sidebarCollapsed && !hideSidebar && !isZenMode && !isMobile;
-  const [peekOpen, setPeekOpen] = useState(false);
-  const [peekMounted, setPeekMounted] = useState(false);
-  const peekTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const openPeek = useCallback(() => {
-    if (peekTimer.current) clearTimeout(peekTimer.current);
-    setPeekMounted(true);
-    setPeekOpen(true);
-  }, []);
-  const closePeek = useCallback(() => {
-    setPeekOpen(false);
-    if (peekTimer.current) clearTimeout(peekTimer.current);
-    peekTimer.current = setTimeout(() => setPeekMounted(false), 250);
-  }, []);
-  useWatchEffect(() => {
-    if (!peekEnabled) {
-      setPeekOpen(false);
-      setPeekMounted(false);
-    }
-  }, [peekEnabled]);
 
   useWatchEffect(() => {
     const ref = sessionListPanelRef.current;
@@ -692,7 +682,6 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
           </Panel>
         </Group>
       </div>
-      {showCollapsedRail && <ErrorBoundary name="SessionRail" level="inline"><CollapsedSessionRail onSelect={sessionListOnSelect} /></ErrorBoundary>}
     </div>
   );
 
@@ -805,6 +794,16 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
             <ErrorBoundary name="UserMenu" level="inline">
               <UserMenu />
             </ErrorBoundary>
+            {isViewingConversation && (
+              <ShortcutTooltip label={commentRailOpen ? "Hide comments" : "Show comments"} action="sidebar.toggleComments">
+                <button
+                  onClick={(e) => { s.setCommentRailOpen(!commentRailOpen); tipActions.whisper('sidebar.toggleComments', e); }}
+                  className={`flex items-center p-1.5 rounded-md transition-colors ${commentRailOpen ? "text-sol-cyan" : "text-sol-text-dim/60 hover:text-sol-text-muted"}`}
+                >
+                  <MessageSquare className="w-[18px] h-[18px]" />
+                </button>
+              </ShortcutTooltip>
+            )}
             <ShortcutTooltip label="Toggle sessions panel" action="sidebar.toggleRight">
               <button
                 onClick={(e) => { s.toggleSidePanel(); tipActions.whisper('sidebar.toggleRight', e); }}
@@ -831,29 +830,28 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       {/* Content area with sidebar and main. Group is always mounted; sidebar Panel
           collapses imperatively so toggling zen/sidebar/mobile doesn't remount {rightArea}. */}
       <div className="flex-1 min-h-0 flex relative">
-        {/* Collapsed-sidebar hover peek: edge hotzone + sliding overlay. Scoped to
-            this container so it starts below the header/banners, not the viewport. */}
-        {peekEnabled && (
-          <>
-            <div className="absolute inset-y-0 left-0 w-1.5 z-[80]" onMouseEnter={openPeek} />
-            <div
-              className={`absolute inset-y-0 left-0 z-[85] w-[280px] border-r border-sol-border/50 bg-sol-bg-alt shadow-2xl transition-transform duration-200 ease-out ${peekOpen ? "translate-x-0" : "-translate-x-full pointer-events-none"}`}
-              onMouseLeave={closePeek}
-            >
-              {peekMounted && (
-                <div className="h-full overflow-auto">
-                  <ErrorBoundary name="SidebarPeek" level="panel">
-                    <Sidebar
-                      directoryFilter={directoryFilter}
-                      isMobileOpen={false}
-                      onMobileClose={() => {}}
-                    />
-                  </ErrorBoundary>
-                </div>
-              )}
+        {/* Collapsed-panel hover peeks: edge hotzone + sliding overlay. Scoped to
+            this container so they start below the header/banners, not the viewport. */}
+        <EdgePeek side="left" enabled={peekEnabled} width={280}>
+          <ErrorBoundary name="SidebarPeek" level="panel">
+            <Sidebar
+              directoryFilter={directoryFilter}
+              isMobileOpen={false}
+              onMobileClose={() => {}}
+            />
+          </ErrorBoundary>
+        </EdgePeek>
+        <EdgePeek side="right" enabled={rightPeekEnabled} width={320}>
+          <ErrorBoundary name="SessionListPeek" level="panel">
+            <div className="w-full h-full border-l border-sol-border/30">
+              <SessionListPanel
+                onSessionSelect={sessionListOnSelect}
+                activeSessionId={sessionListActiveId}
+                onCollapse={s.toggleSidePanel}
+              />
             </div>
-          </>
-        )}
+          </ErrorBoundary>
+        </EdgePeek>
         <div className="flex-1 min-w-0">
           <Group
             orientation="horizontal"
