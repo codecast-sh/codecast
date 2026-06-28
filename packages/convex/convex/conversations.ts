@@ -131,12 +131,21 @@ function previewText(content: string | null | undefined): string | undefined {
   return cleaned.length > 100 ? cleaned.slice(0, 100) + "…" : cleaned;
 }
 
-// The first *user* prompt on a branch after `afterTs` — i.e. the message that
-// sent this branch its own way. For a fork that's the prompt typed past the
-// fork cutoff; for the origin line it's the next user turn after the fork
-// point. This is what distinguishes otherwise-identical sibling branches.
-// Bounded read (a fork point is followed by an assistant turn + tool rows
-// before the next user prompt, so 10 rows comfortably reaches it).
+// The first *genuine* user prompt on a branch after `afterTs` — i.e. the message
+// the human typed that sent this branch its own way. For a fork that's the
+// prompt past the fork cutoff; for the origin line it's the next human turn
+// after the fork point. This is what distinguishes otherwise-identical sibling
+// branches.
+//
+// Routes rows through the same `filterUserMessages` gate the message browser /
+// rewind navigator uses, so the chip label matches a prompt you could actually
+// navigate to. That gate strips harness context blocks (`<task-notification>`,
+// `<system-reminder>`, `<task-reminder>`) and drops noise (tool-result echoes,
+// interrupt stubs, compact boundaries, import notices) — without it a
+// background-task notification leaked through as a chip reading like its raw
+// ids ("w68f2jcpo toolu_01…"). Read window is generous because an
+// orchestration origin line can run many tool/notification rows between the
+// fork point and its next human prompt.
 async function firstDivergentPreview(
   ctx: { db: any },
   conversationId: Id<"conversations">,
@@ -148,13 +157,10 @@ async function firstDivergentPreview(
       q.eq("conversation_id", conversationId).gt("timestamp", afterTs)
     )
     .order("asc")
-    .take(10);
-  for (const m of rows) {
-    const hasToolResults = m.tool_results && m.tool_results.length > 0;
-    if (m.role === "user" && !hasToolResults) {
-      const p = previewText(typeof m.content === "string" ? m.content : "");
-      if (p) return p;
-    }
+    .take(40);
+  for (const m of filterUserMessages(rows)) {
+    const p = previewText(m.content);
+    if (p) return p;
   }
   return undefined;
 }
