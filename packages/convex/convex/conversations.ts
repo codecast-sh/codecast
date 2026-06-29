@@ -853,6 +853,23 @@ export const getConversations = query({
   },
 });
 
+// An anchor's session renders under its bot identity (acting_user_id), not the
+// human host that runs and bills it. Resolve that identity for the author chip;
+// returns null for ordinary sessions so callers fall back to the owner. Cheap:
+// only anchors set acting_user_id, so the extra read is sparse.
+async function resolveActingAuthor(
+  ctx: any,
+  conv: { acting_user_id?: Id<"users"> | null },
+): Promise<{ name: string; avatar: string | null } | null> {
+  if (!conv.acting_user_id) return null;
+  const bot = await ctx.db.get(conv.acting_user_id);
+  if (!bot) return null;
+  return {
+    name: (bot as any).name || "Anchor",
+    avatar: (bot as any).image || (bot as any).github_avatar_url || null,
+  };
+}
+
 export const webGet = query({
   args: {
     short_id: v.optional(v.string()),
@@ -881,7 +898,9 @@ export const webGet = query({
     // Author identity, only for teammates' sessions (own sessions skip the read).
     // The reference pill/hover use this to show the author's avatar when the
     // session isn't yours — same name/avatar convention as the inbox feed rows.
+    // An anchor always shows its bot identity, even on the host's own session.
     const owner = isOwner ? null : await ctx.db.get(conv.user_id);
+    const acting = await resolveActingAuthor(ctx, conv);
 
     return {
       _id: conv._id,
@@ -894,8 +913,10 @@ export const webGet = query({
       agent_type: conv.agent_type,
       updated_at: conv.updated_at,
       is_own: isOwner,
-      author_name: owner ? (owner.name || owner.email?.split("@")[0] || "Unknown") : null,
-      author_avatar: owner ? (owner.image || owner.github_avatar_url || null) : null,
+      acting_user_id: conv.acting_user_id ?? null,
+      is_anchor: !!conv.anchor_id,
+      author_name: acting ? acting.name : owner ? (owner.name || owner.email?.split("@")[0] || "Unknown") : null,
+      author_avatar: acting ? acting.avatar : owner ? (owner.image || owner.github_avatar_url || null) : null,
       // Summary/context fields (already on the doc — no extra reads). The pill
       // card coalesces these into a one-line summary + last-message preview so
       // an expanded session reference shows what it's about, not just metadata.
@@ -2043,8 +2064,11 @@ export const listConversations = query({
           feedFilter?.getVisibility(c.user_id.toString()),
           args.filter === "team"
         );
-        const authorName = (conversationUser as any)?.name || (conversationUser as any)?.email?.split("@")[0] || "Unknown";
-        const authorAvatar = (conversationUser as any)?.image || (conversationUser as any)?.github_avatar_url || null;
+        let authorName = (conversationUser as any)?.name || (conversationUser as any)?.email?.split("@")[0] || "Unknown";
+        let authorAvatar = (conversationUser as any)?.image || (conversationUser as any)?.github_avatar_url || null;
+        // An anchor renders under its bot identity even on the host's own row.
+        const acting = await resolveActingAuthor(ctx, c);
+        if (acting) { authorName = acting.name; authorAvatar = acting.avatar; }
         const projectName = (c.project_path || c.git_root)?.split("/").pop() || "unknown project";
         const durationMs = c.updated_at - c.started_at;
         const isActive = c.status === "active" && (c.updated_at > fiveMinutesAgo || liveConvIds.has(c._id.toString()));
@@ -2057,6 +2081,8 @@ export const listConversations = query({
             visibility_mode: visibilityMode,
             author_name: authorName,
             author_avatar: authorAvatar,
+            acting_user_id: c.acting_user_id ?? null,
+            is_anchor: !!c.anchor_id,
             is_own: c.user_id.toString() === userId.toString(),
             is_active: isActive,
             updated_at: c.updated_at,
@@ -2081,6 +2107,8 @@ export const listConversations = query({
             subtitle: c.subtitle || null,
             author_name: authorName,
             author_avatar: authorAvatar,
+            acting_user_id: c.acting_user_id ?? null,
+            is_anchor: !!c.anchor_id,
             is_own: c.user_id.toString() === userId.toString(),
             is_active: isActive,
             updated_at: c.updated_at,
@@ -2122,6 +2150,8 @@ export const listConversations = query({
             is_active: isActive,
             author_name: authorName,
             author_avatar: authorAvatar,
+            acting_user_id: c.acting_user_id ?? null,
+            is_anchor: !!c.anchor_id,
             is_own: c.user_id.toString() === userId.toString(),
             parent_conversation_id: c.parent_conversation_id || null,
             parent_message_uuid: c.parent_message_uuid || null,
