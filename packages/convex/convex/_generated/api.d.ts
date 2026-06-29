@@ -11,6 +11,7 @@
 import type * as accountSwitch from "../accountSwitch.js";
 import type * as admin_mergeUser from "../admin_mergeUser.js";
 import type * as agentTasks from "../agentTasks.js";
+import type * as anchors from "../anchors.js";
 import type * as apiTokens from "../apiTokens.js";
 import type * as auth from "../auth.js";
 import type * as blame from "../blame.js";
@@ -109,6 +110,7 @@ declare const fullApi: ApiFromModules<{
   accountSwitch: typeof accountSwitch;
   admin_mergeUser: typeof admin_mergeUser;
   agentTasks: typeof agentTasks;
+  anchors: typeof anchors;
   apiTokens: typeof apiTokens;
   auth: typeof auth;
   blame: typeof blame;
