@@ -7525,6 +7525,12 @@ export const markSessionCompleted = mutation({
     if (!convId) return;
     const conv = await ctx.db.get(convId);
     if (!conv || conv.user_id !== userId) return;
+    // Anchors never auto-complete. This single server-side guard covers every
+    // reaping path that routes through markSessionCompleted — the daemon
+    // watchdog, the SessionEnd hook, and kill teardown — so a standing agent
+    // member that goes dormant is never flipped to "completed". It is retired
+    // only by an explicit decommission (which clears `persistent` first).
+    if (conv.persistent) return;
     if (conv.status === "active") {
       if (conv.has_pending_messages) {
         return;
