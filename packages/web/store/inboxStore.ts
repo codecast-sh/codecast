@@ -245,6 +245,12 @@ export type InboxSession = {
   user_id?: string;
   author_name?: string | null;
   author_avatar?: string | null;
+  // An Anchor's session renders under its bot identity (acting_user_id), shown
+  // even on the host's own row; is_anchor marks it a standing member.
+  acting_user_id?: string | null;
+  is_anchor?: boolean;
+  persistent?: boolean;
+  anchor_id?: string | null;
 };
 
 // An image attached to an outbound (optimistic) message. While its upload is in

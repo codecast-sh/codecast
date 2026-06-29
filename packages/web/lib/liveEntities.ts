@@ -96,12 +96,22 @@ export function isForeignSession(
  * loads (an own synced row carries no author_name/is_own:false to mislead it).
  */
 export function resolveSessionAuthor(
-  session: { user_id?: string; author_name?: string | null; author_avatar?: string | null },
-  conv: { user_id?: string; is_own?: boolean; user?: { name?: string | null; email?: string | null; avatar_url?: string | null } | null } | null | undefined,
+  session: { user_id?: string; author_name?: string | null; author_avatar?: string | null; acting_user_id?: string | null },
+  conv: { user_id?: string; is_own?: boolean; acting_user_id?: string | null; user?: { name?: string | null; email?: string | null; avatar_url?: string | null } | null } | null | undefined,
   currentUser: Member | null | undefined,
   teamMembers: Member[] | null | undefined,
 ): SessionAuthor {
   const uid = session.user_id ?? conv?.user_id;
+  // An anchor renders under its bot identity (acting_user_id) even when it is the
+  // current user's OWN session — so resolve that BEFORE the own-session short
+  // circuit. Team bots are in the roster; a personal bot isn't, but the server
+  // already stamped author_name/avatar with the bot, so fall back to those.
+  const actingId = session.acting_user_id ?? conv?.acting_user_id;
+  if (actingId) {
+    const bot = teamMembers?.find((x) => x && x._id === actingId);
+    if (bot) return { name: bot.name || bot.email || "Anchor", avatar: bot.image || bot.github_avatar_url };
+    if (session.author_name) return { name: session.author_name, avatar: session.author_avatar ?? null };
+  }
   if (!isForeignSession(session, conv, currentUser?._id)) return null;
 
   // Display: live roster first (instant rename/avatar), then source fields, then meta.
