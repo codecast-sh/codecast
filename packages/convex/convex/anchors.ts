@@ -95,16 +95,24 @@ export const provisionAnchor = mutation({
     let scopeUserId: Id<"users"> | undefined;
     let scopeLabel: string;
     if (args.scope_type === "team") {
-      if (!args.team_id) throw new Error("team_id is required for a team anchor");
+      // Resolve the team: explicit team_id, else the host's active team.
+      let resolved = args.team_id;
+      if (!resolved) {
+        const host = await ctx.db.get(hostUserId);
+        resolved = host?.active_team_id ?? host?.team_id ?? undefined;
+      }
+      if (!resolved) {
+        throw new Error("No team to anchor: pass --team <id> or set an active team");
+      }
       const membership = await ctx.db
         .query("team_memberships")
         .withIndex("by_user_team", (q: any) =>
-          q.eq("user_id", hostUserId).eq("team_id", args.team_id),
+          q.eq("user_id", hostUserId).eq("team_id", resolved),
         )
         .first();
       if (!membership) throw new Error("Not a member of that team");
-      teamId = args.team_id;
-      const team = await ctx.db.get(args.team_id);
+      teamId = resolved;
+      const team = await ctx.db.get(resolved);
       scopeLabel = `the ${team?.name ?? "team"} workspace`;
     } else {
       scopeUserId = hostUserId;
@@ -274,9 +282,14 @@ export const resolveAnchorForScope = query({
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) return null;
     const scopeUserId = args.scope_type === "user" ? userId : undefined;
+    let teamId = args.team_id;
+    if (args.scope_type === "team" && !teamId) {
+      const host = await ctx.db.get(userId);
+      teamId = host?.active_team_id ?? host?.team_id ?? undefined;
+    }
     const anchor = await findExistingAnchor(ctx, {
       scope_type: args.scope_type,
-      team_id: args.team_id,
+      team_id: teamId,
       scope_user_id: scopeUserId,
     });
     return anchor ?? null;

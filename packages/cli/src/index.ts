@@ -9800,6 +9800,155 @@ const EVENT_SHORTHANDS: Record<string, { event_type: string; action?: string }> 
   push: { event_type: "push" },
 };
 
+// ── Anchors ──────────────────────────────────────────────────────────────────
+// A standing agent member: one per personal workspace, one per team. It owns a
+// long-lived, pinned session that never completes, is woken by events, and
+// delegates code work to ephemeral `cast spawn` hands.
+const anchor = program
+  .command("anchor")
+  .description("Manage your standing agent member (Anchor)")
+  .showHelpAfterError(true);
+
+anchor
+  .command("create")
+  .description("Provision the Anchor for your personal workspace or a team")
+  .option("--team [id]", "Make it the team's shared anchor (default: your active team)")
+  .option("--name <name>", "Display name (default: Anchor)")
+  .option("--avatar <url>", "Avatar image URL")
+  .option("--persona <skill>", "Persona skill name the anchor should adopt")
+  .option("-C, --dir <path>", "Project the anchor lives and works in (default: current)")
+  .option("--model <model>", "Model override (e.g. opus, sonnet)")
+  .option("--no-bootstrap", "Skip the 'I'm online' first message")
+  .option("--json", "Machine-readable output")
+  .action(async (options: any) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+
+    const dir = options.dir
+      ? path.resolve(options.dir.replace(/^~/, process.env.HOME || "~"))
+      : getRealCwd();
+
+    const scopeType = options.team ? "team" : "user";
+    const teamId = typeof options.team === "string" ? options.team : undefined;
+
+    const resp = await cliFetch(`${siteUrl}/cli/anchor/create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_token: config.auth_token,
+        scope_type: scopeType,
+        team_id: teamId,
+        name: options.name,
+        avatar_url: options.avatar,
+        persona: options.persona,
+        project_path: dir,
+        model: options.model,
+        bootstrap: options.bootstrap !== false,
+      }),
+    });
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+      console.error(`Anchor create failed: ${body.error || resp.statusText}`);
+      process.exit(1);
+    }
+    const result = (await resp.json()) as any;
+    if (options.json) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    const where = scopeType === "team" ? "team" : "your personal workspace";
+    if (result.already_existed) {
+      console.log(`${c.yellow}•${c.reset} ${where} already has an anchor ${c.cyan}${result.conversation_id ? String(result.conversation_id).slice(0, 7) : ""}${c.reset}`);
+    } else {
+      console.log(
+        `${c.green}✓${c.reset} anchor for ${c.bold}${where}${c.reset} provisioned ` +
+        `${c.dim}(${result.short_id})${c.reset} — coming online in ${c.dim}${dir.replace(process.env.HOME || "~", "~")}${c.reset}`,
+      );
+    }
+  });
+
+anchor
+  .command("ls")
+  .alias("list")
+  .description("List the anchors you can see")
+  .option("--json", "Machine-readable output")
+  .action(async (options: any) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const resp = await cliFetch(`${siteUrl}/cli/anchor/list`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: config.auth_token }),
+    });
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+      console.error(`Anchor list failed: ${body.error || resp.statusText}`);
+      process.exit(1);
+    }
+    const anchors = (await resp.json()) as any[];
+    if (options.json) {
+      console.log(JSON.stringify(anchors, null, 2));
+      return;
+    }
+    if (!anchors.length) {
+      console.log(`${c.dim}No anchors yet. Create one: cast anchor create${c.reset}`);
+      return;
+    }
+    for (const a of anchors) {
+      const scope = a.scope_type === "team" ? "team" : "personal";
+      const conv = a.conversation_id ? String(a.conversation_id).slice(0, 7) : "(no session)";
+      console.log(
+        `  ${c.cyan}${a.bot_name}${c.reset} ${c.dim}·${c.reset} ${scope} ${c.dim}·${c.reset} ${a.status} ${c.dim}· ${conv}${c.reset}`,
+      );
+    }
+  });
+
+anchor
+  .command("wake")
+  .description("Send a message to an anchor (auto-resumes it if dormant)")
+  .argument("<message>", "What to tell the anchor")
+  .option("--team [id]", "Target the team anchor (default: your personal anchor)")
+  .action(async (message: string, options: any) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const scopeType = options.team ? "team" : "user";
+    const teamId = typeof options.team === "string" ? options.team : undefined;
+
+    const resolveResp = await cliFetch(`${siteUrl}/cli/anchor/resolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: config.auth_token, scope_type: scopeType, team_id: teamId }),
+    });
+    const anchorRow = resolveResp.ok ? ((await resolveResp.json()) as any) : null;
+    if (!anchorRow?._id) {
+      console.error(`No ${scopeType === "team" ? "team" : "personal"} anchor found. Create one: cast anchor create${scopeType === "team" ? " --team" : ""}`);
+      process.exit(1);
+    }
+    const resp = await cliFetch(`${siteUrl}/cli/anchor/wake`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: config.auth_token, anchor_id: anchorRow._id, message }),
+    });
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+      console.error(`Anchor wake failed: ${body.error || resp.statusText}`);
+      process.exit(1);
+    }
+    console.log(`${c.green}✓${c.reset} woke ${c.cyan}${anchorRow.name}${c.reset}`);
+  });
+
 const schedule = program
   .command("schedule")
   .alias("sched")

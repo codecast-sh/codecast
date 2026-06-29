@@ -3160,6 +3160,20 @@ cliRoute("/cli/projects/update", async (ctx, body) => {
   return await ctx.runMutation(api.projects.update, body);
 });
 
+// Anchors (standing agent members)
+cliRoute("/cli/anchor/create", async (ctx, body) => {
+  return await ctx.runMutation(api.anchors.provisionAnchor, body);
+});
+cliRoute("/cli/anchor/list", async (ctx, body) => {
+  return await ctx.runQuery(api.anchors.listAnchors, body);
+});
+cliRoute("/cli/anchor/wake", async (ctx, body) => {
+  return await ctx.runMutation(api.anchors.wakeAnchor, body);
+});
+cliRoute("/cli/anchor/resolve", async (ctx, body) => {
+  return await ctx.runQuery(api.anchors.resolveAnchorForScope, body);
+});
+
 // Tasks
 cliRoute("/cli/work/create", async (ctx, body) => {
   return await ctx.runMutation(api.tasks.create, body);
