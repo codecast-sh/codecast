@@ -9949,6 +9949,71 @@ anchor
     console.log(`${c.green}✓${c.reset} woke ${c.cyan}${anchorRow.name}${c.reset}`);
   });
 
+anchor
+  .command("link-channel")
+  .description("Map a Slack channel to an anchor so @mentions there wake it")
+  .argument("<channel>", "Slack channel id (e.g. C0123ABCD)")
+  .option("--team [id]", "Link to the team anchor (default: your personal anchor)")
+  .option("--workspace <id>", "Slack workspace/team id")
+  .option("-C, --dir <path>", "Project cwd for work from this channel")
+  .action(async (channel: string, options: any) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const resp = await cliFetch(`${siteUrl}/cli/anchor/link-channel`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_token: config.auth_token,
+        channel,
+        team: !!options.team,
+        team_id: typeof options.team === "string" ? options.team : undefined,
+        workspace: options.workspace,
+        project_path: options.dir ? path.resolve(options.dir.replace(/^~/, process.env.HOME || "~")) : undefined,
+      }),
+    });
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+      console.error(`Link failed: ${body.error || resp.statusText}`);
+      process.exit(1);
+    }
+    console.log(`${c.green}✓${c.reset} ${channel} → your ${options.team ? "team" : "personal"} anchor`);
+  });
+
+anchor
+  .command("say")
+  .description("Post a message to Slack as the anchor (used by the anchor itself)")
+  .requiredOption("--channel <id>", "Slack channel id")
+  .option("--thread <ts>", "Slack thread timestamp to reply in")
+  .argument("<text>", "Message text")
+  .action(async (text: string, options: any) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const resp = await cliFetch(`${siteUrl}/cli/anchor/say`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_token: config.auth_token,
+        channel: options.channel,
+        thread_ts: options.thread,
+        text,
+      }),
+    });
+    const result = resp.ok ? ((await resp.json()) as any) : { ok: false, error: `HTTP ${resp.status}` };
+    if (!result.ok) {
+      console.error(`Slack post failed: ${result.error || "unknown"}`);
+      process.exit(1);
+    }
+    console.log(`${c.green}✓${c.reset} posted to Slack`);
+  });
+
 const schedule = program
   .command("schedule")
   .alias("sched")

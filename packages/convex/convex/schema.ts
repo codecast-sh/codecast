@@ -429,6 +429,14 @@ export default defineSchema({
     .index("by_anchor", ["anchor_id"])
     .index("by_surface_channel", ["surface", "channel_key"]),
 
+  // Idempotency for inbound Slack events: Slack retries on slow/failed acks, and
+  // a double-wake would make the anchor answer the same mention twice (Aivery's
+  // triple-send bug). We record each event_id and drop repeats.
+  slack_events: defineTable({
+    event_id: v.string(),
+    created_at: v.number(),
+  }).index("by_event_id", ["event_id"]),
+
   // Large git-diff blobs split off the conversations hot doc. The conversations
   // row is read+patched on every message sync (addMessages) and returned by list
   // queries; keeping multi-MB diffs there inflated every read/write and worsened
