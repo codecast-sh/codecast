@@ -426,15 +426,26 @@ export const decommissionAnchor = mutation({
     if (anchor.conversation_id) {
       const conv = await ctx.db.get(anchor.conversation_id);
       if (conv) {
-        // Tear down the running host agent — status alone doesn't stop the
-        // daemon's tmux/process (kill_session does) — then clear persistence so
-        // the row can complete, unpin it, and mark it completed.
+        // Tear down the running host agent (status alone doesn't stop the daemon's
+        // tmux/process — kill_session does), clear persistence so the row can
+        // complete, unpin it, and mark it completed. (All writes here commit
+        // atomically, so the relative order is for readability, not correctness.)
         await enqueueKillSessionCommand(ctx, conv as any);
         await ctx.db.patch(anchor.conversation_id, {
           persistent: false,
           inbox_pinned_at: undefined,
           status: "completed",
         });
+        // Drop any already-queued turns so the daemon can't auto-resume the
+        // just-killed session for one more billed turn (the pending-message rail
+        // ignores conversation.status).
+        const pending = await ctx.db
+          .query("pending_messages")
+          .withIndex("by_conversation_status", (q: any) =>
+            q.eq("conversation_id", anchor.conversation_id).eq("status", "pending"),
+          )
+          .collect();
+        for (const p of pending) await ctx.db.delete(p._id);
       }
     }
     const chans = await ctx.db
@@ -442,6 +453,14 @@ export const decommissionAnchor = mutation({
       .withIndex("by_anchor", (q: any) => q.eq("anchor_id", args.anchor_id))
       .collect();
     for (const ch of chans) await ctx.db.delete(ch._id);
+    // Remove the bot from team rosters so retired anchors don't pile up as dead
+    // members. Keep the bot user row itself so its past messages still resolve an
+    // author.
+    const botMemberships = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", anchor.bot_user_id))
+      .collect();
+    for (const m of botMemberships) await ctx.db.delete(m._id);
     await ctx.db.patch(args.anchor_id, {
       status: "decommissioned",
       updated_at: Date.now(),

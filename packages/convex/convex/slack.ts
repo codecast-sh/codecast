@@ -55,20 +55,24 @@ async function channelRow(ctx: { db: any }, channel: string) {
     .first();
 }
 
-// prepareLinkChannel — the DB half of linking: authorize the caller, resolve the
-// target anchor, and enforce that re-pointing an existing mapping requires the
-// caller to already control it (no cross-tenant routing hijack).
-export const prepareLinkChannel = internalQuery({
+// commitLinkChannel — the WHOLE DB half in one transaction: authenticate, resolve
+// the caller's anchor, enforce that re-pointing an existing mapping requires the
+// caller to already control it, and write. Auth + ownership-check + write are
+// atomic, so there is NO TOCTOU window for a racing re-point (the earlier
+// prepare-then-commit split had one, widened by the Slack round-trip between them).
+export const commitLinkChannel = internalMutation({
   args: {
     api_token: v.optional(v.string()),
     channel: v.string(),
     team: v.optional(v.boolean()),
     team_id: v.optional(v.id("teams")),
+    workspace: v.optional(v.string()),
+    project_path: v.optional(v.string()),
   },
   handler: async (
     ctx,
     args,
-  ): Promise<{ ok: boolean; error?: string; anchor_id?: Id<"anchors">; replaced?: boolean }> => {
+  ): Promise<{ ok: boolean; error?: string; replaced?: boolean }> => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) return { ok: false, error: "Authentication failed" };
     const anchor = await callerAnchor(ctx, userId, args.team ? "team" : "user", args.team_id);
@@ -79,45 +83,34 @@ export const prepareLinkChannel = internalQuery({
       if (!(await userCanAccessAnchor(ctx, userId, current))) {
         return { ok: false, error: "That channel is already linked to an anchor you don't control" };
       }
-    }
-    return { ok: true, anchor_id: anchor._id, replaced: !!existing };
-  },
-});
-
-export const commitLinkChannel = internalMutation({
-  args: {
-    anchor_id: v.id("anchors"),
-    channel: v.string(),
-    workspace: v.optional(v.string()),
-    project_path: v.optional(v.string()),
-  },
-  handler: async (ctx, args) => {
-    const existing = await channelRow(ctx, args.channel);
-    if (existing) {
       await ctx.db.patch(existing._id, {
-        anchor_id: args.anchor_id,
+        anchor_id: anchor._id,
         workspace_key: args.workspace,
         project_path: args.project_path,
       });
-      return { replaced: true };
+      return { ok: true, replaced: true };
     }
     await ctx.db.insert("anchor_channels", {
-      anchor_id: args.anchor_id,
+      anchor_id: anchor._id,
       surface: "slack",
       channel_key: args.channel,
       workspace_key: args.workspace,
       project_path: args.project_path,
       created_at: Date.now(),
     });
-    return { replaced: false };
+    return { ok: true, replaced: false };
   },
 });
 
-// linkChannel — map a Slack channel to the caller's anchor. Claiming a channel
-// requires the bot to ALREADY be a member of it (verified via the Slack API):
-// inviting the bot is an in-Slack act, so a user can't self-grant ownership of a
-// channel they and the bot aren't in. That closes the confused-deputy relay — the
-// only channels you can claim are ones you can already read and the bot can post to.
+// linkChannel — map a Slack channel to the caller's anchor. Gate: the BOT must
+// already be a member of the channel (read-only conversations.info probe), so a
+// channel can only be claimed after someone invited the bot to it in Slack. The
+// authorization + write then happen atomically in commitLinkChannel.
+// NOTE: this verifies the BOT's membership, not the caller's — with a single
+// shared bot token we can't establish the caller's Slack identity, so any team
+// member can first-claim an unclaimed channel the bot is already in. Re-pointing
+// an existing mapping still requires controlling it. Per-user Slack-identity
+// verification (to also require the caller be in the channel) is a follow-up.
 export const linkChannel = action({
   args: {
     api_token: v.optional(v.string()),
@@ -131,14 +124,7 @@ export const linkChannel = action({
     ctx,
     args,
   ): Promise<{ ok: boolean; error?: string; channel: string; replaced?: boolean }> => {
-    const prep = await ctx.runQuery(internal.slack.prepareLinkChannel, {
-      api_token: args.api_token,
-      channel: args.channel,
-      team: args.team,
-      team_id: args.team_id,
-    });
-    if (!prep.ok || !prep.anchor_id) return { ok: false, error: prep.error, channel: args.channel };
-
+    if (!args.api_token) return { ok: false, error: "Not authenticated", channel: args.channel };
     const token = process.env.SLACK_BOT_TOKEN;
     if (!token) return { ok: false, error: "SLACK_BOT_TOKEN not configured", channel: args.channel };
     const resp = await fetch(
@@ -156,12 +142,14 @@ export const linkChannel = action({
     }
 
     const res = await ctx.runMutation(internal.slack.commitLinkChannel, {
-      anchor_id: prep.anchor_id,
+      api_token: args.api_token,
       channel: args.channel,
+      team: args.team,
+      team_id: args.team_id,
       workspace: args.workspace,
       project_path: args.project_path,
     });
-    return { ok: true, channel: args.channel, replaced: res.replaced };
+    return { ok: res.ok, error: res.error, channel: args.channel, replaced: res.replaced };
   },
 });
 
