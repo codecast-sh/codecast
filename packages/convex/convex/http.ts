@@ -3156,7 +3156,11 @@ http.route({
     if (payload.type === "event_callback") {
       const event = payload.event || {};
       const eventId = payload.event_id as string | undefined;
-      const isMention = event.type === "app_mention";
+      // Ignore the bot's own posts on both paths, so an anchor reply that happens
+      // to @mention the app can't wake it in a loop (each loop has a new event_id,
+      // so dedup wouldn't catch it).
+      const isMention =
+        event.type === "app_mention" && !event.bot_id && !event.subtype;
       const isDM =
         event.type === "message" && event.channel_type === "im" && !event.bot_id && !event.subtype;
       if ((isMention || isDM) && eventId && event.channel) {
@@ -3253,7 +3257,7 @@ cliRoute("/cli/anchor/decommission", async (ctx, body) => {
   return await ctx.runMutation(api.anchors.decommissionAnchor, body);
 });
 cliRoute("/cli/anchor/link-channel", async (ctx, body) => {
-  return await ctx.runMutation(api.slack.linkChannel, body);
+  return await ctx.runAction(api.slack.linkChannel, body);
 });
 cliRoute("/cli/anchor/unlink-channel", async (ctx, body) => {
   return await ctx.runMutation(api.slack.unlinkChannel, body);

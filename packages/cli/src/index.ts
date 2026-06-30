@@ -10017,7 +10017,15 @@ anchor
       console.error(`Link failed: ${body.error || resp.statusText}`);
       process.exit(1);
     }
-    console.log(`${c.green}✓${c.reset} ${channel} → your ${options.team ? "team" : "personal"} anchor`);
+    const result = (await resp.json()) as any;
+    if (!result.ok) {
+      console.error(`Link failed: ${result.error || "unknown"}`);
+      process.exit(1);
+    }
+    console.log(
+      `${c.green}✓${c.reset} ${channel} → your ${options.team ? "team" : "personal"} anchor` +
+      `${result.replaced ? ` ${c.dim}(replaced)${c.reset}` : ""}`,
+    );
   });
 
 anchor
