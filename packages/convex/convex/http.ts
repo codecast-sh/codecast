@@ -3108,6 +3108,94 @@ http.route({
 
 // --- Task Layer Routes ---
 
+// ── Slack webhook (Anchor inbound) ───────────────────────────────────────────
+// An @mention or DM in a mapped channel wakes that channel's anchor. Verified by
+// Slack's v0 HMAC signature (SLACK_SIGNING_SECRET) with replay protection, then
+// deduped by event_id so a Slack retry can't double-wake.
+http.route({
+  path: "/api/webhooks/slack",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const signature = request.headers.get("X-Slack-Signature");
+    const timestamp = request.headers.get("X-Slack-Request-Timestamp");
+    const body = await request.text();
+    const secret = process.env.SLACK_SIGNING_SECRET;
+
+    if (!secret) {
+      console.error("[slack webhook] SLACK_SIGNING_SECRET not configured; refusing");
+      return new Response(JSON.stringify({ error: "Webhook not configured" }), { status: 500 });
+    }
+    if (!signature || !timestamp) {
+      return new Response(JSON.stringify({ error: "Missing signature" }), { status: 401 });
+    }
+    // Replay protection: reject stale timestamps (Slack recommends 5 minutes).
+    const ts = parseInt(timestamp, 10);
+    if (!Number.isFinite(ts) || Math.abs(Date.now() / 1000 - ts) > 300) {
+      return new Response(JSON.stringify({ error: "Stale timestamp" }), { status: 401 });
+    }
+    const encoder = new TextEncoder();
+    const key = await crypto.subtle.importKey(
+      "raw",
+      encoder.encode(secret),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"],
+    );
+    const sigBuf = await crypto.subtle.sign("HMAC", key, encoder.encode(`v0:${timestamp}:${body}`));
+    const hex = Array.from(new Uint8Array(sigBuf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+    if (!timingSafeEqualHex(signature, "v0=" + hex)) {
+      return new Response(JSON.stringify({ error: "Invalid signature" }), { status: 401 });
+    }
+
+    const payload = JSON.parse(body);
+    // Slack's one-time endpoint verification handshake.
+    if (payload.type === "url_verification") {
+      return new Response(payload.challenge, { status: 200, headers: { "Content-Type": "text/plain" } });
+    }
+
+    if (payload.type === "event_callback") {
+      const event = payload.event || {};
+      const eventId = payload.event_id as string | undefined;
+      const isMention = event.type === "app_mention";
+      const isDM =
+        event.type === "message" && event.channel_type === "im" && !event.bot_id && !event.subtype;
+      if ((isMention || isDM) && eventId && event.channel) {
+        const fresh = await ctx.runMutation(internal.slack.markEventSeen, { event_id: eventId });
+        if (fresh) {
+          const resolved = await ctx.runQuery(internal.slack.resolveAnchorForChannel, {
+            channel: event.channel,
+          });
+          if (resolved) {
+            const thread = event.thread_ts || event.ts;
+            const text = String(event.text || "").replace(/<@[A-Z0-9]+>/g, "").trim();
+            const wake = [
+              `[Slack message in channel ${event.channel}, thread ${thread}]`,
+              `<@${event.user}> said: "${text}"`,
+              "",
+              "Reply in this Slack thread by running:",
+              `  cast anchor say --channel ${event.channel} --thread ${thread} "<your reply>"`,
+            ].join("\n");
+            await ctx.runMutation(internal.anchors.wakeAnchorInternal, {
+              anchor_id: resolved.anchor_id,
+              message: wake,
+            });
+          }
+        }
+      }
+      // Always 200 fast — Slack retries on anything else, and we've deduped above.
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }),
+});
+
 function cliRoute(path: string, handler: (ctx: any, body: any) => Promise<any>) {
   const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
@@ -3172,6 +3260,18 @@ cliRoute("/cli/anchor/wake", async (ctx, body) => {
 });
 cliRoute("/cli/anchor/resolve", async (ctx, body) => {
   return await ctx.runQuery(api.anchors.resolveAnchorForScope, body);
+});
+cliRoute("/cli/anchor/link-channel", async (ctx, body) => {
+  return await ctx.runMutation(api.slack.linkChannel, body);
+});
+cliRoute("/cli/anchor/unlink-channel", async (ctx, body) => {
+  return await ctx.runMutation(api.slack.unlinkChannel, body);
+});
+cliRoute("/cli/anchor/channels", async (ctx, body) => {
+  return await ctx.runQuery(api.slack.listChannels, body);
+});
+cliRoute("/cli/anchor/say", async (ctx, body) => {
+  return await ctx.runAction(api.slack.postMessage, body);
 });
 
 // Tasks

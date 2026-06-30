@@ -1,4 +1,4 @@
-import { mutation, query } from "./functions";
+import { mutation, query, internalMutation } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
@@ -243,9 +243,27 @@ export const provisionAnchor = mutation({
   },
 });
 
-// wakeAnchor — deliver a message into an anchor's standing session, auto-resuming
-// it if dormant (the normal pending-message rail does the resume). This is the
-// primitive every trigger (Slack mention, schedule, a finished hand) funnels into.
+// Deliver a message into an anchor's standing session, auto-resuming it if
+// dormant (the normal pending-message rail does the resume). This is the
+// primitive every trigger (Slack mention, schedule, a finished hand) funnels
+// into. Shared by the auth'd `wakeAnchor` and the internal `wakeAnchorInternal`.
+async function deliverToAnchor(
+  ctx: any,
+  anchorId: Id<"anchors">,
+  message: string,
+) {
+  const anchor = await ctx.db.get(anchorId);
+  if (!anchor) throw new Error("Anchor not found");
+  if (!anchor.conversation_id) throw new Error("Anchor has no session yet");
+  const conversation = await ctx.db.get(anchor.conversation_id);
+  if (!conversation) throw new Error("Anchor session missing");
+  await enqueuePendingMessage(ctx, conversation, conversation.user_id, {
+    content: message,
+  });
+  return { conversation_id: anchor.conversation_id, woke: true };
+}
+
+// wakeAnchor — auth'd entry (CLI / web): a human or their session pokes the anchor.
 export const wakeAnchor = mutation({
   args: {
     api_token: v.optional(v.string()),
@@ -255,18 +273,16 @@ export const wakeAnchor = mutation({
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) throw new Error("Authentication failed: invalid token or session");
+    return await deliverToAnchor(ctx, args.anchor_id, args.message);
+  },
+});
 
-    const anchor = await ctx.db.get(args.anchor_id);
-    if (!anchor) throw new Error("Anchor not found");
-    if (!anchor.conversation_id) throw new Error("Anchor has no session yet");
-
-    const conversation = await ctx.db.get(anchor.conversation_id);
-    if (!conversation) throw new Error("Anchor session missing");
-
-    await enqueuePendingMessage(ctx, conversation, conversation.user_id, {
-      content: args.message,
-    });
-    return { conversation_id: anchor.conversation_id, woke: true };
+// wakeAnchorInternal — for adapters already authenticated by their own scheme
+// (e.g. a Slack webhook verified by HMAC). No user token; never expose as public.
+export const wakeAnchorInternal = internalMutation({
+  args: { anchor_id: v.id("anchors"), message: v.string() },
+  handler: async (ctx, args) => {
+    return await deliverToAnchor(ctx, args.anchor_id, args.message);
   },
 });
 

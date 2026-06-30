@@ -85,6 +85,7 @@ import type * as reviews from "../reviews.js";
 import type * as searchCore from "../searchCore.js";
 import type * as sessionInsights from "../sessionInsights.js";
 import type * as sessionThreads from "../sessionThreads.js";
+import type * as slack from "../slack.js";
 import type * as spawn from "../spawn.js";
 import type * as storyMode from "../storyMode.js";
 import type * as syncCursors from "../syncCursors.js";
@@ -184,6 +185,7 @@ declare const fullApi: ApiFromModules<{
   searchCore: typeof searchCore;
   sessionInsights: typeof sessionInsights;
   sessionThreads: typeof sessionThreads;
+  slack: typeof slack;
   spawn: typeof spawn;
   storyMode: typeof storyMode;
   syncCursors: typeof syncCursors;
