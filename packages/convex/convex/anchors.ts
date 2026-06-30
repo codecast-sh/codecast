@@ -1,8 +1,9 @@
-import { mutation, query, internalMutation } from "./functions";
+import { mutation, query } from "./functions";
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import { resolveTeamForPath } from "./privacy";
 import { enqueueStartSession } from "./devices";
+import { enqueueKillSessionCommand } from "./cleanup";
 import { enqueuePendingMessage, getAuthenticatedUserId } from "./pendingMessages";
 
 // An Anchor is codecast's standing agent member: one per team (shared) and one
@@ -313,6 +314,7 @@ export async function deliverToAnchor(
 ) {
   const anchor = await ctx.db.get(anchorId);
   if (!anchor) throw new Error("Anchor not found");
+  if (anchor.status === "decommissioned") throw new Error("Anchor is decommissioned");
   if (!anchor.conversation_id) throw new Error("Anchor has no session yet");
   const conversation = await ctx.db.get(anchor.conversation_id);
   if (!conversation) throw new Error("Anchor session missing");
@@ -337,15 +339,6 @@ export const wakeAnchor = mutation({
     if (!(await userCanAccessAnchor(ctx, userId, anchor))) {
       throw new Error("Not authorized for this anchor");
     }
-    return await deliverToAnchor(ctx, args.anchor_id, args.message);
-  },
-});
-
-// wakeAnchorInternal — for adapters already authenticated by their own scheme
-// (e.g. a Slack webhook verified by HMAC). No user token; never expose as public.
-export const wakeAnchorInternal = internalMutation({
-  args: { anchor_id: v.id("anchors"), message: v.string() },
-  handler: async (ctx, args) => {
     return await deliverToAnchor(ctx, args.anchor_id, args.message);
   },
 });
@@ -433,6 +426,10 @@ export const decommissionAnchor = mutation({
     if (anchor.conversation_id) {
       const conv = await ctx.db.get(anchor.conversation_id);
       if (conv) {
+        // Tear down the running host agent — status alone doesn't stop the
+        // daemon's tmux/process (kill_session does) — then clear persistence so
+        // the row can complete, unpin it, and mark it completed.
+        await enqueueKillSessionCommand(ctx, conv as any);
         await ctx.db.patch(anchor.conversation_id, {
           persistent: false,
           inbox_pinned_at: undefined,

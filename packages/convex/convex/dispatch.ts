@@ -38,6 +38,9 @@ const TABLE_CONFIG: Record<string, TableConfig> = {
       "_id", "_creationTime", "user_id", "session_id", "team_id",
       "started_at", "message_count", "short_id", "share_token",
       "is_private", "team_visibility", "auto_shared", "status", "agent_type",
+      // Anchor invariants are server-owned (set by provisionAnchor / cleared by
+      // decommissionAnchor) — a client must not flip these via a generic patch.
+      "persistent", "acting_user_id", "anchor_id",
     ]),
     // No beforePatch hook: dismiss is an absolute flag, so the server has no
     // reason to rewrite the client's `inbox_dismissed_at`. A previous hook
