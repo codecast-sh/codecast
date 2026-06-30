@@ -168,7 +168,11 @@ async function applyPatches(
             await reapEmptyConversation(ctx, doc as any);
           } else if (action === "kill") {
             await enqueueKillSessionCommand(ctx, doc as any);
-            await ctx.db.patch(docKey as Id<any>, { inbox_killed_at: Date.now(), status: "completed" });
+            // A persistent anchor never auto-completes on a dismiss/kill — it goes
+            // dormant, not retired (only decommissionAnchor clears `persistent`).
+            const killPatch: Record<string, any> = { inbox_killed_at: Date.now() };
+            if (!(doc as any)?.persistent) killPatch.status = "completed";
+            await ctx.db.patch(docKey as Id<any>, killPatch);
           }
         }
       } else {

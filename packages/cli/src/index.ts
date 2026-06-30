@@ -9950,6 +9950,43 @@ anchor
   });
 
 anchor
+  .command("rm")
+  .alias("decommission")
+  .description("Retire an anchor: stop it being persistent and drop its Slack mappings")
+  .option("--team [id]", "Target the team anchor (default: your personal anchor)")
+  .action(async (options: any) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const scopeType = options.team ? "team" : "user";
+    const teamId = typeof options.team === "string" ? options.team : undefined;
+    const resolveResp = await cliFetch(`${siteUrl}/cli/anchor/resolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: config.auth_token, scope_type: scopeType, team_id: teamId }),
+    });
+    const anchorRow = resolveResp.ok ? ((await resolveResp.json()) as any) : null;
+    if (!anchorRow?._id) {
+      console.error(`No ${scopeType === "team" ? "team" : "personal"} anchor found.`);
+      process.exit(1);
+    }
+    const resp = await cliFetch(`${siteUrl}/cli/anchor/decommission`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: config.auth_token, anchor_id: anchorRow._id }),
+    });
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+      console.error(`Decommission failed: ${body.error || resp.statusText}`);
+      process.exit(1);
+    }
+    console.log(`${c.green}✓${c.reset} retired ${c.cyan}${anchorRow.name}${c.reset}`);
+  });
+
+anchor
   .command("link-channel")
   .description("Map a Slack channel to an anchor so @mentions there wake it")
   .argument("<channel>", "Slack channel id (e.g. C0123ABCD)")
