@@ -11,6 +11,7 @@
 import type * as accountSwitch from "../accountSwitch.js";
 import type * as admin_mergeUser from "../admin_mergeUser.js";
 import type * as agentTasks from "../agentTasks.js";
+import type * as anchors from "../anchors.js";
 import type * as apiTokens from "../apiTokens.js";
 import type * as auth from "../auth.js";
 import type * as blame from "../blame.js";
@@ -84,6 +85,7 @@ import type * as reviews from "../reviews.js";
 import type * as searchCore from "../searchCore.js";
 import type * as sessionInsights from "../sessionInsights.js";
 import type * as sessionThreads from "../sessionThreads.js";
+import type * as slack from "../slack.js";
 import type * as spawn from "../spawn.js";
 import type * as storyMode from "../storyMode.js";
 import type * as syncCursors from "../syncCursors.js";
@@ -109,6 +111,7 @@ declare const fullApi: ApiFromModules<{
   accountSwitch: typeof accountSwitch;
   admin_mergeUser: typeof admin_mergeUser;
   agentTasks: typeof agentTasks;
+  anchors: typeof anchors;
   apiTokens: typeof apiTokens;
   auth: typeof auth;
   blame: typeof blame;
@@ -182,6 +185,7 @@ declare const fullApi: ApiFromModules<{
   searchCore: typeof searchCore;
   sessionInsights: typeof sessionInsights;
   sessionThreads: typeof sessionThreads;
+  slack: typeof slack;
   spawn: typeof spawn;
   storyMode: typeof storyMode;
   syncCursors: typeof syncCursors;
