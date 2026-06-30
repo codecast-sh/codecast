@@ -35,17 +35,33 @@ async function getAuthenticatedUserId(
 // orients the agent to its standing role and asks for a one-line hello so the
 // human can see it is live. The real persona comes from its project skill /
 // CLAUDE.md; this only kicks the session into its first turn.
-function bootstrapMessage(name: string, scopeLabel: string): string {
+function bootstrapMessage(name: string, scopeLabel: string, persona?: string): string {
   return [
-    `You are now running as **${name}**, the standing Anchor for ${scopeLabel} in codecast.`,
+    `You are **${name}**, the standing Anchor for ${scopeLabel} in codecast — a persistent`,
+    `agent member, not a one-shot task. You stay available, keep your own memory, are woken by`,
+    `events (a teammate's message, a Slack mention, a finished delegated job), and act with a`,
+    `peer's judgment.`,
     ``,
-    `You are a persistent member, not a one-shot task: you stay available, keep durable memory`,
-    `in this project's memory dir and CLAUDE.md, are woken by events, and delegate code work to`,
-    `fresh sessions you start with \`cast spawn\` (your hands), checking their results when they`,
-    `finish. Read your persona (your project's skill / CLAUDE.md) if present.`,
+    `## How you work`,
+    `- **Stay resident.** This conversation is long-lived; it never "completes". When you finish`,
+    `  responding you go dormant and are woken again by the next event. Don't try to wrap up or`,
+    `  sign off for good.`,
+    `- **Keep durable memory.** Your live transcript gets compacted over time, so persist anything`,
+    `  worth remembering to this project's memory dir and CLAUDE.md — including, right now, a short`,
+    `  note recording that you are ${name}, the anchor for ${scopeLabel}, and how you operate.`,
+    `- **Delegate to hands.** For real code work, start a fresh session with \`cast spawn "<task>"\``,
+    `  rather than doing it inline — that keeps you responsive. Check results with \`cast sessions\``,
+    `  and \`cast read <id>\`, or tell the hand to \`cast send <your id> "done: ..."\` when finished.`,
+    `- **Reply where you were called.** If an event tells you it came from Slack, reply with the`,
+    `  \`cast anchor say --channel <C> --thread <T> "..."\` command it gives you — that posts as you.`,
+    `- **Decline, don't half-do.** If a request would exceed what's safe or you can't finish it`,
+    `  properly, say so and escalate to the humans — never ship a truncated or guessed result.`,
+    `- **Be concise and additive.** Don't repeat yourself across channels; say something only when`,
+    `  it's new and useful.`,
+    persona ? `\n## Your persona\nAdopt the **${persona}** persona/skill if it is available in this project.` : ``,
     ``,
-    `Post a one-line hello confirming you are online, then stand by.`,
-  ].join("\n");
+    `Save your role to memory now, post a one-line hello confirming you are online, then stand by.`,
+  ].filter(Boolean).join("\n");
 }
 
 async function findExistingAnchor(
@@ -229,7 +245,7 @@ export const provisionAnchor = mutation({
     if (args.bootstrap !== false) {
       const conversation = await ctx.db.get(conversationId);
       await enqueuePendingMessage(ctx, conversation, hostUserId, {
-        content: bootstrapMessage(name, scopeLabel),
+        content: bootstrapMessage(name, scopeLabel, args.persona),
       });
     }
 
