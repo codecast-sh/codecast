@@ -320,11 +320,12 @@ export default defineSchema({
     // id. A plain string — the referenced row no longer exists.
     restored_from_conversation_id: v.optional(v.string()),
     // ── Anchor / persistent-session support ──────────────────────────────────
-    // `persistent` exempts a conversation from ALL auto-completion (the daemon
-    // watchdog, the SessionEnd hook, and kill teardown) so a standing agent
-    // member can sit dormant indefinitely and be re-woken by an event — it is
-    // never flipped to "completed" except by an explicit decommission. The
-    // server guard lives in markSessionCompleted; the daemon also skips it.
+    // `persistent` exempts a conversation from auto-completion so a standing
+    // agent member can sit dormant indefinitely and be re-woken by an event. The
+    // guard lives in markSessionCompleted (covers the watchdog, SessionEnd hook,
+    // daemon kill teardown) plus matching checks in the direct-patch kill paths
+    // (killSession + dispatch dismiss→kill). It is flipped to "completed" only by
+    // decommissionAnchor, which clears `persistent` first.
     persistent: v.optional(v.boolean()),
     // The IDENTITY a session renders as. When set (to a synthetic is_bot user),
     // the author chip / feed show the bot, while `user_id` stays the human host
@@ -435,7 +436,9 @@ export default defineSchema({
   slack_events: defineTable({
     event_id: v.string(),
     created_at: v.number(),
-  }).index("by_event_id", ["event_id"]),
+  })
+    .index("by_event_id", ["event_id"])
+    .index("by_created_at", ["created_at"]),
 
   // Large git-diff blobs split off the conversations hot doc. The conversations
   // row is read+patched on every message sync (addMessages) and returned by list

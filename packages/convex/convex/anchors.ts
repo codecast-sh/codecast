@@ -1,11 +1,9 @@
 import { mutation, query, internalMutation } from "./functions";
 import { v } from "convex/values";
-import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
-import { verifyApiToken } from "./apiTokens";
 import { resolveTeamForPath } from "./privacy";
 import { enqueueStartSession } from "./devices";
-import { enqueuePendingMessage } from "./pendingMessages";
+import { enqueuePendingMessage, getAuthenticatedUserId } from "./pendingMessages";
 
 // An Anchor is codecast's standing agent member: one per team (shared) and one
 // per user (personal). It owns a long-lived `persistent` conversation that is
@@ -18,17 +16,62 @@ import { enqueuePendingMessage } from "./pendingMessages";
 // on a laptop and a team anchor run on whichever member hosts it, with no separate
 // bot daemon or bot credentials in v1.
 
-async function getAuthenticatedUserId(
+// Authorization for an anchor: the human host that runs it, the user a personal
+// anchor belongs to, or any member of a team anchor's team. Every ACT path (wake,
+// decommission) and the channel/post paths gate on this — authentication alone is
+// not enough (injecting a turn runs and bills code on the host's daemon).
+export async function userCanAccessAnchor(
   ctx: { db: any },
-  apiToken?: string,
-): Promise<Id<"users"> | null> {
-  const sessionUserId = await getAuthUserId(ctx as any);
-  if (sessionUserId) return sessionUserId;
-  if (apiToken) {
-    const result = await verifyApiToken(ctx, apiToken);
-    if (result) return result.userId;
+  userId: Id<"users">,
+  anchor: { host_user_id?: Id<"users">; scope_user_id?: Id<"users">; team_id?: Id<"teams"> } | null,
+): Promise<boolean> {
+  if (!anchor) return false;
+  if (anchor.host_user_id === userId) return true;
+  if (anchor.scope_user_id && anchor.scope_user_id === userId) return true;
+  if (anchor.team_id) {
+    const m = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_user_team", (q: any) =>
+        q.eq("user_id", userId).eq("team_id", anchor.team_id),
+      )
+      .first();
+    if (m) return true;
   }
-  return null;
+  return false;
+}
+
+// The anchors a caller may see/act on: their personal anchor plus the team anchor
+// of every team they belong to, deduped and excluding decommissioned. Shared by
+// listAnchors and the Slack channel listing so the two can't drift.
+export async function visibleAnchorsForUser(
+  ctx: { db: any },
+  userId: Id<"users">,
+): Promise<any[]> {
+  const personal = await ctx.db
+    .query("anchors")
+    .withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", userId))
+    .collect();
+  const memberships = await ctx.db
+    .query("team_memberships")
+    .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+    .collect();
+  const teamAnchors: any[] = [];
+  for (const m of memberships) {
+    const rows = await ctx.db
+      .query("anchors")
+      .withIndex("by_team", (q: any) => q.eq("team_id", m.team_id))
+      .collect();
+    teamAnchors.push(...rows);
+  }
+  const seen = new Set<string>();
+  const out: any[] = [];
+  for (const a of [...personal, ...teamAnchors]) {
+    if (a.status === "decommissioned") continue;
+    if (seen.has(a._id.toString())) continue;
+    seen.add(a._id.toString());
+    out.push(a);
+  }
+  return out;
 }
 
 // The default first turn that brings a freshly-provisioned anchor "online": it
@@ -263,7 +306,7 @@ export const provisionAnchor = mutation({
 // dormant (the normal pending-message rail does the resume). This is the
 // primitive every trigger (Slack mention, schedule, a finished hand) funnels
 // into. Shared by the auth'd `wakeAnchor` and the internal `wakeAnchorInternal`.
-async function deliverToAnchor(
+export async function deliverToAnchor(
   ctx: any,
   anchorId: Id<"anchors">,
   message: string,
@@ -289,6 +332,11 @@ export const wakeAnchor = mutation({
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) throw new Error("Authentication failed: invalid token or session");
+    const anchor = await ctx.db.get(args.anchor_id);
+    if (!anchor) throw new Error("Anchor not found");
+    if (!(await userCanAccessAnchor(ctx, userId, anchor))) {
+      throw new Error("Not authorized for this anchor");
+    }
     return await deliverToAnchor(ctx, args.anchor_id, args.message);
   },
 });
@@ -319,6 +367,16 @@ export const resolveAnchorForScope = query({
       const host = await ctx.db.get(userId);
       teamId = host?.active_team_id ?? host?.team_id ?? undefined;
     }
+    // Authorize team scope: only a member may resolve a team's anchor (team_id is
+    // not a secret, so without this any user could fetch another team's anchor id).
+    if (args.scope_type === "team") {
+      if (!teamId) return null;
+      const member = await ctx.db
+        .query("team_memberships")
+        .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", teamId))
+        .first();
+      if (!member) return null;
+    }
     const anchor = await findExistingAnchor(ctx, {
       scope_type: args.scope_type,
       team_id: teamId,
@@ -342,29 +400,10 @@ export const listAnchors = query({
       .collect();
     const teamIds = new Set(memberships.map((m: any) => m.team_id.toString()));
 
-    const personal = await ctx.db
-      .query("anchors")
-      .withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", userId))
-      .collect();
-
-    const teamAnchors: any[] = [];
-    for (const m of memberships) {
-      const rows = await ctx.db
-        .query("anchors")
-        .withIndex("by_team", (q: any) => q.eq("team_id", m.team_id))
-        .collect();
-      teamAnchors.push(...rows);
-    }
-
-    const all = [...personal, ...teamAnchors].filter(
-      (a) => a.status !== "decommissioned",
-    );
-    // Dedup (a team can be listed once) and enrich with the bot's display name.
-    const seen = new Set<string>();
+    const anchors = await visibleAnchorsForUser(ctx, userId);
+    // Enrich with the bot's display name/avatar.
     const out: any[] = [];
-    for (const a of all) {
-      if (seen.has(a._id.toString())) continue;
-      seen.add(a._id.toString());
+    for (const a of anchors) {
       const bot = await ctx.db.get(a.bot_user_id as Id<"users">);
       out.push({
         ...a,
@@ -374,5 +413,42 @@ export const listAnchors = query({
       });
     }
     return out;
+  },
+});
+
+// decommissionAnchor — the explicit retire path the never-complete invariant
+// depends on: clear `persistent` (so the session may complete normally), unpin,
+// mark it completed, drop channel mappings, and mark the anchor decommissioned so
+// a fresh `cast anchor create` can provision a new one.
+export const decommissionAnchor = mutation({
+  args: { api_token: v.optional(v.string()), anchor_id: v.id("anchors") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication failed: invalid token or session");
+    const anchor = await ctx.db.get(args.anchor_id);
+    if (!anchor) throw new Error("Anchor not found");
+    if (!(await userCanAccessAnchor(ctx, userId, anchor))) {
+      throw new Error("Not authorized for this anchor");
+    }
+    if (anchor.conversation_id) {
+      const conv = await ctx.db.get(anchor.conversation_id);
+      if (conv) {
+        await ctx.db.patch(anchor.conversation_id, {
+          persistent: false,
+          inbox_pinned_at: undefined,
+          status: "completed",
+        });
+      }
+    }
+    const chans = await ctx.db
+      .query("anchor_channels")
+      .withIndex("by_anchor", (q: any) => q.eq("anchor_id", args.anchor_id))
+      .collect();
+    for (const ch of chans) await ctx.db.delete(ch._id);
+    await ctx.db.patch(args.anchor_id, {
+      status: "decommissioned",
+      updated_at: Date.now(),
+    });
+    return { decommissioned: true };
   },
 });

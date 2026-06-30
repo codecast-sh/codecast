@@ -82,4 +82,13 @@ crons.interval(
   {}
 );
 
+crons.interval(
+  // Slack dedup rows only need to outlive Slack's retry window (minutes); drop
+  // anything older than a day so the table can't grow unbounded.
+  "sweep slack dedup events",
+  { hours: 6 },
+  internal.slack.sweepSlackEvents,
+  {}
+);
+
 export default crons;

@@ -1,31 +1,18 @@
 import { mutation, query, internalMutation, internalQuery, action } from "./functions";
 import { v } from "convex/values";
-import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
-import { verifyApiToken } from "./apiTokens";
+import { getAuthenticatedUserId } from "./pendingMessages";
+import { deliverToAnchor, userCanAccessAnchor, visibleAnchorsForUser } from "./anchors";
 
-// The Slack adapter: a workspace can map a channel to its Anchor, so an @mention
-// in that channel wakes the anchor (inbound), and the anchor replies as the bot
+// The Slack adapter: a workspace maps a channel to its Anchor, so an @mention in
+// that channel wakes the anchor (inbound), and the anchor replies as the bot
 // (outbound, server-side so the bot token never reaches the anchor's session).
 //
 // v1 uses a single Slack app: SLACK_SIGNING_SECRET verifies inbound webhooks and
 // SLACK_BOT_TOKEN posts replies (both Convex env vars). Channel→anchor mapping is
-// per-workspace data in `anchor_channels`. Multi-workspace bot tokens are a later
-// refinement.
-
-async function getAuthenticatedUserId(
-  ctx: { db: any },
-  apiToken?: string,
-): Promise<Id<"users"> | null> {
-  const sessionUserId = await getAuthUserId(ctx as any);
-  if (sessionUserId) return sessionUserId;
-  if (apiToken) {
-    const result = await verifyApiToken(ctx, apiToken);
-    if (result) return result.userId;
-  }
-  return null;
-}
+// per-workspace data in `anchor_channels`. Every act path is authorized against the
+// caller's anchors — authentication alone is never enough (multi-tenant boundary).
 
 async function callerAnchor(
   ctx: { db: any },
@@ -40,6 +27,12 @@ async function callerAnchor(
       resolved = host?.active_team_id ?? host?.team_id ?? undefined;
     }
     if (!resolved) return null;
+    // Only a member may target a team's anchor.
+    const member = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", resolved))
+      .first();
+    if (!member) return null;
     const rows = await ctx.db
       .query("anchors")
       .withIndex("by_team", (q: any) => q.eq("team_id", resolved))
@@ -53,8 +46,17 @@ async function callerAnchor(
   return rows.find((a: any) => a.status !== "decommissioned") ?? null;
 }
 
-// linkChannel — map a Slack channel to the caller's anchor. Backs
-// `cast anchor link-channel`.
+async function channelRow(ctx: { db: any }, channel: string) {
+  return await ctx.db
+    .query("anchor_channels")
+    .withIndex("by_surface_channel", (q: any) =>
+      q.eq("surface", "slack").eq("channel_key", channel),
+    )
+    .first();
+}
+
+// linkChannel — map a Slack channel to the caller's anchor. If a mapping already
+// exists, the caller must already own it (no silent cross-tenant re-pointing).
 export const linkChannel = mutation({
   args: {
     api_token: v.optional(v.string()),
@@ -67,22 +69,17 @@ export const linkChannel = mutation({
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) throw new Error("Authentication failed: invalid token or session");
-    const anchor = await callerAnchor(
-      ctx,
-      userId,
-      args.team ? "team" : "user",
-      args.team_id,
-    );
+    const anchor = await callerAnchor(ctx, userId, args.team ? "team" : "user", args.team_id);
     if (!anchor) throw new Error("No anchor to link. Create one: cast anchor create");
 
-    // One mapping per (surface, channel): replace any existing.
-    const existing = await ctx.db
-      .query("anchor_channels")
-      .withIndex("by_surface_channel", (q: any) =>
-        q.eq("surface", "slack").eq("channel_key", args.channel),
-      )
-      .first();
+    const existing = await channelRow(ctx, args.channel);
     if (existing) {
+      // Re-pointing is only allowed if the caller already controls the current
+      // mapping — otherwise this would hijack another anchor's inbound routing.
+      const current = await ctx.db.get(existing.anchor_id as Id<"anchors">);
+      if (!(await userCanAccessAnchor(ctx, userId, current))) {
+        throw new Error("That channel is already linked to an anchor you don't control");
+      }
       await ctx.db.patch(existing._id, {
         anchor_id: anchor._id,
         workspace_key: args.workspace,
@@ -107,14 +104,14 @@ export const unlinkChannel = mutation({
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) throw new Error("Authentication failed: invalid token or session");
-    const row = await ctx.db
-      .query("anchor_channels")
-      .withIndex("by_surface_channel", (q: any) =>
-        q.eq("surface", "slack").eq("channel_key", args.channel),
-      )
-      .first();
-    if (row) await ctx.db.delete(row._id);
-    return { channel: args.channel, removed: !!row };
+    const row = await channelRow(ctx, args.channel);
+    if (!row) return { channel: args.channel, removed: false };
+    const anchor = await ctx.db.get(row.anchor_id as Id<"anchors">);
+    if (!(await userCanAccessAnchor(ctx, userId, anchor))) {
+      throw new Error("That channel is linked to an anchor you don't control");
+    }
+    await ctx.db.delete(row._id);
+    return { channel: args.channel, removed: true };
   },
 });
 
@@ -123,29 +120,12 @@ export const listChannels = query({
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) return [];
-    // Channels mapped to any of the caller's anchors.
-    const personal = await ctx.db
-      .query("anchors")
-      .withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", userId))
-      .collect();
-    const memberships = await ctx.db
-      .query("team_memberships")
-      .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
-      .collect();
-    const teamAnchors: any[] = [];
-    for (const m of memberships) {
-      const rows = await ctx.db
-        .query("anchors")
-        .withIndex("by_team", (q: any) => q.eq("team_id", m.team_id))
-        .collect();
-      teamAnchors.push(...rows);
-    }
-    const anchorIds = new Set([...personal, ...teamAnchors].map((a) => a._id.toString()));
+    const anchors = await visibleAnchorsForUser(ctx, userId);
     const out: any[] = [];
-    for (const id of anchorIds) {
+    for (const a of anchors) {
       const chans = await ctx.db
         .query("anchor_channels")
-        .withIndex("by_anchor", (q: any) => q.eq("anchor_id", id))
+        .withIndex("by_anchor", (q: any) => q.eq("anchor_id", a._id))
         .collect();
       out.push(...chans);
     }
@@ -153,41 +133,82 @@ export const listChannels = query({
   },
 });
 
-// resolveAnchorForChannel — inbound webhook lookup: which anchor answers in this
-// Slack channel. Internal (the webhook authenticates by signature, not a user).
-export const resolveAnchorForChannel = internalQuery({
-  args: { channel: v.string() },
-  handler: async (ctx, args) => {
-    const row = await ctx.db
-      .query("anchor_channels")
-      .withIndex("by_surface_channel", (q: any) =>
-        q.eq("surface", "slack").eq("channel_key", args.channel),
-      )
-      .first();
+// callerOwnsChannel — for the postMessage action (actions can't read the db): the
+// caller may post to a channel only if they can access the anchor it's mapped to.
+export const callerOwnsChannel = internalQuery({
+  args: { api_token: v.optional(v.string()), channel: v.string() },
+  handler: async (ctx, args): Promise<Id<"users"> | null> => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) return null;
+    const row = await channelRow(ctx, args.channel);
     if (!row) return null;
-    const anchor = await ctx.db.get(row.anchor_id);
+    const anchor = await ctx.db.get(row.anchor_id as Id<"anchors">);
     if (!anchor || anchor.status === "decommissioned") return null;
-    return { anchor_id: anchor._id, name: anchor.name, channel_project: row.project_path ?? null };
+    if (!(await userCanAccessAnchor(ctx, userId, anchor))) return null;
+    return userId;
   },
 });
 
-// markEventSeen — idempotency: returns true the FIRST time an event_id is seen,
-// false on a retry. Slack redelivers on slow acks; a double-wake would double-post.
-export const markEventSeen = internalMutation({
-  args: { event_id: v.string() },
+// wakeFromSlackEvent — the whole inbound step in ONE transaction: dedup, resolve
+// channel→anchor, and deliver. Because the dedup insert and the wake commit
+// together, a wake failure rolls back the dedup row too, so Slack's retry can
+// re-drive it (fixes the "mark-seen-before-wake drops the mention" bug).
+export const wakeFromSlackEvent = internalMutation({
+  args: {
+    event_id: v.string(),
+    channel: v.string(),
+    user: v.optional(v.string()),
+    text: v.string(),
+    thread: v.string(),
+  },
   handler: async (ctx, args) => {
-    const existing = await ctx.db
+    const seen = await ctx.db
       .query("slack_events")
       .withIndex("by_event_id", (q: any) => q.eq("event_id", args.event_id))
       .first();
-    if (existing) return false;
+    if (seen) return { status: "duplicate" as const };
+
+    const row = await channelRow(ctx, args.channel);
+    const anchor = row ? await ctx.db.get(row.anchor_id as Id<"anchors">) : null;
+    if (!anchor || anchor.status === "decommissioned") {
+      // Nothing to wake — record the event so Slack stops retrying an unmapped channel.
+      await ctx.db.insert("slack_events", { event_id: args.event_id, created_at: Date.now() });
+      return { status: "no_anchor" as const };
+    }
+
+    const cleaned = String(args.text).replace(/<@[A-Z0-9]+>/g, "").trim();
+    const wake = [
+      `[Slack message in channel ${args.channel}, thread ${args.thread}]`,
+      `<@${args.user ?? "someone"}> said: "${cleaned}"`,
+      "",
+      "Reply in this Slack thread by running:",
+      `  cast anchor say --channel ${args.channel} --thread ${args.thread} "<your reply>"`,
+    ].join("\n");
+    // Deliver first: if this throws, the whole mutation rolls back (no dedup row
+    // written) so Slack's redelivery re-drives the mention.
+    await deliverToAnchor(ctx, anchor._id, wake);
     await ctx.db.insert("slack_events", { event_id: args.event_id, created_at: Date.now() });
-    return true;
+    return { status: "woke" as const, anchor_id: anchor._id };
+  },
+});
+
+// sweepSlackEvents — dedup rows only need to outlive Slack's retry window; drop
+// the rest so the table can't grow unbounded (cron, see crons.ts).
+export const sweepSlackEvents = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    const stale = await ctx.db
+      .query("slack_events")
+      .withIndex("by_created_at", (q: any) => q.lt("created_at", cutoff))
+      .take(500);
+    for (const row of stale) await ctx.db.delete(row._id);
+    return { deleted: stale.length };
   },
 });
 
 // postMessage — outbound reply, server-side so SLACK_BOT_TOKEN never reaches the
-// anchor's session. Backs `cast anchor say`. Auth'd by the host's api_token.
+// anchor's session. The caller must control the anchor that owns the channel.
 export const postMessage = action({
   args: {
     api_token: v.optional(v.string()),
@@ -196,10 +217,11 @@ export const postMessage = action({
     text: v.string(),
   },
   handler: async (ctx, args): Promise<{ ok: boolean; error?: string }> => {
-    const userId = await ctx.runQuery(internal.slack.whoami, {
+    const userId = await ctx.runQuery(internal.slack.callerOwnsChannel, {
       api_token: args.api_token,
+      channel: args.channel,
     });
-    if (!userId) return { ok: false, error: "Not authenticated" };
+    if (!userId) return { ok: false, error: "Not authorized to post to this channel" };
     const token = process.env.SLACK_BOT_TOKEN;
     if (!token) return { ok: false, error: "SLACK_BOT_TOKEN not configured" };
     const resp = await fetch("https://slack.com/api/chat.postMessage", {
@@ -208,21 +230,9 @@ export const postMessage = action({
         "Content-Type": "application/json; charset=utf-8",
         Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({
-        channel: args.channel,
-        thread_ts: args.thread_ts,
-        text: args.text,
-      }),
+      body: JSON.stringify({ channel: args.channel, thread_ts: args.thread_ts, text: args.text }),
     });
     const data = (await resp.json()) as { ok: boolean; error?: string };
     return { ok: data.ok, error: data.error };
-  },
-});
-
-// Tiny auth helper exposed to the action layer (actions can't touch the db).
-export const whoami = internalQuery({
-  args: { api_token: v.optional(v.string()) },
-  handler: async (ctx, args): Promise<Id<"users"> | null> => {
-    return await getAuthenticatedUserId(ctx, args.api_token);
   },
 });

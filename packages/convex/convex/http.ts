@@ -3160,29 +3160,17 @@ http.route({
       const isDM =
         event.type === "message" && event.channel_type === "im" && !event.bot_id && !event.subtype;
       if ((isMention || isDM) && eventId && event.channel) {
-        const fresh = await ctx.runMutation(internal.slack.markEventSeen, { event_id: eventId });
-        if (fresh) {
-          const resolved = await ctx.runQuery(internal.slack.resolveAnchorForChannel, {
-            channel: event.channel,
-          });
-          if (resolved) {
-            const thread = event.thread_ts || event.ts;
-            const text = String(event.text || "").replace(/<@[A-Z0-9]+>/g, "").trim();
-            const wake = [
-              `[Slack message in channel ${event.channel}, thread ${thread}]`,
-              `<@${event.user}> said: "${text}"`,
-              "",
-              "Reply in this Slack thread by running:",
-              `  cast anchor say --channel ${event.channel} --thread ${thread} "<your reply>"`,
-            ].join("\n");
-            await ctx.runMutation(internal.anchors.wakeAnchorInternal, {
-              anchor_id: resolved.anchor_id,
-              message: wake,
-            });
-          }
-        }
+        // One atomic mutation: dedup + resolve channel→anchor + wake. If the wake
+        // throws it returns 500 and Slack retries — the dedup row rolls back with
+        // it, so a transient failure never silently drops the mention.
+        await ctx.runMutation(internal.slack.wakeFromSlackEvent, {
+          event_id: eventId,
+          channel: event.channel,
+          user: event.user,
+          text: String(event.text || ""),
+          thread: event.thread_ts || event.ts,
+        });
       }
-      // Always 200 fast — Slack retries on anything else, and we've deduped above.
       return new Response(JSON.stringify({ ok: true }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
@@ -3260,6 +3248,9 @@ cliRoute("/cli/anchor/wake", async (ctx, body) => {
 });
 cliRoute("/cli/anchor/resolve", async (ctx, body) => {
   return await ctx.runQuery(api.anchors.resolveAnchorForScope, body);
+});
+cliRoute("/cli/anchor/decommission", async (ctx, body) => {
+  return await ctx.runMutation(api.anchors.decommissionAnchor, body);
 });
 cliRoute("/cli/anchor/link-channel", async (ctx, body) => {
   return await ctx.runMutation(api.slack.linkChannel, body);
