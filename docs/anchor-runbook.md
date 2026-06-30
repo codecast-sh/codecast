@@ -53,15 +53,22 @@ the results — no extra wiring.
 2. **Event Subscriptions** → Request URL: `https://convex.codecast.sh/api/webhooks/slack`
    (Slack will hit it with a `url_verification` challenge — the route answers it). Subscribe to
    bot events: `app_mention`, and `message.im` for DMs.
-3. **OAuth scopes**: `app_mentions:read`, `chat:write`, `im:history` (+ `channels:history` if
-   you want channel DMs). Install to the workspace; copy the Bot Token (`xoxb-…`).
+3. **OAuth scopes**: `app_mentions:read`, `chat:write`, `im:history`, and `channels:read`
+   (+ `groups:read` for private channels) — `channels:read` is required because linking
+   verifies the bot is a member of the channel. Install to the workspace; copy the Bot Token
+   (`xoxb-…`).
 4. Set `SLACK_SIGNING_SECRET` (Basic Information → Signing Secret) and `SLACK_BOT_TOKEN` in
    Convex env.
-5. Invite the bot to a channel, then map it:
+5. **Invite the bot to the channel in Slack first** (`/invite @Anchor`), then map it:
    ```bash
    cast anchor link-channel C0123ABCD --team    # @mentions in C0123 wake the team anchor
    ```
+   Linking is rejected unless the bot is already a channel member — you can't claim a channel
+   you and the bot aren't in (this is what prevents anyone from hijacking a channel's routing).
 6. `@Anchor` in that channel → it wakes, works, and replies in-thread as the bot.
+
+To retire an anchor: `cast anchor rm` (or `--team`) — clears persistence, tears down the host
+agent, drops channel mappings, and frees the scope so `cast anchor create` can make a new one.
 
 ## Validate end to end (post-deploy)
 
@@ -71,6 +78,26 @@ the results — no extra wiring.
 - `cast anchor wake "spawn a hand to list this repo's top-level dirs and report back"` →
   watch it `cast spawn` a session and summarize the result.
 - (Slack) `@Anchor hello` in a linked channel → a threaded reply from the bot.
+
+## Known edges (acknowledged, bounded)
+
+- **Channel-link verification checks the bot's membership, not the caller's.** Linking requires
+  the bot to already be in the channel (so a channel can only be claimed after someone invited
+  the bot in Slack), and re-pointing an existing mapping requires controlling it. But with a
+  single shared bot token we can't establish the *caller's* Slack identity, so a codecast user
+  could first-claim an unclaimed channel the bot is in even if they aren't a member of it.
+  Within one trusted workspace where the bot is invited only to intended channels this is
+  bounded; full per-user Slack-identity verification (require the caller also be in the channel)
+  is a follow-up before multi-org. Keep the bot out of sensitive channels you don't want
+  claimable.
+
+- **Slack delivery is at-least-once within Slack's retry window, not absolute.** A wake patches
+  the anchor's single long-lived conversation row; if that row is under heavy concurrent write
+  (the anchor streaming a long turn while several mentions land at once), a wake mutation can
+  exhaust Convex's OCC-retry budget and 500 — Slack retries (~3× over ~5 min), so it self-heals
+  in practice, but a sustained hot window is the one path a mention could be lost. Bounded at
+  chat wake rates; revisit by decoupling the durable pending-message insert from the conv patch
+  if anchors get high-volume.
 
 ## Deferred to follow-ups (not in v1)
 
