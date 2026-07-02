@@ -9,6 +9,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
 import { CODECAST_IMPORT_NOTICE_PREFIX } from "./parser";
+import { claudeProjectDirName } from "./projectPathResolver.js";
 
 const uuidv4 = () => crypto.randomUUID();
 
@@ -665,7 +666,7 @@ export function generateClaudeCodeJsonl(
 }
 
 export function writeClaudeCodeSession(jsonl: string, sessionId: string, projectPath?: string): { sessionId: string; filePath: string } {
-  const projectSlug = (projectPath || process.cwd()).replace(/\//g, "-");
+  const projectSlug = claudeProjectDirName(projectPath || process.cwd());
   const projectDir = path.join(process.env.HOME!, ".claude", "projects", projectSlug);
   fs.mkdirSync(projectDir, { recursive: true });
   const filePath = path.join(projectDir, `${sessionId}.jsonl`);

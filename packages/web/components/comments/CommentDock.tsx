@@ -55,6 +55,10 @@ function CommentRailImpl({ conversationId }: { conversationId: string }) {
   const open = useInboxStore((s) => s.commentRailOpen) === true;
   const setOpen = useInboxStore((s) => s.setCommentRailOpen);
   const setWidth = useInboxStore((s) => s.setCommentRailWidth);
+  const commentsEnabled = useInboxStore((s) => s.clientState.ui?.comments_enabled ?? false);
+  // The rail is opt-in, but a conversation that already has comments keeps it
+  // available so you can read + reply to what teammates left.
+  const railEnabled = commentsEnabled || comments.totalCount > 0;
   const agentType = useInboxStore((s) => ((s.conversations[conversationId] ?? s.sessions[conversationId]) as { agent_type?: string } | undefined)?.agent_type ?? "claude_code");
   const messages = useInboxStore((s) => s.messages[conversationId]) as Array<{ _id: string; content?: string }> | undefined;
 
@@ -77,9 +81,9 @@ function CommentRailImpl({ conversationId }: { conversationId: string }) {
   // rail hangs over the right edge as an overlay), but the floating scroll arrows
   // read it to slide clear of the rail instead of hiding under it.
   useEffect(() => {
-    setWidth(conversationId, open ? width : 0);
+    setWidth(conversationId, open && railEnabled ? width : 0);
     return () => setWidth(conversationId, 0);
-  }, [conversationId, open, width, setWidth]);
+  }, [conversationId, open, width, railEnabled, setWidth]);
 
   const onResizeDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -102,6 +106,10 @@ function CommentRailImpl({ conversationId }: { conversationId: string }) {
     window.addEventListener("mousemove", move);
     window.addEventListener("mouseup", up);
   }, [width]);
+
+  // Comment tools off and nothing to read → the rail doesn't exist at all (this
+  // also catches the keyboard shortcut, not just the now-hidden header toggle).
+  if (!railEnabled) return null;
 
   return (
     <aside className={`cc-railx${open ? "" : " cc-railx--closed"}`} style={{ width }} aria-hidden={!open}>
