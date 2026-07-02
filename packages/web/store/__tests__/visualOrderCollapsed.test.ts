@@ -51,6 +51,38 @@ describe("visualOrderSessions collapsed sections (grouped view)", () => {
   });
 });
 
+// A plan fan-out (≥2 sessions sharing active_plan) clusters into a "grp:" section
+// that the status view renders default-COLLAPSED. Nav must mirror that: skip the
+// members by default, walk them only when the group is explicitly expanded.
+const plan = { _id: "pl-1", short_id: "pl-1", title: "Roadmap", status: "active" };
+const grpKey = "grp:pl-1 · Roadmap";
+const planSessions: Record<string, InboxSession> = {
+  pw1: session("pw1", { is_idle: false, active_plan: plan }),
+  pw2: session("pw2", { is_idle: false, active_plan: plan }),
+  ni1: session("ni1", { is_idle: true }),
+};
+
+describe("visualOrderSessions orchestration groups (status view)", () => {
+  it("default-collapses a plan group: nav skips its members", () => {
+    const ids = visualOrderSessions(planSessions, new Set(), null, undefined, { collapsedSections: {} })
+      .map((s) => s._id).sort();
+    expect(ids).toEqual(["ni1"]);
+  });
+
+  it("walks the members when the group is explicitly expanded", () => {
+    const ids = visualOrderSessions(planSessions, new Set(), null, undefined, { collapsedSections: { [grpKey]: false } })
+      .map((s) => s._id).sort();
+    expect(ids).toEqual(["ni1", "pw1", "pw2"]);
+  });
+});
+
+describe("computeVisualOrder plan view walks every member", () => {
+  it("plan view dissolves the group — all sessions are reachable", () => {
+    const state = { ...baseState, sessions: planSessions, clientState: { ui: { inbox_view_mode: "plan" as const } } };
+    expect(computeVisualOrder(state).map((s) => s._id).sort()).toEqual(["ni1", "pw1", "pw2"]);
+  });
+});
+
 const baseState = {
   sessions,
   sessionsWithQueuedMessages: new Set<string>(),

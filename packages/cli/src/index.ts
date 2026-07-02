@@ -37,7 +37,7 @@ import { isAppServerManagedCodexSessionHead } from "./codexWatcher.js";
 import { getLastReconciliation, performReconciliation, repairDiscrepancies } from "./reconciliation.js";
 import { parseSessionFile, extractSlug } from "./parser.js";
 import { SyncService } from "./syncService.js";
-import { resolveLocalProjectPath } from "./projectPathResolver.js";
+import { resolveLocalProjectPath, claudeProjectDirName } from "./projectPathResolver.js";
 import { deviceId, deviceLabel } from "./remote/device.js";
 import {
   buildDaemonPlistXml,
@@ -217,7 +217,7 @@ function findCurrentSessionFromProcess(projectRoot: string): string | null {
     if (debug) console.error(`[DEBUG] Claude start time: ${startTimeResult} (${claudeStartTime})`);
 
     // Find session file with matching creation time
-    const projectDir = projectRoot.replace(/\//g, "-");
+    const projectDir = claudeProjectDirName(projectRoot);
     const sessionsDir = path.join(process.env.HOME || "", ".claude", "projects", projectDir);
 
     if (debug) console.error(`[DEBUG] Sessions dir: ${sessionsDir}`);
@@ -312,7 +312,7 @@ function detectCurrentSessionId(): string | null {
     const fromProcess = findCurrentSessionFromProcess(projectRoot);
     if (fromProcess) return fromProcess;
 
-    const projectDir = projectRoot.replace(/\//g, "-");
+    const projectDir = claudeProjectDirName(projectRoot);
     const sessionsDir = path.join(process.env.HOME || "", ".claude", "projects", projectDir);
     if (!fs.existsSync(sessionsDir)) return null;
 
@@ -2904,7 +2904,7 @@ async function syncSingleSession(sessionId: string, projectRoot: string): Promis
     return false;
   }
 
-  const projectDir = projectRoot.replace(/\//g, "-");
+  const projectDir = claudeProjectDirName(projectRoot);
   const sessionsDir = path.join(process.env.HOME || "", ".claude", "projects", projectDir);
   const sessionFile = path.join(sessionsDir, `${sessionId}.jsonl`);
 
@@ -6141,7 +6141,7 @@ interface ReconstitutionContext {
 }
 
 function claudeSessionPath(sessionId: string, projectPath?: string | null): string {
-  const projectSlug = (projectPath || process.cwd()).replace(/\//g, "-");
+  const projectSlug = claudeProjectDirName(projectPath || process.cwd());
   const projectDir = path.join(os.homedir(), ".claude", "projects", projectSlug);
   return path.join(projectDir, `${sessionId}.jsonl`);
 }
@@ -6326,7 +6326,7 @@ function openInNewTab(cmd: string, cwd?: string | null): void {
 function launchClaude(sessionId: string, extraArgs?: string, showArgsHint?: boolean, projectPath?: string | null): void {
   let resumeId = sessionId;
   if (!CLAUDE_UUID_RE.test(sessionId)) {
-    const projectSlug = (projectPath || process.cwd()).replace(/\//g, "-");
+    const projectSlug = claudeProjectDirName(projectPath || process.cwd());
     const projectDir = path.join(os.homedir(), ".claude", "projects", projectSlug);
     const oldPath = path.join(projectDir, `${sessionId}.jsonl`);
     const rewrite = rewriteSubagentJsonlToUuid(sessionId, oldPath);
@@ -7304,7 +7304,7 @@ program
 
     if (!sessionId) {
       // Fallback: find most recently active session file
-      const projectDir = projectRoot.replace(/\//g, "-");
+      const projectDir = claudeProjectDirName(projectRoot);
       const sessionsDir = path.join(process.env.HOME || "", ".claude", "projects", projectDir);
 
       if (!fs.existsSync(sessionsDir)) {
@@ -8700,7 +8700,7 @@ program
       sessionId = findCurrentSessionFromProcess(projectRoot);
 
       if (!sessionId) {
-        const projectDir = projectRoot.replace(/\//g, "-");
+        const projectDir = claudeProjectDirName(projectRoot);
         const sessionsDir = path.join(process.env.HOME || "", ".claude", "projects", projectDir);
         if (fs.existsSync(sessionsDir)) {
           const now = Date.now();

@@ -70,7 +70,7 @@ import {
   removeForkArtifactJsonl,
   rewriteSubagentJsonlToUuid,
 } from "./resumeCommand.js";
-import { resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath } from "./projectPathResolver.js";
+import { resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath, claudeProjectDirName } from "./projectPathResolver.js";
 import type { AgentStatus, DeviceSnippetSettings } from "@codecast/shared/contracts";
 import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG } from "@codecast/shared/contracts";
 import { parseModelPicker, planModelNavigation, SESSION_ONLY_COMMIT_RE, isSwitchConfirmDialog } from "./modelPicker";
@@ -9382,7 +9382,7 @@ async function discoverAndLinkSession(
   cwd: string,
 ): Promise<void> {
   const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
-  const projectDirName = cwd.replace(/\//g, "-");
+  const projectDirName = claudeProjectDirName(cwd);
   const projectDir = path.join(claudeProjectsDir, projectDirName);
 
   const existingFiles = new Set<string>();
@@ -10130,7 +10130,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     try {
       const resumeFile = findSessionFile(resumeId);
       if (resumeFile) {
-        const cwdProjectDir = path.join(process.env.HOME || "", ".claude", "projects", cwd.replace(/\//g, "-"));
+        const cwdProjectDir = path.join(process.env.HOME || "", ".claude", "projects", claudeProjectDirName(cwd));
         const desiredPath = path.join(cwdProjectDir, `${resumeId}.jsonl`);
         if (path.resolve(resumeFile.path) !== path.resolve(desiredPath)) {
           fs.mkdirSync(cwdProjectDir, { recursive: true });

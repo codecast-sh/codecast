@@ -6,6 +6,7 @@ import { applySyncTable, applySyncRecord, type PendingEntry } from "./syncProtoc
 import { soundDismiss, soundKill } from "../lib/sounds";
 import { loadCache, writePatchesToIDB, setHydrating, loadConversationMessages, writeConversationMessages, enqueueDispatch, removeDispatch, loadOutbox, PERSISTENCE_AVAILABLE } from "./idbCache";
 import { HYDRATION_CRITICAL_KEYS, HYDRATION_DEFERRED_KEYS, hydrationMergeStrategy } from "./clientSyncRegistry";
+import { makeCollectionSig } from "./wakeSig";
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
 import { type AgentStatus, ACTIVE_AGENT_STATUSES, isStatusTrustStale } from "@codecast/shared/contracts";
@@ -520,7 +521,7 @@ export type SavedView = {
 // "recent" = flat, newest-first by last activity (updated_at) — reshuffles as
 // sessions work; "time" = flat, newest-first by creation (started_at) — a
 // stable chronology that doesn't move; "bucket" = sections per manual label.
-export type InboxViewMode = "grouped" | "recent" | "time" | "bucket";
+export type InboxViewMode = "grouped" | "recent" | "time" | "bucket" | "plan";
 
 export type ClientUI = {
   theme?: "light" | "dark";
@@ -541,6 +542,10 @@ export type ClientUI = {
   show_old_sessions?: boolean;
   // Show each session's model as a badge in the inbox list. Off by default.
   show_model_badge?: boolean;
+  // Opt in to the teammate-comment tools (the gutter "comment" handle + the
+  // header toggle when a conversation has none yet). Off by default — you still
+  // SEE and can reply to comments others leave regardless of this.
+  comments_enabled?: boolean;
   // Inbox session panel view mode. When true, the panel drops the
   // Pinned/New/Needs-Input/Working grouping and shows every session as one flat
   // list sorted newest-first by creation time (started_at). Toggled by Ctrl+,.
@@ -1000,6 +1005,38 @@ export function orchestrationGroupLabelOf(s: InboxSession): string | null {
   return wt ? `⑂ ${wt}` : null;
 }
 
+// Structural signature of a session for inbox bucketing + ordering. It MUST fold
+// in every field that decides which section/position a row lands in — so it is
+// built FROM sessionSortRank (the order tuple, which already folds in
+// classifySession's idle/waiting verdict) plus the grouping/visibility flags
+// categorizeSessions splits on. Building it this way means it can't drift from
+// the categorizer. It deliberately OMITS updated_at / last_heartbeat /
+// last_message_at and the raw message_count (only the message_count===0 boundary,
+// carried inside the rank tuple, changes a bucket): a heartbeat or a streamed
+// token must not move anything, so it must not change this signature.
+//
+// Subscribe a list/sidebar to sessionsWakeSig(s.sessions) instead of the raw
+// `s.sessions` map and it wakes only on real structural change, not on every
+// liveness tick. The TIME-driven reclassification categorizeSessions performs
+// (the trust-TTL sweep that retires a stale "working" to needs-input) is NOT a
+// field change — drive that with a coarse re-render ticker (useCoarseNow), never
+// by widening this signature. See store/wakeSig.ts.
+export function sessionStructuralSig(s: InboxSession): string {
+  return [
+    s._id,
+    sessionSortRank(s).join(","),
+    isSessionHidden(s) ? 1 : 0,
+    isSessionDismissed(s) ? 1 : 0,
+    isSessionStashed(s) ? 1 : 0,
+    s.parent_conversation_id || "",
+    s.forked_from || "",
+    orchestrationGroupLabelOf(s) || "",
+  ].join("\x1f");
+}
+
+// Collection wake signature over the whole session map (memoized by map ref).
+export const sessionsWakeSig = makeCollectionSig<InboxSession>(sessionStructuralSig);
+
 export interface CategorizedSessions {
   sorted: InboxSession[];
   pinned: InboxSession[];
@@ -1211,7 +1248,15 @@ export function visualOrderSessions(
     ),
   ];
   for (const [section, key] of sections) {
-    if (collapsed?.[key]) continue;
+    // Orchestration ("grp:") sections default to COLLAPSED in the status view —
+    // matching the panel, which folds a fan-out to one summary row — so nav skips
+    // their members unless the group was explicitly expanded (stored false). This
+    // default applies ONLY when collapsedSections is provided (grouped mode); the
+    // bucket/plan views pass none and dissolve the groups, so every member walks.
+    const sectionCollapsed = collapsed
+      ? (key.startsWith("grp:") ? collapsed[key] !== false : !!collapsed[key])
+      : false;
+    if (sectionCollapsed) continue;
     for (const s of section) {
       if (projectFilter && getProjectName(s.git_root, s.project_path) !== projectFilter) continue;
       if (opts.bucketFilter && opts.bucketByConv?.[s._id] !== opts.bucketFilter) continue;
@@ -1294,6 +1339,50 @@ export function computeReorderUpdates(
   return result.map((b, i) => ({ id: b._id, sort_order: (i + 1) * SORT_GAP }));
 }
 
+// Newest-activity-first, the within-group order shared by every grouping below.
+// NB: keyed on updated_at, which the inbox's wake signature deliberately omits —
+// so a re-sort here rides the panel's coarse clock (useCoarseNow), not a sig flip.
+const byActivity = (a: InboxSession, b: InboxSession) => (b.updated_at ?? 0) - (a.updated_at ?? 0);
+
+// Project-fallback groups, biggest first with "other" last — the auto-derived
+// label tier every view falls back to for items that carry no primary key.
+function buildProjectGroups(byProject: Map<string, InboxSession[]>): Array<{ name: string; items: InboxSession[] }> {
+  return Array.from(byProject.entries())
+    .map(([name, list]) => ({ name, items: list.sort(byActivity) }))
+    .sort((a, b) =>
+      (a.name === "other" ? 1 : 0) - (b.name === "other" ? 1 : 0) || b.items.length - a.items.length);
+}
+
+// The grouping skeleton shared by the label and plan views: dedup the input, bin
+// each session under its primary key (keyOf) or — when it has none (keyOf → null)
+// — under its project, then hand the primary bins to the caller to order/shape as
+// it sees fit. Owns the dedup loop, the project fallback, and the project-group
+// build so the two views don't each re-implement them.
+function groupSessionsBy<G>(
+  items: InboxSession[],
+  keyOf: (s: InboxSession) => string | null,
+  buildPrimary: (byPrimary: Map<string, InboxSession[]>) => G[],
+): { primaryGroups: G[]; projectGroups: Array<{ name: string; items: InboxSession[] }> } {
+  const byPrimary = new Map<string, InboxSession[]>();
+  const byProject = new Map<string, InboxSession[]>();
+  const seen = new Set<string>();
+  for (const sess of items) {
+    if (seen.has(sess._id)) continue;
+    seen.add(sess._id);
+    const k = keyOf(sess);
+    if (k !== null) {
+      if (!byPrimary.has(k)) byPrimary.set(k, []);
+      byPrimary.get(k)!.push(sess);
+    } else {
+      const project = getProjectName(sess.git_root, sess.project_path);
+      const pkey = project === "unknown" ? "other" : project;
+      if (!byProject.has(pkey)) byProject.set(pkey, []);
+      byProject.get(pkey)!.push(sess);
+    }
+  }
+  return { primaryGroups: buildPrimary(byPrimary), projectGroups: buildProjectGroups(byProject) };
+}
+
 // The "by label" grouping, shared by the session panel's render AND keyboard
 // order (visualOrder) so Ctrl+J/K walks exactly what's on screen: manual-label
 // groups first (label sort order), then per-project groups for unlabeled
@@ -1307,33 +1396,45 @@ export function groupSessionsForLabelView(
   labelGroups: Array<{ bucket: BucketItem; items: InboxSession[] }>;
   projectGroups: Array<{ name: string; items: InboxSession[] }>;
 } {
-  const visible = sortLabels(buckets);
-  const byBucket = new Map<string, InboxSession[]>();
-  const byProject = new Map<string, InboxSession[]>();
-  const seen = new Set<string>();
-  for (const sess of items) {
-    if (seen.has(sess._id)) continue;
-    seen.add(sess._id);
-    const b = bucketByConv[sess._id];
-    if (b && buckets[b] && !buckets[b].archived_at) {
-      if (!byBucket.has(b)) byBucket.set(b, []);
-      byBucket.get(b)!.push(sess);
-    } else {
-      const project = getProjectName(sess.git_root, sess.project_path);
-      const key = project === "unknown" ? "other" : project;
-      if (!byProject.has(key)) byProject.set(key, []);
-      byProject.get(key)!.push(sess);
-    }
-  }
-  const byActivity = (a: InboxSession, b: InboxSession) => (b.updated_at ?? 0) - (a.updated_at ?? 0);
-  const labelGroups = visible
-    .map((bucket) => ({ bucket, items: (byBucket.get(bucket._id) ?? []).sort(byActivity) }))
-    .filter((g) => g.items.length > 0);
-  const projectGroups = Array.from(byProject.entries())
-    .map(([name, list]) => ({ name, items: list.sort(byActivity) }))
-    .sort((a, b) =>
-      (a.name === "other" ? 1 : 0) - (b.name === "other" ? 1 : 0) || b.items.length - a.items.length);
-  return { labelGroups, projectGroups };
+  const { primaryGroups, projectGroups } = groupSessionsBy(
+    items,
+    // An assigned, non-archived bucket is the primary key; everything else falls
+    // through to the project tier.
+    (sess) => {
+      const b = bucketByConv[sess._id];
+      return b && buckets[b] && !buckets[b].archived_at ? b : null;
+    },
+    // Label groups follow the explicit label sort order, empties dropped.
+    (byBucket) => sortLabels(buckets)
+      .map((bucket) => ({ bucket, items: (byBucket.get(bucket._id) ?? []).sort(byActivity) }))
+      .filter((g) => g.items.length > 0),
+  );
+  return { labelGroups: primaryGroups, projectGroups };
+}
+
+// "By plan" lens: the sibling of groupSessionsForLabelView, keyed on the
+// session's plan instead of a manual label. EVERY plan gets its own section —
+// even a plan of one — because this view's whole job is to show a plan's
+// sessions together; the status view's orchestrationGroups (≥2-only, a flood
+// guard) is the opposite tradeoff. Sessions with no plan fall to project groups,
+// exactly as unlabeled sessions do in the label view. The heading reuses
+// orchestrationGroupLabelOf so a plan reads identically here and in the status
+// view ("pl-x · Title"). Plans sort by size then label so the busiest run leads.
+export function groupSessionsByPlan(
+  items: InboxSession[],
+): {
+  planGroups: Array<{ key: string; label: string; items: InboxSession[] }>;
+  projectGroups: Array<{ name: string; items: InboxSession[] }>;
+} {
+  const { primaryGroups, projectGroups } = groupSessionsBy(
+    items,
+    (sess) => sess.active_plan?.short_id ?? null,
+    // All members of a plan share its label; derive it once from the first.
+    (byPlan) => Array.from(byPlan.entries())
+      .map(([key, list]) => ({ key, label: orchestrationGroupLabelOf(list[0])!, items: list.sort(byActivity) }))
+      .sort((a, b) => b.items.length - a.items.length || a.label.localeCompare(b.label)),
+  );
+  return { planGroups: primaryGroups, projectGroups };
 }
 
 // Thin InboxSession synthesized from a `favorites` list entry (listFavorites) for
@@ -1593,6 +1694,16 @@ export function computeVisualOrder(state: {
       ...pinned,
       ...labelGroups.flatMap((g) => (collapsed[`bucket_${g.bucket._id}`] ? [] : g.items)),
       ...projectGroups.flatMap((g) => (collapsed[`bucketproj_${g.name}`] ? [] : g.items)),
+    ];
+  }
+  if (mode === "plan") {
+    const pinned = collapsed["pinned"] ? [] : base.filter((s) => s.is_pinned);
+    const rest = base.filter((s) => !s.is_pinned);
+    const { planGroups, projectGroups } = groupSessionsByPlan(rest);
+    return [
+      ...pinned,
+      ...planGroups.flatMap((g) => (collapsed[`plan_${g.key}`] ? [] : g.items)),
+      ...projectGroups.flatMap((g) => (collapsed[`planproj_${g.name}`] ? [] : g.items)),
     ];
   }
   return base;
@@ -3103,7 +3214,12 @@ export const useInboxStore = create<InboxStoreState>(
     const state = get();
     const current = state.inboxViewMode();
     const hasBuckets = (Object.values(state.buckets) as BucketItem[]).some((b) => !b.archived_at);
-    const cycle: Array<InboxViewMode> = hasBuckets ? ["grouped", "recent", "time", "bucket"] : ["grouped", "recent", "time"];
+    const hasPlans = (Object.values(state.sessions) as InboxSession[]).some((s) => !!s.active_plan);
+    const cycle: Array<InboxViewMode> = [
+      "grouped", "recent", "time",
+      ...(hasBuckets ? ["bucket" as const] : []),
+      ...(hasPlans ? ["plan" as const] : []),
+    ];
     state.setInboxViewMode(cycle[(cycle.indexOf(current) + 1) % cycle.length]);
   },
   setSessionManualOrder: (id: string, key: number) => {

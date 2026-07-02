@@ -12,7 +12,9 @@ import { sessionCardSummary } from "../lib/sessionSummary";
 import { sessionStartupState } from "../lib/sessionLifecycle";
 import { compressImage } from "../lib/compressImage";
 import { useConversationMessages } from "../hooks/useConversationMessages";
-import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, categorizeSessions, partitionOldSessions, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, isSessionHidden, resolveSessionAuthor, convBucketMap, groupSessionsForLabelView, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem, BucketAssignmentItem } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, categorizeSessions, partitionOldSessions, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, isSessionHidden, resolveSessionAuthor, convBucketMap, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem, BucketAssignmentItem } from "../store/inboxStore";
+import { sessionsWakeSig } from "../store/inboxStore";
+import { useCoarseNow } from "../hooks/useCoarseNow";
 import { isBlockedConversation, isSubagentConversation } from "@codecast/convex/convex/ccAccountsShared";
 import { isStatusTrustStale } from "@codecast/shared/contracts";
 import { TooltipProvider } from "./ui/tooltip";
@@ -28,7 +30,7 @@ import { toast } from "sonner";
 import { animatedHideSession } from "../store/undoActions";
 import { soundKill } from "../lib/sounds";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
-import { X, ChevronsLeft, ChevronsRight, ChevronRight, ChevronDown, List, Clock, Tag, GitFork, History, Star, Activity } from "lucide-react";
+import { X, ChevronsLeft, ChevronsRight, ChevronRight, ChevronDown, List, Clock, Tag, GitFork, History, Star, Activity, Workflow } from "lucide-react";
 import { FilterOptionList } from "./FilterDropdown";
 import { LabelChipsRow } from "./LabelChipsRow";
 import { TaskStatusBadge } from "./TaskStatusBadge";
@@ -676,6 +678,12 @@ export const SessionCard = memo(function SessionCard({
   forkColorKey?: string;
 }) {
   const tipActions = useTipActions();
+  // The card's idle duration ("idle 3m") and trust-stale pulse read Date.now() at
+  // render. Now that the panel no longer re-renders every heartbeat (it wakes on a
+  // structural signature), subscribe to a shared 30s clock so those stay fresh on
+  // their own cadence instead of riding data churn. One timer total for all cards
+  // (see useCoarseNow); 30s granularity is plenty for a minutes-scale idle counter.
+  useCoarseNow(30_000);
   const project = getProjectName(session.git_root, session.project_path);
   const isWorking = variant === "working";
   const isStashed = variant === "stashed";
@@ -1443,7 +1451,13 @@ export function SessionListPanel({
     s => s.clientState.show_dismissed,
     s => s.clientState.show_stashed,
     s => s.liveInboxIds,
-    s => s.sessions,
+    // Wake only on STRUCTURAL session change (bucket/order/identity), not on every
+    // ~1s liveness heartbeat. Subscribing to the raw s.sessions map re-rendered the
+    // whole panel (categorize O(N) + 100 cards) ~17x/sec with 17 live sessions —
+    // measured ~70% idle main-thread. The body still reads s.sessions for the data;
+    // this only gates the re-render. Time-driven reclassification is preserved by
+    // the coarseNow dep on the categorize memo below. See store/wakeSig.ts.
+    s => sessionsWakeSig(s.sessions),
     s => s.sessionsWithQueuedMessages,
     s => s.pendingMessages,
     s => s.activeProjectFilter,
@@ -1498,6 +1512,13 @@ export function SessionListPanel({
   // and dismissed/stashed rows are always kept.
   const showAllSessions = s.clientState.ui?.show_old_sessions ?? true;
   const focusedId = activeSessionId ?? s.currentSessionId;
+  // The wake signature ignores updated_at, so the panel no longer re-renders on
+  // every heartbeat. categorizeSessions still retires a stale "working" to
+  // needs-input by comparing updated_at to Date.now() (the trust-TTL sweep), which
+  // is time-driven, not field-driven — so feed it a coarse clock to keep that
+  // sweep alive without coupling it back to heartbeat churn. 15s is well under the
+  // minutes-scale TTL. See useCoarseNow / store/wakeSig.ts.
+  const coarseNow = useCoarseNow(15_000);
   const { visibleSessions, oldCount } = useMemo(
     () => partitionOldSessions(s.sessions, s.liveInboxIds, showAllSessions, focusedId),
     [s.sessions, s.liveInboxIds, showAllSessions, focusedId],
@@ -1505,7 +1526,10 @@ export function SessionListPanel({
 
   const { sorted: sortedSessions, pinned, newSessions, needsInput, working, stashed: stashedList, dismissed: dismissedList, subsByParent: globalSubByParent, forksByParent: globalForksByParent, orchestrationGroups: globalOrchestrationGroups } = useMemo(
     () => categorizeSessions(visibleSessions, s.sessionsWithQueuedMessages, pendingSendIds, blankOpts),
-    [visibleSessions, s.sessionsWithQueuedMessages, pendingSendIds, blankOpts],
+    // coarseNow: re-run the TTL staleness sweep on the coarse clock (categorize
+    // reads Date.now() internally); the result only changes when a row crosses the
+    // trust TTL, otherwise the memoized arrays keep stable refs.
+    [visibleSessions, s.sessionsWithQueuedMessages, pendingSendIds, blankOpts, coarseNow],
   );
 
   // Corner shown when the session is in a fork tree (has forks, or is one);
@@ -1711,6 +1735,21 @@ export function SessionListPanel({
     );
   }, [viewMode, filteredNew, filteredNeedsInput, filteredWorking, orchestrationGroupMembers, filterByChip, bucketByConv, s.buckets]);
 
+  // "By plan" lens — same active set as the bucket view (status buckets dissolved
+  // back to flat, orchestration members folded in), regrouped by plan instead of
+  // label. Every plan shows, even a plan of one; sessions with no plan fall to
+  // project groups. This is where a fan-out's full per-worker breakdown lives, so
+  // the status view can stop carrying it.
+  const planView = useMemo(() => {
+    if (viewMode !== "plan") return null;
+    return groupSessionsByPlan(
+      [...filteredNew, ...filteredNeedsInput, ...filteredWorking, ...filterByChip(orchestrationGroupMembers)],
+    );
+  }, [viewMode, filteredNew, filteredNeedsInput, filteredWorking, orchestrationGroupMembers, filterByChip]);
+  // Offer the "By plan" option only when a plan is actually in play, mirroring how
+  // "By label" appears only with buckets.
+  const hasPlanSessions = useMemo(() => activeSessions.some((x) => !!x.active_plan), [activeSessions]);
+
   // Favorites view: the SAME session cache filtered to the kept set, grouped by
   // project — the shelf's organization ("what is it about"), distinct from the
   // active desk's status buckets ("what needs me now"). allFavorites (unscoped)
@@ -1855,6 +1894,12 @@ export function SessionListPanel({
             ...bucketView.labelGroups.map(({ bucket, items }) => [items, `bucket_${bucket._id}`] as [InboxSession[], string]),
             ...bucketView.projectGroups.map(({ name, items }) => [items, `bucketproj_${name}`] as [InboxSession[], string]),
           ]
+        : viewMode === "plan" && planView
+        ? [
+            [filteredPinned, "pinned"],
+            ...planView.planGroups.map(({ key, items }) => [items, `plan_${key}`] as [InboxSession[], string]),
+            ...planView.projectGroups.map(({ name, items }) => [items, `planproj_${name}`] as [InboxSession[], string]),
+          ]
         : [
             [filteredPinned, "pinned"], [filteredNew, "new"],
             [filteredNeedsInput, "needs_input"], [filteredWorking, "working"],
@@ -1998,6 +2043,10 @@ export function SessionListPanel({
       dropLabelId?: string | null;
       // "time" view only: each row accepts a dragged session card as a reorder drop.
       reorderable?: boolean;
+      // Render the heading as a monospace, normal-case, truncating label instead
+      // of the uppercased status caption. For long mixed-case identifiers like a
+      // plan heading ("pl-114 · Union Outreach — …") where uppercasing reads badly.
+      monoLabel?: boolean;
     },
   ) => {
     if (items.length === 0) return null;
@@ -2035,11 +2084,18 @@ export function SessionListPanel({
       >
         <button
           onClick={() => s.toggleCollapsedSection(key)}
-          className="w-full px-3 py-1.5 bg-sol-bg border-b border-sol-border/30 flex items-center justify-between"
+          className="w-full px-3 py-1.5 bg-sol-bg border-b border-sol-border/30 flex items-center justify-between gap-2"
         >
-          <span className={`text-[10px] font-semibold uppercase tracking-wider ${color}`}>
-            {label} ({items.length})
-          </span>
+          {opts?.monoLabel ? (
+            <span className={`text-[10px] font-semibold flex items-center gap-1.5 min-w-0 ${color}`}>
+              <span className="truncate font-mono">{label}</span>
+              <span className="opacity-70 shrink-0">({items.length})</span>
+            </span>
+          ) : (
+            <span className={`text-[10px] font-semibold uppercase tracking-wider ${color}`}>
+              {label} ({items.length})
+            </span>
+          )}
           <svg className={`w-3 h-3 transition-transform ${color} ${collapsed ? "" : "rotate-180"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
           </svg>
@@ -2203,6 +2259,7 @@ export function SessionListPanel({
               { key: "recent", label: "By updated", icon: Activity },
               { key: "time", label: "By created", icon: Clock },
               ...(visibleBuckets.length > 0 ? [{ key: "bucket", label: "By label", icon: Tag }] : []),
+              ...(hasPlanSessions ? [{ key: "plan", label: "By plan", icon: Workflow }] : []),
             ];
             const current = viewModeOptions.find((o) => o.key === viewMode) ?? viewModeOptions[0];
             const CurrentIcon = current.icon;
@@ -2366,6 +2423,23 @@ export function SessionListPanel({
           </div>
         ))}
         </>
+        ) : viewMode === "plan" && planView ? (
+        <>
+        {!s.activeProjectFilter && !s.activeBucketFilter && <NeedsAttentionSection />}
+        {renderSection("Pinned", filteredPinned, "text-sol-magenta")}
+        {planView.planGroups.map(({ key, label, items }) => (
+          <div key={key}>
+            {renderSection(label, items, "text-teal-400", undefined, undefined, { key: `plan_${key}`, monoLabel: true })}
+          </div>
+        ))}
+        {/* Sessions with no plan group by project — same fallback tier the label
+            view uses for unlabeled sessions. */}
+        {planView.projectGroups.map(({ name, items }) => (
+          <div key={`planproj-${name}`}>
+            {renderSection(name, items, name === "other" ? "text-sol-text-dim" : getLabelColor(name).text, undefined, undefined, { key: `planproj_${name}` })}
+          </div>
+        ))}
+        </>
         ) : (
         <>
         {!s.activeProjectFilter && !s.activeBucketFilter && <NeedsAttentionSection />}
@@ -2377,7 +2451,11 @@ export function SessionListPanel({
           const visible = filterByChip(members);
           if (visible.length === 0) return null;
           const key = `grp:${label}`;
-          const collapsed = !!s.collapsedSections[key];
+          // Default COLLAPSED in the status view: a fan-out folds to one summary
+          // row instead of N loose worker cards — the status view stays about
+          // status, and the full per-worker breakdown lives in the "By plan"
+          // lens. Explicitly expanding (stored false) still sticks.
+          const collapsed = s.collapsedSections[key] !== false;
           const needsCount = visible.filter((m) => m.awaiting_input).length;
           return (
             <div key={key}>
@@ -2388,8 +2466,12 @@ export function SessionListPanel({
               >
                 <span className="text-[10px] font-semibold uppercase tracking-wider text-teal-500 flex items-center gap-1.5 min-w-0">
                   <span className="truncate normal-case font-mono text-teal-400/90">{label}</span>
-                  <span className="opacity-70">({visible.length})</span>
-                  {needsCount > 0 && <span className="text-sol-yellow normal-case">· {needsCount} needs input</span>}
+                  <span className="opacity-70 shrink-0">({visible.length})</span>
+                  {/* shrink-0 so a long plan label truncates BEFORE this — the
+                      "needs input" count is the only cue a waiting worker is
+                      hidden in the (default-collapsed) group, so it must never
+                      be the thing that gets clipped. */}
+                  {needsCount > 0 && <span className="text-sol-yellow normal-case shrink-0">· {needsCount} needs input</span>}
                 </span>
                 <svg className={`w-3 h-3 transition-transform text-teal-500 shrink-0 ${collapsed ? "" : "rotate-180"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -2472,7 +2554,9 @@ export function SessionListPanel({
 export const ConversationColumn = memo(function ConversationColumn() {
   const s = useTrackedStore([
     s => s.sidePanelSessionId,
-    s => s.sessions,
+    // Only this one row is read below — subscribe to it, not the whole map, so a
+    // heartbeat on any OTHER session doesn't re-render the side panel.
+    s => s.sessions[s.sidePanelSessionId ?? ""],
   ]);
   const router = useRouter();
 

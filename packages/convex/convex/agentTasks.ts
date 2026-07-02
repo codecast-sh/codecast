@@ -516,6 +516,69 @@ export const webDelete = mutation({
   },
 });
 
+// Edit an existing schedule in place (web-only — the CLI has no update verb).
+// Mirrors insertTask's timing rules so the two surfaces can't drift. Only
+// scheduled/paused tasks are editable; a running or finished task is rejected.
+export const webUpdate = mutation({
+  args: {
+    task_id: v.id("agent_tasks"),
+    title: v.optional(v.string()),
+    prompt: v.optional(v.string()),
+    schedule_type: v.optional(v.union(v.literal("once"), v.literal("recurring"), v.literal("event"))),
+    run_at: v.optional(v.number()),
+    interval_ms: v.optional(v.number()),
+    event_filter: v.optional(v.object({
+      event_type: v.string(),
+      action: v.optional(v.string()),
+      repository: v.optional(v.string()),
+    })),
+    mode: v.optional(v.string()),
+    agent_type: v.optional(v.string()),
+    project_path: v.optional(v.string()),
+    max_runtime_ms: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Unauthorized");
+    const task = await getOwnedTask(ctx, args.task_id, userId);
+    if (!task) return false;
+    if (task.status !== "scheduled" && task.status !== "paused") return false;
+
+    const patch: Record<string, unknown> = {};
+    if (args.title !== undefined) patch.title = args.title.trim() || task.title;
+    if (args.prompt !== undefined && args.prompt.trim()) patch.prompt = args.prompt.trim();
+    if (args.mode !== undefined) patch.mode = args.mode === "apply" ? "apply" : "propose";
+    if (args.agent_type !== undefined) patch.agent_type = args.agent_type || "claude";
+    if (args.project_path !== undefined) patch.project_path = args.project_path || undefined;
+    if (args.max_runtime_ms !== undefined) patch.max_runtime_ms = args.max_runtime_ms;
+
+    if (args.schedule_type !== undefined) {
+      patch.schedule_type = args.schedule_type;
+      if (args.schedule_type === "recurring") {
+        if (!args.interval_ms) throw new Error("interval_ms required for recurring tasks");
+        patch.interval_ms = args.interval_ms;
+        patch.run_at = args.run_at ?? Date.now() + args.interval_ms;
+        patch.event_filter = undefined;
+      } else if (args.schedule_type === "event") {
+        if (!args.event_filter) throw new Error("event_filter required for event tasks");
+        patch.event_filter = args.event_filter;
+        patch.run_at = undefined;
+        patch.interval_ms = undefined;
+      } else {
+        patch.run_at = args.run_at ?? Date.now();
+        patch.interval_ms = undefined;
+        patch.event_filter = undefined;
+      }
+    } else {
+      if (args.interval_ms !== undefined) patch.interval_ms = args.interval_ms;
+      if (args.run_at !== undefined) patch.run_at = args.run_at;
+    }
+
+    await ctx.db.patch(task._id, patch);
+    return true;
+  },
+});
+
 export const matchTaskTriggers = internalMutation({
   args: {
     event_type: v.string(),

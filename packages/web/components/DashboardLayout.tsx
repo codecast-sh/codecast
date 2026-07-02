@@ -157,6 +157,12 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     s => s.currentSessionId,
     s => s.viewingDismissedId,
     s => s.commentRailOpen,
+    s => s.clientState.ui?.comments_enabled ?? false,
+    // Re-render the header toggle when the viewed conversation gains/loses
+    // comments, so a teammate's comment surfaces the toggle even with the tools off.
+    // The viewed conversation is currentSessionId for a live one, viewingDismissedId
+    // for a dismissed one — check both.
+    s => { const ids = [s.currentSessionId, s.viewingDismissedId].filter(Boolean); return ids.length > 0 && Object.values(s.comments).some((c: any) => ids.includes(c.conversation_id)); },
     s => s.compose.open,
     s => s.compose.nonce,
     s => s.tabs.length,
@@ -246,6 +252,12 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // toggle only makes sense when a conversation is actually on screen.
   const isViewingConversation = isOnConversationPage || (isOnInboxPage && !!(s.currentSessionId || s.viewingDismissedId));
   const commentRailOpen = s.commentRailOpen === true;
+  // The comment tools are opt-in (off by default), but a conversation that already
+  // has comments still surfaces the toggle so you can open it to read + reply.
+  const commentsEnabled = s.clientState.ui?.comments_enabled ?? false;
+  const viewedConvIds = [s.currentSessionId, s.viewingDismissedId].filter(Boolean) as string[];
+  const convHasComments = viewedConvIds.length > 0 && Object.values(s.comments).some((c: any) => viewedConvIds.includes(c.conversation_id));
+  const showCommentsToggle = isViewingConversation && (commentsEnabled || convHasComments);
 
 
   // Right session list, collapsed: no persistent rail — a right-edge hover-peek
@@ -794,7 +806,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
             <ErrorBoundary name="UserMenu" level="inline">
               <UserMenu />
             </ErrorBoundary>
-            {isViewingConversation && (
+            {showCommentsToggle && (
               <ShortcutTooltip label={commentRailOpen ? "Hide comments" : "Show comments"} action="sidebar.toggleComments">
                 <button
                   onClick={(e) => { s.setCommentRailOpen(!commentRailOpen); tipActions.whisper('sidebar.toggleComments', e); }}

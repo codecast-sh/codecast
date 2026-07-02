@@ -759,6 +759,52 @@ function FolderGlyph({ className = "w-3 h-3" }: { className?: string }) {
   );
 }
 
+// "Open this exact folder" chip glyph — a folder with a plus, distinct from the
+// plain FolderGlyph the recent-project chips use.
+function FolderPlusGlyph({ className = "w-3 h-3" }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 10.5v6m3-3H9m-6.75 2.25V6A2.25 2.25 0 014.5 3.75h4.629a1.5 1.5 0 011.06.44l2.122 2.12a1.5 1.5 0 001.06.44H19.5A2.25 2.25 0 0121.75 9v9.75A2.25 2.25 0 0119.5 21h-15a2.25 2.25 0 01-2.25-2.25z" />
+    </svg>
+  );
+}
+
+// Infer the user's home dir from any absolute path the daemon has reported
+// (recent projects are real local roots), so a typed "~/…" resolves to the same
+// place the daemon would cd to. macOS = /Users/x, Linux = /home/x or /root.
+function inferHomeDir(paths: Array<string | undefined>): string | undefined {
+  for (const p of paths) {
+    const m = p?.match(/^(\/Users\/[^/]+|\/home\/[^/]+|\/root)(?:\/|$)/);
+    if (m) return m[1];
+  }
+  return undefined;
+}
+
+// A picker query that NAMES a directory the recent list can't reach — absolute
+// (/…) or home-relative (~/…). Relative fragments stay plain filters: without a
+// base dir the daemon can't resolve them. Returns the normalized absolute path.
+function resolveCustomPath(raw: string, home: string | undefined): string | undefined {
+  const s = raw.trim();
+  let abs: string | undefined;
+  if (s === "~" || s.startsWith("~/")) {
+    if (!home) return undefined;
+    abs = home + s.slice(1);
+  } else if (s.startsWith("/")) {
+    abs = s;
+  } else {
+    return undefined;
+  }
+  abs = abs.replace(/\/{2,}/g, "/");
+  if (abs.length > 1) abs = abs.replace(/\/$/, "");
+  return abs;
+}
+
+// Re-collapse the home prefix to "~" for a compact, readable chip label.
+function displayPath(abs: string, home: string | undefined): string {
+  if (home && (abs === home || abs.startsWith(home + "/"))) return "~" + abs.slice(home.length);
+  return abs;
+}
+
 // Picker hint rows render key names as <KeyCap> caps (the keyboard-shortcuts
 // panel component) — never as plain text in the surrounding font.
 function HintKeys({ keys, label }: { keys: string[]; label: string }) {
@@ -837,16 +883,38 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
   const pickerRef = useRef<HTMLInputElement>(null);
   const prevFocusRef = useRef<HTMLElement | null>(null);
 
+  // Home dir inferred from real local roots, so "~/…" resolves to the same place
+  // the daemon would cd to.
+  const homeDir = useMemo(
+    () => inferHomeDir([currentPath, ...recentProjects.map((p: { path: string }) => p.path)]),
+    [currentPath, recentProjects],
+  );
+
   // While navigating with the keyboard: the default visible chips, or — once the
   // user types — a live filter across ALL recent projects, so the "other"
-  // overflow is reachable without the mouse. Reuses the modal's match rule.
-  const pickList = useMemo<{ path: string }[]>(() => {
+  // overflow is reachable without the mouse. Reuses the modal's match rule. When
+  // the text instead NAMES a path (absolute or ~/…) that no recent matches, a
+  // synthetic "open this folder" entry rides at the end so any directory is
+  // reachable, not just previously-used ones. The daemon's start_session takes
+  // the cwd verbatim, so a typed path is all it needs.
+  const pickList = useMemo<{ path: string; custom?: boolean }[]>(() => {
     if (filter.trim()) {
-      return recentProjects.filter((p: { path: string }) => matchesProjectQuery(p.path, filter));
+      // A path-like filter expands to an absolute path; match recents against
+      // that so "~/src/…" filters previously-used folders too (not just the raw
+      // tilde string the absolute recent paths never literally contain).
+      const custom = resolveCustomPath(filter, homeDir);
+      const matches = recentProjects.filter((p: { path: string }) => matchesProjectQuery(p.path, custom ?? filter));
+      if (custom && custom !== currentPath && !matches.some((p: { path: string }) => p.path === custom)) {
+        return [...matches, { path: custom, custom: true }];
+      }
+      return matches;
     }
     const base: { path: string }[] = currentPath ? [{ path: currentPath }] : [];
     return base.concat(visibleProjects);
-  }, [filter, recentProjects, currentPath, visibleProjects]);
+  }, [filter, recentProjects, currentPath, visibleProjects, homeDir]);
+
+  // Distinguish "you typed the folder you're already in" from a real miss.
+  const filterIsCurrent = !!currentPath && resolveCustomPath(filter, homeDir) === currentPath;
 
   const clampedHi = Math.min(hi, Math.max(0, pickList.length - 1));
 
@@ -959,10 +1027,11 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
       >
         {picking ? (
           pickList.length === 0 ? (
-            <span className="text-xs text-sol-text-dim px-2.5 py-1">no match for &ldquo;{filter}&rdquo;</span>
+            <span className="text-xs text-sol-text-dim px-2.5 py-1">
+              {filterIsCurrent ? "already in this folder" : <>no match for &ldquo;{filter}&rdquo;</>}
+            </span>
           ) : (
             pickList.map((p, i) => {
-              const name = p.path.split("/").filter(Boolean).pop();
               const isHi = i === clampedHi;
               const isCurrent = p.path === currentPath;
               return (
@@ -972,17 +1041,26 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
                   // input focused so the click isn't lost to an onBlur teardown.
                   onMouseDown={(e) => { e.preventDefault(); handleSwitch(p.path); exitPicker(); }}
                   onMouseEnter={() => setHi(i)}
-                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border transition-all ${
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border transition-all max-w-[min(100%,22rem)] ${
                     isHi
                       ? "border-sol-cyan/70 bg-sol-cyan/15 text-sol-cyan ring-1 ring-sol-cyan/50"
-                      : isCurrent
-                        ? "border-sol-cyan/60 bg-sol-cyan/15 text-sol-cyan font-medium"
-                        : "border-sol-border/40 text-sol-text-dim"
+                      : p.custom
+                        ? "border-dashed border-sol-cyan/40 text-sol-cyan/80"
+                        : isCurrent
+                          ? "border-sol-cyan/60 bg-sol-cyan/15 text-sol-cyan font-medium"
+                          : "border-sol-border/40 text-sol-text-dim"
                   }`}
                   title={p.path}
                 >
-                  <FolderGlyph />
-                  <span>{name}</span>
+                  {p.custom ? <FolderPlusGlyph className="w-3 h-3 shrink-0" /> : <FolderGlyph />}
+                  {p.custom ? (
+                    <span className="truncate">
+                      <span className="opacity-60">open </span>
+                      <span className="font-mono">{displayPath(p.path, homeDir)}</span>
+                    </span>
+                  ) : (
+                    <span>{p.path.split("/").filter(Boolean).pop()}</span>
+                  )}
                 </button>
               );
             })
@@ -1015,7 +1093,7 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
             })}
             <button
               onClick={focusPicker}
-              title="Search all projects"
+              title="Search projects or paste any folder path"
               className="inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-md border border-dashed border-sol-border/50 text-sol-text-dim hover:text-sol-cyan hover:border-sol-cyan/40 hover:bg-sol-cyan/5 transition-all"
             >
               <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -1037,14 +1115,14 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
             onChange={(e) => { setFilter(e.target.value); setHi(0); }}
             onKeyDown={handlePickerKeyDown}
             onBlur={() => exitPicker(false)}
-            placeholder="type to filter…"
+            placeholder="filter or paste a path…"
             spellCheck={false}
             autoComplete="off"
-            className="w-28 bg-transparent text-sol-cyan placeholder:text-sol-text-dim outline-none border-0 p-0"
+            className="w-44 bg-transparent text-sol-cyan placeholder:text-sol-text-dim outline-none border-0 p-0"
           />
           <span className="inline-flex items-center gap-2">
             <HintKeys keys={["←", "→"]} label="move" />
-            <HintKeys keys={["↵"]} label="select" />
+            <HintKeys keys={["↵"]} label={pickList[clampedHi]?.custom ? "open" : "select"} />
             <HintKeys keys={[ALT_CAP, "J"]} label="agent" />
             <HintKeys keys={["Esc"]} label="back" />
           </span>
@@ -4225,6 +4303,22 @@ function PlanModeBlock({ tool, result, conversationId, messageId, onSendMessage 
 
 const _askUserSentState = new Map<string, Record<number, { key: string; label: string; text?: string }>>();
 
+// Claude Code appends two synthetic affordance rows to every AskUserQuestion menu —
+// "Type something" (free text) and "Chat about this" (escape hatch). On a prompt scraped
+// from the terminal (no JSONL sidecar) they arrive as bare options; the web has its own
+// "Other" free-text affordance, so rendering them too is redundant clutter. Mirrors the
+// daemon's SYNTHETIC_OPTION so scraped polls render as clean as sidecar-sourced ones.
+const SYNTHETIC_POLL_OPTION = /^(?:type something\.?|chat about this)$/i;
+
+// The check glyph shown in a selected poll option's index slot / pill.
+function PollCheckIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+    </svg>
+  );
+}
+
 function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall; result?: ToolResult; onSendMessage?: (content: string) => void }) {
   let parsedInput: { questions?: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string; preview?: string }>; multiSelect?: boolean; isConfirmation?: boolean }>; answers?: Record<string, string> } = {};
   try { parsedInput = JSON.parse(tool.input); } catch {}
@@ -4310,112 +4404,160 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
         );
         const sel = selections[i];
         const isOtherSelected = sel?.text !== undefined;
+        // Rich layout (numbered rows with stacked descriptions) when any option carries a
+        // description or preview; otherwise compact borderless pills.
+        const hasRich = q.options.some(o => o.description || o.preview);
         return (
-          <div key={i} className="space-y-1.5">
-            <div className="flex items-center gap-1.5">
-              {q.header && (
-                <span className="text-[9px] uppercase tracking-wider font-semibold px-1 py-px rounded bg-sol-violet/15 text-sol-violet/80 border border-sol-violet/20">
+          <div key={i} className="space-y-2">
+            {q.header && (
+              <div>
+                <span className="inline-block text-[9px] uppercase tracking-[0.09em] font-semibold px-1.5 py-0.5 rounded bg-sol-violet/15 text-sol-violet">
                   {q.header}
                 </span>
-              )}
-            </div>
-            <div className="text-xs text-sol-text-muted">{q.question}</div>
-            <div className={q.options.some(o => o.description || o.preview) ? "flex flex-col gap-1" : "flex flex-wrap gap-1"}>
+              </div>
+            )}
+            <div className="text-[13px] leading-snug font-medium text-sol-text-secondary">{q.question}</div>
+            <div className={hasRich ? "flex flex-col gap-0.5" : "flex flex-wrap gap-1.5"}>
               {q.options.map((opt, j) => {
+                // Synthetic CLI menu chrome scraped as bare options — drop it. Keep the
+                // index `j` so the surviving options retain their positional poll keys.
+                if (SYNTHETIC_POLL_OPTION.test(opt.label.trim())) return null;
                 const cleanLabel = opt.label.replace(" (Recommended)", "");
                 const isSelected = answer !== undefined && (opt.label === answer || cleanLabel === answer);
                 const isLocalSelected = !isOtherSelected && sel?.label === cleanLabel;
-                const chip = isInteractive ? (
+                const on = isSelected || isLocalSelected;
+                const choose = () => {
+                  setOtherOpen(prev => ({ ...prev, [i]: false }));
+                  const pollKey = isConfirmation ? (j === 0 ? "Enter" : "Escape") : String(j + 1);
+                  if (isMultiQuestion) {
+                    setSelections(prev => ({ ...prev, [i]: { key: pollKey, label: cleanLabel } }));
+                  } else {
+                    const newSels = { ...selections, [i]: { key: pollKey, label: cleanLabel } };
+                    _askUserSentState.set(tool.id, newSels);
+                    setSelections(newSels);
+                    setSent(true);
+                    onSendMessage!(JSON.stringify({ __cc_poll: true, keys: [pollKey], display: cleanLabel }));
+                  }
+                };
+                // Rich row: a numbered index slot (becomes a check when chosen) plus the
+                // label stacked above its description — no per-option border, just a soft
+                // hover/selected fill.
+                const marker = (
+                  <span className={`mt-px flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-md text-[10px] font-semibold tabular-nums leading-none transition-colors ${
+                    on
+                      ? isInteractive ? "bg-sol-violet text-white" : "bg-sol-green text-white"
+                      : isInteractive ? "bg-sol-violet/15 text-sol-violet/80 group-hover/opt:bg-sol-violet/25" : "bg-sol-border/15 text-sol-text-dim"
+                  }`}>
+                    {on ? <PollCheckIcon className="w-2.5 h-2.5" /> : j + 1}
+                  </span>
+                );
+                const body = (
+                  <span className="min-w-0 flex-1 leading-snug">
+                    <span className={`text-xs font-medium ${
+                      on ? (isInteractive ? "text-sol-violet" : "text-sol-green") : isInteractive ? "text-sol-violet/90" : "text-sol-text-dim"
+                    }`}>{opt.label}</span>
+                    {opt.description && (
+                      <span className="mt-0.5 block text-xs leading-relaxed text-sol-text-dim">{opt.description}</span>
+                    )}
+                  </span>
+                );
+                const rowCls = `group/opt flex w-full items-start gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors ${
+                  isInteractive ? "cursor-pointer " : ""
+                }${on ? (isInteractive ? "bg-sol-violet/12" : "bg-sol-green/10") : (isInteractive ? "hover:bg-sol-violet/10" : "")}`;
+                const node = hasRich ? (
+                  isInteractive
+                    ? <button type="button" onClick={choose} className={rowCls}>{marker}{body}</button>
+                    : <div className={rowCls}>{marker}{body}</div>
+                ) : isInteractive ? (
                   <button
-                    onClick={() => {
-                      setOtherOpen(prev => ({ ...prev, [i]: false }));
-                      const pollKey = isConfirmation ? (j === 0 ? "Enter" : "Escape") : String(j + 1);
-                      if (isMultiQuestion) {
-                        setSelections(prev => ({ ...prev, [i]: { key: pollKey, label: cleanLabel } }));
-                      } else {
-                        const newSels = { ...selections, [i]: { key: pollKey, label: cleanLabel } };
-                        _askUserSentState.set(tool.id, newSels);
-                        setSelections(newSels);
-                        setSent(true);
-                        onSendMessage!(JSON.stringify({ __cc_poll: true, keys: [pollKey], display: cleanLabel }));
-                      }
-                    }}
-                    className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-lg border transition-colors cursor-pointer text-left ${
-                      isLocalSelected
-                        ? "bg-sol-violet/20 border-sol-violet/50 text-sol-violet"
-                        : "border-sol-violet/30 text-sol-violet/80 hover:bg-sol-violet/15 hover:border-sol-violet/50 hover:text-sol-violet"
+                    type="button"
+                    onClick={choose}
+                    className={`inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-full transition-colors cursor-pointer ${
+                      on ? "bg-sol-violet text-white" : "bg-sol-violet/12 text-sol-violet hover:bg-sol-violet/25"
                     }`}
                   >
-                    {isLocalSelected && (
-                      <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                      </svg>
-                    )}
+                    {on && <PollCheckIcon className="w-3 h-3" />}
                     {opt.label}
-                    {opt.description && <span className="text-sol-text-dim ml-1">{opt.description}</span>}
                   </button>
                 ) : (
-                  <span
-                    className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-lg border ${
-                      isSelected || isLocalSelected
-                        ? "bg-sol-green/15 border-sol-green/40 text-sol-green"
-                        : "border-sol-border/30 text-sol-text-dim"
-                    }`}
-                  >
-                    {(isSelected || isLocalSelected) && (
-                      <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                      </svg>
-                    )}
+                  <span className={`inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-full ${
+                    on ? "bg-sol-green text-white" : "bg-sol-border/12 text-sol-text-dim"
+                  }`}>
+                    {on && <PollCheckIcon className="w-3 h-3" />}
                     {opt.label}
-                    {opt.description && <span className="text-sol-text-dim ml-1">{opt.description}</span>}
                   </span>
                 );
                 // An option's `preview` is the ASCII/mockup the terminal shows in a side
                 // box — surface it so the web user sees the same detail. Show it while
-                // interactive (to read before clicking, since one click submits) and on
-                // the chosen option once answered.
-                const showPreview = !!opt.preview && (isInteractive || isSelected || isLocalSelected);
+                // interactive (read before clicking, since one click submits) and on the
+                // chosen option once answered. In rich mode it sits indented under the label.
+                const showPreview = !!opt.preview && (isInteractive || on);
                 return showPreview ? (
-                  <div key={j} className="flex flex-col items-start gap-0.5">
-                    {chip}
-                    <OptionPreview preview={opt.preview!} />
+                  <div key={j} className={hasRich ? "" : "w-full"}>
+                    {node}
+                    <div className={hasRich ? "pl-9 pr-2 pt-0.5" : "mt-1"}>
+                      <OptionPreview preview={opt.preview!} />
+                    </div>
                   </div>
                 ) : (
-                  <Fragment key={j}>{chip}</Fragment>
+                  <Fragment key={j}>{node}</Fragment>
                 );
               })}
               {isInteractive && !otherOpen[i] && (
-                <button
-                  onClick={() => {
-                    setOtherOpen(prev => ({ ...prev, [i]: true }));
-                    setSelections(prev => { const next = { ...prev }; delete next[i]; return next; });
-                  }}
-                  className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-lg border transition-colors cursor-pointer ${
-                    isOtherSelected
-                      ? "bg-sol-blue/20 border-sol-blue/50 text-sol-blue"
-                      : "border-sol-border/30 text-sol-text-dim hover:border-sol-blue/40 hover:text-sol-blue/80"
-                  }`}
-                >
-                  {isOtherSelected && (
-                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                    </svg>
-                  )}
-                  {isOtherSelected ? sel.label : "Other"}
-                </button>
+                hasRich ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOtherOpen(prev => ({ ...prev, [i]: true }));
+                      setSelections(prev => { const next = { ...prev }; delete next[i]; return next; });
+                    }}
+                    className={`group/opt flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors cursor-pointer ${
+                      isOtherSelected ? "bg-sol-blue/12" : "hover:bg-sol-blue/10"
+                    }`}
+                  >
+                    <span className={`flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-md text-[12px] leading-none transition-colors ${
+                      isOtherSelected ? "bg-sol-blue text-white" : "bg-sol-border/15 text-sol-text-dim group-hover/opt:bg-sol-blue/25 group-hover/opt:text-sol-blue"
+                    }`}>
+                      {isOtherSelected ? <PollCheckIcon className="w-2.5 h-2.5" /> : "+"}
+                    </span>
+                    <span className={`text-xs ${isOtherSelected ? "font-medium text-sol-blue" : "text-sol-text-dim group-hover/opt:text-sol-blue/90"}`}>
+                      {isOtherSelected ? sel.label : "Other"}
+                    </span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOtherOpen(prev => ({ ...prev, [i]: true }));
+                      setSelections(prev => { const next = { ...prev }; delete next[i]; return next; });
+                    }}
+                    className={`inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full transition-colors cursor-pointer ${
+                      isOtherSelected ? "bg-sol-blue text-white font-medium" : "bg-sol-border/12 text-sol-text-dim hover:bg-sol-blue/18 hover:text-sol-blue"
+                    }`}
+                  >
+                    {isOtherSelected ? <PollCheckIcon className="w-3 h-3" /> : <span className="text-[13px] leading-none">+</span>}
+                    {isOtherSelected ? sel.label : "Other"}
+                  </button>
+                )
               )}
               {!isInteractive && (isCustom || isOtherSelected) && (
-                <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-lg border bg-sol-blue/15 border-sol-blue/40 text-sol-blue">
-                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                  </svg>
-                  {isOtherSelected ? sel.label : answer}
-                </span>
+                hasRich ? (
+                  <div className="flex w-full items-start gap-2.5 rounded-md px-2 py-1.5 bg-sol-blue/10">
+                    <span className="mt-px flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-md bg-sol-blue text-white">
+                      <PollCheckIcon className="w-2.5 h-2.5" />
+                    </span>
+                    <span className="min-w-0 flex-1 text-xs font-medium text-sol-blue leading-snug">{isOtherSelected ? sel.label : answer}</span>
+                  </div>
+                ) : (
+                  <span className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-full bg-sol-blue text-white">
+                    <PollCheckIcon className="w-3 h-3" />
+                    {isOtherSelected ? sel.label : answer}
+                  </span>
+                )
               )}
             </div>
             {isInteractive && otherOpen[i] && (
-              <div className="flex items-center gap-1.5 mt-1">
+              <div className="flex items-center gap-1.5">
                 <input
                   autoFocus
                   type="text"
@@ -4430,7 +4572,7 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
                     }
                   }}
                   placeholder="Type your answer..."
-                  className="flex-1 text-xs px-2 py-1 rounded border border-sol-blue/30 bg-sol-bg-alt text-sol-text placeholder:text-sol-text-dim/50 focus:outline-none focus:border-sol-blue/60"
+                  className="flex-1 text-xs px-2.5 py-1.5 rounded-md bg-sol-bg-alt text-sol-text placeholder:text-sol-text-dim/60 focus:outline-none focus:ring-1 focus:ring-inset focus:ring-sol-blue/50"
                 />
                 <button
                   onClick={() => {
@@ -4440,13 +4582,13 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
                     }
                   }}
                   disabled={!otherTexts[i]?.trim()}
-                  className="text-[10px] px-2 py-1 rounded border border-sol-blue/40 text-sol-blue hover:bg-sol-blue/15 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                  className="text-[11px] font-medium px-2.5 py-1.5 rounded-md bg-sol-blue text-white hover:bg-sol-blue/90 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   OK
                 </button>
                 <button
                   onClick={() => setOtherOpen(prev => ({ ...prev, [i]: false }))}
-                  className="text-[10px] px-1.5 py-1 text-sol-text-dim hover:text-sol-text transition-colors cursor-pointer"
+                  className="text-[11px] px-1.5 py-1.5 text-sol-text-dim hover:text-sol-text transition-colors cursor-pointer"
                 >
                   Cancel
                 </button>
@@ -4456,14 +4598,14 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
         );
       })}
       {isInteractive && isMultiQuestion && (
-        <div className="pt-1">
+        <div className="pt-0.5">
           <button
             onClick={handleSubmitAll}
             disabled={!allAnswered}
-            className={`text-[11px] px-3 py-1 rounded border transition-colors ${
+            className={`text-[11px] font-medium px-3 py-1.5 rounded-md transition-colors ${
               allAnswered
-                ? "border-sol-green/40 bg-sol-green/10 text-sol-green hover:bg-sol-green/20 cursor-pointer"
-                : "border-sol-border/30 bg-sol-bg-alt text-sol-text-dim cursor-not-allowed opacity-50"
+                ? "bg-sol-green text-white hover:bg-sol-green/90 cursor-pointer"
+                : "bg-sol-border/15 text-sol-text-dim cursor-not-allowed"
             }`}
           >
             Submit answers ({Object.keys(selections).length}/{questions.length})
