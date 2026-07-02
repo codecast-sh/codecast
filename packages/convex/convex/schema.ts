@@ -26,6 +26,12 @@ export default defineSchema({
     created_at: v.optional(v.number()),
     team_id: v.optional(v.id("teams")),
     role: v.optional(v.union(v.literal("member"), v.literal("admin"))),
+    // Synthetic agent identity (an Anchor's bot user). `is_bot` users have no
+    // login and exist only to give a standing agent member its own name/avatar in
+    // the author chip, team roster, and feed. They never host or bill a session —
+    // a human (the anchor's host) does that; the bot is identity only. See anchors.
+    is_bot: v.optional(v.boolean()),
+    bot_kind: v.optional(v.union(v.literal("anchor"))),
     active_team_id: v.optional(v.id("teams")),
     daemon_last_seen: v.optional(v.number()),
     last_message_sent_at: v.optional(v.number()),
@@ -313,6 +319,21 @@ export default defineSchema({
     // resolveConversation heal stale links/cards that still point at the dead
     // id. A plain string — the referenced row no longer exists.
     restored_from_conversation_id: v.optional(v.string()),
+    // ── Anchor / persistent-session support ──────────────────────────────────
+    // `persistent` exempts a conversation from auto-completion so a standing
+    // agent member can sit dormant indefinitely and be re-woken by an event. The
+    // guard lives in markSessionCompleted (covers the watchdog, SessionEnd hook,
+    // daemon kill teardown) plus matching checks in the direct-patch kill paths
+    // (killSession + dispatch dismiss→kill). It is flipped to "completed" only by
+    // decommissionAnchor, which clears `persistent` first.
+    persistent: v.optional(v.boolean()),
+    // The IDENTITY a session renders as. When set (to a synthetic is_bot user),
+    // the author chip / feed show the bot, while `user_id` stays the human host
+    // that actually runs and bills the session. Absent = render as user_id.
+    acting_user_id: v.optional(v.id("users")),
+    // Back-link to the owning anchors row when this conversation IS an anchor's
+    // standing session (vs an ephemeral hand it spawned).
+    anchor_id: v.optional(v.id("anchors")),
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_updated", ["user_id", "updated_at"])
@@ -338,6 +359,10 @@ export default defineSchema({
     .index("by_user_dismissed", ["user_id", "inbox_dismissed_at"])
     .index("by_owner_device", ["user_id", "owner_device_id"])
     .index("by_restored_from", ["restored_from_conversation_id"])
+    // Sparse in practice (only anchors are persistent) — lets the daemon refresh
+    // its persistent-conversation set without scanning the table.
+    .index("by_user_persistent", ["user_id", "persistent"])
+    .index("by_anchor_id", ["anchor_id"])
     .searchIndex("search_title_v2", {
       searchField: "title",
       filterFields: ["user_id"],
@@ -352,6 +377,68 @@ export default defineSchema({
       searchField: "idle_summary",
       filterFields: ["user_id"],
     }),
+
+  // ── Anchors ─────────────────────────────────────────────────────────────────
+  // A standing agent member: one per team (shared) and one per user (personal).
+  // The anchor owns a long-lived `conversation_id` (persistent, pinned, rendered
+  // under `bot_user_id`'s identity) that is woken by events and delegates code
+  // work to ephemeral `cast spawn` hands. `host_user_id` is the human whose
+  // daemon actually runs and bills the session; `bot_user_id` is identity only.
+  anchors: defineTable({
+    scope_type: v.union(v.literal("team"), v.literal("user")),
+    // Exactly one of these is set, matching scope_type.
+    team_id: v.optional(v.id("teams")),
+    scope_user_id: v.optional(v.id("users")), // the human a personal anchor belongs to
+    bot_user_id: v.id("users"), // the synthetic is_bot identity it renders as
+    host_user_id: v.id("users"), // the human whose daemon runs + bills the session
+    conversation_id: v.optional(v.id("conversations")), // the persistent session (once started)
+    name: v.string(), // display name (default "Anchor", or custom)
+    persona: v.optional(v.string()), // skill name or inline persona reference
+    project_path: v.optional(v.string()), // cwd for the anchor and its hands
+    model: v.optional(v.string()),
+    status: v.union(
+      v.literal("provisioning"),
+      v.literal("active"),
+      v.literal("paused"),
+      v.literal("decommissioned"),
+    ),
+    // Per-anchor governance: cap daily spawned-hand/session count; absent = default.
+    daily_session_cap: v.optional(v.number()),
+    created_at: v.number(),
+    updated_at: v.optional(v.number()),
+  })
+    .index("by_team", ["team_id"])
+    .index("by_scope_user", ["scope_user_id"])
+    .index("by_bot_user", ["bot_user_id"])
+    .index("by_host_user", ["host_user_id"])
+    .index("by_conversation", ["conversation_id"]),
+
+  // Maps an external comms channel (e.g. a Slack channel) to the anchor that
+  // answers there, plus the credentials/config to post back as the bot. Kept
+  // separate from `anchors` so one anchor can own several channels and so the
+  // Slack adapter can resolve channel → anchor with a single indexed lookup.
+  anchor_channels: defineTable({
+    anchor_id: v.id("anchors"),
+    surface: v.union(v.literal("slack")),
+    // Slack: the channel id (e.g. "C0123"). Unique per surface.
+    channel_key: v.string(),
+    // Slack workspace/team id, for multi-workspace installs.
+    workspace_key: v.optional(v.string()),
+    project_path: v.optional(v.string()), // override the anchor's cwd for this channel
+    created_at: v.number(),
+  })
+    .index("by_anchor", ["anchor_id"])
+    .index("by_surface_channel", ["surface", "channel_key"]),
+
+  // Idempotency for inbound Slack events: Slack retries on slow/failed acks, and
+  // a double-wake would make the anchor answer the same mention twice (Aivery's
+  // triple-send bug). We record each event_id and drop repeats.
+  slack_events: defineTable({
+    event_id: v.string(),
+    created_at: v.number(),
+  })
+    .index("by_event_id", ["event_id"])
+    .index("by_created_at", ["created_at"]),
 
   // Large git-diff blobs split off the conversations hot doc. The conversations
   // row is read+patched on every message sync (addMessages) and returned by list
