@@ -26,18 +26,37 @@ function AnchorSpace() {
   const [scope, setScope] = useState<ScopeType>("user");
   const space = useQuery(api.anchors.getAnchorSpace, { scope_type: scope });
 
-  // Surface the ?slack=connected / ?slack=error banner from the OAuth redirect.
+  // When Slack redirects back to this (authenticated) page with ?code&?state,
+  // complete the install here — binding it to the logged-in user's own anchor.
+  const completeInstall = useAction(api.slack.completeSlackInstall);
   const [slackFlash, setSlackFlash] = useState<null | "connected" | "error">(null);
   useEffect(() => {
     const p = new URLSearchParams(window.location.search);
+    const cleanUrl = () => {
+      const u = new URL(window.location.href);
+      ["code", "state", "scope", "slack", "reason", "error"].forEach((k) => u.searchParams.delete(k));
+      window.history.replaceState({}, "", u.pathname + u.search);
+    };
+    const code = p.get("code");
+    const st = p.get("state");
+    if (code && st) {
+      completeInstall({ code, state: st } as any)
+        .then((res: any) => {
+          if (res?.scope_type === "team") setScope("team");
+          setSlackFlash(res?.ok ? "connected" : "error");
+        })
+        .catch(() => setSlackFlash("error"))
+        .finally(() => {
+          cleanUrl();
+          setTimeout(() => setSlackFlash(null), 6000);
+        });
+      return;
+    }
     if (p.get("scope") === "team") setScope("team");
     const s = p.get("slack");
     if (s === "connected" || s === "error") {
       setSlackFlash(s);
-      const url = new URL(window.location.href);
-      url.searchParams.delete("slack");
-      url.searchParams.delete("reason");
-      window.history.replaceState({}, "", url.pathname + url.search);
+      cleanUrl();
       const t = setTimeout(() => setSlackFlash(null), 6000);
       return () => clearTimeout(t);
     }
