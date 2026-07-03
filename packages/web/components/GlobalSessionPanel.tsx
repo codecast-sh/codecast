@@ -1524,7 +1524,7 @@ export function SessionListPanel({
     [s.sessions, s.liveInboxIds, showAllSessions, focusedId],
   );
 
-  const { sorted: sortedSessions, pinned, newSessions, needsInput, working, stashed: stashedList, dismissed: dismissedList, subsByParent: globalSubByParent, forksByParent: globalForksByParent, orchestrationGroups: globalOrchestrationGroups } = useMemo(
+  const { sorted: sortedSessions, pinned, newSessions, needsInput, working, stashed: stashedList, dismissed: dismissedList, subsByParent: globalSubByParent, forksByParent: globalForksByParent } = useMemo(
     () => categorizeSessions(visibleSessions, s.sessionsWithQueuedMessages, pendingSendIds, blankOpts),
     // coarseNow: re-run the TTL staleness sweep on the coarse clock (categorize
     // reads Date.now() internally); the result only changes when a row crosses the
@@ -1542,10 +1542,7 @@ export function SessionListPanel({
     [s.sessions, globalForksByParent],
   );
 
-  const orchestrationGroupMembers = useMemo(() => Array.from(globalOrchestrationGroups.values()).flat(), [globalOrchestrationGroups]);
-  // Grouped workers are held out of the flat buckets; fold them back in for the
-  // header count and project chips so totals stay accurate.
-  const activeSessions = useMemo(() => [...pinned, ...newSessions, ...needsInput, ...working, ...orchestrationGroupMembers], [pinned, newSessions, needsInput, working, orchestrationGroupMembers]);
+  const activeSessions = useMemo(() => [...pinned, ...newSessions, ...needsInput, ...working], [pinned, newSessions, needsInput, working]);
 
   const bucketByConv = useMemo(() => convBucketMap(s.bucketAssignments), [s.bucketAssignments]);
   const visibleBuckets = useMemo(() => sortLabels(s.buckets), [s.buckets]);
@@ -1721,31 +1718,30 @@ export function SessionListPanel({
   }, [viewMenuOpen]);
 
   // "By label" view: every active non-pinned top-level session grouped by its
-  // manual label (orchestration workers folded in); unlabeled sessions group
-  // by PROJECT — projects are a specific kind of label, auto-derived from the
-  // directory. Pinned stays its own top section — pin is urgency, not theme.
-  // The grouping fn is shared with the store's visualOrder so Ctrl+J/K walks
-  // exactly this layout.
+  // manual label; unlabeled sessions group by PROJECT — projects are a specific
+  // kind of label, auto-derived from the directory. Pinned stays its own top
+  // section — pin is urgency, not theme. The grouping fn is shared with the
+  // store's visualOrder so Ctrl+J/K walks exactly this layout.
   const bucketView = useMemo(() => {
     if (viewMode !== "bucket") return null;
     return groupSessionsForLabelView(
-      [...filteredNew, ...filteredNeedsInput, ...filteredWorking, ...filterByChip(orchestrationGroupMembers)],
+      [...filteredNew, ...filteredNeedsInput, ...filteredWorking],
       s.buckets,
       bucketByConv,
     );
-  }, [viewMode, filteredNew, filteredNeedsInput, filteredWorking, orchestrationGroupMembers, filterByChip, bucketByConv, s.buckets]);
+  }, [viewMode, filteredNew, filteredNeedsInput, filteredWorking, bucketByConv, s.buckets]);
 
   // "By plan" lens — same active set as the bucket view (status buckets dissolved
-  // back to flat, orchestration members folded in), regrouped by plan instead of
-  // label. Every plan shows, even a plan of one; sessions with no plan fall to
-  // project groups. This is where a fan-out's full per-worker breakdown lives, so
-  // the status view can stop carrying it.
+  // back to flat), regrouped by plan instead of label. Every plan shows, even a
+  // plan of one; sessions with no plan fall to project groups. This lens is the
+  // ONLY place the inbox groups by plan — the status view keeps every session in
+  // its status bucket.
   const planView = useMemo(() => {
     if (viewMode !== "plan") return null;
     return groupSessionsByPlan(
-      [...filteredNew, ...filteredNeedsInput, ...filteredWorking, ...filterByChip(orchestrationGroupMembers)],
+      [...filteredNew, ...filteredNeedsInput, ...filteredWorking],
     );
-  }, [viewMode, filteredNew, filteredNeedsInput, filteredWorking, orchestrationGroupMembers, filterByChip]);
+  }, [viewMode, filteredNew, filteredNeedsInput, filteredWorking]);
   // Offer the "By plan" option only when a plan is actually in play, mirroring how
   // "By label" appears only with buckets.
   const hasPlanSessions = useMemo(() => activeSessions.some((x) => !!x.active_plan), [activeSessions]);
@@ -2447,55 +2443,6 @@ export function SessionListPanel({
         {renderSection("New", filteredNew, "text-sol-blue")}
         {renderSection("Needs Input", filteredNeedsInput, "text-sol-yellow")}
         {renderSection("Working", filteredWorking, "text-sol-green", "working")}
-        {Array.from(globalOrchestrationGroups.entries()).map(([label, members]) => {
-          const visible = filterByChip(members);
-          if (visible.length === 0) return null;
-          const key = `grp:${label}`;
-          // Default COLLAPSED in the status view: a fan-out folds to one summary
-          // row instead of N loose worker cards — the status view stays about
-          // status, and the full per-worker breakdown lives in the "By plan"
-          // lens. Explicitly expanding (stored false) still sticks.
-          const collapsed = s.collapsedSections[key] !== false;
-          const needsCount = visible.filter((m) => m.awaiting_input).length;
-          return (
-            <div key={key}>
-              <button
-                onClick={() => s.toggleCollapsedSection(key)}
-                className="w-full px-3 py-1.5 bg-sol-bg border-b border-sol-border/30 flex items-center justify-between gap-2"
-                title={`Orchestration workers: ${label}`}
-              >
-                <span className="text-[10px] font-semibold uppercase tracking-wider text-teal-500 flex items-center gap-1.5 min-w-0">
-                  <span className="truncate normal-case font-mono text-teal-400/90">{label}</span>
-                  <span className="opacity-70 shrink-0">({visible.length})</span>
-                  {/* shrink-0 so a long plan label truncates BEFORE this — the
-                      "needs input" count is the only cue a waiting worker is
-                      hidden in the (default-collapsed) group, so it must never
-                      be the thing that gets clipped. */}
-                  {needsCount > 0 && <span className="text-sol-yellow normal-case shrink-0">· {needsCount} needs input</span>}
-                </span>
-                <svg className={`w-3 h-3 transition-transform text-teal-500 shrink-0 ${collapsed ? "" : "rotate-180"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                </svg>
-              </button>
-              {!collapsed && visible.map((session) => (
-                <div key={session._id} className="border-b border-sol-border/30">
-                  <SessionCard
-                    session={session}
-                    isActive={session._id === activeSessionId}
-                    globalIndex={0}
-                    onSelect={handleSelect}
-                    onDismiss={handleAnimatedDismiss}
-                    onStash={handleAnimatedStash}
-                    onDefer={s.deferSession}
-                    onPin={s.pinSession}
-                    variant={"default"}
-                    forkColorKey={forkColorKeyOf(session)}
-                  />
-                </div>
-              ))}
-            </div>
-          );
-        })}
         </>
         )}
         {sortedSessions.length === 0 && (
