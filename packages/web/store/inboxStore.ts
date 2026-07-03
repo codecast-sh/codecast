@@ -999,11 +999,11 @@ export function worktreeKeyOf(s: InboxSession): string | null {
   return m ? m[1] : null;
 }
 
-// Display label used to cluster orchestration workers in the inbox, or null if
-// the session isn't a worker. Prefers the PLAN — the reliable, persisted signal
-// a worker carries (active_plan, stamped at creation) — and falls back to the
-// worktree for an isolated session without a plan. The label doubles as the
-// group's identity (plan short_id keeps distinct plans apart).
+// Display label for a session's plan (or worktree) grouping, used by the
+// "By plan" view's section headings, or null if the session carries neither.
+// Prefers the PLAN — the reliable, persisted signal (active_plan) — and falls
+// back to the worktree for an isolated session without a plan. The label
+// doubles as the group's identity (plan short_id keeps distinct plans apart).
 export function orchestrationGroupLabelOf(s: InboxSession): string | null {
   if (s.active_plan) {
     const title = s.active_plan.title?.trim();
@@ -1055,11 +1055,6 @@ export interface CategorizedSessions {
   dismissed: InboxSession[];
   subsByParent: Map<string, InboxSession[]>;
   forksByParent: Map<string, InboxSession[]>;
-  // Top-level worker sessions clustered by plan (or worktree as a fallback),
-  // keyed by display label, ≥2 per group. Members are pulled OUT of
-  // pinned/new/needsInput/working so the inbox shows one group instead of N
-  // loose cards.
-  orchestrationGroups: Map<string, InboxSession[]>;
 }
 
 export function categorizeSessions(
@@ -1128,29 +1123,13 @@ export function categorizeSessions(
   // (Pinned is exempt below: an explicit pin is a deliberate "keep visible".)
   const isOrphanSubagent = (s: InboxSession) => isSubagentConversation(s) && !subsWithParent.has(s._id);
 
-  // Cluster top-level orchestration workers by plan (or worktree) so a fan-out
-  // collapses into one labeled group instead of N loose cards. Only sessions
-  // not already nested under a conversation parent and not pinned are eligible;
-  // a lone worker (cluster of 1) stays inline. Members are then held out of the
-  // flat buckets below via isFlat. Orphaned subagents are excluded too — a
-  // parentless worker shouldn't seed or pad a plan cluster.
-  const orchestrationGroups = new Map<string, InboxSession[]>();
-  for (const s of sorted) {
-    if (!isTop(s) || s.is_pinned || isOrphanSubagent(s)) continue;
-    const label = orchestrationGroupLabelOf(s);
-    if (!label) continue;
-    if (!orchestrationGroups.has(label)) orchestrationGroups.set(label, []);
-    orchestrationGroups.get(label)!.push(s);
-  }
-  for (const [label, members] of Array.from(orchestrationGroups)) {
-    if (members.length < 2) orchestrationGroups.delete(label);
-  }
-  const groupedIds = new Set(
-    Array.from(orchestrationGroups.values()).flat().map((s) => s._id),
-  );
-  // Flat = top-level, not folded into an orchestration group, and not an
-  // orphaned subagent (those ride their parent — never a loose card here).
-  const isFlat = (s: InboxSession) => isTop(s) && !groupedIds.has(s._id) && !isOrphanSubagent(s);
+  // Flat = top-level and not an orphaned subagent (those ride their parent —
+  // never a loose card here). Plan/worktree clustering is deliberately NOT done
+  // here: the status view is about status, so a working session must always
+  // surface in Working (and count in the sidebar badges). Grouping by plan is
+  // the "By plan" view's job (groupSessionsByPlan), opted into via the view
+  // switcher.
+  const isFlat = (s: InboxSession) => isTop(s) && !isOrphanSubagent(s);
 
   // A pending send is in-flight work just like a locally-queued message: it
   // pushes the session OUT of needs-input and INTO working. Fold the two sets
@@ -1220,7 +1199,7 @@ export function categorizeSessions(
     });
   const working = sorted.filter((s) => (!waitingForInput.get(s._id) && (s.message_count > 0 || hasPendingSend(s)) && !s.is_pinned) && isFlat(s));
 
-  return { sorted, pinned, newSessions, needsInput, working, stashed, dismissed, subsByParent, forksByParent, orchestrationGroups };
+  return { sorted, pinned, newSessions, needsInput, working, stashed, dismissed, subsByParent, forksByParent };
 }
 
 export function visualOrderSessions(
@@ -1236,35 +1215,21 @@ export function visualOrderSessions(
     bucketFilter?: string | null;
     bucketByConv?: Record<string, string | undefined>;
     // Grouped-view collapse: when provided, sessions inside a collapsed status
-    // section or orchestration group are skipped, so Ctrl+J/K only walks cards
-    // the panel is actually rendering. Keys mirror GlobalSessionPanel's
-    // renderSection keys ("pinned"/"new"/"needs_input"/"working", "grp:<label>").
+    // section are skipped, so Ctrl+J/K only walks cards the panel is actually
+    // rendering. Keys mirror GlobalSessionPanel's renderSection keys
+    // ("pinned"/"new"/"needs_input"/"working").
     collapsedSections?: Record<string, boolean>;
   } = {},
 ): InboxSession[] {
-  const { pinned, newSessions, needsInput, working, orchestrationGroups } =
+  const { pinned, newSessions, needsInput, working } =
     categorizeSessions(sessions, sessionsWithQueuedMessages, pendingSendIds, opts);
   const collapsed = opts.collapsedSections;
   const result: InboxSession[] = [];
-  // Orchestration-grouped workers are held out of the flat buckets for the
-  // grouped inbox view; append them here so flat-list consumers (keyboard nav,
-  // the /sessions list) still see every session.
   const sections: Array<[InboxSession[], string]> = [
     [pinned, "pinned"], [newSessions, "new"], [needsInput, "needs_input"], [working, "working"],
-    ...Array.from(orchestrationGroups.entries()).map(
-      ([label, items]) => [items, `grp:${label}`] as [InboxSession[], string],
-    ),
   ];
   for (const [section, key] of sections) {
-    // Orchestration ("grp:") sections default to COLLAPSED in the status view —
-    // matching the panel, which folds a fan-out to one summary row — so nav skips
-    // their members unless the group was explicitly expanded (stored false). This
-    // default applies ONLY when collapsedSections is provided (grouped mode); the
-    // bucket/plan views pass none and dissolve the groups, so every member walks.
-    const sectionCollapsed = collapsed
-      ? (key.startsWith("grp:") ? collapsed[key] !== false : !!collapsed[key])
-      : false;
-    if (sectionCollapsed) continue;
+    if (collapsed?.[key]) continue;
     for (const s of section) {
       if (projectFilter && getProjectName(s.git_root, s.project_path) !== projectFilter) continue;
       if (opts.bucketFilter && opts.bucketByConv?.[s._id] !== opts.bucketFilter) continue;
@@ -1423,11 +1388,10 @@ export function groupSessionsForLabelView(
 // "By plan" lens: the sibling of groupSessionsForLabelView, keyed on the
 // session's plan instead of a manual label. EVERY plan gets its own section —
 // even a plan of one — because this view's whole job is to show a plan's
-// sessions together; the status view's orchestrationGroups (≥2-only, a flood
-// guard) is the opposite tradeoff. Sessions with no plan fall to project groups,
-// exactly as unlabeled sessions do in the label view. The heading reuses
-// orchestrationGroupLabelOf so a plan reads identically here and in the status
-// view ("pl-x · Title"). Plans sort by size then label so the busiest run leads.
+// sessions together. This lens is the ONLY place the inbox groups by plan; the
+// status view keeps every session in its status bucket. Sessions with no plan
+// fall to project groups, exactly as unlabeled sessions do in the label view.
+// Plans sort by size then label so the busiest run leads.
 export function groupSessionsByPlan(
   items: InboxSession[],
 ): {

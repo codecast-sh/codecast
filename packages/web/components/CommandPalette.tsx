@@ -258,13 +258,13 @@ function ActionSubmenu({
   const viewChipData = useMemo(() => {
     if (mode !== "view") return null;
     const st = useInboxStore.getState();
-    const { pinned, newSessions, needsInput, working, orchestrationGroups } = categorizeSessions(
+    const { pinned, newSessions, needsInput, working } = categorizeSessions(
       st.sessions,
       st.sessionsWithQueuedMessages,
       sessionsWithPendingSend(st.pendingMessages),
       { currentSessionId: st.currentSessionId, pendingCreateIds: new Set(Object.keys(st.pendingSessionCreates)) },
     );
-    const active = [...pinned, ...newSessions, ...needsInput, ...working, ...Array.from(orchestrationGroups.values()).flat()];
+    const active = [...pinned, ...newSessions, ...needsInput, ...working];
     return computeChipCounts(active, convBucketMap(st.bucketAssignments as Record<string, BucketAssignmentItem>));
   }, [mode]);
 
