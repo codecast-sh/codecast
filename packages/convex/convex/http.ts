@@ -2,6 +2,7 @@ import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
 import { auth } from "./auth";
 import { internal, api } from "./_generated/api";
+import { verifyState } from "./slack";
 
 const http = httpRouter();
 
@@ -3171,6 +3172,7 @@ http.route({
         await ctx.runMutation(internal.slack.wakeFromSlackEvent, {
           event_id: eventId,
           channel: event.channel,
+          workspace: payload.team_id as string | undefined,
           user: event.user,
           text: String(event.text || ""),
           thread: event.thread_ts || event.ts,
@@ -3185,6 +3187,72 @@ http.route({
     return new Response(JSON.stringify({ ok: true }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
+    });
+  }),
+});
+
+// Slack "Add to Slack" OAuth callback: exchange the code for a per-workspace bot
+// token and store the installation, bound to the codecast scope named in the
+// (signed) state. Mirrors the GitHub App install flow.
+http.route({
+  path: "/api/slack/oauth/callback",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const url = new URL(request.url);
+    const webBase = process.env.SITE_URL || "https://codecast.sh";
+    const fail = (reason: string) =>
+      new Response(null, {
+        status: 302,
+        headers: { Location: `${webBase}/anchor?slack=error&reason=${encodeURIComponent(reason)}` },
+      });
+
+    if (url.searchParams.get("error")) return fail(url.searchParams.get("error")!);
+    const code = url.searchParams.get("code");
+    const stateRaw = url.searchParams.get("state");
+    if (!code || !stateRaw) return fail("missing_code");
+    const state = await verifyState(stateRaw);
+    if (!state || !state.user_id) return fail("bad_state");
+
+    const clientId = process.env.SLACK_CLIENT_ID;
+    const clientSecret = process.env.SLACK_CLIENT_SECRET;
+    if (!clientId || !clientSecret) return fail("not_configured");
+
+    const redirect = `${process.env.SLACK_REDIRECT_BASE || process.env.CONVEX_SITE_URL || "https://convex.codecast.sh"}/api/slack/oauth/callback`;
+    let data: any;
+    try {
+      const resp = await fetch("https://slack.com/api/oauth.v2.access", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          client_id: clientId,
+          client_secret: clientSecret,
+          code,
+          redirect_uri: redirect,
+        }).toString(),
+      });
+      data = await resp.json();
+    } catch {
+      return fail("exchange_failed");
+    }
+    if (!data?.ok || !data.access_token || !data.team?.id || !data.bot_user_id) {
+      return fail(data?.error || "exchange_failed");
+    }
+
+    await ctx.runMutation(internal.slack.storeInstallation, {
+      workspace_id: data.team.id,
+      workspace_name: data.team.name,
+      bot_user_id: data.bot_user_id,
+      bot_token: data.access_token,
+      scopes: data.scope,
+      app_id: data.app_id,
+      team_id: state.team_id,
+      scope_user_id: state.scope_user_id,
+      installed_by: state.user_id,
+    });
+
+    return new Response(null, {
+      status: 302,
+      headers: { Location: `${webBase}/anchor?slack=connected` },
     });
   }),
 });
