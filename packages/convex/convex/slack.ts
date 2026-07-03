@@ -200,10 +200,11 @@ export const getInstallUrl = action({
     if (!clientId) return { ok: false, error: "Slack app not configured (SLACK_CLIENT_ID)" };
     const scope = await ctx.runQuery(internal.slack.resolveInstallScope, args);
     if (!scope) return { ok: false, error: "No anchor to connect — create one first" };
-    // Sign only scope_type + freshness — NO identity. The completing step
-    // (completeSlackInstall) re-derives WHICH anchor from the authenticated caller,
-    // so a relayed state can't bind a victim's workspace to the relayer's anchor.
-    const state = await signState({ scope_type: args.scope_type, ts: Date.now() });
+    // The state names its initiator (user_id + scope). completeSlackInstall runs
+    // in the authenticated session and requires the completer to BE that initiator,
+    // which blocks both relay directions (a link sent to a victim; or a code+state
+    // CSRF'd into a victim's session).
+    const state = await signState({ ...scope, scope_type: args.scope_type, ts: Date.now() });
     return { ok: true, url: slackAuthorizeUrl(state) };
   },
 });
@@ -224,6 +225,10 @@ export const completeSlackInstall = action({
       scope_type: scopeType,
     });
     if (!scope) return { ok: false, error: "no_anchor" };
+    // The completer MUST be the user who initiated the flow. This is the binding
+    // that closes both relay directions: only the state's initiator can complete
+    // it, so a link/code relayed to a victim (either way) is rejected here.
+    if (scope.user_id !== st.user_id) return { ok: false, error: "wrong_user" };
 
     const clientId = process.env.SLACK_CLIENT_ID;
     const clientSecret = process.env.SLACK_CLIENT_SECRET;
