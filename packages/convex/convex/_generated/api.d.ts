@@ -84,6 +84,7 @@ import type * as redact from "../redact.js";
 import type * as reviews from "../reviews.js";
 import type * as searchCore from "../searchCore.js";
 import type * as sessionInsights from "../sessionInsights.js";
+import type * as sessionOwnership from "../sessionOwnership.js";
 import type * as sessionThreads from "../sessionThreads.js";
 import type * as slack from "../slack.js";
 import type * as spawn from "../spawn.js";
@@ -184,6 +185,7 @@ declare const fullApi: ApiFromModules<{
   reviews: typeof reviews;
   searchCore: typeof searchCore;
   sessionInsights: typeof sessionInsights;
+  sessionOwnership: typeof sessionOwnership;
   sessionThreads: typeof sessionThreads;
   slack: typeof slack;
   spawn: typeof spawn;

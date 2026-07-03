@@ -314,6 +314,13 @@ export default defineSchema({
     // only manages sessions whose owner_device_id matches its own device id.
     // "Move to remote" flips this from the local device to the Mac's device.
     owner_device_id: v.optional(v.string()),
+    // Second-party ownership: the team member RESPONSIBLE for this session,
+    // distinct from user_id (the member whose account runs it). Set when an
+    // agent account (e.g. Mr Bot) parks a session on a human reviewer — the
+    // session then surfaces in the owner's inbox/CLI needs-input views and the
+    // owner may reply into it from the web composer. Absent = unowned, classic
+    // behavior. Unrelated to owner_device_id (which DEVICE's daemon runs it).
+    owner_user_id: v.optional(v.id("users")),
     // Tombstone forwarding: the id of a DELETED conversation this row replaced
     // when a kill/restart restored its session (resolveRestartTarget). Lets
     // resolveConversation heal stale links/cards that still point at the dead
@@ -347,6 +354,9 @@ export default defineSchema({
     .index("by_user_private", ["user_id", "is_private"])
     .index("by_team_id", ["team_id"])
     .index("by_team_user_updated", ["team_id", "user_id", "updated_at"])
+    // Sparse: only second-party-owned sessions carry owner_user_id. Powers the
+    // owner's inbox merge (computeInboxSessions) and feed --mine.
+    .index("by_owner_updated", ["owner_user_id", "updated_at"])
     .index("by_share_token", ["share_token"])
     .index("by_session_id", ["session_id"])
     .index("by_short_id", ["short_id"])

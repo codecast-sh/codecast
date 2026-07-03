@@ -5615,10 +5615,31 @@ export const feedForCLI = query({
     }
 
     const isOwnConversation = (c: typeof ownConversations[number]) => c.user_id.toString() === authUserId.toString();
+    const isOwnedByMe = (c: typeof ownConversations[number]) =>
+      (c as any).owner_user_id?.toString() === authUserId.toString();
 
-    let filteredConversations = [...ownConversations, ...teamConversations]
+    // Second-party-owned sessions belong in the owner's feed even in --mine
+    // scope (they're run by another account, so the scans above miss them when
+    // mine_only skips team conversations entirely). Explicit assignment
+    // outranks default team visibility — mirror computeInboxSessions.
+    let ownedConversations: typeof ownConversations = [];
+    if (!args.member_name) {
+      const owned = await ctx.db
+        .query("conversations")
+        .withIndex("by_owner_updated", (q) => q.eq("owner_user_id" as any, authUserId))
+        .order("desc")
+        .take(50);
+      ownedConversations = owned.filter((c) => !isOwnConversation(c));
+    }
+
+    const candidateById = new Map<string, typeof ownConversations[number]>();
+    for (const c of [...ownConversations, ...teamConversations, ...ownedConversations]) {
+      candidateById.set(c._id.toString(), c);
+    }
+
+    let filteredConversations = [...candidateById.values()]
       .filter((c): c is typeof ownConversations[number] => {
-        if (filterUserId && c.user_id.toString() !== filterUserId) return false;
+        if (filterUserId && c.user_id.toString() !== filterUserId && !(args.mine_only && isOwnedByMe(c))) return false;
         if (labelConvIds && !labelConvIds.has(c._id.toString())) return false;
 
         // Team filter: when team is resolved from directory, filter own sessions by team
@@ -5753,6 +5774,9 @@ export const feedForCLI = query({
       work_state?: WorkState;
       is_pinned?: boolean;
       user?: { name: string | null; email: string | null };
+      // Second-party owner (the member responsible for steering), when set.
+      owner?: { name: string | null; email: string | null };
+      owned_by_me?: boolean;
       preview: Array<{
         line: number;
         role: string;
@@ -5828,6 +5852,18 @@ export const feedForCLI = query({
       const owner = teamUserMap.get(conv.user_id.toString()) || (conv.user_id.toString() === authUserId.toString() ? user : null);
       const isOwnConv = conv.user_id.toString() === authUserId.toString();
 
+      // Second-party owner display (distinct from `owner` above, which is the
+      // RUNNER — historical local name). Owner docs are usually teammates and
+      // already loaded; fall back to a direct get for cross-team edge cases.
+      const sessionOwnerId = (conv as any).owner_user_id?.toString();
+      let sessionOwner: { name: string | null; email: string | null } | undefined;
+      if (sessionOwnerId) {
+        const ownerDoc =
+          teamUserMap.get(sessionOwnerId) ||
+          (sessionOwnerId === authUserId.toString() ? user : await ctx.db.get((conv as any).owner_user_id as Id<"users">));
+        if (ownerDoc) sessionOwner = { name: ownerDoc.name || null, email: ownerDoc.email || null };
+      }
+
       const convIsLive = liveStatusMap.has(conv._id.toString());
       results.push({
         id: conv._id,
@@ -5842,6 +5878,8 @@ export const feedForCLI = query({
         work_state: workStateMap.get(conv._id.toString()) || "idle",
         is_pinned: !!conv.inbox_pinned_at,
         user: !isOwnConv && owner ? { name: owner.name || null, email: owner.email || null } : undefined,
+        ...(sessionOwner ? { owner: sessionOwner } : {}),
+        ...(sessionOwnerId === authUserId.toString() ? { owned_by_me: true } : {}),
         preview: preview.slice(0, 4),
       });
     }
@@ -6588,6 +6626,42 @@ const EMPTY_INBOX_MAPS: InboxSessionMaps = {
   userDaemonAlive: false,
 };
 
+// Liveness for second-party-owned rows: their managed_sessions belong to the
+// RUNNING account, which buildUserSessionMaps (scoped to the viewer's user_id)
+// never sees. Fetch per conversation — owned foreign rows are sparse — and
+// merge with the exact same status-trust rules. Deliberately leaves
+// userDaemonAlive untouched: that flag describes the viewer's own daemon.
+async function mergeForeignConversationLiveness(
+  ctx: any,
+  maps: InboxSessionMaps,
+  convs: any[],
+  now: number,
+): Promise<void> {
+  for (const conv of convs) {
+    const cid = conv._id.toString();
+    const managed = await ctx.db
+      .query("managed_sessions")
+      .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conv._id))
+      .first();
+    if (!managed) continue;
+    const heartbeatAlive = now - managed.last_heartbeat < INBOX_HEARTBEAT_ALIVE_MS;
+    if (heartbeatAlive) maps.liveConvIds.add(cid);
+    if (managed.tmux_session) maps.tmuxSessionMap.set(cid, managed.tmux_session);
+    if (managed.permission_mode) maps.permissionModeMap.set(cid, managed.permission_mode);
+    if (!managed.agent_status) continue;
+    if (managed.agent_status_updated_at !== undefined) {
+      maps.agentStatusUpdatedAtMap.set(cid, managed.agent_status_updated_at);
+    }
+    if (managed.agent_status === "stopped" || managed.agent_status === "idle") {
+      maps.agentStatusMap.set(cid, managed.agent_status);
+    } else if (heartbeatAlive) {
+      maps.agentStatusMap.set(cid, managed.agent_status);
+    } else {
+      maps.agentStatusMap.set(cid, "stopped");
+    }
+  }
+}
+
 // The heartbeat-derived fields that move to the sessionsLiveness overlay. Stripped from
 // the base rows when liveness is excluded so the client can't read a stale value before
 // the overlay merges (it overlays these back, keyed by id, via syncOverlay).
@@ -6828,6 +6902,10 @@ async function enrichInboxSessionRow(
     team_id: conv.team_id ?? null,
     is_private: conv.is_private ?? false,
     owner_device_id: (conv as any).owner_device_id ?? null,
+    // Second-party owner (the member responsible for steering; see schema).
+    // author/owner display names are stamped by computeInboxSessions, which
+    // caches the user docs across rows.
+    owner_user_id: (conv as any).owner_user_id?.toString() ?? null,
     user_id: conv.user_id,
     acting_user_id: (conv as any).acting_user_id ?? null,
     is_anchor: !!(conv as any).anchor_id,
@@ -6985,14 +7063,33 @@ async function computeInboxSessions(
     .order("desc")
     .take(200);
 
+  // Second-party-owned sessions — run by another member's account (e.g. Mr
+  // Bot) but assigned to this user — surface in the OWNER's inbox alongside
+  // their own. Explicit assignment outranks default team visibility: routing a
+  // session into someone's inbox is a deliberate act by someone who already
+  // had access. Same recency window as the main scan.
+  const ownedConversations = await ctx.db
+    .query("conversations")
+    .withIndex("by_owner_updated", (q: any) =>
+      q.eq("owner_user_id", userId).gte("updated_at", sessionWindowCutoff)
+    )
+    .order("desc")
+    .filter((q: any) => q.or(
+      q.eq(q.field("status"), "active"),
+      q.eq(q.field("status"), "completed")
+    ))
+    .take(100);
+
   const byId = new Map<string, any>();
   for (const c of recentConversations) byId.set(c._id.toString(), c);
   for (const c of pinnedConversations) byId.set(c._id.toString(), c);
   for (const c of dismissedConversations) byId.set(c._id.toString(), c);
   for (const c of stashedConversations) byId.set(c._id.toString(), c);
+  for (const c of ownedConversations) byId.set(c._id.toString(), c);
 
   // Hydrate explicitly-requested conversations the windows above missed.
-  // Own sessions only (the inbox is "mine"); cap mirrors the window size.
+  // Own or owned-by-me sessions only (the inbox is "mine"); cap mirrors the
+  // window size.
   const extraIds = new Set(opts.extraConvIds ?? []);
   let extraBudget = 200;
   for (const idStr of extraIds) {
@@ -7000,7 +7097,10 @@ async function computeInboxSessions(
     let conv: any = null;
     try { conv = await ctx.db.get(idStr as Id<"conversations">); } catch { conv = null; }
     if (!conv) continue;
-    if (conv.user_id.toString() !== userId.toString()) continue;
+    if (
+      conv.user_id.toString() !== userId.toString() &&
+      conv.owner_user_id?.toString() !== userId.toString()
+    ) continue;
     if (conv.status !== "active" && conv.status !== "completed") continue;
     byId.set(idStr, conv);
     extraBudget--;
@@ -7010,6 +7110,15 @@ async function computeInboxSessions(
   const maps = includeLiveness
     ? await buildUserSessionMaps(ctx, userId, now)
     : EMPTY_INBOX_MAPS;
+
+  // buildUserSessionMaps only covers managed_sessions belonging to THIS user;
+  // an owned foreign-run session's daemon rows belong to the running account,
+  // so merge its liveness per-conversation or the row would always classify as
+  // dead/idle even while the runner's agent is actively working.
+  const foreignConvs = conversations.filter((c) => c.user_id.toString() !== userId.toString());
+  if (includeLiveness && foreignConvs.length > 0) {
+    await mergeForeignConversationLiveness(ctx, maps, foreignConvs, now);
+  }
 
   // Cluster cutoff hides stale active sessions when there's a clean time gap.
   // Dismissed/stashed sessions have their own 30d window, and explicitly-requested
@@ -7031,6 +7140,18 @@ async function computeInboxSessions(
 
   let hiddenCount = 0;
   const results: any[] = [];
+  // User docs for run-by / owner display, cached across rows (both are sparse:
+  // only second-party-owned sessions ever hit this).
+  const userDocCache = new Map<string, any>();
+  const getUserDoc = async (id: any) => {
+    const key = id.toString();
+    if (!userDocCache.has(key)) {
+      let doc: any = null;
+      try { doc = await ctx.db.get(id); } catch { doc = null; }
+      userDocCache.set(key, doc);
+    }
+    return userDocCache.get(key);
+  };
   for (const conv of conversations) {
     if (!shouldShowInInbox(conv)) continue;
     // Explicitly-requested rows are deliberately filed — never cluster-hide them.
@@ -7039,6 +7160,17 @@ async function computeInboxSessions(
     if (hidden) {
       hiddenCount++;
       if (!opts.show_all) continue;
+    }
+    if (conv.user_id.toString() !== userId.toString()) {
+      const author = await getUserDoc(conv.user_id);
+      row.author_name = author?.name ?? author?.email ?? null;
+      row.author_email = author?.email ?? null;
+    }
+    if (conv.owner_user_id) {
+      const ownerDoc = await getUserDoc(conv.owner_user_id);
+      row.owner_name = ownerDoc?.name ?? null;
+      row.owner_email = ownerDoc?.email ?? null;
+      row.owned_by_me = conv.owner_user_id.toString() === userId.toString();
     }
     results.push(row);
     // Don't surface subagents under a dismissed/stashed parent — they used to be
@@ -7215,6 +7347,11 @@ export const inboxForCLI = query({
       label: string | null;
       active_plan: { short_id: string; title: string } | null;
       active_task: { short_id: string; title: string } | null;
+      // Second-party ownership: run_by = the member whose account runs the
+      // session when that isn't the caller; owner = the assigned owner if any.
+      run_by: string | null;
+      owner: { name: string | null; email: string | null } | null;
+      owned_by_me: boolean;
     }> = [];
 
     for (const s of sessions) {
@@ -7264,6 +7401,9 @@ export const inboxForCLI = query({
         label: rowLabel,
         active_plan: s.active_plan ? { short_id: s.active_plan.short_id, title: s.active_plan.title } : null,
         active_task: s.active_task ? { short_id: s.active_task.short_id, title: s.active_task.title } : null,
+        run_by: s.author_name ?? null,
+        owner: s.owner_user_id ? { name: s.owner_name ?? null, email: s.owner_email ?? null } : null,
+        owned_by_me: !!s.owned_by_me,
       });
     }
 

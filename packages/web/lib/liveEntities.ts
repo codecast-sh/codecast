@@ -112,7 +112,14 @@ export function resolveSessionAuthor(
     if (bot) return { name: bot.name || bot.email || "Anchor", avatar: bot.image || bot.github_avatar_url };
     if (session.author_name) return { name: session.author_name, avatar: session.author_avatar ?? null };
   }
-  if (!isForeignSession(session, conv, currentUser?._id)) return null;
+  // Authorship, not steering rights: a second-party-owned session is "mine"
+  // per conv.is_own (the owner steers it like their own) but still RUN by
+  // another account — the chip must name the runner. A known user_id decides;
+  // only thin rows with no uid fall back to the is_own verdict.
+  const foreignAuthor = uid && currentUser?._id
+    ? uid !== currentUser._id
+    : isForeignSession(session, conv, currentUser?._id);
+  if (!foreignAuthor) return null;
 
   // Display: live roster first (instant rename/avatar), then source fields, then meta.
   const m = uid ? teamMembers?.find((x) => x && x._id === uid) : null;
