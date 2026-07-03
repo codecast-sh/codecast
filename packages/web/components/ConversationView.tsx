@@ -148,6 +148,7 @@ import { pendingBannerState, isActiveAgentStatus, isBootingAgentStatus, type Liv
 import { sessionStartupState } from "../lib/sessionLifecycle";
 import { messageRowKey } from "../lib/messageRowKey";
 import { expandEntityMentions } from "../lib/mentionExpansion";
+import { useSessionRestart } from "../hooks/useSessionRestart";
 
 // An @-mention query may contain spaces so multi-word titles are searchable: a
 // first token (possibly empty, so a bare "@" still opens recents) plus up to 4
@@ -12062,6 +12063,31 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const isSessionStarting = isFreshSession && sessionStartup === "starting";
   const isSessionReady = isFreshSession && sessionStartup === "ready" && sessionAge < 120_000;
 
+  // The header dropdown's single "Restart session" action. One click drives both
+  // recovery codepaths (resume-first, then a forced rebuild if it doesn't come
+  // live) so a session is never left dead — see useSessionRestart. "Live" is any
+  // authoritative sign the session is up: daemon-connected, the agent active, or
+  // recent assistant activity.
+  const restartLive =
+    !!managedSession?.is_connected ||
+    isConversationLive ||
+    isThinking ||
+    isActiveAgentStatus(managedSession?.agent_status as LiveAgentStatus | undefined);
+  const restartGhostContext = useCallback(
+    () => (conversation?._id ? ghostRestartContextFor(conversation._id) : {}),
+    [conversation?._id],
+  );
+  const onRestartRestored = useCallback(
+    (res: unknown) => (conversation?._id ? followRestoredConversation(res, conversation._id) : false),
+    [conversation?._id],
+  );
+  const { restart: handleRestartSession } = useSessionRestart({
+    conversationId: conversation?._id ?? "",
+    isLive: restartLive,
+    ghostContext: restartGhostContext,
+    onRestored: onRestartRestored,
+  });
+
   useWatchEffect(() => {
     if (conversation) {
       document.title = `codecast | ${truncatedTitle}`;
@@ -12786,45 +12812,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
                     {effectiveIsOwner && conversation?.session_id && (
-                      <>
-                        <DropdownMenuItem onSelect={() => {
-                          if (!convexConvId) return;
-                          setTimeout(async () => {
-                            try {
-                              const res = await convCommand(convexConvId, "restartSession", ghostRestartContextFor(convexConvId));
-                              if (!followRestoredConversation(res, convexConvId)) {
-                                toast.success("Restarting session, retrying pending messages...");
-                              }
-                            } catch (err) {
-                              toast.error(`Failed to restart session: ${err instanceof Error ? err.message : String(err)}`);
-                            }
-                          });
-                        }}>
-                          <svg className="w-3 h-3 mr-1.5 text-orange-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                          </svg>
-                          Kill & restart
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onSelect={() => {
-                          if (!convexConvId) return;
-                          setTimeout(async () => {
-                            try {
-                              const res = await convCommand(convexConvId, "repairSession", ghostRestartContextFor(convexConvId));
-                              if (!followRestoredConversation(res, convexConvId)) {
-                                toast.success("Repairing session, retrying pending messages...");
-                              }
-                            } catch (err) {
-                              toast.error(`Failed to repair session: ${err instanceof Error ? err.message : String(err)}`);
-                            }
-                          });
-                        }}>
-                          <svg className="w-3 h-3 mr-1.5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                          </svg>
-                          Repair session
-                        </DropdownMenuItem>
-                      </>
+                      <DropdownMenuItem onSelect={() => { setTimeout(() => handleRestartSession()); }}>
+                        <svg className="w-3 h-3 mr-1.5 text-orange-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                        </svg>
+                        Restart session
+                      </DropdownMenuItem>
                     )}
                     {conversation?.short_id && (
                       <DropdownMenuItem onSelect={() => { setTimeout(() => { copyToClipboard(conversation.short_id!).then(() => toast.success("ID copied")).catch(() => toast.error("Failed to copy")); }); }}>
