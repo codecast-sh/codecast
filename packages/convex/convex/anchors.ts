@@ -1,7 +1,7 @@
 import { mutation, query } from "./functions";
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
-import { resolveTeamForPath } from "./privacy";
+import { resolveCreationPrivacy } from "./privacy";
 import { enqueueStartSession } from "./devices";
 import { enqueueKillSessionCommand } from "./cleanup";
 import { enqueuePendingMessage, getAuthenticatedUserId } from "./pendingMessages";
@@ -233,25 +233,16 @@ export const provisionAnchor = mutation({
     // The persistent session: owned (run + billed) by the human host, rendered as
     // the bot, pinned, and exempt from auto-completion.
     const sessionId = crypto.randomUUID();
-    const mappings = await ctx.db
-      .query("directory_team_mappings")
-      .withIndex("by_user_id", (q: any) => q.eq("user_id", hostUserId))
-      .collect();
     // A team anchor always belongs to its team and is shared; a personal anchor
     // resolves team/privacy from its project path like any session.
-    let resolvedTeamId: Id<"teams"> | undefined = teamId;
-    let isPrivate = false;
-    if (args.scope_type === "user") {
-      const r = resolveTeamForPath(mappings, args.project_path, undefined);
-      resolvedTeamId = r.teamId;
-      isPrivate = r.isPrivate;
-    }
+    const privacy = args.scope_type === "user"
+      ? await resolveCreationPrivacy(ctx, hostUserId, args.project_path)
+      : { team_id: teamId, is_private: false, auto_shared: undefined };
 
     const conversationId = await ctx.db.insert("conversations", {
       user_id: hostUserId,
       acting_user_id: botUserId,
       anchor_id: anchorId,
-      team_id: resolvedTeamId,
       agent_type: "claude_code",
       session_id: sessionId,
       title: name,
@@ -262,7 +253,7 @@ export const provisionAnchor = mutation({
       started_at: now,
       updated_at: now,
       message_count: 0,
-      is_private: isPrivate,
+      ...privacy,
       status: "active",
       persistent: true,
       inbox_pinned_at: now,
