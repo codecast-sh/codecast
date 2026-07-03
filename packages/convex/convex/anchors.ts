@@ -41,6 +41,29 @@ export async function userCanAccessAnchor(
   return false;
 }
 
+// Stricter gate for DESTRUCTIVE / config changes (retire, rename, persona): the
+// host, the personal-anchor owner, or a team ADMIN — not every team member. Any
+// member can wake/use the anchor (userCanAccessAnchor); only admins reshape it.
+export async function userCanAdminAnchor(
+  ctx: { db: any },
+  userId: Id<"users">,
+  anchor: { host_user_id?: Id<"users">; scope_user_id?: Id<"users">; team_id?: Id<"teams"> } | null,
+): Promise<boolean> {
+  if (!anchor) return false;
+  if (anchor.host_user_id === userId) return true;
+  if (anchor.scope_user_id && anchor.scope_user_id === userId) return true;
+  if (anchor.team_id) {
+    const m = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_user_team", (q: any) =>
+        q.eq("user_id", userId).eq("team_id", anchor.team_id),
+      )
+      .first();
+    if (m && m.role === "admin") return true;
+  }
+  return false;
+}
+
 // The anchors a caller may see/act on: their personal anchor plus the team anchor
 // of every team they belong to, deduped and excluding decommissioned. Shared by
 // listAnchors and the Slack channel listing so the two can't drift.
@@ -412,8 +435,8 @@ export const decommissionAnchor = mutation({
     if (!userId) throw new Error("Authentication failed: invalid token or session");
     const anchor = await ctx.db.get(args.anchor_id);
     if (!anchor) throw new Error("Anchor not found");
-    if (!(await userCanAccessAnchor(ctx, userId, anchor))) {
-      throw new Error("Not authorized for this anchor");
+    if (!(await userCanAdminAnchor(ctx, userId, anchor))) {
+      throw new Error("Only an admin (or the host) can retire this anchor");
     }
     if (anchor.conversation_id) {
       const conv = await ctx.db.get(anchor.conversation_id);
@@ -499,7 +522,7 @@ export const getAnchorSpace = query({
       teamId = host?.active_team_id ?? host?.team_id ?? undefined;
     }
     if (args.scope_type === "team") {
-      if (!teamId) return { scope_type: args.scope_type, anchor: null };
+      if (!teamId) return { scope_type: args.scope_type, anchor: null, no_team: true };
       const member = await ctx.db
         .query("team_memberships")
         .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", teamId))
@@ -569,8 +592,8 @@ export const updateAnchor = mutation({
     if (!userId) throw new Error("Authentication failed: invalid token or session");
     const anchor = await ctx.db.get(args.anchor_id);
     if (!anchor) throw new Error("Anchor not found");
-    if (!(await userCanAccessAnchor(ctx, userId, anchor))) {
-      throw new Error("Not authorized for this anchor");
+    if (!(await userCanAdminAnchor(ctx, userId, anchor))) {
+      throw new Error("Only an admin (or the host) can edit this anchor");
     }
     const patch: Record<string, any> = { updated_at: Date.now() };
     if (args.name !== undefined) patch.name = args.name;

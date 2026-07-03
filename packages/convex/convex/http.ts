@@ -2,7 +2,7 @@ import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
 import { auth } from "./auth";
 import { internal, api } from "./_generated/api";
-import { verifyState } from "./slack";
+import { verifyState, signState, slackAuthorizeUrl, convexSiteUrl } from "./slack";
 
 const http = httpRouter();
 
@@ -3191,19 +3191,56 @@ http.route({
   }),
 });
 
-// Slack "Add to Slack" OAuth callback: exchange the code for a per-workspace bot
-// token and store the installation, bound to the codecast scope named in the
-// (signed) state. Mirrors the GitHub App install flow.
+// Slack "Add to Slack" OAuth START: getInstallUrl points the browser here. It
+// mints a random nonce, sets it as a browser cookie, embeds it in a fresh signed
+// state, and redirects to Slack. The callback then requires the SAME browser
+// (cookie == state.nonce), so a signed state relayed to a victim can't complete
+// (confused-deputy defense — the install must finish where it began).
 http.route({
-  path: "/api/slack/oauth/callback",
+  path: "/api/slack/oauth/start",
   method: "GET",
-  handler: httpAction(async (ctx, request) => {
+  handler: httpAction(async (_ctx, request) => {
     const url = new URL(request.url);
     const webBase = process.env.SITE_URL || "https://codecast.sh";
     const fail = (reason: string) =>
       new Response(null, {
         status: 302,
         headers: { Location: `${webBase}/anchor?slack=error&reason=${encodeURIComponent(reason)}` },
+      });
+    const s = url.searchParams.get("s");
+    if (!s) return fail("bad_state");
+    const st = await verifyState(s);
+    if (!st || !st.user_id) return fail("bad_state");
+    if (!process.env.SLACK_CLIENT_ID) return fail("not_configured");
+
+    const nonce = crypto.randomUUID();
+    const state2 = await signState({ ...st, nonce, ts: Date.now() });
+    const headers = new Headers({ Location: slackAuthorizeUrl(state2) });
+    headers.append(
+      "Set-Cookie",
+      `slk_nonce=${nonce}; HttpOnly; Secure; SameSite=Lax; Path=/api/slack; Max-Age=900`,
+    );
+    return new Response(null, { status: 302, headers });
+  }),
+});
+
+// Slack "Add to Slack" OAuth CALLBACK: verify the browser-nonce cookie, exchange
+// the code for a per-workspace bot token, and store the installation bound to the
+// codecast scope named in the (signed, browser-bound) state.
+http.route({
+  path: "/api/slack/oauth/callback",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const url = new URL(request.url);
+    const webBase = process.env.SITE_URL || "https://codecast.sh";
+    const clearCookie = "slk_nonce=; HttpOnly; Secure; SameSite=Lax; Path=/api/slack; Max-Age=0";
+    const fail = (reason: string) =>
+      new Response(null, {
+        status: 302,
+        headers: {
+          Location: `${webBase}/anchor?slack=error&reason=${encodeURIComponent(reason)}`,
+          "Set-Cookie": clearCookie,
+        },
       });
 
     if (url.searchParams.get("error")) return fail(url.searchParams.get("error")!);
@@ -3213,11 +3250,18 @@ http.route({
     const state = await verifyState(stateRaw);
     if (!state || !state.user_id) return fail("bad_state");
 
+    // Browser binding: the nonce cookie set at /start must match the state's nonce,
+    // so the install can only complete in the browser that began it.
+    const cookieHeader = request.headers.get("Cookie") || "";
+    const m = cookieHeader.match(/(?:^|;\s*)slk_nonce=([^;]+)/);
+    const cookieNonce = m ? m[1] : null;
+    if (!state.nonce || cookieNonce !== state.nonce) return fail("state_mismatch");
+
     const clientId = process.env.SLACK_CLIENT_ID;
     const clientSecret = process.env.SLACK_CLIENT_SECRET;
     if (!clientId || !clientSecret) return fail("not_configured");
 
-    const redirect = `${process.env.SLACK_REDIRECT_BASE || process.env.CONVEX_SITE_URL || "https://convex.codecast.sh"}/api/slack/oauth/callback`;
+    const redirect = `${convexSiteUrl()}/api/slack/oauth/callback`;
     let data: any;
     try {
       const resp = await fetch("https://slack.com/api/oauth.v2.access", {
@@ -3238,7 +3282,7 @@ http.route({
       return fail(data?.error || "exchange_failed");
     }
 
-    await ctx.runMutation(internal.slack.storeInstallation, {
+    const stored = await ctx.runMutation(internal.slack.storeInstallation, {
       workspace_id: data.team.id,
       workspace_name: data.team.name,
       bot_user_id: data.bot_user_id,
@@ -3249,10 +3293,15 @@ http.route({
       scope_user_id: state.scope_user_id,
       installed_by: state.user_id,
     });
+    if (!stored?.ok) return fail(stored?.error || "store_failed");
 
+    const scopeParam = state.scope_type === "team" ? "&scope=team" : "";
     return new Response(null, {
       status: 302,
-      headers: { Location: `${webBase}/anchor?slack=connected` },
+      headers: {
+        Location: `${webBase}/anchor?slack=connected${scopeParam}`,
+        "Set-Cookie": clearCookie,
+      },
     });
   }),
 });

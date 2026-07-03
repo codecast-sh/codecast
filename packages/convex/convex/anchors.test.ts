@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { userCanAccessAnchor, visibleAnchorsForUser } from "./anchors";
+import { userCanAccessAnchor, userCanAdminAnchor, visibleAnchorsForUser } from "./anchors";
 import { makeFakeDb } from "./testDb";
 
 // These guard the multi-tenant boundary: a regression here re-opens the
@@ -13,6 +13,31 @@ const TEAM = "teams_acme" as any;
 function ctxWith(tables: Record<string, any[]>) {
   return { db: makeFakeDb(tables) } as any;
 }
+
+describe("userCanAdminAnchor", () => {
+  test("the host can admin", async () => {
+    const ctx = ctxWith({ team_memberships: [] });
+    expect(await userCanAdminAnchor(ctx, ME, { host_user_id: ME } as any)).toBe(true);
+  });
+  test("the personal-anchor owner can admin", async () => {
+    const ctx = ctxWith({ team_memberships: [] });
+    expect(await userCanAdminAnchor(ctx, ME, { host_user_id: STRANGER, scope_user_id: ME } as any)).toBe(true);
+  });
+  test("a team ADMIN can admin", async () => {
+    const ctx = ctxWith({ team_memberships: [{ _id: "m1", user_id: TEAMMATE, team_id: TEAM, role: "admin" }] });
+    expect(await userCanAdminAnchor(ctx, TEAMMATE, { host_user_id: ME, team_id: TEAM } as any)).toBe(true);
+  });
+  test("a plain team MEMBER cannot admin (can only use)", async () => {
+    const ctx = ctxWith({ team_memberships: [{ _id: "m1", user_id: TEAMMATE, team_id: TEAM, role: "member" }] });
+    const anchor = { host_user_id: ME, team_id: TEAM } as any;
+    expect(await userCanAccessAnchor(ctx, TEAMMATE, anchor)).toBe(true); // may use
+    expect(await userCanAdminAnchor(ctx, TEAMMATE, anchor)).toBe(false); // may not retire/rename
+  });
+  test("a stranger cannot admin", async () => {
+    const ctx = ctxWith({ team_memberships: [{ _id: "m1", user_id: TEAMMATE, team_id: TEAM, role: "admin" }] });
+    expect(await userCanAdminAnchor(ctx, STRANGER, { host_user_id: ME, team_id: TEAM } as any)).toBe(false);
+  });
+});
 
 describe("userCanAccessAnchor", () => {
   test("the host can access", async () => {
