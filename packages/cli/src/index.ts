@@ -3167,6 +3167,45 @@ labelCmd
     console.log(`${c.green}ok${c.reset} removed label ${c.yellow}${result.label}${c.reset}${note}`);
   });
 
+program
+  .command("own")
+  .description(
+    "Assign a session's owner — the team member responsible for steering it\n\n" +
+    "The owner is distinct from whose account RUNS the session: an agent\n" +
+    "account (e.g. a bot on a shared machine) can park a session on a human\n" +
+    "reviewer, and the session then surfaces in the OWNER's inbox (web NEEDS\n" +
+    "INPUT + cast sessions/feed) marked with who runs it. The owner replies\n" +
+    "with cast send or the web composer to steer it.\n\n" +
+    "You can own any session you can see in the feed (your own, or one shared\n" +
+    "with a team you're in). Scripts should pass an exact email.\n\n" +
+    "Examples:\n" +
+    "  cast own jx7c6zk jason@example.com   # assign to a teammate\n" +
+    "  cast own jx7c6zk                     # claim it yourself\n" +
+    "  cast disown jx7c6zk                  # clear the owner"
+  )
+  .argument("<session_id>", "Session short ID (e.g. jx7c6zk), session UUID, or full ID")
+  .argument("[member]", "Team member email (exact) or name; defaults to you")
+  .action(async (sessionId: string, member: string | undefined) => {
+    const result = await cliPost("/cli/sessions/own", {
+      session_id: sessionId,
+      owner: member?.trim() || "me",
+    });
+    const ownerLabel = result.owner?.name || result.owner?.email || "you";
+    console.log(`${c.green}✓${c.reset} ${c.cyan}${result.short_id || sessionId}${c.reset} ${c.dim}owner →${c.reset} ${c.magenta}${ownerLabel}${c.reset}`);
+  });
+
+program
+  .command("disown")
+  .description("Clear a session's owner (see: cast own)")
+  .argument("<session_id>", "Session short ID (e.g. jx7c6zk), session UUID, or full ID")
+  .action(async (sessionId: string) => {
+    const result = await cliPost("/cli/sessions/own", {
+      session_id: sessionId,
+      owner: null,
+    });
+    console.log(`${c.green}✓${c.reset} ${c.cyan}${result.short_id || sessionId}${c.reset} ${c.dim}owner cleared${c.reset}`);
+  });
+
 const accountsCmd = program
   .command("accounts")
   .description(
