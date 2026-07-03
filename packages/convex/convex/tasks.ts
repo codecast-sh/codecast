@@ -11,6 +11,7 @@ import { internal } from "./_generated/api";
 import { isViableInboxParent } from "./inboxFilters";
 import { pickInheritedGitMeta, type GitMetaSource } from "./projectPaths";
 import { enqueuePendingMessage } from "./pendingMessages";
+import { resolveTeamForPath } from "./privacy";
 // Owner-or-team access check for a task. Moved to lib/access.ts (Wave-1
 // auth/access seam). Imported for local use here and re-exported so existing
 // callers keep working unchanged.
@@ -1787,6 +1788,17 @@ export const assignToAgent = mutation({
       .collect();
     const { project_path, git_root, git_remote_url } = await resolveTaskGitContext(ctx, userId, task, mappings);
 
+    // Team/privacy come from the launcher's directory mappings, exactly like
+    // dispatch.createSession (the sibling launch path) — the task's team is
+    // only a routing fallback. A literal is_private here once minted
+    // "shared with nobody" rows: non-private but teamless, invisible to every
+    // teammate because the visibility gates short-circuit on !team_id.
+    const { teamId, isPrivate, autoShared } = resolveTeamForPath(
+      mappings,
+      git_root || project_path,
+      task.team_id
+    );
+
     const conversationId = await ctx.db.insert("conversations", {
       user_id: userId,
       agent_type,
@@ -1798,7 +1810,9 @@ export const assignToAgent = mutation({
       updated_at: now,
       message_count: 0,
       status: "active",
-      is_private: false,
+      team_id: teamId,
+      is_private: isPrivate,
+      auto_shared: autoShared || undefined,
       active_task_id: task._id,
       title: task.title.slice(0, 80),
       // Stamp the plan so the inbox can group plan workers even when there's no

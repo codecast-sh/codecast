@@ -22,6 +22,7 @@ import {
   isConversationTeamVisible,
   createTeamFeedFilter,
   resolveTeamForPath,
+  resolveCreationPrivacy,
   resolveVisibilityMode,
   buildShareUpdate,
   buildPathRestampUpdate,
@@ -601,16 +602,8 @@ export const createConversation = mutation({
     const startedAt = args.started_at ?? now;
 
     const conversationPath = args.git_root || args.project_path;
-    const mappings = await ctx.db
-      .query("directory_team_mappings")
-      .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
-      .collect();
-
-    const { teamId: resolvedTeamId, isPrivate, autoShared } = resolveTeamForPath(
-      mappings,
-      conversationPath,
-      args.team_id as Id<"teams"> | undefined
-    );
+    const { team_id: resolvedTeamId, is_private: isPrivate, auto_shared: autoShared } =
+      await resolveCreationPrivacy(ctx, args.user_id, conversationPath, args.team_id as Id<"teams"> | undefined);
 
     let parentConversationId: Id<"conversations"> | undefined;
     if (args.parent_conversation_id) {
@@ -749,21 +742,10 @@ export const createQuickSession = mutation({
     const sessionId = args.session_id || crypto.randomUUID();
     const agentType = args.agent_type || "claude_code";
 
-    const conversationPath = args.git_root || args.project_path;
-    const mappings = await ctx.db
-      .query("directory_team_mappings")
-      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-      .collect();
-
-    const { teamId: resolvedTeamId, isPrivate, autoShared } = resolveTeamForPath(
-      mappings,
-      conversationPath,
-      undefined
-    );
+    const privacy = await resolveCreationPrivacy(ctx, userId, args.git_root || args.project_path);
 
     const conversationId = await ctx.db.insert("conversations", {
       user_id: userId,
-      team_id: resolvedTeamId,
       agent_type: agentType,
       session_id: sessionId,
       project_path: args.project_path,
@@ -771,8 +753,7 @@ export const createQuickSession = mutation({
       started_at: now,
       updated_at: now,
       message_count: 0,
-      is_private: isPrivate,
-      auto_shared: autoShared || undefined,
+      ...privacy,
       status: "active",
     });
 
@@ -3086,9 +3067,14 @@ export const setPrivacyBySessionId = mutation({
       throw new Error(`Conversation not found with session_id: ${args.session_id}`);
     }
 
-    await ctx.db.patch(conversation._id, {
-      is_private: args.is_private,
-    });
+    // Same contract as setPrivacy: sharing must guarantee a team_id
+    // (buildShareUpdate), locking forces the private visibility marker. A raw
+    // is_private flip here was the one share path that skipped buildShareUpdate
+    // and could mint a "shared with nobody" row (non-private, teamless).
+    const updates = args.is_private
+      ? { is_private: true as const, team_visibility: "private" as const }
+      : await buildShareUpdate(ctx, conversation, authUserId);
+    await ctx.db.patch(conversation._id, updates);
 
     if (args.api_token) {
       await ctx.db.patch(authUserId, {

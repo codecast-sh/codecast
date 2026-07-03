@@ -2,6 +2,7 @@ import { mutation, query } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
+import { resolveCreationPrivacy } from "./privacy";
 
 export const create = mutation({
   args: {
@@ -65,6 +66,7 @@ export const create = mutation({
     }
 
     if (!primaryConvId) {
+      const privacy = await resolveCreationPrivacy(ctx, userId, args.project_path);
       primaryConvId = await ctx.db.insert("conversations", {
         user_id: userId,
         agent_type: "claude_code",
@@ -74,7 +76,7 @@ export const create = mutation({
         started_at: now,
         updated_at: now,
         message_count: 0,
-        is_private: false,
+        ...privacy,
         status: "active",
         workflow_run_id: runId,
         is_workflow_primary: true,
@@ -168,6 +170,7 @@ export const createFromCli = mutation({
       await ctx.db.patch(planDocId, { workflow_run_id: runId, updated_at: now });
     }
 
+    const privacy = await resolveCreationPrivacy(ctx, userId, args.project_path);
     const primaryConvId = await ctx.db.insert("conversations", {
       user_id: userId,
       agent_type: "claude_code",
@@ -177,7 +180,7 @@ export const createFromCli = mutation({
       started_at: now,
       updated_at: now,
       message_count: 0,
-      is_private: false,
+      ...privacy,
       status: "active",
       workflow_run_id: runId,
       is_workflow_primary: true,
