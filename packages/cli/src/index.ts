@@ -31,7 +31,7 @@ import { checkForDesktopUpdate } from "./desktopUpdate.js";
 import { glob } from "glob";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { encryptToken, decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
-import { getAllSyncRecords, findUnsyncedFiles } from "./syncLedger.js";
+import { getAllSyncRecords, findUnsyncedFiles, readOldestUnsyncedTimestamp } from "./syncLedger.js";
 import { isTestScratchPath } from "./syncScope.js";
 import { isAppServerManagedCodexSessionHead } from "./codexWatcher.js";
 import { getLastReconciliation, performReconciliation, repairDiscrepancies } from "./reconciliation.js";
@@ -1187,6 +1187,14 @@ function getStuckSyncs(): StuckSync[] {
     if (unsynced < STUCK_SYNC_MIN_BYTES) continue;
     if (stats.mtimeMs <= record.lastSyncedAt) continue;
     if (now - record.lastSyncedAt < STUCK_SYNC_THRESHOLD_MS) continue;
+    // lastSyncedAt alone can't tell a wedge from a session that sat quiet for an
+    // hour and just burst back to life (dead session auto-resumed): both have a
+    // stale stamp, but the resumed session's unsynced bytes are seconds old and
+    // the daemon is already draining them. Only flag when the unsynced content
+    // itself has been waiting past the threshold; keep the conservative
+    // (flagging) behavior when no timestamp is readable.
+    const unsyncedBornAt = readOldestUnsyncedTimestamp(filePath, record.lastSyncedPosition);
+    if (unsyncedBornAt !== null && now - unsyncedBornAt < STUCK_SYNC_THRESHOLD_MS) continue;
 
     const base = path.basename(filePath, ".jsonl");
     const m = base.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/);
