@@ -6,7 +6,7 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useImageGallery } from "../ImageGallery";
 import { CodeBlock } from "../CodeBlock";
 import { MermaidDiagram } from "../MermaidDiagram";
-import { tryRenderCanvas } from "../HtmlSnippet";
+import { tryRenderCanvas, tryRenderHtmlMessage } from "../HtmlSnippet";
 import { entityRemarkPlugins } from "../../lib/remarkEntityIds";
 import { EntityAwareCode, EntityAwareLink } from "../EntityIdPill";
 
@@ -199,6 +199,10 @@ const MD_COMPONENTS: Components = {
 // blocks become direct children of their own container; everyone else uses
 // MarkdownRenderer, which wraps these in the prose container.
 export const MarkdownBlocks = memo(function MarkdownBlocks({ content }: { content: string }) {
+  // An all-HTML body renders as a sanitized canvas — the markdown pipeline
+  // escapes raw tags into garbled source.
+  const html = tryRenderHtmlMessage(content);
+  if (html) return html;
   return (
     <ReactMarkdown
       remarkPlugins={entityRemarkPlugins}
