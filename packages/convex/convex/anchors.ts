@@ -256,7 +256,8 @@ export const provisionAnchor = mutation({
       ...privacy,
       status: "active",
       persistent: true,
-      inbox_pinned_at: now,
+      // Not pinned in the inbox — the anchor lives in its dedicated /anchor space
+      // and only surfaces in the inbox when it's waiting on the user.
     });
     await ctx.db.patch(conversationId, {
       short_id: conversationId.toString().slice(0, 7),

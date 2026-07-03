@@ -1080,7 +1080,11 @@ export function categorizeSessions(
   const dismissed: InboxSession[] = [];
   const stashed: InboxSession[] = [];
   for (const s of Object.values(sessions)) {
-    if (!isSessionHidden(s)) activeKeyed.push({ s, rank: sessionSortRank(s) });
+    // An anchor's standing thread lives in its dedicated /anchor space, not the
+    // inbox — surface it here ONLY when it's waiting on the user (blocked / asking
+    // something), then it drops back out to its space once handled.
+    const hiddenAnchor = !!s.is_anchor && !isSessionWaitingForInput(s);
+    if (!isSessionHidden(s) && !hiddenAnchor) activeKeyed.push({ s, rank: sessionSortRank(s) });
     if (isSessionDismissed(s)) dismissed.push(s);
     if (isSessionStashed(s)) stashed.push(s);
   }
