@@ -4036,6 +4036,7 @@ export const exportConversationMessages = query({
         message_uuid: m.message_uuid || undefined,
         tool_calls: m.tool_calls,
         tool_results: m.tool_results,
+        subtype: m.subtype || undefined,
       })),
     };
   },
@@ -4097,6 +4098,7 @@ export const exportConversationMessagesPage = query({
         message_uuid: m.message_uuid || undefined,
         tool_calls: m.tool_calls,
         tool_results: m.tool_results,
+        subtype: m.subtype || undefined,
       }));
 
     return {

@@ -6820,6 +6820,16 @@ function DynamicRunCard({ runId, name }: { runId?: string; name?: string }) {
   );
 }
 
+// A workflow anchor's content is the exact JSON the server posts
+// (convex/workflow_runs.ts). Fork/resume can round-trip that anchor through a
+// synthetic transcript, producing an assistant copy WITHOUT the
+// "workflow_event" subtype — detect by content so those copies still render
+// as the card instead of raw JSON.
+function parseWorkflowEventContent(content: string | undefined): Record<string, any> | null {
+  if (!content || !content.startsWith('{"__wf"')) return null;
+  try { return JSON.parse(content); } catch { return null; }
+}
+
 function WorkflowEventBlock({ content, workflowRun, onGateChoice, gateResponding }: {
   content: string;
   workflowRun?: { _id: string; status: string; gate_response?: string | null } | null;
@@ -10275,6 +10285,22 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   timelineRef.current = timeline;
   scrollCtxRef.current = { messageCount: conversation?.message_count || messages.length, messagesLen: messages.length, timelineLen: timeline.length, loadedStartIndex: conversation?.loaded_start_index ?? 0 };
 
+  // One card per workflow run: fork copies and transcript round-trips can leave
+  // several messages carrying the same run anchor (with or without the
+  // workflow_event subtype). The first occurrence owns the card; the rest
+  // render nothing.
+  const wfRunCardOwner = useMemo(() => {
+    const owner = new Map<string, string>();
+    for (const item of timeline) {
+      if (item.type !== 'message') continue;
+      const m = item.data as Message;
+      if (m.role !== 'assistant') continue;
+      const ev = parseWorkflowEventContent(m.content);
+      if (ev?.__wf === 'workflow_run' && ev.run_id && !owner.has(ev.run_id)) owner.set(ev.run_id, m._id);
+    }
+    return owner;
+  }, [timeline]);
+
   // Index of the first timeline item that arrived while you were away — newer
   // than your last leave (`unreadAnchorAt`) but no newer than your last focus
   // (`enteredAt`). The "New" divider renders above this row; -1 = nothing new
@@ -12251,7 +12277,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
 
     if (msg.role === "assistant") {
-      if (msg.subtype === "workflow_event") {
+      const wfEvent = parseWorkflowEventContent(msg.content);
+      if (msg.subtype === "workflow_event" || wfEvent) {
+        if (wfEvent?.__wf === "workflow_run" && wfEvent.run_id && wfRunCardOwner.get(wfEvent.run_id) !== msg._id) return null;
         return <WorkflowEventBlock key={msg._id} content={msg.content || ""} workflowRun={workflowRun as any} onGateChoice={handleGateChoice} gateResponding={gateResponding} />;
       }
 
