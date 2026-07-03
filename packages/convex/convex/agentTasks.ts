@@ -276,6 +276,10 @@ export const completeTaskRun = mutation({
     daemon_id: v.optional(v.string()),
     summary: v.optional(v.string()),
     conversation_id: v.optional(v.string()),
+    // Claude session UUID of the spawned run (from `claude --session-id`). Stored
+    // raw and resolved to a conversation at read time in webList, since the run's
+    // conversation may not have synced yet at this instant.
+    run_session_uuid: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -309,6 +313,7 @@ export const completeTaskRun = mutation({
       last_run_conversation_id: args.conversation_id
         ? args.conversation_id as Id<"conversations">
         : undefined,
+      last_run_session_uuid: args.run_session_uuid || undefined,
       lease_holder: undefined,
       lease_expires_at: undefined,
     };
@@ -375,6 +380,9 @@ export const failTaskRun = mutation({
     task_id: v.id("agent_tasks"),
     daemon_id: v.string(),
     error: v.optional(v.string()),
+    // Session UUID of the failed run, so a failure is still one click from the
+    // transcript that shows what went wrong.
+    run_session_uuid: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -386,6 +394,7 @@ export const failTaskRun = mutation({
 
     const maxRetries = task.max_retries ?? DEFAULT_MAX_RETRIES;
     const newRetryCount = task.retry_count + 1;
+    const runUuid = args.run_session_uuid || undefined;
 
     if (newRetryCount < maxRetries) {
       await ctx.db.patch(args.task_id, {
@@ -395,6 +404,7 @@ export const failTaskRun = mutation({
         lease_holder: undefined,
         lease_expires_at: undefined,
         last_run_summary: args.error ? `Failed: ${args.error}` : "Failed",
+        last_run_session_uuid: runUuid,
       });
     } else {
       await ctx.db.patch(args.task_id, {
@@ -403,6 +413,7 @@ export const failTaskRun = mutation({
         lease_holder: undefined,
         lease_expires_at: undefined,
         last_run_summary: args.error ? `Failed: ${args.error}` : "Failed (max retries)",
+        last_run_session_uuid: runUuid,
       });
 
       const user = await ctx.db.get(auth.userId);
@@ -460,15 +471,46 @@ export const webList = query({
       })
     );
 
-    return tasks.map((t) => ({
-      ...t,
-      last_run_conversation_title: t.last_run_conversation_id
-        ? titles.get(t.last_run_conversation_id)
-        : undefined,
-      originating_conversation_title: t.originating_conversation_id
-        ? titles.get(t.originating_conversation_id)
-        : undefined,
-    }));
+    // Resolve spawned-run session UUIDs to their conversation (by_session_id).
+    // Done at read time because the run's conversation may not have synced yet
+    // when the daemon reported completion. Only needed when the run didn't
+    // already record a conversation_id directly (the --context-current path).
+    const uuidToConv = new Map<string, { id: Id<"conversations">; title: string }>();
+    const pendingUuids = [
+      ...new Set(
+        tasks
+          .filter((t) => t.last_run_session_uuid && !t.last_run_conversation_id)
+          .map((t) => t.last_run_session_uuid as string)
+      ),
+    ];
+    await Promise.all(
+      pendingUuids.map(async (uuid) => {
+        const conv = await ctx.db
+          .query("conversations")
+          .withIndex("by_session_id", (q) => q.eq("session_id", uuid))
+          .filter((q) => q.eq(q.field("user_id"), userId))
+          .first();
+        if (conv) uuidToConv.set(uuid, { id: conv._id, title: conv.title || "Untitled" });
+      })
+    );
+
+    return tasks.map((t) => {
+      const resolved =
+        !t.last_run_conversation_id && t.last_run_session_uuid
+          ? uuidToConv.get(t.last_run_session_uuid)
+          : undefined;
+      const lastRunConvId = t.last_run_conversation_id ?? resolved?.id;
+      return {
+        ...t,
+        last_run_conversation_id: lastRunConvId,
+        last_run_conversation_title: t.last_run_conversation_id
+          ? titles.get(t.last_run_conversation_id)
+          : resolved?.title,
+        originating_conversation_title: t.originating_conversation_id
+          ? titles.get(t.originating_conversation_id)
+          : undefined,
+      };
+    });
   },
 });
 

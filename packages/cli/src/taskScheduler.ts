@@ -21,6 +21,9 @@ interface RunningTask {
   startedAt: number;
   maxRuntimeMs: number;
   heartbeatTimer: ReturnType<typeof setInterval>;
+  // Claude session UUID assigned to this run via `--session-id`, so completion
+  // can link the run's conversation back to the task. Undefined for codex runs.
+  runSessionUuid?: string;
 }
 
 interface TaskSchedulerConfig {
@@ -183,6 +186,11 @@ export class TaskScheduler {
     // Build agent command args (will be passed to the script, which quotes them via "$(cat promptFile)")
     let extraAgentArgs: string[] = [];
     let agentBin: string;
+    // Assigned for claude runs so completion can link the run's conversation back
+    // to the task. `claude --session-id <uuid>` writes <uuid>.jsonl, which the
+    // daemon syncs into a conversation keyed by session_id=<uuid>. Left undefined
+    // for codex (different session scheme).
+    let runSessionUuid: string | undefined;
     if (agentType === "codex") {
       agentBin = "codex";
       const extraArgs = this.config.codex_args;
@@ -203,6 +211,11 @@ export class TaskScheduler {
           if (!skip.has(arg) && !extraAgentArgs.includes(arg)) extraAgentArgs.push(arg);
         }
       }
+      // Only auto-assign if the operator didn't pin one via claude_args.
+      if (!extraAgentArgs.includes("--session-id")) {
+        runSessionUuid = crypto.randomUUID();
+        extraAgentArgs.push("--session-id", runSessionUuid);
+      }
     }
 
     // Write a shell script so the target shell (inside tmux) handles all quoting/expansion,
@@ -217,6 +230,10 @@ export class TaskScheduler {
       "#!/bin/bash",
       "unset CLAUDECODE",
       "unset ANTHROPIC_API_KEY",
+      // Hand the run's session UUID to the agent so a self-report via
+      // `cast schedule complete` can link the run's conversation back to the task
+      // (the agent's own session_id IS this UUID, assigned via --session-id above).
+      ...(runSessionUuid ? [`export CODECAST_RUN_SESSION_UUID='${runSessionUuid}'`] : []),
       agentInvocation,
       `rm -f ${promptFile} ${scriptFile}`,
       "",
@@ -273,6 +290,7 @@ export class TaskScheduler {
       startedAt: Date.now(),
       maxRuntimeMs,
       heartbeatTimer,
+      runSessionUuid,
     });
   }
 
@@ -285,7 +303,7 @@ export class TaskScheduler {
       await execAsync(`tmux has-session -t '${entry.tmuxSession}' 2>/dev/null`);
     } catch {
       this.log(`tmux session ${entry.tmuxSession} ended for task ${taskId}`);
-      await this.syncService.completeTaskRun(taskId, this.daemonId, "Agent session ended");
+      await this.syncService.completeTaskRun(taskId, this.daemonId, "Agent session ended", undefined, entry.runSessionUuid);
       this.cleanupTask(taskId);
       return;
     }
@@ -295,7 +313,7 @@ export class TaskScheduler {
     if (elapsed > entry.maxRuntimeMs) {
       this.log(`Task ${taskId} exceeded max runtime (${entry.maxRuntimeMs}ms), killing`);
       try { await execAsync(`tmux kill-session -t '${entry.tmuxSession}'`); } catch {}
-      await this.syncService.failTaskRun(taskId, this.daemonId, `Exceeded max runtime (${Math.round(entry.maxRuntimeMs / 60000)}min)`);
+      await this.syncService.failTaskRun(taskId, this.daemonId, `Exceeded max runtime (${Math.round(entry.maxRuntimeMs / 60000)}min)`, entry.runSessionUuid);
       this.cleanupTask(taskId);
       return;
     }
@@ -310,7 +328,7 @@ export class TaskScheduler {
       if (lastLine.endsWith("$") || lastLine.endsWith("%") || lastLine.endsWith("#")) {
         this.log(`Task ${taskId} returned to shell prompt, cleaning up`);
         try { await execAsync(`tmux kill-session -t '${entry.tmuxSession}'`); } catch {}
-        await this.syncService.completeTaskRun(taskId, this.daemonId, "Agent exited");
+        await this.syncService.completeTaskRun(taskId, this.daemonId, "Agent exited", undefined, entry.runSessionUuid);
         this.cleanupTask(taskId);
       }
     } catch {

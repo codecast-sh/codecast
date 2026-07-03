@@ -10293,6 +10293,14 @@ schedule
     const taskId = await resolveTaskId(config, siteUrl, id);
     if (!taskId) return;
 
+    // Link this run's conversation back to the task. The daemon exports the run's
+    // session UUID when it spawns the agent; fall back to detecting our own
+    // session from the process tree (covers manual `cast schedule complete`).
+    const runSessionUuid =
+      process.env.CODECAST_RUN_SESSION_UUID ||
+      findCurrentSessionFromProcess(getRealCwd()) ||
+      undefined;
+
     try {
       const response = await cliFetch(`${siteUrl}/cli/tasks/complete`, {
         method: "POST",
@@ -10301,6 +10309,7 @@ schedule
           api_token: config.auth_token,
           task_id: taskId,
           summary: options.summary,
+          run_session_uuid: runSessionUuid,
         }),
       });
       const result = await response.json();
