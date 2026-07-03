@@ -9999,7 +9999,6 @@ anchor
   .description("Map a Slack channel to an anchor so @mentions there wake it")
   .argument("<channel>", "Slack channel id (e.g. C0123ABCD)")
   .option("--team [id]", "Link to the team anchor (default: your personal anchor)")
-  .option("--workspace <id>", "Slack workspace/team id")
   .option("-C, --dir <path>", "Project cwd for work from this channel")
   .action(async (channel: string, options: any) => {
     const config = readConfig();
@@ -10016,7 +10015,6 @@ anchor
         channel,
         team: !!options.team,
         team_id: typeof options.team === "string" ? options.team : undefined,
-        workspace: options.workspace,
         project_path: options.dir ? path.resolve(options.dir.replace(/^~/, process.env.HOME || "~")) : undefined,
       }),
     });

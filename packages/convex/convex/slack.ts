@@ -11,8 +11,8 @@ import { deliverToAnchor, userCanAccessAnchor, visibleAnchorsForUser } from "./a
 // `anchor_channels`; an @mention wakes the anchor (inbound), and the anchor replies
 // as the bot (outbound, server-side so the token never reaches the session). Every
 // act path authorizes against the caller's anchors — authentication alone is never
-// enough (multi-tenant boundary). SLACK_SIGNING_SECRET (app-level) still verifies
-// inbound webhooks; SLACK_BOT_TOKEN is honored as a fallback for a manual setup.
+// enough (multi-tenant boundary). SLACK_SIGNING_SECRET (app-level) verifies inbound
+// webhooks; outbound uses the per-workspace installation token (no env fallback).
 
 export const BOT_SCOPES = "app_mentions:read,chat:write,im:history,channels:read,groups:read,users:read";
 
@@ -20,15 +20,24 @@ export function convexSiteUrl(): string {
   return process.env.SLACK_REDIRECT_BASE || process.env.CONVEX_SITE_URL || "https://convex.codecast.sh";
 }
 
-// The Slack authorize URL for a (signed) state. Built here so the OAuth /start
-// endpoint (http.ts) and getInstallUrl share one definition.
+export function webBaseUrl(): string {
+  return process.env.SITE_URL || "https://codecast.sh";
+}
+
+// Slack redirects back to the AUTHENTICATED web app (not the Convex callback), so
+// completion runs in the user's logged-in session and the install binds to the
+// completer's own anchor — a relayed state can't bind a victim's workspace to the
+// relayer's anchor. This URI must match exactly between authorize and exchange.
+export function slackRedirectUri(): string {
+  return `${webBaseUrl()}/anchor`;
+}
+
 export function slackAuthorizeUrl(state: string): string {
   const clientId = process.env.SLACK_CLIENT_ID || "";
-  const redirect = `${convexSiteUrl()}/api/slack/oauth/callback`;
   return (
     `https://slack.com/oauth/v2/authorize?client_id=${encodeURIComponent(clientId)}` +
     `&scope=${encodeURIComponent(BOT_SCOPES)}` +
-    `&redirect_uri=${encodeURIComponent(redirect)}` +
+    `&redirect_uri=${encodeURIComponent(slackRedirectUri())}` +
     `&state=${encodeURIComponent(state)}`
   );
 }
@@ -191,18 +200,73 @@ export const getInstallUrl = action({
     if (!clientId) return { ok: false, error: "Slack app not configured (SLACK_CLIENT_ID)" };
     const scope = await ctx.runQuery(internal.slack.resolveInstallScope, args);
     if (!scope) return { ok: false, error: "No anchor to connect — create one first" };
-    // Return the /start endpoint (not Slack directly): it sets a browser-bound
-    // nonce cookie before redirecting to Slack, so the callback can verify the
-    // install completes in the SAME browser that began it (blocks the relay /
-    // confused-deputy attack where a signed state is sent to a victim).
-    const state = await signState({ ...scope, scope_type: args.scope_type, ts: Date.now() });
-    const url = `${convexSiteUrl()}/api/slack/oauth/start?s=${encodeURIComponent(state)}`;
-    return { ok: true, url };
+    // Sign only scope_type + freshness — NO identity. The completing step
+    // (completeSlackInstall) re-derives WHICH anchor from the authenticated caller,
+    // so a relayed state can't bind a victim's workspace to the relayer's anchor.
+    const state = await signState({ scope_type: args.scope_type, ts: Date.now() });
+    return { ok: true, url: slackAuthorizeUrl(state) };
+  },
+});
+
+// completeSlackInstall — the anchor page calls this (authenticated) when Slack
+// redirects back with ?code&?state. The install binds to the AUTHENTICATED
+// caller's own anchor (re-derived here), NOT to anything in the portable state —
+// so a relayed link lands in the recipient's session and can only connect the
+// workspace to the recipient's own anchor, never the relayer's.
+export const completeSlackInstall = action({
+  args: { api_token: v.optional(v.string()), code: v.string(), state: v.string() },
+  handler: async (ctx, args): Promise<{ ok: boolean; error?: string; scope_type?: string }> => {
+    const st = await verifyState(args.state);
+    if (!st) return { ok: false, error: "bad_state" };
+    const scopeType = st.scope_type === "team" ? ("team" as const) : ("user" as const);
+    const scope = await ctx.runQuery(internal.slack.resolveInstallScope, {
+      api_token: args.api_token,
+      scope_type: scopeType,
+    });
+    if (!scope) return { ok: false, error: "no_anchor" };
+
+    const clientId = process.env.SLACK_CLIENT_ID;
+    const clientSecret = process.env.SLACK_CLIENT_SECRET;
+    if (!clientId || !clientSecret) return { ok: false, error: "not_configured" };
+
+    let data: any;
+    try {
+      const resp = await fetch("https://slack.com/api/oauth.v2.access", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          client_id: clientId,
+          client_secret: clientSecret,
+          code: args.code,
+          redirect_uri: slackRedirectUri(),
+        }).toString(),
+      });
+      data = await resp.json();
+    } catch {
+      return { ok: false, error: "exchange_failed" };
+    }
+    if (!data?.ok || !data.access_token || !data.team?.id || !data.bot_user_id) {
+      return { ok: false, error: data?.error || "exchange_failed" };
+    }
+
+    const stored = await ctx.runMutation(internal.slack.storeInstallation, {
+      workspace_id: data.team.id,
+      workspace_name: data.team.name,
+      bot_user_id: data.bot_user_id,
+      bot_token: data.access_token,
+      scopes: data.scope,
+      app_id: data.app_id,
+      team_id: scope.team_id,
+      scope_user_id: scope.scope_user_id,
+      installed_by: scope.user_id,
+    });
+    if (!stored?.ok) return { ok: false, error: stored?.error || "store_failed" };
+    return { ok: true, scope_type: scopeType };
   },
 });
 
 // storeInstallation — upsert the per-workspace bot token, bound to the codecast
-// scope from the (verified) state. Called by the OAuth callback (http.ts).
+// scope resolved from the authenticated completer (completeSlackInstall).
 export const storeInstallation = internalMutation({
   args: {
     workspace_id: v.string(),
