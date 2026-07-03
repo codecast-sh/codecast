@@ -25,6 +25,7 @@ const FULL_WIDTH_PATTERNS: RegExp[] = [
   // layouts and internal scroll regions. Centering them in a padded column
   // would break them.
   /^\/sessions(\/|$)/,
+  /^\/anchor(\/|$)/,
   /^\/admin\//,
 ];
 
