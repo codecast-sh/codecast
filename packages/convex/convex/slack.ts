@@ -14,10 +14,23 @@ import { deliverToAnchor, userCanAccessAnchor, visibleAnchorsForUser } from "./a
 // enough (multi-tenant boundary). SLACK_SIGNING_SECRET (app-level) still verifies
 // inbound webhooks; SLACK_BOT_TOKEN is honored as a fallback for a manual setup.
 
-const BOT_SCOPES = "app_mentions:read,chat:write,im:history,channels:read,groups:read,users:read";
+export const BOT_SCOPES = "app_mentions:read,chat:write,im:history,channels:read,groups:read,users:read";
 
-function convexSiteUrl(): string {
+export function convexSiteUrl(): string {
   return process.env.SLACK_REDIRECT_BASE || process.env.CONVEX_SITE_URL || "https://convex.codecast.sh";
+}
+
+// The Slack authorize URL for a (signed) state. Built here so the OAuth /start
+// endpoint (http.ts) and getInstallUrl share one definition.
+export function slackAuthorizeUrl(state: string): string {
+  const clientId = process.env.SLACK_CLIENT_ID || "";
+  const redirect = `${convexSiteUrl()}/api/slack/oauth/callback`;
+  return (
+    `https://slack.com/oauth/v2/authorize?client_id=${encodeURIComponent(clientId)}` +
+    `&scope=${encodeURIComponent(BOT_SCOPES)}` +
+    `&redirect_uri=${encodeURIComponent(redirect)}` +
+    `&state=${encodeURIComponent(state)}`
+  );
 }
 
 // ── OAuth state signing (CSRF + binding integrity) ──────────────────────────
@@ -37,7 +50,7 @@ async function hmacHex(secret: string, body: string): Promise<string> {
   return Array.from(new Uint8Array(sig)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-async function signState(payload: Record<string, unknown>): Promise<string> {
+export async function signState(payload: Record<string, unknown>): Promise<string> {
   const secret = process.env.SLACK_CLIENT_SECRET || "";
   const body = btoa(JSON.stringify(payload));
   return `${body}.${await hmacHex(secret, body)}`;
@@ -56,7 +69,9 @@ export async function verifyState(state: string): Promise<Record<string, any> | 
   if (mismatch !== 0) return null;
   try {
     const payload = JSON.parse(atob(body));
-    if (typeof payload.ts === "number" && Date.now() - payload.ts > 15 * 60 * 1000) return null;
+    // Require a fresh timestamp — a state with no (or non-numeric) ts would never
+    // expire, defeating the replay window.
+    if (typeof payload.ts !== "number" || Date.now() - payload.ts > 15 * 60 * 1000) return null;
     return payload;
   } catch {
     return null;
@@ -118,14 +133,16 @@ async function installationForAnchor(ctx: { db: any }, anchor: any): Promise<any
 // Channel ids are only unique within a workspace; resolve with the workspace when
 // we have it (inbound events carry team_id), falling back to the global lookup.
 async function channelRow(ctx: { db: any }, channel: string, workspace?: string) {
+  // When the workspace is known (inbound events carry team_id), resolve STRICTLY
+  // within it — no global fallback, or a channel id colliding across workspaces
+  // could cross-route a mention to the wrong tenant's anchor.
   if (workspace) {
-    const scoped = await ctx.db
+    return await ctx.db
       .query("anchor_channels")
       .withIndex("by_workspace_channel", (q: any) =>
         q.eq("surface", "slack").eq("workspace_key", workspace).eq("channel_key", channel),
       )
       .first();
-    if (scoped) return scoped;
   }
   return await ctx.db
     .query("anchor_channels")
@@ -174,13 +191,12 @@ export const getInstallUrl = action({
     if (!clientId) return { ok: false, error: "Slack app not configured (SLACK_CLIENT_ID)" };
     const scope = await ctx.runQuery(internal.slack.resolveInstallScope, args);
     if (!scope) return { ok: false, error: "No anchor to connect — create one first" };
-    const state = await signState({ ...scope, ts: Date.now() });
-    const redirect = `${convexSiteUrl()}/api/slack/oauth/callback`;
-    const url =
-      `https://slack.com/oauth/v2/authorize?client_id=${encodeURIComponent(clientId)}` +
-      `&scope=${encodeURIComponent(BOT_SCOPES)}` +
-      `&redirect_uri=${encodeURIComponent(redirect)}` +
-      `&state=${encodeURIComponent(state)}`;
+    // Return the /start endpoint (not Slack directly): it sets a browser-bound
+    // nonce cookie before redirecting to Slack, so the callback can verify the
+    // install completes in the SAME browser that began it (blocks the relay /
+    // confused-deputy attack where a signed state is sent to a victim).
+    const state = await signState({ ...scope, scope_type: args.scope_type, ts: Date.now() });
+    const url = `${convexSiteUrl()}/api/slack/oauth/start?s=${encodeURIComponent(state)}`;
     return { ok: true, url };
   },
 });
@@ -223,14 +239,22 @@ export const storeInstallation = internalMutation({
       updated_at: now,
     };
     if (existing) {
+      // Refuse to silently re-point an existing workspace install to a DIFFERENT
+      // codecast scope — that would hijack the workspace's token and orphan the
+      // prior owner's channels. Only a re-install to the SAME scope (token
+      // refresh) is allowed. (Mirrors commitLinkChannel's re-point guard.)
+      const idEq = (a: any, b: any) => (a ? a.toString() : null) === (b ? b.toString() : null);
+      const sameScope = idEq(existing.team_id, teamId) && idEq(existing.scope_user_id, scopeUserId);
+      if (!sameScope) return { ok: false as const, error: "workspace_taken" };
       await ctx.db.patch(existing._id, fields);
-      return existing._id;
+      return { ok: true as const, id: existing._id };
     }
-    return await ctx.db.insert("slack_installations", {
+    const id = await ctx.db.insert("slack_installations", {
       ...fields,
       installed_by_user_id: installedBy,
       created_at: now,
     });
+    return { ok: true as const, id };
   },
 });
 
@@ -322,7 +346,7 @@ export const linkChannel = action({
       team_id: args.team_id,
     });
     if (!lc.ok) return { ok: false, error: lc.error, channel: args.channel };
-    const token = lc.bot_token || process.env.SLACK_BOT_TOKEN;
+    const token = lc.bot_token;
     if (!token) return { ok: false, error: "Connect Slack first (Add to Slack)", channel: args.channel };
 
     const resp = await fetch(
@@ -480,8 +504,10 @@ export const postMessage = action({
       channel: args.channel,
     });
     if (!pc.ok) return { ok: false, error: "Not authorized to post to this channel" };
-    const token = pc.bot_token || process.env.SLACK_BOT_TOKEN;
-    if (!token) return { ok: false, error: "No Slack token for this workspace — reconnect Slack" };
+    // No env-token fallback: with per-workspace installs, a shared env token would
+    // be a confused deputy (post to the wrong workspace). Require the installation.
+    const token = pc.bot_token;
+    if (!token) return { ok: false, error: "Slack not connected for this anchor — reconnect Slack" };
     const resp = await fetch("https://slack.com/api/chat.postMessage", {
       method: "POST",
       headers: { "Content-Type": "application/json; charset=utf-8", Authorization: `Bearer ${token}` },

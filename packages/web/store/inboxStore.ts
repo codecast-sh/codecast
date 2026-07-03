@@ -945,6 +945,24 @@ export function isSessionWaitingForInput(
     !session.is_pinned;
 }
 
+// The NARROW "the agent is blocked on the user" signal — an open poll, a
+// permission prompt, an auth/API error, or a dead session with output. Distinct
+// from isSessionWaitingForInput, which ALSO routes the plain idle-with-content
+// resting state to NEEDS INPUT. An Anchor uses this to decide when to surface in
+// the inbox: it should appear only when it genuinely needs you, not every time it
+// finishes a turn and goes idle (its resting state lives in its dedicated space).
+export function isSessionBlockedOnUser(
+  session: Pick<InboxSession, "agent_status" | "message_count" | "awaiting_input" | "pending_api_error">,
+): boolean {
+  if (session.awaiting_input) return true;
+  if (session.pending_api_error && session.message_count > 0) return true;
+  if (session.agent_status === "permission_blocked") return session.message_count > 0;
+  if (!!session.agent_status && DEAD_AGENT_STATUSES.has(session.agent_status)) {
+    return session.message_count > 0;
+  }
+  return false;
+}
+
 // Per-session-object memo for the two costliest classification predicates.
 // categorizeSessions runs on every REAL session change (a single agent flipping
 // working↔idle re-buckets the whole list), and over a never-pruned store that
@@ -1081,9 +1099,11 @@ export function categorizeSessions(
   const stashed: InboxSession[] = [];
   for (const s of Object.values(sessions)) {
     // An anchor's standing thread lives in its dedicated /anchor space, not the
-    // inbox — surface it here ONLY when it's waiting on the user (blocked / asking
-    // something), then it drops back out to its space once handled.
-    const hiddenAnchor = !!s.is_anchor && !isSessionWaitingForInput(s);
+    // inbox — surface it here ONLY when it's genuinely blocked on the user (an open
+    // poll, permission prompt, auth error, or a dead session with output), NOT
+    // every time it finishes a turn and goes idle. It drops back to its space once
+    // handled.
+    const hiddenAnchor = !!s.is_anchor && !isSessionBlockedOnUser(s);
     if (!isSessionHidden(s) && !hiddenAnchor) activeKeyed.push({ s, rank: sessionSortRank(s) });
     if (isSessionDismissed(s)) dismissed.push(s);
     if (isSessionStashed(s)) stashed.push(s);

@@ -30,6 +30,7 @@ function AnchorSpace() {
   const [slackFlash, setSlackFlash] = useState<null | "connected" | "error">(null);
   useEffect(() => {
     const p = new URLSearchParams(window.location.search);
+    if (p.get("scope") === "team") setScope("team");
     const s = p.get("slack");
     if (s === "connected" || s === "error") {
       setSlackFlash(s);
@@ -77,6 +78,8 @@ function AnchorSpace() {
           <CenteredNote>Loading your anchor…</CenteredNote>
         ) : space?.forbidden ? (
           <CenteredNote>You're not a member of that team.</CenteredNote>
+        ) : space?.no_team ? (
+          <CenteredNote>Create or join a team to give it a shared Anchor.</CenteredNote>
         ) : !space?.anchor ? (
           <Onboarding scope={scope} />
         ) : (
@@ -263,16 +266,23 @@ function SlackPanel({ space }: { space: any }) {
   const getInstallUrl = useAction(api.slack.getInstallUrl);
   const unlink = useMutation(api.slack.unlinkChannel);
   const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
   const connected = !!space.slack?.connected;
   const channels: any[] = space.channels ?? [];
 
   const connect = async () => {
     setBusy(true);
+    setErr(null);
     try {
       const res = await getInstallUrl({ scope_type: space.scope_type } as any);
-      if (res?.ok && res.url) window.location.href = res.url;
-      else setBusy(false);
-    } catch {
+      if (res?.ok && res.url) {
+        window.location.href = res.url;
+      } else {
+        setErr(res?.error ?? "Couldn't start the Slack connection");
+        setBusy(false);
+      }
+    } catch (e: any) {
+      setErr(e?.message ?? "Couldn't reach Slack");
       setBusy(false);
     }
   };
@@ -334,6 +344,7 @@ function SlackPanel({ space }: { space: any }) {
           </button>
         </>
       )}
+      {err && <div className="text-sol-red text-xs mt-2">{err}</div>}
     </Panel>
   );
 }
@@ -347,11 +358,25 @@ function SettingsPanel({ anchor }: { anchor: any }) {
   const [persona, setPersona] = useState(anchor.persona ?? "");
   const [saved, setSaved] = useState(false);
   const [confirmRetire, setConfirmRetire] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
 
   const save = async () => {
-    await update({ anchor_id: anchor._id, name, persona } as any);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    setErr(null);
+    try {
+      await update({ anchor_id: anchor._id, name, persona } as any);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e: any) {
+      setErr(e?.message ?? "Save failed");
+    }
+  };
+  const retire = async () => {
+    setErr(null);
+    try {
+      await decommission({ anchor_id: anchor._id } as any);
+    } catch (e: any) {
+      setErr(e?.message ?? "Retire failed");
+    }
   };
 
   return (
@@ -389,14 +414,12 @@ function SettingsPanel({ anchor }: { anchor: any }) {
             Retire
           </button>
         ) : (
-          <button
-            onClick={() => decommission({ anchor_id: anchor._id } as any)}
-            className="ml-auto text-xs text-sol-red font-medium"
-          >
+          <button onClick={retire} className="ml-auto text-xs text-sol-red font-medium">
             Confirm retire
           </button>
         )}
       </div>
+      {err && <div className="text-sol-red text-xs mt-2">{err}</div>}
     </Panel>
   );
 }
