@@ -31,7 +31,7 @@ import { KeyCap, MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { toast } from "sonner";
 import { CodeBlock } from "./CodeBlock";
 import { useFullWidthExpand } from "../hooks/useFullWidthExpand";
-import { tryRenderCanvas } from "./HtmlSnippet";
+import { tryRenderCanvas, tryRenderHtmlMessage, looksLikeHtml } from "./HtmlSnippet";
 import { useDiffViewerStore } from "../store/diffViewerStore";
 import { isJumpReadyToScroll, shouldLoadOlder, shouldLoadNewer } from "./conversationScroll";
 import { parseInsightBlocks } from "./insightBlocks";
@@ -355,6 +355,10 @@ function renderMessageMarkdownCached(content: string): ReactElement {
 // through the context-aware ReactMarkdown wrapper instead.
 const MessageMarkdown = memo(function MessageMarkdown({ content }: { content: string }) {
   const query = useContext(HighlightContext);
+  // An all-HTML body renders as a sanitized canvas — the markdown pipeline
+  // escapes raw tags into garbled source.
+  const html = tryRenderHtmlMessage(content);
+  if (html) return html;
   if (query) {
     return (
       <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={MESSAGE_MD_COMPONENTS}>
@@ -5522,7 +5526,9 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
     .replace(/\[image\]/gi, "")
     .trim();
   const { contexts: contextBlocks, remaining: displayContent } = parseContextBlocks(rawContent);
-  const isMarkdown = hasRichMarkdown(displayContent);
+  // HTML bodies take the markdown branch so MessageMarkdown can dispatch them
+  // to the sanitized canvas renderer.
+  const isMarkdown = hasRichMarkdown(displayContent) || looksLikeHtml(displayContent);
 
   const effectivelyCollapsed = collapsed && !isExpanded;
 
