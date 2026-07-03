@@ -1278,6 +1278,12 @@ export default defineSchema({
     last_run_at: v.optional(v.number()),
     last_run_summary: v.optional(v.string()),
     last_run_conversation_id: v.optional(v.id("conversations")),
+    // Claude session UUID of the last spawned run. The daemon assigns it up front
+    // via `claude --session-id`; webList resolves it to a conversation at read time
+    // (by_session_id), so spawned runs are linkable even if the run's conversation
+    // hadn't synced yet at completion. Absent for --context-current runs, which
+    // record last_run_conversation_id directly.
+    last_run_session_uuid: v.optional(v.string()),
     run_count: v.number(),
     created_at: v.number(),
   })

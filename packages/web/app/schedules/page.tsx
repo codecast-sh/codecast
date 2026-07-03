@@ -257,6 +257,14 @@ function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boole
   const isEditable = task.status === "scheduled" || task.status === "paused";
   const failedSummary = task.status === "failed" || task.last_run_summary?.startsWith("Failed");
 
+  // The session to open from this row: the run's own conversation when the daemon
+  // recorded it, otherwise the session this schedule was created from. Every row
+  // that has run or came from a session becomes one click from a real conversation.
+  const runSession = task.last_run_conversation_id;
+  const sessionId = runSession ?? task.originating_conversation_id;
+  const sessionTitle = runSession ? task.last_run_conversation_title : task.originating_conversation_title;
+  const sessionVerb = runSession ? "Open run session" : "Open source session";
+
   const openForm = (which: "edit" | "duplicate") => (e: React.MouseEvent) => {
     e.stopPropagation();
     setFormMode(which);
@@ -339,25 +347,31 @@ function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boole
               </span>
             )}
 
-            {/* the latest run, surfaced as a clear clickable session — the thing you
-                actually want to open. Truncates last (min-w-0) so it never gets
-                pushed off the row the way the old buried "view run" link did. */}
-            {task.last_run_conversation_id ? (
+            {/* The run, surfaced as a clear clickable session — the thing you
+                actually want to open. Links to the run's own conversation when the
+                daemon recorded it, else the originating session. Truncates last
+                (min-w-0) so it's never pushed off the row like the old buried link. */}
+            {sessionId ? (
               <Link
-                href={`/conversation/${task.last_run_conversation_id}`}
+                href={`/conversation/${sessionId}`}
                 onClick={(e) => e.stopPropagation()}
-                title={task.last_run_conversation_title ? `Open session: ${task.last_run_conversation_title}` : "Open run session"}
+                title={sessionTitle ? `${sessionVerb}: ${sessionTitle}` : sessionVerb}
                 className={`group/sess inline-flex items-center gap-1 min-w-0 rounded px-1.5 py-0.5 -my-0.5 transition-colors hover:bg-sol-cyan/10 ${
                   failedSummary ? "text-sol-red hover:bg-sol-red/10" : "text-sol-cyan"
                 }`}
               >
                 <MessageSquare className="w-3 h-3 flex-shrink-0" />
                 <span className="truncate">
-                  {task.last_run_summary || task.last_run_conversation_title || "View run session"}
+                  {task.last_run_summary || sessionTitle || sessionVerb}
                 </span>
                 {task.last_run_at && <span className="text-sol-text-dim/80 flex-shrink-0">· {timeAgo(task.last_run_at)}</span>}
                 <ArrowUpRight className="w-3 h-3 flex-shrink-0 opacity-50 group-hover/sess:opacity-100 transition-opacity" />
               </Link>
+            ) : task.last_run_summary ? (
+              <span className={`inline-flex items-center gap-1.5 min-w-0`}>
+                <span className={`truncate ${failedSummary ? "text-sol-red" : ""}`}>{task.last_run_summary}</span>
+                {task.last_run_at && <span className="flex-shrink-0">· {timeAgo(task.last_run_at)}</span>}
+              </span>
             ) : (
               task.last_run_at && <span className="flex-shrink-0">last {timeAgo(task.last_run_at)}</span>
             )}

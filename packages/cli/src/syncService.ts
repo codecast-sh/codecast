@@ -1473,7 +1473,7 @@ export class SyncService {
     }
   }
 
-  async completeTaskRun(taskId: string, daemonId: string, summary?: string, conversationId?: string): Promise<boolean> {
+  async completeTaskRun(taskId: string, daemonId: string, summary?: string, conversationId?: string, runSessionUuid?: string): Promise<boolean> {
     if (!this.apiToken) return false;
     try {
       const result = await this.client.mutation(
@@ -1484,6 +1484,7 @@ export class SyncService {
           daemon_id: daemonId,
           summary,
           conversation_id: conversationId,
+          run_session_uuid: runSessionUuid,
         }
       );
       return result as boolean;
@@ -1492,12 +1493,12 @@ export class SyncService {
     }
   }
 
-  async failTaskRun(taskId: string, daemonId: string, error?: string): Promise<boolean> {
+  async failTaskRun(taskId: string, daemonId: string, error?: string, runSessionUuid?: string): Promise<boolean> {
     if (!this.apiToken) return false;
     try {
       const result = await this.client.mutation(
         "agentTasks:failTaskRun" as any,
-        { api_token: this.apiToken, task_id: taskId, daemon_id: daemonId, error }
+        { api_token: this.apiToken, task_id: taskId, daemon_id: daemonId, error, run_session_uuid: runSessionUuid }
       );
       return result as boolean;
     } catch {

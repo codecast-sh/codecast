@@ -2898,6 +2898,7 @@ http.route({
         ...(body.daemon_id ? { daemon_id: body.daemon_id } : {}),
         summary: body.summary,
         conversation_id: body.conversation_id,
+        run_session_uuid: body.run_session_uuid,
       });
       return new Response(JSON.stringify({ success: result }), {
         status: 200,
