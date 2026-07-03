@@ -1257,7 +1257,9 @@ async function pollDaemonCommands(): Promise<void> {
           logLifecycle("self_heal_restart", `Backend recovered after ${downSec}s down, restarting`);
           sendLogImmediate("warn", `[LIFECYCLE] self_heal_restart: backend recovered after ${downSec}s down`, { error_code: "self_heal_restart" });
           saveDaemonState({ lastSelfHealRestart: Date.now() });
-          flushRemoteLogs().then(() => triggerSelfRestart()).catch(() => triggerSelfRestart());
+          flushRemoteLogs()
+            .then(() => restartDaemonProcess("backend recovered after outage"))
+            .catch(() => restartDaemonProcess("backend recovered after outage"));
           return;
         }
       }
@@ -1761,18 +1763,7 @@ async function executeRemoteCommand(
           }),
         });
         setTimeout(() => {
-          log("Restarting daemon per remote command...");
-          if (isManagedByLaunchd()) {
-            log("Launchd will restart daemon after exit");
-          } else {
-            const spawned = spawnReplacement();
-            if (spawned) {
-              skipRespawn = true;
-            } else {
-              log("spawnReplacement failed, letting exit handler respawn");
-            }
-          }
-          setTimeout(() => process.exit(0), 500);
+          restartDaemonProcess("remote restart command");
         }, 1000);
         return;
       }
@@ -1797,18 +1788,7 @@ async function executeRemoteCommand(
           if (result.success) {
             logLifecycle("update_complete", `Binary replaced from v${currentVersion}, restarting`);
             await flushRemoteLogs();
-            log("Update successful, restarting...");
-            if (isManagedByLaunchd()) {
-              log("Launchd will restart daemon after update");
-            } else {
-              const spawned = spawnReplacement();
-              if (spawned) {
-                skipRespawn = true;
-              } else {
-                log("spawnReplacement failed, letting exit handler respawn");
-              }
-            }
-            setTimeout(() => process.exit(0), 500);
+            restartDaemonProcess("remote update command");
           } else {
             logLifecycle("update_failed", `Update failed from v${currentVersion} error=${result.error}`);
             await flushRemoteLogs();
@@ -11486,8 +11466,39 @@ function isAgentProcess(pid: number): boolean {
 
 let skipRespawn = false;
 
+const DAEMON_LAUNCHD_LABEL = "sh.codecast.daemon";
+
+// Parse the running instance pid out of `launchctl print gui/<uid>/<label>` output.
+// Pure so ownership detection is testable without a live launchd.
+export function parseLaunchdPrintPid(printOutput: string): number | null {
+  const m = printOutput.match(/^\s*pid = (\d+)\b/m);
+  if (!m) return null;
+  const pid = parseInt(m[1], 10);
+  return Number.isFinite(pid) && pid > 0 ? pid : null;
+}
+
+function readLaunchdDaemonJob(): { loaded: boolean; pid: number | null } {
+  if (platform !== "darwin" || !process.getuid) return { loaded: false, pid: null };
+  try {
+    const res = spawnSync("launchctl", ["print", `gui/${process.getuid()}/${DAEMON_LAUNCHD_LABEL}`], {
+      encoding: "utf-8",
+      timeout: 5000,
+    });
+    if (res.status !== 0) return { loaded: false, pid: null };
+    return { loaded: true, pid: parseLaunchdPrintPid(res.stdout || "") };
+  } catch {
+    return { loaded: false, pid: null };
+  }
+}
+
+// "Managed by launchd" must mean "launchd's supervised instance IS this process".
+// The old env probe (XPC_SERVICE_NAME) survives into every {...process.env} child,
+// so a self-spawned replacement believed launchd owned it: its restarts went
+// through `kickstart -k`, which cannot kill a process that isn't the job instance
+// and instead spawned duplicates that lost the pid-file race — while the shell
+// watchdog kickstarted the "dead" job every cycle. Ask launchd, not the env.
 function isManagedByLaunchd(): boolean {
-  return !!process.env.XPC_SERVICE_NAME;
+  return readLaunchdDaemonJob().pid === process.pid;
 }
 
 // Mutual supervision: the launchd watchdog revives the daemon, and the daemon
@@ -11540,12 +11551,21 @@ function ensureWatchdogSupervised(force = false): void {
   }
 }
 
+// Environment for a child daemon this process spawns itself. Strip launchd's job
+// marker: the child is NOT the supervised instance, and inheriting the variable is
+// how self-spawned daemons used to believe they were.
+function replacementEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, CODECAST_RESTART: "1" };
+  delete env.XPC_SERVICE_NAME;
+  return env;
+}
+
 function spawnReplacement(): boolean {
   try {
     const child = spawn(process.execPath, process.argv.slice(1), {
       detached: true,
       stdio: "ignore",
-      env: { ...process.env, CODECAST_RESTART: "1" },
+      env: replacementEnv(),
     });
     child.unref();
     return true;
@@ -11566,7 +11586,7 @@ function spawnReplacement(): boolean {
 // even if our own exit never does. Pure so the wiring (label, gui/$uid, -k) is testable
 // without spawning a real kickstart against the live daemon.
 export function buildLaunchdKickstartCommand(uid: number): string {
-  return `sleep 1; launchctl kickstart -k gui/${uid}/sh.codecast.daemon`;
+  return `sleep 1; launchctl kickstart -k gui/${uid}/${DAEMON_LAUNCHD_LABEL}`;
 }
 
 function requestLaunchdRestart(): boolean {
@@ -11584,16 +11604,42 @@ function requestLaunchdRestart(): boolean {
   }
 }
 
-function triggerSelfRestart(): void {
-  if (isManagedByLaunchd()) {
-    // Imperatively kick launchd; kickstart -k kills this instance and starts a fresh
-    // one. Only fall through to the exit-and-trust-KeepAlive path if that fails.
-    if (requestLaunchdRestart()) return;
-  } else {
-    const spawned = spawnReplacement();
-    if (spawned) skipRespawn = true;
+// One restart contract for every "exit and come back" path (self-heal, remote
+// restart/update, forced update, disk version mismatch). Ownership decides the
+// mechanism, and ownership is read from launchd itself — never from the
+// environment, which self-spawned children inherit.
+function restartDaemonProcess(reason: string): void {
+  const job = readLaunchdDaemonJob();
+  const managed = job.pid !== null && job.pid === process.pid;
+  log(`Restarting daemon (${reason}); launchd job: ${job.loaded ? (managed ? "managed" : "loaded, not ours") : "absent"}`);
+  if (managed) {
+    // kickstart -k kills us externally in ~1s, so the restart does not depend on
+    // our own timers (dead in the post-sleep self-heal case). The delayed exit
+    // below only matters if the kickstart never fires; when it works we are gone
+    // before the timer runs.
+    if (requestLaunchdRestart()) {
+      setTimeout(() => process.exit(0), 2000);
+      return;
+    }
+    persistLogQueue();
+    process.exit(0); // KeepAlive respawns us
   }
-  setTimeout(() => process.exit(0), 500);
+  if (job.loaded) {
+    // We are not the instance launchd supervises (a self-spawned lineage).
+    // Spawning another unmanaged replacement would perpetuate that lineage and
+    // keep the watchdog kickstarting a job it sees as dead. Hand ownership back:
+    // free the pid file by exiting and kick the job so launchd's instance wins it.
+    skipRespawn = true;
+    if (!requestLaunchdRestart()) spawnReplacement();
+    persistLogQueue();
+    process.exit(0);
+  }
+  const spawned = spawnReplacement();
+  if (spawned) skipRespawn = true;
+  persistLogQueue();
+  // Exit synchronously: the replacement is already racing for the pid file, and a
+  // timer-deferred exit never happens when the timer subsystem is dead.
+  process.exit(0);
 }
 
 // Cross-platform self-heal. setInterval/setTimeout do not reliably survive a long
@@ -11626,7 +11672,7 @@ function selfHealIfTimersStalled(source: string): void {
   selfHealing = true;
   log(`[SELF-HEAL] event-loop timer stalled ${Math.round(stale / 1000)}s (timers dead, likely post-sleep), restarting via ${source}`);
   logLifecycle("self_heal_restart", `tick stalled ${Math.round(stale / 1000)}s, via ${source}`);
-  triggerSelfRestart();
+  restartDaemonProcess(`event-loop timers stalled, via ${source}`);
 }
 
 const CRASH_FILE = path.join(CONFIG_DIR, "crash-count.json");
@@ -11733,9 +11779,20 @@ export function releasePidFileIfOwned(pidFile: string, pid: number): boolean {
 function acquireLock(): boolean {
   const underLaunchd = isManagedByLaunchd();
 
-  // Even without a PID file, check for zombie daemon processes (e.g. from a
-  // shutdown that deleted the PID file but failed to exit).
-  if (!underLaunchd) {
+  if (underLaunchd) {
+    // We are the instance launchd supervises — the rightful pid-file owner. A live
+    // holder that isn't us is a rogue from a self-spawned lineage; deferring to it
+    // ("already running, exiting") sustains the watchdog's kickstart storm, spawning
+    // a doomed duplicate every cycle. Take over instead.
+    const holder = readPidFile(PID_FILE);
+    if (holder && holder !== process.pid && isProcessRunning(holder)) {
+      log(`Killing rogue daemon ${holder} (launchd instance taking over)`);
+      try { process.kill(holder, "SIGKILL"); } catch {}
+      releasePidFileIfOwned(PID_FILE, holder);
+    }
+  } else {
+    // Even without a PID file, check for zombie daemon processes (e.g. from a
+    // shutdown that deleted the PID file but failed to exit).
     try {
       const pgrepOut = execSync(`pgrep -f 'daemon\\.ts$' 2>/dev/null || true`, { encoding: "utf-8", timeout: 3000 });
       const pids = pgrepOut.trim().split("\n").map(Number).filter(p => p && p !== process.pid && isProcessRunning(p));
@@ -12139,11 +12196,7 @@ async function checkForForcedUpdate(syncService: SyncService): Promise<boolean> 
       if (result.success) {
         logLifecycle("forced_update_complete", `Binary replaced from v${currentVersion}, target>=${minVersion}`);
         await flushRemoteLogs();
-        if (!isManagedByLaunchd()) {
-          spawnReplacement();
-        }
-        await new Promise(resolve => setTimeout(resolve, 500));
-        process.exit(0);
+        restartDaemonProcess(`forced update to >=${minVersion}`);
       } else {
         logLifecycle("forced_update_failed", `current=${currentVersion} target>=${minVersion} error=${result.error}`);
         await flushRemoteLogs();
@@ -12173,19 +12226,9 @@ function checkDiskVersionMismatch(): void {
     if (diskVersion !== daemonVersion) {
       log(`Disk version mismatch: running=${daemonVersion} disk=${diskVersion}, restarting`);
       logLifecycle("version_mismatch_restart", `${daemonVersion} -> ${diskVersion}`);
-      flushRemoteLogs().then(() => {
-        if (!isManagedByLaunchd()) {
-          const spawned = spawnReplacement();
-          if (spawned) skipRespawn = true;
-        }
-        setTimeout(() => process.exit(0), 500);
-      }).catch(() => {
-        if (!isManagedByLaunchd()) {
-          const spawned = spawnReplacement();
-          if (spawned) skipRespawn = true;
-        }
-        setTimeout(() => process.exit(0), 500);
-      });
+      flushRemoteLogs()
+        .then(() => restartDaemonProcess("disk version mismatch"))
+        .catch(() => restartDaemonProcess("disk version mismatch"));
     }
   } catch {}
 }
@@ -12716,7 +12759,7 @@ async function main(): Promise<void> {
           spawn("sh", ["-c", `sleep ${backoffMinutes * 60} && "${process.execPath}" ${process.argv.slice(1).map(a => `"${a}"`).join(" ")}`], {
             detached: true,
             stdio: "ignore",
-            env: { ...process.env, CODECAST_RESTART: "1" },
+            env: replacementEnv(),
           }).unref();
         } catch {}
         return;
@@ -12728,7 +12771,7 @@ async function main(): Promise<void> {
       spawn(process.execPath, process.argv.slice(1), {
         detached: true,
         stdio: "ignore",
-        env: { ...process.env, CODECAST_RESTART: "1" },
+        env: replacementEnv(),
       }).unref();
     } catch {}
   });
