@@ -389,6 +389,8 @@ export type TaskItem = {
   source_agent_type?: string | null;
   origin_session?: { conversation_id: string; session_id: string; title?: string; started_by?: string; last_message_at?: number; message_count?: number } | null;
   session_count?: number;
+  created_from_conversation?: string;
+  conversation_ids?: string[];
   steps?: TaskStep[];
   acceptance_criteria?: string[];
   execution_status?: TaskExecutionStatus;
@@ -2176,6 +2178,10 @@ interface InboxStoreState {
   // -- Task / Doc / Plan / Project state --
   tasks: Record<string, TaskItem>;
   taskActiveSessions: Record<string, any>;
+  // Dormant origin-session badges keyed by conversation id, fetched one-shot by
+  // useSyncTasks (tasks.webTaskOrigins). Task rows no longer carry origin_session
+  // from the server — the tasks page derives it from this map at render.
+  taskOriginBadges: Record<string, NonNullable<TaskItem["origin_session"]> & { agent_type?: string }>;
   // Progress of the full reconcile crawls (useSyncTasks / useSyncDocs), keyed by
   // scope ("tasks" | "docs"). Ephemeral UI state so any list view can show a
   // subtle "syncing N" badge and never imply the list is complete while pages
@@ -4815,6 +4821,7 @@ export const useInboxStore = create<InboxStoreState>(
   comments: {},
   tasks: {},
   taskActiveSessions: {} as Record<string, any>,
+  taskOriginBadges: {},
   syncProgress: {},
   liveLoading: {},
   mentionIndex: { tasks: {}, docs: {}, plans: {} },
