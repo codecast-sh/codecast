@@ -15,7 +15,7 @@ import { resolveTeamForPath } from "./privacy";
 // Owner-or-team access check for a task. Moved to lib/access.ts (Wave-1
 // auth/access seam). Imported for local use here and re-exported so existing
 // callers keep working unchanged.
-import { canAccessTask } from "./lib/access";
+import { canAccessTask, canAccessConversation } from "./lib/access";
 export { canAccessTask };
 
 const VALID_TASK_STATUSES = ["backlog", "open", "in_progress", "in_review", "done", "dropped"] as const;
@@ -1047,7 +1047,7 @@ async function enrichTasks(ctx: any, result: any[]): Promise<any[]> {
     if (t.assignee) allUserIds.add(t.assignee.toString());
   }
   const userMap = new Map<string, { name: string; image?: string; github_username?: string }>();
-  for (const uid of allUserIds) {
+  await Promise.all([...allUserIds].map(async (uid) => {
     try {
       const u = await ctx.db.get(uid as Id<"users">);
       if (u) userMap.set(uid, { name: u.name || u.email || "Unknown", image: u.image || u.github_avatar_url, github_username: u.github_username });
@@ -1059,87 +1059,32 @@ async function enrichTasks(ctx: any, result: any[]): Promise<any[]> {
         userMap.set(uid, { name: u.name || u.email || "Unknown", image: u.image || u.github_avatar_url, github_username: u.github_username });
       }
     }
-  }
+  }));
 
   const planIds = new Set<string>();
   for (const t of result) {
     if (t.plan_id) planIds.add(t.plan_id.toString());
   }
   const planMap = new Map<string, { _id: any; short_id: string; title: string; status: string }>();
-  for (const pid of planIds) {
+  await Promise.all([...planIds].map(async (pid) => {
     try {
       const p = await ctx.db.get(pid as Id<"plans">);
       if (p) planMap.set(pid, { _id: p._id, short_id: p.short_id, title: p.title, status: p.status });
     } catch {}
-  }
+  }));
 
-  // NOTE: activeSession enrichment is intentionally NOT inlined here — it caused
-  // the list queries to subscribe to managed_sessions and conversations, both of
-  // which churn on every daemon heartbeat (~30s per active session), re-shipping
-  // a multi-MB response every few seconds. Live-session overlay lives in
-  // `webActiveSessions` (small, cheap to invalidate); the web client merges it.
-
-  // The session to attribute a task to: the one that created it
-  // (created_from_conversation) or, for tasks that were *started on* a session
-  // via `cast task start` (no created_from, but a linked conversation), its
-  // first linked conversation. Drives both the row's session badge and the
-  // "group by session" view. conversation_ids[0] === created_from for
-  // created-from tasks, so this only adds coverage, never changes it.
-  const sessionConvIdOf = (t: any): string | undefined =>
-    t.created_from_conversation?.toString()
-    ?? (t.conversation_ids && t.conversation_ids.length ? t.conversation_ids[0].toString() : undefined);
-
-  const sourceConvIds = new Set<string>();
-  for (const t of result) {
-    const cid = sessionConvIdOf(t);
-    if (cid) sourceConvIds.add(cid);
-  }
-  const sourceConvMap = new Map<string, { agent_type?: string; session_id?: string; title?: string; user_id?: string; updated_at?: number; message_count?: number }>();
-  for (const cid of sourceConvIds) {
-    try {
-      const c = await ctx.db.get(cid as Id<"conversations">);
-      if (c) sourceConvMap.set(cid, {
-        agent_type: c.agent_type,
-        session_id: c.session_id,
-        title: c.title || undefined,
-        user_id: c.user_id?.toString(),
-        updated_at: c.updated_at,
-        message_count: c.message_count,
-      });
-    } catch {}
-  }
-  // Resolve display names for originating-session owners — often a teammate who
-  // started the work, not the task's own creator — so the task list can show
-  // "who started it" on the session badge. Reuses userMap; only fetches owners
-  // not already resolved from the task creator/assignee pass above.
-  for (const sc of sourceConvMap.values()) {
-    if (sc.user_id && !userMap.has(sc.user_id)) {
-      try {
-        const u = await ctx.db.get(sc.user_id as Id<"users">);
-        if (u) userMap.set(sc.user_id, { name: u.name || u.email || "Unknown", image: u.image || u.github_avatar_url, github_username: u.github_username });
-      } catch {}
-    }
-  }
+  // NOTE: session enrichment is intentionally NOT inlined here — reading
+  // managed_sessions or conversations from a list query subscribes it to tables
+  // that churn on every heartbeat/message, re-running the query and re-shipping
+  // a multi-MB response every few seconds (isolate memory churn + "too many
+  // system operations" timeouts under load). The live overlay is
+  // `webActiveSessions`; the dormant origin badge is `webTaskOrigins`, fetched
+  // one-shot by the client (a dormant session's badge data no longer changes).
 
   for (const t of result) {
     t.creator = userMap.get(t.user_id.toString()) || null;
     t.assignee_info = t.assignee ? userMap.get(t.assignee.toString()) || null : null;
     t.plan = t.plan_id ? planMap.get(t.plan_id.toString()) || null : null;
-    t.source_agent_type = t.created_from_conversation
-      ? sourceConvMap.get(t.created_from_conversation.toString())?.agent_type || null
-      : null;
-    const sessId = sessionConvIdOf(t);
-    const sc = sessId ? sourceConvMap.get(sessId) : undefined;
-    t.origin_session = sc?.session_id
-      ? {
-          conversation_id: sessId!,
-          session_id: sc.session_id,
-          title: sc.title,
-          started_by: sc.user_id ? userMap.get(sc.user_id)?.name : undefined,
-          last_message_at: sc.updated_at,
-          message_count: sc.message_count,
-        }
-      : null;
     t.session_count = (t.conversation_ids || []).length;
   }
   return result;
@@ -1412,6 +1357,51 @@ export const webListPaginated = query({
     await enrichTasks(ctx, rows);
 
     return { page: rows, isDone: result.isDone, continueCursor: result.continueCursor };
+  },
+});
+
+// Companion to webList: the dormant origin-session badge data ("who · when" on
+// a task row's session pill). The client calls this ONE-SHOT (convex.query, not
+// a subscription) for conversation ids referenced by its task rows: a dormant
+// session's badge fields don't change, and a live one is covered by the
+// webActiveSessions overlay — so subscribing would only re-run a query per
+// message written to any referenced conversation, which is exactly the churn
+// enrichTasks used to inflict on webList. Access mirrors canAccessConversation;
+// ids the caller can't see are omitted.
+//
+// Returns: { [conversationId]: { conversation_id, session_id, title?, agent_type?, started_by?, last_message_at?, message_count? } }
+export const webTaskOrigins = query({
+  args: { conversation_ids: v.array(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return {};
+    const out: Record<string, any> = {};
+    const nameCache = new Map<string, string | undefined>();
+    const ownerName = async (uid: any): Promise<string | undefined> => {
+      const key = uid.toString();
+      if (nameCache.has(key)) return nameCache.get(key);
+      let name: string | undefined;
+      try { const u = await ctx.db.get(uid as Id<"users">); name = u ? (u.name || u.email || undefined) : undefined; } catch {}
+      nameCache.set(key, name);
+      return name;
+    };
+    await Promise.all(args.conversation_ids.slice(0, 300).map(async (raw) => {
+      const id = ctx.db.normalizeId("conversations", raw);
+      if (!id) return;
+      const c = await ctx.db.get(id);
+      if (!c || !c.session_id) return;
+      if (!(await canAccessConversation(ctx, userId, c as any))) return;
+      out[raw] = {
+        conversation_id: raw,
+        session_id: c.session_id,
+        title: c.title || undefined,
+        agent_type: c.agent_type || undefined,
+        started_by: await ownerName(c.user_id),
+        last_message_at: c.updated_at,
+        message_count: c.message_count,
+      };
+    }));
+    return out;
   },
 });
 
