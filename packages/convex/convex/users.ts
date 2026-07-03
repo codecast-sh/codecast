@@ -91,37 +91,19 @@ export const updateProfile = mutation({
   },
 });
 
+// No-op stub. This used to advance last_message_sent_at / prev_message_sent_at /
+// work_cluster_started_at on the user doc, scheduled from every synced batch that
+// contained a user-role message (tool results included). Nothing reads those
+// fields, and with a fleet of live sessions the concurrent invocations serialized
+// on one hot document and OCC-storm'd the backend. Kept only so invocations
+// already in the scheduler queue at deploy time don't fail; delete once drained.
 export const updateUserActivity = internalMutation({
   args: {
     userId: v.id("users"),
-    // Accepted-but-ignored: the message path no longer refreshes daemon_last_seen
-    // (the 30s daemonHeartbeat covers it; a second message-triggered writer raced
-    // it on the hot user doc — the OCC conflict this change removes). Kept in the
-    // validator only so any jobs already scheduled with it at deploy time don't
-    // fail their arg check; drop it once the scheduler queue has drained.
     daemonSeen: v.optional(v.boolean()),
     messageTimestamp: v.optional(v.number()),
   },
-  handler: async (ctx, args) => {
-    const patch: Record<string, unknown> = {};
-    const user = await ctx.db.get(args.userId);
-    if (!user) return;
-    if (args.messageTimestamp) {
-      if (!user.last_message_sent_at || args.messageTimestamp > user.last_message_sent_at) {
-        if (user.last_message_sent_at) {
-          patch.prev_message_sent_at = user.last_message_sent_at;
-          const GAP_THRESHOLD_MS = 2 * 60 * 60 * 1000;
-          if (args.messageTimestamp - user.last_message_sent_at > GAP_THRESHOLD_MS) {
-            patch.work_cluster_started_at = args.messageTimestamp;
-          }
-        }
-        patch.last_message_sent_at = args.messageTimestamp;
-      }
-    }
-    if (Object.keys(patch).length > 0) {
-      await ctx.db.patch(args.userId, patch);
-    }
-  },
+  handler: async () => {},
 });
 
 export const updateDaemonLastSeen = mutation({
