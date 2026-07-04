@@ -1,12 +1,13 @@
 "use client";
 
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import Link from "next/link";
 import { ChevronDown, ChevronRight, Clock, Play, Pause, X } from "lucide-react";
 import { describeTaskCadence, fmtDuration } from "./scheduleCadence";
 import { useInboxStore } from "../store/inboxStore";
+import { useCoarseNow } from "../hooks/useCoarseNow";
 
 const api = _api as any;
 
@@ -98,15 +99,10 @@ export function ScheduleContextPanel({
       .sort((a, b) => (b.last_run_at ?? b.created_at) - (a.last_run_at ?? a.created_at))[0];
   }, [matched, conversationId, sessionId, agentTaskId]);
 
-  // Coarse countdown clock: one 30s tick, only while an armed timed fire is
-  // showing. Data churn re-renders are separate (Convex subscription).
-  const [now, setNow] = useState(() => Date.now());
-  const ticking = !!primary && primary.status === "scheduled" && primary.run_at !== undefined;
-  useEffect(() => {
-    if (!ticking) return;
-    const t = setInterval(() => setNow(Date.now()), 30_000);
-    return () => clearInterval(t);
-  }, [ticking]);
+  // Coarse countdown clock — the shared 30s clock the ScheduleBadge cards ride
+  // (one timer total, however many subscribers). Data churn re-renders are
+  // separate (Convex subscription).
+  const now = useCoarseNow(30_000);
 
   if (!primary) return null;
 
