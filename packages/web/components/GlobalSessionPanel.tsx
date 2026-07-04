@@ -12,7 +12,7 @@ import { sessionCardSummary } from "../lib/sessionSummary";
 import { sessionStartupState } from "../lib/sessionLifecycle";
 import { compressImage } from "../lib/compressImage";
 import { useConversationMessages } from "../hooks/useConversationMessages";
-import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, categorizeSessions, partitionOldSessions, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, isSessionHidden, resolveSessionAuthor, convBucketMap, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem, BucketAssignmentItem } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, categorizeSessions, partitionOldSessions, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, isSessionHidden, resolveSessionAuthor, convBucketMap, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
 import { sessionsWakeSig } from "../store/inboxStore";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { isBlockedConversation, isSubagentConversation } from "@codecast/convex/convex/ccAccountsShared";
@@ -661,6 +661,8 @@ export const SessionCard = memo(function SessionCard({
   onNavigateToSession,
   variant = "default",
   forkColorKey,
+  sessionLabel,
+  isFavorite,
 }: {
   session: InboxSession;
   isActive: boolean;
@@ -676,6 +678,12 @@ export const SessionCard = memo(function SessionCard({
   onNavigateToSession?: (id: string) => void;
   variant?: "default" | "working" | "dismissed" | "stashed";
   forkColorKey?: string;
+  // Label + favorite state are derived ONCE in the parent (SessionListPanel) and
+  // passed as scalar props, so a card does O(1) work per render instead of the two
+  // selectors scanning the whole bucketAssignments / favorites collection on every
+  // store heartbeat notification (the selector runs per notification, not per render).
+  sessionLabel: string | null;
+  isFavorite: boolean;
 }) {
   const tipActions = useTipActions();
   // The card's idle duration ("idle 3m") and trust-stale pulse read Date.now() at
@@ -700,21 +708,10 @@ export const SessionCard = memo(function SessionCard({
   const isPendingSend = useInboxStore((st) => convHasPendingSend(st.pendingMessages[session._id]));
   const isPendingWorking = isPendingSend && !isAgentActive(session);
   const showModelBadge = useInboxStore((st) => st.clientState?.ui?.show_model_badge === true);
-  // The session's user label, if any. Selector returns a string so the card
-  // only re-renders when ITS label changes, not on every assignment-map churn.
-  const sessionLabel = useInboxStore((st) => {
-    const assignment = (Object.values(st.bucketAssignments) as BucketAssignmentItem[])
-      .find((a) => a.conversation_id === session._id);
-    const bucket = assignment?.bucket_id ? st.buckets[assignment.bucket_id] : null;
-    return bucket && !bucket.archived_at ? bucket.name : null;
-  });
-  // Favorited-ness, reliable across sync channels: the per-row flag OR membership
-  // in the authoritative favorites list (toggleFavorite maintains both). Returns a
-  // boolean so the card only re-renders when ITS star flips, not on list churn.
-  const isFavorite = useInboxStore((st) =>
-    !!(st.sessions[session._id] as any)?.is_favorite ||
-    (st.favorites as any[]).some((f) => f._id === session._id),
-  );
+  // sessionLabel and isFavorite are now passed as scalar props (computed once in
+  // the parent via labelByConv/cardIsFavorite) instead of per-card store scans —
+  // see ct-37958. Only spawnedByTitle stays a local selector.
+  //
   // Visible-child parent link (agent-team teammate → its lead). Selector
   // returns the parent's title string, so this card re-renders only when that
   // title changes — never on parent-row churn.
@@ -1575,6 +1572,30 @@ export function SessionListPanel({
 
   const bucketByConv = useMemo(() => convBucketMap(s.bucketAssignments), [s.bucketAssignments]);
   const visibleBuckets = useMemo(() => sortLabels(s.buckets), [s.buckets]);
+  // conversation_id → its visible (non-archived) bucket name. Derived ONCE from the
+  // same bucket map the chips use, then handed to each card as a scalar prop so the
+  // card no longer scans bucketAssignments on every heartbeat notification.
+  const labelByConv = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const convId in bucketByConv) {
+      const bucketId = bucketByConv[convId];
+      const bucket = bucketId ? s.buckets[bucketId] : null;
+      if (bucket && !bucket.archived_at) map[convId] = bucket.name;
+    }
+    return map;
+  }, [bucketByConv, s.buckets]);
+  // Favorited conversation ids, derived once from the authoritative favorites list so
+  // a card checks its star with an O(1) Set lookup instead of a per-heartbeat scan.
+  const favoriteIds = useMemo(
+    () => new Set((s.favorites as { _id: string }[]).map((f) => f._id)),
+    [s.favorites],
+  );
+  // Favorited if the row carries the flag OR it's in the favorites list (both are
+  // maintained by toggleFavorite); resolved to a scalar so each card memoizes on it.
+  const cardIsFavorite = useCallback(
+    (sess: InboxSession) => (sess as { is_favorite?: boolean }).is_favorite === true || favoriteIds.has(sess._id),
+    [favoriteIds],
+  );
   const { bucketCounts, projectCounts, projectPathByName } = useMemo(
     () => computeChipCounts(activeSessions, bucketByConv),
     [activeSessions, bucketByConv],
@@ -2021,6 +2042,8 @@ export function SessionListPanel({
                   onKill={onKill}
                   variant={variant}
                   forkColorKey={forkColorKeyOf(session)}
+                  sessionLabel={labelByConv[session._id] ?? null}
+                  isFavorite={cardIsFavorite(session)}
                 />
                 {(subMap.get(session._id) ?? []).filter((sub) => showSubagents || sub._id === activeSessionId).map((sub) => (
                   <SessionCard
@@ -2033,6 +2056,8 @@ export function SessionListPanel({
                     onRestore={s.restoreSession}
                     onKill={onKill}
                     variant={variant}
+                    sessionLabel={labelByConv[sub._id] ?? null}
+                    isFavorite={cardIsFavorite(sub)}
                   />
                 ))}
               </div>
@@ -2204,6 +2229,8 @@ export function SessionListPanel({
                   onPin={s.pinSession}
                   variant={sectionVariant || "default"}
                   forkColorKey={forkColorKeyOf(session)}
+                  sessionLabel={labelByConv[session._id] ?? null}
+                  isFavorite={cardIsFavorite(session)}
                 />
                 {visibleSubs.map((sub) => (
                   <SessionCard
@@ -2216,6 +2243,8 @@ export function SessionListPanel({
                     onDismiss={handleAnimatedDismiss}
                     onStash={handleAnimatedStash}
                     variant={sectionVariant || "default"}
+                    sessionLabel={labelByConv[sub._id] ?? null}
+                    isFavorite={cardIsFavorite(sub)}
                   />
                 ))}
                 {hiddenCount > 0 && (
