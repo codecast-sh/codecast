@@ -206,6 +206,15 @@ export class SyncService {
     return this.client;
   }
 
+  /** Storage URL for an uploaded image, authed via api_token (the daemon's
+   * client has no cookie session — unauthenticated callers get null). */
+  async getImageUrl(storageId: string): Promise<string | null> {
+    return await this.client.query("images:getImageUrl" as any, {
+      storageId,
+      api_token: this.apiToken,
+    });
+  }
+
   getSubscriptionClient(): ConvexClient {
     return this.subscriptionClient;
   }

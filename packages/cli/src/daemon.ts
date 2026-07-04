@@ -10813,8 +10813,11 @@ async function downloadImage(storageId: string, syncService: SyncService): Promi
     if (fs.existsSync(cached)) return cached;
   }
 
-  const imageUrl = await syncService.getClient().query("images:getImageUrl" as any, { storageId });
-  if (!imageUrl) return null;
+  const imageUrl = await syncService.getImageUrl(storageId);
+  if (!imageUrl) {
+    log(`downloadImage: no URL for storage id ${storageId} (auth rejected or file missing)`);
+    return null;
+  }
 
   fs.mkdirSync(dir, { recursive: true });
 

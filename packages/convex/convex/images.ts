@@ -34,11 +34,18 @@ export const generateUploadUrl = mutation({
   },
 });
 
+// Auth (cookie or api_token) is required: an unauthenticated caller gets null.
+// The api_token arg exists for the daemon — its convex client carries no
+// cookie session, so its downloadImage always resolved null here and web-sent
+// images were silently dropped from tmux injection ("[image]" with no file).
 export const getImageUrl = query({
   args: {
     storageId: v.id("_storage"),
+    api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) return null;
     return await ctx.storage.getUrl(args.storageId);
   },
 });
@@ -46,8 +53,11 @@ export const getImageUrl = query({
 export const getImageUrls = query({
   args: {
     storageIds: v.array(v.id("_storage")),
+    api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) return {};
     const urls: Record<string, string | null> = {};
     for (const id of args.storageIds) {
       urls[id] = await ctx.storage.getUrl(id);
