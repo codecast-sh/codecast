@@ -9533,6 +9533,13 @@ interface CachedProcessInfo {
 const sessionProcessCache = new Map<string, CachedProcessInfo>();
 const PROCESS_CACHE_TTL_MS = 30_000;
 
+// Server rows registered with their tmux name, so a later tmux discovery for
+// the same session (e.g. a session that started OUTSIDE tmux and was resumed
+// into one — registration happens once at first detection, so its row carries
+// tmux_session=null forever and the web header never shows the copy-tmux-attach
+// icon) re-registers exactly once per name change.
+const registeredTmuxBySession = new Map<string, string>();
+
 function cacheSessionProcess(sessionId: string, info: ClaudeSessionInfo, tmuxTarget?: string): void {
   sessionProcessCache.set(sessionId, {
     pid: info.pid,
@@ -9541,6 +9548,15 @@ function cacheSessionProcess(sessionId: string, info: ClaudeSessionInfo, tmuxTar
     termProgram: info.termProgram,
     lastVerified: Date.now(),
   });
+  // Backfill tmux_session on the server row when this cache fill is the first
+  // place the tmux placement shows up. registerManagedSession patches the
+  // existing row by session_id; conversation_id/device_id are omitted so the
+  // ownership stamp is untouched.
+  const tmuxName = tmuxTarget?.split(":")[0];
+  if (tmuxName && syncServiceRef && registeredTmuxBySession.get(sessionId) !== tmuxName) {
+    registeredTmuxBySession.set(sessionId, tmuxName);
+    syncServiceRef.registerManagedSession(sessionId, info.pid, tmuxName).catch(() => {});
+  }
 }
 
 async function getCachedSessionProcess(sessionId: string): Promise<ClaudeSessionInfo | null> {
