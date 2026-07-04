@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -25,6 +25,7 @@ import { WorkflowContextPanel } from "../../../components/WorkflowContextPanel";
 import { PlanBoardView } from "../../../components/PlanBoardView";
 import { PlanGraphView } from "../../../components/PlanGraphView";
 import { LivenessDot } from "../../../components/LivenessDot";
+import { mergeLiveTasks, computePlanProgress } from "../../../lib/liveEntities";
 import {
   Clock,
   CheckCircle2,
@@ -114,7 +115,33 @@ export default function PlanDetailPage() {
   const webUpdate = useInboxStore((s) => s.updatePlan);
   const generateShareLink = useMutation(api.plans.generateShareLink);
 
+  // plan.tasks / plan.progress / plan.status are a server-query snapshot, so
+  // optimistic edits (updateTask status/assignee, updatePlan status) wouldn't
+  // show here until the query re-runs. Overlay the live store rows (canonical
+  // helper) so dragged cards, status circles, assignee avatars, the progress
+  // bar and the plan status pill all update instantly — same as PlanDetailPanel.
+  const storeTasks = useInboxStore((s) => s.tasks);
+  const teamMembers = useInboxStore((s) => s.teamMembers);
+  const currentUser = useInboxStore((s) => s.currentUser);
+  const storePlans = useInboxStore((s) => s.plans);
+
   const [activeTab, setActiveTab] = useState<PlanTab>("overview");
+
+  const liveTasks = useMemo(
+    () => mergeLiveTasks((plan as any)?.tasks, storeTasks, teamMembers as any[], currentUser as any),
+    [plan, storeTasks, teamMembers, currentUser]
+  );
+  const liveProgress = useMemo(() => {
+    if (!Array.isArray(liveTasks)) return (plan as any)?.progress;
+    return { ...((plan as any)?.progress || {}), ...computePlanProgress(liveTasks) };
+  }, [liveTasks, plan]);
+  const liveStatus = useMemo(() => {
+    if (!plan) return undefined;
+    const storePlan = Object.values(storePlans).find(
+      (p: any) => p.short_id === plan.short_id || p._id === plan._id
+    ) as any;
+    return storePlan?.status ?? plan.status;
+  }, [plan, storePlans]);
 
   const handleTitleChange = useCallback(
     (title: string) => {
@@ -164,7 +191,7 @@ export default function PlanDetailPage() {
     );
   }
 
-  const hasTasks = (plan.tasks || []).length > 0;
+  const hasTasks = (liveTasks || []).length > 0;
   const hasActiveSessions = (plan.sessions || []).some((s: any) => s.is_active);
 
   return (
@@ -187,7 +214,7 @@ export default function PlanDetailPage() {
           }
           topBarLeft={
             <>
-              <PlanStatusSelector value={plan.status} onChange={handleStatusChange} />
+              <PlanStatusSelector value={liveStatus} onChange={handleStatusChange} />
               {plan.drive_state && plan.drive_state.total_rounds > 0 && (
                 <DriveRoundIndicator driveState={plan.drive_state} />
               )}
@@ -263,8 +290,8 @@ export default function PlanDetailPage() {
             </>
           }
         >
-          {plan.progress && plan.progress.total > 0 && (
-            <PlanProgressBar progress={plan.progress} />
+          {liveProgress && liveProgress.total > 0 && (
+            <PlanProgressBar progress={liveProgress} />
           )}
 
           {(plan as any).workflow_id && !(plan as any).workflow_run_id && (
@@ -305,13 +332,13 @@ export default function PlanDetailPage() {
           )}
 
           {activeTab === "graph" ? (
-            <PlanGraphView tasks={plan.tasks || []} />
+            <PlanGraphView tasks={liveTasks || []} />
           ) : activeTab === "board" ? (
-            <PlanBoardView tasks={plan.tasks || []} planShortId={plan.short_id} />
+            <PlanBoardView tasks={liveTasks || []} planShortId={plan.short_id} />
           ) : activeTab === "overview" ? (
             <>
-              <OrchestrationHeader tasks={plan.tasks || []} sessions={plan.sessions || []} />
-              <PlanTaskSection planShortId={plan.short_id} tasks={plan.tasks || []} sessions={plan.sessions || []} />
+              <OrchestrationHeader tasks={liveTasks || []} sessions={plan.sessions || []} />
+              <PlanTaskSection planShortId={plan.short_id} tasks={liveTasks || []} sessions={plan.sessions || []} />
 
               {plan.comments?.length > 0 && (
                 <div className="mb-6">
@@ -362,7 +389,7 @@ export default function PlanDetailPage() {
               )}
             </>
           ) : (
-            <OrchestrationTab tasks={plan.tasks || []} sessions={plan.sessions || []} />
+            <OrchestrationTab tasks={liveTasks || []} sessions={plan.sessions || []} />
           )}
           </DocumentDetailLayout>
         </div>
