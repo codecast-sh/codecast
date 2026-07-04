@@ -7,6 +7,8 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import Link from "next/link";
+import { KeyCap } from "../../components/KeyboardShortcutsHelp";
+import { isMac } from "../../shortcuts";
 import {
   Search,
   Loader2,
@@ -358,7 +360,8 @@ export default function SearchPage() {
               </span>
               {results.length > 0 && (
                 <span className="hidden sm:flex items-center gap-1 text-[10px] text-sol-text-dim">
-                  <kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50">&#8593;&#8595;</kbd>
+                  <KeyCap size="xs">↑</KeyCap>
+                  <KeyCap size="xs">↓</KeyCap>
                   select
                   <CornerDownLeft className="w-3 h-3 ml-1" />
                   open
@@ -499,7 +502,9 @@ export default function SearchPage() {
                 Search titles and full message content across {mineOnly ? "your" : "your team's"} sessions.
               </p>
               <p className="text-[11px] text-sol-text-dim/70">
-                Tip: open this page from anywhere with <kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50">&#8984;K</kbd> then <kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50">&#8984;&#9166;</kbd>
+                Tip: open this page from anywhere with{" "}
+                <span className="inline-flex items-center gap-0.5"><KeyCap size="xs">{isMac ? "⌘" : "Ctrl"}</KeyCap><KeyCap size="xs">K</KeyCap></span> then{" "}
+                <span className="inline-flex items-center gap-0.5"><KeyCap size="xs">{isMac ? "⌘" : "Ctrl"}</KeyCap><KeyCap size="xs">↵</KeyCap></span>
               </p>
             </div>
           )}
