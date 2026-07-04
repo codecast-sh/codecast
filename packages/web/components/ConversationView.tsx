@@ -5160,7 +5160,7 @@ function ScheduledTaskBlock({ content: rawContent, timestamp }: { content: strin
   );
 }
 
-function SessionMessageBlock({ from, name, body, timestamp, pendingStatus, recipientActive, variant = "session", color, summary }: { from: string; name?: string; body: string; timestamp?: number; pendingStatus?: string; recipientActive?: boolean; variant?: "session" | "teammate"; color?: string; summary?: string }) {
+function SessionMessageBlock({ from, name, body, timestamp, pendingStatus, recipientActive, variant = "session", color, summary, linkToConversationId }: { from: string; name?: string; body: string; timestamp?: number; pendingStatus?: string; recipientActive?: boolean; variant?: "session" | "teammate"; color?: string; summary?: string; linkToConversationId?: string }) {
   // pendingStatus set ⇒ this is a server-side pending_messages row that hasn't reached the
   // recipient's transcript yet (queued — typically because the recipient is mid-turn).
   const isPending = !!pendingStatus;
@@ -5190,7 +5190,20 @@ function SessionMessageBlock({ from, name, body, timestamp, pendingStatus, recip
         <HeaderIcon className={`w-3.5 h-3.5 shrink-0 ${iconText}`} />
         <span className={`text-[11px] font-medium tracking-wide uppercase shrink-0 ${labelText}`}>{isTeammate ? "From teammate" : "Message from"}</span>
         {isTeammate ? (
-          <span className={`px-1.5 py-0.5 rounded border text-[10px] font-mono shrink-0 ${agentColorMap[color || "blue"] || agentColorMap.blue}`}>{from}</span>
+          // A teammate's name isn't a session id, so it can't be an EntityIdPill —
+          // but when the sender is resolvable (team-lead → this conversation's
+          // spawned_by parent) the badge clicks through to that session.
+          linkToConversationId ? (
+            <button
+              onClick={() => useInboxStore.getState().navigateToSession(linkToConversationId)}
+              className={`px-1.5 py-0.5 rounded border text-[10px] font-mono shrink-0 cursor-pointer hover:underline underline-offset-2 ${agentColorMap[color || "blue"] || agentColorMap.blue}`}
+              title="View the sender's session"
+            >
+              {from}
+            </button>
+          ) : (
+            <span className={`px-1.5 py-0.5 rounded border text-[10px] font-mono shrink-0 ${agentColorMap[color || "blue"] || agentColorMap.blue}`}>{from}</span>
+          )
         ) : from && from !== "unknown" ? (
           <EntityIdPill shortId={from} />
         ) : name ? (
@@ -5404,13 +5417,13 @@ const agentBorderMap: Record<string, string> = {
   pink: "border-pink-500/30",
 };
 
-function TeammateEventsBlock({ content, timestamp }: { content: string; timestamp: number }) {
+function TeammateEventsBlock({ content, timestamp, spawnedByConversationId }: { content: string; timestamp: number; spawnedByConversationId?: string }) {
   const parts = parseTeammateMessages(content);
   return (
     <div className="my-1 space-y-1">
       {parts.map((part, i) => {
         if (part.type === 'teammate') {
-          return <TeammateMessageCard key={i} teammateId={part.teammateId} color={part.color} summary={part.summary} content={part.content} timestamp={timestamp} />;
+          return <TeammateMessageCard key={i} teammateId={part.teammateId} color={part.color} summary={part.summary} content={part.content} timestamp={timestamp} spawnedByConversationId={spawnedByConversationId} />;
         }
         // Drop the harness's framing boilerplate ("Another Claude session sent a
         // message:" / the "permission laundering" disclaimer) — it's machine instruction
@@ -5423,7 +5436,7 @@ function TeammateEventsBlock({ content, timestamp }: { content: string; timestam
   );
 }
 
-function TeammateMessageCard({ teammateId, color, summary, content, timestamp }: { teammateId: string; color?: string; summary?: string; content: string; timestamp?: number }) {
+function TeammateMessageCard({ teammateId, color, summary, content, timestamp, spawnedByConversationId }: { teammateId: string; color?: string; summary?: string; content: string; timestamp?: number; spawnedByConversationId?: string }) {
   const safeContent = content || '';
   let parsed: any = null;
   try { if (safeContent) parsed = JSON.parse(safeContent); } catch {}
@@ -5508,7 +5521,7 @@ function TeammateMessageCard({ teammateId, color, summary, content, timestamp }:
   // A substantive teammate broadcast reuses the cast-send card (SessionMessageBlock) via its
   // teammate variant — the same format and code, only slightly distinct.
   return (
-    <SessionMessageBlock variant="teammate" from={teammateId} color={color} summary={summary} body={content} timestamp={timestamp} />
+    <SessionMessageBlock variant="teammate" from={teammateId} color={color} summary={summary} body={content} timestamp={timestamp} linkToConversationId={teammateId === "team-lead" ? spawnedByConversationId : undefined} />
   );
 }
 
@@ -12299,7 +12312,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         case 'plan':
           return <PlanBlock key={msg._id} content={kind.planContent} timestamp={msg.timestamp} collapsed={false} messageId={msg._id} conversationId={conversation?._id} onStartShareSelection={handleStartShareSelection} />;
         case 'teammate_events':
-          return <TeammateEventsBlock key={msg._id} content={msg.content || ""} timestamp={msg.timestamp} />;
+          return <TeammateEventsBlock key={msg._id} content={msg.content || ""} timestamp={msg.timestamp} spawnedByConversationId={(conversation as any)?.spawned_by_conversation_id} />;
         case 'normal': {
           if (!msg.content?.trim() && !msg.images?.some(img => !img.tool_use_id)) return null;
           const userName = conversation?.user?.name || conversation?.user?.email?.split("@")[0];
@@ -12582,9 +12595,16 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               <TooltipProvider delayDuration={300}>
               <div className="flex items-center gap-1 flex-shrink-0 overflow-hidden ml-auto">
 
-                {conversation.parent_conversation_id && (
+                {(() => {
+                  // Subagents carry parent_conversation_id; visible children
+                  // (agent-team teammates, spawns) carry spawned_by_conversation_id.
+                  // Same chip, same click-through.
+                  const parentLinkId = conversation.parent_conversation_id
+                    || (conversation as any).spawned_by_conversation_id;
+                  if (!parentLinkId) return null;
+                  return (
                   <Link
-                    href={convLink(conversation.parent_conversation_id)}
+                    href={convLink(parentLinkId)}
                     onClick={(e) => {
                       // Plain left-click is an instant, store-driven switch (same as the
                       // BranchSelector chips) — bypass the /conversation redirector so the
@@ -12592,7 +12612,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                       // bounce. Modified clicks fall through to the Link for open-in-new-tab.
                       if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
                       e.preventDefault();
-                      navigateToSession(conversation.parent_conversation_id!);
+                      navigateToSession(parentLinkId);
                     }}
                     className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30 hover:bg-sol-cyan/20 transition-colors"
                     title="View parent conversation"
@@ -12602,7 +12622,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     </svg>
                     Parent
                   </Link>
-                )}
+                  );
+                })()}
 
                 {((conversation.fork_children?.length ?? 0) > 0 || conversation.forked_from) && (() => {
                   // Family size from the details payload alone (no store sub):

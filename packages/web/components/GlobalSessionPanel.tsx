@@ -715,6 +715,15 @@ export const SessionCard = memo(function SessionCard({
     !!(st.sessions[session._id] as any)?.is_favorite ||
     (st.favorites as any[]).some((f) => f._id === session._id),
   );
+  // Visible-child parent link (agent-team teammate → its lead). Selector
+  // returns the parent's title string, so this card re-renders only when that
+  // title changes — never on parent-row churn.
+  const spawnedById = session.spawned_by_conversation_id || null;
+  const spawnedByTitle = useInboxStore((st) =>
+    spawnedById
+      ? ((st.sessions[spawnedById]?.title || (st.conversations[spawnedById] as any)?.title) ?? null)
+      : null,
+  );
   const displayTitle = cleanTitle(session.title || "New Session");
   const isSlashCommand = displayTitle.startsWith("/");
   const cleanedUserMsg = cleanUserMessage(session.last_user_message);
@@ -1169,6 +1178,26 @@ export const SessionCard = memo(function SessionCard({
             </span>
           </div>
         </div>
+        {spawnedById && (
+          // Click-through to the session that spawned this one (its agent-team
+          // lead) — same affordance shape as the implementation-session row.
+          <div
+            className="mt-1 flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-cyan cursor-pointer transition-colors"
+            onClick={(e) => {
+              e.stopPropagation();
+              (onNavigateToSession ?? useInboxStore.getState().navigateToSession)(spawnedById);
+            }}
+            title="View the session that spawned this one"
+          >
+            <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+            </svg>
+            <span className="flex-shrink-0">spawned by</span>
+            <span className="truncate underline underline-offset-2">
+              {cleanTitle(spawnedByTitle || "parent session")}
+            </span>
+          </div>
+        )}
         {session.implementation_session && (
           <div
             className="mt-1 flex items-center gap-1 text-[11px] text-sol-cyan hover:text-sol-cyan/80 cursor-pointer"

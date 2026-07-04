@@ -160,6 +160,9 @@ export interface CreateConversationParams {
   gitInfo?: GitInfo;
   cliFlags?: string;
   subagentDescription?: string;
+  // Agent-team stamps from a teammate's JSONL (see parser.extractTeamInfo).
+  agentTeamName?: string;
+  agentName?: string;
 }
 
 export class SyncService {
@@ -401,6 +404,8 @@ export class SyncService {
           worktree_path: gitInfo?.worktreePath,
           worktree_status: gitInfo?.worktreeName ? "active" : undefined,
           subagent_description: params.subagentDescription,
+          agent_team_name: params.agentTeamName,
+          agent_name: params.agentName,
           api_token: this.apiToken,
         }
       );
@@ -422,6 +427,35 @@ export class SyncService {
           parent_conversation_id: parentConversationId,
           child_conversation_id: childConversationId,
           subagent_description: subagentDescription,
+          api_token: this.apiToken,
+        }
+      );
+    } catch (error) {
+      if (isAuthError(error)) {
+        throw new AuthExpiredError();
+      }
+      throw error;
+    }
+  }
+
+  // Visible-child link: teammate/spawned session → the session that spawned it.
+  // Unlike linkSessions this neither hides the child nor marks it a subagent —
+  // it only powers the parent click-through (see conversations.linkSpawnedBy).
+  async linkSpawnedBy(
+    parentConversationId: string,
+    childConversationId: string,
+    agentTeamName?: string,
+    agentName?: string,
+  ): Promise<void> {
+    await this.throttle();
+    try {
+      await this.client.mutation(
+        "conversations:linkSpawnedBy" as any,
+        {
+          parent_conversation_id: parentConversationId,
+          child_conversation_id: childConversationId,
+          agent_team_name: agentTeamName,
+          agent_name: agentName,
           api_token: this.apiToken,
         }
       );
