@@ -32,7 +32,7 @@ import { parseSessionFile, parseCodexSessionFile, parseGeminiSessionFile, parseC
 import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { encryptToken, decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
-import { markSynced, getSyncRecord, findUnsyncedFiles, type SyncRecord } from "./syncLedger.js";
+import { markSynced, updateSyncRecord, getSyncRecord, findUnsyncedFiles, type SyncRecord } from "./syncLedger.js";
 import { SyncService, AuthExpiredError } from "./syncService.js";
 import { redactSecrets, maskToken } from "./redact.js";
 import { RetryQueue, type RetryOperation } from "./retryQueue.js";
@@ -4281,6 +4281,14 @@ async function processSessionFile(
       log(`Warning: Permission denied reading ${filePath}. Will retry when permissions are restored.`);
       return;
     }
+    if (err.code === 'ENOENT') {
+      // Transcript deleted out from under us (fork-artifact cleanup, transcript
+      // cleanup, or a manual rm). There is nothing left to sync — return so the
+      // InvalidateSync backoff COMPLETES instead of throwing ENOENT forever, which
+      // turned a deleted file into a permanent ~2/sec retry+log loop.
+      log(`Transcript ${filePath} no longer exists; nothing to sync.`);
+      return;
+    }
     throw err;
   }
 
@@ -4293,16 +4301,24 @@ async function processSessionFile(
 
   if (stats.size <= lastPosition) {
     // Nothing new to read, but the watchdog uses sync-ledger.json (NOT
-    // positions.json) to decide which files are "stale". If we return without
-    // updating the ledger, findStaleSessionFiles will re-detect this file
-    // forever — burning ~15s of event-loop time every 5 min and head-of-line-
-    // blocking incoming Convex commands (start_session etc.). Bring the ledger
-    // up to the actual read position so the file stops re-appearing as stale.
+    // positions.json) to decide which files are "stale". shouldTreatClaudeFileAsStale
+    // flags a file when mtime > lastSyncedAt, so a file whose mtime was TOUCHED
+    // without any bytes appended (compact-in-place, a `touch`, clock skew) used to
+    // re-detect as stale every 5-min watchdog pass forever — burning event-loop time
+    // and head-of-line-blocking incoming Convex commands (start_session etc.). The
+    // old heal only ran when the position MOVED, so an mtime-only touch never
+    // advanced the baseline. Advance lastSyncedAt (and lastSyncedPosition to the read
+    // position) on EVERY no-op pass so the touch isn't re-flagged. We confirmed
+    // size <= position here, so there is genuinely no unsynced tail — this can't mask
+    // real content. Merge (not markSynced) so messageCount/conversationId aren't
+    // clobbered to zero.
     const existing = getSyncRecord(filePath);
-    if (!existing || existing.lastSyncedPosition < lastPosition) {
-      const knownConvId = conversationCache[sessionId];
-      markSynced(filePath, lastPosition, 0, knownConvId);
-    }
+    const knownConvId = conversationCache[sessionId];
+    updateSyncRecord(filePath, {
+      lastSyncedAt: Date.now(),
+      lastSyncedPosition: Math.max(existing?.lastSyncedPosition ?? 0, lastPosition),
+      ...(knownConvId ? { conversationId: knownConvId } : {}),
+    });
     return;
   }
 
@@ -5529,6 +5545,14 @@ async function processCodexSession(
   } catch (err: any) {
     if (err.code === 'EACCES' || err.code === 'EPERM') {
       log(`Warning: Permission denied reading ${filePath}. Will retry when permissions are restored.`);
+      return;
+    }
+    if (err.code === 'ENOENT') {
+      // Transcript deleted out from under us (fork-artifact cleanup, transcript
+      // cleanup, or a manual rm). There is nothing left to sync — return so the
+      // InvalidateSync backoff COMPLETES instead of throwing ENOENT forever, which
+      // turned a deleted file into a permanent ~2/sec retry+log loop.
+      log(`Transcript ${filePath} no longer exists; nothing to sync.`);
       return;
     }
     throw err;
