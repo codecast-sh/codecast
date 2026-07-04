@@ -144,7 +144,11 @@ export const notifyTeamSessionStart = internalMutation({
   },
 });
 
-export const create = mutation({
+// internal: had zero callers and was a public mutation that let anyone deliver
+// an arbitrary-text notification to any user (spam/phishing). Real notifications
+// are created by the internal mutations and server-side inserts in this file and
+// in agentTasks/notificationRouter.
+export const create = internalMutation({
   args: {
     recipient_user_id: v.id("users"),
     type: v.union(

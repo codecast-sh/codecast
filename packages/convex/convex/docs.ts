@@ -512,6 +512,10 @@ export const list = query({
     if (!auth) throw new Error("Unauthorized");
 
     let docs;
+    // The by_project_id index is global: a client-supplied project_id could
+    // surface another user's/team's docs, so that branch gets an explicit
+    // owner-or-team-member filter below.
+    let needsAccessFilter = false;
     if (args.doc_type) {
       docs = await ctx.db
         .query("docs")
@@ -524,11 +528,24 @@ export const list = query({
         .query("docs")
         .withIndex("by_project_id", (q) => q.eq("project_id", args.project_id as any))
         .collect();
+      needsAccessFilter = true;
     } else {
       docs = await ctx.db
         .query("docs")
         .withIndex("by_user_id", (q) => q.eq("user_id", auth.userId))
         .collect();
+    }
+
+    if (needsAccessFilter) {
+      const memberships = await ctx.db
+        .query("team_memberships")
+        .withIndex("by_user_id", (q: any) => q.eq("user_id", auth.userId))
+        .collect();
+      const memberTeamIds = new Set(memberships.map((m: any) => String(m.team_id)));
+      docs = docs.filter((d: any) =>
+        String(d.user_id) === String(auth.userId) ||
+        (d.team_id && memberTeamIds.has(String(d.team_id)))
+      );
     }
 
     // Exclude archived
@@ -636,6 +653,10 @@ export const resetSync = mutation({
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
+    // Owner-only, matching the sibling `patch` mutation. Without this, any caller
+    // could wipe a doc's deltas and overwrite its snapshot content by id.
+    const target = await ctx.db.get(args.id);
+    if (!target || target.user_id !== auth.userId) throw new Error("Doc not found");
     const docId = args.id as string;
     const snapshots = await ctx.db
       .query("doc_snapshots")
