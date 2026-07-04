@@ -1,4 +1,4 @@
-import { mutation, query, internalMutation } from "./functions";
+import { mutation, query, internalMutation, internalQuery } from "./functions";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
@@ -44,7 +44,10 @@ export const getCurrentUserProbe = query({
   },
 });
 
-export const createUser = mutation({
+// internal: had zero callers and was a public, unauthenticated mutation that
+// inserted a user row for any supplied email. Convex Auth owns real user
+// creation; nothing legitimate needs this from a client.
+export const createUser = internalMutation({
   args: {
     email: v.string(),
     name: v.optional(v.string()),
@@ -60,7 +63,11 @@ export const createUser = mutation({
   },
 });
 
-export const listUsers = query({
+// internal: was a public query that returned the ENTIRE users table (including
+// every email) to any caller — the id/email directory an attacker needed to
+// target the other unauthenticated mutations. Only a dev test script referenced
+// it; no product surface lists all users this way.
+export const listUsers = internalQuery({
   args: {},
   handler: async (ctx) => {
     return await ctx.db.query("users").collect();
@@ -106,7 +113,10 @@ export const updateUserActivity = internalMutation({
   handler: async () => {},
 });
 
-export const updateDaemonLastSeen = mutation({
+// internal: had zero callers and was a public mutation that let anyone stamp
+// any user's daemon_last_seen. The real daemon-liveness write is daemonHeartbeat
+// below, which authenticates via api_token.
+export const updateDaemonLastSeen = internalMutation({
   args: {
     user_id: v.id("users"),
   },

@@ -375,7 +375,7 @@ http.route({
       const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
       const expectedSignature = "sha256=" + hashHex;
 
-      if (signature !== expectedSignature) {
+      if (!signature || !timingSafeEqualHex(signature, expectedSignature)) {
         return new Response(JSON.stringify({ error: "Invalid signature" }), {
           status: 401,
           headers: { "Content-Type": "application/json" },

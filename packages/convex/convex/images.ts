@@ -35,9 +35,12 @@ export const generateUploadUrl = mutation({
 });
 
 // Auth (cookie or api_token) is required: an unauthenticated caller gets null.
-// The api_token arg exists for the daemon — its convex client carries no
-// cookie session, so its downloadImage always resolved null here and web-sent
-// images were silently dropped from tmux injection ("[image]" with no file).
+// A storage id is an unguessable, random handle that only ever reaches a client
+// through a conversation/message it already had access to, so requiring auth
+// stops an anonymous internet client from resolving signed URLs by id while
+// legitimate viewers keep working. The api_token arg exists for the daemon —
+// its convex client carries no cookie session, so its downloadImage otherwise
+// resolved null and web-sent images were silently dropped from tmux injection.
 export const getImageUrl = query({
   args: {
     storageId: v.id("_storage"),
@@ -63,40 +66,5 @@ export const getImageUrls = query({
       urls[id] = await ctx.storage.getUrl(id);
     }
     return urls;
-  },
-});
-
-export const debugMessagesWithImages = query({
-  args: {
-    conversation_id: v.optional(v.string()),
-  },
-  handler: async (ctx, args) => {
-    let messages;
-    if (args.conversation_id) {
-      messages = await ctx.db.query("messages")
-        .withIndex("by_conversation_timestamp", (q) =>
-          q.eq("conversation_id", args.conversation_id as Id<"conversations">)
-        )
-        .collect();
-    } else {
-      messages = await ctx.db.query("messages").order("desc").take(2000);
-    }
-    const withImages = messages.filter(m => m.images && m.images.length > 0);
-    return {
-      totalChecked: messages.length,
-      withImages: withImages.length,
-      samples: withImages.slice(0, 5).map(m => ({
-        id: m._id,
-        imagesCount: m.images?.length,
-        images: m.images?.map(i => ({
-          hasStorageId: !!i.storage_id,
-          hasData: !!i.data,
-          mediaType: i.media_type,
-          toolUseId: i.tool_use_id || null,
-        })),
-        role: m.role,
-        conversationId: m.conversation_id,
-      })),
-    };
   },
 });

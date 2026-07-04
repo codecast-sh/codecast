@@ -73,27 +73,12 @@ export const createSetupToken = mutation({
   },
 });
 
-export const createTokenForUser = mutation({
-  args: {
-    user_id: v.id("users"),
-    name: v.string(),
-  },
-  handler: async (ctx, args) => {
-    const token = generateToken();
-    const tokenHash = await hashToken(token);
-    const now = Date.now();
-
-    await ctx.db.insert("api_tokens", {
-      user_id: args.user_id,
-      token_hash: tokenHash,
-      name: args.name,
-      created_at: now,
-      last_used_at: now,
-    });
-
-    return { token, userId: args.user_id };
-  },
-});
+// NOTE: a public `createTokenForUser({ user_id, name })` mutation used to live
+// here. It authenticated nobody and minted a working plaintext token for any
+// supplied user_id — a one-call account takeover. It had zero callers (the CLI
+// mints tokens through the authenticated relay in cliAuth.ts / createToken
+// above). Removed rather than internalized: nothing should ever mint a token
+// for an arbitrary user without the caller proving they are that user.
 
 export const verifyToken = mutation({
   args: {
