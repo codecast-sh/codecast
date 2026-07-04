@@ -227,6 +227,9 @@ export type InboxSession = {
   workflow_run_id?: string | null;
   is_workflow_primary?: boolean;
   workflow_run_status?: string | null;
+  // The schedule (agent_tasks row) that spawned this conversation as a run.
+  // Lets the sidebar badge/strip attribute any historical run to its schedule.
+  agent_task_id?: string | null;
   forked_from?: string | null;
   parent_message_uuid?: string | null;
   // Messages inherited from the parent up to the fork point. Lets the branch
