@@ -7,6 +7,43 @@ const http = httpRouter();
 
 auth.addHttpRoutes(http);
 
+// IP-keyed rate limit for an unauthenticated HTTP route. Returns a 429 Response to
+// short-circuit the handler when the caller's IP exceeds the window, else null.
+// Fail-open: a limiter error never blocks the route (availability > strictness).
+async function ipRateLimited(
+  ctx: any,
+  request: Request,
+  name: string,
+  max: number,
+  windowMs: number,
+): Promise<Response | null> {
+  const ip =
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    request.headers.get("cf-connecting-ip") ||
+    request.headers.get("x-real-ip") ||
+    "unknown";
+  try {
+    const res = await ctx.runMutation(internal.ipRateLimit.bump, {
+      key: `${name}:${ip}`,
+      max,
+      window_ms: windowMs,
+    });
+    if (!res.ok) {
+      return new Response(JSON.stringify({ error: "Too many requests" }), {
+        status: 429,
+        headers: {
+          "Content-Type": "application/json",
+          "Retry-After": String(Math.ceil((res.retry_after_ms ?? windowMs) / 1000)),
+          "Access-Control-Allow-Origin": "*",
+        },
+      });
+    }
+  } catch {
+    // Fail open.
+  }
+  return null;
+}
+
 
 http.route({
   path: "/cli/exchange-token",
@@ -19,6 +56,11 @@ http.route({
     };
 
     try {
+      // Brute-force guard: a setup token is one-shot + TTL-bound, so 20 exchange
+      // attempts/min per IP is far above any legitimate use and caps guessing.
+      const limited = await ipRateLimited(ctx, request, "exchange-token", 20, 60_000);
+      if (limited) return limited;
+
       const body = await request.json();
       const setupToken = body.token;
 
