@@ -556,11 +556,16 @@ export const linkRunConversation = mutation({
           .filter((q: any) => q.eq(q.field("user_id"), auth.userId))
           .first();
       }
+      // No conv.status check: a spawned run's conversation lingers "active"
+      // long after its agent exits (the watchdog completes it lazily), but
+      // last_run_* only ever points at a run whose task-level completion
+      // (completeTaskRun) already happened — that is the authoritative
+      // "this run finished" signal, and the lease machinery guarantees runs
+      // of one task never overlap.
       if (
         prev &&
         prev._id.toString() !== conv._id.toString() &&
         prev.user_id.toString() === auth.userId.toString() &&
-        prev.status === "completed" &&
         !prev.inbox_pinned_at &&
         !prev.inbox_dismissed_at &&
         !prev.has_pending_messages
