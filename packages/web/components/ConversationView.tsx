@@ -6,7 +6,7 @@ import { useEffect, useLayoutEffect, useRef, useState, useMemo, useImperativeHan
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useWatchEffect } from "../hooks/useWatchEffect";
-import { useShortcutContext, useShortcutAction, isMac } from "../shortcuts";
+import { useShortcutContext, useShortcutAction, isMac, getShortcutsForAction, formatShortcutParts, type ShortcutAction } from "../shortcuts";
 import { useConvexSync } from "../hooks/useConvexSync";
 import { useShallow } from "zustand/react/shallow";
 import { createPortal } from "react-dom";
@@ -7277,21 +7277,35 @@ function ShortcutHint({ keys, label }: { keys: string[]; label: string }) {
   );
 }
 
-const CYCLING_SHORTCUTS = [
-  { keys: ["Cmd", "K"], label: "command palette" },
-  { keys: ["Ctrl", "I"], label: "jump to needs input" },
-  { keys: ["Ctrl", "J"], label: "next session" },
-  { keys: ["Ctrl", "K"], label: "previous session" },
-  { keys: ["Ctrl", "Tab"], label: "MRU next" },
-  { keys: ["Shift", "←"], label: "defer & next session" },
-  { keys: ["Ctrl", "←"], label: "dismiss session" },
+type CyclingHint =
+  | { action: ShortcutAction; label: string }
+  | { keys: string[]; label: string };
+
+// Registry-bound hints derive their keycaps from the live shortcut definition, so
+// rebinding an action can never leave the footer advertising a key that no longer
+// works. Only the two Escape gestures and the Claude Code mode cycle — which have
+// no entry in the shortcut registry — carry literal caps.
+const CYCLING_SHORTCUTS: CyclingHint[] = [
+  { action: "palette.toggle", label: "command palette" },
+  { action: "session.jumpIdle", label: "jump to needs input" },
+  { action: "session.next", label: "next session" },
+  { action: "session.prev", label: "previous session" },
+  { action: "session.mruSwitch", label: "MRU next" },
+  { action: "session.deferAdvance", label: "defer & next session" },
+  { action: "session.stash", label: "stash session" },
   { keys: ["Esc"], label: "escape to session" },
   { keys: ["Esc", "Esc"], label: "send escape" },
-  { keys: ["Cmd", "⇧", "C"], label: "collapse tool blocks" },
-  { keys: ["Ctrl", "."], label: "zen mode" },
-  { keys: ["⇧", "Tab"], label: "cycle CC mode" },
-  { keys: ["Cmd", "⇧", "L"], label: "copy link" },
+  { action: "conv.cycleDensity", label: "collapse tool blocks" },
+  { action: "ui.zenToggle", label: "zen mode" },
+  { keys: [isMac ? "⇧" : "Shift", "Tab"], label: "cycle CC mode" },
+  { action: "conv.copyLink", label: "copy link" },
 ];
+
+function cyclingHintCaps(entry: CyclingHint): string[] {
+  if ("keys" in entry) return entry.keys;
+  const defs = getShortcutsForAction(entry.action);
+  return defs.length > 0 ? formatShortcutParts(defs[0]) : [];
+}
 
 function CyclingShortcutHint() {
   const [index, setIndex] = useState(0);
@@ -7308,7 +7322,8 @@ function CyclingShortcutHint() {
     return () => clearInterval(interval);
   });
 
-  const { keys, label } = CYCLING_SHORTCUTS[index];
+  const entry = CYCLING_SHORTCUTS[index];
+  const caps = cyclingHintCaps(entry);
   return (
     <p className="text-[11px] opacity-[0.55] hidden sm:flex items-center gap-1 overflow-hidden h-[18px]">
       <span
@@ -7316,10 +7331,10 @@ function CyclingShortcutHint() {
           animating ? "-translate-y-full opacity-0" : "translate-y-0 opacity-100"
         }`}
       >
-        {keys.map((k, i) => (
-          <kbd key={i} className="px-1 py-0.5 rounded border border-current/40 text-[10px] leading-none font-semibold bg-sol-bg/50">{k}</kbd>
+        {caps.map((k, i) => (
+          <KeyCap key={i} size="xs">{k}</KeyCap>
         ))}
-        <span className="ml-1.5 text-[10px] opacity-80">{label}</span>
+        <span className="ml-1.5 text-[10px] opacity-80">{entry.label}</span>
       </span>
     </p>
   );
@@ -9020,7 +9035,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                            permissionMode === "dontAsk" ? "don't ask" :
                            permissionMode}
                         </span>
-                        <span className="text-sol-text-dim/50">(Shift+Tab)</span>
+                        <span className="flex items-center gap-1 text-sol-text-dim/50">
+                          <KeyCap size="xs">{isMac ? "⇧" : "Shift"}</KeyCap>
+                          <KeyCap size="xs">Tab</KeyCap>
+                        </span>
                       </div>
                     )}
                   </div>
@@ -9169,10 +9187,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                   ))}
                   {selectedQueueIndex !== null && (
                     <span className="text-[9px] text-sol-text-dim flex items-center gap-2 pl-1">
-                      <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50 text-sol-text-secondary font-mono text-[8px]">&uarr;&darr;</kbd> navigate</span>
-                      <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50 text-sol-text-secondary font-mono text-[8px]">Del</kbd> remove</span>
-                      <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50 text-sol-text-secondary font-mono text-[8px]">Enter</kbd> edit</span>
-                      <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50 text-sol-text-secondary font-mono text-[8px]">Esc</kbd> deselect</span>
+                      <span className="inline-flex items-center gap-1"><KeyCap size="xs">↑</KeyCap><KeyCap size="xs">↓</KeyCap> navigate</span>
+                      <span className="inline-flex items-center gap-1"><KeyCap size="xs">Del</KeyCap> remove</span>
+                      <span className="inline-flex items-center gap-1"><KeyCap size="xs">Enter</KeyCap> edit</span>
+                      <span className="inline-flex items-center gap-1"><KeyCap size="xs">Esc</KeyCap> deselect</span>
                     </span>
                   )}
                 </div>
@@ -9209,10 +9227,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                   ))}
                   {selectedImageIndex !== null && (
                     <span className="text-[10px] text-sol-text-dim ml-1 flex items-center gap-2">
-                      <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50 text-sol-text-secondary font-mono text-[9px]">&larr;&rarr;</kbd> navigate</span>
-                      <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50 text-sol-text-secondary font-mono text-[9px]">Space</kbd> preview</span>
-                      <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50 text-sol-text-secondary font-mono text-[9px]">Del</kbd> remove</span>
-                      <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50 text-sol-text-secondary font-mono text-[9px]">Esc</kbd> exit</span>
+                      <span className="inline-flex items-center gap-1"><KeyCap size="xs">←</KeyCap><KeyCap size="xs">→</KeyCap> navigate</span>
+                      <span className="inline-flex items-center gap-1"><KeyCap size="xs">Space</KeyCap> preview</span>
+                      <span className="inline-flex items-center gap-1"><KeyCap size="xs">Del</KeyCap> remove</span>
+                      <span className="inline-flex items-center gap-1"><KeyCap size="xs">Esc</KeyCap> exit</span>
                     </span>
                   )}
                 </div>
