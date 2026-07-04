@@ -701,8 +701,8 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
 
     let projectId;
     if (opts.project_id) {
-      const p = await ctx.db.query("projects").filter((q: any) => q.eq(q.field("_id"), opts.project_id)).first();
-      if (p) projectId = p._id;
+      const pid = ctx.db.normalizeId("projects", opts.project_id);
+      if (pid && (await ctx.db.get(pid))) projectId = pid;
     }
 
     const resolvedAssignee = await resolveAssigneeStr(ctx, opts.assignee, userId);
