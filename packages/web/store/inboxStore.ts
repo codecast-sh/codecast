@@ -212,6 +212,14 @@ export type InboxSession = {
   implementation_session?: { _id: string; title?: string };
   is_subagent?: boolean;
   parent_conversation_id?: string;
+  // Visible-child pointer: the session that spawned this one (agent-team
+  // teammate → its lead). Unlike parent_conversation_id it does NOT mark the
+  // row a subagent — the card stays top-level; it only powers the parent
+  // click-through. agent_team_name/agent_name identify the teammate so a
+  // name in a transcript can resolve to the sibling session carrying it.
+  spawned_by_conversation_id?: string | null;
+  agent_team_name?: string | null;
+  agent_name?: string | null;
   active_plan?: PlanRef;
   active_task?: TaskRef;
   worktree_name?: string | null;

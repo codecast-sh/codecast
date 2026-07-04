@@ -557,6 +557,8 @@ export const createConversation = mutation({
       v.literal("archived")
     )),
     subagent_description: v.optional(v.string()),
+    agent_team_name: v.optional(v.string()),
+    agent_name: v.optional(v.string()),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -577,8 +579,8 @@ export const createConversation = mutation({
       .first();
 
     if (existing) {
+      const patch: Record<string, any> = {};
       if (args.parent_conversation_id) {
-        const patch: Record<string, any> = {};
         if (!existing.parent_conversation_id) {
           patch.parent_conversation_id = args.parent_conversation_id as Id<"conversations">;
         }
@@ -591,9 +593,13 @@ export const createConversation = mutation({
         if (args.subagent_description && !existing.subagent_description) {
           patch.subagent_description = args.subagent_description;
         }
-        if (Object.keys(patch).length > 0) {
-          await ctx.db.patch(existing._id, patch);
-        }
+      }
+      if (args.agent_team_name && !existing.agent_team_name) {
+        patch.agent_team_name = args.agent_team_name;
+        if (args.agent_name && !existing.agent_name) patch.agent_name = args.agent_name;
+      }
+      if (Object.keys(patch).length > 0) {
+        await ctx.db.patch(existing._id, patch);
       }
       return existing._id;
     }
@@ -636,6 +642,8 @@ export const createConversation = mutation({
       parent_message_uuid: args.parent_message_uuid,
       parent_conversation_id: parentConversationId,
       is_subagent: (!!parentConversationId && !args.parent_message_uuid) || undefined,
+      agent_team_name: args.agent_team_name,
+      agent_name: args.agent_name,
       git_commit_hash: args.git_commit_hash,
       git_branch: args.git_branch,
       git_remote_url: args.git_remote_url,
@@ -2236,7 +2244,10 @@ export const listConversations = query({
 
         const fullTitle = c.title || firstUserMessage || "New Session";
 
-        let parentConversationId: string | null = c.parent_conversation_id || null;
+        // spawned_by (visible child → its lead) joins the same parent
+        // resolution so the "sub of"/"spawned by" row and title come free.
+        let parentConversationId: string | null =
+          c.parent_conversation_id || c.spawned_by_conversation_id || null;
         let parentTitle: string | null = null;
         if (!parentConversationId && c.parent_message_uuid) {
           const parentMsg = await ctx.db
@@ -2279,6 +2290,7 @@ export const listConversations = query({
           author_avatar: authorAvatar,
           is_own: c.user_id.toString() === userId.toString(),
           parent_conversation_id: visibilityMode === "full" ? parentConversationId : null,
+          spawned_by_conversation_id: visibilityMode === "full" ? (c.spawned_by_conversation_id || null) : null,
           parent_message_uuid: c.parent_message_uuid || null,
           is_subagent: !!(c.is_subagent || (c.parent_conversation_id && !c.parent_message_uuid)),
           is_workflow_sub: c.is_workflow_sub || false,
@@ -6896,6 +6908,12 @@ async function enrichInboxSessionRow(
     // pulled in here too — recentConversations has no subagent filter). Without them
     // it renders as a loose flat card. See subagentLinkFields (ct-37439).
     ...subagentLinkFields(conv),
+    // Visible-child pointer + agent-team identity (see schema): links a
+    // teammate/spawned session to its parent WITHOUT the subagent
+    // nesting/hiding that parent_conversation_id implies.
+    spawned_by_conversation_id: conv.spawned_by_conversation_id?.toString() || null,
+    agent_team_name: conv.agent_team_name ?? null,
+    agent_name: conv.agent_name ?? null,
     parent_message_uuid: conv.parent_message_uuid || null,
     icon: conv.icon,
     icon_color: conv.icon_color,
@@ -6970,6 +6988,9 @@ function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: number, 
     // path is for confirmed children, so is_subagent is forced true (covers the
     // parent_message_uuid-less child that has no is_subagent flag of its own).
     ...subagentLinkFields({ is_subagent: true, parent_conversation_id: parentId }),
+    spawned_by_conversation_id: child.spawned_by_conversation_id?.toString() || null,
+    agent_team_name: child.agent_team_name ?? null,
+    agent_name: child.agent_name ?? null,
     worktree_name: child.worktree_name,
     worktree_branch: child.worktree_branch,
     workflow_run_id: null,
@@ -8228,6 +8249,52 @@ export const linkSessions = mutation({
         ? { subagent_description: args.subagent_description }
         : {}),
     });
+  },
+});
+
+// Link a VISIBLE child to the session that spawned it (agent-team teammate →
+// its lead). Unlike linkSessions this neither marks the child a subagent nor
+// dismisses it — the child stays a first-class inbox card; the pointer only
+// powers the "Parent" click-through and teammate-name resolution. Also stamps
+// both sides with the agent-team identity: the child's teamName/agentName come
+// from its JSONL stamps, and the lead (whose transcript is never stamped) gets
+// agent_name "team-lead" so siblings can resolve it by name.
+export const linkSpawnedBy = mutation({
+  args: {
+    parent_conversation_id: v.id("conversations"),
+    child_conversation_id: v.id("conversations"),
+    agent_team_name: v.optional(v.string()),
+    agent_name: v.optional(v.string()),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = args.api_token
+      ? await getAuthenticatedUserId(ctx, args.api_token)
+      : await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    const parent = await ctx.db.get(args.parent_conversation_id);
+    if (!parent || parent.user_id !== userId) throw new Error("Parent not found");
+
+    const child = await ctx.db.get(args.child_conversation_id);
+    if (!child || child.user_id !== userId) throw new Error("Child not found");
+
+    if (!child.spawned_by_conversation_id) {
+      await ctx.db.patch(args.child_conversation_id, {
+        spawned_by_conversation_id: args.parent_conversation_id,
+        ...(args.agent_team_name && !child.agent_team_name
+          ? { agent_team_name: args.agent_team_name }
+          : {}),
+        ...(args.agent_name && !child.agent_name ? { agent_name: args.agent_name } : {}),
+      });
+    }
+
+    if (args.agent_team_name && !parent.agent_team_name) {
+      await ctx.db.patch(args.parent_conversation_id, {
+        agent_team_name: args.agent_team_name,
+        ...(parent.agent_name ? {} : { agent_name: "team-lead" }),
+      });
+    }
   },
 });
 

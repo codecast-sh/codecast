@@ -240,6 +240,20 @@ export default defineSchema({
     comment_fork_message_id: v.optional(v.string()),
     comment_fork_comment_id: v.optional(v.id("comments")),
     comment_fork_prompt_at: v.optional(v.number()),
+    // Visible-child pointer: the session that spawned this one (agent-team
+    // teammate → its lead, `cast spawn` → its caller). Unlike
+    // parent_conversation_id — whose mere presence marks a row as a subagent
+    // and nests/hides it from the inbox — this field only labels and links:
+    // the child stays a first-class inbox card with a click-through to its
+    // parent. Set by conversations.linkSpawnedBy (daemon-resolved).
+    spawned_by_conversation_id: v.optional(v.id("conversations")),
+    // Agent-team identity, from the teamName/agentName stamps Claude Code
+    // writes on every teammate JSONL line (the lead's transcript is never
+    // stamped; linkSpawnedBy stamps the lead as "team-lead" when it links a
+    // worker). Lets the client resolve a teammate name in a transcript to the
+    // sibling session that carries it.
+    agent_team_name: v.optional(v.string()),
+    agent_name: v.optional(v.string()),
     is_favorite: v.optional(v.boolean()),
     short_id: v.optional(v.string()),
     auto_shared: v.optional(v.boolean()),

@@ -28,7 +28,7 @@ import {
   matchStartedConversation,
 } from "./sessionProcessMatcher.js";
 import { GeminiWatcher, type GeminiSessionEvent } from "./geminiWatcher.js";
-import { parseSessionFile, parseCodexSessionFile, parseGeminiSessionFile, parseCursorTranscriptFile, extractSlug, extractParentUuid, extractSummaryTitle, extractCwd, extractCodexCwd, extractCodexForkRoot, extractGeminiProjectHash, detectCliFlags, type ParsedMessage } from "./parser.js";
+import { parseSessionFile, parseCodexSessionFile, parseGeminiSessionFile, parseCursorTranscriptFile, extractSlug, extractParentUuid, extractSummaryTitle, extractCwd, extractCodexCwd, extractCodexForkRoot, extractGeminiProjectHash, extractTeamInfo, detectCliFlags, type ParsedMessage } from "./parser.js";
 import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { encryptToken, decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
@@ -4018,6 +4018,136 @@ function resolveCodexForkRoot(filePath: string): string | undefined {
   return root;
 }
 
+// ── Agent-team "spawned by" linking ──────────────────────────────────────────
+// A teammate session's JSONL lines carry teamName/agentName stamps. Resolve the
+// team's LEAD to a conversation and link the teammate to it as a VISIBLE child
+// (conversations.linkSpawnedBy: powers the parent click-through only — no
+// subagent nesting/hiding, the teammate stays a first-class inbox card).
+//
+// Resolving the lead is the hard part: ~/.claude/teams/<team>/config.json
+// records leadSessionId, but team creation re-mints the lead's session id, so
+// that id almost never matches a synced session. Fast path: the config id
+// resolves in the conversation cache. Fallback (works while the team is live):
+// the worker's tmux pane and the lead's pane share one tmux session — walk the
+// non-member panes' process trees to a pid with a ~/.claude/sessions/<pid>.json
+// entry, which names that agent's CURRENT session id.
+const teamLinkDone = new Set<string>();
+const teamLinkAttempts = new Map<string, number>();
+const TEAM_LINK_MAX_ATTEMPTS = 3;
+
+async function resolveTeamLeadConversation(
+  teamName: string,
+  agentName: string,
+  conversationCache: ConversationCache,
+): Promise<string | null> {
+  let cfg: any;
+  try {
+    cfg = JSON.parse(
+      fs.readFileSync(path.join(process.env.HOME || "", ".claude", "teams", teamName, "config.json"), "utf-8"),
+    );
+  } catch {
+    return null;
+  }
+
+  const leadSessionId: string | undefined = cfg?.leadSessionId;
+  if (leadSessionId && conversationCache[leadSessionId]) {
+    return conversationCache[leadSessionId];
+  }
+
+  const members: any[] = Array.isArray(cfg?.members) ? cfg.members : [];
+  const me = members.find((m) => m?.name === agentName);
+  const memberPanes = new Set<string>(
+    members.map((m) => m?.tmuxPaneId).filter((p: any) => typeof p === "string" && p.startsWith("%")),
+  );
+  const myPane: string | undefined = me?.tmuxPaneId;
+  if (!myPane || !myPane.startsWith("%") || !hasTmux()) return null;
+
+  try {
+    const { stdout: sessOut } = await tmuxExec(["display-message", "-p", "-t", myPane, "#{session_name}"]);
+    const tmuxSession = sessOut.trim();
+    if (!tmuxSession) return null;
+    const { stdout: panesOut } = await tmuxExec(["list-panes", "-s", "-t", tmuxSession, "-F", "#{pane_id} #{pane_pid}"]);
+    const rootPids: number[] = [];
+    for (const line of panesOut.trim().split("\n")) {
+      const [paneId, pidStr] = line.trim().split(/\s+/);
+      if (!paneId || memberPanes.has(paneId)) continue; // teammates' own panes can't be the lead
+      const pid = parseInt(pidStr, 10);
+      if (!isNaN(pid)) rootPids.push(pid);
+    }
+    if (rootPids.length === 0) return null;
+
+    // One process snapshot → children map → BFS from the candidate panes' root
+    // pids. Any descendant with a ~/.claude/sessions/<pid>.json entry is a live
+    // agent whose registry names its current session id.
+    const { stdout: psOut } = await execAsync("ps -axo pid=,ppid=");
+    const children = new Map<number, number[]>();
+    for (const line of psOut.trim().split("\n")) {
+      const [pidStr, ppidStr] = line.trim().split(/\s+/);
+      const pid = parseInt(pidStr, 10);
+      const ppid = parseInt(ppidStr, 10);
+      if (isNaN(pid) || isNaN(ppid)) continue;
+      if (!children.has(ppid)) children.set(ppid, []);
+      children.get(ppid)!.push(pid);
+    }
+    const queue = [...rootPids];
+    const seen = new Set<number>(queue);
+    const leadConvIds = new Set<string>();
+    while (queue.length > 0) {
+      const pid = queue.shift()!;
+      for (const child of children.get(pid) ?? []) {
+        if (!seen.has(child)) {
+          seen.add(child);
+          queue.push(child);
+        }
+      }
+      try {
+        const regPath = path.join(process.env.HOME || "", ".claude", "sessions", `${pid}.json`);
+        if (fs.existsSync(regPath)) {
+          const reg = JSON.parse(fs.readFileSync(regPath, "utf-8"));
+          const sid = reg?.sessionId;
+          if (typeof sid === "string" && conversationCache[sid]) {
+            leadConvIds.add(conversationCache[sid]);
+          }
+        }
+      } catch {}
+    }
+    // Exactly one live non-member agent in this tmux session — that's the lead.
+    // Zero or several means we can't tell; stay unlinked rather than guess.
+    if (leadConvIds.size === 1) return leadConvIds.values().next().value ?? null;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function maybeLinkTeamSpawn(
+  sessionId: string,
+  conversationId: string,
+  content: string,
+  syncService: SyncService,
+  conversationCache: ConversationCache,
+): Promise<void> {
+  const info = extractTeamInfo(content);
+  if (!info) return;
+  const attempts = (teamLinkAttempts.get(sessionId) ?? 0) + 1;
+  teamLinkAttempts.set(sessionId, attempts);
+  if (attempts > TEAM_LINK_MAX_ATTEMPTS) {
+    teamLinkDone.add(sessionId);
+    return;
+  }
+  const parentConvId = await resolveTeamLeadConversation(info.teamName, info.agentName, conversationCache);
+  if (!parentConvId || parentConvId === conversationId) {
+    if (attempts >= TEAM_LINK_MAX_ATTEMPTS) {
+      teamLinkDone.add(sessionId);
+      log(`Could not resolve lead for teammate ${info.agentName} (${sessionId.slice(0, 8)}, team ${info.teamName}) — leaving unlinked`);
+    }
+    return;
+  }
+  await syncService.linkSpawnedBy(parentConvId, conversationId, info.teamName, info.agentName);
+  teamLinkDone.add(sessionId);
+  log(`Linked teammate ${info.agentName} (${sessionId.slice(0, 8)}) -> lead conversation ${parentConvId.slice(0, 12)} (team ${info.teamName})`);
+}
+
 const bakImageRecoveryDone = new Set<string>();
 
 function recoverImagesFromBackup(
@@ -4480,6 +4610,10 @@ async function processSessionFile(
             }
           } catch {}
         }
+        // Teammate transcripts self-identify on every line — stamp the team
+        // identity at create so the row never exists without it. The parent
+        // LINK still happens via maybeLinkTeamSpawn below (lead resolution).
+        const teamInfo = !isSubagent && newContent.includes('"teamName"') ? extractTeamInfo(newContent) : undefined;
         conversationId = await syncService.createConversation({
           userId,
           teamId,
@@ -4494,6 +4628,8 @@ async function processSessionFile(
           gitInfo,
           cliFlags: cliFlags || undefined,
           subagentDescription,
+          agentTeamName: teamInfo?.teamName,
+          agentName: teamInfo?.agentName,
         });
         conversationCache[sessionId] = conversationId;
         saveConversationCache(conversationCache);
@@ -4566,6 +4702,14 @@ async function processSessionFile(
       if (pendingMessages[sessionId]) {
         await flushPendingMessagesBatch(pendingMessages[sessionId], conversationId, syncService, retryQueue);
         delete pendingMessages[sessionId];
+      }
+
+      // Agent-team teammate? Link it to its lead as a visible child (once).
+      // Cheap string gate first — only teammate transcripts carry the stamp.
+      if (!isSubagent && !teamLinkDone.has(sessionId) && newContent.includes('"teamName"')) {
+        maybeLinkTeamSpawn(sessionId, conversationId, newContent, syncService, conversationCache).catch((err) => {
+          log(`Teammate link attempt failed for ${sessionId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
+        });
       }
     } catch (err) {
       if (err instanceof AuthExpiredError) {
