@@ -41,6 +41,12 @@ crons.interval(
 );
 
 crons.interval(
+  "prune expired ip_rate_limits windows",
+  { hours: 1 },
+  internal.ipRateLimit.pruneIpRateLimits
+);
+
+crons.interval(
   "backfill docs and tasks from sessions",
   { hours: 6 },
   internal.taskMining.backfillAllTeams

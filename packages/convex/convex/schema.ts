@@ -1154,6 +1154,16 @@ export default defineSchema({
     .index("by_recipient_read", ["recipient_user_id", "read"])
     .index("by_recipient_created", ["recipient_user_id", "created_at"]),
 
+  // Fixed-window counters for the IP-keyed rate limiter (ipRateLimit.ts) used on
+  // UNAUTHENTICATED endpoints (the auth relay, webhooks) — the existing per-user
+  // rate_limits table can't cover them (no userId). Keyed per (endpoint, ip) so
+  // counters distribute — no hot doc. Pruned hourly.
+  ip_rate_limits: defineTable({
+    key: v.string(),
+    count: v.number(),
+    window_start: v.number(),
+  }).index("by_key", ["key"]),
+
   pending_permissions: defineTable({
     conversation_id: v.id("conversations"),
     session_id: v.string(),
