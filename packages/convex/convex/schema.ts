@@ -1153,9 +1153,14 @@ export default defineSchema({
     created_at: v.number(),
     resolved_at: v.optional(v.number()),
     resolved_by: v.optional(v.id("users")),
+    // Denormalized conversation owner so getAllRespondedPermissions can index by
+    // (owner, resolved_at) instead of scanning the whole table — the scan made
+    // that live per-daemon subscription re-run on every other user's writes.
+    owner_user_id: v.optional(v.id("users")),
   })
     .index("by_conversation_status", ["conversation_id", "status"])
-    .index("by_session", ["session_id"]),
+    .index("by_session", ["session_id"])
+    .index("by_owner_resolved", ["owner_user_id", "resolved_at"]),
 
   // A signed-in link recipient (someone who opened a shared conversation but is
   // neither its owner nor a team member) asking to do more than read: to send
