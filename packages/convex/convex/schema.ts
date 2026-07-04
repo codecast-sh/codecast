@@ -116,7 +116,8 @@ export default defineSchema({
     .index("by_github_username", ["github_username"])
     .index("by_github_id", ["github_id"])
     .index("by_username", ["username"])
-    .index("by_team_id", ["team_id"]),
+    .index("by_team_id", ["team_id"])
+    .index("by_last_heartbeat", ["last_heartbeat"]),
 
   daemon_commands: defineTable({
     user_id: v.id("users"),

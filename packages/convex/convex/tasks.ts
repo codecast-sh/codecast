@@ -293,11 +293,8 @@ export const create = mutation({
 
     let project_id: Id<"projects"> | undefined;
     if (args.project_id) {
-      const project = await ctx.db
-        .query("projects")
-        .filter((q) => q.eq(q.field("_id"), args.project_id as any))
-        .first();
-      if (project) project_id = project._id;
+      const pid = ctx.db.normalizeId("projects", args.project_id);
+      if (pid && (await ctx.db.get(pid))) project_id = pid;
     }
 
     let plan_id: Id<"plans"> | undefined;
@@ -1909,11 +1906,8 @@ export const webCreate = mutation({
 
     let project_id: Id<"projects"> | undefined;
     if (args.project_id) {
-      const project = await ctx.db
-        .query("projects")
-        .filter((q) => q.eq(q.field("_id"), args.project_id as any))
-        .first();
-      if (project) project_id = project._id;
+      const pid = ctx.db.normalizeId("projects", args.project_id);
+      if (pid && (await ctx.db.get(pid))) project_id = pid;
     }
 
     let plan_id: Id<"plans"> | undefined;
