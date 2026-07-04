@@ -1131,7 +1131,10 @@ export class SyncService {
     }
   }
 
-  async sendMessageToSession(conversationId: string, content: string): Promise<string | null> {
+  // `origin: "scheduler"` marks a machine-initiated injection (task scheduler):
+  // the server then skips the stash-clear so a stashed looping session keeps
+  // working out of the user's active queue. Human/agent sends omit it.
+  async sendMessageToSession(conversationId: string, content: string, origin?: "scheduler"): Promise<string | null> {
     if (!this.apiToken) return null;
     try {
       const result = await this.client.mutation(
@@ -1139,6 +1142,7 @@ export class SyncService {
         {
           conversation_id: conversationId,
           content,
+          ...(origin ? { origin } : {}),
           api_token: this.apiToken,
         },
       );
@@ -1546,6 +1550,24 @@ export class SyncService {
       return result as boolean;
     } catch {
       return false;
+    }
+  }
+
+  // Stamp agent_task_id on a spawned run's conversation (and fold the previous
+  // completed run of a repeating spawn schedule). { retry: true } means the
+  // run's conversation hasn't synced yet — call again shortly.
+  async linkRunConversation(taskId: string, runSessionUuid: string): Promise<{ linked: boolean; retry: boolean }> {
+    if (!this.apiToken) return { linked: false, retry: false };
+    try {
+      const result = await this.client.mutation(
+        "agentTasks:linkRunConversation" as any,
+        { api_token: this.apiToken, task_id: taskId, run_session_uuid: runSessionUuid }
+      );
+      return result as { linked: boolean; retry: boolean };
+    } catch {
+      // Unknown mutation (older deployed backend) or transient failure — the
+      // completeTaskRun backfill still stamps the link at run end.
+      return { linked: false, retry: false };
     }
   }
 }

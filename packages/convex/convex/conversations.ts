@@ -9,6 +9,7 @@ import { checkRateLimit } from "./rateLimit";
 import { verifyApiToken } from "./apiTokens";
 import { internal } from "./_generated/api";
 import { resetConversationPendingMessages } from "./pendingMessages";
+import { cancelTasksBoundToConversation } from "./agentTasks";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId } from "./daemonCommandUtils";
 import { AGENT_MODEL_CONFIG, modelAgentKey } from "@codecast/shared/contracts";
@@ -6902,6 +6903,10 @@ async function enrichInboxSessionRow(
     workflow_run_id: conv.workflow_run_id || null,
     is_workflow_primary: conv.is_workflow_primary || false,
     workflow_run_status,
+    // Schedule that spawned this conversation as a run (see schema) — lets the
+    // sidebar badge and the schedule strip attribute ANY run, not just the
+    // latest one webList can resolve from last_run_session_uuid.
+    agent_task_id: conv.agent_task_id?.toString() || null,
     forked_from: conv.forked_from?.toString() || null,
     // Parent-link fields so a session emitted via THIS top-level scan self-identifies
     // as a subagent and nests under its parent (a subagent active in the last 30d is
@@ -9041,6 +9046,10 @@ export const killSession = mutation({
         patch.status = "completed";
       }
       await ctx.db.patch(args.conversation_id, patch);
+      // Kill must stick: cancel any armed schedule that injects into this
+      // conversation, or its next fire would resurrect the session the user
+      // just killed (see cancelTasksBoundToConversation).
+      await cancelTasksBoundToConversation(ctx, userId, args.conversation_id);
     }
     return { existed: !!conv };
   },

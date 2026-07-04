@@ -595,7 +595,9 @@ type UpcomingSchedule = { run_at?: number; title: string; extra: number };
 // Upcoming `cast schedule` follow-ups keyed by conversation, joined client-side
 // from the same per-user webList the /schedules page reads (Convex dedupes the
 // subscription across cards) so the hot inbox row query stays untouched. A task
-// badges both the conversation that scheduled it and the one it will continue;
+// badges the conversation that scheduled it, the one it will continue, and the
+// latest spawned run of a repeating schedule (the card that survives run
+// auto-fold — its badge is the countdown to the run that will supersede it);
 // the soonest timed run wins the label, extra armed tasks are counted.
 function useUpcomingSchedule(conversationId: string): UpcomingSchedule | undefined {
   const tasks = useQuery(api.agentTasks.webList, {});
@@ -603,7 +605,7 @@ function useUpcomingSchedule(conversationId: string): UpcomingSchedule | undefin
     const map = new Map<string, UpcomingSchedule>();
     for (const task of tasks ?? []) {
       if (task.status !== "scheduled") continue;
-      for (const convId of new Set([task.originating_conversation_id, task.target_conversation_id])) {
+      for (const convId of new Set([task.originating_conversation_id, task.target_conversation_id, task.last_run_conversation_id])) {
         if (!convId) continue;
         const prev = map.get(convId);
         if (!prev) {

@@ -273,8 +273,9 @@ export default defineSchema({
     // Stash = set aside WITHOUT killing: hides the session from the active inbox
     // buckets into the "Stashed" group (above Dismissed) while the agent keeps
     // running. Same absolute-flag semantics as inbox_dismissed_at (cleared by
-    // sending a message or an explicit restore); unlike dismiss it never
-    // triggers a kill. A dismiss clears it (the row moves to Dismissed).
+    // a HUMAN send or an explicit restore — a scheduler-origin injection
+    // deliberately leaves it set, see enqueuePendingMessage); unlike dismiss it
+    // never triggers a kill. A dismiss clears it (the row moves to Dismissed).
     inbox_stashed_at: v.optional(v.number()),
     inbox_killed_at: v.optional(v.number()),
     inbox_deferred_at: v.optional(v.number()),
@@ -320,6 +321,11 @@ export default defineSchema({
     workflow_run_id: v.optional(v.id("workflow_runs")),
     is_workflow_sub: v.optional(v.boolean()),
     is_workflow_primary: v.optional(v.boolean()),
+    // The schedule (agent_tasks row) that spawned this conversation as a run.
+    // Stamped by the daemon shortly after spawn (agentTasks.linkRunConversation)
+    // and backfilled on run completion/failure, so EVERY run — not just the
+    // latest — stays attributable to its schedule (panel, badges, provenance).
+    agent_task_id: v.optional(v.id("agent_tasks")),
     available_skills: v.optional(v.string()),
     subagent_description: v.optional(v.string()),
     icon: v.optional(v.string()),
@@ -777,6 +783,12 @@ export default defineSchema({
     image_storage_id: v.optional(v.id("_storage")),
     image_storage_ids: v.optional(v.array(v.id("_storage"))),
     client_id: v.optional(v.string()),
+    // Who initiated the send. Absent = a person (web composer, cast send, team
+    // send) — those clear dismissed/stashed/killed so the session resurfaces.
+    // "scheduler" = the daemon's task scheduler firing a `cast schedule`
+    // injection: a machine wake must not override the user's stash (stash =
+    // "keep working out of my sight"), so enqueue skips the stash-clear.
+    origin: v.optional(v.literal("scheduler")),
     status: v.union(
       v.literal("pending"),
       v.literal("injected"),
@@ -1317,6 +1329,10 @@ export default defineSchema({
 
     last_run_at: v.optional(v.number()),
     last_run_summary: v.optional(v.string()),
+    // True when the last run ended in failTaskRun. Drives the panel's outcome
+    // color and gates run auto-fold: a failed previous run must stay visible in
+    // the inbox (escalation), only a clean run folds when the next one starts.
+    last_run_failed: v.optional(v.boolean()),
     last_run_conversation_id: v.optional(v.id("conversations")),
     // Claude session UUID of the last spawned run. The daemon assigns it up front
     // via `claude --session-id`; webList resolves it to a conversation at read time
