@@ -11,6 +11,7 @@ import { resolveAssigneeStr, resolveAssigneeToUserId, recalcPlanProgress, notify
 import { api, internal } from "./_generated/api";
 import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey } from "@codecast/shared/contracts";
 import { conversationHasNoWork, reapEmptyConversation, enqueueKillSessionCommand } from "./cleanup";
+import { cancelTasksBoundToConversation } from "./agentTasks";
 import { canAccessDoc } from "./docs";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { findConversationBySessionReference } from "./conversationSessionLookup";
@@ -186,6 +187,16 @@ async function applyPatches(
             const killPatch: Record<string, any> = { inbox_killed_at: Date.now() };
             if (!(doc as any)?.persistent) killPatch.status = "completed";
             await ctx.db.patch(docKey as Id<any>, killPatch);
+            // Dismiss retires the session — a standing schedule that injects
+            // into it must die with it, or its next fire would silently
+            // resurrect a session the user just retired. User gestures only:
+            // bulk cleanup sweeps patch inbox_dismissed_at directly (not via
+            // dispatch) and deliberately leave standing schedules armed. An
+            // anchor going dormant keeps its schedules too. Task owner = the
+            // conversation's runner (a second-party owner may be triaging).
+            if (!(doc as any)?.persistent) {
+              await cancelTasksBoundToConversation(ctx, (doc as any).user_id, docKey as Id<"conversations">);
+            }
           }
         }
       } else {
