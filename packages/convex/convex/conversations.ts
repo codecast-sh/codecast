@@ -7001,25 +7001,22 @@ function sortInboxRows(results: any[]) {
 // The live, windowed inbox computation. Extracted from the query handler so a
 // test harness can drive it with an explicit userId (the query is auth-gated and
 // can't be invoked via `npx convex run`).
-async function computeInboxSessions(
+// Shared inbox-conversation scan: the recent/pinned/dismissed/stashed/owned windows,
+// explicit-extra hydration, per-user liveness maps, foreign-run liveness merge, and the
+// stale-cluster cutoff. Extracted so the full inbox enrichment (computeInboxSessions)
+// and the lightweight liveness overlay (computeSessionsLiveness) scan the SAME candidate
+// set the same way — they only differ in what they enrich per row.
+async function scanInboxConversations(
   ctx: any,
   userId: Id<"users">,
-  opts: {
-    show_all?: boolean;
-    includeLiveness?: boolean;
-    // Explicitly-requested conversations (a label's filed set) hydrated into the
-    // candidate pool regardless of the recency window — labels exist to park old
-    // sessions. Deliberately filed, so also exempt from cluster-hiding.
-    extraConvIds?: string[];
-  },
-): Promise<{ sessions: any[]; hidden_count: number }> {
-  // Liveness (agent_status/is_idle/...) is heartbeat-derived and is the reason this
-  // query re-runs ~every second. The live web subscription opts OUT (includeLiveness:
-  // false) and gets those fields from the lightweight `sessionsLiveness` overlay; all
-  // other callers (inboxForCLI, listInboxSessionsPaginated) default to true and are
-  // unchanged. Default MUST stay true — inboxForCLI classifies work-state from it.
-  const includeLiveness = opts.includeLiveness !== false;
-  const now = Date.now();
+  now: number,
+  opts: { includeLiveness: boolean; extraConvIds?: string[] },
+): Promise<{
+  conversations: any[];
+  maps: InboxSessionMaps;
+  extraIds: Set<string>;
+  clusterCutoff: number;
+}> {
   const dismissedCutoff = now - INBOX_DISMISSED_WINDOW_MS;
   const sessionWindowCutoff = now - INBOX_SESSION_WINDOW_MS;
 
@@ -7107,7 +7104,7 @@ async function computeInboxSessions(
   }
   const conversations = Array.from(byId.values());
 
-  const maps = includeLiveness
+  const maps = opts.includeLiveness
     ? await buildUserSessionMaps(ctx, userId, now)
     : EMPTY_INBOX_MAPS;
 
@@ -7116,7 +7113,7 @@ async function computeInboxSessions(
   // so merge its liveness per-conversation or the row would always classify as
   // dead/idle even while the runner's agent is actively working.
   const foreignConvs = conversations.filter((c) => c.user_id.toString() !== userId.toString());
-  if (includeLiveness && foreignConvs.length > 0) {
+  if (opts.includeLiveness && foreignConvs.length > 0) {
     await mergeForeignConversationLiveness(ctx, maps, foreignConvs, now);
   }
 
@@ -7137,6 +7134,34 @@ async function computeInboxSessions(
       }
     }
   }
+
+  return { conversations, maps, extraIds, clusterCutoff };
+}
+
+async function computeInboxSessions(
+  ctx: any,
+  userId: Id<"users">,
+  opts: {
+    show_all?: boolean;
+    includeLiveness?: boolean;
+    // Explicitly-requested conversations (a label's filed set) hydrated into the
+    // candidate pool regardless of the recency window — labels exist to park old
+    // sessions. Deliberately filed, so also exempt from cluster-hiding.
+    extraConvIds?: string[];
+  },
+): Promise<{ sessions: any[]; hidden_count: number }> {
+  // Liveness (agent_status/is_idle/...) is heartbeat-derived and is the reason this
+  // query re-runs ~every second. The live web subscription opts OUT (includeLiveness:
+  // false) and gets those fields from the lightweight `sessionsLiveness` overlay; all
+  // other callers (inboxForCLI, listInboxSessionsPaginated) default to true and are
+  // unchanged. Default MUST stay true — inboxForCLI classifies work-state from it.
+  const includeLiveness = opts.includeLiveness !== false;
+  const now = Date.now();
+  const { conversations, maps, extraIds, clusterCutoff } =
+    await scanInboxConversations(ctx, userId, now, {
+      includeLiveness,
+      extraConvIds: opts.extraConvIds,
+    });
 
   let hiddenCount = 0;
   const results: any[] = [];
@@ -7210,38 +7235,175 @@ export const listInboxSessions = query({
   },
 });
 
+// The 7 heartbeat-derived fields the sessionsLiveness overlay ships — the exact set the
+// full row (enrichInboxSessionRow) exposes and the web client merges via syncOverlay.
+type LivenessFields = {
+  agent_status: any;
+  is_idle: boolean;
+  is_unresponsive: boolean;
+  awaiting_input: boolean;
+  is_connected: boolean;
+  tmux_session: string | null;
+  permission_mode: string | null;
+};
+
+// Lightweight twin of enrichInboxSessionRow that computes ONLY those 7 fields. It reuses
+// the exact same derivations (trustedAgentStatus / deriveSessionActivity / the AUQ probe
+// / subagentKeepsParentWorking) so the overlay never drifts from the bundled row — but it
+// SKIPS everything the overlay throws away: the plan/task/workflow gets, the acting-author
+// resolution, and the subagent-row building. The one heavy read the full enrichment does
+// per row — the by_parent_conversation_id children scan (up to ~620/recompute, the cost
+// this task exists to cut) — runs here only in the single case that can change an output:
+// flipping an otherwise-idle parent back to "working" because a child is still producing.
+// So it's gated on isIdle (nothing to flip otherwise) and skipped for dismissed/stashed
+// rows (their children don't need live liveness). The AUQ probe is likewise gated on the
+// working bucket (!isIdle), matching enrichInboxSessionRow.
+async function enrichLivenessFields(
+  ctx: any,
+  conv: any,
+  maps: InboxSessionMaps,
+  now: number,
+): Promise<LivenessFields> {
+  const cid = conv._id.toString();
+  const hasPending = !!conv.has_pending_messages;
+  let lastMsgRole = conv.last_message_role;
+  let lastUserMessage = conv.last_message_preview || null;
+
+  // Fallback for un-backfilled conversations: one read for the last message so
+  // deriveSessionActivity sees the trailing role + the interrupt-marker preview.
+  if (!lastMsgRole && conv.message_count > 0) {
+    const lastMsg = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_timestamp", (q: any) =>
+        q.eq("conversation_id", conv._id)
+      )
+      .order("desc")
+      .first();
+    if (lastMsg) {
+      lastMsgRole = lastMsg.role;
+      if (lastMsg.role === "user" && lastMsg.content?.trim()) {
+        lastUserMessage = lastMsg.content
+          .replace(/\[Image[:\s][^\]]*\]/gi, "")
+          .replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "")
+          .trim()
+          .slice(0, 200);
+      }
+    }
+  }
+
+  const dismissed = !!conv.inbox_dismissed_at;
+  const stashed = !!conv.inbox_stashed_at;
+
+  const agentStatus = trustedAgentStatus(maps.agentStatusMap.get(cid), conv.updated_at, now);
+  const daemonAlive = agentStatus === "stopped"
+    ? false
+    : maps.liveConvIds.has(cid) ||
+      (maps.userDaemonAlive && (now - conv.updated_at) < 10 * 60 * 1000);
+
+  const activity = deriveSessionActivity({
+    agentStatus,
+    agentStatusUpdatedAt: maps.agentStatusUpdatedAtMap.get(cid),
+    lastMessageRole: lastMsgRole,
+    lastMessagePreview: lastUserMessage,
+    hasPending,
+    status: conv.status,
+    updatedAt: conv.updated_at,
+    daemonAlive,
+    now,
+  });
+  let isIdle = activity.isIdle;
+  const isUnresponsive = activity.isUnresponsive;
+
+  // An open AskUserQuestion poll is the agent blocking on the user — it belongs in
+  // "needs input", never "working". Same authoritative order("desc") probe (and same
+  // !isIdle gate) as enrichInboxSessionRow.
+  let awaitingInput = false;
+  if (!isIdle && conv.message_count > 0) {
+    const lastMsg = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_timestamp", (q: any) =>
+        q.eq("conversation_id", conv._id)
+      )
+      .order("desc")
+      .first();
+    if (lastMsg?.role === "assistant" && lastMsg.tool_calls?.some((tc: any) => tc.name === "AskUserQuestion")) {
+      awaitingInput = true;
+      isIdle = true; // blocked on the user, not actively working
+    }
+  }
+
+  // Keep an idle parent in "working" only while a subagent child is genuinely
+  // PRODUCING (see subagentKeepsParentWorking). This is the ONLY liveness effect of
+  // the children scan, so it runs only when isIdle is still true and never for
+  // dismissed/stashed rows.
+  if (isIdle && !dismissed && !stashed && conv.message_count > 0) {
+    const children = await ctx.db
+      .query("conversations")
+      .withIndex("by_parent_conversation_id", (q: any) =>
+        q.eq("parent_conversation_id", conv._id)
+      )
+      .take(20);
+    if (children.some((c: any) => subagentKeepsParentWorking({
+      isSubagent: !!c.is_subagent,
+      convStatus: c.status,
+      updatedAt: c.updated_at,
+      isLive: maps.liveConvIds.has(c._id.toString()),
+      agentStatus: trustedAgentStatus(maps.agentStatusMap.get(c._id.toString()), c.updated_at, now),
+      now,
+    }))) {
+      isIdle = false;
+    }
+  }
+
+  return {
+    agent_status: agentStatus,
+    is_idle: isIdle,
+    is_unresponsive: isUnresponsive,
+    awaiting_input: awaitingInput,
+    is_connected: !!daemonAlive,
+    tmux_session: maps.tmuxSessionMap.get(cid) ?? null,
+    permission_mode: maps.permissionModeMap.get(cid) ?? null,
+  };
+}
+
+// Build the {convId: LivenessFields} overlay for the user's inbox window. Reuses the
+// shared scan (so the candidate set matches computeInboxSessions exactly) but enriches
+// each row through the lightweight enrichLivenessFields — NOT the full enrichInboxSessionRow
+// — so a heartbeat recompute no longer runs the plan/task/workflow gets, the acting-author
+// resolution, or a children scan for every row. Covers the whole window (dismissed/stashed
+// included) so the overlay is a superset of any row the client might hold; syncOverlay
+// ignores ids it doesn't have.
+async function computeSessionsLiveness(
+  ctx: any,
+  userId: Id<"users">,
+): Promise<Record<string, LivenessFields>> {
+  const now = Date.now();
+  const { conversations, maps } = await scanInboxConversations(ctx, userId, now, {
+    includeLiveness: true,
+  });
+  const liveness: Record<string, LivenessFields> = {};
+  for (const conv of conversations) {
+    if (!shouldShowInInbox(conv)) continue;
+    liveness[conv._id.toString()] = await enrichLivenessFields(ctx, conv, maps, now);
+  }
+  return liveness;
+}
+
 // Heartbeat-derived liveness for the user's inbox sessions, keyed by conversation id —
 // the small, high-churn overlay that pairs with listInboxSessions({include_liveness:
-// false}). Reuses computeInboxSessions so the values are IDENTICAL to the bundled path
-// by construction, then projects to just the liveness fields. This is the only inbox
-// query that re-runs on every heartbeat, and it ships a tiny map instead of the full
-// session list (the client merges it via syncOverlay).
+// false}). This is the only inbox query that re-runs on every heartbeat, so it computes
+// ONLY the 7 liveness fields (computeSessionsLiveness) instead of the full inbox
+// enrichment — the values are still identical to the bundled path because both derive
+// them the same way. Ships a tiny map the client merges via syncOverlay.
 export const sessionsLiveness = query({
   args: {
     show_all: v.optional(v.boolean()),
     _probe: v.optional(v.number()),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, _args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return { liveness: {} };
-    // show_all:true so the overlay covers every row the client might hold; syncOverlay
-    // ignores ids it doesn't have, so a superset is harmless.
-    const { sessions } = await computeInboxSessions(ctx, userId, {
-      show_all: true,
-      includeLiveness: true,
-    });
-    const liveness: Record<string, any> = {};
-    for (const s of sessions) {
-      liveness[s._id.toString()] = {
-        agent_status: s.agent_status,
-        is_idle: s.is_idle,
-        is_unresponsive: s.is_unresponsive,
-        awaiting_input: s.awaiting_input,
-        is_connected: s.is_connected,
-        tmux_session: s.tmux_session,
-        permission_mode: s.permission_mode,
-      };
-    }
+    const liveness = await computeSessionsLiveness(ctx, userId);
     return { liveness };
   },
 });
