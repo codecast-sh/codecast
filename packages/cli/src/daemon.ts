@@ -7338,7 +7338,11 @@ const PICKER_BUSY_RE = /⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|Wandering|Vibing
 
 async function capturePaneText(target: string, lines: number): Promise<string> {
   const { stdout } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${lines}`]);
-  return stdout;
+  // -J preserves trailing blank pane rows (unlike bare -p). When the TUI's
+  // content sits high in the pane — short sessions, a freshly redrawn picker —
+  // the callers' slice(-N) tails would read only blanks and misjudge the pane
+  // (idle looks busy, the cache-confirm dialog goes unseen). Trim them.
+  return stdout.replace(/[\s\n]+$/, "");
 }
 
 export async function driveModelPicker(

@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@codecast/convex": "workspace:*",
+    "@codecast/shared": "workspace:*",
     "@codecast/web": "workspace:*",
     "@convex-dev/auth": "^0.0.90",
     "@expo/vector-icons": "^15.0.3",
