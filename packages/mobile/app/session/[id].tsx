@@ -15,6 +15,7 @@ import { useConversationMessages } from '@codecast/web/hooks/useConversationMess
 import { useEnsureDispatch } from '@codecast/web/hooks/useEnsureDispatch';
 import { PermissionCard } from '@/components/PermissionCard';
 import { DeviceChip, useRunOnDevice } from '@/components/DevicesSection';
+import { ModelSwitcherChip } from '@/components/ModelSwitcherChip';
 import { renderInlineMarkdown, MarkdownContent, MarkdownTextBlock, CodeBlockWithCopy, CodeBlockFullscreen, HighlightedCodeText } from '@/components/MarkdownRenderer';
 import { Theme, Spacing } from '@/constants/Theme';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -230,6 +231,8 @@ type ConversationData = {
   has_more_above?: boolean;
   oldest_timestamp?: number | null;
   model?: string;
+  effort?: string | null;
+  is_own?: boolean;
   agent_type?: string;
   started_at?: number;
   message_count?: number;
@@ -4081,6 +4084,15 @@ export default function SessionDetailScreen() {
                 {isActive && (
                   <Animated.View style={[styles.activeDot, { opacity: activePulse }]} />
                 )}
+                <ModelSwitcherChip
+                  conversationId={conversation._id}
+                  agentType={conversation.agent_type}
+                  model={conversation.model}
+                  effort={conversation.effort}
+                  messageCount={conversation.message_count}
+                  canEdit={!!conversation.is_own}
+                  showToast={showToast}
+                />
                 {(conversation.fork_count ?? 0) > 0 && (
                   <Pressable onPress={() => setTreeModalVisible(true)} style={[styles.metaChip, metaChipTint(Theme.violet)]}>
                     <FontAwesome name="code-fork" size={10} color={Theme.violet} />
