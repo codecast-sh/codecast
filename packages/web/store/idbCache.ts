@@ -114,6 +114,22 @@ class CacheDB extends Dexie {
       conversationMessages: "convId",
       dispatchOutbox: "id, ts",
     });
+    // v8: index conversationMessages by latestTimestamp so the on-disk store can
+    // be pruned (LRU + TTL) instead of growing forever — one row per conversation
+    // ever opened, each up to several MB of inline-image message bodies.
+    this.version(8).stores({
+      sessions: "_id",
+      tasks: "_id",
+      docs: "_id",
+      plans: "_id",
+      projects: "_id",
+      buckets: "_id",
+      bucketAssignments: "_id",
+      comments: "_id",
+      meta: "key",
+      conversationMessages: "convId, latestTimestamp",
+      dispatchOutbox: "id, ts",
+    });
   }
 }
 
@@ -275,6 +291,22 @@ const _pendingMsgWrites = new Map<string, { messages: any[]; pagination: any }>(
 let _msgWriteTimer: ReturnType<typeof setTimeout> | null = null;
 const MSG_WRITE_DEBOUNCE_MS = 300;
 
+// On-disk prune of the conversationMessages store. Every conversation ever opened
+// leaves a row (up to several MB with inline images) and nothing ever deleted it,
+// so the store climbed unbounded (~445MB in a past incident). We cap it at the N
+// most-recently-active conversations and drop anything past a TTL, ordered by the
+// latestTimestamp index. Runs lazily off the write path — piggybacked on the
+// debounced flush and throttled — never on the hot per-tick path.
+const MAX_CACHED_CONVERSATIONS = 300;
+const CONVERSATION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+const PRUNE_THROTTLE_MS = 5 * 60 * 1000; // at most once per 5 min
+const PROTECT_RECENT_MS = 10 * 60 * 1000; // never prune a conv touched this recently
+// Wall-clock of the last write per conversation — a conversation open/on-screen is
+// written continuously, so a recent touch marks it protected from pruning even if
+// its newest message (its latestTimestamp) is old.
+const _touchedAt = new Map<string, number>();
+let _lastPruneAt = 0;
+
 function _latestTs(messages: any[]): number {
   // Loop, not Math.max(...spread): spreading a long messages array risks a
   // call-stack overflow, and this now runs once per flush instead of per tick.
@@ -299,6 +331,47 @@ function _flushMessageWrites() {
       .put({ convId, messages, pagination, latestTimestamp: _latestTs(messages) })
       .catch(() => {});
   }
+  _maybePruneConversations();
+}
+
+// Drop conversationMessages rows beyond the cap (oldest by latestTimestamp) and
+// past the TTL, skipping any conversation currently buffered or recently touched
+// (open/on-screen). Reads only primary keys off the latestTimestamp index, so the
+// multi-MB message payloads are never loaded; best-effort and never throws.
+async function _pruneConversations() {
+  try {
+    const now = Date.now();
+    const protectedIds = new Set<string>(_pendingMsgWrites.keys());
+    for (const [convId, ts] of _touchedAt) {
+      if (now - ts <= PROTECT_RECENT_MS) protectedIds.add(convId);
+      else _touchedAt.delete(convId); // let the recency map self-bound
+    }
+
+    // Ascending by latestTimestamp (oldest first); everything past the cap is the
+    // least-recently-active tail. primaryKeys() reads the index only, not the rows.
+    const orderedKeys = await db.conversationMessages.orderBy("latestTimestamp").primaryKeys();
+    const overCap =
+      orderedKeys.length > MAX_CACHED_CONVERSATIONS
+        ? orderedKeys.slice(0, orderedKeys.length - MAX_CACHED_CONVERSATIONS)
+        : [];
+    const expired = await db.conversationMessages
+      .where("latestTimestamp")
+      .below(now - CONVERSATION_TTL_MS)
+      .primaryKeys();
+
+    const doomed = new Set<string>([...overCap, ...expired]);
+    for (const id of protectedIds) doomed.delete(id);
+    if (doomed.size > 0) await db.conversationMessages.bulkDelete([...doomed]);
+  } catch {
+    // Maintenance is best-effort — the durable cache tolerates skipped prunes.
+  }
+}
+
+function _maybePruneConversations() {
+  const now = Date.now();
+  if (now - _lastPruneAt < PRUNE_THROTTLE_MS) return;
+  _lastPruneAt = now;
+  void _pruneConversations();
 }
 
 // Flush any buffered conversation writes immediately (e.g. on page hide).
@@ -331,6 +404,7 @@ export async function loadConversationMessages(convId: string): Promise<{ messag
 
 export function writeConversationMessages(convId: string, messages: any[], pagination: any) {
   if (_hydrating) return;
+  _touchedAt.set(convId, Date.now());
   _pendingMsgWrites.set(convId, { messages, pagination });
   if (!_msgWriteTimer) _msgWriteTimer = setTimeout(_flushMessageWrites, MSG_WRITE_DEBOUNCE_MS);
 }
