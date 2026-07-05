@@ -49,6 +49,28 @@ async function applyCancel(ctx: TaskCtx, task: Doc<"agent_tasks">) {
   return true;
 }
 
+// Re-arm a retired schedule. Exists for the hide-gesture affordance: killing a
+// session cancels its injecting schedules as a side effect (see
+// cancelTasksBoundToConversation), and both the "Keep schedule" toast action
+// and undo-of-hide need to reverse exactly that side effect. Also revives a
+// failed schedule. Recurring re-arms one interval out (not an immediate fire);
+// a once-task keeps its future run_at or re-arms a minute out.
+async function applyReactivate(ctx: TaskCtx, task: Doc<"agent_tasks">) {
+  if (task.status !== "completed" && task.status !== "failed") return false;
+  await ctx.db.patch(task._id, {
+    status: "scheduled",
+    run_at:
+      task.schedule_type === "event"
+        ? undefined
+        : task.schedule_type === "recurring" && task.interval_ms
+          ? Date.now() + task.interval_ms
+          : task.run_at && task.run_at > Date.now()
+            ? task.run_at
+            : Date.now() + 60_000,
+  });
+  return true;
+}
+
 // Resolve a spawned run's conversation (session_id IS the uuid the daemon
 // assigned via `claude --session-id`) and stamp agent_task_id on it, so the run
 // stays attributable to its schedule forever — not just while it's the latest.
@@ -332,6 +354,10 @@ export const completeTaskRun = mutation({
     // raw and resolved to a conversation at read time in webList, since the run's
     // conversation may not have synced yet at this instant.
     run_session_uuid: v.optional(v.string()),
+    // Agent's explicit "the user should read this run" declaration
+    // (`cast schedule complete --needs-attention`). Skips the clean-run fold
+    // below and keeps the run card escalated in the inbox.
+    needs_attention: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -367,6 +393,7 @@ export const completeTaskRun = mutation({
         ? args.conversation_id as Id<"conversations">
         : undefined,
       last_run_session_uuid: args.run_session_uuid || undefined,
+      last_run_needs_attention: !!args.needs_attention,
       lease_holder: undefined,
       lease_expires_at: undefined,
     };
@@ -379,8 +406,33 @@ export const completeTaskRun = mutation({
     // Spawn tasks only: for an inject task the agent self-completes from INSIDE
     // the originating session, so its uuid resolves to the originating
     // conversation — which is the schedule's home, not a run of it.
+    let runConv: Doc<"conversations"> | null = null;
     if (args.run_session_uuid && !task.originating_conversation_id) {
-      await stampRunConversation(ctx, auth.userId, args.task_id, args.run_session_uuid);
+      runConv = await stampRunConversation(ctx, auth.userId, args.task_id, args.run_session_uuid);
+    }
+
+    // Fold the run the agent just finished, not only the superseded one
+    // (linkRunConversation): the steady state of a healthy repeating spawn
+    // schedule is ZERO loose inbox cards — the schedule's standing row carries
+    // the summary. Strictly gated on the agent's own deliberate completion:
+    // no daemon_id (the daemon's tmux-exit completion means the agent died
+    // WITHOUT self-reporting — that run must stay visible), a real summary,
+    // and no --needs-attention. Same user-intent guards as the previous-run
+    // fold; `once` runs never fold (their single result IS the deliverable).
+    const repeatingSpawn =
+      (task.schedule_type === "recurring" || task.schedule_type === "event") &&
+      !task.originating_conversation_id;
+    if (
+      repeatingSpawn &&
+      !args.daemon_id &&
+      !!args.summary &&
+      !args.needs_attention &&
+      runConv &&
+      !runConv.inbox_pinned_at &&
+      !runConv.inbox_dismissed_at &&
+      !runConv.has_pending_messages
+    ) {
+      await ctx.db.patch(runConv._id, { inbox_dismissed_at: now });
     }
 
     if (isLateSummary) {
@@ -682,6 +734,7 @@ export const webCreate = mutation({
 
 export const webPause = webTaskAction(applyPause);
 export const webResume = webTaskAction(applyResume);
+export const webReactivate = webTaskAction(applyReactivate);
 export const webRunNow = webTaskAction(applyRunNow);
 export const webCancel = webTaskAction(applyCancel);
 

@@ -10330,6 +10330,7 @@ schedule
   .description("Mark a running task as completed (called by the agent)")
   .argument("<id>", "Task ID (full or last 8 chars)")
   .option("--summary <text>", "Summary of what was done")
+  .option("--needs-attention", "Flag the run for the user: it stays in the inbox instead of folding into the schedule's history")
   .action(async (id, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -10357,6 +10358,7 @@ schedule
           task_id: taskId,
           summary: options.summary,
           run_session_uuid: runSessionUuid,
+          ...(options.needsAttention ? { needs_attention: true } : {}),
         }),
       });
       const result = await response.json();

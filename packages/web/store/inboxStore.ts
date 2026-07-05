@@ -956,6 +956,29 @@ export function isSessionWaitingForInput(
     !session.is_pinned;
 }
 
+// A concrete blocker that must escalate even for a STANDING session (one with a
+// recurring schedule injecting into it) or a scheduled run collapsed under its
+// schedule's group row: an open poll, an unresolved auth/API error, a permission
+// prompt, or a dead agent with content. Mirrors isSessionWaitingForInput branch
+// for branch — same fields, same precedence — EXCEPT the fallthrough: a plain
+// finished turn (effectively idle with messages) is the uneventful steady state
+// of standing automation, not a claim on the user's attention, so it does not
+// count as blocked here. No pinned exemption either: placement of pinned rows
+// is the caller's concern (they never leave the Pinned group).
+export function isSessionHardBlocked(
+  session: Pick<InboxSession, "_id" | "agent_status" | "message_count" | "has_pending" | "awaiting_input" | "is_unresponsive" | "pending_api_error">,
+  sessionsWithQueuedMessages?: Set<string>,
+): boolean {
+  if (sessionsWithQueuedMessages?.has(session._id)) return false;
+  if (session.awaiting_input) return true;
+  if (session.pending_api_error && session.message_count > 0) return true;
+  if (session.agent_status === "permission_blocked") return session.message_count > 0;
+  const dead = !!session.agent_status && DEAD_AGENT_STATUSES.has(session.agent_status);
+  if (!session.is_unresponsive && !dead && session.has_pending) return false;
+  if (dead) return session.message_count > 0;
+  return false;
+}
+
 // Per-session-object memo for the two costliest classification predicates.
 // categorizeSessions runs on every REAL session change (a single agent flipping
 // working↔idle re-buckets the whole list), and over a never-pruned store that
@@ -1230,14 +1253,35 @@ export function visualOrderSessions(
     // rendering. Keys mirror GlobalSessionPanel's renderSection keys
     // ("pinned"/"new"/"needs_input"/"working").
     collapsedSections?: Record<string, boolean>;
+    // Status-view schedule projection (grouped mode only), published by the
+    // panel from the agentTasks.webList join: `standingIds` hoists non-blocked
+    // sessions with a recurring inject schedule into their own "Standing"
+    // section (after Pinned, mirroring the render); `groupedRunIds` drops runs
+    // collapsed under a schedule's group row from nav entirely — they're
+    // reachable through the row, not by Ctrl+J/K.
+    standingIds?: ReadonlySet<string>;
+    groupedRunIds?: ReadonlySet<string>;
   } = {},
 ): InboxSession[] {
   const { pinned, newSessions, needsInput, working } =
     categorizeSessions(sessions, sessionsWithQueuedMessages, pendingSendIds, opts);
   const collapsed = opts.collapsedSections;
+  // Extract standing rows in bucket order (needsInput first, then working) so
+  // nav order matches the rendered Standing section, which is built the same way.
+  const standing: InboxSession[] = [];
+  const stripScheduleRows = (arr: InboxSession[]) =>
+    opts.standingIds?.size || opts.groupedRunIds?.size
+      ? arr.filter((s) => {
+          if (opts.groupedRunIds?.has(s._id)) return false;
+          if (opts.standingIds?.has(s._id)) { standing.push(s); return false; }
+          return true;
+        })
+      : arr;
+  const needsInputRest = stripScheduleRows(needsInput);
+  const workingRest = stripScheduleRows(working);
   const result: InboxSession[] = [];
   const sections: Array<[InboxSession[], string]> = [
-    [pinned, "pinned"], [newSessions, "new"], [needsInput, "needs_input"], [working, "working"],
+    [pinned, "pinned"], [standing, "standing"], [newSessions, "new"], [needsInputRest, "needs_input"], [workingRest, "working"],
   ];
   for (const [section, key] of sections) {
     if (collapsed?.[key]) continue;
@@ -1619,6 +1663,10 @@ export function computeVisualOrder(state: {
   liveInboxIds: Set<string>;
   recentFreezeOrder?: string[] | null;
   collapsedSections?: Record<string, boolean>;
+  // Ephemeral schedule projection published by GlobalSessionPanel (see
+  // setScheduleNavSets) so grouped-mode nav matches the Standing/Scheduled
+  // sections it renders. Null until the panel has schedule data.
+  scheduleNavSets?: { standing: ReadonlySet<string>; grouped: ReadonlySet<string> } | null;
   clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; inbox_manual_order?: Record<string, number>; show_subagents?: boolean; show_old_sessions?: boolean } };
 }): InboxSession[] {
   // Favorites view walks its own project-grouped order so Ctrl+J/K moves through
@@ -1668,7 +1716,7 @@ export function computeVisualOrder(state: {
   // Grouped/bucket: the categorized status buckets over the SAME visible set, so
   // old sessions hidden from the render are skipped by nav too. The bucket branch
   // below splits pinned out and regroups the rest by label/project.
-  const base = visualOrderSessions(visibleSessions, state.sessionsWithQueuedMessages, state.activeProjectFilter, sessionsWithPendingSend(state.pendingMessages), { currentSessionId: state.currentSessionId, pendingCreateIds: new Set(Object.keys(state.pendingSessionCreates)), bucketFilter: state.activeBucketFilter, bucketByConv, collapsedSections: mode === "grouped" ? collapsed : undefined });
+  const base = visualOrderSessions(visibleSessions, state.sessionsWithQueuedMessages, state.activeProjectFilter, sessionsWithPendingSend(state.pendingMessages), { currentSessionId: state.currentSessionId, pendingCreateIds: new Set(Object.keys(state.pendingSessionCreates)), bucketFilter: state.activeBucketFilter, bucketByConv, collapsedSections: mode === "grouped" ? collapsed : undefined, standingIds: mode === "grouped" ? state.scheduleNavSets?.standing : undefined, groupedRunIds: mode === "grouped" ? state.scheduleNavSets?.grouped : undefined });
   if (mode === "bucket") {
     const pinned = collapsed["pinned"] ? [] : base.filter((s) => s.is_pinned);
     const rest = base.filter((s) => !s.is_pinned);
@@ -1771,6 +1819,10 @@ interface InboxStoreState {
   // list re-sorts under the cursor and j/k steps through a moving target. null =
   // live (re-sorts freely). Ephemeral: never persisted or synced.
   recentFreezeOrder: string[] | null;
+  // Schedule projection for keyboard nav (standing sessions + runs collapsed
+  // under a schedule group row), published by GlobalSessionPanel from its
+  // agentTasks.webList subscription. Ephemeral: never persisted or synced.
+  scheduleNavSets: { standing: ReadonlySet<string>; grouped: ReadonlySet<string> } | null;
   viewingDismissedId: string | null;
   pendingNavigateId: string | null;
   renamingSessionId: string | null;
@@ -1995,6 +2047,10 @@ interface InboxStoreState {
   toggleShowDismissed: () => void;
   toggleShowStashed: () => void;
   toggleCollapsedSection: (key: string) => void;
+  // Publish the schedule projection (standing sessions, runs grouped under a
+  // schedule row) for keyboard nav. Ephemeral raw-set state — the schedule data
+  // itself lives in the agentTasks.webList Convex subscription, never the store.
+  setScheduleNavSets: (sets: { standing: ReadonlySet<string>; grouped: ReadonlySet<string> } | null) => void;
   setViewingDismissedId: (id: string | null) => void;
   getCurrentSession: () => InboxSession | null;
   injectSession: (session: InboxSession) => void;
@@ -2997,6 +3053,7 @@ export const useInboxStore = create<InboxStoreState>(
   lastFocusedConversationId: null,
   showDismissed: false,
   collapsedSections: {},
+  scheduleNavSets: null,
   recentFreezeOrder: null,
   viewingDismissedId: null,
   pendingNavigateId: null,
@@ -4150,6 +4207,10 @@ export const useInboxStore = create<InboxStoreState>(
   toggleCollapsedSection: action(function (this: Draft, key: string) {
     this.collapsedSections = { ...this.collapsedSections, [key]: !this.collapsedSections[key] };
   }),
+
+  // Raw set: ephemeral nav bookkeeping — no draft, no persistence, no dispatch.
+  setScheduleNavSets: (sets: { standing: ReadonlySet<string>; grouped: ReadonlySet<string> } | null) =>
+    set({ scheduleNavSets: sets }),
 
   setViewingDismissedId: action(function (this: Draft, id: string | null) {
     this.viewingDismissedId = id;

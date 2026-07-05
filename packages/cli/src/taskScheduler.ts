@@ -409,6 +409,7 @@ export class TaskScheduler {
     } else {
       parts.push(`- When done, run: cast schedule complete ${task._id} --summary "brief description of what was done"`);
     }
+    parts.push(`- A clean completion folds this run out of the user's inbox (the summary carries the outcome). If you found something the user must read or act on, add --needs-attention to keep this run in their inbox.`);
     parts.push('- To schedule follow-up: cast schedule add "..." --in <time>');
     if (task.originating_conversation_id) {
       parts.push(`- Run \`cast read ${task.originating_conversation_id}\` for full original context`);
