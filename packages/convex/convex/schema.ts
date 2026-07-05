@@ -1333,6 +1333,10 @@ export default defineSchema({
     // color and gates run auto-fold: a failed previous run must stay visible in
     // the inbox (escalation), only a clean run folds when the next one starts.
     last_run_failed: v.optional(v.boolean()),
+    // Agent's explicit escalation from `cast schedule complete --needs-attention`:
+    // the run neither auto-folds nor collapses under the schedule's standing row —
+    // it stays a real inbox card until the user triages it.
+    last_run_needs_attention: v.optional(v.boolean()),
     last_run_conversation_id: v.optional(v.id("conversations")),
     // Claude session UUID of the last spawned run. The daemon assigns it up front
     // via `claude --session-id`; webList resolves it to a conversation at read time

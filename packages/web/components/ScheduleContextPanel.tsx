@@ -6,10 +6,15 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import Link from "next/link";
 import { ChevronDown, ChevronRight, Clock, Play, Pause, X } from "lucide-react";
 import { describeTaskCadence, fmtDuration } from "./scheduleCadence";
+import { ARMED_STATUSES, type TaskRow } from "./scheduleTasks";
 import { useInboxStore } from "../store/inboxStore";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 
 const api = _api as any;
+
+// TaskRow + ARMED_STATUSES live in scheduleTasks.ts, shared with the inbox
+// partition (standing rows / schedule group rows) so every schedule surface
+// agrees on the payload shape and what counts as armed.
 
 // The standing intent behind a session, surfaced where the user actually looks:
 // a strip above the conversation (subHeaderContent, beside the plan/workflow
@@ -23,29 +28,6 @@ const api = _api as any;
 // Data: the same per-user agentTasks.webList subscription the sidebar badge and
 // /schedules page use — Convex dedupes it, so this strip adds no query load.
 
-const ARMED_STATUSES = new Set(["scheduled", "running", "paused"]);
-
-type TaskRow = {
-  _id: string;
-  title: string;
-  prompt: string;
-  status: string;
-  mode?: string;
-  schedule_type: "once" | "recurring" | "event";
-  run_at?: number;
-  interval_ms?: number;
-  event_filter?: { event_type: string } | null;
-  run_count: number;
-  created_at: number;
-  last_run_at?: number;
-  last_run_summary?: string;
-  last_run_failed?: boolean;
-  last_run_conversation_id?: string;
-  last_run_conversation_title?: string;
-  last_run_session_uuid?: string;
-  originating_conversation_id?: string;
-  target_conversation_id?: string;
-};
 
 export function ScheduleContextPanel({
   conversationId,

@@ -2941,6 +2941,7 @@ http.route({
         summary: body.summary,
         conversation_id: body.conversation_id,
         run_session_uuid: body.run_session_uuid,
+        ...(body.needs_attention !== undefined ? { needs_attention: !!body.needs_attention } : {}),
       });
       return new Response(JSON.stringify({ success: result }), {
         status: 200,
