@@ -31,7 +31,16 @@ export type SessionData = {
   icon?: string;
   icon_color?: string;
   is_favorite?: boolean;
+  model?: string | null;
+  inbox_stashed_at?: number | null;
+  inbox_dismissed_at?: number | null;
 };
+
+/** "claude-opus-4-8" → "opus-4-8"; unknowns pass through. */
+export function formatModelShort(model?: string | null): string | null {
+  if (!model) return null;
+  return model.replace(/^claude-/, "").replace(/-20\d{6}$/, "");
+}
 
 export function formatRelativeTime(timestamp: number): string {
   const now = Date.now();
@@ -205,6 +214,12 @@ export function SessionItem({ session, onPress, onPin, onLongPress }: { session:
         {agent ? (
           <RNText style={[styles.agentBadge, { color: agentColor(session.agent_type ?? "") }]}>{agent}</RNText>
         ) : null}
+        {formatModelShort(session.model) && (
+          <RNText style={styles.modelBadge} numberOfLines={1}>{formatModelShort(session.model)}</RNText>
+        )}
+        {session.message_count > 0 && (
+          <RNText style={styles.messageCount}>{session.message_count} msgs</RNText>
+        )}
       </RNView>
     </TouchableOpacity>
   );
@@ -289,7 +304,7 @@ export function SwipeableSessionItem({ session, onPress, onDismiss, onPin, onLon
     <RNView style={styles.swipeContainer}>
       <RNAnimated.View style={[styles.swipeBehind, { opacity: swipeBehindOpacity }]}>
         <FontAwesome name="archive" size={16} color="#fff" />
-        <RNText style={styles.swipeBehindText}>Dismiss</RNText>
+        <RNText style={styles.swipeBehindText}>Stash</RNText>
       </RNAnimated.View>
       <RNAnimated.View style={[styles.swipeBehindPin, { opacity: swipeBehindPinOpacity }]}>
         <FontAwesome name="thumb-tack" size={16} color="#fff" />
@@ -309,13 +324,14 @@ export const styles = StyleSheet.create({
   swipeContainer: {
     overflow: 'hidden',
   },
+  // Stash is set-aside (agent keeps running) — orange, not destructive red.
   swipeBehind: {
     position: 'absolute',
     top: 0,
     bottom: 0,
     right: 0,
     left: 0,
-    backgroundColor: Theme.red,
+    backgroundColor: Theme.orange,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'flex-end',
@@ -410,6 +426,13 @@ export const styles = StyleSheet.create({
     color: Theme.textMuted0,
     fontVariant: ['tabular-nums'],
     fontWeight: '400',
+  },
+  modelBadge: {
+    fontSize: 10,
+    color: Theme.textDim,
+    fontWeight: '500',
+    letterSpacing: 0.2,
+    maxWidth: 90,
   },
   userMessage: {
     fontSize: 13,

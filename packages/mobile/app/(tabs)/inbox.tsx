@@ -1,8 +1,6 @@
 import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, TextInput, View as RNView, Text as RNText, Modal, Alert, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator, Image, ActionSheetIOS } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
-import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import { useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import { useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
@@ -11,29 +9,51 @@ import {
   SessionData, SwipeableSessionItem, cleanTitle, agentLabel, agentColor,
   formatRelativeTime, projectName, styles as sessionStyles,
 } from '@/components/SessionItem';
-import { useInboxStore, type InboxSession, categorizeSessions } from '@codecast/web/store/inboxStore';
+import {
+  useInboxStore, type InboxSession, categorizeSessions, sessionsWithPendingSend,
+  chipMatchesSession, getProjectName,
+} from '@codecast/web/store/inboxStore';
 import { useSyncInboxSessions } from '@/hooks/useSyncInboxSessions';
 import { SessionListSkeleton } from '@/components/SkeletonLoader';
 import { useQuery } from 'convex/react';
 
-function DismissedItem({ session, onPress }: { session: SessionData; onPress: () => void }) {
+// Stashed/Killed bucket row — the web SessionCard's hidden variants. Tap opens
+// the session; explicit buttons restore (both) and kill (stashed only — a
+// killed session's agent is already torn down).
+function HiddenSessionRow({ session, variant, onPress, onRestore, onKill }: {
+  session: SessionData;
+  variant: "stashed" | "killed";
+  onPress: () => void;
+  onRestore: () => void;
+  onKill?: () => void;
+}) {
   const project = projectName(session);
   const agent = agentLabel(session.agent_type ?? "");
 
   return (
-    <TouchableOpacity
-      onPress={onPress}
-      style={styles.dismissedItem}
-      activeOpacity={0.6}
-    >
+    <TouchableOpacity onPress={onPress} style={styles.dismissedItem} activeOpacity={0.6}>
       <RNView style={sessionStyles.conversationHeader}>
         <RNView style={sessionStyles.titleRow}>
-          <FontAwesome name="archive" size={10} color={Theme.textMuted0} style={{ marginRight: 6 }} />
+          <FontAwesome
+            name={variant === "stashed" ? "archive" : "times-circle"}
+            size={10}
+            color={Theme.textMuted0}
+            style={{ marginRight: 6 }}
+          />
           <RNText style={styles.dismissedTitle} numberOfLines={1}>
             {cleanTitle(session.title)}
           </RNText>
         </RNView>
-        <RNText style={sessionStyles.messageCount}>{session.message_count}</RNText>
+        <RNView style={styles.hiddenRowActions}>
+          <TouchableOpacity onPress={onRestore} hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }} activeOpacity={0.6}>
+            <FontAwesome name="level-up" size={13} color={Theme.cyan} />
+          </TouchableOpacity>
+          {onKill && (
+            <TouchableOpacity onPress={onKill} hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }} activeOpacity={0.6}>
+              <FontAwesome name="times" size={13} color={Theme.red} />
+            </TouchableOpacity>
+          )}
+        </RNView>
       </RNView>
       <RNView style={sessionStyles.conversationMeta}>
         {agent ? (
@@ -51,6 +71,8 @@ function DismissedItem({ session, onPress }: { session: SessionData; onPress: ()
             <RNText style={sessionStyles.projectText} numberOfLines={1}>{project}</RNText>
           </>
         )}
+        <RNText style={sessionStyles.metaSeparator}>·</RNText>
+        <RNText style={sessionStyles.metaText}>{session.message_count} msgs</RNText>
       </RNView>
     </TouchableOpacity>
   );
@@ -303,7 +325,8 @@ function SearchResultItem({ result, onPress }: { result: SearchResult; onPress: 
 
 export default function InboxScreen() {
   const [showNewSession, setShowNewSession] = useState(false);
-  const [showDismissed, setShowDismissed] = useState(false);
+  const [showStashed, setShowStashed] = useState(false);
+  const [showKilled, setShowKilled] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
@@ -318,20 +341,47 @@ export default function InboxScreen() {
   const stashSession = useInboxStore((s) => s.stashSession);
   const restoreSession = useInboxStore((s) => s.restoreSession);
   const pinSession = useInboxStore((s) => s.pinSession);
-  const killSession = useMutation(api.conversations.killSession);
+  // Store actions, not the raw convex mutation: the hide data-transition is
+  // what triggers the server-side agent teardown, and the store's optimistic
+  // move + reconcile keep the row's bucket honest (same path as web).
+  const killSession = useInboxStore((s) => s.killSession);
+  const killSessions = useInboxStore((s) => s.killSessions);
+  const currentSessionId = useInboxStore((s) => s.currentSessionId);
+  const pendingMessages = useInboxStore((s) => s.pendingMessages);
+  const pendingSessionCreates = useInboxStore((s) => s.pendingSessionCreates);
+  const collapsedSections = useInboxStore((s) => s.collapsedSections);
+  const toggleCollapsedSection = useInboxStore((s) => s.toggleCollapsedSection);
+  const activeProjectFilter = useInboxStore((s) => s.activeProjectFilter);
+  const setActiveProjectFilter = useInboxStore((s) => s.setActiveProjectFilter);
 
   const sessionsWithQueuedMessages = useInboxStore((s) => s.sessionsWithQueuedMessages);
+  // Full-args categorize (matches web): pendingSendIds keeps optimistic sends
+  // in Working, and opts make isEngagedBlank work so the New section actually
+  // surfaces freshly created blank sessions.
   const { sorted: sortedAll, pinned, newSessions, needsInput, working, stashed: stashedSessions, dismissed: dismissedOnly } = useMemo(
-    () => categorizeSessions(sessions, sessionsWithQueuedMessages),
-    [sessions, sessionsWithQueuedMessages],
-  );
-  // Mobile renders one hidden drawer: stashed (set aside, agent alive) first,
-  // then dismissed — mirrors the web panel's Stashed-above-Dismissed order.
-  const dismissedSessions = useMemo(
-    () => [...stashedSessions, ...dismissedOnly],
-    [stashedSessions, dismissedOnly],
+    () => categorizeSessions(sessions, sessionsWithQueuedMessages, sessionsWithPendingSend(pendingMessages), {
+      currentSessionId,
+      pendingCreateIds: new Set(Object.keys(pendingSessionCreates)),
+    }),
+    [sessions, sessionsWithQueuedMessages, pendingMessages, currentSessionId, pendingSessionCreates],
   );
   const activeSessions = useMemo(() => sortedAll.filter((s) => !s.is_deferred), [sortedAll]);
+
+  // Project filter chips — the web LabelChipsRow's project half. Counts come
+  // from non-hidden sessions; the active chip filters every bucket below.
+  const projectChips = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const s of sortedAll) {
+      const name = getProjectName(s.git_root ?? undefined, s.project_path ?? undefined);
+      if (name) counts.set(name, (counts.get(name) ?? 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  }, [sortedAll]);
+
+  const chipFilter = useCallback((items: InboxSession[]) => {
+    if (!activeProjectFilter) return items;
+    return items.filter((s) => chipMatchesSession(s, { projectFilter: activeProjectFilter, bucketByConv: {} }));
+  }, [activeProjectFilter]);
 
   const searchResults = useQuery(
     api.conversations.searchConversations,
@@ -351,11 +401,11 @@ export default function InboxScreen() {
     setDebouncedQuery('');
   }, []);
 
-  const handleDismiss = useCallback((conversationId: string) => {
+  const handleStash = useCallback((conversationId: string) => {
     stashSession(conversationId);
   }, [stashSession]);
 
-  const handleUndismiss = useCallback((conversationId: string) => {
+  const handleRestore = useCallback((conversationId: string) => {
     restoreSession(conversationId);
   }, [restoreSession]);
 
@@ -363,14 +413,28 @@ export default function InboxScreen() {
     pinSession(conversationId);
   }, [pinSession]);
 
+  const confirmKill = useCallback((conversationId: string) => {
+    Alert.alert('Kill Session', 'Stop the agent and move this session to Killed?', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Kill', style: 'destructive', onPress: () => killSession(conversationId) },
+    ]);
+  }, [killSession]);
+
+  const confirmKillAllStashed = useCallback((ids: string[]) => {
+    Alert.alert('Kill All Stashed', `Stop ${ids.length} stashed session${ids.length === 1 ? '' : 's'}?`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Kill All', style: 'destructive', onPress: () => killSessions(ids) },
+    ]);
+  }, [killSessions]);
+
   const handleSessionLongPress = useCallback((session: InboxSession) => {
     const favoriteLabel = session.is_favorite ? 'Unfavorite' : 'Favorite';
     const toggleFavorite = () => useInboxStore.getState().toggleFavorite(session._id);
     const options = [
       session.is_pinned ? 'Unpin' : 'Pin',
       favoriteLabel,
-      'Dismiss',
-      'Kill Agent',
+      'Stash',
+      'Kill Session',
       'Cancel',
     ];
     const destructiveButtonIndex = 3;
@@ -382,30 +446,20 @@ export default function InboxScreen() {
         (index) => {
           if (index === 0) handlePin(session._id);
           else if (index === 1) toggleFavorite();
-          else if (index === 2) handleDismiss(session._id);
-          else if (index === 3) {
-            Alert.alert('Kill Agent', 'Stop this agent session?', [
-              { text: 'Cancel', style: 'cancel' },
-              { text: 'Kill', style: 'destructive', onPress: () => killSession({ conversation_id: session._id as Id<"conversations"> }) },
-            ]);
-          }
+          else if (index === 2) handleStash(session._id);
+          else if (index === 3) confirmKill(session._id);
         },
       );
     } else {
       Alert.alert(cleanTitle(session.title), undefined, [
         { text: session.is_pinned ? 'Unpin' : 'Pin', onPress: () => handlePin(session._id) },
         { text: favoriteLabel, onPress: toggleFavorite },
-        { text: 'Dismiss', onPress: () => handleDismiss(session._id) },
-        { text: 'Kill Agent', style: 'destructive', onPress: () => {
-          Alert.alert('Kill Agent', 'Stop this agent session?', [
-            { text: 'Cancel', style: 'cancel' },
-            { text: 'Kill', style: 'destructive', onPress: () => killSession({ conversation_id: session._id as Id<"conversations"> }) },
-          ]);
-        }},
+        { text: 'Stash', onPress: () => handleStash(session._id) },
+        { text: 'Kill Session', style: 'destructive', onPress: () => confirmKill(session._id) },
         { text: 'Cancel', style: 'cancel' },
       ]);
     }
-  }, [handlePin, handleDismiss, killSession]);
+  }, [handlePin, handleStash, confirmKill]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
@@ -417,23 +471,34 @@ export default function InboxScreen() {
       key={s._id}
       session={s as SessionData}
       onPress={() => router.push(`/session/${s._id}`)}
-      onDismiss={() => handleDismiss(s._id)}
+      onDismiss={() => handleStash(s._id)}
       onPin={() => handlePin(s._id)}
       onLongPress={() => handleSessionLongPress(s)}
     />
-  ), [router, handleDismiss, handlePin, handleSessionLongPress]);
+  ), [router, handleStash, handlePin, handleSessionLongPress]);
 
+  // Collapsible section — collapse state lives in the shared store's
+  // collapsedSections (keyed by label, same keys as web), per-device.
   const renderSection = useCallback((label: string, items: InboxSession[], color?: string) => {
     if (items.length === 0) return null;
+    const collapsed = !!collapsedSections?.[label];
     return (
       <RNView key={label}>
-        <RNView style={styles.sectionHeader}>
+        <TouchableOpacity style={styles.sectionHeader} onPress={() => toggleCollapsedSection(label)} activeOpacity={0.7}>
+          <FontAwesome name={collapsed ? "chevron-right" : "chevron-down"} size={9} color={Theme.textMuted0} />
           <RNText style={[styles.sectionTitle, color ? { color } : undefined]}>{label} ({items.length})</RNText>
-        </RNView>
-        {items.map(renderSessionItem)}
+        </TouchableOpacity>
+        {!collapsed && items.map(renderSessionItem)}
       </RNView>
     );
-  }, [renderSessionItem]);
+  }, [renderSessionItem, collapsedSections, toggleCollapsedSection]);
+
+  const filteredPinned = useMemo(() => chipFilter(pinned), [chipFilter, pinned]);
+  const filteredNew = useMemo(() => chipFilter(newSessions), [chipFilter, newSessions]);
+  const filteredNeedsInput = useMemo(() => chipFilter(needsInput), [chipFilter, needsInput]);
+  const filteredWorking = useMemo(() => chipFilter(working), [chipFilter, working]);
+  const filteredStashed = useMemo(() => chipFilter(stashedSessions), [chipFilter, stashedSessions]);
+  const filteredKilled = useMemo(() => chipFilter(dismissedOnly), [chipFilter, dismissedOnly]);
 
   const listData = useMemo(() => {
     const sections: React.ReactNode[] = [];
@@ -445,48 +510,90 @@ export default function InboxScreen() {
         <RNView key="empty" style={styles.emptyInbox}>
           <FontAwesome name="inbox" size={32} color={Theme.textMuted0} />
           <RNText style={styles.emptyText}>Inbox zero</RNText>
-          <RNText style={styles.emptySubtext}>All sessions dismissed or idle</RNText>
+          <RNText style={styles.emptySubtext}>All sessions stashed, killed, or idle</RNText>
         </RNView>
       )];
     }
-    sections.push(renderSection("Pinned", pinned, Theme.magenta));
-    sections.push(renderSection("New", newSessions));
-    sections.push(renderSection("Needs Input", needsInput, Theme.accent));
-    sections.push(renderSection("Working", working, Theme.greenBright));
+    sections.push(renderSection("Pinned", filteredPinned, Theme.magenta));
+    sections.push(renderSection("New", filteredNew, Theme.blue));
+    sections.push(renderSection("Needs Input", filteredNeedsInput, Theme.accent));
+    sections.push(renderSection("Working", filteredWorking, Theme.greenBright));
     return sections.filter(Boolean);
-  }, [activeSessions, sessions, pinned, working, needsInput, newSessions, renderSection]);
+  }, [activeSessions, sessions, filteredPinned, filteredWorking, filteredNeedsInput, filteredNew, renderSection]);
 
+  // Stashed (agent alive, kill-all) and Killed buckets — the web panel's two
+  // hidden sections, collapsed by default behind count toggles.
   const ListFooter = useMemo(() => (
     <RNView>
-      <TouchableOpacity
-        style={styles.dismissedToggle}
-        onPress={() => setShowDismissed(prev => !prev)}
-        activeOpacity={0.7}
-      >
-        <FontAwesome name={showDismissed ? "chevron-up" : "chevron-down"} size={11} color={Theme.textMuted0} />
-        <RNText style={styles.dismissedToggleText}>
-          {showDismissed ? "Hide dismissed" : "Show dismissed"}
-        </RNText>
-      </TouchableOpacity>
-
-      {showDismissed && (
+      <RNView style={styles.hiddenToggleRow}>
+        <TouchableOpacity
+          style={styles.hiddenToggle}
+          onPress={() => setShowStashed(prev => !prev)}
+          activeOpacity={0.7}
+        >
+          <FontAwesome name={showStashed ? "chevron-up" : "chevron-down"} size={11} color={Theme.textMuted0} />
+          <RNText style={styles.dismissedToggleText}>Stashed ({filteredStashed.length})</RNText>
+        </TouchableOpacity>
+        {showStashed && filteredStashed.length > 0 && (
+          <TouchableOpacity
+            onPress={() => confirmKillAllStashed(filteredStashed.map(s => s._id))}
+            style={styles.killAllBtn}
+            activeOpacity={0.7}
+          >
+            <RNText style={styles.killAllText}>Kill all</RNText>
+          </TouchableOpacity>
+        )}
+      </RNView>
+      {showStashed && (
         <RNView style={styles.dismissedSection}>
-          {dismissedSessions.length === 0 ? (
-            <RNText style={styles.dismissedEmpty}>No dismissed sessions</RNText>
+          {filteredStashed.length === 0 ? (
+            <RNText style={styles.dismissedEmpty}>No stashed sessions</RNText>
           ) : (
-            dismissedSessions.map(s => (
-              <DismissedItem
+            filteredStashed.map(s => (
+              <HiddenSessionRow
                 key={s._id}
                 session={s as SessionData}
-                onPress={() => handleUndismiss(s._id)}
+                variant="stashed"
+                onPress={() => router.push(`/session/${s._id}`)}
+                onRestore={() => handleRestore(s._id)}
+                onKill={() => confirmKill(s._id)}
               />
             ))
           )}
         </RNView>
       )}
+
+      <TouchableOpacity
+        style={styles.hiddenToggle}
+        onPress={() => setShowKilled(prev => !prev)}
+        activeOpacity={0.7}
+      >
+        <FontAwesome name={showKilled ? "chevron-up" : "chevron-down"} size={11} color={Theme.textMuted0} />
+        <RNText style={styles.dismissedToggleText}>Killed ({filteredKilled.length})</RNText>
+      </TouchableOpacity>
+      {showKilled && (
+        <RNView style={styles.dismissedSection}>
+          {filteredKilled.length === 0 ? (
+            <RNText style={styles.dismissedEmpty}>No killed sessions</RNText>
+          ) : (
+            filteredKilled.slice(0, 100).map(s => (
+              <HiddenSessionRow
+                key={s._id}
+                session={s as SessionData}
+                variant="killed"
+                onPress={() => router.push(`/session/${s._id}`)}
+                onRestore={() => handleRestore(s._id)}
+              />
+            ))
+          )}
+          {filteredKilled.length > 100 && (
+            <RNText style={styles.dismissedEmpty}>+{filteredKilled.length - 100} more</RNText>
+          )}
+        </RNView>
+      )}
       <RNView style={{ height: 80 }} />
     </RNView>
-  ), [showDismissed, dismissedSessions, router, handleUndismiss]);
+  ), [showStashed, showKilled, filteredStashed, filteredKilled, router, handleRestore, confirmKill, confirmKillAllStashed]);
 
   const searchResultsList = useMemo(() => {
     if (!searchResults) return [];
@@ -535,6 +642,28 @@ export default function InboxScreen() {
           </TouchableOpacity>
         )}
       </RNView>
+
+      {!isSearching && projectChips.length > 1 && (
+        <RNView style={styles.chipRowContainer}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
+            {projectChips.map(([name, count]) => {
+              const active = activeProjectFilter === name;
+              return (
+                <TouchableOpacity
+                  key={name}
+                  style={[styles.projectChip, active && styles.projectChipActive]}
+                  onPress={() => setActiveProjectFilter(active ? null : name)}
+                  activeOpacity={0.7}
+                >
+                  <RNText style={[styles.projectChipText, active && styles.projectChipTextActive]} numberOfLines={1}>
+                    {name} <RNText style={styles.projectChipCount}>{count}</RNText>
+                  </RNText>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        </RNView>
+      )}
 
       {isSearching ? (
         <FlatList
@@ -666,15 +795,74 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
-  dismissedToggle: {
+  hiddenToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderTopWidth: 1,
+    borderTopColor: Theme.bgHighlight,
+    marginTop: Spacing.sm,
+  },
+  hiddenToggle: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
     paddingVertical: 14,
-    borderTopWidth: 1,
-    borderTopColor: Theme.bgHighlight,
-    marginTop: Spacing.sm,
+    flexGrow: 1,
+  },
+  killAllBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    marginRight: Spacing.lg,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: Theme.red + '60',
+  },
+  killAllText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Theme.red,
+  },
+  hiddenRowActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 18,
+    paddingLeft: 8,
+  },
+  chipRowContainer: {
+    backgroundColor: Theme.bgAlt,
+    paddingBottom: Spacing.xs,
+  },
+  chipRow: {
+    paddingHorizontal: Spacing.md,
+    gap: 6,
+    flexDirection: 'row',
+  },
+  projectChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Theme.borderLight,
+    backgroundColor: Theme.bg,
+    maxWidth: 160,
+  },
+  projectChipActive: {
+    borderColor: Theme.cyan,
+    backgroundColor: Theme.cyan + '18',
+  },
+  projectChipText: {
+    fontSize: 12,
+    color: Theme.textMuted,
+    fontWeight: '500',
+  },
+  projectChipTextActive: {
+    color: Theme.cyan,
+    fontWeight: '600',
+  },
+  projectChipCount: {
+    fontSize: 11,
+    color: Theme.textMuted0,
   },
   dismissedToggleText: {
     fontSize: 13,

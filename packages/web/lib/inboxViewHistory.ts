@@ -44,7 +44,10 @@ export function sameInboxView(a: InboxViewSnapshot, b: InboxViewSnapshot): boole
 // and tab reconciliation keep working across these entries. URL is unchanged —
 // the view settings are panel state, not a route.
 export function pushInboxViewHistory(prev: InboxViewSnapshot, next: InboxViewSnapshot) {
-  if (applying || typeof window === "undefined") return;
+  // React Native has a `window` global but no History API — this is browser
+  // back/forward integration only, so it's a no-op anywhere else (the mobile
+  // inbox calls the same store actions, e.g. setActiveProjectFilter).
+  if (applying || typeof window === "undefined" || typeof window.history?.pushState !== "function") return;
   if (sameInboxView(prev, next)) return;
   const url = window.location.pathname + window.location.search + window.location.hash;
   window.history.replaceState({ ...(window.history.state ?? {}), inboxView: prev }, "");
