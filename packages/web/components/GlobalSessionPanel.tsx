@@ -656,17 +656,21 @@ function ScheduleBadge({ upcoming }: { upcoming: UpcomingSchedule }) {
 // controls); the row itself keeps the lightweight verbs (run now, pause/resume).
 // Escalated runs — hard-blocked, failed, or --needs-attention — are deliberately
 // NOT under the row; they stay real cards in Needs Input/Working.
-function ScheduleGroupRow({ group, activeSessionId, onSelectRun }: {
+function ScheduleGroupRow({ group, activeSessionId, onSelectRun, fallbackRun }: {
   group: ScheduleGroup;
   activeSessionId?: string | null;
   onSelectRun: (sess: InboxSession) => void;
+  // The last run's session even when folded (dismissed), so a row whose runs
+  // have all folded still opens its history on click (the peek path handles
+  // dismissed rows, same as the Killed bucket).
+  fallbackRun?: InboxSession;
 }) {
   const { task, runs } = group;
   const now = useCoarseNow(30_000);
   const pause = useMutation(api.agentTasks.webPause);
   const resume = useMutation(api.agentTasks.webResume);
   const runNow = useMutation(api.agentTasks.webRunNow);
-  const latest = runs[0];
+  const latest = runs[0] ?? fallbackRun;
   const paused = task.status === "paused";
   const msUntil = task.run_at !== undefined ? task.run_at - now : undefined;
   const stateLabel = paused
@@ -742,12 +746,13 @@ function ScheduleGroupRow({ group, activeSessionId, onSelectRun }: {
 // The "Scheduled" section: one ScheduleGroupRow per armed spawn schedule.
 // Mirrors renderSection's header (same collapse store key mechanics) without
 // forcing schedules to masquerade as sessions.
-function ScheduledGroupsSection({ groups, collapsed, onToggle, activeSessionId, onSelectRun }: {
+function ScheduledGroupsSection({ groups, collapsed, onToggle, activeSessionId, onSelectRun, fallbackRunOf }: {
   groups: ScheduleGroup[];
   collapsed: boolean;
   onToggle: () => void;
   activeSessionId?: string | null;
   onSelectRun: (sess: InboxSession) => void;
+  fallbackRunOf?: (task: TaskRow) => InboxSession | undefined;
 }) {
   if (groups.length === 0) return null;
   return (
@@ -764,7 +769,7 @@ function ScheduledGroupsSection({ groups, collapsed, onToggle, activeSessionId, 
         </svg>
       </button>
       {!collapsed && groups.map((g) => (
-        <ScheduleGroupRow key={g.task._id} group={g} activeSessionId={activeSessionId} onSelectRun={onSelectRun} />
+        <ScheduleGroupRow key={g.task._id} group={g} activeSessionId={activeSessionId} onSelectRun={onSelectRun} fallbackRun={fallbackRunOf?.(g.task)} />
       ))}
     </div>
   );
@@ -1701,7 +1706,10 @@ export function SessionListPanel({
   // Final standing set: sessions that would otherwise cycle through triage.
   // Pinned stays in Pinned (explicit curation wins), blanks aren't work, and a
   // hard blocker (poll, permission prompt, API error, dead agent) escalates the
-  // session back into Needs Input — attention stays earned.
+  // session back into Needs Input — attention stays earned. A HUMAN-driven turn
+  // escalates too: standing rest is for machine wakes (scheduled injections,
+  // teammate sends), so when the latest user message was typed by a person the
+  // session triages normally — their conversation must never hide in Standing.
   const standingIds = useMemo(() => {
     const ids = new Set<string>();
     for (const convId of schedulePartition.standingByConv.keys()) {
@@ -1709,6 +1717,7 @@ export function SessionListPanel({
       if (!sess || sess.is_pinned || sess.message_count === 0) continue;
       if (isSessionHidden(sess)) continue;
       if (isSessionHardBlocked(sess, s.sessionsWithQueuedMessages)) continue;
+      if (sess.last_user_message && !isMachineDeliveredMessage(sess.last_user_message)) continue;
       ids.add(convId);
     }
     return ids;
@@ -2726,6 +2735,7 @@ export function SessionListPanel({
           onToggle={() => s.toggleCollapsedSection("scheduled")}
           activeSessionId={activeSessionId}
           onSelectRun={handleSelect}
+          fallbackRunOf={(task) => (task.last_run_conversation_id ? s.sessions[task.last_run_conversation_id] : undefined)}
         />
         {renderSection("New", filteredNew, "text-sol-blue")}
         {renderSection("Needs Input", statusNeedsInput, "text-sol-yellow")}

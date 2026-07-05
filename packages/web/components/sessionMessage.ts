@@ -83,8 +83,16 @@ export function isTeammateFramingOnly(leftover: string): boolean {
   return stripTeammateFraming(leftover).length === 0;
 }
 
+// A `cast schedule` injection (the taskScheduler wraps the prompt; the
+// transcript renders it as a ScheduledTaskBlock — same detection pattern as
+// conversationProcessor).
+export function isScheduledTaskMessage(rawContent: string | null | undefined): boolean {
+  return !!rawContent && /^<scheduled-task[\s>]/.test(rawContent.trim());
+}
+
 // Any user-role message delivered by machinery rather than typed by the human: a
-// cross-session `cast send` message or an inter-agent teammate broadcast.
+// cross-session `cast send` message, an inter-agent teammate broadcast, or a
+// scheduled-task injection.
 export function isMachineDeliveredMessage(rawContent: string | null | undefined): boolean {
-  return isSessionMessage(rawContent) || isTeammateMessage(rawContent);
+  return isSessionMessage(rawContent) || isTeammateMessage(rawContent) || isScheduledTaskMessage(rawContent);
 }
