@@ -4306,7 +4306,7 @@ function PlanModeBlock({ tool, result, conversationId, messageId, onSendMessage 
   );
 }
 
-const _askUserSentState = new Map<string, Record<number, { key: string; label: string; text?: string }>>();
+const _askUserSentState = new Map<string, Record<number, Array<{ key: string; label: string; text?: string }>>>();
 
 // Claude Code appends two synthetic affordance rows to every AskUserQuestion menu —
 // "Type something" (free text) and "Chat about this" (escape hatch). On a prompt scraped
@@ -4328,7 +4328,9 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
   let parsedInput: { questions?: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string; preview?: string }>; multiSelect?: boolean; isConfirmation?: boolean }>; answers?: Record<string, string> } = {};
   try { parsedInput = JSON.parse(tool.input); } catch {}
   const [sent, setSent] = useState(() => _askUserSentState.has(tool.id));
-  const [selections, setSelections] = useState<Record<number, { key: string; label: string; text?: string }>>(() => _askUserSentState.get(tool.id) ?? {});
+  // Per-question selections. multiSelect questions hold several entries (checkbox
+  // semantics); single-select questions hold at most one.
+  const [selections, setSelections] = useState<Record<number, Array<{ key: string; label: string; text?: string }>>>(() => _askUserSentState.get(tool.id) ?? {});
   const [otherOpen, setOtherOpen] = useState<Record<number, boolean>>({});
   const [otherTexts, setOtherTexts] = useState<Record<number, string>>({});
 
@@ -4337,6 +4339,10 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
 
   const isMultiQuestion = questions.length > 1;
   const isConfirmation = questions[0]?.isConfirmation;
+  const anyMultiSelect = questions.some(q => q.multiSelect);
+  // multiSelect answers can't auto-submit on first click, so they share the
+  // multi-question "pick everything, then submit" flow.
+  const needsSubmit = isMultiQuestion || anyMultiSelect;
 
   let answers: Record<string, string> = {};
   if (parsedInput.answers && typeof parsedInput.answers === "object") {
@@ -4350,12 +4356,12 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
   }
 
   const isInteractive = !result && !!onSendMessage && !sent;
-  const allAnswered = isMultiQuestion && questions.every((_, i) => selections[i] !== undefined);
+  const allAnswered = needsSubmit && questions.every((_, i) => (selections[i]?.length ?? 0) > 0);
 
   const buildPayload = (sels: typeof selections) => {
     const sorted = Object.keys(sels).sort((a, b) => Number(a) - Number(b));
-    const hasText = sorted.some(k => sels[Number(k)].text);
-    const display = sorted.map(k => sels[Number(k)].label).join(", ");
+    const hasText = sorted.some(k => sels[Number(k)].some(s => s.text !== undefined));
+    const display = sorted.map(k => sels[Number(k)].map(s => s.label).join(", ")).join(", ");
     if (hasText) {
       // Claude Code's AskUserQuestion menu only accepts the listed options — there's no
       // inline free-text slot. So a custom ("Other") answer can't be entered through the
@@ -4367,8 +4373,8 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
       // declined the poll mid-loop and spilled the leftover option digits into the
       // reopened prompt box — the "211" bug, 2026-06-27.)
       const text = sorted.map(k => {
-        const s = sels[Number(k)];
-        const ans = s.text ?? s.label;
+        const qSels = sels[Number(k)];
+        const ans = qSels.map(s => s.text ?? s.label).join(", ");
         if (sorted.length === 1) return ans;
         const q = questions[Number(k)];
         const id = (q?.header?.trim()) || q?.question?.replace(/\s+/g, " ").trim().slice(0, 60) || `Q${Number(k) + 1}`;
@@ -4376,7 +4382,24 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
       }).join("\n\n");
       return JSON.stringify({ __cc_poll: true, text, display });
     }
-    return JSON.stringify({ __cc_poll: true, keys: sorted.map(k => sels[Number(k)].key), display });
+    // Key protocol (verified in tmux against Claude Code 2.1.201): on a multiSelect
+    // question a digit TOGGLES that option's checkbox and the menu stays up; Right
+    // advances to the next tab. Any multi-question or multiSelect form then parks on a
+    // "Review your answers" pane whose cursor sits on "1. Submit answers" — the trailing
+    // Enter confirms it. `multi` tells the daemon these digits are toggles, so its
+    // digit-didn't-advance heuristic must not "confirm" them with Enter (which would
+    // re-toggle the highlighted row).
+    const keys: string[] = [];
+    for (const k of sorted) {
+      const qSels = sels[Number(k)];
+      if (questions[Number(k)]?.multiSelect) {
+        keys.push(...qSels.map(s => s.key).sort((a, b) => Number(a) - Number(b)), "Right");
+      } else {
+        keys.push(qSels[0].key);
+      }
+    }
+    if (needsSubmit) keys.push("Enter");
+    return JSON.stringify({ __cc_poll: true, keys, display, ...(anyMultiSelect ? { multi: true } : {}) });
   };
 
   const handleSubmitAll = () => {
@@ -4389,14 +4412,17 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
   const commitOther = (qIdx: number, text: string, optionsCount: number) => {
     const otherKey = String(optionsCount + 1);
     const sel = { key: otherKey, label: text, text };
-    if (isMultiQuestion) {
-      setSelections(prev => ({ ...prev, [qIdx]: sel }));
+    if (questions[qIdx]?.multiSelect) {
+      // Joins the toggled options (replacing any previous custom entry); sent on Submit.
+      setSelections(prev => ({ ...prev, [qIdx]: [...(prev[qIdx] ?? []).filter(s => s.text === undefined), sel] }));
+    } else if (isMultiQuestion) {
+      setSelections(prev => ({ ...prev, [qIdx]: [sel] }));
     } else {
-      const newSels = { ...selections, [qIdx]: sel };
+      const newSels = { 0: [sel] };
       _askUserSentState.set(tool.id, newSels);
       setSelections(newSels);
       setSent(true);
-      onSendMessage!(buildPayload({ 0: sel }));
+      onSendMessage!(buildPayload(newSels));
     }
   };
 
@@ -4404,11 +4430,17 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
     <div className="my-1.5 ml-1 border-l-2 border-sol-violet/30 pl-3 space-y-2.5">
       {questions.map((q, i) => {
         const answer = answers[q.question];
-        const isCustom = answer !== undefined && !q.options.some(
-          o => o.label === answer || o.label.replace(" (Recommended)", "") === answer
+        // A multiSelect answer arrives as the chosen labels joined with ", " (the CLI's
+        // own join) — split it back so each chosen option lights up individually.
+        const answerParts = answer === undefined ? [] : q.multiSelect ? answer.split(", ") : [answer];
+        const matchesOption = (part: string) => q.options.some(
+          o => o.label === part || o.label.replace(" (Recommended)", "") === part
         );
-        const sel = selections[i];
-        const isOtherSelected = sel?.text !== undefined;
+        const customAnswer = answerParts.filter(p => !matchesOption(p)).join(", ");
+        const isCustom = customAnswer !== "";
+        const sels = selections[i] ?? [];
+        const otherSel = sels.find(s => s.text !== undefined);
+        const isOtherSelected = otherSel !== undefined;
         // Rich layout (numbered rows with stacked descriptions) when any option carries a
         // description or preview; otherwise compact borderless pills.
         const hasRich = q.options.some(o => o.description || o.preview);
@@ -4421,23 +4453,36 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
                 </span>
               </div>
             )}
-            <div className="text-[13px] leading-snug font-medium text-sol-text-secondary">{q.question}</div>
+            <div className="text-[13px] leading-snug font-medium text-sol-text-secondary">
+              {q.question}
+              {q.multiSelect && isInteractive && (
+                <span className="ml-2 text-[10px] font-normal uppercase tracking-[0.07em] text-sol-text-dim">select all that apply</span>
+              )}
+            </div>
             <div className={hasRich ? "flex flex-col gap-0.5" : "flex flex-wrap gap-1.5"}>
               {q.options.map((opt, j) => {
                 // Synthetic CLI menu chrome scraped as bare options — drop it. Keep the
                 // index `j` so the surviving options retain their positional poll keys.
                 if (SYNTHETIC_POLL_OPTION.test(opt.label.trim())) return null;
                 const cleanLabel = opt.label.replace(" (Recommended)", "");
-                const isSelected = answer !== undefined && (opt.label === answer || cleanLabel === answer);
-                const isLocalSelected = !isOtherSelected && sel?.label === cleanLabel;
+                const isSelected = answerParts.some(p => opt.label === p || cleanLabel === p);
+                const isLocalSelected = sels.some(s => s.text === undefined && s.label === cleanLabel);
                 const on = isSelected || isLocalSelected;
                 const choose = () => {
                   setOtherOpen(prev => ({ ...prev, [i]: false }));
                   const pollKey = isConfirmation ? (j === 0 ? "Enter" : "Escape") : String(j + 1);
-                  if (isMultiQuestion) {
-                    setSelections(prev => ({ ...prev, [i]: { key: pollKey, label: cleanLabel } }));
+                  const sel = { key: pollKey, label: cleanLabel };
+                  if (q.multiSelect) {
+                    // Checkbox semantics: clicking toggles; Submit sends.
+                    setSelections(prev => {
+                      const cur = prev[i] ?? [];
+                      const has = cur.some(s => s.text === undefined && s.key === pollKey);
+                      return { ...prev, [i]: has ? cur.filter(s => s.text !== undefined || s.key !== pollKey) : [...cur, sel] };
+                    });
+                  } else if (isMultiQuestion) {
+                    setSelections(prev => ({ ...prev, [i]: [sel] }));
                   } else {
-                    const newSels = { ...selections, [i]: { key: pollKey, label: cleanLabel } };
+                    const newSels = { ...selections, [i]: [sel] };
                     _askUserSentState.set(tool.id, newSels);
                     setSelections(newSels);
                     setSent(true);
@@ -4447,10 +4492,13 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
                 // Rich row: a numbered index slot (becomes a check when chosen) plus the
                 // label stacked above its description — no per-option border, just a soft
                 // hover/selected fill.
+                // multiSelect renders the index slot as an empty checkbox outline so the
+                // rows read as toggles, not a pick-one menu.
                 const marker = (
                   <span className={`mt-px flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-md text-[10px] font-semibold tabular-nums leading-none transition-colors ${
                     on
                       ? isInteractive ? "bg-sol-violet text-white" : "bg-sol-green text-white"
+                      : q.multiSelect && isInteractive ? "border border-sol-violet/40 text-sol-violet/80 group-hover/opt:bg-sol-violet/15"
                       : isInteractive ? "bg-sol-violet/15 text-sol-violet/80 group-hover/opt:bg-sol-violet/25" : "bg-sol-border/15 text-sol-text-dim"
                   }`}>
                     {on ? <PollCheckIcon className="w-2.5 h-2.5" /> : j + 1}
@@ -4514,7 +4562,7 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
                     type="button"
                     onClick={() => {
                       setOtherOpen(prev => ({ ...prev, [i]: true }));
-                      setSelections(prev => { const next = { ...prev }; delete next[i]; return next; });
+                      setSelections(prev => ({ ...prev, [i]: q.multiSelect ? (prev[i] ?? []).filter(s => s.text === undefined) : [] }));
                     }}
                     className={`group/opt flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors cursor-pointer ${
                       isOtherSelected ? "bg-sol-blue/12" : "hover:bg-sol-blue/10"
@@ -4526,7 +4574,7 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
                       {isOtherSelected ? <PollCheckIcon className="w-2.5 h-2.5" /> : "+"}
                     </span>
                     <span className={`text-xs ${isOtherSelected ? "font-medium text-sol-blue" : "text-sol-text-dim group-hover/opt:text-sol-blue/90"}`}>
-                      {isOtherSelected ? sel.label : "Other"}
+                      {isOtherSelected ? otherSel!.label : "Other"}
                     </span>
                   </button>
                 ) : (
@@ -4534,14 +4582,14 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
                     type="button"
                     onClick={() => {
                       setOtherOpen(prev => ({ ...prev, [i]: true }));
-                      setSelections(prev => { const next = { ...prev }; delete next[i]; return next; });
+                      setSelections(prev => ({ ...prev, [i]: q.multiSelect ? (prev[i] ?? []).filter(s => s.text === undefined) : [] }));
                     }}
                     className={`inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full transition-colors cursor-pointer ${
                       isOtherSelected ? "bg-sol-blue text-white font-medium" : "bg-sol-border/12 text-sol-text-dim hover:bg-sol-blue/18 hover:text-sol-blue"
                     }`}
                   >
                     {isOtherSelected ? <PollCheckIcon className="w-3 h-3" /> : <span className="text-[13px] leading-none">+</span>}
-                    {isOtherSelected ? sel.label : "Other"}
+                    {isOtherSelected ? otherSel!.label : "Other"}
                   </button>
                 )
               )}
@@ -4551,12 +4599,12 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
                     <span className="mt-px flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-md bg-sol-blue text-white">
                       <PollCheckIcon className="w-2.5 h-2.5" />
                     </span>
-                    <span className="min-w-0 flex-1 text-xs font-medium text-sol-blue leading-snug">{isOtherSelected ? sel.label : answer}</span>
+                    <span className="min-w-0 flex-1 text-xs font-medium text-sol-blue leading-snug">{isOtherSelected ? otherSel!.label : customAnswer}</span>
                   </div>
                 ) : (
                   <span className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-full bg-sol-blue text-white">
                     <PollCheckIcon className="w-3 h-3" />
-                    {isOtherSelected ? sel.label : answer}
+                    {isOtherSelected ? otherSel!.label : customAnswer}
                   </span>
                 )
               )}
@@ -4602,7 +4650,7 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
           </div>
         );
       })}
-      {isInteractive && isMultiQuestion && (
+      {isInteractive && needsSubmit && (
         <div className="pt-0.5">
           <button
             onClick={handleSubmitAll}
@@ -4613,7 +4661,9 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
                 : "bg-sol-border/15 text-sol-text-dim cursor-not-allowed"
             }`}
           >
-            Submit answers ({Object.keys(selections).length}/{questions.length})
+            {isMultiQuestion
+              ? `Submit answers (${questions.filter((_, qi) => (selections[qi]?.length ?? 0) > 0).length}/${questions.length})`
+              : `Submit (${selections[0]?.length ?? 0} selected)`}
           </button>
         </div>
       )}

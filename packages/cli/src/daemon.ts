@@ -6783,7 +6783,11 @@ export function resolveInteractiveQuestions(prompt: InteractivePrompt, sidecar: 
   }];
 }
 
-type PollMessage = { keys?: string[]; steps?: Array<{ key: string; text?: string }>; text?: string; display?: string };
+// `multi` marks a poll whose digit keys are multiSelect checkbox TOGGLES: the menu is
+// expected to stay on the same question after each one, so the tmux closed-loop must
+// not "confirm" them with Enter (Enter on a multiSelect list toggles the highlighted
+// row, corrupting the selection). The sender navigates tabs itself via Right/Enter.
+type PollMessage = { keys?: string[]; steps?: Array<{ key: string; text?: string }>; text?: string; display?: string; multi?: boolean };
 
 export function parsePollMessage(content: string): PollMessage | null {
   try {
@@ -7756,7 +7760,8 @@ async function injectViaTmuxInner(target: string, content: string): Promise<void
       return;
     }
 
-    for (const step of pollMenuSteps(poll)) {
+    const menuSteps = pollMenuSteps(poll);
+    for (const step of menuSteps) {
       // A bare digit submits a plain AskUserQuestion menu, but an AUQ whose options
       // carry `preview`s renders side-by-side and the digit ONLY navigates — its
       // footer reads "Enter to select", so the answer never lands without a follow-up
@@ -7764,8 +7769,10 @@ async function injectViaTmuxInner(target: string, content: string): Promise<void
       // of guessing: note the on-screen question, send the digit, then look again. If
       // the SAME question is still up the digit only highlighted, so confirm with
       // Enter; if the menu is gone (auto-submitted) or advanced to the next question,
-      // a follow-up Enter would be spurious, so skip it.
-      const qBefore = /^\d+$/.test(step.key) ? await paneInteractiveQuestion(target) : null;
+      // a follow-up Enter would be spurious, so skip it. On a `multi` poll the digits
+      // are checkbox toggles and the menu is SUPPOSED to stay up — the confirm Enter
+      // would re-toggle the highlighted row, so skip the probe entirely.
+      const qBefore = !poll.multi && /^\d+$/.test(step.key) ? await paneInteractiveQuestion(target) : null;
       await tmuxExec(["send-keys", "-t", target, step.key]);
       await new Promise(resolve => setTimeout(resolve, 500));
       if (qBefore && (await paneInteractiveQuestion(target)) === qBefore) {
@@ -7778,6 +7785,17 @@ async function injectViaTmuxInner(target: string, content: string): Promise<void
       await tmuxExec(["send-keys", "-t", target, "-l", poll.text]);
       await new Promise(resolve => setTimeout(resolve, 150));
       await tmuxExec(["send-keys", "-t", target, "Enter"]);
+    } else if (menuSteps.length > 0) {
+      // Claude Code ≥2.1.x no longer auto-continues AskUserQuestion forms: every
+      // multi-question (and multiSelect) form parks on a final "Review your answers"
+      // pane with the cursor on "1. Submit answers" (verified in tmux on 2.1.201).
+      // Payloads that predate the pane — one digit per question — stall there, so
+      // after the steps run, confirm the pane if (and only if) it's what's on screen.
+      const { stdout } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", "-30"]);
+      if (/Ready to submit your answers\?/.test(stdout) && /❯\s*1[.)]\s*Submit answers/.test(stdout)) {
+        await tmuxExec(["send-keys", "-t", target, "Enter"]);
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
     }
     log(`Injected poll response via tmux to ${target}`);
     return;
