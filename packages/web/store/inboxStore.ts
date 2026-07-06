@@ -863,11 +863,19 @@ export function pendingSendConsumed(
   return !!session.is_idle && !session.has_pending;
 }
 
+// Grace window before any consumed/absence prune may fire for a send. The
+// dispatch retry ladder needs several seconds to conclude a send permanently
+// failed (and mark it _isFailed, which exempts it below) — pruning inside that
+// window can destroy the ONLY copy of a message whose send is still in flight:
+// a send into a busy foreign session reads "consumed" via the active-status
+// fast path on the very next sync tick, before the server ever rejected it.
+export const PENDING_SEND_PRUNE_GRACE_MS = 15_000;
+
 // Prune consumed/stale optimistic sends for a synced session. The conversation
 // currently being viewed is left to setMessages (echo-based prune) so a just-sent
 // message stays visible in the open thread until its real row syncs in. Failed
 // sends are kept (the user may retry them). Returns true if anything changed.
-function reconcilePendingSendForSession(
+export function reconcilePendingSendForSession(
   pendingMessages: Record<string, Message[]>,
   convId: string,
   session: Pick<InboxSession, "agent_status" | "is_idle" | "has_pending" | "updated_at"> | undefined,
@@ -880,10 +888,13 @@ function reconcilePendingSendForSession(
   // Legacy entries (persisted before _sentBaselineTs existed) fall back to their
   // own client timestamp.
   let baseline = 0;
+  let newestSentAt = 0;
   for (const m of pending) {
     if (m._isFailed) continue;
     baseline = Math.max(baseline, m._sentBaselineTs ?? m.timestamp);
+    newestSentAt = Math.max(newestSentAt, m.timestamp);
   }
+  if (newestSentAt && Date.now() - newestSentAt < PENDING_SEND_PRUNE_GRACE_MS) return false;
   if (!pendingSendConsumed(session, baseline)) return false;
   const kept = pending.filter((m) => m._isFailed);
   if (kept.length === pending.length) return false;

@@ -10,7 +10,7 @@ import {
   formatRelativeTime, projectName, styles as sessionStyles,
 } from '@/components/SessionItem';
 import {
-  useInboxStore, type InboxSession, categorizeSessions, sessionsWithPendingSend,
+  useInboxStore, type InboxSession, categorizeSessions, partitionOldSessions, sessionsWithPendingSend,
   chipMatchesSession, getProjectName,
 } from '@codecast/web/store/inboxStore';
 import { useSyncInboxSessions } from '@/hooks/useSyncInboxSessions';
@@ -355,15 +355,25 @@ export default function InboxScreen() {
   const setActiveProjectFilter = useInboxStore((s) => s.setActiveProjectFilter);
 
   const sessionsWithQueuedMessages = useInboxStore((s) => s.sessionsWithQueuedMessages);
+  const liveInboxIds = useInboxStore((s) => s.liveInboxIds);
+  // Hide "old" rows exactly like web (GlobalSessionPanel): the never-prune
+  // cache holds every session ever synced (including teammates' threads opened
+  // from the feed), but only rows the live inbox subscription still returns are
+  // actionable. Without this partition the phone's Needs Input bucket fills
+  // with hundreds of dead threads desktop doesn't show.
+  const { visibleSessions } = useMemo(
+    () => partitionOldSessions(sessions, liveInboxIds, false, currentSessionId),
+    [sessions, liveInboxIds, currentSessionId],
+  );
   // Full-args categorize (matches web): pendingSendIds keeps optimistic sends
   // in Working, and opts make isEngagedBlank work so the New section actually
   // surfaces freshly created blank sessions.
   const { sorted: sortedAll, pinned, newSessions, needsInput, working, stashed: stashedSessions, dismissed: dismissedOnly } = useMemo(
-    () => categorizeSessions(sessions, sessionsWithQueuedMessages, sessionsWithPendingSend(pendingMessages), {
+    () => categorizeSessions(visibleSessions, sessionsWithQueuedMessages, sessionsWithPendingSend(pendingMessages), {
       currentSessionId,
       pendingCreateIds: new Set(Object.keys(pendingSessionCreates)),
     }),
-    [sessions, sessionsWithQueuedMessages, pendingMessages, currentSessionId, pendingSessionCreates],
+    [visibleSessions, sessionsWithQueuedMessages, pendingMessages, currentSessionId, pendingSessionCreates],
   );
   const activeSessions = useMemo(() => sortedAll.filter((s) => !s.is_deferred), [sortedAll]);
 

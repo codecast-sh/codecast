@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { categorizeSessions, computeNewDividerIndex, dropLatchedFeedHasMore, feedPagePersistence, findReusableBlankSession, getSessionRenderKey, isConvexId, isSessionDismissed, isSessionStashed, orchestrationGroupLabelOf, pendingSendConsumed, resolveAssigneeInfo, resolveSessionAuthor, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
+import { categorizeSessions, computeNewDividerIndex, dropLatchedFeedHasMore, feedPagePersistence, findReusableBlankSession, getSessionRenderKey, isConvexId, isSessionDismissed, isSessionStashed, orchestrationGroupLabelOf, PENDING_SEND_PRUNE_GRACE_MS, pendingSendConsumed, reconcilePendingSendForSession, resolveAssigneeInfo, resolveSessionAuthor, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
 import { isPersistedStoreKey } from "../idbCache";
 import { declareViewNav } from "../viewNav";
 
@@ -1825,6 +1825,34 @@ describe("pendingSendConsumed — server-advanced gate", () => {
     expect(pendingSendConsumed(
       { agent_status: "idle", is_idle: true, has_pending: true, updated_at: 200 }, 100,
     )).toBe(false);
+  });
+});
+
+describe("reconcilePendingSendForSession — prune grace window", () => {
+  // ACTIVE status → pendingSendConsumed is true immediately; only the grace
+  // window stands between a just-dispatched send and the prune.
+  const consumedSession = { agent_status: "working", is_idle: false, has_pending: false, updated_at: 999_999 } as any;
+  const msg = (over: Record<string, unknown>) =>
+    ({ _id: "m1", _clientId: "m1", role: "user", content: "hi", _isOptimistic: true, ...over }) as any;
+
+  it("keeps a just-sent message even when the session already reads consumed", () => {
+    // The dispatch retry ladder hasn't had time to fail (and mark _isFailed);
+    // pruning now would destroy the only copy of the user's text.
+    const pm: Record<string, any[]> = { c1: [msg({ timestamp: Date.now() })] };
+    expect(reconcilePendingSendForSession(pm, "c1", consumedSession, null)).toBe(false);
+    expect(pm.c1.length).toBe(1);
+  });
+
+  it("prunes a consumed send once it is older than the grace window", () => {
+    const pm: Record<string, any[]> = { c1: [msg({ timestamp: Date.now() - PENDING_SEND_PRUNE_GRACE_MS - 1 })] };
+    expect(reconcilePendingSendForSession(pm, "c1", consumedSession, null)).toBe(true);
+    expect(pm.c1).toBeUndefined();
+  });
+
+  it("keeps failed sends forever (the user may retry them)", () => {
+    const pm: Record<string, any[]> = { c1: [msg({ timestamp: Date.now() - PENDING_SEND_PRUNE_GRACE_MS - 1, _isFailed: true })] };
+    expect(reconcilePendingSendForSession(pm, "c1", consumedSession, null)).toBe(false);
+    expect(pm.c1.length).toBe(1);
   });
 });
 
