@@ -8877,7 +8877,11 @@ export async function resolveRestartTarget(
 ) {
   const conv = await ctx.db.get(conversationId);
   if (conv) {
-    if (conv.user_id !== userId) throw new Error("Not authorized");
+    // The runner, or the session's second-party owner — same rule as dispatch
+    // sendMessage/resumeSession. An owned session (Mr-Bot-run, assigned to this
+    // user) restarts from the owner's inbox exactly like their own; the daemon
+    // commands are routed to the runner by the callers.
+    if (conv.user_id !== userId && conv.owner_user_id !== userId) throw new Error("Not authorized");
     return { conv, restored: false };
   }
   let sessionId = ghost.session_id;
@@ -9067,7 +9071,10 @@ export const restartSession = mutation({
     const { conv, restored } = await resolveRestartTarget(ctx, userId, args.conversation_id, args);
     if (!conv.session_id) throw new Error("No session to restart");
 
-    await enqueueKillAndResume(ctx, userId, conv);
+    // Daemon commands are polled by the RUNNER's daemon — for a second-party
+    // owner restarting a session run by another account, address the commands
+    // to the runner, not the caller (same routing as dispatch.resumeSession).
+    await enqueueKillAndResume(ctx, conv.user_id, conv);
     return { conversation_id: conv._id, restored };
   },
 });
@@ -9084,7 +9091,8 @@ export const repairSession = mutation({
     const { conv, restored } = await resolveRestartTarget(ctx, userId, args.conversation_id, args);
     if (!conv.session_id) throw new Error("No session to repair");
 
-    await enqueueKillAndResume(ctx, userId, conv, { forceReconstitute: true });
+    // Runner-routed for the same reason as restartSession above.
+    await enqueueKillAndResume(ctx, conv.user_id, conv, { forceReconstitute: true });
     return { conversation_id: conv._id, restored };
   },
 });
