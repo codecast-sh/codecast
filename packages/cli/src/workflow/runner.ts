@@ -577,7 +577,15 @@ async function reportGate(
   return null;
 }
 
-export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}): Promise<void> {
+// Library entry point — returns the run's terminal outcome instead of touching
+// process exit state. Setting process.exitCode here poisoned every consumer
+// process that legitimately drives a workflow to failure: the test suite's
+// failure-routing tests passed 100% yet bun exited 1 (0 fail), which tripped
+// the CLI deploy gate. The CLI command wrappers translate the outcome to an
+// exit code at the process boundary (src/index.ts).
+export type WorkflowRunOutcome = "completed" | "failed" | "invalid";
+
+export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}): Promise<WorkflowRunOutcome> {
   const cwd = options.cwd || process.cwd();
 
   if (options.goalOverride) {
@@ -588,7 +596,7 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
   if (errors.length > 0) {
     console.error(`${c.red}Workflow validation errors:${c.reset}`);
     errors.forEach(e => console.error(`  ${c.red}✗ ${e}${c.reset}`));
-    process.exit(1);
+    return "invalid";
   }
 
   const startNode = [...graph.nodes.values()].find(n => n.type === "start")!;
@@ -878,7 +886,6 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
     }
   } else if (state.failed) {
     console.log(`\n${c.bold}${c.red}━━━ Workflow failed: ${state.failReason} ━━━${c.reset}`);
-    process.exitCode = 1;
     if (options.runId) {
       await reportProgress(options, {
         current_node_id: current.id,
@@ -888,7 +895,9 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
         fail_reason: state.failReason,
       });
     }
+    return "failed";
   }
+  return "completed";
 }
 
 // Human gate edges use the selected key to find the right target

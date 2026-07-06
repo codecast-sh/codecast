@@ -167,7 +167,13 @@ export interface CreateConversationParams {
 
 export class SyncService {
   private client: ConvexHttpClient;
-  private subscriptionClient: ConvexClient;
+  // Lazy: ConvexClient opens its websocket at construction and reconnects
+  // forever. Only the daemon's live-subscription path (one call site) needs
+  // it — creating it eagerly meant every SyncService a TEST constructs leaked
+  // an immortal ws://…:0 reconnect loop that outlived the test file and
+  // spammed the suite (and bun's exit code) long after.
+  private subscriptionClient?: ConvexClient;
+  private convexUrl: string;
   private userId?: string;
   private apiToken?: string;
   private lastRequestTime = 0;
@@ -187,7 +193,7 @@ export class SyncService {
 
   constructor(config: SyncConfig) {
     this.client = new ConvexHttpClient(config.convexUrl);
-    this.subscriptionClient = new ConvexClient(config.convexUrl);
+    this.convexUrl = config.convexUrl;
     this.userId = config.userId;
     this.apiToken = config.authToken;
   }
@@ -219,6 +225,9 @@ export class SyncService {
   }
 
   getSubscriptionClient(): ConvexClient {
+    if (!this.subscriptionClient) {
+      this.subscriptionClient = new ConvexClient(this.convexUrl);
+    }
     return this.subscriptionClient;
   }
 
