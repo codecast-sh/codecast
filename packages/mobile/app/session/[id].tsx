@@ -1,5 +1,5 @@
 import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, TextInput, KeyboardAvoidingView, Platform, Share, View as RNView, Text as RNText, Linking, Image, ActionSheetIOS, Alert, Pressable, Clipboard, Modal, Animated, Dimensions, useWindowDimensions } from 'react-native';
-import { useLocalSearchParams, Stack, useRouter } from 'expo-router';
+import { useLocalSearchParams, Stack, useRouter, useFocusEffect } from 'expo-router';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { Id } from '@codecast/convex/convex/_generated/dataModel';
@@ -3168,6 +3168,22 @@ export default function SessionDetailScreen() {
   // subscriptions/soundIdle that useSyncInboxSessions owns) to avoid duplicate
   // subscriptions and double-firing idle sounds.
   useEnsureDispatch();
+
+  // Claim store.currentSessionId while this screen is focused (re-asserted on
+  // stack pop-back). The liveness reconciler prunes a conversation's optimistic
+  // sends as soon as the daemon looks active (reconcilePendingSendForSession)
+  // — EXCEPT for the focused conversation, where the pending bubble must
+  // survive until the real message row syncs into the local window. Web sets
+  // this on every conversation open; without it the just-sent message rendered,
+  // vanished on the next liveness tick, then reappeared when the row synced.
+  useFocusEffect(
+    useCallback(() => {
+      if (typeof id === "string" && id !== DESIGN_MOCK_ID) {
+        useInboxStore.getState().setCurrentSession(id);
+      }
+    }, [id]),
+  );
+
   const flatListRef = useRef<FlatList>(null);
   const loadCooldownRef = useRef(false);
   const [initialScrollDone, setInitialScrollDone] = useState(false);

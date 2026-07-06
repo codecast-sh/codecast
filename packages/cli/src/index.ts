@@ -14182,7 +14182,8 @@ workflow
       }
     }
 
-    await runWorkflow(graph, runOpts);
+    const outcome = await runWorkflow(graph, runOpts);
+    if (outcome !== "completed") process.exitCode = 1;
   });
 
 workflow
@@ -14221,7 +14222,7 @@ workflow
       edges: wf.edges,
     };
     const projectPath = run.project_path || process.cwd();
-    await runWorkflow(graph as any, {
+    const outcome = await runWorkflow(graph as any, {
       runId,
       convexSiteUrl: siteUrl,
       apiToken: config.auth_token,
@@ -14230,6 +14231,7 @@ workflow
       taskId: run.task_short_id,
       planId: run.plan_short_id,
     });
+    if (outcome !== "completed") process.exitCode = 1;
   });
 
 workflow
