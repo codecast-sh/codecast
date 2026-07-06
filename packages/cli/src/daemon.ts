@@ -6445,7 +6445,7 @@ async function findTmuxPaneForTty(tty: string): Promise<string | null> {
   }
 }
 
-type InteractivePrompt = { question: string; options: Array<{ label: string; description?: string }>; isConfirmation?: boolean; header?: string; firstOptionIdx?: number };
+type InteractivePrompt = { question: string; options: Array<{ label: string; description?: string }>; isConfirmation?: boolean; header?: string; firstOptionIdx?: number; multiSelect?: boolean };
 
 // Unicode "Box Drawing" block (┌┐└┘─│ …). An AskUserQuestion option's `preview`
 // renders as a box to the RIGHT of the options; tmux capture-pane flattens those
@@ -6573,6 +6573,12 @@ export function parseInteractivePrompt(text: string): InteractivePrompt | null {
   let lastOptionIdx = -1;
   let gapCount = 0;
   let hasCursorIndicator = false;
+  // Any option row carrying a checkbox glyph marks the menu as multiSelect. This
+  // matters because a pending AskUserQuestion never reaches the session JSONL on
+  // Claude Code ≥2.1.201 (the tool_use is only written once answered), so the live
+  // card is always scrape/sidecar-sourced — and the hook sidecar goes stale after
+  // 5 minutes, leaving this glyph as the only multiSelect signal.
+  let hasCheckbox = false;
   // The AskUserQuestion menu renders each option's description on indented
   // continuation lines BELOW the numbered label. We scan bottom-up, so those
   // lines arrive before their option; buffer them and attach on the next match.
@@ -6584,6 +6590,7 @@ export function parseInteractivePrompt(text: string): InteractivePrompt | null {
       if (lastOptionIdx < 0) lastOptionIdx = i;
       firstOptionIdx = i;
       if (/^\s*[❯>]\s*\d/.test(lines[i])) hasCursorIndicator = true;
+      if (CHECKBOX_PREFIX.test(m[2])) hasCheckbox = true;
       const label = m[2]
         .replace(CHECKBOX_PREFIX, "")        // multiSelect checkbox: "[ ]" / "[x]" / "☐"
         .replace(/\s*[✓✗✔☑]\s*/g, "")        // stray selection glyphs anywhere
@@ -6636,7 +6643,7 @@ export function parseInteractivePrompt(text: string): InteractivePrompt | null {
     const hasFooter = menuFooterBelowOptions(lines, lastOptionIdx);
     if (hasCursorIndicator || hasFooter) {
       const { header, question } = extractPromptHeading(lines, firstOptionIdx);
-      return { question, options, firstOptionIdx, ...(header ? { header } : {}) };
+      return { question, options, firstOptionIdx, ...(header ? { header } : {}), ...(hasCheckbox ? { multiSelect: true } : {}) };
     }
   }
 
@@ -6780,6 +6787,7 @@ export function resolveInteractiveQuestions(prompt: InteractivePrompt, sidecar: 
     ...(prompt.header ? { header: prompt.header } : {}),
     options: prompt.options,
     ...(prompt.isConfirmation ? { isConfirmation: true } : {}),
+    ...(prompt.multiSelect ? { multiSelect: true } : {}),
   }];
 }
 
