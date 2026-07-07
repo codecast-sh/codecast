@@ -2352,19 +2352,31 @@ http.route({
         });
       }
 
-      const result = await ctx.runMutation(api.users.deleteConversationsForPathCLI, {
-        api_token,
-        path_prefix,
-      });
-
-      if ((result as any).error) {
-        return new Response(JSON.stringify({ error: (result as any).error }), {
-          status: (result as any).error === "Unauthorized" ? 401 : 400,
-          headers: { "Content-Type": "application/json", ...corsHeaders },
+      // Each mutation call deletes at most one message batch or one
+      // conversation (bounded transactions); drain here so a single CLI call
+      // deletes everything under the prefix. The iteration cap bounds one HTTP
+      // request — a caller with an enormous project re-invokes on hasMore.
+      let conversationsDeleted = 0;
+      let messagesDeleted = 0;
+      let hasMore = true;
+      for (let i = 0; i < 400 && hasMore; i++) {
+        const result = await ctx.runMutation(api.users.deleteConversationsForPathCLI, {
+          api_token,
+          path_prefix,
         });
+
+        if ((result as any).error) {
+          return new Response(JSON.stringify({ error: (result as any).error }), {
+            status: (result as any).error === "Unauthorized" ? 401 : 400,
+            headers: { "Content-Type": "application/json", ...corsHeaders },
+          });
+        }
+        conversationsDeleted += (result as any).conversationsDeleted ?? 0;
+        messagesDeleted += (result as any).messagesDeleted ?? 0;
+        hasMore = !!(result as any).hasMore;
       }
 
-      return new Response(JSON.stringify(result), {
+      return new Response(JSON.stringify({ conversationsDeleted, messagesDeleted, hasMore }), {
         status: 200,
         headers: { "Content-Type": "application/json", ...corsHeaders },
       });
