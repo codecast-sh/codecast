@@ -7509,7 +7509,7 @@ function WorkingStatusLine({ startedAt, toolLabel }: { startedAt?: number; toolL
       <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
       Working
       {showElapsed && <span className="text-sol-text-dim/60 tabular-nums">· {formatElapsedClock(elapsedMs)}</span>}
-      {showElapsed && toolLabel && <span className="text-sol-text-dim/60">· {toolLabel}</span>}
+      {showElapsed && toolLabel && <span className="text-sol-text-dim/60">· {formatToolName(toolLabel)}</span>}
     </span>
   );
 }
