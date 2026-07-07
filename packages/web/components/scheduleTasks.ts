@@ -1,22 +1,23 @@
-// Schedules (agent_tasks) projected onto the inbox. One shared home for the
-// webList row shape and the partition that decides how each armed schedule
-// shows up in the session list:
+// Schedules (agent_tasks) projected onto the inbox — the synthesis model:
 //
-// - INJECT schedules (originating_conversation_id set — every schedule created
-//   from inside a session) have a stable home conversation. A recurring/event
-//   one makes that session a STANDING row: it rests in its own section instead
-//   of cycling through triage, and only a hard blocker (poll, permission
-//   prompt, API error, dead agent) escalates it back into Needs Input.
-// - SPAWN schedules (web/shell-created, no originating conversation) get a
-//   synthetic group row; their run conversations collapse under it instead of
-//   landing as loose cards. A run escapes the group when it's hard-blocked or
-//   when the schedule flagged it (failed / --needs-attention).
+//   Schedules live in ONE collapsible SCHEDULES section; everything a schedule
+//   does stays behind its row until it needs you — then it's a normal card.
+//
+// Every ARMED schedule (recurring, once, event; inject or spawn — no user-facing
+// distinction) gets exactly one schedule-first row. Conversations never change
+// section because of a schedule; instead, work that is purely the schedule's —
+// a resting loop's home conversation after a machine wake, or an uneventful
+// spawned run — is ABSORBED behind its row (dropped from the triage buckets and
+// keyboard nav, reachable by clicking the row). Anything that needs a human
+// (hard blocker, failed/flagged run, or a turn the human initiated) is never
+// absorbed: it triages as an ordinary card.
 //
 // Data source is the per-user agentTasks.webList subscription (deduped by
 // Convex across the badge, the strip, and /schedules) — never the store.
 
 import type { InboxSession } from "../store/inboxStore";
 import { isSessionHardBlocked, isSessionHidden } from "../store/inboxStore";
+import { isMachineDeliveredMessage } from "./sessionMessage";
 
 export const ARMED_STATUSES = new Set(["scheduled", "running", "paused"]);
 
@@ -45,40 +46,49 @@ export type TaskRow = {
   target_conversation_id?: string;
 };
 
-export interface ScheduleGroup {
+export interface ScheduleRow {
   task: TaskRow;
-  // Visible runs collapsed under this group row, newest first. Escalated runs
-  // are NOT here — they stay loose cards in the triage buckets.
-  runs: InboxSession[];
+  // Conversation this row opens: the home conversation (inject) or the newest
+  // visible run, falling back to the last recorded run even when folded (the
+  // dismissed-peek path handles it). Undefined for a spawn schedule that has
+  // never run.
+  openId?: string;
+  // The latest outcome landed after the user's read watermark.
+  unread: boolean;
 }
 
 export interface ScheduleInboxPartition {
-  // conv id → armed recurring/event inject schedules: the standing loops.
-  standingByConv: Map<string, TaskRow[]>;
-  // conv id → ALL armed inject schedules (any schedule_type). This is exactly
-  // the set cancelTasksBoundToConversation retires when the session is killed,
-  // so the hide-gesture toast and undo-revive read it.
+  // One row per armed schedule, soonest fire first (event/paused sink last).
+  rows: ScheduleRow[];
+  // Sessions absorbed behind a row: resting loop homes + uneventful runs.
+  absorbedIds: Set<string>;
+  // conv id → ALL armed inject schedules. Exactly the set the kill transition
+  // cancels server-side; the kill toast and undo-revive read it.
   armedInjectByConv: Map<string, TaskRow[]>;
-  // Armed spawn schedules with their collapsed runs, soonest fire first.
-  spawnGroups: ScheduleGroup[];
-  // Run conv ids collapsed under a group row — excluded from the status
-  // buckets and from keyboard nav (reachable through the row).
-  groupedRunIds: Set<string>;
+  // Collapsed-header briefing numbers.
+  unreadCount: number;
+  nextRunAt?: number;
 }
 
 const EMPTY: ScheduleInboxPartition = {
-  standingByConv: new Map(),
+  rows: [],
+  absorbedIds: new Set(),
   armedInjectByConv: new Map(),
-  spawnGroups: [],
-  groupedRunIds: new Set(),
+  unreadCount: 0,
+  nextRunAt: undefined,
 };
 
 export function partitionScheduleInbox(
   tasks: TaskRow[] | undefined,
   sessions: Record<string, InboxSession>,
-  sessionsWithQueuedMessages?: Set<string>,
+  opts: {
+    sessionsWithQueuedMessages?: Set<string>;
+    // clientState.ui.schedules_seen_at — outcomes newer than this are unread.
+    seenAt?: number;
+  } = {},
 ): ScheduleInboxPartition {
   if (!tasks?.length) return EMPTY;
+  const seenAt = opts.seenAt ?? 0;
 
   // Index visible runs once: agent_task_id → top-level, non-hidden sessions.
   const runsByTask = new Map<string, InboxSession[]>();
@@ -92,43 +102,75 @@ export function partitionScheduleInbox(
     runs.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
   }
 
-  const standingByConv = new Map<string, TaskRow[]>();
+  const rows: ScheduleRow[] = [];
+  const absorbedIds = new Set<string>();
   const armedInjectByConv = new Map<string, TaskRow[]>();
-  const spawnGroups: ScheduleGroup[] = [];
-  const groupedRunIds = new Set<string>();
+  let unreadCount = 0;
+  let nextRunAt: number | undefined;
 
   for (const task of tasks) {
     if (!ARMED_STATUSES.has(task.status)) continue;
+
+    const unread = !!task.last_run_at && task.last_run_at > seenAt;
+    if (unread) unreadCount++;
+    if (task.status === "scheduled" && task.run_at !== undefined) {
+      if (nextRunAt === undefined || task.run_at < nextRunAt) nextRunAt = task.run_at;
+    }
 
     if (task.originating_conversation_id) {
       const convId = task.originating_conversation_id;
       const armed = armedInjectByConv.get(convId);
       if (armed) armed.push(task);
       else armedInjectByConv.set(convId, [task]);
+
+      // Absorption requires a LOOP: a once follow-up is a reminder on an
+      // ordinary conversation, never a reason to hide it. A loop's home rests
+      // behind the row only while the machine is driving — pinned, blocked,
+      // blank, hidden, or human-engaged conversations triage normally.
       if (task.schedule_type === "recurring" || task.schedule_type === "event") {
-        const standing = standingByConv.get(convId);
-        if (standing) standing.push(task);
-        else standingByConv.set(convId, [task]);
+        const home = sessions[convId];
+        if (
+          home &&
+          !home.is_pinned &&
+          home.message_count > 0 &&
+          !isSessionHidden(home) &&
+          !isSessionHardBlocked(home, opts.sessionsWithQueuedMessages) &&
+          (!home.last_user_message || isMachineDeliveredMessage(home.last_user_message))
+        ) {
+          absorbedIds.add(convId);
+        }
       }
+      rows.push({ task, openId: convId, unread });
       continue;
     }
 
+    // Spawn schedule: absorb its uneventful runs. A run escapes absorption
+    // (stays a loose card) when hard-blocked, or when it's the latest run and
+    // the schedule flagged it (failed / --needs-attention).
     const runs = runsByTask.get(task._id) ?? [];
-    const collapsed: InboxSession[] = [];
+    let newestAbsorbed: InboxSession | undefined;
     for (const run of runs) {
       const isLatest =
         run._id === task.last_run_conversation_id ||
         (!!task.last_run_session_uuid && run.session_id === task.last_run_session_uuid);
       const escalated =
-        isSessionHardBlocked(run, sessionsWithQueuedMessages) ||
+        isSessionHardBlocked(run, opts.sessionsWithQueuedMessages) ||
         (isLatest && (!!task.last_run_failed || !!task.last_run_needs_attention));
       if (escalated) continue;
-      collapsed.push(run);
-      groupedRunIds.add(run._id);
+      absorbedIds.add(run._id);
+      if (!newestAbsorbed) newestAbsorbed = run;
     }
-    spawnGroups.push({ task, runs: collapsed });
+    rows.push({ task, openId: newestAbsorbed?._id ?? task.last_run_conversation_id, unread });
   }
 
-  spawnGroups.sort((a, b) => (a.task.run_at ?? Infinity) - (b.task.run_at ?? Infinity));
-  return { standingByConv, armedInjectByConv, spawnGroups, groupedRunIds };
+  // Soonest fire first; event triggers and paused schedules (no meaningful
+  // run_at) sink to the bottom, newest-created first among themselves.
+  rows.sort((a, b) => {
+    const ar = a.task.status === "scheduled" ? a.task.run_at ?? Infinity : Infinity;
+    const br = b.task.status === "scheduled" ? b.task.run_at ?? Infinity : Infinity;
+    if (ar !== br) return ar - br;
+    return b.task.created_at - a.task.created_at;
+  });
+
+  return { rows, absorbedIds, armedInjectByConv, unreadCount, nextRunAt };
 }
