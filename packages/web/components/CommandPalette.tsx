@@ -451,12 +451,12 @@ function ActionSubmenu({
     if (mode === "model") {
       const store = useInboxStore.getState();
       const real = store.getConvexId(target._id) ?? target._id;
-      if (!isConvexId(real)) {
-        toast.error("Session is still being created — try again in a moment");
-        return;
-      }
       const s0 = target as any;
       const [kind, value] = String(item.key).split(":");
+      // commitModelChange owns the not-ready decision: a blank session records
+      // the choice locally on the stub (the create carries it), only the live
+      // rail needs a real id. Passing `real` (possibly still a stub) lets it
+      // stamp + defer instead of erroring here.
       void commitModelChange({
         conversationId: real,
         agentType: s0?.agent_type,

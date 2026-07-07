@@ -74,7 +74,10 @@ export function ModelEffortMenu({
   if (!cfg) return null;
   const models = cfg.models.filter((m: ModelOption) => (midSession ? true : !m.midSessionOnly));
   return (
-    <DropdownMenuContent align="end" className="w-64">
+    // z-[210] clears the compose overlay's z-[200] backdrop: this menu is the
+    // launch picker inside the new-session popup, and the dropdown portals to
+    // document.body — at the base z-[150] it painted *behind* the popup.
+    <DropdownMenuContent align="end" className="w-64 z-[210]">
       <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-sol-text-dim">Model</DropdownMenuLabel>
       {models.map((m: ModelOption) => (
         <DropdownMenuItem

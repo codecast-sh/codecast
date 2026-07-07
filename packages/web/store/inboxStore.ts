@@ -9,7 +9,7 @@ import { HYDRATION_CRITICAL_KEYS, HYDRATION_DEFERRED_KEYS, hydrationMergeStrateg
 import { makeCollectionSig } from "./wakeSig";
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
-import { type AgentStatus, ACTIVE_AGENT_STATUSES, isStatusTrustStale } from "@codecast/shared/contracts";
+import { type AgentStatus, ACTIVE_AGENT_STATUSES, isStatusTrustStale, modelOptionKey } from "@codecast/shared/contracts";
 import { isSubagentConversation } from "@codecast/convex/convex/ccAccountsShared";
 
 export type { PendingEntry } from "./syncProtocol";
@@ -1986,7 +1986,7 @@ interface InboxStoreState {
   resumeSession: (convId: string) => Promise<any>;
   sendEscape: (convId: string) => void;
   convCommand: (convId: string, command: string, extraArgs?: Record<string, any>, optimistic?: Record<string, any>) => Promise<any>;
-  createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; isolated?: boolean; worktree_name?: string }) => Promise<any>;
+  createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; model?: string; effort?: string; isolated?: boolean; worktree_name?: string }) => Promise<any>;
   // Create the server session for a DEFERRED stub, sourcing project + agent from
   // the LIVE stub row (the new-session pickers write it via updateSessionProject /
   // setConversationAgent) rather than a begin-time closure. This is what makes a
@@ -3688,10 +3688,14 @@ export const useInboxStore = create<InboxStoreState>(
     if (optimistic && this.sessions[convId]) Object.assign(this.sessions[convId], optimistic);
   }),
 
-  createSession: asyncAction(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; isolated?: boolean; worktree_name?: string }) {
+  createSession: asyncAction(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; model?: string; effort?: string; isolated?: boolean; worktree_name?: string }) {
     const sessionId = opts.session_id || (Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
     if (!opts.session_id) opts.session_id = sessionId;
     const now = Date.now();
+    // model/effort ride the dispatched args (the Convex createSession handler
+    // forwards them to the daemon's launch flags) AND get stamped on the local
+    // row so the badge keeps the launch picker's choice through the create —
+    // opts.model is the contract option key ("opus"), the row wants the full id.
     this.sessions[sessionId] = {
       _id: sessionId,
       session_id: sessionId,
@@ -3705,6 +3709,8 @@ export const useInboxStore = create<InboxStoreState>(
       is_idle: true,
       has_pending: false,
       last_user_message: null,
+      ...(opts.model ? { model: opts.agent_type === "claude_code" ? `claude-${opts.model}` : opts.model } : {}),
+      ...(opts.effort ? { effort: opts.effort } : {}),
     } as InboxSession;
   }),
 
@@ -3724,11 +3730,21 @@ export const useInboxStore = create<InboxStoreState>(
     const cur = (s.sessions[stubId] || s.conversations[stubId]) as any;
     const projectPath = cur?.project_path ?? fallback?.projectPath;
     const gitRoot = cur?.git_root ?? fallback?.gitRoot ?? projectPath;
+    const agentType = cur?.agent_type || fallback?.agentType || "claude_code";
+    // Fold in the blank session's chosen model/effort. The launch picker stamps
+    // these on the stub row (setConversationModel) with no server round-trip;
+    // this is where the choice reaches the daemon's launch flags. The row stores
+    // the full model id ("claude-opus-4-8"); the create wants the contract option
+    // key ("opus") — findModelOption matches on key. A model left on a different
+    // agent's id (after an agent switch) resolves to "default" and is dropped.
+    const modelKey = modelOptionKey(cur?.model, agentType);
     return s.createSession({
-      agent_type: cur?.agent_type || fallback?.agentType || "claude_code",
+      agent_type: agentType,
       project_path: projectPath,
       git_root: gitRoot || undefined,
       session_id: stubId,
+      ...(modelKey !== "default" ? { model: modelKey } : {}),
+      ...(cur?.effort ? { effort: cur.effort } : {}),
       ...(s.isolatedWorktreeMode ? { isolated: true } : {}),
     });
   },

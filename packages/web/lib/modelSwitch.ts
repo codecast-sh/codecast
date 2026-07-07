@@ -1,8 +1,15 @@
 import {
   AGENT_MODEL_CONFIG,
   modelAgentKey,
+  modelOptionKey,
 } from "@codecast/shared/contracts";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
+
+// modelOptionKey ("claude-opus-4-8" → "opus") is pure contract logic — it lives
+// in @codecast/shared/contracts now (the store's create path needs it too). Kept
+// re-exported here so existing importers (the pickers, the mobile chip) are
+// unaffected.
+export { modelOptionKey };
 
 // UI-free model/effort switching logic, shared by the web pickers
 // (components/ModelEffortPicker.tsx) and the mobile app's switcher sheet.
@@ -19,15 +26,6 @@ import { useInboxStore, isConvexId } from "../store/inboxStore";
 // answers (offline / pre-set_model daemon). The durable confirmation is the
 // transcript echo flowing back through the model/effort rollup — no
 // server-side optimistic state anywhere.
-
-/** Stored model id → picker option key ("claude-opus-4-8" → "opus"). */
-export function modelOptionKey(model: string | undefined | null, agentType: string | undefined): string {
-  const cfg = AGENT_MODEL_CONFIG[modelAgentKey(agentType)];
-  if (!model || !cfg) return "default";
-  const bare = model.startsWith("claude-") ? model.slice("claude-".length) : model;
-  const hit = cfg.models.find((m) => m.key !== "default" && (bare === m.key || bare.startsWith(`${m.key}-`)));
-  return hit?.key ?? "default";
-}
 
 export function effortGlyph(effort: string | undefined | null): string {
   switch (effort) {
@@ -65,21 +63,39 @@ export async function commitModelChange(opts: {
   notify: (message: string) => void;
 }): Promise<void> {
   const { conversationId, agentType, current, sel, blank, notify } = opts;
-  if (!isConvexId(conversationId)) {
-    notify("Session is still being created — try again in a moment");
-    return;
-  }
   const store = useInboxStore.getState();
   const agentKey = modelAgentKey(agentType);
   const prev = { model: current.model ?? null, effort: current.effort ?? null };
+
+  // Optimistic local stamp — the durable confirmation is the transcript echo
+  // (live rail) or, for a blank session, the model/effort the create launches
+  // with. Runs first so the picker reflects the choice instantly on every rail,
+  // including a not-yet-created stub.
   store.setConversationModel(conversationId, {
     ...(sel.model !== undefined
       ? { model: sel.model === "default" ? null : (agentKey === "claude" ? `claude-${sel.model}` : sel.model) }
       : {}),
     ...(sel.effort !== undefined ? { effort: sel.effort === "default" ? null : sel.effort } : {}),
   });
+
+  // Blank session whose server row doesn't exist yet (the deferred compose stub,
+  // or an in-flight optimistic create): the choice is purely a launch preference.
+  // The local stamp above sticks to the stub row and createSessionFromStub folds
+  // model/effort into the create — no server round-trip, no "not ready" error.
+  // Mirrors how the agent switcher in the same row treats a stub id.
+  if (blank && !isConvexId(conversationId)) return;
+
+  // The live rail (set_model into a running tmux) genuinely needs a real id;
+  // there's nothing to reconcile against a stub, so surface the wait.
+  if (!isConvexId(conversationId)) {
+    store.setConversationModel(conversationId, prev);
+    notify("Session is still being created — try again in a moment");
+    return;
+  }
+
   try {
     if (blank) {
+      // Already-created blank (pre-warmed real id): respawn with the new flags.
       await store.convCommand(conversationId, "reconfigureSession", sel);
     } else {
       const commandId = await store.convCommand(conversationId, "setSessionModel", sel);
