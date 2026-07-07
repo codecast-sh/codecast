@@ -44,7 +44,7 @@ import { getVersion, performUpdate, ensureCastAlias } from "./update.js";
 import { ensureMessagingForMemory } from "./snippets.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
 import { performReconciliation, repairDiscrepancies } from "./reconciliation.js";
-import { TEST_SCRATCH_DIRNAME, isTestScratchPath } from "./syncScope.js";
+import { TEST_SCRATCH_DIRNAME, isTestScratchPath, isPathExcluded, isProjectAllowedToSync } from "./syncScope.js";
 import { TaskScheduler } from "./taskScheduler.js";
 import { hasTmux } from "./tmux.js";
 import { formatFeedResults } from "./formatter.js";
@@ -3459,49 +3459,12 @@ interface GitInfo {
   worktreePath?: string;
 }
 
-function isPathExcluded(projectPath: string, excludedPaths?: string): boolean {
-  if (!excludedPaths || !projectPath) {
-    return false;
-  }
-
-  const paths = excludedPaths.split(',').map(p => p.trim()).filter(p => p.length > 0);
-
-  for (const excludedPath of paths) {
-    const normalizedExcluded = path.resolve(excludedPath);
-    const normalizedProject = path.resolve(projectPath);
-
-    if (normalizedProject.startsWith(normalizedExcluded)) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-// Sync-scope rules (test-scratch exclusion) live in their own leaf module
-// (./syncScope.js) so the reconciliation loop can share the EXACT same rule
-// without importing this giant daemon module. Imported at the top and re-exported
-// here for backward compatibility with tests that import them from "./daemon.js".
-export { TEST_SCRATCH_DIRNAME, isTestScratchPath };
-
-export function isProjectAllowedToSync(projectPath: string, config: Config): boolean {
-  if (isTestScratchPath(projectPath)) {
-    return false;
-  }
-  if (!config.sync_mode || config.sync_mode === "all") {
-    return true;
-  }
-
-  if (!config.sync_projects || config.sync_projects.length === 0) {
-    return false;
-  }
-
-  const normalizedProject = path.resolve(projectPath);
-  return config.sync_projects.some(allowed => {
-    const normalizedAllowed = path.resolve(allowed);
-    return normalizedProject === normalizedAllowed || normalizedProject.startsWith(normalizedAllowed + path.sep);
-  });
-}
+// Sync-scope rules (test-scratch exclusion, excluded-paths, selected-projects
+// allowlist) live in their own leaf module (./syncScope.js) so the
+// reconciliation loop and `cast doctor` can share the EXACT same rules without
+// importing this giant daemon module. Imported at the top and re-exported here
+// for backward compatibility with tests that import them from "./daemon.js".
+export { TEST_SCRATCH_DIRNAME, isTestScratchPath, isProjectAllowedToSync };
 
 function getGitInfo(projectPath: string): GitInfo | undefined {
   const execGit = (args: string): string | undefined => {
