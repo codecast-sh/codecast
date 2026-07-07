@@ -76,3 +76,23 @@ export function modelAgentKey(agentType: string | undefined): string {
 export function findModelOption(agentType: string | undefined, key: string): ModelOption | undefined {
   return AGENT_MODEL_CONFIG[modelAgentKey(agentType)]?.models.find((m) => m.key === key);
 }
+
+/**
+ * Stored model id → picker option key ("claude-opus-4-8" → "opus"). The inverse
+ * direction of cliAlias: the conversation row stores the full model id, but the
+ * pickers, the Cmd+K menu, and the launch-flag path all key off the option key.
+ * Falls back to "default" when nothing matches (e.g. a claude model id read back
+ * under the codex agent after an agent switch).
+ */
+export function modelOptionKey(model: string | undefined | null, agentType: string | undefined): string {
+  const cfg = AGENT_MODEL_CONFIG[modelAgentKey(agentType)];
+  if (!model || !cfg) return "default";
+  const bare = model.startsWith("claude-") ? model.slice("claude-".length) : model;
+  // Exact match wins over a versioned-prefix match so a longer key ("gpt-5.4-mini")
+  // isn't swallowed by a shorter one that prefixes it ("gpt-5.4"); the prefix pass
+  // then resolves "opus-4-8" → "opus".
+  const hit =
+    cfg.models.find((m) => m.key !== "default" && bare === m.key) ??
+    cfg.models.find((m) => m.key !== "default" && bare.startsWith(`${m.key}-`));
+  return hit?.key ?? "default";
+}
