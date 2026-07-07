@@ -1855,7 +1855,7 @@ async function executeRemoteCommand(
         const cmdText = `${castBin} workflow run-daemon ${workflowRunId}`;
 
         try {
-          tmuxExecSync(["new-session", "-d", "-s", tmuxSession, "-c", projectPath], { timeout: 5000 });
+          tmuxExecSync(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", tmuxSession, "-c", projectPath], { timeout: 5000 });
           tmuxExecSync(["send-keys", "-t", tmuxSession, "-l", cmdText], { timeout: 5000 });
           tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
           result = JSON.stringify({ tmux_session: tmuxSession, workflow_run_id: workflowRunId });
@@ -2164,7 +2164,7 @@ async function executeRemoteCommand(
             // the tracked backend, started-session registry, and delivery state.
             try { await tmuxExec(["kill-session", "-t", tmuxSession]); } catch {}
           }
-          tmuxExecSync(["new-session", "-d", "-s", tmuxSession, "-c", cwd], { timeout: 5000 });
+          tmuxExecSync(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", tmuxSession, "-c", cwd], { timeout: 5000 });
           // Tag the tmux so warm-restart can rebuild startedSessionTmux from `tmux ls`.
           if (conversationId) {
             await setTmuxSessionOption(tmuxSession, "@codecast_conversation_id", conversationId).catch(() => {});
@@ -2868,7 +2868,7 @@ async function executeRemoteCommand(
             const safeBlankArgs = sanitizeBinaryArgs(buildBlankLaunchArgs(blankAgentType, config));
             const blankCmdText = `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT ${[blankBinary, ...safeBlankArgs].join(" ")}`;
             try {
-              tmuxExecSync(["new-session", "-d", "-s", tmuxSession, "-c", cwd], { timeout: 5000 });
+              tmuxExecSync(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", tmuxSession, "-c", cwd], { timeout: 5000 });
               // Tag like the other creation paths so this session is discoverable
               // by conversation (findLiveTmuxForConversation / warm-restart). Without
               // the tag it is orphaned: a later fresh-start can't see it and spawns
@@ -7077,6 +7077,22 @@ export function classifyTmuxLiveState(region: string): TmuxLiveState {
   // is also unique to the Rewind option list.
   if (/Esc to cancel|❯\s*\(current\)/i.test(region)) return "rewind";
   if (/What should Claude do instead\?/i.test(region)) return "interrupted";
+  // Teammate panel: a lead session with in-process agents renders a chip list
+  // (⏺ main, ◯ name · state, "↓ N more") below its footer. Teammate panes split
+  // the window, and a squeezed lead pane truncates the footer's "esc to
+  // interrupt" marker — or, squeezed further, leaves the chip list as the ONLY
+  // content the scraper sees (the jx77h6jcsa0s freeze). Either way the pane is a
+  // live Claude Code TUI whose input box takes type-ahead, so classify busy:
+  // the paste path skips the leading Escape (never interrupts a mid-turn lead)
+  // and paste+Enter still submits when the lead is actually idle. Checked
+  // before the prompt-visible idle rule because chips + visible ❯ says nothing
+  // about whether the lead is generating. Requires a panel signature (⏺ main
+  // header, a second chip, or the overflow marker) so one stray ◯ line in a
+  // no-separator fallback region can't hijack the classification.
+  const chipLines = region.split("\n").filter((l) => /^\s*◯\s+\S+/.test(l)).length;
+  if (chipLines >= 2 || (chipLines >= 1 && /(?:^\s*⏺\s+main\s*$|↓\s*\d+\s*more)/m.test(region))) {
+    return "busy";
+  }
   // Input prompt visible = no blocking modal. Real warnings ("Press enter to
   // continue", weekly-limit popup) replace the input box, so the prompt glyph
   // disappears while they're up. Persistent footer banners — "Update available!
@@ -7414,8 +7430,32 @@ async function withTmuxLock<T>(target: string, fn: () => Promise<T>): Promise<T>
 // turn ends. We do NOT wait for idle: that only ever served to keep the paste
 // path's mandatory leading Escape from interrupting the turn, and the caller now
 // simply skips that Escape when busy (see injectViaTmuxInner).
+// Detached tmux sessions default to 80x24, and Claude Code's teammate panes
+// split that window until the lead pane is too narrow for its TUI to render
+// recognizably (truncated footer markers, separators under the detection
+// threshold, chip-list-only regions). Nobody is attached to daemon-owned
+// sessions, so claim a real screen. An attached client re-imposes its own size.
+const TMUX_WINDOW_WIDTH = "220";
+const TMUX_WINDOW_HEIGHT = "50";
+const TMUX_SIZE_ARGS = ["-x", TMUX_WINDOW_WIDTH, "-y", TMUX_WINDOW_HEIGHT];
+
+// Self-heal for sessions created before the daemon sized its windows (or
+// re-squeezed by a small attached client that detached): a lead pane under 80
+// columns cannot render the markers the classifier needs, so widen the window
+// before reading it. Best-effort — classification proceeds either way.
+async function ensureTmuxPaneWide(target: string): Promise<void> {
+  try {
+    const { stdout } = await tmuxExec(["display-message", "-p", "-t", target, "#{pane_width}"]);
+    if (parseInt(stdout.trim(), 10) >= 80) return;
+    await tmuxExec(["resize-window", "-t", target, "-x", TMUX_WINDOW_WIDTH, "-y", TMUX_WINDOW_HEIGHT]);
+    // Give the TUI a beat to reflow before the first capture.
+    await new Promise(resolve => setTimeout(resolve, 500));
+  } catch {}
+}
+
 export async function ensureTmuxReady(target: string): Promise<{ busy: boolean }> {
   const STUCK_BUDGET_MS = 8_000;
+  await ensureTmuxPaneWide(target);
   const startedAt = Date.now();
   let lastCorrectiveState: TmuxLiveState | null = null;
   let sameStateAttempts = 0;
@@ -10381,7 +10421,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
   try {
     try { await tmuxExec(["kill-session", "-t", tmuxSession]); } catch {}
 
-    await tmuxExec(["new-session", "-d", "-s", tmuxSession, "-c", cwd]);
+    await tmuxExec(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", tmuxSession, "-c", cwd]);
     await setTmuxSessionOption(tmuxSession, "@codecast_session_id", sessionId);
     await setTmuxSessionOption(tmuxSession, "@codecast_agent_type", agentType);
 
