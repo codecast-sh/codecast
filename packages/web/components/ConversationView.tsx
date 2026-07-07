@@ -81,7 +81,7 @@ const api = _typedApi as any;
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { DeviceBadge, RunOnDeviceItems } from "./DeviceBadge";
 import { PermissionStack } from "./PermissionCard";
-import { copyToClipboard, shareOrigin, matchesProjectQuery } from "../lib/utils";
+import { copyToClipboard, shareOrigin, matchesProjectQuery, inferHomeDir, resolveCustomPath, displayPath, inferProjectBase, isExplicitPath } from "../lib/utils";
 import { MarkdownRenderer, isMarkdownFile, isPlanFile, CollapsibleImage } from "./tools/MarkdownRenderer";
 import { OptionPreview } from "./tools/AskUserQuestionToolView";
 import { useImageGallery, ImageGalleryProvider } from "./ImageGallery";
@@ -774,41 +774,8 @@ function FolderPlusGlyph({ className = "w-3 h-3" }: { className?: string }) {
   );
 }
 
-// Infer the user's home dir from any absolute path the daemon has reported
-// (recent projects are real local roots), so a typed "~/…" resolves to the same
-// place the daemon would cd to. macOS = /Users/x, Linux = /home/x or /root.
-function inferHomeDir(paths: Array<string | undefined>): string | undefined {
-  for (const p of paths) {
-    const m = p?.match(/^(\/Users\/[^/]+|\/home\/[^/]+|\/root)(?:\/|$)/);
-    if (m) return m[1];
-  }
-  return undefined;
-}
-
-// A picker query that NAMES a directory the recent list can't reach — absolute
-// (/…) or home-relative (~/…). Relative fragments stay plain filters: without a
-// base dir the daemon can't resolve them. Returns the normalized absolute path.
-function resolveCustomPath(raw: string, home: string | undefined): string | undefined {
-  const s = raw.trim();
-  let abs: string | undefined;
-  if (s === "~" || s.startsWith("~/")) {
-    if (!home) return undefined;
-    abs = home + s.slice(1);
-  } else if (s.startsWith("/")) {
-    abs = s;
-  } else {
-    return undefined;
-  }
-  abs = abs.replace(/\/{2,}/g, "/");
-  if (abs.length > 1) abs = abs.replace(/\/$/, "");
-  return abs;
-}
-
-// Re-collapse the home prefix to "~" for a compact, readable chip label.
-function displayPath(abs: string, home: string | undefined): string {
-  if (home && (abs === home || abs.startsWith(home + "/"))) return "~" + abs.slice(home.length);
-  return abs;
-}
+// Project-path helpers (inferHomeDir / resolveCustomPath / displayPath /
+// inferProjectBase / isExplicitPath) live in lib/utils so they're unit-tested.
 
 // Picker hint rows render key names as <KeyCap> caps (the keyboard-shortcuts
 // panel component) — never as plain text in the surrounding font.
@@ -895,31 +862,45 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
     [currentPath, recentProjects],
   );
 
+  // The base a bare folder name resolves under — a sibling of the current
+  // project (its parent dir), so typing "weekend-hack" means the folder next to
+  // the one you're in, not a dead end.
+  const projectBase = useMemo(
+    () => inferProjectBase(currentPath, recentProjects.map((p: { path: string }) => p.path), homeDir),
+    [currentPath, recentProjects, homeDir],
+  );
+
   // While navigating with the keyboard: the default visible chips, or — once the
   // user types — a live filter across ALL recent projects, so the "other"
   // overflow is reachable without the mouse. Reuses the modal's match rule. When
-  // the text instead NAMES a path (absolute or ~/…) that no recent matches, a
-  // synthetic "open this folder" entry rides at the end so any directory is
-  // reachable, not just previously-used ones. The daemon's start_session takes
-  // the cwd verbatim, so a typed path is all it needs.
+  // the text instead NAMES a directory, a synthetic "open this folder" entry
+  // rides at the end so ANY folder is reachable, not just previously-used ones:
+  // an explicit path (absolute or ~/…) always offers it; a bare name resolves
+  // against the project base and offers it only when nothing in recents matches
+  // (so plain filtering — "co" → codecast — stays clean). The daemon's
+  // start_session takes the cwd verbatim, so the fully-resolved path is all it
+  // needs, and the chip shows that path so a wrong base guess is visible first.
   const pickList = useMemo<{ path: string; custom?: boolean }[]>(() => {
     if (filter.trim()) {
-      // A path-like filter expands to an absolute path; match recents against
-      // that so "~/src/…" filters previously-used folders too (not just the raw
-      // tilde string the absolute recent paths never literally contain).
-      const custom = resolveCustomPath(filter, homeDir);
-      const matches = recentProjects.filter((p: { path: string }) => matchesProjectQuery(p.path, custom ?? filter));
-      if (custom && custom !== currentPath && !matches.some((p: { path: string }) => p.path === custom)) {
-        return [...matches, { path: custom, custom: true }];
-      }
+      const explicit = isExplicitPath(filter);
+      const custom = resolveCustomPath(filter, homeDir, projectBase);
+      // An explicit path matches recents against its resolved absolute form (so
+      // "~/src/…" filters previously-used folders too); a bare name keeps
+      // name-prefix matching against the raw text.
+      const matchQuery = explicit ? (custom ?? filter) : filter;
+      const matches = recentProjects.filter((p: { path: string }) => matchesProjectQuery(p.path, matchQuery));
+      const offerCustom = !!custom && custom !== currentPath
+        && !matches.some((p: { path: string }) => p.path === custom)
+        && (explicit || matches.length === 0);
+      if (offerCustom) return [...matches, { path: custom!, custom: true }];
       return matches;
     }
     const base: { path: string }[] = currentPath ? [{ path: currentPath }] : [];
     return base.concat(visibleProjects);
-  }, [filter, recentProjects, currentPath, visibleProjects, homeDir]);
+  }, [filter, recentProjects, currentPath, visibleProjects, homeDir, projectBase]);
 
   // Distinguish "you typed the folder you're already in" from a real miss.
-  const filterIsCurrent = !!currentPath && resolveCustomPath(filter, homeDir) === currentPath;
+  const filterIsCurrent = !!currentPath && resolveCustomPath(filter, homeDir, projectBase) === currentPath;
 
   const clampedHi = Math.min(hi, Math.max(0, pickList.length - 1));
 
