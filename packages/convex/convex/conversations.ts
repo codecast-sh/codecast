@@ -9026,13 +9026,18 @@ export const killSession = mutation({
     if (!userId) throw new Error("Not authenticated");
 
     const conv = await ctx.db.get(args.conversation_id);
-    if (conv && conv.user_id !== userId) throw new Error("Not authorized");
+    // The runner, or the session's second-party owner — same rule as
+    // restartSession/dispatch.sendMessage. An owned session kills from the
+    // owner's inbox exactly like their own.
+    if (conv && conv.user_id !== userId && conv.owner_user_id !== userId) throw new Error("Not authorized");
 
     // Enqueue even when the row is gone: the daemon tears backends down from the
     // conversation id alone (derived tmux names, local caches) plus the cached
-    // session_id the client passes along.
+    // session_id the client passes along. Address the command to the RUNNER's
+    // daemon (conv.user_id) — an owner's kill must reach the machine actually
+    // running the session; ghost rows fall back to the caller.
     await ctx.db.insert("daemon_commands", {
-      user_id: userId,
+      user_id: conv?.user_id ?? userId,
       command: "kill_session",
       args: JSON.stringify({
         conversation_id: args.conversation_id,
@@ -9052,8 +9057,13 @@ export const killSession = mutation({
       await ctx.db.patch(args.conversation_id, patch);
       // Kill must stick: cancel any armed schedule that injects into this
       // conversation, or its next fire would resurrect the session the user
-      // just killed (see cancelTasksBoundToConversation).
-      await cancelTasksBoundToConversation(ctx, userId, args.conversation_id);
+      // just killed (see cancelTasksBoundToConversation). Scan the RUNNER's
+      // schedules (theirs are the ones bound to their session), plus the
+      // caller's when a second-party owner is killing.
+      await cancelTasksBoundToConversation(ctx, conv.user_id, args.conversation_id);
+      if (conv.user_id !== userId) {
+        await cancelTasksBoundToConversation(ctx, userId, args.conversation_id);
+      }
     }
     return { existed: !!conv };
   },
