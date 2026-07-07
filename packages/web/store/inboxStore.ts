@@ -578,6 +578,10 @@ export type ClientUI = {
   // brand-new sessions interleave by creation automatically; a drag pins just the
   // moved row with a single midpoint write. See flatViewComparator / computeManualSortKey.
   inbox_manual_order?: Record<string, number>;
+  // Read watermark for the SCHEDULES section: outcomes with last_run_at newer
+  // than this count as "N new" on the collapsed header. Refreshed whenever the
+  // user toggles the section (expanding IS reading the briefing).
+  schedules_seen_at?: number;
 };
 
 export type ClientLayouts = {
@@ -1265,34 +1269,23 @@ export function visualOrderSessions(
     // ("pinned"/"new"/"needs_input"/"working").
     collapsedSections?: Record<string, boolean>;
     // Status-view schedule projection (grouped mode only), published by the
-    // panel from the agentTasks.webList join: `standingIds` hoists non-blocked
-    // sessions with a recurring inject schedule into their own "Standing"
-    // section (after Pinned, mirroring the render); `groupedRunIds` drops runs
-    // collapsed under a schedule's group row from nav entirely — they're
-    // reachable through the row, not by Ctrl+J/K.
-    standingIds?: ReadonlySet<string>;
-    groupedRunIds?: ReadonlySet<string>;
+    // panel from the agentTasks.webList join: sessions absorbed behind a
+    // SCHEDULES row — a resting loop's home conversation, or an uneventful
+    // spawned run — leave keyboard nav entirely; they're reachable by clicking
+    // the schedule row, not by Ctrl+J/K. Escalated ones aren't in this set.
+    absorbedIds?: ReadonlySet<string>;
   } = {},
 ): InboxSession[] {
   const { pinned, newSessions, needsInput, working } =
     categorizeSessions(sessions, sessionsWithQueuedMessages, pendingSendIds, opts);
   const collapsed = opts.collapsedSections;
-  // Extract standing rows in bucket order (needsInput first, then working) so
-  // nav order matches the rendered Standing section, which is built the same way.
-  const standing: InboxSession[] = [];
-  const stripScheduleRows = (arr: InboxSession[]) =>
-    opts.standingIds?.size || opts.groupedRunIds?.size
-      ? arr.filter((s) => {
-          if (opts.groupedRunIds?.has(s._id)) return false;
-          if (opts.standingIds?.has(s._id)) { standing.push(s); return false; }
-          return true;
-        })
-      : arr;
-  const needsInputRest = stripScheduleRows(needsInput);
-  const workingRest = stripScheduleRows(working);
+  const stripAbsorbed = (arr: InboxSession[]) =>
+    opts.absorbedIds?.size ? arr.filter((s) => !opts.absorbedIds!.has(s._id)) : arr;
+  const needsInputRest = stripAbsorbed(needsInput);
+  const workingRest = stripAbsorbed(working);
   const result: InboxSession[] = [];
   const sections: Array<[InboxSession[], string]> = [
-    [pinned, "pinned"], [standing, "standing"], [newSessions, "new"], [needsInputRest, "needs_input"], [workingRest, "working"],
+    [pinned, "pinned"], [newSessions, "new"], [needsInputRest, "needs_input"], [workingRest, "working"],
   ];
   for (const [section, key] of sections) {
     if (collapsed?.[key]) continue;
@@ -1675,9 +1668,9 @@ export function computeVisualOrder(state: {
   recentFreezeOrder?: string[] | null;
   collapsedSections?: Record<string, boolean>;
   // Ephemeral schedule projection published by GlobalSessionPanel (see
-  // setScheduleNavSets) so grouped-mode nav matches the Standing/Scheduled
-  // sections it renders. Null until the panel has schedule data.
-  scheduleNavSets?: { standing: ReadonlySet<string>; grouped: ReadonlySet<string> } | null;
+  // setScheduleNavSets) so grouped-mode nav skips sessions absorbed behind
+  // SCHEDULES rows. Null until the panel has schedule data.
+  scheduleNavSets?: { absorbed: ReadonlySet<string> } | null;
   clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; inbox_manual_order?: Record<string, number>; show_subagents?: boolean; show_old_sessions?: boolean } };
 }): InboxSession[] {
   // Favorites view walks its own project-grouped order so Ctrl+J/K moves through
@@ -1727,7 +1720,7 @@ export function computeVisualOrder(state: {
   // Grouped/bucket: the categorized status buckets over the SAME visible set, so
   // old sessions hidden from the render are skipped by nav too. The bucket branch
   // below splits pinned out and regroups the rest by label/project.
-  const base = visualOrderSessions(visibleSessions, state.sessionsWithQueuedMessages, state.activeProjectFilter, sessionsWithPendingSend(state.pendingMessages), { currentSessionId: state.currentSessionId, pendingCreateIds: new Set(Object.keys(state.pendingSessionCreates)), bucketFilter: state.activeBucketFilter, bucketByConv, collapsedSections: mode === "grouped" ? collapsed : undefined, standingIds: mode === "grouped" ? state.scheduleNavSets?.standing : undefined, groupedRunIds: mode === "grouped" ? state.scheduleNavSets?.grouped : undefined });
+  const base = visualOrderSessions(visibleSessions, state.sessionsWithQueuedMessages, state.activeProjectFilter, sessionsWithPendingSend(state.pendingMessages), { currentSessionId: state.currentSessionId, pendingCreateIds: new Set(Object.keys(state.pendingSessionCreates)), bucketFilter: state.activeBucketFilter, bucketByConv, collapsedSections: mode === "grouped" ? collapsed : undefined, absorbedIds: mode === "grouped" || mode === "bucket" || mode === "plan" ? state.scheduleNavSets?.absorbed : undefined });
   if (mode === "bucket") {
     const pinned = collapsed["pinned"] ? [] : base.filter((s) => s.is_pinned);
     const rest = base.filter((s) => !s.is_pinned);
@@ -1833,7 +1826,7 @@ interface InboxStoreState {
   // Schedule projection for keyboard nav (standing sessions + runs collapsed
   // under a schedule group row), published by GlobalSessionPanel from its
   // agentTasks.webList subscription. Ephemeral: never persisted or synced.
-  scheduleNavSets: { standing: ReadonlySet<string>; grouped: ReadonlySet<string> } | null;
+  scheduleNavSets: { absorbed: ReadonlySet<string> } | null;
   viewingDismissedId: string | null;
   pendingNavigateId: string | null;
   renamingSessionId: string | null;
@@ -2061,7 +2054,7 @@ interface InboxStoreState {
   // Publish the schedule projection (standing sessions, runs grouped under a
   // schedule row) for keyboard nav. Ephemeral raw-set state — the schedule data
   // itself lives in the agentTasks.webList Convex subscription, never the store.
-  setScheduleNavSets: (sets: { standing: ReadonlySet<string>; grouped: ReadonlySet<string> } | null) => void;
+  setScheduleNavSets: (sets: { absorbed: ReadonlySet<string> } | null) => void;
   setViewingDismissedId: (id: string | null) => void;
   getCurrentSession: () => InboxSession | null;
   injectSession: (session: InboxSession) => void;
@@ -4236,7 +4229,7 @@ export const useInboxStore = create<InboxStoreState>(
   }),
 
   // Raw set: ephemeral nav bookkeeping — no draft, no persistence, no dispatch.
-  setScheduleNavSets: (sets: { standing: ReadonlySet<string>; grouped: ReadonlySet<string> } | null) =>
+  setScheduleNavSets: (sets: { absorbed: ReadonlySet<string> } | null) =>
     set({ scheduleNavSets: sets }),
 
   setViewingDismissedId: action(function (this: Draft, id: string | null) {

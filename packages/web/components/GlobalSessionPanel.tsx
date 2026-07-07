@@ -12,7 +12,7 @@ import { sessionCardSummary } from "../lib/sessionSummary";
 import { sessionStartupState } from "../lib/sessionLifecycle";
 import { compressImage } from "../lib/compressImage";
 import { useConversationMessages } from "../hooks/useConversationMessages";
-import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, categorizeSessions, partitionOldSessions, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, isSessionHidden, isSessionHardBlocked, resolveSessionAuthor, convBucketMap, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, categorizeSessions, partitionOldSessions, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, isSessionHidden, resolveSessionAuthor, convBucketMap, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
 import { sessionsWakeSig } from "../store/inboxStore";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { isBlockedConversation, isSubagentConversation } from "@codecast/convex/convex/ccAccountsShared";
@@ -21,7 +21,7 @@ import { TooltipProvider } from "./ui/tooltip";
 import { cleanTitle, msgCountColor, formatModel } from "../lib/conversationProcessor";
 import { getLabelColor } from "../lib/labelColors";
 import { fmtDuration, describeTaskCadence } from "./scheduleCadence";
-import { partitionScheduleInbox, type ScheduleGroup, type TaskRow } from "./scheduleTasks";
+import { partitionScheduleInbox, type ScheduleRow, type TaskRow } from "./scheduleTasks";
 import { isMachineDeliveredMessage } from "./sessionMessage";
 import { SharePopover } from "./SharePopover";
 import { shareOrigin } from "../lib/utils";
@@ -647,30 +647,24 @@ function ScheduleBadge({ upcoming }: { upcoming: UpcomingSchedule }) {
   );
 }
 
-// -- Scheduled group rows (spawn schedules) --
+// -- The SCHEDULES section (every armed schedule, schedule-first) --
 
-// A synthetic inbox row for an armed spawn schedule (web/shell-created — no
-// originating conversation): the standing intent gets ONE row and its runs
-// collapse underneath, instead of every fire landing a loose card in triage.
-// Click opens the newest run (whose schedule strip carries the full prompt and
-// controls); the row itself keeps the lightweight verbs (run now, pause/resume).
-// Escalated runs — hard-blocked, failed, or --needs-attention — are deliberately
-// NOT under the row; they stay real cards in Needs Input/Working.
-function ScheduleGroupRow({ group, activeSessionId, onSelectRun, fallbackRun }: {
-  group: ScheduleGroup;
+// One row per armed schedule — recurring, once, or event; inject or spawn; no
+// distinction the user must learn. The row IS the schedule's identity in the
+// inbox: name, cadence, live countdown, last outcome, lightweight verbs.
+// Clicking opens the conversation behind it (home session or latest run — the
+// dismissed-peek path handles folded runs). Everything a schedule does stays
+// behind its row; escalations and human-driven turns are ordinary cards.
+function ScheduleRowItem({ row, activeSessionId, onOpen }: {
+  row: ScheduleRow;
   activeSessionId?: string | null;
-  onSelectRun: (sess: InboxSession) => void;
-  // The last run's session even when folded (dismissed), so a row whose runs
-  // have all folded still opens its history on click (the peek path handles
-  // dismissed rows, same as the Killed bucket).
-  fallbackRun?: InboxSession;
+  onOpen: (convId: string) => void;
 }) {
-  const { task, runs } = group;
+  const { task, unread } = row;
   const now = useCoarseNow(30_000);
   const pause = useMutation(api.agentTasks.webPause);
   const resume = useMutation(api.agentTasks.webResume);
   const runNow = useMutation(api.agentTasks.webRunNow);
-  const latest = runs[0] ?? fallbackRun;
   const paused = task.status === "paused";
   const msUntil = task.run_at !== undefined ? task.run_at - now : undefined;
   const stateLabel = paused
@@ -682,12 +676,12 @@ function ScheduleGroupRow({ group, activeSessionId, onSelectRun, fallbackRun }: 
         : msUntil > 0
           ? fmtDuration(msUntil)
           : "due";
-  const isActive = !!latest && latest._id === activeSessionId;
+  const isActive = !!row.openId && row.openId === activeSessionId;
   return (
     <div className={`group/schedrow border-b border-sol-border/30 ${isActive ? "bg-sol-orange/[0.06]" : ""}`}>
       <button
         className="w-full text-left px-3 py-2 hover:bg-sol-bg-alt/60 transition-colors"
-        onClick={() => latest && onSelectRun(latest)}
+        onClick={() => row.openId && onOpen(row.openId)}
         title={task.prompt}
       >
         <div className="flex items-center gap-1.5 min-w-0">
@@ -696,6 +690,7 @@ function ScheduleGroupRow({ group, activeSessionId, onSelectRun, fallbackRun }: 
             <path d="M12 7.5V12l3 2" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
           <span className="text-xs font-medium text-sol-text truncate min-w-0">{task.title}</span>
+          {unread && <span className="w-1.5 h-1.5 rounded-full bg-sol-orange shrink-0" title="New outcome since you last opened this section" />}
           <span
             className={`ml-auto shrink-0 inline-flex items-center px-1 py-0 rounded text-[9px] font-semibold tabular-nums border ${
               paused
@@ -735,41 +730,52 @@ function ScheduleGroupRow({ group, activeSessionId, onSelectRun, fallbackRun }: 
         >
           {paused ? "Resume" : "Pause"}
         </button>
-        {runs.length > 1 && (
-          <span className="ml-auto text-[10px] text-sol-text-dim">{runs.length - 1} earlier run{runs.length === 2 ? "" : "s"} folded</span>
-        )}
       </div>
     </div>
   );
 }
 
-// The "Scheduled" section: one ScheduleGroupRow per armed spawn schedule.
-// Mirrors renderSection's header (same collapse store key mechanics) without
-// forcing schedules to masquerade as sessions.
-function ScheduledGroupsSection({ groups, collapsed, onToggle, activeSessionId, onSelectRun, fallbackRunOf }: {
-  groups: ScheduleGroup[];
+// The SCHEDULES section. Expanded: one ScheduleRowItem per armed schedule.
+// Collapsed: the header itself is the briefing — count, soonest next fire, and
+// how many outcomes landed since the section was last toggled ("N new").
+// Toggling in EITHER direction marks the briefing read (see schedules_seen_at).
+function SchedulesSection({ rows, unreadCount, nextRunAt, collapsed, onToggle, activeSessionId, onOpen }: {
+  rows: ScheduleRow[];
+  unreadCount: number;
+  nextRunAt?: number;
   collapsed: boolean;
   onToggle: () => void;
   activeSessionId?: string | null;
-  onSelectRun: (sess: InboxSession) => void;
-  fallbackRunOf?: (task: TaskRow) => InboxSession | undefined;
+  onOpen: (convId: string) => void;
 }) {
-  if (groups.length === 0) return null;
+  const now = useCoarseNow(30_000);
+  if (rows.length === 0) return null;
+  const nextIn = nextRunAt !== undefined ? Math.max(0, nextRunAt - now) : undefined;
   return (
     <div>
       <button
         onClick={onToggle}
-        className="w-full px-3 py-1.5 bg-sol-bg border-b border-sol-border/30 flex items-center justify-between gap-2"
+        className="w-full px-3 py-1.5 bg-sol-bg border-b border-sol-border/30 flex items-center gap-2"
       >
         <span className="text-[10px] font-semibold uppercase tracking-wider text-sol-orange">
-          Scheduled ({groups.length})
+          Schedules ({rows.length})
         </span>
-        <svg className={`w-3 h-3 transition-transform text-sol-orange ${collapsed ? "" : "rotate-180"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        {collapsed && nextIn !== undefined && (
+          <span className="text-[10px] text-sol-text-dim tabular-nums">
+            · next {nextIn > 0 ? fmtDuration(nextIn) : "due"}
+          </span>
+        )}
+        {collapsed && unreadCount > 0 && (
+          <span className="inline-flex items-center px-1.5 py-0 rounded-full text-[9px] font-semibold bg-sol-orange text-sol-bg">
+            {unreadCount} new
+          </span>
+        )}
+        <svg className={`ml-auto w-3 h-3 transition-transform text-sol-orange ${collapsed ? "" : "rotate-180"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
         </svg>
       </button>
-      {!collapsed && groups.map((g) => (
-        <ScheduleGroupRow key={g.task._id} group={g} activeSessionId={activeSessionId} onSelectRun={onSelectRun} fallbackRun={fallbackRunOf?.(g.task)} />
+      {!collapsed && rows.map((r) => (
+        <ScheduleRowItem key={r.task._id} row={r} activeSessionId={activeSessionId} onOpen={onOpen} />
       ))}
     </div>
   );
@@ -1691,46 +1697,32 @@ export function SessionListPanel({
 
   // -- Schedules in the inbox (status view) --
   // The same per-user webList the badges/strip/schedules page subscribe to
-  // (Convex dedupes), partitioned into: standing sessions (armed recurring
-  // inject schedules), spawn-schedule groups with their collapsed runs, and
-  // the armed-inject map the kill gesture consults.
+  // (Convex dedupes), partitioned into: one row per armed schedule, the set of
+  // sessions absorbed behind those rows (resting loop homes + uneventful runs),
+  // and the armed-inject map the kill gesture consults. All membership rules
+  // live in partitionScheduleInbox.
   const scheduleTasks = useQuery(api.agentTasks.webList, {}) as TaskRow[] | undefined;
+  const schedulesSeenAt = s.clientState.ui?.schedules_seen_at ?? 0;
   const schedulePartition = useMemo(
-    () => partitionScheduleInbox(scheduleTasks, visibleSessions, s.sessionsWithQueuedMessages),
-    [scheduleTasks, visibleSessions, s.sessionsWithQueuedMessages],
+    () => partitionScheduleInbox(scheduleTasks, visibleSessions, {
+      sessionsWithQueuedMessages: s.sessionsWithQueuedMessages,
+      seenAt: schedulesSeenAt,
+    }),
+    [scheduleTasks, visibleSessions, s.sessionsWithQueuedMessages, schedulesSeenAt],
   );
   // Kill-gesture handlers read the partition through a ref so their identities
   // stay stable (SessionCard is memoized on them).
   const schedulePartitionRef = useRef(schedulePartition);
   schedulePartitionRef.current = schedulePartition;
-  // Final standing set: sessions that would otherwise cycle through triage.
-  // Pinned stays in Pinned (explicit curation wins), blanks aren't work, and a
-  // hard blocker (poll, permission prompt, API error, dead agent) escalates the
-  // session back into Needs Input — attention stays earned. A HUMAN-driven turn
-  // escalates too: standing rest is for machine wakes (scheduled injections,
-  // teammate sends), so when the latest user message was typed by a person the
-  // session triages normally — their conversation must never hide in Standing.
-  const standingIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const convId of schedulePartition.standingByConv.keys()) {
-      const sess = visibleSessions[convId];
-      if (!sess || sess.is_pinned || sess.message_count === 0) continue;
-      if (isSessionHidden(sess)) continue;
-      if (isSessionHardBlocked(sess, s.sessionsWithQueuedMessages)) continue;
-      if (sess.last_user_message && !isMachineDeliveredMessage(sess.last_user_message)) continue;
-      ids.add(convId);
-    }
-    return ids;
-  }, [schedulePartition, visibleSessions, s.sessionsWithQueuedMessages]);
-  // Publish the projection for keyboard nav (computeVisualOrder reads it from
+  // Publish the absorbed set for keyboard nav (computeVisualOrder reads it from
   // the store). Content-keyed so Set identity churn from recomputes doesn't
   // spam store notifications.
   const navSetsKey = useMemo(
-    () => [...standingIds].sort().join(",") + "|" + [...schedulePartition.groupedRunIds].sort().join(","),
-    [standingIds, schedulePartition.groupedRunIds],
+    () => [...schedulePartition.absorbedIds].sort().join(","),
+    [schedulePartition.absorbedIds],
   );
   useEffect(() => {
-    useInboxStore.getState().setScheduleNavSets({ standing: standingIds, grouped: schedulePartition.groupedRunIds });
+    useInboxStore.getState().setScheduleNavSets({ absorbed: schedulePartition.absorbedIds });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [navSetsKey]);
 
@@ -1793,32 +1785,54 @@ export function SessionListPanel({
   const filteredNew = useMemo(() => filterByChip(newSessions), [filterByChip, newSessions]);
   const filteredNeedsInput = useMemo(() => filterByChip(needsInput), [filterByChip, needsInput]);
   const filteredWorking = useMemo(() => filterByChip(working), [filterByChip, working]);
-  // STATUS view only: standing sessions and runs collapsed under a schedule
-  // group row leave the triage buckets (they render in their own sections
-  // above). The label/plan lenses keep the plain chip-filtered lists — they
-  // don't render the schedule sections, so nothing may vanish there.
-  // Extraction order matches visualOrderSessions so Ctrl+J/K walks the screen.
+  // STATUS view only: sessions absorbed behind a SCHEDULES row leave the
+  // triage buckets (reachable by clicking the row). The label/plan lenses keep
+  // the plain chip-filtered lists — they don't render the schedule section, so
+  // nothing may vanish there. Mirrors visualOrderSessions so Ctrl+J/K walks
+  // exactly what's on screen.
   const statusNeedsInput = useMemo(
-    () => filteredNeedsInput.filter((sess) => !standingIds.has(sess._id) && !schedulePartition.groupedRunIds.has(sess._id)),
-    [filteredNeedsInput, standingIds, schedulePartition.groupedRunIds],
+    () => filteredNeedsInput.filter((sess) => !schedulePartition.absorbedIds.has(sess._id)),
+    [filteredNeedsInput, schedulePartition.absorbedIds],
   );
   const statusWorking = useMemo(
-    () => filteredWorking.filter((sess) => !standingIds.has(sess._id) && !schedulePartition.groupedRunIds.has(sess._id)),
-    [filteredWorking, standingIds, schedulePartition.groupedRunIds],
+    () => filteredWorking.filter((sess) => !schedulePartition.absorbedIds.has(sess._id)),
+    [filteredWorking, schedulePartition.absorbedIds],
   );
-  const filteredStanding = useMemo(
-    () => filterByChip([...needsInput, ...working].filter((sess) => standingIds.has(sess._id))),
-    [filterByChip, needsInput, working, standingIds],
-  );
-  // Spawn-schedule group rows honor the project chip like session cards do.
-  const spawnGroupsView = useMemo(
+  // Schedule rows honor the project chip like session cards do.
+  const scheduleRowsView = useMemo(
     () =>
       s.activeProjectFilter
-        ? schedulePartition.spawnGroups.filter(
-            (g) => getProjectName(undefined, g.task.project_path) === s.activeProjectFilter,
+        ? schedulePartition.rows.filter(
+            (r) => getProjectName(undefined, r.task.project_path) === s.activeProjectFilter,
           )
-        : schedulePartition.spawnGroups,
-    [schedulePartition.spawnGroups, s.activeProjectFilter],
+        : schedulePartition.rows,
+    [schedulePartition.rows, s.activeProjectFilter],
+  );
+  // Toggling the section in either direction marks the briefing read: expanding
+  // reveals every outcome, collapsing acknowledges what was on screen.
+  const toggleSchedulesSection = useCallback(() => {
+    useInboxStore.getState().updateClientUI({ schedules_seen_at: Date.now() });
+    useInboxStore.getState().toggleCollapsedSection("scheduled");
+  }, []);
+  // A schedule row opens the conversation behind it — the loop's home session
+  // or the newest run; the dismissed-peek path handles folded runs.
+  const openScheduleTarget = useCallback((convId: string) => {
+    const sess = useInboxStore.getState().sessions[convId];
+    if (sess) handleSelect(sess);
+  }, [handleSelect]);
+  // The SCHEDULES shelf renders in every section-based view (status, label,
+  // plan), like Pinned: schedules are an object-level shelf, orthogonal to
+  // whichever grouping lens is applied to conversations below it.
+  const schedulesSectionEl = (
+    <SchedulesSection
+      rows={scheduleRowsView}
+      unreadCount={schedulePartition.unreadCount}
+      nextRunAt={schedulePartition.nextRunAt}
+      collapsed={!!s.collapsedSections["scheduled"]}
+      onToggle={toggleSchedulesSection}
+      activeSessionId={activeSessionId}
+      onOpen={openScheduleTarget}
+    />
   );
   const filteredDismissed = useMemo(() => {
     // Only surface dismissed sessions ACTIVE within the window — keyed on last
@@ -1977,12 +1991,14 @@ export function SessionListPanel({
   // store's visualOrder so Ctrl+J/K walks exactly this layout.
   const bucketView = useMemo(() => {
     if (viewMode !== "bucket") return null;
+    // Absorbed-filtered lists: the label view renders the SCHEDULES section too,
+    // so sessions resting behind a schedule row must not double-render in groups.
     return groupSessionsForLabelView(
-      [...filteredNew, ...filteredNeedsInput, ...filteredWorking],
+      [...filteredNew, ...statusNeedsInput, ...statusWorking],
       s.buckets,
       bucketByConv,
     );
-  }, [viewMode, filteredNew, filteredNeedsInput, filteredWorking, bucketByConv, s.buckets]);
+  }, [viewMode, filteredNew, statusNeedsInput, statusWorking, bucketByConv, s.buckets]);
 
   // "By plan" lens — same active set as the bucket view (status buckets dissolved
   // back to flat), regrouped by plan instead of label. Every plan shows, even a
@@ -1992,9 +2008,9 @@ export function SessionListPanel({
   const planView = useMemo(() => {
     if (viewMode !== "plan") return null;
     return groupSessionsByPlan(
-      [...filteredNew, ...filteredNeedsInput, ...filteredWorking],
+      [...filteredNew, ...statusNeedsInput, ...statusWorking],
     );
-  }, [viewMode, filteredNew, filteredNeedsInput, filteredWorking]);
+  }, [viewMode, filteredNew, statusNeedsInput, statusWorking]);
   // Offer the "By plan" option only when a plan is actually in play, mirroring how
   // "By label" appears only with buckets.
   const hasPlanSessions = useMemo(() => activeSessions.some((x) => !!x.active_plan), [activeSessions]);
@@ -2177,7 +2193,7 @@ export function SessionListPanel({
             ...planView.projectGroups.map(({ name, items }) => [items, `planproj_${name}`] as [InboxSession[], string]),
           ]
         : [
-            [filteredPinned, "pinned"], [filteredStanding, "standing"], [filteredNew, "new"],
+            [filteredPinned, "pinned"], [filteredNew, "new"],
             [statusNeedsInput, "needs_input"], [statusWorking, "working"],
           ];
     for (const [items, key] of sections) {
@@ -2694,6 +2710,7 @@ export function SessionListPanel({
         <>
         {!s.activeProjectFilter && !s.activeBucketFilter && <NeedsAttentionSection />}
         {renderSection("Pinned", filteredPinned, "text-sol-magenta")}
+        {schedulesSectionEl}
         {bucketView.labelGroups.map(({ bucket, items }) => (
           <div key={bucket._id}>
             {renderSection(bucket.name, items, getLabelColor(bucket.name).text, undefined, undefined, { key: `bucket_${bucket._id}`, dropLabelId: bucket._id })}
@@ -2711,6 +2728,7 @@ export function SessionListPanel({
         <>
         {!s.activeProjectFilter && !s.activeBucketFilter && <NeedsAttentionSection />}
         {renderSection("Pinned", filteredPinned, "text-sol-magenta")}
+        {schedulesSectionEl}
         {planView.planGroups.map(({ key, label, items }) => (
           <div key={key}>
             {renderSection(label, items, "text-teal-400", undefined, undefined, { key: `plan_${key}`, monoLabel: true })}
@@ -2728,15 +2746,7 @@ export function SessionListPanel({
         <>
         {!s.activeProjectFilter && !s.activeBucketFilter && <NeedsAttentionSection />}
         {renderSection("Pinned", filteredPinned, "text-sol-magenta")}
-        {renderSection("Standing", filteredStanding, "text-sol-orange")}
-        <ScheduledGroupsSection
-          groups={spawnGroupsView}
-          collapsed={!!s.collapsedSections["scheduled"]}
-          onToggle={() => s.toggleCollapsedSection("scheduled")}
-          activeSessionId={activeSessionId}
-          onSelectRun={handleSelect}
-          fallbackRunOf={(task) => (task.last_run_conversation_id ? s.sessions[task.last_run_conversation_id] : undefined)}
-        />
+        {schedulesSectionEl}
         {renderSection("New", filteredNew, "text-sol-blue")}
         {renderSection("Needs Input", statusNeedsInput, "text-sol-yellow")}
         {renderSection("Working", statusWorking, "text-sol-green", "working")}
