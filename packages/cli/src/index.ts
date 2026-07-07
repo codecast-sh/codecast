@@ -38,6 +38,7 @@ import { getLastReconciliation, performReconciliation, repairDiscrepancies } fro
 import { parseSessionFile, extractSlug } from "./parser.js";
 import { SyncService } from "./syncService.js";
 import { resolveLocalProjectPath, claudeProjectDirName } from "./projectPathResolver.js";
+import { runDoctor } from "./doctor.js";
 import { deviceId, deviceLabel } from "./remote/device.js";
 import {
   buildDaemonPlistXml,
@@ -388,6 +389,8 @@ interface DaemonState {
   lastWatchdogCheck?: number;
   runtimeVersion?: string;
   watchdogRestarts?: number;
+  /** Stamped on every daemon state write — lets `--wait` tell a fresh state file from a stale one. */
+  timestamp?: number;
 }
 
 function detectAgents(): DetectedAgent[] {
@@ -1218,6 +1221,51 @@ function formatBytesShort(n: number): string {
   return `${(n / 1024 / 1024).toFixed(1)}MB`;
 }
 
+// Block until the daemon is running AND connected to Convex, or the timeout
+// lapses. `startedAfterMs` guards against trusting a state file left behind by
+// the PREVIOUS daemon instance: saveDaemonState stamps `timestamp` on every
+// write, so requiring a stamp newer than the (re)start moment proves the state
+// (including `connected`) was written by the instance we just launched. This is
+// the productized form of the "poll `cast status | grep` in a shell loop"
+// ritual that every restart-and-verify workflow used to hand-roll.
+async function waitForDaemonHealthy(timeoutMs: number, startedAfterMs: number): Promise<{ ok: boolean; detail: string }> {
+  const deadline = Date.now() + timeoutMs;
+  let last = "daemon not running";
+  while (Date.now() < deadline) {
+    const pid = getDaemonPid();
+    const state = readDaemonState();
+    const fresh = ((state as any)?.timestamp ?? 0) >= startedAfterMs;
+    if (!pid) last = "daemon not running";
+    else if (!fresh) last = `daemon up (pid ${pid}), waiting for first state write`;
+    else if (state?.authExpired) return { ok: false, detail: "auth expired — run `cast auth`" };
+    else if (!state?.connected) last = `daemon up (pid ${pid}), Convex not connected yet`;
+    else return { ok: true, detail: `running (pid ${pid}), Convex connected` };
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return { ok: false, detail: last };
+}
+
+function printDaemonLogTail(lines = 15): void {
+  try {
+    const raw = fs.readFileSync(path.join(CONFIG_DIR, "daemon.log"), "utf-8");
+    const tail = raw.split("\n").filter(Boolean).slice(-lines);
+    if (tail.length === 0) return;
+    console.log(fmt.muted("  daemon.log tail:"));
+    for (const line of tail) console.log(`  ${c.dim}${line.slice(0, 160)}${c.reset}`);
+  } catch {}
+}
+
+async function finishWithHealthWait(startedAtMs: number, timeoutSec: number): Promise<void> {
+  const result = await waitForDaemonHealthy(timeoutSec * 1000, startedAtMs);
+  if (result.ok) {
+    console.log(`${fmt.success("✓")} ${result.detail}`);
+  } else {
+    console.log(`${fmt.error("✗")} not healthy after ${timeoutSec}s: ${result.detail}`);
+    printDaemonLogTail();
+    process.exit(1);
+  }
+}
+
 function checkDaemonHealth(): { blocked: boolean; restarted: boolean } {
   const pid = getDaemonPid();
   if (!pid) return { blocked: false, restarted: false };
@@ -1342,6 +1390,8 @@ function showStatus(): void {
   }
   console.log(`  ${fmt.muted("  Change:")} ${fmt.cmd("cast sync-settings")}`);
 
+  console.log("");
+  console.log(`  ${fmt.muted("Full self-test (live sync round-trip):")} ${fmt.cmd("cast doctor")}`);
   console.log("");
 }
 
@@ -3328,10 +3378,16 @@ accountsCmd
 program
   .command("start")
   .description("Start the background daemon to automatically watch and sync conversations")
-  .action(() => {
+  .option("--wait", "Block until the daemon is running and connected to Convex (exit 1 if not)")
+  .option("--timeout <seconds>", "How long --wait polls before giving up", "45")
+  .action(async (options: any) => {
+    const startedAt = Date.now();
     startDaemon();
     // Ensure autostart is configured so daemon restarts on reboot/crash
     ensureAutostart();
+    if (options.wait) {
+      await finishWithHealthWait(startedAt, Number.parseInt(options.timeout, 10) || 45);
+    }
   });
 
 program
@@ -3344,7 +3400,10 @@ program
 program
   .command("restart")
   .description("Restart the background daemon (update if available, then start)")
-  .action(async () => {
+  .option("--wait", "Block until the daemon is running and connected to Convex (exit 1 if not)")
+  .option("--timeout <seconds>", "How long --wait polls before giving up", "45")
+  .action(async (options: any) => {
+    const startedAt = Date.now();
     stopDaemon();
     const available = await checkForUpdates(true);
     if (available) {
@@ -3372,6 +3431,9 @@ program
     }
     startDaemon();
     ensureAutostart();
+    if (options.wait) {
+      await finishWithHealthWait(startedAt, Number.parseInt(options.timeout, 10) || 45);
+    }
   });
 
 program
@@ -3871,6 +3933,47 @@ program
       }
     }
     console.log("");
+  });
+
+program
+  .command("doctor")
+  .description(
+    "Verify codecast works end-to-end: daemon health, Convex connection, and a live\n" +
+    "sync round-trip (transcript → server → message delivery → tmux inject → echo back).\n" +
+    "The round-trip uses a throwaway stand-in agent — no Claude tokens, no browser —\n" +
+    "and cleans up after itself. Exit code 0 means the full loop is proven working."
+  )
+  .option("--no-e2e", "Only run the passive health checks, skip the live round-trip")
+  .option("--json", "Machine-readable report")
+  .option("--keep", "Keep the test tmux session, transcript, and server conversation for debugging")
+  .option("--project-dir <path>", "Scratch project dir for the test transcript (must be syncable)")
+  .action(async (options: any) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+    const report = await runDoctor(
+      {
+        config,
+        siteUrl: config.convex_url.replace(".cloud", ".site"),
+        apiToken: config.auth_token,
+        version: getVersion(),
+        configDir: CONFIG_DIR,
+        getDaemonPid,
+        getLaunchdStatus: getMacLaunchdDaemonStatus,
+        readDaemonState,
+        getStuckSyncs,
+      },
+      {
+        e2e: options.e2e !== false,
+        json: options.json === true,
+        keep: options.keep === true,
+        projectDir: options.projectDir,
+      },
+    );
+    if (options.json) console.log(JSON.stringify(report, null, 2));
+    process.exit(report.ok ? 0 : 1);
   });
 
 program
