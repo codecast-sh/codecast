@@ -415,6 +415,11 @@ export class SyncService {
           subagent_description: params.subagentDescription,
           agent_team_name: params.agentTeamName,
           agent_name: params.agentName,
+          // The transcript this conversation is created from lives on THIS
+          // machine — stamp ownership up front so message delivery routes here
+          // instead of racing every daemon's first-claim (a remote daemon that
+          // won that race black-holed injects for freshly synced sessions).
+          owner_device_id: deviceId(),
           api_token: this.apiToken,
         }
       );

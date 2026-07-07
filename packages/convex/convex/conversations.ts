@@ -560,6 +560,15 @@ export const createConversation = mutation({
     subagent_description: v.optional(v.string()),
     agent_team_name: v.optional(v.string()),
     agent_name: v.optional(v.string()),
+    // Device id of the daemon syncing this transcript. The transcript (and any
+    // tmux session) lives on that machine, so it is the only daemon that can
+    // deliver messages here. Without this stamp, ownership was only set lazily
+    // when a daemon claimed the conversation's FIRST pending message — a
+    // broadcast race every one of the user's daemons entered, and a remote
+    // daemon (no transcript, no pane) sometimes won, silently black-holing
+    // delivery. Optional for older CLIs; claim-time stamping remains the
+    // fallback for conversations created without it.
+    owner_device_id: v.optional(v.string()),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -599,6 +608,11 @@ export const createConversation = mutation({
         patch.agent_team_name = args.agent_team_name;
         if (args.agent_name && !existing.agent_name) patch.agent_name = args.agent_name;
       }
+      // Adopt an unowned conversation; never steal one another device owns
+      // (explicit ownership transfers go through sessionOwnership).
+      if (args.owner_device_id && !existing.owner_device_id) {
+        patch.owner_device_id = args.owner_device_id;
+      }
       if (Object.keys(patch).length > 0) {
         await ctx.db.patch(existing._id, patch);
       }
@@ -634,6 +648,7 @@ export const createConversation = mutation({
       title: args.title,
       project_hash: args.project_hash,
       project_path: args.project_path,
+      owner_device_id: args.owner_device_id,
       started_at: startedAt,
       updated_at: startedAt,
       message_count: 0,
