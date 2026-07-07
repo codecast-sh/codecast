@@ -25,6 +25,18 @@ async function getAuthenticatedUserId(
   return null;
 }
 
+// A cross-user reclaim of a managed session is legitimate only when the
+// current owner's daemon is gone (the same session resurfacing after a local
+// logout/login). Heartbeat rows are at most ~60s stale by design
+// (HEARTBEAT_REFRESH_MS throttling); 3 minutes clears that with a full
+// outage's margin. A fresh heartbeat means a live daemon still manages the
+// session, and handing its row to another user silently reroutes message
+// delivery — the freeze that motivated this guard.
+export const CROSS_USER_RECLAIM_STALE_MS = 3 * 60 * 1000;
+export function canReclaimCrossUser(existingLastHeartbeat: number, now: number): boolean {
+  return now - existingLastHeartbeat >= CROSS_USER_RECLAIM_STALE_MS;
+}
+
 export const registerManagedSession = mutation({
   args: {
     session_id: v.string(),
@@ -87,7 +99,15 @@ export const registerManagedSession = mutation({
       // resurface under a different local user (e.g. after a logout/login),
       // and the daemon making this call has the legitimate live process.
       // Without this, the next heartbeat throws Unauthorized in a loop.
+      // Guarded by canReclaimCrossUser: a live owner (fresh heartbeat) is
+      // never robbed — see the helper's comment for the freeze this prevents.
       if (existing.user_id.toString() !== authUserId.toString()) {
+        if (!canReclaimCrossUser(existing.last_heartbeat, now)) {
+          console.warn(
+            `[registerManagedSession] refusing cross-user reclaim of ${args.session_id}: owner ${existing.user_id} heartbeat is fresh`,
+          );
+          return { notOwner: true as const, owner: existing.user_id.toString() } as any;
+        }
         console.warn(
           `[registerManagedSession] reclaiming session ${args.session_id} from ${existing.user_id} -> ${authUserId}`,
         );
