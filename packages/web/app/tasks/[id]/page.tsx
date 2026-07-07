@@ -8,6 +8,7 @@ import { useMutation, useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, TaskDetail, TaskItem, resolveAssigneeInfo } from "../../../store/inboxStore";
 import { useSyncTasks, useSyncTaskDetail } from "../../../hooks/useSyncTasks";
+import { useOpenLinkedSession } from "../../../hooks/useOpenLinkedSession";
 import { DetailSplitLayout } from "../../../components/DetailSplitLayout";
 import { AppLoader } from "../../../components/AppLoader";
 import { TaskListContent } from "../page";
@@ -398,6 +399,7 @@ export default function TaskDetailPage() {
 export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }: { taskId?: string; variant?: "page" | "inline"; onClose?: () => void; onOpen?: () => void } = {}) {
   const params = useParams();
   const router = useRouter();
+  const openLinkedSession = useOpenLinkedSession();
   const id = taskId ?? (params?.id as string);
   const isInline = variant === "inline";
 
@@ -1024,34 +1026,14 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
                   if (!a.is_active && b.is_active) return 1;
                   return (b.updated_at || 0) - (a.updated_at || 0);
                 })
-                .map((conv: any) => {
-                  const sid = conv._id;
-                  return (
+                .map((conv: any) => (
                   <FeedCard
                     key={conv._id}
-                    conv={{ ...conv, _id: sid } as any}
+                    conv={conv as any}
                     showActor={false}
-                    onNavigate={() => {
-                      const store = useInboxStore.getState();
-                      if (!store.sessions[sid]) {
-                        store.syncRecord('sessions', sid, {
-                          _id: conv._id,
-                          session_id: conv.session_id || conv._id,
-                          title: conv.title,
-                          project_path: conv.project_path,
-                          message_count: conv.message_count || 0,
-                          updated_at: conv.updated_at,
-                          started_at: conv.started_at,
-                          agent_type: conv.agent_type || 'claude',
-                          is_idle: !conv.is_active,
-                          has_pending: false,
-                        });
-                      }
-                      store.openSidePanel(sid);
-                    }}
+                    onNavigate={() => openLinkedSession(conv)}
                   />
-                  );
-                })}
+                ))}
             </div>
           </div>
         )}
