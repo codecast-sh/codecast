@@ -700,7 +700,7 @@ export class RetryQueue {
       this.log(
         `Backend recovered (drained ${succeededKey}); collapsed backoff on ${collapsed} queued op(s) for immediate retry`
       );
-      this.persist();
+      this.schedulePersist();
       this.scheduleNextCheck();
     }
   }
