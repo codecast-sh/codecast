@@ -41,6 +41,29 @@ export async function userCanAccessAnchor(
   return false;
 }
 
+// Stricter gate for DESTRUCTIVE / config changes (retire, rename, persona): the
+// host, the personal-anchor owner, or a team ADMIN — not every team member. Any
+// member can wake/use the anchor (userCanAccessAnchor); only admins reshape it.
+export async function userCanAdminAnchor(
+  ctx: { db: any },
+  userId: Id<"users">,
+  anchor: { host_user_id?: Id<"users">; scope_user_id?: Id<"users">; team_id?: Id<"teams"> } | null,
+): Promise<boolean> {
+  if (!anchor) return false;
+  if (anchor.host_user_id === userId) return true;
+  if (anchor.scope_user_id && anchor.scope_user_id === userId) return true;
+  if (anchor.team_id) {
+    const m = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_user_team", (q: any) =>
+        q.eq("user_id", userId).eq("team_id", anchor.team_id),
+      )
+      .first();
+    if (m && m.role === "admin") return true;
+  }
+  return false;
+}
+
 // The anchors a caller may see/act on: their personal anchor plus the team anchor
 // of every team they belong to, deduped and excluding decommissioned. Shared by
 // listAnchors and the Slack channel listing so the two can't drift.
@@ -256,7 +279,8 @@ export const provisionAnchor = mutation({
       ...privacy,
       status: "active",
       persistent: true,
-      inbox_pinned_at: now,
+      // Not pinned in the inbox — the anchor lives in its dedicated /anchor space
+      // and only surfaces in the inbox when it's waiting on the user.
     });
     await ctx.db.patch(conversationId, {
       short_id: conversationId.toString().slice(0, 7),
@@ -411,8 +435,8 @@ export const decommissionAnchor = mutation({
     if (!userId) throw new Error("Authentication failed: invalid token or session");
     const anchor = await ctx.db.get(args.anchor_id);
     if (!anchor) throw new Error("Anchor not found");
-    if (!(await userCanAccessAnchor(ctx, userId, anchor))) {
-      throw new Error("Not authorized for this anchor");
+    if (!(await userCanAdminAnchor(ctx, userId, anchor))) {
+      throw new Error("Only an admin (or the host) can retire this anchor");
     }
     if (anchor.conversation_id) {
       const conv = await ctx.db.get(anchor.conversation_id);
@@ -457,5 +481,129 @@ export const decommissionAnchor = mutation({
       updated_at: Date.now(),
     });
     return { decommissioned: true };
+  },
+});
+
+// The Slack workspace installation bound to an anchor's scope (inline lookup to
+// avoid importing slack.ts, which imports this module).
+async function installForAnchor(ctx: any, anchor: any): Promise<any | null> {
+  if (anchor.team_id) {
+    return await ctx.db
+      .query("slack_installations")
+      .withIndex("by_team", (q: any) => q.eq("team_id", anchor.team_id))
+      .first();
+  }
+  if (anchor.scope_user_id) {
+    return await ctx.db
+      .query("slack_installations")
+      .withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", anchor.scope_user_id))
+      .first();
+  }
+  return null;
+}
+
+// getAnchorSpace — everything the dedicated Anchor page needs for one scope: the
+// anchor (with bot identity + coarse status), its Slack connection, and channels.
+// `anchor: null` means "none yet" → the page shows onboarding. The conversation
+// itself is loaded by the page via the normal conversation queries.
+export const getAnchorSpace = query({
+  args: {
+    api_token: v.optional(v.string()),
+    scope_type: v.union(v.literal("team"), v.literal("user")),
+    team_id: v.optional(v.id("teams")),
+  },
+  handler: async (ctx, args): Promise<any> => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) return null;
+    const scopeUserId = args.scope_type === "user" ? userId : undefined;
+    let teamId = args.team_id;
+    if (args.scope_type === "team" && !teamId) {
+      const host = await ctx.db.get(userId);
+      teamId = host?.active_team_id ?? host?.team_id ?? undefined;
+    }
+    if (args.scope_type === "team") {
+      if (!teamId) return { scope_type: args.scope_type, anchor: null, no_team: true };
+      const member = await ctx.db
+        .query("team_memberships")
+        .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", teamId))
+        .first();
+      if (!member) return { scope_type: args.scope_type, anchor: null, forbidden: true };
+    }
+    const anchor = await findExistingAnchor(ctx, {
+      scope_type: args.scope_type,
+      team_id: teamId,
+      scope_user_id: scopeUserId,
+    });
+    if (!anchor) return { scope_type: args.scope_type, anchor: null };
+
+    const bot = await ctx.db.get(anchor.bot_user_id as Id<"users">);
+    const conv = anchor.conversation_id ? await ctx.db.get(anchor.conversation_id) : null;
+    const channels = await ctx.db
+      .query("anchor_channels")
+      .withIndex("by_anchor", (q: any) => q.eq("anchor_id", anchor._id))
+      .collect();
+    const install = await installForAnchor(ctx, anchor);
+
+    return {
+      scope_type: args.scope_type,
+      anchor: {
+        _id: anchor._id,
+        name: anchor.name,
+        persona: anchor.persona ?? null,
+        project_path: anchor.project_path ?? null,
+        model: anchor.model ?? null,
+        status: anchor.status,
+        team_id: anchor.team_id ?? null,
+        conversation_id: anchor.conversation_id ?? null,
+        conversation_short_id: (conv as any)?.short_id ?? null,
+        bot_name: (bot as any)?.name ?? anchor.name,
+        bot_avatar: (bot as any)?.image ?? null,
+        conv_status: (conv as any)?.status ?? null,
+        message_count: (conv as any)?.message_count ?? 0,
+        has_pending_messages: (conv as any)?.has_pending_messages ?? false,
+        updated_at: (conv as any)?.updated_at ?? anchor.created_at,
+      },
+      slack: {
+        connected: !!install,
+        workspace_name: install?.workspace_name ?? null,
+      },
+      channels: channels.map((c: any) => ({
+        channel_key: c.channel_key,
+        workspace_key: c.workspace_key ?? null,
+        project_path: c.project_path ?? null,
+      })),
+    };
+  },
+});
+
+// updateAnchor — edit an anchor's presentation (name/avatar/persona/model) from
+// the settings panel. Name/avatar mirror onto the bot identity so the chip updates.
+export const updateAnchor = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    anchor_id: v.id("anchors"),
+    name: v.optional(v.string()),
+    avatar_url: v.optional(v.string()),
+    persona: v.optional(v.string()),
+    model: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication failed: invalid token or session");
+    const anchor = await ctx.db.get(args.anchor_id);
+    if (!anchor) throw new Error("Anchor not found");
+    if (!(await userCanAdminAnchor(ctx, userId, anchor))) {
+      throw new Error("Only an admin (or the host) can edit this anchor");
+    }
+    const patch: Record<string, any> = { updated_at: Date.now() };
+    if (args.name !== undefined) patch.name = args.name;
+    if (args.persona !== undefined) patch.persona = args.persona;
+    if (args.model !== undefined) patch.model = args.model;
+    await ctx.db.patch(args.anchor_id, patch);
+    const botPatch: Record<string, any> = {};
+    if (args.name !== undefined) botPatch.name = args.name;
+    if (args.avatar_url !== undefined) botPatch.image = args.avatar_url;
+    if (Object.keys(botPatch).length) await ctx.db.patch(anchor.bot_user_id as Id<"users">, botPatch);
+    return { ok: true };
   },
 });
