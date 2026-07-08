@@ -617,8 +617,6 @@ const lastIdleNotifiedSize = new Map<string, number>();
 const lastWorkingStatusSent = new Map<string, number>();
 const WORKING_STATUS_THROTTLE_MS = 10_000;
 const lastSentAgentStatus = new Map<string, AgentStatus>();
-const workingPhaseStart = new Map<string, number>();
-const MIN_WORKING_DURATION_FOR_NOTIF_MS = 10_000;
 const lastHeartbeatLogged = new Map<string, { status: string; ts: number; since: number }>();
 const HEARTBEAT_LOG_THROTTLE_MS = 5 * 60 * 1000;
 
@@ -837,6 +835,14 @@ function syncSkillsForConversation(conversationId: string, projectPath: string |
   }
 }
 
+// Idle/needs-input notifications are NOT sent from here: the server owns them
+// (notifications.checkNeedsInput, scheduled off the status write this makes),
+// because "needs input" is a composite verdict — status + idle grace + queued
+// messages + open polls — that only the server can evaluate, and doing it
+// there covers every path (hook, watcher fallback, codex app-server) exactly
+// when the web inbox's idle sound fires. The daemon still sends
+// permission_request notifications where it detects the prompt (it holds the
+// tool context the server lacks).
 function sendAgentStatus(
   syncService: SyncService,
   conversationId: string,
@@ -844,7 +850,6 @@ function sendAgentStatus(
   status: AgentStatus,
   clientTs?: number,
   permissionMode?: PermissionMode,
-  idleMessage?: string,
 ): void {
   const prevStatus = lastSentAgentStatus.get(sessionId);
   const isTransition = prevStatus !== status;
@@ -854,33 +859,9 @@ function sendAgentStatus(
   }
   if (status === "working") {
     lastWorkingStatusSent.set(sessionId, Date.now());
-    if (!workingPhaseStart.has(sessionId)) {
-      workingPhaseStart.set(sessionId, Date.now());
-    }
   }
   lastSentAgentStatus.set(sessionId, status);
   syncService.updateSessionAgentStatus(conversationId, status, clientTs, permissionMode).catch((err) => { log(`[sendAgentStatus] error: ${err?.message || err}`); });
-  if (status === "idle" && idleMessage) {
-    const workStart = workingPhaseStart.get(sessionId);
-    workingPhaseStart.delete(sessionId);
-    if (workStart) {
-      const workingDuration = Date.now() - workStart;
-      if (workingDuration >= MIN_WORKING_DURATION_FOR_NOTIF_MS) {
-        syncService.createSessionNotification({
-          conversation_id: conversationId,
-          type: "session_idle",
-          title: "Claude done",
-          message: idleMessage,
-        }).catch(() => {});
-        log(`Sent idle notification for session ${sessionId.slice(0, 8)} (worked ${Math.round(workingDuration / 1000)}s)`);
-      } else {
-        log(`Skipped idle notification for session ${sessionId.slice(0, 8)} (worked only ${Math.round(workingDuration / 1000)}s < ${MIN_WORKING_DURATION_FOR_NOTIF_MS / 1000}s)`);
-      }
-    }
-  }
-  if (status === "stopped") {
-    workingPhaseStart.delete(sessionId);
-  }
 }
 
 // Log the status carried on a heartbeat. Throttled per-session to once every
@@ -5118,8 +5099,7 @@ async function processSessionFile(
             const capturedSize = stats.size;
             if (capturedSize !== lastIdleNotifiedSize.get(sessionId)) {
               lastIdleNotifiedSize.set(sessionId, capturedSize);
-              const preview = isSubagent ? undefined : truncateForNotification(lastAssistantMessage.content);
-              sendAgentStatus(syncService, conversationId, sessionId, "idle", undefined, undefined, preview);
+              sendAgentStatus(syncService, conversationId, sessionId, "idle");
             }
           } else {
             sendAgentStatus(syncService, conversationId, sessionId, "working");
@@ -5130,8 +5110,7 @@ async function processSessionFile(
               lastIdleNotifiedSize.set(sessionId, capturedSize);
               idleTimers.set(sessionId, setTimeout(() => {
                 idleTimers.delete(sessionId);
-                const preview = isSubagent ? undefined : truncateForNotification(lastAssistantMessage.content);
-                sendAgentStatus(syncService, capturedConvId, sessionId, "idle", undefined, undefined, preview);
+                sendAgentStatus(syncService, capturedConvId, sessionId, "idle");
               }, IDLE_DEBOUNCE_MS));
             }
           }

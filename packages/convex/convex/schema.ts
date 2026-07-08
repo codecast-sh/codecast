@@ -261,6 +261,11 @@ export default defineSchema({
     skip_title_generation: v.optional(v.boolean()),
     title_is_custom: v.optional(v.boolean()),
     idle_summary: v.optional(v.string()),
+    // Dedupe for the needs-input push: "<message_count>:<kind>" of the last
+    // waiting episode already notified (see notifications.checkNeedsInput).
+    // Mirrors the web idle-sound's notified-keys map so one episode pushes
+    // once but each new turn can push again.
+    needs_input_notified_key: v.optional(v.string()),
     // Absolute flag: a truthy value means dismissed until a user action clears
     // it. Never compare against `updated_at` — dozens of mutations bump that
     // field and a relative check re-opens the session. Set by:
