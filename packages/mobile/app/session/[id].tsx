@@ -1,4 +1,4 @@
-import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, TextInput, KeyboardAvoidingView, Platform, Share, View as RNView, Text as RNText, Linking, Image, ActionSheetIOS, Alert, Pressable, Clipboard, Modal, Animated, Dimensions, useWindowDimensions } from 'react-native';
+import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, TextInput, Keyboard, KeyboardAvoidingView, Platform, Share, View as RNView, Text as RNText, Linking, Image, ActionSheetIOS, Alert, Pressable, Clipboard, Modal, Animated, Dimensions, useWindowDimensions } from 'react-native';
 import { useLocalSearchParams, Stack, useRouter, useFocusEffect } from 'expo-router';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
@@ -18,6 +18,7 @@ import { DeviceChip, useRunOnDevice } from '@/components/DevicesSection';
 import { ModelSwitcherChip } from '@/components/ModelSwitcherChip';
 import { renderInlineMarkdown, MarkdownContent, MarkdownTextBlock, CodeBlockWithCopy, CodeBlockFullscreen, HighlightedCodeText } from '@/components/MarkdownRenderer';
 import { CastCanvas, canvasAvailable, looksLikeHtmlMessage } from '@/components/CastCanvas';
+import { useSessionRestart, ghostRestartContextFor } from '@codecast/web/hooks/useSessionRestart';
 import { Theme, Spacing, chipShell, chipText, chipTint, CHROME_FONT_CAP } from '@/constants/Theme';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 // A real gradient WITHOUT a native module: expo-linear-gradient's native side
@@ -907,7 +908,7 @@ function TaskToolBlock({ tool, result, childConversationId }: { tool: ToolCall; 
 const _askUserSentState = new Map<string, string>();
 
 function AskUserQuestionBlock({ tool, result, conversationId }: { tool: ToolCall; result?: ToolResult; conversationId?: string }) {
-  let parsedInput: { questions?: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string }>; multiSelect?: boolean; isConfirmation?: boolean }>; answers?: Record<string, string> } = {};
+  let parsedInput: { questions?: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string; preview?: string }>; multiSelect?: boolean; isConfirmation?: boolean }>; answers?: Record<string, string> } = {};
   try { parsedInput = JSON.parse(tool.input); } catch {}
 
   const [sentLabel, setSentLabel] = useState<string | undefined>(() => _askUserSentState.get(tool.id));
@@ -952,7 +953,7 @@ function AskUserQuestionBlock({ tool, result, conversationId }: { tool: ToolCall
     <RNView style={styles.askQuestionBlock}>
       {questions.map((q, i) => {
         const answer = answers[q.question];
-        const hasDescriptions = q.options.some(o => o.description);
+        const hasDescriptions = q.options.some(o => o.description) || q.options.some(o => o.preview);
         const isCustom = answer !== undefined && !q.options.some(
           o => o.label === answer || o.label.replace(' (Recommended)', '') === answer
         );
@@ -968,6 +969,24 @@ function AskUserQuestionBlock({ tool, result, conversationId }: { tool: ToolCall
               {q.options.map((opt, j) => {
                 const cleanLabel = opt.label.replace(' (Recommended)', '');
                 const isSelected = (answer !== undefined && (opt.label === answer || cleanLabel === answer)) || sentLabel === cleanLabel;
+                // The option's `preview` is the ASCII/mockup box the terminal
+                // shows — surface it while interactive (read before tapping,
+                // one tap submits) and on the chosen option once answered.
+                const showPreview = !!opt.preview && (isInteractive || isSelected);
+                // Horizontal ScrollView won't hug multiline text height — size
+                // the box from the line count so it fits the mockup exactly.
+                const previewHeight = showPreview
+                  ? Math.min(opt.preview!.split('\n').length * 15 + 18, 240)
+                  : 0;
+                const previewBox = showPreview ? (
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    style={[styles.auqPreviewBox, { height: previewHeight }]}
+                  >
+                    <RNText style={styles.auqPreviewText}>{opt.preview}</RNText>
+                  </ScrollView>
+                ) : null;
                 const pill = (
                   <RNView
                     style={[
@@ -990,19 +1009,21 @@ function AskUserQuestionBlock({ tool, result, conversationId }: { tool: ToolCall
                 );
                 const wrapped = isInteractive ? (
                   <Pressable key={j} onPress={() => handlePick(j, cleanLabel)} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
-                    {opt.description ? (
+                    {opt.description || previewBox ? (
                       <RNView style={styles.optionItem}>
                         {pill}
-                        <RNText style={styles.optionDescription}>{opt.description}</RNText>
+                        {!!opt.description && <RNText style={styles.optionDescription}>{opt.description}</RNText>}
+                        {previewBox}
                       </RNView>
                     ) : pill}
                   </Pressable>
-                ) : !opt.description ? (
+                ) : !opt.description && !previewBox ? (
                   <RNView key={j}>{pill}</RNView>
                 ) : (
                   <RNView key={j} style={styles.optionItem}>
                     {pill}
-                    <RNText style={styles.optionDescription}>{opt.description}</RNText>
+                    {!!opt.description && <RNText style={styles.optionDescription}>{opt.description}</RNText>}
+                    {previewBox}
                   </RNView>
                 );
                 return wrapped;
@@ -1933,31 +1954,11 @@ function ApiErrorCard({ statusCode, message, errorType, requestId }: { statusCod
   );
 }
 
-type InsightPart = { type: 'text'; content: string } | { type: 'insight'; label: string; content: string };
+// "★ Insight ─────" parsing + card rendering live inside MarkdownContent
+// (components/MarkdownRenderer.tsx, shared parser from web insightBlocks.ts)
+// so every markdown surface gets them, not just the message-bubble branch.
 
-function parseInsightBlocks(text: string): InsightPart[] {
-  if (!text || typeof text !== 'string') return [{ type: 'text', content: String(text || '') }];
-  const insightRegex = /`([★✦⭐☆\*])\s+([\w\s]+?)\s*─+`([\s\S]*?)`─+`/g;
-  const parts: InsightPart[] = [];
-  let lastIndex = 0;
-  let match;
-  while ((match = insightRegex.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      const before = text.slice(lastIndex, match.index).trim();
-      if (before) parts.push({ type: 'text', content: before });
-    }
-    parts.push({ type: 'insight', label: match[2].trim(), content: match[3].trim() });
-    lastIndex = match.index + match[0].length;
-  }
-  if (lastIndex < text.length) {
-    const remaining = text.slice(lastIndex).trim();
-    if (remaining) parts.push({ type: 'text', content: remaining });
-  }
-  if (parts.length === 0) parts.push({ type: 'text', content: text });
-  return parts;
-}
-
-function InsightCard({ label, content }: { label: string; content: string }) {
+function UnusedInsightCard({ label, content }: { label: string; content: string }) {
   return (
     <RNView style={styles.insightCard}>
       <RNView style={styles.insightHeader}>
@@ -3137,6 +3138,8 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
       patchConversation({ id: conversationId, fields: { draft_message: null } }).catch(() => {});
     }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    // Sending is a completed gesture — give the conversation the screen back.
+    Keyboard.dismiss();
 
     store.sendMessage(conversationId, content, storageIds.length ? storageIds : undefined, clientId);
   };
@@ -3173,6 +3176,9 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
         </ScrollView>
       )}
       {managedSession?.managed && (managedSession.agent_status === "working" || managedSession.agent_status === "thinking" || managedSession.agent_status === "compacting" || managedSession.agent_status === "permission_blocked" || managedSession.agent_status === "connected") && (
+        // Floats over the bottom of the message list so it costs zero
+        // conversation height; the footer is just the input row.
+        <RNView style={styles.agentStatusFloat} pointerEvents="none">
         <RNView style={[styles.agentStatusBar, {
           backgroundColor: managedSession.agent_status === "thinking" ? 'rgba(108,113,196,0.12)' :
             managedSession.agent_status === "compacting" ? 'rgba(245,158,11,0.12)' :
@@ -3205,6 +3211,7 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
              managedSession.agent_status === "connected" ? "Connected" :
              "Working"}
           </RNText>
+        </RNView>
         </RNView>
       )}
       <RNView style={styles.inputRow}>
@@ -3276,6 +3283,29 @@ const DESIGN_MOCK_CONVO: ConversationData = {
       content: 'Here is the funnel summary:\n\n```cast-canvas\n<div data-canvas-title="Intro volume funnel">\n<div style="font-size:11px;letter-spacing:1px;color:var(--sol-text-dim);text-transform:uppercase">Intro volume funnel</div>\n<h2 style="margin:6px 0;color:var(--sol-text)">Weekly conversion</h2>\n<table style="width:100%;border-collapse:collapse">\n<tr style="border-bottom:1px solid var(--sol-border-light)"><th style="text-align:left;padding:6px;color:var(--sol-text-muted)">Stage</th><th style="text-align:right;padding:6px;color:var(--sol-text-muted)">Count</th></tr>\n<tr><td style="padding:6px">Intros sent</td><td style="text-align:right;padding:6px;color:var(--sol-blue)">412</td></tr>\n<tr style="background:var(--sol-bg-alt)"><td style="padding:6px">Replies</td><td style="text-align:right;padding:6px;color:var(--sol-cyan)">187</td></tr>\n<tr><td style="padding:6px">Meetings</td><td style="text-align:right;padding:6px;color:var(--sol-green)">63</td></tr>\n</table>\n<div class="cast-chart" data-spec=\'{"marks":[{"type":"barY"}]}\'></div>\n<p style="color:var(--sol-text-secondary)">Reply rate is <b style="color:var(--sol-orange)">45%</b>, up 6pts week over week. The drop from replies to meetings is the leak worth chasing.</p>\n<script>alert("must never run")</script>\n</div>\n```\n\nThe sanitizer strips the script above.',
       timestamp: DESIGN_MOCK_STARTED + 17 * 60000,
       message_uuid: 'mock-uuid-canvas',
+    },
+    // Exercises AskUserQuestion option previews (the ASCII mockup box the
+    // terminal shows next to each option).
+    {
+      _id: 'mock-msg-auq',
+      role: 'assistant',
+      content: '',
+      tool_calls: [{
+        id: 'mock-tool-auq',
+        name: 'AskUserQuestion',
+        input: JSON.stringify({
+          questions: [{
+            question: 'Which layout for the stats header?',
+            header: 'Layout',
+            options: [
+              { label: 'Stacked (Recommended)', description: 'Title above the chip row', preview: '┌──────────────────┐\n│ Title            │\n│ [chip] [chip]    │\n└──────────────────┘' },
+              { label: 'Inline', description: 'Title and chips share one row', preview: '┌──────────────────┐\n│ Title [chip][chip]│\n└──────────────────┘' },
+            ],
+          }],
+        }),
+      }],
+      timestamp: DESIGN_MOCK_STARTED + 18 * 60000,
+      message_uuid: 'mock-uuid-auq',
     },
   ] as Message[],
 };
@@ -3859,6 +3889,29 @@ export default function SessionDetailScreen() {
     { notify: showToast },
   );
 
+  const lastMessageAt = conversation?.messages?.length
+    ? conversation.messages[conversation.messages.length - 1]?.timestamp
+    : undefined;
+  const activityAt = lastMessageAt ?? conversation?.updated_at ?? conversation?.started_at ?? 0;
+  const isActive = conversation?.status === 'active' && (Date.now() - activityAt) < 5 * 60 * 1000;
+
+  // One reliable "Restart session" from the phone — the same two-stage recovery
+  // web runs (resume ladder, escalate once to a forced rebuild from history).
+  const restartNotify = useCallback(
+    (_kind: 'success' | 'error' | 'info', message: string) => showToast(message),
+    [showToast],
+  );
+  const restartGhostContext = useCallback(
+    () => (conversation?._id ? ghostRestartContextFor(conversation._id) : {}),
+    [conversation?._id],
+  );
+  const { restart: restartSession, isRestarting } = useSessionRestart({
+    conversationId: conversation?._id ?? '',
+    isLive: !!isActive,
+    ghostContext: restartGhostContext,
+    notify: restartNotify,
+  });
+
   const handleMoreActions = useCallback(() => {
     const options: string[] = [];
     options.push(conversation?.is_favorite ? 'Unfavorite' : 'Favorite');
@@ -3866,6 +3919,9 @@ export default function SessionDetailScreen() {
     options.push('Search');
     options.push('Copy');
     if (conversation?.session_id) options.push('Copy Resume Command');
+    if (conversation && isConvexId(conversation._id)) {
+      options.push(isRestarting ? 'Restarting…' : 'Restart Session');
+    }
     options.push('Run on Device…');
     options.push(collapsed ? 'Expand Messages' : 'Collapse Messages');
     // git_diff lives off the conversation doc now and is fetched lazily on
@@ -3894,6 +3950,7 @@ export default function SessionDetailScreen() {
           else if (label === 'Search') setSearchVisible(v => !v);
           else if (label === 'Copy') handleCopyMenu();
           else if (label === 'Copy Resume Command') handleCopyResume();
+          else if (label === 'Restart Session') restartSession();
           else if (label === 'Run on Device…') showRunOnDevice();
           else if (label === 'Expand Messages' || label === 'Collapse Messages') setCollapsed(c => !c);
           else if (label === 'View Diff' || label === 'Hide Diff') setDiffExpanded(d => !d);
@@ -3914,6 +3971,7 @@ export default function SessionDetailScreen() {
           else if (label === 'Search') setSearchVisible(v => !v);
           else if (label === 'Copy') handleCopyMenu();
           else if (label === 'Copy Resume Command') handleCopyResume();
+          else if (label === 'Restart Session') restartSession();
           else if (label === 'Run on Device…') showRunOnDevice();
           else if (label === 'Expand Messages' || label === 'Collapse Messages') setCollapsed(c => !c);
           else if (label === 'View Diff' || label === 'Hide Diff') setDiffExpanded(d => !d);
@@ -3923,7 +3981,7 @@ export default function SessionDetailScreen() {
       })),
       { text: 'Cancel', style: 'cancel' },
     ]);
-  }, [conversation, collapsed, diffExpanded, treeResult, handleToggleFavorite, handleShareConversation, handleCopyMenu, handleCopyResume, handleDismiss, showRunOnDevice]);
+  }, [conversation, collapsed, diffExpanded, treeResult, handleToggleFavorite, handleShareConversation, handleCopyMenu, handleCopyResume, handleDismiss, showRunOnDevice, restartSession, isRestarting]);
 
   const handleConfirmShareSelection = useCallback(async () => {
     if (selectedMessageIds.size === 0) return;
@@ -4139,12 +4197,6 @@ export default function SessionDetailScreen() {
       handleLoadOlder();
     }
   }, [hasMoreAbove, loadingOlder, handleLoadOlder, initialScrollDone, floatingHeaderHeight, floatingHeaderY, searchVisible, userScrolled]);
-
-  const lastMessageAt = conversation?.messages?.length
-    ? conversation.messages[conversation.messages.length - 1]?.timestamp
-    : undefined;
-  const activityAt = lastMessageAt ?? conversation?.updated_at ?? conversation?.started_at ?? 0;
-  const isActive = conversation?.status === 'active' && (Date.now() - activityAt) < 5 * 60 * 1000;
 
   useEffect(() => {
     if (isActive) {
@@ -5071,15 +5123,18 @@ const styles = StyleSheet.create({
     // paddingBottom is set inline from safe-area insets (home indicator clearance
     // varies by device/orientation); see MessageInput.
   },
-  // Status reads as one more chip from the shared shell (self-sized, not a
-  // full-width banner) so the footer stays low.
+  // Status reads as one more chip from the shared shell, floated over the
+  // list bottom (agentStatusFloat) so it takes no conversation height.
+  agentStatusFloat: {
+    position: 'absolute',
+    top: -(22 + 6),
+    left: 12,
+    zIndex: 10,
+  },
   agentStatusBar: {
     ...chipShell,
     maxWidth: undefined,
     gap: 6,
-    alignSelf: 'flex-start',
-    marginHorizontal: 12,
-    marginTop: 6,
   },
   agentStatusDot: {
     width: 6,
@@ -5379,6 +5434,25 @@ const styles = StyleSheet.create({
   },
   questionItem: {
     marginBottom: 10,
+  },
+  auqPreviewBox: {
+    // flexGrow 0 stops the horizontal ScrollView from stretching to fill the
+    // cell (same quirk mdStyles.hScroll works around for tables).
+    flexGrow: 0,
+    marginTop: 5,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight,
+    borderRadius: 6,
+    backgroundColor: Theme.bgAlt,
+    alignSelf: 'flex-start',
+    maxWidth: '100%',
+  },
+  auqPreviewText: {
+    fontFamily: 'SpaceMono',
+    fontSize: 10,
+    lineHeight: 15,
+    color: Theme.textSecondary,
+    padding: 8,
   },
   questionHeaderBadge: {
     alignSelf: 'flex-start',
