@@ -19,7 +19,7 @@ import {
 } from "@codecast/shared/entities";
 import { SNIPPET_CATALOG, snippetBySlug, allSnippetSlugs } from "@codecast/shared/contracts";
 import { cliFetch, cliFetchRead } from "./cliHttp.js";
-import { listProfiles, saveProfile, useProfile, CcAccountError } from "./ccAccounts.js";
+import { listProfiles, saveProfile, useProfile, getAccountsHeartbeatPayload, CcAccountError } from "./ccAccounts.js";
 import { CODECAST_STATUS_HOOK } from "./statusHook.js";
 import { AuthServer } from "./authServer.js";
 import { startRelayPoller } from "./authRelay.js";
@@ -3289,10 +3289,28 @@ accountsCmd
     }
   });
 
+// Best-effort direct push of the refreshed account inventory, so the web
+// Settings page reflects a CLI-side save/switch the moment the command
+// returns. The profile store lives in this process, not the daemon's, so
+// without this the change waits on the daemon's next heartbeat. Silent on
+// failure — the heartbeat republishes within ~30s regardless.
+async function publishAccountsInventory(): Promise<void> {
+  try {
+    const { siteUrl, apiToken } = getCliEndpoint();
+    const payload = getAccountsHeartbeatPayload();
+    if (!payload) return;
+    await cliFetch(`${siteUrl}/cli/accounts/publish`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: apiToken, device_id: deviceId(), cc_accounts: payload }),
+    });
+  } catch {}
+}
+
 accountsCmd
   .command("save <name>")
   .description("Snapshot the currently logged-in account as a profile")
-  .action((name: string) => {
+  .action(async (name: string) => {
     try {
       const meta = saveProfile(name);
       console.log(`${c.green}✓${c.reset} saved ${c.cyan}${name}${c.reset} (${meta.email ?? "unknown email"})`);
@@ -3300,6 +3318,7 @@ accountsCmd
       console.error(err instanceof CcAccountError ? err.message : String(err));
       process.exit(1);
     }
+    await publishAccountsInventory();
   });
 
 // A mass revive resumes one claude process per blocked session — past this
@@ -3350,6 +3369,7 @@ accountsCmd
       console.error(err instanceof CcAccountError ? err.message : String(err));
       process.exit(1);
     }
+    await publishAccountsInventory();
   });
 
 accountsCmd

@@ -160,6 +160,10 @@ export interface CreateConversationParams {
   gitInfo?: GitInfo;
   cliFlags?: string;
   subagentDescription?: string;
+  // Transcript path says subagents/ — assert it even when the parent
+  // conversation isn't resolvable yet, so the server never treats the row as
+  // a human-started session (teammate start notifications).
+  isSubagent?: boolean;
   // Agent-team stamps from a teammate's JSONL (see parser.extractTeamInfo).
   agentTeamName?: string;
   agentName?: string;
@@ -413,6 +417,7 @@ export class SyncService {
           worktree_path: gitInfo?.worktreePath,
           worktree_status: gitInfo?.worktreeName ? "active" : undefined,
           subagent_description: params.subagentDescription,
+          is_subagent: params.isSubagent || undefined,
           agent_team_name: params.agentTeamName,
           agent_name: params.agentName,
           // The transcript this conversation is created from lives on THIS
