@@ -120,6 +120,17 @@ function buildShell(code: string): string {
 </script></body></html>`;
 }
 
+// A message whose ENTIRE body is raw HTML (emitted without the cast-canvas
+// fence) — web's looksLikeHtml twin, minus the DOMParser confirmation pass
+// (no DOM on RN). Codecast's own structured envelopes (skill/context/image and
+// hyphenated custom tags) are excluded by the tag regex.
+export function looksLikeHtmlMessage(content: string): boolean {
+  const t = content.trim();
+  if (t.length < 12 || t[0] !== '<' || !t.endsWith('>')) return false;
+  if (/^<(skill|context|image)\b/i.test(t)) return false;
+  return /^<(!doctype\s|[a-z][a-z0-9]*[\s/>])/i.test(t);
+}
+
 // Cheap JS-side title/excerpt extraction for the inline card (no DOM here).
 function extractCanvasTitle(code: string): string | null {
   const explicit = code.match(/data-canvas-title\s*=\s*"([^"]{1,120})"/i)?.[1]?.trim();

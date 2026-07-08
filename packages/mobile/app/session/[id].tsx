@@ -17,6 +17,7 @@ import { PermissionCard } from '@/components/PermissionCard';
 import { DeviceChip, useRunOnDevice } from '@/components/DevicesSection';
 import { ModelSwitcherChip } from '@/components/ModelSwitcherChip';
 import { renderInlineMarkdown, MarkdownContent, MarkdownTextBlock, CodeBlockWithCopy, CodeBlockFullscreen, HighlightedCodeText } from '@/components/MarkdownRenderer';
+import { CastCanvas, canvasAvailable, looksLikeHtmlMessage } from '@/components/CastCanvas';
 import { Theme, Spacing, chipShell, chipText, chipTint, CHROME_FONT_CAP } from '@/constants/Theme';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 // A real gradient WITHOUT a native module: expo-linear-gradient's native side
@@ -2800,6 +2801,11 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
             const wfEvent = parseWorkflowEventContent(content);
             if (wfEvent) {
               return <WorkflowEventBlock event={wfEvent} />;
+            }
+            // Whole-message raw HTML (no cast-canvas fence) — render as a
+            // canvas card instead of escaped tag soup, matching web.
+            if (!isUser && canvasAvailable && looksLikeHtmlMessage(content)) {
+              return <CastCanvas code={content} />;
             }
             if (isTaskNotification(content)) {
               return <TaskNotificationLine content={content} childConversationMap={childConversationMap} />;
