@@ -1846,6 +1846,11 @@ interface InboxStoreState {
   // under a schedule group row), published by GlobalSessionPanel from its
   // agentTasks.webList subscription. Ephemeral: never persisted or synced.
   scheduleNavSets: { absorbed: ReadonlySet<string> } | null;
+  // One-shot request to open the schedule strip above a conversation, published
+  // by schedule-surface clicks (dock rows, bars under cards) so navigating FROM
+  // a schedule lands with the prompt already visible. Nonce-keyed: the strip
+  // consumes each nonce at most once, so a stale request is inert. Ephemeral.
+  scheduleStripExpand: { convId: string; nonce: number } | null;
   viewingDismissedId: string | null;
   pendingNavigateId: string | null;
   renamingSessionId: string | null;
@@ -2074,6 +2079,7 @@ interface InboxStoreState {
   // schedule row) for keyboard nav. Ephemeral raw-set state — the schedule data
   // itself lives in the agentTasks.webList Convex subscription, never the store.
   setScheduleNavSets: (sets: { absorbed: ReadonlySet<string> } | null) => void;
+  setScheduleStripExpand: (req: { convId: string; nonce: number } | null) => void;
   setViewingDismissedId: (id: string | null) => void;
   getCurrentSession: () => InboxSession | null;
   injectSession: (session: InboxSession) => void;
@@ -3077,6 +3083,7 @@ export const useInboxStore = create<InboxStoreState>(
   showDismissed: false,
   collapsedSections: {},
   scheduleNavSets: null,
+  scheduleStripExpand: null,
   recentFreezeOrder: null,
   viewingDismissedId: null,
   pendingNavigateId: null,
@@ -4250,6 +4257,10 @@ export const useInboxStore = create<InboxStoreState>(
   // Raw set: ephemeral nav bookkeeping — no draft, no persistence, no dispatch.
   setScheduleNavSets: (sets: { absorbed: ReadonlySet<string> } | null) =>
     set({ scheduleNavSets: sets }),
+
+  // Raw set: one-shot strip-expand request (see the state field's comment).
+  setScheduleStripExpand: (req: { convId: string; nonce: number } | null) =>
+    set({ scheduleStripExpand: req }),
 
   setViewingDismissedId: action(function (this: Draft, id: string | null) {
     this.viewingDismissedId = id;

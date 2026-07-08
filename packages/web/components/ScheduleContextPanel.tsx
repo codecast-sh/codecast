@@ -9,6 +9,7 @@ import { describeTaskCadence, fmtDuration } from "./scheduleCadence";
 import { ARMED_STATUSES, type TaskRow } from "./scheduleTasks";
 import { useInboxStore } from "../store/inboxStore";
 import { useCoarseNow } from "../hooks/useCoarseNow";
+import { useMountEffect } from "../hooks/useMountEffect";
 
 const api = _api as any;
 
@@ -39,7 +40,21 @@ export function ScheduleContextPanel({
   agentTaskId?: string | null;
 }) {
   const tasks = useQuery(api.agentTasks.webList, {}) as TaskRow[] | undefined;
-  const [expanded, setExpanded] = useState(false);
+  // Arrive expanded when the navigation came FROM a schedule surface (dock row,
+  // bar under a card): the click meant "show me this schedule", so the prompt
+  // opens without a second click. The panel remounts per conversation, so the
+  // initializer reads the pending request once; the mount effect below clears
+  // it so a later revisit doesn't re-expand a strip the user collapsed.
+  const [expanded, setExpanded] = useState(() => {
+    const req = useInboxStore.getState().scheduleStripExpand;
+    return !!req && req.convId === conversationId;
+  });
+  useMountEffect(() => {
+    const req = useInboxStore.getState().scheduleStripExpand;
+    if (req && req.convId === conversationId) {
+      useInboxStore.getState().setScheduleStripExpand(null);
+    }
+  });
   const [confirmingCancel, setConfirmingCancel] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -271,6 +286,30 @@ export function ScheduleContextPanel({
               </Link>
             </span>
           </div>
+
+          {/* The triage-verb contract, stated where the user decides. Stash vs
+              dismiss/kill do different things to a schedule and nothing else in
+              the UI says so at the moment of choice. */}
+          {ARMED_STATUSES.has(primary.status) && (
+            <p className="text-[10px] leading-relaxed text-sol-text-dim/80 border-t border-sol-border/20 pt-1.5">
+              {primary.originating_conversation_id === conversationId ? (
+                <>
+                  <span className="text-sol-text-dim font-medium">Stash</span> keeps this session running quietly — the schedule still fires here, out of your queue.{" "}
+                  <span className="text-sol-text-dim font-medium">Dismiss/kill</span> retires the session and cancels this schedule.
+                </>
+              ) : isRun ? (
+                <>
+                  Dismissing this run leaves the schedule armed — the next run replaces it.{" "}
+                  <span className="text-sol-text-dim font-medium">Cancel</span> above stops future runs.
+                </>
+              ) : (
+                <>
+                  <span className="text-sol-text-dim font-medium">Stash</span> keeps the target session running quietly.{" "}
+                  <span className="text-sol-text-dim font-medium">Dismiss/kill</span> on it cancels this schedule.
+                </>
+              )}
+            </p>
+          )}
         </div>
       )}
     </div>
