@@ -765,6 +765,14 @@ export const addMessage = mutation({
       }
     }
 
+    // Same open-poll trigger as addMessages (the retry-queue drain delivers
+    // through this singular path).
+    if (args.role === "assistant" && args.tool_calls?.some((tc) => tc.name === "AskUserQuestion")) {
+      await ctx.scheduler.runAfter(NEEDS_INPUT_AUQ_CHECK_DELAY_MS, internal.notifications.checkNeedsInput, {
+        conversation_id: args.conversation_id,
+      });
+    }
+
     if (!conversation.skip_title_generation && shouldGenerateTitle(newMessageCount)) {
       await ctx.scheduler.runAfter(0, internal.titleGeneration.generateTitle, {
         conversation_id: args.conversation_id,
@@ -1180,21 +1188,6 @@ export const addMessages = mutation({
         });
       }
 
-      // An AskUserQuestion tool_use landing as the newest message means the
-      // agent just blocked on the user — the needs-input verdict flips NOW, on
-      // this message write, not on any status write (the daemon races back to
-      // "working" while the poll is open, and buffered polls send no status at
-      // all). The check re-reads the messages table at fire time, so a poll
-      // answered in the meantime is a no-op. (see notifications.checkNeedsInput)
-      if (
-        newestMsg.role === "assistant" &&
-        newestMsg.tool_calls?.some((tc) => tc.name === "AskUserQuestion")
-      ) {
-        await ctx.scheduler.runAfter(NEEDS_INPUT_AUQ_CHECK_DELAY_MS, internal.notifications.checkNeedsInput, {
-          conversation_id: args.conversation_id,
-        });
-      }
-
       // Comment-thread agent reply: when this conversation is the hidden fork
       // spawned to answer in a teammate comment thread, mirror its fresh reply
       // back into the placeholder comment. Single cheap field check skips this for
@@ -1223,6 +1216,25 @@ export const addMessages = mutation({
         }
       }
 
+    }
+
+    // An AskUserQuestion tool_use arriving as the batch's newest message means
+    // the agent just blocked on the user — the needs-input verdict flips NOW,
+    // on this message write, not on any status write (the daemon races back to
+    // "working" while the poll is open, and buffered polls send no status at
+    // all). Deliberately OUTSIDE the insertedCount block: the poll's tool_calls
+    // usually land as a PATCH to the already-synced streaming message
+    // (insertedCount 0), which is exactly the batch that must schedule the
+    // check. The check re-reads the messages table at fire time, so a poll
+    // answered in the meantime is a no-op. (see notifications.checkNeedsInput)
+    const newestBatchMsg = args.messages.reduce((a, b) => ((b.timestamp || 0) >= (a.timestamp || 0) ? b : a));
+    if (
+      newestBatchMsg.role === "assistant" &&
+      newestBatchMsg.tool_calls?.some((tc) => tc.name === "AskUserQuestion")
+    ) {
+      await ctx.scheduler.runAfter(NEEDS_INPUT_AUQ_CHECK_DELAY_MS, internal.notifications.checkNeedsInput, {
+        conversation_id: args.conversation_id,
+      });
     }
 
     // Doc extraction touches the docs table (index reads + inserts/patches) and is
