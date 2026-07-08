@@ -9,7 +9,7 @@ import { watch as chokidarWatch } from "chokidar";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
 import { deviceId, deviceLabel, isRemoteDevice } from "./remote/device.js";
 import { copyCredentialToRemoteAsync, loadRemoteHost, remoteHostsRegistered } from "./remote/session-move.js";
-import { useProfile, saveProfile, getAccountsHeartbeatPayload } from "./ccAccounts.js";
+import { useProfile, saveProfile, getAccountsHeartbeatPayload, autoSaveActiveProfile, activeAccountSummary } from "./ccAccounts.js";
 import { CursorWatcher, type CursorSessionEvent } from "./cursorWatcher.js";
 import { CursorTranscriptWatcher, type CursorTranscriptEvent } from "./cursorTranscriptWatcher.js";
 import { CodexWatcher, isAppServerManagedCodexSessionHead, type CodexSessionEvent } from "./codexWatcher.js";
@@ -1382,11 +1382,39 @@ function buildDeviceSettingsPayload(config: Config | null): DeviceSnippetSetting
   };
 }
 
+// Auto-enroll the machine's active CC login as a saved profile: after a fresh
+// /login the account just appears in the web switcher, no save step. One
+// attempt per account per daemon lifetime — a failure (e.g. API-key login,
+// keychain hiccup) falls back to the Settings page's manual save CTA instead
+// of retrying every beat. Remote devices run a pushed COPY of the primary's
+// credential, so profiles are only ever saved on the primary.
+const autoSaveDecidedAccounts = new Set<string>();
+function maybeAutoSaveAccount(): void {
+  if (isRemoteDevice()) return;
+  let key: string | undefined;
+  try {
+    const active = activeAccountSummary();
+    key = active?.uuid || active?.email;
+    if (!key || autoSaveDecidedAccounts.has(key)) return;
+    autoSaveDecidedAccounts.add(key);
+    const saved = autoSaveActiveProfile();
+    if (saved) {
+      log(`[ACCOUNTS] Auto-saved active login as profile "${saved.name}"${saved.email ? ` (${saved.email})` : ""}`);
+    }
+  } catch (err) {
+    log(`[ACCOUNTS] Auto-save of active login failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 async function sendHeartbeat(): Promise<void> {
   const config = readConfig();
   if (!config?.auth_token || !config?.convex_url) {
     return;
   }
+
+  // Before publishing the account inventory, make sure the active login is in
+  // it — this is what makes a new `/login` show up in Settings by itself.
+  maybeAutoSaveAccount();
 
   try {
     const siteUrl = config.convex_url.replace(".cloud", ".site");
@@ -4620,6 +4648,9 @@ async function processSessionFile(
           gitInfo,
           cliFlags: cliFlags || undefined,
           subagentDescription,
+          // Path-derived: true even when the parent conversation isn't cached
+          // yet, so the server never briefly sees this as a top-level session.
+          isSubagent: isSubagent || undefined,
           agentTeamName: teamInfo?.teamName,
           agentName: teamInfo?.agentName,
         });

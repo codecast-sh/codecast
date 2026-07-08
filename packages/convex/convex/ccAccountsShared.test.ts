@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isSubagentConversation, subagentLinkFields } from "./ccAccountsShared";
+import { isAgentSpawnedConversation, isSubagentConversation, subagentLinkFields } from "./ccAccountsShared";
 
 // Regression (ct-37439): a subagent active in the last 30d is pulled into the
 // inbox via the top-level scan (recentConversations), NOT only as a child of its
@@ -42,5 +42,64 @@ describe("subagentLinkFields", () => {
     const row = subagentLinkFields({ is_subagent: true, parent_conversation_id: idObj });
     expect(row.parent_conversation_id).toBe("jx78arhhbhmg6g1vjcmt1k5s1188p13e");
     expect(typeof row.parent_conversation_id).toBe("string");
+  });
+});
+
+// Regression (ct-38175): teammates got "X started coding" pushes for subagent
+// sessions. notifyTeamSessionStart gates on this predicate at fire time (after
+// a grace delay), so every agent-spawned shape must return true — including
+// the ones whose links are stamped seconds after registration.
+describe("isAgentSpawnedConversation", () => {
+  test("THE BUG: a Task-tool subagent must never notify the team", () => {
+    expect(isAgentSpawnedConversation({ is_subagent: true })).toBe(true);
+  });
+
+  test("a subagent linked late (parent id, no fork uuid) is agent-spawned", () => {
+    expect(
+      isAgentSpawnedConversation({ parent_conversation_id: "jx7parent" })
+    ).toBe(true);
+  });
+
+  test("a workflow fan-out agent is agent-spawned", () => {
+    expect(isAgentSpawnedConversation({ is_workflow_sub: true })).toBe(true);
+  });
+
+  test("an agent-team teammate (spawned_by link) is agent-spawned", () => {
+    expect(
+      isAgentSpawnedConversation({ spawned_by_conversation_id: "jx7lead" })
+    ).toBe(true);
+  });
+
+  test("a teammate self-identified at create (agent_name from its transcript) is agent-spawned", () => {
+    // The spawned_by link lands AFTER creation; the transcript's agent stamp
+    // is present at create and must suppress on its own.
+    expect(
+      isAgentSpawnedConversation({ agent_name: "researcher", agent_team_name: "swarm" } as any)
+    ).toBe(true);
+  });
+
+  test("the team LEAD (human-started, stamped agent_name team-lead) still notifies", () => {
+    expect(
+      isAgentSpawnedConversation({ agent_name: "team-lead", agent_team_name: "swarm" } as any)
+    ).toBe(false);
+  });
+
+  test("a fork (parent link WITH parent_message_uuid) is a human action — notifies", () => {
+    expect(
+      isAgentSpawnedConversation({
+        parent_conversation_id: "jx7parent",
+        parent_message_uuid: "uuid-of-fork-point",
+      })
+    ).toBe(false);
+  });
+
+  test("a plain human session notifies", () => {
+    expect(isAgentSpawnedConversation({})).toBe(false);
+  });
+
+  test("accepts Convex Id objects for the link fields", () => {
+    const idObj = { toString: () => "jx7parent" };
+    expect(isAgentSpawnedConversation({ spawned_by_conversation_id: idObj })).toBe(true);
+    expect(isAgentSpawnedConversation({ parent_conversation_id: idObj })).toBe(true);
   });
 });

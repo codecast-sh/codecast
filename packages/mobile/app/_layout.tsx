@@ -5,44 +5,10 @@ import { Stack, useRouter, useSegments } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import * as SecureStore from 'expo-secure-store';
 import * as Linking from 'expo-linking';
-import { AppState, View } from 'react-native';
+import { AppState } from 'react-native';
 import { useEffect, useRef } from 'react';
 import 'react-native-reanimated';
-
-// react-native-gesture-handler's native module is ABSENT on the Feb 1.0.2 App
-// Store binary: the dependency was first installed 2026-03-05, AFTER that build
-// (build #20, Feb 24) was cut. With the new architecture a static import +
-// <GestureHandlerRootView> resolves RNGestureHandlerModule via getEnforcing(),
-// which THROWS during initial JS evaluation on that binary — before expo-updates
-// can mark the OTA "launched" — so every JS-only update silently auto-rolls-back
-// (the long-running "stuck on the old version" bug; the prior rounds guarded
-// expo-sqlite / Sentry / PostHog / clipboard but missed THIS unguarded eager
-// import). Require it lazily and fall back to a plain View when the native module
-// is missing: the app renders and is usable, just without gesture handling, which
-// returns automatically once users get a native build that bundles it. Mirrors the
-// guarded requires in lib/analytics.ts, lib/clipboard.ts, store/idbCache.native.ts.
-let GestureHandlerRootView: any;
-function rnGestureHandlerNativeAvailable(): boolean {
-  // Probe the native module WITHOUT throwing. `getEnforcing` throws when absent,
-  // so use the non-throwing `get` (new arch) and the NativeModules map (old arch).
-  // This catches the case where requiring the JS succeeds but mounting the real
-  // <GestureHandlerRootView> would call native and crash.
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { TurboModuleRegistry, NativeModules } = require('react-native');
-    return !!(TurboModuleRegistry?.get?.('RNGestureHandlerModule') || NativeModules?.RNGestureHandlerModule);
-  } catch {
-    return false;
-  }
-}
-try {
-  if (!rnGestureHandlerNativeAvailable()) throw new Error('RNGestureHandlerModule absent');
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  GestureHandlerRootView = require('react-native-gesture-handler').GestureHandlerRootView;
-  if (!GestureHandlerRootView) throw new Error('GestureHandlerRootView missing');
-} catch {
-  GestureHandlerRootView = ({ style, children }: any) => <View style={style}>{children}</View>;
-}
+import { GestureHandlerRootView } from '@/lib/gestureHandler';
 import { ConvexProvider } from 'convex/react';
 import { ConvexAuthProvider } from '@convex-dev/auth/react';
 import { useQuery } from 'convex/react';

@@ -558,6 +558,11 @@ export const createConversation = mutation({
       v.literal("archived")
     )),
     subagent_description: v.optional(v.string()),
+    // Daemon-asserted subagent flag (transcript lives under a subagents/ dir).
+    // The parent LINK may resolve much later (parent not yet in the daemon's
+    // cache), so without this the row is born looking like a normal session
+    // and teammates get a "started coding" push for it.
+    is_subagent: v.optional(v.boolean()),
     agent_team_name: v.optional(v.string()),
     agent_name: v.optional(v.string()),
     // Device id of the daemon syncing this transcript. The transcript (and any
@@ -603,6 +608,15 @@ export const createConversation = mutation({
         if (args.subagent_description && !existing.subagent_description) {
           patch.subagent_description = args.subagent_description;
         }
+      }
+      if (
+        args.is_subagent &&
+        !("is_subagent" in patch) &&
+        !existing.is_subagent &&
+        !existing.parent_message_uuid &&
+        !args.parent_message_uuid
+      ) {
+        patch.is_subagent = true;
       }
       if (args.agent_team_name && !existing.agent_team_name) {
         patch.agent_team_name = args.agent_team_name;
@@ -657,7 +671,8 @@ export const createConversation = mutation({
       status: "active",
       parent_message_uuid: args.parent_message_uuid,
       parent_conversation_id: parentConversationId,
-      is_subagent: (!!parentConversationId && !args.parent_message_uuid) || undefined,
+      is_subagent: (args.is_subagent === true && !args.parent_message_uuid) ||
+        (!!parentConversationId && !args.parent_message_uuid) || undefined,
       agent_team_name: args.agent_team_name,
       agent_name: args.agent_name,
       git_commit_hash: args.git_commit_hash,
@@ -718,10 +733,19 @@ export const createConversation = mutation({
     }
 
     if (resolvedTeamId && !existing) {
-      await ctx.scheduler.runAfter(0, internal.notifications.notifyTeamSessionStart, {
-        conversation_id: conversationId,
-        user_id: args.user_id,
-      });
+      const bornSubagent =
+        args.is_subagent === true || (!!parentConversationId && !args.parent_message_uuid);
+      if (!bornSubagent) {
+        // Grace delay: subagent/spawned-by links are often stamped seconds
+        // after registration (linkSessions/linkSpawnedBy). notifyTeamSessionStart
+        // re-reads the conversation at fire time, so the delay lets a late
+        // link suppress the push instead of racing it.
+        const NOTIFY_GRACE_MS = 60 * 1000;
+        await ctx.scheduler.runAfter(NOTIFY_GRACE_MS, internal.notifications.notifyTeamSessionStart, {
+          conversation_id: conversationId,
+          user_id: args.user_id,
+        });
+      }
 
       await ctx.scheduler.runAfter(0, internal.teamActivity.recordTeamActivity, {
         team_id: resolvedTeamId,
