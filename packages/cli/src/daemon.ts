@@ -17,11 +17,14 @@ import {
   buildDaemonLauncherScript,
   buildDaemonPlistXml,
   daemonPlistNeedsUpgrade,
+  daemonTickStale,
+  DAEMON_HEARTBEAT_STALE_MS,
   DAEMON_LAUNCHER_FILENAME,
   extractPlistProgramArguments,
   shellEscapeForSh,
   watchdogHeartbeatStale,
   WATCHDOG_HEARTBEAT_FILENAME,
+  WATCHDOG_PASS_STAMP_FILENAME,
 } from "./supervision.js";
 import {
   CodexAppServer,
@@ -495,7 +498,8 @@ const MAX_LOG_QUEUE_SIZE = 500;
 const LOG_QUEUE_FILE = path.join(process.env.HOME || "", ".codecast", "log-queue.json");
 const EVENT_LOOP_CHECK_INTERVAL_MS = 30 * 1000; // 30 seconds
 const EVENT_LOOP_LAG_THRESHOLD_MS = 60 * 1000; // 1 minute of lag = frozen
-const HEARTBEAT_STALE_THRESHOLD_MS = 3 * 60 * 1000; // external watchdog: 3 min (6 missed 30s heartbeats) = deadlocked. Tight so recovery beats the 5-min "blocked" display after a sleep.
+// External-watchdog staleness threshold lives in supervision.ts
+// (DAEMON_HEARTBEAT_STALE_MS) so the shell script and the compiled pass agree.
 const STUCK_CONNECTION_THRESHOLD_MS = 3 * 60 * 1000; // 3 min disconnected = stuck, trigger self-heal
 const SELF_HEAL_COOLDOWN_MS = 10 * 60 * 1000; // 10 min between self-heal restarts
 
@@ -15110,17 +15114,32 @@ export async function runWatchdog(): Promise<void> {
     }
   }
 
-  // 2b. If process is alive, check if event loop is actually responsive
+  // 2b. If process is alive, check if event loop is actually responsive.
+  // The tick freezes during system sleep exactly like a wedged loop, and this
+  // pass usually runs before the woken daemon's 30s stamp interval fires — so a
+  // stale tick only counts when our OWN start-to-start gap shows we've been
+  // continuously awake (see daemonTickStale). Killing on tick age alone SIGKILLed
+  // a healthy daemon on nearly every wake of a napping laptop.
+  const passStampPath = path.join(CONFIG_DIR, WATCHDOG_PASS_STAMP_FILENAME);
+  const passNow = Date.now();
+  let prevPass = 0;
+  try { prevPass = parseInt(fs.readFileSync(passStampPath, "utf-8").trim(), 10) || 0; } catch {}
+  try { fs.writeFileSync(passStampPath, String(passNow)); } catch {}
+  const passGap = prevPass > 0 ? passNow - prevPass : null;
   if (daemonAlive && daemonPid > 0) {
     try {
       const state = readDaemonState();
       const lastTick = state.lastHeartbeatTick || state.lastWatchdogCheck || 0;
-      const staleness = Date.now() - lastTick;
-      if (lastTick > 0 && staleness > HEARTBEAT_STALE_THRESHOLD_MS) {
-        logLine(`Daemon PID ${daemonPid} is alive but event loop frozen for ${Math.round(staleness / 1000)}s, killing`);
-        try { process.kill(daemonPid, 9); } catch {}
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        daemonAlive = false;
+      const staleness = passNow - lastTick;
+      if (lastTick > 0 && staleness > DAEMON_HEARTBEAT_STALE_MS) {
+        if (daemonTickStale(staleness, passGap)) {
+          logLine(`Daemon PID ${daemonPid} is alive but event loop frozen for ${Math.round(staleness / 1000)}s, killing`);
+          try { process.kill(daemonPid, 9); } catch {}
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          daemonAlive = false;
+        } else {
+          logLine(`Daemon tick stale ${Math.round(staleness / 1000)}s but watchdog pass gap ${passGap === null ? "unknown" : Math.round(passGap / 1000) + "s"} implies system sleep — deferring one cycle`);
+        }
       }
     } catch {}
   }
