@@ -31,6 +31,8 @@ import { claudeProjectDirName } from "./projectPathResolver.js";
 import { isProjectAllowedToSync, isPathExcluded } from "./syncScope.js";
 import { c, fmt } from "./colors.js";
 import type { Config } from "./config/types.js";
+import { getMachineKey, hardwareId } from "./machineKey.js";
+import { deviceId } from "./remote/device.js";
 
 // ── deps handed in by index.ts ───────────────────────────────────────────────
 // The CLI entrypoint owns config decryption and the daemon state-file helpers;
@@ -289,6 +291,20 @@ export async function runDoctor(deps: DoctorDeps, opts: DoctorOptions): Promise<
     record({ name: "auth", status: "fail", detail: "expired — run `cast auth`" });
   } else {
     record({ name: "auth", status: "pass", detail: "authenticated" });
+  }
+
+  try {
+    const mk = getMachineKey();
+    const binding = hardwareId()
+      ? "hardware-bound"
+      : "no hardware id, clone detection disabled";
+    record({
+      name: "device",
+      status: "pass",
+      detail: `${deviceId()} (${binding})${mk.previousSecret ? " — key was rotated after a hardware clone" : ""}`,
+    });
+  } catch (e: any) {
+    record({ name: "device", status: "warn", detail: `machine key unreadable: ${e?.message ?? e}` });
   }
 
   const pid = deps.getDaemonPid();

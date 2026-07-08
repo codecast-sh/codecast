@@ -32,6 +32,7 @@ import { parseSessionFile, parseCodexSessionFile, parseGeminiSessionFile, parseC
 import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { encryptToken, decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
+import { getMachineKey } from "./machineKey.js";
 import { markSynced, updateSyncRecord, getSyncRecord, findUnsyncedFiles, type SyncRecord } from "./syncLedger.js";
 import { SyncService, AuthExpiredError } from "./syncService.js";
 import { redactSecrets, maskToken } from "./redact.js";
@@ -13057,6 +13058,14 @@ async function main(): Promise<void> {
   logLifecycle("daemon_start", startMsg);
   sendLogImmediate("info", `[LIFECYCLE] daemon_start: ${startMsg}`, { error_code: "daemon_start" });
   log(`PID: ${process.pid}`);
+
+  try {
+    if (getMachineKey().rotated) {
+      const msg = `machine key rotated: ~/.codecast/.machine_key was cloned from different hardware (Migration Assistant / disk clone) — this machine now has device_id ${deviceId()}`;
+      logLifecycle("machine_key_rotated", msg);
+      sendLogImmediate("info", `[LIFECYCLE] machine_key_rotated: ${msg}`, { error_code: "machine_key_rotated" });
+    }
+  } catch {}
 
   if (isSyncPaused()) {
     log("⚠️  Sync is PAUSED via environment variable (CODE_CHAT_SYNC_PAUSED or CODECAST_PAUSED)");

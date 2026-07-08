@@ -13,25 +13,24 @@
 
 import { execFileSync } from "node:child_process";
 import * as crypto from "node:crypto";
-import * as fs from "node:fs";
 import * as os from "node:os";
-import * as path from "node:path";
-
-const MACHINE_KEY_FILE = path.join(os.homedir(), ".codecast", ".machine_key");
+import { getMachineKey } from "../machineKey.js";
 
 let cachedDeviceId: string | null = null;
 let cachedHostname: string | null = null;
 
 /**
- * Stable, opaque device id (16 hex chars) derived from the machine key.
- * Falls back to a hostname/platform/home hash if the key file is absent
- * (mirrors tokenEncryption's legacyMachineId so we never throw here).
+ * Stable, opaque device id (16 hex chars) derived from the machine key
+ * (machineKey.ts — hardware-bound, rotates when the key file was cloned onto
+ * different hardware, e.g. by Migration Assistant). Falls back to a
+ * hostname/platform/home hash if the key can't be read or created (mirrors
+ * tokenEncryption's legacyMachineId so we never throw here).
  */
 export function deviceId(): string {
   if (cachedDeviceId) return cachedDeviceId;
   let seed: Buffer | string;
   try {
-    seed = fs.readFileSync(MACHINE_KEY_FILE);
+    seed = getMachineKey().secret;
   } catch {
     seed = `${os.hostname()}:${os.platform()}:${os.homedir()}`;
   }
