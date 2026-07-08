@@ -9,11 +9,23 @@ import { watch as chokidarWatch } from "chokidar";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
 import { deviceId, deviceLabel, isRemoteDevice } from "./remote/device.js";
 import { copyCredentialToRemoteAsync, loadRemoteHost, remoteHostsRegistered } from "./remote/session-move.js";
-import { useProfile, saveProfile, getAccountsHeartbeatPayload } from "./ccAccounts.js";
+import { useProfile, saveProfile, getAccountsHeartbeatPayload, autoSaveActiveProfile, activeAccountSummary } from "./ccAccounts.js";
 import { CursorWatcher, type CursorSessionEvent } from "./cursorWatcher.js";
 import { CursorTranscriptWatcher, type CursorTranscriptEvent } from "./cursorTranscriptWatcher.js";
 import { CodexWatcher, isAppServerManagedCodexSessionHead, type CodexSessionEvent } from "./codexWatcher.js";
-import { watchdogHeartbeatStale, WATCHDOG_HEARTBEAT_FILENAME } from "./supervision.js";
+import {
+  buildDaemonLauncherScript,
+  buildDaemonPlistXml,
+  daemonPlistNeedsUpgrade,
+  daemonTickStale,
+  DAEMON_HEARTBEAT_STALE_MS,
+  DAEMON_LAUNCHER_FILENAME,
+  extractPlistProgramArguments,
+  shellEscapeForSh,
+  watchdogHeartbeatStale,
+  WATCHDOG_HEARTBEAT_FILENAME,
+  WATCHDOG_PASS_STAMP_FILENAME,
+} from "./supervision.js";
 import {
   CodexAppServer,
   threadItemsToMessages,
@@ -28,11 +40,12 @@ import {
   matchStartedConversation,
 } from "./sessionProcessMatcher.js";
 import { GeminiWatcher, type GeminiSessionEvent } from "./geminiWatcher.js";
-import { parseSessionFile, parseCodexSessionFile, parseGeminiSessionFile, parseCursorTranscriptFile, extractSlug, extractParentUuid, extractSummaryTitle, extractCwd, extractCodexCwd, extractCodexForkRoot, extractGeminiProjectHash, detectCliFlags, type ParsedMessage } from "./parser.js";
+import { parseSessionFile, parseCodexSessionFile, parseGeminiSessionFile, parseCursorTranscriptFile, extractSlug, extractParentUuid, extractSummaryTitle, extractCwd, extractCodexCwd, extractCodexForkRoot, extractGeminiProjectHash, extractTeamInfo, detectCliFlags, type ParsedMessage } from "./parser.js";
 import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { encryptToken, decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
-import { markSynced, getSyncRecord, findUnsyncedFiles, type SyncRecord } from "./syncLedger.js";
+import { getMachineKey } from "./machineKey.js";
+import { markSynced, updateSyncRecord, getSyncRecord, findUnsyncedFiles, type SyncRecord } from "./syncLedger.js";
 import { SyncService, AuthExpiredError } from "./syncService.js";
 import { redactSecrets, maskToken } from "./redact.js";
 import { RetryQueue, type RetryOperation } from "./retryQueue.js";
@@ -44,7 +57,7 @@ import { getVersion, performUpdate, ensureCastAlias } from "./update.js";
 import { ensureMessagingForMemory } from "./snippets.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
 import { performReconciliation, repairDiscrepancies } from "./reconciliation.js";
-import { TEST_SCRATCH_DIRNAME, isTestScratchPath } from "./syncScope.js";
+import { TEST_SCRATCH_DIRNAME, isTestScratchPath, isPathExcluded, isProjectAllowedToSync } from "./syncScope.js";
 import { TaskScheduler } from "./taskScheduler.js";
 import { hasTmux } from "./tmux.js";
 import { formatFeedResults } from "./formatter.js";
@@ -70,7 +83,7 @@ import {
   removeForkArtifactJsonl,
   rewriteSubagentJsonlToUuid,
 } from "./resumeCommand.js";
-import { resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath } from "./projectPathResolver.js";
+import { resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath, claudeProjectDirName } from "./projectPathResolver.js";
 import type { AgentStatus, DeviceSnippetSettings } from "@codecast/shared/contracts";
 import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG } from "@codecast/shared/contracts";
 import { parseModelPicker, planModelNavigation, SESSION_ONLY_COMMIT_RE, isSwitchConfirmDialog } from "./modelPicker";
@@ -486,7 +499,8 @@ const MAX_LOG_QUEUE_SIZE = 500;
 const LOG_QUEUE_FILE = path.join(process.env.HOME || "", ".codecast", "log-queue.json");
 const EVENT_LOOP_CHECK_INTERVAL_MS = 30 * 1000; // 30 seconds
 const EVENT_LOOP_LAG_THRESHOLD_MS = 60 * 1000; // 1 minute of lag = frozen
-const HEARTBEAT_STALE_THRESHOLD_MS = 3 * 60 * 1000; // external watchdog: 3 min (6 missed 30s heartbeats) = deadlocked. Tight so recovery beats the 5-min "blocked" display after a sleep.
+// External-watchdog staleness threshold lives in supervision.ts
+// (DAEMON_HEARTBEAT_STALE_MS) so the shell script and the compiled pass agree.
 const STUCK_CONNECTION_THRESHOLD_MS = 3 * 60 * 1000; // 3 min disconnected = stuck, trigger self-heal
 const SELF_HEAL_COOLDOWN_MS = 10 * 60 * 1000; // 10 min between self-heal restarts
 
@@ -1265,7 +1279,9 @@ async function pollDaemonCommands(): Promise<void> {
           logLifecycle("self_heal_restart", `Backend recovered after ${downSec}s down, restarting`);
           sendLogImmediate("warn", `[LIFECYCLE] self_heal_restart: backend recovered after ${downSec}s down`, { error_code: "self_heal_restart" });
           saveDaemonState({ lastSelfHealRestart: Date.now() });
-          flushRemoteLogs().then(() => triggerSelfRestart()).catch(() => triggerSelfRestart());
+          flushRemoteLogs()
+            .then(() => restartDaemonProcess("backend recovered after outage"))
+            .catch(() => restartDaemonProcess("backend recovered after outage"));
           return;
         }
       }
@@ -1375,11 +1391,39 @@ function buildDeviceSettingsPayload(config: Config | null): DeviceSnippetSetting
   };
 }
 
+// Auto-enroll the machine's active CC login as a saved profile: after a fresh
+// /login the account just appears in the web switcher, no save step. One
+// attempt per account per daemon lifetime — a failure (e.g. API-key login,
+// keychain hiccup) falls back to the Settings page's manual save CTA instead
+// of retrying every beat. Remote devices run a pushed COPY of the primary's
+// credential, so profiles are only ever saved on the primary.
+const autoSaveDecidedAccounts = new Set<string>();
+function maybeAutoSaveAccount(): void {
+  if (isRemoteDevice()) return;
+  let key: string | undefined;
+  try {
+    const active = activeAccountSummary();
+    key = active?.uuid || active?.email;
+    if (!key || autoSaveDecidedAccounts.has(key)) return;
+    autoSaveDecidedAccounts.add(key);
+    const saved = autoSaveActiveProfile();
+    if (saved) {
+      log(`[ACCOUNTS] Auto-saved active login as profile "${saved.name}"${saved.email ? ` (${saved.email})` : ""}`);
+    }
+  } catch (err) {
+    log(`[ACCOUNTS] Auto-save of active login failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 async function sendHeartbeat(): Promise<void> {
   const config = readConfig();
   if (!config?.auth_token || !config?.convex_url) {
     return;
   }
+
+  // Before publishing the account inventory, make sure the active login is in
+  // it — this is what makes a new `/login` show up in Settings by itself.
+  maybeAutoSaveAccount();
 
   try {
     const siteUrl = config.convex_url.replace(".cloud", ".site");
@@ -1769,18 +1813,7 @@ async function executeRemoteCommand(
           }),
         });
         setTimeout(() => {
-          log("Restarting daemon per remote command...");
-          if (isManagedByLaunchd()) {
-            log("Launchd will restart daemon after exit");
-          } else {
-            const spawned = spawnReplacement();
-            if (spawned) {
-              skipRespawn = true;
-            } else {
-              log("spawnReplacement failed, letting exit handler respawn");
-            }
-          }
-          setTimeout(() => process.exit(0), 500);
+          restartDaemonProcess("remote restart command");
         }, 1000);
         return;
       }
@@ -1805,18 +1838,7 @@ async function executeRemoteCommand(
           if (result.success) {
             logLifecycle("update_complete", `Binary replaced from v${currentVersion}, restarting`);
             await flushRemoteLogs();
-            log("Update successful, restarting...");
-            if (isManagedByLaunchd()) {
-              log("Launchd will restart daemon after update");
-            } else {
-              const spawned = spawnReplacement();
-              if (spawned) {
-                skipRespawn = true;
-              } else {
-                log("spawnReplacement failed, letting exit handler respawn");
-              }
-            }
-            setTimeout(() => process.exit(0), 500);
+            restartDaemonProcess("remote update command");
           } else {
             logLifecycle("update_failed", `Update failed from v${currentVersion} error=${result.error}`);
             await flushRemoteLogs();
@@ -1883,7 +1905,7 @@ async function executeRemoteCommand(
         const cmdText = `${castBin} workflow run-daemon ${workflowRunId}`;
 
         try {
-          tmuxExecSync(["new-session", "-d", "-s", tmuxSession, "-c", projectPath], { timeout: 5000 });
+          tmuxExecSync(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", tmuxSession, "-c", projectPath], { timeout: 5000 });
           tmuxExecSync(["send-keys", "-t", tmuxSession, "-l", cmdText], { timeout: 5000 });
           tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
           result = JSON.stringify({ tmux_session: tmuxSession, workflow_run_id: workflowRunId });
@@ -2192,7 +2214,7 @@ async function executeRemoteCommand(
             // the tracked backend, started-session registry, and delivery state.
             try { await tmuxExec(["kill-session", "-t", tmuxSession]); } catch {}
           }
-          tmuxExecSync(["new-session", "-d", "-s", tmuxSession, "-c", cwd], { timeout: 5000 });
+          tmuxExecSync(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", tmuxSession, "-c", cwd], { timeout: 5000 });
           // Tag the tmux so warm-restart can rebuild startedSessionTmux from `tmux ls`.
           if (conversationId) {
             await setTmuxSessionOption(tmuxSession, "@codecast_conversation_id", conversationId).catch(() => {});
@@ -2896,7 +2918,7 @@ async function executeRemoteCommand(
             const safeBlankArgs = sanitizeBinaryArgs(buildBlankLaunchArgs(blankAgentType, config));
             const blankCmdText = `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT ${[blankBinary, ...safeBlankArgs].join(" ")}`;
             try {
-              tmuxExecSync(["new-session", "-d", "-s", tmuxSession, "-c", cwd], { timeout: 5000 });
+              tmuxExecSync(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", tmuxSession, "-c", cwd], { timeout: 5000 });
               // Tag like the other creation paths so this session is discoverable
               // by conversation (findLiveTmuxForConversation / warm-restart). Without
               // the tag it is orphaned: a later fresh-start can't see it and spawns
@@ -3487,49 +3509,12 @@ interface GitInfo {
   worktreePath?: string;
 }
 
-function isPathExcluded(projectPath: string, excludedPaths?: string): boolean {
-  if (!excludedPaths || !projectPath) {
-    return false;
-  }
-
-  const paths = excludedPaths.split(',').map(p => p.trim()).filter(p => p.length > 0);
-
-  for (const excludedPath of paths) {
-    const normalizedExcluded = path.resolve(excludedPath);
-    const normalizedProject = path.resolve(projectPath);
-
-    if (normalizedProject.startsWith(normalizedExcluded)) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-// Sync-scope rules (test-scratch exclusion) live in their own leaf module
-// (./syncScope.js) so the reconciliation loop can share the EXACT same rule
-// without importing this giant daemon module. Imported at the top and re-exported
-// here for backward compatibility with tests that import them from "./daemon.js".
-export { TEST_SCRATCH_DIRNAME, isTestScratchPath };
-
-export function isProjectAllowedToSync(projectPath: string, config: Config): boolean {
-  if (isTestScratchPath(projectPath)) {
-    return false;
-  }
-  if (!config.sync_mode || config.sync_mode === "all") {
-    return true;
-  }
-
-  if (!config.sync_projects || config.sync_projects.length === 0) {
-    return false;
-  }
-
-  const normalizedProject = path.resolve(projectPath);
-  return config.sync_projects.some(allowed => {
-    const normalizedAllowed = path.resolve(allowed);
-    return normalizedProject === normalizedAllowed || normalizedProject.startsWith(normalizedAllowed + path.sep);
-  });
-}
+// Sync-scope rules (test-scratch exclusion, excluded-paths, selected-projects
+// allowlist) live in their own leaf module (./syncScope.js) so the
+// reconciliation loop and `cast doctor` can share the EXACT same rules without
+// importing this giant daemon module. Imported at the top and re-exported here
+// for backward compatibility with tests that import them from "./daemon.js".
+export { TEST_SCRATCH_DIRNAME, isTestScratchPath, isProjectAllowedToSync };
 
 function getGitInfo(projectPath: string): GitInfo | undefined {
   const execGit = (args: string): string | undefined => {
@@ -4046,6 +4031,136 @@ function resolveCodexForkRoot(filePath: string): string | undefined {
   return root;
 }
 
+// ── Agent-team "spawned by" linking ──────────────────────────────────────────
+// A teammate session's JSONL lines carry teamName/agentName stamps. Resolve the
+// team's LEAD to a conversation and link the teammate to it as a VISIBLE child
+// (conversations.linkSpawnedBy: powers the parent click-through only — no
+// subagent nesting/hiding, the teammate stays a first-class inbox card).
+//
+// Resolving the lead is the hard part: ~/.claude/teams/<team>/config.json
+// records leadSessionId, but team creation re-mints the lead's session id, so
+// that id almost never matches a synced session. Fast path: the config id
+// resolves in the conversation cache. Fallback (works while the team is live):
+// the worker's tmux pane and the lead's pane share one tmux session — walk the
+// non-member panes' process trees to a pid with a ~/.claude/sessions/<pid>.json
+// entry, which names that agent's CURRENT session id.
+const teamLinkDone = new Set<string>();
+const teamLinkAttempts = new Map<string, number>();
+const TEAM_LINK_MAX_ATTEMPTS = 3;
+
+async function resolveTeamLeadConversation(
+  teamName: string,
+  agentName: string,
+  conversationCache: ConversationCache,
+): Promise<string | null> {
+  let cfg: any;
+  try {
+    cfg = JSON.parse(
+      fs.readFileSync(path.join(process.env.HOME || "", ".claude", "teams", teamName, "config.json"), "utf-8"),
+    );
+  } catch {
+    return null;
+  }
+
+  const leadSessionId: string | undefined = cfg?.leadSessionId;
+  if (leadSessionId && conversationCache[leadSessionId]) {
+    return conversationCache[leadSessionId];
+  }
+
+  const members: any[] = Array.isArray(cfg?.members) ? cfg.members : [];
+  const me = members.find((m) => m?.name === agentName);
+  const memberPanes = new Set<string>(
+    members.map((m) => m?.tmuxPaneId).filter((p: any) => typeof p === "string" && p.startsWith("%")),
+  );
+  const myPane: string | undefined = me?.tmuxPaneId;
+  if (!myPane || !myPane.startsWith("%") || !hasTmux()) return null;
+
+  try {
+    const { stdout: sessOut } = await tmuxExec(["display-message", "-p", "-t", myPane, "#{session_name}"]);
+    const tmuxSession = sessOut.trim();
+    if (!tmuxSession) return null;
+    const { stdout: panesOut } = await tmuxExec(["list-panes", "-s", "-t", tmuxSession, "-F", "#{pane_id} #{pane_pid}"]);
+    const rootPids: number[] = [];
+    for (const line of panesOut.trim().split("\n")) {
+      const [paneId, pidStr] = line.trim().split(/\s+/);
+      if (!paneId || memberPanes.has(paneId)) continue; // teammates' own panes can't be the lead
+      const pid = parseInt(pidStr, 10);
+      if (!isNaN(pid)) rootPids.push(pid);
+    }
+    if (rootPids.length === 0) return null;
+
+    // One process snapshot → children map → BFS from the candidate panes' root
+    // pids. Any descendant with a ~/.claude/sessions/<pid>.json entry is a live
+    // agent whose registry names its current session id.
+    const { stdout: psOut } = await execAsync("ps -axo pid=,ppid=");
+    const children = new Map<number, number[]>();
+    for (const line of psOut.trim().split("\n")) {
+      const [pidStr, ppidStr] = line.trim().split(/\s+/);
+      const pid = parseInt(pidStr, 10);
+      const ppid = parseInt(ppidStr, 10);
+      if (isNaN(pid) || isNaN(ppid)) continue;
+      if (!children.has(ppid)) children.set(ppid, []);
+      children.get(ppid)!.push(pid);
+    }
+    const queue = [...rootPids];
+    const seen = new Set<number>(queue);
+    const leadConvIds = new Set<string>();
+    while (queue.length > 0) {
+      const pid = queue.shift()!;
+      for (const child of children.get(pid) ?? []) {
+        if (!seen.has(child)) {
+          seen.add(child);
+          queue.push(child);
+        }
+      }
+      try {
+        const regPath = path.join(process.env.HOME || "", ".claude", "sessions", `${pid}.json`);
+        if (fs.existsSync(regPath)) {
+          const reg = JSON.parse(fs.readFileSync(regPath, "utf-8"));
+          const sid = reg?.sessionId;
+          if (typeof sid === "string" && conversationCache[sid]) {
+            leadConvIds.add(conversationCache[sid]);
+          }
+        }
+      } catch {}
+    }
+    // Exactly one live non-member agent in this tmux session — that's the lead.
+    // Zero or several means we can't tell; stay unlinked rather than guess.
+    if (leadConvIds.size === 1) return leadConvIds.values().next().value ?? null;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function maybeLinkTeamSpawn(
+  sessionId: string,
+  conversationId: string,
+  content: string,
+  syncService: SyncService,
+  conversationCache: ConversationCache,
+): Promise<void> {
+  const info = extractTeamInfo(content);
+  if (!info) return;
+  const attempts = (teamLinkAttempts.get(sessionId) ?? 0) + 1;
+  teamLinkAttempts.set(sessionId, attempts);
+  if (attempts > TEAM_LINK_MAX_ATTEMPTS) {
+    teamLinkDone.add(sessionId);
+    return;
+  }
+  const parentConvId = await resolveTeamLeadConversation(info.teamName, info.agentName, conversationCache);
+  if (!parentConvId || parentConvId === conversationId) {
+    if (attempts >= TEAM_LINK_MAX_ATTEMPTS) {
+      teamLinkDone.add(sessionId);
+      log(`Could not resolve lead for teammate ${info.agentName} (${sessionId.slice(0, 8)}, team ${info.teamName}) — leaving unlinked`);
+    }
+    return;
+  }
+  await syncService.linkSpawnedBy(parentConvId, conversationId, info.teamName, info.agentName);
+  teamLinkDone.add(sessionId);
+  log(`Linked teammate ${info.agentName} (${sessionId.slice(0, 8)}) -> lead conversation ${parentConvId.slice(0, 12)} (team ${info.teamName})`);
+}
+
 const bakImageRecoveryDone = new Set<string>();
 
 function recoverImagesFromBackup(
@@ -4179,6 +4294,14 @@ async function processSessionFile(
       log(`Warning: Permission denied reading ${filePath}. Will retry when permissions are restored.`);
       return;
     }
+    if (err.code === 'ENOENT') {
+      // Transcript deleted out from under us (fork-artifact cleanup, transcript
+      // cleanup, or a manual rm). There is nothing left to sync — return so the
+      // InvalidateSync backoff COMPLETES instead of throwing ENOENT forever, which
+      // turned a deleted file into a permanent ~2/sec retry+log loop.
+      log(`Transcript ${filePath} no longer exists; nothing to sync.`);
+      return;
+    }
     throw err;
   }
 
@@ -4191,16 +4314,24 @@ async function processSessionFile(
 
   if (stats.size <= lastPosition) {
     // Nothing new to read, but the watchdog uses sync-ledger.json (NOT
-    // positions.json) to decide which files are "stale". If we return without
-    // updating the ledger, findStaleSessionFiles will re-detect this file
-    // forever — burning ~15s of event-loop time every 5 min and head-of-line-
-    // blocking incoming Convex commands (start_session etc.). Bring the ledger
-    // up to the actual read position so the file stops re-appearing as stale.
+    // positions.json) to decide which files are "stale". shouldTreatClaudeFileAsStale
+    // flags a file when mtime > lastSyncedAt, so a file whose mtime was TOUCHED
+    // without any bytes appended (compact-in-place, a `touch`, clock skew) used to
+    // re-detect as stale every 5-min watchdog pass forever — burning event-loop time
+    // and head-of-line-blocking incoming Convex commands (start_session etc.). The
+    // old heal only ran when the position MOVED, so an mtime-only touch never
+    // advanced the baseline. Advance lastSyncedAt (and lastSyncedPosition to the read
+    // position) on EVERY no-op pass so the touch isn't re-flagged. We confirmed
+    // size <= position here, so there is genuinely no unsynced tail — this can't mask
+    // real content. Merge (not markSynced) so messageCount/conversationId aren't
+    // clobbered to zero.
     const existing = getSyncRecord(filePath);
-    if (!existing || existing.lastSyncedPosition < lastPosition) {
-      const knownConvId = conversationCache[sessionId];
-      markSynced(filePath, lastPosition, 0, knownConvId);
-    }
+    const knownConvId = conversationCache[sessionId];
+    updateSyncRecord(filePath, {
+      lastSyncedAt: Date.now(),
+      lastSyncedPosition: Math.max(existing?.lastSyncedPosition ?? 0, lastPosition),
+      ...(knownConvId ? { conversationId: knownConvId } : {}),
+    });
     return;
   }
 
@@ -4508,6 +4639,10 @@ async function processSessionFile(
             }
           } catch {}
         }
+        // Teammate transcripts self-identify on every line — stamp the team
+        // identity at create so the row never exists without it. The parent
+        // LINK still happens via maybeLinkTeamSpawn below (lead resolution).
+        const teamInfo = !isSubagent && newContent.includes('"teamName"') ? extractTeamInfo(newContent) : undefined;
         conversationId = await syncService.createConversation({
           userId,
           teamId,
@@ -4522,6 +4657,11 @@ async function processSessionFile(
           gitInfo,
           cliFlags: cliFlags || undefined,
           subagentDescription,
+          // Path-derived: true even when the parent conversation isn't cached
+          // yet, so the server never briefly sees this as a top-level session.
+          isSubagent: isSubagent || undefined,
+          agentTeamName: teamInfo?.teamName,
+          agentName: teamInfo?.agentName,
         });
         conversationCache[sessionId] = conversationId;
         saveConversationCache(conversationCache);
@@ -4594,6 +4734,14 @@ async function processSessionFile(
       if (pendingMessages[sessionId]) {
         await flushPendingMessagesBatch(pendingMessages[sessionId], conversationId, syncService, retryQueue);
         delete pendingMessages[sessionId];
+      }
+
+      // Agent-team teammate? Link it to its lead as a visible child (once).
+      // Cheap string gate first — only teammate transcripts carry the stamp.
+      if (!isSubagent && !teamLinkDone.has(sessionId) && newContent.includes('"teamName"')) {
+        maybeLinkTeamSpawn(sessionId, conversationId, newContent, syncService, conversationCache).catch((err) => {
+          log(`Teammate link attempt failed for ${sessionId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
+        });
       }
     } catch (err) {
       if (err instanceof AuthExpiredError) {
@@ -5413,6 +5561,14 @@ async function processCodexSession(
   } catch (err: any) {
     if (err.code === 'EACCES' || err.code === 'EPERM') {
       log(`Warning: Permission denied reading ${filePath}. Will retry when permissions are restored.`);
+      return;
+    }
+    if (err.code === 'ENOENT') {
+      // Transcript deleted out from under us (fork-artifact cleanup, transcript
+      // cleanup, or a manual rm). There is nothing left to sync — return so the
+      // InvalidateSync backoff COMPLETES instead of throwing ENOENT forever, which
+      // turned a deleted file into a permanent ~2/sec retry+log loop.
+      log(`Transcript ${filePath} no longer exists; nothing to sync.`);
       return;
     }
     throw err;
@@ -6305,7 +6461,7 @@ async function findTmuxPaneForTty(tty: string): Promise<string | null> {
   }
 }
 
-type InteractivePrompt = { question: string; options: Array<{ label: string; description?: string }>; isConfirmation?: boolean; header?: string; firstOptionIdx?: number };
+type InteractivePrompt = { question: string; options: Array<{ label: string; description?: string }>; isConfirmation?: boolean; header?: string; firstOptionIdx?: number; multiSelect?: boolean };
 
 // Unicode "Box Drawing" block (┌┐└┘─│ …). An AskUserQuestion option's `preview`
 // renders as a box to the RIGHT of the options; tmux capture-pane flattens those
@@ -6433,6 +6589,12 @@ export function parseInteractivePrompt(text: string): InteractivePrompt | null {
   let lastOptionIdx = -1;
   let gapCount = 0;
   let hasCursorIndicator = false;
+  // Any option row carrying a checkbox glyph marks the menu as multiSelect. This
+  // matters because a pending AskUserQuestion never reaches the session JSONL on
+  // Claude Code ≥2.1.201 (the tool_use is only written once answered), so the live
+  // card is always scrape/sidecar-sourced — and the hook sidecar goes stale after
+  // 5 minutes, leaving this glyph as the only multiSelect signal.
+  let hasCheckbox = false;
   // The AskUserQuestion menu renders each option's description on indented
   // continuation lines BELOW the numbered label. We scan bottom-up, so those
   // lines arrive before their option; buffer them and attach on the next match.
@@ -6444,6 +6606,7 @@ export function parseInteractivePrompt(text: string): InteractivePrompt | null {
       if (lastOptionIdx < 0) lastOptionIdx = i;
       firstOptionIdx = i;
       if (/^\s*[❯>]\s*\d/.test(lines[i])) hasCursorIndicator = true;
+      if (CHECKBOX_PREFIX.test(m[2])) hasCheckbox = true;
       const label = m[2]
         .replace(CHECKBOX_PREFIX, "")        // multiSelect checkbox: "[ ]" / "[x]" / "☐"
         .replace(/\s*[✓✗✔☑]\s*/g, "")        // stray selection glyphs anywhere
@@ -6496,7 +6659,7 @@ export function parseInteractivePrompt(text: string): InteractivePrompt | null {
     const hasFooter = menuFooterBelowOptions(lines, lastOptionIdx);
     if (hasCursorIndicator || hasFooter) {
       const { header, question } = extractPromptHeading(lines, firstOptionIdx);
-      return { question, options, firstOptionIdx, ...(header ? { header } : {}) };
+      return { question, options, firstOptionIdx, ...(header ? { header } : {}), ...(hasCheckbox ? { multiSelect: true } : {}) };
     }
   }
 
@@ -6640,17 +6803,52 @@ export function resolveInteractiveQuestions(prompt: InteractivePrompt, sidecar: 
     ...(prompt.header ? { header: prompt.header } : {}),
     options: prompt.options,
     ...(prompt.isConfirmation ? { isConfirmation: true } : {}),
+    ...(prompt.multiSelect ? { multiSelect: true } : {}),
   }];
 }
 
-type PollMessage = { keys?: string[]; steps?: Array<{ key: string; text?: string }>; text?: string; display?: string };
+// `multi` marks a poll whose digit keys are multiSelect checkbox TOGGLES: the menu is
+// expected to stay on the same question after each one, so the tmux closed-loop must
+// not "confirm" them with Enter (Enter on a multiSelect list toggles the highlighted
+// row, corrupting the selection). The sender navigates tabs itself via Right/Enter.
+type PollMessage = { keys?: string[]; steps?: Array<{ key: string; text?: string }>; text?: string; display?: string; multi?: boolean };
 
-function parsePollMessage(content: string): PollMessage | null {
+export function parsePollMessage(content: string): PollMessage | null {
   try {
     const parsed = JSON.parse(content);
-    if (parsed.__cc_poll && (Array.isArray(parsed.keys) || Array.isArray(parsed.steps))) return parsed;
+    if (parsed.__cc_poll && (Array.isArray(parsed.keys) || Array.isArray(parsed.steps) || typeof parsed.text === "string")) return parsed;
   } catch {}
   return null;
+}
+
+// A free-text answer to an AskUserQuestion menu. Claude Code's question menu has no
+// inline text slot, so the only way to enter free text is to decline the whole menu
+// (Escape) and type the answer at the prompt — which discards every menu selection. The
+// web sends such an answer as a top-level `text` with no menu keys; pre-2026-06-27 builds
+// embedded it inside `steps` (one step per `text`). BOTH are a decline: do it ONCE up
+// front, then type. Doing it per-step (the old behavior) declined the menu mid-loop and
+// spilled the remaining option digits into the freshly-reopened prompt box (the "211"
+// bug). The OTHER text shape — menu keys PLUS `poll.text` (e.g. plan feedback, where
+// option 4 opens a feedback field) — is NOT a decline: those keys drive a menu whose
+// final option opens the text input, so the text lands in the field, not at the prompt.
+//
+// Returns the text to type after the decline (newlines flattened — a literal LF reads as
+// Enter in the TUI and submits early, which is why the normal paste path flattens too; the
+// middot keeps multi-answer prose readable on one line), or null when this isn't a decline.
+export function pollDeclineText(poll: PollMessage): string | null {
+  const steps: Array<{ key: string; text?: string }> = poll.steps || (poll.keys || []).map(k => ({ key: k }));
+  const menuSteps = steps.filter(s => !s.text);
+  const embeddedText = steps.filter(s => s.text).map(s => s.text!).join("\n\n");
+  const isDecline = (poll.text != null && menuSteps.length === 0) || (embeddedText !== "" && poll.text == null);
+  if (!isDecline) return null;
+  return (poll.text ?? embeddedText).replace(/\r?\n+/g, "  ·  ").trim();
+}
+
+// The menu-navigation steps of a poll (the option keystrokes), excluding any step that
+// carries embedded free text (those decline the menu — see pollDeclineText).
+export function pollMenuSteps(poll: PollMessage): Array<{ key: string; text?: string }> {
+  const steps: Array<{ key: string; text?: string }> = poll.steps || (poll.keys || []).map(k => ({ key: k }));
+  return steps.filter(s => !s.text);
 }
 
 // The synthetic poll the daemon emits for a live interactive prompt must carry a
@@ -6895,6 +7093,22 @@ export function classifyTmuxLiveState(region: string): TmuxLiveState {
   // is also unique to the Rewind option list.
   if (/Esc to cancel|❯\s*\(current\)/i.test(region)) return "rewind";
   if (/What should Claude do instead\?/i.test(region)) return "interrupted";
+  // Teammate panel: a lead session with in-process agents renders a chip list
+  // (⏺ main, ◯ name · state, "↓ N more") below its footer. Teammate panes split
+  // the window, and a squeezed lead pane truncates the footer's "esc to
+  // interrupt" marker — or, squeezed further, leaves the chip list as the ONLY
+  // content the scraper sees (the jx77h6jcsa0s freeze). Either way the pane is a
+  // live Claude Code TUI whose input box takes type-ahead, so classify busy:
+  // the paste path skips the leading Escape (never interrupts a mid-turn lead)
+  // and paste+Enter still submits when the lead is actually idle. Checked
+  // before the prompt-visible idle rule because chips + visible ❯ says nothing
+  // about whether the lead is generating. Requires a panel signature (⏺ main
+  // header, a second chip, or the overflow marker) so one stray ◯ line in a
+  // no-separator fallback region can't hijack the classification.
+  const chipLines = region.split("\n").filter((l) => /^\s*◯\s+\S+/.test(l)).length;
+  if (chipLines >= 2 || (chipLines >= 1 && /(?:^\s*⏺\s+main\s*$|↓\s*\d+\s*more)/m.test(region))) {
+    return "busy";
+  }
   // Input prompt visible = no blocking modal. Real warnings ("Press enter to
   // continue", weekly-limit popup) replace the input box, so the prompt glyph
   // disappears while they're up. Persistent footer banners — "Update available!
@@ -7232,8 +7446,32 @@ async function withTmuxLock<T>(target: string, fn: () => Promise<T>): Promise<T>
 // turn ends. We do NOT wait for idle: that only ever served to keep the paste
 // path's mandatory leading Escape from interrupting the turn, and the caller now
 // simply skips that Escape when busy (see injectViaTmuxInner).
+// Detached tmux sessions default to 80x24, and Claude Code's teammate panes
+// split that window until the lead pane is too narrow for its TUI to render
+// recognizably (truncated footer markers, separators under the detection
+// threshold, chip-list-only regions). Nobody is attached to daemon-owned
+// sessions, so claim a real screen. An attached client re-imposes its own size.
+const TMUX_WINDOW_WIDTH = "220";
+const TMUX_WINDOW_HEIGHT = "50";
+const TMUX_SIZE_ARGS = ["-x", TMUX_WINDOW_WIDTH, "-y", TMUX_WINDOW_HEIGHT];
+
+// Self-heal for sessions created before the daemon sized its windows (or
+// re-squeezed by a small attached client that detached): a lead pane under 80
+// columns cannot render the markers the classifier needs, so widen the window
+// before reading it. Best-effort — classification proceeds either way.
+async function ensureTmuxPaneWide(target: string): Promise<void> {
+  try {
+    const { stdout } = await tmuxExec(["display-message", "-p", "-t", target, "#{pane_width}"]);
+    if (parseInt(stdout.trim(), 10) >= 80) return;
+    await tmuxExec(["resize-window", "-t", target, "-x", TMUX_WINDOW_WIDTH, "-y", TMUX_WINDOW_HEIGHT]);
+    // Give the TUI a beat to reflow before the first capture.
+    await new Promise(resolve => setTimeout(resolve, 500));
+  } catch {}
+}
+
 export async function ensureTmuxReady(target: string): Promise<{ busy: boolean }> {
   const STUCK_BUDGET_MS = 8_000;
+  await ensureTmuxPaneWide(target);
   const startedAt = Date.now();
   let lastCorrectiveState: TmuxLiveState | null = null;
   let sameStateAttempts = 0;
@@ -7336,7 +7574,11 @@ const PICKER_BUSY_RE = /⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|Wandering|Vibing
 
 async function capturePaneText(target: string, lines: number): Promise<string> {
   const { stdout } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${lines}`]);
-  return stdout;
+  // -J preserves trailing blank pane rows (unlike bare -p). When the TUI's
+  // content sits high in the pane — short sessions, a freshly redrawn picker —
+  // the callers' slice(-N) tails would read only blanks and misjudge the pane
+  // (idle looks busy, the cache-confirm dialog goes unseen). Trim them.
+  return stdout.replace(/[\s\n]+$/, "");
 }
 
 export async function driveModelPicker(
@@ -7567,31 +7809,39 @@ export async function injectViaTmux(target: string, content: string): Promise<vo
 async function injectViaTmuxInner(target: string, content: string): Promise<void> {
   const poll = parsePollMessage(content);
   if (poll) {
-    const steps: Array<{ key: string; text?: string }> = poll.steps || (poll.keys || []).map(k => ({ key: k }));
-    for (const step of steps) {
-      if (step.text) {
-        await tmuxExec(["send-keys", "-t", target, "Escape"]);
-        await new Promise(resolve => setTimeout(resolve, 500));
-        await tmuxExec(["send-keys", "-t", target, "-l", step.text]);
+    // A free-text answer can't be entered into Claude Code's AUQ menu — decline the whole
+    // menu once (Escape) and type the answer at the prompt. See pollDeclineText for why.
+    const declineText = pollDeclineText(poll);
+    if (declineText !== null) {
+      await tmuxExec(["send-keys", "-t", target, "Escape"]);
+      await new Promise(resolve => setTimeout(resolve, 500));
+      if (declineText) {
+        await pasteTextIntoPane(target, declineText);
         await new Promise(resolve => setTimeout(resolve, 150));
         await tmuxExec(["send-keys", "-t", target, "Enter"]);
+      }
+      log(`Injected poll free-text answer (declined menu) via tmux to ${target}`);
+      return;
+    }
+
+    const menuSteps = pollMenuSteps(poll);
+    for (const step of menuSteps) {
+      // A bare digit submits a plain AskUserQuestion menu, but an AUQ whose options
+      // carry `preview`s renders side-by-side and the digit ONLY navigates — its
+      // footer reads "Enter to select", so the answer never lands without a follow-up
+      // Enter (verified in tmux on Claude Code 2.1.166). Decide per keypress instead
+      // of guessing: note the on-screen question, send the digit, then look again. If
+      // the SAME question is still up the digit only highlighted, so confirm with
+      // Enter; if the menu is gone (auto-submitted) or advanced to the next question,
+      // a follow-up Enter would be spurious, so skip it. On a `multi` poll the digits
+      // are checkbox toggles and the menu is SUPPOSED to stay up — the confirm Enter
+      // would re-toggle the highlighted row, so skip the probe entirely.
+      const qBefore = !poll.multi && /^\d+$/.test(step.key) ? await paneInteractiveQuestion(target) : null;
+      await tmuxExec(["send-keys", "-t", target, step.key]);
+      await new Promise(resolve => setTimeout(resolve, 500));
+      if (qBefore && (await paneInteractiveQuestion(target)) === qBefore) {
+        await tmuxExec(["send-keys", "-t", target, "Enter"]);
         await new Promise(resolve => setTimeout(resolve, 500));
-      } else {
-        // A bare digit submits a plain AskUserQuestion menu, but an AUQ whose options
-        // carry `preview`s renders side-by-side and the digit ONLY navigates — its
-        // footer reads "Enter to select", so the answer never lands without a follow-up
-        // Enter (verified in tmux on Claude Code 2.1.166). Decide per keypress instead
-        // of guessing: note the on-screen question, send the digit, then look again. If
-        // the SAME question is still up the digit only highlighted, so confirm with
-        // Enter; if the menu is gone (auto-submitted) or advanced to the next question,
-        // a follow-up Enter would be spurious, so skip it.
-        const qBefore = /^\d+$/.test(step.key) ? await paneInteractiveQuestion(target) : null;
-        await tmuxExec(["send-keys", "-t", target, step.key]);
-        await new Promise(resolve => setTimeout(resolve, 500));
-        if (qBefore && (await paneInteractiveQuestion(target)) === qBefore) {
-          await tmuxExec(["send-keys", "-t", target, "Enter"]);
-          await new Promise(resolve => setTimeout(resolve, 500));
-        }
       }
     }
     if (poll.text) {
@@ -7599,6 +7849,17 @@ async function injectViaTmuxInner(target: string, content: string): Promise<void
       await tmuxExec(["send-keys", "-t", target, "-l", poll.text]);
       await new Promise(resolve => setTimeout(resolve, 150));
       await tmuxExec(["send-keys", "-t", target, "Enter"]);
+    } else if (menuSteps.length > 0) {
+      // Claude Code ≥2.1.x no longer auto-continues AskUserQuestion forms: every
+      // multi-question (and multiSelect) form parks on a final "Review your answers"
+      // pane with the cursor on "1. Submit answers" (verified in tmux on 2.1.201).
+      // Payloads that predate the pane — one digit per question — stall there, so
+      // after the steps run, confirm the pane if (and only if) it's what's on screen.
+      const { stdout } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", "-30"]);
+      if (/Ready to submit your answers\?/.test(stdout) && /❯\s*1[.)]\s*Submit answers/.test(stdout)) {
+        await tmuxExec(["send-keys", "-t", target, "Enter"]);
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
     }
     log(`Injected poll response via tmux to ${target}`);
     return;
@@ -7730,45 +7991,39 @@ function buildAppleScript(
   const isIterm = app === "iTerm2";
 
   if (poll) {
-    const steps: Array<{ key: string; text?: string }> = poll.steps || (poll.keys || []).map(k => ({ key: k }));
+    // A free-text answer can't be entered into the AUQ menu: decline it once (Escape),
+    // then type the answer at the prompt (textAction below). Otherwise drive the option
+    // keystrokes. See pollDeclineText — declining per-step spilled the leftover option
+    // digits into the reopened prompt box (the "211" bug).
+    const declineText = pollDeclineText(poll);
+    const menuSteps = pollMenuSteps(poll);
 
     let stepActions: string;
-    if (isIterm) {
-      stepActions = steps.map((step, i) => {
-        const lines: string[] = [];
-        if (step.text) {
-          lines.push(`            tell s to write text (ASCII character 27)`);
-          lines.push("            delay 0.5");
-          const escapedText = step.text.replace(/"/g, '\\"');
-          lines.push(`            tell s to write text "${escapedText}" without newline`);
-          lines.push("            delay 0.15");
-          lines.push(`            tell s to write text ""`);
-        } else {
-          lines.push(`            tell s to write text "${step.key}" without newline`);
-        }
-        if (i < steps.length - 1) lines.push("            delay 0.5");
+    if (declineText !== null) {
+      stepActions = isIterm
+        ? `            tell s to write text (ASCII character 27)`
+        : `          do script (ASCII character 27) in t`;
+    } else if (isIterm) {
+      stepActions = menuSteps.map((step, i) => {
+        const lines = [`            tell s to write text "${step.key}" without newline`];
+        if (i < menuSteps.length - 1) lines.push("            delay 0.5");
         return lines.join("\n");
       }).join("\n");
     } else {
-      stepActions = steps.map((step, i) => {
-        const lines: string[] = [];
-        if (step.text) {
-          lines.push(`          do script (ASCII character 27) in t`);
-          lines.push("          delay 0.5");
-          const escapedText = step.text.replace(/"/g, '\\"');
-          lines.push(`          do script "${escapedText}" in t`);
-        } else {
-          lines.push(`          do script "${step.key}" in t`);
-        }
-        if (i < steps.length - 1) lines.push("          delay 0.5");
+      stepActions = menuSteps.map((step, i) => {
+        const lines = [`          do script "${step.key}" in t`];
+        if (i < menuSteps.length - 1) lines.push("          delay 0.5");
         return lines.join("\n");
       }).join("\n");
     }
 
-    const textAction = poll.text
+    // The text to type at the prompt: the declined free-text answer, or `poll.text` typed
+    // into a field a menu option opened (plan feedback).
+    const promptText = declineText !== null ? declineText : poll.text;
+    const textAction = promptText
       ? isIterm
-        ? `\n            delay 0.3\n            tell s to write text "${poll.text.replace(/"/g, '\\"')}" without newline\n            delay 0.15\n            tell s to write text ""`
-        : `\n          delay 0.3\n          do script "${poll.text.replace(/"/g, '\\"')}" in t`
+        ? `\n            delay 0.3\n            tell s to write text "${promptText.replace(/"/g, '\\"')}" without newline\n            delay 0.15\n            tell s to write text ""`
+        : `\n          delay 0.3\n          do script "${promptText.replace(/"/g, '\\"')}" in t`
       : "";
 
     const script = isIterm
@@ -7923,18 +8178,23 @@ async function injectViaKitty(tty: string, content: string): Promise<void> {
 
   const poll = parsePollMessage(content);
   if (poll) {
-    const steps: Array<{ key: string; text?: string }> = poll.steps || (poll.keys || []).map((k: string) => ({ key: k }));
-    for (const step of steps) {
-      if (step.text) {
-        await execAsync(`kitty @ send-key ${match} escape`);
-        await new Promise(r => setTimeout(r, 500));
-        const escaped = step.text.replace(/'/g, "'\\''");
+    // Free-text answer: decline the AUQ menu once (Escape) and type at the prompt. See
+    // pollDeclineText — doing it per-step spilled leftover option digits into the prompt.
+    const declineText = pollDeclineText(poll);
+    if (declineText !== null) {
+      await execAsync(`kitty @ send-key ${match} escape`);
+      await new Promise(r => setTimeout(r, 500));
+      if (declineText) {
+        const escaped = declineText.replace(/'/g, "'\\''");
         await execAsync(`kitty @ send-text ${match} '${escaped}'`);
         await new Promise(r => setTimeout(r, 150));
         await execAsync(`kitty @ send-key ${match} enter`);
-      } else {
-        await execAsync(`kitty @ send-key ${match} ${mapKeyForKitty(step.key)}`);
       }
+      log(`Injected poll free-text answer (declined menu) via Kitty for TTY ${normalizedTty}`);
+      return;
+    }
+    for (const step of pollMenuSteps(poll)) {
+      await execAsync(`kitty @ send-key ${match} ${mapKeyForKitty(step.key)}`);
       await new Promise(r => setTimeout(r, 500));
     }
     if (poll.text) {
@@ -7986,18 +8246,23 @@ async function injectViaWezTerm(tty: string, content: string): Promise<void> {
 
   const poll = parsePollMessage(content);
   if (poll) {
-    const steps: Array<{ key: string; text?: string }> = poll.steps || (poll.keys || []).map((k: string) => ({ key: k }));
-    for (const step of steps) {
-      if (step.text) {
-        await weztermSendText(paneId, "\x1b"); // Escape
-        await new Promise(r => setTimeout(r, 500));
-        await weztermSendText(paneId, step.text);
+    // Free-text answer: decline the AUQ menu once (Escape) and type at the prompt. See
+    // pollDeclineText — doing it per-step spilled leftover option digits into the prompt.
+    const declineText = pollDeclineText(poll);
+    if (declineText !== null) {
+      await weztermSendText(paneId, "\x1b"); // Escape
+      await new Promise(r => setTimeout(r, 500));
+      if (declineText) {
+        await weztermSendText(paneId, declineText);
         await new Promise(r => setTimeout(r, 150));
         await weztermSendText(paneId, "\r"); // Enter
-      } else {
-        const seq = WEZTERM_KEY_SEQUENCES[step.key];
-        await weztermSendText(paneId, seq || step.key);
       }
+      log(`Injected poll free-text answer (declined menu) via WezTerm for TTY ${normalizedTty}`);
+      return;
+    }
+    for (const step of pollMenuSteps(poll)) {
+      const seq = WEZTERM_KEY_SEQUENCES[step.key];
+      await weztermSendText(paneId, seq || step.key);
       await new Promise(r => setTimeout(r, 500));
     }
     if (poll.text) {
@@ -9351,7 +9616,7 @@ async function discoverAndLinkSession(
   cwd: string,
 ): Promise<void> {
   const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
-  const projectDirName = cwd.replace(/\//g, "-");
+  const projectDirName = claudeProjectDirName(cwd);
   const projectDir = path.join(claudeProjectsDir, projectDirName);
 
   const existingFiles = new Set<string>();
@@ -9518,6 +9783,13 @@ interface CachedProcessInfo {
 const sessionProcessCache = new Map<string, CachedProcessInfo>();
 const PROCESS_CACHE_TTL_MS = 30_000;
 
+// Server rows registered with their tmux name, so a later tmux discovery for
+// the same session (e.g. a session that started OUTSIDE tmux and was resumed
+// into one — registration happens once at first detection, so its row carries
+// tmux_session=null forever and the web header never shows the copy-tmux-attach
+// icon) re-registers exactly once per name change.
+const registeredTmuxBySession = new Map<string, string>();
+
 function cacheSessionProcess(sessionId: string, info: ClaudeSessionInfo, tmuxTarget?: string): void {
   sessionProcessCache.set(sessionId, {
     pid: info.pid,
@@ -9526,6 +9798,15 @@ function cacheSessionProcess(sessionId: string, info: ClaudeSessionInfo, tmuxTar
     termProgram: info.termProgram,
     lastVerified: Date.now(),
   });
+  // Backfill tmux_session on the server row when this cache fill is the first
+  // place the tmux placement shows up. registerManagedSession patches the
+  // existing row by session_id; conversation_id/device_id are omitted so the
+  // ownership stamp is untouched.
+  const tmuxName = tmuxTarget?.split(":")[0];
+  if (tmuxName && syncServiceRef && registeredTmuxBySession.get(sessionId) !== tmuxName) {
+    registeredTmuxBySession.set(sessionId, tmuxName);
+    syncServiceRef.registerManagedSession(sessionId, info.pid, tmuxName).catch(() => {});
+  }
 }
 
 async function getCachedSessionProcess(sessionId: string): Promise<ClaudeSessionInfo | null> {
@@ -10099,7 +10380,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     try {
       const resumeFile = findSessionFile(resumeId);
       if (resumeFile) {
-        const cwdProjectDir = path.join(process.env.HOME || "", ".claude", "projects", cwd.replace(/\//g, "-"));
+        const cwdProjectDir = path.join(process.env.HOME || "", ".claude", "projects", claudeProjectDirName(cwd));
         const desiredPath = path.join(cwdProjectDir, `${resumeId}.jsonl`);
         if (path.resolve(resumeFile.path) !== path.resolve(desiredPath)) {
           fs.mkdirSync(cwdProjectDir, { recursive: true });
@@ -10156,7 +10437,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
   try {
     try { await tmuxExec(["kill-session", "-t", tmuxSession]); } catch {}
 
-    await tmuxExec(["new-session", "-d", "-s", tmuxSession, "-c", cwd]);
+    await tmuxExec(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", tmuxSession, "-c", cwd]);
     await setTmuxSessionOption(tmuxSession, "@codecast_session_id", sessionId);
     await setTmuxSessionOption(tmuxSession, "@codecast_agent_type", agentType);
 
@@ -10782,8 +11063,11 @@ async function downloadImage(storageId: string, syncService: SyncService): Promi
     if (fs.existsSync(cached)) return cached;
   }
 
-  const imageUrl = await syncService.getClient().query("images:getImageUrl" as any, { storageId });
-  if (!imageUrl) return null;
+  const imageUrl = await syncService.getImageUrl(storageId);
+  if (!imageUrl) {
+    log(`downloadImage: no URL for storage id ${storageId} (auth rejected or file missing)`);
+    return null;
+  }
 
   fs.mkdirSync(dir, { recursive: true });
 
@@ -11455,8 +11739,39 @@ function isAgentProcess(pid: number): boolean {
 
 let skipRespawn = false;
 
+const DAEMON_LAUNCHD_LABEL = "sh.codecast.daemon";
+
+// Parse the running instance pid out of `launchctl print gui/<uid>/<label>` output.
+// Pure so ownership detection is testable without a live launchd.
+export function parseLaunchdPrintPid(printOutput: string): number | null {
+  const m = printOutput.match(/^\s*pid = (\d+)\b/m);
+  if (!m) return null;
+  const pid = parseInt(m[1], 10);
+  return Number.isFinite(pid) && pid > 0 ? pid : null;
+}
+
+function readLaunchdDaemonJob(): { loaded: boolean; pid: number | null } {
+  if (platform !== "darwin" || !process.getuid) return { loaded: false, pid: null };
+  try {
+    const res = spawnSync("launchctl", ["print", `gui/${process.getuid()}/${DAEMON_LAUNCHD_LABEL}`], {
+      encoding: "utf-8",
+      timeout: 5000,
+    });
+    if (res.status !== 0) return { loaded: false, pid: null };
+    return { loaded: true, pid: parseLaunchdPrintPid(res.stdout || "") };
+  } catch {
+    return { loaded: false, pid: null };
+  }
+}
+
+// "Managed by launchd" must mean "launchd's supervised instance IS this process".
+// The old env probe (XPC_SERVICE_NAME) survives into every {...process.env} child,
+// so a self-spawned replacement believed launchd owned it: its restarts went
+// through `kickstart -k`, which cannot kill a process that isn't the job instance
+// and instead spawned duplicates that lost the pid-file race — while the shell
+// watchdog kickstarted the "dead" job every cycle. Ask launchd, not the env.
 function isManagedByLaunchd(): boolean {
-  return !!process.env.XPC_SERVICE_NAME;
+  return readLaunchdDaemonJob().pid === process.pid;
 }
 
 // Mutual supervision: the launchd watchdog revives the daemon, and the daemon
@@ -11472,12 +11787,67 @@ function isManagedByLaunchd(): boolean {
 // loaded-only check (the old behavior here) saw "fine" and never revived it. The
 // resident watchdog now stamps a heartbeat file every loop; we treat a stale stamp
 // as a dead loop and kickstart it, mirroring how the watchdog judges the daemon.
+// The detached bootout+bootstrap pair that makes an edited plist take effect:
+// launchd caches the job definition at bootstrap time, so kickstart alone would
+// keep running the old one. bootout kills us (we are the job instance); the same
+// detached shell then bootstraps the rewritten plist. Pure so the wiring is
+// testable without killing a live daemon.
+export function buildLaunchdPlistReloadCommand(uid: number, plistPath: string): string {
+  return `sleep 1; launchctl bootout gui/${uid}/${DAEMON_LAUNCHD_LABEL}; sleep 1; launchctl bootstrap gui/${uid} ${shellEscapeForSh(plistPath)}`;
+}
+
+// One-time fleet migration: rewrite a legacy daemon plist that points launchd
+// directly at the codecast binary into the /bin/sh + launcher-script form, so the
+// login item's BTM identity stops changing on every binary self-update — the
+// source of the repeated macOS "codecast can run in the background" notifications
+// (see supervision.ts). The existing ProgramArguments are preserved verbatim
+// inside the launcher, so compiled and from-source installs both keep their exact
+// command. Ends with a detached bootout+bootstrap that restarts us under the new
+// definition; after that the plist contains /bin/sh and this never fires again.
+function migrateDaemonPlistToStableLauncher(): void {
+  const home = process.env.HOME;
+  if (!home || !process.getuid) return;
+  try {
+    const plistPath = path.join(home, "Library", "LaunchAgents", "sh.codecast.daemon.plist");
+    let content: string;
+    try {
+      content = fs.readFileSync(plistPath, "utf-8");
+    } catch {
+      return; // no autostart configured — nothing to migrate
+    }
+    if (!daemonPlistNeedsUpgrade(content)) return;
+
+    const args = extractPlistProgramArguments(content);
+    // Only migrate a command we can vouch for — an absolute-path executable that
+    // exists. A launcher exec'ing a broken command would crash-loop under KeepAlive.
+    if (args.length === 0 || !args[0].startsWith("/") || !fs.existsSync(args[0])) {
+      log(`Daemon plist migration skipped: unrecognized ProgramArguments (${JSON.stringify(args)})`);
+      return;
+    }
+
+    const launcherPath = path.join(CONFIG_DIR, DAEMON_LAUNCHER_FILENAME);
+    const daemonCommand = args.map(shellEscapeForSh).join(" ");
+    fs.writeFileSync(launcherPath, buildDaemonLauncherScript({ daemonCommand }), { mode: 0o755 });
+    fs.writeFileSync(plistPath, buildDaemonPlistXml({ scriptPath: launcherPath, configDir: CONFIG_DIR }), { mode: 0o644 });
+
+    logLifecycle("plist_stable_identity_migration", `rewrote ${plistPath} to /bin/sh launcher, reloading job`);
+    persistLogQueue(); // the bootout below kills us before exit handlers run
+    spawn("sh", ["-c", buildLaunchdPlistReloadCommand(process.getuid(), plistPath)], {
+      detached: true,
+      stdio: "ignore",
+    }).unref();
+  } catch (err) {
+    log(`Daemon plist migration failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 let lastWatchdogEnsureAt = 0;
 function ensureWatchdogSupervised(force = false): void {
   if (platform !== "darwin" || !process.getuid || !isManagedByLaunchd()) return;
   const now = Date.now();
   if (!force && now - lastWatchdogEnsureAt < 4 * 60 * 1000) return;
   lastWatchdogEnsureAt = now;
+  migrateDaemonPlistToStableLauncher();
   try {
     const uid = process.getuid();
     const domain = `gui/${uid}`;
@@ -11509,12 +11879,21 @@ function ensureWatchdogSupervised(force = false): void {
   }
 }
 
+// Environment for a child daemon this process spawns itself. Strip launchd's job
+// marker: the child is NOT the supervised instance, and inheriting the variable is
+// how self-spawned daemons used to believe they were.
+function replacementEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, CODECAST_RESTART: "1" };
+  delete env.XPC_SERVICE_NAME;
+  return env;
+}
+
 function spawnReplacement(): boolean {
   try {
     const child = spawn(process.execPath, process.argv.slice(1), {
       detached: true,
       stdio: "ignore",
-      env: { ...process.env, CODECAST_RESTART: "1" },
+      env: replacementEnv(),
     });
     child.unref();
     return true;
@@ -11535,7 +11914,7 @@ function spawnReplacement(): boolean {
 // even if our own exit never does. Pure so the wiring (label, gui/$uid, -k) is testable
 // without spawning a real kickstart against the live daemon.
 export function buildLaunchdKickstartCommand(uid: number): string {
-  return `sleep 1; launchctl kickstart -k gui/${uid}/sh.codecast.daemon`;
+  return `sleep 1; launchctl kickstart -k gui/${uid}/${DAEMON_LAUNCHD_LABEL}`;
 }
 
 function requestLaunchdRestart(): boolean {
@@ -11553,16 +11932,42 @@ function requestLaunchdRestart(): boolean {
   }
 }
 
-function triggerSelfRestart(): void {
-  if (isManagedByLaunchd()) {
-    // Imperatively kick launchd; kickstart -k kills this instance and starts a fresh
-    // one. Only fall through to the exit-and-trust-KeepAlive path if that fails.
-    if (requestLaunchdRestart()) return;
-  } else {
-    const spawned = spawnReplacement();
-    if (spawned) skipRespawn = true;
+// One restart contract for every "exit and come back" path (self-heal, remote
+// restart/update, forced update, disk version mismatch). Ownership decides the
+// mechanism, and ownership is read from launchd itself — never from the
+// environment, which self-spawned children inherit.
+function restartDaemonProcess(reason: string): void {
+  const job = readLaunchdDaemonJob();
+  const managed = job.pid !== null && job.pid === process.pid;
+  log(`Restarting daemon (${reason}); launchd job: ${job.loaded ? (managed ? "managed" : "loaded, not ours") : "absent"}`);
+  if (managed) {
+    // kickstart -k kills us externally in ~1s, so the restart does not depend on
+    // our own timers (dead in the post-sleep self-heal case). The delayed exit
+    // below only matters if the kickstart never fires; when it works we are gone
+    // before the timer runs.
+    if (requestLaunchdRestart()) {
+      setTimeout(() => process.exit(0), 2000);
+      return;
+    }
+    persistLogQueue();
+    process.exit(0); // KeepAlive respawns us
   }
-  setTimeout(() => process.exit(0), 500);
+  if (job.loaded) {
+    // We are not the instance launchd supervises (a self-spawned lineage).
+    // Spawning another unmanaged replacement would perpetuate that lineage and
+    // keep the watchdog kickstarting a job it sees as dead. Hand ownership back:
+    // free the pid file by exiting and kick the job so launchd's instance wins it.
+    skipRespawn = true;
+    if (!requestLaunchdRestart()) spawnReplacement();
+    persistLogQueue();
+    process.exit(0);
+  }
+  const spawned = spawnReplacement();
+  if (spawned) skipRespawn = true;
+  persistLogQueue();
+  // Exit synchronously: the replacement is already racing for the pid file, and a
+  // timer-deferred exit never happens when the timer subsystem is dead.
+  process.exit(0);
 }
 
 // Cross-platform self-heal. setInterval/setTimeout do not reliably survive a long
@@ -11595,7 +12000,7 @@ function selfHealIfTimersStalled(source: string): void {
   selfHealing = true;
   log(`[SELF-HEAL] event-loop timer stalled ${Math.round(stale / 1000)}s (timers dead, likely post-sleep), restarting via ${source}`);
   logLifecycle("self_heal_restart", `tick stalled ${Math.round(stale / 1000)}s, via ${source}`);
-  triggerSelfRestart();
+  restartDaemonProcess(`event-loop timers stalled, via ${source}`);
 }
 
 // Post-sleep watcher recovery. Distinct from selfHeal (which handles a dead *timer*):
@@ -11745,9 +12150,20 @@ export function releasePidFileIfOwned(pidFile: string, pid: number): boolean {
 function acquireLock(): boolean {
   const underLaunchd = isManagedByLaunchd();
 
-  // Even without a PID file, check for zombie daemon processes (e.g. from a
-  // shutdown that deleted the PID file but failed to exit).
-  if (!underLaunchd) {
+  if (underLaunchd) {
+    // We are the instance launchd supervises — the rightful pid-file owner. A live
+    // holder that isn't us is a rogue from a self-spawned lineage; deferring to it
+    // ("already running, exiting") sustains the watchdog's kickstart storm, spawning
+    // a doomed duplicate every cycle. Take over instead.
+    const holder = readPidFile(PID_FILE);
+    if (holder && holder !== process.pid && isProcessRunning(holder)) {
+      log(`Killing rogue daemon ${holder} (launchd instance taking over)`);
+      try { process.kill(holder, "SIGKILL"); } catch {}
+      releasePidFileIfOwned(PID_FILE, holder);
+    }
+  } else {
+    // Even without a PID file, check for zombie daemon processes (e.g. from a
+    // shutdown that deleted the PID file but failed to exit).
     try {
       const pgrepOut = execSync(`pgrep -f 'daemon\\.ts$' 2>/dev/null || true`, { encoding: "utf-8", timeout: 3000 });
       const pids = pgrepOut.trim().split("\n").map(Number).filter(p => p && p !== process.pid && isProcessRunning(p));
@@ -12151,11 +12567,7 @@ async function checkForForcedUpdate(syncService: SyncService): Promise<boolean> 
       if (result.success) {
         logLifecycle("forced_update_complete", `Binary replaced from v${currentVersion}, target>=${minVersion}`);
         await flushRemoteLogs();
-        if (!isManagedByLaunchd()) {
-          spawnReplacement();
-        }
-        await new Promise(resolve => setTimeout(resolve, 500));
-        process.exit(0);
+        restartDaemonProcess(`forced update to >=${minVersion}`);
       } else {
         logLifecycle("forced_update_failed", `current=${currentVersion} target>=${minVersion} error=${result.error}`);
         await flushRemoteLogs();
@@ -12185,19 +12597,9 @@ function checkDiskVersionMismatch(): void {
     if (diskVersion !== daemonVersion) {
       log(`Disk version mismatch: running=${daemonVersion} disk=${diskVersion}, restarting`);
       logLifecycle("version_mismatch_restart", `${daemonVersion} -> ${diskVersion}`);
-      flushRemoteLogs().then(() => {
-        if (!isManagedByLaunchd()) {
-          const spawned = spawnReplacement();
-          if (spawned) skipRespawn = true;
-        }
-        setTimeout(() => process.exit(0), 500);
-      }).catch(() => {
-        if (!isManagedByLaunchd()) {
-          const spawned = spawnReplacement();
-          if (spawned) skipRespawn = true;
-        }
-        setTimeout(() => process.exit(0), 500);
-      });
+      flushRemoteLogs()
+        .then(() => restartDaemonProcess("disk version mismatch"))
+        .catch(() => restartDaemonProcess("disk version mismatch"));
     }
   } catch {}
 }
@@ -12746,7 +13148,7 @@ async function main(): Promise<void> {
           spawn("sh", ["-c", `sleep ${backoffMinutes * 60} && "${process.execPath}" ${process.argv.slice(1).map(a => `"${a}"`).join(" ")}`], {
             detached: true,
             stdio: "ignore",
-            env: { ...process.env, CODECAST_RESTART: "1" },
+            env: replacementEnv(),
           }).unref();
         } catch {}
         return;
@@ -12758,7 +13160,7 @@ async function main(): Promise<void> {
       spawn(process.execPath, process.argv.slice(1), {
         detached: true,
         stdio: "ignore",
-        env: { ...process.env, CODECAST_RESTART: "1" },
+        env: replacementEnv(),
       }).unref();
     } catch {}
   });
@@ -12824,6 +13226,14 @@ async function main(): Promise<void> {
   logLifecycle("daemon_start", startMsg);
   sendLogImmediate("info", `[LIFECYCLE] daemon_start: ${startMsg}`, { error_code: "daemon_start" });
   log(`PID: ${process.pid}`);
+
+  try {
+    if (getMachineKey().rotated) {
+      const msg = `machine key rotated: ~/.codecast/.machine_key was cloned from different hardware (Migration Assistant / disk clone) — this machine now has device_id ${deviceId()}`;
+      logLifecycle("machine_key_rotated", msg);
+      sendLogImmediate("info", `[LIFECYCLE] machine_key_rotated: ${msg}`, { error_code: "machine_key_rotated" });
+    }
+  } catch {}
 
   if (isSyncPaused()) {
     log("⚠️  Sync is PAUSED via environment variable (CODE_CHAT_SYNC_PAUSED or CODECAST_PAUSED)");
@@ -14853,17 +15263,32 @@ export async function runWatchdog(): Promise<void> {
     }
   }
 
-  // 2b. If process is alive, check if event loop is actually responsive
+  // 2b. If process is alive, check if event loop is actually responsive.
+  // The tick freezes during system sleep exactly like a wedged loop, and this
+  // pass usually runs before the woken daemon's 30s stamp interval fires — so a
+  // stale tick only counts when our OWN start-to-start gap shows we've been
+  // continuously awake (see daemonTickStale). Killing on tick age alone SIGKILLed
+  // a healthy daemon on nearly every wake of a napping laptop.
+  const passStampPath = path.join(CONFIG_DIR, WATCHDOG_PASS_STAMP_FILENAME);
+  const passNow = Date.now();
+  let prevPass = 0;
+  try { prevPass = parseInt(fs.readFileSync(passStampPath, "utf-8").trim(), 10) || 0; } catch {}
+  try { fs.writeFileSync(passStampPath, String(passNow)); } catch {}
+  const passGap = prevPass > 0 ? passNow - prevPass : null;
   if (daemonAlive && daemonPid > 0) {
     try {
       const state = readDaemonState();
       const lastTick = state.lastHeartbeatTick || state.lastWatchdogCheck || 0;
-      const staleness = Date.now() - lastTick;
-      if (lastTick > 0 && staleness > HEARTBEAT_STALE_THRESHOLD_MS) {
-        logLine(`Daemon PID ${daemonPid} is alive but event loop frozen for ${Math.round(staleness / 1000)}s, killing`);
-        try { process.kill(daemonPid, 9); } catch {}
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        daemonAlive = false;
+      const staleness = passNow - lastTick;
+      if (lastTick > 0 && staleness > DAEMON_HEARTBEAT_STALE_MS) {
+        if (daemonTickStale(staleness, passGap)) {
+          logLine(`Daemon PID ${daemonPid} is alive but event loop frozen for ${Math.round(staleness / 1000)}s, killing`);
+          try { process.kill(daemonPid, 9); } catch {}
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          daemonAlive = false;
+        } else {
+          logLine(`Daemon tick stale ${Math.round(staleness / 1000)}s but watchdog pass gap ${passGap === null ? "unknown" : Math.round(passGap / 1000) + "s"} implies system sleep — deferring one cycle`);
+        }
       }
     } catch {}
   }

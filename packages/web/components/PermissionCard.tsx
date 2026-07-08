@@ -3,6 +3,7 @@ import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useEventListener } from "../hooks/useEventListener";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
+import { KeyCap } from "./KeyboardShortcutsHelp";
 
 type Permission = {
   _id: Id<"pending_permissions">;
@@ -205,7 +206,7 @@ export function PermissionStack({
             </button>
           </div>
           <span className="text-[9px] text-sol-text-dim flex-shrink-0 hidden sm:flex items-center gap-1">
-            <kbd className="px-0.5 bg-sol-bg rounded border border-sol-border/50 text-[9px]">y</kbd>/<kbd className="px-0.5 bg-sol-bg rounded border border-sol-border/50 text-[9px]">n</kbd>
+            <KeyCap size="xs">y</KeyCap>/<KeyCap size="xs">n</KeyCap>
           </span>
         </div>
         {preview && isLong && (
@@ -283,11 +284,11 @@ export function PermissionStack({
 
       <div className="flex items-center justify-center gap-3 py-0.5 border-t border-sol-yellow/8">
         <span className="text-[9px] text-sol-text-dim flex items-center gap-1">
-          <kbd className="px-0.5 bg-sol-bg rounded border border-sol-border/50 text-[9px]">y</kbd>
+          <KeyCap size="xs">y</KeyCap>
           approve all
         </span>
         <span className="text-[9px] text-sol-text-dim flex items-center gap-1">
-          <kbd className="px-0.5 bg-sol-bg rounded border border-sol-border/50 text-[9px]">n</kbd>
+          <KeyCap size="xs">n</KeyCap>
           deny all
         </span>
       </div>

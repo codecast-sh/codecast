@@ -26,8 +26,10 @@ import {
 //     f forks from that point (this is how you "fork higher" — drill into the
 //     root or any ancestor and fork from an early message), Enter rewinds the
 //     current branch there, ← / h / Esc go back, / filters.
-// Keys are captured on `window` (capture phase) so single letters don't leak to
-// the global conversation shortcuts, mirroring the message navigator.
+// The panel's root container carries data-owns-keys and takes focus while open,
+// so the global shortcut dispatcher's input guard suppresses conversation
+// shortcuts (h/t/d/r, y/n permission) while focus is inside it. The panel's own
+// window keydown handler then drives navigation without those keys leaking.
 
 const agentColors: Record<string, string> = {
   claude_code: "text-amber-400",
@@ -188,7 +190,7 @@ function MessageRow({
 type Mode = "branches" | "messages";
 
 function ForkTreeContent({
-  conversation, conversationId, currentBranchId, open, initialDrillId, onClose, onSwitchToConversation, onForkFromBranch, onRewindCurrent,
+  conversation, conversationId, currentBranchId, open, initialDrillId, containerRef, onClose, onSwitchToConversation, onForkFromBranch, onRewindCurrent,
 }: {
   conversation: ForkConversationLike;
   conversationId: string;
@@ -197,6 +199,9 @@ function ForkTreeContent({
   // When set, the map opens directly drilled into this branch's messages
   // (double-Esc into the current branch) instead of the branch list.
   initialDrillId?: string | null;
+  // The [data-owns-keys] root box; the panel keeps focus here so global
+  // conversation shortcuts stay suppressed while it's open.
+  containerRef: React.RefObject<HTMLDivElement | null>;
   onClose: () => void;
   onSwitchToConversation: (convId: string) => void;
   onForkFromBranch: (branchId: string, messageUuid: string, content: string) => void;
@@ -341,7 +346,17 @@ function ForkTreeContent({
     }
   }, [currentBranchId, onRewindCurrent, onClose, forkFromMsg]);
 
-  // Command-mode keys, captured on window so they beat the global dispatcher.
+  // Keep focus inside the [data-owns-keys] container whenever the panel isn't in
+  // its filter input — on open, and after leaving filter mode (blurring the
+  // input drops focus to <body>). This is what makes the global dispatcher's
+  // input guard suppress conversation shortcuts (h/t/d/r, y/n) so navigating the
+  // map can never approve or deny a permission by accident.
+  useWatchEffect(() => {
+    if (open && !filtering) containerRef.current?.focus();
+  }, [open, filtering]);
+
+  // Command-mode keys on window. The container's focus + data-owns-keys keeps the
+  // global dispatcher from claiming these first; this handler drives the map's nav.
   useWatchEffect(() => {
     if (!open) return;
     const handler = (e: KeyboardEvent) => {
@@ -383,10 +398,9 @@ function ForkTreeContent({
         if (k === "Enter") { stop(); if (drillId) rewindToMsg(drillId, msgSel, visibleMsgs); return; }
         if (k === "h" || k === "ArrowLeft") { stop(); backToBranches(); return; }
       }
-      // The map owns the keyboard while open: swallow stray plain keys so they
-      // neither type into the still-focused composer nor trigger global
-      // conversation shortcuts (d=diff, t=tree…). Modifier combos (Ctrl+B to
-      // close, ⌘K palette) still pass through.
+      // The map owns the keyboard while open: swallow stray plain keys as
+      // defense-in-depth (the dispatcher's input guard already skips them).
+      // Modifier combos (Ctrl+B to close, ⌘K palette) still pass through.
       if (!e.metaKey && !e.ctrlKey && !e.altKey && k.length === 1) {
         e.preventDefault();
         e.stopPropagation();
@@ -549,6 +563,15 @@ export function ForkMapBox({
   onRewindCurrent: (messageUuid: string, indexFromEnd: number) => void;
 }) {
   const boxRef = useRef<HTMLDivElement>(null);
+  // Opening the map moves focus into the container (see ForkTreeContent) so the
+  // global dispatcher's input guard suppresses conversation shortcuts. Remember
+  // what was focused first (e.g. the composer when opened via Ctrl+B mid-typing)
+  // and hand focus back on close. Captured at first render, before the child's
+  // effect focuses the container.
+  const restoreFocusRef = useRef<HTMLElement | null>(
+    typeof document !== "undefined" ? (document.activeElement as HTMLElement | null) : null,
+  );
+  useWatchEffect(() => () => restoreFocusRef.current?.focus?.(), []);
   // Close on a mousedown outside the box (and outside the toggle control, so a
   // click on the header icon toggles rather than close-then-reopen).
   useWatchEffect(() => {
@@ -574,7 +597,9 @@ export function ForkMapBox({
   return (
     <div
       ref={boxRef}
-      className={`${containerCls} ${className || ""}`}
+      data-owns-keys
+      tabIndex={-1}
+      className={`outline-none ${containerCls} ${className || ""}`}
     >
       <div className={headCls}>
         <span className="text-[10px] text-sol-text-dim font-medium uppercase tracking-wider inline-flex items-center gap-1.5">
@@ -592,6 +617,7 @@ export function ForkMapBox({
         currentBranchId={currentBranchId}
         open={open}
         initialDrillId={initialDrillId}
+        containerRef={boxRef}
         onClose={onClose}
         onSwitchToConversation={onSwitchToConversation}
         onForkFromBranch={onForkFromBranch}

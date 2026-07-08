@@ -52,6 +52,7 @@ export type ShortcutAction =
   | 'compose.focus'
   | 'sidebar.toggleLeft'
   | 'sidebar.toggleRight'
+  | 'sidebar.toggleComments'
   | 'diff.prevChange'
   | 'diff.nextChange'
   | 'diff.toggleFileTree'
@@ -185,6 +186,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'ctrl+m', action: 'compose.focus', skipInputCheck: true, description: 'Focus message input' },
   { key: 'ctrl+[', action: 'sidebar.toggleLeft', skipInputCheck: true, description: 'Toggle left sidebar' },
   { key: 'ctrl+]', action: 'sidebar.toggleRight', skipInputCheck: true, description: 'Toggle sessions panel' },
+  { key: 'ctrl+\\', action: 'sidebar.toggleComments', skipInputCheck: true, description: 'Toggle comments rail' },
 
   { key: 'j', action: 'review.nextFile', when: 'review', description: 'Next file' },
   { key: 'k', action: 'review.prevFile', when: 'review', description: 'Previous file' },

@@ -122,3 +122,57 @@ describe("hiding old must not promote a subagent to a loose card (ct-37163)", ()
     expect(ids(cat.needsInput)).not.toContain(CHILD);
   });
 });
+
+// Agent-team teammates (spawned_by_conversation_id + agent_team_name, stamped
+// by linkSpawnedBy) NEST under their lead like Task-tool subagents — but keep
+// first-class semantics when the lead is absent: unlike a Task subagent they
+// render as a normal flat card, never hidden, because a teammate is a real
+// session someone may still need to answer. Forks (forked_from) and
+// cast-spawn sessions (no team stamp) never nest.
+describe("agent-team teammates nest under their lead", () => {
+  const LEAD = cid(10);
+  const MATE = cid(11);
+  const ids = (xs: InboxSession[]) => xs.map((x) => x._id);
+  const lead = sess({ _id: LEAD, awaiting_input: true, agent_team_name: "myteam", agent_name: "team-lead" });
+  const mate = sess({
+    _id: MATE,
+    awaiting_input: true,
+    spawned_by_conversation_id: LEAD,
+    agent_team_name: "myteam",
+    agent_name: "researcher",
+  });
+
+  it("lead present: the teammate nests under the lead and leaves the flat buckets", () => {
+    const cat = categorizeSessions({ [LEAD]: lead, [MATE]: mate }, new Set());
+    expect(ids(cat.subsByParent.get(LEAD) ?? [])).toContain(MATE);
+    expect(ids(cat.needsInput)).toEqual([LEAD]);
+  });
+
+  it("lead absent: the teammate stays a normal flat card — never hidden like a Task-subagent orphan", () => {
+    const cat = categorizeSessions({ [MATE]: mate }, new Set());
+    expect(ids(cat.needsInput)).toContain(MATE);
+  });
+
+  it("spawned_by without a team stamp does not nest (cast spawn stays first-class)", () => {
+    const spawned = sess({ _id: MATE, awaiting_input: true, spawned_by_conversation_id: LEAD });
+    const cat = categorizeSessions({ [LEAD]: lead, [MATE]: spawned }, new Set());
+    expect(cat.subsByParent.get(LEAD) ?? []).toHaveLength(0);
+    expect(ids(cat.needsInput)).toContain(MATE);
+  });
+
+  it("forks never nest — they group in forksByParent only", () => {
+    const fork = sess({ _id: MATE, awaiting_input: true, forked_from: LEAD });
+    const cat = categorizeSessions({ [LEAD]: lead, [MATE]: fork }, new Set());
+    expect(cat.subsByParent.get(LEAD) ?? []).toHaveLength(0);
+    expect(ids(cat.forksByParent.get(LEAD) ?? [])).toContain(MATE);
+    expect(ids(cat.needsInput)).toContain(MATE);
+  });
+
+  it("old partition: a teammate rides its LIVE lead, but ages out when the whole team is stale", () => {
+    // Lead live, teammate outside the live window → not old (it nests under the lead).
+    expect(isOldSession(mate, new Set([LEAD]))).toBe(false);
+    // Neither in the live window → the teammate ages out like any session
+    // (unlike a Task subagent, which is exempt outright).
+    expect(isOldSession(mate, new Set([RECENT]))).toBe(true);
+  });
+});

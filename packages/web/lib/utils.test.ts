@@ -1,5 +1,14 @@
 import { test, expect, describe } from "bun:test";
-import { matchesProjectQuery } from "./utils";
+import {
+  matchesProjectQuery,
+  resolveCustomPath,
+  inferProjectBase,
+  parentDir,
+  commonParentDir,
+  isExplicitPath,
+} from "./utils";
+
+const HOME = "/Users/ashot";
 
 describe("matchesProjectQuery", () => {
   const paths = [
@@ -43,5 +52,76 @@ describe("matchesProjectQuery", () => {
   test("query with slash falls back to full-path substring", () => {
     expect(matches("/Users/ashot/src/codecast")).toEqual(["/Users/ashot/src/codecast"]);
     expect(matches("ashot/src")).toEqual(paths);
+  });
+});
+
+describe("resolveCustomPath", () => {
+  const base = "/Users/ashot/src";
+
+  test("home-relative and absolute paths resolve without a base", () => {
+    expect(resolveCustomPath("~/experiments/foo", HOME)).toBe("/Users/ashot/experiments/foo");
+    expect(resolveCustomPath("~", HOME)).toBe("/Users/ashot");
+    expect(resolveCustomPath("/tmp/scratch", HOME)).toBe("/tmp/scratch");
+  });
+
+  test("a bare name resolves against the base (sibling folder)", () => {
+    // The gap this fixes: "weekend-hack" used to dead-end at "no match".
+    expect(resolveCustomPath("weekend-hack", HOME, base)).toBe("/Users/ashot/src/weekend-hack");
+    expect(resolveCustomPath("experiments/foo", HOME, base)).toBe("/Users/ashot/src/experiments/foo");
+  });
+
+  test("a bare name without a base stays unresolved (daemon can't cd to it)", () => {
+    expect(resolveCustomPath("weekend-hack", HOME)).toBeUndefined();
+  });
+
+  test("normalizes doubled and trailing slashes", () => {
+    expect(resolveCustomPath("/a//b/", HOME)).toBe("/a/b");
+    expect(resolveCustomPath("sub/", HOME, base)).toBe("/Users/ashot/src/sub");
+  });
+
+  test("empty input resolves to nothing", () => {
+    expect(resolveCustomPath("", HOME, base)).toBeUndefined();
+    expect(resolveCustomPath("   ", HOME, base)).toBeUndefined();
+  });
+
+  test("~/… needs a known home", () => {
+    expect(resolveCustomPath("~/foo", undefined)).toBeUndefined();
+  });
+});
+
+describe("inferProjectBase", () => {
+  test("prefers the parent of the current project (siblings)", () => {
+    expect(inferProjectBase("/Users/ashot/src/codecast", ["/Users/ashot/family"], HOME)).toBe("/Users/ashot/src");
+  });
+
+  test("with no current project, uses the common parent of recents", () => {
+    expect(
+      inferProjectBase(undefined, ["/Users/ashot/src/codecast", "/Users/ashot/src/union-mobile"], HOME),
+    ).toBe("/Users/ashot/src");
+  });
+
+  test("falls back to home when recents don't cluster", () => {
+    expect(inferProjectBase(undefined, ["/Users/ashot/a", "/Users/ashot/b"], HOME)).toBe("/Users/ashot");
+    expect(inferProjectBase(undefined, [], HOME)).toBe(HOME);
+  });
+});
+
+describe("parentDir / commonParentDir / isExplicitPath", () => {
+  test("parentDir", () => {
+    expect(parentDir("/a/b/c")).toBe("/a/b");
+    expect(parentDir("/a/b/c/")).toBe("/a/b");
+    expect(parentDir("/a")).toBe("/");
+  });
+
+  test("commonParentDir returns undefined when only root is shared", () => {
+    expect(commonParentDir(["/Users/ashot/src/x", "/opt/y"])).toBeUndefined();
+    expect(commonParentDir(["/Users/ashot/src/x", "/Users/ashot/src/y"])).toBe("/Users/ashot/src");
+  });
+
+  test("isExplicitPath distinguishes typed paths from bare names", () => {
+    expect(isExplicitPath("/abs")).toBe(true);
+    expect(isExplicitPath("~/rel")).toBe(true);
+    expect(isExplicitPath("weekend-hack")).toBe(false);
+    expect(isExplicitPath("a/b")).toBe(false);
   });
 });

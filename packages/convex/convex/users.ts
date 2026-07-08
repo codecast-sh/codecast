@@ -1,4 +1,4 @@
-import { mutation, query, internalMutation } from "./functions";
+import { mutation, query, internalMutation, internalQuery } from "./functions";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
@@ -44,7 +44,10 @@ export const getCurrentUserProbe = query({
   },
 });
 
-export const createUser = mutation({
+// internal: had zero callers and was a public, unauthenticated mutation that
+// inserted a user row for any supplied email. Convex Auth owns real user
+// creation; nothing legitimate needs this from a client.
+export const createUser = internalMutation({
   args: {
     email: v.string(),
     name: v.optional(v.string()),
@@ -60,7 +63,11 @@ export const createUser = mutation({
   },
 });
 
-export const listUsers = query({
+// internal: was a public query that returned the ENTIRE users table (including
+// every email) to any caller — the id/email directory an attacker needed to
+// target the other unauthenticated mutations. Only a dev test script referenced
+// it; no product surface lists all users this way.
+export const listUsers = internalQuery({
   args: {},
   handler: async (ctx) => {
     return await ctx.db.query("users").collect();
@@ -91,40 +98,25 @@ export const updateProfile = mutation({
   },
 });
 
+// No-op stub. This used to advance last_message_sent_at / prev_message_sent_at /
+// work_cluster_started_at on the user doc, scheduled from every synced batch that
+// contained a user-role message (tool results included). Nothing reads those
+// fields, and with a fleet of live sessions the concurrent invocations serialized
+// on one hot document and OCC-storm'd the backend. Kept only so invocations
+// already in the scheduler queue at deploy time don't fail; delete once drained.
 export const updateUserActivity = internalMutation({
   args: {
     userId: v.id("users"),
-    // Accepted-but-ignored: the message path no longer refreshes daemon_last_seen
-    // (the 30s daemonHeartbeat covers it; a second message-triggered writer raced
-    // it on the hot user doc — the OCC conflict this change removes). Kept in the
-    // validator only so any jobs already scheduled with it at deploy time don't
-    // fail their arg check; drop it once the scheduler queue has drained.
     daemonSeen: v.optional(v.boolean()),
     messageTimestamp: v.optional(v.number()),
   },
-  handler: async (ctx, args) => {
-    const patch: Record<string, unknown> = {};
-    const user = await ctx.db.get(args.userId);
-    if (!user) return;
-    if (args.messageTimestamp) {
-      if (!user.last_message_sent_at || args.messageTimestamp > user.last_message_sent_at) {
-        if (user.last_message_sent_at) {
-          patch.prev_message_sent_at = user.last_message_sent_at;
-          const GAP_THRESHOLD_MS = 2 * 60 * 60 * 1000;
-          if (args.messageTimestamp - user.last_message_sent_at > GAP_THRESHOLD_MS) {
-            patch.work_cluster_started_at = args.messageTimestamp;
-          }
-        }
-        patch.last_message_sent_at = args.messageTimestamp;
-      }
-    }
-    if (Object.keys(patch).length > 0) {
-      await ctx.db.patch(args.userId, patch);
-    }
-  },
+  handler: async () => {},
 });
 
-export const updateDaemonLastSeen = mutation({
+// internal: had zero callers and was a public mutation that let anyone stamp
+// any user's daemon_last_seen. The real daemon-liveness write is daemonHeartbeat
+// below, which authenticates via api_token.
+export const updateDaemonLastSeen = internalMutation({
   args: {
     user_id: v.id("users"),
   },
@@ -2013,25 +2005,64 @@ async function getMatchingConversationsPage(
   return { page: matches, isDone: page.isDone, continueCursor: page.continueCursor };
 }
 
+// Visit every conversation matching `pathPrefix` (git_root first, then
+// project_path-only rows), calling `visit` until it returns false. Built on
+// `.take()` rather than `.paginate()`: Convex allows only ONE paginated query
+// per query/mutation execution, and this scan needs two index ranges — the
+// paginate version threw "ran multiple paginated queries" the moment the
+// git_root range didn't resolve the call, which silently broke every
+// delete-by-path flow for path-only conversations. take() has no such limit.
+// A batch that fills up is retried from the range start with double the size
+// (value-boundary cursors can't advance safely through runs of identical path
+// values), capped so one call can't blow the transaction read budget; ranges
+// larger than the cap are handled by the callers' delete→rescan loop.
+export async function scanConversationsForPath(
+  ctx: any,
+  userId: any,
+  pathPrefix: string,
+  visit: (conv: any) => boolean,
+) {
+  const MAX_TAKE = 1024;
+  const seen = new Set<string>();
+  for (const source of ["git_root", "project_path"] as const) {
+    const field = source === "git_root" ? "git_root" : "project_path";
+    const index = source === "git_root" ? "by_user_git_root" : "by_user_project_path";
+    let take = 128;
+    while (true) {
+      const rows = await ctx.db
+        .query("conversations")
+        .withIndex(index, (q: any) =>
+          q
+            .eq("user_id", userId)
+            .gte(field, pathPrefix)
+            .lt(field, getPathPrefixUpperBound(pathPrefix))
+        )
+        .take(take);
+      for (const conv of rows) {
+        if (source === "project_path" && conv.git_root) continue;
+        if (!matchesPathPrefix(getConversationProjectPath(conv), pathPrefix)) continue;
+        const id = conv._id.toString();
+        if (seen.has(id)) continue;
+        seen.add(id);
+        if (!visit(conv)) return;
+      }
+      if (rows.length < take || take >= MAX_TAKE) break;
+      take *= 2;
+    }
+  }
+}
+
 async function findNextConversationForPath(
   ctx: any,
   userId: any,
   pathPrefix: string,
 ) {
-  for (const source of ["git_root", "project_path"] as const) {
-    let cursor: string | undefined;
-    while (true) {
-      const page = await getMatchingConversationsPage(ctx, userId, pathPrefix, source, cursor, 16);
-      if (page.page.length > 0) {
-        return page.page[0];
-      }
-      if (page.isDone) {
-        break;
-      }
-      cursor = page.continueCursor;
-    }
-  }
-  return null;
+  let found: any = null;
+  await scanConversationsForPath(ctx, userId, pathPrefix, (conv) => {
+    found = conv;
+    return false;
+  });
+  return found;
 }
 
 // Queue a full re-resolution of every conversation whose path matches
@@ -2283,26 +2314,11 @@ async function countConversationsForPathInternal(
   userId: any,
   pathPrefix: string,
 ) {
-  const seen = new Set<string>();
   let count = 0;
-
-  for (const source of ["git_root", "project_path"] as const) {
-    let cursor: string | undefined;
-    while (true) {
-      const page = await getMatchingConversationsPage(ctx, userId, pathPrefix, source, cursor, 32);
-      for (const conv of page.page) {
-        const id = conv._id.toString();
-        if (seen.has(id)) continue;
-        seen.add(id);
-        count++;
-      }
-      if (page.isDone) {
-        break;
-      }
-      cursor = page.continueCursor;
-    }
-  }
-
+  await scanConversationsForPath(ctx, userId, pathPrefix, () => {
+    count++;
+    return true;
+  });
   return count;
 }
 

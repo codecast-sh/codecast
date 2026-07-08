@@ -46,9 +46,43 @@ const RECONCILE_THROTTLE_MS = 30 * 60 * 1000;
  * that daemon heartbeats (which churn managed_sessions every ~30s) don't
  * invalidate the multi-MB task payload.
  */
+// One-shot badge fetch batch size — bounded by webTaskOrigins' server-side cap.
+const ORIGIN_BADGE_CHUNK = 150;
+
 export function useSyncTasksWithArgs(wsArgs: WorkspaceArgs) {
   const syncTable = useInboxStore((s) => s.syncTable);
   const convex = useConvex();
+
+  // Dormant origin badges — "who · when" on a task row's session pill when no
+  // live session covers it. Fetched ONE-SHOT per conversation id (a dormant
+  // session's badge data doesn't change; live rows ride webActiveSessions), so
+  // the task list never subscribes to conversation churn — reading conversations
+  // inside webList made every message re-run the multi-MB query (isolate memory
+  // churn + "too many system operations" timeouts). See tasks.webTaskOrigins.
+  const requestedOrigins = useRef<Set<string>>(new Set());
+  const fetchOriginBadges = useCallback((rows: any[]) => {
+    const have = useInboxStore.getState().taskOriginBadges;
+    const need: string[] = [];
+    for (const t of rows) {
+      const id = t?.created_from_conversation ?? t?.conversation_ids?.[0];
+      if (id && !have[id] && !requestedOrigins.current.has(id)) {
+        requestedOrigins.current.add(id);
+        need.push(id);
+      }
+    }
+    for (let i = 0; i < need.length; i += ORIGIN_BADGE_CHUNK) {
+      const chunk = need.slice(i, i + ORIGIN_BADGE_CHUNK);
+      convex.query(api.tasks.webTaskOrigins, { conversation_ids: chunk })
+        .then((map: any) => {
+          if (map && Object.keys(map).length) {
+            useInboxStore.setState((s: any) => ({ taskOriginBadges: { ...s.taskOriginBadges, ...map } }));
+          }
+        })
+        // On failure, allow a retry on the next sync tick. Ids the server
+        // omitted (inaccessible/gone) stay in requestedOrigins — no refetch loop.
+        .catch(() => { for (const id of chunk) requestedOrigins.current.delete(id); });
+    }
+  }, [convex]);
   // Gate the watermark reads on hydration so the cursor/backfill we resume from is
   // the restored one, not an empty map mid-hydration (which would re-snapshot +
   // re-crawl unnecessarily). syncMeta is on the critical hydration path.
@@ -99,8 +133,9 @@ export function useSyncTasksWithArgs(wsArgs: WorkspaceArgs) {
   // (status="dropped") and are hidden by read-time filters. Mirrors docs/sessions.
   useConvexSync(taskData, useCallback((data: any) => {
     syncTable("tasks", data.items, { isDelta: true });
+    fetchOriginBadges(data.items);
     if (typeof data.cursor === "number") lastSeenCursor.current = data.cursor;
-  }, [syncTable]));
+  }, [syncTable, fetchOriginBadges]));
 
   // Active sessions stored separately — lightweight update, no task resync.
   useConvexSync(activeMap, useCallback((data: any) => {
@@ -164,7 +199,7 @@ export function useSyncTasksWithArgs(wsArgs: WorkspaceArgs) {
         });
         return { rows: page.page ?? [], isDone: page.isDone, continueCursor: page.continueCursor };
       },
-      onPage: (rows) => syncTable("tasks", rows, { isDelta: true }),
+      onPage: (rows) => { syncTable("tasks", rows, { isDelta: true }); fetchOriginBadges(rows); },
       onComplete: (all) => useInboxStore.getState().syncTable("tasks", all, { isDelta: true }),
     });
   }, [convex, wsKey, reconcileNonce, hydrated]); // eslint-disable-line react-hooks/exhaustive-deps

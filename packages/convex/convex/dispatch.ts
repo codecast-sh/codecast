@@ -11,6 +11,7 @@ import { resolveAssigneeStr, resolveAssigneeToUserId, recalcPlanProgress, notify
 import { api, internal } from "./_generated/api";
 import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey } from "@codecast/shared/contracts";
 import { conversationHasNoWork, reapEmptyConversation, enqueueKillSessionCommand } from "./cleanup";
+import { cancelTasksBoundToConversation } from "./agentTasks";
 import { canAccessDoc } from "./docs";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { findConversationBySessionReference } from "./conversationSessionLookup";
@@ -38,6 +39,11 @@ const TABLE_CONFIG: Record<string, TableConfig> = {
       "_id", "_creationTime", "user_id", "session_id", "team_id",
       "started_at", "message_count", "short_id", "share_token",
       "is_private", "team_visibility", "auto_shared", "status", "agent_type",
+      // Anchor invariants are server-owned (set by provisionAnchor / cleared by
+      // decommissionAnchor) — a client must not flip these via a generic patch.
+      "persistent", "acting_user_id", "anchor_id",
+      // Second-party ownership has a single validated writer (setSessionOwner).
+      "owner_user_id",
     ]),
     // No beforePatch hook: dismiss is an absolute flag, so the server has no
     // reason to rewrite the client's `inbox_dismissed_at`. A previous hook
@@ -155,7 +161,15 @@ async function applyPatches(
 
       if (config.kind === "collection") {
         const doc = await ctx.db.get(docKey as Id<any>);
-        if (!doc || (doc as any)[config.ownerField] !== userId) continue;
+        // Conversations: the second-party owner triages (dismiss/pin/stash)
+        // an assigned session from their inbox exactly like the runner would.
+        // owner_user_id itself is immutable here — assignment goes through the
+        // validated setSessionOwner mutation only.
+        const permitted = doc && (
+          (doc as any)[config.ownerField] === userId ||
+          (table === "conversations" && (doc as any).owner_user_id?.toString() === userId.toString())
+        );
+        if (!permitted) continue;
         const finalSafe = config.beforePatch ? config.beforePatch(doc, { ...safe }) : safe;
         await ctx.db.patch(docKey as Id<any>, finalSafe);
         // Lifecycle hooks on the DATA transition (a conversation patch setting
@@ -168,7 +182,21 @@ async function applyPatches(
             await reapEmptyConversation(ctx, doc as any);
           } else if (action === "kill") {
             await enqueueKillSessionCommand(ctx, doc as any);
-            await ctx.db.patch(docKey as Id<any>, { inbox_killed_at: Date.now(), status: "completed" });
+            // A persistent anchor never auto-completes on a dismiss/kill — it goes
+            // dormant, not retired (only decommissionAnchor clears `persistent`).
+            const killPatch: Record<string, any> = { inbox_killed_at: Date.now() };
+            if (!(doc as any)?.persistent) killPatch.status = "completed";
+            await ctx.db.patch(docKey as Id<any>, killPatch);
+            // Dismiss retires the session — a standing schedule that injects
+            // into it must die with it, or its next fire would silently
+            // resurrect a session the user just retired. User gestures only:
+            // bulk cleanup sweeps patch inbox_dismissed_at directly (not via
+            // dispatch) and deliberately leave standing schedules armed. An
+            // anchor going dormant keeps its schedules too. Task owner = the
+            // conversation's runner (a second-party owner may be triaging).
+            if (!(doc as any)?.persistent) {
+              await cancelTasksBoundToConversation(ctx, (doc as any).user_id, docKey as Id<"conversations">);
+            }
           }
         }
       } else {
@@ -368,11 +396,17 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     // ghost (never-prune cache) and needs to surface "restore session", not a
     // baffling auth failure.
     if (!conversation) throw new Error("conversation_deleted");
-    if (conversation.user_id.toString() !== userId.toString()) throw new Error("Unauthorized");
+    // The runner, or the session's second-party owner (a Mr-Bot-run session
+    // assigned to this user steers exactly like their own — that's the point
+    // of ownership). Delivery routing is unaffected: enqueuePendingMessage
+    // stamps the RUNNER's id for the daemon poll either way.
+    if (
+      conversation.user_id.toString() !== userId.toString() &&
+      conversation.owner_user_id?.toString() !== userId.toString()
+    ) throw new Error("Unauthorized");
 
     // Single canonical writer: dedups on client_id, stamps owner_user_id for the daemon's
-    // delivery poll, and wakes the conversation (un-dismiss, completed→active). The web composer
-    // only ever sends into the user's own conversation (enforced above), so owner == sender.
+    // delivery poll, and wakes the conversation (un-dismiss, completed→active).
     return await enqueuePendingMessage(ctx, conversation, userId, {
       content,
       image_storage_ids: imageIds?.length ? (imageIds as any) : undefined,
@@ -382,11 +416,16 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
 
   resumeSession: async (ctx, userId, [convId]: [string]) => {
     const conv = await ctx.db.get(convId as Id<"conversations">);
-    if (!conv || conv.user_id.toString() !== userId.toString()) throw new Error("Unauthorized");
+    const isSecondPartyOwner = conv?.owner_user_id?.toString() === userId.toString();
+    if (!conv || (conv.user_id.toString() !== userId.toString() && !isSecondPartyOwner)) throw new Error("Unauthorized");
     const agentType = conv.agent_type === "codex" ? "codex" : conv.agent_type === "gemini" ? "gemini" : "claude";
+    // Daemon commands are polled by the RUNNER's daemon — for a second-party
+    // owner resuming a session run by another account, address the command to
+    // the runner, not the caller.
+    const daemonUserId = conv.user_id;
     const pendingCommands = await ctx.db
       .query("daemon_commands")
-      .withIndex("by_user_pending", (q: any) => q.eq("user_id", userId).eq("executed_at", undefined))
+      .withIndex("by_user_pending", (q: any) => q.eq("user_id", daemonUserId).eq("executed_at", undefined))
       .collect();
     if (hasRecentPendingDaemonCommand(pendingCommands as any, {
       conversationId: convId,
@@ -395,7 +434,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       return { deduplicated: true };
     }
     const commandId = await ctx.db.insert("daemon_commands", {
-      user_id: userId,
+      user_id: daemonUserId,
       command: "resume_session" as const,
       args: JSON.stringify({
         session_id: conv.session_id,
@@ -673,8 +712,8 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
 
     let projectId;
     if (opts.project_id) {
-      const p = await ctx.db.query("projects").filter((q: any) => q.eq(q.field("_id"), opts.project_id)).first();
-      if (p) projectId = p._id;
+      const pid = ctx.db.normalizeId("projects", opts.project_id);
+      if (pid && (await ctx.db.get(pid))) projectId = pid;
     }
 
     const resolvedAssignee = await resolveAssigneeStr(ctx, opts.assignee, userId);

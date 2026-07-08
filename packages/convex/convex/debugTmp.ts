@@ -113,3 +113,123 @@ export const unarchiveBucket = internalMutation({
     return { name: bucket.name, was_archived_at: bucket.archived_at ?? null };
   },
 });
+
+// TEMPORARY: sample conversation doc weight — how many docs carry the orphaned
+// title_embedding (1024 float64s) and what the average doc size is, newest or
+// oldest first. Sizes the strip-migration payoff. Safe to delete.
+export const sampleConversationWeight = internalQuery({
+  args: { take: v.optional(v.number()), oldest: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const n = Math.min(args.take ?? 200, 400);
+    const rows = await ctx.db
+      .query("conversations")
+      .order(args.oldest ? "asc" : "desc")
+      .take(n);
+    let withEmb = 0;
+    let bytes = 0;
+    let embBytes = 0;
+    for (const c of rows) {
+      bytes += JSON.stringify(c).length;
+      const emb = (c as any).title_embedding;
+      if (emb) {
+        withEmb++;
+        embBytes += JSON.stringify(emb).length;
+      }
+    }
+    return {
+      sampled: rows.length,
+      with_embedding: withEmb,
+      avg_doc_bytes: rows.length ? Math.round(bytes / rows.length) : 0,
+      embedding_bytes_total: embBytes,
+      newest_first: !args.oldest,
+    };
+  },
+});
+
+// TEMPORARY: sample docs of any table by creation-time seek — how many carry an
+// orphaned embedding field (writers removed 2026-06-28, data never stripped) and
+// average doc size. after = ms epoch to seek to. Safe to delete.
+export const sampleEmbeddingEra = internalQuery({
+  args: {
+    table: v.union(v.literal("messages"), v.literal("conversations"), v.literal("docs")),
+    after: v.number(),
+    take: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const n = Math.min(args.take ?? 300, 400);
+    const rows = await (ctx.db.query(args.table as any) as any)
+      .withIndex("by_creation_time", (q: any) => q.gt("_creationTime", args.after))
+      .take(n);
+    const field = args.table === "conversations" ? "title_embedding" : "embedding";
+    let withEmb = 0;
+    let bytes = 0;
+    let embBytes = 0;
+    for (const r of rows) {
+      bytes += JSON.stringify(r).length;
+      const emb = r[field];
+      if (emb) {
+        withEmb++;
+        embBytes += JSON.stringify(emb).length;
+      }
+    }
+    return {
+      table: args.table,
+      sampled: rows.length,
+      with_embedding: withEmb,
+      avg_doc_bytes: rows.length ? Math.round(bytes / rows.length) : 0,
+      avg_emb_bytes: withEmb ? Math.round(embBytes / withEmb) : 0,
+      first_at: rows.length ? new Date(rows[0]._creationTime).toISOString() : null,
+    };
+  },
+});
+
+// TEMPORARY: time the managed_sessions per-user scan two ways — the unbounded
+// by_user_id collect (suspected SystemTimeoutError source in listConversations)
+// vs a by_user_heartbeat window seek. Safe to delete.
+export const timeManagedScan = internalQuery({
+  args: {
+    who: v.string(), // email, username, or github_username
+    mode: v.union(v.literal("full"), v.literal("window")),
+    windowMs: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const user =
+      (await ctx.db
+        .query("users")
+        .withIndex("email", (q) => q.eq("email", args.who))
+        .first()) ??
+      (await ctx.db
+        .query("users")
+        .withIndex("by_username", (q) => q.eq("username", args.who))
+        .first()) ??
+      (await ctx.db
+        .query("users")
+        .withIndex("by_github_username", (q) => q.eq("github_username", args.who))
+        .first());
+    if (!user) return { error: "no user" };
+    const now = Date.now();
+    const t0 = Date.now();
+    const rows =
+      args.mode === "full"
+        ? await ctx.db
+            .query("managed_sessions")
+            .withIndex("by_user_id", (q) => q.eq("user_id", user._id))
+            .collect()
+        : await ctx.db
+            .query("managed_sessions")
+            .withIndex("by_user_heartbeat", (q) =>
+              q.eq("user_id", user._id).gte("last_heartbeat", now - (args.windowMs ?? 90 * 1000))
+            )
+            .collect();
+    const ages = rows.map((s) => Math.round((now - s.last_heartbeat) / 1000)).sort((a, b) => a - b);
+    return {
+      mode: args.mode,
+      user_id: user._id,
+      user_email: (user as any).email ?? null,
+      scan_ms: Date.now() - t0,
+      rows: rows.length,
+      live_90s: rows.filter((s) => now - s.last_heartbeat < 90 * 1000).length,
+      heartbeat_ages_s: ages.slice(0, 5).concat(ages.length > 10 ? [-1] : [], ages.slice(-5)),
+    };
+  },
+});

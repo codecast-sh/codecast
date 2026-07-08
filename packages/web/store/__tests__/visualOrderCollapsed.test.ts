@@ -51,6 +51,38 @@ describe("visualOrderSessions collapsed sections (grouped view)", () => {
   });
 });
 
+// Sessions sharing a plan are NOT clustered in the status view — grouping by
+// plan is exclusively the "By plan" view's job. Nav walks a plan-bound session
+// exactly like any other card in its status section (regression ct-37908: the
+// old clustering hid working members from Working).
+const plan = { _id: "pl-1", short_id: "pl-1", title: "Roadmap", status: "active" };
+const planSessions: Record<string, InboxSession> = {
+  pw1: session("pw1", { is_idle: false, active_plan: plan }),
+  pw2: session("pw2", { is_idle: false, active_plan: plan }),
+  ni1: session("ni1", { is_idle: true }),
+};
+
+describe("visualOrderSessions plan-bound sessions (status view)", () => {
+  it("plan-sharing sessions stay in their status sections — nav walks every one", () => {
+    const ids = visualOrderSessions(planSessions, new Set(), null, undefined, { collapsedSections: {} })
+      .map((s) => s._id).sort();
+    expect(ids).toEqual(["ni1", "pw1", "pw2"]);
+  });
+
+  it("collapsing Working hides them like any other working card", () => {
+    const ids = visualOrderSessions(planSessions, new Set(), null, undefined, { collapsedSections: { working: true } })
+      .map((s) => s._id).sort();
+    expect(ids).toEqual(["ni1"]);
+  });
+});
+
+describe("computeVisualOrder plan view walks every member", () => {
+  it("plan view dissolves the group — all sessions are reachable", () => {
+    const state = { ...baseState, sessions: planSessions, clientState: { ui: { inbox_view_mode: "plan" as const } } };
+    expect(computeVisualOrder(state).map((s) => s._id).sort()).toEqual(["ni1", "pw1", "pw2"]);
+  });
+});
+
 const baseState = {
   sessions,
   sessionsWithQueuedMessages: new Set<string>(),

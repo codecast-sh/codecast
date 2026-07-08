@@ -1,6 +1,27 @@
 import * as fs from "fs";
 import * as path from "path";
 
+/**
+ * Reproduce Claude Code's cwd → ~/.claude/projects/<dir> slug EXACTLY.
+ *
+ * Claude encodes the working directory by replacing every character that is not
+ * a letter or digit with "-" (so "/", ".", and "_" all become "-"). A session
+ * JSONL written under any other slug is invisible to `claude --resume`, which
+ * scans only the project dir for its own cwd and then crashes with
+ * "No conversation found with session ID". The previous `cwd.replace(/\//g,"-")`
+ * handled "/" but left dots intact, so any cwd containing a dot — notably the
+ * `.claude/worktrees/...` paths used by `cast ws`/orchestrate, or `~/.claude`
+ * itself — landed in a dir Claude never reads.
+ *
+ * Verified against Claude 2.1.196:
+ *   "/Users/a/.claude"  -> "-Users-a--claude"
+ *   ".../outreach/.claude/worktrees/x" -> "...-outreach--claude-worktrees-x"
+ *   "probe_x.y-z"       -> "probe-x-y-z"
+ */
+export function claudeProjectDirName(cwd: string): string {
+  return cwd.replace(/[^a-zA-Z0-9]/g, "-");
+}
+
 export interface ResolveInput {
   // Recorded path from the conversation (often foreign — e.g. /Users/ec2-user/...)
   projectPath?: string | null;
@@ -132,6 +153,19 @@ export function resolveLocalRepoPath(input: LocalRepoInput): string | null {
   const remotePath = input.remotePath?.trim();
   if (!remotePath) return null;
   if (exists(remotePath)) return remotePath;
+
+  // A torn-down worktree path. `cast ws`, orchestrate, and conductor place
+  // worktrees under <repo>/.codecast|.claude|.conductor/...; once destroyed the
+  // recorded cwd is gone but the session belongs to the PARENT repo. Resolve to
+  // it directly when it still exists. Without this, the leaf walk below reaches
+  // the ".claude" segment and resolveBase(".claude") matches $HOME/.claude
+  // (which always exists), so every dead worktree resumed in ~/.claude — the
+  // wrong directory, and the project then mislabels as the home dir. Only
+  // reached because remotePath itself is already gone (checked above).
+  const worktreeParent = remotePath.match(/^(.*?)\/\.(?:claude|codecast|conductor)(?:\/|$)/)?.[1];
+  if (worktreeParent && worktreeParent !== input.home && exists(worktreeParent)) {
+    return worktreeParent;
+  }
 
   const maps = [input.userMap, input.learnedMap].filter(Boolean) as Record<string, string>[];
   // A full-path mapping is the most specific signal — honor it before walking.

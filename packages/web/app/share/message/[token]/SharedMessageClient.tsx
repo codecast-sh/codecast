@@ -1,13 +1,10 @@
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useParams } from "next/navigation";
-import ReactMarkdown from "react-markdown";
-import rehypeHighlight from "rehype-highlight";
 import Link from "next/link";
 import { CodeBlock } from "@/components/CodeBlock";
-import { CollapsibleImage } from "@/components/tools/MarkdownRenderer";
-import { entityRemarkPlugins } from "@/lib/remarkEntityIds";
-import { EntityAwareCode, EntityAwareLink } from "@/components/EntityIdPill";
+import { MarkdownRenderer, isMarkdownFile, isPlanFile } from "@/components/tools/MarkdownRenderer";
+import { tryRenderHtmlMessage } from "@/components/HtmlSnippet";
 import { formatToolName } from "@codecast/shared/render";
 import { AppLoader } from "@/components/AppLoader";
 
@@ -96,32 +93,6 @@ function getLanguageFromPath(filePath: string): string | undefined {
   return ext ? extMap[ext] : undefined;
 }
 
-function isPlanFile(filePath: string, content: string): boolean {
-  const fileName = filePath.split('/').pop()?.toLowerCase() || '';
-  if (fileName.includes('plan') || fileName === 'plan.md') return true;
-  if (filePath.includes('.claude/plans/')) return true;
-  const planPatterns = [
-    /^#\s*(implementation\s+)?plan/im,
-    /^##\s*(goals?|objectives?|overview)/im,
-    /^##\s*(steps?|phases?|tasks?|approach)/im,
-    /^\d+\.\s+\*\*[^*]+\*\*/m,
-    /^-\s+\[[ x]\]/im,
-  ];
-  let matches = 0;
-  for (const pattern of planPatterns) {
-    if (pattern.test(content)) {
-      matches++;
-      if (matches >= 2) return true;
-    }
-  }
-  return false;
-}
-
-function isMarkdownFile(filePath: string): boolean {
-  const ext = filePath.split('.').pop()?.toLowerCase();
-  return ext === 'md' || ext === 'mdx';
-}
-
 function parseWriteToolCall(tool: any): { filePath: string; content: string } | null {
   if (tool.name !== "Write") return null;
   try {
@@ -200,29 +171,8 @@ function MarkdownContentBlock({ content, label, timestamp }: { content: string; 
           <span className="text-xs text-sol-text-dim">{formatRelativeTime(timestamp)}</span>
         )}
       </div>
-      <div className="px-4 py-3 prose prose-invert prose-sm max-w-none text-sol-text">
-        <ReactMarkdown
-          remarkPlugins={entityRemarkPlugins}
-          rehypePlugins={[rehypeHighlight]}
-          components={{
-            code: EntityAwareCode,
-            a: EntityAwareLink,
-            img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
-            pre: ({ node, children, ...props }) => {
-              const codeElement = node?.children?.[0];
-              if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
-                const className = codeElement.properties?.className as string[] | undefined;
-                const lang = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
-                const codeContent = codeElement.children?.[0];
-                const code = codeContent && 'value' in codeContent ? String(codeContent.value) : '';
-                if (code) return <CodeBlock code={code} language={lang} />;
-              }
-              return <pre {...props}>{children}</pre>;
-            },
-          }}
-        >
-          {content}
-        </ReactMarkdown>
+      <div className="px-4 py-3">
+        <MarkdownRenderer content={content} className="text-sol-text" />
       </div>
     </div>
   );
@@ -272,8 +222,10 @@ function MessageBlock({ message, isTarget }: { message: any; isTarget?: boolean 
               {formatRelativeTime(message.timestamp)}
             </span>
           </div>
-          <div className="text-sol-text text-sm pl-7 whitespace-pre-wrap break-words">
-            {message.content}
+          <div className="pl-7">
+            {tryRenderHtmlMessage(message.content) ?? (
+              <div className="text-sol-text text-sm whitespace-pre-wrap break-words">{message.content}</div>
+            )}
           </div>
         </div>
       ) : (
@@ -307,32 +259,8 @@ function MessageBlock({ message, isTarget }: { message: any; isTarget?: boolean 
             return <ToolCallBlock key={tc.id} tool={tc} />;
           })}
           {hasContent && (
-            <div className="pl-7 prose prose-invert prose-sm max-w-none text-sol-text">
-              <ReactMarkdown
-                remarkPlugins={entityRemarkPlugins}
-                rehypePlugins={[rehypeHighlight]}
-                components={{
-                  code: EntityAwareCode,
-                  a: EntityAwareLink,
-                  img: ({ src, alt }) => <CollapsibleImage src={src} alt={alt} />,
-                  pre: ({ node, children, ...props }) => {
-                    const codeElement = node?.children?.[0];
-                    if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
-                      const className = codeElement.properties?.className as string[] | undefined;
-                      const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
-                      const codeContent = codeElement.children?.[0];
-                      const code = codeContent && 'value' in codeContent ? String(codeContent.value) : '';
-
-                      if (code) {
-                        return <CodeBlock code={code} language={language} />;
-                      }
-                    }
-                    return <pre {...props}>{children}</pre>;
-                  },
-                }}
-              >
-                {message.content}
-              </ReactMarkdown>
+            <div className="pl-7">
+              <MarkdownRenderer content={message.content} className="text-sol-text" />
             </div>
           )}
         </div>

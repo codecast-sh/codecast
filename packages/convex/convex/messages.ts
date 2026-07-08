@@ -5,7 +5,7 @@ import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { shouldGenerateTitle } from "./titleGeneration";
-import { canTeamMemberAccess } from "./privacy";
+import { canTeamMemberAccess, checkConversationAccess } from "./privacy";
 import { redactSecrets } from "./redact";
 import { markPendingDelivered } from "./pendingMessages";
 import { nextAgentStatusOnAddMessages, isApiErrorBanner, classifyApiErrorBanner, apiErrorBatchAction } from "./inboxFilters";
@@ -467,6 +467,15 @@ async function materializeFileChanges(
 export const getConversationFileChanges = query({
   args: { conversation_id: v.id("conversations") },
   handler: async (ctx, args): Promise<FileChange[]> => {
+    // Access gate: this returns the full before/after source of every file the
+    // session edited — including private (owner-only) conversations. Match the
+    // other message readers: owner, team member, or share-token holder only.
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) return [];
+    const viewerId = await getAuthUserId(ctx);
+    if ((await checkConversationAccess(ctx, viewerId, conversation)) === "denied") {
+      return [];
+    }
     const rows = await ctx.db
       .query("file_changes")
       .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
@@ -754,19 +763,6 @@ export const addMessage = mutation({
           agent_status_updated_at: Date.now(),
         });
       }
-    }
-
-    // Only record user-message activity when there's a user timestamp to advance.
-    // We deliberately no longer refresh daemon_last_seen here: the 30s
-    // daemonHeartbeat already keeps it within every reader's online threshold
-    // (tightest is 60s), and a message-triggered refresh raced the heartbeat on
-    // the SAME hot user doc — the scheduled_job_mutation_success ⇄ daemonHeartbeat
-    // OCC conflict. Dropping it removes that contention with no liveness change.
-    if (args.role === "user") {
-      await ctx.scheduler.runAfter(0, internal.users.updateUserActivity, {
-        userId: conversation.user_id,
-        messageTimestamp: msgTimestamp,
-      });
     }
 
     if (!conversation.skip_title_generation && shouldGenerateTitle(newMessageCount)) {
@@ -1194,21 +1190,6 @@ export const addMessages = mutation({
       ) {
         await ctx.scheduler.runAfter(0, internal.comments.mirrorAgentReply, {
           fork_conversation_id: args.conversation_id,
-        });
-      }
-
-      const lastUserTs = userMsgs.length > 0
-        ? userMsgs.reduce((max, m) => Math.max(max, m.timestamp || 0), 0)
-        : 0;
-      // Only record user activity when there's a user-message timestamp to advance.
-      // daemon_last_seen is already refreshed by the 30s daemonHeartbeat, so we no
-      // longer schedule a write to the shared (per-user) doc on every assistant/tool
-      // batch — that scheduled mutation fired for all of a user's sessions at once and
-      // serialized on one hot doc. Assistant/tool-only batches now schedule nothing.
-      if (lastUserTs > 0) {
-        await ctx.scheduler.runAfter(0, internal.users.updateUserActivity, {
-          userId: conversation.user_id,
-          messageTimestamp: lastUserTs,
         });
       }
 

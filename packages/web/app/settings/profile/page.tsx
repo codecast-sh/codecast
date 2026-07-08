@@ -88,6 +88,13 @@ export default function ProfilePage() {
             </div>
             <ModelBadgeToggle />
           </div>
+          <div className="flex items-center justify-between">
+            <div>
+              <span className="text-sol-base1">Comments</span>
+              <p className="text-xs text-sol-base01 mt-0.5">Show the tools to leave comments on conversations. You can always read and reply to comments others leave, even with this off.</p>
+            </div>
+            <CommentsToggle />
+          </div>
           <DesktopVersionRow />
           <DesktopLinksRow />
         </div>
@@ -281,6 +288,17 @@ function ModelBadgeToggle() {
     <Switch
       checked={enabled}
       onCheckedChange={(v) => updateUI({ show_model_badge: v })}
+    />
+  );
+}
+
+function CommentsToggle() {
+  const enabled = useInboxStore((s) => s.clientState?.ui?.comments_enabled === true);
+  const updateUI = useInboxStore((s) => s.updateClientUI);
+  return (
+    <Switch
+      checked={enabled}
+      onCheckedChange={(v) => updateUI({ comments_enabled: v })}
     />
   );
 }

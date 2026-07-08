@@ -239,6 +239,37 @@ describe("generateClaudeCodeJsonl", () => {
     expect(thinkingBlock.thinking).toBe("internal reasoning");
   });
 
+  // Regression: the server posts a workflow anchor message (subtype
+  // "workflow_event", content = internal {"__wf":...} JSON) into conversations
+  // so the web can render a live card. Baking it into a synthetic transcript
+  // makes the daemon sync it back as ordinary assistant prose, which the web
+  // then shows as raw JSON mid-conversation.
+  test("skips server-injected workflow anchors so forks don't round-trip raw JSON", () => {
+    const anchor = '{"__wf":"workflow_run","run_id":"th70zm","external_run_id":"wf_1","name":"roadmap-plain-rewrite"}';
+    const data: ExportResult = {
+      conversation: {
+        id: "conv", title: "t", session_id: "session", agent_type: "claude_code",
+        project_path: "/tmp/project", model: "claude-opus-4-6-20260205",
+        message_count: 4, started_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:01.000Z",
+      },
+      messages: [
+        { role: "user", content: "hi", timestamp: "2026-01-01T00:00:00.000Z" },
+        // Original server anchor, tagged with its subtype.
+        { role: "assistant", content: anchor, subtype: "workflow_event", timestamp: "2026-01-01T00:00:00.050Z" },
+        // A copy that already round-tripped through an old fork: subtype lost.
+        { role: "assistant", content: anchor, timestamp: "2026-01-01T00:00:00.060Z" },
+        { role: "assistant", content: "hello", timestamp: "2026-01-01T00:00:00.100Z" },
+      ],
+    };
+
+    const { jsonl } = generateClaudeCodeJsonl(data);
+    expect(jsonl).not.toContain('"__wf"');
+    const lines = jsonl.trim().split("\n").map((l) => JSON.parse(l));
+    const assistants = lines.filter((l) => l.type === "assistant");
+    expect(assistants).toHaveLength(1);
+    expect(assistants[0].message.content[0].text).toBe("hello");
+  });
+
   test("can truncate to tail messages for Claude imports", () => {
     const data: ExportResult = {
       conversation: {
@@ -643,5 +674,23 @@ describe("generateCodexJsonl", () => {
     };
     expect(firstLine.type).toBe("session_meta");
     expect(firstLine.payload?.id).toBe(forcedSessionId);
+  });
+
+  test("skips server-injected workflow anchors", () => {
+    const data: ExportResult = {
+      conversation: {
+        id: "conv", title: "t", session_id: "session", agent_type: "codex",
+        project_path: "/tmp/project", model: "gpt-5",
+        message_count: 3, started_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:01.000Z",
+      },
+      messages: [
+        { role: "user", content: "hi", timestamp: "2026-01-01T00:00:00.000Z" },
+        { role: "assistant", content: '{"__wf":"workflow_run","run_id":"th70zm","name":"n"}', subtype: "workflow_event", timestamp: "2026-01-01T00:00:00.050Z" },
+        { role: "assistant", content: "hello", timestamp: "2026-01-01T00:00:00.100Z" },
+      ],
+    };
+
+    const { jsonl } = generateCodexJsonl(data);
+    expect(jsonl).not.toContain('"__wf"');
   });
 });

@@ -88,6 +88,53 @@ export function subagentLinkFields(conv: {
   };
 }
 
+// Which parent a session NESTS under in session lists — the single definition
+// every nesting computation must share (inbox categorizer, hidden buckets,
+// card styling, wake signature). Two sources, in priority order:
+// - parent_conversation_id: a Task-tool subagent. Full subagent semantics —
+//   hidden when its parent is absent, excluded from revive.
+// - spawned_by_conversation_id + agent_team_name: an agent-team teammate. It
+//   nests under its lead for DISPLAY only and keeps first-class semantics
+//   everywhere else — when the lead is absent from a list it renders as a
+//   normal top-level card, never hidden (it's a real session someone may need
+//   to answer). The agent_team_name gate is what keeps this to teammates:
+//   forks (forked_from) and cast-spawn sessions never nest.
+export function nestParentIdOf(conv: {
+  parent_conversation_id?: { toString(): string } | string | null;
+  spawned_by_conversation_id?: { toString(): string } | string | null;
+  agent_team_name?: string | null;
+}): string | null {
+  if (conv.parent_conversation_id) return conv.parent_conversation_id.toString();
+  if (conv.agent_team_name && conv.spawned_by_conversation_id) {
+    return conv.spawned_by_conversation_id.toString();
+  }
+  return null;
+}
+
+// Whether a conversation was spawned by an agent rather than started by a
+// human. Gates the teammate "started coding" notification: agent fan-out
+// (Task-tool subagents, workflow subs, agent-team teammates) must never ping
+// the team. Broader than isSubagentConversation on purpose — spawned_by and
+// agent identity mark sessions that stay first-class in the inbox but are
+// still machine-initiated. The one session with agent identity a human DID
+// start is the team lead (stamped agent_name "team-lead" by linkSpawnedBy).
+// Forks and plan handoffs (parent link WITH parent_message_uuid) stay
+// notifiable — those are human actions.
+export function isAgentSpawnedConversation(conv: {
+  is_subagent?: boolean;
+  is_workflow_sub?: boolean;
+  parent_conversation_id?: { toString(): string } | string | null;
+  parent_message_uuid?: string | null;
+  spawned_by_conversation_id?: { toString(): string } | string | null;
+  agent_name?: string | null;
+}): boolean {
+  if (conv.is_subagent === true || conv.is_workflow_sub === true) return true;
+  if (conv.spawned_by_conversation_id) return true;
+  if (conv.agent_name && conv.agent_name !== "team-lead") return true;
+  if (conv.parent_conversation_id && !conv.parent_message_uuid) return true;
+  return false;
+}
+
 // Stale-flag sweep: past the revive window the flag stops meaning "current
 // incident" and just pollutes badges/selection — clear it. New activity on a
 // conversation bumps updated_at and supersedes the banner anyway, so for a

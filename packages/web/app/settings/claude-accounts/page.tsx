@@ -74,19 +74,30 @@ function SaveCurrentForm({ device, suggestedName }: { device: DeviceAccounts; su
     }
   };
 
+  // Prominent: an unsaved login is the one state that needs the user's
+  // attention here. Normally transient — the daemon auto-saves new logins on
+  // its next heartbeat — so when this persists, the manual save IS the path.
   return (
-    <div className="mt-2 flex items-center gap-2">
-      <input
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        onKeyDown={(e) => { if (e.key === "Enter") handleSave(); }}
-        placeholder="profile name"
-        className="h-7 w-36 rounded border border-sol-border bg-sol-bg px-2 text-xs text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-cyan"
-      />
-      <Button size="sm" variant="outline" disabled={busy || !name} onClick={handleSave} className="h-7 text-xs">
-        {busy ? "Saving…" : "Save as profile"}
-      </Button>
-      <span className="text-[11px] text-sol-text-dim">this login isn't saved yet — save it so you can switch back later</span>
+    <div className="mt-3 rounded-md border border-sol-yellow/40 bg-sol-yellow/[0.06] p-3">
+      <div className="text-xs font-medium text-sol-text">
+        New login: <span className="text-sol-yellow">{device.active_email}</span> isn't saved as a profile yet
+      </div>
+      <p className="mt-1 text-[11px] leading-relaxed text-sol-text-dim">
+        The daemon saves new logins automatically within ~30 seconds. Save it now to pick the
+        name yourself — either way you'll be able to switch back to it later.
+      </p>
+      <div className="mt-2 flex items-center gap-2">
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") handleSave(); }}
+          placeholder="profile name"
+          className="h-7 w-36 rounded border border-sol-border bg-sol-bg px-2 text-xs text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-cyan"
+        />
+        <Button size="sm" variant="outline" disabled={busy || !name} onClick={handleSave} className="h-7 text-xs">
+          {busy ? "Saving…" : "Save as profile"}
+        </Button>
+      </div>
     </div>
   );
 }
