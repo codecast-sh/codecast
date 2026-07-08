@@ -1,8 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
+  buildDaemonLauncherScript,
   buildDaemonPlistXml,
   buildWatchdogPlistXml,
   buildWatchdogShellScript,
+  daemonPlistNeedsUpgrade,
+  extractPlistProgramArguments,
+  shellEscapeForSh,
   watchdogPlistNeedsUpgrade,
   watchdogHeartbeatStale,
   watchdogHeartbeatAge,
@@ -96,13 +100,83 @@ describe("watchdogHeartbeatStale: liveness, not loaded-ness", () => {
   });
 });
 
-describe("daemon plist keeps its KeepAlive supervision", () => {
+// Regression: the daemon plist used to point launchd directly at the codecast
+// binary. The binary is ad-hoc signed, so macOS BTM identified the login item by
+// the binary's content hash — and every self-update re-registered it as a NEW
+// background item, spamming the user with "codecast can run in the background"
+// notifications on each release. The plist must run /bin/sh (stable Apple-signed
+// identity) exec'ing a launcher script that holds the mutable command.
+describe("daemon plist has a stable BTM identity via the /bin/sh launcher", () => {
+  const plist = buildDaemonPlistXml({ scriptPath: "/Users/x/.codecast/daemon-launcher.sh", configDir: "/Users/x/.codecast" });
+
   test("daemon stays KeepAlive + fast throttle", () => {
-    const plist = buildDaemonPlistXml({ programArgsXml: "    <string>/x/codecast</string>", configDir: "/Users/x/.codecast" });
     expect(plist).toContain("<key>KeepAlive</key>");
     expect(plist).toContain("<key>ThrottleInterval</key>");
   });
+
+  test("runs via /bin/sh + launcher script, never the binary directly", () => {
+    expect(plist).toContain("<string>/bin/sh</string>");
+    expect(plist).toContain("<string>/Users/x/.codecast/daemon-launcher.sh</string>");
+    expect(daemonPlistNeedsUpgrade(plist)).toBe(false);
+  });
+
+  test("launcher execs the daemon command so launchd tracks the daemon's pid", () => {
+    const script = buildDaemonLauncherScript({ daemonCommand: "'/Users/x/.local/bin/codecast' '--' '_daemon'" });
+    expect(script).toContain("exec '/Users/x/.local/bin/codecast' '--' '_daemon'");
+    expect(script.startsWith("#!/bin/sh")).toBe(true);
+  });
 });
+
+describe("daemonPlistNeedsUpgrade migrates legacy direct-binary installs", () => {
+  test("flags the legacy form that re-notified on every binary self-update", () => {
+    expect(daemonPlistNeedsUpgrade(buildLegacyDirectBinaryDaemonPlist())).toBe(true);
+  });
+
+  test("leaves the /bin/sh launcher form alone (migration runs once)", () => {
+    const current = buildDaemonPlistXml({ scriptPath: "/Users/x/.codecast/daemon-launcher.sh", configDir: "/Users/x/.codecast" });
+    expect(daemonPlistNeedsUpgrade(current)).toBe(false);
+  });
+});
+
+describe("extractPlistProgramArguments preserves the install's exact command", () => {
+  test("round-trips a compiled-binary plist", () => {
+    expect(extractPlistProgramArguments(buildLegacyDirectBinaryDaemonPlist())).toEqual([
+      "/Users/x/.local/bin/codecast",
+      "--",
+      "_daemon",
+    ]);
+  });
+
+  test("returns [] when there is no ProgramArguments array to vouch for", () => {
+    expect(extractPlistProgramArguments("<plist><dict></dict></plist>")).toEqual([]);
+  });
+
+  test("extracted args shell-escape safely into a launcher command", () => {
+    const args = extractPlistProgramArguments(buildLegacyDirectBinaryDaemonPlist());
+    const script = buildDaemonLauncherScript({ daemonCommand: args.map(shellEscapeForSh).join(" ") });
+    expect(script).toContain("exec '/Users/x/.local/bin/codecast' '--' '_daemon'");
+  });
+});
+
+function buildLegacyDirectBinaryDaemonPlist(): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>sh.codecast.daemon</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/x/.local/bin/codecast</string>
+    <string>--</string>
+    <string>_daemon</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+</dict>
+</plist>`;
+}
 
 function buildLegacyStartIntervalPlist(): string {
   return `<?xml version="1.0" encoding="UTF-8"?>

@@ -41,9 +41,13 @@ import { resolveLocalProjectPath, claudeProjectDirName } from "./projectPathReso
 import { runDoctor } from "./doctor.js";
 import { deviceId, deviceLabel } from "./remote/device.js";
 import {
+  buildDaemonLauncherScript,
   buildDaemonPlistXml,
   buildWatchdogPlistXml,
   buildWatchdogShellScript,
+  daemonPlistNeedsUpgrade,
+  DAEMON_LAUNCHER_FILENAME,
+  shellEscapeForSh,
   watchdogPlistNeedsUpgrade,
 } from "./supervision.js";
 import * as readline from "readline";
@@ -358,10 +362,7 @@ const VERSION_FILE = path.join(CONFIG_DIR, "daemon.version");
 const STATE_FILE = path.join(CONFIG_DIR, "daemon.state");
 const LOG_FILE = path.join(CONFIG_DIR, "daemon.log");
 const WATCHDOG_SCRIPT_PATH = path.join(CONFIG_DIR, "watchdog.sh");
-
-function shellEscapeForSh(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
-}
+const DAEMON_LAUNCHER_SCRIPT_PATH = path.join(CONFIG_DIR, DAEMON_LAUNCHER_FILENAME);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -6895,6 +6896,19 @@ function installWatchdogScript(): void {
   fs.writeFileSync(WATCHDOG_SCRIPT_PATH, buildWatchdogShellScript({ isBinary, watchdogCommand }), { mode: 0o755 });
 }
 
+// The daemon LaunchAgent runs this script via /bin/sh instead of the binary
+// directly, so the login item's BTM identity survives binary self-updates
+// (see supervision.ts). Refreshed on every autostart pass, like the watchdog
+// script, so a moved binary path is picked up without touching the plist.
+function installDaemonLauncherScript(): void {
+  if (!fs.existsSync(CONFIG_DIR)) {
+    fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  }
+  const { executablePath, args } = getExecutableInfo();
+  const daemonCommand = [executablePath, ...args].map(shellEscapeForSh).join(" ");
+  fs.writeFileSync(DAEMON_LAUNCHER_SCRIPT_PATH, buildDaemonLauncherScript({ daemonCommand }), { mode: 0o755 });
+}
+
 // Bootstrap the watchdog LaunchAgent AND force its resident loop to start now. The
 // watchdog is a KeepAlive long-running loop (see supervision.ts), so RunAtLoad would
 // normally start it — but bootstrapping right before a sleep can leave it dormant
@@ -6933,13 +6947,10 @@ function setupMacOS(disable: boolean): void {
     fs.mkdirSync(launchAgentsDir, { recursive: true });
   }
 
-  // Daemon plist
+  // Daemon plist: /bin/sh launcher for a stable BTM identity (see supervision.ts)
   const { executablePath, args } = getExecutableInfo();
-  const programArgs = [executablePath, ...args]
-    .map((arg) => `    <string>${arg}</string>`)
-    .join("\n");
-
-  const plistContent = buildDaemonPlistXml({ programArgsXml: programArgs, configDir: CONFIG_DIR });
+  installDaemonLauncherScript();
+  const plistContent = buildDaemonPlistXml({ scriptPath: DAEMON_LAUNCHER_SCRIPT_PATH, configDir: CONFIG_DIR });
 
   spawnSync("launchctl", ["bootout", uid, plistPath], { stdio: "ignore" });
   fs.writeFileSync(plistPath, plistContent, { mode: 0o644 });
@@ -7040,15 +7051,21 @@ function ensureAutostart(): boolean {
           return content.includes("<string>bun</string>") || content.includes("<string>node</string>");
         } catch { return false; }
       };
+      const daemonNeedsUpgrade = (ppath: string): boolean => {
+        try {
+          return daemonPlistNeedsUpgrade(fs.readFileSync(ppath, "utf-8"));
+        } catch { return false; }
+      };
       const watchdogNeedsUpgrade = (ppath: string): boolean => {
         try {
           return watchdogPlistNeedsUpgrade(fs.readFileSync(ppath, "utf-8"));
         } catch { return false; }
       };
-      const daemonBroken = daemonExists && plistNeedsRepair(plistPath);
+      const daemonBroken = daemonExists && (plistNeedsRepair(plistPath) || daemonNeedsUpgrade(plistPath));
       const watchdogBroken = watchdogExists && (plistNeedsRepair(watchdogPlistPath) || watchdogNeedsUpgrade(watchdogPlistPath));
 
       installWatchdogScript();
+      installDaemonLauncherScript();
 
       if (daemonBroken) {
         spawnSync("launchctl", ["bootout", uid, plistPath], { stdio: "ignore" });
@@ -7067,9 +7084,7 @@ function ensureAutostart(): boolean {
       }
 
       if (!fs.existsSync(plistPath)) {
-        const { executablePath, args } = getExecutableInfo();
-        const programArgs = [executablePath, ...args].map((arg) => `    <string>${arg}</string>`).join("\n");
-        const plistContent = buildDaemonPlistXml({ programArgsXml: programArgs, configDir: CONFIG_DIR });
+        const plistContent = buildDaemonPlistXml({ scriptPath: DAEMON_LAUNCHER_SCRIPT_PATH, configDir: CONFIG_DIR });
         fs.writeFileSync(plistPath, plistContent, { mode: 0o644 });
         spawnSync("launchctl", ["bootstrap", uid, plistPath], { stdio: "ignore" });
       }

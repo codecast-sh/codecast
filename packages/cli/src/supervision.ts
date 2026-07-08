@@ -15,6 +15,31 @@
 
 export const WATCHDOG_HEARTBEAT_FILENAME = "watchdog.heartbeat";
 
+// Both LaunchAgents must run through /bin/sh + a script in ~/.codecast, never point
+// at the codecast binary directly. macOS Background Task Management identifies a
+// login item by its executable's code-signing identity; our binary is ad-hoc signed
+// (bun --compile), so its identity is its content hash — and every self-update that
+// swaps the binary makes BTM treat the agent as a brand-new background item and
+// re-notify the user ("codecast can run in the background"), several times a day at
+// our release cadence. /bin/sh is Apple-signed and never changes, so the item's
+// identity is stable no matter how often the script's target binary is replaced.
+export const DAEMON_LAUNCHER_FILENAME = "daemon-launcher.sh";
+
+export function shellEscapeForSh(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+// exec (not plain invocation) so the daemon replaces the shell and launchd tracks
+// the daemon's pid as the job instance — kickstart, KeepAlive, and the mutual
+// supervision pid checks all depend on that.
+export function buildDaemonLauncherScript(opts: { daemonCommand: string }): string {
+  return `#!/bin/sh
+# Codecast daemon launcher. The LaunchAgent runs this via /bin/sh so the login
+# item's identity stays stable across binary self-updates (see supervision.ts).
+exec ${opts.daemonCommand}
+`;
+}
+
 // The resident watchdog stamps the heartbeat file every loop. Mutual supervision
 // treats a stale stamp as "watchdog wedged" even when launchd still lists the job as
 // loaded — the gap that let a runs=1 zombie watchdog look healthy. 5 min tolerates a
@@ -26,8 +51,8 @@ export const WATCHDOG_HEARTBEAT_STALE_MS = 5 * 60 * 1000;
 const WATCHDOG_INTERVAL_SECONDS = 60;
 const DAEMON_HEARTBEAT_STALE_MS = 180000; // 3 min; mirrors HEARTBEAT_STALE_THRESHOLD_MS in daemon.ts
 
-export function buildDaemonPlistXml(opts: { programArgsXml: string; configDir: string }): string {
-  const { programArgsXml, configDir } = opts;
+export function buildDaemonPlistXml(opts: { scriptPath: string; configDir: string }): string {
+  const { scriptPath, configDir } = opts;
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -36,7 +61,8 @@ export function buildDaemonPlistXml(opts: { programArgsXml: string; configDir: s
   <string>sh.codecast.daemon</string>
   <key>ProgramArguments</key>
   <array>
-${programArgsXml}
+    <string>/bin/sh</string>
+    <string>${scriptPath}</string>
   </array>
   <key>RunAtLoad</key>
   <true/>
@@ -88,6 +114,28 @@ export function buildWatchdogPlistXml(opts: { scriptPath: string; configDir: str
 // existing installs migrate themselves on the next daemon start.
 export function watchdogPlistNeedsUpgrade(content: string): boolean {
   return !content.includes("/bin/sh") || content.includes("<key>StartInterval</key>");
+}
+
+// A daemon plist that still points launchd directly at the codecast binary (or at
+// bun/node in dev) predates the stable /bin/sh launcher and must be replaced — it
+// is the form that re-triggers a macOS "can run in the background" notification on
+// every binary self-update (see DAEMON_LAUNCHER_FILENAME).
+export function daemonPlistNeedsUpgrade(content: string): boolean {
+  return !content.includes("<string>/bin/sh</string>");
+}
+
+// Pull the ProgramArguments strings out of an existing plist so the daemon's
+// self-migration can preserve exactly the command the install already runs
+// (compiled binary, dev bun+daemon.ts, whatever) inside the new launcher script.
+// Matches the writer's symmetry: values are emitted raw, so they are read raw.
+export function extractPlistProgramArguments(content: string): string[] {
+  const arrayMatch = content.match(/<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/);
+  if (!arrayMatch) return [];
+  const args: string[] = [];
+  for (const m of arrayMatch[1].matchAll(/<string>([\s\S]*?)<\/string>/g)) {
+    args.push(m[1]);
+  }
+  return args;
 }
 
 // Age of the watchdog heartbeat stamp in ms (now - stamp), or null when the stamp is

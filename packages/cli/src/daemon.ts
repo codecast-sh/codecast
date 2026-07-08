@@ -13,7 +13,16 @@ import { useProfile, saveProfile, getAccountsHeartbeatPayload } from "./ccAccoun
 import { CursorWatcher, type CursorSessionEvent } from "./cursorWatcher.js";
 import { CursorTranscriptWatcher, type CursorTranscriptEvent } from "./cursorTranscriptWatcher.js";
 import { CodexWatcher, isAppServerManagedCodexSessionHead, type CodexSessionEvent } from "./codexWatcher.js";
-import { watchdogHeartbeatStale, WATCHDOG_HEARTBEAT_FILENAME } from "./supervision.js";
+import {
+  buildDaemonLauncherScript,
+  buildDaemonPlistXml,
+  daemonPlistNeedsUpgrade,
+  DAEMON_LAUNCHER_FILENAME,
+  extractPlistProgramArguments,
+  shellEscapeForSh,
+  watchdogHeartbeatStale,
+  WATCHDOG_HEARTBEAT_FILENAME,
+} from "./supervision.js";
 import {
   CodexAppServer,
   threadItemsToMessages,
@@ -11734,12 +11743,67 @@ function isManagedByLaunchd(): boolean {
 // loaded-only check (the old behavior here) saw "fine" and never revived it. The
 // resident watchdog now stamps a heartbeat file every loop; we treat a stale stamp
 // as a dead loop and kickstart it, mirroring how the watchdog judges the daemon.
+// The detached bootout+bootstrap pair that makes an edited plist take effect:
+// launchd caches the job definition at bootstrap time, so kickstart alone would
+// keep running the old one. bootout kills us (we are the job instance); the same
+// detached shell then bootstraps the rewritten plist. Pure so the wiring is
+// testable without killing a live daemon.
+export function buildLaunchdPlistReloadCommand(uid: number, plistPath: string): string {
+  return `sleep 1; launchctl bootout gui/${uid}/${DAEMON_LAUNCHD_LABEL}; sleep 1; launchctl bootstrap gui/${uid} ${shellEscapeForSh(plistPath)}`;
+}
+
+// One-time fleet migration: rewrite a legacy daemon plist that points launchd
+// directly at the codecast binary into the /bin/sh + launcher-script form, so the
+// login item's BTM identity stops changing on every binary self-update — the
+// source of the repeated macOS "codecast can run in the background" notifications
+// (see supervision.ts). The existing ProgramArguments are preserved verbatim
+// inside the launcher, so compiled and from-source installs both keep their exact
+// command. Ends with a detached bootout+bootstrap that restarts us under the new
+// definition; after that the plist contains /bin/sh and this never fires again.
+function migrateDaemonPlistToStableLauncher(): void {
+  const home = process.env.HOME;
+  if (!home || !process.getuid) return;
+  try {
+    const plistPath = path.join(home, "Library", "LaunchAgents", "sh.codecast.daemon.plist");
+    let content: string;
+    try {
+      content = fs.readFileSync(plistPath, "utf-8");
+    } catch {
+      return; // no autostart configured — nothing to migrate
+    }
+    if (!daemonPlistNeedsUpgrade(content)) return;
+
+    const args = extractPlistProgramArguments(content);
+    // Only migrate a command we can vouch for — an absolute-path executable that
+    // exists. A launcher exec'ing a broken command would crash-loop under KeepAlive.
+    if (args.length === 0 || !args[0].startsWith("/") || !fs.existsSync(args[0])) {
+      log(`Daemon plist migration skipped: unrecognized ProgramArguments (${JSON.stringify(args)})`);
+      return;
+    }
+
+    const launcherPath = path.join(CONFIG_DIR, DAEMON_LAUNCHER_FILENAME);
+    const daemonCommand = args.map(shellEscapeForSh).join(" ");
+    fs.writeFileSync(launcherPath, buildDaemonLauncherScript({ daemonCommand }), { mode: 0o755 });
+    fs.writeFileSync(plistPath, buildDaemonPlistXml({ scriptPath: launcherPath, configDir: CONFIG_DIR }), { mode: 0o644 });
+
+    logLifecycle("plist_stable_identity_migration", `rewrote ${plistPath} to /bin/sh launcher, reloading job`);
+    persistLogQueue(); // the bootout below kills us before exit handlers run
+    spawn("sh", ["-c", buildLaunchdPlistReloadCommand(process.getuid(), plistPath)], {
+      detached: true,
+      stdio: "ignore",
+    }).unref();
+  } catch (err) {
+    log(`Daemon plist migration failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 let lastWatchdogEnsureAt = 0;
 function ensureWatchdogSupervised(force = false): void {
   if (platform !== "darwin" || !process.getuid || !isManagedByLaunchd()) return;
   const now = Date.now();
   if (!force && now - lastWatchdogEnsureAt < 4 * 60 * 1000) return;
   lastWatchdogEnsureAt = now;
+  migrateDaemonPlistToStableLauncher();
   try {
     const uid = process.getuid();
     const domain = `gui/${uid}`;

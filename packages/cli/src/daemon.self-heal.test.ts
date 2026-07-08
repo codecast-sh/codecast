@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { shouldSelfHeal, buildLaunchdKickstartCommand, parseLaunchdPrintPid } from "./daemon.js";
+import { shouldSelfHeal, buildLaunchdKickstartCommand, buildLaunchdPlistReloadCommand, parseLaunchdPrintPid } from "./daemon.js";
 
 const THRESHOLD = 5 * 60 * 1000;
 
@@ -41,6 +41,18 @@ describe("buildLaunchdKickstartCommand", () => {
   test("interpolates the real uid", () => {
     expect(buildLaunchdKickstartCommand(0)).toContain("gui/0/sh.codecast.daemon");
     expect(buildLaunchdKickstartCommand(1234)).toContain("gui/1234/");
+  });
+});
+
+describe("buildLaunchdPlistReloadCommand", () => {
+  // The stable-identity plist migration edits the plist on disk, but launchd caches
+  // the job definition at bootstrap time — kickstart alone would keep the old one.
+  // The reload must bootout (killing the daemon, since it IS the job instance) and
+  // then bootstrap the rewritten plist from the same detached shell.
+  test("boots the job out, then bootstraps the rewritten plist", () => {
+    expect(buildLaunchdPlistReloadCommand(501, "/Users/x/Library/LaunchAgents/sh.codecast.daemon.plist")).toBe(
+      "sleep 1; launchctl bootout gui/501/sh.codecast.daemon; sleep 1; launchctl bootstrap gui/501 '/Users/x/Library/LaunchAgents/sh.codecast.daemon.plist'",
+    );
   });
 });
 
