@@ -9,10 +9,12 @@
  * One failure mode of a file-derived identity: Migration Assistant (or any
  * disk copy of ~/.codecast) duplicates the key, so two machines compute the
  * SAME device_id and every conversation-ownership guard passes on both —
- * duplicate replies and split-brain transcripts. The tripwire against this is
- * .device_binding.json, which records the hardware UUID the identity belongs
- * to. On a mismatch (the dir arrived via disk copy) the clone mints its own
- * id; the original machine keeps the identity, so nothing in Convex moves.
+ * duplicate replies and split-brain transcripts. Two independent guards catch
+ * this: machineKey.ts rotates the key itself when its hardware sidecar
+ * mismatches (splitting identity at the root, token decryption kept via the
+ * prev-key chain), and .device_binding.json records the hardware UUID the
+ * device id belongs to — on a mismatch the clone mints its own id; the
+ * original machine keeps the identity, so nothing in Convex moves.
  *
  * The remote Mac is "just another device": once it has a device_id and a
  * daemon, a session owned by that device is indistinguishable from a local
@@ -24,8 +26,8 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { getMachineKey, hardwareId } from "../machineKey.js";
 
-const MACHINE_KEY_FILE = path.join(os.homedir(), ".codecast", ".machine_key");
 const DEVICE_BINDING_FILE = path.join(os.homedir(), ".codecast", ".device_binding.json");
 
 let cachedDeviceId: string | null = null;
@@ -70,16 +72,18 @@ export function resolveDeviceIdentity(deps: {
 }
 
 /**
- * Stable, opaque device id (16 hex chars) derived from the machine key and
- * bound to this hardware via .device_binding.json (see resolveDeviceIdentity).
- * Falls back to a hostname/platform/home hash if the key file is absent
+ * Stable, opaque device id (16 hex chars) derived from the machine key
+ * (machineKey.ts — hardware-bound, rotates when the key file was cloned onto
+ * different hardware, e.g. by Migration Assistant) and additionally bound to
+ * this hardware via .device_binding.json (see resolveDeviceIdentity). Falls
+ * back to a hostname/platform/home hash if the key can't be read or created
  * (mirrors tokenEncryption's legacyMachineId so we never throw here).
  */
 export function deviceId(): string {
   if (cachedDeviceId) return cachedDeviceId;
   let seed: Buffer | string;
   try {
-    seed = fs.readFileSync(MACHINE_KEY_FILE);
+    seed = getMachineKey().secret;
   } catch {
     seed = `${os.hostname()}:${os.platform()}:${os.homedir()}`;
   }
@@ -92,7 +96,7 @@ export function deviceId(): string {
       .digest("hex")
       .slice(0, 16);
   const { id, persist } = resolveDeviceIdentity({
-    hardwareUUID: hardwareUUID(),
+    hardwareUUID: hardwareId(),
     legacyId: derive("codecast-device-id-v1"),
     binding: readDeviceBinding(),
     deriveCloneId: (hw) => derive("codecast-device-id-v2", hw),
@@ -100,30 +104,6 @@ export function deviceId(): string {
   if (persist) writeDeviceBinding(persist);
   cachedDeviceId = id;
   return id;
-}
-
-/**
- * A per-machine id the OS keeps outside ~. macOS: IOPlatformUUID (survives
- * renames and OS reinstalls, never copied by Migration Assistant). Linux:
- * /etc/machine-id. Elsewhere (or on any error) "" — identity then falls back
- * to the un-tripwired legacy behavior rather than throwing.
- */
-function hardwareUUID(): string {
-  try {
-    if (process.platform === "darwin") {
-      const out = execFileSync(
-        "/usr/sbin/ioreg",
-        ["-rd1", "-c", "IOPlatformExpertDevice"],
-        { encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "ignore"] },
-      );
-      const m = out.match(/"IOPlatformUUID"\s*=\s*"([^"]+)"/);
-      return m ? m[1] : "";
-    }
-    if (process.platform === "linux") {
-      return fs.readFileSync("/etc/machine-id", "utf8").trim();
-    }
-  } catch {}
-  return "";
 }
 
 function readDeviceBinding(): DeviceBinding | null {
