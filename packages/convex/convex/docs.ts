@@ -6,6 +6,11 @@ import { verifyApiToken } from "./apiTokens";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createDataContext, scopedFetch, resolveEffectiveTeam } from "./data";
 import { resolveTeamForPath, isTeamMember, createTeamFeedFilter } from "./privacy";
+import {
+  webDocsNeedsUserDoc,
+  resolveWebDocsTeamId,
+  clampWebDocsPageSize,
+} from "./webDocsPagination";
 // Owner-or-team access check for a doc. Moved to lib/access.ts (Wave-1 auth/access
 // seam). Imported for local use here and re-exported below so the web mutation
 // and the dispatch side-effect still enforce one rule, not two.
@@ -946,15 +951,14 @@ export const webListPaginated = query({
     // Only read the (hot, heartbeat-churned) user doc when we actually need its
     // active_team_id — i.e. when the caller didn't pin a workspace. Reading it
     // unconditionally made this subscription invalidate on every daemon heartbeat.
-    let resolvedTeamId: typeof args.team_id | undefined;
-    if (args.workspace === "team" && args.team_id) {
-      resolvedTeamId = args.team_id;
-    } else if (!args.workspace) {
-      const user = await ctx.db.get(userId);
-      resolvedTeamId = user?.active_team_id;
-    } else {
-      resolvedTeamId = undefined;
-    }
+    // The branch logic lives in webDocsPagination.ts so the invariant is tested.
+    const userActiveTeamId = webDocsNeedsUserDoc(args)
+      ? (await ctx.db.get(userId))?.active_team_id
+      : undefined;
+    const resolvedTeamId: typeof args.team_id | undefined = resolveWebDocsTeamId(
+      args,
+      userActiveTeamId
+    ) as typeof args.team_id | undefined;
     const effectiveWorkspace = args.scope === "projects"
       ? "personal" as const
       : args.workspace;
@@ -970,9 +974,10 @@ export const webListPaginated = query({
     // stripDoc runs — so per-doc size, not count, is the binding limit. The
     // webListPaginated invalidation storm is addressed client-side instead (cap
     // the auto-load of all pages in useSyncDocs), not by enlarging the page.
+    // Clamp (WEB_DOCS_MAX_PAGE=12) lives in webDocsPagination.ts so it's tested.
     const paginationOpts = {
       ...args.paginationOpts,
-      numItems: Math.min(args.paginationOpts.numItems, 12),
+      numItems: clampWebDocsPageSize(args.paginationOpts.numItems),
     };
     const cursor = parseCursor(paginationOpts.cursor);
 

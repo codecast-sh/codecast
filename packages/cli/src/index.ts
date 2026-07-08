@@ -385,6 +385,9 @@ interface DaemonState {
   connected?: boolean;
   lastSyncTime?: number;
   pendingQueueSize?: number;
+  pendingSyncMessages?: number;
+  pendingSyncConversations?: number;
+  pendingSyncOldestMs?: number;
   authExpired?: boolean;
   lastHeartbeatTick?: number;
   lastWatchdogCheck?: number;
@@ -1121,6 +1124,16 @@ function formatRelativeTime(timestamp: string | number): string {
   }
 }
 
+// Compact "how far behind" duration for the sync-backlog status line, e.g.
+// "2.7m" / "45s" / "1.2h". Tighter than formatRelativeTime's prose so the
+// Queue line stays a single scannable row.
+function formatBehind(ms: number): string {
+  if (ms < 1000) return "0s";
+  if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
+  if (ms < 60 * 60_000) return `${(ms / 60_000).toFixed(1)}m`;
+  return `${(ms / (60 * 60_000)).toFixed(1)}h`;
+}
+
 function getAgentLabel(agentType?: string): string | null {
   if (!agentType || agentType === "claude_code" || agentType === "claude") return "Claude";
   if (agentType === "codex" || agentType === "codex_cli") return "Codex";
@@ -1323,14 +1336,41 @@ function showStatus(): void {
       row("Daemon", fmt.success(icons.check + " running") + fmt.muted(` (PID ${pid})`));
     }
 
+    const queueMessages = state?.pendingSyncMessages ?? 0;
+    const queueConversations = state?.pendingSyncConversations ?? 0;
+    const queueOldestMs = state?.pendingSyncOldestMs ?? 0;
+    const queueSize = state?.pendingQueueSize ?? 0;
+    const hasBacklog = queueMessages > 0 || queueSize > 0;
+
     if (state?.lastSyncTime) {
-      row("Last sync", fmt.value(formatRelativeTime(state.lastSyncTime)));
+      // "Last sync" is the last queue-drain tick, NOT proof everything is on the
+      // server — say so when a backlog is still draining so it doesn't read as
+      // fully synced.
+      const synced = fmt.value(formatRelativeTime(state.lastSyncTime));
+      row("Last sync", hasBacklog ? synced + fmt.warning(" (backlog draining)") : synced);
     } else {
       row("Last sync", fmt.muted("never"));
     }
 
-    const queueSize = state?.pendingQueueSize ?? 0;
-    row("Queue", queueSize > 0 ? fmt.number(queueSize) + fmt.muted(" items") : fmt.muted("empty"));
+    if (hasBacklog) {
+      // Honest backlog: messages waiting, conversations affected, and how far
+      // behind the oldest one is — so "synced" stops lying during a stall.
+      const head =
+        queueMessages > 0
+          ? fmt.number(`${queueMessages} msg${queueMessages === 1 ? "" : "s"}`)
+          : fmt.number(`${queueSize} op${queueSize === 1 ? "" : "s"}`);
+      const parts = [head];
+      if (queueConversations > 0) {
+        const convLabel = `${queueConversations} convo${queueConversations === 1 ? "" : "s"}`;
+        parts.push(fmt.muted("across") + " " + fmt.number(convLabel));
+      }
+      if (queueOldestMs > 0) {
+        parts.push(fmt.muted("oldest") + " " + fmt.warning(formatBehind(queueOldestMs)) + fmt.muted(" behind"));
+      }
+      row("Queue", parts.join(fmt.muted(", ")));
+    } else {
+      row("Queue", fmt.muted("empty"));
+    }
 
     try {
       const fdCount = execSync(`lsof -p ${pid} 2>/dev/null | wc -l`, { encoding: "utf-8" }).trim();

@@ -37,10 +37,38 @@ describe("computeDaemonHealth", () => {
         daemon_last_seen: NOW - 5000,
         daemon_pending_sync_count: 7,
         daemon_oldest_pending_ms: SYNC_STALL_AFTER_MS + 1000,
+        daemon_pending_sync_messages: 56,
+        daemon_pending_sync_conversations: 3,
       },
       NOW,
     );
-    expect(health).toEqual({ kind: "sync_stalled", pending: 7, stalledMs: SYNC_STALL_AFTER_MS + 1000 });
+    expect(health).toEqual({
+      kind: "sync_stalled",
+      pending: 7,
+      messages: 56,
+      conversations: 3,
+      stalledMs: SYNC_STALL_AFTER_MS + 1000,
+    });
+  });
+
+  it("defaults message/conversation backlog to zero for older daemons", () => {
+    // A daemon that predates the honest-backlog fields still reports a stall via
+    // pending + oldest; the new counts just fall back to 0.
+    const health = computeDaemonHealth(
+      {
+        daemon_last_seen: NOW - 5000,
+        daemon_pending_sync_count: 4,
+        daemon_oldest_pending_ms: SYNC_STALL_AFTER_MS + 1,
+      },
+      NOW,
+    );
+    expect(health).toEqual({
+      kind: "sync_stalled",
+      pending: 4,
+      messages: 0,
+      conversations: 0,
+      stalledMs: SYNC_STALL_AFTER_MS + 1,
+    });
   });
 
   it("ignores a transient backlog that hasn't crossed the stall threshold", () => {
