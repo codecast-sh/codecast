@@ -9,7 +9,7 @@ import { watch as chokidarWatch } from "chokidar";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
 import { deviceId, deviceLabel, isRemoteDevice } from "./remote/device.js";
 import { copyCredentialToRemoteAsync, loadRemoteHost, remoteHostsRegistered } from "./remote/session-move.js";
-import { useProfile, saveProfile, getAccountsHeartbeatPayload, autoSaveActiveProfile, activeAccountSummary } from "./ccAccounts.js";
+import { useProfile, saveProfile, getAccountsHeartbeatPayload, autoSaveActiveProfile } from "./ccAccounts.js";
 import { CursorWatcher, type CursorSessionEvent } from "./cursorWatcher.js";
 import { CursorTranscriptWatcher, type CursorTranscriptEvent } from "./cursorTranscriptWatcher.js";
 import { CodexWatcher, isAppServerManagedCodexSessionHead, type CodexSessionEvent } from "./codexWatcher.js";
@@ -1400,11 +1400,13 @@ function buildDeviceSettingsPayload(config: Config | null): DeviceSnippetSetting
 const autoSaveDecidedAccounts = new Set<string>();
 function maybeAutoSaveAccount(): void {
   if (isRemoteDevice()) return;
-  let key: string | undefined;
   try {
-    const active = activeAccountSummary();
-    key = active?.uuid || active?.email;
+    // Ride the mtime-cached payload for the per-beat check — ~/.claude.json
+    // can be multi-MB, so an unconditional parse every 30s is real work.
+    const payload = getAccountsHeartbeatPayload();
+    const key = payload?.active_uuid || payload?.active_email;
     if (!key || autoSaveDecidedAccounts.has(key)) return;
+    if (payload.active_email && payload.profiles.some((p) => p.email === payload.active_email)) return;
     autoSaveDecidedAccounts.add(key);
     const saved = autoSaveActiveProfile();
     if (saved) {
@@ -1445,7 +1447,9 @@ async function sendHeartbeat(): Promise<void> {
         device_label: deviceLabel(),
         is_remote_device: isRemoteDevice(),
         // Saved CC account profiles (names/emails/tiers only, never tokens) so
-        // the web can render the account switcher. Cached 5 min in-module.
+        // the web can render the account switcher. Recomputed when the
+        // backing files change (mtime-keyed cache), so CLI-side saves and
+        // fresh /logins surface on the next beat.
         cc_accounts: getAccountsHeartbeatPayload() ?? undefined,
         // Installed agent-feature snippets + stable mode, so the web Settings
         // page mirrors (and can toggle) this device's setup.

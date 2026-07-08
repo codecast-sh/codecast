@@ -11,12 +11,14 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Feather from '@expo/vector-icons/Feather';
 import Svg, { Path } from 'react-native-svg';
 import { useInboxStore, isConvexId } from '@codecast/web/store/inboxStore';
+import { parseInboundSessionMessage, isScheduledTaskMessage } from '@codecast/web/components/sessionMessage';
 import { useConversationMessages } from '@codecast/web/hooks/useConversationMessages';
 import { useEnsureDispatch } from '@codecast/web/hooks/useEnsureDispatch';
 import { PermissionCard } from '@/components/PermissionCard';
 import { DeviceChip, useRunOnDevice } from '@/components/DevicesSection';
 import { ModelSwitcherChip } from '@/components/ModelSwitcherChip';
 import { renderInlineMarkdown, MarkdownContent, MarkdownTextBlock, CodeBlockWithCopy, CodeBlockFullscreen, HighlightedCodeText } from '@/components/MarkdownRenderer';
+import { EntityPill } from '@/components/EntityPill';
 import { CastCanvas, canvasAvailable, looksLikeHtmlMessage } from '@/components/CastCanvas';
 import { useSessionRestart, ghostRestartContextFor } from '@codecast/web/hooks/useSessionRestart';
 import { Theme, Spacing, chipShell, chipText, chipTint, CHROME_FONT_CAP } from '@/constants/Theme';
@@ -1910,6 +1912,55 @@ function TaskNotificationLine({ content, timestamp, childConversationMap }: { co
       <RNText style={styles.taskNotificationId}>{parsed.taskId}</RNText>
       {timestamp != null && <RNText style={styles.taskNotificationTime}>{formatRelativeTime(timestamp)}</RNText>}
     </TouchableOpacity>
+  );
+}
+
+// Mobile port of web's SessionMessageBlock: a cross-session `cast send` message
+// is machine-delivered, not typed by the human, so it renders as a cyan-accented
+// card naming the sender instead of a user bubble full of raw XML.
+function SessionMessageBlock({ from, name, body, timestamp }: { from: string; name?: string; body: string; timestamp?: number }) {
+  const hasRealSender = !!from && from !== 'unknown';
+  return (
+    <RNView style={styles.sessionMessageBlock}>
+      <RNView style={styles.sessionMessageHeader}>
+        <Feather name="corner-down-right" size={13} color={Theme.cyan + 'b3'} />
+        <RNText style={styles.sessionMessageLabel}>Message from</RNText>
+        {hasRealSender ? (
+          // Resolves the sender's title server-side and taps through to the
+          // session — same as web's EntityIdPill in this header.
+          <EntityPill shortId={from} />
+        ) : (
+          <RNView style={styles.sessionMessageBadge}>
+            <RNText style={styles.sessionMessageBadgeText}>{name || 'another session'}</RNText>
+          </RNView>
+        )}
+        {timestamp != null && timestamp > 0 && (
+          <RNText style={styles.sessionMessageTime}>{formatRelativeTime(timestamp)}</RNText>
+        )}
+      </RNView>
+      <MarkdownContent text={body} baseStyle={styles.sessionMessageBody} isUser={false} />
+    </RNView>
+  );
+}
+
+// Mobile port of web's ScheduledTaskBlock: a `cast schedule` prompt injection.
+function ScheduledTaskBlock({ content: rawContent, timestamp }: { content: string; timestamp?: number }) {
+  const content = rawContent.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
+  const match = content.match(/<scheduled-task\s+title="([^"]*)"(?:\s+task-id="([^"]*)")?[^>]*>([\s\S]*?)<\/scheduled-task>/);
+  const title = match?.[1]?.replace(/&quot;/g, '"') || 'Scheduled Task';
+  const prompt = match?.[3]?.trim() || content.replace(/<[^>]+>/g, '').trim();
+  return (
+    <RNView style={[styles.sessionMessageBlock, { borderLeftColor: Theme.violet + '99', backgroundColor: Theme.violet + '0d' }]}>
+      <RNView style={styles.sessionMessageHeader}>
+        <Feather name="clock" size={13} color={Theme.violet + 'b3'} />
+        <RNText style={[styles.sessionMessageLabel, { color: Theme.violet + 'b3' }]}>Scheduled</RNText>
+        <RNText style={styles.sessionMessageTitle} numberOfLines={1}>{title}</RNText>
+        {timestamp != null && timestamp > 0 && (
+          <RNText style={styles.sessionMessageTime}>{formatRelativeTime(timestamp)}</RNText>
+        )}
+      </RNView>
+      <RNText style={styles.sessionMessageBody} selectable>{prompt}</RNText>
+    </RNView>
   );
 }
 
@@ -4485,6 +4536,19 @@ export default function SessionDetailScreen() {
               }
             }
 
+            // Machine-delivered turns (cast send, cast schedule) render as
+            // dedicated cards, not user bubbles of raw XML — mirrors web's
+            // classifyUserMessage → SessionMessageBlock / ScheduledTaskBlock.
+            if (item.role === 'user' && item.content) {
+              const sessionMsg = parseInboundSessionMessage(item.content);
+              if (sessionMsg) {
+                return <SessionMessageBlock from={sessionMsg.from} name={sessionMsg.name} body={sessionMsg.body} timestamp={item.timestamp} />;
+              }
+              if (isScheduledTaskMessage(item.content)) {
+                return <ScheduledTaskBlock content={item.content} timestamp={item.timestamp} />;
+              }
+            }
+
             if (item.role === 'user' && item.content && isTaskNotification(item.content)) {
               const stripped = item.content.replace(/<task-notification>[\s\S]*?<\/task-notification>/g, '').trim();
               if (!stripped || stripped.length < 4 || stripped.startsWith('Read the output file to retrieve the result:') || stripped.startsWith('Full transcript available at:')) {
@@ -6430,6 +6494,58 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 6,
     marginVertical: 2,
+  },
+  // Session-message / scheduled-task cards (mirrors web's left-accented blocks)
+  sessionMessageBlock: {
+    marginVertical: 4,
+    marginHorizontal: 2,
+    borderRadius: 6,
+    borderLeftWidth: 2,
+    borderLeftColor: Theme.cyan + '99',
+    backgroundColor: Theme.cyan + '0d',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  sessionMessageHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 4,
+  },
+  sessionMessageLabel: {
+    fontSize: 10,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    color: Theme.cyan + 'b3',
+  },
+  sessionMessageBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: Theme.cyan + '60',
+    backgroundColor: Theme.cyan + '20',
+  },
+  sessionMessageBadgeText: {
+    fontSize: 10,
+    fontFamily: 'JetBrainsMono',
+    color: Theme.cyan,
+  },
+  sessionMessageTitle: {
+    fontSize: 12,
+    color: Theme.textMuted,
+    flex: 1,
+  },
+  sessionMessageTime: {
+    fontSize: 10,
+    color: Theme.textDim,
+    marginLeft: 'auto',
+  },
+  sessionMessageBody: {
+    fontSize: 13,
+    color: Theme.textSecondary,
+    lineHeight: 19,
   },
   taskNotificationIcon: {
     fontSize: 14,

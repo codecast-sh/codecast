@@ -22,7 +22,7 @@ import { cleanTitle, msgCountColor, formatModel } from "../lib/conversationProce
 import { getLabelColor } from "../lib/labelColors";
 import { fmtDuration, describeTaskCadence } from "./scheduleCadence";
 import { partitionScheduleInbox, type ScheduleRow, type TaskRow } from "./scheduleTasks";
-import { isMachineDeliveredMessage } from "./sessionMessage";
+import { cleanUserMessage } from "./sessionMessage";
 import { SharePopover } from "./SharePopover";
 import { shareOrigin } from "../lib/utils";
 import { PlanContextPanel } from "./PlanContextPanel";
@@ -37,32 +37,9 @@ import { LabelChipsRow } from "./LabelChipsRow";
 import { TaskStatusBadge } from "./TaskStatusBadge";
 import { useTipActions, checkMilestone } from "../tips";
 
-const NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "Your task is to create a detailed summary", "Please continue the conversation", "<task-notification>", "Implement the following plan", "[Codecast import]", 'Background agent "'];
-
-const NOISE_PATTERNS = [
-  /toolu_[A-Za-z0-9_-]+/,
-  /\/private\/tmp\/claude/,
-  /\/tmp\/claude-\d+\//,
-  /\.output<\/out/,
-  /tasks\/[a-z0-9]+\.output/,
-];
-
-export function cleanUserMessage(raw: string | null | undefined): string | null {
-  if (!raw) return null;
-  // A machine-delivered message (cast send, or an inter-agent teammate broadcast) isn't the
-  // user's own prompt — skip it so it never surfaces as the sticky fallback or card preview.
-  if (isMachineDeliveredMessage(raw)) return null;
-  const cleaned = raw
-    .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "")
-    .replace(/\[Image[:\s][^\]]*\]/gi, "")
-    .replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "")
-    .replace(/<[^>]+>/g, "")
-    .trim();
-  if (!cleaned) return null;
-  if (NOISE_PREFIXES.some(p => cleaned.startsWith(p))) return null;
-  if (NOISE_PATTERNS.some(p => p.test(cleaned))) return null;
-  return cleaned;
-}
+// Moved to sessionMessage.ts (pure module) so the mobile bundle can share it;
+// re-exported here for existing importers.
+export { cleanUserMessage };
 
 export function formatIdleDuration(updatedAt: number): string {
   const diff = Date.now() - updatedAt;
@@ -2088,12 +2065,27 @@ export function SessionListPanel({
   const handleReorderDrop = useCallback((draggedId: string, targetId: string, pos: "before" | "after") => {
     setReorderOver(null);
     if (draggedId === targetId) return;
-    // flatList is exactly the on-screen "time" order; neighbor keys come from it.
-    const rest = flatList.filter((sess) => sess._id !== draggedId);
+    // flatList is the on-screen "time" order, but a hoisted subagent/teammate
+    // row is pinned under its parent — it owns no slot of its own, so neighbor
+    // keys come from the slot-owning rows only (a nested row's key would break
+    // the midpoint math's monotonic-keys assumption). Dragging a nested row is
+    // a no-op (the hoist would snap it right back), and a drop aimed at one
+    // resolves to "after its parent's group".
+    const inList = new Set(flatList.map((sess) => sess._id));
+    const nestedUnder = (sess: InboxSession) => {
+      const p = nestParentIdOf(sess);
+      return p && p !== sess._id && inList.has(p) ? p : null;
+    };
+    const draggedRow = flatList.find((sess) => sess._id === draggedId);
+    if (draggedRow && nestedUnder(draggedRow)) return;
+    const targetRow = flatList.find((sess) => sess._id === targetId);
+    if (!targetRow) return;
+    const targetParent = nestedUnder(targetRow);
+    const rest = flatList.filter((sess) => sess._id !== draggedId && !nestedUnder(sess));
     const restKeys = rest.map((sess) => manualOrder?.[sess._id] ?? sess.started_at ?? sess.updated_at ?? 0);
-    const targetIdx = rest.findIndex((sess) => sess._id === targetId);
+    const targetIdx = rest.findIndex((sess) => sess._id === (targetParent ?? targetId));
     if (targetIdx < 0) return;
-    const insertIndex = pos === "before" ? targetIdx : targetIdx + 1;
+    const insertIndex = (targetParent ? "after" : pos) === "before" ? targetIdx : targetIdx + 1;
     const key = computeManualSortKey(restKeys, insertIndex);
     useInboxStore.getState().setSessionManualOrder(draggedId, key);
   }, [flatList, manualOrder]);

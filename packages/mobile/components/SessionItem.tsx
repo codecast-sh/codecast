@@ -1,5 +1,6 @@
 import { StyleSheet, TouchableOpacity, View as RNView, Text as RNText, Animated as RNAnimated, PanResponder } from 'react-native';
 import { useRef, useCallback, useEffect, useMemo } from 'react';
+import { cleanUserMessage } from '@codecast/web/components/sessionMessage';
 import { gestureHandler } from '@/lib/gestureHandler';
 import * as Haptics from 'expo-haptics';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
@@ -162,6 +163,10 @@ export function SessionItem({ session, onPress, onPin, onLongPress }: { session:
   const sColor = statusColor(session);
   const sLabel = statusLabel(session);
   const showAuthor = session.author_name && session.is_own === false;
+  // Same preview filter as the web inbox cards: machine-delivered messages
+  // (cast send, teammate broadcasts, scheduled tasks) and harness noise never
+  // surface as "what the human said".
+  const userMessage = cleanUserMessage(session.last_user_message);
 
   return (
     <TouchableOpacity
@@ -192,10 +197,10 @@ export function SessionItem({ session, onPress, onPin, onLongPress }: { session:
         </RNView>
       </RNView>
 
-      {session.last_user_message && (
+      {userMessage && (
         <RNText style={styles.userMessage} numberOfLines={1}>
           <RNText style={styles.userMessageCaret}>&gt; </RNText>
-          {session.last_user_message}
+          {userMessage}
         </RNText>
       )}
 
