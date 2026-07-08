@@ -5,11 +5,14 @@ import {
   buildWatchdogPlistXml,
   buildWatchdogShellScript,
   daemonPlistNeedsUpgrade,
+  daemonTickStale,
+  DAEMON_HEARTBEAT_STALE_MS,
   extractPlistProgramArguments,
   shellEscapeForSh,
   watchdogPlistNeedsUpgrade,
   watchdogHeartbeatStale,
   watchdogHeartbeatAge,
+  WATCHDOG_AWAKE_GAP_MS,
   WATCHDOG_HEARTBEAT_STALE_MS,
 } from "./supervision.js";
 
@@ -60,6 +63,49 @@ describe("watchdog shell script is a resident loop that stamps a heartbeat", () 
   test("both forms stamp the watchdog heartbeat each cycle so the daemon sees liveness", () => {
     expect(dev).toContain('> "$HEARTBEAT"');
     expect(bin).toContain('> "$HEARTBEAT"');
+  });
+
+  test("dev form defers the stale-tick restart when its own loop gap shows the machine slept", () => {
+    expect(dev).toContain("LOOP_GAP");
+    expect(dev).toContain(`-lt ${WATCHDOG_AWAKE_GAP_MS}`);
+    expect(dev).toContain("deferring one cycle");
+  });
+});
+
+// Regression: the daemon's heartbeat tick freezes during system sleep exactly
+// like a wedged event loop, and the watchdog resumes within seconds of wake —
+// usually before the daemon's 30s stamp interval fires. Judging tick age alone
+// force-restarted a HEALTHY daemon on nearly every wake (observed staleness
+// values matched the wake_detected suspension durations; 10-20 kills/day). A
+// stale tick only counts when the watchdog's own gap since its previous pass
+// shows the machine was continuously awake.
+describe("daemonTickStale: wedged event loop vs the machine just slept", () => {
+  const STALE = DAEMON_HEARTBEAT_STALE_MS + 1;
+
+  test("fresh tick is never stale, regardless of gap", () => {
+    expect(daemonTickStale(30_000, 60_000)).toBe(false);
+    expect(daemonTickStale(DAEMON_HEARTBEAT_STALE_MS, 60_000)).toBe(false); // boundary exclusive
+  });
+
+  test("stale tick + normal awake gap = wedged, restart", () => {
+    expect(daemonTickStale(STALE, 62_000)).toBe(true);
+  });
+
+  test("stale tick right after a sleep (large gap) = defer, the daemon hasn't had a chance to re-stamp", () => {
+    const fifteenMinNap = 15 * 60 * 1000;
+    expect(daemonTickStale(fifteenMinNap, fifteenMinNap + 60_000)).toBe(false);
+    expect(daemonTickStale(STALE, WATCHDOG_AWAKE_GAP_MS)).toBe(false); // boundary: gap must be strictly under
+  });
+
+  test("first pass (no baseline gap) defers rather than killing blind", () => {
+    expect(daemonTickStale(STALE, null)).toBe(false);
+    expect(daemonTickStale(STALE, -1)).toBe(false);
+  });
+
+  test("a truly wedged daemon is still caught one cycle after wake — gap normalizes, tick stays stale", () => {
+    // Cycle N (just woke): deferred. Cycle N+1 (60s awake later): restart.
+    const tickAgeNextCycle = 15 * 60 * 1000 + 60_000;
+    expect(daemonTickStale(tickAgeNextCycle, 61_000)).toBe(true);
   });
 });
 

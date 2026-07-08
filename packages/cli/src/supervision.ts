@@ -15,6 +15,13 @@
 
 export const WATCHDOG_HEARTBEAT_FILENAME = "watchdog.heartbeat";
 
+// The compiled `_watchdog` pass records when it last ran here (epoch ms). The
+// shell loop's heartbeat stamp can't serve this purpose for the binary pass —
+// the wrapper stamps it immediately before invoking the binary, so the binary
+// would always read a seconds-old value. Its own start-to-start gap is what
+// detects "the machine just slept" (see daemonTickStale).
+export const WATCHDOG_PASS_STAMP_FILENAME = "watchdog.pass";
+
 // Both LaunchAgents must run through /bin/sh + a script in ~/.codecast, never point
 // at the codecast binary directly. macOS Background Task Management identifies a
 // login item by its executable's code-signing identity; our binary is ad-hoc signed
@@ -49,7 +56,34 @@ export const WATCHDOG_HEARTBEAT_STALE_MS = 5 * 60 * 1000;
 // The watchdog's own poll cadence and the daemon-staleness threshold it enforces,
 // kept here so the shell script and any future native watchdog agree on one number.
 const WATCHDOG_INTERVAL_SECONDS = 60;
-const DAEMON_HEARTBEAT_STALE_MS = 180000; // 3 min; mirrors HEARTBEAT_STALE_THRESHOLD_MS in daemon.ts
+export const DAEMON_HEARTBEAT_STALE_MS = 180000; // 3 min = 6 missed 30s daemon heartbeats
+
+// The daemon's heartbeat tick freezes during system sleep exactly like it does
+// when the event loop is wedged — and the watchdog resumes its loop within
+// seconds of wake, usually BEFORE the daemon's 30s stamp interval has fired
+// again. Judging tick age alone therefore killed a healthy daemon on nearly
+// every wake (observed: staleness values matching the wake_detected suspension
+// durations, 10-20 forced restarts/day on a napping laptop). The watchdog's own
+// gap since its previous pass is the sleep detector: while awake the loop runs
+// every WATCHDOG_INTERVAL, so a gap much larger than that means the machine
+// slept and the tick's age is meaningless — defer judgment one cycle. A truly
+// wedged daemon stays stale while the gap normalizes, so detection is only
+// delayed by a single interval.
+export const WATCHDOG_AWAKE_GAP_MS = WATCHDOG_INTERVAL_SECONDS * 1000 + 30_000;
+
+// Pure verdict shared by both watchdog forms (dev shell inline check, compiled
+// `_watchdog` pass). gapMs is the watchdog's time since its own previous pass;
+// null (first pass, missing stamp) defers — a fresh watchdog has no baseline.
+export function daemonTickStale(
+  tickAgeMs: number,
+  gapMs: number | null,
+  thresholdMs: number = DAEMON_HEARTBEAT_STALE_MS,
+  awakeGapMs: number = WATCHDOG_AWAKE_GAP_MS,
+): boolean {
+  if (tickAgeMs <= thresholdMs) return false;
+  if (gapMs === null || gapMs < 0) return false;
+  return gapMs < awakeGapMs;
+}
 
 export function buildDaemonPlistXml(opts: { scriptPath: string; configDir: string }): string {
   const { scriptPath, configDir } = opts;
@@ -191,7 +225,14 @@ rotate_log() {
 check_once() {
   # Stamp liveness first so the daemon's mutual supervision can tell the loop is
   # alive (not merely launchd-loaded). Epoch ms matches daemon.state tick units.
-  printf '%s' "\$(( \$(date +%s) * 1000 ))" > "\$HEARTBEAT" 2>/dev/null
+  # The PREVIOUS stamp is kept as this cycle's sleep detector: a gap far beyond
+  # the loop interval means the machine was suspended, and the daemon's tick age
+  # is then meaningless (see daemonTickStale in supervision.ts).
+  NOW_MS=\$(( \$(date +%s) * 1000 ))
+  PREV_BEAT=\$(tr -cd '0-9' < "\$HEARTBEAT" 2>/dev/null)
+  LOOP_GAP=-1
+  [ -n "\$PREV_BEAT" ] && LOOP_GAP=\$(( NOW_MS - PREV_BEAT ))
+  printf '%s' "\$NOW_MS" > "\$HEARTBEAT" 2>/dev/null
 
   for f in launchd.err.log launchd.out.log daemon.log; do
     rotate_log "\${HOME}/.codecast/\$f"
@@ -217,10 +258,17 @@ check_once() {
     TICK=\$(sed -n 's/.*"lastHeartbeatTick"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' "\$STATE_FILE")
     [ -z "\$TICK" ] && TICK=\$(sed -n 's/.*"lastWatchdogCheck"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' "\$STATE_FILE")
     if [ -n "\$TICK" ] && [ "\$TICK" -gt 0 ]; then
-      AGE=\$(( \$(date +%s) * 1000 - TICK ))
+      AGE=\$(( NOW_MS - TICK ))
       if [ "\$AGE" -gt ${DAEMON_HEARTBEAT_STALE_MS} ]; then
-        STALE=1
-        log "Daemon alive but heartbeat stale (\${AGE}ms) - event loop wedged, forcing restart"
+        # Only a stale tick observed across a continuously-awake cycle means a
+        # wedged event loop. A large gap in our OWN loop = the machine slept and
+        # the daemon may simply not have re-stamped yet — give it one cycle.
+        if [ "\$LOOP_GAP" -ge 0 ] && [ "\$LOOP_GAP" -lt ${WATCHDOG_AWAKE_GAP_MS} ]; then
+          STALE=1
+          log "Daemon alive but heartbeat stale (\${AGE}ms) - event loop wedged, forcing restart"
+        else
+          log "Daemon heartbeat stale (\${AGE}ms) but watchdog loop gap (\${LOOP_GAP}ms) implies system sleep - deferring one cycle"
+        fi
       fi
     fi
   fi
