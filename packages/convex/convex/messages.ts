@@ -8,7 +8,7 @@ import { shouldGenerateTitle } from "./titleGeneration";
 import { canTeamMemberAccess, checkConversationAccess } from "./privacy";
 import { redactSecrets } from "./redact";
 import { markPendingDelivered } from "./pendingMessages";
-import { nextAgentStatusOnAddMessages, isApiErrorBanner, classifyApiErrorBanner, apiErrorBatchAction } from "./inboxFilters";
+import { nextAgentStatusOnAddMessages, isApiErrorBanner, classifyApiErrorBanner, apiErrorBatchAction, NEEDS_INPUT_AUQ_CHECK_DELAY_MS } from "./inboxFilters";
 import { classifyDocContent, extractTitleFromContent, inlineDocSourceKey } from "./docExtraction";
 import { extractFileChanges, extractCommitHashFromContent, hasFileChangeToolCall, type FileChange } from "./fileChanges/extractor";
 
@@ -1177,6 +1177,21 @@ export const addMessages = mutation({
           conversation_id: args.conversation_id,
           scheduled_at: Date.now(),
           ...agentStatusProjection,
+        });
+      }
+
+      // An AskUserQuestion tool_use landing as the newest message means the
+      // agent just blocked on the user — the needs-input verdict flips NOW, on
+      // this message write, not on any status write (the daemon races back to
+      // "working" while the poll is open, and buffered polls send no status at
+      // all). The check re-reads the messages table at fire time, so a poll
+      // answered in the meantime is a no-op. (see notifications.checkNeedsInput)
+      if (
+        newestMsg.role === "assistant" &&
+        newestMsg.tool_calls?.some((tc) => tc.name === "AskUserQuestion")
+      ) {
+        await ctx.scheduler.runAfter(NEEDS_INPUT_AUQ_CHECK_DELAY_MS, internal.notifications.checkNeedsInput, {
+          conversation_id: args.conversation_id,
         });
       }
 
