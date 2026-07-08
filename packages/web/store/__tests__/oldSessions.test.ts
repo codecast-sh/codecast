@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { isOldSession, partitionOldSessions, categorizeSessions, type InboxSession } from "../inboxStore";
+import { isOldSession, partitionOldSessions, categorizeSessions, flatViewSessions, type InboxSession } from "../inboxStore";
 
 // The "show old sessions" toggle is a pure CLIENT-SIDE filter. "Old" = a
 // top-level session the live (recent) inbox subscription no longer returns but
@@ -174,5 +174,65 @@ describe("agent-team teammates nest under their lead", () => {
     // Neither in the live window → the teammate ages out like any session
     // (unlike a Task subagent, which is exempt outright).
     expect(isOldSession(mate, new Set([RECENT]))).toBe(true);
+  });
+});
+
+// Regression (ct-38183): the flat (time / recent) views render every session as
+// its own row in comparator order, so a subagent/teammate row landed wherever
+// ITS activity sorted — stranded between unrelated cards while its
+// recently-active parent sorted far above. flatViewSessions must hoist each
+// child directly under its parent whenever the parent made the final list; a
+// row whose parent is absent keeps its slot (same "parentless renders flat"
+// semantics as categorizeSessions).
+describe("flat views hoist subagent/teammate rows under their parent (ct-38183)", () => {
+  const LEAD = cid(20);
+  const MATE_A = cid(21);
+  const MATE_B = cid(22);
+  const UNRELATED = cid(23);
+  const ids = (xs: InboxSession[]) => xs.map((x) => x._id);
+  const team = (id: string, name: string, t: number) =>
+    sess({
+      _id: id,
+      spawned_by_conversation_id: LEAD,
+      agent_team_name: "myteam",
+      agent_name: name,
+      started_at: t,
+      updated_at: t,
+    });
+  // The production shape: the lead worked recently (sorts to the top), its
+  // teammates went quiet hours ago and sort next to an unrelated old card.
+  const base: Record<string, InboxSession> = {
+    [LEAD]: sess({ _id: LEAD, agent_team_name: "myteam", agent_name: "team-lead", started_at: 1000, updated_at: 5000 }),
+    [UNRELATED]: sess({ _id: UNRELATED, started_at: 3000, updated_at: 3000 }),
+    [MATE_A]: team(MATE_A, "researcher", 2000),
+    [MATE_B]: team(MATE_B, "mapper", 1900),
+  };
+  const flatten = (sessions: Record<string, InboxSession>, mode: "time" | "recent", showSubagents = true) => {
+    const cat = categorizeSessions(sessions, new Set());
+    return flatViewSessions(cat.sorted, cat.subsByParent, { mode, showSubagents });
+  };
+
+  it("recent mode: teammates render directly under their lead, not at their own time slot", () => {
+    expect(ids(flatten(base, "recent"))).toEqual([LEAD, MATE_A, MATE_B, UNRELATED]);
+  });
+
+  it("time mode: same hoist on the creation-time order", () => {
+    // Creation order alone would be UNRELATED(3000), MATE_A, MATE_B, LEAD(1000).
+    expect(ids(flatten(base, "time"))).toEqual([UNRELATED, LEAD, MATE_A, MATE_B]);
+  });
+
+  it("Task-tool subagents hoist the same way", () => {
+    const sub = sess({ _id: MATE_A, parent_conversation_id: LEAD, is_subagent: true, started_at: 2000, updated_at: 2000 });
+    const withSub = { [LEAD]: base[LEAD], [UNRELATED]: base[UNRELATED], [MATE_A]: sub };
+    expect(ids(flatten(withSub, "recent"))).toEqual([LEAD, MATE_A, UNRELATED]);
+  });
+
+  it("parent absent: a teammate keeps its comparator slot as a flat row", () => {
+    const noLead = { [UNRELATED]: base[UNRELATED], [MATE_A]: base[MATE_A], [MATE_B]: base[MATE_B] };
+    expect(ids(flatten(noLead, "recent"))).toEqual([UNRELATED, MATE_A, MATE_B]);
+  });
+
+  it("subagent toggle off still drops nested rows entirely", () => {
+    expect(ids(flatten(base, "recent", false))).toEqual([LEAD, UNRELATED]);
   });
 });

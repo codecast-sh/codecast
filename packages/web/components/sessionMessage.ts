@@ -96,3 +96,35 @@ export function isScheduledTaskMessage(rawContent: string | null | undefined): b
 export function isMachineDeliveredMessage(rawContent: string | null | undefined): boolean {
   return isSessionMessage(rawContent) || isTeammateMessage(rawContent) || isScheduledTaskMessage(rawContent);
 }
+
+// --- Card-preview cleaning ------------------------------------------------------------
+// Shared by every "what the human last said" preview surface (web inbox cards, the sticky
+// fallback, the mobile inbox/team cards). Lives here — not in a component file — because
+// the Expo bundle imports it and must not drag web UI dependencies into Hermes.
+
+const NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "Your task is to create a detailed summary", "Please continue the conversation", "<task-notification>", "Implement the following plan", "[Codecast import]", 'Background agent "'];
+
+const NOISE_PATTERNS = [
+  /toolu_[A-Za-z0-9_-]+/,
+  /\/private\/tmp\/claude/,
+  /\/tmp\/claude-\d+\//,
+  /\.output<\/out/,
+  /tasks\/[a-z0-9]+\.output/,
+];
+
+export function cleanUserMessage(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  // A machine-delivered message (cast send, or an inter-agent teammate broadcast) isn't the
+  // user's own prompt — skip it so it never surfaces as the sticky fallback or card preview.
+  if (isMachineDeliveredMessage(raw)) return null;
+  const cleaned = raw
+    .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "")
+    .replace(/\[Image[:\s][^\]]*\]/gi, "")
+    .replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "")
+    .replace(/<[^>]+>/g, "")
+    .trim();
+  if (!cleaned) return null;
+  if (NOISE_PREFIXES.some(p => cleaned.startsWith(p))) return null;
+  if (NOISE_PATTERNS.some(p => p.test(cleaned))) return null;
+  return cleaned;
+}

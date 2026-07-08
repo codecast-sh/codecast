@@ -1600,6 +1600,43 @@ export function chipMatchesSession(
   return true;
 }
 
+// Subagent/teammate rows never float at their own slot in a flat list — they
+// render directly under their parent whenever the parent is in the list. The
+// view comparator places a child wherever ITS OWN activity lands, which strands
+// it between unrelated cards while its (recently-active) parent sorts far away
+// — three ↳-styled rows adrift in the middle of the inbox. Children keep the
+// comparator's relative order among siblings and follow chains (a child's own
+// children ride along). A row whose parent didn't make the list stays where the
+// sort put it — same "parentless renders flat" semantics as categorizeSessions.
+function hoistNestedUnderParent(list: InboxSession[]): InboxSession[] {
+  const present = new Set(list.map((s) => s._id));
+  const nestedHere = (s: InboxSession) => {
+    const p = nestParentIdOf(s);
+    return p && p !== s._id && present.has(p) ? p : null;
+  };
+  const kidsByParent = new Map<string, InboxSession[]>();
+  for (const s of list) {
+    const p = nestedHere(s);
+    if (!p) continue;
+    if (!kidsByParent.has(p)) kidsByParent.set(p, []);
+    kidsByParent.get(p)!.push(s);
+  }
+  if (kidsByParent.size === 0) return list;
+  const out: InboxSession[] = [];
+  const emitted = new Set<string>();
+  const emit = (s: InboxSession) => {
+    if (emitted.has(s._id)) return;
+    emitted.add(s._id);
+    out.push(s);
+    for (const kid of kidsByParent.get(s._id) ?? []) emit(kid);
+  };
+  for (const s of list) if (!nestedHere(s)) emit(s);
+  // A parent-link cycle would leave its members un-emitted above (each waits on
+  // the other) — append them in sort order rather than dropping rows.
+  for (const s of list) emit(s);
+  return out;
+}
+
 // The flat (time / recent) view's session list AS RENDERED — the single builder
 // behind BOTH the panel's render and computeVisualOrder (keyboard nav), so the
 // two can never drift. This is the crux of "Ctrl+J/K skips New Session cards
@@ -1608,7 +1645,8 @@ export function chipMatchesSession(
 // flat views list EVERY non-hidden session (sortedSessions) — so nav has to walk
 // that same full set or it steps over the blanks the panel is showing. Drops
 // nested subagents when the toggle is off (always keeping the focused one),
-// sorts by the view comparator, then applies the chip predicate.
+// sorts by the view comparator, applies the chip predicate, then hoists each
+// remaining subagent/teammate row under its parent (hoistNestedUnderParent).
 export function flatViewSessions(
   sortedSessions: InboxSession[],
   subsByParent: Map<string, InboxSession[]>,
@@ -1640,7 +1678,7 @@ export function flatViewSessions(
     const fresh = list.filter((s) => !rank.has(s._id)); // new since the snapshot, still in live order
     ordered = [...frozen, ...fresh];
   }
-  return opts.chipMatches ? ordered.filter(opts.chipMatches) : ordered;
+  return hoistNestedUnderParent(opts.chipMatches ? ordered.filter(opts.chipMatches) : ordered);
 }
 
 // The manual sort key to give a row dropped at `insertIndex` among `orderedKeys`

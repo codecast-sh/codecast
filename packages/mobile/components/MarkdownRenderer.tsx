@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   StyleSheet,
   ScrollView,
@@ -11,9 +11,10 @@ import {
 import * as Haptics from 'expo-haptics';
 import { copyToClipboard } from '@/lib/clipboard';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { useRouter } from 'expo-router';
 import { Theme } from '@/constants/Theme';
 import { CastCanvas, canvasAvailable } from './CastCanvas';
+import { EntityPill, isEntityId } from './EntityPill';
+import { parseEntityUrl } from '@codecast/shared/entities';
 // Canonical "★ Insight ─────" parser shared with web (pure string/regex module,
 // Hermes-safe). Mobile used to carry its own narrower copy in session/[id].tsx
 // which silently missed most real-world insight forms — one parser, one truth.
@@ -65,15 +66,13 @@ export function HighlightedCodeText({ content, style }: { content: string; style
   );
 }
 
-const MENTION_COLORS: Record<string, string> = {
-  ct: '#cb4b16',
-  pl: '#6c71c4',
-  doc: Theme.cyan,
-};
+// Trailing "<name> <entity-id>" inside an @[…] mention — same shape web's
+// MENTION_RE extracts (the id renders as a pill; the name is its fallback).
+const MENTION_ENTITY_RE = /^(.*?)\s*\b(ct-\w+|pl-\w+|jx[a-z0-9]{5,}|doc:\w+)$/i;
 
-export function renderInlineMarkdown(text: string, baseStyle: any, keyPrefix = '', isUser = false, onEntityPress?: (id: string) => void): React.ReactNode[] {
+export function renderInlineMarkdown(text: string, baseStyle: any, keyPrefix = '', isUser = false): React.ReactNode[] {
   const result: React.ReactNode[] = [];
-  const pattern = /(`[^`]+`|\*\*(.+?)\*\*|\*(.+?)\*|~~(.+?)~~|\[([^\]]+)\]\(([^)]+)\)|(https?:\/\/[^\s<>\])"',]+)|@\[([^\]]+)\]|@(\w+)|((?:ct|pl|doc)-[a-z0-9]{4,}))/g;
+  const pattern = /(`[^`]+`|\*\*(.+?)\*\*|\*(.+?)\*|~~(.+?)~~|\[([^\]]+)\]\(([^)]+)\)|(https?:\/\/[^\s<>\])"',]+)|@\[([^\]]+)\]|@(\w+)|\b((?:ct|pl)-[a-z0-9]{4,}|jx[a-z0-9]{5,}|doc:[a-z0-9]{20,}|doc-[a-z0-9]{4,})\b)/g;
   let lastIndex = 0;
   let match;
   let key = 0;
@@ -85,9 +84,15 @@ export function renderInlineMarkdown(text: string, baseStyle: any, keyPrefix = '
 
     if (match[0].startsWith('`')) {
       const code = match[0].slice(1, -1);
-      result.push(
-        <RNText key={`${keyPrefix}c${key++}`} style={isUser ? mdStyles.inlineCodeUser : mdStyles.inlineCode}>{code}</RNText>
-      );
+      // `jx…`/`ct-…` in backticks is an object reference, not code — pill it
+      // (web's EntityAwareCode does the same).
+      if (isEntityId(code)) {
+        result.push(<EntityPill key={`${keyPrefix}c${key++}`} shortId={code} />);
+      } else {
+        result.push(
+          <RNText key={`${keyPrefix}c${key++}`} style={isUser ? mdStyles.inlineCodeUser : mdStyles.inlineCode}>{code}</RNText>
+        );
+      }
     } else if (match[2] !== undefined) {
       result.push(
         <RNText key={`${keyPrefix}b${key++}`} style={{ fontWeight: '700' }}>{match[2]}</RNText>
@@ -102,49 +107,69 @@ export function renderInlineMarkdown(text: string, baseStyle: any, keyPrefix = '
       );
     } else if (match[5] && match[6]) {
       const url = match[6];
-      result.push(
-        <RNText key={`${keyPrefix}l${key++}`} style={isUser ? mdStyles.linkTextUser : mdStyles.linkText} onPress={() => Linking.openURL(url)}>
-          {match[5]}
-        </RNText>
-      );
+      // A codecast object URL becomes a rich in-app pill, not an external link
+      // (web's EntityAwareLink parity).
+      const entityRef = parseEntityUrl(url);
+      if (entityRef) {
+        result.push(<EntityPill key={`${keyPrefix}l${key++}`} type={entityRef.type} id={entityRef.id} />);
+      } else {
+        result.push(
+          <RNText key={`${keyPrefix}l${key++}`} style={isUser ? mdStyles.linkTextUser : mdStyles.linkText} onPress={() => Linking.openURL(url)}>
+            {match[5]}
+          </RNText>
+        );
+      }
     } else if (match[7]) {
       const url = match[7];
-      let displayUrl = url;
-      if (url.length > 50) {
-        try {
-          const parsed = new URL(url);
-          const path = parsed.pathname.length > 1 ? parsed.pathname.slice(0, 20) + '...' : '';
-          displayUrl = parsed.hostname + path;
-        } catch { displayUrl = url.slice(0, 40) + '...'; }
+      const entityRef = parseEntityUrl(url);
+      if (entityRef) {
+        result.push(<EntityPill key={`${keyPrefix}u${key++}`} type={entityRef.type} id={entityRef.id} />);
+      } else {
+        let displayUrl = url;
+        if (url.length > 50) {
+          try {
+            const parsed = new URL(url);
+            const path = parsed.pathname.length > 1 ? parsed.pathname.slice(0, 20) + '...' : '';
+            displayUrl = parsed.hostname + path;
+          } catch { displayUrl = url.slice(0, 40) + '...'; }
+        }
+        result.push(
+          <RNText key={`${keyPrefix}u${key++}`} style={isUser ? mdStyles.linkTextUser : mdStyles.linkText} onPress={() => Linking.openURL(url)}>
+            {displayUrl}
+          </RNText>
+        );
       }
-      result.push(
-        <RNText key={`${keyPrefix}u${key++}`} style={isUser ? mdStyles.linkTextUser : mdStyles.linkText} onPress={() => Linking.openURL(url)}>
-          {displayUrl}
-        </RNText>
-      );
     } else if (match[8]) {
-      // @[Bracket mention] syntax
+      // @[Bracket mention] syntax — a trailing entity id ("@[Title jx7c6zk]")
+      // renders as that object's pill; a plain name stays a mention chip.
       const name = match[8];
-      result.push(
-        <RNText key={`${keyPrefix}m${key++}`} style={mdStyles.mentionPill}>@{name}</RNText>
-      );
+      const em = name.match(MENTION_ENTITY_RE);
+      if (em && em[2]) {
+        const entityId = em[2];
+        result.push(
+          entityId.toLowerCase().startsWith('doc:')
+            ? <EntityPill key={`${keyPrefix}m${key++}`} type="doc" id={entityId.slice(4)} />
+            : <EntityPill key={`${keyPrefix}m${key++}`} shortId={entityId} />
+        );
+      } else {
+        result.push(
+          <RNText key={`${keyPrefix}m${key++}`} style={mdStyles.mentionPill}>@{name}</RNText>
+        );
+      }
     } else if (match[9]) {
       // @word mention
       result.push(
         <RNText key={`${keyPrefix}m${key++}`} style={mdStyles.mentionPill}>@{match[9]}</RNText>
       );
     } else if (match[10]) {
-      // Entity ID (ct-xxxx, pl-xxxx, doc-xxxx)
+      // Entity ID (jx… session, ct-/pl- task/plan, doc reference)
       const id = match[10];
-      const prefix = id.split('-')[0];
-      const color = MENTION_COLORS[prefix] || Theme.cyan;
-      const route = prefix === 'ct' ? `/task/${id}` : prefix === 'pl' ? `/plan/${id}` : prefix === 'doc' ? `/doc/${id}` : null;
       result.push(
-        <RNText
-          key={`${keyPrefix}e${key++}`}
-          style={[mdStyles.entityPill, { backgroundColor: color + '20', color }]}
-          onPress={route && onEntityPress ? () => onEntityPress(id) : undefined}
-        >{id}</RNText>
+        id.toLowerCase().startsWith('doc:')
+          ? <EntityPill key={`${keyPrefix}e${key++}`} type="doc" id={id.slice(4)} />
+          : id.toLowerCase().startsWith('doc-')
+            ? <EntityPill key={`${keyPrefix}e${key++}`} type="doc" id={id} />
+            : <EntityPill key={`${keyPrefix}e${key++}`} shortId={id} />
       );
     }
 
@@ -250,7 +275,7 @@ export function CodeBlockWithCopy({ content, language }: { content: string; lang
   );
 }
 
-export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false, onEntityPress }: { text: string; baseStyle: any; blockKey: string; isUser?: boolean; onEntityPress?: (id: string) => void }) {
+export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false }: { text: string; baseStyle: any; blockKey: string; isUser?: boolean }) {
   const lines = text.split('\n');
   const elements: React.ReactNode[] = [];
   let i = 0;
@@ -268,7 +293,7 @@ export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false, o
       const fontSize = [18, 16, 15, 14, 13, 13][level - 1];
       elements.push(
         <RNText key={`${blockKey}h${elKey++}`} style={[baseStyle, { fontSize, fontWeight: '700', marginTop: 8, marginBottom: 4 }]}>
-          {renderInlineMarkdown(headerMatch[2], baseStyle, `${blockKey}h${elKey}`, isUser, onEntityPress)}
+          {renderInlineMarkdown(headerMatch[2], baseStyle, `${blockKey}h${elKey}`, isUser)}
         </RNText>
       );
       i++;
@@ -306,7 +331,7 @@ export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false, o
                 {item.checked !== undefined ? (item.checked ? '\u2611' : '\u2610') : item.ordered ? `${item.num}.` : item.depth > 0 ? '\u25e6' : '\u2022'}
               </RNText>
               <RNText style={[baseStyle, { flex: 1 }, item.checked === true && { textDecorationLine: 'line-through', color: Theme.textMuted0 }]}>
-                {renderInlineMarkdown(item.text, baseStyle, `${blockKey}li${j}`, isUser, onEntityPress)}
+                {renderInlineMarkdown(item.text, baseStyle, `${blockKey}li${j}`, isUser)}
               </RNText>
             </RNView>
           ))}
@@ -336,7 +361,7 @@ export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false, o
       elements.push(
         <RNView key={`${blockKey}q${elKey++}`} style={isUser ? mdStyles.blockquoteUser : mdStyles.blockquote}>
           <RNText style={[baseStyle, mdStyles.blockquoteText]}>
-            {renderInlineMarkdown(quoteLines.join('\n'), baseStyle, `${blockKey}q${elKey}`, isUser, onEntityPress)}
+            {renderInlineMarkdown(quoteLines.join('\n'), baseStyle, `${blockKey}q${elKey}`, isUser)}
           </RNText>
         </RNView>
       );
@@ -371,7 +396,7 @@ export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false, o
                 {row.map((cell, ci) => (
                   <RNView key={ci} style={mdStyles.tableCell}>
                     <RNText style={[baseStyle, mdStyles.tableCellText]}>
-                      {renderInlineMarkdown(cell, baseStyle, `${blockKey}tbl${ri}${ci}`, isUser, onEntityPress)}
+                      {renderInlineMarkdown(cell, baseStyle, `${blockKey}tbl${ri}${ci}`, isUser)}
                     </RNText>
                   </RNView>
                 ))}
@@ -393,7 +418,7 @@ export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false, o
     if (paraLines.length > 0) {
       elements.push(
         <RNText key={`${blockKey}p${elKey++}`} style={[baseStyle, { marginBottom: 6 }]} selectable>
-          {renderInlineMarkdown(paraLines.join('\n'), baseStyle, `${blockKey}p${elKey}`, isUser, onEntityPress)}
+          {renderInlineMarkdown(paraLines.join('\n'), baseStyle, `${blockKey}p${elKey}`, isUser)}
         </RNText>
       );
     }
@@ -405,7 +430,7 @@ export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false, o
 // The fence-splitting run of blocks — code fences to CodeBlockWithCopy /
 // CastCanvas, everything else to MarkdownTextBlock. Internal: MarkdownContent
 // wraps this with insight-block extraction; InsightCard bodies reuse it.
-function MarkdownBlocks({ text, baseStyle, isUser, keyPrefix, onEntityPress }: { text: string; baseStyle: any; isUser: boolean; keyPrefix: string; onEntityPress: (id: string) => void }) {
+function MarkdownBlocks({ text, baseStyle, isUser, keyPrefix }: { text: string; baseStyle: any; isUser: boolean; keyPrefix: string }) {
   // Language may be hyphenated (cast-canvas, objective-c).
   const codeBlockRegex = /```([\w-]+)?\n([\s\S]*?)```/g;
   const blocks: Array<{ type: 'text' | 'code'; content: string; language?: string }> = [];
@@ -444,7 +469,7 @@ function MarkdownBlocks({ text, baseStyle, isUser, keyPrefix, onEntityPress }: {
           );
         }
 
-        return <MarkdownTextBlock key={idx} text={block.content} baseStyle={baseStyle} blockKey={`${keyPrefix}b${idx}`} isUser={isUser} onEntityPress={onEntityPress} />;
+        return <MarkdownTextBlock key={idx} text={block.content} baseStyle={baseStyle} blockKey={`${keyPrefix}b${idx}`} isUser={isUser} />;
       })}
     </>
   );
@@ -452,7 +477,7 @@ function MarkdownBlocks({ text, baseStyle, isUser, keyPrefix, onEntityPress }: {
 
 // "★ Insight ─────" callout — mirrors web's InsightCard (ConversationView):
 // violet-tinted card, star + uppercase label header, markdown body.
-function InsightCard({ label, content, baseStyle, onEntityPress }: { label: string; content: string; baseStyle: any; onEntityPress: (id: string) => void }) {
+function InsightCard({ label, content, baseStyle }: { label: string; content: string; baseStyle: any }) {
   return (
     <RNView style={mdStyles.insightCard}>
       <RNView style={mdStyles.insightHeader}>
@@ -460,20 +485,13 @@ function InsightCard({ label, content, baseStyle, onEntityPress }: { label: stri
         <RNText style={mdStyles.insightLabel}>{label}</RNText>
       </RNView>
       <RNView style={mdStyles.insightBody}>
-        <MarkdownBlocks text={content} baseStyle={baseStyle} isUser={false} keyPrefix="ins" onEntityPress={onEntityPress} />
+        <MarkdownBlocks text={content} baseStyle={baseStyle} isUser={false} keyPrefix="ins" />
       </RNView>
     </RNView>
   );
 }
 
 export function MarkdownContent({ text, baseStyle, isUser = false }: { text: string; baseStyle: any; isUser?: boolean }) {
-  const router = useRouter();
-  const handleEntityPress = useCallback((id: string) => {
-    const prefix = id.split('-')[0];
-    if (prefix === 'ct') router.push(`/task/${id}`);
-    else if (prefix === 'pl') router.push(`/plan/${id}`);
-    else if (prefix === 'doc') router.push(`/doc/${id}`);
-  }, [router]);
   // Insight extraction runs on every assistant text (same placement as web's
   // assistant-message flat run) so cards show up on ALL surfaces that render
   // markdown — message bubbles, tool results, plan/teammate cards.
@@ -486,9 +504,9 @@ export function MarkdownContent({ text, baseStyle, isUser = false }: { text: str
     <RNView>
       {parts.map((part, pIdx) =>
         part.type === 'insight' ? (
-          <InsightCard key={pIdx} label={part.label} content={part.content} baseStyle={baseStyle} onEntityPress={handleEntityPress} />
+          <InsightCard key={pIdx} label={part.label} content={part.content} baseStyle={baseStyle} />
         ) : (
-          <MarkdownBlocks key={pIdx} text={part.content} baseStyle={baseStyle} isUser={isUser} keyPrefix={`p${pIdx}`} onEntityPress={handleEntityPress} />
+          <MarkdownBlocks key={pIdx} text={part.content} baseStyle={baseStyle} isUser={isUser} keyPrefix={`p${pIdx}`} />
         )
       )}
     </RNView>
@@ -529,15 +547,6 @@ export const mdStyles = StyleSheet.create({
     color: Theme.accent,
     fontWeight: '600',
     fontSize: 13,
-    paddingHorizontal: 5,
-    paddingVertical: 1,
-    borderRadius: 4,
-    overflow: 'hidden',
-  },
-  entityPill: {
-    fontFamily: 'SpaceMono',
-    fontSize: 11,
-    fontWeight: '600',
     paddingHorizontal: 5,
     paddingVertical: 1,
     borderRadius: 4,
