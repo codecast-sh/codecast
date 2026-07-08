@@ -309,7 +309,9 @@ export function readLocalCredential(): string | null {
       { encoding: "utf-8" },
     ).trim();
   } catch {
-    const f = path.join(os.homedir(), ".claude", ".credentials.json");
+    // $HOME over os.homedir(): bun caches the latter at startup, breaking
+    // $HOME-sandboxed tests; real environments always have HOME set.
+    const f = path.join(process.env.HOME || os.homedir(), ".claude", ".credentials.json");
     if (!fs.existsSync(f)) return null;
     return fs.readFileSync(f, "utf-8");
   }
