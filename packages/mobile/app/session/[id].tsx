@@ -17,7 +17,7 @@ import { PermissionCard } from '@/components/PermissionCard';
 import { DeviceChip, useRunOnDevice } from '@/components/DevicesSection';
 import { ModelSwitcherChip } from '@/components/ModelSwitcherChip';
 import { renderInlineMarkdown, MarkdownContent, MarkdownTextBlock, CodeBlockWithCopy, CodeBlockFullscreen, HighlightedCodeText } from '@/components/MarkdownRenderer';
-import { Theme, Spacing } from '@/constants/Theme';
+import { Theme, Spacing, chipShell, chipText, chipTint, CHROME_FONT_CAP } from '@/constants/Theme';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 // A real gradient WITHOUT a native module: expo-linear-gradient's native side
 // ("ExpoLinearGradient") isn't linked into the dev/standalone binaries, so importing
@@ -382,7 +382,7 @@ function formatAgentType(agentType?: string): string {
   if (agentType === 'codex') return 'Codex';
   if (agentType === 'cursor') return 'Cursor';
   if (agentType === 'gemini') return 'Gemini';
-  return agentType;
+  return agentType.charAt(0).toUpperCase() + agentType.slice(1);
 }
 
 function agentTypeColor(agentType?: string): string {
@@ -2884,10 +2884,15 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
   );
   const [error, setError] = useState<string | null>(null);
   const [selectedImages, setSelectedImages] = useState<{ uri: string; storageId?: string; uploading: boolean }[]>([]);
-  const managedSession = useQuery(
+  const managedSessionQ = useQuery(
     api.managedSessions.isSessionManaged,
     isConvexId(conversationId as string) ? { conversation_id: conversationId } : "skip"
   );
+  // The design-mock session fakes a working agent so the footer status chip is
+  // reviewable without server data (see DESIGN_MOCK_CONVO).
+  const managedSession = (conversationId as string) === '__designmock__'
+    ? { managed: true as const, agent_status: 'working' }
+    : managedSessionQ;
 
   const patchConversation = useMutation(api.conversations.patchConversation);
   const generateUploadUrl = useMutation(api.images.generateUploadUrl);
@@ -3055,7 +3060,7 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
               managedSession.agent_status === "connected" ? Theme.cyan :
               Theme.greenBright,
           }]} />
-          <RNText style={[styles.agentStatusText, {
+          <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.agentStatusText, {
             color: managedSession.agent_status === "thinking" ? Theme.violet :
               managedSession.agent_status === "compacting" ? '#f59e0b' :
               managedSession.agent_status === "permission_blocked" ? Theme.orange :
@@ -3076,7 +3081,7 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
           onPress={pickImage}
           activeOpacity={0.7}
         >
-          <FontAwesome name="plus" size={20} color={Theme.textMuted} />
+          <FontAwesome name="plus" size={18} color={Theme.textMuted} />
         </TouchableOpacity>
         <TextInput
           style={styles.textInput}
@@ -3087,6 +3092,7 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
           multiline
           maxLength={10000}
           blurOnSubmit={false}
+          maxFontSizeMultiplier={CHROME_FONT_CAP}
         />
         <TouchableOpacity
           style={[styles.sendButton, (!message.trim() && selectedImages.length === 0) && styles.sendButtonDisabled]}
@@ -3094,7 +3100,7 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
           disabled={!message.trim() && selectedImages.length === 0}
           activeOpacity={0.7}
         >
-          <FontAwesome name="arrow-up" size={16} color="#fff" />
+          <FontAwesome name="arrow-up" size={14} color="#fff" />
         </TouchableOpacity>
       </RNView>
     </RNView>
@@ -3131,14 +3137,9 @@ const DESIGN_MOCK_CONVO: ConversationData = {
   })) as Message[],
 };
 
-// One shell for every metadata chip in the session header: identical radius,
-// padding, border weight and text size — only the tint color changes, so the
-// strip reads as one designed unit instead of a row of one-off badges.
-const metaChipTint = (color: string) => ({ borderColor: color + '40', backgroundColor: color + '14' });
-
 // Height of the compact custom title bar (back + title + actions), below the
 // safe-area inset. The collapsing metadata strip is positioned just under it.
-const HEADER_BAR_HEIGHT = 44;
+const HEADER_BAR_HEIGHT = 40;
 
 function TreeNodeView({ node, depth, router, currentId, onClose }: { node: TreeNode; depth: number; router: any; currentId: string; onClose: () => void }) {
   const isCurrent = node.id === currentId || node.is_current;
@@ -4021,9 +4022,9 @@ export default function SessionDetailScreen() {
         <Stack.Screen options={{ headerShown: false }} />
         <RNView style={[styles.pinnedHeader, { paddingTop: insets.top, height: insets.top + HEADER_BAR_HEIGHT, position: 'relative' }]}>
           <TouchableOpacity onPress={() => router.back()} style={styles.headerIconBtn} hitSlop={{ top: 12, bottom: 12, left: 12, right: 4 }} activeOpacity={0.6}>
-            <FontAwesome name="chevron-left" size={20} color={Theme.text} />
+            <FontAwesome name="chevron-left" size={18} color={Theme.text} />
           </TouchableOpacity>
-          <RNText style={styles.headerTitleText} numberOfLines={1}>Conversation</RNText>
+          <RNText style={styles.headerTitleText} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>Conversation</RNText>
         </RNView>
         <RNView style={styles.skeletonContainer}>
           <RNView style={styles.skeletonHeader}>
@@ -4068,11 +4069,11 @@ export default function SessionDetailScreen() {
             pinned while the metadata strip below it collapses on scroll. */}
         <RNView style={[styles.pinnedHeader, { paddingTop: insets.top, height: insets.top + HEADER_BAR_HEIGHT }]}>
           <TouchableOpacity onPress={() => router.back()} style={styles.headerIconBtn} hitSlop={{ top: 12, bottom: 12, left: 12, right: 4 }} activeOpacity={0.6}>
-            <FontAwesome name="chevron-left" size={20} color={Theme.text} />
+            <FontAwesome name="chevron-left" size={18} color={Theme.text} />
           </TouchableOpacity>
-          <RNText style={styles.headerTitleText} numberOfLines={1}>{conversation.title || 'Conversation'}</RNText>
+          <RNText style={styles.headerTitleText} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>{conversation.title || 'Conversation'}</RNText>
           <TouchableOpacity onPress={handleMoreActions} style={styles.headerIconBtn} hitSlop={{ top: 12, bottom: 12, left: 4, right: 12 }} activeOpacity={0.6}>
-            <Feather name="more-horizontal" size={20} color={Theme.textMuted} />
+            <Feather name="more-horizontal" size={18} color={Theme.textMuted} />
           </TouchableOpacity>
         </RNView>
         <Animated.View
@@ -4088,14 +4089,14 @@ export default function SessionDetailScreen() {
               >
                 {conversation.agent_type && (
                   <RNView style={styles.metaBadgeIcon}>
-                    <AgentLogoSvg agentType={conversation.agent_type} size={17} />
-                    <RNText style={[styles.metaBadge, { color: agentTypeColor(conversation.agent_type) }]}>
+                    <AgentLogoSvg agentType={conversation.agent_type} size={13} />
+                    <RNText style={[styles.metaBadge, { color: agentTypeColor(conversation.agent_type) }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>
                       {formatAgentType(conversation.agent_type)}
                     </RNText>
                   </RNView>
                 )}
                 {activityAt > 0 && (
-                  <RNText style={styles.messageCountText}>{conversation.agent_type ? '\u00B7 ' : ''}{formatRelativeTime(activityAt)}</RNText>
+                  <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={styles.messageCountText}>{conversation.agent_type ? '\u00B7 ' : ''}{formatRelativeTime(activityAt)}</RNText>
                 )}
                 {isActive && (
                   <Animated.View style={[styles.activeDot, { opacity: activePulse }]} />
@@ -4110,9 +4111,9 @@ export default function SessionDetailScreen() {
                   showToast={showToast}
                 />
                 {(conversation.fork_count ?? 0) > 0 && (
-                  <Pressable onPress={() => setTreeModalVisible(true)} style={[styles.metaChip, metaChipTint(Theme.violet)]}>
+                  <Pressable onPress={() => setTreeModalVisible(true)} style={[styles.metaChip, chipTint(Theme.violet)]}>
                     <FontAwesome name="code-fork" size={10} color={Theme.violet} />
-                    <RNText style={[styles.metaChipText, { color: Theme.violet }]}>{conversation.fork_count}</RNText>
+                    <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.metaChipText, { color: Theme.violet }]}>{conversation.fork_count}</RNText>
                   </Pressable>
                 )}
                 {conversation.git_branch && (
@@ -4125,17 +4126,17 @@ export default function SessionDetailScreen() {
                         }
                       }
                     }}
-                    style={[styles.metaChip, metaChipTint(Theme.green)]}
+                    style={[styles.metaChip, chipTint(Theme.green)]}
                   >
                     <FontAwesome name="code-fork" size={10} color={Theme.green} />
-                    <RNText style={[styles.metaChipText, { color: Theme.green }]} numberOfLines={1}>{conversation.git_branch}</RNText>
+                    <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.metaChipText, { color: Theme.green }]} numberOfLines={1}>{conversation.git_branch}</RNText>
                   </Pressable>
                 )}
                 <DeviceChip ownerDeviceId={(conversation as any).owner_device_id} onPress={showRunOnDevice} />
                 {latestUsage && (
-                  <RNView style={[styles.metaChip, metaChipTint(Theme.textDim)]}>
+                  <RNView style={[styles.metaChip, chipTint(Theme.textDim)]}>
                     <FontAwesome name="bar-chart" size={10} color={Theme.textDim} />
-                    <RNText style={[styles.metaChipText, { color: Theme.textDim }]}>
+                    <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.metaChipText, { color: Theme.textDim }]}>
                       {Math.round((latestUsage.contextSize / 200000) * 100)}%
                     </RNText>
                   </RNView>
@@ -4143,10 +4144,10 @@ export default function SessionDetailScreen() {
                 {conversation.parent_conversation_id && (
                   <Pressable
                     onPress={() => router.push(`/session/${conversation.parent_conversation_id}`)}
-                    style={[styles.metaChip, metaChipTint(Theme.violet)]}
+                    style={[styles.metaChip, chipTint(Theme.violet)]}
                   >
                     <FontAwesome name="level-up" size={10} color={Theme.violet} />
-                    <RNText style={[styles.metaChipText, { color: Theme.violet }]}>Parent</RNText>
+                    <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.metaChipText, { color: Theme.violet }]}>Parent</RNText>
                   </Pressable>
                 )}
                 {conversation.forked_from_details && (
@@ -4159,10 +4160,10 @@ export default function SessionDetailScreen() {
                         router.push(`/session/${details.conversation_id}`);
                       }
                     }}
-                    style={[styles.metaChip, metaChipTint(Theme.cyan)]}
+                    style={[styles.metaChip, chipTint(Theme.cyan)]}
                   >
                     <FontAwesome name="code-fork" size={10} color={Theme.cyan} />
-                    <RNText style={[styles.metaChipText, { color: Theme.cyan }]}>@{conversation.forked_from_details.username}</RNText>
+                    <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.metaChipText, { color: Theme.cyan }]}>@{conversation.forked_from_details.username}</RNText>
                   </Pressable>
                 )}
               </ScrollView>
@@ -4567,14 +4568,14 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   headerIconBtn: {
-    width: 38,
-    height: 38,
+    width: 34,
+    height: 34,
     justifyContent: 'center',
     alignItems: 'center',
   },
   headerTitleText: {
     flex: 1,
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '600',
     color: Theme.text,
   },
@@ -4591,7 +4592,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: Theme.borderLight,
     paddingHorizontal: 12,
-    paddingVertical: 5,
+    paddingVertical: 4,
   },
   sessionMeta: {
     flexDirection: 'row',
@@ -4605,24 +4606,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   // Shared shell for every metadata chip (fork, branch, device, usage, links).
-  metaChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 6,
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    maxWidth: 160,
-  },
-  metaChipText: {
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  metaBadge: {
-    fontSize: 12,
-    fontWeight: '600',
-  },
+  metaChip: chipShell,
+  metaChipText: chipText,
+  metaBadge: chipText,
   messageCountText: {
     fontSize: 11,
     color: Theme.textMuted,
@@ -4942,27 +4928,22 @@ const styles = StyleSheet.create({
     // paddingBottom is set inline from safe-area insets (home indicator clearance
     // varies by device/orientation); see MessageInput.
   },
+  // Status reads as one more chip from the shared shell (self-sized, not a
+  // full-width banner) so the footer stays low.
   agentStatusBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    ...chipShell,
+    maxWidth: undefined,
     gap: 6,
+    alignSelf: 'flex-start',
     marginHorizontal: 12,
-    marginTop: 8,
-    marginBottom: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 5,
-    borderRadius: 6,
-    borderWidth: 1,
+    marginTop: 6,
   },
   agentStatusDot: {
     width: 6,
     height: 6,
     borderRadius: 3,
   },
-  agentStatusText: {
-    fontSize: 11,
-    fontWeight: '600',
-  },
+  agentStatusText: chipText,
   errorBanner: {
     backgroundColor: Theme.red,
     flexDirection: 'row',
@@ -5011,8 +4992,8 @@ const styles = StyleSheet.create({
     borderRadius: 10,
   },
   imageButton: {
-    width: 34,
-    height: 34,
+    width: 32,
+    height: 32,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -5020,31 +5001,31 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-end',
     paddingHorizontal: 12,
-    paddingVertical: 7,
+    paddingVertical: 6,
     gap: 8,
   },
   textInput: {
     flex: 1,
     backgroundColor: Theme.bg,
-    borderRadius: 18,
-    paddingHorizontal: 14,
-    paddingTop: 8,
-    paddingBottom: 8,
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingTop: 7,
+    paddingBottom: 7,
     color: Theme.text,
     fontSize: 15,
     maxHeight: 100,
-    minHeight: 36,
+    minHeight: 32,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: Theme.borderLight,
   },
   sendButton: {
     backgroundColor: Theme.blue,
-    minWidth: 36,
-    height: 36,
-    borderRadius: 18,
+    minWidth: 32,
+    height: 32,
+    borderRadius: 16,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 10,
+    paddingHorizontal: 9,
   },
   sendButtonDisabled: {
     backgroundColor: Theme.bgHighlight,
