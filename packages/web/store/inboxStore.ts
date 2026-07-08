@@ -10,7 +10,7 @@ import { makeCollectionSig } from "./wakeSig";
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
 import { type AgentStatus, ACTIVE_AGENT_STATUSES, isStatusTrustStale, modelOptionKey } from "@codecast/shared/contracts";
-import { isSubagentConversation } from "@codecast/convex/convex/ccAccountsShared";
+import { isSubagentConversation, nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 
 export type { PendingEntry } from "./syncProtocol";
 
@@ -696,18 +696,24 @@ export function isSessionHidden(
 // — no server re-fetch — so it's instant and never spins the sync chip. Never
 // treat as old: optimistic stubs (no Convex id yet), subagents (they ride their
 // parent), pinned/focused rows, or dismissed/stashed rows (their own buckets).
+// An agent-team teammate rides its LEAD's liveness instead: while the lead is
+// in the live window the teammate stays (nested under it), but unlike a Task
+// subagent it isn't exempt outright — a teammate from a dead team ages out
+// like any session rather than haunting the inbox forever.
 export function isOldSession(
   s: InboxSession,
   liveInboxIds: Set<string>,
   focusedId?: string | null,
 ): boolean {
+  const nestParent = !s.parent_conversation_id ? nestParentIdOf(s) : null;
   return (
     isConvexId(s._id) &&
     !s.parent_conversation_id &&
     !s.is_pinned &&
     !isSessionHidden(s) &&
     s._id !== focusedId &&
-    !liveInboxIds.has(s._id)
+    !liveInboxIds.has(s._id) &&
+    !(nestParent && liveInboxIds.has(nestParent))
   );
 }
 
@@ -1085,7 +1091,7 @@ export function sessionStructuralSig(s: InboxSession): string {
     isSessionHidden(s) ? 1 : 0,
     isSessionDismissed(s) ? 1 : 0,
     isSessionStashed(s) ? 1 : 0,
-    s.parent_conversation_id || "",
+    nestParentIdOf(s) || "",
     s.forked_from || "",
     orchestrationGroupLabelOf(s) || "",
   ].join("\x1f");
@@ -1134,11 +1140,18 @@ export function categorizeSessions(
   stashed.sort((a, b) => (b.inbox_stashed_at || 0) - (a.inbox_stashed_at || 0));
   const allIds = new Set(sorted.map((s) => s._id));
 
+  // Nest parent covers BOTH child kinds (see nestParentIdOf): Task-tool
+  // subagents (parent_conversation_id) and agent-team teammates
+  // (spawned_by_conversation_id + agent_team_name). Nesting is positional —
+  // only when the parent is in this set. A parentless teammate stays a normal
+  // flat card below (it's NOT isSubagentConversation, so the orphan hiding
+  // doesn't apply to it); a parentless Task subagent is hidden as before.
   const subsByParent = new Map<string, InboxSession[]>();
   for (const s of sorted) {
-    if (s.parent_conversation_id && allIds.has(s.parent_conversation_id)) {
-      if (!subsByParent.has(s.parent_conversation_id)) subsByParent.set(s.parent_conversation_id, []);
-      subsByParent.get(s.parent_conversation_id)!.push(s);
+    const nestParent = nestParentIdOf(s);
+    if (nestParent && allIds.has(nestParent)) {
+      if (!subsByParent.has(nestParent)) subsByParent.set(nestParent, []);
+      subsByParent.get(nestParent)!.push(s);
     }
   }
   for (const subs of subsByParent.values()) {

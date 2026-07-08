@@ -815,7 +815,9 @@ export default defineSchema({
     .index("by_status", ["status"]),
 
   // One row per machine the user runs a codecast daemon on. The remote Mac is
-  // just another device. device_id is a stable hash of ~/.codecast/.machine_key
+  // just another device. device_id is a stable hash of ~/.codecast/.machine_key,
+  // bound to the machine's hardware UUID so a disk-copied ~/.codecast (Migration
+  // Assistant) mints a fresh id instead of impersonating the source machine
   // (see remote/device.ts). Per-device fields (local_project_roots) live here
   // rather than on the user doc, so multiple machines don't clobber each other.
   devices: defineTable({
