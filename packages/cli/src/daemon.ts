@@ -9,7 +9,7 @@ import { watch as chokidarWatch } from "chokidar";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
 import { deviceId, deviceLabel, isRemoteDevice } from "./remote/device.js";
 import { copyCredentialToRemoteAsync, loadRemoteHost, remoteHostsRegistered } from "./remote/session-move.js";
-import { useProfile, saveProfile, getAccountsHeartbeatPayload } from "./ccAccounts.js";
+import { useProfile, saveProfile, getAccountsHeartbeatPayload, autoSaveActiveProfile, activeAccountSummary } from "./ccAccounts.js";
 import { CursorWatcher, type CursorSessionEvent } from "./cursorWatcher.js";
 import { CursorTranscriptWatcher, type CursorTranscriptEvent } from "./cursorTranscriptWatcher.js";
 import { CodexWatcher, isAppServerManagedCodexSessionHead, type CodexSessionEvent } from "./codexWatcher.js";
@@ -44,6 +44,7 @@ import { parseSessionFile, parseCodexSessionFile, parseGeminiSessionFile, parseC
 import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { encryptToken, decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
+import { getMachineKey } from "./machineKey.js";
 import { markSynced, updateSyncRecord, getSyncRecord, findUnsyncedFiles, type SyncRecord } from "./syncLedger.js";
 import { SyncService, AuthExpiredError } from "./syncService.js";
 import { redactSecrets, maskToken } from "./redact.js";
@@ -1082,6 +1083,14 @@ const syncStats = {
 
 let lastWatcherEventTime = Date.now();
 
+// Wired up once startDaemon has built config + caches + the watcher. The event-loop
+// monitor (which starts before those exist) calls wakeRecoveryHandler on a detected
+// wake; reconciliation calls pushUnsyncedFilesHandler after it rewinds positions.
+// Both drive a real byte-pushing sweep that does NOT depend on the file watcher —
+// the watcher's FSEvents stream can go silent across a sleep without erroring.
+let wakeRecoveryHandler: (() => void) | null = null;
+let pushUnsyncedFilesHandler: ((reason: string) => Promise<void>) | null = null;
+
 const HEALTH_REPORT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
 // Only actionable levels are worth uploading. debug/info (dominated by the
@@ -1382,11 +1391,39 @@ function buildDeviceSettingsPayload(config: Config | null): DeviceSnippetSetting
   };
 }
 
+// Auto-enroll the machine's active CC login as a saved profile: after a fresh
+// /login the account just appears in the web switcher, no save step. One
+// attempt per account per daemon lifetime — a failure (e.g. API-key login,
+// keychain hiccup) falls back to the Settings page's manual save CTA instead
+// of retrying every beat. Remote devices run a pushed COPY of the primary's
+// credential, so profiles are only ever saved on the primary.
+const autoSaveDecidedAccounts = new Set<string>();
+function maybeAutoSaveAccount(): void {
+  if (isRemoteDevice()) return;
+  let key: string | undefined;
+  try {
+    const active = activeAccountSummary();
+    key = active?.uuid || active?.email;
+    if (!key || autoSaveDecidedAccounts.has(key)) return;
+    autoSaveDecidedAccounts.add(key);
+    const saved = autoSaveActiveProfile();
+    if (saved) {
+      log(`[ACCOUNTS] Auto-saved active login as profile "${saved.name}"${saved.email ? ` (${saved.email})` : ""}`);
+    }
+  } catch (err) {
+    log(`[ACCOUNTS] Auto-save of active login failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 async function sendHeartbeat(): Promise<void> {
   const config = readConfig();
   if (!config?.auth_token || !config?.convex_url) {
     return;
   }
+
+  // Before publishing the account inventory, make sure the active login is in
+  // it — this is what makes a new `/login` show up in Settings by itself.
+  maybeAutoSaveAccount();
 
   try {
     const siteUrl = config.convex_url.replace(".cloud", ".site");
@@ -4620,6 +4657,9 @@ async function processSessionFile(
           gitInfo,
           cliFlags: cliFlags || undefined,
           subagentDescription,
+          // Path-derived: true even when the parent conversation isn't cached
+          // yet, so the server never briefly sees this as a top-level session.
+          isSubagent: isSubagent || undefined,
           agentTeamName: teamInfo?.teamName,
           agentName: teamInfo?.agentName,
         });
@@ -11963,6 +12003,49 @@ function selfHealIfTimersStalled(source: string): void {
   restartDaemonProcess(`event-loop timers stalled, via ${source}`);
 }
 
+// Post-sleep watcher recovery. Distinct from selfHeal (which handles a dead *timer*):
+// here the timers are alive but the file watcher's FSEvents stream went silent across
+// the sleep WITHOUT erroring. The daemon stays "running, connected" yet stops seeing
+// file changes — the queue is empty while a transcript sits unsynced for hours. The
+// 60-min idle watcher restart can't catch this because the wake handler keeps re-arming
+// lastWatcherEventTime, so a laptop opened more than once an hour never accumulates a
+// continuous idle hour. The cure is to stop trusting the watcher across a wake: restart
+// it, then sweep for files it may have missed and push their bytes directly.
+//
+// Pure orchestrator (deps injected) so the order + failure handling is unit-testable,
+// mirroring shouldSelfHeal/computeDaemonHealth. The restart is guarded by the same
+// Promise.race timeout the watchdog uses — restart() can deadlock bun's File Watcher
+// thread on a close→open, and the timeout lets recovery proceed to the sweep regardless.
+// The sweep is the real safety net: even if the restart times out, the bytes still ship.
+export async function runWakeRecovery(deps: {
+  restartWatcher: () => Promise<void>;
+  sweep: () => Promise<void>;
+  onWatcherRestarted: () => void;
+  log: (msg: string) => void;
+  logError: (msg: string, err: Error) => void;
+  restartTimeoutMs?: number;
+}): Promise<void> {
+  const timeoutMs = deps.restartTimeoutMs ?? 10_000;
+  try {
+    await Promise.race([
+      deps.restartWatcher(),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(`wake watcher restart timeout after ${Math.round(timeoutMs / 1000)}s`)), timeoutMs),
+      ),
+    ]);
+    deps.onWatcherRestarted();
+    deps.log("Wake recovery: file watcher restarted");
+  } catch (err) {
+    deps.logError("Wake recovery: watcher restart failed (continuing to sweep)", err instanceof Error ? err : new Error(String(err)));
+  }
+
+  try {
+    await deps.sweep();
+  } catch (err) {
+    deps.logError("Wake recovery: unsynced sweep failed", err instanceof Error ? err : new Error(String(err)));
+  }
+}
+
 const CRASH_FILE = path.join(CONFIG_DIR, "crash-count.json");
 
 function recordCrash(): { count: number; backoffMinutes: number } {
@@ -12534,12 +12617,16 @@ function startEventLoopMonitor(): NodeJS.Timeout {
 
     if (elapsed > EVENT_LOOP_LAG_THRESHOLD_MS) {
       logLifecycle("wake_detected", `System was suspended for ${Math.round(elapsed / 1000)}s, recovering`);
-      // Re-arm to `now`, not 0. Setting to 0 would make the next watchdog tick
-      // see ~56 years of idle time and force a watcher.restart() on every wake,
-      // which can deadlock bun's native File Watcher thread (lock inversion in
-      // fs.watch close→open under load). The watcher's FSEvents handle survives
-      // sleep/wake on macOS; if it doesn't, the genuine 60-min idle path catches it.
+      // Re-arm to `now` so the watchdog's 60-min idle path doesn't also fire a
+      // redundant restart in the gap before recovery completes. We no longer rely
+      // on that path as the safety net: the watcher's FSEvents stream can go silent
+      // across a sleep WITHOUT erroring, and a frequently-woken laptop never
+      // accumulates a continuous idle hour for the watchdog to notice. Instead drive
+      // recovery directly — restart the watcher and sweep for unsynced files. The
+      // handler re-arms lastWatcherEventTime again after a successful restart. Null
+      // only during early boot, before config/caches/watcher are wired.
       lastWatcherEventTime = now;
+      wakeRecoveryHandler?.();
     }
   }, EVENT_LOOP_CHECK_INTERVAL_MS);
 }
@@ -12611,6 +12698,13 @@ function startReconciliation(
         // Auto-repair by resetting positions
         const repaired = await repairDiscrepancies(result.discrepancies, log);
         log(`Reconciliation: Reset ${repaired} sessions for re-sync`);
+        // repairDiscrepancies only rewinds positions; the byte-push is normally
+        // watcher-driven, so a silent post-sleep watcher would leave the reset files
+        // sitting unsynced. Drive the sweep directly — this is what makes reconciliation
+        // a real watcher-independent backstop rather than one that also waits on the watcher.
+        if (repaired > 0) {
+          await pushUnsyncedFilesHandler?.("Reconciliation");
+        }
       }
     } catch (err) {
       logError("Initial reconciliation failed", err instanceof Error ? err : new Error(String(err)));
@@ -12637,6 +12731,13 @@ function startReconciliation(
         logWarn(`Reconciliation found ${result.discrepancies.length} discrepancies`);
         const repaired = await repairDiscrepancies(result.discrepancies, log);
         log(`Reconciliation: Reset ${repaired} sessions for re-sync`);
+        // repairDiscrepancies only rewinds positions; the byte-push is normally
+        // watcher-driven, so a silent post-sleep watcher would leave the reset files
+        // sitting unsynced. Drive the sweep directly — this is what makes reconciliation
+        // a real watcher-independent backstop rather than one that also waits on the watcher.
+        if (repaired > 0) {
+          await pushUnsyncedFilesHandler?.("Reconciliation");
+        }
       }
     } catch (err) {
       logError("Reconciliation failed", err instanceof Error ? err : new Error(String(err)));
@@ -13125,6 +13226,14 @@ async function main(): Promise<void> {
   logLifecycle("daemon_start", startMsg);
   sendLogImmediate("info", `[LIFECYCLE] daemon_start: ${startMsg}`, { error_code: "daemon_start" });
   log(`PID: ${process.pid}`);
+
+  try {
+    if (getMachineKey().rotated) {
+      const msg = `machine key rotated: ~/.codecast/.machine_key was cloned from different hardware (Migration Assistant / disk clone) — this machine now has device_id ${deviceId()}`;
+      logLifecycle("machine_key_rotated", msg);
+      sendLogImmediate("info", `[LIFECYCLE] machine_key_rotated: ${msg}`, { error_code: "machine_key_rotated" });
+    }
+  } catch {}
 
   if (isSyncPaused()) {
     log("⚠️  Sync is PAUSED via environment variable (CODE_CHAT_SYNC_PAUSED or CODECAST_PAUSED)");
@@ -14008,13 +14117,17 @@ async function main(): Promise<void> {
     log(`Plan file watcher started on ${CLAUDE_PLANS_DIR}`);
   }
 
-  // Startup scan: sync any files that were missed while daemon was down
-  const performStartupScan = async () => {
+  // Sweep ~/.claude/projects for files whose synced position trails their size and
+  // push the missing bytes directly via processSessionFile — independent of the file
+  // watcher. Runs at startup (files missed while the daemon was down), on wake (the
+  // watcher's FSEvents stream may have gone silent across a sleep), and after
+  // reconciliation rewinds positions (so its repair actually ships, not just resets).
+  const runUnsyncedSweepOnce = async (reason: string) => {
     const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
 
     // Safety check: ensure directory exists
     if (!fs.existsSync(claudeProjectsDir)) {
-      log("Startup scan: No projects directory found, skipping");
+      log(`${reason}: No projects directory found, skipping`);
       return;
     }
 
@@ -14022,12 +14135,12 @@ async function main(): Promise<void> {
     try {
       unsyncedFiles = findUnsyncedFiles(claudeProjectsDir);
     } catch (err) {
-      logError("Startup scan failed to find unsynced files", err instanceof Error ? err : new Error(String(err)));
+      logError(`${reason} failed to find unsynced files`, err instanceof Error ? err : new Error(String(err)));
       return;
     }
 
     if (unsyncedFiles.length > 0) {
-      log(`Startup scan: Found ${unsyncedFiles.length} files needing sync`);
+      log(`${reason}: Found ${unsyncedFiles.length} files needing sync`);
 
       for (const filePath of unsyncedFiles) {
         const parts = filePath.split(path.sep);
@@ -14067,7 +14180,7 @@ async function main(): Promise<void> {
           } catch {}
         }
 
-        log(`Startup scan: Syncing ${sessionId}${parentConversationId ? ` (subagent of ${parentConversationId})` : ""}`);
+        log(`${reason}: Syncing ${sessionId}${parentConversationId ? ` (subagent of ${parentConversationId})` : ""}`);
 
         await processSessionFile(
           filePath,
@@ -14091,22 +14204,58 @@ async function main(): Promise<void> {
         const childConvId = conversationCache[childSessionId];
         if (parentConvId && childConvId) {
           syncService.linkSessions(parentConvId, childConvId, subagentDescriptions.get(childSessionId)).then(() => {
-            log(`Startup scan: Linked subagent ${childSessionId.slice(0, 8)} -> parent ${parentSessionId.slice(0, 8)}`);
+            log(`${reason}: Linked subagent ${childSessionId.slice(0, 8)} -> parent ${parentSessionId.slice(0, 8)}`);
           }).catch((err) => {
-            log(`Startup scan: Failed to link subagent ${childSessionId.slice(0, 8)}: ${err}`);
+            log(`${reason}: Failed to link subagent ${childSessionId.slice(0, 8)}: ${err}`);
           });
           pendingSubagentParents.delete(childSessionId);
         }
       }
 
-      log(`Startup scan: Completed syncing ${unsyncedFiles.length} files`);
+      log(`${reason}: Completed syncing ${unsyncedFiles.length} files`);
     } else {
-      log("Startup scan: All files up to date");
+      log(`${reason}: All files up to date`);
     }
   };
 
+  // Serialize sweeps: startup, wake recovery, and reconciliation can all fire one, and
+  // two overlapping runs would race processSessionFile on the same file (each advances
+  // the shared synced position). If one is active, mark that another pass is needed and
+  // let the running sweep loop once more — so a wake during a slow startup scan isn't lost.
+  let unsyncedSweepRunning = false;
+  let unsyncedSweepQueued = false;
+  const syncUnsyncedFiles = async (reason: string): Promise<void> => {
+    if (unsyncedSweepRunning) { unsyncedSweepQueued = true; return; }
+    unsyncedSweepRunning = true;
+    try {
+      do {
+        unsyncedSweepQueued = false;
+        await runUnsyncedSweepOnce(reason);
+      } while (unsyncedSweepQueued);
+    } finally {
+      unsyncedSweepRunning = false;
+    }
+  };
+
+  // Expose the sweep to reconciliation (watcher-independent backstop) and define the
+  // wake-recovery handler the event-loop monitor calls. Reentrancy is guarded so a
+  // burst of wake ticks collapses to a single restart+sweep in flight.
+  pushUnsyncedFilesHandler = syncUnsyncedFiles;
+  let wakeRecoveryInProgress = false;
+  wakeRecoveryHandler = () => {
+    if (wakeRecoveryInProgress) return;
+    wakeRecoveryInProgress = true;
+    void runWakeRecovery({
+      restartWatcher: () => watcher.restart(),
+      sweep: () => syncUnsyncedFiles("Wake recovery"),
+      onWatcherRestarted: () => { lastWatcherEventTime = Date.now(); },
+      log: (msg) => log(msg),
+      logError: (msg, err) => logError(msg, err),
+    }).finally(() => { wakeRecoveryInProgress = false; });
+  };
+
   // Run startup scan in background (don't block daemon startup)
-  performStartupScan().then(async () => {
+  syncUnsyncedFiles("Startup scan").then(async () => {
     // Backfill: detect unlinked plan handoff children
     const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
     let linked = 0;

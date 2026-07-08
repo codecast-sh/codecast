@@ -111,6 +111,30 @@ export function nestParentIdOf(conv: {
   return null;
 }
 
+// Whether a conversation was spawned by an agent rather than started by a
+// human. Gates the teammate "started coding" notification: agent fan-out
+// (Task-tool subagents, workflow subs, agent-team teammates) must never ping
+// the team. Broader than isSubagentConversation on purpose — spawned_by and
+// agent identity mark sessions that stay first-class in the inbox but are
+// still machine-initiated. The one session with agent identity a human DID
+// start is the team lead (stamped agent_name "team-lead" by linkSpawnedBy).
+// Forks and plan handoffs (parent link WITH parent_message_uuid) stay
+// notifiable — those are human actions.
+export function isAgentSpawnedConversation(conv: {
+  is_subagent?: boolean;
+  is_workflow_sub?: boolean;
+  parent_conversation_id?: { toString(): string } | string | null;
+  parent_message_uuid?: string | null;
+  spawned_by_conversation_id?: { toString(): string } | string | null;
+  agent_name?: string | null;
+}): boolean {
+  if (conv.is_subagent === true || conv.is_workflow_sub === true) return true;
+  if (conv.spawned_by_conversation_id) return true;
+  if (conv.agent_name && conv.agent_name !== "team-lead") return true;
+  if (conv.parent_conversation_id && !conv.parent_message_uuid) return true;
+  return false;
+}
+
 // Stale-flag sweep: past the revive window the flag stops meaning "current
 // incident" and just pollutes badges/selection — clear it. New activity on a
 // conversation bumps updated_at and supersedes the banner anyway, so for a

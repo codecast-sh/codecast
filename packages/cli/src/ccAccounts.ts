@@ -60,8 +60,14 @@ function useFileStore(): boolean {
   return process.platform !== "darwin" || process.env.CC_ACCOUNTS_FORCE_FILE === "1";
 }
 
+/** $HOME first (bun's os.homedir() caches at startup and ignores later env
+ * changes, which breaks $HOME-sandboxed tests), os.homedir() as fallback. */
+function homeDir(): string {
+  return process.env.HOME || os.homedir();
+}
+
 function codecastDir(): string {
-  return path.join(os.homedir(), ".codecast");
+  return path.join(homeDir(), ".codecast");
 }
 
 function profileFileDir(): string {
@@ -156,7 +162,7 @@ function keychainAcct(): string {
 
 export function writeActiveCredential(credentialJson: string): void {
   if (useFileStore()) {
-    atomicWriteFile(path.join(os.homedir(), ".claude", ".credentials.json"), credentialJson);
+    atomicWriteFile(path.join(homeDir(), ".claude", ".credentials.json"), credentialJson);
     return;
   }
   // -U updates in place, preserving the item (and its ACL) so claude keeps
@@ -174,7 +180,7 @@ export function writeActiveCredential(credentialJson: string): void {
 }
 
 function claudeJsonPath(): string {
-  return path.join(os.homedir(), ".claude.json");
+  return path.join(homeDir(), ".claude.json");
 }
 
 export function readOauthAccount(): Record<string, any> | null {
@@ -350,15 +356,30 @@ export interface AccountsHeartbeatPayload {
   profiles: Array<{ name: string; email?: string; tier?: string; subscription?: string }>;
 }
 
-let accountsCache: { value: AccountsHeartbeatPayload | null; at: number } | null = null;
-const ACCOUNTS_CACHE_TTL_MS = 5 * 60 * 1000;
+// Keyed on the mtimes of the two files the payload derives from (the profile
+// index and ~/.claude.json's oauthAccount) rather than a TTL: a `cast accounts
+// save` in another process or a fresh /login shows up on the very next
+// heartbeat instead of after a blind expiry window. Recompute is two small
+// file reads — never the keychain — so the cache only exists to skip parsing
+// ~/.claude.json when nothing changed.
+let accountsCache: { value: AccountsHeartbeatPayload | null; indexMtime: number; claudeMtime: number } | null = null;
+
+function mtimeOf(p: string): number {
+  try {
+    return fs.statSync(p).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
 
 export function invalidateAccountsCache(): void {
   accountsCache = null;
 }
 
 export function getAccountsHeartbeatPayload(): AccountsHeartbeatPayload | null {
-  if (accountsCache && Date.now() - accountsCache.at < ACCOUNTS_CACHE_TTL_MS) {
+  const indexMtime = mtimeOf(indexPath());
+  const claudeMtime = mtimeOf(claudeJsonPath());
+  if (accountsCache && accountsCache.indexMtime === indexMtime && accountsCache.claudeMtime === claudeMtime) {
     return accountsCache.value;
   }
   let value: AccountsHeartbeatPayload | null = null;
@@ -376,6 +397,42 @@ export function getAccountsHeartbeatPayload(): AccountsHeartbeatPayload | null {
   } catch {
     value = null;
   }
-  accountsCache = { value, at: Date.now() };
+  accountsCache = { value, indexMtime, claudeMtime };
   return value;
+}
+
+// ---------------------------------------------------------------------------
+// Auto-save: every login becomes a profile without the user asking
+// ---------------------------------------------------------------------------
+
+/** Derive a profile name from an email: the org part of the domain
+ * (ashot@footage.com → footage), deduped with -2/-3 against taken names.
+ * Mirrors the web Settings suggestion so auto-saved and hand-saved profiles
+ * end up named the same way. */
+export function deriveProfileName(email: string | undefined, taken: string[]): string {
+  const org = email?.split("@")[1]?.split(".")[0]?.toLowerCase().replace(/[^a-z0-9._-]/g, "");
+  const base = org && VALID_PROFILE_NAME.test(org) ? org : "account";
+  const takenSet = new Set(taken.map((t) => t.toLowerCase()));
+  if (!takenSet.has(base)) return base;
+  for (let i = 2; ; i++) {
+    if (!takenSet.has(`${base}-${i}`)) return `${base}-${i}`;
+  }
+}
+
+/** Snapshot the active login as a profile iff no saved profile already covers
+ * it (matched by account uuid, falling back to email). Returns the saved meta,
+ * or null when there's nothing to do (no login, or already saved). The daemon
+ * calls this each heartbeat so a fresh /login enrolls itself — the OAuth
+ * browser dance stays the only manual step, ever. */
+export function autoSaveActiveProfile(): CcProfileMeta | null {
+  const active = activeAccountSummary();
+  if (!active?.uuid && !active?.email) return null;
+  const index = readProfileIndex();
+  const covered = Object.values(index.profiles).some(
+    (meta) =>
+      (active.uuid && meta.uuid === active.uuid) ||
+      (active.email && meta.email === active.email),
+  );
+  if (covered) return null;
+  return saveProfile(deriveProfileName(active.email, Object.keys(index.profiles)));
 }

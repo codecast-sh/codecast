@@ -1,5 +1,6 @@
 import { StyleSheet, TouchableOpacity, View as RNView, Text as RNText, Animated as RNAnimated, PanResponder } from 'react-native';
-import { useRef, useCallback, useEffect } from 'react';
+import { useRef, useCallback, useEffect, useMemo } from 'react';
+import { gestureHandler } from '@/lib/gestureHandler';
 import * as Haptics from 'expo-haptics';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Feather from '@expo/vector-icons/Feather';
@@ -248,16 +249,65 @@ export function SwipeableSessionItem({ session, onPress, onDismiss, onPin, onLon
     }).start(after ? () => after() : undefined);
   }, [translateX]);
 
-  // PanResponder (RN core — NOT gesture-handler) is what fixes the "vertical
-  // scroll moves during a horizontal swipe" bug without breaking tap/long-press.
-  // onMoveShouldSetPanResponder claims the touch ONLY once the finger has moved
-  // clearly horizontally; at that moment the parent ScrollView yields the
-  // responder, so it can't scroll. A vertical drag is never claimed (scrolling is
-  // untouched), and a stationary press/tap is never claimed (the inner
-  // TouchableOpacity still fires onPress/onLongPress). A gesture-handler pan, by
-  // contrast, holds the gesture undetermined during a hold and starves long-press.
+  // Shared release logic for both gesture paths below. vx is px/s: a committed
+  // drag (past the distance threshold) OR a flick (shorter drag at speed)
+  // triggers the action; anything else springs back.
+  const settle = useCallback((dx: number, vx: number) => {
+    if (dx < -100 || (dx < -48 && vx < -800)) {
+      // tactile confirm at the commit point — a destructive dismiss reads as
+      // accidental without it.
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      RNAnimated.timing(translateX, {
+        toValue: -400,
+        duration: 200,
+        useNativeDriver: true,
+      }).start(() => cb.current.onDismiss());
+    } else if ((dx > 80 || (dx > 48 && vx > 800)) && cb.current.onPin) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      springBack(cb.current.onPin);
+    } else {
+      springBack();
+    }
+    requestAnimationFrame(() => { didSwipe.current = false; });
+  }, [springBack, translateX]);
+
+  // Gesture-handler pan with NATIVE arbitration. The previous JS PanResponder
+  // raced the FlatList's native scroll recognizer and usually lost (the swipe
+  // only triggered from a standstill, perfectly horizontal), and even when it
+  // won, JS cannot cancel a native scroll — the list kept scrolling vertically
+  // under the swipe. activeOffsetX/failOffsetY arbitrate on the native side:
+  // 10px of horizontal travel claims the touch AND cancels the scroll
+  // recognizer (scroll locks); 15px of vertical travel first fails the pan and
+  // scrolling proceeds untouched. While undetermined (a stationary press)
+  // gesture-handler does not consume touches, so the inner TouchableOpacity's
+  // tap and long-press still fire; on activation it cancels them, so a swipe
+  // cannot misfire a tap. Callbacks hop to the JS thread (runOnJS) because they
+  // drive an RN Animated value — arbitration stays native regardless.
+  const panGesture = useMemo(() => {
+    if (!gestureHandler) return null;
+    return gestureHandler.Gesture.Pan()
+      .activeOffsetX([-10, 10])
+      .failOffsetY([-15, 15])
+      .onStart(() => { didSwipe.current = true; })
+      .onUpdate((e: any) => translateX.setValue(e.translationX))
+      .onEnd((e: any) => settle(e.translationX, e.velocityX))
+      .onFinalize((_e: any, success: boolean) => {
+        // Cancelled mid-swipe (e.g. a system gesture took over) — onEnd never
+        // ran. Guarded on didSwipe so the finalize that follows every failed
+        // non-swipe touch (taps, scrolls) doesn't spawn no-op springs.
+        if (!success && didSwipe.current) {
+          springBack();
+          requestAnimationFrame(() => { didSwipe.current = false; });
+        }
+      })
+      .runOnJS(true);
+  }, [settle, springBack, translateX]);
+
+  // Fallback for binaries whose native build lacks gesture-handler (see
+  // lib/gestureHandler.tsx): the old JS PanResponder. Worse arbitration, but
+  // the feature stays functional. PanResponder vx is px/ms; settle takes px/s.
   const responder = useRef(
-    PanResponder.create({
+    gestureHandler ? null : PanResponder.create({
       onMoveShouldSetPanResponder: (_e, gs) =>
         Math.abs(gs.dx) > 8 && Math.abs(gs.dx) > Math.abs(gs.dy) * 1.5,
       onPanResponderGrant: () => {
@@ -266,24 +316,7 @@ export function SwipeableSessionItem({ session, onPress, onDismiss, onPin, onLon
       onPanResponderMove: (_e, gs) => {
         translateX.setValue(gs.dx);
       },
-      onPanResponderRelease: (_e, gs) => {
-        if (gs.dx < -100) {
-          // tactile confirm at the commit point — a destructive dismiss reads as
-          // accidental without it.
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-          RNAnimated.timing(translateX, {
-            toValue: -400,
-            duration: 200,
-            useNativeDriver: true,
-          }).start(() => cb.current.onDismiss());
-        } else if (gs.dx > 80 && cb.current.onPin) {
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-          springBack(cb.current.onPin);
-        } else {
-          springBack();
-        }
-        requestAnimationFrame(() => { didSwipe.current = false; });
-      },
+      onPanResponderRelease: (_e, gs) => settle(gs.dx, gs.vx * 1000),
       onPanResponderTerminate: () => {
         springBack();
         requestAnimationFrame(() => { didSwipe.current = false; });
@@ -300,6 +333,15 @@ export function SwipeableSessionItem({ session, onPress, onDismiss, onPin, onLon
     outputRange: [0, 0, 0, 1, 1],
   });
 
+  const card = (
+    <RNAnimated.View
+      style={[styles.conversationItem, { transform: [{ translateX }] }]}
+      {...(responder ? responder.panHandlers : {})}
+    >
+      <SessionItem session={session} onPress={() => { if (!didSwipe.current) onPress(); }} onPin={onPin} onLongPress={onLongPress} />
+    </RNAnimated.View>
+  );
+
   return (
     <RNView style={styles.swipeContainer}>
       <RNAnimated.View style={[styles.swipeBehind, { opacity: swipeBehindOpacity }]}>
@@ -310,12 +352,9 @@ export function SwipeableSessionItem({ session, onPress, onDismiss, onPin, onLon
         <FontAwesome name="thumb-tack" size={16} color="#fff" />
         <RNText style={styles.swipeBehindText}>{session.is_pinned ? "Unpin" : "Pin"}</RNText>
       </RNAnimated.View>
-      <RNAnimated.View
-        style={[styles.conversationItem, { transform: [{ translateX }] }]}
-        {...responder.panHandlers}
-      >
-        <SessionItem session={session} onPress={() => { if (!didSwipe.current) onPress(); }} onPin={onPin} onLongPress={onLongPress} />
-      </RNAnimated.View>
+      {panGesture ? (
+        <gestureHandler.GestureDetector gesture={panGesture}>{card}</gestureHandler.GestureDetector>
+      ) : card}
     </RNView>
   );
 }

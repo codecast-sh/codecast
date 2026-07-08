@@ -15,6 +15,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id, Doc } from "./_generated/dataModel";
 import { getAuthenticatedUserId, enqueuePendingMessage } from "./pendingMessages";
 import {
+  ccAccountsValidator,
   isBlockedConversation,
   isSubagentConversation,
   isDeviceOnline,
@@ -302,6 +303,31 @@ export const saveAccountProfile = mutation({
       target_device_id: target.device_id,
     });
     return { command_id: commandId, device_id: target.device_id };
+  },
+});
+
+// Direct push of a device's account inventory, bypassing the heartbeat cycle:
+// the CLI calls this right after `cast accounts save`/`use` so the Settings
+// page reflects the change the moment the command returns instead of on the
+// next beat. Same payload the heartbeat carries (names/emails/tiers, never
+// tokens). Only patches an EXISTING device row — the heartbeat remains the
+// sole creator, so a stray publish can't fabricate device presence.
+export const publishDeviceAccounts = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    device_id: v.string(),
+    cc_accounts: ccAccountsValidator,
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication failed: invalid token or session");
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_user_device", (q) => q.eq("user_id", userId).eq("device_id", args.device_id))
+      .first();
+    if (!device) return { published: false };
+    await ctx.db.patch(device._id, { cc_accounts: args.cc_accounts });
+    return { published: true };
   },
 });
 
