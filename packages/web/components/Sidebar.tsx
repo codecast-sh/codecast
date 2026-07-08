@@ -1,13 +1,18 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useState, useMemo, useCallback, useRef } from "react";
+import { useState, useMemo, useCallback, useRef, memo } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
+import { useWatchEffect } from "../hooks/useWatchEffect";
 import { toast } from "sonner";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery, useMutation, useConvex } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { cleanTitle, msgCountColor } from "../lib/conversationProcessor";
+import { compressImage } from "../lib/compressImage";
+import { visitTimeAgo } from "../lib/recentVisits";
+import { getLabelColor } from "../lib/labelColors";
 import { shouldShowSession } from "../lib/sessionFilters";
+import { nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 import { useInboxStore, categorizeSessions, sessionsWithPendingSend } from "../store/inboxStore";
 import { useConvexSync } from "../hooks/useConvexSync";
 import { useCurrentUser } from "../hooks/useCurrentUser";
@@ -15,15 +20,15 @@ import { TeamIcon } from "./TeamIcon";
 import { isDesktop } from "../lib/desktop";
 import { CreateTaskModal } from "./CreateTaskModal";
 import { CreateDocModal } from "./CreateDocModal";
-import { SidebarDocTree } from "./SidebarDocTree";
+import { Workflow } from "lucide-react";
 
 const api = _api as any;
 
 interface SidebarProps {
-  filter?: "my" | "team";
-  onFilterChange?: (filter: "my" | "team") => void;
+  // The active workspace filter, derived from the activity-feed tab's `?dir=` by
+  // DashboardLayout (the feed lives at /team/activity). Drives the "Workspaces"
+  // highlight; clicking a workspace navigates there with the param toggled.
   directoryFilter?: string | null;
-  onDirectoryFilterChange?: (directory: string | null) => void;
   isMobileOpen?: boolean;
   onMobileClose?: () => void;
   isNarrow?: boolean;
@@ -88,8 +93,9 @@ function DroppableSessionRow({ conv, onMobileClose }: { conv: any; onMobileClose
     try {
       const storageIds: Id<"_storage">[] = [];
       for (const file of files) {
+        const uploaded = await compressImage(file);
         const uploadUrl = await generateUploadUrl({});
-        const result = await fetch(uploadUrl, { method: "POST", headers: { "Content-Type": file.type }, body: file });
+        const result = await fetch(uploadUrl, { method: "POST", headers: { "Content-Type": uploaded.type }, body: uploaded });
         const { storageId } = await result.json();
         storageIds.push(storageId);
       }
@@ -109,7 +115,7 @@ function DroppableSessionRow({ conv, onMobileClose }: { conv: any; onMobileClose
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
       className={`flex items-center gap-2 px-3 py-1 rounded text-sm transition-colors group ${
-        conv.is_subagent || conv.parent_conversation_id || conv.worktree_name
+        conv.is_subagent || nestParentIdOf(conv) || conv.worktree_name
           ? "text-sol-text-dim/50 hover:text-sol-text-dim/70 hover:bg-sol-bg-alt/30 opacity-60"
           : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
       } ${isDragOver ? "ring-1 ring-sol-cyan bg-sol-cyan/10" : ""}`}
@@ -117,7 +123,7 @@ function DroppableSessionRow({ conv, onMobileClose }: { conv: any; onMobileClose
       {conv.is_active && (
         <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse flex-shrink-0 -ml-1" />
       )}
-      <span className={`truncate flex-1 leading-tight ${conv.is_subagent || conv.parent_conversation_id || conv.worktree_name ? "text-[13px]" : ""}`}>{cleanTitle(conv.title || "Untitled")}</span>
+      <span className={`truncate flex-1 leading-tight ${conv.is_subagent || nestParentIdOf(conv) || conv.worktree_name ? "text-[13px]" : ""}`}>{cleanTitle(conv.title || "Untitled")}</span>
       {conv.worktree_name && (
         <span className="text-[9px] text-sol-cyan font-mono truncate max-w-[80px] flex-shrink-0" title={conv.worktree_branch || conv.worktree_name}>
           {conv.worktree_name}
@@ -207,6 +213,12 @@ function NavSection({
   icon,
   onMobileClose,
   onAdd,
+  addTitle,
+  views,
+  expanded,
+  onToggle,
+  onSelectView,
+  onRemoveView,
 }: {
   label: string;
   href: string;
@@ -215,7 +227,15 @@ function NavSection({
   icon: React.ReactNode;
   onMobileClose?: () => void;
   onAdd?: () => void;
+  addTitle?: string;
+  views?: any[];
+  expanded?: boolean;
+  onToggle?: () => void;
+  onSelectView?: (view: any) => void;
+  onRemoveView?: (id: string) => void;
 }) {
+  // Only the wide rail nests saved views; the narrow rail stays icon-only.
+  const hasViews = !isNarrow && !!views && views.length > 0;
   return (
     <div>
       <div className={`flex items-center transition-colors motion-reduce:transition-none ${
@@ -232,11 +252,23 @@ function NavSection({
           {icon}
           {!isNarrow && <span>{label}</span>}
         </Link>
+        {hasViews && (
+          <button
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); onToggle?.(); }}
+            className="p-1 text-sol-text-dim hover:text-sol-text transition-colors"
+            title={expanded ? `Hide saved ${label.toLowerCase()} views` : `Show saved ${label.toLowerCase()} views`}
+            aria-expanded={expanded}
+          >
+            <svg className={`w-3 h-3 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+            </svg>
+          </button>
+        )}
         {!isNarrow && onAdd && (
           <button
             onClick={(e) => { e.preventDefault(); e.stopPropagation(); onAdd(); }}
             className="p-1 mr-2 opacity-60 hover:opacity-100 text-sol-text-dim hover:text-sol-text transition-all"
-            title={`New ${label.toLowerCase().replace(/s$/, '')}`}
+            title={addTitle ?? `New ${label.toLowerCase().replace(/s$/, '')}`}
           >
             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
               <path strokeLinecap="round" d="M12 5v14m-7-7h14" />
@@ -244,23 +276,70 @@ function NavSection({
           </button>
         )}
       </div>
+      {/* Saved views for this page — a slide-open list aligned under the row's icon. */}
+      {hasViews && (
+        <div className={`overflow-hidden transition-all duration-200 ease-out ${expanded ? 'max-h-96 opacity-100' : 'max-h-0 opacity-0'}`}>
+          <div className="ml-[27px] my-0.5 border-l border-sol-border/50">
+            {views!.map((view) => (
+              <div key={view.id} className="flex items-center group/v">
+                <button
+                  onClick={() => onSelectView?.(view)}
+                  className="flex items-center pl-4 pr-2 py-1 text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/40 transition-colors flex-1 min-w-0 text-left"
+                >
+                  <span className="truncate text-[13px] min-w-0">{view.name}</span>
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); onRemoveView?.(view.id); }}
+                  className="p-1 mr-1.5 rounded opacity-0 group-hover/v:opacity-100 text-sol-text-dim hover:text-sol-text transition-opacity flex-shrink-0"
+                  title="Remove saved view"
+                >
+                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen = false, onMobileClose, isNarrow = false }: SidebarProps) {
+// The "needs input" count is the only thing in the Sidebar that depends on the
+// whole sessions map, which gets a fresh identity on every ~1s heartbeat.
+// Isolating it here means a heartbeat re-renders just this 20px badge instead of
+// the entire Sidebar (favorites, bookmarks, recents). Mirrors ActiveAgentsBadge
+// in DashboardLayout. Only mounted in the non-narrow rail, so no work when narrow.
+const NeedsInputCountBadge = memo(function NeedsInputCountBadge() {
+  const inboxSessions = useInboxStore((s) => s.sessions);
+  const sessionsWithQueuedMessages = useInboxStore((s) => s.sessionsWithQueuedMessages);
+  const pendingMessages = useInboxStore((s) => s.pendingMessages);
+  const needsInputCount = useMemo(
+    () => categorizeSessions(inboxSessions, sessionsWithQueuedMessages, sessionsWithPendingSend(pendingMessages)).needsInput.length,
+    [inboxSessions, sessionsWithQueuedMessages, pendingMessages],
+  );
+  if (needsInputCount === 0) return null;
+  return (
+    <span className="-ml-0.5 min-w-[20px] h-[20px] px-1.5 flex items-center justify-center text-[11px] font-bold bg-teal-600 text-white rounded-full">
+      {needsInputCount}
+    </span>
+  );
+});
+
+export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, isNarrow = false }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
   const isInbox = pathname === "/conversation" || pathname?.startsWith("/conversation/") || pathname === "/inbox" || pathname?.startsWith("/inbox/");
   const isSessions = pathname?.startsWith("/sessions");
+  const isAnchor = pathname?.startsWith("/anchor");
   const isWindows = pathname?.startsWith("/windows");
-  const isConfig = pathname?.startsWith("/config");
   const isTeamActivity = pathname === "/team/activity" || pathname?.startsWith("/team/activity");
   const isTasks = pathname === "/tasks" || pathname?.startsWith("/tasks/");
   const isPlans = pathname === "/plans" || pathname?.startsWith("/plans/");
   const isDocs = pathname === "/docs" || pathname?.startsWith("/docs/");
-  const isProjects = pathname === "/projects" || pathname?.startsWith("/projects/");
   const isWorkflows = pathname === "/workflows" || pathname?.startsWith("/workflows/");
+  const isSchedules = pathname === "/schedules" || pathname?.startsWith("/schedules/");
   const { user: currentUser } = useCurrentUser();
   const teamMembers = useInboxStore((s) => s.teamMembers);
   const [currentTime, setCurrentTime] = useState(Date.now());
@@ -273,19 +352,11 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
     activeTeamId ? { teamId: activeTeamId } : "skip"
   );
   const teamUnreadCount = teamUnreadCountQuery ?? useInboxStore.getState().teamUnreadCount;
-  const toggleFavorite = useMutation(api.conversations.toggleFavorite);
-  const createDoc = useMutation(api.docs.webCreate);
+  const createDoc = useInboxStore((s) => s.createDoc);
   const createModal = useInboxStore((s) => s.createModal);
   const closeCreateModal = useInboxStore((s) => s.closeCreateModal);
   const openCreateModal = useInboxStore((s) => s.openCreateModal);
-  const inboxSessions = useInboxStore((s) => s.sessions);
-  const sessionsWithQueuedMessages = useInboxStore((s) => s.sessionsWithQueuedMessages);
-  const pendingMessages = useInboxStore((s) => s.pendingMessages);
-  const needsInputCount = useMemo(
-    () => categorizeSessions(inboxSessions, sessionsWithQueuedMessages, sessionsWithPendingSend(pendingMessages)).needsInput.length,
-    [inboxSessions, sessionsWithQueuedMessages, pendingMessages],
-  );
-  const openNewSession = useInboxStore((s) => s.openNewSession);
+  const openCompose = useInboxStore((s) => s.openCompose);
   const hasUsedDesktop = useInboxStore((s) => s.clientState.dismissed?.has_used_desktop ?? false);
 
   useMountEffect(() => {
@@ -296,11 +367,38 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
   });
 
   const favoritesQuery = useQuery(api.conversations.listFavorites);
-  const bookmarksQuery = useQuery(api.bookmarks.listBookmarks);
-  const favorites = favoritesQuery ?? useInboxStore.getState().favorites;
-  const [showAllFavorites, setShowAllFavorites] = useState(false);
-  const bookmarks = bookmarksQuery ?? useInboxStore.getState().bookmarks;
-  const toggleBookmark = useMutation(api.bookmarks.toggleBookmark);
+  // Read bookmarks straight from the store (synced globally in useSyncInboxSessions)
+  // so an optimistic add/remove shows here instantly, with no round-trip.
+  const bookmarks = useInboxStore((s) => s.bookmarks);
+  const [showAllBookmarks, setShowAllBookmarks] = useState(false);
+  const convex = useConvex();
+  const prefetchedBookmarksRef = useRef<Set<string>>(new Set());
+  // Warm the Convex cache with the EXACT window + meta the conversation view
+  // requests on click (getMessagesAroundTimestamp with the same 50/50 bounds,
+  // plus the header meta), so opening a bookmark jumps to the message with no
+  // load spinner. Fires on hover; deduped per bookmark.
+  const prefetchBookmark = useCallback((bm: any) => {
+    if (!bm?.message_timestamp || prefetchedBookmarksRef.current.has(bm._id)) return;
+    prefetchedBookmarksRef.current.add(bm._id);
+    convex
+      .query(api.conversations.getMessagesAroundTimestamp, {
+        conversation_id: bm.conversation_id,
+        center_timestamp: bm.message_timestamp,
+        limit_before: 50,
+        limit_after: 50,
+      })
+      .catch(() => prefetchedBookmarksRef.current.delete(bm._id));
+    convex.query(api.conversations.getConversationWithMeta, { conversation_id: bm.conversation_id }).catch(() => {});
+  }, [convex]);
+  // Precache the visible bookmarks up front (not just on hover) so the very
+  // first click — or keyboard activation — opens straight to the message
+  // window with no spinner. Deduped per bookmark, so list churn re-runs are free.
+  useWatchEffect(() => {
+    const visible = showAllBookmarks ? bookmarks : bookmarks.slice(0, 8);
+    for (const bm of visible) prefetchBookmark(bm);
+  }, [bookmarks, showAllBookmarks, prefetchBookmark]);
+  const toggleBookmark = useInboxStore((s) => s.toggleBookmark);
+  const openConversationId = useInboxStore((s) => s.currentSessionId);
   const allSavedViews = useInboxStore((s) => s.clientState.ui?.saved_views);
   const savedViews = useMemo(
     () => allSavedViews?.filter((v: any) => !v.team_id || v.team_id === activeTeamId),
@@ -308,11 +406,22 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
   );
   const deleteView = useInboxStore((s) => s.deleteView);
   const updateClientUI = useInboxStore((s) => s.updateClientUI);
+  // Saved views nest under their page's nav row instead of a separate section.
+  const taskViews = useMemo(() => savedViews?.filter((v: any) => v.page === "tasks") ?? [], [savedViews]);
+  const docViews = useMemo(() => savedViews?.filter((v: any) => v.page === "docs" || v.page === "plans") ?? [], [savedViews]);
+  // They reveal when you open that page (navigation is the default); the chevron
+  // pins a section open or closed regardless of which page you're on.
+  const [viewSectionOverride, setViewSectionOverride] = useState<Record<string, boolean>>({});
+  const applyView = useCallback((view: any) => {
+    const pagePrefsKey = view.page === "tasks" ? "task_view" : view.page === "docs" ? "doc_view" : "plan_view";
+    updateClientUI({ [pagePrefsKey]: view.prefs });
+    router.push(`/${view.page}`);
+    onMobileClose?.();
+  }, [updateClientUI, router, onMobileClose]);
 
   useConvexSync(teamsQuery, useCallback((d: any) => useInboxStore.getState().syncTable("teams", d), []));
   useConvexSync(teamUnreadCountQuery, useCallback((d: any) => useInboxStore.getState().syncTable("teamUnreadCount", d), []));
   useConvexSync(favoritesQuery, useCallback((d: any) => useInboxStore.getState().syncTable("favorites", d), []));
-  useConvexSync(bookmarksQuery, useCallback((d: any) => useInboxStore.getState().syncTable("bookmarks", d), []));
   const { conversations } =
     useQuery(api.conversations.listConversations, {
       filter: "my",
@@ -322,14 +431,18 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
 
   const handleDirectoryClick = (dir: string) => {
     const newDir = directoryFilter === dir ? null : dir;
-    if (!pathname?.startsWith("/dashboard")) {
-      if (newDir) {
-        router.push(`/dashboard?dir=${encodeURIComponent(newDir)}`);
-      } else {
-        router.push("/dashboard");
-      }
+    // Workspace filtering is personal-scoped: it matches your own sessions by the
+    // path's leaf, so it only makes sense on the "my" feed (the team feed would send
+    // a machine-local absolute path to the server and match nothing). Hence filter=my.
+    const params = new URLSearchParams({ filter: "my" });
+    if (newDir) params.set("dir", newDir);
+    const target = `/team/activity?${params.toString()}`;
+    // Already on the feed → replace (just retune the filter, no history entry);
+    // otherwise push so we navigate to it. The feed reads these params from the URL.
+    if (pathname?.startsWith("/team/activity")) {
+      router.replace(target);
     } else {
-      onDirectoryFilterChange?.(newDir);
+      router.push(target);
     }
     onMobileClose?.();
   };
@@ -420,6 +533,7 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
         <div>
           <button
             onClick={() => {
+              useInboxStore.getState().setShowFavorites(false);
               if (isInbox) {
                 useInboxStore.getState().setShowMySessions(true);
                 useInboxStore.getState().clearSelection();
@@ -439,11 +553,7 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
             {!isNarrow && (
               <>
                 <span>Inbox</span>
-                {needsInputCount > 0 && (
-                  <span className="-ml-0.5 min-w-[20px] h-[20px] px-1.5 flex items-center justify-center text-[11px] font-bold bg-teal-600 text-white rounded-full">
-                    {needsInputCount}
-                  </span>
-                )}
+                <NeedsInputCountBadge />
               </>
             )}
           </button>
@@ -477,66 +587,39 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
             isNarrow={isNarrow}
             onMobileClose={onMobileClose}
             onAdd={() => openCreateModal("task")}
+            views={taskViews}
+            expanded={viewSectionOverride.tasks ?? isTasks}
+            onToggle={() => setViewSectionOverride((o) => ({ ...o, tasks: !(o.tasks ?? isTasks) }))}
+            onSelectView={applyView}
+            onRemoveView={deleteView}
             icon={
               <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
               </svg>
             }
           />
-          <Link
-            href="/projects"
-            onClick={onMobileClose}
-            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none ${
-              isProjects
-                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
-                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
-            }`}
-            title="Projects"
-          >
-            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3.75 9.776c.112-.017.227-.026.344-.026h15.812c.117 0 .232.009.344.026m-16.5 0a2.25 2.25 0 00-1.883 2.542l.857 6a2.25 2.25 0 002.227 1.932H19.05a2.25 2.25 0 002.227-1.932l.857-6a2.25 2.25 0 00-1.883-2.542m-16.5 0V6A2.25 2.25 0 016 3.75h3.879a1.5 1.5 0 011.06.44l2.122 2.12a1.5 1.5 0 001.06.44H18A2.25 2.25 0 0120.25 9v.776" />
-            </svg>
-            {!isNarrow && <span>Projects</span>}
-          </Link>
-          {/* Docs section with expandable tree */}
-          <div>
-            <div className={`flex items-center transition-colors motion-reduce:transition-none ${
-              isDocs || isPlans
-                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
-                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
-            }`}>
-              <Link
-                href="/docs"
-                onClick={onMobileClose}
-                className={`flex-1 flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 min-w-0`}
-                title="Docs"
-              >
-                <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
-                {!isNarrow && <span>Docs</span>}
-              </Link>
-              {!isNarrow && (
-                <button
-                  onClick={async (e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    const result = await createDoc({ title: "", doc_type: "note" });
-                    if (result?.id) router.push(`/docs/${result.id}`);
-                  }}
-                  className="p-1 mr-2 opacity-60 hover:opacity-100 text-sol-text-dim hover:text-sol-text transition-all"
-                  title="New page"
-                >
-                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                    <path strokeLinecap="round" d="M12 5v14m-7-7h14" />
-                  </svg>
-                </button>
-              )}
-            </div>
-            {!isNarrow && (isDocs || isPlans) && (
-              <SidebarDocTree onMobileClose={onMobileClose} />
-            )}
-          </div>
+          <NavSection
+            label="Docs"
+            href="/docs"
+            isActive={isDocs || isPlans}
+            isNarrow={isNarrow}
+            onMobileClose={onMobileClose}
+            addTitle="New page"
+            onAdd={async () => {
+              const result = await createDoc({ title: "", doc_type: "note" });
+              if (result?.id) router.push(`/docs/${result.id}`);
+            }}
+            views={docViews}
+            expanded={viewSectionOverride.docs ?? (isDocs || isPlans)}
+            onToggle={() => setViewSectionOverride((o) => ({ ...o, docs: !(o.docs ?? (isDocs || isPlans)) }))}
+            onSelectView={applyView}
+            onRemoveView={deleteView}
+            icon={
+              <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+            }
+          />
           <Link
             href="/workflows"
             className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none ${
@@ -546,10 +629,37 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
             }`}
             title="Workflows"
           >
-            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" />
-            </svg>
+            <Workflow className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />
             {!isNarrow && <span>Workflows</span>}
+          </Link>
+          <Link
+            href="/schedules"
+            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none ${
+              isSchedules
+                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
+                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
+            }`}
+            title="Schedules"
+          >
+            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            {!isNarrow && <span>Schedules</span>}
+          </Link>
+          <Link
+            href="/anchor"
+            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none ${
+              isAnchor
+                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
+                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
+            }`}
+            title="Anchor — your standing agent"
+          >
+            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <circle cx="12" cy="5" r="2.5" strokeWidth={1.5} />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 7.5V21M5 12H3a9 9 0 0018 0h-2" />
+            </svg>
+            {!isNarrow && <span>Anchor</span>}
           </Link>
           <Link
             href="/sessions"
@@ -579,173 +689,111 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
             </svg>
             {!isNarrow && <span>Windows</span>}
           </Link>
-          <Link
-            href="/config"
-            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none ${
-              isConfig
-                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
-                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
-            }`}
-            title="Config Files"
-          >
-            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-            </svg>
-            {!isNarrow && <span>Config</span>}
-          </Link>
         </div>
-
-        {!isNarrow && savedViews && savedViews.length > 0 && (
-          <div className="mt-4">
-            <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-4 mb-2 flex items-center gap-1.5">
-              <svg className="w-3.5 h-3.5 text-sol-cyan" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
-              </svg>
-              Saved Views
-            </div>
-            <div className="space-y-0.5">
-              {savedViews.map((view: any) => (
-                <div key={view.id} className="flex items-center group">
-                  <button
-                    onClick={() => {
-                      const pagePrefsKey = view.page === "tasks" ? "task_view" : view.page === "docs" ? "doc_view" : "plan_view";
-                      updateClientUI({ [pagePrefsKey]: view.prefs });
-                      router.push(`/${view.page}`);
-                      onMobileClose?.();
-                    }}
-                    className="flex items-center gap-2 px-4 py-1.5 text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60 transition-colors flex-1 min-w-0 text-left"
-                  >
-                    <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${view.page === "tasks" ? "bg-sol-yellow" : view.page === "docs" ? "bg-sol-violet" : "bg-sol-cyan"}`} />
-                    <span className="truncate text-sm flex-1">{view.name}</span>
-                    <span className="text-[9px] text-sol-text-dim/60 uppercase">{view.page}</span>
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      deleteView(view.id);
-                    }}
-                    className="p-1 rounded opacity-0 group-hover:opacity-100 text-sol-text-dim hover:text-sol-text transition-opacity flex-shrink-0 mr-1"
-                    title="Remove saved view"
-                  >
-                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {!isNarrow && favorites && favorites.length > 0 && (
-          <div className="mt-4">
-            <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-4 mb-2 flex items-center gap-1.5">
-              <svg className="w-3.5 h-3.5 text-amber-400" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
-              </svg>
-              Favorites
-            </div>
-            <div className="space-y-0.5">
-              {(showAllFavorites ? favorites : favorites.slice(0, 5)).map((fav: any) => (
-                <div key={fav._id} className="flex items-center group">
-                  <a
-                    href={`/conversation/${fav._id}`}
-                    onClick={(e) => {
-                      e.preventDefault();
-                      const store = useInboxStore.getState();
-                      store.navigateToSession(fav._id);
-                      const activeTab = store.tabs.find((t: any) => t.id === store.activeTabId);
-                      if (activeTab) {
-                        store.updateTab(activeTab.id, { path: "/inbox" });
-                      }
-                      if (!store.tabs.length) router.push("/inbox");
-                      onMobileClose?.();
-                    }}
-                    className="flex items-center gap-2 px-4 py-1.5 text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60 transition-colors flex-1 min-w-0 cursor-pointer"
-                  >
-                    <svg className="w-3 h-3 text-amber-400 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
-                      <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
-                    </svg>
-                    <span className="truncate text-sm flex-1">{cleanTitle(fav.title || "New Session")}</span>
-                    {fav.message_count > 0 && <span className={`text-[10px] tabular-nums ${msgCountColor(fav.message_count)}`}>{fav.message_count}</span>}
-                  </a>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      toggleFavorite({ conversation_id: fav._id as Id<"conversations"> });
-                    }}
-                    className="p-1 rounded opacity-0 group-hover:opacity-100 text-sol-text-dim hover:text-sol-text transition-opacity flex-shrink-0 mr-1"
-                    title="Remove from favorites"
-                  >
-                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
-                </div>
-              ))}
-              {favorites.length > 5 && (
-                <button
-                  onClick={() => setShowAllFavorites(v => !v)}
-                  className="w-full px-4 py-1.5 text-xs text-sol-text-dim hover:text-sol-text transition-colors text-left"
-                >
-                  {showAllFavorites ? "Show less" : `${favorites.length - 5} more…`}
-                </button>
-              )}
-            </div>
-          </div>
-        )}
 
         {!isNarrow && bookmarks && bookmarks.length > 0 && (
           <div className="mt-4">
-            <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-4 mb-2 flex items-center gap-1.5">
-              <svg className="w-3.5 h-3.5 text-sol-cyan" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
-              </svg>
-              Bookmarks
+            <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-4 mb-2 flex items-center">
+              <span>Bookmarks</span>
+              <span className="ml-auto inline-flex items-center justify-center min-w-[17px] h-[15px] px-1 rounded-full bg-sol-bg-highlight/70 text-[10px] tabular-nums text-sol-text-dim/50 normal-case font-normal">{bookmarks.length}</span>
             </div>
-            <div className="space-y-0.5">
-              {bookmarks.slice(0, 8).map((bookmark: any) => (
-                <div
-                  key={bookmark._id}
-                  className="flex items-center gap-2 px-4 py-1.5 text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60 transition-colors group cursor-pointer"
-                  onClick={() => {
-                    const store = useInboxStore.getState();
-                    // Pair the navigation target with the scroll target atomically so the
-                    // inbox's pendingNavigateId watcher resolves them together. Setting them
-                    // separately (navigateToSession + a later setState) raced the cache-hit
-                    // watcher, which pinned the scroll to the *previous* conversation.
-                    useInboxStore.setState({
-                      pendingNavigateId: bookmark.conversation_id,
-                      pendingScrollToMessageId: bookmark.message_id,
-                    });
-                    const activeTab = store.tabs.find((t: any) => t.id === store.activeTabId);
-                    if (activeTab) {
-                      store.updateTab(activeTab.id, { path: "/inbox" });
-                    }
-                    if (!store.tabs.length) router.push("/inbox");
-                    onMobileClose?.();
-                  }}
+            <div className="space-y-1">
+              {(showAllBookmarks ? bookmarks : bookmarks.slice(0, 8)).map((bm: any, i: number, arr: any[]) => {
+                const isOpen = bm.conversation_id === openConversationId;
+                // Adjacent bookmarks from the same conversation drop the repeated
+                // conversation line — the row above already named it.
+                const sameConvAsPrev = i > 0 && arr[i - 1].conversation_id === bm.conversation_id;
+                const named = !!bm.name;
+                const primary = bm.name || bm.message_preview || "";
+                const convTitle = cleanTitle(bm.conversation_title || "New Session");
+                const isUser = bm.message_role === "user";
+                // Each workspace gets a stable hashed color so the eye can sort by project.
+                const proj = bm.project_path ? getShortPath(bm.project_path) : "";
+                const projColor = proj ? getLabelColor(proj) : null;
+                return (
+                  <div key={bm._id} className="group relative px-1.5" onMouseEnter={() => prefetchBookmark(bm)} onFocus={() => prefetchBookmark(bm)}>
+                    <button
+                      onClick={() => {
+                        const store = useInboxStore.getState();
+                        // Pair navigation + scroll target atomically so the inbox's
+                        // pendingNavigateId watcher resolves them together (separate sets
+                        // raced the cache-hit watcher, pinning scroll to the previous conv).
+                        store.requestNavigate(bm.conversation_id, { scrollToMessageId: bm.message_id, scrollToMessageTimestamp: bm.message_timestamp });
+                        const activeTab = store.tabs.find((t: any) => t.id === store.activeTabId);
+                        if (activeTab) store.updateTab(activeTab.id, { path: "/inbox" });
+                        if (!store.tabs.length) router.push("/inbox");
+                        onMobileClose?.();
+                      }}
+                      title={primary || convTitle}
+                      aria-label={`Open bookmark ${named ? `"${bm.name}"` : "message"} in ${convTitle}`}
+                      className={`flex items-stretch gap-2.5 w-full pl-2 pr-2.5 py-1.5 rounded-md text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-sol-cyan/60 ${
+                        isOpen ? "bg-sol-cyan/10" : "hover:bg-sol-bg-highlight/50"
+                      }`}
+                    >
+                      {/* A saved excerpt, so a quote-bar spine: role-colored, cyan while its conversation is open.
+                          Held at a visible base opacity so it anchors each row, not just on hover. */}
+                      <span
+                        aria-hidden
+                        className={`flex-shrink-0 w-[3px] self-stretch rounded-full transition-colors ${
+                          isOpen ? "bg-sol-cyan/80" : isUser ? "bg-sol-blue/45 group-hover:bg-sol-blue/80" : "bg-sol-violet/45 group-hover:bg-sol-violet/80"
+                        }`}
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-baseline gap-2">
+                          {/* Headline: full-contrast and weighted up for deliberately-named bookmarks so
+                              curated entries out-rank auto-captured previews at a glance. */}
+                          <span className={`min-w-0 flex-1 truncate text-[13px] leading-snug text-sol-text-muted group-hover:text-sol-text-secondary transition-colors ${named ? "font-semibold" : "font-normal"}`}>
+                            {named && (
+                              <svg aria-hidden viewBox="0 0 24 24" className="inline-block w-2.5 h-2.5 mr-1 -mt-px align-middle text-sol-yellow/90" fill="currentColor">
+                                <path d="M6 3a2 2 0 0 0-2 2v15.5a.5.5 0 0 0 .79.407L12 16l7.21 4.907A.5.5 0 0 0 20 20.5V5a2 2 0 0 0-2-2H6z" />
+                              </svg>
+                            )}
+                            {primary || <span className="italic font-normal text-sol-text-dim/60">No preview</span>}
+                          </span>
+                          <span
+                            className="flex-shrink-0 text-[9.5px] tabular-nums text-[color-mix(in_srgb,var(--sol-text-dim)_28%,transparent)] group-hover:text-sol-text-dim transition-colors"
+                            title={new Date(bm.created_at).toLocaleString()}
+                          >
+                            {visitTimeAgo(bm.created_at)}
+                          </span>
+                        </span>
+                        {!sameConvAsPrev && (
+                          // Source line: deliberately recessed (dimmest text) so it reads as context, not a
+                          // second headline; the project dot carries the only color so the eye groups by project.
+                          <span className="flex items-center gap-1.5 mt-[3px] min-w-0">
+                            {projColor && <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 opacity-75 ${projColor.dot}`} title={proj} />}
+                            <span className="min-w-0 truncate text-[10px] text-[color-mix(in_srgb,var(--sol-text-dim)_38%,transparent)] leading-tight group-hover:text-sol-text-dim transition-colors">
+                              {convTitle}
+                            </span>
+                          </span>
+                        )}
+                      </span>
+                    </button>
+                    {/* Remove floats over the timestamp on hover so the row never reflows. */}
+                    <button
+                      onClick={(e) => { e.stopPropagation(); toggleBookmark(bm.conversation_id, bm.message_id); }}
+                      className="absolute right-3 top-1.5 p-0.5 rounded opacity-0 group-hover:opacity-100 bg-sol-bg-highlight text-sol-text-dim hover:text-sol-red transition-opacity"
+                      title="Remove bookmark"
+                      aria-label="Remove bookmark"
+                    >
+                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                );
+              })}
+              {bookmarks.length > 8 && (
+                <button
+                  onClick={() => setShowAllBookmarks(v => !v)}
+                  className="w-full mt-1 px-4 py-1 flex items-center gap-1 text-[10.5px] text-sol-text-dim/70 hover:text-sol-text transition-colors"
                 >
-                  <svg className={`w-3 h-3 flex-shrink-0 ${bookmark.message_role === "user" ? "text-sol-blue" : "text-sol-violet"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+                  <svg className={`w-2.5 h-2.5 transition-transform ${showAllBookmarks ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
                   </svg>
-                  <span className="truncate text-sm flex-1">{bookmark.message_preview || bookmark.conversation_title}</span>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      toggleBookmark({ conversation_id: bookmark.conversation_id, message_id: bookmark.message_id });
-                    }}
-                    className="opacity-40 group-hover:opacity-100 text-sol-text-dim hover:text-sol-red transition-all flex-shrink-0"
-                    title="Remove bookmark"
-                    aria-label="Remove bookmark"
-                  >
-                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
-                </div>
-              ))}
+                  {showAllBookmarks ? "Show fewer" : `${bookmarks.length - 8} more`}
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -755,9 +803,9 @@ export function Sidebar({ directoryFilter, onDirectoryFilterChange, isMobileOpen
             <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-4 mb-2 flex items-center justify-between">
               <span>Workspaces</span>
               <button
-                onClick={() => openNewSession()}
+                onClick={() => openCompose()}
                 className="text-sol-text-dim hover:text-sol-yellow transition-colors"
-                title="New session..."
+                title="New session"
               >
                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />

@@ -1,16 +1,20 @@
 "use client";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useInboxStore, DocDetail } from "../../../store/inboxStore";
 import { useSyncDocDetail } from "../../../hooks/useSyncDocs";
+import { useOpenLinkedSession } from "../../../hooks/useOpenLinkedSession";
 import { DetailSplitLayout } from "../../../components/DetailSplitLayout";
+import { AuthGuard } from "../../../components/AuthGuard";
+import { AppLoader } from "../../../components/AppLoader";
 import { DocListContent } from "../page";
-import { shareOrigin, copyToClipboard } from "../../../lib/utils";
+import { shareOrigin, canonicalUrl } from "../../../lib/utils";
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { DocumentDetailLayout } from "../../../components/DocumentDetailLayout";
+import { SharePopover } from "../../../components/SharePopover";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
-import { SessionCardInner } from "../../../components/ActivityFeed";
+import { FeedCard } from "../../../components/ActivityFeed";
 import { WatchButton } from "../../../components/WatchButton";
 import { Badge } from "../../../components/ui/badge";
 import "../../../components/editor/editor.css";
@@ -28,8 +32,6 @@ import {
   ArrowDown,
   Minus,
   Tag,
-  Link2,
-  Check,
 } from "lucide-react";
 import Link from "next/link";
 import { toast } from "sonner";
@@ -120,25 +122,37 @@ function DocTypeSelector({
 
 export default function DocDetailPage() {
   return (
-    <DetailSplitLayout list={<DocListContent />}>
-      <ErrorBoundary name="DocDetail" level="panel">
-        <DocDetailContent />
-      </ErrorBoundary>
-    </DetailSplitLayout>
+    <AuthGuard>
+      <DetailSplitLayout list={<DocListContent />}>
+        <ErrorBoundary name="DocDetail" level="panel">
+          <DocDetailContent />
+        </ErrorBoundary>
+      </DetailSplitLayout>
+    </AuthGuard>
   );
 }
 
 function DocDetailContent() {
   const params = useParams();
   const router = useRouter();
+  const openLinkedSession = useOpenLinkedSession();
   const id = params.id as string;
 
-  useSyncDocDetail(id);
+  const detailResult = useSyncDocDetail(id);
 
   const detail = useInboxStore((s) => s.docDetails[id]) as DocDetail | undefined;
   const listItem = useInboxStore((s) => s.docs[id]) as DocDetail | undefined;
   const allDocs = useInboxStore((s) => s.docs);
   const data = detail || listItem;
+
+  // The id may be a conversation's (malformed /docs/<conversationId> link).
+  // When the server says "not a doc" and the id is a session we know, land in
+  // the conversation instead of a dead-end. Mirrors /tasks/[id].
+  const notADoc = detailResult === null && !listItem;
+  const sessionForBadId = useInboxStore((s) => (notADoc ? s.sessions[id] : undefined));
+  useEffect(() => {
+    if (notADoc && sessionForBadId) router.replace(`/conversation/${id}`);
+  }, [notADoc, sessionForBadId, id, router]);
 
   // Compute backlinks: docs that link to this doc via linked_doc_ids
   const backlinks = useMemo(() => {
@@ -154,23 +168,8 @@ function DocDetailContent() {
   }, [allDocs, id]);
   const updateDoc = useInboxStore((s) => s.updateDoc);
   const pinDoc = useInboxStore((s) => s.pinDoc);
-  const promoteToPlan = useMutation(api.docs.webPromoteToPlan);
+  const promoteToPlan = useInboxStore((s) => s.promoteDocToPlan);
   const generateShareLink = useMutation(api.docs.generateShareLink);
-  const [shareCopied, setShareCopied] = useState(false);
-
-  const handleShare = useCallback(async () => {
-    if (!data) return;
-    try {
-      const result = await generateShareLink({ id: data._id as any });
-      const url = `${shareOrigin()}/share/doc/${result.share_token}`;
-      await copyToClipboard(url);
-      setShareCopied(true);
-      toast.success("Share link copied to clipboard");
-      setTimeout(() => setShareCopied(false), 2000);
-    } catch (e: any) {
-      toast.error(e.message || "Failed to generate share link");
-    }
-  }, [data, generateShareLink]);
 
   const handleTitleChange = useCallback(
     (title: string) => {
@@ -195,7 +194,7 @@ function DocDetailContent() {
     async (newType: string) => {
       if (!data) return;
       if (newType === "plan" && !(data as any).plan_id) {
-        const result = await promoteToPlan({ doc_id: data._id as any });
+        const result = await promoteToPlan(data._id);
         if (result?.short_id) {
           toast.success("Promoted to plan");
           router.push(`/plans/${result.short_id}`);
@@ -208,11 +207,22 @@ function DocDetailContent() {
   );
 
   if (!data) {
-    return (
-      <div className="flex items-center justify-center h-64 text-sol-text-dim text-sm">
-        Loading...
-      </div>
-    );
+    // The query resolved to null and nothing is cached for this id → it doesn't
+    // address an accessible doc (e.g. a conversation id from a malformed
+    // /docs/<id> link). Show a graceful empty state rather than spinning forever.
+    if (notADoc) {
+      // Redirecting to the conversation (effect above) — show the loader.
+      if (sessionForBadId) return <AppLoader className="min-h-[16rem] h-full" />;
+      return (
+        <div className="flex flex-col items-center justify-center h-full gap-2 text-sol-text-dim text-sm">
+          <span>Document not found</span>
+          <Link href="/docs" className="text-sol-blue hover:underline text-xs">
+            Back to docs
+          </Link>
+        </div>
+      );
+    }
+    return <AppLoader className="min-h-[16rem] h-full" />;
   }
 
   const doc = data;
@@ -235,8 +245,10 @@ function DocDetailContent() {
           onTitleChange={handleTitleChange}
           backHref="/docs"
           linkedObjectId={doc._id}
+          ownerConversationId={(doc as any).conversation_id}
           placeholder="Start typing or insert using /"
           cliEditedAt={(doc as any).cli_edited_at}
+          contentReady={!!detail}
           topBarLeft={
             <>
               <DocTypeSelector value={doc.doc_type} onChange={handleTypeChange} />
@@ -246,13 +258,16 @@ function DocDetailContent() {
           }
           topBarRight={
             <>
-              <button
-                onClick={handleShare}
-                className={`p-1.5 rounded-md transition-colors ${shareCopied ? "text-sol-green" : "text-sol-text-dim hover:text-sol-cyan"}`}
-                title="Copy share link"
-              >
-                {shareCopied ? <Check className="w-3.5 h-3.5" /> : <Link2 className="w-3.5 h-3.5" />}
-              </button>
+              <SharePopover
+                hasTeam={false}
+                hasShareToken={!!(doc as any).share_token}
+                shareUrl={(doc as any).share_token ? `${shareOrigin()}/share/doc/${(doc as any).share_token}` : null}
+                pageUrl={canonicalUrl()}
+                onGenerateShareLink={async () => {
+                  const result = await generateShareLink({ id: doc._id as any });
+                  return `${shareOrigin()}/share/doc/${result.share_token}`;
+                }}
+              />
               <button
                 onClick={handlePin}
                 className={`p-1.5 rounded-md transition-colors ${doc.pinned ? "text-sol-yellow" : "text-sol-text-dim hover:text-sol-yellow"}`}
@@ -319,34 +334,14 @@ function DocDetailContent() {
                 <div className="space-y-1.5">
                   {((doc as any).related_conversations ||
                     (conversation ? [conversation] : [])
-                  ).map((conv: any) => {
-                    const sid = conv._id;
-                    return (
-                    <SessionCardInner
+                  ).map((conv: any) => (
+                    <FeedCard
                       key={conv._id}
-                      item={{ ...conv, conversation_id: sid }}
-                      compact
-                      onNavigate={() => {
-                        const store = useInboxStore.getState();
-                        if (!store.sessions[sid]) {
-                          store.syncRecord('sessions', sid, {
-                            _id: conv._id,
-                            session_id: conv.session_id || conv._id,
-                            title: conv.title,
-                            project_path: conv.project_path,
-                            message_count: conv.message_count || 0,
-                            updated_at: conv.updated_at,
-                            started_at: conv.started_at,
-                            agent_type: conv.agent_type || 'claude',
-                            is_idle: !conv.is_active,
-                            has_pending: false,
-                          });
-                        }
-                        store.openSidePanel(sid);
-                      }}
+                      conv={conv as any}
+                      showActor={false}
+                      onNavigate={() => openLinkedSession(conv)}
                     />
-                    );
-                  })}
+                  ))}
                 </div>
               </div>
             ) : undefined

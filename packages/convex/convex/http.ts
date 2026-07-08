@@ -7,6 +7,43 @@ const http = httpRouter();
 
 auth.addHttpRoutes(http);
 
+// IP-keyed rate limit for an unauthenticated HTTP route. Returns a 429 Response to
+// short-circuit the handler when the caller's IP exceeds the window, else null.
+// Fail-open: a limiter error never blocks the route (availability > strictness).
+async function ipRateLimited(
+  ctx: any,
+  request: Request,
+  name: string,
+  max: number,
+  windowMs: number,
+): Promise<Response | null> {
+  const ip =
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    request.headers.get("cf-connecting-ip") ||
+    request.headers.get("x-real-ip") ||
+    "unknown";
+  try {
+    const res = await ctx.runMutation(internal.ipRateLimit.bump, {
+      key: `${name}:${ip}`,
+      max,
+      window_ms: windowMs,
+    });
+    if (!res.ok) {
+      return new Response(JSON.stringify({ error: "Too many requests" }), {
+        status: 429,
+        headers: {
+          "Content-Type": "application/json",
+          "Retry-After": String(Math.ceil((res.retry_after_ms ?? windowMs) / 1000)),
+          "Access-Control-Allow-Origin": "*",
+        },
+      });
+    }
+  } catch {
+    // Fail open.
+  }
+  return null;
+}
+
 
 http.route({
   path: "/cli/exchange-token",
@@ -19,6 +56,11 @@ http.route({
     };
 
     try {
+      // Brute-force guard: a setup token is one-shot + TTL-bound, so 20 exchange
+      // attempts/min per IP is far above any legitimate use and caps guessing.
+      const limited = await ipRateLimited(ctx, request, "exchange-token", 20, 60_000);
+      if (limited) return limited;
+
       const body = await request.json();
       const setupToken = body.token;
 
@@ -55,6 +97,68 @@ http.route({
 
 http.route({
   path: "/cli/exchange-token",
+  method: "OPTIONS",
+  handler: httpAction(async () => {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+      },
+    });
+  }),
+});
+
+// Polled by `cast auth` while it waits on its localhost listener, so auth
+// also completes for CLIs the browser can't reach (SSH / remote machines).
+// The nonce is the CLI's one-time 256-bit secret; a claim is single-use.
+http.route({
+  path: "/cli/claim-auth",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+    };
+
+    try {
+      const body = await request.json();
+      const nonce = body.nonce;
+
+      if (!nonce || typeof nonce !== "string") {
+        return new Response(JSON.stringify({ error: "Missing nonce" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json", ...corsHeaders },
+        });
+      }
+
+      const result = await ctx.runMutation(internal.cliAuth.claim, { nonce });
+
+      // "Not deposited yet" is the normal polling answer, not an error.
+      if (!result) {
+        return new Response(JSON.stringify({ pending: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json", ...corsHeaders },
+        });
+      }
+
+      return new Response(JSON.stringify(result), {
+        status: 200,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    } catch (error) {
+      return new Response(JSON.stringify({ error: "Internal error" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    }
+  }),
+});
+
+http.route({
+  path: "/cli/claim-auth",
   method: "OPTIONS",
   handler: httpAction(async () => {
     return new Response(null, {
@@ -140,6 +244,15 @@ http.route({
   }),
 });
 
+// Constant-time hex-string compare so webhook signature verification can't be
+// timing-probed (a plain `!==` short-circuits on the first differing byte).
+function timingSafeEqualHex(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let mismatch = 0;
+  for (let i = 0; i < a.length; i++) mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return mismatch === 0;
+}
+
 http.route({
   path: "/api/webhooks/github-app",
   method: "POST",
@@ -158,30 +271,41 @@ http.route({
     const body = await request.text();
     const webhookSecret = process.env.GITHUB_APP_WEBHOOK_SECRET;
 
-    if (webhookSecret && signature) {
-      const encoder = new TextEncoder();
-      const keyData = encoder.encode(webhookSecret);
-      const messageData = encoder.encode(body);
+    // Fail CLOSED. The old `if (webhookSecret && signature)` skipped verification
+    // entirely when the secret was unconfigured or the signature header absent —
+    // i.e. it processed unsigned payloads. A missing secret or signature must reject.
+    if (!webhookSecret) {
+      console.error("[github-app webhook] GITHUB_APP_WEBHOOK_SECRET not configured; refusing webhook");
+      return new Response(JSON.stringify({ error: "Webhook not configured" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    if (!signature) {
+      return new Response(JSON.stringify({ error: "Missing signature" }), {
+        status: 401,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
 
-      const key = await crypto.subtle.importKey(
-        "raw",
-        keyData,
-        { name: "HMAC", hash: "SHA-256" },
-        false,
-        ["sign"]
-      );
+    const encoder = new TextEncoder();
+    const key = await crypto.subtle.importKey(
+      "raw",
+      encoder.encode(webhookSecret),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"]
+    );
+    const signatureBuffer = await crypto.subtle.sign("HMAC", key, encoder.encode(body));
+    const hashArray = Array.from(new Uint8Array(signatureBuffer));
+    const hashHex = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+    const expectedSignature = "sha256=" + hashHex;
 
-      const signatureBuffer = await crypto.subtle.sign("HMAC", key, messageData);
-      const hashArray = Array.from(new Uint8Array(signatureBuffer));
-      const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-      const expectedSignature = "sha256=" + hashHex;
-
-      if (signature !== expectedSignature) {
-        return new Response(JSON.stringify({ error: "Invalid signature" }), {
-          status: 401,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
+    if (!timingSafeEqualHex(signature, expectedSignature)) {
+      return new Response(JSON.stringify({ error: "Invalid signature" }), {
+        status: 401,
+        headers: { "Content-Type": "application/json" },
+      });
     }
 
     const payload = JSON.parse(body);
@@ -293,7 +417,7 @@ http.route({
       const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
       const expectedSignature = "sha256=" + hashHex;
 
-      if (signature !== expectedSignature) {
+      if (!signature || !timingSafeEqualHex(signature, expectedSignature)) {
         return new Response(JSON.stringify({ error: "Invalid signature" }), {
           status: 401,
           headers: { "Content-Type": "application/json" },
@@ -404,7 +528,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, query, limit, offset, start_time, end_time, context_before, context_after, project_path, user_only, member_name, mine_only } = body;
+      const { api_token, query, limit, offset, start_time, end_time, context_before, context_after, project_path, user_only, member_name, mine_only, label } = body;
 
       if (!api_token || !query) {
         return new Response(JSON.stringify({ error: "Missing api_token or query" }), {
@@ -435,6 +559,7 @@ http.route({
         team_id,
         member_name,
         mine_only,
+        label,
       });
 
       if (result.error) {
@@ -485,7 +610,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, conversation_id, start_line, end_line, full_content } = body;
+      const { api_token, conversation_id, start_line, end_line, full_content, around_message_id, context } = body;
 
       if (!api_token || !conversation_id) {
         return new Response(JSON.stringify({ error: "Missing api_token or conversation_id" }), {
@@ -500,6 +625,8 @@ http.route({
         start_line,
         end_line,
         full_content,
+        around_message_id,
+        context,
       });
 
       if (result.error) {
@@ -661,7 +788,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, limit, offset, start_time, end_time, query, project_path, member_name, mine_only, live_only } = body;
+      const { api_token, limit, offset, start_time, end_time, query, project_path, member_name, mine_only, live_only, state, label } = body;
 
       if (!api_token) {
         return new Response(JSON.stringify({ error: "Missing api_token" }), {
@@ -690,6 +817,8 @@ http.route({
         member_name,
         mine_only,
         live_only,
+        state,
+        label,
       });
 
       if (result.error) {
@@ -715,6 +844,72 @@ http.route({
 
 http.route({
   path: "/cli/feed",
+  method: "OPTIONS",
+  handler: httpAction(async () => {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+      },
+    });
+  }),
+});
+
+http.route({
+  path: "/cli/inbox",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+    };
+
+    try {
+      const body = await request.json();
+      const { api_token, show_all, state, limit, label, project_path } = body;
+
+      if (!api_token) {
+        return new Response(JSON.stringify({ error: "Missing api_token" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json", ...corsHeaders },
+        });
+      }
+
+      const result = await ctx.runQuery(api.conversations.inboxForCLI, {
+        api_token,
+        show_all,
+        state,
+        limit,
+        label,
+        project_path,
+      });
+
+      if (result.error) {
+        return new Response(JSON.stringify({ error: result.error }), {
+          status: result.error === "Unauthorized" ? 401 : 400,
+          headers: { "Content-Type": "application/json", ...corsHeaders },
+        });
+      }
+
+      return new Response(JSON.stringify(result), {
+        status: 200,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    } catch (error) {
+      console.error("Inbox error:", error);
+      return new Response(JSON.stringify({ error: "Internal error", details: error instanceof Error ? error.message : String(error) }), {
+        status: 500,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    }
+  }),
+});
+
+http.route({
+  path: "/cli/inbox",
   method: "OPTIONS",
   handler: httpAction(async () => {
     return new Response(null, {
@@ -1567,6 +1762,75 @@ http.route({
   }),
 });
 
+// Line-level blame resolution: maps git blame SHAs (and uncommitted line
+// texts) to the sessions that produced them. The file-level /cli/blame above
+// stays as-is — `cast context` also consumes it.
+http.route({
+  path: "/cli/blame/resolve",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+    };
+
+    try {
+      const body = await request.json();
+      const { api_token, shas, commits, file_path, uncommitted_lines, content_lines } = body;
+
+      if (!api_token || (!Array.isArray(shas) && !Array.isArray(commits))) {
+        return new Response(JSON.stringify({ error: "Missing api_token or shas/commits" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json", ...corsHeaders },
+        });
+      }
+
+      const result = await ctx.runQuery(api.blame.resolveBlame, {
+        api_token,
+        shas,
+        commits,
+        file_path,
+        uncommitted_lines,
+        content_lines,
+      });
+
+      if ("error" in result && result.error) {
+        return new Response(JSON.stringify({ error: result.error }), {
+          status: result.error === "Unauthorized" ? 401 : 400,
+          headers: { "Content-Type": "application/json", ...corsHeaders },
+        });
+      }
+
+      return new Response(JSON.stringify(result), {
+        status: 200,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    } catch (error) {
+      console.error("Blame resolve error:", error);
+      return new Response(JSON.stringify({ error: "Internal error", details: error instanceof Error ? error.message : String(error) }), {
+        status: 500,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    }
+  }),
+});
+
+http.route({
+  path: "/cli/blame/resolve",
+  method: "OPTIONS",
+  handler: httpAction(async () => {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+      },
+    });
+  }),
+});
+
 http.route({
   path: "/cli/sync-settings",
   method: "POST",
@@ -2088,19 +2352,31 @@ http.route({
         });
       }
 
-      const result = await ctx.runMutation(api.users.deleteConversationsForPathCLI, {
-        api_token,
-        path_prefix,
-      });
-
-      if ((result as any).error) {
-        return new Response(JSON.stringify({ error: (result as any).error }), {
-          status: (result as any).error === "Unauthorized" ? 401 : 400,
-          headers: { "Content-Type": "application/json", ...corsHeaders },
+      // Each mutation call deletes at most one message batch or one
+      // conversation (bounded transactions); drain here so a single CLI call
+      // deletes everything under the prefix. The iteration cap bounds one HTTP
+      // request — a caller with an enormous project re-invokes on hasMore.
+      let conversationsDeleted = 0;
+      let messagesDeleted = 0;
+      let hasMore = true;
+      for (let i = 0; i < 400 && hasMore; i++) {
+        const result = await ctx.runMutation(api.users.deleteConversationsForPathCLI, {
+          api_token,
+          path_prefix,
         });
+
+        if ((result as any).error) {
+          return new Response(JSON.stringify({ error: (result as any).error }), {
+            status: (result as any).error === "Unauthorized" ? 401 : 400,
+            headers: { "Content-Type": "application/json", ...corsHeaders },
+          });
+        }
+        conversationsDeleted += (result as any).conversationsDeleted ?? 0;
+        messagesDeleted += (result as any).messagesDeleted ?? 0;
+        hasMore = !!(result as any).hasMore;
       }
 
-      return new Response(JSON.stringify(result), {
+      return new Response(JSON.stringify({ conversationsDeleted, messagesDeleted, hasMore }), {
         status: 200,
         headers: { "Content-Type": "application/json", ...corsHeaders },
       });
@@ -2203,7 +2479,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, version, platform, pid, autostart_enabled, has_tmux, local_project_roots, pending_sync_count, oldest_pending_ms, pending_sync_messages, pending_sync_conversations, device_id, device_label, is_remote_device } = body;
+      const { api_token, version, platform, pid, autostart_enabled, has_tmux, local_project_roots, pending_sync_count, oldest_pending_ms, pending_sync_messages, pending_sync_conversations, device_id, device_label, is_remote_device, cc_accounts, settings } = body;
 
       if (!api_token || !version || !platform) {
         return new Response(JSON.stringify({ error: "Missing required fields" }), {
@@ -2227,6 +2503,8 @@ http.route({
         device_id,
         device_label,
         is_remote_device,
+        cc_accounts,
+        settings,
       });
 
       if (result.error) {
@@ -2676,6 +2954,8 @@ http.route({
         ...(body.daemon_id ? { daemon_id: body.daemon_id } : {}),
         summary: body.summary,
         conversation_id: body.conversation_id,
+        run_session_uuid: body.run_session_uuid,
+        ...(body.needs_attention !== undefined ? { needs_attention: !!body.needs_attention } : {}),
       });
       return new Response(JSON.stringify({ success: result }), {
         status: 200,
@@ -2886,6 +3166,88 @@ http.route({
 
 // --- Task Layer Routes ---
 
+// ── Slack webhook (Anchor inbound) ───────────────────────────────────────────
+// An @mention or DM in a mapped channel wakes that channel's anchor. Verified by
+// Slack's v0 HMAC signature (SLACK_SIGNING_SECRET) with replay protection, then
+// deduped by event_id so a Slack retry can't double-wake.
+http.route({
+  path: "/api/webhooks/slack",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const signature = request.headers.get("X-Slack-Signature");
+    const timestamp = request.headers.get("X-Slack-Request-Timestamp");
+    const body = await request.text();
+    const secret = process.env.SLACK_SIGNING_SECRET;
+
+    if (!secret) {
+      console.error("[slack webhook] SLACK_SIGNING_SECRET not configured; refusing");
+      return new Response(JSON.stringify({ error: "Webhook not configured" }), { status: 500 });
+    }
+    if (!signature || !timestamp) {
+      return new Response(JSON.stringify({ error: "Missing signature" }), { status: 401 });
+    }
+    // Replay protection: reject stale timestamps (Slack recommends 5 minutes).
+    const ts = parseInt(timestamp, 10);
+    if (!Number.isFinite(ts) || Math.abs(Date.now() / 1000 - ts) > 300) {
+      return new Response(JSON.stringify({ error: "Stale timestamp" }), { status: 401 });
+    }
+    const encoder = new TextEncoder();
+    const key = await crypto.subtle.importKey(
+      "raw",
+      encoder.encode(secret),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"],
+    );
+    const sigBuf = await crypto.subtle.sign("HMAC", key, encoder.encode(`v0:${timestamp}:${body}`));
+    const hex = Array.from(new Uint8Array(sigBuf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+    if (!timingSafeEqualHex(signature, "v0=" + hex)) {
+      return new Response(JSON.stringify({ error: "Invalid signature" }), { status: 401 });
+    }
+
+    const payload = JSON.parse(body);
+    // Slack's one-time endpoint verification handshake.
+    if (payload.type === "url_verification") {
+      return new Response(payload.challenge, { status: 200, headers: { "Content-Type": "text/plain" } });
+    }
+
+    if (payload.type === "event_callback") {
+      const event = payload.event || {};
+      const eventId = payload.event_id as string | undefined;
+      // Ignore the bot's own posts on both paths, so an anchor reply that happens
+      // to @mention the app can't wake it in a loop (each loop has a new event_id,
+      // so dedup wouldn't catch it).
+      const isMention =
+        event.type === "app_mention" && !event.bot_id && !event.subtype;
+      const isDM =
+        event.type === "message" && event.channel_type === "im" && !event.bot_id && !event.subtype;
+      if ((isMention || isDM) && eventId && event.channel) {
+        // One atomic mutation: dedup + resolve channel→anchor + wake. If the wake
+        // throws it returns 500 and Slack retries — the dedup row rolls back with
+        // it, so a transient failure never silently drops the mention.
+        await ctx.runMutation(internal.slack.wakeFromSlackEvent, {
+          event_id: eventId,
+          channel: event.channel,
+          workspace: payload.team_id as string | undefined,
+          user: event.user,
+          text: String(event.text || ""),
+          thread: event.thread_ts || event.ts,
+        });
+      }
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }),
+});
+
+
 function cliRoute(path: string, handler: (ctx: any, body: any) => Promise<any>) {
   const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
@@ -2938,6 +3300,35 @@ cliRoute("/cli/projects/update", async (ctx, body) => {
   return await ctx.runMutation(api.projects.update, body);
 });
 
+// Anchors (standing agent members)
+cliRoute("/cli/anchor/create", async (ctx, body) => {
+  return await ctx.runMutation(api.anchors.provisionAnchor, body);
+});
+cliRoute("/cli/anchor/list", async (ctx, body) => {
+  return await ctx.runQuery(api.anchors.listAnchors, body);
+});
+cliRoute("/cli/anchor/wake", async (ctx, body) => {
+  return await ctx.runMutation(api.anchors.wakeAnchor, body);
+});
+cliRoute("/cli/anchor/resolve", async (ctx, body) => {
+  return await ctx.runQuery(api.anchors.resolveAnchorForScope, body);
+});
+cliRoute("/cli/anchor/decommission", async (ctx, body) => {
+  return await ctx.runMutation(api.anchors.decommissionAnchor, body);
+});
+cliRoute("/cli/anchor/link-channel", async (ctx, body) => {
+  return await ctx.runAction(api.slack.linkChannel, body);
+});
+cliRoute("/cli/anchor/unlink-channel", async (ctx, body) => {
+  return await ctx.runMutation(api.slack.unlinkChannel, body);
+});
+cliRoute("/cli/anchor/channels", async (ctx, body) => {
+  return await ctx.runQuery(api.slack.listChannels, body);
+});
+cliRoute("/cli/anchor/say", async (ctx, body) => {
+  return await ctx.runAction(api.slack.postMessage, body);
+});
+
 // Tasks
 cliRoute("/cli/work/create", async (ctx, body) => {
   return await ctx.runMutation(api.tasks.create, body);
@@ -2967,7 +3358,7 @@ cliRoute("/cli/work/snippet", async (ctx, body) => {
   return await ctx.runQuery(api.tasks.snippet, body);
 });
 cliRoute("/cli/work/backfill", async (ctx, body) => {
-  return await ctx.runMutation(api.tasks.backfillTeamScope, body);
+  return await ctx.runMutation(internal.tasks.backfillTeamScope, body);
 });
 cliRoute("/cli/work/heartbeat", async (ctx, body) => {
   return await ctx.runMutation(api.tasks.heartbeat, body);
@@ -3132,5 +3523,36 @@ cliRoute("/cli/workflow-runs/gate", async (ctx, body) => ctx.runMutation(api.wor
 cliRoute("/cli/workflow-runs/poll-gate", async (ctx, body) => ctx.runMutation(api.workflow_runs.pollGateResponse, body));
 cliRoute("/cli/workflow-runs/set-primary", async (ctx, body) => ctx.runMutation(api.workflow_runs.setPrimarySession, body));
 cliRoute("/cli/workflow-runs/respond-gate", async (ctx, body) => ctx.runMutation(api.workflow_runs.respondToGateFromCli, body));
+cliRoute("/cli/workflow-runs/ingest", async (ctx, body) => ctx.runMutation(api.workflow_runs.ingestSnapshot, body));
+cliRoute("/cli/workflow-runs/by-external", async (ctx, body) => ctx.runQuery(api.workflow_runs.getByExternalRun, body));
+
+// Session-to-session messaging
+cliRoute("/cli/messages/send", async (ctx, body) => ctx.runMutation(api.pendingMessages.sendSessionMessage, body));
+
+// Session labels (personal filing). List the catalog, file/unfile a session,
+// and manage the label catalog itself.
+cliRoute("/cli/labels/list", async (ctx, body) => ctx.runQuery(api.buckets.cliListLabels, body));
+cliRoute("/cli/labels/set", async (ctx, body) => ctx.runMutation(api.buckets.cliSetLabel, body));
+cliRoute("/cli/labels/clear", async (ctx, body) => ctx.runMutation(api.buckets.cliClearLabel, body));
+cliRoute("/cli/labels/create", async (ctx, body) => ctx.runMutation(api.buckets.cliCreateLabel, body));
+cliRoute("/cli/labels/rename", async (ctx, body) => ctx.runMutation(api.buckets.cliRenameLabel, body));
+cliRoute("/cli/labels/remove", async (ctx, body) => ctx.runMutation(api.buckets.cliArchiveLabel, body));
+
+// Spawn a fresh, inbox-visible session (cast spawn). `api.spawn` is filled in by
+// codegen on deploy; cast to any so the committed _generated typecheck stays green
+// until then.
+cliRoute("/cli/spawn", async (ctx, body) => ctx.runMutation((api as any).spawn.createSessionFromCli, body));
+
+// Second-party session ownership (cast own / cast disown, or scripts routing an
+// agent-run session into a human's inbox). body: { api_token, session_id,
+// owner: "<email|name>" | "me" | null }.
+cliRoute("/cli/sessions/own", async (ctx, body) => ctx.runMutation(api.sessionOwnership.setSessionOwner, body));
+
+// CC account switching: route the swap + blocked-session revive through the
+// daemon fleet / nudge limit-parked sessions after a window reset.
+cliRoute("/cli/accounts/switch", async (ctx, body) => ctx.runMutation(api.accountSwitch.requestAccountSwitch, body));
+cliRoute("/cli/accounts/continue-blocked", async (ctx, body) => ctx.runMutation(api.accountSwitch.continueAllBlocked, body));
+cliRoute("/cli/accounts/save", async (ctx, body) => ctx.runMutation(api.accountSwitch.saveAccountProfile, body));
+cliRoute("/cli/accounts/publish", async (ctx, body) => ctx.runMutation(api.accountSwitch.publishDeviceAccounts, body));
 
 export default http;

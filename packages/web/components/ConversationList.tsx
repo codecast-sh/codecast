@@ -1,22 +1,20 @@
 import Link from "next/link";
 import { LoadingSkeleton } from "./LoadingSkeleton";
 import { EmptyState } from "./EmptyState";
+import { Spinner } from "./ui/spinner";
 import { useState, useMemo, useRef, useCallback } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
-import { useConvexSync } from "../hooks/useConvexSync";
-import { cleanTitle, isSystemMessage, isCommandMessage } from "../lib/conversationProcessor";
+import { cleanTitle, isSystemMessage, isCommandMessage, isImportNotice } from "../lib/conversationProcessor";
+import { stripTeammateFraming } from "./sessionMessage";
 import { shouldShowSession, isSubagent, isTrivialSubagent, isWarmupSession } from "../lib/sessionFilters";
 import { useConversationsWithError } from "../hooks/useConversationsWithError";
 import { useStableOrder } from "../hooks/useStableOrder";
 import { useFlipAnimation } from "../hooks/useFlipAnimation";
 import { useRouter } from "next/navigation";
-import { useQuery, useMutation } from "convex/react";
-import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { toast } from "sonner";
 import { useInboxStore } from "../store/inboxStore";
-import { soundNewSession } from "../lib/sounds";
 
 function VisibilityDropdown({
   conversationId,
@@ -30,14 +28,13 @@ function VisibilityDropdown({
   teamVisibility?: string | null;
 }) {
   const [isOpen, setIsOpen] = useState(false);
-  const [optimisticState, setOptimisticState] = useState<{ isPrivate?: boolean; teamVisibility?: string | null } | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
-  const setPrivacy = useMutation(api.conversations.setPrivacy);
-  const setTeamVisibility = useMutation(api.conversations.setTeamVisibility);
+  // Local-first: store actions mutate conversations[id] synchronously, so the
+  // conv props re-render instantly — no manual optimistic shim needed.
+  const setPrivacy = useInboxStore((s) => s.setPrivacy);
+  const setTeamVisibility = useInboxStore((s) => s.setTeamVisibility);
 
-  const effectivePrivate = optimisticState?.isPrivate !== undefined ? optimisticState.isPrivate : isPrivate;
-  const effectiveTeamVisibility = optimisticState?.teamVisibility !== undefined ? optimisticState.teamVisibility : teamVisibility;
-  const effectiveMode = effectivePrivate ? "private" : (effectiveTeamVisibility || visibilityMode || "summary");
+  const effectiveMode = isPrivate ? "private" : (teamVisibility || visibilityMode || "summary");
 
   useWatchEffect(() => {
     if (!isOpen) return;
@@ -50,26 +47,14 @@ function VisibilityDropdown({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [isOpen]);
 
-  const handleSetPrivate = async () => {
-    setOptimisticState({ isPrivate: true });
+  const handleSetPrivate = () => {
     setIsOpen(false);
-    try {
-      await setPrivacy({ conversation_id: conversationId as Id<"conversations">, is_private: true });
-    } catch {
-      setOptimisticState(null);
-      toast.error("Failed to update visibility");
-    }
+    setPrivacy(conversationId, true);
   };
 
-  const handleSetTeamVisibility = async (mode: "summary" | "full") => {
-    setOptimisticState({ isPrivate: false, teamVisibility: mode });
+  const handleSetTeamVisibility = (mode: "summary" | "full") => {
     setIsOpen(false);
-    try {
-      await setTeamVisibility({ conversation_id: conversationId as Id<"conversations">, team_visibility: mode });
-    } catch {
-      setOptimisticState(null);
-      toast.error("Failed to update visibility");
-    }
+    setTeamVisibility(conversationId, mode);
   };
 
   const getLabel = () => {
@@ -182,21 +167,14 @@ function FavoriteButton({
   conversationId: string;
   isFavorite: boolean;
 }) {
-  const [optimisticFavorite, setOptimisticFavorite] = useState<boolean | null>(null);
-  const toggleFavorite = useMutation(api.conversations.toggleFavorite);
+  const toggleFavorite = useInboxStore((s) => s.toggleFavorite);
 
-  const effectiveFavorite = optimisticFavorite !== null ? optimisticFavorite : isFavorite;
+  const effectiveFavorite = isFavorite;
 
-  const handleClick = async (e: React.MouseEvent) => {
+  const handleClick = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    setOptimisticFavorite(!effectiveFavorite);
-    try {
-      await toggleFavorite({ conversation_id: conversationId as Id<"conversations"> });
-    } catch {
-      setOptimisticFavorite(null);
-      toast.error("Failed to update favorite");
-    }
+    toggleFavorite(conversationId);
   };
 
   return (
@@ -216,7 +194,7 @@ function FavoriteButton({
   );
 }
 
-type Conversation = {
+export type Conversation = {
   _id: string;
   user_id: string;
   title?: string;
@@ -239,6 +217,9 @@ type Conversation = {
   author_name: string;
   is_own: boolean;
   parent_conversation_id?: string | null;
+  // Visible-child pointer (agent-team teammate → its lead). The server folds it
+  // into parent_conversation_id for the link; this field only picks the label.
+  spawned_by_conversation_id?: string | null;
   parent_message_uuid?: string | null;
   is_subagent?: boolean;
   is_workflow_sub?: boolean;
@@ -379,7 +360,7 @@ function GeminiIcon({ className = "w-4 h-4" }: { className?: string }) {
   );
 }
 
-function AgentIcon({ agentType, className = "w-4 h-4" }: { agentType: string; className?: string }) {
+export function AgentIcon({ agentType, className = "w-4 h-4" }: { agentType: string; className?: string }) {
   if (agentType === "codex" || agentType === "codex_cli") {
     return (
       <span className={`${className} rounded bg-[#0f0f0f] flex items-center justify-center shrink-0`}>
@@ -410,7 +391,14 @@ function AgentIcon({ agentType, className = "w-4 h-4" }: { agentType: string; cl
 function ConvSubtitleSection({ conv, expanded }: { conv: Conversation; expanded?: boolean }) {
   const cleanTeammate = (c: string) => {
     if (!c?.includes('<teammate-message')) return c;
-    return c.replace(/<teammate-message\s+[^>]*>[\s\S]*?<\/teammate-message>/g, '').trim();
+    // Remove complete teammate blocks, then any dangling opening tag onward (a truncated
+    // preview drops the closing tag, so the raw body/JSON would otherwise leak), then the
+    // harness's framing prose — leaving only words a human actually wrote (usually none).
+    const noBlocks = c
+      .replace(/<teammate-message\s+[^>]*>[\s\S]*?<\/teammate-message>/g, '')
+      .replace(/<teammate-message[\s\S]*$/, '')
+      .trim();
+    return stripTeammateFraming(noBlocks);
   };
   const clean = (c: string) => cleanTeammate(c)?.replace(/<[^>]+>/g, "").replace(/^\s*Caveat:.*$/gm, "").trim() || "";
   const commandLabel = (c: string) => {
@@ -424,7 +412,7 @@ function ConvSubtitleSection({ conv, expanded }: { conv: Conversation; expanded?
       const isCmd = m.role === "user" && isCommandMessage(m.content);
       return { ...m, cleanContent: isCmd ? (commandLabel(m.content) || clean(m.content)) : clean(m.content), isCmd };
     })
-    .filter(m => m.cleanContent.length > 0 && !isSystemMessage(m.cleanContent));
+    .filter(m => m.cleanContent.length > 0 && !isSystemMessage(m.cleanContent) && !isImportNotice(m.cleanContent));
 
   const hasBullets = processed.length > 0;
 
@@ -499,7 +487,7 @@ function getRelativeTime(timestamp: number): string {
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
-function ConversationCard({ conv, filter, isFocused, onNavigate, hasTeam }: {
+export function ConversationCard({ conv, filter, isFocused, onNavigate, hasTeam }: {
   conv: Conversation;
   filter: "my" | "team";
   isFocused: boolean;
@@ -590,7 +578,7 @@ function ConversationCard({ conv, filter, isFocused, onNavigate, hasTeam }: {
                 <svg className="w-3 h-3 rotate-180 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
                 </svg>
-                <span className="shrink-0">sub of</span>
+                <span className="shrink-0">{conv.spawned_by_conversation_id && conv.parent_conversation_id === conv.spawned_by_conversation_id ? "spawned by" : "sub of"}</span>
                 <button
                   className="text-sol-cyan/70 hover:text-sol-cyan truncate max-w-[150px] sm:max-w-[200px] transition-colors text-left"
                   onClick={(e) => {
@@ -753,378 +741,6 @@ function createConversationAriaLabel(conv: Conversation): string {
   return `${title}, ${agentType}, ${time}${status}`;
 }
 
-export function NewSessionModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
-  const [mode, setMode] = useState<"session" | "workflow">("session");
-  const [agentType, setAgentType] = useState<"claude" | "codex" | "cursor" | "gemini">("claude");
-  const [projectPath, setProjectPath] = useState("");
-  const [firstMessage, setFirstMessage] = useState("");
-  const [isolated, setIsolated] = useState(false);
-  const [worktreeName, setWorktreeName] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [showDropdown, setShowDropdown] = useState(false);
-  const [dropdownIndex, setDropdownIndex] = useState(-1);
-  const [selectedWorkflowId, setSelectedWorkflowId] = useState("");
-  const [goalOverride, setGoalOverride] = useState("");
-  const createQuickSession = useMutation(api.conversations.createQuickSession);
-  const sendMessage = useMutation(api.pendingMessages.sendMessageToSession);
-  const createWorkflowRun = useMutation((api as any).workflow_runs.create);
-  const workflows = useQuery((api as any).workflows.webList);
-  const freshProjects = useQuery(api.users.getRecentProjectPaths, { limit: 15 });
-  const cachedProjects = useInboxStore((s) => s.recentProjects);
-  const setRecentProjects = useInboxStore((s) => s.setRecentProjects);
-  const recentProjects = freshProjects ?? (cachedProjects.length > 0 ? cachedProjects : null);
-  const [frozenProjects, setFrozenProjects] = useState<typeof recentProjects>(null);
-  const modalRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const dropdownRef = useRef<HTMLDivElement>(null);
-  const router = useRouter();
-  const context = useInboxStore((s) => s.newSession.context);
-  const initializedRef = useRef(false);
-  const handleSubmitRef = useRef<() => void>(() => {});
-
-  useConvexSync(freshProjects, setRecentProjects);
-
-  useWatchEffect(() => {
-    if (isOpen && recentProjects?.length && !frozenProjects) {
-      setFrozenProjects([...recentProjects]);
-    }
-    if (!isOpen) {
-      setFrozenProjects(null);
-      initializedRef.current = false;
-    }
-  }, [isOpen, recentProjects, frozenProjects]);
-
-  const filteredProjects = useMemo(() => {
-    if (!frozenProjects || frozenProjects.length === 0) return [];
-    if (!projectPath) return frozenProjects;
-    const lower = projectPath.toLowerCase();
-    return frozenProjects.filter((p: { path: string }) => p.path.toLowerCase().includes(lower));
-  }, [frozenProjects, projectPath]);
-
-  useWatchEffect(() => {
-    if (!isOpen || initializedRef.current) return;
-    if (context.projectPath) {
-      setProjectPath(context.projectPath);
-      initializedRef.current = true;
-    } else if (frozenProjects?.length) {
-      setProjectPath(frozenProjects[0].path);
-      initializedRef.current = true;
-    }
-    if (context.agentType) {
-      const mapped = context.agentType === "claude_code" ? "claude" : context.agentType === "codex" ? "codex" : context.agentType === "cursor" ? "cursor" : "gemini";
-      setAgentType(mapped as "claude" | "codex" | "cursor" | "gemini");
-    }
-  }, [isOpen, context, frozenProjects]);
-
-  useWatchEffect(() => {
-    if (!isOpen) return;
-    function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
-      if (e.key === "Enter" && !e.defaultPrevented) {
-        // Skip plain Enter when the user is typing in the first-message textarea —
-        // its own onKeyDown handles Cmd/Ctrl+Enter and leaves plain Enter alone
-        // so users can write multi-line prompts.
-        const target = e.target as HTMLElement | null;
-        if (target?.tagName === "TEXTAREA" && !e.metaKey && !e.ctrlKey) return;
-        handleSubmitRef.current();
-      }
-    }
-    function handleClickOutside(e: MouseEvent) {
-      if (modalRef.current && !modalRef.current.contains(e.target as Node)) onClose();
-    }
-    document.addEventListener("keydown", handleKeyDown);
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => {
-      document.removeEventListener("keydown", handleKeyDown);
-      document.removeEventListener("mousedown", handleClickOutside);
-    };
-  }, [isOpen, onClose]);
-
-  if (!isOpen) return null;
-
-  const handleSubmit = async () => {
-    if (isSubmitting) return;
-    setIsSubmitting(true);
-    soundNewSession();
-    try {
-      if (mode === "workflow") {
-        if (!selectedWorkflowId) { toast.error("Select a workflow"); return; }
-        await createWorkflowRun({
-          workflow_id: selectedWorkflowId,
-          goal_override: goalOverride || undefined,
-          project_path: projectPath || undefined,
-        });
-        toast.success("Workflow run started");
-        onClose();
-      } else {
-        const convexAgentType = agentType === "claude" ? "claude_code" as const : agentType === "codex" ? "codex" as const : agentType === "cursor" ? "cursor" as const : "gemini" as const;
-        const trimmedFirstMessage = firstMessage.trim();
-        const conversationId = await createQuickSession({
-          agent_type: convexAgentType,
-          project_path: projectPath || undefined,
-          git_root: projectPath || undefined,
-          isolated: isolated || undefined,
-          worktree_name: (isolated && worktreeName) ? worktreeName : undefined,
-        });
-        // Send the first message in the same step so the daemon's startedSessionTmux
-        // fallback delivers it via the tmux pane while discovery is still in flight.
-        // The 2-step flow (create then type) leaves orphaned 0-message sessions when
-        // the user gives up before discovery resolves.
-        if (trimmedFirstMessage) {
-          try {
-            await sendMessage({
-              conversation_id: conversationId as Id<"conversations">,
-              content: trimmedFirstMessage,
-              client_id: `first-${conversationId}-${Date.now()}`,
-            });
-          } catch (err) {
-            toast.error(err instanceof Error ? err.message : "Failed to send initial message");
-          }
-        }
-        router.push(`/conversation/${conversationId}?focus=1`);
-        onClose();
-        setProjectPath("");
-        setFirstMessage("");
-      }
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to create session");
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-  handleSubmitRef.current = handleSubmit;
-
-
-  return (
-    <div className="fixed inset-0 z-[200] flex items-start justify-center pt-[15vh] bg-black/40 backdrop-blur-sm">
-      <div ref={modalRef} className="bg-white dark:bg-sol-bg border border-sol-border rounded-xl shadow-2xl w-full max-w-md mx-4">
-        <div className="px-5 pt-5 pb-3">
-          <div className="flex items-center justify-between">
-            <h3 className="text-base font-semibold text-sol-text">New Session</h3>
-            <div className="flex gap-1 p-0.5 bg-sol-bg-alt rounded-lg border border-sol-border/30">
-              <button
-                onClick={() => setMode("session")}
-                className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${mode === "session" ? "bg-sol-bg text-sol-text shadow-sm" : "text-sol-text-dim hover:text-sol-text"}`}
-              >
-                Session
-              </button>
-              <button
-                onClick={() => setMode("workflow")}
-                className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${mode === "workflow" ? "bg-sol-bg text-sol-text shadow-sm" : "text-sol-text-dim hover:text-sol-text"}`}
-              >
-                Workflow
-              </button>
-            </div>
-          </div>
-          <p className="text-xs text-sol-text-muted mt-0.5">
-            {mode === "workflow" ? "Run a workflow on your machine" : "Start a coding session on your machine"}
-          </p>
-        </div>
-
-        <div className="px-5 pb-4 space-y-3">
-          {mode === "workflow" ? (
-            <>
-              <div>
-                <label className="block text-xs font-medium text-sol-text-muted mb-1">Workflow</label>
-                <select
-                  value={selectedWorkflowId}
-                  onChange={(e) => setSelectedWorkflowId(e.target.value)}
-                  className="w-full px-3 py-2 text-sm bg-sol-bg-alt border border-sol-border/50 rounded-lg text-sol-text focus:outline-none focus:border-sol-violet/50"
-                >
-                  <option value="">Select a workflow...</option>
-                  {(workflows || []).map((wf: any) => (
-                    <option key={wf._id} value={wf._id}>{wf.name}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-sol-text-muted mb-1">Goal override <span className="text-sol-text-dim">(optional)</span></label>
-                <input
-                  type="text"
-                  value={goalOverride}
-                  onChange={(e) => setGoalOverride(e.target.value)}
-                  placeholder="Override the workflow goal..."
-                  className="w-full px-3 py-2 text-sm bg-sol-bg-alt border border-sol-border/50 rounded-lg text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-violet/50"
-                />
-              </div>
-            </>
-          ) : (
-          <div className="flex gap-2">
-            {(["claude", "codex", "cursor", "gemini"] as const).map((type) => (
-              <button
-                key={type}
-                onClick={() => setAgentType(type)}
-                className={`flex-1 py-2 px-3 rounded-lg text-sm font-medium transition-colors border ${
-                  agentType === type
-                    ? type === "claude"
-                      ? "bg-sol-yellow/20 text-sol-yellow border-sol-yellow/50"
-                      : type === "codex"
-                        ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/50"
-                        : type === "cursor"
-                          ? "bg-purple-500/20 text-purple-400 border-purple-500/50"
-                          : "bg-blue-500/20 text-blue-400 border-blue-500/50"
-                    : "bg-sol-bg-alt/60 text-sol-text-muted border-sol-border/40 hover:border-sol-border"
-                }`}
-              >
-                <div className="flex items-center justify-center gap-1.5">
-                  <AgentIcon agentType={type === "claude" ? "claude_code" : type} className="w-4 h-4" />
-                  {type === "claude" ? "Claude" : type === "codex" ? "Codex" : type === "cursor" ? "Cursor" : "Gemini"}
-                </div>
-              </button>
-            ))}
-          </div>
-          )}
-
-          {mode === "session" && (
-            <div>
-              <label className="block text-xs font-medium text-sol-text-muted mb-1">First message <span className="text-sol-text-dim">(optional)</span></label>
-              <textarea
-                autoFocus
-                value={firstMessage}
-                onChange={(e) => setFirstMessage(e.target.value)}
-                onKeyDown={(e) => {
-                  // Cmd/Ctrl+Enter submits — preventDefault so browsers don't
-                  // insert a newline before the modal's global handler runs.
-                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) e.preventDefault();
-                }}
-                placeholder="What should this session do? (⌘+Enter to send)"
-                rows={3}
-                className="w-full px-3 py-2 text-sm bg-sol-bg-alt border border-sol-border/50 rounded-lg text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-yellow/50 resize-none font-mono"
-              />
-            </div>
-          )}
-
-          {/* Project path */}
-          <div className="relative">
-            <label className="block text-xs font-medium text-sol-text-muted mb-1">Project directory</label>
-            <input
-              ref={inputRef}
-              type="text"
-              value={projectPath}
-              onChange={(e) => {
-                setProjectPath(e.target.value);
-                setShowDropdown(true);
-                setDropdownIndex(-1);
-              }}
-              onFocus={() => setShowDropdown(true)}
-              onBlur={() => setTimeout(() => setShowDropdown(false), 150)}
-              placeholder="~/src/my-project"
-              className="w-full px-3 py-2 text-sm bg-sol-bg-alt border border-sol-border/50 rounded-lg text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-yellow/50"
-              onKeyDown={(e) => {
-                if (showDropdown && filteredProjects.length > 0) {
-                  if (e.key === "ArrowDown") {
-                    e.preventDefault();
-                    setDropdownIndex((i) => Math.min(i + 1, filteredProjects.length - 1));
-                    return;
-                  }
-                  if (e.key === "ArrowUp") {
-                    e.preventDefault();
-                    setDropdownIndex((i) => Math.max(i - 1, -1));
-                    return;
-                  }
-                  if (e.key === "Enter" && dropdownIndex >= 0) {
-                    e.preventDefault();
-                    setProjectPath(filteredProjects[dropdownIndex].path);
-                    setShowDropdown(false);
-                    return;
-                  }
-                  if (e.key === "Tab" && dropdownIndex >= 0) {
-                    e.preventDefault();
-                    setProjectPath(filteredProjects[dropdownIndex].path);
-                    setShowDropdown(false);
-                    return;
-                  }
-                }
-                if (e.key === "Escape") {
-                  setShowDropdown(false);
-                  return;
-                }
-                if (e.key === "Enter") { e.preventDefault(); handleSubmit(); }
-              }}
-            />
-            {showDropdown && filteredProjects.length > 0 && (
-              <div ref={dropdownRef} className="absolute z-10 left-0 right-0 mt-1 bg-white dark:bg-sol-bg border border-sol-border rounded-lg shadow-lg overflow-hidden max-h-[200px] overflow-y-auto">
-                {filteredProjects.map((p, i) => {
-                  const parts = p.path.split("/");
-                  const dirName = parts.pop() || "";
-                  const parentPath = parts.join("/");
-                  return (
-                    <button
-                      key={p.path}
-                      onMouseDown={(e) => {
-                        e.preventDefault();
-                        setProjectPath(p.path);
-                        setShowDropdown(false);
-                      }}
-                      onMouseEnter={() => setDropdownIndex(i)}
-                      className={`w-full px-3 py-2 text-left text-sm flex items-center justify-between gap-2 transition-colors ${
-                        i === dropdownIndex
-                          ? "bg-sol-yellow/15 text-sol-text"
-                          : "text-sol-text-muted hover:bg-sol-bg-alt"
-                      }`}
-                    >
-                      <span className="truncate">
-                        <span className="text-sol-text-dim">{parentPath}/</span>
-                        <span className="font-medium text-sol-text">{dirName}</span>
-                      </span>
-                      <span className="text-[10px] text-sol-text-dim shrink-0">{p.count} session{p.count !== 1 ? "s" : ""}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {mode === "session" && (
-          <div className="px-5 pb-3">
-            <button
-              onClick={() => setIsolated(!isolated)}
-              className={`flex items-center gap-2 text-xs transition-colors ${
-                isolated ? "text-sol-cyan" : "text-sol-text-dim hover:text-sol-text-muted"
-              }`}
-            >
-              <span className={`w-7 h-4 rounded-full transition-colors relative ${isolated ? "bg-sol-cyan/30" : "bg-sol-border/50"}`}>
-                <span className={`absolute top-0.5 w-3 h-3 rounded-full transition-all ${isolated ? "left-3.5 bg-sol-cyan" : "left-0.5 bg-sol-text-dim"}`} />
-              </span>
-              Isolated worktree
-            </button>
-            {isolated && (
-              <input
-                type="text"
-                value={worktreeName}
-                onChange={(e) => setWorktreeName(e.target.value.replace(/[^a-zA-Z0-9_-]/g, ""))}
-                placeholder="feature-name (optional)"
-                className="mt-2 w-full px-3 py-1.5 text-xs bg-sol-bg-alt border border-sol-border/50 rounded-lg text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-cyan/50 font-mono"
-              />
-            )}
-          </div>
-        )}
-
-        <div className="px-5 pb-4 flex justify-end gap-2">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 text-sm text-sol-text-muted hover:text-sol-text transition-colors"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleSubmit}
-            disabled={isSubmitting}
-            className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors disabled:opacity-50 ${
-              mode === "workflow"
-                ? "bg-sol-violet text-white hover:bg-sol-violet/90"
-                : "bg-sol-yellow text-sol-bg hover:bg-sol-yellow/90"
-            }`}
-          >
-            {isSubmitting ? (mode === "workflow" ? "Starting..." : "Creating...") : mode === "workflow" ? "Run Workflow" : "Create Session"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 type TimeFilter = "all" | "long" | "active";
 type SubagentFilter = "all" | "main" | "subagent";
 
@@ -1144,9 +760,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onNavi
   const serverTimeFilter = timeFilter === "all" ? null : timeFilter;
   const { conversations, hasMore, loadMore, isLoadingMore, isLoading, hasSubagents } = useConversationsWithError(filter, memberFilter, serverSubagentFilter, directoryFilter, serverTimeFilter);
   const [focusedIndex, setFocusedIndex] = useState(-1);
-  const showNewSession = useInboxStore((s) => s.newSession.isOpen);
-  const openNewSession = useInboxStore((s) => s.openNewSession);
-  const closeNewSession = useInboxStore((s) => s.closeNewSession);
+  const openCompose = useInboxStore((s) => s.openCompose);
   const listRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const isHoveredRef = useRef(false);
@@ -1308,7 +922,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onNavi
       <div className="flex gap-1 sm:gap-1.5 items-center pt-1 sm:pt-2 overflow-x-auto pb-1 scrollbar-auto flex-wrap sm:pb-0" style={{ scrollbarWidth: 'none' }}>
         {filter === "my" && (
           <button
-            onClick={() => openNewSession()}
+            onClick={() => openCompose()}
             className="px-1.5 sm:px-2.5 py-0.5 sm:py-1 text-[11px] sm:text-xs rounded-md transition-colors whitespace-nowrap bg-sol-yellow/20 text-sol-yellow border border-sol-yellow/40 hover:bg-sol-yellow/30"
           >
             <span className="flex items-center gap-1">
@@ -1481,10 +1095,7 @@ export function ConversationList({ filter, directoryFilter, memberFilter, onNavi
       {isLoadingMore && (
         <div className="flex justify-center pt-4 pb-8">
           <span className="flex items-center gap-2 text-sol-text-muted text-[11px]">
-            <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-            </svg>
+            <Spinner />
             Loading more...
           </span>
         </div>

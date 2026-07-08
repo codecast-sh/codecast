@@ -1,4 +1,4 @@
-import { mutation, query, internalMutation } from "./_generated/server";
+import { mutation, query, internalMutation } from "./functions";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
@@ -18,10 +18,11 @@ export function shouldPersistLog(level: string): boolean {
   return level === "warn" || level === "error";
 }
 
-// Steady-state retention: keep 3 days of warn/error. The backlog is ~9.5M rows,
-// so the prune must DRAIN, not just cap growth.
+// Steady-state retention window for warn/error logs (info/debug are dropped at
+// ingestion by shouldPersistLog, so they never accumulate). The pre-gate backlog
+// of ~9.6M rows is NOT drained here — bulk-deleting it through Convex during live
+// traffic saturates the backend; that reclaim belongs in a maintenance window.
 const RETENTION_MS = 3 * 24 * 60 * 60 * 1000;
-const PRUNE_BATCH_SIZE = 4000;
 
 export const insertBatch = mutation({
   args: {
@@ -343,10 +344,15 @@ export const checkDaemonHealth = internalMutation({
     const OFFLINE_THRESHOLD_MS = 10 * 60 * 1000; // 10 min no heartbeat = offline
     const RECENTLY_ACTIVE_MS = 24 * 60 * 60 * 1000; // Only care about daemons active in last 24h
 
-    const allUsers = await ctx.db.query("users").collect();
-    const activeUsers = allUsers.filter(
-      (u) => u.last_heartbeat && now - u.last_heartbeat < RECENTLY_ACTIVE_MS
-    );
+    // Range-scan only the handful of daemons that beat within the last 24h via
+    // the by_last_heartbeat index, instead of loading the whole (growing) users
+    // table every 5min. gte covers the RECENTLY_ACTIVE_MS window exactly.
+    const activeUsers = await ctx.db
+      .query("users")
+      .withIndex("by_last_heartbeat", (q) =>
+        q.gte("last_heartbeat", now - RECENTLY_ACTIVE_MS)
+      )
+      .collect();
 
     let alertsCreated = 0;
 
@@ -401,32 +407,36 @@ export const clearOfflineAlerts = internalMutation({
   },
 });
 
-// Deletes daemon_logs older than RETENTION_MS in a single large batch via the
-// by_timestamp index, then self-reschedules while it deleted a full batch so a
-// single cron kick drains the multi-million-row backlog. Stops once a partial
-// batch signals we've caught up to the retention window. Uses ctx.db.delete
-// only — never raw SQL, which corrupts Convex's MVCC documents/indexes tables.
+// Steady-state retention only: trims a SMALL bounded batch of the oldest rows per
+// cron tick and does NOT self-reschedule. Reuses the DEFAULT (_creationTime) order
+// (rows insert in timestamp order, so oldest-by-creation == oldest-by-timestamp) so
+// no index backfill is needed. The ingestion gate (shouldPersistLog) is what stops
+// the growth; this just keeps warn/error logs from accumulating past the window.
+//
+// NOTE: an aggressive self-rescheduling drain of the multi-million-row pre-gate
+// backlog saturated the backend (46-63s mutation latency) — deleting at that scale
+// through Convex's MVCC (each delete = tombstone + index removals) is too heavy for
+// live traffic. The one-time backlog reclaim belongs in a low-traffic maintenance
+// window, not here. ctx.db.delete only — never raw SQL.
+const PRUNE_PER_TICK = 300;
 export const pruneOldLogs = internalMutation({
   args: {},
   handler: async (ctx) => {
     const cutoff = Date.now() - RETENTION_MS;
 
-    const stale = await ctx.db
+    const candidates = await ctx.db
       .query("daemon_logs")
-      .withIndex("by_timestamp", (q) => q.lt("timestamp", cutoff))
       .order("asc")
-      .take(PRUNE_BATCH_SIZE);
+      .take(PRUNE_PER_TICK);
 
-    for (const log of stale) {
-      await ctx.db.delete(log._id);
+    let deleted = 0;
+    for (const log of candidates) {
+      if (log.timestamp < cutoff) {
+        await ctx.db.delete(log._id);
+        deleted++;
+      }
     }
 
-    // A full batch means there's almost certainly more to drain; keep going on a
-    // fresh transaction. A partial batch means we've reached the retention edge.
-    if (stale.length === PRUNE_BATCH_SIZE) {
-      await ctx.scheduler.runAfter(0, internal.daemonLogs.pruneOldLogs, {});
-    }
-
-    return { deleted: stale.length, drained: stale.length < PRUNE_BATCH_SIZE };
+    return { deleted, scanned: candidates.length };
   },
 });

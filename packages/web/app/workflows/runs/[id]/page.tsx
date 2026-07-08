@@ -6,6 +6,7 @@ import { useParams } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { AuthGuard } from "../../../../components/AuthGuard";
+import { AppLoader } from "../../../../components/AppLoader";
 import { DashboardLayout } from "../../../../components/DashboardLayout";
 import {
   Bot, Terminal, User, Zap, GitFork, Merge, GitBranch,
@@ -105,11 +106,7 @@ function RunDetailContent({ runId }: { runId: string }) {
   };
 
   if (run === undefined || workflow === undefined) {
-    return (
-      <div className="flex items-center justify-center h-full text-sol-text-dim text-sm">
-        Loading...
-      </div>
-    );
+    return <AppLoader className="min-h-[16rem] h-full" />;
   }
 
   if (run === null) {

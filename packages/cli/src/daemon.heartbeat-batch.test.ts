@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { heartbeatHealthCheckBucket } from "./daemon.ts";
+import { heartbeatHealthCheckBucket } from "./daemon.js";
 
 // The batched heartbeat flush sends the whole fleet's liveness in one
 // transaction per tick (collapsing N inbox invalidations into 1), but the

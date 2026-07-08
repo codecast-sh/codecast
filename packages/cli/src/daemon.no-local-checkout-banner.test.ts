@@ -1,32 +1,32 @@
 import { describe, expect, test } from "bun:test";
 import { noLocalCheckoutBannerActionable } from "./daemon.js";
 
-// Regression: the daemon stamped a red "No local checkout for <unknown remote>
-// (recorded path unknown doesn't exist here). Clone it first." banner on remote
-// sessions that carried NEITHER a git remote NOR a recorded cwd (e.g. a Codex run
-// resumed from another host). That banner is a dead end — there's nothing named
-// to clone and no path to point at — so the user can't act on it. The predicate
-// gates the banner: it's only actionable when we can name what's missing.
+// The predicate gates a red "No local checkout for <remote> (recorded path X
+// doesn't exist here). Clone it first." banner. It is consulted ONLY after every
+// resolution attempt has already failed: no checkout at the recorded path, no
+// git-remote match, and no convention/ancestor match via resolveLocalRepo. At
+// that point a recorded path alone is a dead end — you can't recreate another
+// machine's home dir, and "<unknown remote>" names nothing to clone — so only a
+// real git remote earns the banner.
 describe("noLocalCheckoutBannerActionable", () => {
-  test("suppressed when there is neither a remote nor a recorded path (the bug)", () => {
+  test("suppressed when there is no git remote (the dead-end cases)", () => {
     expect(noLocalCheckoutBannerActionable({ remote: null, recordedPath: undefined })).toBe(false);
     expect(noLocalCheckoutBannerActionable({ remote: undefined, recordedPath: null })).toBe(false);
     expect(noLocalCheckoutBannerActionable({ remote: "", recordedPath: "" })).toBe(false);
+    // A foreign recorded path with no remote — the flashing-banner bug. The user
+    // can't act on "clone <unknown remote>", so stay silent.
+    expect(
+      noLocalCheckoutBannerActionable({ remote: null, recordedPath: "/Users/m1/work/codecast/packages/cli" }),
+    ).toBe(false);
+    expect(
+      noLocalCheckoutBannerActionable({ remote: "", recordedPath: "/Users/ec2-user/src/union-mobile/outreach" }),
+    ).toBe(false);
   });
 
   test("actionable when we know the git remote to clone", () => {
     expect(
       noLocalCheckoutBannerActionable({ remote: "git@github.com:ashot/codecast.git", recordedPath: undefined }),
     ).toBe(true);
-  });
-
-  test("actionable when we have a concrete recorded path that just isn't here", () => {
-    expect(
-      noLocalCheckoutBannerActionable({ remote: null, recordedPath: "/Users/ec2-user/work/codecast" }),
-    ).toBe(true);
-  });
-
-  test("actionable when we have both", () => {
     expect(
       noLocalCheckoutBannerActionable({
         remote: "git@github.com:ashot/codecast.git",

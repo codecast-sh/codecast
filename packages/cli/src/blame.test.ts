@@ -1,0 +1,361 @@
+import { describe, expect, test } from "bun:test";
+import {
+  EMPTY_RESOLUTION,
+  ZERO_SHA,
+  augmentPorcelain,
+  contentLinesToMatch,
+  conversationDeepLink,
+  formatDefaultBlame,
+  formatGitDate,
+  groupBlameBySession,
+  parseBlamePorcelain,
+  rewriteFugitiveBlame,
+  sessionLabel,
+  type BlameResolution,
+} from "./blame";
+
+// Real `git blame --porcelain` / `git blame` outputs captured from a probe
+// repo (root/boundary commit, a second author, one uncommitted line). The
+// formatter must reproduce git's default rendering byte-for-byte from the
+// porcelain — that equivalence is the drop-in guarantee.
+const PORCELAIN = `c8219e945b7eba64dc69e07dd25052344d187c29 1 1 2
+author Al
+author-mail <a@b.c>
+author-time 1781076368
+author-tz -0400
+committer Al
+committer-mail <a@b.c>
+committer-time 1781076368
+committer-tz -0400
+summary one
+boundary
+filename f.txt
+\tone
+c8219e945b7eba64dc69e07dd25052344d187c29 2 2
+\ttwo
+0734898927ee6bfd79c0619b2b6cea59d2ba235f 3 3 1
+author Bartholomew Longname
+author-mail <a@b.c>
+author-time 1781076368
+author-tz -0400
+committer Bartholomew Longname
+committer-mail <a@b.c>
+committer-time 1781076368
+committer-tz -0400
+summary two
+previous c8219e945b7eba64dc69e07dd25052344d187c29 f.txt
+filename f.txt
+\tthree
+0000000000000000000000000000000000000000 4 4 1
+author Not Committed Yet
+author-mail <not.committed.yet>
+author-time 1781076612
+author-tz -0400
+committer Not Committed Yet
+committer-mail <not.committed.yet>
+committer-time 1781076612
+committer-tz -0400
+summary Version of f.txt from f.txt
+previous 0734898927ee6bfd79c0619b2b6cea59d2ba235f f.txt
+filename f.txt
+\tfour-uncommitted
+`;
+
+const GIT_DEFAULT = `^c8219e9 (Al                   2026-06-10 03:26:08 -0400 1) one
+^c8219e9 (Al                   2026-06-10 03:26:08 -0400 2) two
+07348989 (Bartholomew Longname 2026-06-10 03:26:08 -0400 3) three
+00000000 (Not Committed Yet    2026-06-10 03:30:12 -0400 4) four-uncommitted`;
+
+describe("parseBlamePorcelain", () => {
+  test("extracts lines, commit metadata, and boundary flag", () => {
+    const parsed = parseBlamePorcelain(PORCELAIN);
+    expect(parsed.lines.map((l) => l.content)).toEqual(["one", "two", "three", "four-uncommitted"]);
+    expect(parsed.lines.map((l) => l.finalLine)).toEqual([1, 2, 3, 4]);
+    const root = parsed.commits.get("c8219e945b7eba64dc69e07dd25052344d187c29")!;
+    expect(root.author).toBe("Al");
+    expect(root.boundary).toBe(true);
+    expect(root.authorTime).toBe(1781076368);
+    expect(root.authorTz).toBe("-0400");
+    expect(parsed.commits.get(ZERO_SHA)!.author).toBe("Not Committed Yet");
+  });
+});
+
+describe("formatGitDate", () => {
+  test("renders in the author's timezone like git", () => {
+    expect(formatGitDate(1781076368, "-0400")).toBe("2026-06-10 03:26:08 -0400");
+    expect(formatGitDate(1766628673, "-0800")).toBe("2025-12-24 18:11:13 -0800");
+    expect(formatGitDate(0, "+0000")).toBe("1970-01-01 00:00:00 +0000");
+    expect(formatGitDate(3600, "+0530")).toBe("1970-01-01 06:30:00 +0530");
+  });
+});
+
+describe("formatDefaultBlame", () => {
+  test("reproduces git blame's default output byte-for-byte when nothing resolves", () => {
+    const parsed = parseBlamePorcelain(PORCELAIN);
+    expect(formatDefaultBlame(parsed, EMPTY_RESOLUTION, 8)).toBe(GIT_DEFAULT);
+  });
+
+  test("swaps resolved shas' author column for the session label and re-pads", () => {
+    const parsed = parseBlamePorcelain(PORCELAIN);
+    const resolution: BlameResolution = {
+      bySha: new Map([
+        [
+          "0734898927ee6bfd79c0619b2b6cea59d2ba235f",
+          { conversation_id: "jx7bcdsm572w8abpms5vanx0ms88dvxv", title: "Organize commits" },
+        ],
+      ]),
+      byLine: new Map([
+        [
+          "four-uncommitted",
+          { conversation_id: "jx794j1m572w8abpms5vanx0ms88dvxv", title: "Model tooltip" },
+        ],
+      ]),
+    };
+    const out = formatDefaultBlame(parsed, resolution, 8);
+    const lines = out.split("\n");
+    expect(lines[2]).toBe("07348989 (jx7bcds Organize commits 2026-06-10 03:26:08 -0400 3) three");
+    expect(lines[3]).toBe("00000000 (jx794j1 Model tooltip    2026-06-10 03:30:12 -0400 4) four-uncommitted");
+    // Unresolved lines keep the git author, padded to the new widest who.
+    expect(lines[0]).toBe("^c8219e9 (Al                       2026-06-10 03:26:08 -0400 1) one");
+    // Structure stays parseable by git-blame-shaped regexes.
+    for (const line of lines) {
+      expect(line).toMatch(/^[\^0-9a-f]+ \(.+ \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4} +\d+\) /);
+    }
+  });
+});
+
+describe("rewriteFugitiveBlame", () => {
+  // Real `git blame --show-number` shape (the format fugitive renders): the
+  // original-line column sits between sha and `(`, and must survive untouched.
+  const PORCELAIN_TWO =
+    `bcc05bee702a2ae1a58c6dc535b3fd6901a45759 1 1 1\n` +
+    `author Ashot Petrosian\nauthor-time 1766628673\nauthor-tz -0800\nsummary init\nfilename p.json\n` +
+    `\t{\n` +
+    `cd2bb1509c85ca18c85f54c6358aface4f3398dd 5 2 1\n` +
+    `author Ashot Petrosian\nauthor-time 1774318626\nauthor-tz -0500\nsummary license\nfilename p.json\n` +
+    `\t  "license": "MIT",\n`;
+  const STANDARD_TWO =
+    `bcc05bee7  1 (Ashot Petrosian 2025-12-24 18:11:13 -0800  1) {\n` +
+    `cd2bb1509  5 (Ashot Petrosian 2026-03-23 21:17:06 -0500  2)   "license": "MIT",\n`;
+
+  const resolution: BlameResolution = {
+    bySha: new Map([
+      ["cd2bb1509c85ca18c85f54c6358aface4f3398dd", { conversation_id: "jx7lic9", title: "License prep" }],
+    ]),
+    byLine: new Map(),
+  };
+
+  test("swaps the author for the session label, preserving sha/lineno/code columns", () => {
+    const out = rewriteFugitiveBlame(STANDARD_TWO, parseBlamePorcelain(PORCELAIN_TWO), resolution);
+    const lines = out.split("\n");
+    // Resolved line: author → session label; everything else byte-identical.
+    expect(lines[1]).toBe("cd2bb1509  5 (jx7lic9 License prep 2026-03-23 21:17:06 -0500  2)   \"license\": \"MIT\",");
+    // Unresolved line keeps its git author, re-padded to the new column width.
+    expect(lines[0]).toBe("bcc05bee7  1 (Ashot Petrosian      2025-12-24 18:11:13 -0800  1) {");
+    // Author columns align (both whos padded to the same width).
+    expect(lines[0].indexOf("2025")).toBe(lines[1].indexOf("2026"));
+  });
+
+  test("byLine (authoring session) wins over bySha (committing session)", () => {
+    const withLine: BlameResolution = {
+      bySha: resolution.bySha,
+      byLine: new Map([['"license": "MIT",', { conversation_id: "jx7auth", title: "Wrote it" }]]),
+    };
+    const out = rewriteFugitiveBlame(STANDARD_TWO, parseBlamePorcelain(PORCELAIN_TWO), withLine);
+    expect(out.split("\n")[1]).toContain("jx7auth Wrote it");
+  });
+
+  test("with no resolutions the output is git-identical", () => {
+    expect(rewriteFugitiveBlame(STANDARD_TWO, parseBlamePorcelain(PORCELAIN_TWO), EMPTY_RESOLUTION)).toBe(
+      STANDARD_TWO,
+    );
+  });
+
+  test("a line-count mismatch returns real git's bytes untouched", () => {
+    const oneLine = parseBlamePorcelain(
+      `bcc05bee702a2ae1a58c6dc535b3fd6901a45759 1 1 1\nauthor X\nauthor-time 1\nauthor-tz +0000\nsummary s\nfilename p\n\t{\n`,
+    );
+    expect(rewriteFugitiveBlame(STANDARD_TWO, oneLine, resolution)).toBe(STANDARD_TWO);
+  });
+});
+
+describe("groupBlameBySession", () => {
+  // Three commits across two sessions; line 5 uncommitted but content-matched.
+  const PORC =
+    `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 1 1 2\nauthor A\nauthor-time 1778696400\nauthor-tz +0000\nsummary s1\nfilename f\n\tone\n` +
+    `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 2 2\n\ttwo\n` +
+    `bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb 3 3 1\nauthor B\nauthor-time 1778100000\nauthor-tz +0000\nsummary s2\nfilename f\n\tthree\n` +
+    `${ZERO_SHA} 4 4 1\nauthor Not Committed Yet\nauthor-time 1779000000\nauthor-tz +0000\nsummary x\nfilename f\n\tfour-uncommitted-line\n`;
+
+  test("groups lines per session, newest-touch first, with counts and jump line", () => {
+    const parsed = parseBlamePorcelain(PORC);
+    const resolution: BlameResolution = {
+      bySha: new Map([
+        ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", { conversation_id: "jx7newAAA000", title: "New work", author_name: "Sam Smith" }],
+        ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", { conversation_id: "jx7oldBBB000", title: "Old work", author_name: "Al" }],
+      ]),
+      byLine: new Map([
+        ["four-uncommitted-line", { conversation_id: "jx7newAAA000", title: "New work", author_name: "Sam Smith" }],
+      ]),
+    };
+    const { entries, attributed, total } = groupBlameBySession(parsed, resolution);
+    expect(total).toBe(4);
+    expect(attributed).toBe(4);
+    // jx7new owns lines 1,2,4 (3 lines), jx7old owns line 3 (1 line).
+    expect(entries.map((e) => e.shortId)).toEqual(["jx7newA", "jx7oldB"]);
+    expect(entries[0].lineCount).toBe(3);
+    expect(entries[0].firstLine).toBe(1);
+    expect(entries[0].authorName).toBe("Sam Smith");
+    // newestSha = the session's newest COMMITTED sha (line 4 is uncommitted, so
+    // it falls back to the 'aaa…' commit, not the zero sha).
+    expect(entries[0].newestSha).toBe("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    expect(entries[1].lineCount).toBe(1);
+    expect(entries[1].firstLine).toBe(3);
+    expect(entries[1].newestSha).toBe("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+  });
+
+  test("unresolved lines are excluded from attribution", () => {
+    const parsed = parseBlamePorcelain(PORC);
+    const { entries, attributed, total } = groupBlameBySession(parsed, EMPTY_RESOLUTION);
+    expect(entries).toEqual([]);
+    expect(attributed).toBe(0);
+    expect(total).toBe(4);
+  });
+});
+
+describe("conversationDeepLink", () => {
+  test("anchors on the originating message when present", () => {
+    expect(
+      conversationDeepLink({ conversation_id: "jx7azjfFULLID", title: "x", message_id: "k17abc" }),
+    ).toBe("https://codecast.sh/conversation/jx7azjfFULLID#msg-k17abc");
+  });
+  test("falls back to the bare conversation url without a message id", () => {
+    expect(conversationDeepLink({ conversation_id: "jx7azjfFULLID", title: "x" })).toBe(
+      "https://codecast.sh/conversation/jx7azjfFULLID",
+    );
+  });
+});
+
+describe("sessionLabel", () => {
+  test("short id + title, parens stripped, long titles truncated", () => {
+    expect(
+      sessionLabel({ conversation_id: "jx7bcdsm572w8abpms5vanx0ms88dvxv", title: "Fix (auth) flow" }),
+    ).toBe("jx7bcds Fix auth flow");
+    const long = sessionLabel({
+      conversation_id: "jx7bcdsm572w8abpms5vanx0ms88dvxv",
+      title: "An extremely long conversation title that keeps going",
+    });
+    expect(long.length).toBeLessThanOrEqual(48);
+    expect(long.endsWith("..")).toBe(true);
+  });
+
+  test("includes the author's first name when present", () => {
+    expect(
+      sessionLabel({
+        conversation_id: "jx74qbm93yrmevd4m1stg74cnh86mp7x",
+        title: "Agent prompt guardrails",
+        author_name: "Samvit Ramadurgam",
+      }),
+    ).toBe("jx74qbm Samvit Agent prompt guardrails");
+  });
+});
+
+describe("contentLinesToMatch", () => {
+  // The fixture's commits are authored at 1781076368s; "now" shortly after.
+  const NOW = 1781076368_000 + 60_000;
+
+  test("uncommitted lines carry no deadline; committed lines get commit-time + slack", () => {
+    const longLine = "const sessionToken = await refreshSession(user);";
+    const porcelain =
+      `0734898927ee6bfd79c0619b2b6cea59d2ba235f 1 1 1\n` +
+      `author Al\nauthor-time 1781076368\nauthor-tz -0400\nsummary x\nfilename f.ts\n` +
+      `\t${longLine}\n` +
+      PORCELAIN;
+    const lines = contentLinesToMatch(parseBlamePorcelain(porcelain), NOW);
+    const committed = lines.find((l) => l.t === longLine);
+    expect(committed?.d).toBe(1781076368_000 + 10 * 60 * 1000);
+    const uncommitted = lines.find((l) => l.t === "four-uncommitted");
+    expect(uncommitted).toBeDefined();
+    expect(uncommitted!.d).toBeUndefined();
+    // "three" is only 5 chars (below the match threshold) — excluded entirely.
+    expect(lines.find((l) => l.t === "three")).toBeUndefined();
+  });
+
+  test("lines from commits older than the window are not sent", () => {
+    const parsed = parseBlamePorcelain(PORCELAIN);
+    const muchLater = NOW + 90 * 24 * 60 * 60 * 1000;
+    const lines = contentLinesToMatch(parsed, muchLater);
+    // Committed lines age out; the uncommitted line (no author-time gate) stays.
+    expect(lines).toEqual([{ t: "four-uncommitted", d: undefined }]);
+  });
+});
+
+describe("augmentPorcelain", () => {
+  const resolution: BlameResolution = {
+    bySha: new Map([
+      [
+        "0734898927ee6bfd79c0619b2b6cea59d2ba235f",
+        {
+          conversation_id: "jx7bcdsm572w8abpms5vanx0ms88dvxv",
+          title: "Organize commits",
+          message_id: "k17abc",
+        },
+      ],
+    ]),
+    byLine: new Map([
+      ["four-uncommitted", { conversation_id: "jx794j1m572w8abpms5vanx0ms88dvxv", title: "Model tooltip" }],
+    ]),
+  };
+
+  test("injects codecast keys after the summary of resolved blocks only", () => {
+    const out = augmentPorcelain(PORCELAIN, resolution);
+    const lines = out.split("\n");
+    const summaryIdx = lines.indexOf("summary two");
+    expect(lines[summaryIdx + 1]).toBe("codecast-session jx7bcds");
+    expect(lines[summaryIdx + 2]).toBe("codecast-conversation jx7bcdsm572w8abpms5vanx0ms88dvxv");
+    expect(lines[summaryIdx + 3]).toBe("codecast-title Organize commits");
+    expect(lines[summaryIdx + 4]).toBe(
+      "codecast-url https://codecast.sh/conversation/jx7bcdsm572w8abpms5vanx0ms88dvxv",
+    );
+    expect(lines[summaryIdx + 5]).toBe("codecast-message k17abc");
+    // The boundary commit resolved to nothing — no keys injected there.
+    expect(lines[lines.indexOf("summary one") + 1]).toBe("boundary");
+  });
+
+  test("attributes the zero-sha block from its content line", () => {
+    const out = augmentPorcelain(PORCELAIN, resolution);
+    const lines = out.split("\n");
+    const idx = lines.indexOf("summary Version of f.txt from f.txt");
+    expect(lines[idx + 1]).toBe("codecast-session jx794j1");
+  });
+
+  test("leaves content lines and structure untouched", () => {
+    const out = augmentPorcelain(PORCELAIN, resolution);
+    const stripped = out
+      .split("\n")
+      .filter((l) => !l.startsWith("codecast-"))
+      .join("\n");
+    expect(stripped).toBe(PORCELAIN);
+  });
+
+  test("no-op without resolutions", () => {
+    expect(augmentPorcelain(PORCELAIN, EMPTY_RESOLUTION)).toBe(PORCELAIN);
+  });
+
+  test("injects codecast-author after the title when present (consumed by the VS Code extension)", () => {
+    const withAuthor: BlameResolution = {
+      bySha: new Map([
+        [
+          "0734898927ee6bfd79c0619b2b6cea59d2ba235f",
+          { conversation_id: "jx7bcdsm572w8abpms5vanx0ms88dvxv", title: "Organize commits", author_name: "Samvit Ramadurgam" },
+        ],
+      ]),
+      byLine: new Map(),
+    };
+    const lines = augmentPorcelain(PORCELAIN, withAuthor).split("\n");
+    const i = lines.indexOf("summary two");
+    expect(lines[i + 3]).toBe("codecast-title Organize commits");
+    expect(lines[i + 4]).toBe("codecast-author Samvit Ramadurgam");
+    expect(lines[i + 5]).toBe("codecast-url https://codecast.sh/conversation/jx7bcdsm572w8abpms5vanx0ms88dvxv");
+  });
+});

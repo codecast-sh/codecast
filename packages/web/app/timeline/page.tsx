@@ -56,15 +56,12 @@ function SyncButton() {
 }
 
 export default function TimelinePage() {
-  const [filter, setFilter] = useState<"my" | "team">("my");
+  const [filter] = useState<"my" | "team">("my");
   const [dateRange, setDateRange] = useState<{ start?: number; end?: number }>({});
 
   return (
     <AuthGuard>
-      <DashboardLayout
-        filter={filter}
-        onFilterChange={setFilter}
-      >
+      <DashboardLayout>
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <h1 className="text-2xl font-bold text-sol-text">Timeline</h1>

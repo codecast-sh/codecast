@@ -3,8 +3,37 @@
 // app restart — the RN replacement for the web Dexie engine. Metro resolves this
 // .native file (and its mobile-only expo-sqlite dep) for the native bundle; the web
 // bundler and tsconfig never touch it.
-import Storage from "expo-sqlite/kv-store";
+//
+// CRITICAL — acquire it through a guarded require(), NOT a static import. expo-sqlite
+// resolves its native module at module-eval time (`requireNativeModule('ExpoSQLite')`
+// THROWS when the installed binary doesn't contain it). An OTA update ships JS only,
+// so this code can land on an app binary built BEFORE expo-sqlite was added as a
+// native dependency. With a static import the throw propagates up the import chain
+// (inboxStore imports this eagerly at startup) and crashes the app on every launch —
+// before expo-updates can mark the update "launched", so it auto-rolls-back and the
+// update never takes. A guarded require degrades to an in-memory (non-persistent)
+// session on those older binaries instead of bricking them; native persistence
+// resumes automatically once users get a build that includes the ExpoSQLite module.
 import type { Patch } from "mutative";
+import {
+  COLLECTION_STORE_KEYS,
+  META_STORE_KEYS,
+  collectionRowValidator,
+  isPersistedClientStoreKey,
+} from "./clientSyncRegistry";
+import { diffCollection } from "./idbCollectionDiff";
+
+let Storage: any = null;
+try {
+  Storage = require("expo-sqlite/kv-store").default;
+} catch {
+  // Tests can't reach this require with bun's mock.module (it intercepts the
+  // ESM path only), so the suite injects an AsyncStorage-compatible shim via
+  // this global BEFORE importing the module — that also lets the eval-time
+  // PERSISTENCE_AVAILABLE const come out true. Absent the global (production
+  // on an older binary), degrade to in-memory exactly as before.
+  Storage = (globalThis as any).__CODECAST_TEST_KV_STORAGE__ ?? null;
+}
 
 export type OutboxEntry = {
   id: string;
@@ -15,34 +44,8 @@ export type OutboxEntry = {
   ts: number;
 };
 
-// Mirrors COLLECTION_TABLES in idbCache.ts — collections keyed by _id.
-const COLLECTION_TABLES = new Set(["sessions", "tasks", "docs", "plans", "projects"]);
-
-// Mirrors META_KEYS in idbCache.ts — single-blob meta values.
-const META_KEYS = new Set([
-  "clientState",
-  // "messages" and "pagination" are now per-conversation in the conversationMessages store
-  "conversations",
-  "drafts",
-  // The user's outbound optimistic/queued/failed messages. Must persist so a
-  // reload mid-send can never drop a user message — they only leave this map
-  // once the server confirms them (pruned by client_id in setMessages).
-  "pendingMessages",
-  "pending",
-  "recentProjects",
-  "collapsedSections",
-  "sidebarNavExpanded",
-  "teams",
-  "teamMembers",
-  "teamUnreadCount",
-  "favorites",
-  "bookmarks",
-  "tabs",
-  "activeTabId",
-  "sidePanelOpen",
-  "sidePanelSessionId",
-  "sidePanelUserClosed",
-]);
+const COLLECTION_TABLES = new Set<string>(COLLECTION_STORE_KEYS);
+const META_KEYS = new Set<string>(META_STORE_KEYS);
 
 // KV key prefixes namespace the flat store so reads can reconstruct the same
 // shape Dexie's per-table layout produces.
@@ -53,17 +56,32 @@ const OUTBOX_KEY = "dispatchOutbox";
 
 let _hydrating = false;
 
-export const PERSISTENCE_AVAILABLE = true;
+// What each collection currently holds on disk, by id → row reference. The KV
+// engine stores a collection as a single JSON blob, so it can't rewrite one row
+// — but it CAN skip the rewrite entirely when a sync changed nothing (the common
+// case: live queries re-push identical rows constantly). Seeded from loadCache.
+const lastPersisted = new Map<string, Map<string, any>>();
+
+// Test hook — see idbCache.ts.
+export function _resetPersistedShadow() {
+  lastPersisted.clear();
+}
+
+// False when the ExpoSQLite native module is absent (OTA shipped to an older
+// binary). inboxStore gates its hydrate/persist wiring on this, so the app runs
+// in-memory instead of crashing. Every Storage access below is also individually
+// null-guarded as defense in depth.
+export const PERSISTENCE_AVAILABLE = Storage != null;
 
 // A top-level store key is durable iff it maps to a dedicated collection or is
 // whitelisted as a meta blob. Keys that satisfy neither are silently dropped on
 // write — the class of bug that lost pending user messages.
 export function isPersistedStoreKey(key: string): boolean {
-  return COLLECTION_TABLES.has(key) || META_KEYS.has(key);
+  return isPersistedClientStoreKey(key);
 }
 
 export function writePatchesToIDB(patches: Patch[], state: any) {
-  if (_hydrating) return;
+  if (!Storage || _hydrating) return;
 
   const affectedKeys = new Set<string>();
   for (const patch of patches) {
@@ -75,7 +93,26 @@ export function writePatchesToIDB(patches: Patch[], state: any) {
     if (COLLECTION_TABLES.has(key)) {
       const data = state[key];
       if (data && typeof data === "object") {
-        Storage.setItem(COLLECTION_PREFIX + key, JSON.stringify(Object.values(data))).catch(() => {});
+        const prevShadow = lastPersisted.get(key);
+        const { puts, deletes: rawDeletes, next } = diffCollection(prevShadow, data);
+        // NEVER wipe the cache from a store-shrink (same guarantee as the web
+        // engine). A row leaves storage ONLY when explicitly removed — kill/archive
+        // plant a `${key}:${id}` exclude in `pending`. A diff-delete with NO exclude
+        // means the store is merely missing the row, so keep it in the persisted
+        // blob AND the shadow. Makes a whole-collection wipe structurally impossible.
+        const pending = (state.pending || {}) as Record<string, { type?: string }>;
+        const kept: any[] = [];
+        for (const id of rawDeletes) {
+          if (pending[`${key}:${id}`]?.type === "exclude") continue; // intentional → drop
+          if (prevShadow?.has(id)) { next.set(id, prevShadow.get(id)); kept.push(prevShadow.get(id)); }
+        }
+        lastPersisted.set(key, next);
+        // Whole-blob engine: rewrite only when something actually changed, and
+        // include the rows we refused to drop so they survive on disk.
+        if (puts.length || rawDeletes.length) {
+          const rows = kept.length ? [...Object.values(data), ...kept] : Object.values(data);
+          Storage.setItem(COLLECTION_PREFIX + key, JSON.stringify(rows)).catch(() => {});
+        }
       }
     } else if (META_KEYS.has(key)) {
       Storage.setItem(META_PREFIX + key, JSON.stringify(state[key])).catch(() => {});
@@ -84,6 +121,7 @@ export function writePatchesToIDB(patches: Patch[], state: any) {
 }
 
 export async function loadCache(): Promise<Record<string, any> | null> {
+  if (!Storage) return null;
   try {
     const result: Record<string, any> = {};
     let hasData = false;
@@ -100,12 +138,25 @@ export async function loadCache(): Promise<Record<string, any> | null> {
       const raw = byKey.get(COLLECTION_PREFIX + key);
       if (raw == null) continue;
       const rows = JSON.parse(raw) as any[];
+      // Seed the persistence shadow with what's on disk so the first write after
+      // hydrate diffs against reality (see idbCache.ts).
+      const shadow = new Map<string, any>();
+      const validRow = collectionRowValidator(key);
       if (rows.length > 0) {
         const map: Record<string, any> = {};
-        for (const row of rows) map[row._id] = row;
-        result[key] = map;
-        hasData = true;
+        for (const row of rows) {
+          // Foreign documents persisted under the wrong collection (see validRow
+          // in the registry) never enter the store or the shadow; the next blob
+          // rewrite drops them from disk.
+          if (validRow && !validRow(row)) continue;
+          map[row._id] = row; shadow.set(row._id, row);
+        }
+        if (Object.keys(map).length > 0) {
+          result[key] = map;
+          hasData = true;
+        }
       }
+      lastPersisted.set(key, shadow);
     }
 
     for (const key of metaKeys) {
@@ -128,6 +179,7 @@ export function setHydrating(v: boolean) {
 // -- Per-conversation message cache --
 
 export async function loadConversationMessages(convId: string): Promise<{ messages: any[]; pagination: any; latestTimestamp: number } | null> {
+  if (!Storage) return null;
   try {
     const raw = await Storage.getItem(CONVMSG_PREFIX + convId);
     if (raw == null) return null;
@@ -139,7 +191,7 @@ export async function loadConversationMessages(convId: string): Promise<{ messag
 }
 
 export function writeConversationMessages(convId: string, messages: any[], pagination: any) {
-  if (_hydrating) return;
+  if (!Storage || _hydrating) return;
   const latestTimestamp = messages.length > 0
     ? Math.max(...messages.map((m: any) => m.timestamp || 0))
     : 0;
@@ -153,6 +205,7 @@ export function writeConversationMessages(convId: string, messages: any[], pagin
 // We chain every mutation onto a single tail promise to enforce ordering.
 
 async function readOutbox(): Promise<OutboxEntry[]> {
+  if (!Storage) return [];
   const raw = await Storage.getItem(OUTBOX_KEY);
   if (raw == null) return [];
   return JSON.parse(raw) as OutboxEntry[];
@@ -161,6 +214,7 @@ async function readOutbox(): Promise<OutboxEntry[]> {
 let _outboxQueue: Promise<unknown> = Promise.resolve();
 
 function mutateOutbox(transform: (entries: OutboxEntry[]) => OutboxEntry[]) {
+  if (!Storage) return;
   _outboxQueue = _outboxQueue
     .then(() => readOutbox())
     .then((entries) => Storage.setItem(OUTBOX_KEY, JSON.stringify(transform(entries))))

@@ -5,8 +5,10 @@ import { Stack, useRouter, useSegments } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import * as SecureStore from 'expo-secure-store';
 import * as Linking from 'expo-linking';
+import { AppState } from 'react-native';
 import { useEffect, useRef } from 'react';
 import 'react-native-reanimated';
+import { GestureHandlerRootView } from '@/lib/gestureHandler';
 import { ConvexProvider } from 'convex/react';
 import { ConvexAuthProvider } from '@convex-dev/auth/react';
 import { useQuery } from 'convex/react';
@@ -15,10 +17,9 @@ import { useColorScheme } from '@/components/useColorScheme';
 import { convex } from '@/lib/convex';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
-import { initAnalytics, identifyUser, resetUser, Sentry } from '@/lib/analytics';
+import { initAnalytics, identifyUser, resetUser, wrapRoot } from '@/lib/analytics';
 import { api } from '@codecast/convex/convex/_generated/api';
 
-initAnalytics();
 const secureStorage = {
   getItem: async (key: string) => {
     return await SecureStore.getItemAsync(key);
@@ -43,9 +44,24 @@ SplashScreen.preventAutoHideAsync();
 
 function RootLayout() {
   const [loaded, error] = useFonts({
-    SpaceMono: require('../assets/fonts/SpaceMono-Regular.ttf'),
+    // JetBrains Mono is the mono face on web; use it on mobile too for parity.
+    // The legacy "SpaceMono" key now points at JetBrains Mono so the existing
+    // fontFamily:'SpaceMono' call sites render it without a repo-wide rename.
+    SpaceMono: require('../assets/fonts/JetBrainsMono-Regular.ttf'),
+    JetBrainsMono: require('../assets/fonts/JetBrainsMono-Regular.ttf'),
+    'JetBrainsMono-Bold': require('../assets/fonts/JetBrainsMono-Bold.ttf'),
     ...FontAwesome.font,
   });
+
+  // Initialize analytics AFTER the first mount, never at module-eval. On the
+  // Feb App Store binary the Sentry/PostHog native modules are absent; running
+  // this before render risks throwing during initial JS evaluation — before
+  // expo-updates can mark the OTA "launched" — which silently auto-rolls-back
+  // the update (the "stuck on the old version" symptom). Post-mount the app has
+  // already rendered, so even a failure here cannot trigger a rollback.
+  useEffect(() => {
+    initAnalytics();
+  }, []);
 
   useEffect(() => {
     if (error) throw error;
@@ -58,24 +74,43 @@ function RootLayout() {
   }, [loaded]);
 
   useEffect(() => {
+    if (!loaded) return;
+
+    // Fetch OTA updates in the background, but DON'T reloadAsync() mid-session —
+    // that yanks the user out of whatever they're typing/scrolling, and an eager
+    // unconditional reload maximizes blast radius if an update is bad (see the
+    // OTA dep-skew brick-on-launch history). Instead apply the fetched update the
+    // next time the app goes to the background, the standard expo-updates pattern.
+    let updatePending = false;
+    let cancelled = false;
+
     async function checkForUpdates() {
       if (__DEV__) return;
-
       try {
         const Updates = await import('expo-updates');
         const update = await Updates.checkForUpdateAsync();
-        if (update.isAvailable) {
-          await Updates.fetchUpdateAsync();
-          await Updates.reloadAsync();
-        }
+        if (cancelled || !update.isAvailable) return;
+        await Updates.fetchUpdateAsync();
+        if (!cancelled) updatePending = true;
       } catch (e) {
         console.log('OTA update check failed:', e);
       }
     }
 
-    if (loaded) {
-      checkForUpdates();
-    }
+    const sub = AppState.addEventListener('change', (state) => {
+      if (updatePending && (state === 'background' || state === 'inactive')) {
+        updatePending = false;
+        import('expo-updates')
+          .then((Updates) => Updates.reloadAsync())
+          .catch(() => {});
+      }
+    });
+
+    checkForUpdates();
+    return () => {
+      cancelled = true;
+      sub.remove();
+    };
   }, [loaded]);
 
   if (!loaded) {
@@ -85,32 +120,35 @@ function RootLayout() {
   return <RootLayoutNav />;
 }
 
-export default Sentry.wrap(RootLayout);
+export default wrapRoot(RootLayout);
 
 function RootLayoutNav() {
   const colorScheme = useColorScheme();
 
   return (
-    <ConvexProvider client={convex}>
-      <ConvexAuthProvider client={convex} storage={secureStorage}>
-        <AuthProvider>
-          <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-            <AnalyticsIdentify />
-            <AuthGate>
-              <Stack>
-                <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-                <Stack.Screen name="auth/login" options={{ title: 'Login', headerShown: false }} />
-                <Stack.Screen name="auth/signup" options={{ title: 'Sign Up', headerShown: false }} />
-                <Stack.Screen name="session/[id]" options={{ title: 'Conversation' }} />
-                <Stack.Screen name="task/[id]" options={{ title: 'Task' }} />
-                <Stack.Screen name="plan/[id]" options={{ title: 'Plan' }} />
-                <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
-              </Stack>
-            </AuthGate>
-          </ThemeProvider>
-        </AuthProvider>
-      </ConvexAuthProvider>
-    </ConvexProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <ConvexProvider client={convex}>
+        <ConvexAuthProvider client={convex} storage={secureStorage}>
+          <AuthProvider>
+            <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+              <AnalyticsIdentify />
+              <AuthGate>
+                <Stack>
+                  <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+                  <Stack.Screen name="auth/login" options={{ title: 'Login', headerShown: false }} />
+                  <Stack.Screen name="auth/signup" options={{ title: 'Sign Up', headerShown: false }} />
+                  <Stack.Screen name="session/[id]" options={{ title: 'Conversation' }} />
+                  <Stack.Screen name="task/[id]" options={{ title: 'Task' }} />
+                  <Stack.Screen name="plan/[id]" options={{ title: 'Plan' }} />
+                  <Stack.Screen name="doc/[id]" options={{ title: 'Doc' }} />
+                  <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
+                </Stack>
+              </AuthGate>
+            </ThemeProvider>
+          </AuthProvider>
+        </ConvexAuthProvider>
+      </ConvexProvider>
+    </GestureHandlerRootView>
   );
 }
 

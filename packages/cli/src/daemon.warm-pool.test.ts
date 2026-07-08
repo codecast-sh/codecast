@@ -2,7 +2,7 @@
 // agent-dead sessions to re-warm. Imports daemon.ts directly (not the stale daemon.js
 // bundle).
 import { test, expect } from "bun:test";
-import { selectSessionsToWarm, type WarmCandidate } from "./daemon.ts";
+import { selectSessionsToWarm, type WarmCandidate } from "./daemon.js";
 
 const NOW = 10_000_000;
 const WINDOW = 15 * 60 * 1000;

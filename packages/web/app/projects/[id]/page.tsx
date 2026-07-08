@@ -208,7 +208,7 @@ function ProjectDetailContent() {
 
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
-  const updateProject = useMutation(api.projects.webUpdate);
+  const updateProject = useInboxStore((s) => s.updateProject);
 
   // Plans in this project
   const projectPlans = useMemo(() =>
@@ -274,16 +274,16 @@ function ProjectDetailContent() {
     }
   }, [project]);
 
-  const handleSaveTitle = useCallback(async () => {
+  const handleSaveTitle = useCallback(() => {
     const trimmed = titleDraft.trim();
     if (trimmed && trimmed !== project?.title) {
-      await updateProject({ id: projectId as any, title: trimmed });
+      updateProject(projectId, { title: trimmed });
     }
     setEditingTitle(false);
   }, [titleDraft, project?.title, projectId, updateProject]);
 
-  const handleStatusChange = useCallback(async (status: string) => {
-    await updateProject({ id: projectId as any, status });
+  const handleStatusChange = useCallback((status: string) => {
+    updateProject(projectId, { status });
     toast.success(`Project marked as ${status}`);
   }, [projectId, updateProject]);
 

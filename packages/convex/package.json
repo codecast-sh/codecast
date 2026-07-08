@@ -5,13 +5,18 @@
   "license": "MIT",
   "scripts": {
     "dev": "convex dev",
-    "deploy": "convex deploy"
+    "deploy": "convex deploy",
+    "typecheck": "tsc --noEmit -p convex/tsconfig.json",
+    "test": "bun test convex/"
   },
   "dependencies": {
     "@auth/core": "^0.37.2",
+    "@codecast/shared": "workspace:*",
     "@convex-dev/auth": "^0.0.79",
     "@convex-dev/prosemirror-sync": "^0.2.3",
     "convex": "^1.31.6",
+    "fflate": "^0.4.8",
+    "jose": "5.10.0",
     "oslo": "^1.2.1",
     "resend": "^6.6.0"
   },

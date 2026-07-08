@@ -49,6 +49,20 @@ describe("filterUserMessages", () => {
     expect(out).toEqual([]);
   });
 
+  test("drops the [Codecast import] truncation notice", () => {
+    const out = filterUserMessages([
+      msg({
+        _id: "u1",
+        role: "user",
+        content:
+          "[Codecast import] This Claude session was truncated to avoid overly-long context (which can break Claude Code /compact).\nOriginal: 434 messages. Included: last 393 messages + first user message.",
+        timestamp: 1,
+      }),
+      msg({ _id: "u2", role: "user", content: "real question", timestamp: 2 }),
+    ]);
+    expect(out.map((m) => m._id)).toEqual(["u2"]);
+  });
+
   test("strips context tags from user content before noise checks", () => {
     const out = filterUserMessages([
       msg({
@@ -110,6 +124,23 @@ describe("filterUserMessages", () => {
         _id: "u1",
         role: "user",
         content: "<system-reminder>only-noise</system-reminder>",
+        timestamp: 1,
+      }),
+    ]);
+    expect(out).toEqual([]);
+  });
+
+  // Regression: a background-task completion is injected as a user-role row whose
+  // whole body is a <task-notification> block. It must not read as a human prompt
+  // — otherwise the branch-selector "main" chip rendered its stripped inner ids
+  // ("w68f2jcpo toolu_01…") as the label instead of the real divergent prompt.
+  test("drops user turns that are only a <task-notification> block", () => {
+    const out = filterUserMessages([
+      msg({
+        _id: "u1",
+        role: "user",
+        content:
+          "<task-notification>\n<task-id>w68f2jcpo</task-id>\n<tool-use-id>toolu_01UzBQAkQVbQhm22pqTWtRdD</tool-use-id>\n<output-file>/tmp/out</output-file>\n</task-notification>",
         timestamp: 1,
       }),
     ]);

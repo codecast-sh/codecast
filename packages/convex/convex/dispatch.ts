@@ -1,14 +1,21 @@
-import { mutation } from "./_generated/server";
+import { mutation } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { enqueueStartSession } from "./devices";
 import { Id } from "./_generated/dataModel";
 import { checkRateLimit } from "./rateLimit";
-import { resolveTeamForPath } from "./privacy";
+import { resolveTeamForPath, buildShareUpdate } from "./privacy";
 import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
 import { nextShortId } from "./counters";
-import { resolveAssigneeStr, resolveAssigneeToUserId, recalcPlanProgress, notifySubscribers, subscribeUser } from "./tasks";
-import { internal } from "./_generated/api";
+import { resolveAssigneeStr, resolveAssigneeToUserId, recalcPlanProgress, notifySubscribers, subscribeUser, resolveWorkerParentConversation, resolveTaskGitContext } from "./tasks";
+import { api, internal } from "./_generated/api";
+import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey } from "@codecast/shared/contracts";
+import { conversationHasNoWork, reapEmptyConversation, enqueueKillSessionCommand } from "./cleanup";
+import { cancelTasksBoundToConversation } from "./agentTasks";
+import { canAccessDoc } from "./docs";
+import { enqueuePendingMessage } from "./pendingMessages";
+import { findConversationBySessionReference } from "./conversationSessionLookup";
+import { createBucketForUser, assignConversationToBucketForUser } from "./buckets";
 
 type TableConfig =
   | {
@@ -32,6 +39,11 @@ const TABLE_CONFIG: Record<string, TableConfig> = {
       "_id", "_creationTime", "user_id", "session_id", "team_id",
       "started_at", "message_count", "short_id", "share_token",
       "is_private", "team_visibility", "auto_shared", "status", "agent_type",
+      // Anchor invariants are server-owned (set by provisionAnchor / cleared by
+      // decommissionAnchor) — a client must not flip these via a generic patch.
+      "persistent", "acting_user_id", "anchor_id",
+      // Second-party ownership has a single validated writer (setSessionOwner).
+      "owner_user_id",
     ]),
     // No beforePatch hook: dismiss is an absolute flag, so the server has no
     // reason to rewrite the client's `inbox_dismissed_at`. A previous hook
@@ -45,6 +57,25 @@ const TABLE_CONFIG: Record<string, TableConfig> = {
     ownerField: "user_id",
     lookupIndex: "by_user_id",
     immutable: new Set(["_id", "_creationTime", "user_id"]),
+  },
+  // Bucket field edits (rename / color / sort_order / archived_at) ride the
+  // generic patch path. Creation and assignment need inserts/upserts, so they
+  // live in SIDE_EFFECTS (createBucket / assignSessionToBucket).
+  inbox_buckets: {
+    kind: "collection",
+    ownerField: "user_id",
+    immutable: new Set(["_id", "_creationTime", "user_id", "created_at"]),
+  },
+  // Comment content edits ride the generic patch path; everything structural is
+  // immutable. Creation, deletion and the agent-reply ask need inserts/forks, so
+  // they live in SIDE_EFFECTS (addComment / deleteComment / askAgentInThread).
+  comments: {
+    kind: "collection",
+    ownerField: "user_id",
+    immutable: new Set([
+      "_id", "_creationTime", "user_id", "conversation_id", "message_id", "created_at",
+      "parent_comment_id", "author_kind", "agent_status", "fork_conversation_id", "client_id",
+    ]),
   },
 };
 
@@ -86,6 +117,32 @@ function deepMergeField(existing: any, incoming: any): any {
   return incoming;
 }
 
+// Pure decision for the conversation hide-transition hook (exported for tests).
+//
+//  "reap" — a never-prompted EMPTY pre-warm got hidden (dismissed OR stashed).
+//           Quick-create eagerly boots a real agent per summon; a 0-message
+//           pre-warm has nothing to preserve — leaving it running leaks a
+//           zombie tmux that keeps the conversation is_connected and
+//           re-surfaces it as a phantom "New session" card.
+//           reapEmptyConversation kills the agent and then deletes the row.
+//  "kill" — dismiss = kill. Stash is the keep-alive set-aside; dismiss retires
+//           the session: tear the agent down and mark it completed (mirrors the
+//           explicit killSession mutation). Gated on the TRANSITION (`doc` is
+//           the pre-patch row) so a re-asserted dismiss can't re-kill, and an
+//           undo (dismissed → null) never reaches here. Stays resumable.
+//  "none" — a stash of a session with real work (the whole point of stash), or
+//           a re-asserted dismiss.
+export function classifyHideTransition(
+  patch: { inbox_dismissed_at?: any; inbox_stashed_at?: any },
+  doc: { inbox_dismissed_at?: number | null },
+  hasNoWork: boolean,
+): "reap" | "kill" | "none" {
+  if (!patch.inbox_dismissed_at && !patch.inbox_stashed_at) return "none";
+  if (hasNoWork) return "reap";
+  if (patch.inbox_dismissed_at && !doc.inbox_dismissed_at) return "kill";
+  return "none";
+}
+
 async function applyPatches(
   ctx: HandlerCtx,
   userId: Id<"users">,
@@ -104,9 +161,44 @@ async function applyPatches(
 
       if (config.kind === "collection") {
         const doc = await ctx.db.get(docKey as Id<any>);
-        if (!doc || (doc as any)[config.ownerField] !== userId) continue;
+        // Conversations: the second-party owner triages (dismiss/pin/stash)
+        // an assigned session from their inbox exactly like the runner would.
+        // owner_user_id itself is immutable here — assignment goes through the
+        // validated setSessionOwner mutation only.
+        const permitted = doc && (
+          (doc as any)[config.ownerField] === userId ||
+          (table === "conversations" && (doc as any).owner_user_id?.toString() === userId.toString())
+        );
+        if (!permitted) continue;
         const finalSafe = config.beforePatch ? config.beforePatch(doc, { ...safe }) : safe;
         await ctx.db.patch(docKey as Id<any>, finalSafe);
+        // Lifecycle hooks on the DATA transition (a conversation patch setting
+        // inbox_dismissed_at / inbox_stashed_at), not any one action, so every
+        // dismiss/stash path funnels through here — the inbox shortcuts, the
+        // palette, the /sessions toggle (patchConversation), and any future one.
+        if (table === "conversations" && ((finalSafe as any).inbox_dismissed_at || (finalSafe as any).inbox_stashed_at)) {
+          const action = classifyHideTransition(finalSafe, doc as any, await conversationHasNoWork(ctx, doc));
+          if (action === "reap") {
+            await reapEmptyConversation(ctx, doc as any);
+          } else if (action === "kill") {
+            await enqueueKillSessionCommand(ctx, doc as any);
+            // A persistent anchor never auto-completes on a dismiss/kill — it goes
+            // dormant, not retired (only decommissionAnchor clears `persistent`).
+            const killPatch: Record<string, any> = { inbox_killed_at: Date.now() };
+            if (!(doc as any)?.persistent) killPatch.status = "completed";
+            await ctx.db.patch(docKey as Id<any>, killPatch);
+            // Dismiss retires the session — a standing schedule that injects
+            // into it must die with it, or its next fire would silently
+            // resurrect a session the user just retired. User gestures only:
+            // bulk cleanup sweeps patch inbox_dismissed_at directly (not via
+            // dispatch) and deliberately leave standing schedules armed. An
+            // anchor going dormant keeps its schedules too. Task owner = the
+            // conversation's runner (a second-party owner may be triaging).
+            if (!(doc as any)?.persistent) {
+              await cancelTasksBoundToConversation(ctx, (doc as any).user_id, docKey as Id<"conversations">);
+            }
+          }
+        }
       } else {
         const existing = await ctx.db
           .query(table as any)
@@ -158,10 +250,24 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     });
   },
 
-  createSession: async (ctx, userId, [opts]: [{ agent_type?: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string } }]) => {
+  createSession: async (ctx, userId, [opts]: [{ agent_type?: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string }]) => {
+    const sessionId = opts.session_id || crypto.randomUUID();
+    // Idempotent on (user, session_id). The optimistic web client keys a New
+    // Session by a client-minted stub id and passes it as session_id, then
+    // waits for this conversation to sync back and supersede the stub. That
+    // create can legitimately arrive more than once for the same session_id:
+    // the dispatch outbox re-fires across reloads (MAX_OUTBOX_BOOT_ATTEMPTS),
+    // and the client's stuck-stub heal re-issues it when the first attempt was
+    // given up. Returning the existing row instead of inserting a duplicate
+    // avoids stranding twin conversations (the fork-resume doppelganger class)
+    // and is what makes client-side re-create safe. Skips the rate limit too —
+    // reviving an already-created session shouldn't count against the quota.
+    if (opts.session_id) {
+      const existing = await findConversationBySessionReference(ctx, sessionId, userId);
+      if (existing) return existing._id;
+    }
     await checkRateLimit(ctx as any, userId, "createConversation");
     const now = Date.now();
-    const sessionId = opts.session_id || crypto.randomUUID();
     const agentType = (opts.agent_type || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
 
     const mappings = await ctx.db
@@ -172,6 +278,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     // Resolve project_path from linked task (or its team mapping) before falling back to client-supplied path.
     let resolvedProjectPath = opts.project_path;
     let resolvedGitRoot = opts.git_root;
+    let resolvedGitRemoteUrl: string | undefined = undefined;
     let linkedTask: any = null;
     if (opts.linked_object?.type === "task" && opts.linked_object.id) {
       try {
@@ -185,14 +292,16 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
               .first()));
         if (!hasAccess) {
           linkedTask = null;
-        } else if (!resolvedProjectPath) {
-          if (linkedTask.project_path) {
-            resolvedProjectPath = linkedTask.project_path;
-          } else if (linkedTask.team_id) {
-            const teamMapping = mappings.find((m: any) => m.team_id.toString() === linkedTask.team_id.toString());
-            if (teamMapping) resolvedProjectPath = teamMapping.path_prefix;
-          }
-          if (!resolvedGitRoot) resolvedGitRoot = resolvedProjectPath;
+        } else {
+          // Resolve project_path/git_root/git_remote_url from the task. Shared
+          // with tasks.assignToAgent so both task-launch paths route identically.
+          const resolved = await resolveTaskGitContext(ctx, userId, linkedTask, mappings, {
+            project_path: resolvedProjectPath,
+            git_root: resolvedGitRoot,
+          });
+          resolvedProjectPath = resolved.project_path;
+          resolvedGitRoot = resolved.git_root;
+          resolvedGitRemoteUrl = resolved.git_remote_url;
         }
       }
     }
@@ -204,6 +313,17 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       linkedTask?.team_id
     );
 
+    // Nest orchestration workers under their plan's creator session so they
+    // don't clutter the top-level inbox. The plan is found via a linked task
+    // or a directly-linked plan; resolveWorkerParentConversation only returns
+    // a parent that the inbox will actually render the child under.
+    const workerPlanId: Id<"plans"> | undefined =
+      (linkedTask?.plan_id as Id<"plans"> | undefined) ??
+      (opts.linked_object?.type === "plan" && opts.linked_object.id
+        ? (opts.linked_object.id as Id<"plans">)
+        : undefined);
+    const parentConversationId = await resolveWorkerParentConversation(ctx, userId, workerPlanId);
+
     const conversationId = await ctx.db.insert("conversations", {
       user_id: userId,
       team_id: resolvedTeamId,
@@ -211,6 +331,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       session_id: sessionId,
       project_path: resolvedProjectPath,
       git_root: resolvedGitRoot,
+      ...(resolvedGitRemoteUrl ? { git_remote_url: resolvedGitRemoteUrl } : {}),
       started_at: now,
       updated_at: now,
       message_count: 0,
@@ -218,6 +339,12 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       auto_shared: autoShared || undefined,
       status: "active" as const,
       ...(linkedTask ? { active_task_id: linkedTask._id } : {}),
+      // Stamp the plan so the inbox can group plan workers even without a viable
+      // parent session to nest under (the grouping fallback).
+      ...(workerPlanId ? { active_plan_id: workerPlanId } : {}),
+      ...(parentConversationId
+        ? { parent_conversation_id: parentConversationId, is_subagent: true }
+        : {}),
     });
 
     await ctx.db.patch(conversationId, { short_id: conversationId.toString().slice(0, 7) });
@@ -232,12 +359,32 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     }
 
     const daemonType = agentType === "codex" ? "codex" : agentType === "gemini" ? "gemini" : "claude";
+    // Per-session model/effort (validated against the shared contract; "default"
+    // = omit). Stamped on the conversation so the badge is right from t=0 — the
+    // rollup confirms/corrects from the first turn's switch echo or model field.
+    const modelOpt = opts.model ? findModelOption(agentType, opts.model) : undefined;
+    const effortOk = opts.effort && AGENT_MODEL_CONFIG[modelAgentKey(agentType)]?.efforts.includes(opts.effort);
+    const requestedModel = modelOpt?.cliAlias ? modelOpt.key : undefined;
+    if (requestedModel || effortOk) {
+      await ctx.db.patch(conversationId, {
+        ...(requestedModel ? { model: daemonType === "claude" ? `claude-${requestedModel}` : requestedModel } : {}),
+        ...(effortOk ? { effort: opts.effort } : {}),
+      });
+    }
     await enqueueStartSession(ctx, userId, {
       conversationId,
       agentType: daemonType,
       projectPath: resolvedProjectPath || resolvedGitRoot,
       gitRoot: resolvedGitRoot,
       createdAt: now,
+      // Isolated-worktree sessions: forward the launch flag so the daemon's
+      // start_session creates the git worktree up front. This is the SAME path
+      // reconfigureSession/createQuickSession use; without it the "isolated
+      // worktree" toggle silently did nothing until a later project switch.
+      ...(opts.isolated ? { isolated: true } : {}),
+      ...(opts.worktree_name ? { worktreeName: opts.worktree_name } : {}),
+      ...(requestedModel ? { model: requestedModel } : {}),
+      ...(effortOk ? { effort: opts.effort } : {}),
     });
 
     return conversationId;
@@ -245,47 +392,40 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
 
   sendMessage: async (ctx, userId, [convId, content, imageIds, clientId]: [string, string, string[] | undefined, string | undefined]) => {
     const conversation = await ctx.db.get(convId as Id<"conversations">);
-    if (!conversation || conversation.user_id.toString() !== userId.toString()) throw new Error("Unauthorized");
+    // Distinct error for a deleted row: the client may be sending into a cached
+    // ghost (never-prune cache) and needs to surface "restore session", not a
+    // baffling auth failure.
+    if (!conversation) throw new Error("conversation_deleted");
+    // The runner, or the session's second-party owner (a Mr-Bot-run session
+    // assigned to this user steers exactly like their own — that's the point
+    // of ownership). Delivery routing is unaffected: enqueuePendingMessage
+    // stamps the RUNNER's id for the daemon poll either way.
+    if (
+      conversation.user_id.toString() !== userId.toString() &&
+      conversation.owner_user_id?.toString() !== userId.toString()
+    ) throw new Error("Unauthorized");
 
-    if (clientId) {
-      const existing = await ctx.db
-        .query("pending_messages")
-        .withIndex("by_conversation_status", (q: any) =>
-          q.eq("conversation_id", convId as Id<"conversations">)
-        )
-        .filter((q: any) => q.eq(q.field("client_id"), clientId))
-        .first();
-      if (existing) return existing._id;
-    }
-
-    const messageId = await ctx.db.insert("pending_messages", {
-      conversation_id: convId as Id<"conversations">,
-      from_user_id: userId,
+    // Single canonical writer: dedups on client_id, stamps owner_user_id for the daemon's
+    // delivery poll, and wakes the conversation (un-dismiss, completed→active).
+    return await enqueuePendingMessage(ctx, conversation, userId, {
       content,
-      image_storage_ids: imageIds?.length ? imageIds as any : undefined,
+      image_storage_ids: imageIds?.length ? (imageIds as any) : undefined,
       client_id: clientId,
-      status: "pending" as const,
-      created_at: Date.now(),
-      retry_count: 0,
     });
-    const now = Date.now();
-    await ctx.db.patch(convId as Id<"conversations">, {
-      updated_at: now,
-      has_pending_messages: true,
-      ...(conversation.status === "completed" ? { status: "active" as const } : {}),
-      ...(conversation.inbox_dismissed_at ? { inbox_dismissed_at: undefined } : {}),
-      ...(conversation.inbox_killed_at ? { inbox_killed_at: undefined } : {}),
-    });
-    return messageId;
   },
 
   resumeSession: async (ctx, userId, [convId]: [string]) => {
     const conv = await ctx.db.get(convId as Id<"conversations">);
-    if (!conv || conv.user_id.toString() !== userId.toString()) throw new Error("Unauthorized");
+    const isSecondPartyOwner = conv?.owner_user_id?.toString() === userId.toString();
+    if (!conv || (conv.user_id.toString() !== userId.toString() && !isSecondPartyOwner)) throw new Error("Unauthorized");
     const agentType = conv.agent_type === "codex" ? "codex" : conv.agent_type === "gemini" ? "gemini" : "claude";
+    // Daemon commands are polled by the RUNNER's daemon — for a second-party
+    // owner resuming a session run by another account, address the command to
+    // the runner, not the caller.
+    const daemonUserId = conv.user_id;
     const pendingCommands = await ctx.db
       .query("daemon_commands")
-      .withIndex("by_user_pending", (q: any) => q.eq("user_id", userId).eq("executed_at", undefined))
+      .withIndex("by_user_pending", (q: any) => q.eq("user_id", daemonUserId).eq("executed_at", undefined))
       .collect();
     if (hasRecentPendingDaemonCommand(pendingCommands as any, {
       conversationId: convId,
@@ -294,7 +434,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       return { deduplicated: true };
     }
     const commandId = await ctx.db.insert("daemon_commands", {
-      user_id: userId,
+      user_id: daemonUserId,
       command: "resume_session" as const,
       args: JSON.stringify({
         session_id: conv.session_id,
@@ -413,6 +553,33 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       command: "escape" as const,
       args: JSON.stringify({ conversation_id: convId }),
       created_at: Date.now(),
+    });
+  },
+
+  // Mirror of conversations.setPrivacy — these two fields are immutable in
+  // applyPatches because flipping them re-resolves team sharing, so the write
+  // happens here while the client optimistically updates local state.
+  setPrivacy: async (ctx, userId, [convId, isPrivate]: [string, boolean]) => {
+    const conv = await ctx.db.get(convId as Id<"conversations">);
+    if (!conv) throw new Error("Conversation not found");
+    if (conv.user_id.toString() !== userId.toString()) throw new Error("Unauthorized");
+    // Sharing must guarantee a team_id (buildShareUpdate); locking forces the
+    // private visibility marker. Never let is_private:false and team_id diverge.
+    const updates = isPrivate
+      ? { is_private: true as const, team_visibility: "private" as const }
+      : await buildShareUpdate(ctx, conv, userId);
+    await ctx.db.patch(convId as Id<"conversations">, updates);
+  },
+
+  setTeamVisibility: async (ctx, userId, [convId, visibility]: [string, "summary" | "full" | null]) => {
+    const conv = await ctx.db.get(convId as Id<"conversations">);
+    if (!conv || conv.user_id.toString() !== userId.toString()) throw new Error("Unauthorized");
+    // Setting any team visibility shares the conversation, so guarantee a
+    // team_id alongside it (else it's shared-with-nobody).
+    const updates = await buildShareUpdate(ctx, conv, userId);
+    await ctx.db.patch(convId as Id<"conversations">, {
+      ...updates,
+      team_visibility: visibility ?? undefined,
     });
   },
 
@@ -545,8 +712,8 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
 
     let projectId;
     if (opts.project_id) {
-      const p = await ctx.db.query("projects").filter((q: any) => q.eq(q.field("_id"), opts.project_id)).first();
-      if (p) projectId = p._id;
+      const pid = ctx.db.normalizeId("projects", opts.project_id);
+      if (pid && (await ctx.db.get(pid))) projectId = pid;
     }
 
     const resolvedAssignee = await resolveAssigneeStr(ctx, opts.assignee, userId);
@@ -601,19 +768,15 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     return { id, short_id: shortId };
   },
 
-  addTaskComment: async (ctx, userId, [shortId, text, commentType]: [string, string, string?]) => {
-    const task = await ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", shortId)).first();
-    if (!task) throw new Error("Task not found");
-    const user = await ctx.db.get(userId);
-    const teamId = user?.active_team_id || user?.team_id;
-    if (task.user_id !== userId && task.team_id !== teamId) throw new Error("Not authorized");
-
-    await ctx.db.insert("task_comments", {
-      task_id: task._id,
-      author: user?.name || "unknown",
+  // Delegate to tasks.webAddComment so the local-first path keeps image
+  // attachments, the canAccessTask check, and subscriber notifications — none of
+  // which the old inline insert had. Same ctx.runMutation reuse as updatePlan.
+  addTaskComment: async (ctx, userId, [shortId, text, commentType, imageIds]: [string, string, string?, string[]?]) => {
+    await (ctx as any).runMutation(api.tasks.webAddComment, {
+      short_id: shortId,
       text,
-      comment_type: (commentType || "note") as any,
-      created_at: Date.now(),
+      comment_type: commentType || undefined,
+      image_storage_ids: imageIds && imageIds.length ? imageIds : undefined,
     });
   },
 
@@ -638,6 +801,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   updateDoc: async (ctx, userId, [docId, fields]: [string, { content?: string; title?: string; doc_type?: string; labels?: string[] }]) => {
     const doc = await ctx.db.get(docId as Id<"docs">);
     if (!doc) throw new Error("Doc not found");
+    if (!(await canAccessDoc(ctx, userId, doc))) throw new Error("Unauthorized");
     const updates: any = { updated_at: Date.now() };
     if (fields.content !== undefined) updates.content = fields.content;
     if (fields.title !== undefined) updates.title = fields.title;
@@ -645,4 +809,148 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     if (fields.labels !== undefined) updates.labels = fields.labels;
     await ctx.db.patch(doc._id, updates);
   },
+
+  // Plans/projects carry server-side logic (plan progress recalc, doc-title
+  // sync, access checks) that already lives in their public mutations. Rather
+  // than duplicate it, the side-effect delegates via ctx.runMutation in the
+  // same transaction — same identity, atomic. The client mutates plans[]/
+  // projects[] optimistically; this performs the authoritative write.
+  updatePlan: async (ctx, userId, [shortId, fields]: [string, Record<string, any>]) => {
+    await (ctx as any).runMutation(api.plans.webUpdate, { short_id: shortId, ...fields });
+  },
+
+  updateProject: async (ctx, userId, [id, fields]: [string, Record<string, any>]) => {
+    await (ctx as any).runMutation(api.projects.webUpdate, { id, ...fields });
+  },
+
+  toggleBookmark: async (ctx, userId, [conversationId, messageId]: [string, string]) => {
+    return await (ctx as any).runMutation(api.bookmarks.toggleBookmark, {
+      conversation_id: conversationId,
+      message_id: messageId,
+    });
+  },
+
+  markNotificationRead: async (ctx, userId, [id]: [string]) => {
+    return await (ctx as any).runMutation(api.notifications.markAsRead, { notificationId: id });
+  },
+  markAllNotificationsRead: async (ctx, userId) => {
+    return await (ctx as any).runMutation(api.notifications.markAllAsRead, {});
+  },
+
+  // Creates delegate to the existing webCreate mutations (which own short-id
+  // allocation, team resolution, history, etc.) and return their {id,...} so
+  // the awaiting caller can navigate to the new record.
+  createBucket: async (ctx, userId, [opts]: [{ name: string; color?: string }]) => {
+    // Shared with the CLI's `cast label create` — see buckets.createBucketForUser.
+    return await createBucketForUser(ctx as any, userId, opts);
+  },
+
+  // Teammate comment create/delete/agent-ask delegate to the public comment
+  // mutations (which carry the notification / mention / fork logic). The store
+  // optimistic stub already painted; the real row supersedes it via client_id.
+  addComment: async (ctx, _userId, _args, result) => {
+    const r = result as { conversationId: string; content: string; messageId?: string; parentCommentId?: string; clientId: string };
+    return ctx.runMutation!(api.comments.addComment, {
+      conversation_id: r.conversationId as Id<"conversations">,
+      content: r.content,
+      message_id: r.messageId ? (r.messageId as Id<"messages">) : undefined,
+      parent_comment_id: r.parentCommentId ? (r.parentCommentId as Id<"comments">) : undefined,
+      client_id: r.clientId,
+    });
+  },
+  deleteComment: async (ctx, _userId, _args, result) => {
+    const r = result as { commentId: string };
+    // A stub id (optimistic create not yet landed) has nothing to delete server-side.
+    if (!r.commentId || r.commentId.startsWith("commentstub")) return;
+    return ctx.runMutation!(api.comments.deleteComment, { comment_id: r.commentId as Id<"comments"> });
+  },
+  askAgentInThread: async (ctx, _userId, _args, result) => {
+    const r = result as { conversationId: string; messageId?: string; clientId: string };
+    return ctx.runMutation!(api.comments.askAgentInThread, {
+      conversation_id: r.conversationId as Id<"conversations">,
+      message_id: r.messageId ? (r.messageId as Id<"messages">) : undefined,
+      client_id: r.clientId,
+    });
+  },
+
+  // Exclusive per-user filing: upsert the single (user, conversation) row.
+  // bucketId null = unassign (tombstone row, never deleted — delta sync).
+  // Returns the gate it stopped at (or "ok") so a silent no-op is debuggable
+  // from the client (`await store.assignSessionToBucket(...)`).
+  assignSessionToBucket: async (ctx, userId, [convId, bucketId]: [string, string | null]) => {
+    let conv: any = null;
+    let convErr: string | null = null;
+    try {
+      conv = await ctx.db.get(convId as Id<"conversations">);
+    } catch (e: any) {
+      convErr = String(e?.message || e);
+    }
+    if (!conv) return { gate: "conv_not_found", convErr };
+    if (String(conv.user_id) !== String(userId)) return { gate: "conv_not_owned" };
+    if (bucketId) {
+      const bucket = await ctx.db.get(bucketId as Id<"inbox_buckets">).catch(() => null);
+      if (!bucket || String((bucket as any).user_id) !== String(userId)) return { gate: "bucket_not_owned" };
+    }
+    // Shared with the CLI's `cast label set/clear` — see buckets.assignConversationToBucketForUser.
+    await assignConversationToBucketForUser(
+      ctx as any,
+      userId,
+      convId as Id<"conversations">,
+      (bucketId ?? null) as Id<"inbox_buckets"> | null
+    );
+    return { gate: "ok" };
+  },
+
+  createDoc: async (ctx, userId, [opts]: [any]) => {
+    return await (ctx as any).runMutation(api.docs.webCreate, opts);
+  },
+  createPlan: async (ctx, userId, [opts]: [any]) => {
+    return await (ctx as any).runMutation(api.plans.webCreate, opts);
+  },
+  createProject: async (ctx, userId, [opts]: [any]) => {
+    return await (ctx as any).runMutation(api.projects.webCreate, opts);
+  },
+  promoteDocToPlan: async (ctx, userId, [docId]: [string]) => {
+    return await (ctx as any).runMutation(api.docs.webPromoteToPlan, { doc_id: docId });
+  },
+  ensurePlanDoc: async (ctx, userId, [planId]: [string]) => {
+    return await (ctx as any).runMutation(api.plans.ensureDoc, { plan_id: planId });
+  },
+  publishToDirectory: async (ctx, userId, [opts]: [any]) => {
+    return await (ctx as any).runMutation(api.conversations.publishToDirectory, opts);
+  },
+  moveDoc: async (ctx, userId, [id, parentId, sortOrder]: [string, string?, number?]) => {
+    return await (ctx as any).runMutation(api.docs.webMoveDoc, {
+      id,
+      parent_id: parentId ?? undefined,
+      sort_order: sortOrder ?? undefined,
+    });
+  },
+
+  // Generic session daemon-command dispatch: delegates to the existing mutation
+  // so all its dedup / pending-reset / multi-command logic is reused verbatim.
+  // The store's convCommand action routes every kill/restart/repair/reconfigure/
+  // rewind/fork/sendKeys/sendEscape/resume here. Every target takes
+  // conversation_id as its first arg; per-command extras ride extraArgs.
+  convCommand: async (ctx, userId, [convId, command, extraArgs]: [string, string, Record<string, any>?]) => {
+    const fn = (SESSION_COMMANDS as Record<string, any>)[command];
+    if (!fn) throw new Error(`convCommand: unknown command ${command}`);
+    return await (ctx as any).runMutation(fn, {
+      conversation_id: convId,
+      ...(extraArgs || {}),
+    });
+  },
+};
+
+const SESSION_COMMANDS = {
+  killSession: api.conversations.killSession,
+  restartSession: api.conversations.restartSession,
+  repairSession: api.conversations.repairSession,
+  reconfigureSession: api.conversations.reconfigureSession,
+  rewindSession: api.conversations.rewindSession,
+  forkFromMessage: api.conversations.forkFromMessage,
+  sendKeysToSession: api.conversations.sendKeysToSession,
+  setSessionModel: api.conversations.setSessionModel,
+  sendEscapeToSession: api.conversations.sendEscapeToSession,
+  resumeSession: api.users.resumeSession,
 };

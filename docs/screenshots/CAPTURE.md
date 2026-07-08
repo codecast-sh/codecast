@@ -1,19 +1,36 @@
 # Screenshot Capture Guide
 
-Save these screenshots from the live app at `local.codecast.sh` (or `codecast.sh`).
-Use your personal workspace with the codecast project selected for consistent content.
+Screenshots are captured from the live production app at `codecast.sh` at retina
+resolution (1440×900 logical, 2880×1800 actual) for crisp rendering on the README.
+Use your personal/team workspace with the codecast project rail filter applied so
+the content stays on-brand and consistent across shots.
 
-## Required Screenshots
+## Current screenshots
 
-| Filename | View | What to show |
-|----------|------|-------------|
-| `inbox.png` | `/inbox` | Personal inbox with sessions selected, showing the 3-column layout |
-| `activity-feed.png` | `/dashboard?dir=codecast` | Daily digest with codecast project filtered, showing session cards |
-| `conversation.png` | Any codecast conversation | Message thread with code blocks, tool call summaries, insight block |
-| `command-palette.png` | `Cmd+K` overlay | Command palette open over a conversation, showing recent sessions |
-| `tasks.png` | `/tasks` | Task list grouped by plan, with status filters and label chips |
-| `plans.png` | `/plans?plan=<any>` | Split view with plan list and detail panel showing document + tasks |
+| Filename | View | What it shows |
+|----------|------|---------------|
+| `hero.png` | A conversation, sidebar expanded | The full three-column workspace — nav rail, open conversation, and the session feed rail |
+| `inbox.png` | `/inbox` | Session feed grouped by label with live status, model badges, and summaries next to the open conversation |
+| `conversation.png` | Any conversation | Message thread with syntax-highlighted code, collapsed tool calls, and the file-changed pill |
+| `command-palette.png` | `Cmd+K` over a conversation | Palette open showing conversation actions (pin, label, change model & effort, stash, kill) |
+| `tasks.png` | `/tasks` | Task list in the workspace column with checkboxes and titles |
+| `logo.png` | — | App mark used at the top of the README |
 
-## Recommended dimensions
+## How they were captured
 
-Resize browser to ~1400x900 for clean captures. Use `Cmd+Shift+4` then Space to capture the Chrome window.
+A headless Chrome driven over the Chrome DevTools Protocol, with the Convex auth
+JWT + refresh token seeded into `localStorage` for `convex.codecast.sh` before
+navigating. The device metrics are set to 1440×900 at `deviceScaleFactor: 2`.
+
+Two production-only quirks to handle when scripting captures:
+
+- **Desktop handoff dialog** — fresh navigations on the `codecast.sh` host hand off
+  to the desktop app and show an "Opened in Codecast desktop" overlay. Dismiss it
+  after load by clicking the **Open in browser** button (this does not change the
+  user's sticky preference). It never fires on `local.codecast.sh` or `localhost`.
+- **Heavy list views** (`/plans` with hundreds of plans) need a long settle time
+  before they finish rendering; give them 20s+ or capture a specific item's detail
+  by full Convex id instead of the list.
+
+To refresh a shot: capture at 1440×900 logical / retina, then drop the PNG into
+this directory under the matching filename.

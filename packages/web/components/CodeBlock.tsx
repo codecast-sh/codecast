@@ -1,5 +1,5 @@
-import { useState, useRef, useMemo, useCallback } from "react";
-import { useWatchEffect } from "../hooks/useWatchEffect";
+import { useState, useMemo, useCallback, memo } from "react";
+import { useFullWidthExpand } from "../hooks/useFullWidthExpand";
 import { toast } from "sonner";
 import { copyToClipboard } from "../lib/utils";
 import { Copy, Check, MoveHorizontal, WrapText } from "lucide-react";
@@ -43,7 +43,6 @@ function highlightCode(code: string, language?: string): string | null {
   }
 }
 
-const expandedBlocks = new Map<string, { left: number; width: number }>();
 const wrappedBlocks = new Set<string>();
 
 function codeKey(code: string): string {
@@ -52,58 +51,12 @@ function codeKey(code: string): string {
   return String(h);
 }
 
-function measureExpand(el: HTMLElement, currentLeftOffset = 0): { left: number; width: number } | null {
-  const scrollParent = el.closest('.overflow-y-auto') as HTMLElement | null;
-  if (!scrollParent) return null;
-  const scrollRect = scrollParent.getBoundingClientRect();
-  const elRect = el.getBoundingClientRect();
-  const naturalLeft = elRect.left - currentLeftOffset;
-  const leftOffset = naturalLeft - scrollRect.left - 16;
-  const targetWidth = scrollRect.width - 32;
-  return { left: -leftOffset, width: targetWidth };
-}
-
-export function CodeBlock({ code, language }: CodeBlockProps) {
+export const CodeBlock = memo(function CodeBlock({ code, language }: CodeBlockProps) {
   const highlighted = useMemo(() => highlightCode(code, language), [code, language]);
   const key = useMemo(() => codeKey(code), [code]);
-  const stored = expandedBlocks.get(key);
-  const [expanded, setExpanded] = useState(!!stored);
+  const { expanded, toggle: toggleExpand, containerRef, style: expandStyle } = useFullWidthExpand(key);
   const [wrapped, setWrapped] = useState(wrappedBlocks.has(key));
-  const [geo, setGeo] = useState<{ left: number; width: number } | null>(stored || null);
   const [copied, setCopied] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  useWatchEffect(() => {
-    const el = containerRef.current;
-    if (!el || !expanded) return;
-    requestAnimationFrame(() => {
-      if (!el.isConnected) return;
-      const fresh = measureExpand(el, geo?.left || 0);
-      if (!fresh) return;
-      if (geo?.left !== fresh.left || geo?.width !== fresh.width) {
-        expandedBlocks.set(key, fresh);
-        setGeo(fresh);
-      }
-    });
-  }, [expanded, key]);
-
-  const toggleExpand = useCallback(() => {
-    const next = !expanded;
-    setExpanded(next);
-    if (next) {
-      const el = containerRef.current;
-      if (el) {
-        const fresh = measureExpand(el);
-        if (fresh) {
-          expandedBlocks.set(key, fresh);
-          setGeo(fresh);
-        }
-      }
-    } else {
-      expandedBlocks.delete(key);
-      setGeo(null);
-    }
-  }, [expanded, key]);
 
   const toggleWrap = useCallback(() => {
     const next = !wrapped;
@@ -121,10 +74,6 @@ export function CodeBlock({ code, language }: CodeBlockProps) {
       toast.error("Failed to copy");
     }
   };
-
-  const expandStyle: React.CSSProperties = geo
-    ? { position: 'relative', left: geo.left, width: geo.width }
-    : {};
 
   return (
     <div
@@ -167,7 +116,7 @@ export function CodeBlock({ code, language }: CodeBlockProps) {
       </pre>
     </div>
   );
-}
+});
 
 export interface ParsedBlock {
   type: "text" | "code";

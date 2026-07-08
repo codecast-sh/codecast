@@ -122,7 +122,7 @@ This adds `local.codecast.sh` (and `local.1.codecast.sh`, `local.2.codecast.sh`)
 ./dev.sh
 ```
 
-This starts Convex + Vite with a watchdog that auto-restarts crashed processes. Open **http://local.codecast.sh** (or `http://localhost:3200`).
+This starts Convex + Vite with a watchdog that auto-restarts crashed processes. Open **https://local.codecast.sh** (http redirects to https) or `http://localhost:3200`.
 
 `Ctrl+C` to stop. Just run `./dev.sh` again to restart — it self-cleans.
 

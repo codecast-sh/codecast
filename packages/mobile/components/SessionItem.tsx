@@ -1,5 +1,7 @@
-import { StyleSheet, TouchableOpacity, View as RNView, Text as RNText, Animated as RNAnimated } from 'react-native';
-import { useRef, useCallback, useEffect } from 'react';
+import { StyleSheet, TouchableOpacity, View as RNView, Text as RNText, Animated as RNAnimated, PanResponder } from 'react-native';
+import { useRef, useCallback, useEffect, useMemo } from 'react';
+import { gestureHandler } from '@/lib/gestureHandler';
+import * as Haptics from 'expo-haptics';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Feather from '@expo/vector-icons/Feather';
 import { Theme, Spacing } from '@/constants/Theme';
@@ -30,7 +32,16 @@ export type SessionData = {
   icon?: string;
   icon_color?: string;
   is_favorite?: boolean;
+  model?: string | null;
+  inbox_stashed_at?: number | null;
+  inbox_dismissed_at?: number | null;
 };
+
+/** "claude-opus-4-8" → "opus-4-8"; unknowns pass through. */
+export function formatModelShort(model?: string | null): string | null {
+  if (!model) return null;
+  return model.replace(/^claude-/, "").replace(/-20\d{6}$/, "");
+}
 
 export function formatRelativeTime(timestamp: number): string {
   const now = Date.now();
@@ -94,53 +105,6 @@ export function agentColor(agentType: string): string {
   }
 }
 
-// Session icon names mapped to Feather icon names
-const SESSION_ICONS = [
-  "rocket", "flame", "zap", "star", "diamond", "crown",
-  "shield", "sword", "anchor", "compass", "mountain", "tree",
-  "sun", "moon", "cloud", "bolt", "atom", "dna",
-  "hexagon", "triangle", "cube", "sphere", "infinity", "omega",
-] as const;
-
-const ICON_COLORS = ["cyan", "blue", "violet", "magenta", "green", "yellow", "orange"] as const;
-
-// Map web icon names to Feather equivalents
-const featherIconMap: Record<string, string> = {
-  rocket: "send", flame: "zap", zap: "zap", star: "star", diamond: "octagon",
-  crown: "award", shield: "shield", sword: "crosshair", anchor: "anchor",
-  compass: "compass", mountain: "triangle", tree: "git-branch",
-  sun: "sun", moon: "moon", cloud: "cloud", bolt: "zap",
-  atom: "aperture", dna: "activity", hexagon: "hexagon", triangle: "triangle",
-  cube: "box", sphere: "circle", infinity: "repeat", omega: "type",
-};
-
-const iconColorMap: Record<string, string> = {
-  cyan: Theme.cyan, blue: Theme.blue, violet: Theme.violet,
-  magenta: Theme.magenta, green: Theme.green, yellow: Theme.accent,
-  orange: Theme.orange,
-};
-
-function getSessionIconDefaults(id: string): { icon: string; color: string } {
-  let hash = 0;
-  for (let i = 0; i < id.length; i++) {
-    hash = ((hash << 5) - hash) + id.charCodeAt(i);
-    hash |= 0;
-  }
-  return {
-    icon: SESSION_ICONS[(hash >>> 0) % SESSION_ICONS.length],
-    color: ICON_COLORS[((hash >>> 8) & 0xFF) % ICON_COLORS.length],
-  };
-}
-
-export function SessionIcon({ icon, iconColor, id, size = 16 }: { icon?: string; iconColor?: string; id: string; size?: number }) {
-  const defaults = getSessionIconDefaults(id);
-  const effectiveIcon = icon || defaults.icon;
-  const effectiveColor = iconColor || defaults.color;
-  const featherName = featherIconMap[effectiveIcon] || "circle";
-  const color = iconColorMap[effectiveColor] || Theme.textMuted0;
-  return <Feather name={featherName as any} size={size} color={color} />;
-}
-
 export function statusColor(session: SessionData): string {
   if (session.session_error) return Theme.red;
   if (session.is_unresponsive) return Theme.orange;
@@ -200,11 +164,16 @@ export function SessionItem({ session, onPress, onPin, onLongPress }: { session:
   const showAuthor = session.author_name && session.is_own === false;
 
   return (
-    <TouchableOpacity onPress={onPress} onLongPress={onLongPress} delayLongPress={400} style={styles.conversationContent} activeOpacity={0.6}>
+    <TouchableOpacity
+      onPress={onPress}
+      onLongPress={onLongPress ? () => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onLongPress(); } : undefined}
+      delayLongPress={400}
+      style={styles.conversationContent}
+      activeOpacity={0.6}
+    >
       <RNView style={styles.conversationHeader}>
         <RNView style={styles.titleRow}>
           <RNView style={styles.iconWithStatus}>
-            <SessionIcon icon={session.icon} iconColor={session.icon_color} id={session._id} size={14} />
             <StatusDot session={session} />
           </RNView>
           {session.is_favorite && (
@@ -246,6 +215,12 @@ export function SessionItem({ session, onPress, onPin, onLongPress }: { session:
         {agent ? (
           <RNText style={[styles.agentBadge, { color: agentColor(session.agent_type ?? "") }]}>{agent}</RNText>
         ) : null}
+        {formatModelShort(session.model) && (
+          <RNText style={styles.modelBadge} numberOfLines={1}>{formatModelShort(session.model)}</RNText>
+        )}
+        {session.message_count > 0 && (
+          <RNText style={styles.messageCount}>{session.message_count} msgs</RNText>
+        )}
       </RNView>
     </TouchableOpacity>
   );
@@ -259,49 +234,95 @@ export function SwipeableSessionItem({ session, onPress, onDismiss, onPin, onLon
   onLongPress?: () => void;
 }) {
   const translateX = useRef(new RNAnimated.Value(0)).current;
-  const panStartX = useRef(0);
-  const dismissed = useRef(false);
-
   const didSwipe = useRef(false);
 
-  const handleTouchStart = useCallback((e: any) => {
-    panStartX.current = e.nativeEvent.pageX;
-    dismissed.current = false;
-    didSwipe.current = false;
-  }, []);
+  // Keep the latest action callbacks reachable from the once-created responder.
+  const cb = useRef({ onDismiss, onPin });
+  cb.current = { onDismiss, onPin };
 
-  const handleTouchMove = useCallback((e: any) => {
-    const dx = e.nativeEvent.pageX - panStartX.current;
-    if (Math.abs(dx) > 5) didSwipe.current = true;
-    if (dx < 0) translateX.setValue(dx);
-    if (dx > 0) translateX.setValue(dx);
+  const springBack = useCallback((after?: () => void) => {
+    RNAnimated.spring(translateX, {
+      toValue: 0,
+      useNativeDriver: true,
+      tension: 100,
+      friction: 10,
+    }).start(after ? () => after() : undefined);
   }, [translateX]);
 
-  const handleTouchEnd = useCallback(() => {
-    const currentValue = (translateX as any).__getValue();
-    if (currentValue < -100) {
-      dismissed.current = true;
+  // Shared release logic for both gesture paths below. vx is px/s: a committed
+  // drag (past the distance threshold) OR a flick (shorter drag at speed)
+  // triggers the action; anything else springs back.
+  const settle = useCallback((dx: number, vx: number) => {
+    if (dx < -100 || (dx < -48 && vx < -800)) {
+      // tactile confirm at the commit point — a destructive dismiss reads as
+      // accidental without it.
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       RNAnimated.timing(translateX, {
         toValue: -400,
         duration: 200,
         useNativeDriver: true,
-      }).start(() => onDismiss());
-    } else if (currentValue > 80 && onPin) {
-      RNAnimated.spring(translateX, {
-        toValue: 0,
-        useNativeDriver: true,
-        tension: 100,
-        friction: 10,
-      }).start(() => onPin());
+      }).start(() => cb.current.onDismiss());
+    } else if ((dx > 80 || (dx > 48 && vx > 800)) && cb.current.onPin) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      springBack(cb.current.onPin);
     } else {
-      RNAnimated.spring(translateX, {
-        toValue: 0,
-        useNativeDriver: true,
-        tension: 100,
-        friction: 10,
-      }).start();
+      springBack();
     }
-  }, [translateX, onDismiss, onPin]);
+    requestAnimationFrame(() => { didSwipe.current = false; });
+  }, [springBack, translateX]);
+
+  // Gesture-handler pan with NATIVE arbitration. The previous JS PanResponder
+  // raced the FlatList's native scroll recognizer and usually lost (the swipe
+  // only triggered from a standstill, perfectly horizontal), and even when it
+  // won, JS cannot cancel a native scroll — the list kept scrolling vertically
+  // under the swipe. activeOffsetX/failOffsetY arbitrate on the native side:
+  // 10px of horizontal travel claims the touch AND cancels the scroll
+  // recognizer (scroll locks); 15px of vertical travel first fails the pan and
+  // scrolling proceeds untouched. While undetermined (a stationary press)
+  // gesture-handler does not consume touches, so the inner TouchableOpacity's
+  // tap and long-press still fire; on activation it cancels them, so a swipe
+  // cannot misfire a tap. Callbacks hop to the JS thread (runOnJS) because they
+  // drive an RN Animated value — arbitration stays native regardless.
+  const panGesture = useMemo(() => {
+    if (!gestureHandler) return null;
+    return gestureHandler.Gesture.Pan()
+      .activeOffsetX([-10, 10])
+      .failOffsetY([-15, 15])
+      .onStart(() => { didSwipe.current = true; })
+      .onUpdate((e: any) => translateX.setValue(e.translationX))
+      .onEnd((e: any) => settle(e.translationX, e.velocityX))
+      .onFinalize((_e: any, success: boolean) => {
+        // Cancelled mid-swipe (e.g. a system gesture took over) — onEnd never
+        // ran. Guarded on didSwipe so the finalize that follows every failed
+        // non-swipe touch (taps, scrolls) doesn't spawn no-op springs.
+        if (!success && didSwipe.current) {
+          springBack();
+          requestAnimationFrame(() => { didSwipe.current = false; });
+        }
+      })
+      .runOnJS(true);
+  }, [settle, springBack, translateX]);
+
+  // Fallback for binaries whose native build lacks gesture-handler (see
+  // lib/gestureHandler.tsx): the old JS PanResponder. Worse arbitration, but
+  // the feature stays functional. PanResponder vx is px/ms; settle takes px/s.
+  const responder = useRef(
+    gestureHandler ? null : PanResponder.create({
+      onMoveShouldSetPanResponder: (_e, gs) =>
+        Math.abs(gs.dx) > 8 && Math.abs(gs.dx) > Math.abs(gs.dy) * 1.5,
+      onPanResponderGrant: () => {
+        didSwipe.current = true;
+      },
+      onPanResponderMove: (_e, gs) => {
+        translateX.setValue(gs.dx);
+      },
+      onPanResponderRelease: (_e, gs) => settle(gs.dx, gs.vx * 1000),
+      onPanResponderTerminate: () => {
+        springBack();
+        requestAnimationFrame(() => { didSwipe.current = false; });
+      },
+    })
+  ).current;
 
   const swipeBehindOpacity = translateX.interpolate({
     inputRange: [-400, -1, 0, 1, 400],
@@ -312,24 +333,28 @@ export function SwipeableSessionItem({ session, onPress, onDismiss, onPin, onLon
     outputRange: [0, 0, 0, 1, 1],
   });
 
+  const card = (
+    <RNAnimated.View
+      style={[styles.conversationItem, { transform: [{ translateX }] }]}
+      {...(responder ? responder.panHandlers : {})}
+    >
+      <SessionItem session={session} onPress={() => { if (!didSwipe.current) onPress(); }} onPin={onPin} onLongPress={onLongPress} />
+    </RNAnimated.View>
+  );
+
   return (
     <RNView style={styles.swipeContainer}>
       <RNAnimated.View style={[styles.swipeBehind, { opacity: swipeBehindOpacity }]}>
         <FontAwesome name="archive" size={16} color="#fff" />
-        <RNText style={styles.swipeBehindText}>Dismiss</RNText>
+        <RNText style={styles.swipeBehindText}>Stash</RNText>
       </RNAnimated.View>
       <RNAnimated.View style={[styles.swipeBehindPin, { opacity: swipeBehindPinOpacity }]}>
         <FontAwesome name="thumb-tack" size={16} color="#fff" />
         <RNText style={styles.swipeBehindText}>{session.is_pinned ? "Unpin" : "Pin"}</RNText>
       </RNAnimated.View>
-      <RNAnimated.View
-        style={[styles.conversationItem, { transform: [{ translateX }] }]}
-        onTouchStart={handleTouchStart}
-        onTouchMove={handleTouchMove}
-        onTouchEnd={handleTouchEnd}
-      >
-        <SessionItem session={session} onPress={() => { if (!didSwipe.current) onPress(); }} onPin={onPin} onLongPress={onLongPress} />
-      </RNAnimated.View>
+      {panGesture ? (
+        <gestureHandler.GestureDetector gesture={panGesture}>{card}</gestureHandler.GestureDetector>
+      ) : card}
     </RNView>
   );
 }
@@ -338,13 +363,14 @@ export const styles = StyleSheet.create({
   swipeContainer: {
     overflow: 'hidden',
   },
+  // Stash is set-aside (agent keeps running) — orange, not destructive red.
   swipeBehind: {
     position: 'absolute',
     top: 0,
     bottom: 0,
     right: 0,
     left: 0,
-    backgroundColor: Theme.red,
+    backgroundColor: Theme.orange,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'flex-end',
@@ -394,7 +420,6 @@ export const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginRight: Spacing.sm,
-    gap: 3,
   },
   statusDot: {
     width: 6,
@@ -441,11 +466,18 @@ export const styles = StyleSheet.create({
     fontVariant: ['tabular-nums'],
     fontWeight: '400',
   },
+  modelBadge: {
+    fontSize: 10,
+    color: Theme.textDim,
+    fontWeight: '500',
+    letterSpacing: 0.2,
+    maxWidth: 90,
+  },
   userMessage: {
     fontSize: 13,
     color: Theme.blue,
     fontWeight: '600',
-    marginLeft: 31,
+    marginLeft: 14,
     marginBottom: 2,
     lineHeight: 18,
   },
@@ -456,14 +488,14 @@ export const styles = StyleSheet.create({
   summaryText: {
     fontSize: 12,
     color: Theme.textMuted,
-    marginLeft: 31,
+    marginLeft: 14,
     marginBottom: 2,
     lineHeight: 17,
   },
   conversationMeta: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginLeft: 31,
+    marginLeft: 14,
     marginTop: 2,
     gap: 6,
   },

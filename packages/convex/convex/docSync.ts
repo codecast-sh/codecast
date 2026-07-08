@@ -1,8 +1,9 @@
-import { mutation, query } from "./_generated/server";
+import { mutation, query } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
+import { packSnapshotContent, readSnapshotContent } from "./lib/docSnapshot";
 
 const MAX_DELTA_FETCH = 100;
 const MAX_SNAPSHOT_FETCH = 10;
@@ -13,6 +14,28 @@ async function requireAuth(ctx: any): Promise<Id<"users">> {
   const userId = await getAuthUserId(ctx);
   if (!userId) throw new Error("Not authenticated");
   return userId;
+}
+
+/**
+ * The web editor seeds the collaborative snapshot from the doc's markdown the
+ * first time a doc is opened. If that markdown prop hadn't loaded yet (the
+ * snapshot query resolves before the heavier doc-detail query), it seeds an
+ * EMPTY doc — and submitSnapshot would then overwrite the real markdown in
+ * `doc.content` with "". This predicate detects that racy initial empty seed so
+ * the mutation can reject it wholesale: no empty snapshot is written and the
+ * markdown is preserved, so the doc re-seeds correctly on the next open.
+ *
+ * Scoped to the initial snapshot (version <= 1) only — a genuine full clear of
+ * an existing doc arrives at version > 1 and must be allowed through.
+ */
+export function isRacyEmptySeed(args: {
+  version: number;
+  derivedMarkdown: string;
+  existingContent: string | undefined | null;
+}): boolean {
+  if (args.version > 1) return false;
+  if (args.derivedMarkdown.trim() !== "") return false;
+  return (args.existingContent ?? "").trim() !== "";
 }
 
 export const getSnapshot = query({
@@ -31,7 +54,7 @@ export const getSnapshot = query({
       .order("desc")
       .first();
     if (!snapshot) return { content: null };
-    return { content: snapshot.content, version: snapshot.version };
+    return { content: readSnapshotContent(snapshot), version: snapshot.version };
   },
 });
 
@@ -51,14 +74,46 @@ export const submitSnapshot = mutation({
       )
       .first();
     if (existing) return;
+
+    // Parse once and guard against the racy empty seed BEFORE writing anything.
+    // Otherwise a v1 empty snapshot from a not-yet-loaded editor would clobber
+    // the doc's real markdown (see isRacyEmptySeed).
+    let parsed: any;
+    try {
+      parsed = JSON.parse(args.content);
+    } catch {
+      parsed = null;
+    }
+    const md = parsed ? toMarkdown(parsed).trim() : "";
+    // The sync id is a real `docs` row id only for the document editor. The chat
+    // composer reuses this same OT backend under a synthetic "compose:<convId>"
+    // id, which is not a docs id — normalizeId returns null for it, so we skip the
+    // docs-table coupling (content patch + mention notifications) entirely. Calling
+    // ctx.db.get with a non-id string would throw.
+    const docId = ctx.db.normalizeId("docs", args.id);
+    const docForGuard = docId ? await ctx.db.get(docId) : null;
+    if (
+      isRacyEmptySeed({
+        version: args.version,
+        derivedMarkdown: md,
+        existingContent: (docForGuard as any)?.content,
+      })
+    ) {
+      return;
+    }
+
     try {
       await ctx.db.insert("doc_snapshots", {
         id: args.id,
         version: args.version,
-        content: args.content,
+        content_gz: packSnapshotContent(args.content),
       });
     } catch (e: any) {
       if (e.message?.includes("duplicate") || e.message?.includes("conflict")) return;
+      // Even gzipped, a pathologically huge doc could still exceed the 1 MiB
+      // limit. Skip the snapshot rather than throwing — the doc stays syncable
+      // via delta replay; only cold-load compaction is lost.
+      if (e.message?.includes("too large")) return;
       throw e;
     }
     if (args.version > 1) {
@@ -71,10 +126,8 @@ export const submitSnapshot = mutation({
       await Promise.all(oldSnapshots.map((doc: any) => ctx.db.delete(doc._id)));
     }
     try {
-      const doc = await ctx.db.get(args.id as Id<"docs">);
-      if (doc) {
-        const parsed = JSON.parse(args.content);
-        const md = toMarkdown(parsed).trim();
+      const doc = docForGuard;
+      if (doc && parsed) {
         await ctx.db.patch(doc._id, { content: md, updated_at: Date.now() });
 
         const newMentions = extractPersonMentionIds(parsed);
@@ -90,7 +143,7 @@ export const submitSnapshot = mutation({
               .first();
             if (prevSnapshot) {
               try {
-                oldMentions = extractPersonMentionIds(JSON.parse(prevSnapshot.content));
+                oldMentions = extractPersonMentionIds(JSON.parse(readSnapshotContent(prevSnapshot)));
               } catch {}
             }
           }
@@ -349,6 +402,9 @@ export const updatePresence = mutation({
     doc_id: v.string(),
     cursor_pos: v.optional(v.number()),
     anchor_pos: v.optional(v.number()),
+    // Composer co-presence only: the sender's live draft, capped so a long message
+    // doesn't bloat the row. Omitted by the document editor.
+    draft_text: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx);
@@ -360,10 +416,12 @@ export const updatePresence = mutation({
       .first();
     const name = user.name || user.email || "Anonymous";
     const color = PRESENCE_COLORS[name.charCodeAt(0) % PRESENCE_COLORS.length];
+    const draft = args.draft_text === undefined ? undefined : args.draft_text.slice(0, 2000);
     if (existing) {
       await ctx.db.patch(existing._id, {
         cursor_pos: args.cursor_pos,
         anchor_pos: args.anchor_pos,
+        draft_text: draft,
         user_name: name,
         user_color: color,
         updated_at: Date.now(),
@@ -376,6 +434,7 @@ export const updatePresence = mutation({
         user_color: color,
         cursor_pos: args.cursor_pos,
         anchor_pos: args.anchor_pos,
+        draft_text: draft,
         updated_at: Date.now(),
       });
     }
@@ -402,6 +461,7 @@ export const getPresence = query({
     user_color: v.string(),
     cursor_pos: v.optional(v.number()),
     anchor_pos: v.optional(v.number()),
+    draft_text: v.optional(v.string()),
     updated_at: v.number(),
   })),
   handler: async (ctx, args) => {
@@ -419,6 +479,7 @@ export const getPresence = query({
         user_color: p.user_color,
         cursor_pos: p.cursor_pos,
         anchor_pos: p.anchor_pos,
+        draft_text: p.draft_text,
         updated_at: p.updated_at,
       }));
   },

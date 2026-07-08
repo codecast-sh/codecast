@@ -5,6 +5,7 @@ import * as path from "path";
 import {
   CLAUDE_UUID_RE,
   combineClaudeResumeFlags,
+  copyJsonlAsSession,
   extractJsonlPermissionMode,
   rewriteSubagentJsonlToUuid,
 } from "./resumeCommand.js";
@@ -138,5 +139,76 @@ describe("rewriteSubagentJsonlToUuid", () => {
     expect(result.rewrote).toBe(true);
     const rewritten = fs.readFileSync(result.newJsonlPath!, "utf-8");
     expect(rewritten).toContain(`"sessionId":"${result.resumeId}"`);
+  });
+});
+
+describe("copyJsonlAsSession", () => {
+  const PARENT = "11111111-2222-4333-8444-555555555555";
+  const FORK = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+
+  function writeParent(dir: string, content: string): string {
+    fs.mkdirSync(dir, { recursive: true });
+    trash.push(dir);
+    const p = path.join(dir, `${PARENT}.jsonl`);
+    fs.writeFileSync(p, content);
+    return p;
+  }
+
+  test("copies next to the source under the target id, rewriting only sessionId fields", () => {
+    const dir = tmpDir("fork-copy");
+    const line1 = `{"sessionId":"${PARENT}","type":"user","message":{"role":"user","content":"hello"},"uuid":"u1"}`;
+    const line2 = `{"sessionId":"${PARENT}","type":"assistant","message":{"role":"assistant","content":"hi"},"uuid":"u2"}`;
+    const src = writeParent(dir, `${line1}\n${line2}\n`);
+
+    const newPath = copyJsonlAsSession(src, PARENT, FORK);
+    expect(newPath).toBe(path.join(dir, `${FORK}.jsonl`));
+    const copied = fs.readFileSync(newPath!, "utf-8");
+    expect(copied).not.toContain(PARENT);
+    expect(copied).toContain(`"sessionId":"${FORK}"`);
+    // Message content bytes untouched — this is what keeps the prompt cache warm.
+    expect(copied).toContain(`"content":"hello"`);
+    expect(copied.split("\n").length).toBe(3); // two lines + trailing newline
+    // Source untouched.
+    expect(fs.readFileSync(src, "utf-8")).toContain(`"sessionId":"${PARENT}"`);
+  });
+
+  test("drops a partially-flushed (invalid JSON) trailing line from a live source", () => {
+    const dir = tmpDir("fork-copy");
+    const full = `{"sessionId":"${PARENT}","uuid":"u1"}`;
+    const partial = `{"sessionId":"${PARENT}","uuid":"u2","mess`; // mid-flush
+    const src = writeParent(dir, `${full}\n${partial}`);
+
+    const newPath = copyJsonlAsSession(src, PARENT, FORK);
+    const copied = fs.readFileSync(newPath!, "utf-8");
+    expect(copied).toBe(`{"sessionId":"${FORK}","uuid":"u1"}\n`);
+  });
+
+  test("keeps a complete final line that merely lacks its newline", () => {
+    const dir = tmpDir("fork-copy");
+    const l1 = `{"sessionId":"${PARENT}","uuid":"u1"}`;
+    const l2 = `{"sessionId":"${PARENT}","uuid":"u2"}`;
+    const src = writeParent(dir, `${l1}\n${l2}`); // no trailing \n
+
+    const newPath = copyJsonlAsSession(src, PARENT, FORK);
+    const copied = fs.readFileSync(newPath!, "utf-8");
+    expect(copied).toContain(`"uuid":"u2"`);
+  });
+
+  test("idempotent: existing target is returned untouched", () => {
+    const dir = tmpDir("fork-copy");
+    const src = writeParent(dir, `{"sessionId":"${PARENT}","uuid":"u1"}\n`);
+    const existing = path.join(dir, `${FORK}.jsonl`);
+    fs.writeFileSync(existing, "already-here\n");
+
+    const newPath = copyJsonlAsSession(src, PARENT, FORK);
+    expect(newPath).toBe(existing);
+    expect(fs.readFileSync(existing, "utf-8")).toBe("already-here\n");
+  });
+
+  test("returns null when the source is missing", () => {
+    const dir = tmpDir("fork-copy");
+    fs.mkdirSync(dir, { recursive: true });
+    trash.push(dir);
+    expect(copyJsonlAsSession(path.join(dir, "missing.jsonl"), PARENT, FORK)).toBeNull();
   });
 });

@@ -1,7 +1,7 @@
 /**
  * `cast workspace` CLI subcommand wiring.
  *
- * Six subcommands: init, acquire, status, heal, destroy, ls.
+ * Seven subcommands: init, acquire, path, status, heal, destroy, ls.
  * Registered via registerWorkspaceCommand(program) called from index.ts.
  */
 
@@ -149,6 +149,25 @@ export function registerWorkspaceCommand(program: Command): void {
         console.log(`    ${mark} ${c.name}${reason}`);
       }
       if (!r.ok) process.exit(2);
+    });
+
+  // -----------------------------------------------------------------------
+  // cast workspace path <name>
+  // -----------------------------------------------------------------------
+  ws.command("path <name>")
+    .description("Print a workspace's absolute worktree path (for `cd \"$(cast ws path <name>)\"`)")
+    .action((name: string) => {
+      const repoRoot = findRepoRoot();
+      // Prefer the tracked path (handles pool-claimed slots whose layout may
+      // differ from the default), then fall back to the deterministic location.
+      const tracked = readState(repoRoot, name)?.path;
+      const fallback = path.join(repoRoot, ".codecast/worktrees", name);
+      const resolved = tracked ?? fallback;
+      if (!fs.existsSync(resolved)) {
+        console.error(`Workspace '${name}' not found (run: cast workspace acquire ${name})`);
+        process.exit(1);
+      }
+      console.log(resolved);
     });
 
   // -----------------------------------------------------------------------

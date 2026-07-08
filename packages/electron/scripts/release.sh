@@ -26,8 +26,16 @@ if [[ ! "$BUMP_TYPE" =~ ^(patch|minor|major)$ ]]; then
 fi
 
 OLD_VERSION=$(jq -r '.version' package.json)
-npm version "$BUMP_TYPE" --no-git-tag-version
-NEW_VERSION=$(jq -r '.version' package.json)
+# Bump via jq (not `npm version`): npm walks up to the bun workspace root and
+# chokes on `workspace:*` deps it can't parse. Mirrors packages/cli/deploy.sh.
+IFS='.' read -r MAJOR MINOR PATCH <<< "$OLD_VERSION"
+case "$BUMP_TYPE" in
+  major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+  minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+  patch) PATCH=$((PATCH + 1)) ;;
+esac
+NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+jq --arg v "$NEW_VERSION" '.version = $v' package.json > package.json.tmp && mv package.json.tmp package.json
 
 echo "=== Releasing Codecast Desktop v$NEW_VERSION (was v$OLD_VERSION) ==="
 echo ""
@@ -76,6 +84,11 @@ if [[ "$REMOTE" != "version: $NEW_VERSION" ]]; then
   exit 1
 fi
 echo "  Verified: $REMOTE"
+
+# NOTE: releases do NOT force the fleet to update — clients are prompted in-app
+# (Update now / Later) and otherwise update on next quit. To push a specific
+# version to everyone (quit+relaunch even while open), run it deliberately:
+#   cast desktop-force-update <version>
 
 echo ""
 echo "[4/4] Updating web download URL and committing..."

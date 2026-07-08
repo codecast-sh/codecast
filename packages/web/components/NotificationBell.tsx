@@ -1,11 +1,13 @@
-import { useQuery, useMutation } from "convex/react";
+import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useMemo } from "react";
 import { useEventListener } from "../hooks/useEventListener";
 import { useWatchEffect } from "../hooks/useWatchEffect";
+import { useConvexSync } from "../hooks/useConvexSync";
 import { useRouter } from "next/navigation";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore } from "../store/inboxStore";
+import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 
 function timeAgo(timestamp: number): string {
   const seconds = Math.floor((Date.now() - timestamp) / 1000);
@@ -143,10 +145,20 @@ export function NotificationBell() {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  const unreadCount = useQuery(api.notifications.getUnreadCount);
-  const notifications = useQuery(api.notifications.list);
-  const markAsRead = useMutation(api.notifications.markAsRead);
-  const markAllAsRead = useMutation(api.notifications.markAllAsRead);
+  // Local-first: sync the server list into the store, then read + mutate the
+  // store so mark-read flips the bold state and badge instantly (the optimistic
+  // `read` is field-protected against the next list sync).
+  const notifsList = useQuery(api.notifications.list);
+  useConvexSync(notifsList, useCallback((d: any) => useInboxStore.getState().syncTable("notifications", d), []));
+  const notifications = useInboxStore((s) => s.notifications);
+  const markAsRead = useInboxStore((s) => s.markNotificationRead);
+  const markAllAsRead = useInboxStore((s) => s.markAllNotificationsRead);
+
+  const sortedNotifications = useMemo(
+    () => (Object.values(notifications) as any[]).sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0)),
+    [notifications]
+  );
+  const unreadCount = useMemo(() => sortedNotifications.filter((n) => !n.read).length, [sortedNotifications]);
 
   useEventListener("mousedown", useCallback((event: MouseEvent) => {
     if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
@@ -155,7 +167,7 @@ export function NotificationBell() {
   }, []), isOpen ? document : null);
 
   useWatchEffect(() => {
-    if (isOpen && unreadCount && unreadCount > 0) {
+    if (isOpen && unreadCount > 0) {
       markAllAsRead();
     }
   }, [isOpen, markAllAsRead, unreadCount]);
@@ -166,14 +178,14 @@ export function NotificationBell() {
     entityType?: string,
     entityId?: string
   ) => {
-    await markAsRead({ notificationId });
+    markAsRead(notificationId);
     if (entityType && entityId) {
       const routes: Record<string, string> = { task: "/tasks/", doc: "/docs/", plan: "/plans/" };
       const base = routes[entityType];
       if (base) { router.push(`${base}${entityId}`); setIsOpen(false); return; }
     }
     if (conversationId) {
-      useInboxStore.setState({ pendingNavigateId: conversationId });
+      useInboxStore.getState().requestNavigate(conversationId);
       router.push('/inbox');
     } else {
       router.push('/inbox');
@@ -181,10 +193,11 @@ export function NotificationBell() {
     setIsOpen(false);
   };
 
-  const recentNotifications = notifications?.slice(0, 20) || [];
+  const recentNotifications = sortedNotifications.slice(0, 20);
 
   return (
     <div className="relative" ref={dropdownRef}>
+      <ShortcutTooltip label="Notifications">
       <button
         onClick={() => setIsOpen(!isOpen)}
         className="relative p-2 text-sol-text hover:text-sol-yellow transition-colors"
@@ -204,6 +217,7 @@ export function NotificationBell() {
           </span>
         )}
       </button>
+      </ShortcutTooltip>
 
       {isOpen && (
         <div className="absolute right-0 mt-2 w-[calc(100vw-1rem)] sm:w-[520px] max-w-[520px] bg-sol-bg border border-sol-border rounded-lg shadow-lg overflow-hidden z-50">

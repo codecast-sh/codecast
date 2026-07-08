@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { classifyTmuxLiveState, extractTmuxLiveRegion, isPhantomBypassPermissionBlock } from "./daemon.js";
+import { classifyBypassBlock, classifyTmuxLiveState, extractTmuxLiveRegion, isPhantomBypassPermissionBlock } from "./daemon.js";
 
 describe("isPhantomBypassPermissionBlock", () => {
   test("suppresses auto-approved tool permission_blocked in bypass mode", () => {
@@ -120,6 +120,53 @@ const BUSY_WITH_INPUT_BOX_PANE = `⏺ Reading the delivery path now…
   ⏵⏵ bypass permissions on (shift+tab to cycle)               · esc to interrupt
 `;
 
+describe("classifyBypassBlock", () => {
+  const SID = "07191b53";
+
+  test("holds an AskUserQuestion block across a context-free follow-up (the bug)", () => {
+    // Exact sequence that left jx7dwas showing "working/stuck" for 13 min on the web.
+    const blocked = new Set<string>();
+
+    // 1. PreToolUse AskUserQuestion: the agent is now waiting. Not a phantom.
+    expect(classifyBypassBlock(blocked, SID, "permission_blocked", "bypassPermissions", "AskUserQuestion").suppress).toBe(false);
+    expect(blocked.has(SID)).toBe(true);
+
+    // 2. Follow-up generic Notification (no tool name) while still waiting. Pre-fix this
+    //    was suppressed -> status reverted to "working" -> web fell behind. Must hold.
+    expect(classifyBypassBlock(blocked, SID, "permission_blocked", "bypassPermissions", undefined).suppress).toBe(false);
+    expect(blocked.has(SID)).toBe(true);
+
+    // 3. The answer lands and the agent moves on. Block closes.
+    expect(classifyBypassBlock(blocked, SID, "working", "bypassPermissions", undefined).suppress).toBe(false);
+    expect(blocked.has(SID)).toBe(false);
+
+    // 4. A genuine phantom auto-approve afterwards is suppressed again, as before.
+    expect(classifyBypassBlock(blocked, SID, "permission_blocked", "bypassPermissions", "Bash: rm -rf").suppress).toBe(true);
+  });
+
+  test("a phantom with no preceding AskUserQuestion is still suppressed", () => {
+    const blocked = new Set<string>();
+    expect(classifyBypassBlock(blocked, SID, "permission_blocked", "bypassPermissions", "Bash").suppress).toBe(true);
+    expect(classifyBypassBlock(blocked, SID, "permission_blocked", "bypassPermissions", undefined).suppress).toBe(true);
+    expect(blocked.has(SID)).toBe(false);
+  });
+
+  test("never suppresses outside bypass mode, even mid-block", () => {
+    const blocked = new Set<string>();
+    classifyBypassBlock(blocked, SID, "permission_blocked", "default", "AskUserQuestion");
+    expect(classifyBypassBlock(blocked, SID, "permission_blocked", "default", undefined).suppress).toBe(false);
+  });
+
+  test("blocks are tracked per session", () => {
+    const blocked = new Set<string>();
+    classifyBypassBlock(blocked, "sessA", "permission_blocked", "bypassPermissions", "AskUserQuestion");
+    // A different session's phantom is unaffected by sessA's open block.
+    expect(classifyBypassBlock(blocked, "sessB", "permission_blocked", "bypassPermissions", undefined).suppress).toBe(true);
+    // sessA's own follow-up is still held.
+    expect(classifyBypassBlock(blocked, "sessA", "permission_blocked", "bypassPermissions", undefined).suppress).toBe(false);
+  });
+});
+
 describe("extractTmuxLiveRegion", () => {
   test("returns content between the last two separators for an idle input box", () => {
     const region = extractTmuxLiveRegion(IDLE_PANE);
@@ -204,6 +251,21 @@ describe("classifyTmuxLiveState", () => {
     expect(classifyTmuxLiveState("  Update available: 1.1.36 → 1.1.40\n  Press enter to continue")).toBe("warning");
   });
 
+  test("idle beats 'Update available' persistent footer when input prompt is visible", () => {
+    // Regression: Claude Code's persistent footer renders "Update available! Run:
+    // brew upgrade claude-code" below the input box on every turn when an update
+    // is pending. It is NOT a blocking modal — the input prompt (❯) stays usable.
+    // Pre-fix, the classifier matched /Update available/ first and returned
+    // "warning", which made ensureTmuxReady press Enter against the still-visible
+    // banner, loop 3x, throw AGENT_STUCK_WARNING (and in practice AGENT_BUSY when
+    // the agent was also working), and abandon delivery — so no Codecast-launched
+    // tmux session could ever receive a message while any Claude update was
+    // available. Real blocker warnings replace the input box, so prompt-visible
+    // is a reliable "no modal" signal.
+    const region = "❯  \n──────────────\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n     Update available! Run: brew upgrade claude-code";
+    expect(classifyTmuxLiveState(region)).toBe("idle");
+  });
+
   test("exited: 'Resume this session with:' surfaced in the live region", () => {
     expect(classifyTmuxLiveState("Resume this session with: claude --resume abc123")).toBe("exited");
   });
@@ -247,6 +309,75 @@ describe("classifyTmuxLiveState", () => {
   test("no prompt glyph + no modal marker → unknown (defer rather than guess)", () => {
     expect(classifyTmuxLiveState("  some weird state we have never seen")).toBe("unknown");
     expect(classifyTmuxLiveState("Files touched:\n  foo.ts\n  bar.ts")).toBe("unknown");
+  });
+});
+
+// Real capture from cc-claude-gkvbs98a3t3m (2026-07-06): six named teammates
+// split the daemon's default 80x24 window into 55x3 agent panes, squeezing the
+// lead pane to 24 columns. At that width the footer truncates mid-word — the
+// "esc to interrupt" busy marker is gone — and the teammate chip list renders
+// below the footer. Busy/idle can no longer be read from the footer, so the
+// chip list itself must carry the classification.
+const TEAMMATE_SPLIT_PANE = `✢ Crunching… (4m 52s)
+  ⎿  Tip: Use git
+     worktrees to run
+     multiple Claude
+     sessions in
+     parallel.
+
+────────────────────────
+❯
+────────────────────────
+  ⏵⏵ bypass         ·
+  Update available! R…
+
+  ⏺ main
+  ◯ navigator   Run… 15s
+  ◯ reviewer-1  Run… 14s
+  ◯ reviewer-2  Run… 12s
+  ◯ reviewer-3  Run… 11s
+  ◯ reviewer-4  Run…  9s
+                ↓ 1 more
+`;
+
+// The exact live region the daemon logged while conversation jx77h6jcsa0s was
+// frozen (2026-07-07 00:03Z, "Unrecognized live UI in cc-claude-y59tvn8a0bhr:0.0"):
+// the teammate split had shrunk the lead pane until its separators fell under
+// the 20-char detection threshold, so the no-separator 5-line fallback saw
+// nothing but the chip list. Pre-fix this classified "unknown" and every
+// delivery deferred — the thread froze for hours until the user killed it.
+const TEAMMATE_PANEL_ONLY_REGION = ` ◯ nav…
+ ◯ rev…
+ ◯ rev…
+ ◯ rev…
+        ↓ 2 more`;
+
+describe("teammate panel (in-process agents)", () => {
+  test("split-pane capture keeps the input box AND the chip list in the region", () => {
+    const region = extractTmuxLiveRegion(TEAMMATE_SPLIT_PANE);
+    expect(region).toContain("❯");
+    expect(region).toContain("◯ navigator");
+  });
+
+  test("lead pane with teammate chips classifies busy — never idle (truncated footer hides the busy marker, and an idle-paste's leading Escape would interrupt the lead's turn)", () => {
+    const region = extractTmuxLiveRegion(TEAMMATE_SPLIT_PANE);
+    expect(classifyTmuxLiveState(region)).toBe("busy");
+  });
+
+  test("the exact chips-only region that froze jx77h6jcsa0s classifies busy, not unknown", () => {
+    expect(classifyTmuxLiveState(TEAMMATE_PANEL_ONLY_REGION)).toBe("busy");
+  });
+
+  test("a single-teammate panel (⏺ main + one ◯ chip) also classifies busy", () => {
+    expect(classifyTmuxLiveState("  ⏺ main\n  ◯ navigator   Run… 15s")).toBe("busy");
+  });
+
+  test("one stray ◯ line without any panel signature stays unknown", () => {
+    expect(classifyTmuxLiveState("  ◯ some bullet in odd output")).toBe("unknown");
+  });
+
+  test("modal patterns still beat the chip list", () => {
+    expect(classifyTmuxLiveState("  ◯ navigator   Run… 15s\n  ◯ reviewer-1  Run… 14s\nWhat should Claude do instead?")).toBe("interrupted");
   });
 });
 

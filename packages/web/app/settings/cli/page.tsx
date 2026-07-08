@@ -3,6 +3,24 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { useState } from "react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { copyToClipboard } from "../../../lib/utils";
+import { AppLoader } from "../../../components/AppLoader";
+
+type InstallOs = "unix" | "windows";
+
+function detectOs(): InstallOs {
+  if (typeof navigator === "undefined") return "unix";
+  const ua = `${navigator.platform || ""} ${navigator.userAgent || ""}`;
+  return /win/i.test(ua) ? "windows" : "unix";
+}
+
+// The two install commands diverge by shell: curl|sh can't run on Windows, and
+// irm|iex can't run on a POSIX shell. The Windows form passes the token via env
+// var because `irm | iex` evaluates script text and can't forward arguments.
+function installCommand(os: InstallOs, token: string): string {
+  return os === "windows"
+    ? `$env:CODECAST_SETUP_TOKEN="${token}"; irm codecast.sh/install.ps1 | iex`
+    : `curl -fsSL codecast.sh/install | sh -s -- ${token}`;
+}
 
 export default function CliSettingsPage() {
   const { isAuthenticated } = useConvexAuth();
@@ -14,6 +32,7 @@ export default function CliSettingsPage() {
   const [setupToken, setSetupToken] = useState<string | null>(null);
   const [tokenExpiry, setTokenExpiry] = useState<number | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [os, setOs] = useState<InstallOs>(detectOs);
 
   const createSetupToken = useMutation(api.apiTokens.createSetupToken);
 
@@ -45,11 +64,7 @@ export default function CliSettingsPage() {
   const isTokenExpired = tokenExpiry ? now > tokenExpiry : false;
 
   if (!currentUser) {
-    return (
-      <div className="bg-sol-bg-alt/50 rounded-lg p-6 border border-sol-border">
-        <p className="text-sol-text-muted">Loading...</p>
-      </div>
-    );
+    return <AppLoader className="min-h-0 bg-transparent py-12" size={28} />;
   }
 
   return (
@@ -70,20 +85,30 @@ export default function CliSettingsPage() {
           </button>
         ) : (
           <div className="space-y-3">
+            <div className="inline-flex rounded-lg border border-sol-border overflow-hidden text-xs">
+              {(["unix", "windows"] as const).map((value) => (
+                <button
+                  key={value}
+                  onClick={() => setOs(value)}
+                  className={`px-3 py-1.5 transition-colors ${
+                    os === value
+                      ? "bg-amber-600 text-white"
+                      : "bg-sol-bg text-sol-text-muted hover:bg-sol-bg-highlight"
+                  }`}
+                >
+                  {value === "unix" ? "macOS / Linux" : "Windows"}
+                </button>
+              ))}
+            </div>
             <p className="text-sol-text-dim text-xs">
               Token expires in 60 minutes:
             </p>
             <div className="relative">
               <code className="block bg-sol-bg rounded-lg p-4 text-sm text-green-400 overflow-x-auto pr-20 break-all">
-                curl -fsSL codecast.sh/install | sh -s -- {setupToken}
+                {installCommand(os, setupToken)}
               </code>
               <button
-                onClick={() =>
-                  handleCopy(
-                    `curl -fsSL codecast.sh/install | sh -s -- ${setupToken}`,
-                    "install"
-                  )
-                }
+                onClick={() => handleCopy(installCommand(os, setupToken), "install")}
                 className="absolute top-2 right-2 px-3 py-1.5 bg-sol-bg-highlight hover:bg-amber-600/20 text-sol-text-muted text-xs rounded transition-colors"
               >
                 {copied === "install" ? "Copied!" : "Copy"}

@@ -1,4 +1,9 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback, memo } from "react";
+import { useShallow } from "zustand/react/shallow";
+import { MessageSquarePlus } from "lucide-react";
+import { useInboxStore } from "../store/inboxStore";
+import { genCommentId } from "../lib/reviewActions";
+import { KeyCap } from "./KeyboardShortcutsHelp";
 import Prism from "prismjs";
 import "prismjs/components/prism-typescript";
 import "prismjs/components/prism-javascript";
@@ -11,40 +16,73 @@ import "prismjs/components/prism-css";
 import "prismjs/components/prism-markdown";
 import "prismjs/components/prism-yaml";
 import type { PatchHunk } from "../lib/patchParser";
+import type { PendingComment } from "../lib/quoteFormat";
 
-function computeDiff(oldLines: string[], newLines: string[]): Array<{ type: 'added' | 'removed' | 'context'; content: string }> {
-  const m = oldLines.length;
-  const n = newLines.length;
+// Stable empty references so the comment selector/props don't churn renders when
+// a diff has no line comments (the common case).
+const EMPTY_LINE_COMMENTS: Record<number, PendingComment[]> = {};
+const EMPTY_COMMENT_LIST: PendingComment[] = [];
 
-  const dp: number[][] = Array(m + 1).fill(null).map(() => Array(n + 1).fill(0));
-  for (let i = 1; i <= m; i++) {
-    for (let j = 1; j <= n; j++) {
-      if (oldLines[i - 1] === newLines[j - 1]) {
-        dp[i][j] = dp[i - 1][j - 1] + 1;
-      } else {
-        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
-      }
-    }
-  }
+// The LCS matrix below is O(m*n) in time and memory; past this many cells we
+// give up on a minimal diff and render the changed region as remove-all/add-all.
+const MAX_LCS_CELLS = 500_000;
+
+export function computeDiff(oldLines: string[], newLines: string[]): Array<{ type: 'added' | 'removed' | 'context'; content: string }> {
+  const totalOld = oldLines.length;
+  const totalNew = newLines.length;
+
+  // Trim common prefix/suffix so the quadratic LCS only sees the changed
+  // middle. Identical inputs (e.g. a Read result rendered through DiffView)
+  // resolve here in linear time with no matrix at all.
+  const minLen = Math.min(totalOld, totalNew);
+  let prefix = 0;
+  while (prefix < minLen && oldLines[prefix] === newLines[prefix]) prefix++;
+  let suffix = 0;
+  while (
+    suffix < minLen - prefix &&
+    oldLines[totalOld - 1 - suffix] === newLines[totalNew - 1 - suffix]
+  ) suffix++;
 
   const result: Array<{ type: 'added' | 'removed' | 'context'; content: string }> = [];
-  let i = m, j = n;
-  const temp: typeof result = [];
+  for (let k = 0; k < prefix; k++) result.push({ type: 'context', content: oldLines[k] });
 
-  while (i > 0 || j > 0) {
-    if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
-      temp.push({ type: 'context', content: oldLines[i - 1] });
-      i--; j--;
-    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
-      temp.push({ type: 'added', content: newLines[j - 1] });
-      j--;
-    } else {
-      temp.push({ type: 'removed', content: oldLines[i - 1] });
-      i--;
+  const m = totalOld - prefix - suffix;
+  const n = totalNew - prefix - suffix;
+
+  if (m > 0 && n > 0 && m * n > MAX_LCS_CELLS) {
+    for (let k = 0; k < m; k++) result.push({ type: 'removed', content: oldLines[prefix + k] });
+    for (let k = 0; k < n; k++) result.push({ type: 'added', content: newLines[prefix + k] });
+  } else if (m > 0 || n > 0) {
+    const dp: number[][] = Array(m + 1).fill(null).map(() => Array(n + 1).fill(0));
+    for (let i = 1; i <= m; i++) {
+      for (let j = 1; j <= n; j++) {
+        if (oldLines[prefix + i - 1] === newLines[prefix + j - 1]) {
+          dp[i][j] = dp[i - 1][j - 1] + 1;
+        } else {
+          dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+        }
+      }
     }
+
+    let i = m, j = n;
+    const temp: typeof result = [];
+    while (i > 0 || j > 0) {
+      if (i > 0 && j > 0 && oldLines[prefix + i - 1] === newLines[prefix + j - 1]) {
+        temp.push({ type: 'context', content: oldLines[prefix + i - 1] });
+        i--; j--;
+      } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+        temp.push({ type: 'added', content: newLines[prefix + j - 1] });
+        j--;
+      } else {
+        temp.push({ type: 'removed', content: oldLines[prefix + i - 1] });
+        i--;
+      }
+    }
+    for (let k = temp.length - 1; k >= 0; k--) result.push(temp[k]);
   }
 
-  return temp.reverse();
+  for (let k = suffix; k > 0; k--) result.push({ type: 'context', content: oldLines[totalOld - k] });
+  return result;
 }
 
 function highlightCode(code: string, language?: string): string {
@@ -130,6 +168,10 @@ interface FlatDiffLine {
   oldNum?: number;
   newNum?: number;
   wordDiffHtml?: string;
+  html?: string;
+  // Stable index across the full (un-truncated) line list, used to anchor line
+  // comments so they stay attached when the diff expands/collapses.
+  lineKey?: number;
 }
 
 interface HunkSeparator {
@@ -284,9 +326,15 @@ interface DiffViewProps {
   startLine?: number;
   maxLines?: number;
   language?: string;
+  showLineNumbers?: boolean;
+  // When provided, each line gets a hover affordance to attach an inline comment.
+  // Comments accumulate in the shared review batch keyed by `conversationId`
+  // (under this `anchorKey`), so they auto-attach to the user's next reply just
+  // like message/plan annotations. Omit it (the default) and the diff is inert.
+  commentContext?: { conversationId: string; anchorKey: string; filePath: string };
 }
 
-export function DiffView({
+export const DiffView = memo(function DiffView({
   oldStr,
   newStr,
   hunks,
@@ -294,21 +342,34 @@ export function DiffView({
   startLine = 1,
   maxLines = 10,
   language,
+  showLineNumbers = false,
+  commentContext,
 }: DiffViewProps) {
   const [fullyExpanded, setFullyExpanded] = useState(false);
 
-  const { items, totalCodeLines } = useMemo(() => {
+  const { items, totalCodeLines, gutterCh } = useMemo(() => {
+    let items: DisplayItem[];
+    let maxLineNum: number;
     if (hunks && hunks.length > 0) {
-      const { items } = hunksToDisplayItems(hunks, language);
-      const totalCodeLines = items.filter(i => i.type !== 'separator').length;
-      return { items, totalCodeLines };
+      ({ items, maxLineNum } = hunksToDisplayItems(hunks, language));
+    } else {
+      const oldLines = (oldStr || "").split('\n');
+      const newLines = (newStr || "").split('\n');
+      const changes = computeDiff(oldLines, newLines);
+      ({ items, maxLineNum } = diffToDisplayItems(changes, startLine, contextLines, language));
     }
-
-    const oldLines = (oldStr || "").split('\n');
-    const newLines = (newStr || "").split('\n');
-    const changes = computeDiff(oldLines, newLines);
-    const result = diffToDisplayItems(changes, startLine, contextLines, language);
-    return { items: result.items, totalCodeLines: result.totalCodeLines };
+    // Highlight once here, not in render — this component sits inside the
+    // frequently re-rendering conversation tree, and Prism per line per render
+    // froze the page whenever a large block was open. Assign a stable lineKey to
+    // each code line in the same pass so comment anchors survive truncation.
+    let lineKey = 0;
+    items = items.map(item =>
+      item.type === 'separator'
+        ? item
+        : { ...item, lineKey: lineKey++, html: item.wordDiffHtml ?? highlightCode(item.content, language) },
+    );
+    const totalCodeLines = items.filter(i => i.type !== 'separator').length;
+    return { items, totalCodeLines, gutterCh: String(Math.max(maxLineNum, 1)).length };
   }, [hunks, oldStr, newStr, startLine, contextLines, language]);
 
   const needsTruncation = totalCodeLines > maxLines && !fullyExpanded;
@@ -329,6 +390,53 @@ export function DiffView({
     }
     return truncated;
   }, [items, needsTruncation, maxLines]);
+
+  // Line comments (opt-in): grouped by their anchor line so each row can render
+  // its own thread. Only subscribes when commentContext is set, so inert diffs
+  // (Read results, etc.) pay nothing.
+  //
+  // The store subscription MUST return a flat array, not the grouped map: the map
+  // would hold freshly-allocated sub-arrays every render, which `useShallow`'s
+  // value-by-value comparison can never see as equal, so the useSyncExternalStore
+  // snapshot would never stabilize and React would loop ("Maximum update depth
+  // exceeded"). A flat filtered list shallow-compares by stable comment refs, so
+  // it settles. Group into the map afterward in a plain useMemo.
+  const myComments = useInboxStore(
+    useShallow((s) =>
+      commentContext
+        ? (s.reviewComments[commentContext.conversationId] ?? []).filter(
+            (c) => c.messageId === commentContext.anchorKey,
+          )
+        : EMPTY_COMMENT_LIST,
+    ),
+  );
+  const commentsByLine = useMemo(() => {
+    if (myComments.length === 0) return EMPTY_LINE_COMMENTS;
+    const map: Record<number, PendingComment[]> = {};
+    for (const c of myComments) (map[c.blockIndex] ??= []).push(c);
+    return map;
+  }, [myComments]);
+  const [editingLine, setEditingLine] = useState<number | null>(null);
+
+  const closeEditor = useCallback(() => {
+    setEditingLine(null);
+    useInboxStore.getState().setReviewEditingId(null);
+  }, []);
+
+  const addLineComment = useCallback(
+    (lineKey: number, lineNum: number | undefined, code: string) => {
+      if (!commentContext) return;
+      const s = useInboxStore.getState();
+      const id = genCommentId();
+      const quote = `${commentContext.filePath}:${lineNum ?? "?"}\n${code}`;
+      s.addReviewComment(commentContext.conversationId, {
+        id, messageId: commentContext.anchorKey, blockIndex: lineKey, quote, body: "", createdAt: Date.now(),
+      });
+      s.setReviewEditingId(id);
+      setEditingLine(lineKey);
+    },
+    [commentContext],
+  );
 
   return (
     <div className="code-block-resizable group font-mono text-[13px] leading-[22px]">
@@ -356,19 +464,47 @@ export function DiffView({
             ? 'text-sol-red/60'
             : 'text-transparent';
 
-          let contentHtml: string;
-          if (line.wordDiffHtml) {
-            contentHtml = line.wordDiffHtml;
-          } else if (language) {
-            contentHtml = highlightCode(line.content, language);
-          } else {
-            contentHtml = escapeHtml(line.content);
-          }
+          const lk = line.lineKey ?? i;
+          const lineComments = commentContext ? commentsByLine[lk] : undefined;
+          const lineNum = line.newNum ?? line.oldNum;
 
-          return (
-            <div key={i} className={`${rowBg} whitespace-pre`}>
+          const row = (
+            <div className={`${rowBg} whitespace-pre ${commentContext ? "relative group/line pl-5" : ""}`}>
+              {commentContext && (
+                <button
+                  type="button"
+                  onClick={() => addLineComment(lk, lineNum, line.content)}
+                  className="absolute left-0 top-1/2 -translate-y-1/2 z-10 flex items-center justify-center w-4 h-4 rounded-sm text-sol-blue/80 bg-sol-bg-highlight/90 opacity-0 group-hover/line:opacity-100 hover:text-sol-cyan transition-opacity"
+                  title="Comment on this line"
+                  aria-label="Comment on this line"
+                >
+                  <MessageSquarePlus size={11} />
+                </button>
+              )}
+              {showLineNumbers && (
+                <span
+                  className="select-none inline-block text-right font-medium text-sol-text-dim opacity-55 pl-1 pr-3 mr-3 border-r border-sol-border/30"
+                  style={{ minWidth: `calc(${gutterCh}ch + 1rem)` }}
+                >
+                  {line.newNum ?? line.oldNum ?? ''}
+                </span>
+              )}
               <span className={`select-none ${prefixColor}`}>{prefix} </span>
-              <span dangerouslySetInnerHTML={{ __html: contentHtml || ' ' }} />
+              <span dangerouslySetInnerHTML={{ __html: line.html || ' ' }} />
+            </div>
+          );
+
+          if (!commentContext || (!lineComments?.length && editingLine !== lk)) {
+            return <div key={i}>{row}</div>;
+          }
+          return (
+            <div key={i}>
+              {row}
+              <DiffLineThread
+                conversationId={commentContext.conversationId}
+                comments={lineComments ?? EMPTY_COMMENT_LIST}
+                onCloseEditor={closeEditor}
+              />
             </div>
           );
         })}
@@ -390,6 +526,113 @@ export function DiffView({
           collapse
         </button>
       )}
+    </div>
+  );
+});
+
+// The inline comment thread rendered directly under a diff line. Each comment is
+// the one being edited (a textarea) or a saved chip. Comments live in the shared
+// review batch, so they ride out to the agent on the user's next reply.
+function DiffLineThread({
+  conversationId,
+  comments,
+  onCloseEditor,
+}: {
+  conversationId: string;
+  comments: PendingComment[];
+  onCloseEditor: () => void;
+}) {
+  const editingId = useInboxStore((s) => s.reviewEditingId);
+  return (
+    <div className="ml-5 my-1 border-l-2 border-sol-blue/40 pl-2.5 space-y-1 font-sans text-sol-text">
+      {comments.map((c) =>
+        c.id === editingId ? (
+          <LineCommentEditor key={c.id} conversationId={conversationId} comment={c} onDone={onCloseEditor} />
+        ) : (
+          <LineCommentChip key={c.id} conversationId={conversationId} comment={c} />
+        ),
+      )}
+    </div>
+  );
+}
+
+function LineCommentChip({ conversationId, comment }: { conversationId: string; comment: PendingComment }) {
+  return (
+    <div className="group/chip flex items-start gap-2 rounded-md bg-sol-blue/5 border border-sol-blue/20 px-2 py-1">
+      <span className="text-sol-blue/70 text-xs mt-0.5 select-none">💬</span>
+      <div className="flex-1 min-w-0 text-[13px]">
+        {comment.body ? (
+          <span className="whitespace-pre-wrap break-words">{comment.body}</span>
+        ) : (
+          <span className="italic text-sol-text-dim">Flagged this line (no note)</span>
+        )}
+      </div>
+      <div className="flex items-center gap-2 opacity-0 group-hover/chip:opacity-100 transition-opacity">
+        <button
+          type="button"
+          className="text-[11px] text-sol-text-dim hover:text-sol-cyan"
+          onClick={() => useInboxStore.getState().setReviewEditingId(comment.id)}
+        >
+          {comment.body ? "Edit" : "Add note"}
+        </button>
+        <button
+          type="button"
+          className="text-[11px] text-sol-text-dim hover:text-sol-red"
+          onClick={() => useInboxStore.getState().removeReviewComment(conversationId, comment.id)}
+        >
+          Remove
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function LineCommentEditor({
+  conversationId,
+  comment,
+  onDone,
+}: {
+  conversationId: string;
+  comment: PendingComment;
+  onDone: () => void;
+}) {
+  const [value, setValue] = useState(comment.body);
+  const save = useCallback(() => {
+    useInboxStore.getState().commitReviewComment(conversationId, comment.id, value.trim());
+    onDone();
+  }, [value, conversationId, comment.id, onDone]);
+  // Cancel an as-yet-unsaved (empty) comment by removing it, so a stray click on
+  // the + button doesn't leave an empty flag behind; keep existing notes intact.
+  const cancel = useCallback(() => {
+    if (!comment.body.trim() && !value.trim()) {
+      useInboxStore.getState().removeReviewComment(conversationId, comment.id);
+    }
+    onDone();
+  }, [comment.body, value, conversationId, comment.id, onDone]);
+
+  return (
+    <div className="rounded-md bg-sol-bg-highlight/40 border border-sol-blue/30 p-1.5 font-sans">
+      <textarea
+        autoFocus
+        value={value}
+        placeholder="Comment on this line…"
+        className="w-full bg-transparent text-[13px] text-sol-text placeholder:text-sol-text-dim outline-none resize-none"
+        rows={2}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); save(); }
+          else if (e.key === "Escape") { e.preventDefault(); cancel(); }
+        }}
+      />
+      <div className="flex items-center justify-end gap-2 mt-1">
+        <button type="button" className="text-[11px] text-sol-text-dim hover:text-sol-text" onMouseDown={(e) => e.preventDefault()} onClick={cancel}>
+          Cancel <KeyCap size="xs">Esc</KeyCap>
+        </button>
+        <button type="button" className="text-[11px] text-sol-blue hover:text-sol-cyan font-medium" onMouseDown={(e) => e.preventDefault()} onClick={save}>
+          Save <KeyCap size="xs">⌘</KeyCap><KeyCap size="xs">↵</KeyCap>
+        </button>
+      </div>
     </div>
   );
 }

@@ -18,7 +18,12 @@
     "jsx": "preserve",
     "incremental": true,
     "types": [
-      "vite/client"
+      "vite/client",
+      // The web tree imports shared logic from the convex package
+      // (@codecast/convex/convex/...), whose source legitimately uses the node
+      // `process` global; without node types, tsc follows those imports and
+      // flags every `process` reference (TS2591). server/index.ts is node too.
+      "node"
     ],
     "paths": {
       "@/*": [
@@ -59,6 +64,18 @@
   ],
   "exclude": [
     "node_modules",
+    // Dead Next.js API-route scaffolding. This is a Vite SPA — the real
+    // /api/health endpoint is served by `server/index.ts`. These route handlers
+    // never run here, and they pull in `next/server` (not a dependency), so keep
+    // them out of the app typecheck.
+    "app/api/**",
+    // Test files run under `bun test` (which provides the `bun:test` module and
+    // its types); the app typecheck has no bun types, so a full tsc would flag
+    // every *.test.ts on its `bun:test` import. Tests aren't app code — keep them
+    // out of the app typecheck entirely (bun type-checks them on its own).
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/__tests__/**",
     // Platform-extension files (and their tests) target React Native / mobile-only
     // deps (expo-sqlite). Metro resolves them for the native bundle; the web build
     // and typecheck must never touch them.

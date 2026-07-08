@@ -317,22 +317,14 @@ describe("workflow/runner (dry-run)", () => {
     expect(cap.logs.some(l => l.includes("max_visits"))).toBe(true);
   });
 
-  test("workflow fails when validation errors exist", async () => {
+  test("workflow reports invalid when validation errors exist", async () => {
     const g = parseWorkflowSource(`digraph g {
       exit [shape=Msquare]
     }`);
-    // runWorkflow calls process.exit(1) on validation error; throw to stop execution
-    const origExit = process.exit;
-    let exitCalled = false;
-    (process as any).exit = () => { exitCalled = true; throw new Error("process.exit"); };
-    try {
-      await runWorkflow(g, { ...dryRun, cwd: tmpDir });
-    } catch {
-      // expected
-    } finally {
-      (process as any).exit = origExit;
-    }
-    expect(exitCalled).toBe(true);
+    // runWorkflow returns its outcome instead of touching process exit state —
+    // the CLI wrappers translate to an exit code at the process boundary.
+    const outcome = await runWorkflow(g, { ...dryRun, cwd: tmpDir });
+    expect(outcome).toBe("invalid");
   });
 });
 

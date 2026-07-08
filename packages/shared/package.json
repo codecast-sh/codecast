@@ -7,6 +7,9 @@
   "types": "./index.ts",
   "exports": {
     ".": "./index.ts",
-    "./encryption": "./encryption/index.ts"
+    "./encryption": "./encryption/index.ts",
+    "./contracts": "./contracts/index.ts",
+    "./entities": "./entities/index.ts",
+    "./render": "./render/index.ts"
   }
 }

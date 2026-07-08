@@ -3,19 +3,11 @@ import { computeCumulativeDiff, type CumulativeDiff } from '../lib/cumulativeDif
 import { LRUCache } from '../lib/lruCache';
 import { useInboxStore } from './inboxStore';
 
-export interface FileChange {
-  id: string;
-  toolCallId?: string;
-  sequenceIndex: number;
-  messageId: string;
-  filePath: string;
-  changeType: 'write' | 'edit' | 'commit';
-  oldContent?: string;
-  newContent: string;
-  commitMessage?: string;
-  commitHash?: string;
-  timestamp: number;
-}
+// FileChange is defined once in the shared extractor (@codecast/convex) so the
+// server materializer and the client viewer can't drift. Re-exported here to
+// preserve the many `import type { FileChange } from '../store/diffViewerStore'` sites.
+import type { FileChange } from '../lib/fileChangeExtractor';
+export type { FileChange };
 
 interface DiffCacheKey {
   rangeStart: number;

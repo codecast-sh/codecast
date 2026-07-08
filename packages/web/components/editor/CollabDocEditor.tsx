@@ -20,7 +20,10 @@ import { TableCell } from "@tiptap/extension-table-cell";
 import { TableHeader } from "@tiptap/extension-table-header";
 import { Markdown } from "tiptap-markdown";
 import { common, createLowlight } from "lowlight";
-import { Editor as HeadlessEditor } from "@tiptap/core";
+import { Editor as HeadlessEditor, Extension } from "@tiptap/core";
+import { getVersion, sendableSteps } from "prosemirror-collab";
+import type { ComposeEditorHandle } from "./ComposeEditor";
+import { AppLoader } from "../AppLoader";
 import tippy, { type Instance as TippyInstance } from "tippy.js";
 import { useTiptapSync } from "@convex-dev/prosemirror-sync/tiptap";
 import { useQuery, useMutation } from "convex/react";
@@ -29,6 +32,7 @@ import { MentionList, type MentionItem } from "./MentionList";
 import { MentionNodeView } from "./MentionNodeView";
 import { SlashCommandExtension } from "./SlashCommandExtension";
 import { DateMentionExtension } from "./DateMentionExtension";
+import { TabIndentExtension } from "./TabIndentExtension";
 import { EntityIdExtension } from "./EntityIdExtension";
 import { BubbleToolbar } from "./BubbleToolbar";
 import { ImageUploadPlaceholder, uploadImageWithPlaceholder } from "./ImageUploadPlugin";
@@ -46,11 +50,32 @@ interface CollabDocEditorProps {
   markdownContent: string;
   onMentionQuery: MentionQueryFn;
   onImageUpload?: (file: File) => Promise<string | null>;
+  // When set, pasted/dropped images are routed here (the chat composer's
+  // attachment pipeline) instead of being uploaded and inlined into the doc body.
+  // Takes precedence over onImageUpload. Omitted by /docs.
+  onImagePaste?: (file: File) => void;
   editable?: boolean;
   className?: string;
   placeholder?: string;
   getMarkdownRef?: React.MutableRefObject<(() => string) | null>;
   cliEditedAt?: number;
+  /**
+   * Whether `markdownContent` reflects the loaded doc (vs. a lite list row whose
+   * content hasn't arrived yet). When false and there's no content, the editor
+   * waits instead of seeding an empty collab snapshot — seeding empty over a
+   * still-loading doc would wipe its markdown server-side. Defaults to true for
+   * callers that pass authoritative content synchronously.
+   */
+  contentReady?: boolean;
+  // ── Compose-mode affordances (the chat composer's expanded "doc" view) ──
+  // When provided, the editor binds Cmd/Ctrl+Enter → onSubmit and Cmd+Shift+E →
+  // onExit, reports content emptiness via onContentChange, and exposes an
+  // imperative handle so the composer can read/clear it on send. `clear()` empties
+  // the shared OT doc, which propagates to every collaborator. Omitted by /docs.
+  onSubmit?: () => void;
+  onExit?: () => void;
+  onContentChange?: (hasContent: boolean) => void;
+  composeHandleRef?: React.MutableRefObject<ComposeEditorHandle | null>;
 }
 
 const MENTION_ROUTE_MAP: Record<string, string> = {
@@ -240,6 +265,7 @@ function buildExtensions(onMentionQuery: MentionQueryFn, placeholder: string) {
     }),
     SlashCommandExtension,
     DateMentionExtension,
+    TabIndentExtension,
     EntityIdExtension,
     Typography,
     Highlight.configure({ HTMLAttributes: { class: "editor-highlight" } }),
@@ -280,7 +306,12 @@ function CursorOverlay({ presences }: { presences: PresenceEntry[] }) {
     return () => { if (tickRef.current) clearInterval(tickRef.current); };
   });
 
-  if (!editor || !editor.view) return null;
+  // `editor.view` is a Proxy that THROWS on any property access (e.g. `.dom`)
+  // until the ProseMirror view is mounted — so `!editor.view` never short-circuits
+  // (the proxy is always truthy) and the `.dom` read below blows up during the
+  // mount race. `isInitialized` flips true only once editorView exists, and reading
+  // it never touches the proxy. (Sentry: "[tiptap error]: Cannot access view['dom']".)
+  if (!editor || !editor.isInitialized) return null;
 
   const editorEl = editor.view.dom;
   const editorRect = editorEl.getBoundingClientRect();
@@ -339,23 +370,63 @@ function EditorInner({
   editable,
   presences,
   getMarkdownRef,
+  composeHandleRef,
+  onContentChange,
 }: {
   docId: string;
   editable: boolean;
   presences: PresenceEntry[];
   getMarkdownRef?: React.MutableRefObject<(() => string) | null>;
+  composeHandleRef?: React.MutableRefObject<ComposeEditorHandle | null>;
+  onContentChange?: (hasContent: boolean) => void;
 }) {
   const { editor } = useCurrentEditor();
 
+  const readMarkdown = () =>
+    editor ? ((editor.storage as any).markdown?.getMarkdown?.() ?? editor.getText()) : "";
+
   if (getMarkdownRef && editor && !editor.isDestroyed) {
-    getMarkdownRef.current = () => (editor.storage as any).markdown.getMarkdown();
+    getMarkdownRef.current = readMarkdown;
   }
+  // Same imperative contract as ComposeEditor so the composer's send/collapse
+  // paths are unchanged. clear() empties the shared doc → propagates via OT.
+  if (composeHandleRef && editor && !editor.isDestroyed) {
+    composeHandleRef.current = {
+      getMarkdown: readMarkdown,
+      focus: () => editor.commands.focus("end"),
+      clear: () => editor.commands.clearContent(),
+    };
+  }
+
+  useMountEffect(() => {
+    if (!editor || !onContentChange) return;
+    const report = () => onContentChange(readMarkdown().trim().length > 0);
+    report();
+    editor.on("update", report);
+    return () => editor.off("update", report);
+  });
   const updatePresence = useMutation(api.docSync.updatePresence);
   const removePresence = useMutation(api.docSync.removePresence);
   const presenceTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastPosRef = useRef<{ cursor: number | undefined; anchor: number | undefined }>({
     cursor: undefined,
     anchor: undefined,
+  });
+
+  useMountEffect(() => {
+    if (!editor) return;
+    let cacheTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleCacheWrite = () => {
+      if (cacheTimer) clearTimeout(cacheTimer);
+      cacheTimer = setTimeout(() => writeSyncCache(docId, editor), 1000);
+    };
+    editor.on("update", scheduleCacheWrite);
+    writeSyncCache(docId, editor); // cache on open so revisits skip the loading round-trip
+    return () => {
+      if (cacheTimer) clearTimeout(cacheTimer);
+      editor.off("update", scheduleCacheWrite);
+      writeSyncCache(docId, editor);
+    };
   });
 
   useMountEffect(() => {
@@ -386,6 +457,24 @@ function EditorInner({
   );
 }
 
+// useTiptapSync reads a sessionStorage cache (`convex-sync-<id>`) to skip the
+// snapshot round-trip on mount, but never writes it — we write it here so
+// reopening a doc renders the editor instantly and catches up via getSteps.
+function writeSyncCache(docId: string, editor: HeadlessEditor) {
+  if (editor.isDestroyed) return;
+  // Only cache confirmed state: content holding unconfirmed local steps would
+  // get those steps re-applied by the catch-up fetch on restore.
+  if (sendableSteps(editor.state)) return;
+  try {
+    sessionStorage.setItem(
+      `convex-sync-${docId}`,
+      JSON.stringify({ content: editor.state.doc.toJSON(), version: getVersion(editor.state) }),
+    );
+  } catch {
+    // best-effort — without the cache, loading falls back to the server path
+  }
+}
+
 function markdownToJson(markdown: string, extensions: any[]): any {
   const editor = new HeadlessEditor({
     extensions,
@@ -407,6 +496,11 @@ export function CollabDocEditor({
   placeholder = "Start writing, use / for commands, @ to mention, # for dates...",
   getMarkdownRef,
   cliEditedAt,
+  contentReady = true,
+  onSubmit,
+  onExit,
+  onContentChange,
+  composeHandleRef,
 }: CollabDocEditorProps) {
   const onImageUploadRef = useRef(onImageUpload);
   onImageUploadRef.current = onImageUpload;
@@ -416,20 +510,62 @@ export function CollabDocEditor({
   const createdRef = useRef(false);
   const extensionsRef = useRef<any[] | null>(null);
 
+  // Compose keymap: bound to refs so the latest handlers fire without rebuilding
+  // the editor. Created once and only when compose handlers are supplied (the
+  // document editor passes none, so its keymap is unchanged).
+  const onSubmitRef = useRef(onSubmit);
+  onSubmitRef.current = onSubmit;
+  const onExitRef = useRef(onExit);
+  onExitRef.current = onExit;
+  const composeKeymapRef = useRef<Extension | null>(null);
+  if ((onSubmit || onExit) && !composeKeymapRef.current) {
+    composeKeymapRef.current = Extension.create({
+      name: "composeKeymap",
+      addKeyboardShortcuts() {
+        return {
+          "Mod-Enter": () => { onSubmitRef.current?.(); return true; },
+          "Mod-Shift-e": () => { onExitRef.current?.(); return true; },
+        };
+      },
+    });
+  }
+
   if (!extensionsRef.current) {
     extensionsRef.current = buildExtensions(onMentionQuery, placeholder);
   }
 
   if (sync.isLoading) {
+    // Paint the content we already have (store-cached markdown) as a read-only
+    // editor while the snapshot loads; the live editor swaps in when ready.
+    if (markdownContent) {
+      return (
+        <div className={`doc-editor ${className}`} style={{ position: "relative" }}>
+          <EditorProvider
+            key={`preview-${markdownContent.length}`}
+            content={markdownContent}
+            extensions={extensionsRef.current}
+            editable={false}
+            editorProps={{
+              attributes: { class: "doc-editor-content focus:outline-none" },
+            }}
+          />
+        </div>
+      );
+    }
     return (
       <div className={`doc-editor ${className}`}>
-        <div className="text-sol-text-dim text-sm py-8">Loading editor...</div>
+        <AppLoader className="min-h-0 bg-transparent py-8" size={24} />
       </div>
     );
   }
 
   if (!sync.initialContent) {
-    if (!createdRef.current) {
+    // No snapshot exists yet — we must seed one from the doc's markdown. Only do
+    // so once we actually have the content: either markdownContent is non-empty,
+    // or the doc detail has loaded and confirms it's genuinely empty. Seeding an
+    // empty snapshot while the markdown is still loading wipes it server-side.
+    const canSeed = !!markdownContent || contentReady;
+    if (canSeed && !createdRef.current) {
       createdRef.current = true;
       const json = markdownContent
         ? markdownToJson(markdownContent, extensionsRef.current)
@@ -438,16 +574,21 @@ export function CollabDocEditor({
     }
     return (
       <div className={`doc-editor ${className}`}>
-        <div className="text-sol-text-dim text-sm py-8">Initializing collaborative editing...</div>
+        <AppLoader className="min-h-0 bg-transparent py-8" size={24} />
       </div>
     );
   }
 
-  const allExtensions = [...extensionsRef.current, sync.extension];
+  const allExtensions = [
+    ...extensionsRef.current,
+    sync.extension,
+    ...(composeKeymapRef.current ? [composeKeymapRef.current] : []),
+  ];
 
   return (
     <div className={`doc-editor ${className}`} style={{ position: "relative" }}>
       <EditorProvider
+        key="live"
         content={sync.initialContent}
         extensions={allExtensions}
         editable={editable}
@@ -488,6 +629,8 @@ export function CollabDocEditor({
           editable={editable}
           presences={presences}
           getMarkdownRef={getMarkdownRef}
+          composeHandleRef={composeHandleRef}
+          onContentChange={onContentChange}
         />
         {cliEditedAt && (
           <ExternalEditSync

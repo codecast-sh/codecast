@@ -21,6 +21,9 @@
     "production": {
       "autoIncrement": true,
       "channel": "production",
+      "env": {
+        "SENTRY_DISABLE_AUTO_UPLOAD": "true"
+      },
       "ios": {
         "resourceClass": "m-medium"
       }
@@ -29,9 +32,10 @@
   "submit": {
     "production": {
       "ios": {
-        "appleId": "$APPLE_ID",
-        "ascAppId": "$ASC_APP_ID",
-        "appleTeamId": "$APPLE_TEAM_ID"
+        "ascAppId": "6757820850",
+        "ascApiKeyPath": "/Users/ashot/.app-store-connect/AuthKey_KR5Y6LS448.p8",
+        "ascApiKeyId": "KR5Y6LS448",
+        "ascApiKeyIssuerId": "69a6de76-856e-47e3-e053-5b8c7c11a4d1"
       }
     }
   }

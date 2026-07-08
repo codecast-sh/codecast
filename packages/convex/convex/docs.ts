@@ -1,16 +1,22 @@
 import { v } from "convex/values";
-import { mutation, query, internalMutation, internalQuery } from "./_generated/server";
-import { Id } from "./_generated/dataModel";
+import { mutation, query, internalMutation, internalQuery } from "./functions";
+import { Id, type Doc } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { verifyApiToken } from "./apiTokens";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createDataContext, scopedFetch, resolveEffectiveTeam } from "./data";
-import { resolveTeamForPath } from "./privacy";
+import { resolveTeamForPath, isTeamMember, createTeamFeedFilter } from "./privacy";
 import {
   webDocsNeedsUserDoc,
   resolveWebDocsTeamId,
   clampWebDocsPageSize,
 } from "./webDocsPagination";
+// Owner-or-team access check for a doc. Moved to lib/access.ts (Wave-1 auth/access
+// seam). Imported for local use here and re-exported below so the web mutation
+// and the dispatch side-effect still enforce one rule, not two.
+import { canAccessDoc } from "./lib/access";
+import { packSnapshotContent } from "./lib/docSnapshot";
+export { canAccessDoc };
 
 function generatePlanShortId(): string {
   const chars = "0123456789abcdefghijklmnopqrstuvwxyz";
@@ -81,6 +87,61 @@ function extractPlanTitleForWeb(d: any) {
     if (match) return { ...d, display_title: match[1].trim(), plan_name: d.title };
   }
   return d;
+}
+
+export type WebDocRelatedConversation = {
+  _id: Id<"conversations">;
+  session_id: string;
+  title?: string;
+  project_path?: string;
+  started_at: number;
+  updated_at: number;
+  message_count: number;
+  short_id?: string;
+};
+
+export type WebDocActivePlan = {
+  _id: Id<"plans">;
+  short_id: string;
+  title: string;
+  status: string;
+};
+
+export type WebDocDetail = Doc<"docs"> & {
+  display_title?: string;
+  plan_name?: string;
+  related_conversations?: WebDocRelatedConversation[];
+  active_plan?: WebDocActivePlan;
+};
+
+export function isWebDocOwner(doc: Doc<"docs"> | null | undefined, userId: Id<"users">): doc is Doc<"docs"> {
+  return !!doc && doc.user_id === userId;
+}
+
+export function mapWebDocDetail(input: {
+  doc: Doc<"docs">;
+  relatedConversations?: WebDocRelatedConversation[];
+  activePlan?: WebDocActivePlan;
+}): WebDocDetail {
+  const result: WebDocDetail = { ...input.doc };
+
+  if (input.doc.source === "plan_mode" && input.doc.content) {
+    const match = input.doc.content.match(/^#\s+(.+)/m);
+    if (match) {
+      result.display_title = match[1].trim();
+      result.plan_name = input.doc.title;
+    }
+  }
+
+  if (input.relatedConversations && input.relatedConversations.length > 0) {
+    result.related_conversations = input.relatedConversations;
+  }
+
+  if (input.activePlan) {
+    result.active_plan = input.activePlan;
+  }
+
+  return result;
 }
 
 async function buildWebDocList(
@@ -456,6 +517,10 @@ export const list = query({
     if (!auth) throw new Error("Unauthorized");
 
     let docs;
+    // The by_project_id index is global: a client-supplied project_id could
+    // surface another user's/team's docs, so that branch gets an explicit
+    // owner-or-team-member filter below.
+    let needsAccessFilter = false;
     if (args.doc_type) {
       docs = await ctx.db
         .query("docs")
@@ -468,11 +533,24 @@ export const list = query({
         .query("docs")
         .withIndex("by_project_id", (q) => q.eq("project_id", args.project_id as any))
         .collect();
+      needsAccessFilter = true;
     } else {
       docs = await ctx.db
         .query("docs")
         .withIndex("by_user_id", (q) => q.eq("user_id", auth.userId))
         .collect();
+    }
+
+    if (needsAccessFilter) {
+      const memberships = await ctx.db
+        .query("team_memberships")
+        .withIndex("by_user_id", (q: any) => q.eq("user_id", auth.userId))
+        .collect();
+      const memberTeamIds = new Set(memberships.map((m: any) => String(m.team_id)));
+      docs = docs.filter((d: any) =>
+        String(d.user_id) === String(auth.userId) ||
+        (d.team_id && memberTeamIds.has(String(d.team_id)))
+      );
     }
 
     // Exclude archived
@@ -580,6 +658,10 @@ export const resetSync = mutation({
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
+    // Owner-only, matching the sibling `patch` mutation. Without this, any caller
+    // could wipe a doc's deltas and overwrite its snapshot content by id.
+    const target = await ctx.db.get(args.id);
+    if (!target || target.user_id !== auth.userId) throw new Error("Doc not found");
     const docId = args.id as string;
     const snapshots = await ctx.db
       .query("doc_snapshots")
@@ -595,12 +677,18 @@ export const resetSync = mutation({
 
     if (snapshots.length > 0) {
       const latest = snapshots.reduce((a: any, b: any) => a.version > b.version ? a : b);
-      await ctx.db.patch(latest._id, { content: json, version: latest.version + 1 });
+      // Write the compressed form and drop any legacy uncompressed content so the
+      // row carries exactly one representation (see doc_snapshots in schema.ts).
+      await ctx.db.patch(latest._id, {
+        content_gz: packSnapshotContent(json),
+        content: undefined,
+        version: latest.version + 1,
+      });
       for (const s of snapshots) {
         if (s._id !== latest._id) await ctx.db.delete(s._id);
       }
     } else {
-      await ctx.db.insert("doc_snapshots", { id: docId, version: 1, content: json });
+      await ctx.db.insert("doc_snapshots", { id: docId, version: 1, content_gz: packSnapshotContent(json) });
     }
     await ctx.db.patch(args.id, { cli_edited_at: Date.now() });
     return { success: true };
@@ -795,6 +883,57 @@ async function enrichPage(
   });
 }
 
+// Change-feed batch fetch: current state for a set of doc ids the user can
+// access (own or team). Decorates like enrichPage (display_title via
+// extractPlanTitleForWeb, author + plan badges) but DELIBERATELY skips
+// enrichPage's presentation filters: catch-up must deliver an archived doc WITH
+// archived_at set (so the client hides it) and plan-docs too, rather than
+// dropping them. Inaccessible / gone ids are omitted; the feed drives the prune.
+// See changeFeed.ts.
+export const webGetByIds = query({
+  args: { ids: v.array(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { docs: [] };
+    const rows: any[] = [];
+    for (const raw of args.ids.slice(0, 300)) {
+      const id = ctx.db.normalizeId("docs", raw);
+      if (!id) continue;
+      const doc = await ctx.db.get(id);
+      if (!doc || !(await canAccessDoc(ctx, userId, doc))) continue;
+      rows.push(doc);
+    }
+    const userMap = new Map<string, any>();
+    for (const d of rows) {
+      const uid = d.user_id ? String(d.user_id) : null;
+      if (!uid || userMap.has(uid)) continue;
+      const u = await ctx.db.get(uid as Id<"users">);
+      if (u) userMap.set(uid, { name: u.name, image: u.image || (u as any).github_avatar_url, github_username: (u as any).github_username });
+    }
+    const planMap = new Map<string, { short_id: string; status: string }>();
+    const docToPlan = new Map<string, { short_id: string; status: string }>();
+    for (const d of rows) {
+      if (d.plan_id) {
+        const p = await ctx.db.get(d.plan_id as Id<"plans">);
+        if (p) planMap.set(String(d.plan_id), { short_id: (p as any).short_id, status: (p as any).status });
+      } else if (d.doc_type === "plan") {
+        const p = await ctx.db.query("plans").withIndex("by_doc_id", (q: any) => q.eq("doc_id", d._id as string)).first();
+        if (p) docToPlan.set(d._id as string, { short_id: p.short_id, status: p.status as string });
+      }
+    }
+    const docs = rows.map(extractPlanTitleForWeb).map((d: any) => {
+      const author = d.user_id ? userMap.get(String(d.user_id)) : undefined;
+      const plan = d.plan_id ? planMap.get(String(d.plan_id)) : docToPlan.get(d._id as string);
+      return {
+        ...d,
+        ...(author ? { author_name: author.name, author_image: author.image, author_username: author.github_username } : {}),
+        ...(plan ? { plan_short_id: plan.short_id, plan_status: plan.status } : {}),
+      };
+    });
+    return { docs };
+  },
+});
+
 export const webListPaginated = query({
   args: {
     doc_type: v.optional(v.string()),
@@ -828,9 +967,14 @@ export const webListPaginated = query({
     // Defensive clamp: Convex returns full documents from storage before our
     // strip step runs, so a single page that includes a doc with multi-MB
     // content/entries can blow the 64MB query memory cap. Originally 100 —
-    // lowered after observing TooMuchMemoryCarryOver on this UDF (2026-05-13),
-    // now WEB_DOCS_MAX_PAGE=12, which leaves headroom for the convMap/user/plan
-    // lookups below. Clamp lives in webDocsPagination.ts so it's tested.
+    // lowered to 30 after observing TooMuchMemoryCarryOver on this UDF
+    // (2026-05-13), then tightened to 12. Confirmed 2026-05-30: bumping to 24
+    // re-triggered TooMuchMemoryCarryOver (~63 MiB carryover) because Convex
+    // loads each doc's full content/entries into the isolate heap before
+    // stripDoc runs — so per-doc size, not count, is the binding limit. The
+    // webListPaginated invalidation storm is addressed client-side instead (cap
+    // the auto-load of all pages in useSyncDocs), not by enlarging the page.
+    // Clamp (WEB_DOCS_MAX_PAGE=12) lives in webDocsPagination.ts so it's tested.
     const paginationOpts = {
       ...args.paginationOpts,
       numItems: clampWebDocsPageSize(args.paginationOpts.numItems),
@@ -904,33 +1048,37 @@ export const webListPaginated = query({
 });
 
 export const webGet = query({
+  // Accept a raw string rather than v.id("docs"). These ids arrive from clickable
+  // pills/links embedded in untrusted message and doc content, where a stale or
+  // mistyped id (e.g. a conversation id in a malformed /docs/<id> link) would make
+  // the v.id("docs") validator throw ArgumentValidationError and crash the page.
+  // normalizeId returns null for anything that isn't a docs-table id, so we degrade
+  // to "not found" instead. (It also avoids ctx.db.get silently returning a
+  // cross-table document, since Convex ids are globally unique.)
   args: {
-    id: v.id("docs"),
+    id: v.string(),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return null;
 
-    const doc = await ctx.db.get(args.id);
-    if (!doc || doc.user_id !== userId) return null;
+    const docId = ctx.db.normalizeId("docs", args.id);
+    if (!docId) return null;
+    const doc = await ctx.db.get(docId);
+    if (!doc) return null;
+    // Creator OR any member of the doc's team — same access rule as
+    // tasks.webGet. Creator-only made a teammate's embedded doc reference
+    // (inline pill / hover preview) resolve to nothing.
+    const hasAccess = doc.user_id === userId
+      || (doc.team_id ? await isTeamMember(ctx, userId, doc.team_id) : false);
+    if (!hasAccess) return null;
 
-    const result: any = { ...doc };
-
-    if (doc.source === "plan_mode" && doc.content) {
-      const match = doc.content.match(/^#\s+(.+)/m);
-      if (match) {
-        result.display_title = match[1].trim();
-        result.plan_name = doc.title;
-      }
-    }
-
-    // Load related conversations
     const convIds = doc.related_conversation_ids || (doc.conversation_id ? [doc.conversation_id] : []);
+    const relatedConversations: WebDocRelatedConversation[] = [];
     if (convIds.length > 0) {
-      const convs = [];
       for (const cid of convIds) {
         const conv = await ctx.db.get(cid);
-        if (conv) convs.push({
+        if (conv) relatedConversations.push({
           _id: conv._id,
           session_id: conv.session_id,
           title: conv.title,
@@ -941,19 +1089,20 @@ export const webGet = query({
           short_id: conv.short_id,
         });
       }
-      result.related_conversations = convs;
     }
 
-    // Resolve plan from conversation's active_plan_id
+    let activePlan: WebDocActivePlan | undefined;
     if (doc.conversation_id) {
       const conv = await ctx.db.get(doc.conversation_id);
       if (conv?.active_plan_id) {
         const plan = await ctx.db.get(conv.active_plan_id);
-        if (plan) result.active_plan = { _id: plan._id, short_id: plan.short_id, title: plan.title, status: plan.status };
+        if (plan) {
+          activePlan = { _id: plan._id, short_id: plan.short_id, title: plan.title, status: plan.status };
+        }
       }
     }
 
-    return result;
+    return mapWebDocDetail({ doc, relatedConversations, activePlan });
   },
 });
 
@@ -1022,6 +1171,7 @@ export const webSearch = query({
   },
 });
 
+
 export const webUpdate = mutation({
   args: {
     id: v.id("docs"),
@@ -1038,6 +1188,7 @@ export const webUpdate = mutation({
 
     const doc = await ctx.db.get(args.id);
     if (!doc) throw new Error("Doc not found");
+    if (!(await canAccessDoc(ctx, userId, doc))) throw new Error("Unauthorized");
 
     const updates: any = { updated_at: Date.now() };
     if (args.title !== undefined) updates.title = args.title;
@@ -1216,10 +1367,17 @@ export const webMentionList = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) return { items: [] };
 
-    // Bound the response below Convex's 8192-array limit. See tasks.webMentionList
-    // for the rationale — same shape, same fallback to mentionSearch for stale items.
-    const MAX_TOTAL = 4000;
-    const MAX_PER_TEAM = 1500;
+    // Bound the scan to a small recent slice. The client only renders the
+    // top-6-per-type "recents" (see useMentionQuery); anything beyond that is
+    // served by `mentionSearch`. The old 4000/1500 caps were chosen for the
+    // 8192-array return limit, but the real failure mode is MEMORY: `.take()`
+    // materializes whole `docs` rows — including the heavy `content` body,
+    // the ~8KB `embedding`, and the unbounded `entries[]` timeline (Convex has
+    // no field projection) — so thousands of rows blow the 64 MB isolate cap
+    // and crash the whole app. A small cap keeps the scan well under it while
+    // still giving the client plenty of recent candidates.
+    const MAX_TOTAL = 50;
+    const MAX_PER_TEAM = 25;
     const seen = new Set<string>();
     const docs: any[] = [];
     const pushUnique = (d: any) => {
@@ -1276,6 +1434,9 @@ export const webMentionList = query({
           _id: String(d._id),
           title: d.title,
           doc_type: d.doc_type,
+          // Filename/path so the palette can find a file-synced doc by its name,
+          // not just its content-derived title (e.g. "backend/ROADMAP_EXPLAINED.md").
+          source_file: d.source_file ?? null,
           updated_at: d.updated_at,
           team_id: d.team_id ?? null,
           user_id: d.user_id ?? null,
@@ -1396,19 +1557,53 @@ export const mentionSearch = query({
     }
 
     if (types.includes("doc")) {
+      // A file-synced doc is titled from its content heading, not its filename, so
+      // match the source file path too — lets you find a doc by name/path.
+      const docMatches = (d: any) =>
+        d.title?.toLowerCase().includes(q) || d.source_file?.toLowerCase().includes(q);
       let docs;
       if (teamId) {
+        // Recent team docs by recency — the local-cache window. Raised well past
+        // the old 100 so more of a team's docs are reachable as plain recents
+        // without any search round-trip.
         docs = await ctx.db
           .query("docs")
           .withIndex("by_team_id", (d: any) => d.eq("team_id", teamId))
           .order("desc")
-          .take(perType * 10);
-        if (q) docs = docs.filter((d: any) => d.title?.toLowerCase().includes(q));
+          .take(perType * 30);
+        if (q) {
+          docs = docs.filter(docMatches);
+          // The recency scan only sees the newest rows; a full-text title lookup
+          // reaches docs far older than any cache window. Without this a team doc
+          // outside the recent set was unfindable by @-mention — unlike team
+          // tasks and sessions, which already union a search-index fallback the
+          // same way (see the task/session branches above).
+          const teamStr = String(teamId);
+          const titleHits = (await ctx.db
+            .query("docs")
+            .withSearchIndex("search_docs_v2", (s: any) => s.search("title", args.query))
+            .take(perType * 20))
+            .filter((d: any) => String(d.team_id || "") === teamStr);
+          const seen = new Set(docs.map((d: any) => String(d._id)));
+          for (const hit of titleHits) {
+            if (!seen.has(String(hit._id))) docs.push(hit);
+          }
+        }
       } else if (q) {
-        docs = await db.raw
+        // The title search index can't see source_file, so union the title-index
+        // hits with filename hits from a bounded recent scan.
+        const byTitle = await db.raw
           .query("docs")
           .withSearchIndex("search_docs_v2", (s: any) => s.search("title", args.query).eq("user_id", userId))
           .take(perType * 5);
+        const byFile = (await db.raw
+          .query("docs")
+          .withIndex("by_user_id", (d: any) => d.eq("user_id", userId))
+          .order("desc")
+          .take(perType * 20))
+          .filter((d: any) => d.source_file?.toLowerCase().includes(q));
+        const seen = new Set(byTitle.map((d: any) => String(d._id)));
+        docs = [...byTitle, ...byFile.filter((d: any) => !seen.has(String(d._id)))];
       } else {
         docs = await db.raw
           .query("docs")
@@ -1421,7 +1616,9 @@ export const mentionSearch = query({
           id: String(doc._id),
           type: "doc",
           label: doc.title,
-          sublabel: doc.doc_type,
+          // Show the filename when the doc is backed by a file, so a name/path
+          // match is legible (the title may not contain what you typed).
+          sublabel: doc.source_file ? (doc.source_file.split("/").pop() || doc.doc_type) : doc.doc_type,
           docType: doc.doc_type,
         });
       }
@@ -1473,11 +1670,42 @@ export const mentionSearch = query({
           .order("desc")
           .take(perType * 5);
       }
-      const filtered = q
+      let filtered = q
         ? sessions.filter((s: any) =>
             s.title?.toLowerCase().includes(q) ||
             s.idle_summary?.toLowerCase().includes(q))
         : sessions;
+      if (q) {
+        // The recency window above only sees the most recent rows; a full-text
+        // title lookup reaches sessions far older than any client cache window.
+        // Recency matches stay first (most likely target), older hits fill in.
+        let titleHits;
+        if (teamId) {
+          const teamStr = String(teamId);
+          titleHits = (await ctx.db
+            .query("conversations")
+            .withSearchIndex("search_title_v2", (s: any) => s.search("title", args.query))
+            .take(perType * 20))
+            .filter((c: any) => String(c.team_id || "") === teamStr);
+        } else {
+          titleHits = await ctx.db
+            .query("conversations")
+            .withSearchIndex("search_title_v2", (s: any) =>
+              s.search("title", args.query).eq("user_id", userId))
+            .take(perType * 5);
+        }
+        const seen = new Set(filtered.map((c: any) => String(c._id)));
+        for (const hit of titleHits) {
+          if (!seen.has(String(hit._id))) filtered.push(hit);
+        }
+      }
+      if (teamId) {
+        // team_id is routing, not visibility — without this gate teammates'
+        // private session titles would surface in mention results.
+        const feedFilter = await createTeamFeedFilter(ctx, teamId as any);
+        filtered = filtered.filter((c: any) =>
+          String(c.user_id) === String(userId) || feedFilter.isVisible(c));
+      }
       for (const sess of filtered.slice(0, perType)) {
         results.push({
           id: String(sess._id),
@@ -1721,6 +1949,31 @@ export const expandMentions = query({
             }
             md += `> \`cast doc read ${String(doc._id).slice(-6)}\` for full document\n---\n`;
             results.push({ type: "doc", id: mention.id, markdown: md });
+          }
+
+        } else if (mention.type === "label" && mention.id) {
+          // A label (inbox bucket) mention expands to the sessions the user
+          // filed under it, so the agent can pull any of them with cast read.
+          const bucket = await ctx.db.get(mention.id as Id<"inbox_buckets">);
+          if (bucket && String((bucket as any).user_id) === String(userId)) {
+            const assignments = await ctx.db.query("bucket_assignments")
+              .withIndex("by_user_id", (a: any) => a.eq("user_id", userId))
+              .collect();
+            const convIds = assignments
+              .filter((a: any) => String(a.bucket_id) === String(bucket._id))
+              .map((a: any) => a.conversation_id);
+            const convs = (await Promise.all(convIds.slice(0, 30).map((id: any) => ctx.db.get(id))))
+              .filter((c): c is NonNullable<typeof c> => c !== null)
+              .sort((a: any, b: any) => (b.updated_at || 0) - (a.updated_at || 0));
+            let md = `\n\n---\n### Label: ${(bucket as any).name}\n`;
+            md += `${convs.length} session${convs.length === 1 ? "" : "s"} filed under this label\n\n`;
+            for (const s of convs as any[]) {
+              md += `- **${s.title || "Untitled"}** \`${s.short_id}\` (${s.message_count || 0} msgs${s.project_path ? `, ${s.project_path}` : ""})`;
+              if (s.idle_summary) md += ` — ${s.idle_summary.slice(0, 150)}`;
+              md += `\n`;
+            }
+            md += `\n> \`cast sessions --label "${(bucket as any).name}" -a\` for live state · \`cast read <id>\` for a transcript\n---\n`;
+            results.push({ type: "label", id: mention.id, markdown: md });
           }
 
         } else if (mention.type === "person") {

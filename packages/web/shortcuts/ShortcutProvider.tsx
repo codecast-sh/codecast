@@ -3,7 +3,7 @@
 import { createContext, useContext, useCallback, useRef, ReactNode } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
-import { ShortcutAction, SHORTCUTS, matchShortcut } from "./registry";
+import { ShortcutAction, SHORTCUTS, matchShortcut, inputGuardBypass } from "./registry";
 import { onShortcutUsed } from "../tips/useTips";
 import { setShortcutHandler } from "./listener";
 
@@ -21,6 +21,15 @@ function isInputTarget(e: KeyboardEvent): boolean {
   if (!el) return false;
   if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') return true;
   if (el.isContentEditable) return true;
+  // Some regions own their own single-letter keys and must not leak them to the
+  // global conversation shortcuts (h/t/d/r, and critically y/n which approve or
+  // deny a live permission prompt). A region opts in either with the inline
+  // review marker (data-review-region="active") or the generic data-owns-keys
+  // (e.g. the branch map). Treating a focus inside such a region like an input
+  // makes the dispatcher skip those shortcuts; the region's own keydown handler
+  // still receives the key.
+  if (typeof el.closest === 'function' &&
+      el.closest('[data-review-region="active"], [data-owns-keys]')) return true;
   return false;
 }
 
@@ -56,7 +65,7 @@ export function ShortcutProvider({ children }: { children: ReactNode }) {
       for (const def of SHORTCUTS) {
         if (!matchShortcut(e, def)) continue;
         if (def.when && !contextsRef.current.has(def.when)) continue;
-        if (inInput && !def.skipInputCheck) continue;
+        if (inInput && !inputGuardBypass(def, e.target as HTMLElement | null)) continue;
 
         const actionHandlers = handlersRef.current.get(def.action);
         if (!actionHandlers || actionHandlers.size === 0) continue;

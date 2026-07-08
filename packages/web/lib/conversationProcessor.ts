@@ -13,6 +13,7 @@ export type MessageAlternate = {
 };
 
 import { SYSTEM_MESSAGE_PREFIXES } from "./sessionFilters";
+import { stripTeammateFraming } from "../components/sessionMessage";
 
 const COMMAND_PATTERNS = [
   /^<command-name>([^<]*)<\/command-name>/,
@@ -44,6 +45,14 @@ export function extractSkillInfo(content: string): { name: string; path: string;
 
 export function isSystemMessage(content: string): boolean {
   return SYSTEM_MESSAGE_PREFIXES.some(prefix => content.startsWith(prefix));
+}
+
+/** Synthetic truncation notice the CLI injects into imported sessions for the
+ * model's context. Context-only — hide it from every user-facing surface. */
+export const IMPORT_NOTICE_PREFIX = "[Codecast import]";
+
+export function isImportNotice(content: string | null | undefined): boolean {
+  return !!content && content.trimStart().startsWith(IMPORT_NOTICE_PREFIX);
 }
 
 export function isCommandMessage(content: string): boolean {
@@ -109,6 +118,7 @@ export function getConversationPreview(
   return processed
     .filter(m => {
       if (isSystemMessage(m.cleanContent)) return false;
+      if (isImportNotice(m.cleanContent)) return false;
       if (m.role === "user") {
         const msgNorm = m.cleanContent.toLowerCase().trim().slice(0, 80);
         if (msgNorm === titleNorm) return false;
@@ -134,6 +144,116 @@ export function cleanTitle(title: string): string {
   if (title.includes("<local-command-stdout>")) return "Command output";
 
   return title.replace(/<[^>]+>/g, "").replace(/<[^>]*$/, "").trim().slice(0, 50) || "Untitled";
+}
+
+// ── Structured / machine user-messages ──────────────────────────────────────
+// Many "user" role messages aren't things a person typed: task-completion pings,
+// compaction prompts, session continuations, tool-output pointers, skill dumps,
+// interrupts, slash-command expansions. They're context for the model. Every
+// list/preview surface (the message feed, conversation cards) needs the SAME
+// decision about what counts as a real message, so it lives here once.
+
+const TOOL_OUTPUT_POINTER_PREFIXES = [
+  "Read the output file to retrieve the result:",
+  "Full transcript available at:",
+];
+const CONTINUATION_PREFIXES = [
+  "This session is being continued",
+  "Please continue the conversation",
+];
+const INTERRUPT_PREFIXES = ["[Request interrupted", "[Request cancelled"];
+
+/** Strip the machine wrappers (reminders, command tags, caveats) for display
+ * while preserving the human's prose/markdown. Shared with the conversation
+ * view so a message reads the same wherever it's shown. */
+export function stripSystemTags(content: string): string {
+  return content
+    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")
+    .replace(/<task-reminder>[\s\S]*?<\/task-reminder>/g, "")
+    .replace(/<local-command-stdout>[\s\S]*?<\/local-command-stdout>/g, "")
+    .replace(/<local-command-stderr>[\s\S]*?<\/local-command-stderr>/g, "")
+    .replace(/<local-command-caveat>[\s\S]*?<\/local-command-caveat>/g, "")
+    .replace(/<\/?(?:command-(?:name|message|args)|antml:[a-z_]+)[^>]*>/g, "")
+    .replace(/^\s*Caveat:.*$/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+export function isTaskNotification(content: string): boolean {
+  return content.trim().startsWith("<task-notification>");
+}
+
+export function isCompactionPrompt(content: string): boolean {
+  return content.trim().startsWith("Your task is to create a detailed summary");
+}
+
+// Claude Code injects a synthetic user-role notice when a background agent (a Task
+// tool subagent run in the background) is stopped: `Background agent "<name>" was
+// stopped by the user.` It carries no isMeta flag, so without special handling it
+// renders as a real user turn (avatar + bubble). It's a control event like an
+// interrupt — hide it from previews, render it as a status line in the thread.
+const BACKGROUND_AGENT_STOPPED_RE = /^Background agent "(.*)" was stopped by the user\.?$/;
+
+/** The agent's name if `content` is a background-agent-stopped notice, else null. */
+export function backgroundAgentStoppedName(content: string | null | undefined): string | null {
+  if (!content) return null;
+  const m = content.trim().match(BACKGROUND_AGENT_STOPPED_RE);
+  return m ? m[1] : null;
+}
+
+export function isBackgroundAgentStoppedNotice(content: string | null | undefined): boolean {
+  return !!content && BACKGROUND_AGENT_STOPPED_RE.test(content.trim());
+}
+
+/** True when a user-role message is machine-generated noise that no person
+ * typed — so feeds and previews hide it instead of dumping the raw XML. */
+export function isNoiseUserMessage(content: string | null | undefined): boolean {
+  if (!content) return true;
+  const raw = content.trim();
+  if (!raw) return true;
+  if (isImportNotice(raw)) return true;
+  if (isTaskNotification(raw)) return true;
+  if (/^<scheduled-task[\s>]/.test(raw)) return true;
+  if (isSkillExpansion(raw)) return true;
+  if (isCompactionPrompt(raw)) return true;
+  if (raw.startsWith("<turn_aborted>")) return true;
+  if (isBackgroundAgentStoppedNotice(raw)) return true;
+  if (INTERRUPT_PREFIXES.some((p) => raw.startsWith(p))) return true;
+  if (TOOL_OUTPUT_POINTER_PREFIXES.some((p) => raw.startsWith(p))) return true;
+  const noReminders = stripSystemTags(raw);
+  if (CONTINUATION_PREFIXES.some((p) => noReminders.startsWith(p))) return true;
+  // Nothing a person wrote survives stripping the wrappers/tags.
+  if (!cleanContent(raw)) return true;
+  if (isSystemMessage(noReminders)) return true;
+  return false;
+}
+
+export type FeedDisplay = { kind: "hidden" } | { kind: "text"; text: string };
+
+/** Single classifier for list/preview surfaces: returns the cleaned text to
+ * show, or `hidden` for machine noise. Slash commands collapse to "/cmd args".
+ * (Session→session messages are handled separately by their own renderer.) */
+export function classifyFeedMessage(content: string | null | undefined): FeedDisplay {
+  if (isNoiseUserMessage(content)) return { kind: "hidden" };
+  const raw = (content || "").trim();
+  if (isCommandMessage(raw)) return { kind: "text", text: cleanTitle(raw) };
+  const text = stripTeammateFraming(stripSystemTags(raw)
+    .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "")
+    .replace(/<teammate-message\s+[^>]*>[\s\S]*?<\/teammate-message>/g, "")
+    .replace(/\[Image[:\s][^\]]*\]/gi, "")
+    .replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "")
+    .trim());
+  return text ? { kind: "text", text } : { kind: "hidden" };
+}
+
+/** Compact display name for a model id: "claude-opus-4-8" → "opus-4-8",
+ * "claude-sonnet-4-5-20250929" → "sonnet-4-5-'250929". Non-claude ids pass through. */
+export function formatModel(model?: string): string {
+  if (!model) return "";
+  if (model.startsWith("claude-")) {
+    return model.slice("claude-".length).replace("-20", "-'");
+  }
+  return model;
 }
 
 /** Tailwind color class for message-count badges — warmer as count grows. */

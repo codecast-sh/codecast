@@ -1,10 +1,64 @@
-import { convexAuth } from "@convex-dev/auth/server";
+import { convexAuth, createAccount, retrieveAccount } from "@convex-dev/auth/server";
 import { Password } from "@convex-dev/auth/providers/Password";
 import { Email } from "@convex-dev/auth/providers/Email";
+import { ConvexCredentials } from "@convex-dev/auth/providers/ConvexCredentials";
 import GitHub from "@auth/core/providers/github";
 import Apple from "@auth/core/providers/apple";
 import { Resend as ResendAPI } from "resend";
 import { alphabet, generateRandomString } from "oslo/crypto";
+import { createRemoteJWKSet, jwtVerify } from "jose";
+
+// Native "Sign in with Apple": the iOS app presents Apple's own system sheet
+// (expo-apple-authentication) and sends us the resulting identity token. We
+// verify it here instead of running the web-redirect OAuth flow, which on a
+// native app depends on a Services-ID Return URL match and an in-app browser —
+// fragile, and the source of the App Store 2.1 rejection. The token's audience
+// for the native flow is the app bundle id, NOT the web Services ID.
+const APPLE_NATIVE_AUDIENCE = "com.ashotp.codecast";
+const APPLE_JWKS = createRemoteJWKSet(new URL("https://appleid.apple.com/auth/keys"));
+
+const AppleNative = ConvexCredentials({
+  id: "apple-native",
+  authorize: async (params: Record<string, unknown>, ctx: any) => {
+    const idToken = params.idToken as string | undefined;
+    if (!idToken) throw new Error("Missing Apple identity token");
+    // Verify signature against Apple's public keys + the standard claims.
+    const { payload } = await jwtVerify(idToken, APPLE_JWKS, {
+      issuer: "https://appleid.apple.com",
+      audience: APPLE_NATIVE_AUDIENCE,
+    });
+    const appleSub = payload.sub;
+    if (!appleSub) throw new Error("Apple identity token missing subject");
+    // Apple only returns name/email on the FIRST authorization; fall back to the
+    // token's email (present when the user shares it) on later sign-ins.
+    const tokenEmail = typeof payload.email === "string" ? payload.email : undefined;
+    const email = ((params.email as string | undefined) ?? tokenEmail)?.toLowerCase().trim();
+    const name = (params.fullName as string | undefined)?.trim() || email?.split("@")[0];
+
+    // Returning user — the (provider, appleSub) account already exists.
+    try {
+      const existing = await retrieveAccount(ctx, {
+        provider: "apple-native",
+        account: { id: appleSub },
+      });
+      return { userId: existing.user._id };
+    } catch {
+      // No account yet — fall through to create one.
+    }
+
+    // New account. shouldLinkViaEmail folds this into an existing user with the
+    // same (Apple-verified) email, so signing in via Apple after GitHub/password
+    // doesn't mint a duplicate user. The createOrUpdateUser callback below is the
+    // second layer of the same dedup.
+    const created = await createAccount(ctx, {
+      provider: "apple-native",
+      account: { id: appleSub },
+      profile: { email, name } as any,
+      shouldLinkViaEmail: true,
+    });
+    return { userId: created.user._id };
+  },
+});
 
 const ResendOTPPasswordReset = Email({
   id: "resend-otp-password-reset",
@@ -131,6 +185,7 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
         };
       },
     }),
+    AppleNative,
     Password({ reset: ResendOTPPasswordReset }),
   ],
 });

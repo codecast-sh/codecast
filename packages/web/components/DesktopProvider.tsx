@@ -1,20 +1,26 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useRouter } from "next/navigation";
-import { useQuery } from "convex/react";
+import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import {
   isDesktop,
-  isElectron,
   updateBadge,
   onDeepLink,
-  checkForUpdates,
+  checkDesktopUpdate,
   onUpdateStatus,
   restartForUpdate,
+  checkForUpdate,
+  hasInProcessUpdater,
   notifyNative,
   requestNotificationPermission,
   hasBrowserNotificationPermission,
+  parseDesktopDeepLinkPath,
+  extractDeepLinkIntent,
+  installDesktopInputTracker,
+  shouldApplyAutoDeepLink,
 } from "../lib/desktop";
+import { toast } from "sonner";
 import { cleanNotificationBody } from "../lib/notificationText";
 import { useInboxStore } from "../store/inboxStore";
 
@@ -23,9 +29,33 @@ export function DesktopProvider() {
   const sessions = useInboxStore((s) => s.sessions);
   const prevCountRef = useRef<number | null>(null);
   const initRef = useRef(false);
-  const [updateStatus, setUpdateStatus] = useState<{ status: string; version?: string; percent?: number } | null>(null);
-  const [dismissed, setDismissed] = useState(false);
-  const dismissedStatusRef = useRef<string | null>(null);
+  const [update, setUpdate] = useState<{ current: string; latest: string } | null>(null);
+  const [updating, setUpdating] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  const [stalled, setStalled] = useState(false);
+  // Real download progress from Electron's own auto-updater (works when
+  // Squirrel is alive). The daemon-driven "Update now" path can't report a
+  // percentage, so it falls back to the indeterminate bar below.
+  const [ipc, setIpc] = useState<{ status: string; version?: string; percent?: number } | null>(null);
+  const [dismissedVersion, setDismissedVersion] = useState<string | null>(null);
+  const requestDesktopUpdate = useMutation(api.users.requestDesktopUpdate);
+
+  const startUpdate = () => {
+    setStalled(false);
+    setUpdating(true);
+    setAttempt((a) => a + 1);
+    // Newer desktop builds download in-process and report real progress over
+    // IPC (the `ipc` state below), then swap + relaunch on "Restart". Older
+    // builds lack that, so fall back to the daemon path (silent download +
+    // forced restart) — which still ships via the working CLI auto-update
+    // channel, so it can at least carry the user to a build that has the
+    // in-process updater.
+    if (hasInProcessUpdater()) {
+      checkForUpdate({ manual: false });
+    } else {
+      requestDesktopUpdate({}).catch(() => setUpdating(false));
+    }
+  };
 
   useWatchEffect(() => {
     if (!isDesktop()) return;
@@ -79,25 +109,17 @@ export function DesktopProvider() {
 
     updateDismissed("has_used_desktop", true);
 
-    onDeepLink((urls) => {
-      for (const url of urls) {
-        try {
-          const parsed = new URL(url);
-          if (parsed.pathname) {
-            router.push(parsed.pathname + parsed.search);
-          }
-        } catch {}
-      }
-    });
+    installDesktopInputTracker();
 
-    const handleNavigate = (e: Event) => {
-      const path = (e as CustomEvent).detail;
+    // Single in-app navigation path, shared by codecast:// deep links (from the
+    // native layer) and the codecast-navigate event (tray/menus/notifications).
+    const goTo = (path: string | undefined) => {
       if (!path) return;
 
       const convMatch = path.match(/^\/conversation\/([^/?#]+)/);
       if (convMatch) {
         const convId = convMatch[1];
-        useInboxStore.getState().navigateToSession(convId);
+        useInboxStore.getState().navigateToSession(convId, "deeplink");
 
         const cur = window.location.pathname;
         if (cur.startsWith("/inbox") || cur.startsWith("/conversation/")) {
@@ -108,56 +130,171 @@ export function DesktopProvider() {
 
       router.push(path);
     };
+
+    onDeepLink((urls) => {
+      for (const url of urls) {
+        const raw = parseDesktopDeepLinkPath(url);
+        if (!raw) continue;
+        const { path, auto } = extractDeepLinkIntent(raw);
+        // An auto handoff (the browser page redirecting itself, not a user
+        // clicking an "Open in desktop" button) may not move the view while
+        // the user is actively working in the desktop — agent-driven Chrome
+        // tabs satisfy every browser-side gate and used to yank the app to
+        // whatever the agent had open. Offer it instead.
+        if (auto && !shouldApplyAutoDeepLink()) {
+          const convMatch = path.match(/^\/conversation\/([^/?#]+)/);
+          const title = convMatch ? useInboxStore.getState().sessions[convMatch[1]]?.title : null;
+          toast.info(`Browser handed off ${title ? `“${title}”` : "a page"}`, {
+            action: { label: "Open", onClick: () => goTo(path) },
+            duration: 10_000,
+          });
+          continue;
+        }
+        goTo(path);
+      }
+    });
+
+    const handleNavigate = (e: Event) => goTo((e as CustomEvent).detail);
     window.addEventListener("codecast-navigate", handleNavigate);
 
-    checkForUpdates().catch(() => {});
+    // Electron's built-in updater emits real download progress + a "ready"
+    // signal over IPC. Surface it directly when it fires (it's dead on macOS
+    // 26, where the daemon path takes over instead).
+    onUpdateStatus((s) => setIpc(s));
 
-    if (isElectron()) {
-      onUpdateStatus((status) => {
-        setUpdateStatus(status);
-        if (status.status !== dismissedStatusRef.current) {
-          setDismissed(false);
-        }
-      });
-    }
   }, [router]);
 
-  if (!updateStatus || dismissed) return null;
+  // Desktop update detection: compare the running app version against the latest
+  // published version (same-origin /api/desktop/latest). Poll on mount, on window
+  // focus, and hourly — Squirrel's own check is dead on macOS 26, so this is the
+  // only reliable signal that an update is waiting.
+  useEffect(() => {
+    if (!isDesktop()) return;
+    let cancelled = false;
+    const check = () => {
+      checkDesktopUpdate().then((u) => {
+        if (cancelled) return;
+        setUpdate(u);
+      });
+    };
+    check();
+    const onFocus = () => check();
+    window.addEventListener("focus", onFocus);
+    const id = window.setInterval(check, 60 * 60 * 1000);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", onFocus);
+      window.clearInterval(id);
+    };
+  }, []);
 
-  const { status, version, percent } = updateStatus;
-  if (status !== "available" && status !== "downloading" && status !== "ready") return null;
+  // The daemon downloads ~95MB silently then force-restarts the app, so there's
+  // no percentage to show on that path. If the window is still alive well past
+  // when that should have finished, the update likely failed (daemon down,
+  // download/verify error) — surface that instead of a frozen banner.
+  useEffect(() => {
+    if (!updating) {
+      setStalled(false);
+      return;
+    }
+    const id = window.setTimeout(() => setStalled(true), 90_000);
+    return () => window.clearTimeout(id);
+  }, [updating, attempt]);
+
+  const ready = ipc?.status === "ready";
+  const downloading = ipc?.status === "downloading";
+  const latest = ipc?.version ?? update?.latest;
+  const inProgress = updating || downloading;
+
+  // Nothing to surface: no known update (and not mid-update), or this version
+  // was dismissed while idle.
+  if (!ready && !inProgress && (!update || update.latest === dismissedVersion)) return null;
+  if (!latest) return null;
 
   return (
-    <div className="fixed top-0 left-0 right-0 z-[9998] pointer-events-none">
-      <div className="pointer-events-auto mx-auto max-w-xl mt-12 px-3">
-        <div className="relative overflow-hidden rounded-lg border border-sol-cyan/30 bg-sol-bg-alt/95 backdrop-blur-md shadow-lg shadow-sol-cyan/5">
-          {status === "downloading" && (
-            <div
-              className="absolute bottom-0 left-0 h-[2px] bg-sol-cyan/60 transition-all duration-300"
-              style={{ width: `${percent ?? 0}%` }}
-            />
-          )}
-          <div className="flex items-center gap-3 px-4 py-2.5">
-            <div className="w-1.5 h-1.5 rounded-full flex-shrink-0 animate-pulse bg-sol-cyan" />
-            <span className="text-xs text-sol-text flex-1">
-              {status === "available" && `v${version} available — downloading`}
-              {status === "downloading" && `Downloading v${version}${percent != null ? ` — ${percent}%` : ""}`}
-              {status === "ready" && `v${version} ready to install`}
-            </span>
-            {status === "ready" && (
+    <div className="fixed bottom-4 left-4 z-[9998] w-80 max-w-[calc(100vw-2rem)]">
+      <div className="relative overflow-hidden rounded-lg border border-sol-cyan/30 bg-sol-bg-alt/95 backdrop-blur-md shadow-lg shadow-sol-cyan/5">
+        {/* Progress: real % when Electron's updater reports one, else an
+            indeterminate sweep while the daemon works in the background. */}
+        {downloading && (
+          <div
+            className="absolute bottom-0 left-0 h-[2px] bg-sol-cyan transition-all duration-300"
+            style={{ width: `${ipc?.percent ?? 0}%` }}
+          />
+        )}
+        {updating && !stalled && (
+          <div className="absolute bottom-0 left-0 h-[2px] w-1/4 bg-sol-cyan animate-[indeterminateBar_1.3s_ease-in-out_infinite]" />
+        )}
+        <div className="flex items-start gap-3 px-4 py-3">
+          <div
+            className={`mt-1 w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+              stalled ? "bg-sol-orange" : "animate-pulse bg-sol-cyan"
+            }`}
+          />
+          <div className="flex-1 min-w-0">
+            {ready ? (
+              <p className="text-xs text-sol-text">Codecast v{latest} is ready to install</p>
+            ) : stalled ? (
+              <>
+                <p className="text-xs text-sol-text">Update is taking longer than usual</p>
+                <p className="mt-0.5 text-[11px] text-sol-text-dim">
+                  If Codecast doesn&rsquo;t restart shortly, quit and reopen it.
+                </p>
+              </>
+            ) : inProgress ? (
+              <>
+                <p className="text-xs text-sol-text">
+                  {downloading ? `Downloading v${latest}` : `Updating to v${latest}`}
+                  {downloading && ipc?.percent != null ? ` — ${ipc.percent}%` : "…"}
+                </p>
+                <p className="mt-0.5 text-[11px] text-sol-text-dim">
+                  {downloading
+                    ? "Keep working — we’ll prompt you to restart when it’s ready."
+                    : "Downloading in the background — Codecast will restart on its own."}
+                </p>
+              </>
+            ) : (
+              <p className="text-xs text-sol-text">
+                Codecast v{latest} is available
+                {update?.current && (
+                  <span className="text-sol-text-dim"> · you&rsquo;re on v{update.current}</span>
+                )}
+              </p>
+            )}
+          </div>
+          <div className="flex flex-shrink-0 items-center gap-2">
+            {ready && (
               <button
                 onClick={() => restartForUpdate()}
-                className="rounded-md bg-sol-cyan px-3 py-1 text-[11px] font-medium text-sol-bg hover:opacity-90 transition-opacity"
+                className="rounded-md bg-sol-cyan px-3 py-1 text-[11px] font-medium text-sol-bg transition-opacity hover:opacity-90"
               >
-                Restart
+                Restart now
               </button>
             )}
-            <button
-              onClick={() => { setDismissed(true); dismissedStatusRef.current = status; }}
-              className="text-sol-text-dim hover:text-sol-text transition-colors text-xs leading-none"
-            >
-              &times;
-            </button>
+            {stalled && (
+              <button
+                onClick={startUpdate}
+                className="rounded-md bg-sol-cyan px-3 py-1 text-[11px] font-medium text-sol-bg transition-opacity hover:opacity-90"
+              >
+                Try again
+              </button>
+            )}
+            {!inProgress && !ready && (
+              <>
+                <button
+                  onClick={startUpdate}
+                  className="rounded-md bg-sol-cyan px-3 py-1 text-[11px] font-medium text-sol-bg transition-opacity hover:opacity-90"
+                >
+                  Update now
+                </button>
+                <button
+                  onClick={() => setDismissedVersion(latest)}
+                  className="text-[11px] text-sol-text-dim transition-colors hover:text-sol-text"
+                >
+                  Later
+                </button>
+              </>
+            )}
           </div>
         </div>
       </div>

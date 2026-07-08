@@ -12,7 +12,7 @@ import {
   resumeReadinessPollMs,
   classifyTmuxLiveState,
   extractTmuxLiveRegion,
-} from "./daemon.ts";
+} from "./daemon.js";
 
 // ---- 2a: readiness window tiers ----
 test("readiness floor is 30s for small/reconstituted sessions (was 15s)", () => {

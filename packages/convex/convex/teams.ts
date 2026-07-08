@@ -1,7 +1,8 @@
-import { mutation, query, action, internalMutation } from "./_generated/server";
+import { mutation, query, action, internalMutation } from "./functions";
 import { v } from "convex/values";
 import { api, internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { createTeamFeedFilter } from "./privacy";
 
 function generateInviteCode(): string {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -100,10 +101,16 @@ export const getActiveTeamContext = query({
 export const createTeam = mutation({
   args: {
     name: v.string(),
-    user_id: v.id("users"),
+    // Deprecated/ignored: the creator is the authenticated caller, never a
+    // client-supplied id. Kept optional so existing callers don't break.
+    user_id: v.optional(v.id("users")),
     icon: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) {
+      throw new Error("Not authenticated");
+    }
     const inviteCode = generateInviteCode();
     const now = Date.now();
     const sevenDaysInMs = 7 * 24 * 60 * 60 * 1000;
@@ -116,12 +123,12 @@ export const createTeam = mutation({
       invite_code_expires_at: now + sevenDaysInMs,
     });
     await ctx.db.insert("team_memberships", {
-      user_id: args.user_id,
+      user_id: authUserId,
       team_id: teamId,
       role: "admin",
       joined_at: now,
     });
-    await ctx.db.patch(args.user_id, {
+    await ctx.db.patch(authUserId, {
       team_id: teamId,
       role: "admin",
       active_team_id: teamId,
@@ -133,9 +140,15 @@ export const createTeam = mutation({
 export const joinTeam = mutation({
   args: {
     invite_code: v.string(),
-    user_id: v.id("users"),
+    // Deprecated/ignored: the joiner is the authenticated caller, never a
+    // client-supplied id (trusting it let anyone join any user to any team).
+    user_id: v.optional(v.id("users")),
   },
   handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) {
+      throw new Error("Not authenticated");
+    }
     const team = await ctx.db
       .query("teams")
       .withIndex("by_invite_code", (q) => q.eq("invite_code", args.invite_code))
@@ -148,21 +161,21 @@ export const joinTeam = mutation({
     }
     const existingMembership = await ctx.db
       .query("team_memberships")
-      .withIndex("by_user_team", (q) => q.eq("user_id", args.user_id).eq("team_id", team._id))
+      .withIndex("by_user_team", (q) => q.eq("user_id", authUserId).eq("team_id", team._id))
       .unique();
     if (existingMembership) {
       return team._id;
     }
     const now = Date.now();
     await ctx.db.insert("team_memberships", {
-      user_id: args.user_id,
+      user_id: authUserId,
       team_id: team._id,
       role: "member",
       joined_at: now,
     });
-    const user = await ctx.db.get(args.user_id);
+    const user = await ctx.db.get(authUserId);
     if (!user?.team_id) {
-      await ctx.db.patch(args.user_id, {
+      await ctx.db.patch(authUserId, {
         team_id: team._id,
         role: "member",
         active_team_id: team._id,
@@ -172,7 +185,7 @@ export const joinTeam = mutation({
     const actorName = user?.name || user?.email || "A member";
     await ctx.scheduler.runAfter(0, internal.teamActivity.recordTeamActivity, {
       team_id: team._id,
-      actor_user_id: args.user_id,
+      actor_user_id: authUserId,
       event_type: "member_joined" as const,
       title: `${actorName} joined ${team.name}`,
       description: "Joined via invite code",
@@ -226,19 +239,40 @@ export const getTeamMembers = query({
     team_id: v.id("teams"),
   },
   handler: async (ctx, args) => {
+    // Membership gate: this returns member emails and recent session previews,
+    // so only a member of this team may read it (team_id is guessable).
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) {
+      return [];
+    }
+    const callerMembership = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_user_team", (q) => q.eq("user_id", authUserId).eq("team_id", args.team_id))
+      .unique();
+    if (!callerMembership) {
+      return [];
+    }
     const memberships = await ctx.db
       .query("team_memberships")
       .withIndex("by_team_id", (q) => q.eq("team_id", args.team_id))
       .collect();
+    // Visibility gate for the avatar-bar session preview: the most recent
+    // conversation may be private (team_id is routing, not visibility), so we
+    // must not expose its title/last-message. Pick the most recent *team-visible*
+    // session in this team instead.
+    const feedFilter = await createTeamFeedFilter(ctx, args.team_id);
     const members = await Promise.all(
       memberships.map(async (m) => {
         const user = await ctx.db.get(m.user_id);
         if (!user) return null;
-        const recentConvo = await ctx.db
+        const recentConvos = await ctx.db
           .query("conversations")
-          .withIndex("by_user_updated", (q) => q.eq("user_id", user._id))
+          .withIndex("by_team_user_updated", (q) =>
+            q.eq("team_id", args.team_id).eq("user_id", user._id)
+          )
           .order("desc")
-          .first();
+          .take(10);
+        const recentConvo = recentConvos.find((c) => feedFilter.isVisible(c));
         return {
           _id: user._id,
           name: user.name,
@@ -265,12 +299,17 @@ export const getTeamMembers = query({
 
 export const removeMember = mutation({
   args: {
-    requesting_user_id: v.id("users"),
+    // Deprecated/ignored: the requester is the authenticated caller.
+    requesting_user_id: v.optional(v.id("users")),
     member_user_id: v.id("users"),
     team_id: v.optional(v.id("teams")),
   },
   handler: async (ctx, args) => {
-    const requestingUser = await ctx.db.get(args.requesting_user_id);
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) {
+      throw new Error("Not authenticated");
+    }
+    const requestingUser = await ctx.db.get(authUserId);
     if (!requestingUser) {
       throw new Error("Requesting user not found");
     }
@@ -280,7 +319,7 @@ export const removeMember = mutation({
     }
     const requesterMembership = await ctx.db
       .query("team_memberships")
-      .withIndex("by_user_team", (q) => q.eq("user_id", args.requesting_user_id).eq("team_id", teamId))
+      .withIndex("by_user_team", (q) => q.eq("user_id", authUserId).eq("team_id", teamId))
       .unique();
     if (!requesterMembership || requesterMembership.role !== "admin") {
       throw new Error("Only admins can remove members");
@@ -292,7 +331,7 @@ export const removeMember = mutation({
     if (!memberMembership) {
       throw new Error("User is not a member of this team");
     }
-    if (args.requesting_user_id === args.member_user_id) {
+    if (authUserId === args.member_user_id) {
       const teamMemberships = await ctx.db
         .query("team_memberships")
         .withIndex("by_team_id", (q) => q.eq("team_id", teamId))
@@ -311,7 +350,7 @@ export const removeMember = mutation({
       actor_user_id: args.member_user_id,
       event_type: "member_left" as const,
       title: `${memberName} left ${team?.name || "the team"}`,
-      description: args.requesting_user_id === args.member_user_id ? "Left team" : "Removed by admin",
+      description: authUserId === args.member_user_id ? "Left team" : "Removed by admin",
     });
 
     if (memberUser?.team_id?.toString() === teamId.toString()) {
@@ -339,13 +378,18 @@ export const removeMember = mutation({
 export const renameTeam = mutation({
   args: {
     team_id: v.id("teams"),
-    requesting_user_id: v.id("users"),
+    // Deprecated/ignored: the requester is the authenticated caller.
+    requesting_user_id: v.optional(v.id("users")),
     name: v.string(),
   },
   handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) {
+      throw new Error("Not authenticated");
+    }
     const membership = await ctx.db
       .query("team_memberships")
-      .withIndex("by_user_team", (q) => q.eq("user_id", args.requesting_user_id).eq("team_id", args.team_id))
+      .withIndex("by_user_team", (q) => q.eq("user_id", authUserId).eq("team_id", args.team_id))
       .first();
     if (!membership || membership.role !== "admin") {
       throw new Error("Only admins can rename the team");
@@ -357,12 +401,17 @@ export const renameTeam = mutation({
 export const inviteToTeam = mutation({
   args: {
     team_id: v.id("teams"),
-    requesting_user_id: v.id("users"),
+    // Deprecated/ignored: the requester is the authenticated caller.
+    requesting_user_id: v.optional(v.id("users")),
   },
   handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) {
+      throw new Error("Not authenticated");
+    }
     const membership = await ctx.db
       .query("team_memberships")
-      .withIndex("by_user_team", (q) => q.eq("user_id", args.requesting_user_id).eq("team_id", args.team_id))
+      .withIndex("by_user_team", (q) => q.eq("user_id", authUserId).eq("team_id", args.team_id))
       .first();
     if (!membership || membership.role !== "admin") {
       throw new Error("Only admins can generate invite codes");
@@ -380,12 +429,17 @@ export const inviteToTeam = mutation({
 export const regenerateInviteCode = mutation({
   args: {
     team_id: v.id("teams"),
-    requesting_user_id: v.id("users"),
+    // Deprecated/ignored: the requester is the authenticated caller.
+    requesting_user_id: v.optional(v.id("users")),
   },
   handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) {
+      throw new Error("Not authenticated");
+    }
     const membership = await ctx.db
       .query("team_memberships")
-      .withIndex("by_user_team", (q) => q.eq("user_id", args.requesting_user_id).eq("team_id", args.team_id))
+      .withIndex("by_user_team", (q) => q.eq("user_id", authUserId).eq("team_id", args.team_id))
       .first();
     if (!membership || membership.role !== "admin") {
       throw new Error("Only admins can regenerate invite codes");
@@ -402,13 +456,18 @@ export const regenerateInviteCode = mutation({
 
 export const setMemberRole = mutation({
   args: {
-    requesting_user_id: v.id("users"),
+    // Deprecated/ignored: the requester is the authenticated caller.
+    requesting_user_id: v.optional(v.id("users")),
     member_user_id: v.id("users"),
     role: v.union(v.literal("member"), v.literal("admin")),
     team_id: v.optional(v.id("teams")),
   },
   handler: async (ctx, args) => {
-    const requestingUser = await ctx.db.get(args.requesting_user_id);
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) {
+      throw new Error("Not authenticated");
+    }
+    const requestingUser = await ctx.db.get(authUserId);
     if (!requestingUser) {
       throw new Error("Requesting user not found");
     }
@@ -418,7 +477,7 @@ export const setMemberRole = mutation({
     }
     const requesterMembership = await ctx.db
       .query("team_memberships")
-      .withIndex("by_user_team", (q) => q.eq("user_id", args.requesting_user_id).eq("team_id", teamId))
+      .withIndex("by_user_team", (q) => q.eq("user_id", authUserId).eq("team_id", teamId))
       .unique();
     if (!requesterMembership || requesterMembership.role !== "admin") {
       throw new Error("Only admins can change member roles");
@@ -452,12 +511,17 @@ export const removeFromTeam = mutation({
   args: {
     team_id: v.id("teams"),
     user_id: v.id("users"),
-    requesting_user_id: v.id("users"),
+    // Deprecated/ignored: the requester is the authenticated caller.
+    requesting_user_id: v.optional(v.id("users")),
   },
   handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) {
+      throw new Error("Not authenticated");
+    }
     const requesterMembership = await ctx.db
       .query("team_memberships")
-      .withIndex("by_user_team", (q) => q.eq("user_id", args.requesting_user_id).eq("team_id", args.team_id))
+      .withIndex("by_user_team", (q) => q.eq("user_id", authUserId).eq("team_id", args.team_id))
       .unique();
     if (!requesterMembership || requesterMembership.role !== "admin") {
       throw new Error("Only admins can remove members");
@@ -469,7 +533,7 @@ export const removeFromTeam = mutation({
     if (!memberMembership) {
       throw new Error("User not in this team");
     }
-    if (args.requesting_user_id === args.user_id) {
+    if (authUserId === args.user_id) {
       const teamMemberships = await ctx.db
         .query("team_memberships")
         .withIndex("by_team_id", (q) => q.eq("team_id", args.team_id))
@@ -488,7 +552,7 @@ export const removeFromTeam = mutation({
       actor_user_id: args.user_id,
       event_type: "member_left" as const,
       title: `${memberName} left ${team?.name || "the team"}`,
-      description: args.requesting_user_id === args.user_id ? "Left team" : "Removed by admin",
+      description: authUserId === args.user_id ? "Left team" : "Removed by admin",
     });
 
     if (userToRemove?.team_id?.toString() === args.team_id.toString()) {
@@ -594,7 +658,7 @@ export const syncGithubOrg = action({
           });
           continue;
         }
-        await ctx.runMutation(api.teams.updateUserTeamAndRole, {
+        await ctx.runMutation(internal.teams.updateUserTeamAndRole, {
           user_id: existingUser._id,
           team_id: requestingUser.team_id,
           role,
@@ -605,7 +669,7 @@ export const syncGithubOrg = action({
           role,
         });
       } else {
-        const newUserId = await ctx.runMutation(api.teams.createUserFromGithub, {
+        const newUserId = await ctx.runMutation(internal.teams.createUserFromGithub, {
           github_id: String(member.id),
           github_username: member.login,
           github_avatar_url: member.avatar_url,
@@ -640,7 +704,10 @@ export const getUserByGithubId = query({
   },
 });
 
-export const updateUserTeamAndRole = mutation({
+// internal: only syncGithubOrg calls this, after authenticating the caller as a
+// team admin. Was a public `mutation` that trusted every argument — anyone could
+// make themselves admin of any team. Now unreachable from clients.
+export const updateUserTeamAndRole = internalMutation({
   args: {
     user_id: v.id("users"),
     team_id: v.id("teams"),
@@ -668,7 +735,10 @@ export const updateUserTeamAndRole = mutation({
   },
 });
 
-export const createUserFromGithub = mutation({
+// internal: only syncGithubOrg calls this, after authenticating the caller as a
+// team admin. Was a public `mutation` that let anyone insert a user + membership
+// into any team. Now unreachable from clients.
+export const createUserFromGithub = internalMutation({
   args: {
     github_id: v.string(),
     github_username: v.string(),

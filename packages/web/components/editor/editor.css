@@ -15,6 +15,13 @@
   min-height: 40vh;
 }
 
+/* Preserve tabs/spaces so TabIndentExtension's inserted \t renders as an
+   indent instead of collapsing to a single space (ProseMirror's default). */
+.doc-editor .tiptap {
+  white-space: pre-wrap;
+  tab-size: 4;
+}
+
 /* Headings */
 .doc-editor .tiptap h1 {
   font-size: 1.5em;
@@ -269,6 +276,11 @@
 .doc-editor .mention-plan {
   background: rgba(108, 113, 196, 0.15);
   color: #6c71c4;
+}
+
+.doc-editor .mention-label {
+  background: rgba(211, 54, 130, 0.15);
+  color: #d33682;
 }
 
 /* Rich mention node views */

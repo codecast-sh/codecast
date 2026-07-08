@@ -1,6 +1,19 @@
 import { defineSchema, defineTable } from "convex/server";
 import { authTables } from "@convex-dev/auth/server";
 import { v } from "convex/values";
+import { AGENT_STATUSES, DAEMON_COMMANDS } from "@codecast/shared/contracts";
+import { ccAccountsValidator } from "./ccAccountsShared";
+import { deviceSettingsValidator } from "./deviceSettingsShared";
+
+// Derived from the single source of truth in @codecast/shared/contracts so the
+// schema, validators, the CLI daemon, and the browser store can never drift.
+// Each accepts exactly the same set as the old hand-written unions.
+const agentStatusFieldValidator = v.union(
+  ...AGENT_STATUSES.map((s) => v.literal(s)),
+);
+const daemonCommandValidator = v.union(
+  ...DAEMON_COMMANDS.map((c) => v.literal(c)),
+);
 
 export default defineSchema({
   ...authTables,
@@ -13,6 +26,12 @@ export default defineSchema({
     created_at: v.optional(v.number()),
     team_id: v.optional(v.id("teams")),
     role: v.optional(v.union(v.literal("member"), v.literal("admin"))),
+    // Synthetic agent identity (an Anchor's bot user). `is_bot` users have no
+    // login and exist only to give a standing agent member its own name/avatar in
+    // the author chip, team roster, and feed. They never host or bill a session —
+    // a human (the anchor's host) does that; the bot is identity only. See anchors.
+    is_bot: v.optional(v.boolean()),
+    bot_kind: v.optional(v.union(v.literal("anchor"))),
     active_team_id: v.optional(v.id("teams")),
     daemon_last_seen: v.optional(v.number()),
     last_message_sent_at: v.optional(v.number()),
@@ -41,6 +60,12 @@ export default defineSchema({
     status: v.optional(v.union(v.literal("available"), v.literal("busy"), v.literal("away"))),
     timezone: v.optional(v.string()),
     hide_activity: v.optional(v.boolean()),
+    // Public-profile opt-in. A claimed, unique handle (lowercase alnum+dash) that
+    // forms the anonymous URL /u/<username>; github_username only pre-fills the
+    // suggestion. `public_profile_enabled` is the master switch — until it's true
+    // the public page 404s for everyone. See privacy.ts (public visibility tier).
+    username: v.optional(v.string()),
+    public_profile_enabled: v.optional(v.boolean()),
     share_session_metadata: v.optional(v.boolean()),
     activity_visibility: v.optional(v.union(
       v.literal("detailed"),
@@ -94,30 +119,13 @@ export default defineSchema({
     .index("email", ["email"])
     .index("by_github_username", ["github_username"])
     .index("by_github_id", ["github_id"])
-    .index("by_team_id", ["team_id"]),
+    .index("by_username", ["username"])
+    .index("by_team_id", ["team_id"])
+    .index("by_last_heartbeat", ["last_heartbeat"]),
 
   daemon_commands: defineTable({
     user_id: v.id("users"),
-    command: v.union(
-      v.literal("status"),
-      v.literal("restart"),
-      v.literal("force_update"),
-      v.literal("version"),
-      v.literal("start_session"),
-      v.literal("escape"),
-      v.literal("resume_session"),
-      v.literal("kill_session"),
-      v.literal("send_keys"),
-      v.literal("rewind"),
-      v.literal("config_list"),
-      v.literal("config_read"),
-      v.literal("config_write"),
-      v.literal("config_create"),
-      v.literal("config_delete"),
-      v.literal("run_workflow"),
-      v.literal("reinstall"),
-      v.literal("move_to_device")
-    ),
+    command: daemonCommandValidator,
     args: v.optional(v.string()),
     created_at: v.number(),
     executed_at: v.optional(v.number()),
@@ -186,6 +194,10 @@ export default defineSchema({
     project_hash: v.optional(v.string()),
     project_path: v.optional(v.string()),
     model: v.optional(v.string()),
+    // Last-known effort level (low|medium|high|max), same lifecycle as `model`:
+    // stamped optimistically by the web picker / at create, confirmed by the
+    // rollup parsing "Set effort level to X" / "with X effort" switch echoes.
+    effort: v.optional(v.string()),
     started_at: v.number(),
     updated_at: v.number(),
     message_count: v.number(),
@@ -223,6 +235,30 @@ export default defineSchema({
     fork_copy_cursor: v.optional(v.number()),
     fork_cutoff_timestamp: v.optional(v.number()),
     fork_daemon_args: v.optional(v.string()),
+    // Comment-thread agent reply: this conversation is a hidden fork spawned to
+    // answer in a teammate comment thread. It points back at the parent
+    // conversation, the anchored message (if any), and the placeholder comment to
+    // mirror the reply into; comment_fork_prompt_at separates the agent's new
+    // reply from the copied parent history (any assistant message newer than it
+    // is the reply). Hidden from the feed via is_subagent.
+    comment_fork_parent: v.optional(v.id("conversations")),
+    comment_fork_message_id: v.optional(v.string()),
+    comment_fork_comment_id: v.optional(v.id("comments")),
+    comment_fork_prompt_at: v.optional(v.number()),
+    // Visible-child pointer: the session that spawned this one (agent-team
+    // teammate → its lead, `cast spawn` → its caller). Unlike
+    // parent_conversation_id — whose mere presence marks a row as a subagent
+    // and nests/hides it from the inbox — this field only labels and links:
+    // the child stays a first-class inbox card with a click-through to its
+    // parent. Set by conversations.linkSpawnedBy (daemon-resolved).
+    spawned_by_conversation_id: v.optional(v.id("conversations")),
+    // Agent-team identity, from the teamName/agentName stamps Claude Code
+    // writes on every teammate JSONL line (the lead's transcript is never
+    // stamped; linkSpawnedBy stamps the lead as "team-lead" when it links a
+    // worker). Lets the client resolve a teammate name in a transcript to the
+    // sibling session that carries it.
+    agent_team_name: v.optional(v.string()),
+    agent_name: v.optional(v.string()),
     is_favorite: v.optional(v.boolean()),
     short_id: v.optional(v.string()),
     auto_shared: v.optional(v.boolean()),
@@ -234,12 +270,25 @@ export default defineSchema({
     // field and a relative check re-opens the session. Set by:
     // dismissFromInbox, linkSessions*, linkPlanHandoff (auto-dismiss parent),
     // killSession-adjacent paths. Cleared only by: dispatch.sendMessage,
-    // pendingMessages.create, inboxStore.unstashSession, adminUnlinkSession.
-    // The list predicates live in inboxFilters.ts.
+    // pendingMessages.create, inboxStore.restoreSession, adminUnlinkSession.
+    // The list predicates live in inboxFilters.ts. Dismiss also KILLS the
+    // agent (dispatch.applyPatches enqueues kill_session on the transition).
     inbox_dismissed_at: v.optional(v.number()),
+    // Stash = set aside WITHOUT killing: hides the session from the active inbox
+    // buckets into the "Stashed" group (above Dismissed) while the agent keeps
+    // running. Same absolute-flag semantics as inbox_dismissed_at (cleared by
+    // a HUMAN send or an explicit restore — a scheduler-origin injection
+    // deliberately leaves it set, see enqueuePendingMessage); unlike dismiss it
+    // never triggers a kill. A dismiss clears it (the row moves to Dismissed).
+    inbox_stashed_at: v.optional(v.number()),
     inbox_killed_at: v.optional(v.number()),
     inbox_deferred_at: v.optional(v.number()),
     inbox_pinned_at: v.optional(v.number()),
+    // Distinct from inbox_pinned_at: this is the PUBLIC-profile pin. Setting it
+    // is the consent act that makes a session world-visible (the mutation also
+    // guarantees a share_token, so the card deep-links to the existing /share
+    // guest viewer). Timestamp = curation order, GitHub-pinned-repos style.
+    profile_pinned_at: v.optional(v.number()),
     draft_message: v.optional(v.string()),
     last_user_message_at: v.optional(v.number()),
     is_subagent: v.optional(v.boolean()),
@@ -257,6 +306,10 @@ export default defineSchema({
     // supersedes it. Gates the banner-cleanup scan in addMessages so the common
     // (no-error) write path never pays for the extra read.
     pending_api_error: v.optional(v.boolean()),
+    // Which banner family parked the session ("auth" | "limit" | "error", see
+    // classifyApiErrorBanner) — drives the session-card pill label (login vs
+    // limit). Set/cleared in lockstep with pending_api_error.
+    pending_api_error_kind: v.optional(v.string()),
     session_error: v.optional(v.string()),
     active_plan_id: v.optional(v.id("plans")),
     active_task_id: v.optional(v.id("tasks")),
@@ -272,6 +325,11 @@ export default defineSchema({
     workflow_run_id: v.optional(v.id("workflow_runs")),
     is_workflow_sub: v.optional(v.boolean()),
     is_workflow_primary: v.optional(v.boolean()),
+    // The schedule (agent_tasks row) that spawned this conversation as a run.
+    // Stamped by the daemon shortly after spawn (agentTasks.linkRunConversation)
+    // and backfilled on run completion/failure, so EVERY run — not just the
+    // latest — stays attributable to its schedule (panel, badges, provenance).
+    agent_task_id: v.optional(v.id("agent_tasks")),
     available_skills: v.optional(v.string()),
     subagent_description: v.optional(v.string()),
     icon: v.optional(v.string()),
@@ -281,38 +339,167 @@ export default defineSchema({
     // only manages sessions whose owner_device_id matches its own device id.
     // "Move to remote" flips this from the local device to the Mac's device.
     owner_device_id: v.optional(v.string()),
+    // Second-party ownership: the team member RESPONSIBLE for this session,
+    // distinct from user_id (the member whose account runs it). Set when an
+    // agent account (e.g. Mr Bot) parks a session on a human reviewer — the
+    // session then surfaces in the owner's inbox/CLI needs-input views and the
+    // owner may reply into it from the web composer. Absent = unowned, classic
+    // behavior. Unrelated to owner_device_id (which DEVICE's daemon runs it).
+    owner_user_id: v.optional(v.id("users")),
+    // Tombstone forwarding: the id of a DELETED conversation this row replaced
+    // when a kill/restart restored its session (resolveRestartTarget). Lets
+    // resolveConversation heal stale links/cards that still point at the dead
+    // id. A plain string — the referenced row no longer exists.
+    restored_from_conversation_id: v.optional(v.string()),
+    // ── Anchor / persistent-session support ──────────────────────────────────
+    // `persistent` exempts a conversation from auto-completion so a standing
+    // agent member can sit dormant indefinitely and be re-woken by an event. The
+    // guard lives in markSessionCompleted (covers the watchdog, SessionEnd hook,
+    // daemon kill teardown) plus matching checks in the direct-patch kill paths
+    // (killSession + dispatch dismiss→kill). It is flipped to "completed" only by
+    // decommissionAnchor, which clears `persistent` first.
+    persistent: v.optional(v.boolean()),
+    // The IDENTITY a session renders as. When set (to a synthetic is_bot user),
+    // the author chip / feed show the bot, while `user_id` stays the human host
+    // that actually runs and bills the session. Absent = render as user_id.
+    acting_user_id: v.optional(v.id("users")),
+    // Back-link to the owning anchors row when this conversation IS an anchor's
+    // standing session (vs an ephemeral hand it spawned).
+    anchor_id: v.optional(v.id("anchors")),
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_updated", ["user_id", "updated_at"])
+    // Sparse in practice (only banner-parked conversations are true) — lets the
+    // stale-flag sweep find expired pending_api_error rows without a table scan.
+    .index("by_pending_api_error", ["pending_api_error", "updated_at"])
     .index("by_user_git_root", ["user_id", "git_root"])
     .index("by_user_git_remote_url", ["user_id", "git_remote_url"])
     .index("by_user_project_path", ["user_id", "project_path"])
-    .index("by_user_subagent_updated", ["user_id", "is_subagent", "updated_at"])
     .index("by_user_favorite", ["user_id", "is_favorite"])
     .index("by_user_private", ["user_id", "is_private"])
     .index("by_team_id", ["team_id"])
     .index("by_team_user_updated", ["team_id", "user_id", "updated_at"])
-    .index("by_agent_type", ["agent_type"])
-    .vectorIndex("by_title_embedding_v2", {
-      vectorField: "title_embedding",
-      dimensions: 1024,
-      filterFields: ["user_id"],
-    })
+    // Sparse: only second-party-owned sessions carry owner_user_id. Powers the
+    // owner's inbox merge (computeInboxSessions) and feed --mine.
+    .index("by_owner_updated", ["owner_user_id", "updated_at"])
     .index("by_share_token", ["share_token"])
     .index("by_session_id", ["session_id"])
     .index("by_short_id", ["short_id"])
     .index("by_forked_from", ["forked_from"])
     .index("by_git_branch", ["git_branch"])
-    .index("by_parent_message_uuid", ["parent_message_uuid"])
     .index("by_parent_conversation_id", ["parent_conversation_id"])
     .index("by_user_pinned", ["user_id", "inbox_pinned_at"])
+    .index("by_user_stashed", ["user_id", "inbox_stashed_at"])
+    .index("by_user_profile_pinned", ["user_id", "profile_pinned_at"])
     .index("by_user_dismissed", ["user_id", "inbox_dismissed_at"])
-    .index("by_workflow_run", ["workflow_run_id"])
     .index("by_owner_device", ["user_id", "owner_device_id"])
+    .index("by_restored_from", ["restored_from_conversation_id"])
+    // Sparse in practice (only anchors are persistent) — lets the daemon refresh
+    // its persistent-conversation set without scanning the table.
+    .index("by_user_persistent", ["user_id", "persistent"])
+    .index("by_anchor_id", ["anchor_id"])
     .searchIndex("search_title_v2", {
       searchField: "title",
       filterFields: ["user_id"],
+    })
+    // Summaries are searched alongside titles (searchConversations): subtitle is
+    // the generated multi-line session summary, idle_summary the one-line blurb.
+    .searchIndex("search_subtitle", {
+      searchField: "subtitle",
+      filterFields: ["user_id"],
+    })
+    .searchIndex("search_idle_summary", {
+      searchField: "idle_summary",
+      filterFields: ["user_id"],
     }),
+
+  // ── Anchors ─────────────────────────────────────────────────────────────────
+  // A standing agent member: one per team (shared) and one per user (personal).
+  // The anchor owns a long-lived `conversation_id` (persistent, pinned, rendered
+  // under `bot_user_id`'s identity) that is woken by events and delegates code
+  // work to ephemeral `cast spawn` hands. `host_user_id` is the human whose
+  // daemon actually runs and bills the session; `bot_user_id` is identity only.
+  anchors: defineTable({
+    scope_type: v.union(v.literal("team"), v.literal("user")),
+    // Exactly one of these is set, matching scope_type.
+    team_id: v.optional(v.id("teams")),
+    scope_user_id: v.optional(v.id("users")), // the human a personal anchor belongs to
+    bot_user_id: v.id("users"), // the synthetic is_bot identity it renders as
+    host_user_id: v.id("users"), // the human whose daemon runs + bills the session
+    conversation_id: v.optional(v.id("conversations")), // the persistent session (once started)
+    name: v.string(), // display name (default "Anchor", or custom)
+    persona: v.optional(v.string()), // skill name or inline persona reference
+    project_path: v.optional(v.string()), // cwd for the anchor and its hands
+    model: v.optional(v.string()),
+    status: v.union(
+      v.literal("provisioning"),
+      v.literal("active"),
+      v.literal("paused"),
+      v.literal("decommissioned"),
+    ),
+    // Per-anchor governance: cap daily spawned-hand/session count; absent = default.
+    daily_session_cap: v.optional(v.number()),
+    created_at: v.number(),
+    updated_at: v.optional(v.number()),
+  })
+    .index("by_team", ["team_id"])
+    .index("by_scope_user", ["scope_user_id"])
+    .index("by_bot_user", ["bot_user_id"])
+    .index("by_host_user", ["host_user_id"])
+    .index("by_conversation", ["conversation_id"]),
+
+  // Maps an external comms channel (e.g. a Slack channel) to the anchor that
+  // answers there, plus the credentials/config to post back as the bot. Kept
+  // separate from `anchors` so one anchor can own several channels and so the
+  // Slack adapter can resolve channel → anchor with a single indexed lookup.
+  anchor_channels: defineTable({
+    anchor_id: v.id("anchors"),
+    surface: v.union(v.literal("slack")),
+    // Slack: the channel id (e.g. "C0123"). Unique per surface.
+    channel_key: v.string(),
+    // Slack workspace/team id, for multi-workspace installs.
+    workspace_key: v.optional(v.string()),
+    project_path: v.optional(v.string()), // override the anchor's cwd for this channel
+    created_at: v.number(),
+  })
+    .index("by_anchor", ["anchor_id"])
+    .index("by_surface_channel", ["surface", "channel_key"])
+    // Channel ids are only unique WITHIN a workspace, so multi-workspace routing
+    // resolves on (surface, workspace, channel).
+    .index("by_workspace_channel", ["surface", "workspace_key", "channel_key"]),
+
+  // A Slack workspace connected via the "Add to Slack" OAuth flow. Holds the
+  // per-workspace bot token (replaces the single app-level SLACK_BOT_TOKEN env
+  // var) so many workspaces can install the one codecast Slack app. Bound to the
+  // codecast scope (team or user) that authorized it, which is how link/post
+  // authorize and how inbound events resolve the right token.
+  slack_installations: defineTable({
+    workspace_id: v.string(), // Slack team.id
+    workspace_name: v.optional(v.string()),
+    bot_user_id: v.string(), // Slack bot user id (self-loop detection)
+    bot_token: v.string(), // xoxb- per-workspace OAuth token
+    scopes: v.optional(v.string()),
+    app_id: v.optional(v.string()),
+    // The codecast scope that owns this install (exactly one set).
+    team_id: v.optional(v.id("teams")),
+    scope_user_id: v.optional(v.id("users")),
+    installed_by_user_id: v.id("users"),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_workspace", ["workspace_id"])
+    .index("by_team", ["team_id"])
+    .index("by_scope_user", ["scope_user_id"]),
+
+  // Idempotency for inbound Slack events: Slack retries on slow/failed acks, and
+  // a double-wake would make the anchor answer the same mention twice (Aivery's
+  // triple-send bug). We record each event_id and drop repeats.
+  slack_events: defineTable({
+    event_id: v.string(),
+    created_at: v.number(),
+  })
+    .index("by_event_id", ["event_id"])
+    .index("by_created_at", ["created_at"]),
 
   // Large git-diff blobs split off the conversations hot doc. The conversations
   // row is read+patched on every message sync (addMessages) and returned by list
@@ -338,8 +525,7 @@ export default defineSchema({
     created_at: v.number(),
     view_count: v.number(),
   })
-    .index("by_created_at", ["created_at"])
-    .index("by_view_count", ["view_count"]),
+    .index("by_created_at", ["created_at"]),
 
   messages: defineTable({
     conversation_id: v.id("conversations"),
@@ -373,6 +559,10 @@ export default defineSchema({
     }))),
     subtype: v.optional(v.string()),
     client_id: v.optional(v.string()),
+    // Model that generated this assistant turn (from the agent transcript),
+    // e.g. "claude-opus-4-8". Conversations can switch models mid-stream, so
+    // this is per-message; conversations.model is only the last-known value.
+    model: v.optional(v.string()),
     timestamp: v.number(),
     tokens_used: v.optional(v.number()),
     usage: v.optional(v.object({
@@ -392,12 +582,25 @@ export default defineSchema({
     .searchIndex("search_content_v2", {
       searchField: "content",
       filterFields: ["conversation_id"],
-    })
-    .vectorIndex("by_embedding_v2", {
-      vectorField: "embedding",
-      dimensions: 1024,
-      filterFields: ["conversation_id"],
     }),
+
+  // Story & Summary densities. Both are chunked first-person retellings cached
+  // as JSON. `story` is an array of beats (each spans several turns); `summary`
+  // is a coarser array of phases built by grouping the beats. Each level tracks
+  // the message_count it was built at so the client knows when to regenerate.
+  // Kept out of the conversations table so list queries don't carry the markdown.
+  conversation_summaries: defineTable({
+    conversation_id: v.id("conversations"),
+    story: v.optional(v.string()),
+    summary: v.optional(v.string()),
+    story_message_count: v.optional(v.number()),
+    summary_message_count: v.optional(v.number()),
+    // Legacy field from the first (per-conversation single-summary) design.
+    // Tolerated so old rows validate; superseded by the per-level counts above.
+    message_count: v.optional(v.number()),
+    generated_at: v.number(),
+    model: v.optional(v.string()),
+  }).index("by_conversation_id", ["conversation_id"]),
 
   bookmarks: defineTable({
     user_id: v.id("users"),
@@ -411,6 +614,33 @@ export default defineSchema({
     .index("by_user_conversation", ["user_id", "conversation_id"])
     .index("by_message_id", ["message_id"])
     .index("by_user_name", ["user_id", "name"]),
+
+  // Manual session buckets: personal, lightweight named groups for organizing
+  // inbox sessions by workstream. Purely attention-organization for the human —
+  // orthogonal to plans (which carry agent-facing context). Archive = archived_at
+  // set; rows are never hard-deleted so the delta sync cache converges.
+  inbox_buckets: defineTable({
+    user_id: v.id("users"),
+    name: v.string(),
+    color: v.optional(v.string()),
+    sort_order: v.optional(v.number()),
+    archived_at: v.optional(v.number()),
+    created_at: v.number(),
+    updated_at: v.number(),
+  }).index("by_user_id", ["user_id"]),
+
+  // One row per (user, conversation): exclusive bucket membership. Unassign sets
+  // bucket_id null (delta-friendly tombstone) rather than deleting the row, so
+  // every change reaches clients as an upsert. Kept off the conversation row on
+  // purpose: conversations are hot, shared docs; filing is per-user and cold.
+  bucket_assignments: defineTable({
+    user_id: v.id("users"),
+    conversation_id: v.id("conversations"),
+    bucket_id: v.optional(v.id("inbox_buckets")),
+    updated_at: v.number(),
+  })
+    .index("by_user_id", ["user_id"])
+    .index("by_user_conversation", ["user_id", "conversation_id"]),
 
   decisions: defineTable({
     user_id: v.id("users"),
@@ -474,7 +704,6 @@ export default defineSchema({
   })
     .index("by_conversation", ["conversation_id"])
     .index("by_user_file", ["user_id", "file_path"])
-    .index("by_file_path", ["file_path"])
     .index("by_timestamp", ["timestamp"]),
 
   comments: defineTable({
@@ -488,6 +717,22 @@ export default defineSchema({
     pr_id: v.optional(v.id("pull_requests")),
     file_path: v.optional(v.string()),
     line_number: v.optional(v.number()),
+    // Agent-reply comments: an opt-in "ask the agent to reply" spawns a hidden
+    // fork whose answer is mirrored back into this comment. author_kind="agent"
+    // renders it as the agent; agent_status tracks the reply lifecycle; the fork
+    // it came from is recorded for traceability.
+    author_kind: v.optional(v.union(v.literal("user"), v.literal("agent"))),
+    agent_status: v.optional(v.union(
+      v.literal("thinking"),
+      v.literal("streaming"),
+      v.literal("done"),
+      v.literal("error"),
+    )),
+    fork_conversation_id: v.optional(v.id("conversations")),
+    // Client-generated id for the optimistic store flow: the inboxStore stub
+    // carries it as altKey so the synced server row supersedes the stub, and the
+    // server dedups on it so a dispatch-outbox retry can't double-insert.
+    client_id: v.optional(v.string()),
   })
     .index("by_conversation_id", ["conversation_id"])
     .index("by_message_id", ["message_id"])
@@ -533,13 +778,47 @@ export default defineSchema({
     .index("by_user_id", ["user_id"])
     .index("by_token_hash", ["token_hash"]),
 
+  // Server-relayed `cast auth` handoffs for CLIs the browser can't reach over
+  // 127.0.0.1 (SSH / remote machines). The web page deposits the minted token
+  // keyed by a hash of the CLI's one-time nonce; the CLI polls /cli/claim-auth
+  // and the row is deleted on first claim. Rows are transient: claimed within
+  // minutes or swept (token revoked) by the cleanup cron.
+  cli_auth_requests: defineTable({
+    nonce_hash: v.string(),
+    user_id: v.id("users"),
+    token: v.string(),
+    device_name: v.string(),
+    created_at: v.number(),
+  })
+    .index("by_nonce_hash", ["nonce_hash"])
+    .index("by_created_at", ["created_at"]),
+
   pending_messages: defineTable({
     conversation_id: v.id("conversations"),
     from_user_id: v.id("users"),
+    // The user who OWNS the target conversation — i.e. whose daemon delivers this message.
+    // For a self-send (the common case) this equals from_user_id; for a team send (one user
+    // messaging a teammate's session) it's the teammate. Delivery, claiming, and status writes
+    // route on owner; cancel/retry/status-read and failure notifications route on the sender.
+    // Optional only for backward compat with rows created before this field existed (backfilled
+    // to from_user_id, which they're equal to); enqueuePendingMessage always sets it on new rows.
+    owner_user_id: v.optional(v.id("users")),
+    // The sender's own conversation, captured so the cron can tell the sending session when a
+    // cross-user message can't be delivered (the "remote not responding" feedback path).
+    from_conversation_id: v.optional(v.id("conversations")),
+    // Set once when the sender has been told this cross-user message is stuck — keeps the cron
+    // from notifying repeatedly.
+    sender_notified_at: v.optional(v.number()),
     content: v.string(),
     image_storage_id: v.optional(v.id("_storage")),
     image_storage_ids: v.optional(v.array(v.id("_storage"))),
     client_id: v.optional(v.string()),
+    // Who initiated the send. Absent = a person (web composer, cast send, team
+    // send) — those clear dismissed/stashed/killed so the session resurfaces.
+    // "scheduler" = the daemon's task scheduler firing a `cast schedule`
+    // injection: a machine wake must not override the user's stash (stash =
+    // "keep working out of my sight"), so enqueue skips the stash-clear.
+    origin: v.optional(v.literal("scheduler")),
     status: v.union(
       v.literal("pending"),
       v.literal("injected"),
@@ -557,13 +836,18 @@ export default defineSchema({
     .index("by_conversation_id", ["conversation_id"])
     .index("by_conversation_status", ["conversation_id", "status"])
     .index("by_user_status", ["from_user_id", "status"])
+    // The daemon polls by the TARGET owner (owner_user_id), not the sender, so a teammate's
+    // message lands in the right daemon's queue. Replaces by_user_status for delivery routing.
+    .index("by_owner_status", ["owner_user_id", "status"])
     // Lets the global retryStuckMessages cron read ONLY the handful of non-terminal
     // rows instead of `.filter()`-scanning the entire table (which read-conflicts
     // with every addMessages pending-write → OCC stampede → 60s sync timeouts).
     .index("by_status", ["status"]),
 
   // One row per machine the user runs a codecast daemon on. The remote Mac is
-  // just another device. device_id is a stable hash of ~/.codecast/.machine_key
+  // just another device. device_id is a stable hash of ~/.codecast/.machine_key,
+  // bound to the machine's hardware UUID so a disk-copied ~/.codecast (Migration
+  // Assistant) mints a fresh id instead of impersonating the source machine
   // (see remote/device.ts). Per-device fields (local_project_roots) live here
   // rather than on the user doc, so multiple machines don't clobber each other.
   devices: defineTable({
@@ -575,6 +859,12 @@ export default defineSchema({
     status: v.optional(v.union(v.literal("online"), v.literal("offline"))),
     is_remote: v.optional(v.boolean()),
     local_project_roots: v.optional(v.array(v.string())),
+    // Saved CC account profiles on this machine (names/emails/tiers only,
+    // never tokens) — heartbeat-reported, drives the web account switcher.
+    cc_accounts: v.optional(ccAccountsValidator),
+    // Installed agent-feature snippets (by slug) + stable mode on this machine
+    // — heartbeat-reported, drives the web Settings page (per-device toggles).
+    settings: v.optional(deviceSettingsValidator),
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_device", ["user_id", "device_id"]),
@@ -587,7 +877,7 @@ export default defineSchema({
     tmux_session: v.optional(v.string()),
     started_at: v.number(),
     last_heartbeat: v.number(),
-    agent_status: v.optional(v.union(v.literal("working"), v.literal("idle"), v.literal("permission_blocked"), v.literal("compacting"), v.literal("thinking"), v.literal("connected"), v.literal("stopped"), v.literal("starting"), v.literal("resuming"))),
+    agent_status: v.optional(agentStatusFieldValidator),
     agent_status_updated_at: v.optional(v.number()),
     permission_mode: v.optional(v.union(v.literal("default"), v.literal("plan"), v.literal("acceptEdits"), v.literal("bypassPermissions"), v.literal("dontAsk"), v.literal("auto"))),
     current_cpu: v.optional(v.number()),
@@ -646,6 +936,38 @@ export default defineSchema({
     .index("by_sha", ["sha"])
     .index("by_repository", ["repository"]),
 
+  // Per-edit file changes materialized at message ingest (materializeFileChanges
+  // in messages.ts). Lets the diff viewer show the full session diff without
+  // paginating the whole conversation to the top. change_key = the extractor's
+  // stable per-edit id (toolCallId, or `${toolCallId}:${section}`) so re-synced
+  // messages upsert idempotently instead of duplicating rows.
+  file_changes: defineTable({
+    conversation_id: v.id("conversations"),
+    change_key: v.string(),
+    message_id: v.id("messages"),
+    tool_call_id: v.optional(v.string()),
+    seq: v.number(),
+    file_path: v.string(),
+    change_type: v.union(v.literal("write"), v.literal("edit"), v.literal("commit")),
+    old_content: v.optional(v.string()),
+    new_content: v.string(),
+    commit_message: v.optional(v.string()),
+    commit_hash: v.optional(v.string()),
+    timestamp: v.number(),
+  })
+    .index("by_conversation_id", ["conversation_id"])
+    .index("by_conversation_change_key", ["conversation_id", "change_key"])
+    // cast blame: resolve a git SHA to the session that committed it. Stored
+    // hashes are short (parsed from `[branch abc1234]` output), so lookups
+    // range-scan [sha7, fullSha] and prefix-verify.
+    .index("by_commit_hash", ["commit_hash"])
+    // cast blame fallback: sessions often commit via compound commands whose
+    // output carries no `[branch hash]` line, so the row has a message but no
+    // hash. Blame then matches commit rows by subject + timestamp proximity.
+    .index("by_type_timestamp", ["change_type", "timestamp"])
+    // cast blame: attribute uncommitted lines to the newest edit of the file.
+    .index("by_file_path", ["file_path"]),
+
   pull_requests: defineTable({
     team_id: v.id("teams"),
     github_pr_id: v.number(),
@@ -683,7 +1005,6 @@ export default defineSchema({
     .index("by_team_id", ["team_id"])
     .index("by_github_pr_id", ["github_pr_id"])
     .index("by_repository", ["repository"])
-    .index("by_head_ref", ["head_ref"])
     .index("by_updated_at", ["updated_at"]),
 
   reviews: defineTable({
@@ -877,6 +1198,16 @@ export default defineSchema({
     .index("by_recipient_read", ["recipient_user_id", "read"])
     .index("by_recipient_created", ["recipient_user_id", "created_at"]),
 
+  // Fixed-window counters for the IP-keyed rate limiter (ipRateLimit.ts) used on
+  // UNAUTHENTICATED endpoints (the auth relay, webhooks) — the existing per-user
+  // rate_limits table can't cover them (no userId). Keyed per (endpoint, ip) so
+  // counters distribute — no hot doc. Pruned hourly.
+  ip_rate_limits: defineTable({
+    key: v.string(),
+    count: v.number(),
+    window_start: v.number(),
+  }).index("by_key", ["key"]),
+
   pending_permissions: defineTable({
     conversation_id: v.id("conversations"),
     session_id: v.string(),
@@ -891,9 +1222,41 @@ export default defineSchema({
     created_at: v.number(),
     resolved_at: v.optional(v.number()),
     resolved_by: v.optional(v.id("users")),
+    // Denormalized conversation owner so getAllRespondedPermissions can index by
+    // (owner, resolved_at) instead of scanning the whole table — the scan made
+    // that live per-daemon subscription re-run on every other user's writes.
+    owner_user_id: v.optional(v.id("users")),
   })
     .index("by_conversation_status", ["conversation_id", "status"])
-    .index("by_session", ["session_id"]),
+    .index("by_session", ["session_id"])
+    .index("by_owner_resolved", ["owner_user_id", "resolved_at"]),
+
+  // A signed-in link recipient (someone who opened a shared conversation but is
+  // neither its owner nor a team member) asking to do more than read: to send
+  // messages into the live session — which, since the agent runs whatever it's
+  // told, means running commands on the owner's machine. The owner approves once
+  // per session; the grant then lets performSessionSend accept that user's sends.
+  // Co-writing the draft needs no grant — only firing it into the session does.
+  collab_grants: defineTable({
+    conversation_id: v.id("conversations"),
+    grantee_user_id: v.id("users"),
+    // The conversation owner whose session is acted on — the one who must approve.
+    owner_user_id: v.id("users"),
+    status: v.union(
+      v.literal("requested"),
+      v.literal("granted"),
+      v.literal("denied"),
+      v.literal("revoked")
+    ),
+    // Snapshot of the requester so the approve/deny card renders without a join.
+    grantee_name: v.optional(v.string()),
+    grantee_image: v.optional(v.string()),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_conversation", ["conversation_id"])
+    .index("by_conversation_grantee", ["conversation_id", "grantee_user_id"])
+    .index("by_owner_status", ["owner_user_id", "status"]),
 
   github_webhook_events: defineTable({
     delivery_id: v.string(),
@@ -904,8 +1267,7 @@ export default defineSchema({
     created_at: v.number(),
   })
     .index("by_delivery_id", ["delivery_id"])
-    .index("by_processed", ["processed"])
-    .index("by_event_type", ["event_type"]),
+    .index("by_processed", ["processed"]),
 
   github_app_installations: defineTable({
     team_id: v.id("teams"),
@@ -964,6 +1326,10 @@ export default defineSchema({
     target_conversation_id: v.optional(v.id("conversations")),
     project_path: v.optional(v.string()),
     agent_type: v.optional(v.string()),
+    // Device that created the task (CLI `cast schedule add`). When set, only
+    // that device's scheduler may claim it. Absent on web-created/legacy tasks,
+    // which fall back to checkout-existence eligibility.
+    created_device_id: v.optional(v.string()),
 
     schedule_type: v.union(
       v.literal("once"),
@@ -995,7 +1361,21 @@ export default defineSchema({
 
     last_run_at: v.optional(v.number()),
     last_run_summary: v.optional(v.string()),
+    // True when the last run ended in failTaskRun. Drives the panel's outcome
+    // color and gates run auto-fold: a failed previous run must stay visible in
+    // the inbox (escalation), only a clean run folds when the next one starts.
+    last_run_failed: v.optional(v.boolean()),
+    // Agent's explicit escalation from `cast schedule complete --needs-attention`:
+    // the run neither auto-folds nor collapses under the schedule's standing row —
+    // it stays a real inbox card until the user triages it.
+    last_run_needs_attention: v.optional(v.boolean()),
     last_run_conversation_id: v.optional(v.id("conversations")),
+    // Claude session UUID of the last spawned run. The daemon assigns it up front
+    // via `claude --session-id`; webList resolves it to a conversation at read time
+    // (by_session_id), so spawned runs are linkable even if the run's conversation
+    // hadn't synced yet at completion. Absent for --context-current runs, which
+    // record last_run_conversation_id directly.
+    last_run_session_uuid: v.optional(v.string()),
     run_count: v.number(),
     created_at: v.number(),
   })
@@ -1485,17 +1865,17 @@ export default defineSchema({
     .searchIndex("search_docs_v2", {
       searchField: "title",
       filterFields: ["user_id", "doc_type", "project_id"],
-    })
-    .vectorIndex("by_doc_embedding_v2", {
-      vectorField: "embedding",
-      dimensions: 1024,
-      filterFields: ["user_id"],
     }),
 
   doc_snapshots: defineTable({
     id: v.string(),
     version: v.number(),
-    content: v.string(),
+    // The full ProseMirror doc serialized as JSON. Stored gzip-compressed in
+    // `content_gz` (text compresses ~5-10x) so large docs stay under Convex's
+    // 1 MiB per-document limit. `content` is the legacy uncompressed form —
+    // still read for rows written before compression; never written anymore.
+    content: v.optional(v.string()),
+    content_gz: v.optional(v.bytes()),
   }).index("id_version", ["id", "version"]),
 
   doc_deltas: defineTable({
@@ -1512,6 +1892,10 @@ export default defineSchema({
     user_color: v.string(),
     cursor_pos: v.optional(v.number()),
     anchor_pos: v.optional(v.number()),
+    // Live draft text for composer co-presence (doc_id "compose:<conversationId>").
+    // Lets each side watch the words the other is forming without a full OT buffer.
+    // Unused by the document editor, which only sends cursor/anchor positions.
+    draft_text: v.optional(v.string()),
     updated_at: v.number(),
   })
     .index("by_doc", ["doc_id"])
@@ -1568,6 +1952,11 @@ export default defineSchema({
       session_id: v.optional(v.string()),
       started_at: v.optional(v.number()),
       completed_at: v.optional(v.number()),
+      // Dynamic-workflow agents carry their own label/phase/tokens (no stored graph to look them up in)
+      label: v.optional(v.string()),
+      phase: v.optional(v.string()),
+      tokens: v.optional(v.number()),
+      result_preview: v.optional(v.string()),
     })),
     goal_override: v.optional(v.string()),
     project_path: v.optional(v.string()),
@@ -1582,11 +1971,19 @@ export default defineSchema({
     }))),
     gate_response: v.optional(v.string()),
     fail_reason: v.optional(v.string()),
+    // "routine" = our DOT-graph runs (default/legacy); "workflow" = Anthropic dynamic workflows
+    run_kind: v.optional(v.union(v.literal("routine"), v.literal("workflow"))),
+    external_run_id: v.optional(v.string()), // the runtime's wf_<id>; idempotent upsert key for snapshot ingest
+    workflow_name: v.optional(v.string()),
+    phases: v.optional(v.array(v.object({ title: v.string(), detail: v.optional(v.string()) }))),
+    total_tokens: v.optional(v.number()),
+    agent_count: v.optional(v.number()),
     created_at: v.number(),
     updated_at: v.number(),
   })
     .index("by_user_id", ["user_id"])
     .index("by_workflow_id", ["workflow_id"])
+    .index("by_external_run", ["external_run_id"])
     .index("by_status", ["status"]),
 
   client_state: defineTable({
@@ -1641,9 +2038,7 @@ export default defineSchema({
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_timestamp", ["user_id", "timestamp"])
-    .index("by_user_level", ["user_id", "level"])
-    // Cross-user scan by age, for the retention prune that drains old rows.
-    .index("by_timestamp", ["timestamp"]),
+    .index("by_user_level", ["user_id", "level"]),
 
   plan_templates: defineTable({
     user_id: v.id("users"),
@@ -1696,4 +2091,41 @@ export default defineSchema({
   })
     .index("by_name", ["name"]),
 
+  // Cross-entity change feed — the per-user "what changed" log that lets a
+  // client returning online catch up on EVERY change (including deletes) across
+  // conversations, tasks, docs and plans, without re-reading whole lists and
+  // diffing. One row PER ENTITY (not per change): every write upserts the row's
+  // `seq` to now, so the table is bounded by entity count, not change volume.
+  // The write interceptor in functions.ts is the sole writer (see changeLog.ts).
+  //  - entity_id      the entity's _id as a string (entity_type says which table)
+  //  - op             "upsert" (created/changed) | "delete" (hard-deleted)
+  //  - owner_user_id  the entity's user_id — owner-scope catch-up (the inbox)
+  //  - team_id        the entity's team_id when shared — team-scope catch-up
+  //  - seq            Date.now() at write time; the monotonic cursor clients track
+  change_log: defineTable({
+    entity_type: v.union(
+      v.literal("conversations"),
+      v.literal("tasks"),
+      v.literal("docs"),
+      v.literal("plans"),
+    ),
+    entity_id: v.string(),
+    op: v.union(v.literal("upsert"), v.literal("delete")),
+    owner_user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
+    seq: v.number(),
+  })
+    .index("by_entity", ["entity_id"])
+    .index("by_owner_seq", ["owner_user_id", "seq"])
+    .index("by_team_seq", ["team_id", "seq"]),
+
+}, {
+  // The `messages` table is in the millions of rows, and the default
+  // `schemaValidation: true` re-scans every document on every `convex deploy` —
+  // turning a one-field function change into a multi-minute full-table walk.
+  // Disable the runtime/push-time scan: writes still flow through mutations with
+  // `v.*` arg validators and the schema continues to generate the TypeScript
+  // types, so the validators above remain the source of truth for shape — they
+  // just aren't re-checked against the whole DB on each push.
+  schemaValidation: false,
 });

@@ -35,16 +35,30 @@ export function usePushNotifications() {
       }
     });
 
-    notificationListener.current = Notifications.addNotificationReceivedListener((notification) => {
-      setNotification(notification);
-    });
-
-    responseListener.current = Notifications.addNotificationResponseReceivedListener((response) => {
+    const handleNotificationResponse = (response: Notifications.NotificationResponse) => {
       const data = response.notification.request.content.data;
       if (data.conversationId) {
         router.push(`/session/${data.conversationId}`);
       }
+    };
+
+    // Cold-start tap: when the app is fully killed and a notification launches it,
+    // the launching response is delivered here, not through the live listener below.
+    let handledColdStart = false;
+    Notifications.getLastNotificationResponseAsync()
+      .then((last) => {
+        if (last && !handledColdStart) {
+          handledColdStart = true;
+          handleNotificationResponse(last);
+        }
+      })
+      .catch(() => {});
+
+    notificationListener.current = Notifications.addNotificationReceivedListener((notification) => {
+      setNotification(notification);
     });
+
+    responseListener.current = Notifications.addNotificationResponseReceivedListener(handleNotificationResponse);
 
     return () => {
       if (notificationListener.current && typeof Notifications.removeNotificationSubscription === 'function') {

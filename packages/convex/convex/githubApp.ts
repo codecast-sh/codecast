@@ -1,7 +1,8 @@
 import { v } from "convex/values";
-import { mutation, query, internalMutation, internalQuery, internalAction } from "./_generated/server";
+import { mutation, query, internalMutation, internalQuery, internalAction } from "./functions";
 import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
+import { isTeamMember } from "./privacy";
 
 const GITHUB_API_BASE = "https://api.github.com";
 
@@ -176,10 +177,22 @@ export const storeInstallation = internalMutation({
     installed_by_user_id: v.optional(v.id("users")),
   },
   handler: async (ctx, args) => {
+    // The callback's OAuth `state` (team_id + user_id) is client-supplied and
+    // unsigned, so bind an installation to a team only if the named installer
+    // actually belongs to it. Blocks binding your GitHub installation to a team
+    // you're not in. (Signing the state end-to-end is a follow-up.)
+    if (!args.installed_by_user_id || !(await isTeamMember(ctx, args.installed_by_user_id, args.team_id))) {
+      throw new Error("Installer is not a member of the target team");
+    }
     const existing = await ctx.db
       .query("github_app_installations")
       .withIndex("by_installation_id", (q) => q.eq("installation_id", args.installation_id))
       .first();
+    // Don't let a fresh install silently re-point an installation that is
+    // already bound to a different team (would move that team's repo access).
+    if (existing && String(existing.team_id) !== String(args.team_id)) {
+      throw new Error("Installation is already linked to another team");
+    }
 
     if (existing) {
       await ctx.db.patch(existing._id, {

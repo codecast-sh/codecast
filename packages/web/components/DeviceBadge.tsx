@@ -25,6 +25,12 @@ export type Device = {
   last_seen: number;
   is_remote: boolean;
   local_project_roots: string[];
+  /** Installed agent-feature snippets (by slug) + stable mode, heartbeat-reported. */
+  settings?: {
+    snippets?: Record<string, boolean>;
+    stable_mode?: "solo" | "team" | "off";
+    stable_global?: boolean;
+  };
   online: boolean;
 };
 
@@ -40,7 +46,9 @@ export function deviceDisplayName(d: Device | undefined | null): string {
 export function deviceKindLabel(d: Device): string {
   if (d.is_remote) return "Remote";
   if (/linux/i.test(d.platform)) return "Linux";
-  if (/win/i.test(d.platform)) return "Windows";
+  // process.platform is "win32" — match that (or a friendly "Windows"), NOT a
+  // bare "win", which the "win" inside "darwin" would falsely trip.
+  if (/win32|windows/i.test(d.platform)) return "Windows";
   return "Mac";
 }
 

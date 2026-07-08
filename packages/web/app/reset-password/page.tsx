@@ -2,6 +2,7 @@ import { useState, Suspense } from "react";
 import Link from "next/link";
 import { useAuthActions } from "@convex-dev/auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { AppLoader } from "../../components/AppLoader";
 
 function ResetPasswordForm() {
   const searchParams = useSearchParams();
@@ -164,9 +165,7 @@ export default function ResetPasswordPage() {
   return (
     <Suspense
       fallback={
-        <div className="min-h-screen flex items-center justify-center bg-sol-bg">
-          <div className="text-sol-text-muted">Loading...</div>
-        </div>
+<AppLoader />
       }
     >
       <ResetPasswordForm />

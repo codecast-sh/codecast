@@ -6,6 +6,15 @@
   .cq-container {
     container-type: inline-size;
   }
+
+  /* Single source of truth for the conversation column width — messages, header,
+     composer, jump banners, and expanded panels all read this one token. Tune the
+     width here and it applies everywhere; it never needs a file-wide sweep again.
+     56rem == Tailwind's max-w-4xl. (It was widened to max-w-7xl/80rem, which made
+     lines too long to read comfortably — capped back here.) */
+  .conv-col {
+    max-width: var(--conv-col-w, 56rem);
+  }
 }
 
 @container (max-width: 600px) {
@@ -15,20 +24,110 @@
   .cq-hide-minimal { display: none !important; }
 }
 
+/* List header (GenericListView) progressive disclosure. The header is its own
+   container query container, so this fires off the header's width and works on
+   the full-width list page too — not just inside the squeezed detail panel. As
+   the panel narrows the toolbar sheds its lowest-value bits in order: text labels
+   collapse to icons, the ⌘K launcher drops, the sync badge keeps only its spinner,
+   and the status tabs fold into a dropdown (see .cq-tabs-compact). Past that the
+   row simply wraps — the action cluster (ml-auto) drops below the title/tabs row
+   instead of overflowing and painting over them, which is why the left section
+   keeps its min-content floor (no min-w-0) so flex can decide when to break. */
+@container (max-width: 780px) {
+  .cq-header-collapse { display: none !important; }
+}
+
+/* Status tabs swap a multi-pill segmented control for a single compact dropdown
+   once the header is too tight to show every pill on one row alongside the
+   toolbar. Measured for the Tasks header (the widest consumer: ~52 title + ~452
+   pills + ~626 toolbar), the pills stop fitting one row just under ~1205px and
+   wrap to a second; below the threshold the dropdown instead keeps every status
+   one click away on a single tidy row, never wrapped or scrolled out of reach. */
+.cq-tabs-compact { display: none; }
+@container (max-width: 1210px) {
+  .cq-tabs-pills { display: none !important; }
+  .cq-tabs-compact { display: flex !important; }
+}
+/* Tightest widths: the status dropdown sheds its text label and count, leaving
+   just the active-status icon + caret so it reads as an icon-button alongside the
+   rest of the collapsed toolbar instead of a wide pill crowding the row. The
+   source/scope segmented toggle (All / 👤 / 🤖, a headerExtra) likewise folds its
+   segments into one dropdown (.cq-seg-compact) here — three buttons collapse to a
+   single active-option button so the toolbar keeps to one row instead of wrapping. */
+.cq-seg-compact { display: none; }
+@container (max-width: 620px) {
+  .cq-tab-label { display: none !important; }
+  .cq-seg-full { display: none !important; }
+  .cq-seg-compact { display: flex !important; }
+}
+
+/* At tight container widths the list header + filter bar trade their roomy 24px
+   side padding for 12px, reclaiming ~24px of usable width — enough to keep the
+   toolbar and the view-action cluster on fewer rows before they wrap. */
+@container (max-width: 600px) {
+  .cq-header-pad { padding-left: 0.75rem !important; padding-right: 0.75rem !important; }
+}
+
+/* Very narrow panels: keep EACH header bar to a single line that never wraps, so
+   the toolbar and the filter bar stay two lines total (not four). Rather than let
+   a control spill to a second row, we compact the controls to make room: shrink
+   the side padding and the gaps, hide the dropdown carets (cq-caret) and the
+   "+ Filter" word (cq-addfilter-label), and trim the dropdown triggers' padding —
+   then pin both rows to nowrap. Wide layouts (> 440px) are untouched. */
+@container (max-width: 440px) {
+  .cq-header-pad { padding-left: 0.5rem !important; padding-right: 0.5rem !important; }
+  .cq-header { flex-wrap: nowrap !important; column-gap: 0.25rem !important; }
+  .cq-header-toolbar { flex-wrap: nowrap !important; column-gap: 0.125rem !important; }
+  .cq-filter-bar { flex-wrap: nowrap !important; column-gap: 0.25rem !important; }
+  .cq-header-toolbar > div > button { padding-left: 0.375rem !important; padding-right: 0.375rem !important; }
+  .cq-caret { display: none !important; }
+  .cq-addfilter-label { display: none !important; }
+}
+
+.cq-no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+.cq-no-scrollbar::-webkit-scrollbar { display: none; }
+
+/* Kill Chromium's two-finger / overscroll "swipe to go back/forward" gesture.
+   We push a history entry per viewed conversation (QueuePageClient session
+   switch), so in the desktop shell an accidental horizontal swipe — or
+   overscrolling past the edge of a wide code block, which chains up to the root
+   scroller — was firing popstate and jumping to a previously-viewed conversation.
+   Intentional back/forward (Cmd+[ / Cmd+], app menu) routes through
+   webContents.goBack() and is unaffected by overscroll-behavior. */
+html, body {
+  overscroll-behavior-x: none;
+}
+
 :root {
   --font-mono: "JetBrains Mono", monospace;
   --font-serif: "Fraunces", serif;
 
+  /* Inline-review comment rail width + gap (single source of truth: the message
+     body splits content|rail by these, and the action toolbar offsets by them). */
+  --cc-rail-w: 15rem;
+  --cc-rail-gap: 1.25rem;
+
   /* Default to Light - Solarized Light */
   --sol-bg: #FBF5E2;
   --sol-bg-alt: #eee8d5;
+  /* Inset panel surface (tool output, code blocks) — sits between the page
+     background and bg-alt; resolves per-theme since the mixed vars cascade. */
+  --sol-bg-inset: color-mix(in srgb, var(--sol-bg) 40%, var(--sol-bg-alt));
   --sol-bg-highlight: #e4ddc8;
+  /* Elevated card surface — pure white in light mode so pills lift off the
+     cream background; a touch-lighter teal in dark mode (see .dark below). */
+  --sol-card: #ffffff;
+  --sol-card-hover: #fffdf6;
   --sol-border: #93a1a1;
   --sol-text: #002b36;
   --sol-text-secondary: #073642;
   --sol-text-muted: #586e75;
   --sol-text-dim: #657b83;
   --sol-text-muted0: #839496;
+
+  /* Logo "C" glyph — dark neutral on light chrome; .dark lightens it (the
+     coral arrow is theme-stable). Static-light pages pin [--logo-c:#444444]. */
+  --logo-c: #444444;
 
   /* Solarized accent colors (work on both light/dark) */
   --sol-yellow: #b58900;
@@ -58,12 +157,16 @@
   --sol-bg: #002b36;
   --sol-bg-alt: #073642;
   --sol-bg-highlight: #094959;
+  --sol-card: #08404e;
+  --sol-card-hover: #0a4c5d;
   --sol-border: #586e75;
   --sol-text: #fdf6e3;
   --sol-text-secondary: #eee8d5;
   --sol-text-muted: #93a1a1;
   --sol-text-dim: #657b83;
   --sol-text-muted0: #839496;
+
+  --logo-c: #93a1a1;
 
   /* Syntax highlighting - Dark mode (same accent colors work well) */
   --hljs-comment: #586e75;
@@ -133,7 +236,7 @@
   --tw-prose-bold: var(--sol-text);
   --tw-prose-links: #d97706;
   --tw-prose-code: var(--sol-text);
-  --tw-prose-pre-bg: var(--sol-bg-alt);
+  --tw-prose-pre-bg: var(--sol-bg-inset);
   --tw-prose-bullets: var(--sol-text-muted);
   --tw-prose-counters: var(--sol-text-muted);
   --tw-prose-quotes: var(--sol-text-muted);
@@ -299,6 +402,30 @@
     background: var(--sol-border);
   }
 
+  /* Always-visible solarized scrollbar — used by the fullscreen canvas so a long
+     report visibly reads as scrollable. Deliberately NOT setting scrollbar-width:
+     the standard property renders as a 0-width auto-hiding overlay on macOS and
+     suppresses the legacy ::-webkit-scrollbar below. Omitting it makes Chrome use
+     the classic scrollbar, which reserves space and stays visible. */
+  .canvas-scroll::-webkit-scrollbar {
+    width: 12px;
+    height: 12px;
+  }
+  .canvas-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .canvas-scroll::-webkit-scrollbar-thumb {
+    background: var(--sol-border);
+    border-radius: 8px;
+    border: 3px solid transparent;
+    background-clip: padding-box;
+  }
+  .canvas-scroll::-webkit-scrollbar-thumb:hover {
+    background: var(--sol-text-dim);
+    border: 3px solid transparent;
+    background-clip: padding-box;
+  }
+
 }
 
 /* Code block horizontal scrollbar - solarized */
@@ -355,6 +482,16 @@
   transform: rotate(3deg) translate(0px, -4px);
 }
 
+/* When the desktop window is backgrounded (see installIdleAnimationPause), freeze
+   every running animation so the GPU compositor can idle instead of repainting
+   the per-session pulse/ping/spin dots at the display refresh rate. JS and the
+   live-query socket keep running, so data stays fresh; animations resume on focus. */
+html[data-idle] *,
+html[data-idle] *::before,
+html[data-idle] *::after {
+  animation-play-state: paused !important;
+}
+
 @keyframes messageSlideIn {
   from {
     opacity: 0;
@@ -389,6 +526,15 @@
   animation: fadeSlideIn 0.3s ease-out !important;
 }
 
+/* Staggered page-load reveal (public profile). Reuses fadeSlideIn; the
+   .reveal-N modifiers offset each band for a cascading entrance. */
+.reveal {
+  animation: fadeSlideIn 0.5s ease-out both;
+}
+.reveal-1 { animation-delay: 0.08s; }
+.reveal-2 { animation-delay: 0.16s; }
+.reveal-3 { animation-delay: 0.24s; }
+
 @keyframes fadeIn {
   from {
     opacity: 0;
@@ -403,6 +549,39 @@
 .animate-fadeIn {
   animation: fadeIn 0.4s ease-out forwards;
   opacity: 0;
+}
+
+/* Indeterminate hairline shimmer used by AppLoader. Colored by currentColor;
+   mirrored by the pre-React #boot-shell in index.html — keep the two in sync. */
+.app-loader-bar {
+  position: relative;
+  width: 120px;
+  height: 2px;
+  border-radius: 999px;
+  overflow: hidden;
+}
+.app-loader-bar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: currentColor;
+  opacity: 0.14;
+}
+.app-loader-bar::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 36px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.55;
+  animation: app-loader-slide 1.5s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+@keyframes app-loader-slide {
+  0% { transform: translateX(-40px); }
+  100% { transform: translateX(124px); }
 }
 
 /* Highlight.js Solarized theme overrides */
@@ -638,15 +817,18 @@ pre[class*="language-"] {
   animation: slideInRight 0.2s ease-out;
 }
 
+/* --row-h is set from JS (undoActions.ts) to the row's measured height just
+   before the class is applied, so the collapse spans the real content — a single
+   card or a parent plus its subagent rows — instead of a hardcoded cap. */
 @keyframes sessionEnter {
   from {
     opacity: 0;
-    max-height: 0;
+    height: 0;
     transform: translateY(-6px);
   }
   to {
     opacity: 1;
-    max-height: 80px;
+    height: var(--row-h, 80px);
     transform: translateY(0);
   }
 }
@@ -654,13 +836,12 @@ pre[class*="language-"] {
 @keyframes sessionDismiss {
   from {
     opacity: 1;
-    max-height: 80px;
+    height: var(--row-h, 80px);
   }
   to {
     opacity: 0;
-    max-height: 0;
+    height: 0;
     transform: translateY(-6px);
-    border-color: transparent;
   }
 }
 
@@ -765,6 +946,23 @@ pre[class*="language-"] {
   cursor: col-resize !important;
 }
 
+/* Sidebar collapse/expand: panels are flex-grow sized (react-resizable-panels),
+   so animating flex-grow slides the panel. The class is applied only for the
+   duration of a programmatic toggle — drag-resizes never animate. The content
+   (panel > library inner div > our wrapper) holds its expanded pixel width
+   (--sidebar-frozen-w, set from JS) so text doesn't reflow mid-animation.
+   !important needed: the library sets overflow inline on both divs. */
+[data-panel].sidebar-animating {
+  transition: flex-grow 280ms cubic-bezier(0.32, 0.72, 0, 1);
+  overflow: hidden !important;
+}
+[data-panel].sidebar-animating > div {
+  overflow: hidden !important;
+}
+[data-panel].sidebar-animating > div > div {
+  width: var(--sidebar-frozen-w, 100%);
+}
+
 /* Window manager: hide input area on unfocused windows */
 .session-window--blurred [data-chat-input] {
   display: none;
@@ -784,3 +982,861 @@ pre[class*="language-"] {
   -webkit-app-region: no-drag;
 }
 
+/* ============================================================
+   Quote / comment on assistant message blocks (review mode)
+   ============================================================ */
+
+/* Rail width/gap live on :root so the message action toolbar (outside this
+   subtree) can offset itself by the same amount — single source of truth. */
+.cc-msg-review {
+  position: relative;
+}
+/* The region is programmatically focusable (tabIndex=-1) so it can capture
+   block-navigation keys; the active-block highlight is the focus indicator, so
+   suppress the redundant UA outline on the container itself. */
+.cc-msg-review:focus,
+.cc-msg-review:focus-visible {
+  outline: none;
+}
+
+/* z-index lifts content above the block-highlight overlay so the tint sits behind text. */
+.cc-content {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+}
+
+/* The comment rail lives on the LEFT.
+   - cc-rail-margin (wide screens): float it in the empty page margin to the LEFT
+     of the centered column so the text keeps its full width.
+   - cc-rail-inline (tight screens): a real in-flow left column that shrinks text. */
+.cc-rail-inline {
+  display: flex;
+  gap: var(--cc-rail-gap);
+}
+.cc-rail-inline .cc-content {
+  flex: 1 1 auto;
+}
+.cc-rail-inline .cc-rail {
+  order: -1; /* rail before content */
+  flex: 0 0 var(--cc-rail-w);
+  position: relative;
+}
+.cc-rail-margin .cc-rail {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: var(--cc-rail-w);
+  right: calc(100% + 2.25rem); /* just left of the hover handle, into the margin */
+}
+.cc-rail-item {
+  position: absolute;
+  left: 0;
+  right: 0;
+  transition: top 140ms ease;
+}
+
+/* Soft highlight of the block a comment points at — sits BEHIND the text. In inline
+   mode the content is offset right by the rail, so shift the overlay to match. */
+.cc-active-overlay {
+  position: absolute;
+  left: -0.5rem;
+  right: -0.5rem;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--sol-cyan) 10%, transparent);
+  box-shadow: inset 2px 0 0 var(--sol-cyan);
+  pointer-events: none;
+  z-index: 0;
+  transition: top 120ms ease, height 120ms ease;
+}
+.cc-rail-inline .cc-active-overlay {
+  left: calc(var(--cc-rail-w) + var(--cc-rail-gap) - 0.5rem);
+}
+
+/* Modeless per-block hover actions: [quote][comment] pill at the hovered block's
+   top-right. Sits at the content's right edge; slides left of the rail when the
+   rail is open. One container border, plain icon buttons inside. */
+/* Single Quote handle in the LEFT gutter at the hovered block's top — kept on
+   the opposite side from the top-right meta toolbar so the two never collide. */
+.cc-block-quote {
+  position: absolute;
+  left: -1.95rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.55rem;
+  height: 1.45rem;
+  margin-top: -1px;
+  border: 1px solid var(--sol-border);
+  border-radius: 7px;
+  /* Same surface as .cc-sel-toolbar / the corner toolbars — NOT --sol-card,
+     which is pure white in light mode and reads off-theme over the cream. */
+  background: var(--sol-bg);
+  color: var(--sol-text-muted);
+  cursor: pointer;
+  z-index: 6;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  animation: ccPop 120ms ease-out;
+  transition: color 120ms, border-color 120ms, background 120ms, transform 120ms;
+}
+.cc-block-quote:hover {
+  color: var(--sol-cyan);
+  border-color: var(--sol-cyan);
+  background: color-mix(in srgb, var(--sol-cyan) 14%, var(--sol-bg));
+  transform: scale(1.06);
+}
+
+/* Mirror of .cc-block-quote on the RIGHT gutter: anchor a teammate comment thread
+   to this message. Carries a count badge when the message already has comments. */
+.cc-block-comment {
+  position: absolute;
+  right: -1.95rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.55rem;
+  height: 1.45rem;
+  margin-top: -1px;
+  border: 1px solid var(--sol-border);
+  border-radius: 7px;
+  background: var(--sol-bg);
+  color: var(--sol-text-muted);
+  cursor: pointer;
+  z-index: 6;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  animation: ccPop 120ms ease-out;
+  transition: color 120ms, border-color 120ms, background 120ms, transform 120ms;
+}
+.cc-block-comment:hover {
+  color: var(--sol-cyan);
+  border-color: var(--sol-cyan);
+  background: color-mix(in srgb, var(--sol-cyan) 14%, var(--sol-bg));
+  transform: scale(1.06);
+}
+.cc-block-comment-badge {
+  position: absolute;
+  top: -0.4rem;
+  right: -0.4rem;
+  min-width: 0.95rem;
+  height: 0.95rem;
+  padding: 0 0.2rem;
+  display: grid;
+  place-items: center;
+  font-size: 0.55rem;
+  font-weight: 700;
+  border-radius: 999px;
+  background: var(--sol-cyan);
+  color: var(--sol-bg);
+}
+
+/* Rail cards: minimal inline notes — author avatar + a single LEFT accent bar,
+   no boxed border, no card background. The textarea/buttons carry no frame. */
+.cc-comment-chip,
+.cc-comment-editor {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+  padding: 0.1rem 0 0.1rem 0.55rem;
+  border-left: 2px solid var(--sol-border);
+  font-size: 0.8125rem;
+}
+.cc-comment-chip {
+  cursor: pointer;
+  transition: border-color 120ms;
+}
+.cc-comment-chip:hover,
+.cc-comment-chip-active {
+  border-left-color: var(--sol-cyan);
+}
+.cc-comment-editor {
+  border-left-color: var(--sol-cyan);
+}
+.cc-comment-avatar {
+  flex: none;
+  width: 1.3rem;
+  height: 1.3rem;
+  border-radius: 50%;
+  object-fit: cover;
+  margin-top: 0.1rem;
+}
+.cc-comment-avatar-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--sol-bg-highlight);
+  color: var(--sol-text-muted);
+  font-size: 0.62rem;
+  font-weight: 700;
+}
+.cc-comment-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.cc-comment-body {
+  color: var(--sol-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.45;
+}
+/* Bare-quote chip: a muted snippet of the quoted text (no note yet). */
+.cc-comment-quote {
+  color: var(--sol-text-muted);
+  font-style: italic;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+/* Quote glyph so the snippet reads as "quoted from the block", not as a note. */
+.cc-comment-quote-mark {
+  font-style: normal;
+  font-weight: 700;
+  margin-right: 0.25rem;
+  color: color-mix(in srgb, var(--sol-cyan) 70%, var(--sol-text-muted));
+}
+.cc-comment-empty {
+  color: var(--sol-text-dim);
+}
+
+/* Borderless textarea — sits flush in the card, no box-in-a-box */
+.cc-comment-textarea {
+  width: 100%;
+  background: transparent;
+  border: none;
+  padding: 0.15rem 0.2rem;
+  font: inherit;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--sol-text);
+  resize: none;
+  outline: none;
+  overflow: hidden;
+  min-height: 3.2em;
+}
+.cc-comment-textarea::placeholder {
+  color: var(--sol-text-dim);
+}
+
+/* Actions: plain text buttons, revealed on hover for the chip */
+.cc-comment-actions,
+.cc-comment-editor-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.25rem;
+}
+.cc-comment-editor-footer {
+  margin-top: 0.2rem;
+}
+.cc-comment-chip .cc-comment-actions {
+  margin-top: 0.3rem;
+  opacity: 0;
+  transition: opacity 120ms;
+}
+.cc-comment-chip:hover .cc-comment-actions,
+.cc-comment-chip-active .cc-comment-actions {
+  opacity: 1;
+}
+.cc-comment-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.1rem 0.4rem;
+  font-size: 0.72rem;
+  font-weight: 500;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--sol-text-dim);
+  cursor: pointer;
+  transition: background 120ms, color 120ms;
+}
+.cc-comment-btn:hover {
+  background: var(--sol-bg-highlight);
+  color: var(--sol-text);
+}
+.cc-comment-btn-primary {
+  color: var(--sol-cyan);
+  font-weight: 600;
+}
+.cc-comment-btn-primary:hover {
+  background: color-mix(in srgb, var(--sol-cyan) 14%, transparent);
+  color: var(--sol-cyan);
+}
+.cc-comment-btn-danger:hover {
+  background: color-mix(in srgb, var(--sol-red) 12%, transparent);
+  color: var(--sol-red);
+}
+
+/* Floating selection toolbar */
+.cc-sel-toolbar {
+  position: fixed;
+  z-index: 60;
+  display: inline-flex;
+  align-items: stretch;
+  padding: 2px;
+  border: 1px solid var(--sol-border);
+  border-radius: 9px;
+  background: var(--sol-bg);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.28);
+  animation: ccFade 110ms ease-out;
+}
+@keyframes ccFade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.cc-sel-btn {
+  padding: 0.32rem 0.75rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--sol-text);
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 110ms, color 110ms;
+}
+.cc-sel-btn:hover {
+  background: var(--sol-bg-highlight);
+  color: var(--sol-cyan);
+}
+.cc-sel-div {
+  width: 1px;
+  background: var(--sol-border);
+  margin: 0.28rem 1px;
+}
+
+/* Review batch shelf at the top of the composer block. Hierarchy comes from a
+   single tinted BAND that bleeds to the composer's edges (negative margins mirror
+   the composer's px-4/py-2 padding; top radius hugs its rounded-2xl corners) — a
+   zone of the same block, not a box inside a box. Quotes are plain rail-indented
+   lines on the band; the input sits below on the untinted composer surface. */
+.cc-review-tray {
+  margin: -0.5rem -1rem 0.55rem;
+  padding: 0.4rem 1rem 0.6rem;
+  background: color-mix(in srgb, var(--sol-cyan) 5%, var(--sol-bg));
+  border-bottom: 1px solid color-mix(in srgb, var(--sol-cyan) 22%, var(--sol-border) 60%);
+  border-radius: calc(1rem - 1px) calc(1rem - 1px) 0 0;
+  font-size: 0.78rem;
+}
+.cc-review-tray-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.1rem 0 0.4rem;
+}
+.cc-review-tray-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--sol-text-muted);
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  min-width: 0;
+}
+/* Shelf actions stay light: ghost icon+text buttons quieter than the quotes
+   themselves; hover (from the global cc-comment-btn rules) supplies the chrome. */
+.cc-review-tray-actions .cc-comment-btn {
+  padding: 0.15rem 0.45rem;
+  font-weight: 400;
+}
+.cc-review-tray-actions .cc-comment-btn-primary {
+  color: color-mix(in srgb, var(--sol-cyan) 75%, var(--sol-text-dim));
+  font-weight: 500;
+}
+/* Armed "Discard N?" state of the Clear button (two-step confirm). */
+.cc-comment-btn-confirm,
+.cc-comment-btn-confirm:hover {
+  color: var(--sol-red);
+  background: color-mix(in srgb, var(--sol-red) 12%, transparent);
+  font-weight: 600;
+}
+.cc-review-tray-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: none;
+}
+.cc-review-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--sol-cyan);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--sol-cyan) 70%, transparent);
+  animation: ccPulse 1.8s ease-out infinite;
+  flex: none;
+}
+.cc-review-tray-list {
+  max-height: 9.5rem;
+  overflow-y: auto;
+  padding: 0 0 0.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+.cc-review-tray-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  padding: 0.1rem 0 0.1rem 0.6rem;
+  border-left: 2px solid color-mix(in srgb, var(--sol-cyan) 70%, var(--sol-border));
+}
+.cc-review-tray-item-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* The QUOTE (their words) recedes: smaller, dimmer, italic. The NOTE (your
+   words) leads: full-strength text behind a cyan reply arrow. */
+.cc-review-tray-quote {
+  color: var(--sol-text-dim);
+  font-size: 0.72rem;
+  font-style: italic;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.cc-review-tray-note {
+  color: var(--sol-text);
+  font-weight: 500;
+  margin-top: 0.2rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.4;
+}
+.cc-review-tray-note::before {
+  content: "↳";
+  color: var(--sol-cyan);
+  font-weight: 700;
+  margin-right: 0.35rem;
+}
+.cc-review-tray-x {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.3rem;
+  height: 1.3rem;
+  border-radius: 0.3rem;
+  color: var(--sol-text-dim);
+  opacity: 0.65;
+  transition: opacity 120ms, color 120ms, background 120ms;
+}
+.cc-review-tray-x:hover {
+  opacity: 1;
+  color: var(--sol-red);
+  background: color-mix(in srgb, var(--sol-red) 12%, transparent);
+}
+.cc-bar-keys {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: 0.3rem;
+}
+
+@keyframes ccPop {
+  from {
+    opacity: 0;
+    transform: var(--cc-pop-from, scale(0.94));
+  }
+  to {
+    opacity: 1;
+    transform: var(--cc-pop-to, scale(1));
+  }
+}
+@keyframes ccPulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--sol-cyan) 60%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 5px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+/* Indeterminate progress sweep — used by the desktop update banner while the
+   daemon downloads in the background (no percentage to report). */
+@keyframes indeterminateBar {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(400%);
+  }
+}
+
+/* ═══════════════════════════ Teammate comments ═══════════════════════════
+   A refined secondary layer over the transcript: tighter scale, a teal accent,
+   and quiet chrome so it reads as distinct from (and subordinate to) the convo.
+   Three surfaces share the card/thread/composer pieces below: the inline thread
+   pinned at a message, the right-docked rail for the conversation-wide thread,
+   and (rare) the global thread inside the rail. */
+
+:root {
+  --cc-accent: var(--sol-cyan);
+  --cc-agent: var(--sol-violet);
+  --cc-hair: color-mix(in srgb, var(--sol-border) 40%, transparent);
+  --cc-hair-soft: color-mix(in srgb, var(--sol-border) 22%, transparent);
+}
+
+/* ── Comment card ─────────────────────────────────────────────────────────── */
+.cc-cmt {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.3rem 0.4rem;
+  border-radius: 9px;
+  transition: background 120ms ease;
+}
+.cc-cmt:hover {
+  background: color-mix(in srgb, var(--sol-text) 3.5%, transparent);
+}
+.cc-cmt-avatar { margin-top: 0.1rem; }
+.cc-cmt-main { flex: 1; min-width: 0; }
+.cc-cmt-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  line-height: 1.2;
+  margin-bottom: 0.05rem;
+}
+.cc-cmt-name {
+  font-size: 0.745rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--sol-text-secondary);
+}
+.cc-cmt-time {
+  font-size: 0.62rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--sol-text-dim);
+}
+.cc-cmt-thinking {
+  font-size: 0.66rem;
+  color: var(--sol-text-dim);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+/* Action row below the body — mirrors the left quote chip's buttons. Hidden
+   until hover so a quiet thread stays clean. */
+.cc-cmt-actions {
+  display: flex;
+  gap: 0.15rem;
+  margin: 0.1rem 0 0 -0.4rem;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.cc-cmt:hover .cc-cmt-actions,
+.cc-cmt:focus-within .cc-cmt-actions { opacity: 1; }
+.cc-cmt-act {
+  color: var(--sol-text-dim);
+  padding: 0.18rem;
+  border-radius: 5px;
+  transition: color 110ms ease, background 110ms ease;
+}
+.cc-cmt-act:hover {
+  color: var(--sol-text);
+  background: color-mix(in srgb, var(--sol-text) 9%, transparent);
+}
+.cc-cmt-act-danger:hover {
+  color: var(--sol-red);
+  background: color-mix(in srgb, var(--sol-red) 12%, transparent);
+}
+.cc-cmt-body {
+  font-size: 0.795rem;
+  line-height: 1.5;
+  color: var(--sol-text);
+  word-break: break-word;
+}
+.cc-cmt-shimmer {
+  color: var(--sol-text-dim);
+  font-style: italic;
+  background: linear-gradient(90deg, var(--sol-text-dim) 30%, color-mix(in srgb, var(--cc-agent) 80%, var(--sol-text-dim)) 50%, var(--sol-text-dim) 70%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: ccShimmer 2s linear infinite;
+}
+@keyframes ccShimmer { to { background-position: -200% 0; } }
+
+/* Tighten the shared markdown pipeline for the comment scale. */
+.cc-cmt-md.prose { font-size: 0.795rem; line-height: 1.5; }
+.cc-cmt-md.prose > :first-child { margin-top: 0; }
+.cc-cmt-md.prose > :last-child { margin-bottom: 0; }
+.cc-cmt-md.prose p { margin: 0.2rem 0; }
+.cc-cmt-md.prose pre { margin: 0.4rem 0; }
+.cc-cmt-md.prose ul, .cc-cmt-md.prose ol { margin: 0.25rem 0; }
+
+/* Inline edit. */
+.cc-cmt-edit { margin-top: 0.2rem; }
+.cc-cmt-textarea {
+  width: 100%;
+  resize: none;
+  background: var(--sol-bg);
+  border: 1px solid color-mix(in srgb, var(--sol-border) 60%, transparent);
+  border-radius: 9px;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.795rem;
+  line-height: 1.45;
+  color: var(--sol-text);
+  font-family: inherit;
+}
+.cc-cmt-textarea:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--cc-accent) 55%, transparent);
+}
+.cc-cmt-edit-foot { display: flex; justify-content: flex-end; gap: 0.3rem; margin-top: 0.3rem; }
+.cc-cmt-mini {
+  display: inline-flex; align-items: center; gap: 0.2rem;
+  font-size: 0.66rem; padding: 0.15rem 0.45rem; border-radius: 6px;
+  color: var(--sol-text-dim); border: 1px solid transparent; transition: all 120ms ease;
+}
+.cc-cmt-mini:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 8%, transparent); }
+.cc-cmt-mini-primary { color: var(--cc-accent); border-color: color-mix(in srgb, var(--cc-accent) 35%, transparent); }
+.cc-cmt-mini-primary:hover { background: color-mix(in srgb, var(--cc-accent) 14%, transparent); }
+
+/* thinking dots */
+.cc-dots { display: inline-flex; gap: 2px; margin-left: 3px; }
+.cc-dots i { width: 3px; height: 3px; border-radius: 999px; background: currentColor; animation: ccBlink 1.2s infinite ease-in-out; }
+.cc-dots i:nth-child(2) { animation-delay: 0.18s; }
+.cc-dots i:nth-child(3) { animation-delay: 0.36s; }
+@keyframes ccBlink { 0%, 60%, 100% { opacity: 0.25; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-2px); } }
+
+/* ── Thread (cards + composer) ────────────────────────────────────────────── */
+.cc-thread { display: flex; flex-direction: column; min-height: 0; }
+.cc-thread-global { flex: 1; }
+.cc-thread-list { display: flex; flex-direction: column; gap: 0.1rem; overflow-y: auto; padding: 0.2rem 0.25rem; }
+.cc-thread-global .cc-thread-list { flex: 1; padding: 0.35rem 0.5rem 0.5rem; }
+.cc-thread-empty {
+  font-size: 0.74rem; line-height: 1.55; color: var(--sol-text-dim);
+  padding: 0.6rem 0.5rem;
+}
+.cc-thread-acc-head { display: flex; align-items: center; gap: 0.15rem; cursor: pointer; }
+.cc-thread-acc-toggle { flex-shrink: 0; color: var(--sol-text-dim); padding: 0.15rem; border-radius: 5px; transition: color 120ms ease, background 120ms ease; }
+.cc-thread-acc-toggle:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 8%, transparent); }
+.cc-thread-chev { transition: transform 160ms ease; }
+.cc-thread-chev-collapsed { transform: rotate(-90deg); }
+.cc-thread-acc-header { flex: 1; min-width: 0; }
+.cc-thread-acc-count {
+  flex-shrink: 0; font-size: 0.58rem; font-weight: 700; color: var(--cc-accent);
+  background: color-mix(in srgb, var(--cc-accent) 14%, transparent); border-radius: 999px;
+  min-width: 1rem; height: 1rem; display: grid; place-items: center; padding: 0 0.25rem; margin-right: 0.2rem;
+}
+
+/* Agent action — separate from Send, styled like the shared comment buttons. */
+.cc-thread-askagent-row { display: flex; padding: 0.1rem 0.4rem 0.3rem; }
+
+/* ── Composer (reuses MessageInput in bareComposer mode) ──────────────────── */
+.cc-cmt-composer { flex-shrink: 0; padding: 0.35rem 0.5rem 0.45rem; }
+.cc-thread-anchored .cc-cmt-composer { padding: 0.2rem 0.25rem 0.1rem; }
+.cc-cmt-mi { width: 100%; }
+.cc-cmt-mi form { padding: 0 !important; }
+/* Drop MessageInput's footer spacing in bare mode (its own gates hide content). */
+.cc-cmt-mi .conv-col { max-width: none; }
+.cc-cmt-signedout { font-size: 0.74rem; color: var(--sol-text-dim); padding: 0.5rem; }
+
+.cc-cmt-typing {
+  display: flex; align-items: center; gap: 0.35rem;
+  font-size: 0.66rem; color: var(--sol-text-muted); padding: 0 0.2rem 0.3rem; min-width: 0;
+}
+.cc-cmt-typing > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cc-cmt-typing-preview { font-style: italic; color: var(--sol-text-dim); }
+.cc-cmt-typing-dots { display: inline-flex; gap: 2px; flex-shrink: 0; }
+.cc-cmt-typing-dots i { width: 4px; height: 4px; border-radius: 999px; background: var(--cc-accent); animation: ccBlink 1.2s infinite ease-in-out; }
+.cc-cmt-typing-dots i:nth-child(2) { animation-delay: 0.18s; }
+.cc-cmt-typing-dots i:nth-child(3) { animation-delay: 0.36s; }
+
+.cc-cmt-replyto {
+  display: flex; align-items: center; gap: 0.35rem;
+  font-size: 0.68rem; color: var(--sol-text-secondary);
+  padding: 0.2rem 0.45rem; margin-bottom: 0.3rem;
+  border-left: 2px solid var(--cc-accent);
+  background: color-mix(in srgb, var(--cc-accent) 12%, transparent);
+  border-radius: 0 6px 6px 0;
+}
+.cc-cmt-replyto b { color: var(--sol-text); font-weight: 600; }
+.cc-cmt-replyto > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.cc-cmt-replyto-x { color: var(--sol-text-dim); display: inline-flex; }
+.cc-cmt-replyto-x:hover { color: var(--sol-text); }
+
+/* "replying to <name>" marker on a threaded reply card. */
+.cc-cmt-replying {
+  display: inline-flex; align-items: center; gap: 0.2rem;
+  font-size: 0.62rem; font-weight: 500; color: var(--sol-text-dim);
+  margin-bottom: 0.08rem;
+}
+.cc-cmt-replying svg { color: var(--cc-accent); opacity: 0.75; }
+
+/* Composer Cancel footer (matches the left editor footer). */
+.cc-cmt-composer-foot { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-top: 0.25rem; }
+/* Ping <agent> button — agent logo + name, clean (no violet, no sparkle). */
+.cc-ping-btn { gap: 0.35rem; }
+.cc-ping-btn:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 8%, transparent); }
+/* Agent variant of the shared comment button — violet, like Ask-agent. */
+.cc-comment-btn-agent { color: color-mix(in srgb, var(--cc-agent) 80%, var(--sol-text-dim)); }
+.cc-comment-btn-agent:hover { color: var(--cc-agent); background: color-mix(in srgb, var(--cc-agent) 12%, transparent); }
+.cc-comment-btn-agent svg { color: var(--cc-agent); }
+
+/* ── Inline anchored thread (pinned at its message in the flow) ───────────── */
+.cc-inline { margin: 0.4rem 0 0.55rem; }
+.cc-inline-preview {
+  display: flex; align-items: center; gap: 0.5rem; width: 100%; text-align: left;
+  padding: 0.35rem 0.55rem; border-radius: 0 8px 8px 0;
+  border-left: 2px solid color-mix(in srgb, var(--cc-accent) 50%, transparent);
+  background: transparent;
+  transition: background 130ms ease, border-color 130ms ease;
+}
+.cc-inline-preview:hover {
+  background: color-mix(in srgb, var(--cc-accent) 6%, transparent);
+  border-left-color: var(--cc-accent);
+}
+.cc-inline-faces { display: inline-flex; flex-shrink: 0; }
+.cc-inline-faces > * + * { margin-left: -6px; }
+.cc-inline-last {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 0.775rem; color: var(--sol-text-secondary);
+}
+.cc-inline-last-text { color: var(--sol-text-muted); }
+.cc-inline-meta {
+  flex-shrink: 0; display: inline-flex; align-items: center; gap: 0.3rem;
+  font-size: 0.66rem; font-weight: 600; color: var(--cc-accent);
+}
+.cc-inline-time { color: var(--sol-text-dim); font-weight: 400; }
+
+/* Clean left-accent treatment — one teal bar, no boxed borders. */
+.cc-inline-thread {
+  border-left: 2px solid color-mix(in srgb, var(--cc-accent) 55%, transparent);
+  border-radius: 0 8px 8px 0;
+  background: color-mix(in srgb, var(--cc-accent) 3%, transparent);
+  overflow: hidden;
+}
+.cc-inline-head {
+  display: flex; align-items: center; gap: 0.4rem;
+  padding: 0.35rem 0.4rem 0.25rem 0.6rem;
+}
+.cc-inline-title { font-size: 0.7rem; font-weight: 600; letter-spacing: 0.01em; color: var(--sol-text-muted); }
+.cc-inline-collapse { margin-left: auto; color: var(--sol-text-dim); padding: 0.15rem; border-radius: 5px; transition: color 120ms ease, background 120ms ease; }
+.cc-inline-collapse:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 8%, transparent); }
+.cc-inline-thread .cc-thread-list { max-height: 340px; }
+
+/* ── Right-docked rail (the conversation-wide thread) ─────────────────────── */
+.cc-railx {
+  position: absolute; top: 0; right: 0; bottom: 0; z-index: 25;
+  display: flex; flex-direction: column;
+  background: var(--sol-bg-alt);
+  border-left: 1px solid color-mix(in srgb, var(--sol-border) 70%, transparent);
+  box-shadow: -10px 0 30px -22px rgba(0, 0, 0, 0.55);
+  transition: transform 220ms cubic-bezier(0.32, 0.72, 0, 1);
+  will-change: transform;
+}
+/* Closed = slid fully off the right edge, nothing left behind (mirror of the
+   left sidebar collapsing to zero width). The host clips its x-overflow. */
+.cc-railx--closed {
+  transform: translateX(100%);
+  pointer-events: none;
+  box-shadow: none;
+}
+.cc-railx-resize {
+  position: absolute; left: -3px; top: 0; bottom: 0; width: 7px; z-index: 2;
+  cursor: col-resize;
+}
+.cc-railx-resize::after {
+  content: ""; position: absolute; left: 3px; top: 0; bottom: 0; width: 1px;
+  background: transparent; transition: background 120ms ease;
+}
+.cc-railx-resize:hover::after,
+.cc-railx-resize:active::after { background: var(--cc-accent); }
+.cc-railx-head {
+  display: flex; align-items: center; gap: 0.4rem; flex-shrink: 0;
+  padding: 0.55rem 0.55rem 0.55rem 0.8rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 45%, transparent);
+}
+.cc-railx-title { font-size: 0.7rem; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--sol-text-muted); }
+.cc-railx-count {
+  font-size: 0.62rem; font-weight: 600; color: var(--cc-accent);
+  background: color-mix(in srgb, var(--cc-accent) 14%, transparent);
+  border-radius: 999px; padding: 0.05rem 0.4rem;
+}
+.cc-railx-close { margin-left: auto; color: var(--sol-text-dim); padding: 0.2rem; border-radius: 6px; transition: color 120ms ease, background 120ms ease; }
+.cc-railx-close:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 8%, transparent); }
+
+.cc-railx-anchored {
+  flex-shrink: 0; max-height: 34%; overflow-y: auto;
+  border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 35%, transparent);
+  padding: 0.35rem 0.4rem;
+}
+.cc-railx-anchored-label {
+  font-size: 0.58rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--sol-text-dim); padding: 0.1rem 0.25rem 0.3rem;
+}
+.cc-railx-anchored-row {
+  display: flex; align-items: center; gap: 0.35rem; width: 100%; text-align: left;
+  font-size: 0.7rem; color: var(--sol-text-dim); padding: 0.28rem 0.3rem; border-radius: 7px;
+  transition: color 120ms ease, background 120ms ease;
+}
+.cc-railx-anchored-row:hover { color: var(--sol-text-secondary); background: color-mix(in srgb, var(--cc-accent) 6%, transparent); }
+.cc-railx-anchored-snip { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-style: italic; }
+.cc-railx-anchored-count {
+  flex-shrink: 0; font-size: 0.56rem; font-weight: 700; color: var(--cc-accent);
+  background: color-mix(in srgb, var(--cc-accent) 14%, transparent); border-radius: 999px;
+  min-width: 0.95rem; height: 0.95rem; display: grid; place-items: center; padding: 0 0.2rem;
+}
+.cc-railx-global { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.cc-railx-global .cc-thread-global { flex: 1; min-height: 0; }
+
+/* ── Right comment rail (mirror of the left quote rail) ───────────────────────
+   MARGIN mode: float in the empty right margin (text keeps full width).
+   INLINE mode: the host becomes a flex row and the rail is a real right column
+   that shrinks the text — so comments still sit beside the message, not below. */
+.cc-rright {
+  display: flex; flex-direction: column; gap: 0.1rem;
+  border-left: 2px solid color-mix(in srgb, var(--cc-accent) 50%, transparent);
+  padding: 0.05rem 0 0.2rem 0.6rem;
+}
+.cc-rright-cards { display: flex; flex-direction: column; gap: 0.1rem; }
+.cc-rright-margin {
+  position: absolute;
+  top: 0;
+  left: calc(100% + 2.25rem); /* into the right margin, mirror of the left rail */
+  width: var(--cc-rright-w);
+  z-index: 4;
+}
+/* Column: host flexes into [text | comments], comments shrink the text. */
+.cc-rright-host-inline {
+  display: flex;
+  gap: 1.75rem;
+  align-items: flex-start;
+}
+.cc-rright-host-inline > .cc-content { flex: 1 1 auto; min-width: 0; }
+.cc-rright-host-inline > .cc-rright-column {
+  flex: 0 0 var(--cc-rright-w, 260px);
+  position: relative;
+}
+/* Below: clean cards under the message when it's too narrow to sit beside. */
+.cc-rright-below {
+  margin: 0.45rem 0 0.2rem;
+  max-width: 34rem;
+}
+.cc-rright-composer { padding: 0.15rem 0 0.1rem; }
+.cc-rright-foot {
+  display: flex; align-items: center; gap: 0.25rem;
+  padding: 0.2rem 0 0.1rem;
+}
+
+/* Flash a transcript message when jumped to from the rail's anchored list. */
+.cc-msg-flash { animation: ccMsgFlash 1.3s ease-out; border-radius: 8px; }
+@keyframes ccMsgFlash {
+  0%, 25% { background: color-mix(in srgb, var(--cc-accent) 16%, transparent); }
+  100% { background: transparent; }
+}

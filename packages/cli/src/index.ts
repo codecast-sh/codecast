@@ -9,25 +9,45 @@ import * as os from "os";
 import { spawn, spawnSync, execSync } from "child_process";
 import { fileURLToPath } from "url";
 import { maskToken } from "./redact.js";
+import { parseConversationRef, buildConversationUrl } from "./conversationRef.js";
+import {
+  parseEntityUrl,
+  buildEntityUrl,
+  inferEntityTypeFromShortId,
+  normalizeEntityType,
+  type EntityType,
+} from "@codecast/shared/entities";
+import { SNIPPET_CATALOG, snippetBySlug, allSnippetSlugs } from "@codecast/shared/contracts";
 import { cliFetch, cliFetchRead } from "./cliHttp.js";
+import { listProfiles, saveProfile, useProfile, getAccountsHeartbeatPayload, CcAccountError } from "./ccAccounts.js";
 import { CODECAST_STATUS_HOOK } from "./statusHook.js";
 import { AuthServer } from "./authServer.js";
+import { startRelayPoller } from "./authRelay.js";
 import { c, fmt, icons } from "./colors.js";
-import { ensureTmux, tryInstallTmux } from "./tmux.js";
-import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, ensureCastAlias } from "./update.js";
+import { ensureTmux, tryInstallTmux, tmuxRun } from "./tmux.js";
+import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, ensureCastAlias } from "./update.js";
+import { type SnippetTarget, getSnippetTargets, MESSAGING_SNIPPET_END, installMessagingSnippet, ensureMessagingForMemory } from "./snippets.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
 import { glob } from "glob";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { encryptToken, decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
-import { getAllSyncRecords, findUnsyncedFiles } from "./syncLedger.js";
+import { getAllSyncRecords, findUnsyncedFiles, readOldestUnsyncedTimestamp } from "./syncLedger.js";
+import { isTestScratchPath } from "./syncScope.js";
+import { isAppServerManagedCodexSessionHead } from "./codexWatcher.js";
 import { getLastReconciliation, performReconciliation, repairDiscrepancies } from "./reconciliation.js";
 import { parseSessionFile, extractSlug } from "./parser.js";
 import { SyncService } from "./syncService.js";
-import { resolveLocalProjectPath } from "./projectPathResolver.js";
+import { resolveLocalProjectPath, claudeProjectDirName } from "./projectPathResolver.js";
+import { runDoctor } from "./doctor.js";
+import { deviceId, deviceLabel } from "./remote/device.js";
 import {
+  buildDaemonLauncherScript,
   buildDaemonPlistXml,
   buildWatchdogPlistXml,
   buildWatchdogShellScript,
+  daemonPlistNeedsUpgrade,
+  DAEMON_LAUNCHER_FILENAME,
+  shellEscapeForSh,
   watchdogPlistNeedsUpgrade,
 } from "./supervision.js";
 import * as readline from "readline";
@@ -39,6 +59,10 @@ import {
   writeCodexSession,
   estimateClaudeImportTokens,
   chooseClaudeTailMessagesForTokenBudget,
+  resumeModelFlag,
+  resumeModelFlagFromFile,
+  resumeEffortFlag,
+  resumeEffortFlagFromFile,
 } from "./jsonlGenerator.js";
 import {
   CLAUDE_UUID_RE,
@@ -46,12 +70,14 @@ import {
   CLAUDE_AUTO_TRIM_TARGET_TOKENS,
   CLAUDE_CONTEXT_LIMIT_TOKENS,
   combineClaudeResumeFlags,
+  removeForkArtifactJsonl,
   rewriteSubagentJsonlToUuid,
 } from "./resumeCommand.js";
 import Anthropic from "@anthropic-ai/sdk";
 import { detectRuntime, parseAgentMarkers as _parseAgentMarkers, type AgentRuntime, type AgentHandle } from "./agents/index.js";
 import { buildImplementerPrompt as _buildImplementerPrompt, buildReviewerPrompt, buildCriticPrompt, resolveTaskModel, resolveTaskModelFull, resolveFidelity, buildRetroPrompt, type FidelityLevel, type TypedRetro } from "./agents/index.js";
 import { checkbox, confirm, input, select } from "@inquirer/prompts";
+import type { Config } from "./config/types.js";
 
 const program = new Command();
 
@@ -196,7 +222,7 @@ function findCurrentSessionFromProcess(projectRoot: string): string | null {
     if (debug) console.error(`[DEBUG] Claude start time: ${startTimeResult} (${claudeStartTime})`);
 
     // Find session file with matching creation time
-    const projectDir = projectRoot.replace(/\//g, "-");
+    const projectDir = claudeProjectDirName(projectRoot);
     const sessionsDir = path.join(process.env.HOME || "", ".claude", "projects", projectDir);
 
     if (debug) console.error(`[DEBUG] Sessions dir: ${sessionsDir}`);
@@ -291,7 +317,7 @@ function detectCurrentSessionId(): string | null {
     const fromProcess = findCurrentSessionFromProcess(projectRoot);
     if (fromProcess) return fromProcess;
 
-    const projectDir = projectRoot.replace(/\//g, "-");
+    const projectDir = claudeProjectDirName(projectRoot);
     const sessionsDir = path.join(process.env.HOME || "", ".claude", "projects", projectDir);
     if (!fs.existsSync(sessionsDir)) return null;
 
@@ -336,10 +362,7 @@ const VERSION_FILE = path.join(CONFIG_DIR, "daemon.version");
 const STATE_FILE = path.join(CONFIG_DIR, "daemon.state");
 const LOG_FILE = path.join(CONFIG_DIR, "daemon.log");
 const WATCHDOG_SCRIPT_PATH = path.join(CONFIG_DIR, "watchdog.sh");
-
-function shellEscapeForSh(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
-}
+const DAEMON_LAUNCHER_SCRIPT_PATH = path.join(CONFIG_DIR, DAEMON_LAUNCHER_FILENAME);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -347,47 +370,9 @@ const __dirname = path.dirname(__filename);
 const WEB_URL = process.env.CODE_CHAT_SYNC_WEB_URL || "https://codecast.sh";
 const CONVEX_URL = process.env.CONVEX_URL || "https://convex.codecast.sh";
 
-interface Config {
-  auth_token?: string;
-  user_id?: string;
-  convex_url?: string;
-  web_url?: string;
-  team_id?: string;
-  excluded_paths?: string;
-  auto_update?: boolean;
-  memory_enabled?: boolean;
-  memory_version?: string;
-  task_enabled?: boolean;
-  task_version?: string;
-  work_enabled?: boolean;
-  work_version?: string;
-  plan_enabled?: boolean;
-  plan_version?: string;
-  workflow_enabled?: boolean;
-  workflow_version?: string;
-  orch_enabled?: boolean;
-  orch_version?: string;
-  claude_args?: string;
-  codex_args?: string;
-  sync_mode?: "all" | "selected";
-  sync_projects?: string[];
-  stable_mode?: "solo" | "team";
-  stable_global?: boolean;
-  team_share_mode?: "full" | "summary";
-  agent_permission_modes?: {
-    claude?: "default" | "bypass";
-    codex?: "default" | "full_auto" | "bypass";
-    gemini?: "default" | "bypass";
-  };
-  agent_default_params?: {
-    claude?: Record<string, string>;
-    codex?: Record<string, string>;
-    gemini?: Record<string, string>;
-    cursor?: Record<string, string>;
-  };
-  created_at?: string;
-  updated_at?: string;
-}
+// `Config` (the ~/.codecast/config.json shape) is unified in ./config/types.ts —
+// the faithful union of every field the CLI, the daemon, and the claude wrapper
+// read/write into the same file. Imported above.
 
 interface DetectedAgent {
   name: string;
@@ -408,6 +393,8 @@ interface DaemonState {
   lastWatchdogCheck?: number;
   runtimeVersion?: string;
   watchdogRestarts?: number;
+  /** Stamped on every daemon state write — lets `--wait` tell a fresh state file from a stale one. */
+  timestamp?: number;
 }
 
 function detectAgents(): DetectedAgent[] {
@@ -1168,6 +1155,25 @@ type StuckSync = {
   conversationId?: string;
 };
 
+// Read the first ~2KB (enough for the session_meta line) and decide whether this
+// Codex rollout is app-server-managed. On any read error, treat it as not managed
+// so a genuine wedge is never silently hidden.
+function isAppServerManagedRollout(filePath: string): boolean {
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(filePath, "r");
+    const buf = Buffer.alloc(2048);
+    const bytes = fs.readSync(fd, buf, 0, buf.length, 0);
+    return isAppServerManagedCodexSessionHead(buf.toString("utf-8", 0, bytes));
+  } catch {
+    return false;
+  } finally {
+    if (fd !== undefined) {
+      try { fs.closeSync(fd); } catch { /* ignore */ }
+    }
+  }
+}
+
 function getStuckSyncs(): StuckSync[] {
   const ledger = getAllSyncRecords();
   const now = Date.now();
@@ -1180,10 +1186,32 @@ function getStuckSyncs(): StuckSync[] {
     } catch {
       continue;
     }
+    // A never-synced record (lastSyncedAt === 0) is NOT a wedged sync — it's a
+    // file the sync loop hasn't (and for out-of-scope files, won't) ever synced.
+    // Reporting it formats epoch 0 as "last sync 20618 days ago" and points the
+    // user at "cast restart", which can't help. Genuine stuck syncs have synced
+    // at least once, so they carry a real timestamp.
+    if (record.lastSyncedAt <= 0) continue;
+    // Files the sync loop refuses to sync (test-scratch transcripts) are never
+    // actionable here — skip them defensively.
+    if (isTestScratchPath(filePath)) continue;
+    // Codex rollouts started by codecast are synced live by the app-server path,
+    // which never advances the transcript-file ledger. The watchdog's stale scan
+    // already skips them; without the same skip here they always read as stuck
+    // (file grows past lastSyncedPosition) even though every message is synced.
+    if (filePath.includes("/.codex/sessions/") && isAppServerManagedRollout(filePath)) continue;
     const unsynced = stats.size - record.lastSyncedPosition;
     if (unsynced < STUCK_SYNC_MIN_BYTES) continue;
     if (stats.mtimeMs <= record.lastSyncedAt) continue;
     if (now - record.lastSyncedAt < STUCK_SYNC_THRESHOLD_MS) continue;
+    // lastSyncedAt alone can't tell a wedge from a session that sat quiet for an
+    // hour and just burst back to life (dead session auto-resumed): both have a
+    // stale stamp, but the resumed session's unsynced bytes are seconds old and
+    // the daemon is already draining them. Only flag when the unsynced content
+    // itself has been waiting past the threshold; keep the conservative
+    // (flagging) behavior when no timestamp is readable.
+    const unsyncedBornAt = readOldestUnsyncedTimestamp(filePath, record.lastSyncedPosition);
+    if (unsyncedBornAt !== null && now - unsyncedBornAt < STUCK_SYNC_THRESHOLD_MS) continue;
 
     const base = path.basename(filePath, ".jsonl");
     const m = base.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/);
@@ -1205,6 +1233,51 @@ function formatBytesShort(n: number): string {
   if (n < 1024) return `${n}B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}KB`;
   return `${(n / 1024 / 1024).toFixed(1)}MB`;
+}
+
+// Block until the daemon is running AND connected to Convex, or the timeout
+// lapses. `startedAfterMs` guards against trusting a state file left behind by
+// the PREVIOUS daemon instance: saveDaemonState stamps `timestamp` on every
+// write, so requiring a stamp newer than the (re)start moment proves the state
+// (including `connected`) was written by the instance we just launched. This is
+// the productized form of the "poll `cast status | grep` in a shell loop"
+// ritual that every restart-and-verify workflow used to hand-roll.
+async function waitForDaemonHealthy(timeoutMs: number, startedAfterMs: number): Promise<{ ok: boolean; detail: string }> {
+  const deadline = Date.now() + timeoutMs;
+  let last = "daemon not running";
+  while (Date.now() < deadline) {
+    const pid = getDaemonPid();
+    const state = readDaemonState();
+    const fresh = ((state as any)?.timestamp ?? 0) >= startedAfterMs;
+    if (!pid) last = "daemon not running";
+    else if (!fresh) last = `daemon up (pid ${pid}), waiting for first state write`;
+    else if (state?.authExpired) return { ok: false, detail: "auth expired — run `cast auth`" };
+    else if (!state?.connected) last = `daemon up (pid ${pid}), Convex not connected yet`;
+    else return { ok: true, detail: `running (pid ${pid}), Convex connected` };
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return { ok: false, detail: last };
+}
+
+function printDaemonLogTail(lines = 15): void {
+  try {
+    const raw = fs.readFileSync(path.join(CONFIG_DIR, "daemon.log"), "utf-8");
+    const tail = raw.split("\n").filter(Boolean).slice(-lines);
+    if (tail.length === 0) return;
+    console.log(fmt.muted("  daemon.log tail:"));
+    for (const line of tail) console.log(`  ${c.dim}${line.slice(0, 160)}${c.reset}`);
+  } catch {}
+}
+
+async function finishWithHealthWait(startedAtMs: number, timeoutSec: number): Promise<void> {
+  const result = await waitForDaemonHealthy(timeoutSec * 1000, startedAtMs);
+  if (result.ok) {
+    console.log(`${fmt.success("✓")} ${result.detail}`);
+  } else {
+    console.log(`${fmt.error("✗")} not healthy after ${timeoutSec}s: ${result.detail}`);
+    printDaemonLogTail();
+    process.exit(1);
+  }
 }
 
 function checkDaemonHealth(): { blocked: boolean; restarted: boolean } {
@@ -1359,6 +1432,8 @@ function showStatus(): void {
   console.log(`  ${fmt.muted("  Change:")} ${fmt.cmd("cast sync-settings")}`);
 
   console.log("");
+  console.log(`  ${fmt.muted("Full self-test (live sync round-trip):")} ${fmt.cmd("cast doctor")}`);
+  console.log("");
 }
 
 function getManagedDaemonPlistPath(): string | null {
@@ -1508,13 +1583,6 @@ function startDaemon(): void {
   }
 }
 
-function getDeviceName(): string {
-  const os = process.platform;
-  const hostname = require("os").hostname();
-  const platformName = os === "darwin" ? "macOS" : os === "win32" ? "Windows" : "Linux";
-  return `${platformName} - ${hostname}`;
-}
-
 // Shared post-authentication onboarding, run by BOTH the browser flow (runAuth)
 // and the setup-token flow (runLogin). Installs hooks + autostart unconditionally
 // (these must happen on every install), then runs the interactive setup wizard.
@@ -1634,6 +1702,17 @@ async function runLogin(setupToken: string): Promise<void> {
   }
 }
 
+// Shown whenever the browser auth flow can't complete. The token path
+// (cast login) skips the localhost callback entirely, so it still works when
+// the browser <-> CLI handshake itself is what's broken.
+function authFallbackHint(): string {
+  return (
+    `\nOr link this device with a token instead (skips the browser handshake):\n` +
+    `  1. Open ${WEB_URL}/settings/cli and click "Generate Install Command"\n` +
+    `  2. Run:  cast login <token>`
+  );
+}
+
 async function runAuth(): Promise<void> {
   console.log(`\n${c.bold}cast${c.reset} ${fmt.muted("Authentication")}\n`);
 
@@ -1646,30 +1725,54 @@ async function runAuth(): Promise<void> {
     console.log();
   }
 
-  console.log(`${fmt.muted("Opening browser for authentication...")}\n`);
-
   const authServer = new AuthServer({ port: 42424, timeout: 300000 });
   const nonce = authServer.getNonce();
-  const port = authServer.getPort();
-  const deviceName = encodeURIComponent(getDeviceName());
+  const deviceName = encodeURIComponent(deviceLabel());
+
+  // Bind the local callback listener FIRST, then build the URL from the port we
+  // actually bound to. If 42424 was taken we move to the next port, and the
+  // browser must be handed the real one or its callback POST goes nowhere.
+  let port: number;
+  try {
+    port = await authServer.listen();
+  } catch (err) {
+    console.error(`\nCould not start the local auth listener: ${(err as Error).message}`);
+    console.error(authFallbackHint());
+    process.exit(1);
+  }
 
   const cliUrl = `${WEB_URL}/auth/cli?nonce=${nonce}&port=${port}&device=${deviceName}`;
 
-  console.log(`${fmt.muted("If the browser doesn't open, visit:")}\n  ${fmt.accent(cliUrl)}\n`);
+  // Over SSH there is no browser to open here — the user signs in on another
+  // machine, and the server relay (below) carries the token back to us.
+  const isRemoteShell = Boolean(process.env.SSH_CONNECTION || process.env.SSH_TTY);
+  if (isRemoteShell) {
+    console.log(`${fmt.muted("Remote session detected — open this URL in a browser on your computer:")}\n  ${fmt.accent(cliUrl)}\n`);
+  } else {
+    console.log(`${fmt.muted("Opening browser for authentication...")}\n`);
+    console.log(`${fmt.muted("If the browser doesn't open, visit:")}\n  ${fmt.accent(cliUrl)}\n`);
 
-  try {
-    await open(cliUrl);
-  } catch {
-    console.log(fmt.muted("Could not open browser automatically."));
+    try {
+      await open(cliUrl);
+    } catch {
+      console.log(fmt.muted("Could not open browser automatically."));
+    }
   }
 
-  console.log(`${fmt.muted("Waiting for authentication...")}\n`);
+  console.log(`${fmt.muted("Waiting for authentication (up to 5 minutes)...")}\n`);
 
-  const authResult = await authServer.start();
+  // Two delivery paths race: the browser POSTs to our localhost listener
+  // (same-machine fast path), or — when it can't reach us — it deposits the
+  // token server-side and our relay poll claims it. waitForCallback owns the
+  // 5-minute timeout for both.
+  const relay = startRelayPoller(CONVEX_URL.replace(".cloud", ".site"), nonce);
+  const authResult = await Promise.race([authServer.waitForCallback(), relay.promise]);
+  relay.stop();
+  authServer.stop();
 
   if (!authResult || !authResult.apiToken) {
     console.error("\nAuthentication failed or timed out.");
-    console.error("Please try again with 'cast auth'");
+    console.error(authFallbackHint());
     process.exit(1);
   }
 
@@ -1940,7 +2043,33 @@ cast search "auth" -g -s 7d       # all teams, last 7 days
 cast feed                         # team feed
 cast feed --mine                  # only my sessions
 cast feed -m samvit               # specific member
+cast feed --state needs-input     # filter feed by work state
+cast feed --label api             # sessions I filed under a label (search/sessions take --label too)
 cast read <id> 15:25              # read messages 15-25
+cast read '<share-url>#msg-<id>'  # read a window around a linked message (-c N for context size)
+cast link <id> [line]             # mint a deep link to any object (session+line→message, ct-/pl- task/plan, --type doc)
+
+# Explore sessions — 3 axes: QUERY (which) × CONTENT (state | --messages) × LIVENESS (snapshot | -w)
+cast sessions                     # state snapshot, grouped most-actionable-first
+cast sessions -w                  # stream state changes live (one line per transition)
+cast sessions --state needs-input # narrow the query (also --team, -m <name>, or a session id)
+cast sessions --labels            # my labels + counts, current project (--by-label groups, --label <name> filters, -g all projects)
+cast sessions --messages -w       # follow MESSAGES across my live sessions (multi-session)
+cast sessions <id> --messages -w  # …focused on one session
+cast sessions --json   |   -w --json   # any view as JSON / NDJSON
+# Monitor + wait-for-input: background a -w stream (narrow with --state), get woken on a transition (e.g. → needs-input), then act.
+# --state: working | needs-input | idle | pinned | live (also works on cast feed)
+# needs-input = ball in your court (finished turn, open question, permission prompt, dead with
+# output) — same as the web inbox's NEEDS INPUT. idle = blank sessions with nothing to act on.
+
+# Labels — personal filing. File a session under a name, then filter by it
+# (cast sessions/feed/search --label <name>). A session carries at most one label.
+cast label set api <id>           # file a session under "api" (creates the label if new)
+cast label set api                # …file the CURRENT session
+cast label ls                     # my labels with session counts
+cast label clear <id>             # unfile a session (drop its label)
+cast label rename api backend     # rename a label (its sessions follow)
+cast label rm api                 # remove a label (its sessions become unlabeled)
 
 # Analysis
 cast diff <id>                    # files changed, commits, tools used
@@ -1956,7 +2085,7 @@ cast decisions list               # view architectural decisions
 cast decisions add "title" --reason "why"
 \`\`\`
 
-Common options: --mine (just me), -m <name> (member), -g (all teams), -s/-e (time range), -p (page), -n (limit)
+Common options: --mine (just me), -m <name> (member), --label <name> (my label), -g (all teams), -s/-e (time range), -p (page), -n (limit)
 ${MEMORY_SNIPPET_END}
 `;
 
@@ -2062,7 +2191,11 @@ cast plan comment <plan_id> "note"         # Add comment (progress by default)
 cast plan comment <plan_id> "x" -d -r "y" # Decision with rationale
 cast plan done/drop <plan_id>             # Close or abandon a plan
 cast doc create "Title" [-c content] [-t type]
-cast doc show/ls/edit/search/comment
+cast doc ls/edit/comment
+cast doc show <id>                          # paginates long docs (200 lines) + prints "next:" hint
+cast doc show <id> -p 2 | 800:1000 | --full # page · line range · whole doc (-n = line gutter)
+cast doc grep <id> '<text>'                 # search inside one doc (grep '^#' = outline)
+cast doc search "<title>"                    # search doc TITLES across the corpus
 \`\`\`
 ${WORK_SNIPPET_END}
 `;
@@ -2103,34 +2236,102 @@ digraph my_flow {
 ${WORKFLOW_SNIPPET_END}
 `;
 
-interface SnippetTarget {
-  filePath: string;
-  dirPath: string;
-  label: string;
-}
+const VISUAL_SNIPPET_END = "<!-- /codecast-visual -->";
+const VISUAL_SNIPPET = `
+## Visual Canvas
 
-function getSnippetTargets(): SnippetTarget[] {
-  const home = os.homedir();
-  const targets: SnippetTarget[] = [
-    { filePath: path.join(home, ".claude", "CLAUDE.md"), dirPath: path.join(home, ".claude"), label: "~/.claude/CLAUDE.md" },
-  ];
+Some results land better seen than read. Emit a \`cast-canvas\` block of self-contained HTML/CSS/SVG and codecast renders it inline — themed to match, expandable to fullscreen.
 
-  const codexDir = path.join(home, ".codex");
-  if (fs.existsSync(codexDir)) {
-    targets.push({ filePath: path.join(codexDir, "AGENTS.md"), dirPath: codexDir, label: "~/.codex/AGENTS.md" });
-  }
+\`\`\`cast-canvas
+<div> … </div>
+\`\`\`
 
-  const cursorDir = path.join(home, ".cursor");
-  if (fs.existsSync(cursorDir)) {
-    const rulesDir = path.join(cursorDir, "rules");
-    if (!fs.existsSync(rulesDir)) {
-      fs.mkdirSync(rulesDir, { recursive: true });
+**Reach for it whenever structure or magnitude carries the meaning**, not only when you'd otherwise draw ASCII. Comparing a few options, a system's data flow, a before/after, a timeline, a set of metrics, where the time or tokens went, a dashboard summarizing a run — all read faster as a designed layout than as paragraphs. Keep markdown for ordinary prose answers; when laying it out is what makes the point land, let the canvas be the centerpiece of your reply, not a footnote.
+
+**Treat it as a real design surface.** You have full CSS and SVG: grid and flexbox for multi-panel layouts, \`color-mix()\` for tints, gradients for depth, cards with \`--sol-card\` backgrounds and \`--sol-border\` rules, hand-drawn SVG for diagrams. Compose deliberately — a title and a one-line takeaway up top, then panels, stat callouts, or a chart beneath — so it reads like a considered report, not a wall of text in a box.
+
+**Theme with the \`--sol-*\` tokens** so it follows light/dark; never hardcode colors. Text: \`--sol-text\` / \`--sol-text-muted\` / \`--sol-text-dim\`. Surfaces: \`--sol-card\` / \`--sol-bg-alt\` / \`--sol-border\`. Accents: \`--sol-blue\`, \`--sol-green\`, \`--sol-yellow\`, \`--sol-red\`, \`--sol-magenta\`, \`--sol-cyan\`, \`--sol-orange\`, \`--sol-violet\`. For a soft fill, \`color-mix(in srgb, var(--sol-blue) 14%, transparent)\`. Title it with a heading or \`data-canvas-title\` — that shows in the header.
+
+It runs sandboxed: **no scripts, no web fonts, no external resources** (it inherits codecast's mono font). Carry the work with layout, color, SVG, and the built-in chart engine rather than JS.
+
+**Charts are declarative** — describe the data, codecast renders it with Observable Plot (never your JS), themed automatically:
+
+\`\`\`html
+<div class="cast-chart" data-spec='{"marks":[{"type":"barY","data":[…],"x":"label","y":"value"}],"y":{"grid":true}}'></div>
+\`\`\`
+
+You have **every Observable Plot mark and transform** by name — the whole gallery, not a fixed menu — so fit the form to the data instead of reaching for bars and lines: distributions (\`boxY\`, \`density\`), relationships (\`dot\`, \`hexbin\`), parts of a whole (stacked \`areaY\`/\`barY\`), magnitude grids (\`cell\` heatmaps), flows and fields (\`vector\`, \`arrow\`, \`link\`), and on. Set \`fill\`/\`stroke\` to a field for multi-series (add \`"color":{"legend":true}\`), facet with \`fx\`/\`fy\`, layer marks freely, and let Plot aggregate with a transform — \`"transform":{"kind":"binX","out":{"y":"count"}}\` for a histogram, likewise \`hexbin\`, \`groupX\`, \`dodgeX\`, \`windowY\` — rather than pre-summing.
+${VISUAL_SNIPPET_END}
+`;
+
+const FORKS_SNIPPET_END = "<!-- /codecast-forks -->";
+const FORKS_SNIPPET = `
+## Forks & Sessions
+
+You can spin work off into your human's inbox as independent sessions — not hidden subagents. The difference is ownership: a subagent (Task tool) reports back to you and you keep its result; a fork or a spawned session lands in the human's inbox for them to review, steer, and continue on their own. Reach for these when the work is theirs to own, or when several directions are worth running at once and seeing side by side. Launch them when the human asks; if spinning them up is your idea, propose it first.
+
+\`\`\`bash
+cast fork "<direction>" ["<direction>" ...]   # branch THIS conversation N ways from here
+cast spawn "<task>" ["<task>" ...]            # start N fresh sessions, no shared history
+\`\`\`
+
+\`cast fork\` branches the current conversation — each branch keeps the full history up to the fork point (the latest user message by default; \`--at <line>\` picks another spot, \`-s <id>\` forks a different session), then pursues its own direction. Use it when the thread splits into distinct paths worth exploring in parallel.
+
+\`cast spawn\` starts fresh sessions with no shared history, in the current project (\`-C <dir>\` for elsewhere). Use it to hand off self-contained work — a parallel audit, a port, a spike — rather than research you'd fold back into your own answer.
+
+Both start working immediately and appear in the inbox. A branch or session only knows what you give it — for forks, plus the history up to the fork point — so seed each with a sharp, self-contained prompt. When you launch several, tell the human what you sent where.
+
+Labels carry across a fork by default: a branch inherits whatever label you'd filed the parent session under (labels are your personal filing, so this follows your own filing even when you fork a teammate's session), keeping a fork grouped with its source without any flag. Pass \`--label <name>\` to file the new sessions under a label you choose instead — an override for forks, and the only way to file a \`spawn\` (which starts fresh, with nothing to inherit). The label is created if it doesn't exist: \`cast spawn --label rollout "<task>" "<task>"\`, then \`cast sessions --label rollout\` to see the whole fan-out as a group.
+${FORKS_SNIPPET_END}
+`;
+
+// Generic marked-snippet installer: idempotent header check + end-marker replace,
+// otherwise append. Used for snippets that don't need the bespoke per-section
+// fallback heuristics the older installers carry.
+function installMarkedSnippet(
+  header: string,
+  endMarker: string,
+  snippet: string,
+  update: boolean,
+): { installed: boolean; updated: boolean } {
+  const targets = getSnippetTargets();
+  let anyInstalled = false;
+  let anyUpdated = false;
+
+  for (const target of targets) {
+    if (!fs.existsSync(target.dirPath)) {
+      fs.mkdirSync(target.dirPath, { recursive: true });
     }
-    targets.push({ filePath: path.join(rulesDir, "codecast.mdc"), dirPath: rulesDir, label: "~/.cursor/rules/codecast.mdc" });
+    let existing = fs.existsSync(target.filePath) ? fs.readFileSync(target.filePath, "utf-8") : "";
+
+    const has = existing.includes(header) && existing.includes(endMarker);
+    if (has && !update) continue;
+
+    if (has) {
+      const start = existing.indexOf(header);
+      const markerIdx = existing.indexOf(endMarker, start);
+      let end = markerIdx !== -1 ? markerIdx + endMarker.length : existing.length;
+      if (existing[end] === "\n") end++;
+      existing = existing.slice(0, start) + existing.slice(end);
+      fs.writeFileSync(target.filePath, existing.trimEnd() + "\n" + snippet, { mode: 0o600 });
+      anyInstalled = true;
+      anyUpdated = true;
+    } else {
+      fs.writeFileSync(target.filePath, existing + snippet, { mode: 0o600 });
+      anyInstalled = true;
+    }
   }
 
-  return targets;
+  return { installed: anyInstalled, updated: anyUpdated };
 }
+
+function installForksSnippet(update = false): { installed: boolean; updated: boolean } {
+  return installMarkedSnippet("## Forks & Sessions", FORKS_SNIPPET_END, FORKS_SNIPPET, update);
+}
+
+// MESSAGING_SNIPPET + MESSAGING_SNIPPET_END live in ./snippets.ts (shared with the daemon).
+
+// SnippetTarget + getSnippetTargets live in ./snippets.ts (shared with the daemon).
 
 function installSnippetToFile(filePath: string, dirPath: string, update: boolean): { installed: boolean; updated: boolean } {
   if (!fs.existsSync(dirPath)) {
@@ -2346,6 +2547,58 @@ function installWorkflowSnippet(update = false): { installed: boolean; updated: 
   return { installed: anyInstalled, updated: anyUpdated };
 }
 
+function installVisualSnippetToFile(filePath: string, dirPath: string, update: boolean): { installed: boolean; updated: boolean } {
+  if (!fs.existsSync(dirPath)) {
+    fs.mkdirSync(dirPath, { recursive: true });
+  }
+
+  let existing = "";
+  if (fs.existsSync(filePath)) {
+    existing = fs.readFileSync(filePath, "utf-8");
+  }
+
+  const hasVisual = existing.includes("## Visual Canvas") && existing.includes(VISUAL_SNIPPET_END);
+  if (hasVisual && !update) {
+    return { installed: false, updated: false };
+  }
+
+  if (hasVisual && update) {
+    const visualStart = existing.indexOf("## Visual Canvas");
+    let visualEnd = existing.length;
+
+    const endMarkerIdx = existing.indexOf(VISUAL_SNIPPET_END, visualStart);
+    if (endMarkerIdx !== -1) {
+      visualEnd = endMarkerIdx + VISUAL_SNIPPET_END.length;
+      if (existing[visualEnd] === "\n") visualEnd++;
+    }
+
+    const before = existing.slice(0, visualStart);
+    const after = existing.slice(visualEnd);
+    existing = before + after;
+    fs.writeFileSync(filePath, existing.trimEnd() + "\n" + VISUAL_SNIPPET, { mode: 0o600 });
+    return { installed: true, updated: true };
+  }
+
+  fs.writeFileSync(filePath, existing + VISUAL_SNIPPET, { mode: 0o600 });
+  return { installed: true, updated: false };
+}
+
+function installVisualSnippet(update = false): { installed: boolean; updated: boolean } {
+  const targets = getSnippetTargets();
+  let anyInstalled = false;
+  let anyUpdated = false;
+
+  for (const target of targets) {
+    const result = installVisualSnippetToFile(target.filePath, target.dirPath, update);
+    if (result.installed) anyInstalled = true;
+    if (result.updated) anyUpdated = true;
+  }
+
+  return { installed: anyInstalled, updated: anyUpdated };
+}
+
+// installMessagingSnippet lives in ./snippets.ts (shared with the daemon).
+
 function installOrchestration(update = false): { installed: boolean; updated: boolean } {
   const orchSrc = path.resolve(__dirname, "..", "orchestration");
   if (!fs.existsSync(orchSrc)) {
@@ -2485,6 +2738,19 @@ async function promptMemoryEnablement(): Promise<void> {
     writeConfig(config);
     const targets = getSnippetTargets();
     console.log(`Work snippet installed in ${targets.map(t => t.label).join(", ")}.`);
+  }
+  // Messaging is on by default for memory installs; ensureMessagingForMemory
+  // backfills it (continuity for anyone who had it inside the old work snippet)
+  // and refreshes it on a version bump. Returns null for non-memory installs.
+  const msgPatch = ensureMessagingForMemory(config);
+  if (msgPatch) {
+    const wasNew = config.messaging_enabled === undefined;
+    Object.assign(config, msgPatch);
+    writeConfig(config);
+    const targets = getSnippetTargets();
+    console.log(`Messaging snippet ${wasNew ? "installed" : "updated to latest version"} in ${targets.map(t => t.label).join(", ")}.`);
+  } else if (config.messaging_enabled) {
+    installMessagingSnippet(false);
   }
   if (config.task_enabled && config.task_version !== getTaskVersion()) {
     const result = installTaskSnippet(true);
@@ -2737,7 +3003,7 @@ async function syncSingleSession(sessionId: string, projectRoot: string): Promis
     return false;
   }
 
-  const projectDir = projectRoot.replace(/\//g, "-");
+  const projectDir = claudeProjectDirName(projectRoot);
   const sessionsDir = path.join(process.env.HOME || "", ".claude", "projects", projectDir);
   const sessionFile = path.join(sessionsDir, `${sessionId}.jsonl`);
 
@@ -2841,12 +3107,348 @@ program
   });
 
 program
+  .command("send")
+  .description(
+    "Send a message to another session — your own or a teammate's\n\n" +
+    "The text is injected into the target session as a new turn, attributed to\n" +
+    "this session so the recipient (and the dashboard) can see who sent it. You\n" +
+    "can message any session you can see in the feed (your own, or one shared\n" +
+    "with a team you're in). If the target session is offline, the message is\n" +
+    "queued and the cron tells your session if it can't be delivered.\n\n" +
+    "Examples:\n" +
+    "  cast send jx7c6zk \"can you take the auth half?\"\n" +
+    "  cast send jx7c6zk \"done\" --from jx7abcd"
+  )
+  .argument("<session_id>", "Target session short ID (e.g. jx7c6zk)")
+  .argument("<text>", "Message text")
+  .option("--from <id>", "Override sender session (default: detect current session)")
+  .action(async (sessionId: string, text: string, options: any) => {
+    const body = (text ?? "").trim();
+    if (!body) {
+      console.error("Message text is empty");
+      process.exit(1);
+    }
+    const from = options.from || detectCurrentSessionId() || undefined;
+    const result = await cliPost("/cli/messages/send", {
+      to: sessionId,
+      from,
+      body,
+    });
+    const fromNote =
+      result.from_short_id && result.from_short_id !== "unknown"
+        ? ` ${c.dim}from${c.reset} ${c.cyan}${result.from_short_id}${c.reset}`
+        : "";
+    const teamNote = result.cross_user ? ` ${c.dim}(teammate's session)${c.reset}` : "";
+    console.log(`${c.green}✓${c.reset} sent to ${c.cyan}${result.to_short_id || sessionId}${c.reset}${fromNote}${teamNote}`);
+    // The send always succeeds (it queues); warn if there's no live daemon to receive it, so the
+    // caller knows it may sit until the session reconnects rather than landing now.
+    if (result.target_live === false) {
+      console.log(`${c.yellow}!${c.reset} ${c.dim}that session has no live daemon right now — queued; you'll be told if it can't be delivered${c.reset}`);
+    }
+  });
+
+// ── cast label ────────────────────────────────────────────────────────────────
+// Labels are personal filing: a session is filed under at most ONE label, which
+// you can then filter by (cast sessions/feed/search --label <name>). The catalog
+// and the filing live server-side (inbox_buckets / bucket_assignments), shared
+// with the web sessions panel.
+const labelCmd = program
+  .command("label")
+  .alias("labels")
+  .description(
+    "Manage personal session labels\n\n" +
+    "A label is a name you file sessions under, then filter by (cast sessions\n" +
+    "--label <name>). Filing is exclusive — a session carries at most one label.\n" +
+    "Labels are personal; teammates never see yours.\n\n" +
+    "Examples:\n" +
+    "  cast label set api jx7c6zk     # file a session under \"api\" (creates it if new)\n" +
+    "  cast label set api             # …file the CURRENT session\n" +
+    "  cast label ls                  # my labels with session counts\n" +
+    "  cast label clear jx7c6zk       # remove a session's label\n" +
+    "  cast label rm api              # delete the \"api\" label"
+  )
+  .showHelpAfterError(true);
+
+labelCmd
+  .command("ls")
+  .alias("list")
+  .description("List my labels with how many sessions are filed under each")
+  .option("--json", "Output as JSON")
+  .action(async (options: any) => {
+    const result = await cliPost("/cli/labels/list", {});
+    if (options.json) {
+      console.log(JSON.stringify({ labels: result.labels ?? [] }));
+      return;
+    }
+    const { formatLabelsList } = await import("./formatter.js");
+    console.log(formatLabelsList(result));
+  });
+
+function resolveLabelSession(session: string | undefined): string {
+  const sess = session || detectCurrentSessionId();
+  if (!sess) {
+    console.error("No session given and none detected — pass a session short ID (e.g. cast label set api jx7c6zk)");
+    process.exit(1);
+  }
+  return sess;
+}
+
+labelCmd
+  .command("set")
+  .alias("assign")
+  .description("File a session under a label (creates the label if it doesn't exist)")
+  .argument("<name>", "Label name")
+  .argument("[session]", "Session short ID (default: current session)")
+  .option("--color <color>", "Color for a newly-created label")
+  .action(async (name: string, session: string | undefined, options: any) => {
+    const result = await cliPost("/cli/labels/set", {
+      session: resolveLabelSession(session),
+      name,
+      ...(options.color ? { color: options.color } : {}),
+    });
+    const created = result.created_label ? ` ${c.dim}(new label)${c.reset}` : "";
+    console.log(`${c.green}ok${c.reset} filed ${c.cyan}${result.session_short_id}${c.reset} under ${c.yellow}${result.label}${c.reset}${created}`);
+  });
+
+labelCmd
+  .command("clear")
+  .alias("unset")
+  .description("Unfile a session (remove whatever label it's under)")
+  .argument("[session]", "Session short ID (default: current session)")
+  .action(async (session: string | undefined) => {
+    const result = await cliPost("/cli/labels/clear", { session: resolveLabelSession(session) });
+    if (result.prior_label) {
+      console.log(`${c.green}ok${c.reset} unfiled ${c.cyan}${result.session_short_id}${c.reset} from ${c.yellow}${result.prior_label}${c.reset}`);
+    } else {
+      console.log(`${c.dim}${result.session_short_id} had no label${c.reset}`);
+    }
+  });
+
+labelCmd
+  .command("create")
+  .alias("new")
+  .description("Create an empty label up front")
+  .argument("<name>", "Label name")
+  .option("--color <color>", "Optional color")
+  .action(async (name: string, options: any) => {
+    const result = await cliPost("/cli/labels/create", { name, ...(options.color ? { color: options.color } : {}) });
+    if (result.created) console.log(`${c.green}ok${c.reset} created label ${c.yellow}${result.label}${c.reset}`);
+    else console.log(`${c.dim}label ${c.yellow}${result.label}${c.reset}${c.dim} already exists${c.reset}`);
+  });
+
+labelCmd
+  .command("rename")
+  .description("Rename a label (the sessions filed under it follow along)")
+  .argument("<from>", "Existing label name")
+  .argument("<to>", "New label name")
+  .action(async (from: string, to: string) => {
+    const result = await cliPost("/cli/labels/rename", { from, to });
+    console.log(`${c.green}ok${c.reset} renamed ${c.yellow}${result.old}${c.reset} ${c.dim}→${c.reset} ${c.yellow}${result.new}${c.reset}`);
+  });
+
+labelCmd
+  .command("rm")
+  .aliases(["remove", "archive", "delete"])
+  .description("Remove a label (archives it; its sessions become unlabeled)")
+  .argument("<name>", "Label name")
+  .action(async (name: string) => {
+    const result = await cliPost("/cli/labels/remove", { name });
+    const n = result.filed_count ?? 0;
+    const note = n > 0 ? ` ${c.dim}(${n} session${n === 1 ? "" : "s"} now unlabeled)${c.reset}` : "";
+    console.log(`${c.green}ok${c.reset} removed label ${c.yellow}${result.label}${c.reset}${note}`);
+  });
+
+program
+  .command("own")
+  .description(
+    "Assign a session's owner — the team member responsible for steering it\n\n" +
+    "The owner is distinct from whose account RUNS the session: an agent\n" +
+    "account (e.g. a bot on a shared machine) can park a session on a human\n" +
+    "reviewer, and the session then surfaces in the OWNER's inbox (web NEEDS\n" +
+    "INPUT + cast sessions/feed) marked with who runs it. The owner replies\n" +
+    "with cast send or the web composer to steer it.\n\n" +
+    "You can own any session you can see in the feed (your own, or one shared\n" +
+    "with a team you're in). Scripts should pass an exact email.\n\n" +
+    "Examples:\n" +
+    "  cast own jx7c6zk jason@example.com   # assign to a teammate\n" +
+    "  cast own jx7c6zk                     # claim it yourself\n" +
+    "  cast disown jx7c6zk                  # clear the owner"
+  )
+  .argument("<session_id>", "Session short ID (e.g. jx7c6zk), session UUID, or full ID")
+  .argument("[member]", "Team member email (exact) or name; defaults to you")
+  .action(async (sessionId: string, member: string | undefined) => {
+    const result = await cliPost("/cli/sessions/own", {
+      session_id: sessionId,
+      owner: member?.trim() || "me",
+    });
+    const ownerLabel = result.owner?.name || result.owner?.email || "you";
+    console.log(`${c.green}✓${c.reset} ${c.cyan}${result.short_id || sessionId}${c.reset} ${c.dim}owner →${c.reset} ${c.magenta}${ownerLabel}${c.reset}`);
+  });
+
+program
+  .command("disown")
+  .description("Clear a session's owner (see: cast own)")
+  .argument("<session_id>", "Session short ID (e.g. jx7c6zk), session UUID, or full ID")
+  .action(async (sessionId: string) => {
+    const result = await cliPost("/cli/sessions/own", {
+      session_id: sessionId,
+      owner: null,
+    });
+    console.log(`${c.green}✓${c.reset} ${c.cyan}${result.short_id || sessionId}${c.reset} ${c.dim}owner cleared${c.reset}`);
+  });
+
+const accountsCmd = program
+  .command("accounts")
+  .description(
+    "Manage Claude Code account profiles\n\n" +
+    "Log into each account ONCE (claude /login), save it as a profile, then\n" +
+    "switch between them instantly — no browser. Switching swaps the machine's\n" +
+    "global CC credential; running sessions keep their old account until\n" +
+    "restarted (use --continue to restart the limit-blocked ones)."
+  );
+
+accountsCmd
+  .command("ls")
+  .alias("list")
+  .description("List saved account profiles")
+  .action(() => {
+    try {
+      const profiles = listProfiles();
+      if (profiles.length === 0) {
+        console.log(`${c.dim}No saved profiles. Save the current login with:${c.reset} cast accounts save <name>`);
+        return;
+      }
+      for (const p of profiles) {
+        const mark = p.active ? `${c.green}●${c.reset}` : `${c.dim}○${c.reset}`;
+        const tier = p.subscription ? ` ${c.dim}(${p.subscription}${p.tier?.includes("20x") ? " 20x" : ""})${c.reset}` : "";
+        console.log(`${mark} ${c.cyan}${p.name}${c.reset} ${p.email ?? ""}${tier}${p.active ? ` ${c.dim}— active${c.reset}` : ""}`);
+      }
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+  });
+
+// Best-effort direct push of the refreshed account inventory, so the web
+// Settings page reflects a CLI-side save/switch the moment the command
+// returns. The profile store lives in this process, not the daemon's, so
+// without this the change waits on the daemon's next heartbeat. Silent on
+// failure — the heartbeat republishes within ~30s regardless.
+async function publishAccountsInventory(): Promise<void> {
+  try {
+    const { siteUrl, apiToken } = getCliEndpoint();
+    const payload = getAccountsHeartbeatPayload();
+    if (!payload) return;
+    await cliFetch(`${siteUrl}/cli/accounts/publish`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: apiToken, device_id: deviceId(), cc_accounts: payload }),
+    });
+  } catch {}
+}
+
+accountsCmd
+  .command("save <name>")
+  .description("Snapshot the currently logged-in account as a profile")
+  .action(async (name: string) => {
+    try {
+      const meta = saveProfile(name);
+      console.log(`${c.green}✓${c.reset} saved ${c.cyan}${name}${c.reset} (${meta.email ?? "unknown email"})`);
+    } catch (err) {
+      console.error(err instanceof CcAccountError ? err.message : String(err));
+      process.exit(1);
+    }
+    await publishAccountsInventory();
+  });
+
+// A mass revive resumes one claude process per blocked session — past this
+// count, require an explicit --yes so a pile of stale banner flags can't
+// trigger a 50-session resume stampede by accident.
+const REVIVE_CONFIRM_THRESHOLD = 10;
+
+accountsCmd
+  .command("use <name>")
+  .description("Switch the active Claude Code account to a saved profile")
+  .option(
+    "--continue",
+    "also restart every limit/auth-blocked session (last 48h) on the new account and send it a 'continue' (runs via the daemon)"
+  )
+  .option("--yes", "skip the confirmation when many sessions would be revived")
+  .option("--include-subagents", "also revive blocked subagent workers (skipped by default — their parent has usually moved on)")
+  .action(async (name: string, options: any) => {
+    if (options.continue) {
+      // Daemon-orchestrated: swap + kill blocked sessions + enqueue continues,
+      // in that order (killing first keeps the delivery rail from injecting
+      // into a still-alive process that holds the old account's token).
+      const reviveArgs = { profile: name, include_subagents: options.includeSubagents === true };
+      const probe = await cliPost("/cli/accounts/switch", { ...reviveArgs, dry_run: true });
+      const count = probe.conversations ?? 0;
+      const subNote = !options.includeSubagents && (probe.subagents ?? 0) > 0
+        ? ` (${probe.subagents} blocked subagent(s) skipped — add --include-subagents to revive them too)`
+        : "";
+      if (count > REVIVE_CONFIRM_THRESHOLD && !options.yes) {
+        console.log(`${c.yellow}!${c.reset} ${count} blocked session(s) would be restarted + continued (of ${probe.total_blocked ?? count} flagged in the last 48h)${subNote}.`);
+        console.log(`${c.dim}  re-run with --yes to revive all of them, or switch without --continue and nudge sessions individually${c.reset}`);
+        process.exit(1);
+      }
+      const result = await cliPost("/cli/accounts/switch", reviveArgs);
+      const n = result.conversations ?? 0;
+      console.log(
+        `${c.green}✓${c.reset} switch to ${c.cyan}${name}${c.reset} requested on ${result.devices ?? 0} device(s)` +
+        (n > 0 ? `; ${n} blocked session(s) will be restarted + continued` : "; no blocked sessions to revive") +
+        subNote
+      );
+      return;
+    }
+    try {
+      const result = useProfile(name);
+      console.log(`${c.green}✓${c.reset} switched to ${c.cyan}${name}${c.reset}${result.toEmail ? ` (${result.toEmail})` : ""}`);
+      if (result.from) console.log(`${c.dim}  outgoing account re-saved as "${result.from}"${c.reset}`);
+      console.log(`${c.dim}  running sessions keep the old account until restarted — new/resumed ones use ${name}${c.reset}`);
+    } catch (err) {
+      console.error(err instanceof CcAccountError ? err.message : String(err));
+      process.exit(1);
+    }
+    await publishAccountsInventory();
+  });
+
+accountsCmd
+  .command("continue")
+  .description("Send 'continue' to every session parked on a usage-limit banner (last 48h; no account switch — use after the limit window resets)")
+  .option("--yes", "skip the confirmation when many sessions would be continued")
+  .option("--include-subagents", "also continue blocked subagent workers (skipped by default — their parent has usually moved on)")
+  .action(async (options: any) => {
+    const reviveArgs = { include_subagents: options.includeSubagents === true };
+    const probe = await cliPost("/cli/accounts/continue-blocked", { ...reviveArgs, dry_run: true });
+    const count = probe.would_continue ?? 0;
+    const subNote = !options.includeSubagents && (probe.subagents ?? 0) > 0
+      ? ` (${probe.subagents} blocked subagent(s) skipped — add --include-subagents to include them)`
+      : "";
+    if (count === 0) {
+      console.log(`${c.dim}No sessions are blocked on a usage limit.${subNote}${c.reset}`);
+      return;
+    }
+    if (count > REVIVE_CONFIRM_THRESHOLD && !options.yes) {
+      console.log(`${c.yellow}!${c.reset} ${count} session(s) would get a 'continue'${subNote}. Re-run with --yes to proceed.`);
+      process.exit(1);
+    }
+    const result = await cliPost("/cli/accounts/continue-blocked", reviveArgs);
+    console.log(`${c.green}✓${c.reset} queued 'continue' to ${result.continued} blocked session(s)${subNote}`);
+  });
+
+program
   .command("start")
   .description("Start the background daemon to automatically watch and sync conversations")
-  .action(() => {
+  .option("--wait", "Block until the daemon is running and connected to Convex (exit 1 if not)")
+  .option("--timeout <seconds>", "How long --wait polls before giving up", "45")
+  .action(async (options: any) => {
+    const startedAt = Date.now();
     startDaemon();
     // Ensure autostart is configured so daemon restarts on reboot/crash
     ensureAutostart();
+    if (options.wait) {
+      await finishWithHealthWait(startedAt, Number.parseInt(options.timeout, 10) || 45);
+    }
   });
 
 program
@@ -2859,7 +3461,10 @@ program
 program
   .command("restart")
   .description("Restart the background daemon (update if available, then start)")
-  .action(async () => {
+  .option("--wait", "Block until the daemon is running and connected to Convex (exit 1 if not)")
+  .option("--timeout <seconds>", "How long --wait polls before giving up", "45")
+  .action(async (options: any) => {
+    const startedAt = Date.now();
     stopDaemon();
     const available = await checkForUpdates(true);
     if (available) {
@@ -2871,6 +3476,11 @@ program
         if (config.task_enabled) installTaskSnippet(true);
         if (config.work_enabled) installWorkSnippet(true);
         if (config.workflow_enabled) installWorkflowSnippet(true);
+        if (config.visual_enabled) installVisualSnippet(true);
+        // Messaging is on by default for memory installs — backfill/refresh + persist.
+        const msgPatch = ensureMessagingForMemory(config);
+        if (msgPatch) { Object.assign(config, msgPatch); writeConfig(config); }
+        else if (config.messaging_enabled) installMessagingSnippet(true);
         if (config.orch_enabled) installOrchestration(true);
         installSessionRegisterHook();
         installStatusHook();
@@ -2882,6 +3492,9 @@ program
     }
     startDaemon();
     ensureAutostart();
+    if (options.wait) {
+      await finishWithHealthWait(startedAt, Number.parseInt(options.timeout, 10) || 45);
+    }
   });
 
 program
@@ -3384,6 +3997,47 @@ program
   });
 
 program
+  .command("doctor")
+  .description(
+    "Verify codecast works end-to-end: daemon health, Convex connection, and a live\n" +
+    "sync round-trip (transcript → server → message delivery → tmux inject → echo back).\n" +
+    "The round-trip uses a throwaway stand-in agent — no Claude tokens, no browser —\n" +
+    "and cleans up after itself. Exit code 0 means the full loop is proven working."
+  )
+  .option("--no-e2e", "Only run the passive health checks, skip the live round-trip")
+  .option("--json", "Machine-readable report")
+  .option("--keep", "Keep the test tmux session, transcript, and server conversation for debugging")
+  .option("--project-dir <path>", "Scratch project dir for the test transcript (must be syncable)")
+  .action(async (options: any) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+    const report = await runDoctor(
+      {
+        config,
+        siteUrl: config.convex_url.replace(".cloud", ".site"),
+        apiToken: config.auth_token,
+        version: getVersion(),
+        configDir: CONFIG_DIR,
+        getDaemonPid,
+        getLaunchdStatus: getMacLaunchdDaemonStatus,
+        readDaemonState,
+        getStuckSyncs,
+      },
+      {
+        e2e: options.e2e !== false,
+        json: options.json === true,
+        keep: options.keep === true,
+        projectDir: options.projectDir,
+      },
+    );
+    if (options.json) console.log(JSON.stringify(report, null, 2));
+    process.exit(report.ok ? 0 : 1);
+  });
+
+program
   .command("sync")
   .description("Manually sync all unsynced conversations (daemon does this automatically)")
   .action(async () => {
@@ -3453,7 +4107,7 @@ program
           console.log("No agent default params configured.");
           console.log("\nUsage: cast config agent <agent> --<flag> <value> [--<flag> <value> ...]");
           console.log("  cast config agent claude --effort max");
-          console.log("  cast config agent claude --effort max --model claude-opus-4-6");
+          console.log("  cast config agent claude --effort max --model opus");
           return;
         }
         for (const [agent, params] of Object.entries(allParams)) {
@@ -4227,13 +4881,15 @@ program
     "  cast search auth                 # team-wide search\n" +
     "  cast search auth --mine          # only my sessions\n" +
     "  cast search auth -m samvit       # specific member\n" +
-    "  cast search auth -g -s 7d        # all teams, last 7 days"
+    "  cast search auth -g -s 7d        # all teams, last 7 days\n" +
+    "  cast search auth --label api     # only sessions I filed under a label"
   )
   .argument("<query>", "Search query (min 2 characters)")
   .option("-u, --user-only", "Search only user messages (excludes assistant responses)")
   .option("-g, --global", "Search all sessions (not just current team)")
   .option("--mine", "Show only my sessions")
   .option("-m, --member <name>", "Filter by team member name or email")
+  .option("--label <name>", "Filter to sessions filed under one of my labels")
   .option("--keyword", "Use keyword-only search (no semantic matching)")
   .option("--semantic", "Use semantic-only search (no keyword matching)")
   .option("-s, --start <date>", "Start date/time (e.g., 7d, 2w, yesterday)")
@@ -4307,13 +4963,14 @@ program
           mode,
           member_name: options.member,
           mine_only: options.mine || undefined,
+          label: options.label,
         }),
       });
 
       const result = await response.json();
 
       if (result.error) {
-        console.error(`Error: ${result.error}`);
+        console.error(`Error: ${result.details ? `${result.error}: ${result.details}` : result.error}`);
         process.exit(1);
       }
 
@@ -4340,12 +4997,17 @@ program
     "  cast feed -m samvit          # specific member\n" +
     "  cast feed -g                 # all teams\n" +
     "  cast feed -s 7d              # last 7 days\n" +
-    "  cast feed -q auth            # filter by keyword"
+    "  cast feed -q auth            # filter by keyword\n" +
+    "  cast feed --state working    # only sessions the agent is working\n" +
+    "  cast feed --state needs-input # only sessions waiting on a human\n" +
+    "  cast feed --label api        # only sessions I filed under a label"
   )
   .option("-g, --global", "Show all sessions (not just current team)")
   .option("--mine", "Show only my sessions")
   .option("-q, --query <text>", "Filter by keyword (keeps recency order)")
   .option("-m, --member <name>", "Filter by team member name or email")
+  .option("--label <name>", "Filter to sessions filed under one of my labels")
+  .option("--state <state>", "Filter by work state: working | needs-input | idle | pinned | live")
   .option("-n, --limit <n>", "Number of conversations per page", "10")
   .option("-p, --page <n>", "Page number (1-indexed)", "1")
   .option("-s, --start <date>", "Start date/time (e.g., 7d, 2w, yesterday, 2024-01-15)")
@@ -4396,6 +5058,8 @@ program
           project_path: projectPath,
           member_name: options.member,
           mine_only: options.mine || undefined,
+          state: options.state,
+          label: options.label,
           ...(options.live ? { live_only: true } : {}),
         }),
       });
@@ -4413,6 +5077,333 @@ program
       console.error("Feed failed:", error instanceof Error ? error.message : error);
       process.exit(1);
     }
+  });
+
+program
+  .command("sessions [session_id]")
+  .alias("monitor")
+  .description(
+    "Explore sessions — three independent axes:\n\n" +
+    "  QUERY (which sessions): a session id, --state, --team / -m … narrow the set\n" +
+    "  CONTENT: work state by default (grouped NEEDS INPUT → WORKING → IDLE), or\n" +
+    "           --messages for conversation messages\n" +
+    "  LIVENESS: a one-shot snapshot, or -w to stream live\n\n" +
+    "NEEDS INPUT = ball in your court (finished turn, open question, permission prompt, dead\n" +
+    "with output) — matches the web inbox. IDLE = blank sessions. --json swaps any view to JSON.\n\n" +
+    "Examples:\n" +
+    "  cast sessions                  # state snapshot of your sessions\n" +
+    "  cast sessions -w               # stream state changes live\n" +
+    "  cast sessions --state needs-input   # only what's waiting on you\n" +
+    "  cast sessions --team -w        # stream the whole team's state changes\n" +
+    "  cast sessions --messages -w    # follow messages across your live sessions\n" +
+    "  cast sessions jx7abc --messages -w  # …focused on one session\n" +
+    "  cast sessions jx7abc --messages     # one session's recent messages\n" +
+    "  cast sessions --labels         # my labels with session counts (current project)\n" +
+    "  cast sessions --labels -g      # …across all projects\n" +
+    "  cast sessions --by-label -a    # group all sessions by label"
+  )
+  .option("-w, --watch", "Stream live instead of a one-shot snapshot (state changes, or messages with -M)")
+  .option("--state <state>", "Filter: needs-input | working | idle | pinned | live")
+  .option("-t, --team", "Show the team's sessions (default: just yours)")
+  .option("-g, --global", "All teams (implies --team)")
+  .option("-m, --member <name>", "Filter by team member (implies --team)")
+  .option("--mine", "Only my sessions within team scope")
+  .option("--label <name>", "Filter to sessions filed under one of my labels (current project; -g for all)")
+  .option("--labels", "List my labels with session counts (current project; -g for all)")
+  .option("--by-label", "Group the snapshot by label (current project; -g for all)")
+  .option("-a, --all", "Include idle / dismissed sessions")
+  .option("-n, --limit <n>", "Max sessions to show", "200")
+  .option("-M, --messages", "Show conversation messages instead of work state (live with -w)")
+  .option("--json", "Output as JSON instead of the colored view")
+  .action(async (sessionId, options) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+
+    // MESSAGE MODE (--messages): show conversation MESSAGES, not work state. The query
+    // picks the sessions — a session id narrows to one, else the live sessions in the
+    // (--state/--team-filtered) inbox. -w follows live. Reuses /cli/read with a
+    // per-session message_count high-water mark (CLI-only; no cross-session backend yet).
+    if (options.messages) {
+      const fullContent = options.all || undefined;
+      const { formatStreamedMessage, formatReadResult } = await import("./formatter.js");
+      const single = !!sessionId;
+      // Reactive subscriptions are cheap (server pushes only on change), so follow
+      // ALL active sessions — the ceiling is just a sanity backstop, not a real limit.
+      const MAX_FOLLOW = 60;
+
+      const readMessages = async (id: string, start?: number, end?: number) => {
+        const r = await cliFetchRead(`${siteUrl}/cli/read`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ api_token: config.auth_token, conversation_id: id, start_line: start, end_line: end, full_content: fullContent }),
+        });
+        return r.json();
+      };
+
+      // Resolve which sessions to read from the query: one explicit id, else the live
+      // sessions in the inbox (only live ones produce messages), capped.
+      const resolveSet = async (): Promise<Array<{ id: string; title: string }>> => {
+        if (sessionId) {
+          const head = await readMessages(sessionId, 1, 1);
+          if (head.error) { console.error(`Error: ${head.error}`); process.exit(1); }
+          return [{ id: head.conversation?.id || sessionId, title: head.conversation?.title || sessionId }];
+        }
+        const r = await cliFetchRead(`${siteUrl}/cli/inbox`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          // Same policy as the state view below: --label is project-bounded
+          // to the cwd unless -g.
+          body: JSON.stringify({ api_token: config.auth_token, state: options.state, show_all: options.all || undefined, label: options.label, project_path: options.label && !options.global ? getRealCwd() : undefined, limit: 200 }),
+        });
+        const inbox = await r.json();
+        if (inbox.error) { console.error(`Error: ${inbox.error}`); process.exit(1); }
+        // Messages come from sessions that are actively WORKING (or at least live),
+        // so prioritize those — the inbox's own order leads with pinned/needs-input,
+        // which are idle and won't produce. Working first, then other live, capped.
+        return (inbox.sessions || [])
+          .filter((s: any) => s.work_state === "working" || s.is_live)
+          .sort((a: any, b: any) => (b.work_state === "working" ? 1 : 0) - (a.work_state === "working" ? 1 : 0))
+          .slice(0, MAX_FOLLOW)
+          .map((s: any) => ({ id: s.id, title: s.title || "Session" }));
+      };
+
+      if (!options.watch) {
+        // Snapshot. Single: that session's recent tail. Multi: a merged, time-sorted
+        // recent slice across the queried live sessions, labeled by session.
+        const set = await resolveSet();
+        if (single) {
+          const id = set[0].id;
+          const head = await readMessages(id, 1, 1);
+          const count = head.conversation?.message_count ?? 0;
+          const tail = count > 1 ? await readMessages(id, Math.max(1, count - 19), count) : head;
+          if (tail.error) { console.error(`Error: ${tail.error}`); process.exit(1); }
+          console.log(options.json ? JSON.stringify(tail) : formatReadResult(tail));
+          return;
+        }
+        const collected: any[] = [];
+        for (const s of set) {
+          const head = await readMessages(s.id, 1, 1);
+          const count = head.conversation?.message_count ?? 0;
+          if (count === 0) continue;
+          const tail = await readMessages(s.id, Math.max(1, count - 3), count);
+          for (const m of (tail.messages || [])) collected.push({ ...m, _sid: s.id, _title: s.title });
+        }
+        collected.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+        const shown = collected.slice(-30);
+        if (options.json) console.log(JSON.stringify({ sessions: set, messages: shown }));
+        else for (const m of shown) console.log(formatStreamedMessage({ ...m, label: `${(m._sid || "").slice(0, 7)} ${m._title}`.trim() }));
+        return;
+      }
+
+      // Follow (-w) via Convex LIVE QUERIES: subscribe per session to the reactive
+      // message tail (conversationMessagesForCLI). The server PUSHES on each new
+      // message over the WebSocket — no polling. The first push per session is the
+      // baseline (its messages are marked seen, not printed, so no history dump);
+      // later pushes print only the messages we haven't seen (deduped by uuid).
+      const { ConvexClient } = await import("convex/browser");
+      const client = new ConvexClient(config.convex_url!);
+      const TAIL = 40;
+      const subscribed = new Set<string>();
+      const baselined = new Set<string>();
+      const seen = new Map<string, Set<string>>();
+      const titles = new Map<string, string>();
+      const keyOf = (m: any) => m.message_uuid || `${m.timestamp}:${m.role}:${(m.content || "").length}`;
+
+      const subscribe = (s: { id: string; title: string }) => {
+        if (subscribed.has(s.id)) return;
+        subscribed.add(s.id);
+        titles.set(s.id, s.title);
+        seen.set(s.id, new Set());
+        client.onUpdate(
+          "conversations:conversationMessagesForCLI" as any,
+          { api_token: config.auth_token, conversation_id: s.id, limit: TAIL, full_content: fullContent },
+          (res: any) => {
+            if (!res || res.error) return;
+            const seenSet = seen.get(s.id)!;
+            const msgs: any[] = res.messages || [];
+            if (!baselined.has(s.id)) {
+              for (const m of msgs) seenSet.add(keyOf(m));
+              baselined.add(s.id);
+              return;
+            }
+            for (const m of msgs) {
+              const k = keyOf(m);
+              if (seenSet.has(k)) continue;
+              seenSet.add(k);
+              if (options.json) console.log(JSON.stringify({ ts: new Date().toISOString(), session_id: s.id, title: titles.get(s.id), ...m }));
+              else console.log(formatStreamedMessage({ ...m, label: single ? undefined : `${s.id.slice(0, 7)} ${titles.get(s.id) || ""}`.trim() }));
+            }
+          },
+        );
+      };
+
+      const initial = await resolveSet();
+      for (const s of initial) subscribe(s);
+      const what = single
+        ? `${(initial[0]?.id || sessionId).slice(0, 7)} ${titles.get(initial[0]?.id) || ""}`.trim()
+        : `${initial.length} live session${initial.length === 1 ? "" : "s"}`;
+      const header = `cast sessions: following ${what} — live messages stream below… Ctrl-C to stop`;
+      if (options.json) { if (process.stderr.isTTY) process.stderr.write(header + "\n"); }
+      else console.log(`${header}\n`);
+
+      process.on("SIGINT", () => { try { client.close(); } catch {} process.exit(0); });
+      // Multi mode: pick up newly-active sessions over time (subscribe to them too).
+      if (!single) setInterval(async () => { try { for (const s of await resolveSet()) subscribe(s); } catch {} }, 15000);
+      await new Promise(() => {}); // stay alive; WebSocket pushes drive all output
+      return;
+    }
+
+    const limit = parseInt(options.limit) || 200;
+    // Label views (--labels/--by-label) are personal filing, so they never run
+    // through the team feed; -g on them means "all projects" instead of "all teams".
+    const labelView = !!(options.labels || options.byLabel);
+    const teamMode = !labelView && !!(options.team || options.global || options.member);
+    if (labelView && (options.team || options.member)) {
+      console.error("Labels are personal — drop --team/-m to use --labels/--by-label.");
+      process.exit(1);
+    }
+    // Solo label views default to the current project (cwd); -g lifts the bound.
+    const labelProjectPath = !teamMode && (labelView || options.label) && !options.global
+      ? getRealCwd()
+      : undefined;
+    const scopeLabel = teamMode
+      ? (options.member ? `team: ${options.member}` : options.global ? "all teams" : "team")
+      : labelProjectPath ? `you · ${labelProjectPath.split("/").pop()}` : "you";
+
+    // Reshape the team feed (feedForCLI) into the same {sessions, counts} shape
+    // the solo inbox returns, so one renderer/loop serves both scopes.
+    const feedToSessions = (feed: any) => {
+      const sessions = (feed.conversations || []).map((c: any) => ({
+        id: c.id, session_id: c.session_id, title: c.title, project_path: c.project_path,
+        updated_at: c.updated_at, message_count: c.message_count, agent_type: c.agent_type,
+        agent_status: c.agent_status, work_state: c.work_state || "idle", is_pinned: !!c.is_pinned,
+        is_live: !!c.is_live, is_unresponsive: false, awaiting_input: false,
+        idle_summary: null, last_user_message: null, active_plan: null, active_task: null,
+      }));
+      const counts: any = { working: 0, needs_input: 0, idle: 0, pinned: 0, live: 0, total: 0 };
+      for (const s of sessions) {
+        counts.total++; counts[s.work_state] = (counts[s.work_state] || 0) + 1;
+        if (s.is_pinned) counts.pinned++; if (s.is_live) counts.live++;
+      }
+      return { sessions, counts, scope: feed.scope };
+    };
+
+    const fetchSnapshot = async () => {
+      let result: any;
+      if (!teamMode) {
+        const response = await cliFetchRead(`${siteUrl}/cli/inbox`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ api_token: config.auth_token, show_all: options.all || undefined, state: options.state, label: options.label, project_path: labelProjectPath, limit }),
+        });
+        result = await response.json();
+      } else {
+        const projectPath = options.global ? undefined : getRealCwd();
+        const response = await cliFetchRead(`${siteUrl}/cli/feed`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            api_token: config.auth_token,
+            project_path: projectPath,
+            member_name: options.member,
+            mine_only: options.mine || undefined,
+            state: options.state,
+            label: options.label,
+            limit,
+          }),
+        });
+        const feed = await response.json();
+        result = feed?.error ? feed : feedToSessions(feed);
+      }
+      // A session id is a query filter — narrow the state view to that one session.
+      if (sessionId && result && !result.error && Array.isArray(result.sessions)) {
+        const match = (s: any) =>
+          s.id === sessionId || (s.id || "").startsWith(sessionId) || (s.id || "").slice(0, 7) === sessionId || s.session_id === sessionId;
+        result = { ...result, sessions: result.sessions.filter(match) };
+      }
+      return result;
+    };
+
+    const { formatMonitor, formatSessionChangeLine, formatLabelsList } = await import("./formatter.js");
+
+    // Snapshot vs change stream are the two BEHAVIORS; --json is only the format.
+    //   no -w : one snapshot of the current state (grouped colored, or full JSON)
+    //   -w    : a live stream of CHANGES — one line per transition, colored or
+    //           NDJSON. Never re-emits the unchanged set.
+    if (!options.watch) {
+      try {
+        const result = await fetchSnapshot();
+        if (result.error) {
+          console.error(`Error: ${result.error}`);
+          process.exit(1);
+        }
+        if (options.labels) {
+          console.log(options.json
+            ? JSON.stringify({ labels: result.labels ?? [], counts: result.counts, project: labelProjectPath ?? null })
+            : formatLabelsList(result, { project: labelProjectPath ? labelProjectPath.split("/").pop() : null }));
+          return;
+        }
+        console.log(options.json
+          ? JSON.stringify(result)
+          : formatMonitor(result, { state: options.state, all: options.all, groupByLabel: options.byLabel, scopeLabel, command: "cast sessions" }));
+      } catch (error) {
+        console.error("sessions failed:", error instanceof Error ? error.message : error);
+        process.exit(1);
+      }
+      return;
+    }
+
+    // -w change stream via Convex LIVE QUERY: subscribe to the reactive inbox (solo)
+    // or feed (team); the server PUSHES on any change. Diff each push for state
+    // transitions and emit one line per change — no polling. First push is the silent
+    // baseline; a "watching…" header (stderr under --json) gives proof-of-life.
+    const { ConvexClient } = await import("convex/browser");
+    const stateClient = new ConvexClient(config.convex_url!);
+    process.on("SIGINT", () => { try { stateClient.close(); } catch {} process.exit(0); });
+
+    const header = `cast sessions: watching ${scopeLabel}${options.state ? ` (${options.state})` : ""} for changes… Ctrl-C to stop`;
+    if (options.json) { if (process.stderr.isTTY) process.stderr.write(header + "\n"); }
+    else console.log(`${header}\n`);
+
+    let prevStates: Record<string, string> = {};
+    let firstFrame = true;
+    const matchesId = (s: any) =>
+      !sessionId || s.id === sessionId || (s.id || "").startsWith(sessionId) || (s.id || "").slice(0, 7) === sessionId || s.session_id === sessionId;
+    const onSessions = (sessions: any[]) => {
+      if (process.env.CAST_DEBUG) process.stderr.write(`[push: ${sessions.length} sessions]\n`);
+      const cur: Record<string, string> = {};
+      for (const s of sessions) {
+        if (!matchesId(s)) continue;
+        cur[s.id] = s.work_state;
+        if (firstFrame) continue;
+        const prev = prevStates[s.id];
+        const isNew = prev === undefined;
+        if (!isNew && prev === s.work_state) continue; // unchanged — skip
+        const from = isNew ? null : prev;
+        if (options.json) {
+          console.log(JSON.stringify({ ts: new Date().toISOString(), event: isNew ? "new" : "transition", id: s.id, session_id: s.session_id ?? null, title: s.title ?? null, from, to: s.work_state, is_pinned: !!s.is_pinned, is_live: !!s.is_live }));
+        } else {
+          console.log(formatSessionChangeLine({ id: s.id, title: s.title, from, to: s.work_state, is_pinned: !!s.is_pinned, is_live: !!s.is_live }));
+        }
+      }
+      prevStates = cur;
+      firstFrame = false;
+    };
+
+    if (!teamMode) {
+      stateClient.onUpdate("conversations:inboxForCLI" as any,
+        { api_token: config.auth_token, state: options.state, show_all: options.all || undefined },
+        (result: any) => { if (result && !result.error) onSessions(result.sessions || []); });
+    } else {
+      const projectPath = options.global ? undefined : getRealCwd();
+      stateClient.onUpdate("conversations:feedForCLI" as any,
+        { api_token: config.auth_token, project_path: projectPath, member_name: options.member, mine_only: options.mine || undefined, state: options.state, limit },
+        (feed: any) => { if (feed && !feed.error) onSessions(feedToSessions(feed).sessions); });
+    }
+    await new Promise(() => {}); // stay alive; WebSocket pushes drive all output
   });
 
 program
@@ -4552,7 +5543,7 @@ function discoverLiveProcesses(options: LiveProcessDiscoveryOptions = {}): LiveP
 
   const tmuxPanes: Record<string, string> = {};
   try {
-    const out = execSync("tmux list-panes -a -F '#{pane_tty} #{session_name}' 2>/dev/null", { encoding: "utf-8", timeout: 10_000 });
+    const out = tmuxRun(["list-panes", "-a", "-F", "#{pane_tty} #{session_name}"], { timeout: 10_000 }).stdout;
     for (const line of out.trim().split("\n").filter(Boolean)) {
       const i = line.indexOf(" ");
       if (i > 0) tmuxPanes[line.slice(0, i)] = line.slice(i + 1);
@@ -5325,10 +6316,6 @@ async function convertAndLaunch(
     const resolvedArgs = extraArgs ?? config.codex_args;
     launchCodex(sessionId, resolvedArgs, showArgsHint, projectPath);
   } else {
-    const CLAUDE_CONTEXT_LIMIT_TOKENS = 200_000;
-    const AUTO_TRIM_THRESHOLD_TOKENS = 120_000;
-    const AUTO_TRIM_TARGET_TOKENS = 100_000;
-
     const estimatedTokens = estimateClaudeImportTokens(data);
     let tailMessages: number | undefined;
     let noTrim = !!claudeFull;
@@ -5342,11 +6329,11 @@ async function convertAndLaunch(
         noTrim = true;
         console.log(`  Claude import trimming disabled (--claude-tail ${claudeTail})`);
       }
-    } else if (!noTrim && estimatedTokens > AUTO_TRIM_THRESHOLD_TOKENS) {
-      tailMessages = chooseClaudeTailMessagesForTokenBudget(data, AUTO_TRIM_TARGET_TOKENS);
+    } else if (!noTrim && estimatedTokens > CLAUDE_AUTO_TRIM_THRESHOLD_TOKENS) {
+      tailMessages = chooseClaudeTailMessagesForTokenBudget(data, CLAUDE_AUTO_TRIM_TARGET_TOKENS);
       console.log(
         `  Claude context window is ~${CLAUDE_CONTEXT_LIMIT_TOKENS.toLocaleString()} tokens; import estimates ~${estimatedTokens.toLocaleString()} tokens.\n` +
-        `  Auto-trimming to last ${tailMessages} messages (target ~${AUTO_TRIM_TARGET_TOKENS.toLocaleString()} tokens) to keep Claude Code /compact usable.\n` +
+        `  Auto-trimming to last ${tailMessages} messages (target ~${CLAUDE_AUTO_TRIM_TARGET_TOKENS.toLocaleString()} tokens) to keep Claude Code /compact usable.\n` +
         `  Disable with --claude-full (or --claude-tail 0).`
       );
     }
@@ -5365,7 +6352,7 @@ interface ReconstitutionContext {
 }
 
 function claudeSessionPath(sessionId: string, projectPath?: string | null): string {
-  const projectSlug = (projectPath || process.cwd()).replace(/\//g, "-");
+  const projectSlug = claudeProjectDirName(projectPath || process.cwd());
   const projectDir = path.join(os.homedir(), ".claude", "projects", projectSlug);
   return path.join(projectDir, `${sessionId}.jsonl`);
 }
@@ -5550,13 +6537,16 @@ function openInNewTab(cmd: string, cwd?: string | null): void {
 function launchClaude(sessionId: string, extraArgs?: string, showArgsHint?: boolean, projectPath?: string | null): void {
   let resumeId = sessionId;
   if (!CLAUDE_UUID_RE.test(sessionId)) {
-    const projectSlug = (projectPath || process.cwd()).replace(/\//g, "-");
+    const projectSlug = claudeProjectDirName(projectPath || process.cwd());
     const projectDir = path.join(os.homedir(), ".claude", "projects", projectSlug);
     const oldPath = path.join(projectDir, `${sessionId}.jsonl`);
     const rewrite = rewriteSubagentJsonlToUuid(sessionId, oldPath);
     if (rewrite.rewrote) {
       console.log(`Converted subagent session ${sessionId} -> ${rewrite.resumeId}`);
       resumeId = rewrite.resumeId;
+      // Fork artifacts must not linger once unmapped — the daemon's watcher
+      // would mint a doppelgänger conversation for the leftover file.
+      removeForkArtifactJsonl(sessionId, oldPath);
     } else {
       console.error(`Session file not found: ${oldPath}`);
       console.error(`Non-UUID session IDs (subagent sessions) require a local JSONL file to resume.`);
@@ -5572,6 +6562,19 @@ function launchClaude(sessionId: string, extraArgs?: string, showArgsHint?: bool
   const combined = combineClaudeResumeFlags(extraArgs, cliDefaultPermFlag);
   if (combined) {
     args.push(...combined.split(/\s+/).filter((a) => a.length > 0));
+  }
+
+  // Override the recorded model with its live short alias so the resume never
+  // lands on a retired pinned snapshot (see resumeModelFlagFromFile).
+  const modelFlag = resumeModelFlagFromFile(claudeSessionPath(resumeId, projectPath), combined || "");
+  if (modelFlag) {
+    args.push(...modelFlag.trim().split(/\s+/));
+  }
+  // Effort twin: re-pin a session-scoped /effort (or picker) switch on resume —
+  // without the flag the resumed session falls back to the global default.
+  const effortFlag = resumeEffortFlagFromFile(claudeSessionPath(resumeId, projectPath), combined || "");
+  if (effortFlag) {
+    args.push(...effortFlag.trim().split(/\s+/));
   }
 
   if (extraArgs) {
@@ -5621,17 +6624,23 @@ program
     "  cast read jx70ntf 12:               # Read from message 12 to end\n" +
     "  cast read jx70ntf :20               # Read first 20 messages\n" +
     "  cast read jx70ntf 15                # Read single message 15\n" +
-    "  cast read jx70ntf 10:15 --full      # Show full tool call/result content"
+    "  cast read jx70ntf 10:15 --full      # Show full tool call/result content\n" +
+    "  cast read 'https://codecast.sh/conversation/<id>#msg-<msgId>'\n" +
+    "                                      # Read a window around a linked message\n" +
+    "  cast read '<url-with-#msg>' -c 5    # …with 5 messages of context each side"
   )
-  .argument("<conversation-id>", "Conversation ID (can be truncated)")
+  .argument("<conversation-id>", "Conversation ID, or a share URL (a #msg-<id> anchor reads around that message)")
   .argument("[range]", "Message range (e.g., 12:20, 12:, :20, 15)")
   .option("-f, --full", "Show full tool call and tool result content")
+  .option("-c, --context <n>", "Messages to show on each side of a #msg-<id> anchor (default 10)")
   .action(async (conversationId, range, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
       console.error("Not authenticated. Run: cast auth");
       process.exit(1);
     }
+
+    const { conversationId: parsedId, messageId } = parseConversationRef(conversationId);
 
     let startLine: number | undefined;
     let endLine: number | undefined;
@@ -5647,6 +6656,10 @@ program
       }
     }
 
+    // An explicit range wins over the anchor's window, but the anchor is still
+    // sent so the linked message gets highlighted.
+    const contextN = options.context !== undefined ? parseInt(options.context, 10) : undefined;
+
     const siteUrl = config.convex_url.replace(".cloud", ".site");
 
     try {
@@ -5655,10 +6668,12 @@ program
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           api_token: config.auth_token,
-          conversation_id: conversationId,
+          conversation_id: parsedId,
           start_line: startLine,
           end_line: endLine,
           full_content: options.full || undefined,
+          around_message_id: messageId,
+          context: Number.isFinite(contextN) ? contextN : undefined,
         }),
       });
 
@@ -5670,10 +6685,164 @@ program
         process.exit(1);
       }
 
+      if (messageId && result.target_missing) {
+        console.error(`Note: message ${messageId} not found in this conversation — showing the start instead.`);
+      }
+
       const { formatReadResult } = await import("./formatter.js");
-      console.log(formatReadResult(result, { full: options.full }));
+      console.log(formatReadResult(result, { full: options.full, targetLine: result.target_line }));
     } catch (error) {
       console.error("Read failed:", error instanceof Error ? error.message : error);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("link")
+  .description(
+    "Build a permalink (deep link) to any codecast object — the inverse of `cast read`\n\n" +
+    "Works for sessions/messages, tasks, plans, and docs. Feed it a short id, a full\n" +
+    "id, or a pasted URL; for a session you can add a line number (as shown by\n" +
+    "`cast read`) to anchor the exact message. Type is inferred from the id prefix\n" +
+    "(ct-… task, pl-… plan, jx… session); pass --type for full ids or docs.\n\n" +
+    "Examples:\n" +
+    "  cast link jx70ntf 99                # link to message 99 in that session\n" +
+    "  cast link jx70ntf                   # link to the session (no anchor)\n" +
+    "  cast link ct-37187                  # link to a task\n" +
+    "  cast link pl-42                     # link to a plan\n" +
+    "  cast link --type doc <doc-id>       # link to a doc (full id, no prefix to infer)\n" +
+    "  cast link 'https://codecast.sh/conversation/<id>#msg-<msgId>'\n" +
+    "                                      # expand a short/partial link to canonical form\n" +
+    "  cast link jx70ntf 99 --json         # { url, type, id, message_id, line }"
+  )
+  .argument("<ref>", "Object id (short or full), or a pasted codecast URL (a #msg-<id> anchor is preserved)")
+  .argument("[line]", "1-based message line to anchor (sessions only, as shown by `cast read`)")
+  .option("--type <type>", "Entity type: session | task | plan | doc | project (overrides inference)")
+  .option("--json", "Output as JSON")
+  .action(async (ref, line, options) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+
+    const lineNum = line !== undefined ? parseInt(line, 10) : undefined;
+    if (line !== undefined && !Number.isFinite(lineNum)) {
+      console.error(`Error: line must be a number (got "${line}")`);
+      process.exit(1);
+    }
+
+    // Resolve the entity {type, id} (+ a #msg anchor for sessions). A pasted URL
+    // names its own type; a bare id's type comes from --type, else the id prefix,
+    // else session (the common case and the only type needing id/line resolution).
+    let entityType: EntityType;
+    let rawId: string;
+    let messageId: string | undefined;
+    const fromUrl = parseEntityUrl(ref);
+    if (fromUrl) {
+      entityType = fromUrl.type;
+      rawId = fromUrl.id;
+      if (fromUrl.type === "session") messageId = parseConversationRef(ref).messageId;
+    } else {
+      const cref = parseConversationRef(ref); // splits #msg, strips stray query
+      rawId = cref.conversationId;
+      messageId = cref.messageId;
+      entityType = inferEntityTypeFromShortId(rawId) ?? "session";
+    }
+    if (options.type) {
+      const t = normalizeEntityType(options.type);
+      if (!t) {
+        console.error(`Error: unknown --type "${options.type}" (use session | task | plan | doc | project)`);
+        process.exit(1);
+      }
+      entityType = t;
+    }
+
+    // Non-session objects have no message anchor and no line — a plain URL is the
+    // whole answer, no server round-trip needed.
+    if (entityType !== "session") {
+      if (lineNum !== undefined) {
+        console.error(`Error: a line number only applies to sessions (got --type ${entityType})`);
+        process.exit(1);
+      }
+      const url = buildEntityUrl(entityType, rawId);
+      if (!url) {
+        console.error(`Error: cannot build a link for type "${entityType}"`);
+        process.exit(1);
+      }
+      if (options.json) {
+        console.log(JSON.stringify({ url, type: entityType, id: rawId }, null, 2));
+      } else {
+        console.log(url);
+      }
+      return;
+    }
+
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+
+    // Reuse /cli/read to resolve short id → full id and line → message _id. A line
+    // wins over a #msg anchor in the ref; otherwise we resolve the anchor (so a
+    // short link expands to the canonical full-id form). With neither, we still
+    // call read for line 1 just to get the full conversation id.
+    const body: Record<string, unknown> = {
+      api_token: config.auth_token,
+      conversation_id: rawId,
+    };
+    if (lineNum !== undefined) {
+      body.start_line = lineNum;
+      body.end_line = lineNum;
+    } else if (messageId) {
+      body.around_message_id = messageId;
+      body.context = 0;
+    } else {
+      body.start_line = 1;
+      body.end_line = 1;
+    }
+
+    try {
+      const response = await cliFetchRead(`${siteUrl}/cli/read`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const result = await response.json();
+
+      if (result.error) {
+        const msg = result.details ? `${result.error}: ${result.details}` : result.error;
+        console.error(`Error: ${msg}`);
+        process.exit(1);
+      }
+
+      const fullId: string = result.conversation?.id ?? rawId;
+
+      let anchorId: string | undefined;
+      let resolvedLine: number | undefined;
+      if (lineNum !== undefined) {
+        const msg = (result.messages ?? []).find((m: any) => m.line === lineNum) ?? result.messages?.[0];
+        if (!msg) {
+          console.error(`Error: no message at line ${lineNum} (session has ${result.conversation?.message_count ?? 0} messages)`);
+          process.exit(1);
+        }
+        anchorId = msg.id;
+        resolvedLine = msg.line;
+      } else if (messageId) {
+        if (result.target_missing) {
+          console.error(`Note: message ${messageId} not found in this session — linking without an anchor.`);
+        } else {
+          anchorId = result.target_message_id ?? messageId;
+          resolvedLine = result.target_line;
+        }
+      }
+
+      const url = buildConversationUrl({ conversationId: fullId, messageId: anchorId });
+
+      if (options.json) {
+        console.log(JSON.stringify({ url, type: entityType, id: fullId, message_id: anchorId, line: resolvedLine }, null, 2));
+      } else {
+        console.log(url);
+      }
+    } catch (error) {
+      console.error("Link failed:", error instanceof Error ? error.message : error);
       process.exit(1);
     }
   });
@@ -5787,6 +6956,19 @@ function installWatchdogScript(): void {
   fs.writeFileSync(WATCHDOG_SCRIPT_PATH, buildWatchdogShellScript({ isBinary, watchdogCommand }), { mode: 0o755 });
 }
 
+// The daemon LaunchAgent runs this script via /bin/sh instead of the binary
+// directly, so the login item's BTM identity survives binary self-updates
+// (see supervision.ts). Refreshed on every autostart pass, like the watchdog
+// script, so a moved binary path is picked up without touching the plist.
+function installDaemonLauncherScript(): void {
+  if (!fs.existsSync(CONFIG_DIR)) {
+    fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  }
+  const { executablePath, args } = getExecutableInfo();
+  const daemonCommand = [executablePath, ...args].map(shellEscapeForSh).join(" ");
+  fs.writeFileSync(DAEMON_LAUNCHER_SCRIPT_PATH, buildDaemonLauncherScript({ daemonCommand }), { mode: 0o755 });
+}
+
 // Bootstrap the watchdog LaunchAgent AND force its resident loop to start now. The
 // watchdog is a KeepAlive long-running loop (see supervision.ts), so RunAtLoad would
 // normally start it — but bootstrapping right before a sleep can leave it dormant
@@ -5825,13 +7007,10 @@ function setupMacOS(disable: boolean): void {
     fs.mkdirSync(launchAgentsDir, { recursive: true });
   }
 
-  // Daemon plist
+  // Daemon plist: /bin/sh launcher for a stable BTM identity (see supervision.ts)
   const { executablePath, args } = getExecutableInfo();
-  const programArgs = [executablePath, ...args]
-    .map((arg) => `    <string>${arg}</string>`)
-    .join("\n");
-
-  const plistContent = buildDaemonPlistXml({ programArgsXml: programArgs, configDir: CONFIG_DIR });
+  installDaemonLauncherScript();
+  const plistContent = buildDaemonPlistXml({ scriptPath: DAEMON_LAUNCHER_SCRIPT_PATH, configDir: CONFIG_DIR });
 
   spawnSync("launchctl", ["bootout", uid, plistPath], { stdio: "ignore" });
   fs.writeFileSync(plistPath, plistContent, { mode: 0o644 });
@@ -5932,15 +7111,21 @@ function ensureAutostart(): boolean {
           return content.includes("<string>bun</string>") || content.includes("<string>node</string>");
         } catch { return false; }
       };
+      const daemonNeedsUpgrade = (ppath: string): boolean => {
+        try {
+          return daemonPlistNeedsUpgrade(fs.readFileSync(ppath, "utf-8"));
+        } catch { return false; }
+      };
       const watchdogNeedsUpgrade = (ppath: string): boolean => {
         try {
           return watchdogPlistNeedsUpgrade(fs.readFileSync(ppath, "utf-8"));
         } catch { return false; }
       };
-      const daemonBroken = daemonExists && plistNeedsRepair(plistPath);
+      const daemonBroken = daemonExists && (plistNeedsRepair(plistPath) || daemonNeedsUpgrade(plistPath));
       const watchdogBroken = watchdogExists && (plistNeedsRepair(watchdogPlistPath) || watchdogNeedsUpgrade(watchdogPlistPath));
 
       installWatchdogScript();
+      installDaemonLauncherScript();
 
       if (daemonBroken) {
         spawnSync("launchctl", ["bootout", uid, plistPath], { stdio: "ignore" });
@@ -5959,9 +7144,7 @@ function ensureAutostart(): boolean {
       }
 
       if (!fs.existsSync(plistPath)) {
-        const { executablePath, args } = getExecutableInfo();
-        const programArgs = [executablePath, ...args].map((arg) => `    <string>${arg}</string>`).join("\n");
-        const plistContent = buildDaemonPlistXml({ programArgsXml: programArgs, configDir: CONFIG_DIR });
+        const plistContent = buildDaemonPlistXml({ scriptPath: DAEMON_LAUNCHER_SCRIPT_PATH, configDir: CONFIG_DIR });
         fs.writeFileSync(plistPath, plistContent, { mode: 0o644 });
         spawnSync("launchctl", ["bootstrap", uid, plistPath], { stdio: "ignore" });
       }
@@ -6261,6 +7444,16 @@ program
         changed = true;
       }
 
+      // Remove messaging snippet
+      const msgStart = content.indexOf("## Messaging");
+      if (msgStart !== -1 && content.includes(MESSAGING_SNIPPET_END)) {
+        const msgEndMarker = content.indexOf(MESSAGING_SNIPPET_END, msgStart);
+        let msgEnd = msgEndMarker !== -1 ? msgEndMarker + MESSAGING_SNIPPET_END.length : content.length;
+        if (content[msgEnd] === "\n") msgEnd++;
+        content = content.slice(0, msgStart) + content.slice(msgEnd);
+        changed = true;
+      }
+
       if (changed) {
         fs.writeFileSync(filePath, content.trimEnd() + "\n");
         console.log(`Removed codecast snippets from ${filePath.replace(home, "~")}`);
@@ -6336,7 +7529,7 @@ program
 
     if (!sessionId) {
       // Fallback: find most recently active session file
-      const projectDir = projectRoot.replace(/\//g, "-");
+      const projectDir = claudeProjectDirName(projectRoot);
       const sessionsDir = path.join(process.env.HOME || "", ".claude", "projects", projectDir);
 
       if (!fs.existsSync(sessionsDir)) {
@@ -6796,92 +7989,79 @@ program
 
 program
   .command("install")
-  .description("Install or manage all CLAUDE.md snippets")
+  .argument("[snippet]", "install just one snippet by name (e.g. workflows); omit for the interactive wizard")
+  .description(
+    "Install or manage agent capability snippets in your CLAUDE.md / ~/.claude config.\n\n" +
+    "Run with no argument for the interactive wizard, or name one snippet to install\n" +
+    "just that one (non-interactive). Add --disable to turn a snippet off.\n\n" +
+    "Snippets:\n" +
+    SNIPPET_CATALOG.map((s) => `  ${s.slug.padEnd(14)}${s.desc}`).join("\n") +
+    "\n  stable        Inject recent session history into every new conversation\n\n" +
+    "Examples:\n" +
+    "  cast install                      Interactive wizard (all snippets)\n" +
+    "  cast install --all                Install everything, no prompts\n" +
+    "  cast install workflows            Install just the Workflows snippet\n" +
+    "  cast install workflows --disable  Turn the Workflows snippet off\n" +
+    "  cast install --disable            Turn all snippets off"
+  )
   .option("--all", "Enable all snippets without prompting")
-  .option("--disable", "Disable all snippets")
-  .action(async (options) => {
+  .option("--disable", "Disable the named snippet (or all snippets when none is named)")
+  .action(async (snippetArg: string | undefined, options) => {
     const config = readConfig() || {};
     const targets = getSnippetTargets();
     const targetList = targets.map(t => t.label).join(", ");
 
-    const snippets = [
-      {
-        name: "Memory",
-        desc: "Cross-session recall",
-        detail:
-          "Adds `cast search`, `cast context`, and `cast feed` commands to your agent config.\n" +
-          "  Agents use these to find prior conversations relevant to their current task.\n" +
-          "  Nothing runs automatically — agents call these when they need context.\n" +
-          "  Writes to: CLAUDE.md (adds a ## Memory section with command reference)",
-        enabledKey: "memory_enabled" as const,
-        versionKey: "memory_version" as const,
-        getVersion: getMemoryVersion,
-        install: installMemorySnippet,
-        reEnable: "cast memory",
-      },
-      {
-        name: "Tasks & Plans",
-        desc: "Work tracking for agents",
-        detail:
-          "Gives agents `cast task` and `cast plan` commands to track what they're working on.\n" +
-          "  Agents create tasks, log progress, and mark work done — you see it on the dashboard.\n" +
-          "  Agents only use this when doing real work (not for questions or quick lookups).\n" +
-          "  Writes to: CLAUDE.md (adds a ## Tasks & Plans section with guidelines and commands)",
-        enabledKey: "work_enabled" as const,
-        versionKey: "work_version" as const,
-        getVersion: getWorkVersion,
-        install: installWorkSnippet,
-        reEnable: "cast task install",
-      },
-      {
-        name: "Scheduling",
-        desc: "Delayed and recurring agent sessions",
-        detail:
-          "Adds `cast schedule` commands so agents can queue follow-up work.\n" +
-          "  Example: agent finishes a PR and schedules \"check CI in 30m\" — a new session\n" +
-          "  spawns later to verify. Agents only schedule when they have a reason to.\n" +
-          "  Writes to: CLAUDE.md (adds a ## Async Tasks section with schedule commands)",
-        enabledKey: "task_enabled" as const,
-        versionKey: "task_version" as const,
-        getVersion: getTaskVersion,
-        install: installTaskSnippet,
-        reEnable: "cast schedule install",
-      },
-      {
-        name: "Workflows",
-        desc: "Execution graphs with approval gates",
-        detail:
-          "Adds `cast workflow` commands for running .cast files — directed graphs in DOT syntax.\n" +
-          "  Each node is an agent session, shell command, or human approval gate.\n" +
-          "  Workflows only run when you explicitly invoke them (cast workflow run <file>).\n" +
-          "  Writes to: CLAUDE.md (adds a ## Workflows section with syntax reference)",
-        enabledKey: "workflow_enabled" as const,
-        versionKey: "workflow_version" as const,
-        getVersion: getWorkflowVersion,
-        install: installWorkflowSnippet,
-        reEnable: "cast workflow install",
-      },
-      {
-        name: "Orchestration",
-        desc: "Multi-agent plan execution",
-        detail:
-          "Installs a /orchestrate skill and three agent types (implementer, reviewer, critic).\n" +
-          "  Only activates when you say \"orchestrate this plan\" or invoke /orchestrate.\n" +
-          "  When active, your agent acts as a conductor:\n" +
-          "    — Decomposes the plan into tasks by reading your codebase\n" +
-          "    — Spawns implementer agents in isolated git worktrees (parallel)\n" +
-          "    — Spawns reviewer agents to check each implementation\n" +
-          "    — Runs critic agents for a final integration sweep\n" +
-          "  Also installs two lifecycle hooks (SubagentStop → update task status,\n" +
-          "  PostCompact → re-inject plan context). These only fire during orchestration.\n" +
-          "  Writes to: ~/.claude/skills/, ~/.claude/agents/, ~/.claude/settings.json (hooks)",
-        enabledKey: "orch_enabled" as const,
-        versionKey: "orch_version" as const,
-        getVersion: getWorkVersion,
-        install: installOrchestration,
-        reEnable: "cast install",
-      },
-    ];
+    // Display fields (name/desc/detail/writesTo) come from the shared catalog
+    // so the wizard, `-h`, and the web Settings page never drift. Only the
+    // install behavior is wired here, keyed by slug.
+    const SNIPPET_BEHAVIOR: Record<string, { getVersion: () => string; install: (update?: boolean) => { installed: boolean; updated: boolean }; reEnable: string }> = {
+      memory: { getVersion: getMemoryVersion, install: installMemorySnippet, reEnable: "cast memory" },
+      messaging: { getVersion: getMessagingVersion, install: installMessagingSnippet, reEnable: "cast messaging install" },
+      forks: { getVersion: getForksVersion, install: installForksSnippet, reEnable: "cast install" },
+      tasks: { getVersion: getWorkVersion, install: installWorkSnippet, reEnable: "cast task install" },
+      scheduling: { getVersion: getTaskVersion, install: installTaskSnippet, reEnable: "cast schedule install" },
+      workflows: { getVersion: getWorkflowVersion, install: installWorkflowSnippet, reEnable: "cast workflow install" },
+      visual: { getVersion: getVisualVersion, install: installVisualSnippet, reEnable: "cast install" },
+      orchestration: { getVersion: getWorkVersion, install: installOrchestration, reEnable: "cast install" },
+    };
+    const snippets = SNIPPET_CATALOG.map((d) => ({ ...d, ...SNIPPET_BEHAVIOR[d.slug] }));
+    // Single-snippet path: `cast install workflows` (+ --disable to turn off).
+    // Non-interactive — this is also exactly what the daemon shells out to when
+    // the web Settings page toggles a snippet for a device (apply_snippet).
+    if (snippetArg) {
+      const key = snippetArg.trim().toLowerCase();
+
+      // Stable mode is a SessionStart hook, not a markdown snippet — a tri-state
+      // (solo/team/off), so it's handled apart from the boolean snippets.
+      if (key === "stable") {
+        const mode = options.disable ? "off" : "solo";
+        applyStableMode(config, mode, (config as any).stable_global === true); // persists config + syncs the hook
+        console.log(mode === "off" ? `${icons.cross} stable mode off` : `${icons.check} stable mode: ${mode}`);
+        return;
+      }
+
+      const desc = snippetBySlug(key);
+      const entry = desc ? snippets.find((s) => s.enabledKey === desc.enabledKey) : undefined;
+      if (!entry) {
+        console.error(`Unknown snippet ${fmt.value(snippetArg)}. Available: ${allSnippetSlugs().join(", ")}, stable`);
+        process.exit(1);
+      }
+
+      if (options.disable) {
+        (config as any)[entry.enabledKey] = false;
+        writeConfig(config);
+        console.log(`${icons.cross} ${entry.name} disabled. Run ${fmt.cmd(`cast install ${desc?.slug ?? key}`)} to re-enable.`);
+        return;
+      }
+
+      const result = entry.install(true);
+      (config as any)[entry.enabledKey] = true;
+      (config as any)[entry.versionKey] = entry.getVersion();
+      writeConfig(config);
+      const verb = result.updated ? "updated" : result.installed ? "installed" : "up to date";
+      console.log(`${icons.check} ${entry.name} — ${verb} in ${targetList}`);
+      return;
+    }
 
     if (options.disable) {
       for (const s of snippets) {
@@ -6897,6 +8077,30 @@ program
     console.log(fmt.muted(`Installs instructions into ${targetList}\n`));
 
     let anyInstalled = false;
+
+    // Stable mode — a SessionStart hook (not a markdown snippet), so it's a
+    // solo/team/off choice rather than a boolean. It belongs with the sessions/
+    // recall family, so it's offered right after Memory.
+    const runStableSelect = async () => {
+      const currentStable: "solo" | "team" | "off" = (config as any).stable_mode ?? "off";
+      console.log(`\n  ${c.bold}Stable${c.reset} — inject recent session history into every new conversation`);
+      console.log(fmt.muted(`  Adds a SessionStart hook that feeds recent sessions into each new session.`));
+      const stableChoice = await select<"solo" | "team" | "off">({
+        message: `Enable stable mode? [${currentStable}]`,
+        choices: [
+          { name: "Solo — your recent sessions (last 7 days)", value: "solo" },
+          { name: "Team — all team activity (last 14 days)", value: "team" },
+          { name: "None — off", value: "off" },
+        ],
+        default: currentStable,
+      });
+      applyStableMode(config, stableChoice, (config as any).stable_global === true);
+      console.log(
+        stableChoice === "off"
+          ? `  ${icons.cross} stable mode off`
+          : `  ${icons.check} stable mode: ${stableChoice}`
+      );
+    };
 
     for (const s of snippets) {
       const enabled = (config as any)[s.enabledKey];
@@ -6915,6 +8119,7 @@ program
       if (s.detail) {
         console.log(`\n  ${c.bold}${s.name}${c.reset} — ${s.desc}`);
         console.log(fmt.muted(`  ${s.detail}`));
+        console.log(fmt.muted(`  Writes to: ${s.writesTo}`));
       }
 
       const answer = await confirm({
@@ -6933,28 +8138,11 @@ program
         (config as any)[s.enabledKey] = false;
         console.log(`  ${icons.cross} skipped`);
       }
-    }
 
-    // Stable mode — inject recent session history into every new conversation
-    if (!options.all) {
-      const currentStable: "solo" | "team" | "off" = (config as any).stable_mode ?? "off";
-      console.log(`\n  ${c.bold}Stable Mode${c.reset} — inject recent session history into every new conversation`);
-      console.log(fmt.muted(`  Adds a SessionStart hook that feeds recent sessions into each new session.`));
-      const stableChoice = await select<"solo" | "team" | "off">({
-        message: `Enable stable mode? [${currentStable}]`,
-        choices: [
-          { name: "Solo — your recent sessions (last 7 days)", value: "solo" },
-          { name: "Team — all team activity (last 14 days)", value: "team" },
-          { name: "None — off", value: "off" },
-        ],
-        default: currentStable,
-      });
-      applyStableMode(config, stableChoice, (config as any).stable_global === true);
-      console.log(
-        stableChoice === "off"
-          ? `  ${icons.cross} stable mode off`
-          : `  ${icons.check} stable mode: ${stableChoice}`
-      );
+      // Offer Stable right after Memory — same sessions/recall family.
+      if (s.enabledKey === "memory_enabled") {
+        await runStableSelect();
+      }
     }
 
     writeConfig(config);
@@ -7500,17 +8688,46 @@ program
 program
   .command("blame")
   .description(
-    "Find sessions that touched a specific file\n\n" +
+    "git blame with session attribution — a drop-in replacement whose author\n" +
+    "column shows the codecast session that wrote each line. Output matches\n" +
+    "git blame's default and porcelain formats, so editor integrations that\n" +
+    "shell out to `git blame` can call `cast blame` instead.\n\n" +
     "Examples:\n" +
-    "  cast blame src/auth.ts             # sessions that touched this file\n" +
-    "  cast blame src/auth.ts:42          # sessions that touched line 42"
+    "  cast blame src/auth.ts             # line-level blame with sessions\n" +
+    "  cast blame src/auth.ts:42          # just line 42\n" +
+    "  cast blame -L 10,30 src/auth.ts    # a range\n" +
+    "  cast blame --porcelain src/auth.ts # machine format (+codecast-* keys)\n" +
+    "  cast blame --touches src/auth.ts   # legacy: sessions that touched the file"
   )
-  .argument("<file>", "File path, optionally with line number (e.g., src/auth.ts:42)")
-  .option("-n, --limit <n>", "Number of results", "20")
+  .argument("[file]", "File path, optionally with line number (e.g., src/auth.ts:42)")
+  .option("-L, --range <start,end>", "Blame only the given line range (repeatable)", (v: string, acc: string[]) => [...acc, v], [] as string[])
+  .option("--rev <rev>", "Blame at a revision instead of the working tree")
+  .option("-w, --ignore-whitespace", "Ignore whitespace when attributing lines")
+  .option("--porcelain", "Machine-readable porcelain format with codecast-* keys")
+  .option("--line-porcelain", "Porcelain with full headers for every line")
+  .option("--abbrev <n>", "Use n hex digits for commit shas")
+  .option("--no-sessions", "Skip session resolution (pure git blame output)")
+  .option("--touches", "Legacy view: sessions that touched the file (no line attribution)")
+  .option("--log", "Session log: which sessions shaped this file, newest first (:Gclog equivalent)")
+  .option("--quickfix", "With --log: emit tab-separated rows for the vim :Gslog quickfix list")
+  .option("--open", "Resolve <file>:<line> to its session and open the conversation in the browser")
+  .option("--install-fugitive", "Install the vim-fugitive git shim so :Gblame shows sessions")
+  .option("-n, --limit <n>", "Number of results (--touches mode)", "20")
   .action(async (file, options) => {
+    if (options.installFugitive) {
+      const { installFugitiveShim } = await import("./blame.js");
+      installFugitiveShim();
+      return;
+    }
+
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
       console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+
+    if (!file) {
+      console.error("Missing file argument. Usage: cast blame <file>");
       process.exit(1);
     }
 
@@ -7525,6 +8742,58 @@ program
 
     if (!path.isAbsolute(filePath)) {
       filePath = path.resolve(process.cwd(), filePath);
+    }
+
+    if (options.log) {
+      try {
+        const { runBlameLog } = await import("./blame.js");
+        await runBlameLog(filePath, { quickfix: options.quickfix, rev: options.rev }, config);
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exit(1);
+      }
+      return;
+    }
+
+    // `cast blame <file>:<line> --open` — resolve the line's session and open
+    // the conversation (used by editor keybindings, e.g. VSCode/Cursor).
+    if (options.open) {
+      if (!lineNumber) {
+        console.error("--open needs a line: cast blame <file>:<line> --open");
+        process.exit(1);
+      }
+      try {
+        const { runBlameConversation } = await import("./blame.js");
+        await runBlameConversation(filePath, lineNumber, config);
+        if (process.exitCode === 1) console.error("No codecast session resolved for that line.");
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exit(1);
+      }
+      return;
+    }
+
+    if (!options.touches) {
+      try {
+        const { runBlameCommand } = await import("./blame.js");
+        await runBlameCommand(
+          filePath,
+          {
+            ranges: lineNumber ? [...options.range, `${lineNumber},${lineNumber}`] : options.range,
+            rev: options.rev,
+            ignoreWhitespace: options.ignoreWhitespace,
+            porcelain: options.porcelain,
+            linePorcelain: options.linePorcelain,
+            abbrev: options.abbrev ? parseInt(options.abbrev) : undefined,
+            sessions: options.sessions,
+          },
+          config,
+        );
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exit(1);
+      }
+      return;
     }
 
     const siteUrl = config.convex_url.replace(".cloud", ".site");
@@ -7560,27 +8829,67 @@ program
     }
   });
 
+// File freshly-created sessions (spawn/fork --label) under a label, reusing the
+// /cli/labels/set endpoint — resolve-or-create happens server-side, and for a
+// fork this overrides whatever label the branch inherited from its parent. The
+// sessions already exist, so a failed call WARNS (with a recoverable hint)
+// instead of aborting. Returns whether a brand-new label was minted, for the
+// caller's success line.
+async function fileSessionsUnderLabel(
+  siteUrl: string,
+  token: string,
+  conversationIds: string[],
+  label: string,
+): Promise<{ createdLabel: boolean; failures: number }> {
+  let createdLabel = false;
+  let failures = 0;
+  for (const convId of conversationIds) {
+    try {
+      const resp = await cliFetch(`${siteUrl}/cli/labels/set`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ api_token: token, session: convId, name: label }),
+      });
+      if (resp.ok) {
+        const r = (await resp.json().catch(() => ({}))) as { created_label?: boolean };
+        if (r.created_label) createdLabel = true;
+      } else {
+        failures++;
+      }
+    } catch {
+      failures++;
+    }
+  }
+  return { createdLabel, failures };
+}
+
 program
   .command("fork")
   .description(
-    "Fork a conversation from a specific message\n\n" +
-    "Creates a new conversation branching from a specific point.\n" +
-    "Like git branching for conversations.\n\n" +
+    "Fork a conversation into one or more parallel branches\n\n" +
+    "Each branch keeps the full history up to the fork point, then heads off in\n" +
+    "its own direction. Every branch becomes a live session in your inbox — an\n" +
+    "independent thread you can review and continue.\n\n" +
     "Examples:\n" +
-    "  cast fork                            # fork current session\n" +
-    "  cast fork --from 15                  # fork current session from message 15\n" +
-    "  cast fork --from 15 --resume         # fork and open in Claude\n" +
-    "  cast fork abc1234                    # fork specific conversation\n" +
-    "  cast fork abc1234 --from 15          # fork specific conversation from message 15"
+    "  cast fork \"use Redis\" \"use Postgres\" \"keep it in-memory\"  # 3 branches from here\n" +
+    "  cast fork --at 42 \"what if we cache\" \"what if we don't\"   # branch at message 42\n" +
+    "  cast fork \"explore the bold refactor\"                     # one branch\n" +
+    "  cast fork                                                 # legacy: one unseeded fork\n" +
+    "  cast fork -s abc1234 --from 15 --resume                   # fork another session, open it locally"
   )
-  .argument("[id]", "Conversation ID or short ID (auto-detects current session if omitted)")
-  .option("--from <index>", "1-based message index to fork from")
-  .option("--resume", "Open forked conversation in Claude/Codex after creating")
+  .argument("[directions...]", "One seed prompt per branch; each branch starts on it immediately")
+  .option("-s, --session <id>", "Conversation to fork (default: current session)")
+  .option("--at <line>", "Fork at message line N (cast read numbering); default: the latest user message")
+  .option("--tip", "Fork at the very end instead (include everything so far)")
+  .option("--from <index>", "Alias for --at (back-compat)")
+  .option("--label <name>", "File each branch under this label instead of the parent's (created if new; branches inherit the parent label by default)")
+  .option("--json", "Machine-readable output")
+  .option("--resume", "Open forked conversation in Claude/Codex after creating (single, unseeded fork only)")
   .option("--as <agent>", "Agent to resume with (claude or codex)")
   .option("--claude-args <args>", "Additional args to pass to claude")
   .option("--claude-tail <n>", "When resuming in Claude, keep only the last N messages (+ a truncation notice)")
   .option("--claude-full", "When resuming in Claude, do not auto-trim (may create a session too large for /compact)")
-  .action(async (id: string | undefined, options) => {
+  .action(async (rawDirections: string[] | undefined, options: any) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
       console.error("Not authenticated. Run: cast auth");
@@ -7588,6 +8897,20 @@ program
     }
 
     const siteUrl = config.convex_url.replace(".cloud", ".site");
+
+    const directions: string[] = (rawDirections ?? []).map((d) => d.trim()).filter(Boolean);
+    let id: string | undefined = options.session;
+
+    // Back-compat: the old `cast fork <id>` took the conversation as the first
+    // positional. Positionals are now branch directions, so only treat the first
+    // token as a target when it's a bare conversation-id shape AND it's either
+    // alone or paired with a legacy targeting flag (--from/--resume). To fork
+    // another session *with* directions, use -s <id>.
+    const looksLikeConvId = (s: string) => /^jx[a-z0-9]{5,}$/i.test(s) || /^[a-z0-9]{25,}$/i.test(s);
+    if (!id && directions.length > 0 && looksLikeConvId(directions[0]) &&
+        (directions.length === 1 || options.from || options.resume)) {
+      id = directions.shift();
+    }
 
     if (!id) {
       let sessionId: string | null = null;
@@ -7602,7 +8925,7 @@ program
       sessionId = findCurrentSessionFromProcess(projectRoot);
 
       if (!sessionId) {
-        const projectDir = projectRoot.replace(/\//g, "-");
+        const projectDir = claudeProjectDirName(projectRoot);
         const sessionsDir = path.join(process.env.HOME || "", ".claude", "projects", projectDir);
         if (fs.existsSync(sessionsDir)) {
           const now = Date.now();
@@ -7617,7 +8940,7 @@ program
       }
 
       if (!sessionId) {
-        console.error("Could not detect current session. Pass a conversation ID: cast fork <id>");
+        console.error("Could not detect current session. Pass one: cast fork -s <id> \"<direction>\"");
         process.exit(1);
       }
 
@@ -7628,39 +8951,102 @@ program
       });
       const linksResult = await linksResp.json() as any;
       if (!linksResult.conversation_id) {
-        console.error("Could not resolve session to conversation. Try: cast fork <id>");
+        console.error("Could not resolve session to conversation. Try: cast fork -s <id>");
         process.exit(1);
       }
       id = linksResult.conversation_id;
-      console.log(`Detected conversation: ${linksResult.title || id!.slice(0, 7)}`);
+      if (!options.json) console.log(`Detected conversation: ${linksResult.title || id!.slice(0, 7)}`);
     }
 
+    // Resolve the fork anchor (message_uuid). --tip forks at the end; --at/--from
+    // pick a 1-based message line; otherwise the default for a seeded fork is the
+    // latest user message, so each branch carries context through the human's last
+    // instruction but not the agent's in-flight reply. A bare legacy fork (no
+    // directions, no flags) leaves the anchor unset = fork the entire conversation.
     let messageUuid: string | undefined;
-
-    if (options.from) {
-      const fromIndex = parseInt(options.from);
-      if (isNaN(fromIndex) || fromIndex < 1) {
-        console.error("--from must be a positive integer (1-based message index)");
-        process.exit(1);
-      }
-
-      console.log(`Fetching conversation to resolve message ${fromIndex}...`);
+    const explicitIndex = options.at ?? options.from;
+    if (!options.tip && (explicitIndex !== undefined || directions.length > 0)) {
       const data = await fetchExport(siteUrl, config.auth_token!, id!);
-      const userMessages = data.messages.filter((m: any) =>
-        m.role === "user" || m.role === "assistant"
+      if (explicitIndex !== undefined) {
+        const idx = parseInt(String(explicitIndex));
+        if (isNaN(idx) || idx < 1) {
+          console.error("--at must be a positive integer (1-based message line)");
+          process.exit(1);
+        }
+        const seq = data.messages.filter((m: any) => m.role === "user" || m.role === "assistant");
+        if (idx > seq.length) {
+          console.error(`Message line ${idx} out of range (conversation has ${seq.length} messages)`);
+          process.exit(1);
+        }
+        messageUuid = seq[idx - 1].message_uuid;
+        if (!messageUuid) {
+          console.error(`Message ${idx} has no UUID, cannot fork from it`);
+          process.exit(1);
+        }
+      } else {
+        const lastUser = [...data.messages].reverse().find((m: any) => m.role === "user" && m.message_uuid);
+        messageUuid = lastUser?.message_uuid;
+      }
+    }
+
+    // Multi-direction fork: branch once per direction from the same anchor, then
+    // seed each branch with its direction over the same pending-message rail
+    // `cast send` uses. Each lands in the inbox as its own session.
+    if (directions.length > 0) {
+      const roster: { short_id: string; conversation_id: string; direction: string; seeded: boolean }[] = [];
+      for (const direction of directions) {
+        const response = await cliFetch(`${siteUrl}/cli/fork`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ api_token: config.auth_token, conversation_id: id, message_uuid: messageUuid }),
+        });
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+          console.error(`Fork failed for "${direction}": ${body.error || response.statusText}`);
+          process.exit(1);
+        }
+        const result = await response.json() as any;
+        const newShortId = result.short_id || result.conversation_id?.toString().slice(0, 7);
+        // Seed via cliFetch (not cliPost) so a failed seed flags this branch
+        // instead of exiting and abandoning the branches already created.
+        let seeded = false;
+        try {
+          const seedResp = await cliFetch(`${siteUrl}/cli/messages/send`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ api_token: config.auth_token, to: result.conversation_id, from: id, body: direction }),
+          });
+          seeded = seedResp.ok;
+        } catch {}
+        roster.push({ short_id: newShortId, conversation_id: result.conversation_id, direction, seeded });
+      }
+
+      let labelResult: { createdLabel: boolean; failures: number } | null = null;
+      if (options.label) {
+        labelResult = await fileSessionsUnderLabel(siteUrl, config.auth_token!, roster.map((b) => b.conversation_id), options.label);
+      }
+
+      if (options.json) {
+        console.log(JSON.stringify({ forked_from: id, message_uuid: messageUuid ?? null, label: options.label ?? null, branches: roster }, null, 2));
+        return;
+      }
+
+      const anchorNote = options.tip ? "at the tip" : messageUuid ? "at the latest user message" : "(entire conversation)";
+      const labelNote = options.label
+        ? ` ${c.dim}·${c.reset} filed under ${c.yellow}${options.label}${c.reset}${labelResult?.createdLabel ? ` ${c.dim}(new label)${c.reset}` : ""}`
+        : "";
+      console.log(
+        `${c.green}✓${c.reset} forked ${c.cyan}${id!.toString().slice(0, 7)}${c.reset} ${anchorNote} into ` +
+        `${c.bold}${roster.length}${c.reset} branch${roster.length === 1 ? "" : "es"} — all in your inbox:${labelNote}`
       );
-
-      if (fromIndex > userMessages.length) {
-        console.error(`Message index ${fromIndex} out of range (conversation has ${userMessages.length} messages)`);
-        process.exit(1);
+      for (const b of roster) {
+        const warn = b.seeded ? "" : ` ${c.yellow}(seed not delivered — resend with cast send)${c.reset}`;
+        console.log(`  ${c.cyan}${b.short_id}${c.reset}  ${b.direction}${warn}`);
       }
-
-      const targetMsg = userMessages[fromIndex - 1];
-      messageUuid = targetMsg.message_uuid;
-      if (!messageUuid) {
-        console.error(`Message ${fromIndex} has no UUID, cannot fork from it`);
-        process.exit(1);
+      if (labelResult?.failures) {
+        console.log(`  ${c.yellow}!${c.reset} ${c.dim}${labelResult.failures} branch${labelResult.failures === 1 ? "" : "es"} not filed — retry with cast label set ${options.label} <id>${c.reset}`);
       }
+      return;
     }
 
     try {
@@ -7685,6 +9071,12 @@ program
       const shortId = result.short_id || result.conversation_id?.toString().slice(0, 7);
       console.log(`Forked! New conversation: ${shortId}`);
       console.log(`View: https://codecast.sh/conversation/${result.conversation_id}`);
+
+      if (options.label) {
+        const { createdLabel, failures } = await fileSessionsUnderLabel(siteUrl, config.auth_token!, [result.conversation_id], options.label);
+        if (failures) console.log(`${c.yellow}!${c.reset} could not file under ${options.label} — retry with cast label set ${options.label} ${shortId}`);
+        else console.log(`Filed under ${c.yellow}${options.label}${c.reset}${createdLabel ? ` ${c.dim}(new label)${c.reset}` : ""}`);
+      }
 
       if (options.resume) {
         const targetAgent = options.as?.toLowerCase() || "claude";
@@ -7724,10 +9116,6 @@ program
           console.log(`\nResume command:\n  ${cmd}`);
           openInNewTab(cmd, launchCwd.path);
         } else {
-          const CLAUDE_CONTEXT_LIMIT_TOKENS = 200_000;
-          const AUTO_TRIM_THRESHOLD_TOKENS = 120_000;
-          const AUTO_TRIM_TARGET_TOKENS = 100_000;
-
           const estimatedTokens = estimateClaudeImportTokens(data);
           let tailMessages: number | undefined;
           let noTrim = !!options.claudeFull;
@@ -7741,11 +9129,11 @@ program
               noTrim = true;
               console.log(`  Claude import trimming disabled (--claude-tail ${options.claudeTail})`);
             }
-          } else if (!noTrim && estimatedTokens > AUTO_TRIM_THRESHOLD_TOKENS) {
-            tailMessages = chooseClaudeTailMessagesForTokenBudget(data, AUTO_TRIM_TARGET_TOKENS);
+          } else if (!noTrim && estimatedTokens > CLAUDE_AUTO_TRIM_THRESHOLD_TOKENS) {
+            tailMessages = chooseClaudeTailMessagesForTokenBudget(data, CLAUDE_AUTO_TRIM_TARGET_TOKENS);
             console.log(
               `  Claude context window is ~${CLAUDE_CONTEXT_LIMIT_TOKENS.toLocaleString()} tokens; import estimates ~${estimatedTokens.toLocaleString()} tokens.\n` +
-              `  Auto-trimming to last ${tailMessages} messages (target ~${AUTO_TRIM_TARGET_TOKENS.toLocaleString()} tokens) to keep Claude Code /compact usable.\n` +
+              `  Auto-trimming to last ${tailMessages} messages (target ~${CLAUDE_AUTO_TRIM_TARGET_TOKENS.toLocaleString()} tokens) to keep Claude Code /compact usable.\n` +
               `  Disable with --claude-full (or --claude-tail 0).`
             );
           }
@@ -7753,7 +9141,7 @@ program
           const { jsonl, sessionId } = generateClaudeCodeJsonl(data, { tailMessages });
           writeClaudeCodeSession(jsonl, sessionId, launchCwd.path);
           const resolvedArgs = options.claudeArgs ?? config.claude_args ?? "";
-          const launchCmd = `claude --resume ${sessionId}${resolvedArgs ? " " + resolvedArgs : ""}`;
+          const launchCmd = `claude --resume ${sessionId}${resumeModelFlag(jsonl, resolvedArgs)}${resumeEffortFlag(jsonl, resolvedArgs)}${resolvedArgs ? " " + resolvedArgs : ""}`;
           console.log(`\nResume command:\n  cast resume ${sessionId}`);
           openInNewTab(launchCmd, launchCwd.path);
         }
@@ -7761,6 +9149,103 @@ program
     } catch (error) {
       console.error("Fork failed:", error instanceof Error ? error.message : error);
       process.exit(1);
+    }
+  });
+
+program
+  .command("spawn")
+  .description(
+    "Start one or more fresh sessions in your inbox\n\n" +
+    "Each session is a new agent with no shared history. It runs on its own and\n" +
+    "reports to your inbox — unlike a subagent, which is a hidden helper that\n" +
+    "reports back to whoever launched it.\n\n" +
+    "Examples:\n" +
+    "  cast spawn \"audit the auth flow\" \"audit the billing flow\"\n" +
+    "  cast spawn -C ~/src/api \"port the v1 routes to v2\"\n" +
+    "  cast spawn --isolated \"refactor the store\" \"rewrite the router\"   # parallel worktrees"
+  )
+  .argument("<prompts...>", "One task per session; each starts working on it immediately")
+  .option("-C, --dir <path>", "Working directory (default: current project)")
+  .option("--agent <type>", "Agent: claude (default), codex, cursor, gemini", "claude")
+  .option("--model <model>", "Model override (e.g. opus, sonnet)")
+  .option("--isolated", "Give each session its own git worktree")
+  .option("--label <name>", "File each spawned session under a label (created if new)")
+  .option("--json", "Machine-readable output")
+  .action(async (rawPrompts: string[], options: any) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+
+    const prompts = (rawPrompts ?? []).map((p) => p.trim()).filter(Boolean);
+    if (prompts.length === 0) {
+      console.error("Give at least one task: cast spawn \"<task>\"");
+      process.exit(1);
+    }
+
+    const dir = options.dir ? path.resolve(options.dir.replace(/^~/, process.env.HOME || "~")) : getRealCwd();
+    let gitRoot = dir;
+    try {
+      gitRoot = execSync(`git -C "${dir}" rev-parse --show-toplevel`, {
+        encoding: "utf-8",
+        stdio: ["pipe", "pipe", "ignore"],
+      }).trim();
+    } catch {}
+
+    const agentMap: Record<string, string> = {
+      claude: "claude_code", claude_code: "claude_code", codex: "codex", cursor: "cursor", gemini: "gemini",
+    };
+    const agentType = agentMap[String(options.agent).toLowerCase()] ?? "claude_code";
+
+    const roster: { short_id: string; conversation_id: string; prompt: string }[] = [];
+    for (const prompt of prompts) {
+      const resp = await cliFetch(`${siteUrl}/cli/spawn`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_token: config.auth_token,
+          prompt,
+          project_path: dir,
+          git_root: gitRoot,
+          agent_type: agentType,
+          model: options.model,
+          isolated: options.isolated || undefined,
+        }),
+      });
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+        console.error(`Spawn failed for "${prompt}": ${body.error || resp.statusText}`);
+        process.exit(1);
+      }
+      const result = await resp.json() as any;
+      roster.push({ short_id: result.short_id, conversation_id: result.conversation_id, prompt });
+    }
+
+    let labelResult: { createdLabel: boolean; failures: number } | null = null;
+    if (options.label) {
+      labelResult = await fileSessionsUnderLabel(siteUrl, config.auth_token!, roster.map((s) => s.conversation_id), options.label);
+    }
+
+    if (options.json) {
+      console.log(JSON.stringify({ dir, agent: agentType, label: options.label ?? null, sessions: roster }, null, 2));
+      return;
+    }
+
+    const dirNote = dir.replace(process.env.HOME || "~", "~");
+    const labelNote = options.label
+      ? ` ${c.dim}·${c.reset} filed under ${c.yellow}${options.label}${c.reset}${labelResult?.createdLabel ? ` ${c.dim}(new label)${c.reset}` : ""}`
+      : "";
+    console.log(
+      `${c.green}✓${c.reset} spawned ${c.bold}${roster.length}${c.reset} session${roster.length === 1 ? "" : "s"} in ` +
+      `${c.dim}${dirNote}${c.reset} — all in your inbox:${labelNote}`
+    );
+    for (const s of roster) {
+      console.log(`  ${c.cyan}${s.short_id}${c.reset}  ${s.prompt}`);
+    }
+    if (labelResult?.failures) {
+      console.log(`  ${c.yellow}!${c.reset} ${c.dim}${labelResult.failures} session${labelResult.failures === 1 ? "" : "s"} not filed — retry with cast label set ${options.label} <id>${c.reset}`);
     }
   });
 
@@ -7854,6 +9339,11 @@ program
       if (config.task_enabled) installTaskSnippet(true);
       if (config.work_enabled) installWorkSnippet(true);
       if (config.workflow_enabled) installWorkflowSnippet(true);
+      if (config.visual_enabled) installVisualSnippet(true);
+      // Messaging is on by default for memory installs — backfill/refresh + persist.
+      const msgPatch = ensureMessagingForMemory(config);
+      if (msgPatch) { Object.assign(config, msgPatch); writeConfig(config); }
+      else if (config.messaging_enabled) installMessagingSnippet(true);
       if (config.orch_enabled) installOrchestration(true);
       installSessionRegisterHook();
       installStatusHook();
@@ -7928,6 +9418,43 @@ program
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       console.error(`Failed to set min version: ${errMsg}`);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("desktop-force-update")
+  .description("Set minimum desktop app version to force all clients to update, quitting & relaunching the app if open (admin only)")
+  .argument("<version>", "Minimum desktop version required (e.g., 1.1.78)")
+  .action(async (version) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+
+    if (!/^\d+\.\d+\.\d+$/.test(version)) {
+      console.error("Invalid version format. Use semver (e.g., 1.1.78)");
+      process.exit(1);
+    }
+
+    const syncService = new SyncService({
+      convexUrl: config.convex_url,
+      authToken: config.auth_token,
+      userId: config.user_id,
+    });
+
+    try {
+      await syncService.getClient().mutation(
+        "systemConfig:setMinDesktopVersion" as any,
+        { version, api_token: config.auth_token }
+      );
+      console.log(`Minimum desktop version set to ${version}`);
+      console.log("Remote daemons will apply it within 5 minutes — quitting and relaunching the app if it's open");
+      process.exit(0);
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.error(`Failed to set min desktop version: ${errMsg}`);
       process.exit(1);
     }
   });
@@ -8364,7 +9891,19 @@ program
 
         const searchResult = await searchResponse.json();
 
-        if (!searchResult.error && searchResult.conversations) {
+        if (searchResult.error) {
+          // A failed search must not read as "no relevant sessions" — agents
+          // treat that as ground truth and skip prior work.
+          const detail = searchResult.details
+            ? `${searchResult.error}: ${searchResult.details}`
+            : searchResult.error;
+          if (filePaths.length === 0) {
+            console.error(`Search failed: ${detail}`);
+            console.error("Try fewer or more distinctive keywords, or --file/--auto.");
+            process.exit(1);
+          }
+          console.error(`Warning: text search failed (${detail}); continuing with file matches.`);
+        } else if (searchResult.conversations) {
           for (const conv of searchResult.conversations) {
             const preview = conv.matches?.[0]?.content?.slice(0, 100) + "..." || "";
             sessions.set(conv.id, {
@@ -8486,6 +10025,263 @@ const EVENT_SHORTHANDS: Record<string, { event_type: string; action?: string }> 
   push: { event_type: "push" },
 };
 
+// ── Anchors ──────────────────────────────────────────────────────────────────
+// A standing agent member: one per personal workspace, one per team. It owns a
+// long-lived, pinned session that never completes, is woken by events, and
+// delegates code work to ephemeral `cast spawn` hands.
+const anchor = program
+  .command("anchor")
+  .description("Manage your standing agent member (Anchor)")
+  .showHelpAfterError(true);
+
+anchor
+  .command("create")
+  .description("Provision the Anchor for your personal workspace or a team")
+  .option("--team [id]", "Make it the team's shared anchor (default: your active team)")
+  .option("--name <name>", "Display name (default: Anchor)")
+  .option("--avatar <url>", "Avatar image URL")
+  .option("--persona <skill>", "Persona skill name the anchor should adopt")
+  .option("-C, --dir <path>", "Project the anchor lives and works in (default: current)")
+  .option("--model <model>", "Model override (e.g. opus, sonnet)")
+  .option("--no-bootstrap", "Skip the 'I'm online' first message")
+  .option("--json", "Machine-readable output")
+  .action(async (options: any) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+
+    const dir = options.dir
+      ? path.resolve(options.dir.replace(/^~/, process.env.HOME || "~"))
+      : getRealCwd();
+
+    const scopeType = options.team ? "team" : "user";
+    const teamId = typeof options.team === "string" ? options.team : undefined;
+
+    const resp = await cliFetch(`${siteUrl}/cli/anchor/create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_token: config.auth_token,
+        scope_type: scopeType,
+        team_id: teamId,
+        name: options.name,
+        avatar_url: options.avatar,
+        persona: options.persona,
+        project_path: dir,
+        model: options.model,
+        bootstrap: options.bootstrap !== false,
+      }),
+    });
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+      console.error(`Anchor create failed: ${body.error || resp.statusText}`);
+      process.exit(1);
+    }
+    const result = (await resp.json()) as any;
+    if (options.json) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    const where = scopeType === "team" ? "team" : "your personal workspace";
+    if (result.already_existed) {
+      console.log(`${c.yellow}•${c.reset} ${where} already has an anchor ${c.cyan}${result.conversation_id ? String(result.conversation_id).slice(0, 7) : ""}${c.reset}`);
+    } else {
+      console.log(
+        `${c.green}✓${c.reset} anchor for ${c.bold}${where}${c.reset} provisioned ` +
+        `${c.dim}(${result.short_id})${c.reset} — coming online in ${c.dim}${dir.replace(process.env.HOME || "~", "~")}${c.reset}`,
+      );
+    }
+  });
+
+anchor
+  .command("ls")
+  .alias("list")
+  .description("List the anchors you can see")
+  .option("--json", "Machine-readable output")
+  .action(async (options: any) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const resp = await cliFetch(`${siteUrl}/cli/anchor/list`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: config.auth_token }),
+    });
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+      console.error(`Anchor list failed: ${body.error || resp.statusText}`);
+      process.exit(1);
+    }
+    const anchors = (await resp.json()) as any[];
+    if (options.json) {
+      console.log(JSON.stringify(anchors, null, 2));
+      return;
+    }
+    if (!anchors.length) {
+      console.log(`${c.dim}No anchors yet. Create one: cast anchor create${c.reset}`);
+      return;
+    }
+    for (const a of anchors) {
+      const scope = a.scope_type === "team" ? "team" : "personal";
+      const conv = a.conversation_id ? String(a.conversation_id).slice(0, 7) : "(no session)";
+      console.log(
+        `  ${c.cyan}${a.bot_name}${c.reset} ${c.dim}·${c.reset} ${scope} ${c.dim}·${c.reset} ${a.status} ${c.dim}· ${conv}${c.reset}`,
+      );
+    }
+  });
+
+anchor
+  .command("wake")
+  .description("Send a message to an anchor (auto-resumes it if dormant)")
+  .argument("<message>", "What to tell the anchor")
+  .option("--team [id]", "Target the team anchor (default: your personal anchor)")
+  .action(async (message: string, options: any) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const scopeType = options.team ? "team" : "user";
+    const teamId = typeof options.team === "string" ? options.team : undefined;
+
+    const resolveResp = await cliFetch(`${siteUrl}/cli/anchor/resolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: config.auth_token, scope_type: scopeType, team_id: teamId }),
+    });
+    const anchorRow = resolveResp.ok ? ((await resolveResp.json()) as any) : null;
+    if (!anchorRow?._id) {
+      console.error(`No ${scopeType === "team" ? "team" : "personal"} anchor found. Create one: cast anchor create${scopeType === "team" ? " --team" : ""}`);
+      process.exit(1);
+    }
+    const resp = await cliFetch(`${siteUrl}/cli/anchor/wake`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: config.auth_token, anchor_id: anchorRow._id, message }),
+    });
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+      console.error(`Anchor wake failed: ${body.error || resp.statusText}`);
+      process.exit(1);
+    }
+    console.log(`${c.green}✓${c.reset} woke ${c.cyan}${anchorRow.name}${c.reset}`);
+  });
+
+anchor
+  .command("rm")
+  .alias("decommission")
+  .description("Retire an anchor: stop it being persistent and drop its Slack mappings")
+  .option("--team [id]", "Target the team anchor (default: your personal anchor)")
+  .action(async (options: any) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const scopeType = options.team ? "team" : "user";
+    const teamId = typeof options.team === "string" ? options.team : undefined;
+    const resolveResp = await cliFetch(`${siteUrl}/cli/anchor/resolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: config.auth_token, scope_type: scopeType, team_id: teamId }),
+    });
+    const anchorRow = resolveResp.ok ? ((await resolveResp.json()) as any) : null;
+    if (!anchorRow?._id) {
+      console.error(`No ${scopeType === "team" ? "team" : "personal"} anchor found.`);
+      process.exit(1);
+    }
+    const resp = await cliFetch(`${siteUrl}/cli/anchor/decommission`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: config.auth_token, anchor_id: anchorRow._id }),
+    });
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+      console.error(`Decommission failed: ${body.error || resp.statusText}`);
+      process.exit(1);
+    }
+    console.log(`${c.green}✓${c.reset} retired ${c.cyan}${anchorRow.name}${c.reset}`);
+  });
+
+anchor
+  .command("link-channel")
+  .description("Map a Slack channel to an anchor so @mentions there wake it")
+  .argument("<channel>", "Slack channel id (e.g. C0123ABCD)")
+  .option("--team [id]", "Link to the team anchor (default: your personal anchor)")
+  .option("-C, --dir <path>", "Project cwd for work from this channel")
+  .action(async (channel: string, options: any) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const resp = await cliFetch(`${siteUrl}/cli/anchor/link-channel`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_token: config.auth_token,
+        channel,
+        team: !!options.team,
+        team_id: typeof options.team === "string" ? options.team : undefined,
+        project_path: options.dir ? path.resolve(options.dir.replace(/^~/, process.env.HOME || "~")) : undefined,
+      }),
+    });
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+      console.error(`Link failed: ${body.error || resp.statusText}`);
+      process.exit(1);
+    }
+    const result = (await resp.json()) as any;
+    if (!result.ok) {
+      console.error(`Link failed: ${result.error || "unknown"}`);
+      process.exit(1);
+    }
+    console.log(
+      `${c.green}✓${c.reset} ${channel} → your ${options.team ? "team" : "personal"} anchor` +
+      `${result.replaced ? ` ${c.dim}(replaced)${c.reset}` : ""}`,
+    );
+  });
+
+anchor
+  .command("say")
+  .description("Post a message to Slack as the anchor (used by the anchor itself)")
+  .requiredOption("--channel <id>", "Slack channel id")
+  .option("--thread <ts>", "Slack thread timestamp to reply in")
+  .argument("<text>", "Message text")
+  .action(async (text: string, options: any) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const resp = await cliFetch(`${siteUrl}/cli/anchor/say`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_token: config.auth_token,
+        channel: options.channel,
+        thread_ts: options.thread,
+        text,
+      }),
+    });
+    const result = resp.ok ? ((await resp.json()) as any) : { ok: false, error: `HTTP ${resp.status}` };
+    if (!result.ok) {
+      console.error(`Slack post failed: ${result.error || "unknown"}`);
+      process.exit(1);
+    }
+    console.log(`${c.green}✓${c.reset} posted to Slack`);
+  });
+
 const schedule = program
   .command("schedule")
   .alias("sched")
@@ -8592,6 +10388,9 @@ schedule
           target_conversation_id,
           project_path: options.project || getRealCwd(),
           agent_type: options.agent,
+          // Bind the task to this machine: only the creating device's
+          // scheduler claims it (see TaskScheduler.canServeTask).
+          created_device_id: deviceId(),
           schedule_type,
           run_at,
           interval_ms,
@@ -8707,6 +10506,7 @@ schedule
   .description("Mark a running task as completed (called by the agent)")
   .argument("<id>", "Task ID (full or last 8 chars)")
   .option("--summary <text>", "Summary of what was done")
+  .option("--needs-attention", "Flag the run for the user: it stays in the inbox instead of folding into the schedule's history")
   .action(async (id, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -8717,6 +10517,14 @@ schedule
     const taskId = await resolveTaskId(config, siteUrl, id);
     if (!taskId) return;
 
+    // Link this run's conversation back to the task. The daemon exports the run's
+    // session UUID when it spawns the agent; fall back to detecting our own
+    // session from the process tree (covers manual `cast schedule complete`).
+    const runSessionUuid =
+      process.env.CODECAST_RUN_SESSION_UUID ||
+      findCurrentSessionFromProcess(getRealCwd()) ||
+      undefined;
+
     try {
       const response = await cliFetch(`${siteUrl}/cli/tasks/complete`, {
         method: "POST",
@@ -8725,6 +10533,8 @@ schedule
           api_token: config.auth_token,
           task_id: taskId,
           summary: options.summary,
+          run_session_uuid: runSessionUuid,
+          ...(options.needsAttention ? { needs_attention: true } : {}),
         }),
       });
       const result = await response.json();
@@ -9786,16 +11596,81 @@ doc
 doc
   .command("show")
   .alias("get")
-  .description("Show a document's content")
+  .description(
+    "Show a document's content (paginated for long docs)\n\n" +
+    "Examples:\n" +
+    "  cast doc show <id>             # first page (200 lines)\n" +
+    "  cast doc show <id> -p 2        # next page\n" +
+    "  cast doc show <id> 100:250     # an explicit line range\n" +
+    "  cast doc show <id> 100:        # line 100 to the end\n" +
+    "  cast doc show <id> :50         # the first 50 lines\n" +
+    "  cast doc show <id> -L 500      # bigger page size\n" +
+    "  cast doc show <id> -n          # with a line-number gutter\n" +
+    "  cast doc show <id> --full      # whole doc, no paging"
+  )
   .argument("<id>", "Document ID")
-  .action(async (id: string) => {
+  .argument("[range]", "Line range (e.g. 100:250, 100:, :50, 42) — overrides --page")
+  .option("-p, --page <n>", "Page number (1-based)", "1")
+  .option("-L, --lines <n>", "Lines per page", "200")
+  .option("-n, --line-numbers", "Prefix each line with its number")
+  .option("--full", "Print the entire document without paging")
+  .action(async (id: string, range: string | undefined, options: any) => {
     const result = await cliPost("/cli/docs/get", { id });
     if (!result) { console.error("Doc not found"); process.exit(1); }
-    console.log(`${c.bold}${result.title}${c.reset} ${c.dim}[${result.doc_type}]${c.reset}`);
+    const lines = (result.content || "").split("\n");
+    const total = lines.length;
+
+    console.log(`${c.bold}${result.title}${c.reset} ${c.dim}[${result.doc_type}] · ${total} lines${c.reset}`);
     if (result.labels?.length) console.log(`Labels: ${result.labels.join(", ")}`);
+
+    const pageSize = Math.max(1, parseInt(options.lines, 10) || 200);
+    let start = 1, end = total, next = "";
+    if (options.full) {
+      // whole doc
+    } else if (range) {
+      if (range.includes(":")) {
+        const [s, e] = range.split(":");
+        if (s) start = Math.max(1, parseInt(s, 10) || 1);
+        if (e) end = Math.min(total, parseInt(e, 10) || total);
+      } else {
+        start = end = Math.min(total, Math.max(1, parseInt(range, 10) || 1));
+      }
+      if (end < start) end = start;
+      if (end < total) next = `cast doc show ${id} ${end + 1}:${end + (end - start + 1)}`;
+    } else {
+      const pages = Math.max(1, Math.ceil(total / pageSize));
+      const page = Math.min(pages, Math.max(1, parseInt(options.page, 10) || 1));
+      start = (page - 1) * pageSize + 1;
+      end = Math.min(total, page * pageSize);
+      if (page < pages) next = `cast doc show ${id} -p ${page + 1}`;
+    }
+
     console.log("");
-    console.log(result.content || "(empty)");
-    if (result.entries?.length) {
+    if (!result.content) {
+      console.log("(empty)");
+    } else {
+      const slice = lines.slice(start - 1, end);
+      if (options.lineNumbers) {
+        slice.forEach((ln: string, i: number) =>
+          console.log(`${c.dim}${String(start + i).padStart(5)}${c.reset}  ${ln}`));
+      } else {
+        console.log(slice.join("\n"));
+      }
+    }
+
+    // Footer: where you are + how to continue. Only when the doc was paged.
+    if (!options.full && (start > 1 || end < total)) {
+      console.log("");
+      const where = `${c.dim}─ lines ${start}-${end} of ${total}${c.reset}`;
+      const hints = next
+        ? `${c.dim} · next: ${c.reset}${c.cyan}${next}${c.reset}`
+        : "";
+      const find = `${c.dim} · search: ${c.reset}${c.cyan}cast doc grep ${id} <text>${c.reset}`;
+      console.log(`${where}${hints}${find}`);
+    }
+
+    // Comments only when the view reaches the end of the doc.
+    if (end >= total && result.entries?.length) {
       const ENTRY_ICONS: Record<string, string> = {
         progress: `${c.blue}↳${c.reset}`,
         decision: `${c.yellow}◆${c.reset}`,
@@ -9881,6 +11756,64 @@ doc
       const icon = DOC_TYPE_ICONS[d.doc_type] || "?";
       console.log(`  ${c.dim}[${icon}]${c.reset} ${c.cyan}${d._id}${c.reset} ${d.title}`);
     }
+  });
+
+doc
+  .command("grep")
+  .alias("find")
+  .description(
+    "Search within one document's body (prints matching lines with line numbers)\n\n" +
+    "Examples:\n" +
+    "  cast doc grep <id> 'scoring'        # every line mentioning scoring\n" +
+    "  cast doc grep <id> 'P0\\.' -i         # regex, case-insensitive\n" +
+    "  cast doc grep <id> markets -C 2     # 2 lines of context each side\n\n" +
+    "Then jump to a hit with: cast doc show <id> <start>:<end>"
+  )
+  .argument("<id>", "Document ID")
+  .argument("<pattern>", "Text or regex to find")
+  .option("-i, --ignore-case", "Case-insensitive match")
+  .option("-C, --context <n>", "Lines of context around each match", "0")
+  .option("-n, --limit <n>", "Max matches to show", "40")
+  .action(async (id: string, pattern: string, options: any) => {
+    const result = await cliPost("/cli/docs/get", { id });
+    if (!result) { console.error("Doc not found"); process.exit(1); }
+    const lines = (result.content || "").split("\n");
+
+    const flags = options.ignoreCase ? "i" : "";
+    let re: RegExp;
+    try {
+      re = new RegExp(pattern, flags);
+    } catch {
+      re = new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), flags);
+    }
+    const reG = new RegExp(re.source, flags + "g");
+    const ctx = Math.max(0, parseInt(options.context, 10) || 0);
+    const limit = Math.max(1, parseInt(options.limit, 10) || 40);
+
+    const hits: number[] = [];
+    for (let i = 0; i < lines.length; i++) if (re.test(lines[i])) hits.push(i);
+
+    console.log(`${c.bold}${result.title}${c.reset} ${c.dim}— ${hits.length} line${hits.length === 1 ? "" : "s"} match /${pattern}/${options.ignoreCase ? "i" : ""}${c.reset}`);
+    if (!hits.length) return;
+    console.log("");
+
+    const shown = hits.slice(0, limit);
+    let lastPrinted = -1;
+    for (const m of shown) {
+      const from = Math.max(0, m - ctx), to = Math.min(lines.length - 1, m + ctx);
+      if (lastPrinted >= 0 && from > lastPrinted + 1) console.log(`${c.dim}  ⋮${c.reset}`);
+      for (let i = Math.max(from, lastPrinted + 1); i <= to; i++) {
+        const isHit = i === m;
+        const num = String(i + 1).padStart(5);
+        const text = isHit ? lines[i].replace(reG, (mm: string) => `${c.yellow}${mm}${c.reset}`) : lines[i];
+        console.log(`${isHit ? c.cyan : c.dim}${num}${c.reset}  ${text}`);
+        lastPrinted = i;
+      }
+    }
+    if (hits.length > shown.length) {
+      console.log(`\n${c.dim}… ${hits.length - shown.length} more match${hits.length - shown.length === 1 ? "" : "es"} (raise --limit)${c.reset}`);
+    }
+    console.log(`\n${c.dim}Read around a hit: ${c.reset}${c.cyan}cast doc show ${id} <start>:<end>${c.reset}`);
   });
 
 doc
@@ -10386,11 +12319,8 @@ const activeHandles = new Map<string, AgentHandle>();
 function captureAgentOutput(sessionName: string, lines = 500): string {
   const handle = activeHandles.get(sessionName);
   if (handle) return getAgentRuntime().getOutput(handle, lines).text;
-  const sr = spawnSync("tmux", ["capture-pane", "-p", "-J", "-t", `${sessionName}:0.0`, "-S", `-${lines}`], {
-    encoding: "utf-8",
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-  return sr.status === 0 ? (sr.stdout || "") : "";
+  const sr = tmuxRun(["capture-pane", "-p", "-J", "-t", `${sessionName}:0.0`, "-S", `-${lines}`]);
+  return sr.status === 0 ? sr.stdout : "";
 }
 
 function parseAgentMarkers(output: string) {
@@ -10498,7 +12428,7 @@ plan
         for (const task of toSpawn) {
           const sn = `impl-${task.short_id}`;
           const h = activeHandles.get(sn);
-          const alive = h ? getAgentRuntime().isAlive(h) : spawnSync("tmux", ["has-session", "-t", sn], { stdio: ["pipe", "pipe", "pipe"] }).status === 0;
+          const alive = h ? getAgentRuntime().isAlive(h) : tmuxRun(["has-session", "-t", sn]).status === 0;
           if (!alive) {
             const lastOutput = captureAgentOutput(sn);
             const markers = parseAgentMarkers(lastOutput);
@@ -10819,7 +12749,7 @@ plan
         const sn = `impl-${shortId}`;
         const task = allTasks.find((t: any) => t.short_id === shortId);
         const handle = activeHandles.get(sn);
-        const agentAlive = handle ? runtime.isAlive(handle) : spawnSync("tmux", ["has-session", "-t", sn], { stdio: ["pipe", "pipe", "pipe"] }).status === 0;
+        const agentAlive = handle ? runtime.isAlive(handle) : tmuxRun(["has-session", "-t", sn]).status === 0;
 
         if (task?.status === "done") {
           console.log(`  ${c.green}done${c.reset}  ${c.cyan}${shortId}${c.reset} ${info.task.title}`);
@@ -11432,10 +13362,10 @@ plan
     for (const t of inProgress) {
       const sessionName = `impl-${t.short_id}`;
       const handle = activeHandles.get(sessionName);
-      const isAlive = handle ? killRuntime.isAlive(handle) : spawnSync("tmux", ["has-session", "-t", sessionName], { stdio: ["pipe", "pipe", "pipe"] }).status === 0;
+      const isAlive = handle ? killRuntime.isAlive(handle) : tmuxRun(["has-session", "-t", sessionName]).status === 0;
       if (isAlive) {
         if (handle) killRuntime.kill(handle);
-        else spawnSync("tmux", ["kill-session", "-t", sessionName], { stdio: ["pipe", "pipe", "pipe"] });
+        else tmuxRun(["kill-session", "-t", sessionName]);
         activeHandles.delete(sessionName);
         console.log(`  ${c.red}killed${c.reset} ${c.cyan}${t.short_id}${c.reset} ${t.title}`);
         killed++;
@@ -12428,7 +14358,8 @@ workflow
       }
     }
 
-    await runWorkflow(graph, runOpts);
+    const outcome = await runWorkflow(graph, runOpts);
+    if (outcome !== "completed") process.exitCode = 1;
   });
 
 workflow
@@ -12467,7 +14398,7 @@ workflow
       edges: wf.edges,
     };
     const projectPath = run.project_path || process.cwd();
-    await runWorkflow(graph as any, {
+    const outcome = await runWorkflow(graph as any, {
       runId,
       convexSiteUrl: siteUrl,
       apiToken: config.auth_token,
@@ -12476,6 +14407,7 @@ workflow
       taskId: run.task_short_id,
       planId: run.plan_short_id,
     });
+    if (outcome !== "completed") process.exitCode = 1;
   });
 
 workflow
@@ -12701,6 +14633,42 @@ workflow
     }
   });
 
+const messaging = program
+  .command("messaging")
+  .description("Manage the session-to-session messaging snippet")
+  .showHelpAfterError(true);
+
+messaging
+  .command("install")
+  .description("Install messaging snippet into agent config (CLAUDE.md, AGENTS.md)")
+  .option("--disable", "Remove messaging snippet and disable")
+  .action(async (options: any) => {
+    const config = readConfig() || {};
+
+    if (options.disable) {
+      config.messaging_enabled = false;
+      writeConfig(config);
+      console.log("Messaging snippet disabled. Run 'cast messaging install' to re-enable.");
+      return;
+    }
+
+    const result = installMessagingSnippet(true);
+    config.messaging_enabled = true;
+    config.messaging_version = getMessagingVersion();
+    writeConfig(config);
+
+    const targets = getSnippetTargets();
+    const targetList = targets.map(t => t.label).join(", ");
+    if (result.updated) {
+      console.log(`Messaging snippet updated in ${targetList}`);
+    } else if (result.installed) {
+      console.log(`Messaging snippet installed in ${targetList}`);
+      console.log("Your sessions can now message each other with 'cast send'.");
+    } else {
+      console.log("Messaging snippet is up to date.");
+    }
+  });
+
 // Check for updates in background (non-blocking)
 checkForUpdates().then(async (available) => {
   if (!available) return;
@@ -12770,6 +14738,30 @@ program.hook('preAction', (thisCommand, actionCommand) => {
   }
 });
 
-ensureCastAlias();
-autoBindFromEnv();
-program.parse();
+// Fast path for the vim-fugitive git shim: it invokes `cast __fugitive_blame@@
+// <git args…>`. The git argv carries flags commander would mis-parse, and this
+// runs on every :Gblame, so bypass commander (and its daemon/alias side
+// effects) entirely and stream the rewritten blame straight out.
+if (process.argv[2] === "__fugitive_blame@@") {
+  import("./blame.js")
+    .then(({ runFugitiveBlame }) => runFugitiveBlame(process.argv.slice(3), readConfig() ?? {}))
+    .catch((err) => {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+    });
+} else if (process.argv[2] === "__blame_conversation") {
+  // Invoked by the fugitive <CR> mapping: resolve <file> <line> to its session
+  // and open the conversation. Exits non-zero when nothing resolves so vim can
+  // fall back to fugitive's own commit view.
+  import("./blame.js")
+    .then(({ runBlameConversation }) =>
+      runBlameConversation(process.argv[3], parseInt(process.argv[4] ?? "", 10), readConfig() ?? {}),
+    )
+    .catch(() => {
+      process.exitCode = 1;
+    });
+} else {
+  ensureCastAlias();
+  autoBindFromEnv();
+  program.parse();
+}

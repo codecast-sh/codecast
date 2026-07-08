@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
-import { classifyCodexTranscriptTail, classifyTranscriptTail, paneReconcileTarget, reconciledStatus, transcriptTailLastRealRole, permissionBlockedRecoveryTarget } from "./daemon.js";
+import { classifyCodexTranscriptTail, classifyTranscriptTail, findCachedSessionIdForConversation, isInterruptControlMessage, paneReconcileTarget, reconciledStatus, transcriptTailLastRealRole, permissionBlockedRecoveryTarget, registerManagedStartedSession, isSessionPaneTracked } from "./daemon.js";
 import type { TranscriptTurnState } from "./daemon.js";
 
 // Regression test for the "session stuck in 'working' (or 'stopped') forever" bug,
@@ -19,6 +19,10 @@ const asst = (stop_reason: string | null) =>
 const userMsg = (kind: "prompt" | "tool_result") =>
   JSON.stringify({ type: "user", message: { role: "user", content: [{ type: kind === "tool_result" ? "tool_result" : "text" }] } });
 const sysMeta = () => JSON.stringify({ type: "system", subtype: "hook", content: [] });
+// The synthetic control message Claude Code appends when the user interrupts a
+// turn. Both on-disk shapes occur: a text content-block array, and a raw string.
+const interruptMsg = (shape: "block" | "string" = "block", text = "[Request interrupted by user]") =>
+  JSON.stringify({ type: "user", message: { role: "user", content: shape === "string" ? text : [{ type: "text", text }] } });
 
 describe("classifyTranscriptTail", () => {
   test("last assistant turn ended -> idle", () => {
@@ -34,6 +38,24 @@ describe("classifyTranscriptTail", () => {
   test("ball in the agent's court (user prompt or tool_result) -> active", () => {
     expect(classifyTranscriptTail(userMsg("prompt"))).toBe("active");
     expect(classifyTranscriptTail(userMsg("tool_result"))).toBe("active");
+  });
+
+  test("trailing interrupt control message -> idle, not active (the bare-terminal bug)", () => {
+    // The user pressed ESC mid-turn; the agent is parked at the prompt. Reading
+    // this as "active" is what latched interrupted bare-terminal sessions in
+    // "working" forever (the reconcile heartbeat re-derived active every cycle).
+    expect(classifyTranscriptTail(interruptMsg("block"))).toBe("idle");
+    expect(classifyTranscriptTail(interruptMsg("string"))).toBe("idle");
+    expect(classifyTranscriptTail(interruptMsg("string", "[Request cancelled]"))).toBe("idle");
+    // Trailing system/meta after the interrupt (mode / permission-mode lines that
+    // Claude Code writes last) must not hide it.
+    expect(classifyTranscriptTail([interruptMsg("block"), sysMeta()].join("\n"))).toBe("idle");
+  });
+
+  test("interrupt detection does not misfire on a real prompt that merely mentions one", () => {
+    // A genuine user prompt is still the agent's move, even if its text discusses
+    // interrupts — only a leading control marker counts.
+    expect(classifyTranscriptTail(interruptMsg("string", "fix the [Request interrupted] handling"))).toBe("active");
   });
 
   test("skips trailing system/meta lines to find the last real turn", () => {
@@ -55,6 +77,38 @@ describe("classifyTranscriptTail", () => {
     expect(classifyTranscriptTail("")).toBe("unknown");
     expect(classifyTranscriptTail([sysMeta(), sysMeta()].join("\n"))).toBe("unknown");
     expect(classifyTranscriptTail("not json at all")).toBe("unknown");
+  });
+});
+
+describe("isInterruptControlMessage", () => {
+  test("matches the interrupt/cancel control markers (leading, after trim)", () => {
+    expect(isInterruptControlMessage("[Request interrupted by user]")).toBe(true);
+    expect(isInterruptControlMessage("[Request interrupted by user for tool use]")).toBe(true);
+    expect(isInterruptControlMessage("[Request cancelled]")).toBe(true);
+    expect(isInterruptControlMessage("  \n[Request interrupted by user]")).toBe(true);
+  });
+  test("does not match ordinary prompts or empty/nullish input", () => {
+    expect(isInterruptControlMessage("please continue")).toBe(false);
+    expect(isInterruptControlMessage("see [Request interrupted] note")).toBe(false);
+    expect(isInterruptControlMessage("")).toBe(false);
+    expect(isInterruptControlMessage(null)).toBe(false);
+    expect(isInterruptControlMessage(undefined)).toBe(false);
+  });
+});
+
+// End-to-end: the exact bug. A bare-terminal session latched at "working" whose
+// transcript ends in a user interrupt must reconcile to "idle" — which is what
+// lets the server/web route it into NEEDS INPUT. Before the fix the interrupt
+// read as "active" and reconciledStatus left it (or flipped it back to) working.
+describe("interrupted bare-terminal session reconciles to idle (the full chain)", () => {
+  test("working + interrupt tail -> idle", () => {
+    const turn = classifyTranscriptTail([asst("tool_use"), interruptMsg("block")].join("\n"));
+    expect(turn).toBe("idle");
+    expect(reconciledStatus("working", turn)).toBe("idle");
+  });
+  test("once idle, the interrupt tail no longer flips it back to working", () => {
+    const turn = classifyTranscriptTail(interruptMsg("string"));
+    expect(reconciledStatus("idle", turn)).toBeNull();
   });
 });
 
@@ -172,10 +226,30 @@ describe("paneReconcileTarget", () => {
     expect(paneReconcileTarget("busy", "thinking")).toBeNull();
   });
 
+  // The "stuck working" inbox bug: a tmux session parked on a buffered
+  // AskUserQuestion. Claude Code hides the question's tool_use from the JSONL until
+  // answered, so the transcript can't see it — only the pane can. The pane reconcile
+  // is the authority and recovers a permission_blocked latch ONCE THE MENU IS GONE.
+  // (Its sole caller runs it only after parseInteractivePrompt confirmed no menu, and
+  // a live menu classifies as rewind/unknown anyway — never idle/busy — so this can
+  // never clear a still-open prompt.)
+  test("idle pane + permission_blocked -> idle (question answered, agent finished, resume hook lost)", () => {
+    expect(paneReconcileTarget("idle", "permission_blocked")).toBe("idle");
+  });
+  test("busy pane + permission_blocked -> working (question answered, agent resumed)", () => {
+    expect(paneReconcileTarget("busy", "permission_blocked")).toBe("working");
+  });
+  test("a live menu (rewind/unknown pane) never clears permission_blocked", () => {
+    // While the AskUserQuestion menu is up the pane never reads idle/busy, so the
+    // block stays put — the agent is genuinely waiting on the user.
+    for (const state of ["rewind", "interrupted", "warning", "unknown"] as const) {
+      expect(paneReconcileTarget(state, "permission_blocked")).toBeNull();
+    }
+  });
+
   test("never overrides statuses owned by other code paths", () => {
-    // permission_blocked / resuming are not bare idle/busy panes anyway, but be
-    // explicit: the pane reconcile must not stomp them or a terminal "stopped".
-    for (const stored of ["permission_blocked", "resuming", "stopped"] as const) {
+    // resuming / a terminal "stopped" must never be stomped by the pane reconcile.
+    for (const stored of ["resuming", "stopped"] as const) {
       expect(paneReconcileTarget("idle", stored)).toBeNull();
       expect(paneReconcileTarget("busy", stored)).toBeNull();
     }
@@ -186,6 +260,35 @@ describe("paneReconcileTarget", () => {
       expect(paneReconcileTarget(state, "working")).toBeNull();
       expect(paneReconcileTarget(state, undefined)).toBeNull();
     }
+  });
+});
+
+describe("warm-restart session id recovery", () => {
+  test("recovers the real transcript session id from a conversation-tagged tmux", () => {
+    const cache = {
+      "5e9f3b9b-a08c-4b97-980c-7e5c1e5e3039": "jx75mtdncevqqf6esgrmja255587w9pn",
+      "b66907ab-bf95-445f-ba0b-df9c4933d41b": "jx7dtgcj63bmrg09g8dvzx974587x61d",
+    };
+
+    expect(findCachedSessionIdForConversation(cache, "jx75mtdncevqqf6esgrmja255587w9pn")).toBe(
+      "5e9f3b9b-a08c-4b97-980c-7e5c1e5e3039",
+    );
+    expect(findCachedSessionIdForConversation(cache, "missing")).toBeUndefined();
+  });
+});
+
+// A freshly-started session (never resumed, no daemon restart since it started) must still be
+// pane-tracked, or the periodic health sweep skips it and a buffered AskUserQuestion on it
+// stays invisible on the web until answered. Regression for jx7e0c1 (session 54c97147): its
+// poll only synced after an unrelated daemon restart warm-recovered it into the cache.
+describe("started session is pane-tracked for the interactive-prompt sweep", () => {
+  test("registerManagedStartedSession tracks a fresh started session immediately", () => {
+    const sid = "11111111-2222-4333-8444-555555555555";
+    expect(isSessionPaneTracked(sid)).toBe(false);
+    // No syncServiceRef in tests: the function records the pane (local bookkeeping) then
+    // returns at the guard — exercising exactly the line that closes the gap.
+    registerManagedStartedSession("jx7e0c1b0crwpsfyj5y017mgmd87ybtc", sid, "cc-claude-testpane");
+    expect(isSessionPaneTracked(sid)).toBe(true);
   });
 });
 

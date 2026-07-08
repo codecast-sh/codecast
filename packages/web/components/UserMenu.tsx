@@ -6,6 +6,40 @@ import { useRouter } from "next/navigation";
 import { useInboxStore } from "../store/inboxStore";
 import { copyToClipboard } from "../lib/utils";
 import { useCurrentUser } from "../hooks/useCurrentUser";
+import { MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
+import {
+  Settings, Keyboard, SlidersHorizontal, CircleUser, History, Rss, ListChecks,
+  FileText, FolderGit2, CalendarClock, ArrowLeftRight, ScrollText, Globe, LogOut,
+  BookOpen, ExternalLink, Radio, Newspaper,
+} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+
+function MenuItem({
+  icon: Icon,
+  label,
+  onClick,
+  trailing,
+  prominent,
+}: {
+  icon: LucideIcon;
+  label: string;
+  onClick: () => void;
+  trailing?: React.ReactNode;
+  prominent?: boolean;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full px-3 py-1.5 flex items-center gap-2.5 text-sm text-left transition-colors hover:bg-sol-bg-alt ${
+        prominent ? "text-sol-text font-medium" : "text-sol-text"
+      }`}
+    >
+      <Icon className={`w-4 h-4 flex-shrink-0 ${prominent ? "text-sol-cyan" : "text-sol-text-dim"}`} />
+      <span className="flex-1 truncate">{label}</span>
+      {trailing}
+    </button>
+  );
+}
 
 function UrlBarModal({ onClose }: { onClose: () => void }) {
   const router = useRouter();
@@ -112,7 +146,8 @@ export function UserMenu() {
   const displayName = user?.name || user?.email?.split("@")[0] || "User";
   const isAdmin = user?.role === "admin";
   const isLocal = typeof window !== "undefined" && window.location.hostname.includes("local.");
-  const menuBtnClass = "w-full px-4 py-2 text-left text-sm text-sol-base1 text-sol-text hover:bg-slate-700 hover:bg-sol-bg-alt transition-colors";
+
+  const go = (path: string) => { setOpen(false); router.push(path); };
 
   const handleEnvSwitch = () => {
     const { pathname, search, hash } = window.location;
@@ -124,6 +159,7 @@ export function UserMenu() {
 
   return (
     <div className="relative" ref={menuRef}>
+      <ShortcutTooltip label="Account & settings">
       <button
         onClick={() => setOpen(!open)}
         className="w-8 h-8 rounded-full flex items-center justify-center text-sol-text-muted hover:text-sol-text transition-colors"
@@ -134,12 +170,13 @@ export function UserMenu() {
           <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
         </svg>
       </button>
+      </ShortcutTooltip>
       {urlBarOpen && <UrlBarModal onClose={() => setUrlBarOpen(false)} />}
       {open && (
-        <div className="absolute right-0 mt-2 w-56 bg-sol-base02 bg-sol-bg border border-sol-base01 border-sol-border rounded-lg shadow-lg py-1 z-50">
+        <div className="absolute right-0 mt-2 w-60 bg-sol-bg border border-sol-border rounded-lg shadow-lg py-1 z-50">
           <button
-            onClick={() => { setOpen(false); router.push(`/team/${user?.github_username || user?._id || ""}`); }}
-            className="w-full px-4 py-3 border-b border-sol-base01 border-sol-border text-left hover:bg-sol-bg-alt transition-colors"
+            onClick={() => go(`/team/${user?.github_username || user?._id || ""}`)}
+            className="w-full px-3 py-2.5 border-b border-sol-border text-left hover:bg-sol-bg-alt transition-colors"
           >
             <div className="flex items-center gap-2">
               <p className="text-sm font-medium text-sol-text">{displayName}</p>
@@ -151,81 +188,67 @@ export function UserMenu() {
               <p className="text-xs text-sol-base0 truncate">{user.email}</p>
             )}
           </button>
-          <button
-            onClick={() => { setOpen(false); router.push(`/team/${user?.github_username || user?._id || ""}`); }}
-            className={menuBtnClass}
-          >
-            Profile
-          </button>
-          <button
-            onClick={() => { setOpen(false); router.push("/timeline"); }}
-            className={menuBtnClass}
-          >
-            Timeline
-          </button>
-          <button
-            onClick={() => { setOpen(false); router.push("/feed"); }}
-            className={menuBtnClass}
-          >
-            Feed
-          </button>
-          <button
-            onClick={() => { setOpen(false); router.push("/tasks"); }}
-            className={menuBtnClass}
-          >
-            Tasks
-          </button>
-          <button
-            onClick={() => { setOpen(false); router.push("/docs"); }}
-            className={menuBtnClass}
-          >
-            Documents
-          </button>
-          <div className="border-t border-sol-border my-1" />
-          <button
-            onClick={() => { setOpen(false); toggleShortcutsPanel(); }}
-            className={menuBtnClass}
-          >
-            Keyboard shortcuts
-          </button>
-          <button
-            onClick={() => { setOpen(false); router.push("/settings"); }}
-            className={menuBtnClass}
-          >
-            Settings
-          </button>
+
+          <div className="py-1">
+            <MenuItem
+              icon={Settings}
+              label="Settings"
+              prominent
+              onClick={() => { setOpen(false); useInboxStore.getState().openSettingsModal(); }}
+              trailing={<MenuKeyCaps action="ui.openSettings" />}
+            />
+            <MenuItem
+              icon={Keyboard}
+              label="Keyboard shortcuts"
+              onClick={() => { setOpen(false); toggleShortcutsPanel(); }}
+              trailing={<MenuKeyCaps action="ui.toggleShortcutsHelp" />}
+            />
+            <MenuItem icon={SlidersHorizontal} label="Agent Config" onClick={() => go("/config")} />
+            <MenuItem
+              icon={BookOpen}
+              label="Documentation"
+              onClick={() => { setOpen(false); window.open("/documentation", "_blank", "noopener"); }}
+              trailing={<ExternalLink className="w-3.5 h-3.5 text-sol-text-dim" />}
+            />
+            <MenuItem
+              icon={Newspaper}
+              label="Changelog"
+              onClick={() => { setOpen(false); window.open("/changelog", "_blank", "noopener"); }}
+              trailing={<ExternalLink className="w-3.5 h-3.5 text-sol-text-dim" />}
+            />
+          </div>
+
+          <div className="border-t border-sol-border py-1">
+            <MenuItem icon={CircleUser} label="Profile" onClick={() => go(`/team/${user?.github_username || user?._id || ""}`)} />
+            <MenuItem icon={History} label="Timeline" onClick={() => go("/timeline")} />
+            <MenuItem icon={Rss} label="Feed" onClick={() => go("/feed")} />
+            <MenuItem icon={Radio} label="Crosstalk" onClick={() => go("/crosstalk")} />
+            <MenuItem icon={ListChecks} label="Tasks" onClick={() => go("/tasks")} />
+            <MenuItem icon={FileText} label="Documents" onClick={() => go("/docs")} />
+            <MenuItem icon={FolderGit2} label="Projects" onClick={() => go("/projects")} />
+            <MenuItem icon={CalendarClock} label="Routines" onClick={() => go("/routines")} />
+          </div>
+
           {isAdmin && (
-            <>
-              <div className="border-t border-sol-border my-1" />
-              <button onClick={handleEnvSwitch} className={menuBtnClass}>
-                <span className="flex items-center justify-between">
-                  Switch to {isLocal ? "prod" : "local"}
+            <div className="border-t border-sol-border py-1">
+              <MenuItem
+                icon={ArrowLeftRight}
+                label={`Switch to ${isLocal ? "prod" : "local"}`}
+                onClick={handleEnvSwitch}
+                trailing={
                   <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${isLocal ? "bg-sol-green/20 text-sol-green" : "bg-sol-red/20 text-sol-red"}`}>
                     {isLocal ? "local" : "prod"}
                   </span>
-                </span>
-              </button>
-              <button
-                onClick={() => { setOpen(false); router.push("/admin/daemon-logs"); }}
-                className={menuBtnClass}
-              >
-                Daemon logs
-              </button>
-              <button
-                onClick={() => { setOpen(false); setUrlBarOpen(true); }}
-                className={menuBtnClass}
-              >
-                URL bar
-              </button>
-            </>
+                }
+              />
+              <MenuItem icon={ScrollText} label="Daemon logs" onClick={() => go("/admin/daemon-logs")} />
+              <MenuItem icon={Globe} label="URL bar" onClick={() => { setOpen(false); setUrlBarOpen(true); }} />
+            </div>
           )}
-          <div className="border-t border-sol-border my-1" />
-          <button
-            onClick={handleLogout}
-            className={menuBtnClass}
-          >
-            Sign out
-          </button>
+
+          <div className="border-t border-sol-border py-1">
+            <MenuItem icon={LogOut} label="Sign out" onClick={handleLogout} />
+          </div>
         </div>
       )}
     </div>

@@ -5,12 +5,19 @@ cd "$(dirname "$0")/.."
 
 PREVIEW_ONLY=false
 FORCE_CLI=false
+SKIP_CLI_CHECKS=false
 for arg in "$@"; do
   case "$arg" in
     --preview) PREVIEW_ONLY=true ;;
     --force) FORCE_CLI=true ;;
+    # Forward the CLI release's pre-deploy typecheck+test override (see
+    # packages/cli/scripts/deploy.sh --skip-checks). Discouraged: only when the
+    # only failures are known-unrelated/flaky and verified out-of-band.
+    --skip-checks) SKIP_CLI_CHECKS=true ;;
   esac
 done
+SKIP_CHECKS_FLAG=""
+$SKIP_CLI_CHECKS && SKIP_CHECKS_FLAG="--skip-checks"
 
 echo "=== Codecast Full Deployment ==="
 if $PREVIEW_ONLY; then
@@ -94,9 +101,9 @@ fi
 
 if $CLI_NEEDS_DEPLOY; then
   if $FORCE_CLI; then
-    ./scripts/deploy.sh --force
+    ./scripts/deploy.sh --force $SKIP_CHECKS_FLAG
   else
-    ./scripts/deploy.sh
+    ./scripts/deploy.sh $SKIP_CHECKS_FLAG
   fi
   CURRENT_VERSION=$(grep '"version"' package.json | head -1 | sed 's/.*"version": "\(.*\)".*/\1/')
   # Re-read hash AFTER deploy.sh (which may have committed a version bump)

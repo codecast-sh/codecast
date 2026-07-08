@@ -9,14 +9,57 @@ import {
 
 export const CLAUDE_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export const CLAUDE_AUTO_TRIM_THRESHOLD_TOKENS = 120_000;
-export const CLAUDE_AUTO_TRIM_TARGET_TOKENS = 100_000;
+// Single knob for how much of a long conversation survives reconstitution into a
+// local Claude session. THRESHOLD = "trim if the import is estimated above this";
+// TARGET = "trim down to roughly this". Sized to leave ~40k of headroom under a
+// 200k window (system prompt + tools + the first response), and far more on the
+// 1M-context models, while still keeping the session small enough that /compact
+// works. Every reconstitution/import/fork site imports these — don't redeclare.
+export const CLAUDE_AUTO_TRIM_THRESHOLD_TOKENS = 180_000;
+export const CLAUDE_AUTO_TRIM_TARGET_TOKENS = 160_000;
 export const CLAUDE_CONTEXT_LIMIT_TOKENS = 200_000;
 
 export interface RewriteSubagentJsonlResult {
   resumeId: string;
   newJsonlPath?: string;
   rewrote: boolean;
+}
+
+/**
+ * Copy a session JSONL next to itself under a new session id, rewriting the
+ * per-line `sessionId` fields to match. Message content bytes are untouched,
+ * so the resumed session's prompt prefix — and Claude's server-side prompt
+ * cache — stay identical to the source. Trims any partially-flushed trailing
+ * line (the source may be a LIVE session mid-append). Idempotent: an existing
+ * target is returned as-is. Returns the new path, or null when the source is
+ * missing.
+ */
+export function copyJsonlAsSession(
+  sourceJsonlPath: string,
+  sourceSessionId: string,
+  targetSessionId: string,
+): string | null {
+  if (!fs.existsSync(sourceJsonlPath)) return null;
+  const newPath = path.join(path.dirname(sourceJsonlPath), `${targetSessionId}.jsonl`);
+  if (fs.existsSync(newPath)) return newPath;
+  let raw = fs.readFileSync(sourceJsonlPath, "utf-8");
+  // A live writer may have flushed a partial tail line. Drop it only if it
+  // isn't complete JSON — a final line that merely lacks its newline is kept.
+  const lastNewline = raw.lastIndexOf("\n");
+  if (lastNewline !== raw.length - 1) {
+    const tail = raw.slice(lastNewline + 1);
+    try {
+      JSON.parse(tail);
+    } catch {
+      raw = raw.slice(0, lastNewline + 1);
+    }
+  }
+  const rewritten = raw.replace(
+    new RegExp(`"sessionId"\\s*:\\s*"${sourceSessionId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`, "g"),
+    `"sessionId":"${targetSessionId}"`,
+  );
+  fs.writeFileSync(newPath, rewritten);
+  return newPath;
 }
 
 /**
@@ -30,17 +73,37 @@ export function rewriteSubagentJsonlToUuid(
   sourceJsonlPath: string,
 ): RewriteSubagentJsonlResult {
   if (CLAUDE_UUID_RE.test(sessionId)) return { resumeId: sessionId, rewrote: false };
-  if (!fs.existsSync(sourceJsonlPath)) return { resumeId: sessionId, rewrote: false };
-
   const newUuid = crypto.randomUUID();
-  const newPath = path.join(path.dirname(sourceJsonlPath), `${newUuid}.jsonl`);
-  const raw = fs.readFileSync(sourceJsonlPath, "utf-8");
-  const rewritten = raw.replace(
-    new RegExp(`"sessionId"\\s*:\\s*"${sessionId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`, "g"),
-    `"sessionId":"${newUuid}"`,
-  );
-  fs.writeFileSync(newPath, rewritten);
+  const newPath = copyJsonlAsSession(sourceJsonlPath, sessionId, newUuid);
+  if (!newPath) return { resumeId: sessionId, rewrote: false };
   return { resumeId: newUuid, newJsonlPath: newPath, rewrote: true };
+}
+
+/**
+ * True for session ids minted by the server-side fork/handoff flow
+ * (`forked-<originalSessionId>-<uuid>`, see convex conversations.ts). A JSONL
+ * under such an id only ever exists locally as a daemon-written reconstitution
+ * artifact — the live transcript is the UUID copy made for `claude --resume`.
+ */
+export function isForkArtifactSessionId(sessionId: string): boolean {
+  return sessionId.startsWith("forked-");
+}
+
+/**
+ * Delete the source JSONL left behind after copying a fork artifact to its
+ * resumable UUID. Left on disk, the sync watcher rediscovers it as an unknown
+ * session (its conversation mapping just moved to the UUID copy) and mints a
+ * frozen doppelgänger conversation that receives input but never output.
+ * Subagent (`agent-*`) sources are real transcripts and are left alone.
+ */
+export function removeForkArtifactJsonl(sessionId: string, sourceJsonlPath: string): boolean {
+  if (!isForkArtifactSessionId(sessionId)) return false;
+  try {
+    fs.unlinkSync(sourceJsonlPath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

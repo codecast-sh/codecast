@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { useInboxStore } from "@/store/inboxStore";
-import { isNonTabRoute, shouldUseTabRouting } from "./tabRouting";
+import { isNonTabRoute, shouldUseTabRouting, tabNavigate } from "./tabRouting";
 
 const inboxTab = { id: "tab_1", title: "Inbox", path: "/inbox", createdAt: 1 };
 
@@ -23,6 +23,16 @@ describe("isNonTabRoute", () => {
       "/docs", "/docs/y", "/plans", "/projects", "/team", "/cli",
     ]) {
       expect(isNonTabRoute(p)).toBe(false);
+    }
+  });
+
+  // Public profiles live at the ROOT as a bare handle (/:username), rendered
+  // full-page outside the shell. A bare single segment that isn't a known
+  // in-shell route must be treated as non-tab, or a signed-in user's in-app
+  // click to /<handle> gets intercepted into a blank TabContent pane.
+  it("treats root-level profile handles as outside the tab shell", () => {
+    for (const p of ["/ashot", "/jane-doe", "/some_user", "/ashot?ref=x"]) {
+      expect(isNonTabRoute(p)).toBe(true);
     }
   });
 });
@@ -55,5 +65,50 @@ describe("shouldUseTabRouting", () => {
   it("does NOT intercept when no tab is active", () => {
     useInboxStore.setState({ tabs: [], activeTabId: null });
     expect(shouldUseTabRouting("/conversation/abc", "/inbox")).toBe(false);
+  });
+});
+
+describe("tabNavigate", () => {
+  let calls: Array<{ op: "push" | "replace"; url: string; state: any }>;
+  const realWindow = (globalThis as any).window;
+
+  beforeEach(() => {
+    useInboxStore.setState({ tabs: [inboxTab], activeTabId: inboxTab.id });
+    calls = [];
+    (globalThis as any).window = {
+      location: { pathname: "/inbox", search: "" },
+      history: {
+        pushState: (state: any, _t: string, url: string) => calls.push({ op: "push", url, state }),
+        replaceState: (state: any, _t: string, url: string) => calls.push({ op: "replace", url, state }),
+      },
+    };
+  });
+
+  afterEach(() => {
+    if (realWindow === undefined) delete (globalThis as any).window;
+    else (globalThis as any).window = realWindow;
+  });
+
+  it("pushes a new history entry for a navigation to a different path", () => {
+    tabNavigate("/tasks", "push");
+    expect(calls).toEqual([{ op: "push", url: "/tasks", state: { tabNav: true, tabId: "tab_1" } }]);
+  });
+
+  // A push whose target equals the current URL must NOT stack a duplicate entry —
+  // otherwise re-selecting the current page would pile up dead back-stack entries.
+  it("downgrades a same-URL push to replace", () => {
+    tabNavigate("/inbox", "push");
+    expect(calls).toEqual([{ op: "replace", url: "/inbox", state: { tabNav: true, tabId: "tab_1" } }]);
+  });
+
+  it("replaces (no new entry) in replace mode", () => {
+    tabNavigate("/tasks", "replace");
+    expect(calls[0].op).toBe("replace");
+  });
+
+  it("mirrors the navigation into the active tab's stored path", () => {
+    tabNavigate("/tasks/ct-1", "push");
+    const tab = useInboxStore.getState().tabs.find((t) => t.id === "tab_1");
+    expect(tab?.path).toBe("/tasks/ct-1");
   });
 });

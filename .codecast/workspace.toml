@@ -1,0 +1,29 @@
+# .codecast/workspace.toml — shared workspace manifest (tracked in git).
+#
+# Drives BOTH `cast workspace acquire` (CLI) and the web "isolated worktree"
+# toggle (daemon → acquireWorkspace). When a worktree is created, the files in
+# `copy` are pulled in, `install` runs, and each [ports.*] entry is allocated a
+# free port exposed to the worktree as PORT_<NAME>.
+# Schema: https://codecast.sh/docs/workspace
+
+[setup]
+# Gitignored secrets/config a worktree needs to actually run web + convex + cli.
+# (git worktrees do not inherit these — they live outside version control.)
+copy = [
+  ".env",
+  ".env.local",
+  "packages/convex/.env.local",
+  "packages/web/.env.local",
+  "packages/cli/.env.local",
+]
+# A fresh worktree has its own (empty) node_modules — bun doesn't share them
+# across worktrees, so install once on creation. If this fails, the daemon
+# falls back to a bare worktree rather than blocking the session.
+install = ["bun install"]
+
+# Per-worktree web dev server port. `acquire` picks the first free port at/after
+# `base` and exposes it as PORT_WEB, so parallel worktrees never collide.
+# Run the dev server with it, e.g.  vite --port "$PORT_WEB"
+[ports.web]
+base = 3201
+range = 20

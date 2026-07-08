@@ -3,6 +3,7 @@ import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useParams } from "next/navigation";
 import { MarkdownRenderer } from "../../../../components/tools/MarkdownRenderer";
+import { AppLoader } from "../../../../components/AppLoader";
 
 const DOC_TYPE_LABELS: Record<string, { label: string; color: string }> = {
   plan: { label: "Plan", color: "text-sol-blue" },
@@ -45,9 +46,7 @@ export default function SharedDocClient() {
 
   if (doc === undefined) {
     return (
-      <main className="h-screen flex flex-col bg-sol-base03 items-center justify-center">
-        <div className="text-sol-text-dim text-sm">Loading...</div>
-      </main>
+<AppLoader className="min-h-0 h-screen bg-sol-base03" />
     );
   }
 

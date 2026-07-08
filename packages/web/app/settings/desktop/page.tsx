@@ -1,7 +1,15 @@
 import { useState, useCallback } from "react";
 import { useEventListener } from "../../../hooks/useEventListener";
 import { useMountEffect } from "../../../hooks/useMountEffect";
-import { isElectron } from "../../../lib/desktop";
+import {
+  isElectron,
+  getAppVersion,
+  checkDesktopUpdate,
+  onUpdateStatus,
+  restartForUpdate,
+  checkForUpdate,
+} from "../../../lib/desktop";
+import { AppLoader } from "../../../components/AppLoader";
 
 const SHORTCUT_LABELS: Record<string, string> = {
   toggleWindow: "Toggle Main Window",
@@ -89,6 +97,82 @@ function ShortcutRecorder({
   );
 }
 
+// At-a-glance version readout + update control, mirroring the global banner's
+// state machine (DesktopProvider) but as a passive settings row. Reflects the
+// in-process updater's live IPC status (downloading % / ready) when present.
+function DesktopVersionSection() {
+  const [current, setCurrent] = useState<string | null>(null);
+  const [available, setAvailable] = useState<string | null>(null);
+  const [ipc, setIpc] = useState<{ status: string; version?: string; percent?: number } | null>(null);
+  const [checking, setChecking] = useState(false);
+
+  useMountEffect(() => {
+    getAppVersion().then(setCurrent);
+    checkDesktopUpdate().then((u) => setAvailable(u?.latest ?? null));
+    onUpdateStatus(setIpc);
+  });
+
+  const ready = ipc?.status === "ready";
+  const downloading = ipc?.status === "downloading";
+  const latest = ipc?.version ?? available;
+
+  let statusLine: string;
+  if (ready) statusLine = `v${latest} is ready to install`;
+  else if (downloading) statusLine = `Downloading v${latest}… ${ipc?.percent ?? 0}%`;
+  else if (latest) statusLine = `v${latest} is available`;
+  else if (checking) statusLine = "Checking for updates…";
+  else statusLine = "You're on the latest version";
+
+  const runCheck = () => {
+    setChecking(true);
+    checkForUpdate({ manual: true });
+    // Re-poll the feed so the at-rest "available" readout refreshes even if the
+    // in-process updater isn't present (older build) and emits no IPC.
+    setTimeout(() => {
+      checkDesktopUpdate().then((u) => setAvailable(u?.latest ?? null));
+      setChecking(false);
+    }, 4000);
+  };
+
+  return (
+    <div className="flex items-center justify-between py-3 px-4 rounded-lg border border-sol-border/60 bg-sol-bg-alt/30">
+      <div className="min-w-0">
+        <div className="text-sm font-medium text-sol-text">Codecast Desktop</div>
+        <div className="text-xs text-sol-text-dim mt-0.5">
+          {current ? `Version ${current} — ${statusLine}` : statusLine}
+        </div>
+      </div>
+      <div className="flex items-center gap-2 flex-shrink-0">
+        {ready ? (
+          <button
+            onClick={() => restartForUpdate()}
+            className="rounded-md bg-sol-cyan px-3 py-1.5 text-xs font-medium text-sol-bg transition-opacity hover:opacity-90"
+          >
+            Restart now
+          </button>
+        ) : downloading ? (
+          <span className="text-xs text-sol-cyan">{ipc?.percent ?? 0}%</span>
+        ) : latest ? (
+          <button
+            onClick={() => checkForUpdate({ manual: false })}
+            className="rounded-md bg-sol-cyan px-3 py-1.5 text-xs font-medium text-sol-bg transition-opacity hover:opacity-90"
+          >
+            Update now
+          </button>
+        ) : (
+          <button
+            onClick={runCheck}
+            disabled={checking}
+            className="rounded-md border border-sol-border px-3 py-1.5 text-xs text-sol-text hover:border-sol-text-dim transition-colors disabled:opacity-50"
+          >
+            {checking ? "Checking…" : "Check for updates"}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function DesktopSettingsPage() {
   const [shortcuts, setShortcuts] = useState<Record<string, string> | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
@@ -115,11 +199,19 @@ export default function DesktopSettingsPage() {
   }
 
   if (!shortcuts) {
-    return <div className="text-sol-text-dim text-sm py-4">Loading...</div>;
+    return <AppLoader className="min-h-0 bg-transparent py-10" size={28} />;
   }
 
   return (
     <div className="space-y-6">
+      <div>
+        <h2 className="text-lg font-semibold text-sol-text mb-1">About</h2>
+        <p className="text-sm text-sol-text-dim mb-3">
+          Updates download in the background; you choose when to restart and install.
+        </p>
+        <DesktopVersionSection />
+      </div>
+
       <div>
         <h2 className="text-lg font-semibold text-sol-text mb-1">Keyboard Shortcuts</h2>
         <p className="text-sm text-sol-text-dim">

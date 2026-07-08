@@ -1,15 +1,17 @@
-import { useState, useCallback, useRef, memo, useMemo } from "react";
+import { useState, useCallback, useRef, memo, useMemo, useDeferredValue } from "react";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useEventListener } from "../../hooks/useEventListener";
 import { useShortcutContext } from "../../shortcuts";
 import { useQuery, useMutation } from "convex/react";
 import { useSearchParams } from "next/navigation";
+import { useTabContext } from "../../components/TabContent";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { KeyCap } from "../../components/KeyboardShortcutsHelp";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
+import { AppLoader } from "../../components/AppLoader";
 import { ConversationDiffLayout } from "../../components/ConversationDiffLayout";
 import { ConversationData } from "../../components/ConversationView";
 import { shareOrigin } from "../../lib/utils";
@@ -19,11 +21,23 @@ import { SharePopover } from "../../components/SharePopover";
 import { ActivityFeed } from "../../components/ActivityFeed";
 import { PlanContextPanel } from "../../components/PlanContextPanel";
 import { WorkflowContextPanel } from "../../components/WorkflowContextPanel";
+import { ScheduleContextPanel } from "../../components/ScheduleContextPanel";
 import { toast } from "sonner";
-import { animatedStashSession } from "../../store/undoActions";
+import { animatedHideSession } from "../../store/undoActions";
 import { cleanUserMessage } from "../../components/GlobalSessionPanel";
 
-const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, onSendAndAdvance, onSendAndDismiss, lastUserMessage, sessionError, onBack, targetMessageId, highlightQuery, onClearHighlight }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; onSendAndDismiss?: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string; highlightQuery?: string; onClearHighlight?: () => void }) {
+const InboxConversation = memo(function InboxConversation({ sessionId: liveSessionId, isIdle, onSendAndAdvance, onSendAndDismiss, lastUserMessage, sessionError, onBack, targetMessageId, targetTimestamp, highlightQuery, onClearHighlight }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; onSendAndDismiss?: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string; targetTimestamp?: number; highlightQuery?: string; onClearHighlight?: () => void }) {
+  // Non-blocking switch: the heavy work of a session switch is mounting the new
+  // conversation's message tree (every block keyed by msg._id unmounts/remounts,
+  // re-parsing markdown). Defer the id the BODY renders from so a switch stays
+  // interruptible — React keeps the previous conversation painted and
+  // interactive while it mounts the next one at transition priority, instead of
+  // freezing the main thread on one synchronous render. The parent's sidebar
+  // highlight still moves instantly off the live id. Renaming the prop to
+  // liveSessionId means every existing reference below reads the deferred value,
+  // so the whole pane (body + banners + resume target) stays self-consistent and
+  // swaps atomically when the next conversation is ready.
+  const sessionId = useDeferredValue(liveSessionId);
   const {
     conversation,
     hasMoreAbove,
@@ -36,12 +50,12 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
     jumpToEnd,
     jumpToTimestamp,
     effectiveTargetMessageId,
-  } = useConversationMessages(sessionId, targetMessageId);
+    isJumpingToTarget,
+  } = useConversationMessages(sessionId, targetMessageId, undefined, targetTimestamp);
 
-  const resumeSession = useMutation(api.users.resumeSession);
-  const restartSessionMutation = useMutation(api.conversations.restartSession);
-  const setPrivacy = useMutation(api.conversations.setPrivacy);
-  const setTeamVisibility = useMutation(api.conversations.setTeamVisibility);
+  const convCommand = useInboxStore((s) => s.convCommand);
+  const setPrivacy = useInboxStore((s) => s.setPrivacy);
+  const setTeamVisibility = useInboxStore((s) => s.setTeamVisibility);
   const generateShareLink = useMutation(api.conversations.generateShareLink);
   const [resumeState, setResumeState] = useState<"idle" | "resuming" | "sent" | "failed">("idle");
   const forceRestartAttemptedRef = useRef(false);
@@ -70,7 +84,7 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
       if (!forceRestartAttemptedRef.current && isConvexId(sessionId)) {
         forceRestartAttemptedRef.current = true;
         try {
-          await restartSessionMutation({ conversation_id: sessionId as Id<"conversations"> });
+          await convCommand(sessionId, "restartSession");
           setResumeState("sent");
         } catch {
           setResumeState("failed");
@@ -80,26 +94,18 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
       }
     }, 45_000);
     return () => clearTimeout(timeout);
-  }, [resumeState, sessionId, restartSessionMutation]);
+  }, [resumeState, sessionId, convCommand]);
 
   const handleManualResume = useCallback(() => {
     setResumeState("resuming");
-    resumeSession({ conversation_id: sessionId as Id<"conversations"> })
+    convCommand(sessionId, "resumeSession")
       .then(() => setResumeState("sent"))
       .catch(() => setResumeState("failed"));
-  }, [sessionId, resumeSession]);
+  }, [sessionId, convCommand]);
 
   if (!conversation) {
     return (
-      <div className="h-full flex items-center justify-center text-sol-text-dim">
-        <div className="flex items-center gap-2">
-          <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-          </svg>
-          <span className="text-sm">Loading conversation...</span>
-        </div>
-      </div>
+      <AppLoader className="min-h-0 h-full bg-transparent" size={32} />
     );
   }
 
@@ -113,9 +119,9 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
       isPrivate={conversation.is_private !== false}
       teamVisibility={(conversation as any).team_visibility || (conversation as any).effective_team_visibility}
       hasShareToken={!!conversation.share_token}
-      hasTeam={!!(conversation as any).auto_shared}
-      onSetPrivate={async () => { await setPrivacy({ conversation_id: convId, is_private: true }); toast.success("Made private"); }}
-      onSetTeamVisibility={async (mode) => { await setTeamVisibility({ conversation_id: convId, team_visibility: mode }); toast.success(mode === "full" ? "Sharing full conversation with team" : "Sharing summary with team"); }}
+      hasTeam={!!(conversation as any).team_id}
+      onSetPrivate={() => { setPrivacy(convId, true); toast.success("Made private"); }}
+      onSetTeamVisibility={(mode) => { setTeamVisibility(convId, mode); toast.success(mode === "full" ? "Sharing full conversation with team" : "Sharing summary with team"); }}
       onGenerateShareLink={async () => { await generateShareLink({ conversation_id: convId }); return `${shareOrigin()}/conversation/${convId}`; }}
       shareUrl={shareUrl}
     />
@@ -182,10 +188,18 @@ const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, o
           backHref="/inbox"
           onBack={onBack}
           targetMessageId={effectiveTargetMessageId}
+          isJumpingToTarget={isJumpingToTarget}
           highlightQuery={highlightQuery}
           onClearHighlight={onClearHighlight}
           fallbackStickyContent={isOwnSession ? cleanUserMessage(lastUserMessage) : undefined}
           subHeaderContent={<>
+            {isOwnSession && (
+              <ScheduleContextPanel
+                conversationId={convId}
+                sessionId={(conversation as any).session_id}
+                agentTaskId={(conversation as any).agent_task_id}
+              />
+            )}
             {activePlanId && <PlanContextPanel planId={activePlanId} />}
             {workflowRunId && <WorkflowContextPanel workflowRunId={workflowRunId} />}
           </>}
@@ -204,6 +218,13 @@ function InboxShortcuts() {
 
 export function QueuePageClient() {
   const searchParams = useSearchParams();
+  // When this inbox lives inside a tab, only the ACTIVE tab owns global view
+  // state (currentSessionId, the URL, the sidebar highlight). A background tab
+  // stays mounted but renders FROZEN on its own ?s= param so its conversation
+  // and scroll position survive untouched until it's brought forward again.
+  // Outside the tab shell (web standalone), there's no context → always active.
+  const tabCtx = useTabContext();
+  const isActiveTab = tabCtx ? tabCtx.isActive : true;
 
   // Auto-open session panel when entering inbox (DashboardLayout renders it)
   useMountEffect(() => {
@@ -242,7 +263,7 @@ export function QueuePageClient() {
 
   // ID we're trying to navigate to that isn't yet in the queue
   const [pendingInjectId, setPendingInjectId] = useState<string | null>(null);
-  const [scrollTarget, setScrollTarget] = useState<{ sessionId: string; messageId: string } | null>(null);
+  const [scrollTarget, setScrollTarget] = useState<{ sessionId: string; messageId: string; timestamp?: number } | null>(null);
   const [activeHighlight, setActiveHighlight] = useState<string | undefined>(undefined);
 
   const shouldQueryDirect = pendingInjectId && isConvexId(pendingInjectId);
@@ -255,28 +276,47 @@ export function QueuePageClient() {
 
   // Select session from URL param -- only when the param actually changes
   const paramSessionId = searchParams.get("s") || null;
+  // Whether this tab's `?s=` target is already in the local cache. Used as the
+  // re-assert effect's dependency INSTEAD of the whole `sessions` object: that
+  // object gets a fresh reference on every daemon heartbeat (~4s, the only inbox
+  // channel that re-runs on heartbeats), and depending on it made the effect
+  // below re-fire constantly — snapping the view back to a stale `?s=` every few
+  // seconds. A boolean only flips when the target appears/disappears, so the
+  // effect now runs on the events that actually matter: param change, tab
+  // activation, or the target loading in.
+  const paramSessionLoaded = paramSessionId != null && !!sessions[paramSessionId];
+  // Drives global view state from THIS tab's ?s= param — but only while this is
+  // the active tab (a background tab must never reach into global state). It also
+  // doubles as the activation handler: when a backgrounded tab is brought
+  // forward, a sibling may have moved global currentSessionId, so we re-assert
+  // this tab's session even if its param itself didn't change.
   useWatchEffect(() => {
-    if (!paramSessionId || paramSessionId === lastAppliedParamId.current) return;
-    if (Object.keys(sessions).length === 0 && !clientStateInitialized) return;
-    lastAppliedParamId.current = paramSessionId;
-    // Consume any pending highlight/scroll from the store (set by ConversationPageClient redirect)
+    if (!isActiveTab || !paramSessionId) return;
     const store = useInboxStore.getState();
-    if (store.pendingHighlightQuery) {
-      setActiveHighlight(store.pendingHighlightQuery);
-      useInboxStore.setState({ pendingHighlightQuery: null });
+    const paramChanged = paramSessionId !== lastAppliedParamId.current;
+    if (!paramChanged && store.currentSessionId === paramSessionId) return;
+    if (Object.keys(store.sessions).length === 0 && !clientStateInitialized) return;
+    lastAppliedParamId.current = paramSessionId;
+    if (paramChanged) {
+      // Consume any pending highlight/scroll from the store (set by ConversationPageClient redirect)
+      if (store.pendingHighlightQuery) {
+        setActiveHighlight(store.pendingHighlightQuery);
+        useInboxStore.setState({ pendingHighlightQuery: null });
+      }
+      if (store.pendingScrollToMessageId) {
+        setScrollTarget({ sessionId: paramSessionId, messageId: store.pendingScrollToMessageId, timestamp: store.pendingScrollToMessageTimestamp ?? undefined });
+        useInboxStore.setState({ pendingScrollToMessageId: null, pendingScrollToMessageTimestamp: null });
+      }
     }
-    if (store.pendingScrollToMessageId) {
-      setScrollTarget({ sessionId: paramSessionId, messageId: store.pendingScrollToMessageId });
-      useInboxStore.setState({ pendingScrollToMessageId: null });
-    }
-    if (sessions[paramSessionId]) {
+    if (store.sessions[paramSessionId]) {
+      if (store.showMySessions) setShowMySessions(false);
       navigateToSession(paramSessionId);
       setPendingInjectId(null);
       paramProcessedRef.current = true;
     } else {
       setPendingInjectId(paramSessionId);
     }
-  }, [paramSessionId, sessions, navigateToSession, clientStateInitialized]);
+  }, [paramSessionId, paramSessionLoaded, navigateToSession, clientStateInitialized, isActiveTab, setShowMySessions]);
 
   // Once we have the conversation data, inject it into the queue
   useWatchEffect(() => {
@@ -313,6 +353,9 @@ export function QueuePageClient() {
       has_pending: false,
       forked_from: directConv.forked_from || null,
       parent_message_uuid: directConv.parent_message_uuid || null,
+      // Carry the author so a deep-linked teammate session shows whose it is.
+      user_id: directConv.user_id,
+      author_name: directConv.user?.name ?? null,
     });
     setPendingInjectId(null);
     paramProcessedRef.current = true;
@@ -321,15 +364,17 @@ export function QueuePageClient() {
   // Handle store-based navigation (from CommandPalette, bookmarks, etc.)
   const pendingNavigateId = useInboxStore((s) => s.pendingNavigateId);
   const pendingScrollToMessageId = useInboxStore((s) => s.pendingScrollToMessageId);
+  const pendingScrollToMessageTimestamp = useInboxStore((s) => s.pendingScrollToMessageTimestamp);
   const pendingHighlightQuery = useInboxStore((s) => s.pendingHighlightQuery);
   useWatchEffect(() => {
     if (!pendingNavigateId) return;
     const scrollTarget = pendingScrollToMessageId;
+    const scrollTs = pendingScrollToMessageTimestamp;
     const highlight = pendingHighlightQuery;
-    useInboxStore.setState({ pendingNavigateId: null, pendingScrollToMessageId: null, pendingHighlightQuery: null, showMySessions: false });
+    useInboxStore.setState({ pendingNavigateId: null, pendingScrollToMessageId: null, pendingScrollToMessageTimestamp: null, pendingHighlightQuery: null, showMySessions: false });
     if (highlight) setActiveHighlight(highlight);
     if (scrollTarget) {
-      setScrollTarget({ sessionId: pendingNavigateId, messageId: scrollTarget });
+      setScrollTarget({ sessionId: pendingNavigateId, messageId: scrollTarget, timestamp: scrollTs ?? undefined });
     }
     if (sessions[pendingNavigateId]) {
       setPendingInjectId(null);
@@ -337,7 +382,7 @@ export function QueuePageClient() {
     } else {
       setPendingInjectId(pendingNavigateId);
     }
-  }, [pendingNavigateId, pendingScrollToMessageId, sessions, navigateToSession]);
+  }, [pendingNavigateId, pendingScrollToMessageId, pendingScrollToMessageTimestamp, sessions, navigateToSession]);
 
   // Consume pendingScrollToMessageId / pendingHighlightQuery on cache-hit navigation:
   // navigateToSession sets currentSessionId (or viewingDismissedId for a dismissed
@@ -355,23 +400,45 @@ export function QueuePageClient() {
     if (!viewSessionId) return;
     if (!pendingScrollToMessageId && !pendingHighlightQuery) return;
     const scrollTarget = pendingScrollToMessageId;
+    const scrollTs = pendingScrollToMessageTimestamp;
     const highlight = pendingHighlightQuery;
-    useInboxStore.setState({ pendingScrollToMessageId: null, pendingHighlightQuery: null });
+    useInboxStore.setState({ pendingScrollToMessageId: null, pendingScrollToMessageTimestamp: null, pendingHighlightQuery: null });
     if (highlight) setActiveHighlight(highlight);
     if (scrollTarget) {
-      setScrollTarget({ sessionId: viewSessionId, messageId: scrollTarget });
+      setScrollTarget({ sessionId: viewSessionId, messageId: scrollTarget, timestamp: scrollTs ?? undefined });
     }
-  }, [currentSessionId, viewingDismissedId, pendingNavigateId, pendingScrollToMessageId, pendingHighlightQuery]);
+  }, [currentSessionId, viewingDismissedId, pendingNavigateId, pendingScrollToMessageId, pendingScrollToMessageTimestamp, pendingHighlightQuery]);
 
   const prevSessionRef = useRef(currentSessionId);
   prevSessionRef.current = currentSessionId;
+
+  // One-shot deep-link scroll target. A bookmark/link/search jump sets
+  // `scrollTarget`, which drives `targetMessageId` (load the window AROUND that
+  // message + scroll to it once). We keep it for the WHOLE visit so target mode
+  // stays stable — clearing it mid-visit would flip useConversationMessages back
+  // to normal mode and swap the message window out from under the user. Instead
+  // we drop it only once we've navigated AWAY from the targeted session, so
+  // returning later opens at the live tail instead of re-jumping to the message.
+  const scrollTargetArrivedRef = useRef(false);
+  useWatchEffect(() => {
+    if (!scrollTarget) { scrollTargetArrivedRef.current = false; return; }
+    const viewSessionId = viewingDismissedId ?? currentSessionId;
+    if (viewSessionId === scrollTarget.sessionId) {
+      scrollTargetArrivedRef.current = true;
+    } else if (scrollTargetArrivedRef.current && viewSessionId) {
+      setScrollTarget(null);
+      scrollTargetArrivedRef.current = false;
+    }
+  }, [currentSessionId, viewingDismissedId, scrollTarget]);
 
   const handleSendAndAdvance = useCallback(() => {
     advanceToNext();
   }, [advanceToNext]);
 
+  // "Send and stash": the message needs a live agent to process it, so this
+  // hides without killing — never the killing dismiss.
   const handleSendAndDismiss = useCallback(() => {
-    if (currentSessionId) animatedStashSession(currentSessionId);
+    if (currentSessionId) animatedHideSession(currentSessionId, "stash");
   }, [currentSessionId]);
 
   const viewingDismissedSession = viewingDismissedId
@@ -385,7 +452,18 @@ export function QueuePageClient() {
     ? undefined
     : rawCurrentSession;
 
+  // What THIS pane renders. The active tab follows live global view state; a
+  // background tab freezes on its own ?s= param (its conversation, or the feed
+  // when it has none) so it stays exactly as left — same DOM, same scroll —
+  // regardless of what a sibling tab does to global state.
+  const renderSession = isActiveTab
+    ? currentSession
+    : (paramSessionId ? sessions[paramSessionId] ?? null : null);
+  const renderDismissedSession = isActiveTab ? viewingDismissedSession : null;
+  const renderShowMine = isActiveTab ? showMySessions : !paramSessionId;
+
   useWatchEffect(() => {
+    if (!isActiveTab) return;
     if (currentSession) {
       setCurrentConversation({
         conversationId: currentSession._id,
@@ -396,15 +474,26 @@ export function QueuePageClient() {
       });
       touchMru(currentSession._id);
     }
-  }, [currentSession?._id, currentSession?.project_path, currentSession?.git_root, currentSession?.agent_type, setCurrentConversation, touchMru]);
+  }, [currentSession?._id, currentSession?.project_path, currentSession?.git_root, currentSession?.agent_type, setCurrentConversation, touchMru, isActiveTab]);
 
+  // Machine adoption of a view when none exists. "adopt" is boot-only: the
+  // store rejects it before hydration completes (a live sync racing IDB must
+  // not pick top-of-inbox over the user's restored position) and after any
+  // view has been shown (a mid-session null — e.g. a background stub discard —
+  // must leave the view empty, never teleport to another session).
   useWatchEffect(() => {
+    if (!isActiveTab) return;
     if (currentSessionId || currentSession || showMySessions || viewingDismissedId || pendingInjectId) return;
-    if (sortedSessions.length > 0) setCurrentSession(sortedSessions[0]._id);
-  }, [currentSessionId, currentSession, showMySessions, viewingDismissedId, pendingInjectId, sortedSessions, setCurrentSession]);
+    if (sortedSessions.length > 0) setCurrentSession(sortedSessions[0]._id, "adopt");
+  }, [currentSessionId, currentSession, showMySessions, viewingDismissedId, pendingInjectId, sortedSessions, setCurrentSession, isActiveTab]);
 
-  // Sync URL when current session changes (but not before initial param is resolved)
+  // Sync URL when current session changes (but not before initial param is
+  // resolved). Only the active tab owns the address bar — a background pane must
+  // never write the shared URL to its own frozen session. The active tab's
+  // /conversation/<id> URL is normalized back to /inbox?s=<id> by stampedTabPath
+  // when it's backgrounded, keeping the tab on the inbox route.
   useWatchEffect(() => {
+    if (!isActiveTab) return;
     if (!paramProcessedRef.current) return;
     if (isPopstateRef.current) {
       isPopstateRef.current = false;
@@ -416,12 +505,19 @@ export function QueuePageClient() {
     if (!targetId) return;
     const targetPath = `/conversation/${targetId}`;
     if (window.location.pathname !== targetPath) {
-      window.history.replaceState({ inboxId: targetId }, "", targetPath);
+      // Switching from one session to another (URL already points at a session) is a
+      // real navigation — push so browser back/forward cycles through viewed sessions.
+      // The first resolution from the bare inbox (or a deep-link param) only
+      // canonicalizes the URL, so replace it to avoid a dead bare-inbox entry that
+      // would just auto-select again on back.
+      const switchingSessions = window.location.pathname.startsWith("/conversation/");
+      window.history[switchingSessions ? "pushState" : "replaceState"]({ inboxId: targetId }, "", targetPath);
     }
-  }, [currentSession?._id, viewingDismissedId]);
+  }, [currentSession?._id, viewingDismissedId, isActiveTab]);
 
   // Handle browser back/forward
   useEventListener("popstate", (e: PopStateEvent) => {
+    if (!isActiveTab) return;
     const url = new URL(window.location.href);
     const id = e.state?.inboxId
       || url.searchParams.get("s")
@@ -466,7 +562,7 @@ export function QueuePageClient() {
 
   const inboxContent = (
     <>
-      {showMySessions ? (
+      {renderShowMine ? (
         <div className="h-full overflow-y-auto" data-main-scroll>
           <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-8">
             <ErrorBoundary name="ActivityFeed" level="inline">
@@ -474,45 +570,37 @@ export function QueuePageClient() {
             </ErrorBoundary>
           </div>
         </div>
-      ) : viewingDismissedSession ? (
+      ) : renderDismissedSession ? (
         <ErrorBoundary name="Conversation" level="inline">
           <InboxConversation
-            sessionId={viewingDismissedSession._id}
-            isIdle={viewingDismissedSession.is_idle}
+            sessionId={renderDismissedSession._id}
+            isIdle={renderDismissedSession.is_idle}
             onSendAndAdvance={() => setViewingDismissedId(null)}
-            lastUserMessage={viewingDismissedSession.last_user_message}
-            sessionError={viewingDismissedSession.session_error}
+            lastUserMessage={renderDismissedSession.last_user_message}
+            sessionError={renderDismissedSession.session_error}
             onBack={handleBack}
-            targetMessageId={scrollTarget?.sessionId === viewingDismissedSession._id ? scrollTarget.messageId : undefined}
+            targetMessageId={scrollTarget?.sessionId === renderDismissedSession._id ? scrollTarget.messageId : undefined}
+            targetTimestamp={scrollTarget?.sessionId === renderDismissedSession._id ? scrollTarget.timestamp : undefined}
             highlightQuery={activeHighlight}
-            onClearHighlight={handleClearHighlight}
-          />
+            onClearHighlight={handleClearHighlight}          />
         </ErrorBoundary>
-      ) : currentSession ? (
+      ) : renderSession ? (
         <ErrorBoundary name="Conversation" level="inline">
           <InboxConversation
-            sessionId={currentSession._id}
-            isIdle={currentSession.is_idle}
+            sessionId={renderSession._id}
+            isIdle={renderSession.is_idle}
             onSendAndAdvance={handleSendAndAdvance}
             onSendAndDismiss={handleSendAndDismiss}
-            lastUserMessage={currentSession.last_user_message}
-            sessionError={currentSession.session_error}
+            lastUserMessage={renderSession.last_user_message}
+            sessionError={renderSession.session_error}
             onBack={handleBack}
-            targetMessageId={scrollTarget?.sessionId === currentSession._id ? scrollTarget.messageId : undefined}
+            targetMessageId={scrollTarget?.sessionId === renderSession._id ? scrollTarget.messageId : undefined}
+            targetTimestamp={scrollTarget?.sessionId === renderSession._id ? scrollTarget.timestamp : undefined}
             highlightQuery={activeHighlight}
-            onClearHighlight={handleClearHighlight}
-          />
+            onClearHighlight={handleClearHighlight}          />
         </ErrorBoundary>
       ) : pendingInjectId ? (
-        <div className="h-full flex items-center justify-center text-sol-text-dim">
-          <div className="flex items-center gap-2">
-            <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-            </svg>
-            <span className="text-sm">Loading session...</span>
-          </div>
-        </div>
+        <AppLoader className="min-h-0 h-full bg-transparent" size={32} />
       ) : sortedSessions.length > 0 ? (
         <div className="h-full" />
       ) : (

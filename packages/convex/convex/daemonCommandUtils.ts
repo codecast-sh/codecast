@@ -4,7 +4,7 @@ export type PendingDaemonCommand = {
   _creationTime?: number;
 };
 
-function extractConversationId(args: string | null | undefined): string | null {
+export function extractDaemonCommandConversationId(args: string | null | undefined): string | null {
   if (!args) return null;
   try {
     const parsed = JSON.parse(args);
@@ -30,7 +30,7 @@ export function hasRecentPendingDaemonCommand(
 ): boolean {
   return commands.some((entry) => {
     if (entry.command !== command) return false;
-    if (extractConversationId(entry.args) !== conversationId) return false;
+    if (extractDaemonCommandConversationId(entry.args) !== conversationId) return false;
     if (!entry._creationTime) return true;
     return now - entry._creationTime < dedupeWindowMs;
   });

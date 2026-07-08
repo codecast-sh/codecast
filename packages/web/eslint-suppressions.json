@@ -1,0 +1,145 @@
+{
+  "app/docs/page.tsx": {
+    "no-restricted-syntax": {
+      "count": 2
+    }
+  },
+  "app/schedules/page.tsx": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "app/sessions/page.tsx": {
+    "no-restricted-syntax": {
+      "count": 2
+    }
+  },
+  "app/team/[username]/page.tsx": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "components/ActivityFeed.tsx": {
+    "no-restricted-syntax": {
+      "count": 5
+    }
+  },
+  "components/BranchSelector.tsx": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "components/ConversationView.tsx": {
+    "no-restricted-syntax": {
+      "count": 2
+    }
+  },
+  "components/EntityIdPill.tsx": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "components/GenericListView.tsx": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "components/HtmlSnippet.tsx": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "components/MessageBrowserPopover.tsx": {
+    "no-restricted-syntax": {
+      "count": 5
+    }
+  },
+  "components/MessageReview.tsx": {
+    "no-restricted-syntax": {
+      "count": 3
+    }
+  },
+  "components/SelectionQuoteToolbar.tsx": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "components/TabBar.tsx": {
+    "no-restricted-syntax": {
+      "count": 2
+    }
+  },
+  "components/TabContent.tsx": {
+    "no-restricted-syntax": {
+      "count": 3
+    },
+    "react-hooks/rules-of-hooks": {
+      "count": 4
+    }
+  },
+  "components/TeamSetupDialog.tsx": {
+    "no-restricted-syntax": {
+      "count": 3
+    }
+  },
+  "components/WindowTaskbar.tsx": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "components/editor/ComposeEditor.tsx": {
+    "react/display-name": {
+      "count": 1
+    }
+  },
+  "components/ui/command.tsx": {
+    "react/no-unknown-property": {
+      "count": 1
+    }
+  },
+  "hooks/useDaemonHealth.ts": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "hooks/useMentionLinkNavigation.ts": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "hooks/useRecoveryPoll.ts": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "hooks/useSyncDocs.ts": {
+    "no-restricted-syntax": {
+      "count": 2
+    }
+  },
+  "hooks/useSyncInboxSessions.ts": {
+    "no-restricted-syntax": {
+      "count": 4
+    }
+  },
+  "hooks/useSyncTasks.ts": {
+    "no-restricted-syntax": {
+      "count": 3
+    }
+  },
+  "src/App.tsx": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  },
+  "tips/TipNudge.tsx": {
+    "no-restricted-syntax": {
+      "count": 2
+    }
+  },
+  "tips/TipWhisper.tsx": {
+    "no-restricted-syntax": {
+      "count": 1
+    }
+  }
+}

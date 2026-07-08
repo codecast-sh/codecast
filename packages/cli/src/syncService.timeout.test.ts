@@ -146,7 +146,9 @@ describe("SyncService.offloadImages", () => {
   it("replaces data with storageId on successful upload (no raw base64 left)", async () => {
     const sync = make();
     (sync as any).uploadImage = async () => "kg-stored";
-    const msgs = [{ images: [{ mediaType: "image/png", data: hugeImg }] }];
+    const msgs: Array<{
+      images?: Array<{ mediaType: string; data?: string; storageId?: string; toolUseId?: string }>;
+    }> = [{ images: [{ mediaType: "image/png", data: hugeImg }] }];
     await sync.offloadImages(msgs);
     expect(msgs[0].images).toEqual([{ mediaType: "image/png", storageId: "kg-stored", toolUseId: undefined }]);
     expect((msgs[0].images![0] as any).data).toBeUndefined();

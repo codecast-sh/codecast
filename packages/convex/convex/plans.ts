@@ -1,10 +1,16 @@
 import { v } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { mutation, query } from "./functions";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createDataContext, scopeByProject, scopedFetch } from "./data";
 import { nextShortId } from "./counters";
+// Owner-or-team access check for a plan. Moved to lib/access.ts (Wave-1
+// auth/access seam). Imported for local use here and re-exported so existing
+// callers keep working unchanged.
+import { canAccessPlan } from "./lib/access";
+import { isTeamMember } from "./privacy";
+export { canAccessPlan };
 
 async function recalcProgress(ctx: any, taskIds: Id<"tasks">[]) {
   let total = 0, done = 0, in_progress = 0, open = 0;
@@ -36,16 +42,6 @@ async function recalcProgress(ctx: any, taskIds: Id<"tasks">[]) {
   };
 }
 
-
-async function canAccessPlan(ctx: any, userId: Id<"users">, plan: any): Promise<boolean> {
-  if (plan.user_id === userId) return true;
-  if (!plan.team_id) return false;
-  const membership = await ctx.db
-    .query("team_memberships")
-    .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", plan.team_id))
-    .first();
-  return !!membership;
-}
 
 // Merge legacy per-type arrays with new unified entries into a single sorted timeline.
 // Deduplicates by timestamp+content to avoid showing entries written to both old and new.
@@ -112,11 +108,8 @@ export const create = mutation({
 
     let project_id: Id<"projects"> | undefined;
     if (args.project_id) {
-      const project = await ctx.db
-        .query("projects")
-        .filter((q) => q.eq(q.field("_id"), args.project_id as any))
-        .first();
-      if (project) project_id = project._id;
+      const pid = ctx.db.normalizeId("projects", args.project_id);
+      if (pid && (await ctx.db.get(pid))) project_id = pid;
     }
 
     let created_from_conversation_id: Id<"conversations"> | undefined;
@@ -193,6 +186,12 @@ export const createFromTemplate = mutation({
 
     const template = await ctx.db.get(args.template_id);
     if (!template) throw new Error("Template not found");
+    // Templates carry a goal + task list and stamp their team_id onto the new
+    // plan. Only the owner or a member of the template's team may instantiate it.
+    const ownsTemplate = String(template.user_id) === String(auth.userId);
+    if (!ownsTemplate && !(template.team_id && (await isTeamMember(ctx, auth.userId, template.team_id)))) {
+      throw new Error("Template not found");
+    }
 
     const now = Date.now();
     const short_id = await nextShortId(ctx.db, "pl");
@@ -267,6 +266,8 @@ export const fork = mutation({
       .withIndex("by_short_id", (q) => q.eq("short_id", args.source_short_id))
       .first();
     if (!source) throw new Error("Source plan not found");
+    // Forking clones the plan's goal, tasks, and team_id — gate on read access.
+    if (!(await canAccessPlan(ctx, auth.userId, source))) throw new Error("Source plan not found");
 
     const now = Date.now();
     const short_id = await nextShortId(ctx.db, "pl");
@@ -448,6 +449,7 @@ export const addComment = mutation({
       .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id))
       .first();
     if (!plan) throw new Error("Plan not found");
+    if (!(await canAccessPlan(ctx, auth.userId, plan))) throw new Error("Plan not found");
 
     const entries = (plan as any).entries || [];
     const entry: Record<string, any> = {
@@ -483,6 +485,7 @@ export const addLogEntry = mutation({
       .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id))
       .first();
     if (!plan) throw new Error("Plan not found");
+    if (!(await canAccessPlan(ctx, auth.userId, plan))) throw new Error("Plan not found");
 
     const entries = (plan as any).entries || [];
     entries.push({ type: "progress", timestamp: Date.now(), content: args.entry, session_id: args.session_id });
@@ -506,6 +509,7 @@ export const bindSession = mutation({
       .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id))
       .first();
     if (!plan) throw new Error("Plan not found");
+    if (!(await canAccessPlan(ctx, auth.userId, plan))) throw new Error("Plan not found");
 
     const conv = await ctx.db
       .query("conversations")
@@ -553,6 +557,7 @@ export const associatePlan = mutation({
       .withIndex("by_short_id", (q) => q.eq("short_id", args.plan_id))
       .first();
     if (!plan) throw new Error("Plan not found");
+    if (!(await canAccessPlan(ctx, auth.userId, plan))) throw new Error("Plan not found");
 
     const conv = await ctx.db
       .query("conversations")
@@ -590,6 +595,7 @@ export const unbindSession = mutation({
       .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id))
       .first();
     if (!plan) throw new Error("Plan not found");
+    if (!(await canAccessPlan(ctx, auth.userId, plan))) throw new Error("Plan not found");
 
     if (plan.current_session_id) {
       const conv = await ctx.db.get(plan.current_session_id);
@@ -914,11 +920,15 @@ export const list = query({
     const db = await createDataContext(ctx, { userId: auth.userId, project_path: args.project_path });
 
     let plans;
+    // by_project_id is a global index — a client-supplied project_id could
+    // surface another user's/team's plans, so filter that branch by access.
+    let needsAccessFilter = false;
     if (args.project_id) {
       plans = await ctx.db
         .query("plans")
         .withIndex("by_project_id", (q) => q.eq("project_id", args.project_id as any))
         .collect();
+      needsAccessFilter = true;
     } else if (args.team && db.workspace.type === "team") {
       const teamId = (db.workspace as { type: "team"; teamId: Id<"teams"> }).teamId;
       if (args.status) {
@@ -939,6 +949,18 @@ export const list = query({
         .collect();
     } else {
       plans = await db.query("plans").collect();
+    }
+
+    if (needsAccessFilter) {
+      const memberships = await ctx.db
+        .query("team_memberships")
+        .withIndex("by_user_id", (q: any) => q.eq("user_id", auth.userId))
+        .collect();
+      const memberTeamIds = new Set(memberships.map((m: any) => String(m.team_id)));
+      plans = plans.filter((p: any) =>
+        String(p.user_id) === String(auth.userId) ||
+        (p.team_id && memberTeamIds.has(String(p.team_id)))
+      );
     }
 
     if (!args.status && !args.include_all) {
@@ -981,6 +1003,7 @@ export const snippet = query({
     }
 
     if (!plan) return { snippet: "", task_count: 0 };
+    if (!(await canAccessPlan(ctx, auth.userId, plan))) return { snippet: "", task_count: 0 };
 
     const lines: string[] = [];
     lines.push(`Plan: ${plan.title} (${plan.short_id}) [${plan.status}]`);
@@ -1077,11 +1100,8 @@ export const webCreate = mutation({
 
     let project_id: Id<"projects"> | undefined;
     if (args.project_id) {
-      const project = await ctx.db
-        .query("projects")
-        .filter((q) => q.eq(q.field("_id"), args.project_id as any))
-        .first();
-      if (project) project_id = project._id;
+      const pid = ctx.db.normalizeId("projects", args.project_id);
+      if (pid && (await ctx.db.get(pid))) project_id = pid;
     }
 
     const id = await db.insert("plans", {
@@ -1184,7 +1204,13 @@ export const webGet = query({
         .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id!))
         .first();
     } else if (args.id) {
-      plan = await ctx.db.get(args.id as Id<"plans">);
+      // ids arrive from clickable pills/links embedded in untrusted message and
+      // doc content; a malformed or cross-table id would make ctx.db.get throw
+      // ("Invalid ID length") and crash the page. normalizeId returns null for
+      // anything that isn't a plans id, so we degrade to "not found". (Mirrors
+      // docs.webGet.)
+      const planId = ctx.db.normalizeId("plans", args.id);
+      plan = planId ? await ctx.db.get(planId) : null;
     }
 
     if (!plan) return null;
@@ -1316,6 +1342,7 @@ export const qualityScore = query({
       .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id))
       .first();
     if (!plan) return null;
+    if (!(await canAccessPlan(ctx, auth.userId, plan))) return null;
 
     const tasks: any[] = [];
     for (const tid of plan.task_ids || []) {
@@ -1391,6 +1418,29 @@ export const webList = query({
   },
 });
 
+// Change-feed batch fetch: current state for a set of plan ids the user can
+// access (own or team). Same enriched shape as webList (reuses
+// enrichPlansWithLiveness), so the client merges via syncTable("plans"). No
+// status filter — an abandoned/done plan comes back with its status and the
+// client's read-time filter hides it. Inaccessible / gone ids are omitted; the
+// feed drives the prune. See changeFeed.ts.
+export const webGetByIds = query({
+  args: { ids: v.array(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    const result: any[] = [];
+    for (const raw of args.ids.slice(0, 300)) {
+      const id = ctx.db.normalizeId("plans", raw);
+      if (!id) continue;
+      const plan = await ctx.db.get(id);
+      if (!plan || !(await canAccessPlan(ctx, userId, plan))) continue;
+      result.push(plan);
+    }
+    return enrichPlansWithLiveness(ctx, userId, result);
+  },
+});
+
 async function enrichPlansWithLiveness(ctx: any, userId: any, plans: any[]) {
   const now = Date.now();
   const HEARTBEAT_ALIVE_MS = 90 * 1000;
@@ -1424,10 +1474,12 @@ export const webMentionList = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) return { items: [] };
 
-    // Bound the response below Convex's 8192-array limit. See tasks.webMentionList
-    // for the rationale — same shape, same fallback to mentionSearch for stale items.
-    const MAX_TOTAL = 4000;
-    const MAX_PER_TEAM = 1500;
+    // Bound the scan to a small recent slice — the client only renders the
+    // top-6-per-type "recents" (see useMentionQuery); completeness comes from
+    // `mentionSearch`. `.take()` loads whole rows, so large caps risk the 64 MB
+    // isolate cap (see docs.webMentionList for the full rationale).
+    const MAX_TOTAL = 50;
+    const MAX_PER_TEAM = 25;
     const seen = new Set<string>();
     const plans: any[] = [];
     const pushUnique = (p: any) => {
@@ -1529,6 +1581,7 @@ export const webPlanContext = query({
 
     const plan = await ctx.db.get(args.plan_id);
     if (!plan) return null;
+    if (!(await canAccessPlan(ctx, userId, plan))) return null;
 
     const tasks: any[] = [];
     if (plan.task_ids) {
@@ -1545,6 +1598,7 @@ export const webPlanContext = query({
         }
       }
     }
+
 
     const done = tasks.filter(t => t.status === "done").length;
     const inProgress = tasks.filter(t => t.status === "in_progress").length;

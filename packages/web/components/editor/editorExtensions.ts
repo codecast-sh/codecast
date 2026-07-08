@@ -19,6 +19,7 @@ import { MentionList, type MentionItem } from "./MentionList";
 import { MentionNodeView } from "./MentionNodeView";
 import { SlashCommandExtension } from "./SlashCommandExtension";
 import { DateMentionExtension } from "./DateMentionExtension";
+import { TabIndentExtension } from "./TabIndentExtension";
 import { ImageUploadPlaceholder } from "./ImageUploadPlugin";
 
 const lowlight = createLowlight(common);
@@ -31,6 +32,7 @@ export const MENTION_ROUTE_MAP: Record<string, string> = {
   doc: "/docs",
   session: "/conversation",
   plan: "/plans",
+  label: "/inbox", // labels have no page of their own; they live in the sessions panel
 };
 
 export const MENTION_COLOR_MAP: Record<string, string> = {
@@ -39,6 +41,7 @@ export const MENTION_COLOR_MAP: Record<string, string> = {
   doc: "mention-doc",
   session: "mention-session",
   plan: "mention-plan",
+  label: "mention-label",
 };
 
 export function createMentionSuggestion(queryFn: MentionQueryFn) {
@@ -118,6 +121,7 @@ export function createBaseExtensions(opts: {
       transformCopiedText: true,
     }) as any,
     DateMentionExtension,
+    TabIndentExtension,
     ImageUploadPlaceholder,
   ];
 

@@ -2,6 +2,7 @@ import { Authenticated, Unauthenticated, AuthLoading } from "convex/react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
+import { AppLoader } from "./AppLoader";
 
 function RedirectToHome() {
   const router = useRouter();
@@ -9,16 +10,14 @@ function RedirectToHome() {
   return null;
 }
 
-function AuthGuardInner({ children }: { children: React.ReactNode }) {
+function AuthGuardInner({ children, guestOk }: { children: React.ReactNode; guestOk?: boolean }) {
   return (
     <>
       <AuthLoading>
-        <div className="min-h-screen flex items-center justify-center bg-sol-base02">
-          <div className="text-sol-base0">Loading...</div>
-        </div>
+        <AppLoader />
       </AuthLoading>
       <Unauthenticated>
-        <RedirectToHome />
+        {guestOk ? children : <RedirectToHome />}
       </Unauthenticated>
       <Authenticated>
         {children}
@@ -29,7 +28,12 @@ function AuthGuardInner({ children }: { children: React.ReactNode }) {
 
 let hasHydrated = false;
 
-export function AuthGuard({ children }: { children: React.ReactNode }) {
+/**
+ * guestOk: render children for unauthenticated visitors instead of redirecting
+ * home — for routes that do their own access resolution (public share links).
+ * The auth-loading holding screen still applies either way.
+ */
+export function AuthGuard({ children, guestOk }: { children: React.ReactNode; guestOk?: boolean }) {
   const [mounted, setMounted] = useState(hasHydrated);
 
   useMountEffect(() => {
@@ -38,12 +42,8 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
   });
 
   if (!mounted) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-sol-base02">
-        <div className="text-sol-base0">Loading...</div>
-      </div>
-    );
+    return <AppLoader />;
   }
 
-  return <AuthGuardInner>{children}</AuthGuardInner>;
+  return <AuthGuardInner guestOk={guestOk}>{children}</AuthGuardInner>;
 }

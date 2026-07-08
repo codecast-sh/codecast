@@ -8,7 +8,7 @@ export default function AboutPage() {
       <nav className="border-b border-[#eee8d5] bg-[#fdf6e3]/80 backdrop-blur-sm sticky top-0 z-50">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
           <Link href="/">
-            <Logo size="md" className="text-[#002b36]" />
+            <Logo size="md" className="[--logo-c:#444444] text-[#002b36]" />
           </Link>
           <div className="flex items-center gap-3">
             <Link href="/security" className="text-[#657b83] hover:text-[#002b36] font-medium text-sm px-3 py-1.5">
@@ -60,7 +60,7 @@ export default function AboutPage() {
         <div className="max-w-6xl mx-auto px-6 py-12">
           <div className="grid md:grid-cols-4 gap-8">
             <div>
-              <Logo size="md" className="text-[#002b36] mb-4" />
+              <Logo size="md" className="[--logo-c:#444444] text-[#002b36] mb-4" />
               <p className="text-sm text-[#657b83]">
                 Real-time sync for Claude Code, Codex, Gemini, and Cursor.
               </p>

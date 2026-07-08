@@ -1,12 +1,209 @@
 import { v } from "convex/values";
-import { mutation, query, internalMutation } from "./_generated/server";
+import { mutation, query, internalMutation } from "./functions";
 import { internal } from "./_generated/api";
 import { verifyApiToken } from "./apiTokens";
-import { Id } from "./_generated/dataModel";
+import { getAuthUserId } from "@convex-dev/auth/server";
+import { Doc, Id } from "./_generated/dataModel";
 
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_MAX_RUNTIME_MS = 10 * 60 * 1000; // 10 min
 const LEASE_DURATION_MS = 5 * 60 * 1000; // 5 min
+
+// --- Shared core: CLI (api_token) and web (session auth) entry points resolve
+// to a userId, then go through these so the two surfaces can't drift. ---
+
+type TaskCtx = { db: any };
+
+async function getOwnedTask(
+  ctx: TaskCtx,
+  taskId: Id<"agent_tasks">,
+  userId: Id<"users">
+): Promise<Doc<"agent_tasks"> | null> {
+  const task = await ctx.db.get(taskId);
+  if (!task || task.user_id !== userId) return null;
+  return task;
+}
+
+async function applyPause(ctx: TaskCtx, task: Doc<"agent_tasks">) {
+  if (task.status !== "scheduled" && task.status !== "running") return false;
+  await ctx.db.patch(task._id, { status: "paused" });
+  return true;
+}
+
+async function applyResume(ctx: TaskCtx, task: Doc<"agent_tasks">) {
+  if (task.status !== "paused") return false;
+  await ctx.db.patch(task._id, {
+    status: "scheduled",
+    run_at: task.run_at || Date.now(),
+  });
+  return true;
+}
+
+async function applyRunNow(ctx: TaskCtx, task: Doc<"agent_tasks">) {
+  await ctx.db.patch(task._id, { status: "scheduled", run_at: Date.now() });
+  return true;
+}
+
+async function applyCancel(ctx: TaskCtx, task: Doc<"agent_tasks">) {
+  await ctx.db.patch(task._id, { status: "completed" });
+  return true;
+}
+
+// Re-arm a retired schedule. Exists for the hide-gesture affordance: killing a
+// session cancels its injecting schedules as a side effect (see
+// cancelTasksBoundToConversation), and both the "Keep schedule" toast action
+// and undo-of-hide need to reverse exactly that side effect. Also revives a
+// failed schedule. Recurring re-arms one interval out (not an immediate fire);
+// a once-task keeps its future run_at or re-arms a minute out.
+async function applyReactivate(ctx: TaskCtx, task: Doc<"agent_tasks">) {
+  if (task.status !== "completed" && task.status !== "failed") return false;
+  await ctx.db.patch(task._id, {
+    status: "scheduled",
+    run_at:
+      task.schedule_type === "event"
+        ? undefined
+        : task.schedule_type === "recurring" && task.interval_ms
+          ? Date.now() + task.interval_ms
+          : task.run_at && task.run_at > Date.now()
+            ? task.run_at
+            : Date.now() + 60_000,
+  });
+  return true;
+}
+
+// Resolve a spawned run's conversation (session_id IS the uuid the daemon
+// assigned via `claude --session-id`) and stamp agent_task_id on it, so the run
+// stays attributable to its schedule forever — not just while it's the latest.
+// Idempotent; returns the conversation or null if it hasn't synced yet.
+async function stampRunConversation(
+  ctx: TaskCtx,
+  userId: Id<"users">,
+  taskId: Id<"agent_tasks">,
+  runSessionUuid: string
+): Promise<Doc<"conversations"> | null> {
+  const conv = await ctx.db
+    .query("conversations")
+    .withIndex("by_session_id", (q: any) => q.eq("session_id", runSessionUuid))
+    .filter((q: any) => q.eq(q.field("user_id"), userId))
+    .first();
+  if (!conv) return null;
+  if (conv.agent_task_id !== taskId) {
+    await ctx.db.patch(conv._id, { agent_task_id: taskId });
+  }
+  return conv;
+}
+
+// Kill is the strongest triage gesture — "make this stop". Any armed schedule
+// that INJECTS into the killed conversation (originating_conversation_id, the
+// `--context current` kind) would resurrect it on its next fire — the
+// scheduler's injection un-kills the session for delivery — silently defeating
+// the kill. So killSession cancels those schedules in the same transaction.
+// Schedules that merely post summaries to the conversation
+// (target_conversation_id) never wake it, and spawn-type schedules whose RUN
+// was killed are untouched: each run is its own session, and killing one run
+// doesn't mean "stop the program" — the schedule strip on the run gives the
+// user that verb explicitly.
+export async function cancelTasksBoundToConversation(
+  ctx: TaskCtx,
+  userId: Id<"users">,
+  conversationId: Id<"conversations">
+): Promise<number> {
+  let cancelled = 0;
+  for (const status of ["scheduled", "running", "paused"] as const) {
+    const tasks = await ctx.db
+      .query("agent_tasks")
+      .withIndex("by_user_status", (q: any) => q.eq("user_id", userId).eq("status", status))
+      .collect();
+    for (const task of tasks) {
+      if (task.originating_conversation_id?.toString() !== conversationId.toString()) continue;
+      await ctx.db.patch(task._id, { status: "completed" });
+      cancelled++;
+    }
+  }
+  return cancelled;
+}
+
+interface NewTaskArgs {
+  title: string;
+  prompt: string;
+  context_summary?: string;
+  originating_conversation_id?: string;
+  target_conversation_id?: string;
+  project_path?: string;
+  agent_type?: string;
+  created_device_id?: string;
+  schedule_type: "once" | "recurring" | "event";
+  run_at?: number;
+  interval_ms?: number;
+  event_filter?: { event_type: string; action?: string; repository?: string };
+  mode?: string;
+  max_runtime_ms?: number;
+  max_retries?: number;
+}
+
+async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTaskArgs) {
+  if (args.schedule_type === "recurring" && !args.interval_ms) {
+    throw new Error("interval_ms required for recurring tasks");
+  }
+  if (args.schedule_type === "event" && !args.event_filter) {
+    throw new Error("event_filter required for event tasks");
+  }
+
+  const now = Date.now();
+  const run_at = args.schedule_type === "event" ? undefined : (args.run_at || now);
+
+  return await ctx.db.insert("agent_tasks", {
+    user_id: userId,
+    title: args.title,
+    prompt: args.prompt,
+    context_summary: args.context_summary,
+    originating_conversation_id: args.originating_conversation_id
+      ? args.originating_conversation_id as Id<"conversations">
+      : undefined,
+    target_conversation_id: args.target_conversation_id
+      ? args.target_conversation_id as Id<"conversations">
+      : undefined,
+    project_path: args.project_path,
+    agent_type: args.agent_type || "claude",
+    created_device_id: args.created_device_id,
+    schedule_type: args.schedule_type,
+    run_at,
+    interval_ms: args.interval_ms,
+    event_filter: args.event_filter,
+    mode: (args.mode === "apply" ? "apply" : "propose") as "propose" | "apply",
+    max_runtime_ms: args.max_runtime_ms || DEFAULT_MAX_RUNTIME_MS,
+    status: "scheduled" as const,
+    retry_count: 0,
+    max_retries: args.max_retries ?? DEFAULT_MAX_RETRIES,
+    run_count: 0,
+    created_at: now,
+  });
+}
+
+// Single-task action exposed under both auth schemes.
+const cliTaskAction = (apply: (ctx: TaskCtx, task: Doc<"agent_tasks">) => Promise<boolean>) =>
+  mutation({
+    args: { api_token: v.string(), task_id: v.id("agent_tasks") },
+    handler: async (ctx, args) => {
+      const auth = await verifyApiToken(ctx, args.api_token);
+      if (!auth) throw new Error("Unauthorized");
+      const task = await getOwnedTask(ctx, args.task_id, auth.userId);
+      if (!task) return false;
+      return apply(ctx, task);
+    },
+  });
+
+const webTaskAction = (apply: (ctx: TaskCtx, task: Doc<"agent_tasks">) => Promise<boolean>) =>
+  mutation({
+    args: { task_id: v.id("agent_tasks") },
+    handler: async (ctx, args) => {
+      const userId = await getAuthUserId(ctx);
+      if (!userId) throw new Error("Unauthorized");
+      const task = await getOwnedTask(ctx, args.task_id, userId);
+      if (!task) return false;
+      return apply(ctx, task);
+    },
+  });
 
 export const createTask = mutation({
   args: {
@@ -18,6 +215,7 @@ export const createTask = mutation({
     target_conversation_id: v.optional(v.string()),
     project_path: v.optional(v.string()),
     agent_type: v.optional(v.string()),
+    created_device_id: v.optional(v.string()),
     schedule_type: v.union(v.literal("once"), v.literal("recurring"), v.literal("event")),
     run_at: v.optional(v.number()),
     interval_ms: v.optional(v.number()),
@@ -33,44 +231,8 @@ export const createTask = mutation({
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
-
-    if (args.schedule_type === "recurring" && !args.interval_ms) {
-      throw new Error("interval_ms required for recurring tasks");
-    }
-    if (args.schedule_type === "event" && !args.event_filter) {
-      throw new Error("event_filter required for event tasks");
-    }
-
-    const now = Date.now();
-    const run_at = args.schedule_type === "event" ? undefined : (args.run_at || now);
-
-    const taskId = await ctx.db.insert("agent_tasks", {
-      user_id: auth.userId,
-      title: args.title,
-      prompt: args.prompt,
-      context_summary: args.context_summary,
-      originating_conversation_id: args.originating_conversation_id
-        ? args.originating_conversation_id as Id<"conversations">
-        : undefined,
-      target_conversation_id: args.target_conversation_id
-        ? args.target_conversation_id as Id<"conversations">
-        : undefined,
-      project_path: args.project_path,
-      agent_type: args.agent_type || "claude",
-      schedule_type: args.schedule_type,
-      run_at,
-      interval_ms: args.interval_ms,
-      event_filter: args.event_filter,
-      mode: (args.mode === "apply" ? "apply" : "propose") as "propose" | "apply",
-      max_runtime_ms: args.max_runtime_ms || DEFAULT_MAX_RUNTIME_MS,
-      status: "scheduled",
-      retry_count: 0,
-      max_retries: args.max_retries ?? DEFAULT_MAX_RETRIES,
-      run_count: 0,
-      created_at: now,
-    });
-
-    return taskId;
+    const { api_token: _token, ...taskArgs } = args;
+    return await insertTask(ctx, auth.userId, taskArgs);
   },
 });
 
@@ -188,6 +350,14 @@ export const completeTaskRun = mutation({
     daemon_id: v.optional(v.string()),
     summary: v.optional(v.string()),
     conversation_id: v.optional(v.string()),
+    // Claude session UUID of the spawned run (from `claude --session-id`). Stored
+    // raw and resolved to a conversation at read time in webList, since the run's
+    // conversation may not have synced yet at this instant.
+    run_session_uuid: v.optional(v.string()),
+    // Agent's explicit "the user should read this run" declaration
+    // (`cast schedule complete --needs-attention`). Skips the clean-run fold
+    // below and keeps the run card escalated in the inbox.
+    needs_attention: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -218,12 +388,52 @@ export const completeTaskRun = mutation({
     const updates: Record<string, any> = {
       last_run_at: now,
       last_run_summary: args.summary,
+      last_run_failed: false,
       last_run_conversation_id: args.conversation_id
         ? args.conversation_id as Id<"conversations">
         : undefined,
+      last_run_session_uuid: args.run_session_uuid || undefined,
+      last_run_needs_attention: !!args.needs_attention,
       lease_holder: undefined,
       lease_expires_at: undefined,
     };
+
+    // Keep the run conversation attributable to its schedule even after a
+    // later run overwrites last_run_*. This is the backfill for the daemon's
+    // post-spawn linkRunConversation — it rides whichever completion is
+    // accepted (the agent's own `cast schedule complete` lands first and wins;
+    // the daemon's tmux-exit completion is rejected by the status guard above).
+    // Spawn tasks only: for an inject task the agent self-completes from INSIDE
+    // the originating session, so its uuid resolves to the originating
+    // conversation — which is the schedule's home, not a run of it.
+    let runConv: Doc<"conversations"> | null = null;
+    if (args.run_session_uuid && !task.originating_conversation_id) {
+      runConv = await stampRunConversation(ctx, auth.userId, args.task_id, args.run_session_uuid);
+    }
+
+    // Fold the run the agent just finished, not only the superseded one
+    // (linkRunConversation): the steady state of a healthy repeating spawn
+    // schedule is ZERO loose inbox cards — the schedule's standing row carries
+    // the summary. Strictly gated on the agent's own deliberate completion:
+    // no daemon_id (the daemon's tmux-exit completion means the agent died
+    // WITHOUT self-reporting — that run must stay visible), a real summary,
+    // and no --needs-attention. Same user-intent guards as the previous-run
+    // fold; `once` runs never fold (their single result IS the deliverable).
+    const repeatingSpawn =
+      (task.schedule_type === "recurring" || task.schedule_type === "event") &&
+      !task.originating_conversation_id;
+    if (
+      repeatingSpawn &&
+      !args.daemon_id &&
+      !!args.summary &&
+      !args.needs_attention &&
+      runConv &&
+      !runConv.inbox_pinned_at &&
+      !runConv.inbox_dismissed_at &&
+      !runConv.has_pending_messages
+    ) {
+      await ctx.db.patch(runConv._id, { inbox_dismissed_at: now });
+    }
 
     if (isLateSummary) {
       // Already counted on initial completion; don't double-count or re-arm.
@@ -287,6 +497,9 @@ export const failTaskRun = mutation({
     task_id: v.id("agent_tasks"),
     daemon_id: v.string(),
     error: v.optional(v.string()),
+    // Session UUID of the failed run, so a failure is still one click from the
+    // transcript that shows what went wrong.
+    run_session_uuid: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -298,6 +511,15 @@ export const failTaskRun = mutation({
 
     const maxRetries = task.max_retries ?? DEFAULT_MAX_RETRIES;
     const newRetryCount = task.retry_count + 1;
+    const runUuid = args.run_session_uuid || undefined;
+
+    // A failed run's conversation is one click away from what went wrong —
+    // stamp it too (and last_run_failed gates the auto-fold: a failed run
+    // must stay visible in the inbox when the retry starts). Spawn tasks only,
+    // same reason as completeTaskRun.
+    if (runUuid && !task.originating_conversation_id) {
+      await stampRunConversation(ctx, auth.userId, args.task_id, runUuid);
+    }
 
     if (newRetryCount < maxRetries) {
       await ctx.db.patch(args.task_id, {
@@ -307,6 +529,8 @@ export const failTaskRun = mutation({
         lease_holder: undefined,
         lease_expires_at: undefined,
         last_run_summary: args.error ? `Failed: ${args.error}` : "Failed",
+        last_run_failed: true,
+        last_run_session_uuid: runUuid,
       });
     } else {
       await ctx.db.patch(args.task_id, {
@@ -315,6 +539,8 @@ export const failTaskRun = mutation({
         lease_holder: undefined,
         lease_expires_at: undefined,
         last_run_summary: args.error ? `Failed: ${args.error}` : "Failed (max retries)",
+        last_run_failed: true,
+        last_run_session_uuid: runUuid,
       });
 
       const user = await ctx.db.get(auth.userId);
@@ -339,78 +565,250 @@ export const failTaskRun = mutation({
   },
 });
 
-export const cancelTask = mutation({
+// Called by the daemon shortly after spawning a run (bounded retries — the
+// run's conversation appears when its JSONL first syncs). Two jobs, one
+// transaction:
+//
+// 1. Stamp agent_task_id on the new run's conversation, so the schedule strip
+//    and badges work DURING the run and on every historical run.
+// 2. Auto-fold the PREVIOUS run: for a repeating spawn schedule (recurring or
+//    event), each fire lands a whole new conversation in the inbox — an hourly
+//    job is 24 cards a day of pure noise. The moment a new run starts, the
+//    previous run has been superseded: if it completed cleanly, fold it out of
+//    the active inbox (dismiss). Attention stays earned, not granted: a run
+//    that FAILED (last_run_failed), is still active, was pinned, or has a
+//    pending user message is never folded. Folded runs remain reachable — the
+//    Dismissed group, /schedules, and the new run's strip all link the history.
+export const linkRunConversation = mutation({
   args: {
     api_token: v.string(),
     task_id: v.id("agent_tasks"),
+    run_session_uuid: v.string(),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
+    const task = await getOwnedTask(ctx, args.task_id, auth.userId);
+    if (!task) return { linked: false, retry: false };
 
-    const task = await ctx.db.get(args.task_id);
-    if (!task || task.user_id !== auth.userId) return false;
+    const conv = await stampRunConversation(ctx, auth.userId, args.task_id, args.run_session_uuid);
+    if (!conv) return { linked: false, retry: true }; // not synced yet — daemon retries
 
-    await ctx.db.patch(args.task_id, { status: "completed" });
-    return true;
+    const repeatingSpawn =
+      (task.schedule_type === "recurring" || task.schedule_type === "event") &&
+      !task.originating_conversation_id;
+    if (repeatingSpawn && !task.last_run_failed) {
+      let prev: Doc<"conversations"> | null = task.last_run_conversation_id
+        ? await ctx.db.get(task.last_run_conversation_id)
+        : null;
+      if (!prev && task.last_run_session_uuid && task.last_run_session_uuid !== args.run_session_uuid) {
+        prev = await ctx.db
+          .query("conversations")
+          .withIndex("by_session_id", (q: any) => q.eq("session_id", task.last_run_session_uuid))
+          .filter((q: any) => q.eq(q.field("user_id"), auth.userId))
+          .first();
+      }
+      // No conv.status check: a spawned run's conversation lingers "active"
+      // long after its agent exits (the watchdog completes it lazily), but
+      // last_run_* only ever points at a run whose task-level completion
+      // (completeTaskRun) already happened — that is the authoritative
+      // "this run finished" signal, and the lease machinery guarantees runs
+      // of one task never overlap.
+      if (
+        prev &&
+        prev._id.toString() !== conv._id.toString() &&
+        prev.user_id.toString() === auth.userId.toString() &&
+        !prev.inbox_pinned_at &&
+        !prev.inbox_dismissed_at &&
+        !prev.has_pending_messages
+      ) {
+        await ctx.db.patch(prev._id, { inbox_dismissed_at: Date.now() });
+      }
+    }
+    return { linked: true, retry: false };
   },
 });
 
-export const pauseTask = mutation({
-  args: {
-    api_token: v.string(),
-    task_id: v.id("agent_tasks"),
-  },
-  handler: async (ctx, args) => {
-    const auth = await verifyApiToken(ctx, args.api_token);
-    if (!auth) throw new Error("Unauthorized");
+export const cancelTask = cliTaskAction(applyCancel);
+export const pauseTask = cliTaskAction(applyPause);
+export const resumeTask = cliTaskAction(applyResume);
+export const runTaskNow = cliTaskAction(applyRunNow);
 
-    const task = await ctx.db.get(args.task_id);
-    if (!task || task.user_id !== auth.userId) return false;
-    if (task.status !== "scheduled" && task.status !== "running") return false;
+// --- Web (session-auth) surface, used by the /schedules page ---
 
-    await ctx.db.patch(args.task_id, { status: "paused" });
-    return true;
-  },
-});
+export const webList = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
 
-export const resumeTask = mutation({
-  args: {
-    api_token: v.string(),
-    task_id: v.id("agent_tasks"),
-  },
-  handler: async (ctx, args) => {
-    const auth = await verifyApiToken(ctx, args.api_token);
-    if (!auth) throw new Error("Unauthorized");
+    const tasks = await ctx.db
+      .query("agent_tasks")
+      .withIndex("by_user_status", (q) => q.eq("user_id", userId))
+      .collect();
 
-    const task = await ctx.db.get(args.task_id);
-    if (!task || task.user_id !== auth.userId) return false;
-    if (task.status !== "paused") return false;
+    // Enrich with conversation titles so rows can link to the last run and
+    // the originating session without N client queries.
+    const convIds = new Set<Id<"conversations">>();
+    for (const t of tasks) {
+      if (t.last_run_conversation_id) convIds.add(t.last_run_conversation_id);
+      if (t.originating_conversation_id) convIds.add(t.originating_conversation_id);
+    }
+    const titles = new Map<string, string>();
+    await Promise.all(
+      [...convIds].map(async (id) => {
+        const conv = await ctx.db.get(id);
+        if (conv) titles.set(id, conv.title || "Untitled");
+      })
+    );
 
-    await ctx.db.patch(args.task_id, {
-      status: "scheduled",
-      run_at: task.run_at || Date.now(),
+    // Resolve spawned-run session UUIDs to their conversation (by_session_id).
+    // Done at read time because the run's conversation may not have synced yet
+    // when the daemon reported completion. Only needed when the run didn't
+    // already record a conversation_id directly (the --context-current path).
+    const uuidToConv = new Map<string, { id: Id<"conversations">; title: string }>();
+    const pendingUuids = [
+      ...new Set(
+        tasks
+          .filter((t) => t.last_run_session_uuid && !t.last_run_conversation_id)
+          .map((t) => t.last_run_session_uuid as string)
+      ),
+    ];
+    await Promise.all(
+      pendingUuids.map(async (uuid) => {
+        const conv = await ctx.db
+          .query("conversations")
+          .withIndex("by_session_id", (q) => q.eq("session_id", uuid))
+          .filter((q) => q.eq(q.field("user_id"), userId))
+          .first();
+        if (conv) uuidToConv.set(uuid, { id: conv._id, title: conv.title || "Untitled" });
+      })
+    );
+
+    return tasks.map((t) => {
+      const resolved =
+        !t.last_run_conversation_id && t.last_run_session_uuid
+          ? uuidToConv.get(t.last_run_session_uuid)
+          : undefined;
+      const lastRunConvId = t.last_run_conversation_id ?? resolved?.id;
+      return {
+        ...t,
+        last_run_conversation_id: lastRunConvId,
+        last_run_conversation_title: t.last_run_conversation_id
+          ? titles.get(t.last_run_conversation_id)
+          : resolved?.title,
+        originating_conversation_title: t.originating_conversation_id
+          ? titles.get(t.originating_conversation_id)
+          : undefined,
+      };
     });
+  },
+});
+
+export const webCreate = mutation({
+  args: {
+    title: v.optional(v.string()),
+    prompt: v.string(),
+    schedule_type: v.union(v.literal("once"), v.literal("recurring"), v.literal("event")),
+    run_at: v.optional(v.number()),
+    interval_ms: v.optional(v.number()),
+    event_filter: v.optional(v.object({
+      event_type: v.string(),
+      action: v.optional(v.string()),
+      repository: v.optional(v.string()),
+    })),
+    mode: v.optional(v.string()),
+    agent_type: v.optional(v.string()),
+    project_path: v.optional(v.string()),
+    max_runtime_ms: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Unauthorized");
+    return await insertTask(ctx, userId, {
+      ...args,
+      title: args.title?.trim() || args.prompt.slice(0, 60),
+    });
+  },
+});
+
+export const webPause = webTaskAction(applyPause);
+export const webResume = webTaskAction(applyResume);
+export const webReactivate = webTaskAction(applyReactivate);
+export const webRunNow = webTaskAction(applyRunNow);
+export const webCancel = webTaskAction(applyCancel);
+
+export const webDelete = mutation({
+  args: { task_id: v.id("agent_tasks") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Unauthorized");
+    const task = await getOwnedTask(ctx, args.task_id, userId);
+    if (!task) return false;
+    await ctx.db.delete(args.task_id);
     return true;
   },
 });
 
-export const runTaskNow = mutation({
+// Edit an existing schedule in place (web-only — the CLI has no update verb).
+// Mirrors insertTask's timing rules so the two surfaces can't drift. Only
+// scheduled/paused tasks are editable; a running or finished task is rejected.
+export const webUpdate = mutation({
   args: {
-    api_token: v.string(),
     task_id: v.id("agent_tasks"),
+    title: v.optional(v.string()),
+    prompt: v.optional(v.string()),
+    schedule_type: v.optional(v.union(v.literal("once"), v.literal("recurring"), v.literal("event"))),
+    run_at: v.optional(v.number()),
+    interval_ms: v.optional(v.number()),
+    event_filter: v.optional(v.object({
+      event_type: v.string(),
+      action: v.optional(v.string()),
+      repository: v.optional(v.string()),
+    })),
+    mode: v.optional(v.string()),
+    agent_type: v.optional(v.string()),
+    project_path: v.optional(v.string()),
+    max_runtime_ms: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const auth = await verifyApiToken(ctx, args.api_token);
-    if (!auth) throw new Error("Unauthorized");
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Unauthorized");
+    const task = await getOwnedTask(ctx, args.task_id, userId);
+    if (!task) return false;
+    if (task.status !== "scheduled" && task.status !== "paused") return false;
 
-    const task = await ctx.db.get(args.task_id);
-    if (!task || task.user_id !== auth.userId) return false;
+    const patch: Record<string, unknown> = {};
+    if (args.title !== undefined) patch.title = args.title.trim() || task.title;
+    if (args.prompt !== undefined && args.prompt.trim()) patch.prompt = args.prompt.trim();
+    if (args.mode !== undefined) patch.mode = args.mode === "apply" ? "apply" : "propose";
+    if (args.agent_type !== undefined) patch.agent_type = args.agent_type || "claude";
+    if (args.project_path !== undefined) patch.project_path = args.project_path || undefined;
+    if (args.max_runtime_ms !== undefined) patch.max_runtime_ms = args.max_runtime_ms;
 
-    await ctx.db.patch(args.task_id, {
-      status: "scheduled",
-      run_at: Date.now(),
-    });
+    if (args.schedule_type !== undefined) {
+      patch.schedule_type = args.schedule_type;
+      if (args.schedule_type === "recurring") {
+        if (!args.interval_ms) throw new Error("interval_ms required for recurring tasks");
+        patch.interval_ms = args.interval_ms;
+        patch.run_at = args.run_at ?? Date.now() + args.interval_ms;
+        patch.event_filter = undefined;
+      } else if (args.schedule_type === "event") {
+        if (!args.event_filter) throw new Error("event_filter required for event tasks");
+        patch.event_filter = args.event_filter;
+        patch.run_at = undefined;
+        patch.interval_ms = undefined;
+      } else {
+        patch.run_at = args.run_at ?? Date.now();
+        patch.interval_ms = undefined;
+        patch.event_filter = undefined;
+      }
+    } else {
+      if (args.interval_ms !== undefined) patch.interval_ms = args.interval_ms;
+      if (args.run_at !== undefined) patch.run_at = args.run_at;
+    }
+
+    await ctx.db.patch(task._id, patch);
     return true;
   },
 });

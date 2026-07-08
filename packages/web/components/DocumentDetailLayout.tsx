@@ -5,10 +5,18 @@ import { useMentionQuery } from "../hooks/useMentionQuery";
 import { useImageUpload } from "../hooks/useImageUpload";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { ContextChatInput } from "./ContextChatInput";
-import { ArrowLeft, Edit3, Eye, MoreHorizontal, Copy, Check, X, Link2 } from "lucide-react";
+import { MessageReview } from "./MessageReview";
+import { MarkdownBlocks } from "./tools/MarkdownRenderer";
+import { DocReviewBar } from "./DocReviewBar";
+import { ArrowLeft, Edit3, Eye, MessageSquareQuote, MoreHorizontal, Copy, Check, X } from "lucide-react";
 import Link from "next/link";
-import { copyToClipboard, canonicalUrl } from "../lib/utils";
+import { copyToClipboard } from "../lib/utils";
 import { toast } from "sonner";
+
+// Module-level so MessageReview's memo holds (a fresh inline arrow would defeat
+// it). Renders the doc's markdown as a flat run of blocks — each a direct child
+// of MessageReview's measurement container, so every block is hover-quotable.
+const renderDocBlocks = (content: string) => <MarkdownBlocks content={content} />;
 
 interface DocumentDetailLayoutProps {
   docId: string;
@@ -20,12 +28,19 @@ interface DocumentDetailLayoutProps {
   backHref: string;
   topBarLeft?: React.ReactNode;
   topBarRight?: React.ReactNode;
+  /** Always-visible content shown between the title and the body editor (e.g. a plan's goal). */
+  leadContent?: React.ReactNode;
   metaContent?: React.ReactNode;
   children?: React.ReactNode;
   footerContent?: React.ReactNode;
   contextType?: string;
   linkedObjectId?: string;
   cliEditedAt?: number;
+  /** Forwarded to CollabDocEditor — see its `contentReady` doc. */
+  contentReady?: boolean;
+  /** The session this doc came from, if any — the default target when sending
+   *  review annotations to an agent. */
+  ownerConversationId?: string;
 }
 
 export function DocumentDetailLayout({
@@ -38,17 +53,21 @@ export function DocumentDetailLayout({
   backHref,
   topBarLeft,
   topBarRight,
+  leadContent,
   metaContent,
   children,
   footerContent,
   contextType = "doc",
   linkedObjectId,
   cliEditedAt,
+  contentReady = true,
+  ownerConversationId,
 }: DocumentDetailLayoutProps) {
   const [isEditing, setIsEditing] = useState(initialEditable);
+  const [reviewing, setReviewing] = useState(false);
+  const reviewKey = `doc:${docId}`;
   const [showMeta, setShowMeta] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [linkCopied, setLinkCopied] = useState(false);
   const handleMentionQuery = useMentionQuery();
   const handleImageUpload = useImageUpload();
   const getMarkdownRef = useRef<(() => string) | null>(null);
@@ -56,16 +75,6 @@ export function DocumentDetailLayout({
     () => getMarkdownRef.current?.() ?? markdownContent,
     [markdownContent]
   );
-
-  const handleCopyLink = () => {
-    copyToClipboard(canonicalUrl())
-      .then(() => {
-        setLinkCopied(true);
-        setTimeout(() => setLinkCopied(false), 2000);
-        toast.success("Link copied!");
-      })
-      .catch(() => toast.error("Failed to copy link"));
-  };
 
   const handleCopyMarkdown = () => {
     const md = getMarkdownRef.current?.() ?? markdownContent;
@@ -81,7 +90,10 @@ export function DocumentDetailLayout({
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between px-6 py-2 border-b border-sol-border/10 flex-shrink-0">
+      {/* Wraps the action cluster to a second row rather than letting it overflow
+          (and clip its trailing icons) once the back/type/watch cluster and the
+          icons can no longer share one line — e.g. a narrow split-pane doc view. */}
+      <div className="flex flex-wrap items-center justify-between gap-y-2 px-6 py-2 border-b border-sol-border/10 flex-shrink-0">
         <div className="flex items-center gap-3">
           <Link
             href={backHref}
@@ -91,7 +103,7 @@ export function DocumentDetailLayout({
           </Link>
           {topBarLeft}
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 ml-auto">
           <button
             onClick={handleCopyMarkdown}
             className="p-1.5 rounded-md text-xs flex items-center gap-1 text-sol-text-dim hover:text-sol-text transition-colors"
@@ -100,14 +112,16 @@ export function DocumentDetailLayout({
             {copied ? <Check className="w-3.5 h-3.5 text-sol-green" /> : <Copy className="w-3.5 h-3.5" />}
           </button>
           <button
-            onClick={handleCopyLink}
-            className="p-1.5 rounded-md text-xs flex items-center gap-1 text-sol-text-dim hover:text-sol-text transition-colors"
-            title="Copy link"
+            onClick={() => { setReviewing((r) => !r); setIsEditing(false); }}
+            className={`p-1.5 rounded-md text-xs flex items-center gap-1 transition-colors ${
+              reviewing ? "text-sol-yellow" : "text-sol-text-dim hover:text-sol-text"
+            }`}
+            title={reviewing ? "Exit review" : "Review: quote sections and send feedback to an agent"}
           >
-            {linkCopied ? <Check className="w-3.5 h-3.5 text-sol-green" /> : <Link2 className="w-3.5 h-3.5" />}
+            <MessageSquareQuote className="w-3.5 h-3.5" />
           </button>
           <button
-            onClick={() => setIsEditing(!isEditing)}
+            onClick={() => { setIsEditing(!isEditing); setReviewing(false); }}
             className={`p-1.5 rounded-md text-xs flex items-center gap-1 transition-colors ${
               isEditing
                 ? "text-sol-cyan"
@@ -159,20 +173,34 @@ export function DocumentDetailLayout({
             {title || "Untitled"}
           </h1>
 
+          {leadContent && <div className="mt-2">{leadContent}</div>}
+
           <div className="mt-4">
-            <ErrorBoundary name="DocEditor" level="panel">
-              <CollabDocEditor
-                key={docId}
-                docId={docId}
-                markdownContent={markdownContent}
-                onMentionQuery={handleMentionQuery}
-                onImageUpload={handleImageUpload}
-                editable={isEditing}
-                placeholder={placeholder}
-                getMarkdownRef={getMarkdownRef}
-                cliEditedAt={cliEditedAt}
-              />
-            </ErrorBoundary>
+            {reviewing ? (
+              <div className="prose prose-invert prose-sm max-w-none text-sol-text">
+                <MessageReview
+                  conversationId={reviewKey}
+                  messageId={reviewKey}
+                  content={markdownContent}
+                  renderBlock={renderDocBlocks}
+                />
+              </div>
+            ) : (
+              <ErrorBoundary name="DocEditor" level="panel">
+                <CollabDocEditor
+                  key={docId}
+                  docId={docId}
+                  markdownContent={markdownContent}
+                  onMentionQuery={handleMentionQuery}
+                  onImageUpload={handleImageUpload}
+                  editable={isEditing}
+                  placeholder={placeholder}
+                  getMarkdownRef={getMarkdownRef}
+                  cliEditedAt={cliEditedAt}
+                  contentReady={contentReady}
+                />
+              </ErrorBoundary>
+            )}
           </div>
 
           {children && (
@@ -186,12 +214,22 @@ export function DocumentDetailLayout({
             {footerContent}
           </div>
         )}
-        <ContextChatInput
-          contextType={contextType}
-          contextTitle={title || "Untitled"}
-          getContextBody={getContextBody}
-          linkedObjectId={linkedObjectId}
-        />
+        {reviewing ? (
+          <DocReviewBar
+            reviewKey={reviewKey}
+            docId={docId}
+            title={title || "Untitled"}
+            ownerConversationId={ownerConversationId}
+            onSent={() => setReviewing(false)}
+          />
+        ) : (
+          <ContextChatInput
+            contextType={contextType}
+            contextTitle={title || "Untitled"}
+            getContextBody={getContextBody}
+            linkedObjectId={linkedObjectId}
+          />
+        )}
         </div>
       </div>
     </div>

@@ -6,6 +6,7 @@ import { NavigationProgress } from "@/components/NavigationProgress";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Toaster } from "@/components/ui/sonner";
 import { DesktopProvider } from "@/components/DesktopProvider";
+import { OpenInDesktopHandoff } from "@/components/OpenInDesktopHandoff";
 import { ShortcutProvider } from "@/shortcuts";
 import { TipProvider } from "@/tips/TipProvider";
 import { useLocalStorageMigration } from "@/hooks/useLocalStorageMigration";
@@ -56,6 +57,9 @@ export function Providers({ children }: { children: ReactNode }) {
         {children}
         <ErrorBoundary name="DesktopProvider" level="inline">
           <DesktopProvider />
+        </ErrorBoundary>
+        <ErrorBoundary name="OpenInDesktopHandoff" level="inline">
+          <OpenInDesktopHandoff />
         </ErrorBoundary>
         <PrefsMigration />
         <AnalyticsIdentify />

@@ -1,4 +1,10 @@
 import type { Doc } from "./_generated/dataModel";
+// Single source of truth for the "agent is actively producing" set and the
+// stale-status trust TTL. Re-exported so existing `from "./inboxFilters"`
+// importers (incl. the tests) keep working unchanged.
+import { ACTIVE_AGENT_STATUSES, STATUS_TRUST_TTL_MS } from "@codecast/shared/contracts";
+
+export { ACTIVE_AGENT_STATUSES, STATUS_TRUST_TTL_MS };
 
 export type ConversationDoc = Doc<"conversations">;
 
@@ -32,19 +38,65 @@ export function shouldShowInInbox(conv: ConversationDoc): boolean {
   return true;
 }
 
+// Whether `parent` is a conversation an orchestration worker can safely be
+// nested under at spawn time. We only stamp a worker's parent_conversation_id
+// when this holds, because listInboxSessions surfaces a child *only* under a
+// parent that is itself in the inbox and not dismissed (see the `dismissed`
+// guard in that query). Linking to a parent that fails this test would make
+// the worker vanish entirely instead of nesting. When it returns false the
+// caller leaves the worker top-level and the client's plan-grouping fallback
+// takes over.
+export function isViableInboxParent(
+  parent: ConversationDoc | null | undefined,
+  userId: string,
+): boolean {
+  if (!parent) return false;
+  if (parent.user_id.toString() !== userId) return false;
+  if (parent.inbox_dismissed_at || parent.inbox_stashed_at) return false;
+  return shouldShowInInbox(parent);
+}
+
 // Anti-flicker grace before a finished agent is treated as idle. Mirrors the
 // "working" pill in ConversationView so the inbox bucket and the per-conversation
 // header agree for the moment right after a turn ends.
 export const AGENT_IDLE_GRACE_MS = 45 * 1000;
 
-const ACTIVE_AGENT_STATUSES = new Set([
-  "working",
-  "compacting",
-  "thinking",
-  "connected",
-  "starting",
-  "resuming",
-]);
+// A daemon-reported status that means the agent process is gone. A dead session
+// with content still needs a human (to read the result / restart it), so the
+// classifier routes it to needs-input rather than working. Mirrors the web
+// store's DEAD_AGENT_STATUSES.
+export const DEAD_AGENT_STATUSES = new Set(["stopped"]);
+
+// STATUS_TRUST_TTL_MS (imported from @codecast/shared/contracts): how long a
+// daemon-reported "active" status is trusted with no new synced activity. When
+// the daemon loses a turn's idle transition (a dropped Stop hook, Codex's
+// sleep-killed idle timer) it re-asserts the last "working" on every heartbeat,
+// and because that heartbeat keeps the managed row "live" the 90s
+// heartbeat-staleness coercion never fires — so the session would be pinned in
+// the inbox's WORKING bucket indefinitely. Past the TTL we stop trusting it (see
+// trustedAgentStatus). AskUserQuestion / permission blocks never reach here as
+// "active" (the caller routes them to needs-input first).
+
+// Collapse a stale "active" status to "idle" so every consumer agrees the agent
+// has finished. The agent_status field is read in three independent places — the
+// web row's isAgentActive short-circuit, the server-computed is_idle
+// (deriveSessionActivity), and classifyWorkState — so coercing once at the
+// enrichment boundary fixes all of them with no downstream duplication.
+//
+// Non-destructive and self-correcting by construction: this is a read-time
+// transform (the stored managed_sessions.agent_status is untouched), and any
+// later message bumps conv.updated_at, so a genuinely long-running turn
+// re-promotes itself to "working" on its next output. "idle" (not "stopped")
+// because a fresh heartbeat means the process is alive — it's finished, not dead.
+export function trustedAgentStatus(
+  agentStatus: string | undefined,
+  updatedAt: number | undefined,
+  now: number,
+): string | undefined {
+  if (!agentStatus || !ACTIVE_AGENT_STATUSES.has(agentStatus)) return agentStatus;
+  if (updatedAt !== undefined && now - updatedAt >= STATUS_TRUST_TTL_MS) return "idle";
+  return agentStatus;
+}
 
 // Decides whether a batch of freshly-synced messages should bump
 // managed_sessions.agent_status back to "working". Two cases, both meaning the
@@ -69,25 +121,18 @@ export function nextAgentStatusOnAddMessages(
   return null;
 }
 
-// Recognizes a Claude Code API/auth-error *banner* turn — the one-liner the CLI
-// emits when an Anthropic request fails (expired OAuth token, overload, bad key).
-// These are transient TUI state, not real conversation turns: when the CLI's
-// next attempt succeeds it rewinds the banner out of its transcript and replays
-// the turn for real. The daemon's file-watcher, however, has usually already
-// synced the banner to a durable message — and append-only sync never un-syncs
-// it, leaving a stale "Please run /login" card on a session that actually
-// recovered. We detect these so the server can supersede them once a genuine
-// turn follows. Anchored prefixes + a length cap keep a real assistant message
-// that merely *discusses* an API error from being mistaken for a banner.
-const API_ERROR_BANNER_RE =
-  /^(?:please run \/login|not logged in|invalid api key|credit balance is too low|api error\b|oauth (?:token|authentication))/i;
-
-export function isApiErrorBanner(content: string | null | undefined): boolean {
-  if (!content) return false;
-  const trimmed = content.trim();
-  if (trimmed.length === 0 || trimmed.length > 400) return false;
-  return API_ERROR_BANNER_RE.test(trimmed);
-}
+// Claude Code API/auth/limit-error *banner* detection — the one-liner the CLI
+// emits when an Anthropic request fails (expired OAuth token, overload, bad
+// key, usage/session limit). These are transient TUI state, not real
+// conversation turns: when the CLI's next attempt succeeds it rewinds the
+// banner out of its transcript and replays the turn for real. The daemon's
+// file-watcher, however, has usually already synced the banner to a durable
+// message — and append-only sync never un-syncs it, leaving a stale "Please
+// run /login" card on a session that actually recovered. We detect these so
+// the server can supersede them once a genuine turn follows. The classifier
+// lives in @codecast/shared/contracts as the single source of truth shared
+// with the web client's ApiErrorCard rendering.
+export { isApiErrorBanner, classifyApiErrorBanner } from "@codecast/shared/contracts";
 
 // Decides what an addMessages batch should do about stale API-error banners.
 //   - "supersede": a real turn arrived; delete banner(s) that precede it and
@@ -166,4 +211,184 @@ export function isSessionIdle(input: SessionIdleInput): boolean {
   return daemonAlive
     ? !hasPending && !lastRoleIsUser && !recentlyUpdated
     : !recentlyUpdated;
+}
+
+export interface SessionActivityInput {
+  agentStatus?: string;
+  agentStatusUpdatedAt?: number;
+  /** conv.last_message_role, as synced. */
+  lastMessageRole?: string;
+  /** conv.last_message_preview — used only to spot an interrupt marker. */
+  lastMessagePreview?: string | null;
+  hasPending: boolean;
+  /** conv.status ("active" | "completed"). */
+  status: string;
+  /** conv.updated_at. */
+  updatedAt: number;
+  /** Caller computes liveness from its own source (inbox maps vs a single managed row). */
+  daemonAlive: boolean;
+  now: number;
+}
+
+export interface SessionActivity {
+  isIdle: boolean;
+  isUnresponsive: boolean;
+  lastRoleIsUser: boolean;
+  recentlyUpdated: boolean;
+}
+
+// The composite "is this session waiting on the user / stuck" derivation shared
+// by the inbox enrichment and the CLI feed. Extracted verbatim from
+// enrichInboxSessionRow so the two callers can never drift on what "idle" or
+// "unresponsive" means; the only per-caller difference is how `daemonAlive` is
+// sourced, which is passed in.
+export function deriveSessionActivity(input: SessionActivityInput): SessionActivity {
+  const isInterruptMsg = !!input.lastMessagePreview && (
+    input.lastMessagePreview.startsWith("[Request interrupted") ||
+    input.lastMessagePreview.startsWith("[Request cancelled")
+  );
+  const lastRoleIsUser = input.lastMessageRole === "user" && !isInterruptMsg;
+  const recentlyUpdated = (input.now - input.updatedAt) < AGENT_IDLE_GRACE_MS;
+
+  const isUnresponsive = input.status === "active" && !input.daemonAlive && (
+    (lastRoleIsUser && !recentlyUpdated) ||
+    (input.hasPending && !recentlyUpdated)
+  );
+
+  const isIdle = isSessionIdle({
+    agentStatus: input.agentStatus,
+    agentStatusUpdatedAt: input.agentStatusUpdatedAt,
+    hasPending: input.hasPending,
+    lastRoleIsUser,
+    recentlyUpdated,
+    daemonAlive: input.daemonAlive,
+    now: input.now,
+  });
+
+  return { isIdle, isUnresponsive, lastRoleIsUser, recentlyUpdated };
+}
+
+// How recently a subagent must have produced output to keep its parent in
+// "working" on the strength of recent activity alone. Wider than the
+// AGENT_IDLE_GRACE so a child mid-tool-call (quiet but live) doesn't drop its
+// parent out of "working" prematurely.
+export const SUBAGENT_PRODUCING_GRACE_MS = 5 * 60 * 1000;
+
+// Whether a subagent child is still PRODUCING, and so should keep its idle
+// parent classified as "working" (the orchestrator-waiting-on-its-workers case).
+// The trap this guards against: "alive" is not "working". `convStatus` is the
+// conversation status — "active" for nearly every non-completed conversation,
+// never the agent status — and a managed session keeps heartbeating (so the
+// caller's `isLive` stays true) for hours after its agent has gone idle, e.g. a
+// forked subagent that finished but whose daemon is still up. Either signal
+// alone would pin a long-finished parent in "working" forever. So we accept two
+// independent proofs of real work:
+//   - recent output: the child synced something within the grace window. This
+//     stands alone and covers Task-tool subagents that have no managed session
+//     of their own (no agent_status to read), so liveness can't be checked.
+//   - a live session whose agent_status is genuinely active. The caller passes
+//     the child's agent_status already coerced for heartbeat staleness (so a
+//     re-asserted-stale "working" on a long-quiet child reads as not-active).
+export function subagentKeepsParentWorking(input: {
+  isSubagent: boolean;
+  convStatus: string;
+  updatedAt: number;
+  isLive: boolean;
+  agentStatus: string | undefined;
+  now: number;
+}): boolean {
+  if (!input.isSubagent || input.convStatus !== "active") return false;
+  if (input.now - input.updatedAt < SUBAGENT_PRODUCING_GRACE_MS) return true;
+  return input.isLive && ACTIVE_AGENT_STATUSES.has(input.agentStatus ?? "");
+}
+
+// A single, coarse "what is this session doing" label for CLI discovery and the
+// `cast monitor` dashboard. Collapses the inbox's many derived flags into three
+// buckets, matching the web inbox's categorization (isSessionWaitingForInput):
+//   - "working":     the agent is actively producing, has deliverable queued
+//                    work, or the user just sent a message it hasn't picked up.
+//   - "needs_input": the ball is in the user's court — a finished turn waiting
+//                    to be read, an open question / permission prompt, or a dead
+//                    session with output. This is the web's NEEDS INPUT bucket:
+//                    a settled session with content always lands here (pinned
+//                    included — a pin means "ping me when this is free").
+//   - "idle":        nothing to act on: blank sessions (no messages yet).
+// This is the server-side mirror of the web store's isSessionWaitingForInput,
+// minus the client-only queued-message signal, and is the ONE place the rule
+// lives — the CLI only ever string-matches the resulting work_state.
+export type WorkState = "working" | "needs_input" | "idle";
+
+export interface WorkStateInput {
+  /** Heartbeat-fresh managed_sessions.agent_status, or undefined when stale/absent. */
+  agentStatus?: string;
+  isIdle: boolean;
+  awaitingInput: boolean;
+  hasPending: boolean;
+  isUnresponsive: boolean;
+  messageCount: number;
+}
+
+// Accepted `--state` filter values for CLI discovery, normalized to a canonical
+// token. "pinned" and "live" are orthogonal to work_state (they filter the
+// is_pinned / is_live flags), so callers handle them specially. Returns null for
+// "all"/unset/garbage so an unrecognized value transparently means "no filter".
+export type WorkStateFilter = WorkState | "pinned" | "live";
+
+export function normalizeWorkStateFilter(raw: string | undefined | null): WorkStateFilter | null {
+  const v = (raw || "").trim().toLowerCase().replace(/[\s_]+/g, "-");
+  switch (v) {
+    case "working":
+    case "active":
+    case "busy":
+      return "working";
+    case "needs-input":
+    case "needs":
+    case "needsinput":
+    case "blocked":
+    case "input":
+    case "attention":
+      return "needs_input";
+    case "idle":
+    case "done":
+    case "waiting":
+      return "idle";
+    case "pinned":
+    case "pin":
+      return "pinned";
+    case "live":
+    case "running":
+      return "live";
+    default:
+      return null;
+  }
+}
+
+export function classifyWorkState(input: WorkStateInput): WorkState {
+  const { agentStatus, isIdle, awaitingInput, hasPending, isUnresponsive, messageCount } = input;
+  const dead = !!agentStatus && DEAD_AGENT_STATUSES.has(agentStatus);
+  const canDeliver = !isUnresponsive && !dead;
+  const hasMsgs = messageCount > 0;
+
+  // Blocked on the user right now (open AskUserQuestion poll, or a tool-use
+  // awaiting approve/deny) → needs input. A poll/permission on an empty session
+  // is just startup noise, so gate on having real content.
+  if (awaitingInput && hasMsgs) return "needs_input";
+  if (agentStatus === "permission_blocked" && hasMsgs) return "needs_input";
+
+  // Actively producing, or carrying deliverable queued work on a live daemon.
+  if (agentStatus && ACTIVE_AGENT_STATUSES.has(agentStatus)) return "working";
+  if (canDeliver && hasPending) return "working";
+
+  // Dead with output → a human needs to read/restart it.
+  if (dead) return hasMsgs ? "needs_input" : "idle";
+
+  // Settled with content: the ball is in the user's court — the web inbox files
+  // this under NEEDS INPUT (it has no "idle with content" bucket), so the CLI
+  // matches. This also covers unresponsive sessions (a hanging user message on
+  // a dead daemon needs a human to restart it).
+  if (isIdle) return hasMsgs ? "needs_input" : "idle";
+
+  // Not idle but no active status either: mid-grace right after a turn, or the
+  // user just sent a message the agent hasn't picked up — work in flight.
+  return hasMsgs ? "working" : "idle";
 }

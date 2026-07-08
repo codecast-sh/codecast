@@ -1,9 +1,10 @@
-import { mutation, query, internalMutation } from "./_generated/server";
+import { mutation, query, internalMutation } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { findConversationBySessionReference } from "./conversationSessionLookup";
+import { AGENT_STATUSES } from "@codecast/shared/contracts";
 
 async function getAuthenticatedUserId(
   ctx: { db: any },
@@ -22,6 +23,18 @@ async function getAuthenticatedUserId(
   }
 
   return null;
+}
+
+// A cross-user reclaim of a managed session is legitimate only when the
+// current owner's daemon is gone (the same session resurfacing after a local
+// logout/login). Heartbeat rows are at most ~60s stale by design
+// (HEARTBEAT_REFRESH_MS throttling); 3 minutes clears that with a full
+// outage's margin. A fresh heartbeat means a live daemon still manages the
+// session, and handing its row to another user silently reroutes message
+// delivery — the freeze that motivated this guard.
+export const CROSS_USER_RECLAIM_STALE_MS = 3 * 60 * 1000;
+export function canReclaimCrossUser(existingLastHeartbeat: number, now: number): boolean {
+  return now - existingLastHeartbeat >= CROSS_USER_RECLAIM_STALE_MS;
 }
 
 export const registerManagedSession = mutation({
@@ -86,7 +99,15 @@ export const registerManagedSession = mutation({
       // resurface under a different local user (e.g. after a logout/login),
       // and the daemon making this call has the legitimate live process.
       // Without this, the next heartbeat throws Unauthorized in a loop.
+      // Guarded by canReclaimCrossUser: a live owner (fresh heartbeat) is
+      // never robbed — see the helper's comment for the freeze this prevents.
       if (existing.user_id.toString() !== authUserId.toString()) {
+        if (!canReclaimCrossUser(existing.last_heartbeat, now)) {
+          console.warn(
+            `[registerManagedSession] refusing cross-user reclaim of ${args.session_id}: owner ${existing.user_id} heartbeat is fresh`,
+          );
+          return { notOwner: true as const, owner: existing.user_id.toString() } as any;
+        }
         console.warn(
           `[registerManagedSession] reclaiming session ${args.session_id} from ${existing.user_id} -> ${authUserId}`,
         );
@@ -242,10 +263,11 @@ export const updateManagedSessionId = mutation({
   },
 });
 
+// Derived from the single source of truth in @codecast/shared/contracts so the
+// CLI daemon, the browser store, and this validator can never drift. Accepts
+// exactly AGENT_STATUSES — same set as before, just no longer hand-maintained.
 const agentStatusValidator = v.union(
-  v.literal("working"), v.literal("idle"), v.literal("permission_blocked"),
-  v.literal("compacting"), v.literal("thinking"), v.literal("connected"),
-  v.literal("stopped"), v.literal("starting"), v.literal("resuming"),
+  ...AGENT_STATUSES.map((s) => v.literal(s)),
 );
 
 // Shared by heartbeat + heartbeatBatch: compute one session's heartbeat patch.
@@ -574,7 +596,7 @@ export const markMessageDelivered = mutation({
 export const updateAgentStatus = mutation({
   args: {
     conversation_id: v.id("conversations"),
-    agent_status: v.union(v.literal("working"), v.literal("idle"), v.literal("permission_blocked"), v.literal("compacting"), v.literal("thinking"), v.literal("connected"), v.literal("stopped"), v.literal("starting"), v.literal("resuming")),
+    agent_status: agentStatusValidator,
     client_ts: v.optional(v.number()),
     api_token: v.optional(v.string()),
     permission_mode: v.optional(v.union(v.literal("default"), v.literal("plan"), v.literal("acceptEdits"), v.literal("bypassPermissions"), v.literal("dontAsk"), v.literal("auto"))),
@@ -748,6 +770,9 @@ export const listActiveSessions = query({
       let worktreeName: string | undefined;
       let headline: string | undefined;
       let isSubagent: boolean | undefined;
+      let conversationUpdatedAt: number | undefined;
+      let lastMessagePreview: string | undefined;
+      let lastMessageRole: string | undefined;
 
       if (session.conversation_id) {
         const conv = await ctx.db.get(session.conversation_id);
@@ -762,6 +787,13 @@ export const listActiveSessions = query({
           gitBranch = conv.git_branch;
           worktreeName = conv.worktree_name;
           isSubagent = conv.is_subagent;
+          // updated_at moves on real conversation activity (messages, status) but
+          // NOT on idle heartbeats or metrics writes — the honest "last active"
+          // signal. The preview/role give every row something identifiable even
+          // when no insight headline exists (common for short/dead sessions).
+          conversationUpdatedAt = conv.updated_at;
+          lastMessagePreview = conv.last_message_preview;
+          lastMessageRole = conv.last_message_role;
 
           const insight = await ctx.db
             .query("session_insights")
@@ -774,6 +806,20 @@ export const listActiveSessions = query({
         }
       }
 
+      // The current_* copies on the registry doc are throttled to a ~5min write
+      // (SNAPSHOT_THROTTLE_MS in reportMetrics) to keep listInboxSessions' read
+      // set stable. That staleness is fine for the inbox but wrong for this
+      // monitoring view, which sorts and sums these numbers. Read the freshest
+      // time-series sample instead (≤30s old for active sessions, ≤3min for
+      // idle) and prefer it. This page is the ONLY consumer of
+      // listActiveSessions, so the extra per-session read never touches the hot
+      // inbox subscription the throttle exists to protect.
+      const latestMetric = await ctx.db
+        .query("session_metrics")
+        .withIndex("by_session_collected", (q: any) => q.eq("session_id", session.session_id))
+        .order("desc")
+        .first();
+
       results.push({
         _id: session._id,
         session_id: session.session_id,
@@ -785,12 +831,16 @@ export const listActiveSessions = query({
         agent_status: session.agent_status,
         agent_status_updated_at: session.agent_status_updated_at,
         permission_mode: session.permission_mode,
-        current_cpu: session.current_cpu,
-        current_memory: session.current_memory,
-        current_pid_count: session.current_pid_count,
+        // Prefer the freshest sample; fall back to the throttled snapshot only
+        // when no time-series row survives the 2h retention (e.g. long-idle).
+        current_cpu: latestMetric?.cpu ?? session.current_cpu,
+        current_memory: latestMetric?.memory ?? session.current_memory,
+        current_pid_count: latestMetric?.pid_count ?? session.current_pid_count,
         agent_pid: session.agent_pid,
         awake_idle_ms: session.awake_idle_ms,
-        last_metrics_at: session.last_metrics_at,
+        // Honest "as of" for the displayed metrics: the sample time, not the
+        // throttled snapshot time.
+        last_metrics_at: latestMetric?.collected_at ?? session.last_metrics_at,
         conversation_title: conversationTitle,
         project_path: projectPath,
         agent_type: agentType,
@@ -801,6 +851,9 @@ export const listActiveSessions = query({
         worktree_name: worktreeName,
         headline,
         is_subagent: isSubagent,
+        conversation_updated_at: conversationUpdatedAt,
+        last_message_preview: lastMessagePreview,
+        last_message_role: lastMessageRole,
       });
     }
 
@@ -888,30 +941,44 @@ export const getConversationBySessionId = query({
   },
 });
 
-// Reap dead managed_sessions. The daemon heartbeats every live session every ~30s,
-// so a row not heartbeated in over an hour belongs to a session whose process/tmux
-// is long gone. These rows accumulate (one per resumed/forked tmux session that was
-// never cleanly unregistered) and bloat every listInboxSessions `.collect()` of
-// managed_sessions — the read grows unboundedly, inflating the cost of the hottest
-// inbox query. A periodic sweep keeps the table lean. Deletion is safe: if such a
-// session ever revives, the daemon re-registers it via registerManagedSession.
+// Reap dead managed_sessions — rows whose daemon stopped heartbeating (a crash, a
+// kill, or a forked tmux that was never cleanly unregistered). This is pure
+// housekeeping, NOT correctness: clean shutdowns delete their own row, and every
+// reader already ignores stale rows by filtering on heartbeat age
+// (HEARTBEAT_ALIVE_MS), so a dead row never shows up as "live". The reaper just
+// stops the registry growing without bound — Convex won't drop the row on its own
+// (a dead session's final row is its newest version, not a superseded one).
+//
+// The one non-obvious bit: `last_heartbeat` is indexed and rewritten every ~45s per
+// live session, and Convex keeps ~10 days of old index versions, so the OLD end of
+// `by_heartbeat` is a multi-million-row tombstone graveyard. An unbounded
+// `lt(cutoff)` scan timed out fetching even one row. The fix is the LOWER bound:
+// gte(cutoff - WINDOW) lets the index seek straight to the recent sliver and skip
+// the graveyard. That range is also disjoint from live heartbeats (which land at
+// > cutoff), so the deletes never collide with heartbeat writes. Everything in range
+// is dead by definition. WINDOW only needs to exceed the gap between cron runs so a
+// death is always caught before it ages out — 6h gives the 10-min cron wide margin.
+const REAP_WINDOW_MS = 6 * 60 * 60 * 1000;
 export const reapStaleManagedSessions = internalMutation({
-  args: { cutoffMs: v.optional(v.number()), max: v.optional(v.number()) },
+  args: { cutoffMs: v.optional(v.number()) },
   handler: async (ctx, args) => {
-    const cutoff = Date.now() - (args.cutoffMs ?? 60 * 60 * 1000); // 1h default
-    const max = args.max ?? 1000;
-    // Range-scan only the stale rows via the by_heartbeat index. This keeps the
-    // read set to the rows we delete (last_heartbeat < cutoff). Live sessions get
-    // fresh heartbeats (> cutoff), so their constant writes fall OUTSIDE this range
-    // and can't invalidate the sweep — avoiding the OCC stampede a full-table scan
-    // hits while reportMetrics/heartbeat are writing.
-    const stale = await ctx.db
+    const cutoff = Date.now() - (args.cutoffMs ?? 60 * 60 * 1000); // dead = no beat in 1h
+    const readStart = Date.now();
+    const dead = await ctx.db
       .query("managed_sessions")
-      .withIndex("by_heartbeat", (q: any) => q.lt("last_heartbeat", cutoff))
-      .take(max);
-    for (const s of stale) {
-      await ctx.db.delete(s._id);
+      .withIndex("by_heartbeat", (q: any) =>
+        q.gte("last_heartbeat", cutoff - REAP_WINDOW_MS).lt("last_heartbeat", cutoff)
+      )
+      .collect();
+    const readMs = Date.now() - readStart;
+
+    for (const s of dead) await ctx.db.delete(s._id);
+
+    if (dead.length > 0) {
+      console.log(
+        `reapStaleManagedSessions: deleted ${dead.length} dead session(s) (scan ${readMs}ms)`
+      );
     }
-    return { deleted: stale.length, hasMore: stale.length === max };
+    return { deleted: dead.length };
   },
 });
