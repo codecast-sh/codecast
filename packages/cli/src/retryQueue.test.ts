@@ -583,6 +583,36 @@ describe("RetryQueue", () => {
     }
   });
 
+  it("persists compactly and debounced, and reloads across a restart", async () => {
+    // Regression for BUG 1: every mutation used to synchronously rewrite the whole
+    // queue as pretty-printed JSON, blocking the daemon's event loop. Writes must now
+    // be debounced + compact, yet still survive a restart (crash-safety preserved).
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rq-persist-"));
+    const persistPath = path.join(dir, "retry-queue.json");
+    try {
+      const q = new RetryQueue({ persistPath, persistDebounceMs: 20, onLog: () => {} });
+      q.add("addMessages", { conversationId: "c1", messages: [{ messageUuid: "a" }] });
+
+      // Debounced: the enqueue does NOT write to disk synchronously.
+      expect(fs.existsSync(persistPath)).toBe(false);
+
+      // A single coalesced write lands after the debounce window.
+      await new Promise((r) => setTimeout(r, 60));
+      const raw = fs.readFileSync(persistPath, "utf-8");
+      expect(raw).not.toContain("\n"); // compact, not pretty-printed
+      expect(Array.isArray(JSON.parse(raw))).toBe(true);
+
+      // A fresh queue restores the op from disk.
+      const reloaded = new RetryQueue({ persistPath, onLog: () => {} });
+      expect(reloaded.getPendingOperations().length).toBe(1);
+      expect(reloaded.getPendingOperations()[0].params.conversationId).toBe("c1");
+      reloaded.stop();
+      q.stop();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("compacts many persisted addMessages ops for one conversation on load", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rq-compact-"));
     const persistPath = path.join(dir, "retry-queue.json");

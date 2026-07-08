@@ -293,11 +293,8 @@ export const create = mutation({
 
     let project_id: Id<"projects"> | undefined;
     if (args.project_id) {
-      const project = await ctx.db
-        .query("projects")
-        .filter((q) => q.eq(q.field("_id"), args.project_id as any))
-        .first();
-      if (project) project_id = project._id;
+      const pid = ctx.db.normalizeId("projects", args.project_id);
+      if (pid && (await ctx.db.get(pid))) project_id = pid;
     }
 
     let plan_id: Id<"plans"> | undefined;
@@ -567,6 +564,11 @@ export const list = query({
     }
 
     let tasks: any[];
+    // The assignee and project_id indexes are global — they return rows the
+    // caller may not be able to see, so those two branches get an explicit
+    // owner-or-team-member filter below. The other branches are already
+    // user/workspace-scoped.
+    let needsAccessFilter = false;
     if (resolvedAssignee) {
       // When filtering by assignee, query the assignee index directly so
       // tasks assigned to the user but missing team_id aren't dropped by
@@ -577,11 +579,13 @@ export const list = query({
           q.eq("assignee", resolvedAssignee)
         )
         .collect();
+      needsAccessFilter = true;
     } else if (args.project_id) {
       tasks = await ctx.db
         .query("tasks")
         .withIndex("by_project_id", (q) => q.eq("project_id", args.project_id as any))
         .collect();
+      needsAccessFilter = true;
     } else if (args.status && !args.team) {
       tasks = await ctx.db
         .query("tasks")
@@ -591,6 +595,18 @@ export const list = query({
         .collect();
     } else {
       tasks = await db.query("tasks").collect();
+    }
+
+    if (needsAccessFilter) {
+      const memberships = await ctx.db
+        .query("team_memberships")
+        .withIndex("by_user_id", (q: any) => q.eq("user_id", auth.userId))
+        .collect();
+      const memberTeamIds = new Set(memberships.map((m: any) => String(m.team_id)));
+      tasks = tasks.filter((t: any) =>
+        String(t.user_id) === String(auth.userId) ||
+        (t.team_id && memberTeamIds.has(String(t.team_id)))
+      );
     }
 
     if (!args.status && !args.include_done) {
@@ -921,12 +937,13 @@ export const addDep = mutation({
       if (!current.includes(args.blocks)) {
         await ctx.db.patch(task._id, { blocks: [...current, args.blocks], updated_at: Date.now() });
       }
-      // Also add reverse dep
+      // Also add reverse dep — only on a task the caller can access, so a
+      // dependency edge can't be forced onto someone else's task.
       const other = await ctx.db
         .query("tasks")
         .withIndex("by_short_id", (q) => q.eq("short_id", args.blocks!))
         .first();
-      if (other) {
+      if (other && (await canAccessTask(ctx, auth.userId, other))) {
         const otherBlocked = other.blocked_by || [];
         if (!otherBlocked.includes(args.short_id)) {
           await ctx.db.patch(other._id, { blocked_by: [...otherBlocked, args.short_id], updated_at: Date.now() });
@@ -939,12 +956,12 @@ export const addDep = mutation({
       if (!current.includes(args.blocked_by)) {
         await ctx.db.patch(task._id, { blocked_by: [...current, args.blocked_by], updated_at: Date.now() });
       }
-      // Also add reverse dep
+      // Also add reverse dep — only on a task the caller can access.
       const other = await ctx.db
         .query("tasks")
         .withIndex("by_short_id", (q) => q.eq("short_id", args.blocked_by!))
         .first();
-      if (other) {
+      if (other && (await canAccessTask(ctx, auth.userId, other))) {
         const otherBlocks = other.blocks || [];
         if (!otherBlocks.includes(args.short_id)) {
           await ctx.db.patch(other._id, { blocks: [...otherBlocks, args.short_id], updated_at: Date.now() });
@@ -1889,11 +1906,8 @@ export const webCreate = mutation({
 
     let project_id: Id<"projects"> | undefined;
     if (args.project_id) {
-      const project = await ctx.db
-        .query("projects")
-        .filter((q) => q.eq(q.field("_id"), args.project_id as any))
-        .first();
-      if (project) project_id = project._id;
+      const pid = ctx.db.normalizeId("projects", args.project_id);
+      if (pid && (await ctx.db.get(pid))) project_id = pid;
     }
 
     let plan_id: Id<"plans"> | undefined;
@@ -2484,7 +2498,7 @@ export const heartbeat = mutation({
       .query("tasks")
       .withIndex("by_short_id", (q: any) => q.eq("short_id", args.short_id))
       .first();
-    if (!task) throw new Error("Task not found");
+    if (!task || !(await canAccessTask(ctx, auth.userId, task))) throw new Error("Task not found");
 
     const updates: any = { last_heartbeat: Date.now() };
     if (args.progress_pct !== undefined) updates.progress_pct = args.progress_pct;

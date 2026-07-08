@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { categorizeSessions, isSessionBlockedOnUser, type InboxSession } from "../inboxStore";
+import { categorizeSessions, isSessionHardBlocked, type InboxSession } from "../inboxStore";
 
 // Guards the Anchor v2 inbox rule (and the round-1 regression it fixed): an
 // anchor's standing thread is HIDDEN from the inbox in its normal idle-after-a-turn
@@ -40,9 +40,9 @@ describe("anchor inbox visibility", () => {
     expect(inSorted({ a: mk("a") }, "a")).toBe(true);
   });
 
-  it("isSessionBlockedOnUser is narrow: idle-with-content is not 'blocked'", () => {
-    expect(isSessionBlockedOnUser(mk("x"))).toBe(false);
-    expect(isSessionBlockedOnUser(mk("x", { awaiting_input: true }))).toBe(true);
-    expect(isSessionBlockedOnUser(mk("x", { pending_api_error: true }))).toBe(true);
+  it("isSessionHardBlocked is narrow: idle-with-content is not 'blocked'", () => {
+    expect(isSessionHardBlocked(mk("x"))).toBe(false);
+    expect(isSessionHardBlocked(mk("x", { awaiting_input: true }))).toBe(true);
+    expect(isSessionHardBlocked(mk("x", { pending_api_error: true }))).toBe(true);
   });
 });

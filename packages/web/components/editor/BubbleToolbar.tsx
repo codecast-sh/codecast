@@ -10,6 +10,10 @@ import {
   Highlighter,
 } from "lucide-react";
 import { useState, useCallback } from "react";
+import { isMac } from "../../shortcuts";
+
+// TipTap's marks bind to Mod (Cmd on macOS, Ctrl elsewhere).
+const MOD = isMac ? "Cmd" : "Ctrl";
 
 interface BubbleToolbarProps {
   editor: Editor;
@@ -105,21 +109,21 @@ export function BubbleToolbar({ editor }: BubbleToolbarProps) {
           <ToolbarButton
             onClick={() => (editor.chain().focus() as any).toggleBold().run()}
             isActive={editor.isActive("bold")}
-            title="Bold (Cmd+B)"
+            title={`Bold (${MOD}+B)`}
           >
             <Bold className="w-3.5 h-3.5" />
           </ToolbarButton>
           <ToolbarButton
             onClick={() => (editor.chain().focus() as any).toggleItalic().run()}
             isActive={editor.isActive("italic")}
-            title="Italic (Cmd+I)"
+            title={`Italic (${MOD}+I)`}
           >
             <Italic className="w-3.5 h-3.5" />
           </ToolbarButton>
           <ToolbarButton
             onClick={() => (editor.chain().focus() as any).toggleUnderline().run()}
             isActive={editor.isActive("underline")}
-            title="Underline (Cmd+U)"
+            title={`Underline (${MOD}+U)`}
           >
             <Underline className="w-3.5 h-3.5" />
           </ToolbarButton>
@@ -133,7 +137,7 @@ export function BubbleToolbar({ editor }: BubbleToolbarProps) {
           <ToolbarButton
             onClick={() => (editor.chain().focus() as any).toggleCode().run()}
             isActive={editor.isActive("code")}
-            title="Inline Code (Cmd+E)"
+            title={`Inline Code (${MOD}+E)`}
           >
             <Code className="w-3.5 h-3.5" />
           </ToolbarButton>
@@ -148,7 +152,7 @@ export function BubbleToolbar({ editor }: BubbleToolbarProps) {
           <ToolbarButton
             onClick={handleLinkClick}
             isActive={editor.isActive("link")}
-            title="Link (Cmd+K)"
+            title="Link"
           >
             <Link className="w-3.5 h-3.5" />
           </ToolbarButton>

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { categorizeSessions, computeNewDividerIndex, dropLatchedFeedHasMore, feedPagePersistence, findReusableBlankSession, getSessionRenderKey, isConvexId, isSessionDismissed, isSessionStashed, orchestrationGroupLabelOf, pendingSendConsumed, resolveAssigneeInfo, resolveSessionAuthor, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
+import { categorizeSessions, computeNewDividerIndex, dropLatchedFeedHasMore, feedPagePersistence, findReusableBlankSession, getSessionRenderKey, isConvexId, isSessionDismissed, isSessionStashed, orchestrationGroupLabelOf, PENDING_SEND_PRUNE_GRACE_MS, pendingSendConsumed, reconcilePendingSendForSession, resolveAssigneeInfo, resolveSessionAuthor, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
 import { isPersistedStoreKey } from "../idbCache";
 import { declareViewNav } from "../viewNav";
 
@@ -1828,6 +1828,34 @@ describe("pendingSendConsumed — server-advanced gate", () => {
   });
 });
 
+describe("reconcilePendingSendForSession — prune grace window", () => {
+  // ACTIVE status → pendingSendConsumed is true immediately; only the grace
+  // window stands between a just-dispatched send and the prune.
+  const consumedSession = { agent_status: "working", is_idle: false, has_pending: false, updated_at: 999_999 } as any;
+  const msg = (over: Record<string, unknown>) =>
+    ({ _id: "m1", _clientId: "m1", role: "user", content: "hi", _isOptimistic: true, ...over }) as any;
+
+  it("keeps a just-sent message even when the session already reads consumed", () => {
+    // The dispatch retry ladder hasn't had time to fail (and mark _isFailed);
+    // pruning now would destroy the only copy of the user's text.
+    const pm: Record<string, any[]> = { c1: [msg({ timestamp: Date.now() })] };
+    expect(reconcilePendingSendForSession(pm, "c1", consumedSession, null)).toBe(false);
+    expect(pm.c1.length).toBe(1);
+  });
+
+  it("prunes a consumed send once it is older than the grace window", () => {
+    const pm: Record<string, any[]> = { c1: [msg({ timestamp: Date.now() - PENDING_SEND_PRUNE_GRACE_MS - 1 })] };
+    expect(reconcilePendingSendForSession(pm, "c1", consumedSession, null)).toBe(true);
+    expect(pm.c1).toBeUndefined();
+  });
+
+  it("keeps failed sends forever (the user may retry them)", () => {
+    const pm: Record<string, any[]> = { c1: [msg({ timestamp: Date.now() - PENDING_SEND_PRUNE_GRACE_MS - 1, _isFailed: true })] };
+    expect(reconcilePendingSendForSession(pm, "c1", consumedSession, null)).toBe(false);
+    expect(pm.c1.length).toBe(1);
+  });
+});
+
 describe("session-view recording (MRU order + unread divider anchor)", () => {
   const realNow = Date.now;
   let clock = 1000;
@@ -1984,64 +2012,42 @@ describe("orchestration grouping", () => {
     expect(orchestrationGroupLabelOf(mk("d", { project_path: "/Users/x/src/codecast" }))).toBeNull();
   });
 
-  it("clusters >=2 plan workers (main-repo path) under the plan label", () => {
-    // The real shape: workers carry active_plan but a plain main-repo project_path.
+  it("sessions sharing a plan stay in their status buckets — the status view never clusters by plan", () => {
+    // Regression (ct-37908): the status view used to fold ≥2 plan-bound sessions
+    // into a collapsed group, hiding a working session from Working and
+    // undercounting the sidebar's needs-input badge. Grouping by plan is now
+    // exclusively the "By plan" view's job (groupSessionsByPlan).
     const sessions = {
       a: mk("a", { active_plan: PLAN, project_path: "/Users/x/src/codecast", updated_at: 3 }),
       b: mk("b", { active_plan: PLAN, project_path: "/Users/x/src/codecast", updated_at: 2 }),
+      wt1: mk("wt1", { project_path: WT, updated_at: 3 }),
+      wt2: mk("wt2", { project_path: WT, updated_at: 2 }),
       main: mk("main", { project_path: "/Users/x/src/codecast", updated_at: 4 }),
     };
     const r = categorizeSessions(sessions, new Set());
-    expect(r.orchestrationGroups.get("pl-85 · Architecture hardening")?.map((s) => s._id).sort())
-      .toEqual(["a", "b"]);
     const flat = new Set([...r.pinned, ...r.newSessions, ...r.needsInput, ...r.working].map((s) => s._id));
-    expect(flat.has("a")).toBe(false);
-    expect(flat.has("b")).toBe(false);
-    // a plain main-repo session (no plan) is never grouped and stays flat
-    expect(flat.has("main")).toBe(true);
+    for (const id of ["a", "b", "wt1", "wt2", "main"]) expect(flat.has(id)).toBe(true);
   });
 
-  it("clusters >=2 same-worktree workers (no plan) under the worktree label", () => {
-    const sessions = {
-      a: mk("a", { project_path: WT, updated_at: 3 }),
-      b: mk("b", { project_path: WT, updated_at: 2 }),
-      main: mk("main", { project_path: "/Users/x/src/codecast", updated_at: 4 }),
-    };
-    const r = categorizeSessions(sessions, new Set());
-    expect(r.orchestrationGroups.get("⑂ arch-hardening-top-six")?.map((s) => s._id).sort())
-      .toEqual(["a", "b"]);
-    expect(new Set([...r.needsInput, ...r.working].map((s) => s._id)).has("main")).toBe(true);
-  });
-
-  it("leaves a lone worker (cluster of 1) inline", () => {
-    const sessions = {
-      a: mk("a", { active_plan: PLAN, project_path: "/Users/x/src/codecast" }),
-      main: mk("main", { project_path: "/Users/x/src/codecast" }),
-    };
-    const r = categorizeSessions(sessions, new Set());
-    expect(r.orchestrationGroups.size).toBe(0);
-    const flat = new Set([...r.needsInput, ...r.working].map((s) => s._id));
-    expect(flat.has("a")).toBe(true);
-  });
-
-  it("does not group a worker already nested under a conversation parent", () => {
+  it("a plan-bound session nested under a conversation parent still nests, never a loose card", () => {
     const sessions = {
       parent: mk("parent", { project_path: "/Users/x/src/codecast" }),
       a: mk("a", { active_plan: PLAN, parent_conversation_id: "parent" }),
       b: mk("b", { active_plan: PLAN, parent_conversation_id: "parent" }),
     };
     const r = categorizeSessions(sessions, new Set());
-    expect(r.orchestrationGroups.size).toBe(0);
     expect(r.subsByParent.get("parent")?.length).toBe(2);
+    const flat = new Set([...r.needsInput, ...r.working].map((s) => s._id));
+    expect(flat.has("a")).toBe(false);
+    expect(flat.has("b")).toBe(false);
   });
 
-  it("does not pull pinned workers into an orchestration group", () => {
+  it("pinned plan-bound sessions stay in Pinned", () => {
     const sessions = {
       a: mk("a", { active_plan: PLAN, is_pinned: true, inbox_pinned_at: 5 }),
       b: mk("b", { active_plan: PLAN, is_pinned: true, inbox_pinned_at: 6 }),
     };
     const r = categorizeSessions(sessions, new Set());
-    expect(r.orchestrationGroups.size).toBe(0);
     expect(r.pinned.map((s) => s._id).sort()).toEqual(["a", "b"]);
   });
 });

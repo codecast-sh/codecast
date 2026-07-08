@@ -344,10 +344,15 @@ export const checkDaemonHealth = internalMutation({
     const OFFLINE_THRESHOLD_MS = 10 * 60 * 1000; // 10 min no heartbeat = offline
     const RECENTLY_ACTIVE_MS = 24 * 60 * 60 * 1000; // Only care about daemons active in last 24h
 
-    const allUsers = await ctx.db.query("users").collect();
-    const activeUsers = allUsers.filter(
-      (u) => u.last_heartbeat && now - u.last_heartbeat < RECENTLY_ACTIVE_MS
-    );
+    // Range-scan only the handful of daemons that beat within the last 24h via
+    // the by_last_heartbeat index, instead of loading the whole (growing) users
+    // table every 5min. gte covers the RECENTLY_ACTIVE_MS window exactly.
+    const activeUsers = await ctx.db
+      .query("users")
+      .withIndex("by_last_heartbeat", (q) =>
+        q.gte("last_heartbeat", now - RECENTLY_ACTIVE_MS)
+      )
+      .collect();
 
     let alertsCreated = 0;
 

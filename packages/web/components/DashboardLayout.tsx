@@ -158,11 +158,15 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     s => s.viewingDismissedId,
     s => s.commentRailOpen,
     s => s.clientState.ui?.comments_enabled ?? false,
-    // Re-render the header toggle when the viewed conversation gains/loses
-    // comments, so a teammate's comment surfaces the toggle even with the tools off.
-    // The viewed conversation is currentSessionId for a live one, viewingDismissedId
-    // for a dismissed one — check both.
-    s => { const ids = [s.currentSessionId, s.viewingDismissedId].filter(Boolean); return ids.length > 0 && Object.values(s.comments).some((c: any) => ids.includes(c.conversation_id)); },
+    // Re-render the header toggle when comments change, so a teammate's comment on
+    // the viewed conversation surfaces the toggle even with the tools off. Subscribe
+    // to the comments map REF (O(1) Object.is compare), not a full scan: comments is
+    // low-churn (heartbeats never touch it, so the ref is stable between comment
+    // syncs), and the actual "does the viewed conversation have comments" boolean is
+    // derived below off the same ref. Scanning all comments here re-ran on every ~1s
+    // store heartbeat notification app-wide. The viewed conversation id is already a
+    // dep (currentSessionId / viewingDismissedId above).
+    s => s.comments,
     s => s.compose.open,
     s => s.compose.nonce,
     s => s.tabs.length,
@@ -256,7 +260,16 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // has comments still surfaces the toggle so you can open it to read + reply.
   const commentsEnabled = s.clientState.ui?.comments_enabled ?? false;
   const viewedConvIds = [s.currentSessionId, s.viewingDismissedId].filter(Boolean) as string[];
-  const convHasComments = viewedConvIds.length > 0 && Object.values(s.comments).some((c: any) => viewedConvIds.includes(c.conversation_id));
+  // Conversation ids that carry at least one comment, indexed once per comments-map
+  // change (not per render) so the toggle check below is an O(1) Set lookup.
+  const commentedConvIds = useMemo(() => {
+    const set = new Set<string>();
+    for (const c of Object.values(s.comments) as { conversation_id?: string }[]) {
+      if (c.conversation_id) set.add(c.conversation_id);
+    }
+    return set;
+  }, [s.comments]);
+  const convHasComments = viewedConvIds.some((id) => commentedConvIds.has(id));
   const showCommentsToggle = isViewingConversation && (commentsEnabled || convHasComments);
 
 

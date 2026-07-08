@@ -49,6 +49,80 @@ async function applyCancel(ctx: TaskCtx, task: Doc<"agent_tasks">) {
   return true;
 }
 
+// Re-arm a retired schedule. Exists for the hide-gesture affordance: killing a
+// session cancels its injecting schedules as a side effect (see
+// cancelTasksBoundToConversation), and both the "Keep schedule" toast action
+// and undo-of-hide need to reverse exactly that side effect. Also revives a
+// failed schedule. Recurring re-arms one interval out (not an immediate fire);
+// a once-task keeps its future run_at or re-arms a minute out.
+async function applyReactivate(ctx: TaskCtx, task: Doc<"agent_tasks">) {
+  if (task.status !== "completed" && task.status !== "failed") return false;
+  await ctx.db.patch(task._id, {
+    status: "scheduled",
+    run_at:
+      task.schedule_type === "event"
+        ? undefined
+        : task.schedule_type === "recurring" && task.interval_ms
+          ? Date.now() + task.interval_ms
+          : task.run_at && task.run_at > Date.now()
+            ? task.run_at
+            : Date.now() + 60_000,
+  });
+  return true;
+}
+
+// Resolve a spawned run's conversation (session_id IS the uuid the daemon
+// assigned via `claude --session-id`) and stamp agent_task_id on it, so the run
+// stays attributable to its schedule forever — not just while it's the latest.
+// Idempotent; returns the conversation or null if it hasn't synced yet.
+async function stampRunConversation(
+  ctx: TaskCtx,
+  userId: Id<"users">,
+  taskId: Id<"agent_tasks">,
+  runSessionUuid: string
+): Promise<Doc<"conversations"> | null> {
+  const conv = await ctx.db
+    .query("conversations")
+    .withIndex("by_session_id", (q: any) => q.eq("session_id", runSessionUuid))
+    .filter((q: any) => q.eq(q.field("user_id"), userId))
+    .first();
+  if (!conv) return null;
+  if (conv.agent_task_id !== taskId) {
+    await ctx.db.patch(conv._id, { agent_task_id: taskId });
+  }
+  return conv;
+}
+
+// Kill is the strongest triage gesture — "make this stop". Any armed schedule
+// that INJECTS into the killed conversation (originating_conversation_id, the
+// `--context current` kind) would resurrect it on its next fire — the
+// scheduler's injection un-kills the session for delivery — silently defeating
+// the kill. So killSession cancels those schedules in the same transaction.
+// Schedules that merely post summaries to the conversation
+// (target_conversation_id) never wake it, and spawn-type schedules whose RUN
+// was killed are untouched: each run is its own session, and killing one run
+// doesn't mean "stop the program" — the schedule strip on the run gives the
+// user that verb explicitly.
+export async function cancelTasksBoundToConversation(
+  ctx: TaskCtx,
+  userId: Id<"users">,
+  conversationId: Id<"conversations">
+): Promise<number> {
+  let cancelled = 0;
+  for (const status of ["scheduled", "running", "paused"] as const) {
+    const tasks = await ctx.db
+      .query("agent_tasks")
+      .withIndex("by_user_status", (q: any) => q.eq("user_id", userId).eq("status", status))
+      .collect();
+    for (const task of tasks) {
+      if (task.originating_conversation_id?.toString() !== conversationId.toString()) continue;
+      await ctx.db.patch(task._id, { status: "completed" });
+      cancelled++;
+    }
+  }
+  return cancelled;
+}
+
 interface NewTaskArgs {
   title: string;
   prompt: string;
@@ -280,6 +354,10 @@ export const completeTaskRun = mutation({
     // raw and resolved to a conversation at read time in webList, since the run's
     // conversation may not have synced yet at this instant.
     run_session_uuid: v.optional(v.string()),
+    // Agent's explicit "the user should read this run" declaration
+    // (`cast schedule complete --needs-attention`). Skips the clean-run fold
+    // below and keeps the run card escalated in the inbox.
+    needs_attention: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -310,13 +388,52 @@ export const completeTaskRun = mutation({
     const updates: Record<string, any> = {
       last_run_at: now,
       last_run_summary: args.summary,
+      last_run_failed: false,
       last_run_conversation_id: args.conversation_id
         ? args.conversation_id as Id<"conversations">
         : undefined,
       last_run_session_uuid: args.run_session_uuid || undefined,
+      last_run_needs_attention: !!args.needs_attention,
       lease_holder: undefined,
       lease_expires_at: undefined,
     };
+
+    // Keep the run conversation attributable to its schedule even after a
+    // later run overwrites last_run_*. This is the backfill for the daemon's
+    // post-spawn linkRunConversation — it rides whichever completion is
+    // accepted (the agent's own `cast schedule complete` lands first and wins;
+    // the daemon's tmux-exit completion is rejected by the status guard above).
+    // Spawn tasks only: for an inject task the agent self-completes from INSIDE
+    // the originating session, so its uuid resolves to the originating
+    // conversation — which is the schedule's home, not a run of it.
+    let runConv: Doc<"conversations"> | null = null;
+    if (args.run_session_uuid && !task.originating_conversation_id) {
+      runConv = await stampRunConversation(ctx, auth.userId, args.task_id, args.run_session_uuid);
+    }
+
+    // Fold the run the agent just finished, not only the superseded one
+    // (linkRunConversation): the steady state of a healthy repeating spawn
+    // schedule is ZERO loose inbox cards — the schedule's standing row carries
+    // the summary. Strictly gated on the agent's own deliberate completion:
+    // no daemon_id (the daemon's tmux-exit completion means the agent died
+    // WITHOUT self-reporting — that run must stay visible), a real summary,
+    // and no --needs-attention. Same user-intent guards as the previous-run
+    // fold; `once` runs never fold (their single result IS the deliverable).
+    const repeatingSpawn =
+      (task.schedule_type === "recurring" || task.schedule_type === "event") &&
+      !task.originating_conversation_id;
+    if (
+      repeatingSpawn &&
+      !args.daemon_id &&
+      !!args.summary &&
+      !args.needs_attention &&
+      runConv &&
+      !runConv.inbox_pinned_at &&
+      !runConv.inbox_dismissed_at &&
+      !runConv.has_pending_messages
+    ) {
+      await ctx.db.patch(runConv._id, { inbox_dismissed_at: now });
+    }
 
     if (isLateSummary) {
       // Already counted on initial completion; don't double-count or re-arm.
@@ -396,6 +513,14 @@ export const failTaskRun = mutation({
     const newRetryCount = task.retry_count + 1;
     const runUuid = args.run_session_uuid || undefined;
 
+    // A failed run's conversation is one click away from what went wrong —
+    // stamp it too (and last_run_failed gates the auto-fold: a failed run
+    // must stay visible in the inbox when the retry starts). Spawn tasks only,
+    // same reason as completeTaskRun.
+    if (runUuid && !task.originating_conversation_id) {
+      await stampRunConversation(ctx, auth.userId, args.task_id, runUuid);
+    }
+
     if (newRetryCount < maxRetries) {
       await ctx.db.patch(args.task_id, {
         status: "scheduled",
@@ -404,6 +529,7 @@ export const failTaskRun = mutation({
         lease_holder: undefined,
         lease_expires_at: undefined,
         last_run_summary: args.error ? `Failed: ${args.error}` : "Failed",
+        last_run_failed: true,
         last_run_session_uuid: runUuid,
       });
     } else {
@@ -413,6 +539,7 @@ export const failTaskRun = mutation({
         lease_holder: undefined,
         lease_expires_at: undefined,
         last_run_summary: args.error ? `Failed: ${args.error}` : "Failed (max retries)",
+        last_run_failed: true,
         last_run_session_uuid: runUuid,
       });
 
@@ -435,6 +562,70 @@ export const failTaskRun = mutation({
     }
 
     return true;
+  },
+});
+
+// Called by the daemon shortly after spawning a run (bounded retries — the
+// run's conversation appears when its JSONL first syncs). Two jobs, one
+// transaction:
+//
+// 1. Stamp agent_task_id on the new run's conversation, so the schedule strip
+//    and badges work DURING the run and on every historical run.
+// 2. Auto-fold the PREVIOUS run: for a repeating spawn schedule (recurring or
+//    event), each fire lands a whole new conversation in the inbox — an hourly
+//    job is 24 cards a day of pure noise. The moment a new run starts, the
+//    previous run has been superseded: if it completed cleanly, fold it out of
+//    the active inbox (dismiss). Attention stays earned, not granted: a run
+//    that FAILED (last_run_failed), is still active, was pinned, or has a
+//    pending user message is never folded. Folded runs remain reachable — the
+//    Dismissed group, /schedules, and the new run's strip all link the history.
+export const linkRunConversation = mutation({
+  args: {
+    api_token: v.string(),
+    task_id: v.id("agent_tasks"),
+    run_session_uuid: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Unauthorized");
+    const task = await getOwnedTask(ctx, args.task_id, auth.userId);
+    if (!task) return { linked: false, retry: false };
+
+    const conv = await stampRunConversation(ctx, auth.userId, args.task_id, args.run_session_uuid);
+    if (!conv) return { linked: false, retry: true }; // not synced yet — daemon retries
+
+    const repeatingSpawn =
+      (task.schedule_type === "recurring" || task.schedule_type === "event") &&
+      !task.originating_conversation_id;
+    if (repeatingSpawn && !task.last_run_failed) {
+      let prev: Doc<"conversations"> | null = task.last_run_conversation_id
+        ? await ctx.db.get(task.last_run_conversation_id)
+        : null;
+      if (!prev && task.last_run_session_uuid && task.last_run_session_uuid !== args.run_session_uuid) {
+        prev = await ctx.db
+          .query("conversations")
+          .withIndex("by_session_id", (q: any) => q.eq("session_id", task.last_run_session_uuid))
+          .filter((q: any) => q.eq(q.field("user_id"), auth.userId))
+          .first();
+      }
+      // No conv.status check: a spawned run's conversation lingers "active"
+      // long after its agent exits (the watchdog completes it lazily), but
+      // last_run_* only ever points at a run whose task-level completion
+      // (completeTaskRun) already happened — that is the authoritative
+      // "this run finished" signal, and the lease machinery guarantees runs
+      // of one task never overlap.
+      if (
+        prev &&
+        prev._id.toString() !== conv._id.toString() &&
+        prev.user_id.toString() === auth.userId.toString() &&
+        !prev.inbox_pinned_at &&
+        !prev.inbox_dismissed_at &&
+        !prev.has_pending_messages
+      ) {
+        await ctx.db.patch(prev._id, { inbox_dismissed_at: Date.now() });
+      }
+    }
+    return { linked: true, retry: false };
   },
 });
 
@@ -543,6 +734,7 @@ export const webCreate = mutation({
 
 export const webPause = webTaskAction(applyPause);
 export const webResume = webTaskAction(applyResume);
+export const webReactivate = webTaskAction(applyReactivate);
 export const webRunNow = webTaskAction(applyRunNow);
 export const webCancel = webTaskAction(applyCancel);
 

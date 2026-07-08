@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, memo, useMemo } from "react";
+import React, { useState, useCallback, useEffect, useRef, memo, useMemo } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -12,15 +12,16 @@ import { sessionCardSummary } from "../lib/sessionSummary";
 import { sessionStartupState } from "../lib/sessionLifecycle";
 import { compressImage } from "../lib/compressImage";
 import { useConversationMessages } from "../hooks/useConversationMessages";
-import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, categorizeSessions, partitionOldSessions, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, isSessionHidden, resolveSessionAuthor, convBucketMap, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem, BucketAssignmentItem } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, categorizeSessions, partitionOldSessions, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, isSessionHidden, resolveSessionAuthor, convBucketMap, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
 import { sessionsWakeSig } from "../store/inboxStore";
 import { useCoarseNow } from "../hooks/useCoarseNow";
-import { isBlockedConversation, isSubagentConversation } from "@codecast/convex/convex/ccAccountsShared";
+import { isBlockedConversation, isSubagentConversation, nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 import { isStatusTrustStale } from "@codecast/shared/contracts";
 import { TooltipProvider } from "./ui/tooltip";
 import { cleanTitle, msgCountColor, formatModel } from "../lib/conversationProcessor";
 import { getLabelColor } from "../lib/labelColors";
-import { fmtDuration } from "./scheduleCadence";
+import { fmtDuration, describeTaskCadence } from "./scheduleCadence";
+import { partitionScheduleInbox, type ScheduleRow, type TaskRow } from "./scheduleTasks";
 import { isMachineDeliveredMessage } from "./sessionMessage";
 import { SharePopover } from "./SharePopover";
 import { shareOrigin } from "../lib/utils";
@@ -590,57 +591,206 @@ function BlockedSessionsBanner({
   );
 }
 
-type UpcomingSchedule = { run_at?: number; title: string; extra: number };
-
-// Upcoming `cast schedule` follow-ups keyed by conversation, joined client-side
-// from the same per-user webList the /schedules page reads (Convex dedupes the
-// subscription across cards) so the hot inbox row query stays untouched. A task
-// badges both the conversation that scheduled it and the one it will continue;
-// the soonest timed run wins the label, extra armed tasks are counted.
-function useUpcomingSchedule(conversationId: string): UpcomingSchedule | undefined {
-  const tasks = useQuery(api.agentTasks.webList, {});
-  const byConversation = useMemo(() => {
-    const map = new Map<string, UpcomingSchedule>();
-    for (const task of tasks ?? []) {
-      if (task.status !== "scheduled") continue;
-      for (const convId of new Set([task.originating_conversation_id, task.target_conversation_id])) {
-        if (!convId) continue;
-        const prev = map.get(convId);
-        if (!prev) {
-          map.set(convId, { run_at: task.run_at, title: task.title, extra: 0 });
-        } else if (task.run_at !== undefined && (prev.run_at === undefined || task.run_at < prev.run_at)) {
-          map.set(convId, { run_at: task.run_at, title: task.title, extra: prev.extra + 1 });
-        } else {
-          prev.extra += 1;
-        }
-      }
-    }
-    return map;
-  }, [tasks]);
-  return byConversation.get(conversationId);
-}
-
-// Badge for a session with a `cast schedule` follow-up armed: a future timed
-// run ("2h 30m"), a due-but-unclaimed run ("due"), or an event-trigger task
-// ("event"). sol-orange to match the schedule identity color used by the cast
-// schedule command cards and cadence chips; still distinct from the amber-500
-// login pills. Shared by both SessionCard variants.
-function ScheduleBadge({ upcoming }: { upcoming: UpcomingSchedule }) {
-  const msUntil = upcoming.run_at !== undefined ? upcoming.run_at - Date.now() : undefined;
-  const label = msUntil === undefined ? "event" : msUntil > 0 ? fmtDuration(msUntil) : "due";
-  const when = msUntil === undefined ? "runs on its event trigger" : msUntil > 0 ? `next run in ${fmtDuration(msUntil)}` : "run due now";
-  const more = upcoming.extra > 0 ? ` (+${upcoming.extra} more)` : "";
+// A slim schedule bar rendered UNDER its session card — stacked when the
+// session has several, the way subagent rows stack under a parent. This is the
+// roomy replacement for the old cramped countdown chip: the schedule's name,
+// cadence, and live state get a whole line instead of competing with the
+// card's chip row. Bars appear wherever the owning card renders (an escalated
+// run, a loop you're driving, a once follow-up on an ordinary conversation).
+// Click selects the owning session — the strip above the conversation carries
+// the full prompt and controls.
+function ScheduleBarRow({ task, unread, onClick }: { task: TaskRow; unread?: boolean; onClick: () => void }) {
+  const now = useCoarseNow(30_000);
+  const paused = task.status === "paused";
+  const msUntil = task.run_at !== undefined ? task.run_at - now : undefined;
+  const stateLabel = paused
+    ? "paused"
+    : task.status === "running"
+      ? "running"
+      : msUntil === undefined
+        ? "event"
+        : msUntil > 0
+          ? fmtDuration(msUntil)
+          : "due";
   return (
-    <span
-      className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-semibold tabular-nums bg-sol-orange/10 text-sol-orange border border-sol-orange/30"
-      title={`Scheduled: "${upcoming.title}" — ${when}${more}`}
+    <button
+      onClick={onClick}
+      title={task.prompt}
+      className="w-full flex items-center gap-1.5 pl-7 pr-3 py-1 text-left bg-sol-orange/[0.045] hover:bg-sol-orange/10 border-t border-sol-border/20 transition-colors min-w-0"
     >
-      <svg className="w-2 h-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+      <svg className="w-2.5 h-2.5 shrink-0 text-sol-orange" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
         <circle cx="12" cy="12" r="9" />
         <path d="M12 7.5V12l3 2" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
-      {label}
-    </span>
+      <span className="text-[10px] text-sol-text-dim truncate min-w-0">{task.title}</span>
+      {unread && <span className="w-1 h-1 rounded-full bg-sol-orange shrink-0" />}
+      <span className="ml-auto shrink-0 text-[9px] text-sol-text-dim">{describeTaskCadence(task)}</span>
+      <span
+        className={`shrink-0 inline-flex items-center px-1 py-0 rounded text-[9px] font-semibold tabular-nums border ${
+          paused
+            ? "bg-sol-bg-alt text-sol-text-dim border-sol-border/50"
+            : task.status === "running"
+              ? "bg-sol-green/10 text-sol-green border-sol-green/30"
+              : "bg-sol-orange/10 text-sol-orange border-sol-orange/30"
+        }`}
+      >
+        {stateLabel}
+      </span>
+    </button>
+  );
+}
+
+// -- The SCHEDULES section (every armed schedule, schedule-first) --
+
+// One row per armed schedule — recurring, once, or event; inject or spawn; no
+// distinction the user must learn. The row IS the schedule's identity in the
+// inbox: name, cadence, live countdown, last outcome, lightweight verbs.
+// Clicking opens the conversation behind it (home session or latest run — the
+// dismissed-peek path handles folded runs). Everything a schedule does stays
+// behind its row; escalations and human-driven turns are ordinary cards.
+function ScheduleRowItem({ row, activeSessionId, onOpen }: {
+  row: ScheduleRow;
+  activeSessionId?: string | null;
+  onOpen: (convId: string) => void;
+}) {
+  const { task, unread } = row;
+  const now = useCoarseNow(30_000);
+  const pause = useMutation(api.agentTasks.webPause);
+  const resume = useMutation(api.agentTasks.webResume);
+  const runNow = useMutation(api.agentTasks.webRunNow);
+  const paused = task.status === "paused";
+  const msUntil = task.run_at !== undefined ? task.run_at - now : undefined;
+  const stateLabel = paused
+    ? "paused"
+    : task.status === "running"
+      ? "running"
+      : msUntil === undefined
+        ? "event"
+        : msUntil > 0
+          ? fmtDuration(msUntil)
+          : "due";
+  const isActive = !!row.openId && row.openId === activeSessionId;
+  return (
+    <div className={`group/schedrow border-b border-sol-border/30 ${isActive ? "bg-sol-orange/[0.06]" : ""}`}>
+      <button
+        className="w-full text-left px-3 py-2 hover:bg-sol-bg-alt/60 transition-colors"
+        onClick={() => row.openId && onOpen(row.openId)}
+        title={task.prompt}
+      >
+        <div className="flex items-center gap-1.5 min-w-0">
+          <svg className="w-3 h-3 shrink-0 text-sol-orange" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 7.5V12l3 2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          <span className="text-xs font-medium text-sol-text truncate min-w-0">{task.title}</span>
+          {unread && <span className="w-1.5 h-1.5 rounded-full bg-sol-orange shrink-0" title="New outcome since you last opened this section" />}
+          <span
+            className={`ml-auto shrink-0 inline-flex items-center px-1 py-0 rounded text-[9px] font-semibold tabular-nums border ${
+              paused
+                ? "bg-sol-bg-alt text-sol-text-dim border-sol-border/50"
+                : task.status === "running"
+                  ? "bg-sol-green/10 text-sol-green border-sol-green/30"
+                  : "bg-sol-orange/10 text-sol-orange border-sol-orange/30"
+            }`}
+          >
+            {stateLabel}
+          </span>
+        </div>
+        <div className="flex items-center gap-2 mt-0.5 text-[10px] text-sol-text-dim min-w-0">
+          <span className="shrink-0">{describeTaskCadence(task)}</span>
+          {task.mode === "apply" && <span className="shrink-0 text-sol-red/70">apply</span>}
+          {task.run_count > 0 && <span className="shrink-0">{task.run_count} run{task.run_count === 1 ? "" : "s"}</span>}
+          {task.last_run_summary && (
+            <span className={`truncate min-w-0 ${task.last_run_failed ? "text-sol-red/80" : ""}`}>
+              {task.last_run_summary}
+            </span>
+          )}
+        </div>
+      </button>
+      <div className="hidden group-hover/schedrow:flex items-center gap-1 px-3 pb-1.5 -mt-0.5">
+        <button
+          onClick={(e) => { e.stopPropagation(); runNow({ task_id: task._id as Id<"agent_tasks"> }).catch(() => {}); toast.success("Run queued"); }}
+          className="px-1.5 py-0.5 rounded text-[10px] font-medium text-sol-orange bg-sol-orange/10 hover:bg-sol-orange/20 border border-sol-orange/30 transition-colors"
+        >
+          Run now
+        </button>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            (paused ? resume({ task_id: task._id as Id<"agent_tasks"> }) : pause({ task_id: task._id as Id<"agent_tasks"> })).catch(() => {});
+          }}
+          className="px-1.5 py-0.5 rounded text-[10px] font-medium text-sol-text-dim bg-sol-bg-alt hover:bg-sol-bg-alt/70 border border-sol-border/50 transition-colors"
+        >
+          {paused ? "Resume" : "Pause"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// The SCHEDULES section. Expanded: one ScheduleRowItem per armed schedule.
+// Collapsed: the header itself is the briefing — count, soonest next fire, and
+// how many outcomes landed since the section was last toggled ("N new").
+// -- The schedule dock --
+// The schedules' home. The session list stays a list of ONE kind of thing
+// (conversations); every armed schedule lives in this single always-visible
+// line docked under the list. The line is the briefing: how many are armed,
+// when the next fires, how many outcomes landed since you last looked, and a
+// red accent when one failed or flagged itself. Expanding opens a roster
+// overlay of full schedule rows (same anatomy as /schedules); opening or
+// closing marks the briefing read (schedules_seen_at).
+function ScheduleDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen }: {
+  rows: ScheduleRow[];
+  unreadCount: number;
+  nextRunAt?: number;
+  activeSessionId?: string | null;
+  onOpen: (convId: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const now = useCoarseNow(30_000);
+  if (rows.length === 0) return null;
+  const nextIn = nextRunAt !== undefined ? Math.max(0, nextRunAt - now) : undefined;
+  const attention = rows.some((r) => r.task.last_run_failed || r.task.last_run_needs_attention);
+  const toggle = () => {
+    useInboxStore.getState().updateClientUI({ schedules_seen_at: Date.now() });
+    setOpen((o) => !o);
+  };
+  return (
+    <div className="relative shrink-0 border-t border-sol-border/40">
+      {open && (
+        <div className="absolute bottom-full left-0 right-0 max-h-[55vh] overflow-y-auto bg-sol-bg border-t border-sol-border/60 shadow-[0_-8px_24px_rgba(0,0,0,0.18)] z-20">
+          {rows.map((r) => (
+            <ScheduleRowItem
+              key={r.task._id}
+              row={r}
+              activeSessionId={activeSessionId}
+              onOpen={(id) => { setOpen(false); onOpen(id); }}
+            />
+          ))}
+        </div>
+      )}
+      <button onClick={toggle} className="w-full flex items-center gap-1.5 px-3 py-1.5 bg-sol-bg hover:bg-sol-bg-alt/60 transition-colors">
+        <svg className={`w-3 h-3 shrink-0 ${attention ? "text-sol-red" : "text-sol-orange"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+          <circle cx="12" cy="12" r="9" />
+          <path d="M12 7.5V12l3 2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-sol-orange">
+          Schedules ({rows.length})
+        </span>
+        {nextIn !== undefined && (
+          <span className="text-[10px] text-sol-text-dim tabular-nums">· next {nextIn > 0 ? fmtDuration(nextIn) : "due"}</span>
+        )}
+        {unreadCount > 0 && (
+          <span className="inline-flex items-center px-1.5 py-0 rounded-full text-[9px] font-semibold bg-sol-orange text-sol-bg">
+            {unreadCount} new
+          </span>
+        )}
+        {attention && <span className="text-[9px] font-semibold text-sol-red uppercase">attention</span>}
+        <svg className={`ml-auto w-3 h-3 transition-transform text-sol-text-dim ${open ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+        </svg>
+      </button>
+    </div>
   );
 }
 
@@ -661,6 +811,8 @@ export const SessionCard = memo(function SessionCard({
   onNavigateToSession,
   variant = "default",
   forkColorKey,
+  sessionLabel,
+  isFavorite,
 }: {
   session: InboxSession;
   isActive: boolean;
@@ -676,6 +828,12 @@ export const SessionCard = memo(function SessionCard({
   onNavigateToSession?: (id: string) => void;
   variant?: "default" | "working" | "dismissed" | "stashed";
   forkColorKey?: string;
+  // Label + favorite state are derived ONCE in the parent (SessionListPanel) and
+  // passed as scalar props, so a card does O(1) work per render instead of the two
+  // selectors scanning the whole bucketAssignments / favorites collection on every
+  // store heartbeat notification (the selector runs per notification, not per render).
+  sessionLabel: string | null;
+  isFavorite: boolean;
 }) {
   const tipActions = useTipActions();
   // The card's idle duration ("idle 3m") and trust-stale pulse read Date.now() at
@@ -691,7 +849,11 @@ export const SessionCard = memo(function SessionCard({
   // liveness suppression (a stashed agent is still running; see the idle-dot
   // gate below, which stays keyed on the real dismissed variant).
   const isDismissed = variant === "dismissed" || isStashed;
-  const isSubagent = !!session.is_subagent || !!session.parent_conversation_id || !!session.worktree_name;
+  // Compact sub-row look: Task subagents and agent-team teammates (via
+  // nestParentIdOf) plus worktree workers. Teammates render this way even when
+  // floating top-level (lead absent) — same as worktree rows, the ↳ arrow
+  // carries the "child of something" reading on its own.
+  const isSubagent = !!session.is_subagent || !!nestParentIdOf(session) || !!session.worktree_name;
   // Local-first "pending working": a message has been sent but the daemon
   // hasn't confirmed delivery yet (status not active). Reading the durable
   // pendingMessages map directly returns a stable boolean, so only this card
@@ -700,20 +862,18 @@ export const SessionCard = memo(function SessionCard({
   const isPendingSend = useInboxStore((st) => convHasPendingSend(st.pendingMessages[session._id]));
   const isPendingWorking = isPendingSend && !isAgentActive(session);
   const showModelBadge = useInboxStore((st) => st.clientState?.ui?.show_model_badge === true);
-  // The session's user label, if any. Selector returns a string so the card
-  // only re-renders when ITS label changes, not on every assignment-map churn.
-  const sessionLabel = useInboxStore((st) => {
-    const assignment = (Object.values(st.bucketAssignments) as BucketAssignmentItem[])
-      .find((a) => a.conversation_id === session._id);
-    const bucket = assignment?.bucket_id ? st.buckets[assignment.bucket_id] : null;
-    return bucket && !bucket.archived_at ? bucket.name : null;
-  });
-  // Favorited-ness, reliable across sync channels: the per-row flag OR membership
-  // in the authoritative favorites list (toggleFavorite maintains both). Returns a
-  // boolean so the card only re-renders when ITS star flips, not on list churn.
-  const isFavorite = useInboxStore((st) =>
-    !!(st.sessions[session._id] as any)?.is_favorite ||
-    (st.favorites as any[]).some((f) => f._id === session._id),
+  // sessionLabel and isFavorite are now passed as scalar props (computed once in
+  // the parent via labelByConv/cardIsFavorite) instead of per-card store scans —
+  // see ct-37958. Only spawnedByTitle stays a local selector.
+  //
+  // Visible-child parent link (agent-team teammate → its lead). Selector
+  // returns the parent's title string, so this card re-renders only when that
+  // title changes — never on parent-row churn.
+  const spawnedById = session.spawned_by_conversation_id || null;
+  const spawnedByTitle = useInboxStore((st) =>
+    spawnedById
+      ? ((st.sessions[spawnedById]?.title || (st.conversations[spawnedById] as any)?.title) ?? null)
+      : null,
   );
   const displayTitle = cleanTitle(session.title || "New Session");
   const isSlashCommand = displayTitle.startsWith("/");
@@ -744,8 +904,6 @@ export const SessionCard = memo(function SessionCard({
     () => resolveSessionAuthor(session, convMeta, currentUser, teamMembers),
     [session.user_id, session.author_name, session.author_avatar, convMeta, currentUser, teamMembers],
   );
-  const upcomingSchedule = useUpcomingSchedule(session._id);
-
   const [isDragOver, setIsDragOver] = useState(false);
   const dragCounter = useRef(0);
   const generateUploadUrl = useMutation(api.images.generateUploadUrl);
@@ -882,7 +1040,6 @@ export const SessionCard = memo(function SessionCard({
               {isSlashCommand ? <span className="font-mono text-violet-400/80">{displayTitle}</span> : displayTitle}
             </span>
             <div className="flex items-center gap-1 flex-shrink-0">
-              {upcomingSchedule && <ScheduleBadge upcoming={upcomingSchedule} />}
               {session.pending_api_error && <AuthErrorBadge kind={session.pending_api_error_kind} />}
               {session.session_error && (
                 <span className="w-1.5 h-1.5 rounded-full bg-sol-red" title={session.session_error} />
@@ -1135,7 +1292,6 @@ export const SessionCard = memo(function SessionCard({
                 Gate
               </span>
             )}
-            {upcomingSchedule && <ScheduleBadge upcoming={upcomingSchedule} />}
             {session.pending_api_error && <AuthErrorBadge kind={session.pending_api_error_kind} />}
             {session.session_error && (
               <span className="w-1.5 h-1.5 rounded-full bg-sol-red" title={session.session_error} />
@@ -1169,6 +1325,26 @@ export const SessionCard = memo(function SessionCard({
             </span>
           </div>
         </div>
+        {spawnedById && (
+          // Click-through to the session that spawned this one (its agent-team
+          // lead) — same affordance shape as the implementation-session row.
+          <div
+            className="mt-1 flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-cyan cursor-pointer transition-colors"
+            onClick={(e) => {
+              e.stopPropagation();
+              (onNavigateToSession ?? useInboxStore.getState().navigateToSession)(spawnedById);
+            }}
+            title="View the session that spawned this one"
+          >
+            <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+            </svg>
+            <span className="flex-shrink-0">spawned by</span>
+            <span className="truncate underline underline-offset-2">
+              {cleanTitle(spawnedByTitle || "parent session")}
+            </span>
+          </div>
+        )}
         {session.implementation_session && (
           <div
             className="mt-1 flex items-center gap-1 text-[11px] text-sol-cyan hover:text-sol-cyan/80 cursor-pointer"
@@ -1524,13 +1700,44 @@ export function SessionListPanel({
     [s.sessions, s.liveInboxIds, showAllSessions, focusedId],
   );
 
-  const { sorted: sortedSessions, pinned, newSessions, needsInput, working, stashed: stashedList, dismissed: dismissedList, subsByParent: globalSubByParent, forksByParent: globalForksByParent, orchestrationGroups: globalOrchestrationGroups } = useMemo(
+  const { sorted: sortedSessions, pinned, newSessions, needsInput, working, stashed: stashedList, dismissed: dismissedList, subsByParent: globalSubByParent, forksByParent: globalForksByParent } = useMemo(
     () => categorizeSessions(visibleSessions, s.sessionsWithQueuedMessages, pendingSendIds, blankOpts),
     // coarseNow: re-run the TTL staleness sweep on the coarse clock (categorize
     // reads Date.now() internally); the result only changes when a row crosses the
     // trust TTL, otherwise the memoized arrays keep stable refs.
     [visibleSessions, s.sessionsWithQueuedMessages, pendingSendIds, blankOpts, coarseNow],
   );
+
+  // -- Schedules in the inbox (status view) --
+  // The same per-user webList the badges/strip/schedules page subscribe to
+  // (Convex dedupes), partitioned into: one row per armed schedule, the set of
+  // sessions absorbed behind those rows (resting loop homes + uneventful runs),
+  // and the armed-inject map the kill gesture consults. All membership rules
+  // live in partitionScheduleInbox.
+  const scheduleTasks = useQuery(api.agentTasks.webList, {}) as TaskRow[] | undefined;
+  const schedulesSeenAt = s.clientState.ui?.schedules_seen_at ?? 0;
+  const schedulePartition = useMemo(
+    () => partitionScheduleInbox(scheduleTasks, visibleSessions, {
+      sessionsWithQueuedMessages: s.sessionsWithQueuedMessages,
+      seenAt: schedulesSeenAt,
+    }),
+    [scheduleTasks, visibleSessions, s.sessionsWithQueuedMessages, schedulesSeenAt],
+  );
+  // Kill-gesture handlers read the partition through a ref so their identities
+  // stay stable (SessionCard is memoized on them).
+  const schedulePartitionRef = useRef(schedulePartition);
+  schedulePartitionRef.current = schedulePartition;
+  // Publish the absorbed set for keyboard nav (computeVisualOrder reads it from
+  // the store). Content-keyed so Set identity churn from recomputes doesn't
+  // spam store notifications.
+  const navSetsKey = useMemo(
+    () => [...schedulePartition.absorbedIds].sort().join(","),
+    [schedulePartition.absorbedIds],
+  );
+  useEffect(() => {
+    useInboxStore.getState().setScheduleNavSets({ absorbed: schedulePartition.absorbedIds });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navSetsKey]);
 
   // Corner shown when the session is in a fork tree (has forks, or is one);
   // colored by the tree's root so the whole tree matches.
@@ -1542,13 +1749,34 @@ export function SessionListPanel({
     [s.sessions, globalForksByParent],
   );
 
-  const orchestrationGroupMembers = useMemo(() => Array.from(globalOrchestrationGroups.values()).flat(), [globalOrchestrationGroups]);
-  // Grouped workers are held out of the flat buckets; fold them back in for the
-  // header count and project chips so totals stay accurate.
-  const activeSessions = useMemo(() => [...pinned, ...newSessions, ...needsInput, ...working, ...orchestrationGroupMembers], [pinned, newSessions, needsInput, working, orchestrationGroupMembers]);
+  const activeSessions = useMemo(() => [...pinned, ...newSessions, ...needsInput, ...working], [pinned, newSessions, needsInput, working]);
 
   const bucketByConv = useMemo(() => convBucketMap(s.bucketAssignments), [s.bucketAssignments]);
   const visibleBuckets = useMemo(() => sortLabels(s.buckets), [s.buckets]);
+  // conversation_id → its visible (non-archived) bucket name. Derived ONCE from the
+  // same bucket map the chips use, then handed to each card as a scalar prop so the
+  // card no longer scans bucketAssignments on every heartbeat notification.
+  const labelByConv = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const convId in bucketByConv) {
+      const bucketId = bucketByConv[convId];
+      const bucket = bucketId ? s.buckets[bucketId] : null;
+      if (bucket && !bucket.archived_at) map[convId] = bucket.name;
+    }
+    return map;
+  }, [bucketByConv, s.buckets]);
+  // Favorited conversation ids, derived once from the authoritative favorites list so
+  // a card checks its star with an O(1) Set lookup instead of a per-heartbeat scan.
+  const favoriteIds = useMemo(
+    () => new Set((s.favorites as { _id: string }[]).map((f) => f._id)),
+    [s.favorites],
+  );
+  // Favorited if the row carries the flag OR it's in the favorites list (both are
+  // maintained by toggleFavorite); resolved to a scalar so each card memoizes on it.
+  const cardIsFavorite = useCallback(
+    (sess: InboxSession) => (sess as { is_favorite?: boolean }).is_favorite === true || favoriteIds.has(sess._id),
+    [favoriteIds],
+  );
   const { bucketCounts, projectCounts, projectPathByName } = useMemo(
     () => computeChipCounts(activeSessions, bucketByConv),
     [activeSessions, bucketByConv],
@@ -1570,6 +1798,51 @@ export function SessionListPanel({
   const filteredNew = useMemo(() => filterByChip(newSessions), [filterByChip, newSessions]);
   const filteredNeedsInput = useMemo(() => filterByChip(needsInput), [filterByChip, needsInput]);
   const filteredWorking = useMemo(() => filterByChip(working), [filterByChip, working]);
+  // STATUS view only: sessions absorbed behind a SCHEDULES row leave the
+  // triage buckets (reachable by clicking the row). The label/plan lenses keep
+  // the plain chip-filtered lists — they don't render the schedule section, so
+  // nothing may vanish there. Mirrors visualOrderSessions so Ctrl+J/K walks
+  // exactly what's on screen.
+  const statusNeedsInput = useMemo(
+    () => filteredNeedsInput.filter((sess) => !schedulePartition.absorbedIds.has(sess._id)),
+    [filteredNeedsInput, schedulePartition.absorbedIds],
+  );
+  const statusWorking = useMemo(
+    () => filteredWorking.filter((sess) => !schedulePartition.absorbedIds.has(sess._id)),
+    [filteredWorking, schedulePartition.absorbedIds],
+  );
+  // Schedule rows honor the project chip like session cards do.
+  const scheduleRowsView = useMemo(
+    () =>
+      s.activeProjectFilter
+        ? schedulePartition.rows.filter(
+            (r) => getProjectName(undefined, r.task.project_path) === s.activeProjectFilter,
+          )
+        : schedulePartition.rows,
+    [schedulePartition.rows, s.activeProjectFilter],
+  );
+  // A schedule row opens the conversation behind it — the loop's home session
+  // or the newest run; the dismissed-peek path handles folded runs.
+  const openScheduleTarget = useCallback((convId: string) => {
+    const sess = useInboxStore.getState().sessions[convId];
+    if (sess) handleSelect(sess);
+  }, [handleSelect]);
+  // Schedule bars under cards: the schedules bound to a VISIBLE session — the
+  // ones it originates (inject, any type) plus, for a run card, the schedule
+  // that spawned it. Keyed off partition.rows so bars share the unread state.
+  const scheduleBarRowsFor = useCallback((sess: InboxSession): ScheduleRow[] => {
+    const rows = schedulePartitionRef.current.rows;
+    const out: ScheduleRow[] = [];
+    for (const r of rows) {
+      if (
+        r.task.originating_conversation_id === sess._id ||
+        (!!sess.agent_task_id && r.task._id === sess.agent_task_id)
+      ) {
+        out.push(r);
+      }
+    }
+    return out;
+  }, []);
   const filteredDismissed = useMemo(() => {
     // Only surface dismissed sessions ACTIVE within the window — keyed on last
     // activity (updated_at), NOT when they were dismissed. A bulk cleanup dismisses
@@ -1721,31 +1994,32 @@ export function SessionListPanel({
   }, [viewMenuOpen]);
 
   // "By label" view: every active non-pinned top-level session grouped by its
-  // manual label (orchestration workers folded in); unlabeled sessions group
-  // by PROJECT — projects are a specific kind of label, auto-derived from the
-  // directory. Pinned stays its own top section — pin is urgency, not theme.
-  // The grouping fn is shared with the store's visualOrder so Ctrl+J/K walks
-  // exactly this layout.
+  // manual label; unlabeled sessions group by PROJECT — projects are a specific
+  // kind of label, auto-derived from the directory. Pinned stays its own top
+  // section — pin is urgency, not theme. The grouping fn is shared with the
+  // store's visualOrder so Ctrl+J/K walks exactly this layout.
   const bucketView = useMemo(() => {
     if (viewMode !== "bucket") return null;
+    // Absorbed-filtered lists: the label view renders the SCHEDULES section too,
+    // so sessions resting behind a schedule row must not double-render in groups.
     return groupSessionsForLabelView(
-      [...filteredNew, ...filteredNeedsInput, ...filteredWorking, ...filterByChip(orchestrationGroupMembers)],
+      [...filteredNew, ...statusNeedsInput, ...statusWorking],
       s.buckets,
       bucketByConv,
     );
-  }, [viewMode, filteredNew, filteredNeedsInput, filteredWorking, orchestrationGroupMembers, filterByChip, bucketByConv, s.buckets]);
+  }, [viewMode, filteredNew, statusNeedsInput, statusWorking, bucketByConv, s.buckets]);
 
   // "By plan" lens — same active set as the bucket view (status buckets dissolved
-  // back to flat, orchestration members folded in), regrouped by plan instead of
-  // label. Every plan shows, even a plan of one; sessions with no plan fall to
-  // project groups. This is where a fan-out's full per-worker breakdown lives, so
-  // the status view can stop carrying it.
+  // back to flat), regrouped by plan instead of label. Every plan shows, even a
+  // plan of one; sessions with no plan fall to project groups. This lens is the
+  // ONLY place the inbox groups by plan — the status view keeps every session in
+  // its status bucket.
   const planView = useMemo(() => {
     if (viewMode !== "plan") return null;
     return groupSessionsByPlan(
-      [...filteredNew, ...filteredNeedsInput, ...filteredWorking, ...filterByChip(orchestrationGroupMembers)],
+      [...filteredNew, ...statusNeedsInput, ...statusWorking],
     );
-  }, [viewMode, filteredNew, filteredNeedsInput, filteredWorking, orchestrationGroupMembers, filterByChip]);
+  }, [viewMode, filteredNew, statusNeedsInput, statusWorking]);
   // Offer the "By plan" option only when a plan is actually in play, mirroring how
   // "By label" appears only with buckets.
   const hasPlanSessions = useMemo(() => activeSessions.some((x) => !!x.active_plan), [activeSessions]);
@@ -1828,21 +2102,48 @@ export function SessionListPanel({
 
   // -- Hide & enter animations --
   // Stash: set aside, agent keeps running (Stashed group). The secondary remove.
+  // Deliberately no schedule handling: stash keeps schedules armed (a
+  // scheduler-origin injection preserves the stash), so nothing is canceled.
   const handleAnimatedStash = useCallback((id: string) => {
     animatedHideSession(id, "stash");
   }, []);
+  // Killing a session cancels the schedules that inject into it (server side,
+  // on the hide transition) — surface that side effect instead of letting the
+  // loop die silently: a toast names the schedule and offers to keep it armed,
+  // and undo-of-kill re-arms it along with the session. Reads the partition
+  // through a ref so the handlers stay referentially stable for SessionCard.
+  const reactivateTask = useMutation(api.agentTasks.webReactivate);
+  const killWithScheduleNotice = useCallback((id: string) => {
+    const armed = schedulePartitionRef.current.armedInjectByConv.get(id);
+    const revive = armed?.length
+      ? () => { for (const t of armed) reactivateTask({ task_id: t._id as Id<"agent_tasks"> }).catch(() => {}); }
+      : undefined;
+    animatedHideSession(id, "kill", revive ? { onUndo: revive } : undefined);
+    if (armed?.length && revive) {
+      toast(
+        armed.length === 1
+          ? `Also canceled schedule "${armed[0].title}"`
+          : `Also canceled ${armed.length} schedules bound to this session`,
+        {
+          description: "Its next fire would have revived the session you just killed.",
+          duration: 10000,
+          action: { label: "Keep schedule", onClick: () => { revive(); toast.success("Schedule re-armed — it will revive this session on its next fire"); } },
+        },
+      );
+    }
+  }, [reactivateTask]);
   // Dismiss: "done with it" — clears the session from the inbox into the Dismissed
   // group. The server tears the (usually idle) agent down on the inbox_dismissed_at
   // transition, so this is codecast's kill gesture, surfaced as the PRIMARY remove
   // action. Undoable via the toast.
   const handleAnimatedDismiss = useCallback((id: string) => {
-    animatedHideSession(id, "kill");
-  }, []);
+    killWithScheduleNotice(id);
+  }, [killWithScheduleNotice]);
   // On a stashed card the destructive slot kills (server tears the agent down
   // on the transition) — the row moves down into Killed.
   const handleKillStashed = useCallback((id: string) => {
-    animatedHideSession(id, "kill");
-  }, []);
+    killWithScheduleNotice(id);
+  }, [killWithScheduleNotice]);
   // "Kill all" on the Stashed header — two-step confirm (arm, then fire within
   // 3s) since it tears down every stashed agent at once. Kills the top-level
   // rows (each stamps its own children) plus any stashed child whose parent
@@ -1882,9 +2183,10 @@ export function SessionListPanel({
     }
 
     // Card not rendered — try to reveal it by uncollapsing its section. A
-    // subagent renders nested under its parent's card, so the parent's
-    // membership decides which section hosts the row.
-    const parentId = s.sessions[activeSessionId]?.parent_conversation_id;
+    // subagent (or nested teammate) renders under its parent's card, so the
+    // parent's membership decides which section hosts the row.
+    const activeRow = s.sessions[activeSessionId];
+    const parentId = activeRow ? nestParentIdOf(activeRow) : null;
     const inList = (items: InboxSession[]) => items.some(i => i._id === activeSessionId || (!!parentId && i._id === parentId));
     const sections: [InboxSession[], string][] = flatView
       ? [[flatList, "all"]]
@@ -1902,7 +2204,7 @@ export function SessionListPanel({
           ]
         : [
             [filteredPinned, "pinned"], [filteredNew, "new"],
-            [filteredNeedsInput, "needs_input"], [filteredWorking, "working"],
+            [statusNeedsInput, "needs_input"], [statusWorking, "working"],
           ];
     for (const [items, key] of sections) {
       if (inList(items) && s.collapsedSections[key]) {
@@ -1940,9 +2242,10 @@ export function SessionListPanel({
     const allIds = new Set(items.map((sess) => sess._id));
     const subMap = new Map<string, InboxSession[]>();
     for (const sess of items) {
-      if (sess.parent_conversation_id && allIds.has(sess.parent_conversation_id)) {
-        if (!subMap.has(sess.parent_conversation_id)) subMap.set(sess.parent_conversation_id, []);
-        subMap.get(sess.parent_conversation_id)!.push(sess);
+      const nestParent = nestParentIdOf(sess);
+      if (nestParent && allIds.has(nestParent)) {
+        if (!subMap.has(nestParent)) subMap.set(nestParent, []);
+        subMap.get(nestParent)!.push(sess);
       }
     }
     for (const subs of subMap.values()) {
@@ -1996,6 +2299,8 @@ export function SessionListPanel({
                   onKill={onKill}
                   variant={variant}
                   forkColorKey={forkColorKeyOf(session)}
+                  sessionLabel={labelByConv[session._id] ?? null}
+                  isFavorite={cardIsFavorite(session)}
                 />
                 {(subMap.get(session._id) ?? []).filter((sub) => showSubagents || sub._id === activeSessionId).map((sub) => (
                   <SessionCard
@@ -2008,6 +2313,8 @@ export function SessionListPanel({
                     onRestore={s.restoreSession}
                     onKill={onKill}
                     variant={variant}
+                    sessionLabel={labelByConv[sub._id] ?? null}
+                    isFavorite={cardIsFavorite(sub)}
                   />
                 ))}
               </div>
@@ -2179,7 +2486,16 @@ export function SessionListPanel({
                   onPin={s.pinSession}
                   variant={sectionVariant || "default"}
                   forkColorKey={forkColorKeyOf(session)}
+                  sessionLabel={labelByConv[session._id] ?? null}
+                  isFavorite={cardIsFavorite(session)}
                 />
+                {/* Schedule bars stack under their card the way subagent rows
+                    do — full-width room for name/cadence/countdown instead of
+                    a cramped chip. Click selects the session (the strip above
+                    the conversation carries the controls). */}
+                {scheduleBarRowsFor(session).map((r) => (
+                  <ScheduleBarRow key={r.task._id} task={r.task} unread={r.unread} onClick={() => handleSelect(session)} />
+                ))}
                 {visibleSubs.map((sub) => (
                   <SessionCard
                     key={sub._id}
@@ -2191,6 +2507,8 @@ export function SessionListPanel({
                     onDismiss={handleAnimatedDismiss}
                     onStash={handleAnimatedStash}
                     variant={sectionVariant || "default"}
+                    sessionLabel={labelByConv[sub._id] ?? null}
+                    isFavorite={cardIsFavorite(sub)}
                   />
                 ))}
                 {hiddenCount > 0 && (
@@ -2445,57 +2763,8 @@ export function SessionListPanel({
         {!s.activeProjectFilter && !s.activeBucketFilter && <NeedsAttentionSection />}
         {renderSection("Pinned", filteredPinned, "text-sol-magenta")}
         {renderSection("New", filteredNew, "text-sol-blue")}
-        {renderSection("Needs Input", filteredNeedsInput, "text-sol-yellow")}
-        {renderSection("Working", filteredWorking, "text-sol-green", "working")}
-        {Array.from(globalOrchestrationGroups.entries()).map(([label, members]) => {
-          const visible = filterByChip(members);
-          if (visible.length === 0) return null;
-          const key = `grp:${label}`;
-          // Default COLLAPSED in the status view: a fan-out folds to one summary
-          // row instead of N loose worker cards — the status view stays about
-          // status, and the full per-worker breakdown lives in the "By plan"
-          // lens. Explicitly expanding (stored false) still sticks.
-          const collapsed = s.collapsedSections[key] !== false;
-          const needsCount = visible.filter((m) => m.awaiting_input).length;
-          return (
-            <div key={key}>
-              <button
-                onClick={() => s.toggleCollapsedSection(key)}
-                className="w-full px-3 py-1.5 bg-sol-bg border-b border-sol-border/30 flex items-center justify-between gap-2"
-                title={`Orchestration workers: ${label}`}
-              >
-                <span className="text-[10px] font-semibold uppercase tracking-wider text-teal-500 flex items-center gap-1.5 min-w-0">
-                  <span className="truncate normal-case font-mono text-teal-400/90">{label}</span>
-                  <span className="opacity-70 shrink-0">({visible.length})</span>
-                  {/* shrink-0 so a long plan label truncates BEFORE this — the
-                      "needs input" count is the only cue a waiting worker is
-                      hidden in the (default-collapsed) group, so it must never
-                      be the thing that gets clipped. */}
-                  {needsCount > 0 && <span className="text-sol-yellow normal-case shrink-0">· {needsCount} needs input</span>}
-                </span>
-                <svg className={`w-3 h-3 transition-transform text-teal-500 shrink-0 ${collapsed ? "" : "rotate-180"}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                </svg>
-              </button>
-              {!collapsed && visible.map((session) => (
-                <div key={session._id} className="border-b border-sol-border/30">
-                  <SessionCard
-                    session={session}
-                    isActive={session._id === activeSessionId}
-                    globalIndex={0}
-                    onSelect={handleSelect}
-                    onDismiss={handleAnimatedDismiss}
-                    onStash={handleAnimatedStash}
-                    onDefer={s.deferSession}
-                    onPin={s.pinSession}
-                    variant={"default"}
-                    forkColorKey={forkColorKeyOf(session)}
-                  />
-                </div>
-              ))}
-            </div>
-          );
-        })}
+        {renderSection("Needs Input", statusNeedsInput, "text-sol-yellow")}
+        {renderSection("Working", statusWorking, "text-sol-green", "working")}
         </>
         )}
         {sortedSessions.length === 0 && (
@@ -2534,6 +2803,15 @@ export function SessionListPanel({
         })}
         </>)}
       </div>
+      {/* The schedule dock is panel chrome, not list content: it renders under
+          the scroll area in EVERY view mode — the robots' one home. */}
+      <ScheduleDock
+        rows={scheduleRowsView}
+        unreadCount={schedulePartition.unreadCount}
+        nextRunAt={schedulePartition.nextRunAt}
+        activeSessionId={activeSessionId}
+        onOpen={openScheduleTarget}
+      />
       {onCollapse && (
         <div className="flex-shrink-0 border-t border-sol-border/30 flex justify-center py-1">
           <button

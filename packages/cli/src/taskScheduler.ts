@@ -149,7 +149,9 @@ export class TaskScheduler {
         // the agent's JSONL is parsed. The UI detects the <scheduled-task>
         // wrapper and renders it as a ScheduledTaskBlock, so we must not
         // also write a system-subtype row here -- that would double-render.
-        await this.syncService.sendMessageToSession(task.originating_conversation_id, wrappedPrompt);
+        // origin "scheduler": a machine wake must not clear the user's stash —
+        // a stashed session keeps running out of the active queue.
+        await this.syncService.sendMessageToSession(task.originating_conversation_id, wrappedPrompt, "scheduler");
         this.log(`Injected prompt into conversation ${task.originating_conversation_id.toString().slice(-8)} for task "${task.title}"`);
         await this.syncService.completeTaskRun(
           task._id,
@@ -292,6 +294,30 @@ export class TaskScheduler {
       heartbeatTimer,
       runSessionUuid,
     });
+
+    // Link the run's conversation to the task as soon as it syncs (bounded
+    // retries — the first JSONL write usually lands within seconds). This makes
+    // the schedule strip/badge work DURING the run and folds the previous
+    // completed run of a repeating schedule out of the inbox. completeTaskRun
+    // backfills the link at run end if every attempt here loses the race.
+    if (runSessionUuid) this.scheduleRunLink(task._id, runSessionUuid);
+  }
+
+  // Bounded retry chain for linkRunConversation; standalone timers (not tied
+  // to the RunningTask entry) so a fast run that completes before the first
+  // attempt doesn't orphan the link — the mutation is idempotent either way.
+  private scheduleRunLink(taskId: string, runSessionUuid: string, attempt = 0): void {
+    const delaysMs = [10_000, 30_000, 90_000];
+    if (attempt >= delaysMs.length) return;
+    setTimeout(async () => {
+      try {
+        const result = await this.syncService.linkRunConversation(taskId, runSessionUuid);
+        if (result.linked || !result.retry) return;
+      } catch {
+        // fall through to retry
+      }
+      this.scheduleRunLink(taskId, runSessionUuid, attempt + 1);
+    }, delaysMs[attempt]);
   }
 
   private async checkTaskCompletion(taskId: string): Promise<void> {
@@ -383,6 +409,7 @@ export class TaskScheduler {
     } else {
       parts.push(`- When done, run: cast schedule complete ${task._id} --summary "brief description of what was done"`);
     }
+    parts.push(`- A clean completion folds this run out of the user's inbox (the summary carries the outcome). If you found something the user must read or act on, add --needs-attention to keep this run in their inbox.`);
     parts.push('- To schedule follow-up: cast schedule add "..." --in <time>');
     if (task.originating_conversation_id) {
       parts.push(`- Run \`cast read ${task.originating_conversation_id}\` for full original context`);

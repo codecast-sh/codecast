@@ -6,7 +6,7 @@ import { useEffect, useLayoutEffect, useRef, useState, useMemo, useImperativeHan
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useWatchEffect } from "../hooks/useWatchEffect";
-import { useShortcutContext, useShortcutAction, isMac } from "../shortcuts";
+import { useShortcutContext, useShortcutAction, isMac, getShortcutsForAction, formatShortcutParts, type ShortcutAction } from "../shortcuts";
 import { useConvexSync } from "../hooks/useConvexSync";
 import { useShallow } from "zustand/react/shallow";
 import { createPortal } from "react-dom";
@@ -31,7 +31,7 @@ import { KeyCap, MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { toast } from "sonner";
 import { CodeBlock } from "./CodeBlock";
 import { useFullWidthExpand } from "../hooks/useFullWidthExpand";
-import { tryRenderCanvas } from "./HtmlSnippet";
+import { tryRenderCanvas, tryRenderHtmlMessage, looksLikeHtml } from "./HtmlSnippet";
 import { useDiffViewerStore } from "../store/diffViewerStore";
 import { isJumpReadyToScroll, shouldLoadOlder, shouldLoadNewer } from "./conversationScroll";
 import { parseInsightBlocks } from "./insightBlocks";
@@ -81,7 +81,7 @@ const api = _typedApi as any;
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { DeviceBadge, RunOnDeviceItems } from "./DeviceBadge";
 import { PermissionStack } from "./PermissionCard";
-import { copyToClipboard, shareOrigin, matchesProjectQuery } from "../lib/utils";
+import { copyToClipboard, shareOrigin, matchesProjectQuery, inferHomeDir, resolveCustomPath, displayPath, inferProjectBase, isExplicitPath } from "../lib/utils";
 import { MarkdownRenderer, isMarkdownFile, isPlanFile, CollapsibleImage } from "./tools/MarkdownRenderer";
 import { OptionPreview } from "./tools/AskUserQuestionToolView";
 import { useImageGallery, ImageGalleryProvider } from "./ImageGallery";
@@ -96,21 +96,6 @@ import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, type ParsedC
 import { ConversationTree } from "./ConversationTree";
 import { useInboxStore, isConvexId, computeNewDividerIndex, convBucketMap, type BucketItem, type ForkChild, type InboxSession, type OptimisticImage } from "../store/inboxStore";
 
-// Context for restoring a server-deleted (ghost) conversation: for a deleted
-// row the server knows nothing, so restartSession/repairSession take the
-// session binding from our cached copy. Shared by every restart call site
-// (composer recovery, auto-restart effect, header dropdown).
-function ghostRestartContextFor(conversationId: string) {
-  const s = useInboxStore.getState();
-  const row: any = s.conversations[conversationId] ?? s.sessions[conversationId];
-  if (!row) return {};
-  return {
-    session_id: row.session_id,
-    project_path: row.project_path ?? row.git_root,
-    agent_type: row.agent_type,
-    title: row.title,
-  };
-}
 
 // restartSession can answer with a DIFFERENT conversation: the ghost's live
 // twin, or a freshly recreated row. Follow it there, and clear the ghost from
@@ -148,7 +133,7 @@ import { pendingBannerState, isActiveAgentStatus, isBootingAgentStatus, type Liv
 import { sessionStartupState } from "../lib/sessionLifecycle";
 import { messageRowKey } from "../lib/messageRowKey";
 import { expandEntityMentions } from "../lib/mentionExpansion";
-import { useSessionRestart } from "../hooks/useSessionRestart";
+import { useSessionRestart, ghostRestartContextFor } from "../hooks/useSessionRestart";
 
 // An @-mention query may contain spaces so multi-word titles are searchable: a
 // first token (possibly empty, so a bare "@" still opens recents) plus up to 4
@@ -355,6 +340,10 @@ function renderMessageMarkdownCached(content: string): ReactElement {
 // through the context-aware ReactMarkdown wrapper instead.
 const MessageMarkdown = memo(function MessageMarkdown({ content }: { content: string }) {
   const query = useContext(HighlightContext);
+  // An all-HTML body renders as a sanitized canvas — the markdown pipeline
+  // escapes raw tags into garbled source.
+  const html = tryRenderHtmlMessage(content);
+  if (html) return html;
   if (query) {
     return (
       <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={MESSAGE_MD_COMPONENTS}>
@@ -770,41 +759,8 @@ function FolderPlusGlyph({ className = "w-3 h-3" }: { className?: string }) {
   );
 }
 
-// Infer the user's home dir from any absolute path the daemon has reported
-// (recent projects are real local roots), so a typed "~/…" resolves to the same
-// place the daemon would cd to. macOS = /Users/x, Linux = /home/x or /root.
-function inferHomeDir(paths: Array<string | undefined>): string | undefined {
-  for (const p of paths) {
-    const m = p?.match(/^(\/Users\/[^/]+|\/home\/[^/]+|\/root)(?:\/|$)/);
-    if (m) return m[1];
-  }
-  return undefined;
-}
-
-// A picker query that NAMES a directory the recent list can't reach — absolute
-// (/…) or home-relative (~/…). Relative fragments stay plain filters: without a
-// base dir the daemon can't resolve them. Returns the normalized absolute path.
-function resolveCustomPath(raw: string, home: string | undefined): string | undefined {
-  const s = raw.trim();
-  let abs: string | undefined;
-  if (s === "~" || s.startsWith("~/")) {
-    if (!home) return undefined;
-    abs = home + s.slice(1);
-  } else if (s.startsWith("/")) {
-    abs = s;
-  } else {
-    return undefined;
-  }
-  abs = abs.replace(/\/{2,}/g, "/");
-  if (abs.length > 1) abs = abs.replace(/\/$/, "");
-  return abs;
-}
-
-// Re-collapse the home prefix to "~" for a compact, readable chip label.
-function displayPath(abs: string, home: string | undefined): string {
-  if (home && (abs === home || abs.startsWith(home + "/"))) return "~" + abs.slice(home.length);
-  return abs;
-}
+// Project-path helpers (inferHomeDir / resolveCustomPath / displayPath /
+// inferProjectBase / isExplicitPath) live in lib/utils so they're unit-tested.
 
 // Picker hint rows render key names as <KeyCap> caps (the keyboard-shortcuts
 // panel component) — never as plain text in the surrounding font.
@@ -891,31 +847,45 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
     [currentPath, recentProjects],
   );
 
+  // The base a bare folder name resolves under — a sibling of the current
+  // project (its parent dir), so typing "weekend-hack" means the folder next to
+  // the one you're in, not a dead end.
+  const projectBase = useMemo(
+    () => inferProjectBase(currentPath, recentProjects.map((p: { path: string }) => p.path), homeDir),
+    [currentPath, recentProjects, homeDir],
+  );
+
   // While navigating with the keyboard: the default visible chips, or — once the
   // user types — a live filter across ALL recent projects, so the "other"
   // overflow is reachable without the mouse. Reuses the modal's match rule. When
-  // the text instead NAMES a path (absolute or ~/…) that no recent matches, a
-  // synthetic "open this folder" entry rides at the end so any directory is
-  // reachable, not just previously-used ones. The daemon's start_session takes
-  // the cwd verbatim, so a typed path is all it needs.
+  // the text instead NAMES a directory, a synthetic "open this folder" entry
+  // rides at the end so ANY folder is reachable, not just previously-used ones:
+  // an explicit path (absolute or ~/…) always offers it; a bare name resolves
+  // against the project base and offers it only when nothing in recents matches
+  // (so plain filtering — "co" → codecast — stays clean). The daemon's
+  // start_session takes the cwd verbatim, so the fully-resolved path is all it
+  // needs, and the chip shows that path so a wrong base guess is visible first.
   const pickList = useMemo<{ path: string; custom?: boolean }[]>(() => {
     if (filter.trim()) {
-      // A path-like filter expands to an absolute path; match recents against
-      // that so "~/src/…" filters previously-used folders too (not just the raw
-      // tilde string the absolute recent paths never literally contain).
-      const custom = resolveCustomPath(filter, homeDir);
-      const matches = recentProjects.filter((p: { path: string }) => matchesProjectQuery(p.path, custom ?? filter));
-      if (custom && custom !== currentPath && !matches.some((p: { path: string }) => p.path === custom)) {
-        return [...matches, { path: custom, custom: true }];
-      }
+      const explicit = isExplicitPath(filter);
+      const custom = resolveCustomPath(filter, homeDir, projectBase);
+      // An explicit path matches recents against its resolved absolute form (so
+      // "~/src/…" filters previously-used folders too); a bare name keeps
+      // name-prefix matching against the raw text.
+      const matchQuery = explicit ? (custom ?? filter) : filter;
+      const matches = recentProjects.filter((p: { path: string }) => matchesProjectQuery(p.path, matchQuery));
+      const offerCustom = !!custom && custom !== currentPath
+        && !matches.some((p: { path: string }) => p.path === custom)
+        && (explicit || matches.length === 0);
+      if (offerCustom) return [...matches, { path: custom!, custom: true }];
       return matches;
     }
     const base: { path: string }[] = currentPath ? [{ path: currentPath }] : [];
     return base.concat(visibleProjects);
-  }, [filter, recentProjects, currentPath, visibleProjects, homeDir]);
+  }, [filter, recentProjects, currentPath, visibleProjects, homeDir, projectBase]);
 
   // Distinguish "you typed the folder you're already in" from a real miss.
-  const filterIsCurrent = !!currentPath && resolveCustomPath(filter, homeDir) === currentPath;
+  const filterIsCurrent = !!currentPath && resolveCustomPath(filter, homeDir, projectBase) === currentPath;
 
   const clampedHi = Math.min(hi, Math.max(0, pickList.length - 1));
 
@@ -4302,7 +4272,7 @@ function PlanModeBlock({ tool, result, conversationId, messageId, onSendMessage 
   );
 }
 
-const _askUserSentState = new Map<string, Record<number, { key: string; label: string; text?: string }>>();
+const _askUserSentState = new Map<string, Record<number, Array<{ key: string; label: string; text?: string }>>>();
 
 // Claude Code appends two synthetic affordance rows to every AskUserQuestion menu —
 // "Type something" (free text) and "Chat about this" (escape hatch). On a prompt scraped
@@ -4324,7 +4294,9 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
   let parsedInput: { questions?: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string; preview?: string }>; multiSelect?: boolean; isConfirmation?: boolean }>; answers?: Record<string, string> } = {};
   try { parsedInput = JSON.parse(tool.input); } catch {}
   const [sent, setSent] = useState(() => _askUserSentState.has(tool.id));
-  const [selections, setSelections] = useState<Record<number, { key: string; label: string; text?: string }>>(() => _askUserSentState.get(tool.id) ?? {});
+  // Per-question selections. multiSelect questions hold several entries (checkbox
+  // semantics); single-select questions hold at most one.
+  const [selections, setSelections] = useState<Record<number, Array<{ key: string; label: string; text?: string }>>>(() => _askUserSentState.get(tool.id) ?? {});
   const [otherOpen, setOtherOpen] = useState<Record<number, boolean>>({});
   const [otherTexts, setOtherTexts] = useState<Record<number, string>>({});
 
@@ -4333,6 +4305,10 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
 
   const isMultiQuestion = questions.length > 1;
   const isConfirmation = questions[0]?.isConfirmation;
+  const anyMultiSelect = questions.some(q => q.multiSelect);
+  // multiSelect answers can't auto-submit on first click, so they share the
+  // multi-question "pick everything, then submit" flow.
+  const needsSubmit = isMultiQuestion || anyMultiSelect;
 
   let answers: Record<string, string> = {};
   if (parsedInput.answers && typeof parsedInput.answers === "object") {
@@ -4346,12 +4322,12 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
   }
 
   const isInteractive = !result && !!onSendMessage && !sent;
-  const allAnswered = isMultiQuestion && questions.every((_, i) => selections[i] !== undefined);
+  const allAnswered = needsSubmit && questions.every((_, i) => (selections[i]?.length ?? 0) > 0);
 
   const buildPayload = (sels: typeof selections) => {
     const sorted = Object.keys(sels).sort((a, b) => Number(a) - Number(b));
-    const hasText = sorted.some(k => sels[Number(k)].text);
-    const display = sorted.map(k => sels[Number(k)].label).join(", ");
+    const hasText = sorted.some(k => sels[Number(k)].some(s => s.text !== undefined));
+    const display = sorted.map(k => sels[Number(k)].map(s => s.label).join(", ")).join(", ");
     if (hasText) {
       // Claude Code's AskUserQuestion menu only accepts the listed options — there's no
       // inline free-text slot. So a custom ("Other") answer can't be entered through the
@@ -4363,8 +4339,8 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
       // declined the poll mid-loop and spilled the leftover option digits into the
       // reopened prompt box — the "211" bug, 2026-06-27.)
       const text = sorted.map(k => {
-        const s = sels[Number(k)];
-        const ans = s.text ?? s.label;
+        const qSels = sels[Number(k)];
+        const ans = qSels.map(s => s.text ?? s.label).join(", ");
         if (sorted.length === 1) return ans;
         const q = questions[Number(k)];
         const id = (q?.header?.trim()) || q?.question?.replace(/\s+/g, " ").trim().slice(0, 60) || `Q${Number(k) + 1}`;
@@ -4372,7 +4348,24 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
       }).join("\n\n");
       return JSON.stringify({ __cc_poll: true, text, display });
     }
-    return JSON.stringify({ __cc_poll: true, keys: sorted.map(k => sels[Number(k)].key), display });
+    // Key protocol (verified in tmux against Claude Code 2.1.201): on a multiSelect
+    // question a digit TOGGLES that option's checkbox and the menu stays up; Right
+    // advances to the next tab. Any multi-question or multiSelect form then parks on a
+    // "Review your answers" pane whose cursor sits on "1. Submit answers" — the trailing
+    // Enter confirms it. `multi` tells the daemon these digits are toggles, so its
+    // digit-didn't-advance heuristic must not "confirm" them with Enter (which would
+    // re-toggle the highlighted row).
+    const keys: string[] = [];
+    for (const k of sorted) {
+      const qSels = sels[Number(k)];
+      if (questions[Number(k)]?.multiSelect) {
+        keys.push(...qSels.map(s => s.key).sort((a, b) => Number(a) - Number(b)), "Right");
+      } else {
+        keys.push(qSels[0].key);
+      }
+    }
+    if (needsSubmit) keys.push("Enter");
+    return JSON.stringify({ __cc_poll: true, keys, display, ...(anyMultiSelect ? { multi: true } : {}) });
   };
 
   const handleSubmitAll = () => {
@@ -4385,14 +4378,17 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
   const commitOther = (qIdx: number, text: string, optionsCount: number) => {
     const otherKey = String(optionsCount + 1);
     const sel = { key: otherKey, label: text, text };
-    if (isMultiQuestion) {
-      setSelections(prev => ({ ...prev, [qIdx]: sel }));
+    if (questions[qIdx]?.multiSelect) {
+      // Joins the toggled options (replacing any previous custom entry); sent on Submit.
+      setSelections(prev => ({ ...prev, [qIdx]: [...(prev[qIdx] ?? []).filter(s => s.text === undefined), sel] }));
+    } else if (isMultiQuestion) {
+      setSelections(prev => ({ ...prev, [qIdx]: [sel] }));
     } else {
-      const newSels = { ...selections, [qIdx]: sel };
+      const newSels = { 0: [sel] };
       _askUserSentState.set(tool.id, newSels);
       setSelections(newSels);
       setSent(true);
-      onSendMessage!(buildPayload({ 0: sel }));
+      onSendMessage!(buildPayload(newSels));
     }
   };
 
@@ -4400,11 +4396,17 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
     <div className="my-1.5 ml-1 border-l-2 border-sol-violet/30 pl-3 space-y-2.5">
       {questions.map((q, i) => {
         const answer = answers[q.question];
-        const isCustom = answer !== undefined && !q.options.some(
-          o => o.label === answer || o.label.replace(" (Recommended)", "") === answer
+        // A multiSelect answer arrives as the chosen labels joined with ", " (the CLI's
+        // own join) — split it back so each chosen option lights up individually.
+        const answerParts = answer === undefined ? [] : q.multiSelect ? answer.split(", ") : [answer];
+        const matchesOption = (part: string) => q.options.some(
+          o => o.label === part || o.label.replace(" (Recommended)", "") === part
         );
-        const sel = selections[i];
-        const isOtherSelected = sel?.text !== undefined;
+        const customAnswer = answerParts.filter(p => !matchesOption(p)).join(", ");
+        const isCustom = customAnswer !== "";
+        const sels = selections[i] ?? [];
+        const otherSel = sels.find(s => s.text !== undefined);
+        const isOtherSelected = otherSel !== undefined;
         // Rich layout (numbered rows with stacked descriptions) when any option carries a
         // description or preview; otherwise compact borderless pills.
         const hasRich = q.options.some(o => o.description || o.preview);
@@ -4417,23 +4419,36 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
                 </span>
               </div>
             )}
-            <div className="text-[13px] leading-snug font-medium text-sol-text-secondary">{q.question}</div>
+            <div className="text-[13px] leading-snug font-medium text-sol-text-secondary">
+              {q.question}
+              {q.multiSelect && isInteractive && (
+                <span className="ml-2 text-[10px] font-normal uppercase tracking-[0.07em] text-sol-text-dim">select all that apply</span>
+              )}
+            </div>
             <div className={hasRich ? "flex flex-col gap-0.5" : "flex flex-wrap gap-1.5"}>
               {q.options.map((opt, j) => {
                 // Synthetic CLI menu chrome scraped as bare options — drop it. Keep the
                 // index `j` so the surviving options retain their positional poll keys.
                 if (SYNTHETIC_POLL_OPTION.test(opt.label.trim())) return null;
                 const cleanLabel = opt.label.replace(" (Recommended)", "");
-                const isSelected = answer !== undefined && (opt.label === answer || cleanLabel === answer);
-                const isLocalSelected = !isOtherSelected && sel?.label === cleanLabel;
+                const isSelected = answerParts.some(p => opt.label === p || cleanLabel === p);
+                const isLocalSelected = sels.some(s => s.text === undefined && s.label === cleanLabel);
                 const on = isSelected || isLocalSelected;
                 const choose = () => {
                   setOtherOpen(prev => ({ ...prev, [i]: false }));
                   const pollKey = isConfirmation ? (j === 0 ? "Enter" : "Escape") : String(j + 1);
-                  if (isMultiQuestion) {
-                    setSelections(prev => ({ ...prev, [i]: { key: pollKey, label: cleanLabel } }));
+                  const sel = { key: pollKey, label: cleanLabel };
+                  if (q.multiSelect) {
+                    // Checkbox semantics: clicking toggles; Submit sends.
+                    setSelections(prev => {
+                      const cur = prev[i] ?? [];
+                      const has = cur.some(s => s.text === undefined && s.key === pollKey);
+                      return { ...prev, [i]: has ? cur.filter(s => s.text !== undefined || s.key !== pollKey) : [...cur, sel] };
+                    });
+                  } else if (isMultiQuestion) {
+                    setSelections(prev => ({ ...prev, [i]: [sel] }));
                   } else {
-                    const newSels = { ...selections, [i]: { key: pollKey, label: cleanLabel } };
+                    const newSels = { ...selections, [i]: [sel] };
                     _askUserSentState.set(tool.id, newSels);
                     setSelections(newSels);
                     setSent(true);
@@ -4443,10 +4458,13 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
                 // Rich row: a numbered index slot (becomes a check when chosen) plus the
                 // label stacked above its description — no per-option border, just a soft
                 // hover/selected fill.
+                // multiSelect renders the index slot as an empty checkbox outline so the
+                // rows read as toggles, not a pick-one menu.
                 const marker = (
                   <span className={`mt-px flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-md text-[10px] font-semibold tabular-nums leading-none transition-colors ${
                     on
                       ? isInteractive ? "bg-sol-violet text-white" : "bg-sol-green text-white"
+                      : q.multiSelect && isInteractive ? "border border-sol-violet/40 text-sol-violet/80 group-hover/opt:bg-sol-violet/15"
                       : isInteractive ? "bg-sol-violet/15 text-sol-violet/80 group-hover/opt:bg-sol-violet/25" : "bg-sol-border/15 text-sol-text-dim"
                   }`}>
                     {on ? <PollCheckIcon className="w-2.5 h-2.5" /> : j + 1}
@@ -4510,7 +4528,7 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
                     type="button"
                     onClick={() => {
                       setOtherOpen(prev => ({ ...prev, [i]: true }));
-                      setSelections(prev => { const next = { ...prev }; delete next[i]; return next; });
+                      setSelections(prev => ({ ...prev, [i]: q.multiSelect ? (prev[i] ?? []).filter(s => s.text === undefined) : [] }));
                     }}
                     className={`group/opt flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors cursor-pointer ${
                       isOtherSelected ? "bg-sol-blue/12" : "hover:bg-sol-blue/10"
@@ -4522,7 +4540,7 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
                       {isOtherSelected ? <PollCheckIcon className="w-2.5 h-2.5" /> : "+"}
                     </span>
                     <span className={`text-xs ${isOtherSelected ? "font-medium text-sol-blue" : "text-sol-text-dim group-hover/opt:text-sol-blue/90"}`}>
-                      {isOtherSelected ? sel.label : "Other"}
+                      {isOtherSelected ? otherSel!.label : "Other"}
                     </span>
                   </button>
                 ) : (
@@ -4530,14 +4548,14 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
                     type="button"
                     onClick={() => {
                       setOtherOpen(prev => ({ ...prev, [i]: true }));
-                      setSelections(prev => { const next = { ...prev }; delete next[i]; return next; });
+                      setSelections(prev => ({ ...prev, [i]: q.multiSelect ? (prev[i] ?? []).filter(s => s.text === undefined) : [] }));
                     }}
                     className={`inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full transition-colors cursor-pointer ${
                       isOtherSelected ? "bg-sol-blue text-white font-medium" : "bg-sol-border/12 text-sol-text-dim hover:bg-sol-blue/18 hover:text-sol-blue"
                     }`}
                   >
                     {isOtherSelected ? <PollCheckIcon className="w-3 h-3" /> : <span className="text-[13px] leading-none">+</span>}
-                    {isOtherSelected ? sel.label : "Other"}
+                    {isOtherSelected ? otherSel!.label : "Other"}
                   </button>
                 )
               )}
@@ -4547,12 +4565,12 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
                     <span className="mt-px flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-md bg-sol-blue text-white">
                       <PollCheckIcon className="w-2.5 h-2.5" />
                     </span>
-                    <span className="min-w-0 flex-1 text-xs font-medium text-sol-blue leading-snug">{isOtherSelected ? sel.label : answer}</span>
+                    <span className="min-w-0 flex-1 text-xs font-medium text-sol-blue leading-snug">{isOtherSelected ? otherSel!.label : customAnswer}</span>
                   </div>
                 ) : (
                   <span className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-full bg-sol-blue text-white">
                     <PollCheckIcon className="w-3 h-3" />
-                    {isOtherSelected ? sel.label : answer}
+                    {isOtherSelected ? otherSel!.label : customAnswer}
                   </span>
                 )
               )}
@@ -4598,7 +4616,7 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
           </div>
         );
       })}
-      {isInteractive && isMultiQuestion && (
+      {isInteractive && needsSubmit && (
         <div className="pt-0.5">
           <button
             onClick={handleSubmitAll}
@@ -4609,7 +4627,9 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
                 : "bg-sol-border/15 text-sol-text-dim cursor-not-allowed"
             }`}
           >
-            Submit answers ({Object.keys(selections).length}/{questions.length})
+            {isMultiQuestion
+              ? `Submit answers (${questions.filter((_, qi) => (selections[qi]?.length ?? 0) > 0).length}/${questions.length})`
+              : `Submit (${selections[0]?.length ?? 0} selected)`}
           </button>
         </div>
       )}
@@ -5156,7 +5176,7 @@ function ScheduledTaskBlock({ content: rawContent, timestamp }: { content: strin
   );
 }
 
-function SessionMessageBlock({ from, name, body, timestamp, pendingStatus, recipientActive, variant = "session", color, summary }: { from: string; name?: string; body: string; timestamp?: number; pendingStatus?: string; recipientActive?: boolean; variant?: "session" | "teammate"; color?: string; summary?: string }) {
+function SessionMessageBlock({ from, name, body, timestamp, pendingStatus, recipientActive, variant = "session", color, summary, linkToConversationId }: { from: string; name?: string; body: string; timestamp?: number; pendingStatus?: string; recipientActive?: boolean; variant?: "session" | "teammate"; color?: string; summary?: string; linkToConversationId?: string }) {
   // pendingStatus set ⇒ this is a server-side pending_messages row that hasn't reached the
   // recipient's transcript yet (queued — typically because the recipient is mid-turn).
   const isPending = !!pendingStatus;
@@ -5186,7 +5206,20 @@ function SessionMessageBlock({ from, name, body, timestamp, pendingStatus, recip
         <HeaderIcon className={`w-3.5 h-3.5 shrink-0 ${iconText}`} />
         <span className={`text-[11px] font-medium tracking-wide uppercase shrink-0 ${labelText}`}>{isTeammate ? "From teammate" : "Message from"}</span>
         {isTeammate ? (
-          <span className={`px-1.5 py-0.5 rounded border text-[10px] font-mono shrink-0 ${agentColorMap[color || "blue"] || agentColorMap.blue}`}>{from}</span>
+          // A teammate's name isn't a session id, so it can't be an EntityIdPill —
+          // but when the sender is resolvable (team-lead → this conversation's
+          // spawned_by parent) the badge clicks through to that session.
+          linkToConversationId ? (
+            <button
+              onClick={() => useInboxStore.getState().navigateToSession(linkToConversationId)}
+              className={`px-1.5 py-0.5 rounded border text-[10px] font-mono shrink-0 cursor-pointer hover:underline underline-offset-2 ${agentColorMap[color || "blue"] || agentColorMap.blue}`}
+              title="View the sender's session"
+            >
+              {from}
+            </button>
+          ) : (
+            <span className={`px-1.5 py-0.5 rounded border text-[10px] font-mono shrink-0 ${agentColorMap[color || "blue"] || agentColorMap.blue}`}>{from}</span>
+          )
         ) : from && from !== "unknown" ? (
           <EntityIdPill shortId={from} />
         ) : name ? (
@@ -5400,13 +5433,13 @@ const agentBorderMap: Record<string, string> = {
   pink: "border-pink-500/30",
 };
 
-function TeammateEventsBlock({ content, timestamp }: { content: string; timestamp: number }) {
+function TeammateEventsBlock({ content, timestamp, spawnedByConversationId }: { content: string; timestamp: number; spawnedByConversationId?: string }) {
   const parts = parseTeammateMessages(content);
   return (
     <div className="my-1 space-y-1">
       {parts.map((part, i) => {
         if (part.type === 'teammate') {
-          return <TeammateMessageCard key={i} teammateId={part.teammateId} color={part.color} summary={part.summary} content={part.content} timestamp={timestamp} />;
+          return <TeammateMessageCard key={i} teammateId={part.teammateId} color={part.color} summary={part.summary} content={part.content} timestamp={timestamp} spawnedByConversationId={spawnedByConversationId} />;
         }
         // Drop the harness's framing boilerplate ("Another Claude session sent a
         // message:" / the "permission laundering" disclaimer) — it's machine instruction
@@ -5419,7 +5452,7 @@ function TeammateEventsBlock({ content, timestamp }: { content: string; timestam
   );
 }
 
-function TeammateMessageCard({ teammateId, color, summary, content, timestamp }: { teammateId: string; color?: string; summary?: string; content: string; timestamp?: number }) {
+function TeammateMessageCard({ teammateId, color, summary, content, timestamp, spawnedByConversationId }: { teammateId: string; color?: string; summary?: string; content: string; timestamp?: number; spawnedByConversationId?: string }) {
   const safeContent = content || '';
   let parsed: any = null;
   try { if (safeContent) parsed = JSON.parse(safeContent); } catch {}
@@ -5504,7 +5537,7 @@ function TeammateMessageCard({ teammateId, color, summary, content, timestamp }:
   // A substantive teammate broadcast reuses the cast-send card (SessionMessageBlock) via its
   // teammate variant — the same format and code, only slightly distinct.
   return (
-    <SessionMessageBlock variant="teammate" from={teammateId} color={color} summary={summary} body={content} timestamp={timestamp} />
+    <SessionMessageBlock variant="teammate" from={teammateId} color={color} summary={summary} body={content} timestamp={timestamp} linkToConversationId={teammateId === "team-lead" ? spawnedByConversationId : undefined} />
   );
 }
 
@@ -5522,7 +5555,9 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
     .replace(/\[image\]/gi, "")
     .trim();
   const { contexts: contextBlocks, remaining: displayContent } = parseContextBlocks(rawContent);
-  const isMarkdown = hasRichMarkdown(displayContent);
+  // HTML bodies take the markdown branch so MessageMarkdown can dispatch them
+  // to the sanitized canvas renderer.
+  const isMarkdown = hasRichMarkdown(displayContent) || looksLikeHtml(displayContent);
 
   const effectivelyCollapsed = collapsed && !isExpanded;
 
@@ -7258,21 +7293,35 @@ function ShortcutHint({ keys, label }: { keys: string[]; label: string }) {
   );
 }
 
-const CYCLING_SHORTCUTS = [
-  { keys: ["Cmd", "K"], label: "command palette" },
-  { keys: ["Ctrl", "I"], label: "jump to needs input" },
-  { keys: ["Ctrl", "J"], label: "next session" },
-  { keys: ["Ctrl", "K"], label: "previous session" },
-  { keys: ["Ctrl", "Tab"], label: "MRU next" },
-  { keys: ["Shift", "←"], label: "defer & next session" },
-  { keys: ["Ctrl", "←"], label: "dismiss session" },
+type CyclingHint =
+  | { action: ShortcutAction; label: string }
+  | { keys: string[]; label: string };
+
+// Registry-bound hints derive their keycaps from the live shortcut definition, so
+// rebinding an action can never leave the footer advertising a key that no longer
+// works. Only the two Escape gestures and the Claude Code mode cycle — which have
+// no entry in the shortcut registry — carry literal caps.
+const CYCLING_SHORTCUTS: CyclingHint[] = [
+  { action: "palette.toggle", label: "command palette" },
+  { action: "session.jumpIdle", label: "jump to needs input" },
+  { action: "session.next", label: "next session" },
+  { action: "session.prev", label: "previous session" },
+  { action: "session.mruSwitch", label: "MRU next" },
+  { action: "session.deferAdvance", label: "defer & next session" },
+  { action: "session.stash", label: "stash session" },
   { keys: ["Esc"], label: "escape to session" },
   { keys: ["Esc", "Esc"], label: "send escape" },
-  { keys: ["Cmd", "⇧", "C"], label: "collapse tool blocks" },
-  { keys: ["Ctrl", "."], label: "zen mode" },
-  { keys: ["⇧", "Tab"], label: "cycle CC mode" },
-  { keys: ["Cmd", "⇧", "L"], label: "copy link" },
+  { action: "conv.cycleDensity", label: "collapse tool blocks" },
+  { action: "ui.zenToggle", label: "zen mode" },
+  { keys: [isMac ? "⇧" : "Shift", "Tab"], label: "cycle CC mode" },
+  { action: "conv.copyLink", label: "copy link" },
 ];
+
+function cyclingHintCaps(entry: CyclingHint): string[] {
+  if ("keys" in entry) return entry.keys;
+  const defs = getShortcutsForAction(entry.action);
+  return defs.length > 0 ? formatShortcutParts(defs[0]) : [];
+}
 
 function CyclingShortcutHint() {
   const [index, setIndex] = useState(0);
@@ -7289,7 +7338,8 @@ function CyclingShortcutHint() {
     return () => clearInterval(interval);
   });
 
-  const { keys, label } = CYCLING_SHORTCUTS[index];
+  const entry = CYCLING_SHORTCUTS[index];
+  const caps = cyclingHintCaps(entry);
   return (
     <p className="text-[11px] opacity-[0.55] hidden sm:flex items-center gap-1 overflow-hidden h-[18px]">
       <span
@@ -7297,10 +7347,10 @@ function CyclingShortcutHint() {
           animating ? "-translate-y-full opacity-0" : "translate-y-0 opacity-100"
         }`}
       >
-        {keys.map((k, i) => (
-          <kbd key={i} className="px-1 py-0.5 rounded border border-current/40 text-[10px] leading-none font-semibold bg-sol-bg/50">{k}</kbd>
+        {caps.map((k, i) => (
+          <KeyCap key={i} size="xs">{k}</KeyCap>
         ))}
-        <span className="ml-1.5 text-[10px] opacity-80">{label}</span>
+        <span className="ml-1.5 text-[10px] opacity-80">{entry.label}</span>
       </span>
     </p>
   );
@@ -7444,7 +7494,7 @@ function WorkingStatusLine({ startedAt, toolLabel }: { startedAt?: number; toolL
       <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
       Working
       {showElapsed && <span className="text-sol-text-dim/60 tabular-nums">· {formatElapsedClock(elapsedMs)}</span>}
-      {showElapsed && toolLabel && <span className="text-sol-text-dim/60">· {toolLabel}</span>}
+      {showElapsed && toolLabel && <span className="text-sol-text-dim/60">· {formatToolName(toolLabel)}</span>}
     </span>
   );
 }
@@ -9001,7 +9051,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                            permissionMode === "dontAsk" ? "don't ask" :
                            permissionMode}
                         </span>
-                        <span className="text-sol-text-dim/50">(Shift+Tab)</span>
+                        <span className="flex items-center gap-1 text-sol-text-dim/50">
+                          <KeyCap size="xs">{isMac ? "⇧" : "Shift"}</KeyCap>
+                          <KeyCap size="xs">Tab</KeyCap>
+                        </span>
                       </div>
                     )}
                   </div>
@@ -9150,10 +9203,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                   ))}
                   {selectedQueueIndex !== null && (
                     <span className="text-[9px] text-sol-text-dim flex items-center gap-2 pl-1">
-                      <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50 text-sol-text-secondary font-mono text-[8px]">&uarr;&darr;</kbd> navigate</span>
-                      <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50 text-sol-text-secondary font-mono text-[8px]">Del</kbd> remove</span>
-                      <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50 text-sol-text-secondary font-mono text-[8px]">Enter</kbd> edit</span>
-                      <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50 text-sol-text-secondary font-mono text-[8px]">Esc</kbd> deselect</span>
+                      <span className="inline-flex items-center gap-1"><KeyCap size="xs">↑</KeyCap><KeyCap size="xs">↓</KeyCap> navigate</span>
+                      <span className="inline-flex items-center gap-1"><KeyCap size="xs">Del</KeyCap> remove</span>
+                      <span className="inline-flex items-center gap-1"><KeyCap size="xs">Enter</KeyCap> edit</span>
+                      <span className="inline-flex items-center gap-1"><KeyCap size="xs">Esc</KeyCap> deselect</span>
                     </span>
                   )}
                 </div>
@@ -9190,10 +9243,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                   ))}
                   {selectedImageIndex !== null && (
                     <span className="text-[10px] text-sol-text-dim ml-1 flex items-center gap-2">
-                      <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50 text-sol-text-secondary font-mono text-[9px]">&larr;&rarr;</kbd> navigate</span>
-                      <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50 text-sol-text-secondary font-mono text-[9px]">Space</kbd> preview</span>
-                      <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50 text-sol-text-secondary font-mono text-[9px]">Del</kbd> remove</span>
-                      <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50 text-sol-text-secondary font-mono text-[9px]">Esc</kbd> exit</span>
+                      <span className="inline-flex items-center gap-1"><KeyCap size="xs">←</KeyCap><KeyCap size="xs">→</KeyCap> navigate</span>
+                      <span className="inline-flex items-center gap-1"><KeyCap size="xs">Space</KeyCap> preview</span>
+                      <span className="inline-flex items-center gap-1"><KeyCap size="xs">Del</KeyCap> remove</span>
+                      <span className="inline-flex items-center gap-1"><KeyCap size="xs">Esc</KeyCap> exit</span>
                     </span>
                   )}
                 </div>
@@ -12081,11 +12134,17 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     (res: unknown) => (conversation?._id ? followRestoredConversation(res, conversation._id) : false),
     [conversation?._id],
   );
+  const restartNotify = useCallback((kind: "success" | "error" | "info", message: string) => {
+    if (kind === "error") toast.error(message);
+    else if (kind === "success") toast.success(message);
+    else toast(message);
+  }, []);
   const { restart: handleRestartSession } = useSessionRestart({
     conversationId: conversation?._id ?? "",
     isLive: restartLive,
     ghostContext: restartGhostContext,
     onRestored: onRestartRestored,
+    notify: restartNotify,
   });
 
   useWatchEffect(() => {
@@ -12293,7 +12352,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         case 'plan':
           return <PlanBlock key={msg._id} content={kind.planContent} timestamp={msg.timestamp} collapsed={false} messageId={msg._id} conversationId={conversation?._id} onStartShareSelection={handleStartShareSelection} />;
         case 'teammate_events':
-          return <TeammateEventsBlock key={msg._id} content={msg.content || ""} timestamp={msg.timestamp} />;
+          return <TeammateEventsBlock key={msg._id} content={msg.content || ""} timestamp={msg.timestamp} spawnedByConversationId={(conversation as any)?.spawned_by_conversation_id} />;
         case 'normal': {
           if (!msg.content?.trim() && !msg.images?.some(img => !img.tool_use_id)) return null;
           const userName = conversation?.user?.name || conversation?.user?.email?.split("@")[0];
@@ -12576,9 +12635,16 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               <TooltipProvider delayDuration={300}>
               <div className="flex items-center gap-1 flex-shrink-0 overflow-hidden ml-auto">
 
-                {conversation.parent_conversation_id && (
+                {(() => {
+                  // Subagents carry parent_conversation_id; visible children
+                  // (agent-team teammates, spawns) carry spawned_by_conversation_id.
+                  // Same chip, same click-through.
+                  const parentLinkId = conversation.parent_conversation_id
+                    || (conversation as any).spawned_by_conversation_id;
+                  if (!parentLinkId) return null;
+                  return (
                   <Link
-                    href={convLink(conversation.parent_conversation_id)}
+                    href={convLink(parentLinkId)}
                     onClick={(e) => {
                       // Plain left-click is an instant, store-driven switch (same as the
                       // BranchSelector chips) — bypass the /conversation redirector so the
@@ -12586,7 +12652,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                       // bounce. Modified clicks fall through to the Link for open-in-new-tab.
                       if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
                       e.preventDefault();
-                      navigateToSession(conversation.parent_conversation_id!);
+                      navigateToSession(parentLinkId);
                     }}
                     className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30 hover:bg-sol-cyan/20 transition-colors"
                     title="View parent conversation"
@@ -12596,7 +12662,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     </svg>
                     Parent
                   </Link>
-                )}
+                  );
+                })()}
 
                 {((conversation.fork_children?.length ?? 0) > 0 || conversation.forked_from) && (() => {
                   // Family size from the details payload alone (no store sub):
