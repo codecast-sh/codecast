@@ -51,28 +51,28 @@ describe("visualOrderSessions collapsed sections (grouped view)", () => {
   });
 });
 
-// A plan fan-out (≥2 sessions sharing active_plan) clusters into a "grp:" section
-// that the status view renders default-COLLAPSED. Nav must mirror that: skip the
-// members by default, walk them only when the group is explicitly expanded.
+// Sessions sharing a plan are NOT clustered in the status view — grouping by
+// plan is exclusively the "By plan" view's job. Nav walks a plan-bound session
+// exactly like any other card in its status section (regression ct-37908: the
+// old clustering hid working members from Working).
 const plan = { _id: "pl-1", short_id: "pl-1", title: "Roadmap", status: "active" };
-const grpKey = "grp:pl-1 · Roadmap";
 const planSessions: Record<string, InboxSession> = {
   pw1: session("pw1", { is_idle: false, active_plan: plan }),
   pw2: session("pw2", { is_idle: false, active_plan: plan }),
   ni1: session("ni1", { is_idle: true }),
 };
 
-describe("visualOrderSessions orchestration groups (status view)", () => {
-  it("default-collapses a plan group: nav skips its members", () => {
+describe("visualOrderSessions plan-bound sessions (status view)", () => {
+  it("plan-sharing sessions stay in their status sections — nav walks every one", () => {
     const ids = visualOrderSessions(planSessions, new Set(), null, undefined, { collapsedSections: {} })
       .map((s) => s._id).sort();
-    expect(ids).toEqual(["ni1"]);
+    expect(ids).toEqual(["ni1", "pw1", "pw2"]);
   });
 
-  it("walks the members when the group is explicitly expanded", () => {
-    const ids = visualOrderSessions(planSessions, new Set(), null, undefined, { collapsedSections: { [grpKey]: false } })
+  it("collapsing Working hides them like any other working card", () => {
+    const ids = visualOrderSessions(planSessions, new Set(), null, undefined, { collapsedSections: { working: true } })
       .map((s) => s._id).sort();
-    expect(ids).toEqual(["ni1", "pw1", "pw2"]);
+    expect(ids).toEqual(["ni1"]);
   });
 });
 

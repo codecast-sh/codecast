@@ -217,6 +217,9 @@ export type Conversation = {
   author_name: string;
   is_own: boolean;
   parent_conversation_id?: string | null;
+  // Visible-child pointer (agent-team teammate → its lead). The server folds it
+  // into parent_conversation_id for the link; this field only picks the label.
+  spawned_by_conversation_id?: string | null;
   parent_message_uuid?: string | null;
   is_subagent?: boolean;
   is_workflow_sub?: boolean;
@@ -575,7 +578,7 @@ export function ConversationCard({ conv, filter, isFocused, onNavigate, hasTeam 
                 <svg className="w-3 h-3 rotate-180 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
                 </svg>
-                <span className="shrink-0">sub of</span>
+                <span className="shrink-0">{conv.spawned_by_conversation_id && conv.parent_conversation_id === conv.spawned_by_conversation_id ? "spawned by" : "sub of"}</span>
                 <button
                   className="text-sol-cyan/70 hover:text-sol-cyan truncate max-w-[150px] sm:max-w-[200px] transition-colors text-left"
                   onClick={(e) => {

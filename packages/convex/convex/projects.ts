@@ -3,6 +3,7 @@ import { mutation, query } from "./functions";
 import { verifyApiToken } from "./apiTokens";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createDataContext } from "./data";
+import { isTeamMember } from "./privacy";
 
 export const create = mutation({
   args: {
@@ -157,6 +158,8 @@ export const webList = query({
 
     let projects;
     if (args.workspace === "team" && args.team_id) {
+      // team_id is client-supplied — only a member may list a team's projects.
+      if (!(await isTeamMember(ctx, userId, args.team_id))) return [];
       projects = await ctx.db
         .query("projects")
         .withIndex("by_team_id", (q) => q.eq("team_id", args.team_id!))
@@ -203,8 +206,14 @@ export const webGet = query({
 
     const project = await ctx.db.get(args.id);
     if (!project) return null;
-    // Allow if owner or same team
-    if (project.user_id !== userId && !project.team_id) return null;
+    // Owner, or a member of the project's team. (The old check only rejected
+    // *teamless* others' projects, so any team-tagged project was world-readable.)
+    const isOwner = String(project.user_id) === String(userId);
+    if (!isOwner) {
+      if (!project.team_id || !(await isTeamMember(ctx, userId, project.team_id))) {
+        return null;
+      }
+    }
 
     return enrichProject(ctx, project);
   },

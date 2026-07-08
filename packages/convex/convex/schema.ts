@@ -116,7 +116,8 @@ export default defineSchema({
     .index("by_github_username", ["github_username"])
     .index("by_github_id", ["github_id"])
     .index("by_username", ["username"])
-    .index("by_team_id", ["team_id"]),
+    .index("by_team_id", ["team_id"])
+    .index("by_last_heartbeat", ["last_heartbeat"]),
 
   daemon_commands: defineTable({
     user_id: v.id("users"),
@@ -240,6 +241,20 @@ export default defineSchema({
     comment_fork_message_id: v.optional(v.string()),
     comment_fork_comment_id: v.optional(v.id("comments")),
     comment_fork_prompt_at: v.optional(v.number()),
+    // Visible-child pointer: the session that spawned this one (agent-team
+    // teammate → its lead, `cast spawn` → its caller). Unlike
+    // parent_conversation_id — whose mere presence marks a row as a subagent
+    // and nests/hides it from the inbox — this field only labels and links:
+    // the child stays a first-class inbox card with a click-through to its
+    // parent. Set by conversations.linkSpawnedBy (daemon-resolved).
+    spawned_by_conversation_id: v.optional(v.id("conversations")),
+    // Agent-team identity, from the teamName/agentName stamps Claude Code
+    // writes on every teammate JSONL line (the lead's transcript is never
+    // stamped; linkSpawnedBy stamps the lead as "team-lead" when it links a
+    // worker). Lets the client resolve a teammate name in a transcript to the
+    // sibling session that carries it.
+    agent_team_name: v.optional(v.string()),
+    agent_name: v.optional(v.string()),
     is_favorite: v.optional(v.boolean()),
     short_id: v.optional(v.string()),
     auto_shared: v.optional(v.boolean()),
@@ -258,8 +273,9 @@ export default defineSchema({
     // Stash = set aside WITHOUT killing: hides the session from the active inbox
     // buckets into the "Stashed" group (above Dismissed) while the agent keeps
     // running. Same absolute-flag semantics as inbox_dismissed_at (cleared by
-    // sending a message or an explicit restore); unlike dismiss it never
-    // triggers a kill. A dismiss clears it (the row moves to Dismissed).
+    // a HUMAN send or an explicit restore — a scheduler-origin injection
+    // deliberately leaves it set, see enqueuePendingMessage); unlike dismiss it
+    // never triggers a kill. A dismiss clears it (the row moves to Dismissed).
     inbox_stashed_at: v.optional(v.number()),
     inbox_killed_at: v.optional(v.number()),
     inbox_deferred_at: v.optional(v.number()),
@@ -305,6 +321,11 @@ export default defineSchema({
     workflow_run_id: v.optional(v.id("workflow_runs")),
     is_workflow_sub: v.optional(v.boolean()),
     is_workflow_primary: v.optional(v.boolean()),
+    // The schedule (agent_tasks row) that spawned this conversation as a run.
+    // Stamped by the daemon shortly after spawn (agentTasks.linkRunConversation)
+    // and backfilled on run completion/failure, so EVERY run — not just the
+    // latest — stays attributable to its schedule (panel, badges, provenance).
+    agent_task_id: v.optional(v.id("agent_tasks")),
     available_skills: v.optional(v.string()),
     subagent_description: v.optional(v.string()),
     icon: v.optional(v.string()),
@@ -314,6 +335,13 @@ export default defineSchema({
     // only manages sessions whose owner_device_id matches its own device id.
     // "Move to remote" flips this from the local device to the Mac's device.
     owner_device_id: v.optional(v.string()),
+    // Second-party ownership: the team member RESPONSIBLE for this session,
+    // distinct from user_id (the member whose account runs it). Set when an
+    // agent account (e.g. Mr Bot) parks a session on a human reviewer — the
+    // session then surfaces in the owner's inbox/CLI needs-input views and the
+    // owner may reply into it from the web composer. Absent = unowned, classic
+    // behavior. Unrelated to owner_device_id (which DEVICE's daemon runs it).
+    owner_user_id: v.optional(v.id("users")),
     // Tombstone forwarding: the id of a DELETED conversation this row replaced
     // when a kill/restart restored its session (resolveRestartTarget). Lets
     // resolveConversation heal stale links/cards that still point at the dead
@@ -347,6 +375,9 @@ export default defineSchema({
     .index("by_user_private", ["user_id", "is_private"])
     .index("by_team_id", ["team_id"])
     .index("by_team_user_updated", ["team_id", "user_id", "updated_at"])
+    // Sparse: only second-party-owned sessions carry owner_user_id. Powers the
+    // owner's inbox merge (computeInboxSessions) and feed --mine.
+    .index("by_owner_updated", ["owner_user_id", "updated_at"])
     .index("by_share_token", ["share_token"])
     .index("by_session_id", ["session_id"])
     .index("by_short_id", ["short_id"])
@@ -778,6 +809,12 @@ export default defineSchema({
     image_storage_id: v.optional(v.id("_storage")),
     image_storage_ids: v.optional(v.array(v.id("_storage"))),
     client_id: v.optional(v.string()),
+    // Who initiated the send. Absent = a person (web composer, cast send, team
+    // send) — those clear dismissed/stashed/killed so the session resurfaces.
+    // "scheduler" = the daemon's task scheduler firing a `cast schedule`
+    // injection: a machine wake must not override the user's stash (stash =
+    // "keep working out of my sight"), so enqueue skips the stash-clear.
+    origin: v.optional(v.literal("scheduler")),
     status: v.union(
       v.literal("pending"),
       v.literal("injected"),
@@ -804,7 +841,9 @@ export default defineSchema({
     .index("by_status", ["status"]),
 
   // One row per machine the user runs a codecast daemon on. The remote Mac is
-  // just another device. device_id is a stable hash of ~/.codecast/.machine_key
+  // just another device. device_id is a stable hash of ~/.codecast/.machine_key,
+  // bound to the machine's hardware UUID so a disk-copied ~/.codecast (Migration
+  // Assistant) mints a fresh id instead of impersonating the source machine
   // (see remote/device.ts). Per-device fields (local_project_roots) live here
   // rather than on the user doc, so multiple machines don't clobber each other.
   devices: defineTable({
@@ -1155,6 +1194,16 @@ export default defineSchema({
     .index("by_recipient_read", ["recipient_user_id", "read"])
     .index("by_recipient_created", ["recipient_user_id", "created_at"]),
 
+  // Fixed-window counters for the IP-keyed rate limiter (ipRateLimit.ts) used on
+  // UNAUTHENTICATED endpoints (the auth relay, webhooks) — the existing per-user
+  // rate_limits table can't cover them (no userId). Keyed per (endpoint, ip) so
+  // counters distribute — no hot doc. Pruned hourly.
+  ip_rate_limits: defineTable({
+    key: v.string(),
+    count: v.number(),
+    window_start: v.number(),
+  }).index("by_key", ["key"]),
+
   pending_permissions: defineTable({
     conversation_id: v.id("conversations"),
     session_id: v.string(),
@@ -1169,9 +1218,14 @@ export default defineSchema({
     created_at: v.number(),
     resolved_at: v.optional(v.number()),
     resolved_by: v.optional(v.id("users")),
+    // Denormalized conversation owner so getAllRespondedPermissions can index by
+    // (owner, resolved_at) instead of scanning the whole table — the scan made
+    // that live per-daemon subscription re-run on every other user's writes.
+    owner_user_id: v.optional(v.id("users")),
   })
     .index("by_conversation_status", ["conversation_id", "status"])
-    .index("by_session", ["session_id"]),
+    .index("by_session", ["session_id"])
+    .index("by_owner_resolved", ["owner_user_id", "resolved_at"]),
 
   // A signed-in link recipient (someone who opened a shared conversation but is
   // neither its owner nor a team member) asking to do more than read: to send
@@ -1303,6 +1357,14 @@ export default defineSchema({
 
     last_run_at: v.optional(v.number()),
     last_run_summary: v.optional(v.string()),
+    // True when the last run ended in failTaskRun. Drives the panel's outcome
+    // color and gates run auto-fold: a failed previous run must stay visible in
+    // the inbox (escalation), only a clean run folds when the next one starts.
+    last_run_failed: v.optional(v.boolean()),
+    // Agent's explicit escalation from `cast schedule complete --needs-attention`:
+    // the run neither auto-folds nor collapses under the schedule's standing row —
+    // it stays a real inbox card until the user triages it.
+    last_run_needs_attention: v.optional(v.boolean()),
     last_run_conversation_id: v.optional(v.id("conversations")),
     // Claude session UUID of the last spawned run. The daemon assigns it up front
     // via `claude --session-id`; webList resolves it to a conversation at read time

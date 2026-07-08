@@ -38,11 +38,16 @@ import { getLastReconciliation, performReconciliation, repairDiscrepancies } fro
 import { parseSessionFile, extractSlug } from "./parser.js";
 import { SyncService } from "./syncService.js";
 import { resolveLocalProjectPath, claudeProjectDirName } from "./projectPathResolver.js";
+import { runDoctor } from "./doctor.js";
 import { deviceId, deviceLabel } from "./remote/device.js";
 import {
+  buildDaemonLauncherScript,
   buildDaemonPlistXml,
   buildWatchdogPlistXml,
   buildWatchdogShellScript,
+  daemonPlistNeedsUpgrade,
+  DAEMON_LAUNCHER_FILENAME,
+  shellEscapeForSh,
   watchdogPlistNeedsUpgrade,
 } from "./supervision.js";
 import * as readline from "readline";
@@ -357,10 +362,7 @@ const VERSION_FILE = path.join(CONFIG_DIR, "daemon.version");
 const STATE_FILE = path.join(CONFIG_DIR, "daemon.state");
 const LOG_FILE = path.join(CONFIG_DIR, "daemon.log");
 const WATCHDOG_SCRIPT_PATH = path.join(CONFIG_DIR, "watchdog.sh");
-
-function shellEscapeForSh(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
-}
+const DAEMON_LAUNCHER_SCRIPT_PATH = path.join(CONFIG_DIR, DAEMON_LAUNCHER_FILENAME);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -388,6 +390,8 @@ interface DaemonState {
   lastWatchdogCheck?: number;
   runtimeVersion?: string;
   watchdogRestarts?: number;
+  /** Stamped on every daemon state write — lets `--wait` tell a fresh state file from a stale one. */
+  timestamp?: number;
 }
 
 function detectAgents(): DetectedAgent[] {
@@ -1218,6 +1222,51 @@ function formatBytesShort(n: number): string {
   return `${(n / 1024 / 1024).toFixed(1)}MB`;
 }
 
+// Block until the daemon is running AND connected to Convex, or the timeout
+// lapses. `startedAfterMs` guards against trusting a state file left behind by
+// the PREVIOUS daemon instance: saveDaemonState stamps `timestamp` on every
+// write, so requiring a stamp newer than the (re)start moment proves the state
+// (including `connected`) was written by the instance we just launched. This is
+// the productized form of the "poll `cast status | grep` in a shell loop"
+// ritual that every restart-and-verify workflow used to hand-roll.
+async function waitForDaemonHealthy(timeoutMs: number, startedAfterMs: number): Promise<{ ok: boolean; detail: string }> {
+  const deadline = Date.now() + timeoutMs;
+  let last = "daemon not running";
+  while (Date.now() < deadline) {
+    const pid = getDaemonPid();
+    const state = readDaemonState();
+    const fresh = ((state as any)?.timestamp ?? 0) >= startedAfterMs;
+    if (!pid) last = "daemon not running";
+    else if (!fresh) last = `daemon up (pid ${pid}), waiting for first state write`;
+    else if (state?.authExpired) return { ok: false, detail: "auth expired — run `cast auth`" };
+    else if (!state?.connected) last = `daemon up (pid ${pid}), Convex not connected yet`;
+    else return { ok: true, detail: `running (pid ${pid}), Convex connected` };
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return { ok: false, detail: last };
+}
+
+function printDaemonLogTail(lines = 15): void {
+  try {
+    const raw = fs.readFileSync(path.join(CONFIG_DIR, "daemon.log"), "utf-8");
+    const tail = raw.split("\n").filter(Boolean).slice(-lines);
+    if (tail.length === 0) return;
+    console.log(fmt.muted("  daemon.log tail:"));
+    for (const line of tail) console.log(`  ${c.dim}${line.slice(0, 160)}${c.reset}`);
+  } catch {}
+}
+
+async function finishWithHealthWait(startedAtMs: number, timeoutSec: number): Promise<void> {
+  const result = await waitForDaemonHealthy(timeoutSec * 1000, startedAtMs);
+  if (result.ok) {
+    console.log(`${fmt.success("✓")} ${result.detail}`);
+  } else {
+    console.log(`${fmt.error("✗")} not healthy after ${timeoutSec}s: ${result.detail}`);
+    printDaemonLogTail();
+    process.exit(1);
+  }
+}
+
 function checkDaemonHealth(): { blocked: boolean; restarted: boolean } {
   const pid = getDaemonPid();
   if (!pid) return { blocked: false, restarted: false };
@@ -1342,6 +1391,8 @@ function showStatus(): void {
   }
   console.log(`  ${fmt.muted("  Change:")} ${fmt.cmd("cast sync-settings")}`);
 
+  console.log("");
+  console.log(`  ${fmt.muted("Full self-test (live sync round-trip):")} ${fmt.cmd("cast doctor")}`);
   console.log("");
 }
 
@@ -3167,6 +3218,45 @@ labelCmd
     console.log(`${c.green}ok${c.reset} removed label ${c.yellow}${result.label}${c.reset}${note}`);
   });
 
+program
+  .command("own")
+  .description(
+    "Assign a session's owner — the team member responsible for steering it\n\n" +
+    "The owner is distinct from whose account RUNS the session: an agent\n" +
+    "account (e.g. a bot on a shared machine) can park a session on a human\n" +
+    "reviewer, and the session then surfaces in the OWNER's inbox (web NEEDS\n" +
+    "INPUT + cast sessions/feed) marked with who runs it. The owner replies\n" +
+    "with cast send or the web composer to steer it.\n\n" +
+    "You can own any session you can see in the feed (your own, or one shared\n" +
+    "with a team you're in). Scripts should pass an exact email.\n\n" +
+    "Examples:\n" +
+    "  cast own jx7c6zk jason@example.com   # assign to a teammate\n" +
+    "  cast own jx7c6zk                     # claim it yourself\n" +
+    "  cast disown jx7c6zk                  # clear the owner"
+  )
+  .argument("<session_id>", "Session short ID (e.g. jx7c6zk), session UUID, or full ID")
+  .argument("[member]", "Team member email (exact) or name; defaults to you")
+  .action(async (sessionId: string, member: string | undefined) => {
+    const result = await cliPost("/cli/sessions/own", {
+      session_id: sessionId,
+      owner: member?.trim() || "me",
+    });
+    const ownerLabel = result.owner?.name || result.owner?.email || "you";
+    console.log(`${c.green}✓${c.reset} ${c.cyan}${result.short_id || sessionId}${c.reset} ${c.dim}owner →${c.reset} ${c.magenta}${ownerLabel}${c.reset}`);
+  });
+
+program
+  .command("disown")
+  .description("Clear a session's owner (see: cast own)")
+  .argument("<session_id>", "Session short ID (e.g. jx7c6zk), session UUID, or full ID")
+  .action(async (sessionId: string) => {
+    const result = await cliPost("/cli/sessions/own", {
+      session_id: sessionId,
+      owner: null,
+    });
+    console.log(`${c.green}✓${c.reset} ${c.cyan}${result.short_id || sessionId}${c.reset} ${c.dim}owner cleared${c.reset}`);
+  });
+
 const accountsCmd = program
   .command("accounts")
   .description(
@@ -3289,10 +3379,16 @@ accountsCmd
 program
   .command("start")
   .description("Start the background daemon to automatically watch and sync conversations")
-  .action(() => {
+  .option("--wait", "Block until the daemon is running and connected to Convex (exit 1 if not)")
+  .option("--timeout <seconds>", "How long --wait polls before giving up", "45")
+  .action(async (options: any) => {
+    const startedAt = Date.now();
     startDaemon();
     // Ensure autostart is configured so daemon restarts on reboot/crash
     ensureAutostart();
+    if (options.wait) {
+      await finishWithHealthWait(startedAt, Number.parseInt(options.timeout, 10) || 45);
+    }
   });
 
 program
@@ -3305,7 +3401,10 @@ program
 program
   .command("restart")
   .description("Restart the background daemon (update if available, then start)")
-  .action(async () => {
+  .option("--wait", "Block until the daemon is running and connected to Convex (exit 1 if not)")
+  .option("--timeout <seconds>", "How long --wait polls before giving up", "45")
+  .action(async (options: any) => {
+    const startedAt = Date.now();
     stopDaemon();
     const available = await checkForUpdates(true);
     if (available) {
@@ -3333,6 +3432,9 @@ program
     }
     startDaemon();
     ensureAutostart();
+    if (options.wait) {
+      await finishWithHealthWait(startedAt, Number.parseInt(options.timeout, 10) || 45);
+    }
   });
 
 program
@@ -3832,6 +3934,47 @@ program
       }
     }
     console.log("");
+  });
+
+program
+  .command("doctor")
+  .description(
+    "Verify codecast works end-to-end: daemon health, Convex connection, and a live\n" +
+    "sync round-trip (transcript → server → message delivery → tmux inject → echo back).\n" +
+    "The round-trip uses a throwaway stand-in agent — no Claude tokens, no browser —\n" +
+    "and cleans up after itself. Exit code 0 means the full loop is proven working."
+  )
+  .option("--no-e2e", "Only run the passive health checks, skip the live round-trip")
+  .option("--json", "Machine-readable report")
+  .option("--keep", "Keep the test tmux session, transcript, and server conversation for debugging")
+  .option("--project-dir <path>", "Scratch project dir for the test transcript (must be syncable)")
+  .action(async (options: any) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+    const report = await runDoctor(
+      {
+        config,
+        siteUrl: config.convex_url.replace(".cloud", ".site"),
+        apiToken: config.auth_token,
+        version: getVersion(),
+        configDir: CONFIG_DIR,
+        getDaemonPid,
+        getLaunchdStatus: getMacLaunchdDaemonStatus,
+        readDaemonState,
+        getStuckSyncs,
+      },
+      {
+        e2e: options.e2e !== false,
+        json: options.json === true,
+        keep: options.keep === true,
+        projectDir: options.projectDir,
+      },
+    );
+    if (options.json) console.log(JSON.stringify(report, null, 2));
+    process.exit(report.ok ? 0 : 1);
   });
 
 program
@@ -6753,6 +6896,19 @@ function installWatchdogScript(): void {
   fs.writeFileSync(WATCHDOG_SCRIPT_PATH, buildWatchdogShellScript({ isBinary, watchdogCommand }), { mode: 0o755 });
 }
 
+// The daemon LaunchAgent runs this script via /bin/sh instead of the binary
+// directly, so the login item's BTM identity survives binary self-updates
+// (see supervision.ts). Refreshed on every autostart pass, like the watchdog
+// script, so a moved binary path is picked up without touching the plist.
+function installDaemonLauncherScript(): void {
+  if (!fs.existsSync(CONFIG_DIR)) {
+    fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  }
+  const { executablePath, args } = getExecutableInfo();
+  const daemonCommand = [executablePath, ...args].map(shellEscapeForSh).join(" ");
+  fs.writeFileSync(DAEMON_LAUNCHER_SCRIPT_PATH, buildDaemonLauncherScript({ daemonCommand }), { mode: 0o755 });
+}
+
 // Bootstrap the watchdog LaunchAgent AND force its resident loop to start now. The
 // watchdog is a KeepAlive long-running loop (see supervision.ts), so RunAtLoad would
 // normally start it — but bootstrapping right before a sleep can leave it dormant
@@ -6791,13 +6947,10 @@ function setupMacOS(disable: boolean): void {
     fs.mkdirSync(launchAgentsDir, { recursive: true });
   }
 
-  // Daemon plist
+  // Daemon plist: /bin/sh launcher for a stable BTM identity (see supervision.ts)
   const { executablePath, args } = getExecutableInfo();
-  const programArgs = [executablePath, ...args]
-    .map((arg) => `    <string>${arg}</string>`)
-    .join("\n");
-
-  const plistContent = buildDaemonPlistXml({ programArgsXml: programArgs, configDir: CONFIG_DIR });
+  installDaemonLauncherScript();
+  const plistContent = buildDaemonPlistXml({ scriptPath: DAEMON_LAUNCHER_SCRIPT_PATH, configDir: CONFIG_DIR });
 
   spawnSync("launchctl", ["bootout", uid, plistPath], { stdio: "ignore" });
   fs.writeFileSync(plistPath, plistContent, { mode: 0o644 });
@@ -6898,15 +7051,21 @@ function ensureAutostart(): boolean {
           return content.includes("<string>bun</string>") || content.includes("<string>node</string>");
         } catch { return false; }
       };
+      const daemonNeedsUpgrade = (ppath: string): boolean => {
+        try {
+          return daemonPlistNeedsUpgrade(fs.readFileSync(ppath, "utf-8"));
+        } catch { return false; }
+      };
       const watchdogNeedsUpgrade = (ppath: string): boolean => {
         try {
           return watchdogPlistNeedsUpgrade(fs.readFileSync(ppath, "utf-8"));
         } catch { return false; }
       };
-      const daemonBroken = daemonExists && plistNeedsRepair(plistPath);
+      const daemonBroken = daemonExists && (plistNeedsRepair(plistPath) || daemonNeedsUpgrade(plistPath));
       const watchdogBroken = watchdogExists && (plistNeedsRepair(watchdogPlistPath) || watchdogNeedsUpgrade(watchdogPlistPath));
 
       installWatchdogScript();
+      installDaemonLauncherScript();
 
       if (daemonBroken) {
         spawnSync("launchctl", ["bootout", uid, plistPath], { stdio: "ignore" });
@@ -6925,9 +7084,7 @@ function ensureAutostart(): boolean {
       }
 
       if (!fs.existsSync(plistPath)) {
-        const { executablePath, args } = getExecutableInfo();
-        const programArgs = [executablePath, ...args].map((arg) => `    <string>${arg}</string>`).join("\n");
-        const plistContent = buildDaemonPlistXml({ programArgsXml: programArgs, configDir: CONFIG_DIR });
+        const plistContent = buildDaemonPlistXml({ scriptPath: DAEMON_LAUNCHER_SCRIPT_PATH, configDir: CONFIG_DIR });
         fs.writeFileSync(plistPath, plistContent, { mode: 0o644 });
         spawnSync("launchctl", ["bootstrap", uid, plistPath], { stdio: "ignore" });
       }
@@ -10289,6 +10446,7 @@ schedule
   .description("Mark a running task as completed (called by the agent)")
   .argument("<id>", "Task ID (full or last 8 chars)")
   .option("--summary <text>", "Summary of what was done")
+  .option("--needs-attention", "Flag the run for the user: it stays in the inbox instead of folding into the schedule's history")
   .action(async (id, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -10316,6 +10474,7 @@ schedule
           task_id: taskId,
           summary: options.summary,
           run_session_uuid: runSessionUuid,
+          ...(options.needsAttention ? { needs_attention: true } : {}),
         }),
       });
       const result = await response.json();
@@ -14139,7 +14298,8 @@ workflow
       }
     }
 
-    await runWorkflow(graph, runOpts);
+    const outcome = await runWorkflow(graph, runOpts);
+    if (outcome !== "completed") process.exitCode = 1;
   });
 
 workflow
@@ -14178,7 +14338,7 @@ workflow
       edges: wf.edges,
     };
     const projectPath = run.project_path || process.cwd();
-    await runWorkflow(graph as any, {
+    const outcome = await runWorkflow(graph as any, {
       runId,
       convexSiteUrl: siteUrl,
       apiToken: config.auth_token,
@@ -14187,6 +14347,7 @@ workflow
       taskId: run.task_short_id,
       planId: run.plan_short_id,
     });
+    if (outcome !== "completed") process.exitCode = 1;
   });
 
 workflow

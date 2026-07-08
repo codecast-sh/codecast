@@ -1,7 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { toast } from "sonner";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { useWatchEffect } from "./useWatchEffect";
 
@@ -14,6 +13,22 @@ const RESTART_ESCALATE_AFTER_MS = 45_000;
 // slack). Past this we stop tracking so nothing spins forever when an offline
 // daemon or a dead machine means no one is ever going to answer.
 const RESTART_GIVE_UP_AFTER_MS = RESTART_ESCALATE_AFTER_MS * 2 + 30_000;
+
+// Context for restoring a server-deleted (ghost) conversation: for a deleted
+// row the server knows nothing, so restartSession/repairSession take the
+// session binding from our cached copy. Shared by every restart call site on
+// web AND mobile.
+export function ghostRestartContextFor(conversationId: string) {
+  const s = useInboxStore.getState();
+  const row: any = s.conversations[conversationId] ?? s.sessions[conversationId];
+  if (!row) return {};
+  return {
+    session_id: row.session_id,
+    project_path: row.project_path ?? row.git_root,
+    agent_type: row.agent_type,
+    title: row.title,
+  };
+}
 
 type RestartProgressRow = {
   command: string;
@@ -45,8 +60,10 @@ export function useSessionRestart(opts: {
   isLive: boolean;
   ghostContext: () => Record<string, unknown>;
   onRestored?: (res: unknown) => boolean;
+  /** Platform toast — sonner on web, RN toast on mobile. */
+  notify: (kind: "success" | "error" | "info", message: string) => void;
 }): { restart: () => void; isRestarting: boolean } {
-  const { conversationId, isLive, ghostContext, onRestored } = opts;
+  const { conversationId, isLive, ghostContext, onRestored, notify } = opts;
   const convCommand = useInboxStore((s) => s.convCommand);
   const [isRestarting, setIsRestarting] = useState(false);
   const escalatedRef = useRef(false);
@@ -67,18 +84,18 @@ export function useSessionRestart(opts: {
     startedAtRef.current = Date.now();
     setIsRestarting(true);
     convCommand(conversationId, "restartSession", ghostContext())
-      .then((res: unknown) => { if (!onRestored?.(res)) toast.success("Restarting session…"); })
+      .then((res: unknown) => { if (!onRestored?.(res)) notify("success", "Restarting session…"); })
       .catch((err: unknown) => {
         setIsRestarting(false);
         const msg = err instanceof Error ? err.message : String(err);
         if (/conversation_deleted|Conversation not found/i.test(msg)) {
           useInboxStore.getState().markServerDeleted(conversationId);
-          toast.error("This conversation no longer exists on the server — use Restore to bring its session back");
+          notify("error", "This conversation no longer exists on the server — use Restore to bring its session back");
         } else {
-          toast.error(`Failed to restart session: ${msg}`);
+          notify("error", `Failed to restart session: ${msg}`);
         }
       });
-  }, [conversationId, convCommand, ghostContext, onRestored]);
+  }, [conversationId, convCommand, ghostContext, onRestored, notify]);
 
   // Session came live → the recovery is done.
   useWatchEffect(() => {
@@ -93,7 +110,7 @@ export function useSessionRestart(opts: {
     const escalate = () => {
       if (escalatedRef.current) return;
       escalatedRef.current = true;
-      toast("Resume didn't take — rebuilding the session from history…");
+      notify("info", "Resume didn't take — rebuilding the session from history…");
       convCommand(conversationId, "repairSession", ghostContext())
         .then((res: unknown) => onRestored?.(res))
         .catch(() => { /* the give-up backstop below stops the spinner */ });
@@ -107,7 +124,7 @@ export function useSessionRestart(opts: {
     const remaining = RESTART_ESCALATE_AFTER_MS - (Date.now() - (startedAtRef.current ?? Date.now()));
     const t = setTimeout(escalate, Math.max(0, remaining));
     return () => clearTimeout(t);
-  }, [isRestarting, isLive, restartProgress, conversationId, convCommand, ghostContext, onRestored]);
+  }, [isRestarting, isLive, restartProgress, conversationId, convCommand, ghostContext, onRestored, notify]);
 
   // Give-up backstop: after both stages have had their window, stop tracking so
   // the caller never spins forever if nothing is ever going to revive it.

@@ -258,13 +258,13 @@ function ActionSubmenu({
   const viewChipData = useMemo(() => {
     if (mode !== "view") return null;
     const st = useInboxStore.getState();
-    const { pinned, newSessions, needsInput, working, orchestrationGroups } = categorizeSessions(
+    const { pinned, newSessions, needsInput, working } = categorizeSessions(
       st.sessions,
       st.sessionsWithQueuedMessages,
       sessionsWithPendingSend(st.pendingMessages),
       { currentSessionId: st.currentSessionId, pendingCreateIds: new Set(Object.keys(st.pendingSessionCreates)) },
     );
-    const active = [...pinned, ...newSessions, ...needsInput, ...working, ...Array.from(orchestrationGroups.values()).flat()];
+    const active = [...pinned, ...newSessions, ...needsInput, ...working];
     return computeChipCounts(active, convBucketMap(st.bucketAssignments as Record<string, BucketAssignmentItem>));
   }, [mode]);
 
@@ -451,12 +451,12 @@ function ActionSubmenu({
     if (mode === "model") {
       const store = useInboxStore.getState();
       const real = store.getConvexId(target._id) ?? target._id;
-      if (!isConvexId(real)) {
-        toast.error("Session is still being created — try again in a moment");
-        return;
-      }
       const s0 = target as any;
       const [kind, value] = String(item.key).split(":");
+      // commitModelChange owns the not-ready decision: a blank session records
+      // the choice locally on the stub (the create carries it), only the live
+      // rail needs a real id. Passing `real` (possibly still a stub) lets it
+      // stamp + defer instead of erroring here.
       void commitModelChange({
         conversationId: real,
         agentType: s0?.agent_type,

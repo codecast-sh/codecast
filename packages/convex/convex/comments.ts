@@ -360,7 +360,10 @@ export const getConversationCommentSummary = query({
   },
 });
 
-export const updateGitHubCommentId = mutation({
+// internal: only githubApi (a server action) calls this, to record the GitHub
+// comment id after mirroring. Was a public mutation that let anyone stamp an
+// arbitrary github_comment_id onto any comment.
+export const updateGitHubCommentId = internalMutation({
   args: {
     comment_id: v.id("comments"),
     github_comment_id: v.number(),

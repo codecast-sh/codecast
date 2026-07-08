@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useInboxStore, DocDetail } from "../../../store/inboxStore";
 import { useSyncDocDetail } from "../../../hooks/useSyncDocs";
+import { useOpenLinkedSession } from "../../../hooks/useOpenLinkedSession";
 import { DetailSplitLayout } from "../../../components/DetailSplitLayout";
 import { AuthGuard } from "../../../components/AuthGuard";
 import { AppLoader } from "../../../components/AppLoader";
@@ -134,6 +135,7 @@ export default function DocDetailPage() {
 function DocDetailContent() {
   const params = useParams();
   const router = useRouter();
+  const openLinkedSession = useOpenLinkedSession();
   const id = params.id as string;
 
   const detailResult = useSyncDocDetail(id);
@@ -332,34 +334,14 @@ function DocDetailContent() {
                 <div className="space-y-1.5">
                   {((doc as any).related_conversations ||
                     (conversation ? [conversation] : [])
-                  ).map((conv: any) => {
-                    const sid = conv._id;
-                    return (
+                  ).map((conv: any) => (
                     <FeedCard
                       key={conv._id}
-                      conv={{ ...conv, _id: sid } as any}
+                      conv={conv as any}
                       showActor={false}
-                      onNavigate={() => {
-                        const store = useInboxStore.getState();
-                        if (!store.sessions[sid]) {
-                          store.syncRecord('sessions', sid, {
-                            _id: conv._id,
-                            session_id: conv.session_id || conv._id,
-                            title: conv.title,
-                            project_path: conv.project_path,
-                            message_count: conv.message_count || 0,
-                            updated_at: conv.updated_at,
-                            started_at: conv.started_at,
-                            agent_type: conv.agent_type || 'claude',
-                            is_idle: !conv.is_active,
-                            has_pending: false,
-                          });
-                        }
-                        store.openSidePanel(sid);
-                      }}
+                      onNavigate={() => openLinkedSession(conv)}
                     />
-                    );
-                  })}
+                  ))}
                 </div>
               </div>
             ) : undefined

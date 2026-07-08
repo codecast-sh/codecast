@@ -36,6 +36,25 @@ export function humanizeDurationToken(token: string): string {
   return `${num} ${unit}${num === 1 ? "" : "s"}`;
 }
 
+// Cadence label straight from an agent_tasks record (the authoritative fields,
+// not command-line args): "every 8h", "on PR comment", "once". Used by the
+// schedule strip above the conversation; parseScheduleCadence below stays for
+// rendering `cast schedule add` command cards, where only args are available.
+export function describeTaskCadence(task: {
+  schedule_type: "once" | "recurring" | "event";
+  interval_ms?: number;
+  event_filter?: { event_type: string } | null;
+}): string {
+  if (task.schedule_type === "recurring" && task.interval_ms) {
+    return `every ${fmtDuration(task.interval_ms)}`;
+  }
+  if (task.schedule_type === "event") {
+    const ev = task.event_filter?.event_type;
+    return ev ? `on ${SCHEDULE_EVENT_LABELS[ev] ?? ev.replace(/_/g, " ")}` : "on event";
+  }
+  return "once";
+}
+
 // Extract the human-readable cadence from `cast schedule add` args. The three timing flags are
 // mutually exclusive; absent all of them the task runs immediately ("now").
 export function parseScheduleCadence(args: string): string | null {

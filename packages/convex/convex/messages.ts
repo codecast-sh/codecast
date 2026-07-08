@@ -5,7 +5,7 @@ import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { shouldGenerateTitle } from "./titleGeneration";
-import { canTeamMemberAccess } from "./privacy";
+import { canTeamMemberAccess, checkConversationAccess } from "./privacy";
 import { redactSecrets } from "./redact";
 import { markPendingDelivered } from "./pendingMessages";
 import { nextAgentStatusOnAddMessages, isApiErrorBanner, classifyApiErrorBanner, apiErrorBatchAction } from "./inboxFilters";
@@ -467,6 +467,15 @@ async function materializeFileChanges(
 export const getConversationFileChanges = query({
   args: { conversation_id: v.id("conversations") },
   handler: async (ctx, args): Promise<FileChange[]> => {
+    // Access gate: this returns the full before/after source of every file the
+    // session edited — including private (owner-only) conversations. Match the
+    // other message readers: owner, team member, or share-token holder only.
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) return [];
+    const viewerId = await getAuthUserId(ctx);
+    if ((await checkConversationAccess(ctx, viewerId, conversation)) === "denied") {
+      return [];
+    }
     const rows = await ctx.db
       .query("file_changes")
       .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))

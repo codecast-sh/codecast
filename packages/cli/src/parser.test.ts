@@ -1,5 +1,5 @@
 import { describe, test, expect, mock } from "bun:test";
-import { parseSessionLine, parseLine, parseCodexLine, extractMessages, parseSessionFile, parseCodexSessionFile, extractCodexForkRoot, type ClaudeSessionEntry } from "./parser.js";
+import { parseSessionLine, parseLine, parseCodexLine, extractMessages, parseSessionFile, parseCodexSessionFile, extractCodexForkRoot, extractTeamInfo, type ClaudeSessionEntry } from "./parser.js";
 
 describe("Parser malformed JSON handling", () => {
   test("parseSessionLine logs warning and returns null for malformed JSON", () => {
@@ -991,5 +991,36 @@ describe("queued-command attachments (Ctrl+Enter / busy-agent delivery)", () => 
 
     expect(() => extractMessages(entries)).not.toThrow();
     expect(extractMessages(entries)).toHaveLength(0);
+  });
+});
+
+describe("extractTeamInfo - agent-team teammate stamps", () => {
+  // Shapes verified against real teammate transcripts (Claude Code 2.1.201):
+  // every message line of a TEAMMATE session carries teamName + agentName;
+  // lead transcripts and setup lines (agent-setting/mode) carry neither.
+  test("finds team stamps past unstamped setup lines", () => {
+    const content = [
+      JSON.stringify({ type: "agent-setting", agentSetting: "Explore", sessionId: "c57f0264" }),
+      JSON.stringify({ type: "mode", mode: "normal", sessionId: "c57f0264" }),
+      JSON.stringify({ type: "user", uuid: "u1", teamName: "session-aafd7be1", agentName: "web-audit", message: { role: "user", content: "hi" } }),
+    ].join("\n");
+    expect(extractTeamInfo(content)).toEqual({ teamName: "session-aafd7be1", agentName: "web-audit" });
+  });
+
+  test("returns undefined for a lead/plain transcript (no stamps)", () => {
+    const content = [
+      JSON.stringify({ type: "user", uuid: "u1", message: { role: "user", content: "hi" } }),
+      JSON.stringify({ type: "assistant", uuid: "a1", message: { role: "assistant", content: "yo" } }),
+    ].join("\n");
+    expect(extractTeamInfo(content)).toBeUndefined();
+  });
+
+  test("requires BOTH stamps on one line and skips malformed lines", () => {
+    const content = [
+      "not json at all",
+      JSON.stringify({ type: "user", uuid: "u1", teamName: "session-x", message: { role: "user", content: "half-stamped" } }),
+      JSON.stringify({ type: "assistant", uuid: "a1", teamName: "session-x", agentName: "convex-audit" }),
+    ].join("\n");
+    expect(extractTeamInfo(content)).toEqual({ teamName: "session-x", agentName: "convex-audit" });
   });
 });

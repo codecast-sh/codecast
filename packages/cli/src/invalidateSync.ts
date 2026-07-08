@@ -22,24 +22,33 @@ export interface BackoffOptions {
   minDelay?: number;
   maxDelay?: number;
   maxFailureCount?: number;
+  // Give up after this many consecutive failures instead of retrying forever,
+  // rethrowing the last error so the caller can decide what to do. Undefined =
+  // retry indefinitely (legacy behavior).
+  maxRetries?: number;
 }
 
 export function createBackoff(opts?: BackoffOptions): BackoffFunc {
   return async <T>(callback: () => Promise<T>): Promise<T> => {
-    let currentFailureCount = 0;
+    let failures = 0;
     const minDelay = opts?.minDelay ?? 250;
     const maxDelay = opts?.maxDelay ?? 1000;
     const maxFailureCount = opts?.maxFailureCount ?? 50;
+    const maxRetries = opts?.maxRetries;
     while (true) {
       try {
         return await callback();
       } catch (e) {
-        if (currentFailureCount < maxFailureCount) {
-          currentFailureCount++;
+        failures++;
+        opts?.onError?.(e, failures);
+        // Stop hammering a command that never recovers (a deleted transcript, or any
+        // permanently-failing sync) — it used to loop ~2/sec forever. Callers re-arm
+        // on the next event, so giving up here is a bounded backoff, not a dead end.
+        if (maxRetries !== undefined && failures >= maxRetries) {
+          throw e;
         }
-        opts?.onError?.(e, currentFailureCount);
         const waitForRequest = exponentialBackoffDelay(
-          currentFailureCount,
+          Math.min(failures, maxFailureCount),
           minDelay,
           maxDelay,
           maxFailureCount
@@ -50,11 +59,6 @@ export function createBackoff(opts?: BackoffOptions): BackoffFunc {
   };
 }
 
-export const backoff = createBackoff({
-  onError: (e) => {
-    console.warn(e);
-  },
-});
 
 export interface InvalidateSyncOptions {
   // Coalesce bursts of invalidations: wait this long after the last event before
@@ -65,7 +69,19 @@ export interface InvalidateSyncOptions {
   // Upper bound on how long a pending change can be held by debounce, so a source
   // that never goes quiet still flushes. 0 = no cap.
   maxWaitMs?: number;
+  // Give up after this many consecutive command failures instead of retrying
+  // forever, then re-arm on the next invalidate. Defaults to DEFAULT_MAX_RETRIES.
+  maxRetries?: number;
+  // Called once when the retry budget is exhausted, with the last error. Lets the
+  // caller log the give-up on its own channel.
+  onGiveUp?: (error: unknown) => void;
 }
+
+// A persistently-failing sync (e.g. a bug, an un-retryable server rejection) used to
+// retry ~2/sec forever. Cap the burst so it backs off after ~this many tries; a real
+// file change or the 5-min watchdog re-arms a fresh attempt. High enough that a
+// transient blip (which recovers in a few tries) never trips it.
+const DEFAULT_MAX_RETRIES = 50;
 
 export class InvalidateSync {
   private _invalidated = false;
@@ -77,11 +93,20 @@ export class InvalidateSync {
   private _maxWaitMs: number;
   private _debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private _firstPendingAt = 0;
+  private _backoff: BackoffFunc;
+  private _onGiveUp?: (error: unknown) => void;
 
   constructor(command: () => Promise<void>, options: InvalidateSyncOptions = {}) {
     this._command = command;
     this._debounceMs = options.debounceMs ?? 0;
     this._maxWaitMs = options.maxWaitMs ?? 0;
+    this._onGiveUp = options.onGiveUp;
+    this._backoff = createBackoff({
+      onError: (e) => {
+        console.warn(e);
+      },
+      maxRetries: options.maxRetries ?? DEFAULT_MAX_RETRIES,
+    });
   }
 
   invalidate(): void {
@@ -181,12 +206,23 @@ export class InvalidateSync {
   };
 
   private _doSync = async (): Promise<void> => {
-    await backoff(async () => {
-      if (this._stopped) {
-        return;
-      }
-      await this._command();
-    });
+    try {
+      await this._backoff(async () => {
+        if (this._stopped) {
+          return;
+        }
+        await this._command();
+      });
+    } catch (e) {
+      // Backoff exhausted its retry budget on a persistently-failing command. Stop
+      // the loop, surface the error, and reset so the NEXT invalidate (a real file
+      // change or the watchdog) starts a fresh attempt — rather than looping forever.
+      this._invalidated = false;
+      this._invalidatedDouble = false;
+      this._onGiveUp?.(e);
+      this._notifyPendings();
+      return;
+    }
     if (this._stopped) {
       this._notifyPendings();
       return;

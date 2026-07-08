@@ -88,6 +88,29 @@ export function subagentLinkFields(conv: {
   };
 }
 
+// Which parent a session NESTS under in session lists — the single definition
+// every nesting computation must share (inbox categorizer, hidden buckets,
+// card styling, wake signature). Two sources, in priority order:
+// - parent_conversation_id: a Task-tool subagent. Full subagent semantics —
+//   hidden when its parent is absent, excluded from revive.
+// - spawned_by_conversation_id + agent_team_name: an agent-team teammate. It
+//   nests under its lead for DISPLAY only and keeps first-class semantics
+//   everywhere else — when the lead is absent from a list it renders as a
+//   normal top-level card, never hidden (it's a real session someone may need
+//   to answer). The agent_team_name gate is what keeps this to teammates:
+//   forks (forked_from) and cast-spawn sessions never nest.
+export function nestParentIdOf(conv: {
+  parent_conversation_id?: { toString(): string } | string | null;
+  spawned_by_conversation_id?: { toString(): string } | string | null;
+  agent_team_name?: string | null;
+}): string | null {
+  if (conv.parent_conversation_id) return conv.parent_conversation_id.toString();
+  if (conv.agent_team_name && conv.spawned_by_conversation_id) {
+    return conv.spawned_by_conversation_id.toString();
+  }
+  return null;
+}
+
 // Stale-flag sweep: past the revive window the flag stops meaning "current
 // incident" and just pollutes badges/selection — clear it. New activity on a
 // conversation bumps updated_at and supersedes the banner anyway, so for a

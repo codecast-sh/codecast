@@ -33,6 +33,17 @@ describe("resolveRestartTarget", () => {
     await expect(resolveRestartTarget(ctx, USER, "conversations_1" as any, {})).rejects.toThrow("Not authorized");
   });
 
+  test("live conversation run by another user but second-party-owned by caller resolves", async () => {
+    // Same rule as dispatch sendMessage/resumeSession: an owned session (e.g.
+    // Mr-Bot-run, assigned to this user) restarts from the owner's inbox.
+    const ctx = ctxWith({
+      conversations: [{ _id: "conversations_1", user_id: OTHER, owner_user_id: USER, session_id: "s1" }],
+    });
+    const { conv, restored } = await resolveRestartTarget(ctx, USER, "conversations_1" as any, {});
+    expect(String(conv._id)).toBe("conversations_1");
+    expect(restored).toBe(false);
+  });
+
   test("ghost without session context and no recovery source throws conversation_deleted", async () => {
     const ctx = ctxWith({ conversations: [], managed_sessions: [] });
     await expect(resolveRestartTarget(ctx, USER, "conversations_gone" as any, {})).rejects.toThrow("conversation_deleted");

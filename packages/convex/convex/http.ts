@@ -7,6 +7,43 @@ const http = httpRouter();
 
 auth.addHttpRoutes(http);
 
+// IP-keyed rate limit for an unauthenticated HTTP route. Returns a 429 Response to
+// short-circuit the handler when the caller's IP exceeds the window, else null.
+// Fail-open: a limiter error never blocks the route (availability > strictness).
+async function ipRateLimited(
+  ctx: any,
+  request: Request,
+  name: string,
+  max: number,
+  windowMs: number,
+): Promise<Response | null> {
+  const ip =
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    request.headers.get("cf-connecting-ip") ||
+    request.headers.get("x-real-ip") ||
+    "unknown";
+  try {
+    const res = await ctx.runMutation(internal.ipRateLimit.bump, {
+      key: `${name}:${ip}`,
+      max,
+      window_ms: windowMs,
+    });
+    if (!res.ok) {
+      return new Response(JSON.stringify({ error: "Too many requests" }), {
+        status: 429,
+        headers: {
+          "Content-Type": "application/json",
+          "Retry-After": String(Math.ceil((res.retry_after_ms ?? windowMs) / 1000)),
+          "Access-Control-Allow-Origin": "*",
+        },
+      });
+    }
+  } catch {
+    // Fail open.
+  }
+  return null;
+}
+
 
 http.route({
   path: "/cli/exchange-token",
@@ -19,6 +56,11 @@ http.route({
     };
 
     try {
+      // Brute-force guard: a setup token is one-shot + TTL-bound, so 20 exchange
+      // attempts/min per IP is far above any legitimate use and caps guessing.
+      const limited = await ipRateLimited(ctx, request, "exchange-token", 20, 60_000);
+      if (limited) return limited;
+
       const body = await request.json();
       const setupToken = body.token;
 
@@ -375,7 +417,7 @@ http.route({
       const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
       const expectedSignature = "sha256=" + hashHex;
 
-      if (signature !== expectedSignature) {
+      if (!signature || !timingSafeEqualHex(signature, expectedSignature)) {
         return new Response(JSON.stringify({ error: "Invalid signature" }), {
           status: 401,
           headers: { "Content-Type": "application/json" },
@@ -2310,19 +2352,31 @@ http.route({
         });
       }
 
-      const result = await ctx.runMutation(api.users.deleteConversationsForPathCLI, {
-        api_token,
-        path_prefix,
-      });
-
-      if ((result as any).error) {
-        return new Response(JSON.stringify({ error: (result as any).error }), {
-          status: (result as any).error === "Unauthorized" ? 401 : 400,
-          headers: { "Content-Type": "application/json", ...corsHeaders },
+      // Each mutation call deletes at most one message batch or one
+      // conversation (bounded transactions); drain here so a single CLI call
+      // deletes everything under the prefix. The iteration cap bounds one HTTP
+      // request — a caller with an enormous project re-invokes on hasMore.
+      let conversationsDeleted = 0;
+      let messagesDeleted = 0;
+      let hasMore = true;
+      for (let i = 0; i < 400 && hasMore; i++) {
+        const result = await ctx.runMutation(api.users.deleteConversationsForPathCLI, {
+          api_token,
+          path_prefix,
         });
+
+        if ((result as any).error) {
+          return new Response(JSON.stringify({ error: (result as any).error }), {
+            status: (result as any).error === "Unauthorized" ? 401 : 400,
+            headers: { "Content-Type": "application/json", ...corsHeaders },
+          });
+        }
+        conversationsDeleted += (result as any).conversationsDeleted ?? 0;
+        messagesDeleted += (result as any).messagesDeleted ?? 0;
+        hasMore = !!(result as any).hasMore;
       }
 
-      return new Response(JSON.stringify(result), {
+      return new Response(JSON.stringify({ conversationsDeleted, messagesDeleted, hasMore }), {
         status: 200,
         headers: { "Content-Type": "application/json", ...corsHeaders },
       });
@@ -2899,6 +2953,7 @@ http.route({
         summary: body.summary,
         conversation_id: body.conversation_id,
         run_session_uuid: body.run_session_uuid,
+        ...(body.needs_attention !== undefined ? { needs_attention: !!body.needs_attention } : {}),
       });
       return new Response(JSON.stringify({ success: result }), {
         status: 200,
@@ -3485,6 +3540,11 @@ cliRoute("/cli/labels/remove", async (ctx, body) => ctx.runMutation(api.buckets.
 // codegen on deploy; cast to any so the committed _generated typecheck stays green
 // until then.
 cliRoute("/cli/spawn", async (ctx, body) => ctx.runMutation((api as any).spawn.createSessionFromCli, body));
+
+// Second-party session ownership (cast own / cast disown, or scripts routing an
+// agent-run session into a human's inbox). body: { api_token, session_id,
+// owner: "<email|name>" | "me" | null }.
+cliRoute("/cli/sessions/own", async (ctx, body) => ctx.runMutation(api.sessionOwnership.setSessionOwner, body));
 
 // CC account switching: route the swap + blocked-session revive through the
 // daemon fleet / nudge limit-parked sessions after a window reset.

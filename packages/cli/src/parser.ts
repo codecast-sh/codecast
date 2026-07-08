@@ -11,6 +11,11 @@ export interface ClaudeSessionEntry {
   uuid?: string;
   parentUuid?: string;
   sessionId?: string;
+  // Agent-team stamps: Claude Code writes these on every line of a TEAMMATE
+  // session's transcript (the lead's transcript is never stamped). teamName is
+  // the team dir under ~/.claude/teams/; agentName is this member's name.
+  teamName?: string;
+  agentName?: string;
   slug?: string;
   timestamp?: string;
   content?: string;
@@ -308,6 +313,21 @@ export function extractSummaryTitle(content: string): string | undefined {
     const entry = parseSessionLine(line);
     if (entry?.type === "summary" && entry?.summary) {
       return entry.summary;
+    }
+  }
+  return undefined;
+}
+
+// Agent-team stamps from a TEAMMATE session's transcript (see
+// ClaudeSessionEntry.teamName). Any stamped line identifies the session's team
+// and member name; the lead's transcript carries no stamps, so undefined here
+// means "not a teammate" (or the stamped lines haven't been written yet).
+export function extractTeamInfo(content: string): { teamName: string; agentName: string } | undefined {
+  const lines = content.split("\n");
+  for (const line of lines) {
+    const entry = parseSessionLine(line);
+    if (entry?.teamName && entry?.agentName) {
+      return { teamName: entry.teamName, agentName: entry.agentName };
     }
   }
   return undefined;

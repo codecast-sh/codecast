@@ -10,7 +10,8 @@ import { useFlipAnimation } from "../hooks/useFlipAnimation";
 import { AgentIcon, type Conversation } from "./ConversationList";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { shouldShowSession, isWarmupSession } from "../lib/sessionFilters";
-import { useInboxStore, isAgentActive, sortSessions, feedPagePersistence, type InboxSession } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, sessionsWakeSig, isAgentActive, sortSessions, feedPagePersistence, type InboxSession } from "../store/inboxStore";
+import { useCoarseNow } from "../hooks/useCoarseNow";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 
 // Activity feed. Two sources, one rendering (FeedBody):
@@ -712,20 +713,32 @@ function inboxSessionToConv(s: InboxSession): Conversation {
 
 // --- Personal source: a view over store.sessions (the liberal delta cache). ---
 function PersonalFeed({ compact, directoryFilter, onNavigate }: ActivityFeedProps) {
-  const sessions = useInboxStore((s) => s.sessions);
+  // Wake only on STRUCTURAL session change (bucket/order/identity), not on every ~1s
+  // liveness heartbeat. Subscribing to the raw s.sessions map re-ran sortSessions
+  // (O(N log N)) + filter + map on every tick even though the order was stable. The
+  // memo below reads s.sessions for the data; this only gates the re-render. See
+  // store/wakeSig.ts.
+  const s = useTrackedStore([(st) => sessionsWakeSig(st.sessions)]);
+  const sessions = s.sessions;
+  // The mapped conversations carry time-driven fields (duration_ms, live status). A
+  // structural wake alone would freeze those between changes, so refresh on a coarse
+  // 15s clock — same cadence the inbox sidebar uses — instead of the heartbeat.
+  const coarseNow = useCoarseNow(15_000);
   const sourceConvs = useMemo(() => {
     const dirLeaf = directoryFilter ? directoryFilter.split("/").filter(Boolean).pop() : null;
     // sortSessions gives the inbox's stable order (pinned/active/idle) and already
     // drops dismissed — keep that order so the feed doesn't churn on heartbeats.
     return sortSessions(sessions)
-      .filter((s) => !s.is_subagent)
-      .filter((s) => {
+      .filter((sess) => !sess.is_subagent)
+      .filter((sess) => {
         if (!dirLeaf) return true;
-        const path = s.git_root || s.project_path;
+        const path = sess.git_root || sess.project_path;
         return !!path && path.split("/").filter(Boolean).includes(dirLeaf);
       })
       .map(inboxSessionToConv);
-  }, [sessions, directoryFilter]);
+    // coarseNow: re-run on the coarse clock so time-driven fields stay fresh without
+    // riding heartbeat churn (categorize memo in SessionListPanel does the same).
+  }, [sessions, directoryFilter, coarseNow]);
   return (
     <FeedBody
       source="personal"

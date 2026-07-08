@@ -32,6 +32,21 @@ crons.interval(
 );
 
 crons.interval(
+  // pending_permissions was never pruned — resolved rows matter for ~5 min and
+  // the daemon cancels its own after ~1h, so drop the leftovers hourly to keep
+  // the table (and every reader's scan) small.
+  "prune resolved pending_permissions",
+  { hours: 1 },
+  internal.permissions.prunePendingPermissions
+);
+
+crons.interval(
+  "prune expired ip_rate_limits windows",
+  { hours: 1 },
+  internal.ipRateLimit.pruneIpRateLimits
+);
+
+crons.interval(
   "backfill docs and tasks from sessions",
   { hours: 6 },
   internal.taskMining.backfillAllTeams

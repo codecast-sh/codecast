@@ -202,6 +202,10 @@ export async function enqueuePendingMessage(
     // The sender's own conversation, so the cron can notify the sending session if this message
     // can't be delivered. Only meaningful for cross-user (team) sends; omitted for self-sends.
     from_conversation_id?: Id<"conversations">;
+    // "scheduler" = machine-initiated (the daemon's task scheduler firing a
+    // `cast schedule` injection). Every human send — web composer, cast send,
+    // team send — leaves this unset.
+    origin?: "scheduler";
   }
 ): Promise<Id<"pending_messages">> {
   if (fields.client_id) {
@@ -225,17 +229,28 @@ export async function enqueuePendingMessage(
     image_storage_id: fields.image_storage_id,
     image_storage_ids: fields.image_storage_ids,
     client_id: fields.client_id,
+    origin: fields.origin,
     status: "pending" as const,
     created_at: Date.now(),
     retry_count: 0,
   });
 
+  // Wake-up rules. A human send resurfaces the session everywhere: dismissed,
+  // stashed, and killed flags all clear ("I messaged it, show it to me").
+  // A scheduler injection inherits all of that EXCEPT the stash-clear: stash
+  // means "keep working out of my sight", which is exactly the state a user
+  // puts a looping/scheduled session into — the machine waking itself must not
+  // pull it back into the active queue. Dismissed and killed still clear, so a
+  // scheduled follow-up on a session the user closed out does come back (and a
+  // killed one is resurrected for delivery) — that revival is deliberate and is
+  // surfaced by the schedule strip in the conversation header.
+  const machineWake = fields.origin === "scheduler";
   await ctx.db.patch(conversation._id, {
     updated_at: Date.now(),
     has_pending_messages: true,
     ...(conversation.status === "completed" ? { status: "active" } : {}),
     ...(conversation.inbox_dismissed_at ? { inbox_dismissed_at: undefined } : {}),
-    ...(conversation.inbox_stashed_at ? { inbox_stashed_at: undefined } : {}),
+    ...(conversation.inbox_stashed_at && !machineWake ? { inbox_stashed_at: undefined } : {}),
     ...(conversation.inbox_killed_at ? { inbox_killed_at: undefined } : {}),
   });
 
@@ -249,6 +264,10 @@ export const sendMessageToSession = mutation({
     image_storage_id: v.optional(v.id("_storage")),
     image_storage_ids: v.optional(v.array(v.id("_storage"))),
     client_id: v.optional(v.string()),
+    // See enqueuePendingMessage: only the daemon's task scheduler passes
+    // "scheduler". Self-declared, but the only effect is LESS resurfacing
+    // (the stash-clear is skipped), so a spoofed value can't grab attention.
+    origin: v.optional(v.literal("scheduler")),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -271,6 +290,7 @@ export const sendMessageToSession = mutation({
       image_storage_id: args.image_storage_id,
       image_storage_ids: args.image_storage_ids,
       client_id: args.client_id,
+      origin: args.origin,
     });
   },
 });
