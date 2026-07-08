@@ -43,6 +43,8 @@ export interface RetryQueueConfig {
   concurrency?: number;
   persistPath?: string;
   droppedPath?: string;
+  /** Debounce window (ms) before coalesced mutations are written to disk. */
+  persistDebounceMs?: number;
   onLog?: (message: string, level?: LogLevel) => void;
   // Fired when the queue grows (an op is enqueued). Lets the daemon refresh its
   // persisted health snapshot as backlog ACCUMULATES, not only when it drains —
@@ -56,6 +58,7 @@ const DEFAULT_INITIAL_DELAY = 1000;
 const DEFAULT_MAX_DELAY = 30000;
 const DEFAULT_MAX_ATTEMPTS = 10;
 const DEFAULT_CONCURRENCY = 5;
+const DEFAULT_PERSIST_DEBOUNCE = 1000;
 
 // Match the Convex addMessages sub-batch size in syncService. Queueing a
 // 5000-message blob as a single retry op meant every retry had to complete
@@ -97,6 +100,9 @@ export class RetryQueue {
   private concurrency: number;
   private persistPath: string | null;
   private droppedPath: string | null;
+  private persistDebounceMs: number;
+  private persistTimer: ReturnType<typeof setTimeout> | null = null;
+  private exitFlushRegistered = false;
   private log: (message: string, level?: LogLevel) => void;
   private onEnqueue: () => void;
   private processing = false;
@@ -112,6 +118,7 @@ export class RetryQueue {
     this.concurrency = config.concurrency ?? DEFAULT_CONCURRENCY;
     this.persistPath = config.persistPath ?? null;
     this.droppedPath = config.droppedPath ?? null;
+    this.persistDebounceMs = config.persistDebounceMs ?? DEFAULT_PERSIST_DEBOUNCE;
     this.log = config.onLog ?? (() => {});
     this.onEnqueue = config.onEnqueue ?? (() => {});
     this.load();
@@ -191,8 +198,9 @@ export class RetryQueue {
             ].filter(Boolean).join(", ");
             this.log(`Restored ${this.queue.size} operations from disk${heals ? ` (${heals})` : ""}`);
           }
-          // Rewrite the healed queue so the duplicate/raw-base64 bloat doesn't persist.
-          if (dedupedMsgs > 0 || splitFrom > 0 || compactedOps > 0) this.persist();
+          // Rewrite the healed queue so the duplicate/raw-base64 bloat doesn't
+          // persist. Synchronous: a restart must see the collapsed file immediately.
+          if (dedupedMsgs > 0 || splitFrom > 0 || compactedOps > 0) this.persistSync();
         }
       }
     } catch {
@@ -206,21 +214,95 @@ export class RetryQueue {
     }
   }
 
-  private persist(): void {
+  /**
+   * Connection restored after an outage (e.g. the Convex socket reconnected
+   * following a sleep or network drop). Pull every queued op's retry forward to
+   * now so the backlog drains the instant we're back online, instead of waiting
+   * out a backoff that was scheduled against the outage we just recovered from.
+   * Network errors back off up to 5 min, so without this a fully-reconnected
+   * daemon can sit on "sync stalled (N)" for minutes with the socket already
+   * live — which is exactly what `cast status` showed after a laptop wake
+   * (Convex connected, queue not draining).
+   *
+   * A current server-side rate limit is deliberately still honored: we only
+   * pull the per-op retry forward; scheduleNextCheck still respects
+   * rateLimitedUntil, so we never hammer a server that just told us to wait.
+   */
+  notifyConnectionRestored(): void {
+    if (this.queue.size === 0) return;
+    const now = Date.now();
+    for (const op of this.queue.values()) {
+      if (op.nextRetryAt > now) op.nextRetryAt = now;
+    }
+    this.log(`Connection restored — retrying ${this.queue.size} queued operation(s) now`);
+    this.scheduleNextCheck();
+  }
+
+  // Debounced, compact (non-pretty) async persistence. Replaces the old pattern of
+  // synchronously rewriting the whole pretty-printed queue file on every enqueue,
+  // failure, and dequeue — the same event-loop-blocking, O(queue-size)-per-mutation
+  // cost CachedJsonStore was built to eliminate for the sync ledger/positions. Bursts
+  // of mutations coalesce into a single write; a graceful shutdown flushes
+  // synchronously via the exit handler, and every op is idempotent server-side
+  // (addMessages dedups by message_uuid) so a SIGKILL loses at most one debounce
+  // window and re-syncs cleanly on restart.
+  private schedulePersist(): void {
     if (!this.persistPath) return;
+    this.registerExitFlush();
+    if (this.persistTimer) return;
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = null;
+      void this.writeQueueFile();
+    }, this.persistDebounceMs);
+    // Never keep the process alive solely to flush — the exit handler guarantees
+    // the final write happens before the process leaves.
+    if (typeof this.persistTimer.unref === "function") this.persistTimer.unref();
+  }
+
+  private serializeQueue(): string {
+    return JSON.stringify(Array.from(this.queue.values()));
+  }
+
+  private async writeQueueFile(): Promise<void> {
+    if (!this.persistPath) return;
+    const tmp = `${this.persistPath}.tmp`;
     try {
-      const data = Array.from(this.queue.values());
-      fs.writeFileSync(this.persistPath, JSON.stringify(data, null, 2));
+      await fs.promises.writeFile(tmp, this.serializeQueue());
+      await fs.promises.rename(tmp, this.persistPath);
     } catch {
       this.log("Failed to persist retry queue to disk");
     }
+  }
+
+  // Synchronous atomic write for the load-time heal, clear(), and the process-exit
+  // path (where async I/O can't run). Supersedes any pending debounced write.
+  private persistSync(): void {
+    if (!this.persistPath) return;
+    this.registerExitFlush();
+    if (this.persistTimer) {
+      clearTimeout(this.persistTimer);
+      this.persistTimer = null;
+    }
+    const tmp = `${this.persistPath}.tmp`;
+    try {
+      fs.writeFileSync(tmp, this.serializeQueue());
+      fs.renameSync(tmp, this.persistPath);
+    } catch {
+      this.log("Failed to persist retry queue to disk");
+    }
+  }
+
+  private registerExitFlush(): void {
+    if (this.exitFlushRegistered || !this.persistPath) return;
+    this.exitFlushRegistered = true;
+    process.once("exit", () => this.persistSync());
   }
 
   /** Flush the queue to disk on demand. Used after an executor mutates an op's
    *  params in place (e.g. offloading image base64 → storageId) so the shrunk
    *  payload survives a restart and isn't re-processed as raw base64. */
   persistNow(): void {
-    this.persist();
+    this.schedulePersist();
   }
 
   setExecutor(executor: (op: RetryOperation) => Promise<boolean>): void {
@@ -263,7 +345,8 @@ export class RetryQueue {
         typeof conversationId === "string"
           ? this.conversationChunkLimits.get(conversationId) ?? RETRY_BATCH_CHUNK
           : RETRY_BATCH_CHUNK;
-      const chunks = Array.isArray(msgs) ? chunkRetryMessages(msgs, maxCount) : [];
+      const msgArr: unknown[] = Array.isArray(msgs) ? msgs : [];
+      const chunks = Array.isArray(msgs) ? chunkRetryMessages(msgArr, maxCount) : [];
       if (chunks.length > 1) {
         const ids: string[] = [];
         for (let i = 0; i < chunks.length; i++) {
@@ -272,15 +355,15 @@ export class RetryQueue {
         }
         if (typeof conversationId === "string") {
           this.compactQueuedAddMessagesConversation(conversationId);
-          this.persist();
+          this.schedulePersist();
         }
-        this.log(`Split oversized addMessages (${msgs.length} msgs) into ${ids.length} retry chunks`);
+        this.log(`Split oversized addMessages (${msgArr.length} msgs) into ${ids.length} retry chunks`);
         return ids[0] ?? "";
       }
       const id = this.addSingle(type, params, error);
       if (typeof conversationId === "string") {
         this.compactQueuedAddMessagesConversation(conversationId);
-        this.persist();
+        this.schedulePersist();
       }
       return id;
     }
@@ -429,7 +512,7 @@ export class RetryQueue {
       rateLimitDelayMs: rateLimitDelay ?? undefined,
     };
     this.queue.set(id, op);
-    this.persist();
+    this.schedulePersist();
     this.log(`Queued ${type} for retry${rateLimitDelay ? ` (rate limited, ${delay}ms)` : ''} (id: ${id})`);
     this.scheduleNextCheck();
     // Refresh the daemon's health snapshot as backlog accumulates so `cast
@@ -558,7 +641,7 @@ export class RetryQueue {
       } finally {
         this.activeKeys.delete(this.conversationKey(op));
         this.activeOpIds.delete(op.id);
-        this.persist();
+        this.schedulePersist();
         this.scheduleNextCheck();
         this.processQueue().catch(() => {});
       }
@@ -814,7 +897,7 @@ export class RetryQueue {
 
   clear(): void {
     this.queue.clear();
-    this.persist();
+    this.persistSync();
     this.stopTimer();
   }
 

@@ -2,7 +2,9 @@ import { useState, useRef, useCallback } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useShortcutAction } from "../shortcuts";
+import { KeyCap, MenuKeyCaps } from "./KeyboardShortcutsHelp";
 import { useQuery } from "convex/react";
+import { AppLoader } from "./AppLoader";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useRouter } from "next/navigation";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -76,8 +78,10 @@ function getSnippet(content: string, query: string, maxLen = 400): string {
 
 export function GlobalSearch() {
   const [isOpen, setIsOpen] = useState(false);
+  const [isFocused, setIsFocused] = useState(false);
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
+  const [searchIsSlow, setSearchIsSlow] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [userOnly, setUserOnly] = useState(false);
   const [selectedTeamId, setSelectedTeamId] = useState<Id<"teams"> | null>(null);
@@ -113,6 +117,19 @@ export function GlobalSearch() {
       ? { query: debouncedQuery, limit: 30, userOnly, activeTeamId: selectedTeamId ?? undefined }
       : "skip"
   );
+
+  // A broad term scans the whole message history and can exceed Convex's per-query
+  // budget; the reactive client treats that system error as retryable and never
+  // hands it to useQuery, so searchResults stays undefined and the panel would spin
+  // forever. After a grace period, surface a "too broad" hint instead of a bare
+  // spinner. The query stays subscribed — if it does eventually resolve we show
+  // results; this only changes what an unresolved load looks like. (see ct-37627)
+  useWatchEffect(() => {
+    setSearchIsSlow(false);
+    if (debouncedQuery.length < 2 || searchResults !== undefined) return;
+    const timer = setTimeout(() => setSearchIsSlow(true), 9000);
+    return () => clearTimeout(timer);
+  }, [debouncedQuery, searchResults]);
 
   const searchData = searchResults && "results" in searchResults ? searchResults : null;
 
@@ -163,6 +180,7 @@ export function GlobalSearch() {
     if (e.key === "Escape") {
       setIsOpen(false);
       setQuery("");
+      inputRef.current?.blur();
     }
   }, document);
 
@@ -204,16 +222,18 @@ export function GlobalSearch() {
   // Group results by session for display
   const groupedResults = searchData?.results || [];
 
+  const isExpanded = isFocused || query.length > 0;
+
   return (
-    <div className="relative flex-1 min-w-[500px] max-w-[800px] mx-8 z-[9999]">
+    <div className="relative w-full min-w-0 z-[9999] flex justify-center">
       <div
-        className={`relative transition-all duration-200 ${
-          isOpen ? "scale-105" : ""
+        className={`relative w-full min-w-0 transition-[max-width] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] ${
+          isExpanded ? "max-w-[680px]" : "max-w-[230px]"
         }`}
       >
         <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
           <svg
-            className="w-4 h-4 text-sol-base00"
+            className={`w-4 h-4 transition-colors duration-200 ${isExpanded ? "text-sol-cyan" : "text-sol-text-dim"}`}
             fill="none"
             stroke="currentColor"
             viewBox="0 0 24 24"
@@ -232,17 +252,27 @@ export function GlobalSearch() {
           value={query}
           onChange={(e) => {
             setQuery(e.target.value);
+            // Clear the slow-search hint the instant the term changes, so it can
+            // never linger from a prior broad query onto a fresh, fast one.
+            setSearchIsSlow(false);
             if (!isOpen) setIsOpen(true);
           }}
-          onFocus={() => setIsOpen(true)}
+          onFocus={() => { setIsFocused(true); setIsOpen(true); }}
+          onBlur={() => setIsFocused(false)}
           onKeyDown={handleKeyDown}
-          placeholder="Search conversations..."
-          className="w-full pl-10 pr-16 py-2 bg-sol-base02/60 bg-sol-bg-alt border border-sol-base01/60 border-sol-border rounded-lg text-sm text-sol-base2 text-sol-text placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-amber-500/50 focus:border-amber-500/50 transition-all"
+          placeholder="Search sessions"
+          className={`w-full pl-9 py-1.5 bg-sol-bg-alt border rounded-full text-sm text-sol-text placeholder:text-sol-text-dim truncate cursor-pointer focus:cursor-text focus:outline-none transition-[border-color,box-shadow,padding] duration-200 ${
+            isExpanded
+              ? "pr-3 border-sol-cyan/50 ring-1 ring-sol-cyan/30 shadow-lg shadow-black/10"
+              : "pr-12 border-sol-border hover:border-sol-text-dim/40 hover:bg-sol-bg-highlight"
+          }`}
         />
-        <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
-          <kbd className="hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium text-sol-base00 bg-sol-base02 bg-sol-bg-alt rounded border border-sol-base01 border-sol-border">
-            <span className="text-xs">&#8984;</span>/
-          </kbd>
+        <div
+          className={`absolute inset-y-0 right-0 pr-2.5 flex items-center pointer-events-none transition-opacity duration-150 ${
+            isExpanded ? "opacity-0" : "opacity-100"
+          }`}
+        >
+          <MenuKeyCaps action="search.open" />
         </div>
       </div>
 
@@ -252,9 +282,16 @@ export function GlobalSearch() {
           className="fixed left-1/2 -translate-x-1/2 w-[min(1200px,calc(100vw-2rem))] bg-sol-bg border border-sol-border rounded-xl shadow-2xl shadow-black/50 overflow-hidden z-[9999]"
         >
             {!searchResults ? (
-              <div className="px-4 py-8 text-center">
-                <div className="inline-block w-5 h-5 border-2 border-sol-base01 border-t-amber-500 rounded-full animate-spin" />
-              </div>
+              searchIsSlow ? (
+                <div className="px-4 py-8 text-center">
+                  <p className="text-sm text-sol-text-secondary mb-2">This search is taking a while</p>
+                  <p className="text-xs text-sol-text-dim">
+                    Broad terms scan your whole history and can time out. Try a more specific word, or wrap an exact phrase in quotes.
+                  </p>
+                </div>
+              ) : (
+                <AppLoader className="min-h-0 bg-transparent py-8" size={24} />
+              )
             ) : groupedResults.length === 0 ? (
               <div className="px-4 py-8 text-center">
                 <p className="text-sm text-sol-text-secondary mb-2">No conversations match</p>
@@ -353,12 +390,12 @@ export function GlobalSearch() {
                 )}
                 <span className="text-sol-border">|</span>
                 <span className="flex items-center gap-1">
-                  <kbd className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border text-sol-text-secondary">&#8593;</kbd>
-                  <kbd className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border text-sol-text-secondary">&#8595;</kbd>
+                  <KeyCap size="xs">↑</KeyCap>
+                  <KeyCap size="xs">↓</KeyCap>
                   navigate
                 </span>
                 <span className="flex items-center gap-1">
-                  <kbd className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border text-sol-text-secondary">&#9166;</kbd>
+                  <KeyCap size="xs">↵</KeyCap>
                   open
                 </span>
               </div>
@@ -372,12 +409,13 @@ export function GlobalSearch() {
                     }}
                     className="flex items-center gap-1 cursor-pointer text-sol-text-secondary hover:text-sol-text transition-colors"
                   >
-                    <kbd className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border text-sol-text-secondary">⇧↵</kbd>
+                    <KeyCap size="xs">⇧</KeyCap>
+                    <KeyCap size="xs">↵</KeyCap>
                     see all
                   </span>
                 )}
                 <span className="flex items-center gap-1">
-                  <kbd className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border text-sol-text-secondary">esc</kbd>
+                  <KeyCap size="xs">Esc</KeyCap>
                   close
                 </span>
               </div>

@@ -1,10 +1,12 @@
-import { useQuery, useMutation } from "convex/react";
+import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
+import { useInboxStore } from "../../store/inboxStore";
+import { useConvexSync } from "../../hooks/useConvexSync";
 
 function timeAgo(timestamp: number): string {
   const seconds = Math.floor((Date.now() - timestamp) / 1000);
@@ -144,9 +146,16 @@ function sessionLabel(conversation: { title?: string; project_path?: string; age
 
 export default function NotificationsPage() {
   const router = useRouter();
-  const notifications = useQuery(api.notifications.list);
-  const markAsRead = useMutation(api.notifications.markAsRead);
-  const markAllAsRead = useMutation(api.notifications.markAllAsRead);
+  // Local-first: sync the server list into the store, read + mutate the store.
+  const notifsList = useQuery(api.notifications.list);
+  useConvexSync(notifsList, useCallback((d: any) => useInboxStore.getState().syncTable("notifications", d), []));
+  const notificationsMap = useInboxStore((s) => s.notifications);
+  const notifications = useMemo(
+    () => (Object.values(notificationsMap) as any[]).sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0)),
+    [notificationsMap]
+  );
+  const markAsRead = useInboxStore((s) => s.markNotificationRead);
+  const markAllAsRead = useInboxStore((s) => s.markAllNotificationsRead);
   const [activeTab, setActiveTab] = useState<FilterTab>("all");
 
   const handleNotificationClick = async (
@@ -155,7 +164,7 @@ export default function NotificationsPage() {
     entityType?: string,
     entityId?: string
   ) => {
-    await markAsRead({ notificationId });
+    markAsRead(notificationId);
     if (entityType && entityId) {
       const routes: Record<string, string> = { task: "/tasks/", doc: "/docs/", plan: "/plans/" };
       const base = routes[entityType];
@@ -189,7 +198,7 @@ export default function NotificationsPage() {
   return (
     <AuthGuard>
       <DashboardLayout>
-        <div className="max-w-2xl mx-auto py-2">
+        <div className="max-w-2xl mx-auto">
           <div className="flex items-center justify-between mb-5">
             <h1 className="text-xl font-semibold text-sol-text">Notifications</h1>
             {unreadCount > 0 && (
@@ -218,7 +227,7 @@ export default function NotificationsPage() {
             ))}
           </div>
 
-          {notifications === undefined ? (
+          {notifsList === undefined && notifications.length === 0 ? (
             <div className="space-y-3">
               {[...Array(5)].map((_, i) => (
                 <div key={i} className="flex items-start gap-3 p-4 rounded-lg bg-sol-bg-alt/30 animate-pulse">

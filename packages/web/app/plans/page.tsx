@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useEventListener } from "../../hooks/useEventListener";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -10,6 +10,7 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useWorkspaceArgs } from "../../hooks/useWorkspaceArgs";
 import { useInboxStore } from "../../store/inboxStore";
 import { AuthGuard } from "../../components/AuthGuard";
+import { AppLoader } from "../../components/AppLoader";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { PlanDetailPanel } from "../../components/PlanDetailPanel";
 import { CreateDocModal } from "../../components/CreateDocModal";
@@ -26,7 +27,9 @@ import {
   Zap,
   User,
   Bot,
+  Link2,
 } from "lucide-react";
+import { toast } from "sonner";
 import { LivenessDot, planLivenessState } from "../../components/LivenessDot";
 
 const api = _api as any;
@@ -190,6 +193,33 @@ export default function PlansPage() {
     updateClientUI({ plan_view: { ...planView, source: source || undefined } });
   }, [updateClientUI, planView]);
 
+  // The source toggle is otherwise store-only; honor a shared ?source= deep link
+  // once on mount so the copied "link to this view" round-trips back through here.
+  const seededRef = useRef(false);
+  useEffect(() => {
+    if (seededRef.current) return;
+    seededRef.current = true;
+    const src = searchParams.get("source");
+    if (src && src !== planSource) setPlanSource(src);
+  }, []);
+
+  // Copy a deep-linkable URL for the current view: the source filter plus the
+  // open plan (already carried in the URL as ?plan=). Built from state rather
+  // than window.location because the source toggle doesn't live-sync the URL.
+  const copyViewLink = useCallback(async () => {
+    const params = new URLSearchParams();
+    if (planSource) params.set("source", planSource);
+    if (selectedPlan) params.set("plan", selectedPlan);
+    const qs = params.toString();
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    try {
+      await navigator.clipboard.writeText(`${origin}/plans${qs ? `?${qs}` : ""}`);
+      toast.success("Link to this view copied");
+    } catch {
+      toast.error("Couldn't copy link");
+    }
+  }, [planSource, selectedPlan]);
+
   const workspaceArgs = useWorkspaceArgs();
   const activePlans = useQuery(api.plans.webList,
     workspaceArgs === "skip" ? "skip" : { ...workspaceArgs }
@@ -278,6 +308,13 @@ export default function PlansPage() {
                   </button>
                 </div>
                 <button
+                  onClick={copyViewLink}
+                  className="p-1 rounded-md text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt transition-colors"
+                  title="Copy link to this view"
+                >
+                  <Link2 className="w-3.5 h-3.5" />
+                </button>
+                <button
                   onClick={() => setShowCreate(!showCreate)}
                   className="p-1 rounded-md text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt transition-colors"
                   title="New Plan"
@@ -293,9 +330,7 @@ export default function PlansPage() {
 
             <div className="flex-1 overflow-y-auto">
               {!activePlans ? (
-                <div className="flex items-center justify-center h-32 text-sol-text-dim">
-                  <span className="text-xs">Loading...</span>
-                </div>
+                <AppLoader className="min-h-[16rem] h-full" />
               ) : allPlans.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-32 text-sol-text-dim px-4">
                   <Target className="w-6 h-6 mb-2 opacity-30" />
@@ -424,9 +459,7 @@ function MobileList({
       </div>
       <div className="flex-1 overflow-y-auto">
         {loading ? (
-          <div className="flex items-center justify-center h-32 text-sol-text-dim">
-            <span className="text-sm">Loading...</span>
-          </div>
+          <AppLoader className="min-h-[16rem] h-full" />
         ) : empty ? (
           <div className="flex flex-col items-center justify-center h-32 text-sol-text-dim">
             <Target className="w-6 h-6 mb-2 opacity-30" />

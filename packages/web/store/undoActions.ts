@@ -1,5 +1,6 @@
 import { useInboxStore, type InboxSession, type ConversationMeta } from "./inboxStore";
 import { pushUndo, showUndoToast } from "./undoStack";
+import { declareViewNav } from "./viewNav";
 
 /** Mark a session card to play the enter animation after it appears in the DOM. */
 export function animateSessionEnter(id: string) {
@@ -7,10 +8,17 @@ export function animateSessionEnter(id: string) {
   const delays = [0, 20, 50, 100, 200];
   const tryApply = (attempt: number) => {
     const card = document.querySelector(`[data-session-id="${id}"]`);
-    const target = card?.parentElement ?? card;
+    const target = (card?.parentElement ?? card) as HTMLElement | null;
     if (target) {
+      // Drive the collapse off the row's real rendered height (it may hold a
+      // parent card plus subagent cards) so the keyframe never coasts on a short
+      // row or clips a tall one — what the old hardcoded 80px cap did.
+      target.style.setProperty('--row-h', `${target.offsetHeight}px`);
       target.classList.add('session-entering');
-      target.addEventListener('animationend', () => target.classList.remove('session-entering'), { once: true });
+      target.addEventListener('animationend', () => {
+        target.classList.remove('session-entering');
+        target.style.removeProperty('--row-h');
+      }, { once: true });
     } else if (attempt < delays.length - 1) {
       setTimeout(() => tryApply(attempt + 1), delays[attempt + 1]);
     }
@@ -18,22 +26,33 @@ export function animateSessionEnter(id: string) {
   setTimeout(() => tryApply(0), delays[0]);
 }
 
-/** Animate a session card sliding out, then call undoableStashSession. */
-export function animatedStashSession(id: string, opts?: { verb?: string }) {
+export type HideSessionMode = "stash" | "kill";
+
+// Side effects of the hide that live OUTSIDE the store and must be reversed on
+// undo. Today: re-arming the injecting schedules the server cancels on the kill
+// transition (see agentTasks.cancelTasksBoundToConversation) — without this,
+// undoing a kill restores the session but leaves its standing loop dead.
+export type HideSessionExtras = { onUndo?: () => void };
+
+/** Animate a session card sliding out, then call undoableHideSession. */
+export function animatedHideSession(id: string, mode: HideSessionMode, extras?: HideSessionExtras) {
   const card = document.querySelector(`[data-session-id="${id}"]`);
   const wrapper = card?.parentElement;
   if (wrapper) {
+    // Measure the real height (parent + any subagent rows) so the collapse
+    // animates the whole stack, not just the first 80px the old cap allowed.
+    wrapper.style.setProperty('--row-h', `${wrapper.offsetHeight}px`);
     wrapper.classList.add('session-dismissing');
     let done = false;
     const finish = () => {
       if (done) return;
       done = true;
-      undoableStashSession(id, opts);
+      undoableHideSession(id, mode, extras);
     };
     wrapper.addEventListener('animationend', finish, { once: true });
     setTimeout(finish, 250);
   } else {
-    undoableStashSession(id, opts);
+    undoableHideSession(id, mode, extras);
   }
 }
 
@@ -68,15 +87,19 @@ function snapshotSession(state: StoreState, id: string) {
   };
 }
 
-export function undoableStashSession(id: string, options?: { verb?: string }) {
+// Hide a session with undo. "stash" sets the session aside (agent keeps
+// running); "kill" retires it (the server kills the agent on the hide
+// transition). Undo restores the snapshot and clears BOTH hide flags — the
+// kill itself isn't undoable (the session stays resumable), same as before.
+export function undoableHideSession(id: string, mode: HideSessionMode, extras?: HideSessionExtras) {
   const state = useInboxStore.getState();
   const session = state.sessions[id];
   const label = session?.title || "session";
-  const verb = options?.verb || "Dismissed";
+  const verb = mode === "kill" ? "Killed" : "Stashed";
   const snap = snapshotSession(state, id);
 
-  const isKill = verb === "Killed";
-  useInboxStore.getState().stashSession(id, isKill ? { kill: true } : undefined);
+  if (mode === "kill") useInboxStore.getState().killSession(id);
+  else useInboxStore.getState().stashSession(id);
 
   pushUndo({
     label: `${verb} ${label}`,
@@ -95,6 +118,8 @@ export function undoableStashSession(id: string, options?: { verb?: string }) {
         restoredPending[key] = val;
       }
 
+      // User-invoked undo putting them back where they were at snapshot time.
+      declareViewNav("undo");
       useInboxStore.setState({
         sessions: restoredSessions,
         conversations: restoredConvos,
@@ -103,15 +128,28 @@ export function undoableStashSession(id: string, options?: { verb?: string }) {
         clientState: snap.clientState,
       });
       animateSessionEnter(id);
+      // Push the SNAPSHOT flags, not blanket nulls: undoing a dismiss of a
+      // session that was stashed at the time must land it back in Stashed.
       store._dispatch("patch", [], {
         conversations: Object.fromEntries(
-          snap.allIds.map((sid) => [sid, { inbox_dismissed_at: null }])
+          snap.allIds.map((sid) => {
+            const prev = snap.sessions[sid] ?? (snap.conversations[sid] as any);
+            return [sid, {
+              inbox_dismissed_at: prev?.inbox_dismissed_at ?? null,
+              inbox_stashed_at: prev?.inbox_stashed_at ?? null,
+            }];
+          })
         ),
         client_state: { _: { current_conversation_id: snap.currentSessionId } },
       }).catch(() => {});
+      // Reverse out-of-store side effects last (e.g. re-arm the schedules the
+      // kill canceled). Redo re-kills through the same transition, so the
+      // server re-cancels them — no symmetric redo hook needed.
+      extras?.onUndo?.();
     },
     redo: () => {
-      useInboxStore.getState().stashSession(id);
+      if (mode === "kill") useInboxStore.getState().killSession(id);
+      else useInboxStore.getState().stashSession(id);
     },
   });
 

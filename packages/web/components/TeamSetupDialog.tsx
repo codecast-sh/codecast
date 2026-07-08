@@ -162,11 +162,13 @@ export function TeamSetupDialog() {
     setOpen(false);
     setStep("visibility");
     if (!teamSetupRequested) return;
+    // Consume the handoff params off the CURRENT URL — this dialog renders
+    // inside the settings modal over whatever page initiated team setup.
     const next = new URLSearchParams(searchParams.toString());
     next.delete("teamSetup");
     next.delete("teamId");
     const q = next.toString();
-    router.replace(q ? `/settings/sync?${q}` : "/settings/sync");
+    router.replace(`${window.location.pathname}${q ? `?${q}` : ""}`);
   };
 
   const handleSave = async () => {

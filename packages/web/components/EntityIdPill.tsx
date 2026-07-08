@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useRef, useEffect } from "react";
 import { useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import Link from "next/link";
@@ -14,13 +14,16 @@ import {
   ArrowUp,
   Minus,
   ArrowDown,
-  ChevronDown,
-  ExternalLink,
   MessageSquare,
   FolderOpen,
+  FileText,
+  Folder,
 } from "lucide-react";
 import { Popover, PopoverContent, PopoverAnchor } from "./ui/popover";
-import { stripMarkdown } from "../lib/notificationText";
+import { stripMarkdown, docContentPreview } from "../lib/notificationText";
+import { parseEntityUrl, ENTITY_ROUTE, isConvexId, type EntityType } from "../lib/entityLinks";
+import { FormattedSummary } from "./FormattedSummary";
+import { sessionCardSummary } from "../lib/sessionSummary";
 
 const api = _api as any;
 
@@ -71,6 +74,39 @@ const PRIORITY_CONFIG: Record<string, { icon: any; color: string; label: string 
 
 export function isEntityId(text: string): boolean {
   return ENTITY_ID_RE.test(text.trim());
+}
+
+const TYPE_LABEL: Record<EntityType, string> = {
+  task: "Task",
+  plan: "Plan",
+  session: "Session",
+  doc: "Doc",
+  project: "Project",
+};
+
+/** Infer an entity type from a bare id by its prefix (back-compat path). */
+function detectEntityType(id: string): EntityType | null {
+  const lower = id.toLowerCase();
+  if (lower.startsWith("ct-")) return "task";
+  if (lower.startsWith("pl-")) return "plan";
+  if (/^jx[a-z0-9]/i.test(id)) return "session";
+  return null;
+}
+
+/**
+ * Pick the right `webGet` argument for an id: a full Convex id resolves by
+ * `{ id }`, a short id by `{ short_id }`. Sessions store a 7-char short id, so
+ * we trim to that when the id is short. doc/project only ever carry Convex ids.
+ */
+function entityQueryArgs(type: EntityType, id: string): { short_id?: string; id?: string } {
+  // Only a genuine 32-char Convex id may be resolved by `{ id }` (db.get). A
+  // longer-than-short-id but non-Convex string (e.g. a garbled /plans/<id> URL)
+  // would otherwise be sent to db.get and throw "Invalid ID length"; routing it
+  // through the by_short_id index instead just resolves to null.
+  if (isConvexId(id)) return { id };
+  if (type === "session") return { short_id: id.slice(0, 7).toLowerCase() };
+  if (type === "task" || type === "plan") return { short_id: id.toLowerCase() };
+  return { id };
 }
 
 function TaskHoverContent({ task }: { task: any }) {
@@ -196,6 +232,39 @@ function PlanHoverContent({ plan }: { plan: any }) {
   );
 }
 
+// A teammate's avatar for session references: the author's image, or a colored
+// initial circle as fallback. Rendered in the pill and hover header only when a
+// session isn't the current user's (webGet returns author_* for foreign rows).
+function AuthorAvatar({
+  name,
+  avatar,
+  size = 14,
+}: {
+  name?: string | null;
+  avatar?: string | null;
+  size?: number;
+}) {
+  const dim = { width: size, height: size };
+  if (avatar) {
+    return (
+      <img
+        src={avatar}
+        alt={name ?? "author"}
+        className="rounded-full object-cover ring-1 ring-sol-border/60"
+        style={dim}
+      />
+    );
+  }
+  return (
+    <span
+      className="inline-flex items-center justify-center rounded-full bg-sol-blue/20 text-sol-blue font-semibold leading-none ring-1 ring-sol-border/60"
+      style={{ ...dim, fontSize: Math.round(size * 0.55) }}
+    >
+      {(name?.charAt(0) || "?").toUpperCase()}
+    </span>
+  );
+}
+
 function abbrevModel(model?: string | null): string | null {
   if (!model) return null;
   if (model.includes("opus")) return "Opus";
@@ -216,11 +285,40 @@ function relativeTime(ts?: number | null): string | null {
   return "just now";
 }
 
+// Summary + a bit of context for a session reference card: the coalesced
+// one-line summary (idle_summary/subtitle, with Goal:/Next: labels bolded) plus
+// the last message preview. Reused by the hover popover and the inline expand so
+// "opening" a session reference shows what it's about, not just its metadata.
+function SessionSummaryBlock({ session, className = "" }: { session: any; className?: string }) {
+  const summary = sessionCardSummary(session);
+  const preview = session.last_message_preview?.trim();
+  const showPreview = preview && preview !== summary;
+  const role = session.last_message_role;
+  if (!summary && !showPreview) return null;
+  return (
+    <div className={`space-y-1 ${className}`}>
+      {summary && (
+        <p className="text-[11px] text-sol-text-muted leading-relaxed line-clamp-3 whitespace-pre-line">
+          <FormattedSummary text={summary} />
+        </p>
+      )}
+      {showPreview && (
+        <div className="flex items-start gap-1 text-[10px] text-sol-text-dim leading-snug">
+          <span className="flex-shrink-0 font-mono text-sol-cyan/60">{role && role !== "user" ? `${role}:` : ">"}</span>
+          <span className="line-clamp-2 min-w-0">{preview}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SessionHoverContent({ session }: { session: any }) {
   const isActive = session.status === "active";
   const model = abbrevModel(session.model);
   const projectName = session.project_path?.split("/").pop() ?? null;
   const timeAgo = relativeTime(session.updated_at);
+  // webGet returns author_* only when the session belongs to a teammate.
+  const isForeign = !!(session.author_name || session.author_avatar);
 
   const metaParts = [
     session.message_count != null ? `${session.message_count} msgs` : null,
@@ -232,7 +330,11 @@ function SessionHoverContent({ session }: { session: any }) {
     <div className="space-y-2">
       <div className="flex items-start gap-2">
         <div className="relative flex-shrink-0 mt-0.5">
-          <MessageSquare className="w-3.5 h-3.5 text-sol-blue" />
+          {isForeign ? (
+            <AuthorAvatar name={session.author_name} avatar={session.author_avatar} size={16} />
+          ) : (
+            <MessageSquare className="w-3.5 h-3.5 text-sol-blue" />
+          )}
           {isActive && (
             <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-sol-green border border-sol-bg" />
           )}
@@ -251,9 +353,17 @@ function SessionHoverContent({ session }: { session: any }) {
                 <span className="text-[10px] text-gray-400">{session.agent_type}</span>
               </>
             )}
+            {isForeign && session.author_name && (
+              <>
+                <span className="text-gray-600">·</span>
+                <span className="text-[10px] text-sol-text-muted truncate">{session.author_name}</span>
+              </>
+            )}
           </div>
         </div>
       </div>
+
+      <SessionSummaryBlock session={session} className="pl-[22px]" />
 
       {metaParts.length > 0 && (
         <div className="flex items-center gap-2 pl-[22px] text-[10px] text-gray-500 font-mono">
@@ -280,9 +390,19 @@ function SessionHoverContent({ session }: { session: any }) {
   );
 }
 
-const MENTION_RE = /@\[([^\]]*?)(?:\s+(ct-\w+|pl-\w+|jx\w+|doc:\w+))?\](?:\s*\([^)]*\))?/g;
+const MENTION_RE = /@\[([^\]]*?)(?:\s+(ct-\w+|pl-\w+|jx\w+|doc:\w+|label:\w+))?\](?:\s*\([^)]*\))?/g;
 
 function MentionPill({ name, entityId }: { name: string; entityId?: string }) {
+  if (entityId?.startsWith("doc:") && entityId.length > 4) {
+    return <EntityIdPill type="doc" id={entityId.slice(4)} />;
+  }
+  if (entityId?.startsWith("label:")) {
+    return (
+      <span className="inline-flex items-center gap-0.5 px-1.5 py-0 rounded text-[11px] font-medium leading-[1.4] bg-sol-magenta/10 text-sol-magenta border border-sol-magenta/20 align-baseline">
+        @{name}
+      </span>
+    );
+  }
   if (entityId && isEntityId(entityId)) {
     return <EntityIdPill shortId={entityId} />;
   }
@@ -323,7 +443,9 @@ export function EntityAwareCode({ children, className, ...props }: any) {
 
 export function EntityAwareLink({ href, children, ...props }: any) {
   if (href?.startsWith("entity://")) {
-    return <EntityIdPill shortId={href.slice(9)} />;
+    const ref = href.slice(9);
+    if (ref.startsWith("doc:")) return <EntityIdPill type="doc" id={ref.slice(4)} />;
+    return <EntityIdPill shortId={ref} />;
   }
   if (href?.startsWith("mention://")) {
     const name = decodeURIComponent(href.slice(10));
@@ -334,297 +456,242 @@ export function EntityAwareLink({ href, children, ...props }: any) {
     );
   }
   const text = typeof children === "string" ? children : Array.isArray(children) ? children.map(String).join("") : String(children ?? "");
+  // Docs have no short id, so a doc reference carries "doc:<convexId>" in the
+  // link text (the entity:// href is stripped by react-markdown's url
+  // sanitizer). This is the markdown twin of the entity:// branch above.
+  if (text.startsWith("doc:") && text.length > 4) {
+    return <EntityIdPill type="doc" id={text.slice(4)} />;
+  }
   if (isEntityId(text)) {
     return <EntityIdPill shortId={text} />;
+  }
+  // A pasted/linked codecast object URL (e.g. https://codecast.sh/tasks/<id>)
+  // becomes a rich, in-app pill instead of an external link.
+  const entityRef = parseEntityUrl(href);
+  if (entityRef) {
+    return <EntityIdPill type={entityRef.type} id={entityRef.id} />;
   }
   return <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>;
 }
 
-const CROSSHATCH_BG = [
-  "repeating-linear-gradient(45deg, transparent, transparent 4px, rgba(255,255,255,0.04) 4px, rgba(255,255,255,0.04) 5px)",
-  "repeating-linear-gradient(-45deg, transparent, transparent 4px, rgba(255,255,255,0.04) 4px, rgba(255,255,255,0.04) 5px)",
-].join(", ");
-
-function InlineTaskExpand({ task }: { task: any }) {
-  const sc = TASK_STATUS_CONFIG[task.status] || TASK_STATUS_CONFIG.open;
-  const StatusIcon = sc.icon;
-  const pc = PRIORITY_CONFIG[task.priority || "medium"];
-  const PriorityIcon = pc?.icon || Minus;
-
-  return (
-    <div
-      className="mt-1 rounded-lg border border-sol-border/20 overflow-hidden"
-      style={{ background: CROSSHATCH_BG }}
-    >
-      <div className="px-3 py-2.5 space-y-2">
-        <div className="text-xs font-medium text-sol-text leading-snug">
-          {task.title}
-        </div>
-        <div className="flex items-center gap-3">
-          <span className={`inline-flex items-center gap-1 text-[10px] font-medium ${sc.color}`}>
-            <StatusIcon className="w-2.5 h-2.5" />
-            {sc.label}
-          </span>
-          {pc && (
-            <span className={`inline-flex items-center gap-1 text-[10px] ${pc.color}`}>
-              <PriorityIcon className="w-2.5 h-2.5" />
-              {pc.label}
-            </span>
-          )}
-        </div>
-        {task.description && (
-          <p className="text-[11px] text-sol-text-muted line-clamp-3 leading-relaxed">
-            {stripMarkdown(task.description).slice(0, 200)}
-          </p>
-        )}
-        {task.plan && (
-          <div className="flex items-center gap-1.5">
-            <Target className="w-2.5 h-2.5 text-sol-cyan flex-shrink-0" />
-            <span className="text-[10px] text-sol-cyan truncate">{task.plan.title}</span>
-          </div>
-        )}
-        <Link
-          href={`/tasks/${task._id}`}
-          className="flex items-center gap-1 text-[10px] text-sol-cyan hover:text-sol-text transition-colors pt-1 border-t border-sol-border/10"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <ExternalLink className="w-2.5 h-2.5" />
-          Open full task
-        </Link>
-      </div>
-    </div>
-  );
+function genericTitle(entity: any): string {
+  return entity.display_title || entity.title || entity.name || entity.short_id || "Untitled";
 }
 
-function InlinePlanExpand({ plan }: { plan: any }) {
-  const statusColor = STATUS_COLOR[plan.status || "active"] || "text-gray-400";
-  const statusLabel = STATUS_LABEL[plan.status] || plan.status;
-  const tasks = plan.tasks || [];
-  const doneCount = tasks.filter((t: any) => t.status === "done").length;
-  const total = tasks.length;
-  const pct = total > 0 ? Math.round((doneCount / total) * 100) : 0;
+// Doc hover shows a real peek at the document body, not just metadata — a
+// multi-line plain-text preview with paragraph shape, faded out at the bottom.
+function DocHoverContent({ doc }: { doc: any }) {
+  const preview = docContentPreview(doc.content);
+  const typeLabel = doc.doc_type ? doc.doc_type.charAt(0).toUpperCase() + doc.doc_type.slice(1) : "Doc";
+  const timeAgo = relativeTime(doc.updated_at);
 
   return (
-    <div
-      className="mt-1 rounded-lg border border-sol-border/20 overflow-hidden"
-      style={{ background: CROSSHATCH_BG }}
-    >
-      <div className="px-3 py-2.5 space-y-2">
-        <div className="text-xs font-medium text-sol-text leading-snug">
-          {plan.title}
-        </div>
-        <span className={`text-[10px] font-medium ${statusColor}`}>{statusLabel}</span>
-        {plan.goal && (
-          <p className="text-[11px] text-sol-text-muted line-clamp-2 leading-relaxed">
-            {stripMarkdown(plan.goal).slice(0, 200)}
-          </p>
-        )}
-        {total > 0 && (
-          <div className="flex items-center gap-2">
-            <div className="flex-1 h-1.5 rounded-full bg-white/5 overflow-hidden">
-              <div
-                className="h-full rounded-full bg-sol-green transition-all"
-                style={{ width: `${pct}%` }}
-              />
-            </div>
-            <span className="text-[10px] text-sol-text-dim font-mono">
-              {doneCount}/{total}
-            </span>
-          </div>
-        )}
-        {tasks.length > 0 && (
-          <div className="space-y-0.5 max-h-[100px] overflow-y-auto">
-            {tasks.slice(0, 5).map((t: any) => {
-              const Icon = STATUS_ICON[t.status] || Circle;
-              const color = STATUS_COLOR[t.status] || "text-gray-400";
-              return (
-                <div key={t._id} className="flex items-center gap-1.5 py-0.5 text-[10px]">
-                  <Icon className={`w-2.5 h-2.5 flex-shrink-0 ${color}`} />
-                  <span className={`truncate ${t.status === "done" ? "line-through text-sol-text-dim" : "text-sol-text-muted"}`}>
-                    {t.title}
-                  </span>
-                </div>
-              );
-            })}
-            {tasks.length > 5 && (
-              <div className="text-[10px] text-sol-text-dim">+{tasks.length - 5} more</div>
+    <div className="space-y-2">
+      <div className="flex items-start gap-2">
+        <FileText className="w-3.5 h-3.5 flex-shrink-0 mt-0.5 text-sol-green" />
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-medium text-sol-text leading-snug">{genericTitle(doc)}</div>
+          <div className="flex items-center gap-2 mt-1">
+            <span className="text-[10px] font-medium text-sol-green">{typeLabel}</span>
+            {timeAgo && (
+              <>
+                <span className="text-gray-600">·</span>
+                <span className="text-[10px] text-gray-400">{timeAgo}</span>
+              </>
             )}
           </div>
-        )}
-        <Link
-          href={`/plans/${plan._id}`}
-          className="flex items-center gap-1 text-[10px] text-sol-cyan hover:text-sol-text transition-colors pt-1 border-t border-sol-border/10"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <ExternalLink className="w-2.5 h-2.5" />
-          Open full plan
-        </Link>
+        </div>
+      </div>
+
+      {preview && (
+        <div className="relative pl-[22px] max-h-44 overflow-hidden">
+          <p className="text-[11px] text-gray-400 leading-relaxed whitespace-pre-line">{preview}</p>
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-sol-bg to-transparent" />
+        </div>
+      )}
+
+      <div className="flex items-center justify-end pt-1 border-t border-white/5">
+        <span className="text-[10px] text-gray-500 inline-flex items-center gap-0.5">
+          Click to open <ArrowUpRight className="w-2.5 h-2.5" />
+        </span>
       </div>
     </div>
   );
 }
 
-function InlineSessionExpand({ session }: { session: any }) {
-  const isActive = session.status === "active";
-  const model = abbrevModel(session.model);
-  const projectName = session.project_path?.split("/").pop() ?? null;
-  const timeAgo = relativeTime(session.updated_at);
-
-  const metaParts = [
-    session.message_count != null ? `${session.message_count} msgs` : null,
-    model,
-    timeAgo,
-  ].filter(Boolean);
-
+function GenericHoverContent({ entity, type }: { entity: any; type: EntityType }) {
+  const Icon = type === "doc" ? FileText : Folder;
+  const summary = entity.description || entity.goal || entity.summary;
   return (
-    <div
-      className="mt-1 rounded-lg border border-sol-border/20 overflow-hidden"
-      style={{ background: CROSSHATCH_BG }}
-    >
-      <div className="px-3 py-2.5 space-y-2">
-        <div className="flex items-center gap-2">
-          <div className="relative flex-shrink-0">
-            <MessageSquare className="w-3.5 h-3.5 text-sol-blue" />
-            {isActive && (
-              <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-sol-green border border-sol-bg" />
-            )}
-          </div>
-          <div className="text-xs font-medium text-sol-text leading-snug">
-            {session.title || session.short_id}
-          </div>
+    <div className="space-y-2">
+      <div className="flex items-start gap-2">
+        <Icon className="w-3.5 h-3.5 flex-shrink-0 mt-0.5 text-sol-text-muted" />
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-medium text-sol-text leading-snug">{genericTitle(entity)}</div>
+          <span className="text-[10px] font-medium text-sol-text-dim">{TYPE_LABEL[type]}</span>
         </div>
-        <div className="flex items-center gap-3">
-          <span className={`inline-flex items-center gap-1 text-[10px] font-medium ${isActive ? "text-sol-green" : "text-sol-text-dim"}`}>
-            {isActive ? "Active" : session.status || "Stopped"}
-          </span>
-          {metaParts.map((p, i) => (
-            <span key={i} className="text-[10px] text-sol-text-dim font-mono">{p}</span>
-          ))}
-        </div>
-        {projectName && (
-          <div className="flex items-center gap-1.5">
-            <FolderOpen className="w-2.5 h-2.5 text-sol-text-dim flex-shrink-0" />
-            <span className="text-[10px] text-sol-text-muted font-mono truncate">{projectName}</span>
-          </div>
-        )}
-        <Link
-          href={`/conversation/${session._id}`}
-          className="flex items-center gap-1 text-[10px] text-sol-cyan hover:text-sol-text transition-colors pt-1 border-t border-sol-border/10"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <ExternalLink className="w-2.5 h-2.5" />
-          Open session
-        </Link>
+      </div>
+      {summary && (
+        <p className="text-[11px] text-gray-400 line-clamp-2 leading-relaxed pl-[22px]">
+          {stripMarkdown(summary).slice(0, 200)}
+        </p>
+      )}
+      <div className="flex items-center justify-end pt-1 border-t border-white/5">
+        <span className="text-[10px] text-gray-500 inline-flex items-center gap-0.5">
+          Click to open <ArrowUpRight className="w-2.5 h-2.5" />
+        </span>
       </div>
     </div>
   );
 }
 
-const TASK_STATUS_CONFIG: Record<string, { icon: any; label: string; color: string }> = {
-  draft: { icon: CircleDotDashed, label: "Draft", color: "text-gray-400" },
-  open: { icon: Circle, label: "Open", color: "text-sol-blue" },
-  in_progress: { icon: CircleDot, label: "In Progress", color: "text-sol-yellow" },
-  in_review: { icon: CircleDot, label: "In Review", color: "text-sol-violet" },
-  done: { icon: CheckCircle2, label: "Done", color: "text-sol-green" },
-  dropped: { icon: XCircle, label: "Dropped", color: "text-gray-500" },
-};
-
-export function EntityIdPill({ shortId }: { shortId: string }) {
-  const id = shortId.toLowerCase().trim();
-  const isTask = id.startsWith("ct-");
-  const isPlan = id.startsWith("pl-");
-  const isSession = id.startsWith("jx");
+export function EntityIdPill({ shortId, type: typeProp, id: idProp }: { shortId?: string; type?: EntityType; id?: string }) {
+  // `id` keeps its original case (Convex ids are case-sensitive); short-id and
+  // prefix matching lowercase internally.
+  const rawId = (idProp ?? shortId ?? "").trim();
+  const type: EntityType | null = typeProp ?? detectEntityType(rawId);
+  const looksConvex = isConvexId(rawId);
+  const isTask = type === "task";
+  const isPlan = type === "plan";
+  const isSession = type === "session";
 
   const [hoverOpen, setHoverOpen] = useState(false);
-  const [expanded, setExpanded] = useState(false);
-  const hoverTimeout = { current: null as ReturnType<typeof setTimeout> | null };
+  const hoverTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const task = useQuery(api.tasks.webGet, isTask ? { short_id: id } : "skip");
-  const plan = useQuery(api.plans.webGet, isPlan ? { short_id: id } : "skip");
-  const session = useQuery(
-    api.conversations.webGet,
-    isSession ? { short_id: id.slice(0, 7) } : "skip"
-  );
+  const queryArgs = type ? entityQueryArgs(type, rawId) : null;
+  const task = useQuery(api.tasks.webGet, isTask && queryArgs ? queryArgs : "skip");
+  const plan = useQuery(api.plans.webGet, isPlan && queryArgs ? queryArgs : "skip");
+  const session = useQuery(api.conversations.webGet, isSession && queryArgs ? queryArgs : "skip");
+  // docs/projects are only ever addressed by a full Convex id.
+  const doc = useQuery(api.docs.webGet, type === "doc" && looksConvex ? { id: rawId } : "skip");
+  const project = useQuery(api.projects.webGet, type === "project" && looksConvex ? { id: rawId } : "skip");
 
-  const entity = isTask ? task : isPlan ? plan : session;
+  const entity = isTask ? task : isPlan ? plan : isSession ? session : type === "doc" ? doc : type === "project" ? project : undefined;
   const status = entity?.status;
 
   const Icon = isSession
     ? MessageSquare
     : isPlan
       ? Target
-      : STATUS_ICON[status || "open"] || Circle;
+      : type === "doc"
+        ? FileText
+        : type === "project"
+          ? Folder
+          : STATUS_ICON[status || "open"] || Circle;
 
   const colors = isSession
     ? "bg-sol-blue/10 text-sol-blue border-sol-blue/20 hover:bg-sol-blue/20"
     : isPlan
       ? "bg-sol-cyan/10 text-sol-cyan border-sol-cyan/20 hover:bg-sol-cyan/20"
-      : "bg-sol-yellow/10 text-sol-yellow border-sol-yellow/20 hover:bg-sol-yellow/20";
+      : type === "doc"
+        ? "bg-sol-green/10 text-sol-green border-sol-green/20 hover:bg-sol-green/20"
+        : type === "project"
+          ? "bg-sol-violet/10 text-sol-violet border-sol-violet/20 hover:bg-sol-violet/20"
+          : "bg-sol-yellow/10 text-sol-yellow border-sol-yellow/20 hover:bg-sol-yellow/20";
 
-  const pillLabel = isSession && entity?.title
-    ? entity.title.length > 30 ? entity.title.slice(0, 30) + "…" : entity.title
-    : id;
+  // Label rules, preserving existing inline behavior:
+  //  • full-Convex-id links (pasted URLs, docs, projects): show the resolved
+  //    title — never the 32-char id; fall back to short_id / type while loading.
+  //  • session short id (jx…): title once known, else the short id.
+  //  • ct-/pl- short ids: stay compact, always show the id.
+  const resolvedTitle: string | undefined = entity?.title || entity?.display_title || entity?.name;
+  const truncated = resolvedTitle && resolvedTitle.length > 30 ? resolvedTitle.slice(0, 30) + "…" : resolvedTitle;
+  const pillLabel = looksConvex
+    ? truncated || entity?.short_id || (type ? TYPE_LABEL[type] : rawId)
+    : isSession
+      ? truncated || rawId
+      : rawId;
 
-  const handleMouseEnter = useCallback(() => {
-    if (expanded) return;
-    hoverTimeout.current = setTimeout(() => setHoverOpen(true), 250);
-  }, [expanded]);
+  // Route that opens this entity. Prefer the resolved Convex id; fall back to
+  // the raw id so the link still works in the brief window before the query
+  // resolves. The pill IS the click target — one click navigates ("click
+  // through"), exactly like any other link.
+  const href = `${ENTITY_ROUTE[type ?? "session"]}/${entity?._id ?? rawId}`;
 
-  const handleMouseLeave = useCallback(() => {
-    if (hoverTimeout.current) clearTimeout(hoverTimeout.current);
+  const cancelHover = useCallback(() => {
+    if (hoverTimeout.current) {
+      clearTimeout(hoverTimeout.current);
+      hoverTimeout.current = null;
+    }
+  }, []);
+
+  // Always cancel any pending timer before scheduling the next one. The flicker
+  // ("disappears then comes back") was a stale close-timer surviving re-entry
+  // into the card: it fired and hid the popover even though the cursor was now
+  // inside it.
+  const openSoon = useCallback(() => {
+    cancelHover();
+    hoverTimeout.current = setTimeout(() => setHoverOpen(true), 200);
+  }, [cancelHover]);
+
+  const closeSoon = useCallback(() => {
+    cancelHover();
     hoverTimeout.current = setTimeout(() => setHoverOpen(false), 150);
-  }, []);
+  }, [cancelHover]);
 
-  const handleClick = useCallback(() => {
+  const closeNow = useCallback(() => {
+    cancelHover();
     setHoverOpen(false);
-    if (hoverTimeout.current) clearTimeout(hoverTimeout.current);
-    setExpanded((v) => !v);
-  }, []);
+  }, [cancelHover]);
+
+  // Clear any in-flight timer if the pill unmounts (e.g. on navigation).
+  useEffect(() => cancelHover, [cancelHover]);
+
+  // Unknown id shape (no detectable type) — render the raw text, not a pill.
+  if (!type) return <span>{rawId}</span>;
 
   return (
-    <span style={{ display: expanded ? "block" : "inline" }}>
-      <Popover open={hoverOpen && !expanded} onOpenChange={setHoverOpen}>
-        <PopoverAnchor asChild>
-          <button
-            onClick={handleClick}
-            onMouseEnter={handleMouseEnter}
-            onMouseLeave={handleMouseLeave}
-            className={`inline-flex items-center gap-1 px-1.5 py-0 rounded text-[11px] font-mono leading-[1.4] ${colors} border transition-colors cursor-pointer align-baseline`}
-          >
-            <span className="relative flex-shrink-0">
-              <Icon className="w-2.5 h-2.5" />
-              {isSession && status === "active" && (
-                <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-sol-green" />
-              )}
-            </span>
-            <span>{pillLabel}</span>
-            <ChevronDown className={`w-2 h-2 flex-shrink-0 transition-transform ${expanded ? "rotate-180" : ""}`} />
-          </button>
-        </PopoverAnchor>
-        <PopoverContent
-          className="w-64 bg-sol-bg border border-sol-border shadow-xl p-3 cursor-pointer"
-          side="top"
-          align="start"
-          sideOffset={6}
-          onClick={handleClick}
-          onMouseEnter={handleMouseEnter}
-          onMouseLeave={handleMouseLeave}
-          onOpenAutoFocus={(e) => e.preventDefault()}
+    <Popover open={hoverOpen} onOpenChange={setHoverOpen}>
+      <PopoverAnchor asChild>
+        <Link
+          href={href}
+          onClick={closeNow}
+          onMouseEnter={openSoon}
+          onMouseLeave={closeSoon}
+          className={`not-prose inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-mono leading-[1.4] no-underline ${colors} border transition-colors cursor-pointer align-baseline`}
+        >
+          <span className="relative flex-shrink-0">
+            {isSession && (session?.author_name || session?.author_avatar) ? (
+              <AuthorAvatar name={session.author_name} avatar={session.author_avatar} size={14} />
+            ) : (
+              <Icon className="w-3 h-3" />
+            )}
+            {isSession && status === "active" && (
+              <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-sol-green" />
+            )}
+          </span>
+          <span>{pillLabel}</span>
+        </Link>
+      </PopoverAnchor>
+      <PopoverContent
+        className={`${type === "doc" ? "w-80" : "w-64"} bg-sol-bg border border-sol-border shadow-xl p-0 relative`}
+        side="top"
+        align="start"
+        sideOffset={6}
+        onMouseEnter={openSoon}
+        onMouseLeave={closeSoon}
+        onOpenAutoFocus={(e) => e.preventDefault()}
+      >
+        {/* Invisible bridge over the offset gap to the pill: keeps the cursor
+            "inside" the card while crossing it, so moving up to click never
+            dismisses the popover. */}
+        <span aria-hidden className="absolute inset-x-0 top-full h-2" />
+        <Link
+          href={href}
+          onClick={closeNow}
+          className="block p-3 no-underline cursor-pointer"
         >
           {entity ? (
             isTask ? <TaskHoverContent task={entity} />
             : isPlan ? <PlanHoverContent plan={entity} />
-            : <SessionHoverContent session={entity} />
+            : isSession ? <SessionHoverContent session={entity} />
+            : type === "doc" ? <DocHoverContent doc={entity} />
+            : <GenericHoverContent entity={entity} type={type} />
           ) : (
-            <div className="text-[11px] text-gray-500">{id}</div>
+            <div className="text-[11px] text-gray-500">{pillLabel}</div>
           )}
-        </PopoverContent>
-      </Popover>
-      {expanded && entity && (
-        isTask ? <InlineTaskExpand task={entity} />
-        : isPlan ? <InlinePlanExpand plan={entity} />
-        : <InlineSessionExpand session={entity} />
-      )}
-    </span>
+        </Link>
+      </PopoverContent>
+    </Popover>
   );
 }

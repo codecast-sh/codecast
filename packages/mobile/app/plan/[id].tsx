@@ -13,9 +13,11 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { Theme, Spacing } from "@/constants/Theme";
 import { useInboxStore } from "@codecast/web/store/inboxStore";
+import { computePlanProgress } from "@codecast/web/lib/liveEntities";
 import { useSyncPlans } from "@/hooks/useSyncPlans";
 import { PLAN_STATUS_CONFIG } from "@/components/PlanItem";
 import { TaskItemRow, showTaskActions } from "@/components/TaskItem";
+import { MarkdownContent } from "@/components/MarkdownRenderer";
 
 type PlanStatus = keyof typeof PLAN_STATUS_CONFIG;
 
@@ -27,16 +29,25 @@ export default function PlanDetailScreen() {
   const updateTask = useInboxStore((s) => s.updateTask);
   const { ready: plansReady } = useSyncPlans();
 
-  const plan = useMemo(() => {
+  const storePlan = useMemo(() => {
     return Object.values(plans).find((p) => p.short_id === id);
   }, [plans, id]);
 
   const planDetail = useQuery(api.plans.webGet, id ? { short_id: id } : "skip");
 
+  // Fall back to the fetched server record when the plan isn't in the local
+  // store yet (cold deep-link from a push/universal link, or a plan outside the
+  // synced window). The store row is preferred so optimistic edits show live.
+  const plan = storePlan ?? planDetail ?? undefined;
+
   const planTasks = useMemo(() => {
-    if (!plan) return [];
-    return Object.values(tasks).filter((t) => t.plan?._id === plan._id);
-  }, [tasks, plan]);
+    // Store-derived (live) tasks when the plan is in the store, so a task status
+    // flip moves the progress bar instantly. Otherwise use the server snapshot.
+    if (storePlan) {
+      return Object.values(tasks).filter((t) => t.plan?._id === storePlan._id);
+    }
+    return (planDetail?.tasks ?? []) as any[];
+  }, [tasks, storePlan, planDetail]);
 
   const activeTasks = useMemo(
     () => planTasks.filter((t) => t.status !== "done" && t.status !== "dropped"),
@@ -47,7 +58,10 @@ export default function PlanDetailScreen() {
     [planTasks],
   );
 
-  const hasSynced = plansReady;
+  // Only declare "not found" once the server query has actually resolved (null
+  // = no access / missing). While it's still loading (undefined) keep the
+  // spinner so a cold deep-link doesn't flash "not found" before the fetch lands.
+  const hasSynced = plansReady && planDetail !== undefined;
 
   if (!plan) {
     return (
@@ -74,7 +88,14 @@ export default function PlanDetailScreen() {
   }
 
   const status = PLAN_STATUS_CONFIG[plan.status as PlanStatus] ?? PLAN_STATUS_CONFIG.draft;
-  const progress = plan.progress;
+  // Derive live from the (store-live) task list so a status flip on this screen
+  // moves the bar/counts before the server round-trips. Mirrors web.
+  const progress = computePlanProgress(planTasks);
+
+  // session_count is a server-only enrichment present on both the store row and
+  // the webGet snapshot at runtime, but the generated webGet type doesn't declare
+  // it — read it defensively so the union (storePlan ?? planDetail) typechecks.
+  const sessionCount = (plan as { session_count?: number }).session_count;
 
   return (
     <>
@@ -95,11 +116,11 @@ export default function PlanDetailScreen() {
             <RNText style={[styles.badgeText, { color: status.color }]}>{status.label}</RNText>
           </RNView>
 
-          {plan.session_count != null && plan.session_count > 0 && (
+          {sessionCount != null && sessionCount > 0 && (
             <RNView style={[styles.badge, { borderColor: Theme.borderLight }]}>
               <FontAwesome name="terminal" size={10} color={Theme.textMuted0} />
               <RNText style={[styles.badgeText, { color: Theme.textMuted0 }]}>
-                {plan.session_count} session{plan.session_count !== 1 ? "s" : ""}
+                {sessionCount} session{sessionCount !== 1 ? "s" : ""}
               </RNText>
             </RNView>
           )}
@@ -115,7 +136,7 @@ export default function PlanDetailScreen() {
         {planDetail?.doc_content && (
           <RNView style={styles.section}>
             <RNText style={styles.sectionLabel}>Description</RNText>
-            <RNText style={styles.bodyText}>{planDetail.doc_content}</RNText>
+            <MarkdownContent text={planDetail.doc_content} baseStyle={styles.bodyText} />
           </RNView>
         )}
 

@@ -3,6 +3,7 @@ import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useParams } from "next/navigation";
 import { MarkdownRenderer } from "../../../../components/tools/MarkdownRenderer";
+import { AppLoader } from "../../../../components/AppLoader";
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
   draft: { label: "Draft", color: "text-sol-text-dim", bg: "bg-sol-base02" },
@@ -53,9 +54,7 @@ export default function SharedPlanClient() {
 
   if (plan === undefined) {
     return (
-      <main className="h-screen flex flex-col bg-sol-base03 items-center justify-center">
-        <div className="text-sol-text-dim text-sm">Loading...</div>
-      </main>
+<AppLoader className="min-h-0 h-screen bg-sol-base03" />
     );
   }
 

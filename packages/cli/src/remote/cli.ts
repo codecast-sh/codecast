@@ -161,16 +161,24 @@ export function registerRemoteCommand(program: Command): void {
     .command("move <sessionId>")
     .description("Move a live session to the remote Mac (handoff: transfer + flip owner + resume there)")
     .option("--host <id>", "Target a specific host id")
-    .action(async (sessionId: string, opts: { host?: string }) => {
+    .option("--to-device <id>", "Target a specific codecast device id (default: first online remote)")
+    .action(async (sessionId: string, opts: { host?: string; toDevice?: string }) => {
       const host = loadRemoteHost(opts.host);
       const { client, token, api } = await convexClient();
       const conv = await client.query(api.devices.resolveConversationBySession, { api_token: token, session_id: sessionId });
       if (!conv?._id) { console.error(`No conversation for session ${sessionId} (is it synced?)`); process.exit(1); }
 
-      // identify the target Mac's codecast device id
+      // identify the target Mac's codecast device id. When the web initiates the
+      // move it names an explicit destination (--to-device); otherwise fall back
+      // to the first online remote (single-Mac convenience for the CLI).
       const devices = await client.query(api.devices.listDevices, { api_token: token });
-      const macDevice = devices.find((d: any) => d.is_remote && d.online) ?? devices.find((d: any) => d.is_remote);
-      if (!macDevice) { console.error("No online remote device found (start the Mac daemon)"); process.exit(1); }
+      const macDevice = opts.toDevice
+        ? devices.find((d: any) => d.device_id === opts.toDevice)
+        : devices.find((d: any) => d.is_remote && d.online) ?? devices.find((d: any) => d.is_remote);
+      if (!macDevice) {
+        console.error(opts.toDevice ? `Device ${opts.toDevice} not found` : "No online remote device found (start the Mac daemon)");
+        process.exit(1);
+      }
 
       console.log(`moving ${sessionId} -> ${host.user}@${host.address} (device ${macDevice.device_id.slice(0, 8)})`);
       console.log("  [1/4] transfer worktree + transcript + credential");

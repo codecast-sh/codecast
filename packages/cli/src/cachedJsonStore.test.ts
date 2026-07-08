@@ -108,7 +108,16 @@ describe("CachedJsonStore", () => {
     store.set("a", 1);
     await new Promise((r) => setTimeout(r, 20));
     store.set("b", 2);
-    await new Promise((r) => setTimeout(r, 20));
-    expect(read()).toEqual({ a: 1, b: 2 });
+    // Poll rather than sleep a fixed 20ms: the debounce timer competes with
+    // suite load, and a fixed wait loses that race just often enough to flake
+    // the deploy gate. The deadline is generous; the pass condition is exact.
+    const deadline = Date.now() + 2000;
+    let last: Record<string, unknown> | null = null;
+    while (Date.now() < deadline) {
+      last = read();
+      if (last && last.a === 1 && last.b === 2) break;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(last).toEqual({ a: 1, b: 2 });
   });
 });

@@ -1,12 +1,17 @@
-import { mutation, query, internalMutation } from "./_generated/server";
+import { mutation, query, internalMutation, internalQuery } from "./functions";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
+import { paginationOptsValidator } from "convex/server";
+import type { PaginationOptions, PaginationResult, RegisteredQuery } from "convex/server";
+import type { Id } from "./_generated/dataModel";
 import { enqueueStartSession, getOnlineLocalRoots } from "./devices";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
-import { resolveTeamForPath } from "./privacy";
+import { resolveTeamForPath, getProfileVisibilityPredicate, profilePublicSessionVisible } from "./privacy";
 import { resetConversationPendingMessages } from "./pendingMessages";
+import { ccAccountsValidator } from "./ccAccountsShared";
+import { deviceSettingsValidator } from "./deviceSettingsShared";
 import { normalizeProjectPath } from "./projectPaths";
 import { backlogFieldsPatch } from "./heartbeatBacklog";
 
@@ -40,7 +45,10 @@ export const getCurrentUserProbe = query({
   },
 });
 
-export const createUser = mutation({
+// internal: had zero callers and was a public, unauthenticated mutation that
+// inserted a user row for any supplied email. Convex Auth owns real user
+// creation; nothing legitimate needs this from a client.
+export const createUser = internalMutation({
   args: {
     email: v.string(),
     name: v.optional(v.string()),
@@ -56,7 +64,11 @@ export const createUser = mutation({
   },
 });
 
-export const listUsers = query({
+// internal: was a public query that returned the ENTIRE users table (including
+// every email) to any caller — the id/email directory an attacker needed to
+// target the other unauthenticated mutations. Only a dev test script referenced
+// it; no product surface lists all users this way.
+export const listUsers = internalQuery({
   args: {},
   handler: async (ctx) => {
     return await ctx.db.query("users").collect();
@@ -87,43 +99,25 @@ export const updateProfile = mutation({
   },
 });
 
+// No-op stub. This used to advance last_message_sent_at / prev_message_sent_at /
+// work_cluster_started_at on the user doc, scheduled from every synced batch that
+// contained a user-role message (tool results included). Nothing reads those
+// fields, and with a fleet of live sessions the concurrent invocations serialized
+// on one hot document and OCC-storm'd the backend. Kept only so invocations
+// already in the scheduler queue at deploy time don't fail; delete once drained.
 export const updateUserActivity = internalMutation({
   args: {
     userId: v.id("users"),
     daemonSeen: v.optional(v.boolean()),
     messageTimestamp: v.optional(v.number()),
   },
-  handler: async (ctx, args) => {
-    const patch: Record<string, unknown> = {};
-    const user = await ctx.db.get(args.userId);
-    if (!user) return;
-    if (args.daemonSeen) {
-      // Throttle: this fires on every message sync across all of the user's
-      // sessions, contending on a single hot doc. Only refresh when stale.
-      const DAEMON_SEEN_THROTTLE_MS = 60 * 1000;
-      if (!user.daemon_last_seen || Date.now() - user.daemon_last_seen > DAEMON_SEEN_THROTTLE_MS) {
-        patch.daemon_last_seen = Date.now();
-      }
-    }
-    if (args.messageTimestamp) {
-      if (!user.last_message_sent_at || args.messageTimestamp > user.last_message_sent_at) {
-        if (user.last_message_sent_at) {
-          patch.prev_message_sent_at = user.last_message_sent_at;
-          const GAP_THRESHOLD_MS = 2 * 60 * 60 * 1000;
-          if (args.messageTimestamp - user.last_message_sent_at > GAP_THRESHOLD_MS) {
-            patch.work_cluster_started_at = args.messageTimestamp;
-          }
-        }
-        patch.last_message_sent_at = args.messageTimestamp;
-      }
-    }
-    if (Object.keys(patch).length > 0) {
-      await ctx.db.patch(args.userId, patch);
-    }
-  },
+  handler: async () => {},
 });
 
-export const updateDaemonLastSeen = mutation({
+// internal: had zero callers and was a public mutation that let anyone stamp
+// any user's daemon_last_seen. The real daemon-liveness write is daemonHeartbeat
+// below, which authenticates via api_token.
+export const updateDaemonLastSeen = internalMutation({
   args: {
     user_id: v.id("users"),
   },
@@ -152,6 +146,10 @@ export const daemonHeartbeat = mutation({
     device_id: v.optional(v.string()),
     device_label: v.optional(v.string()),
     is_remote_device: v.optional(v.boolean()),
+    // CC account inventory (names/emails/tiers, never tokens) for the switcher.
+    cc_accounts: v.optional(ccAccountsValidator),
+    // Installed agent-feature snippets (by slug) + stable mode on this device.
+    settings: v.optional(deviceSettingsValidator),
   },
   handler: async (ctx, args) => {
     // updateLastUsed=true here is the ONLY token-doc refresh: heartbeat is a
@@ -241,6 +239,8 @@ export const daemonHeartbeat = mutation({
         ...(args.local_project_roots !== undefined
           ? { local_project_roots: args.local_project_roots }
           : {}),
+        ...(args.cc_accounts !== undefined ? { cc_accounts: args.cc_accounts } : {}),
+        ...(args.settings !== undefined ? { settings: args.settings } : {}),
       };
       if (existingDevice) {
         await ctx.db.patch(existingDevice._id, devicePatch);
@@ -383,6 +383,25 @@ export const sendDaemonCommand = mutation({
     });
 
     return { command_id: commandId };
+  },
+});
+
+// "Update now" from the in-app desktop-update banner. Unlike sendDaemonCommand
+// (admin, targets any user), this lets a signed-in user apply the desktop update
+// to THEIR OWN daemon on demand — the daemon force-applies (quit + swap +
+// relaunch) so an always-open app updates without waiting for a manual quit.
+export const requestDesktopUpdate = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      throw new Error("Not authenticated");
+    }
+    await ctx.db.insert("daemon_commands", {
+      user_id: userId,
+      command: "desktop_update",
+      created_at: Date.now(),
+    });
   },
 });
 
@@ -733,7 +752,7 @@ export const getUserByUsername = query({
       const byUsername = await ctx.db
         .query("users")
         .withIndex("by_github_username", (q) => q.eq("github_username", args.username))
-        .unique();
+        .first();
       if (byUsername) return byUsername;
       const asId = ctx.db.normalizeId("users", args.username);
       if (asId) return ctx.db.get(asId);
@@ -755,7 +774,9 @@ export const getUserActivity = query({
   },
   handler: async (ctx, args) => {
     const user = await ctx.db.get(args.user_id);
-    if (!user || user.hide_activity) {
+    // Public, unauthed query. is_private=false means TEAM-visible, not world-
+    // visible, so it must stay gated behind the explicit public-profile opt-in.
+    if (!user || user.hide_activity || !user.public_profile_enabled) {
       return [];
     }
     const limit = Math.min(args.limit ?? 3, 5);
@@ -785,7 +806,7 @@ export const getUserStats = query({
   },
   handler: async (ctx, args) => {
     const user = await ctx.db.get(args.user_id);
-    if (!user || user.hide_activity) {
+    if (!user || user.hide_activity || !user.public_profile_enabled) {
       return null;
     }
     const conversations = await ctx.db
@@ -805,12 +826,243 @@ export const getUserStats = query({
   },
 });
 
+// ── Public profiles ──────────────────────────────────────────────────────────
+// Anonymous, opt-in profile pages at /u/<username>. Three rules govern them:
+//   1. Nothing is anonymously readable until public_profile_enabled is true.
+//   2. The handle is a claimed, unique `username` (github_username only pre-fills).
+//   3. Sessions appear only because they were explicitly pinned (profile_pinned_at),
+//      which guarantees a share_token — so cards deep-link to the /share viewer.
+// Counts/heatmap are anonymized aggregates (no titles/ids cross the boundary).
+
+// Handles live at the ROOT (/<handle>), sharing the URL namespace with every
+// top-level route. React Router still serves real routes (static beats dynamic),
+// but a handle matching one would be an unreachable, confusing profile — so block
+// them. KEEP IN SYNC with the top-level <Route> paths in web/src/App.tsx; add any
+// new first-segment route here. Plus product nouns we don't want impersonated.
+const RESERVED_USERNAMES = new Set([
+  // Top-level route segments (web/src/App.tsx)
+  "about", "features", "documentation", "privacy", "security", "support", "terms",
+  "login", "signup", "signin", "logout", "forgot-password", "reset-password", "auth",
+  "join", "inbox", "feed", "search", "notifications", "conversation", "docs", "plans",
+  "tasks", "projects", "workflows", "routines", "schedules", "sessions", "team",
+  "admin", "config", "dashboard", "explore", "timeline", "windows", "orchestration",
+  "roadmap", "cli", "share", "commit", "pr", "review", "palette", "settings",
+  // Product nouns / safety
+  "u", "api", "teams", "codecast", "help", "status", "me", "you", "new", "null", "undefined",
+]);
+
+// Lowercase, 3–30 chars, alnum + single internal dashes, must start/end alnum.
+// Returns the normalized handle or an error string.
+export function normalizeUsername(raw: string): { username?: string; error?: string } {
+  const username = raw.trim().toLowerCase();
+  if (username.length < 3) return { error: "Username must be at least 3 characters" };
+  if (username.length > 30) return { error: "Username must be at most 30 characters" };
+  if (!/^[a-z0-9](?:[a-z0-9]|-(?=[a-z0-9]))*$/.test(username))
+    return { error: "Use lowercase letters, numbers, and single dashes (no leading/trailing dash)" };
+  if (RESERVED_USERNAMES.has(username)) return { error: "That username is reserved" };
+  return { username };
+}
+
+// Last path segment only — the public profile shows "codecast", never the
+// owner's full "/Users/ashot/src/codecast" home-dir layout.
+function basenameOf(path?: string): string | null {
+  if (!path) return null;
+  const parts = path.replace(/\/+$/, "").split("/");
+  return parts[parts.length - 1] || null;
+}
+
+// Whitelisted, never-leaks-internal-fields view of a user for anonymous pages.
+function publicUserCard(user: any) {
+  return {
+    _id: user._id,
+    username: user.username,
+    name: user.name,
+    avatar_url: user.github_avatar_url ?? user.image ?? null,
+    github_username: user.github_username ?? null,
+    bio: user.bio ?? null,
+    title: user.title ?? null,
+    timezone: user.timezone ?? null,
+  };
+}
+
+// Is the requested handle available for this user to claim?
+export const isUsernameAvailable = query({
+  args: { username: v.string() },
+  handler: async (ctx, args) => {
+    const { username, error } = normalizeUsername(args.username);
+    if (error) return { available: false, reason: error };
+    const existing = await ctx.db
+      .query("users")
+      .withIndex("by_username", (q) => q.eq("username", username))
+      .first();
+    const me = await getAuthUserId(ctx);
+    if (existing && (!me || existing._id.toString() !== me.toString())) {
+      return { available: false, reason: "That username is taken" };
+    }
+    return { available: true, username };
+  },
+});
+
+// Claim (or change) the caller's public handle. Uniqueness-checked.
+export const claimUsername = mutation({
+  args: { username: v.string() },
+  handler: async (ctx, args) => {
+    const me = await getAuthUserId(ctx);
+    if (!me) throw new Error("Unauthorized");
+    const { username, error } = normalizeUsername(args.username);
+    if (error) throw new Error(error);
+    const existing = await ctx.db
+      .query("users")
+      .withIndex("by_username", (q) => q.eq("username", username))
+      .first();
+    if (existing && existing._id.toString() !== me.toString()) {
+      throw new Error("That username is taken");
+    }
+    await ctx.db.patch(me, { username });
+    return { username };
+  },
+});
+
+// The master opt-in switch. Refuses to enable without a claimed handle, since
+// the public URL is the handle — there'd be nothing to route to.
+export const setPublicProfileEnabled = mutation({
+  args: { enabled: v.boolean() },
+  handler: async (ctx, args) => {
+    const me = await getAuthUserId(ctx);
+    if (!me) throw new Error("Unauthorized");
+    if (args.enabled) {
+      const user = await ctx.db.get(me);
+      if (!user?.username) throw new Error("Claim a username before enabling your public profile");
+    }
+    await ctx.db.patch(me, { public_profile_enabled: args.enabled });
+    return { enabled: args.enabled };
+  },
+});
+
+// PUBLIC. The 404 gate lives here: returns null unless the handle resolves AND
+// the owner has the profile switched on. Only whitelisted fields ever escape.
+export const getPublicProfile = query({
+  args: { username: v.string() },
+  handler: async (ctx, args) => {
+    const handle = args.username.trim().toLowerCase();
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_username", (q) => q.eq("username", handle))
+      .first();
+    if (!user || !user.public_profile_enabled) return null;
+
+    // Aggregate, anonymized stats from the public (pinned) tier only.
+    const pinned = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_profile_pinned", (q) =>
+        q.eq("user_id", user._id).gt("profile_pinned_at", 0)
+      )
+      .collect();
+    const publicPins = pinned.filter((c) => profilePublicSessionVisible(c));
+
+    return {
+      ...publicUserCard(user),
+      show_activity_graph: !user.hide_activity,
+      stats: {
+        pinned_sessions: publicPins.length,
+        pinned_messages: publicPins.reduce((s, c) => s + (c.message_count ?? 0), 0),
+      },
+    };
+  },
+});
+
+// PUBLIC. The pinned sessions, newest pin first. Defense-in-depth filtered to
+// those still backed by a share_token; each row carries that token so the card
+// links straight to the existing guest /share viewer. Never leaks the full
+// local path — only the repo/folder basename.
+export const getPublicPinnedSessions = query({
+  args: { username: v.string() },
+  handler: async (ctx, args) => {
+    const handle = args.username.trim().toLowerCase();
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_username", (q) => q.eq("username", handle))
+      .first();
+    if (!user || !user.public_profile_enabled) return [];
+
+    const pinned = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_profile_pinned", (q) =>
+        q.eq("user_id", user._id).gt("profile_pinned_at", 0)
+      )
+      .order("desc")
+      .collect();
+
+    return pinned
+      .filter((c) => profilePublicSessionVisible(c))
+      .map((c) => ({
+        _id: c._id,
+        share_token: c.share_token!,
+        title: c.title,
+        subtitle: c.subtitle,
+        repo: basenameOf(c.git_root || c.project_path),
+        agent: c.agent_type ?? null,
+        message_count: c.message_count ?? 0,
+        updated_at: c.updated_at ?? c.started_at ?? c._creationTime,
+        profile_pinned_at: c.profile_pinned_at,
+      }));
+  },
+});
+
+// PUBLIC. The anonymized GitHub-style contribution graph: per-day activity
+// tally across ALL the user's sessions (private ones count as anonymous squares,
+// exactly like GitHub). Each day is only aggregates — hours, session/message
+// counts, and a distinct-project COUNT (never names) — so the same rows power
+// both the contribution grid and the anonymized "ran N sessions on M projects"
+// feed. `projects` is best-effort: only the recent conversations source knows
+// paths, so older days report 0 (render-side: omit, don't show "0 projects").
+// Honors hide_activity, and only runs once the profile is enabled.
+export const getPublicActivityHeatmap = query({
+  args: { username: v.string(), days: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const handle = args.username.trim().toLowerCase();
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_username", (q) => q.eq("username", handle))
+      .first();
+    if (!user || !user.public_profile_enabled || user.hide_activity) return [];
+
+    const intervals = await collectUserActivityIntervals(
+      ctx,
+      null,
+      { user_id: user._id, days: args.days },
+      { countAll: true }
+    );
+
+    const buckets: Record<string, { hours: number; sessions: number; msgs: number; projects: Set<string> }> = {};
+    for (const iv of intervals) {
+      const date = new Date(iv.end).toISOString().split("T")[0];
+      const b = (buckets[date] ||= { hours: 0, sessions: 0, msgs: 0, projects: new Set() });
+      b.sessions++;
+      b.hours += iv.hours;
+      b.msgs += iv.msgs;
+      if (iv.project) b.projects.add(iv.project);
+    }
+    return Object.entries(buckets)
+      .map(([date, d]) => ({
+        date,
+        hours: Math.round(d.hours * 100) / 100,
+        sessions: d.sessions,
+        msgs: Math.round(d.msgs),
+        projects: d.projects.size,
+      }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+  },
+});
+
 export const getUserAbstractActivity = query({
   args: {
     user_id: v.id("users"),
     team_id: v.optional(v.id("teams")),
   },
   handler: async (ctx, args) => {
+    const viewerId = await getAuthUserId(ctx);
+    if (!viewerId) return null;
     const user = await ctx.db.get(args.user_id);
     if (!user) return null;
 
@@ -818,7 +1070,7 @@ export const getUserAbstractActivity = query({
     const oneWeekAgo = now - 7 * 24 * 60 * 60 * 1000;
     const oneMonthAgo = now - 30 * 24 * 60 * 60 * 1000;
 
-    const recentConversations = args.team_id
+    const recentConversationsRaw = args.team_id
       ? await ctx.db
           .query("conversations")
           .withIndex("by_team_user_updated", (q: any) =>
@@ -831,6 +1083,11 @@ export const getUserAbstractActivity = query({
           .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
           .order("desc")
           .take(10);
+
+    // Privacy gate: exclude private conversations from a teammate's profile so
+    // their titles/subtitles/projects and counts don't leak (owner sees all).
+    const isVisible = await getProfileVisibilityPredicate(ctx, viewerId, args.user_id, args.team_id);
+    const recentConversations = recentConversationsRaw.filter(isVisible);
 
     const weekConversations = recentConversations.filter(c => c.started_at > oneWeekAgo);
     const monthConversations = recentConversations.filter(c => c.started_at > oneMonthAgo);
@@ -970,6 +1227,132 @@ export const getUserAbstractActivity = query({
   },
 });
 
+// One credited slice of session activity, normalized across the three sources
+// (live conversations, team_activity_events, session_insights). `hours` is the
+// capped duration credit (exactly what the day heatmap has always added) and
+// `end` is the legacy bucketing timestamp; `start` lets granular consumers
+// distribute that credit across the hours the session actually spanned.
+// `project` is the repo/folder basename — only the recent `conversations`
+// branch knows it (events/insights don't carry a path), so consumers must
+// treat it as best-effort. Used solely for anonymized distinct-project COUNTS.
+type ActivityInterval = { start: number; end: number; hours: number; msgs: number; project?: string | null };
+
+// Hybrid read strategy shared by the day heatmap and the hour punchcard:
+//   - Recent window (last 7 days): stream `conversations` directly.
+//     Source of truth for in-progress sessions, but heavy docs
+//     (1024-dim title_embedding + git_diff blobs), so we keep the window
+//     tight to stay under the 100MB bytes-read cap.
+//   - Older days: use lightweight `team_activity_events` and
+//     `session_insights` (no embeddings/diffs). They lag real time but
+//     have settled by day +1, so they're accurate for historical buckets.
+// `preferCompleted` processes session_completed events before session_started
+// ones so the record carrying duration + message_count wins the dedupe. The
+// legacy day heatmap keeps insertion order (started usually wins) so its
+// historical buckets stay stable.
+async function collectUserActivityIntervals(
+  ctx: any,
+  viewerId: Id<"users"> | null,
+  args: { user_id: Id<"users">; team_id?: Id<"teams">; days?: number },
+  opts?: { preferCompleted?: boolean; countAll?: boolean }
+): Promise<ActivityInterval[]> {
+  const numDays = args.days ?? 365;
+  const now = Date.now();
+  const cutoff = now - numDays * 24 * 60 * 60 * 1000;
+  const recentCutoff = now - 7 * 24 * 60 * 60 * 1000;
+  const HOUR = 3600000;
+  const CAP = 8 * HOUR;
+
+  const intervals: ActivityInterval[] = [];
+  const seen = new Set<string>();
+
+  // Credit each session on its **last activity day** (`updated_at`), not its
+  // start day. This matches the user's mental model — "today's hours" means
+  // sessions I was working on today, even if they began earlier in the week.
+  // Long sessions are common in this codebase (workflow/orchestrate), so
+  // start-day bucketing would hide today's work on multi-day sessions.
+  // Subagent/child sessions are included (no parent filter) to match the
+  // pre-existing query semantics and the 5422-session header total.
+  // Privacy gate: don't count a teammate's private conversations toward their
+  // public heatmap (owner sees all). Private convs are still marked `seen` so
+  // the events/insights fallback branches below can't re-introduce them.
+  // countAll = the anonymized public contribution graph: every session counts
+  // (GitHub-style "private contributions" squares), but only as a per-day tally
+  // — the caller returns no titles/ids, so nothing about content leaks.
+  const isVisible = opts?.countAll
+    ? () => true
+    : await getProfileVisibilityPredicate(ctx, viewerId!, args.user_id, args.team_id);
+  const recentConvos = args.team_id
+    ? ctx.db.query("conversations").withIndex("by_team_user_updated", (q: any) =>
+        q.eq("team_id", args.team_id).eq("user_id", args.user_id).gte("updated_at", recentCutoff))
+    : ctx.db.query("conversations").withIndex("by_user_updated", (q: any) =>
+        q.eq("user_id", args.user_id).gte("updated_at", recentCutoff));
+  for await (const c of recentConvos) {
+    const upd = c.updated_at ?? c.started_at;
+    if (!upd) continue;
+    seen.add(String(c._id));
+    if (!isVisible(c)) continue;
+    const durMs = c.started_at ? Math.max(0, upd - c.started_at) : 0;
+    intervals.push({
+      start: upd - durMs,
+      end: upd,
+      hours: Math.min(durMs, CAP) / HOUR,
+      msgs: c.message_count ?? 0,
+      project: basenameOf(c.git_root || c.project_path),
+    });
+  }
+
+  const events = await ctx.db
+    .query("team_activity_events")
+    .withIndex("by_actor", (q: any) => q.eq("actor_user_id", args.user_id))
+    .collect();
+
+  const eventPasses = opts?.preferCompleted
+    ? [
+        events.filter((e: any) => e.event_type === "session_completed"),
+        events.filter((e: any) => e.event_type === "session_started"),
+      ]
+    : [events];
+  for (const pass of eventPasses) {
+    for (const e of pass) {
+      if (e.timestamp < cutoff || e.timestamp >= recentCutoff) continue;
+      if (args.team_id && String(e.team_id) !== String(args.team_id)) continue;
+      if (e.event_type !== "session_started" && e.event_type !== "session_completed") continue;
+      const cid = e.related_conversation_id ? String(e.related_conversation_id) : `evt-${e._id}`;
+      if (seen.has(cid)) continue;
+      seen.add(cid);
+      // `e.timestamp` is when the event fired: for `session_completed` that's
+      // the end of activity; for `session_started` it's the start. Both are
+      // reasonable proxies for "activity day" — the original query used the
+      // same field, so historical buckets stay stable across this change.
+      const durMs = e.event_type === "session_completed" ? e.metadata?.duration_ms : undefined;
+      intervals.push({
+        start: e.timestamp - (durMs ?? 0.5 * HOUR),
+        end: e.timestamp,
+        hours: durMs ? Math.min(durMs, CAP) / HOUR : 0.5,
+        msgs: e.metadata?.message_count ?? 0,
+      });
+    }
+  }
+
+  const insights = await ctx.db
+    .query("session_insights")
+    .withIndex("by_actor_generated_at", (q: any) =>
+      q.eq("actor_user_id", args.user_id).gte("generated_at", cutoff)
+    )
+    .collect();
+
+  for (const ins of insights) {
+    if (ins.generated_at >= recentCutoff) continue;
+    if (args.team_id && String(ins.team_id) !== String(args.team_id)) continue;
+    const cid = String(ins.conversation_id);
+    if (seen.has(cid)) continue;
+    seen.add(cid);
+    intervals.push({ start: ins.generated_at - 0.5 * HOUR, end: ins.generated_at, hours: 0.5, msgs: 0 });
+  }
+
+  return intervals;
+}
+
 export const getUserActivityHeatmap = query({
   args: {
     user_id: v.id("users"),
@@ -983,88 +1366,14 @@ export const getUserActivityHeatmap = query({
     const user = await ctx.db.get(args.user_id);
     if (!user || user.hide_activity) return [];
 
-    const numDays = args.days ?? 365;
-    const now = Date.now();
-    const cutoff = now - numDays * 24 * 60 * 60 * 1000;
-    // Hybrid read strategy:
-    //   - Recent window (last 7 days): stream `conversations` directly.
-    //     Source of truth for in-progress sessions, but heavy docs
-    //     (1024-dim title_embedding + git_diff blobs), so we keep the window
-    //     tight to stay under the 100MB bytes-read cap.
-    //   - Older days: use lightweight `team_activity_events` and
-    //     `session_insights` (no embeddings/diffs). They lag real time but
-    //     have settled by day +1, so they're accurate for historical buckets.
-    // Bucketing is done on the session START day in both branches so a
-    // session that runs past midnight lands on the day it began (matching
-    // how DayHeader groups the Feed tab).
-    const recentCutoff = now - 7 * 24 * 60 * 60 * 1000;
+    const intervals = await collectUserActivityIntervals(ctx, userId, args);
 
     const buckets: Record<string, { hours: number; sessions: number }> = {};
-    const seen = new Set<string>();
-
-    // Bucket each session on its **last activity day** (`updated_at`), not its
-    // start day. This matches the user's mental model — "today's hours" means
-    // sessions I was working on today, even if they began earlier in the week.
-    // Long sessions are common in this codebase (workflow/orchestrate), so
-    // start-day bucketing would hide today's work on multi-day sessions.
-    // Subagent/child sessions are included (no parent filter) to match the
-    // pre-existing query semantics and the 5422-session header total.
-    const recentConvos = args.team_id
-      ? ctx.db.query("conversations").withIndex("by_team_user_updated", (q: any) =>
-          q.eq("team_id", args.team_id).eq("user_id", args.user_id).gte("updated_at", recentCutoff))
-      : ctx.db.query("conversations").withIndex("by_user_updated", (q) =>
-          q.eq("user_id", args.user_id).gte("updated_at", recentCutoff));
-    for await (const c of recentConvos) {
-      const upd = c.updated_at ?? c.started_at;
-      if (!upd) continue;
-      seen.add(String(c._id));
-      const date = new Date(upd).toISOString().split("T")[0];
+    for (const iv of intervals) {
+      const date = new Date(iv.end).toISOString().split("T")[0];
       if (!buckets[date]) buckets[date] = { hours: 0, sessions: 0 };
       buckets[date].sessions++;
-      const durMs = c.started_at ? Math.max(0, upd - c.started_at) : 0;
-      buckets[date].hours += Math.min(durMs, 8 * 3600000) / 3600000;
-    }
-
-    const events = await ctx.db
-      .query("team_activity_events")
-      .withIndex("by_actor", (q) => q.eq("actor_user_id", args.user_id))
-      .collect();
-
-    for (const e of events) {
-      if (e.timestamp < cutoff || e.timestamp >= recentCutoff) continue;
-      if (args.team_id && String(e.team_id) !== String(args.team_id)) continue;
-      if (e.event_type !== "session_started" && e.event_type !== "session_completed") continue;
-      const cid = e.related_conversation_id ? String(e.related_conversation_id) : `evt-${e._id}`;
-      if (seen.has(cid)) continue;
-      seen.add(cid);
-      // `e.timestamp` is when the event fired: for `session_completed` that's
-      // the end of activity; for `session_started` it's the start. Both are
-      // reasonable proxies for "activity day" — the original query used the
-      // same field, so historical buckets stay stable across this change.
-      const date = new Date(e.timestamp).toISOString().split("T")[0];
-      if (!buckets[date]) buckets[date] = { hours: 0, sessions: 0 };
-      buckets[date].sessions++;
-      const durMs = e.event_type === "session_completed" ? e.metadata?.duration_ms : undefined;
-      buckets[date].hours += durMs ? Math.min(durMs, 8 * 3600000) / 3600000 : 0.5;
-    }
-
-    const insights = await ctx.db
-      .query("session_insights")
-      .withIndex("by_actor_generated_at", (q) =>
-        q.eq("actor_user_id", args.user_id).gte("generated_at", cutoff)
-      )
-      .collect();
-
-    for (const ins of insights) {
-      if (ins.generated_at >= recentCutoff) continue;
-      if (args.team_id && String(ins.team_id) !== String(args.team_id)) continue;
-      const cid = String(ins.conversation_id);
-      if (seen.has(cid)) continue;
-      seen.add(cid);
-      const date = new Date(ins.generated_at).toISOString().split("T")[0];
-      if (!buckets[date]) buckets[date] = { hours: 0, sessions: 0 };
-      buckets[date].sessions++;
-      buckets[date].hours += 0.5;
+      buckets[date].hours += iv.hours;
     }
 
     return Object.entries(buckets)
@@ -1074,6 +1383,110 @@ export const getUserActivityHeatmap = query({
         sessions: data.sessions,
       }))
       .sort((a, b) => a.date.localeCompare(b.date));
+  },
+});
+
+// Hour-of-day bucketing shared by the authed and public punchcard queries:
+// each session's credit is distributed across the (local date × hour) cells
+// its interval overlaps, so the punchcard shows *when during the day* work
+// actually happened. `tzOffsetMinutes` is the viewer's Date.getTimezoneOffset()
+// — hour-of-day only means something in the viewer's local clock. (One offset
+// is applied to the whole range, so cells across a DST switch can shift by an
+// hour.) Returns only per-cell aggregates — nothing identifying leaks.
+function bucketPunchcardRows(intervals: ActivityInterval[], tzOffsetMinutes: number) {
+  const HOUR = 3600000;
+  const tzShift = tzOffsetMinutes * 60000;
+  const rows: Record<string, { hours: number[]; msgs: number[]; sessions: number[]; day_sessions: number }> = {};
+
+  for (const iv of intervals) {
+    // Bound the distribution loop: a zombie conversation idling for weeks
+    // still only smears its (already 8h-capped) credit over the final 14d.
+    let start = Math.min(iv.start, iv.end);
+    if (iv.end - start > 14 * 24 * HOUR) start = iv.end - 14 * 24 * HOUR;
+    const ls = start - tzShift;
+    const le = iv.end - tzShift;
+    const span = le - ls;
+    const firstCell = Math.floor(ls / HOUR);
+    const lastCell = Math.floor(le / HOUR);
+    const touchedDates = new Set<string>();
+    for (let cell = firstCell; cell <= lastCell; cell++) {
+      const cellStart = cell * HOUR;
+      const frac = span <= 0 ? 1 : (Math.min(le, cellStart + HOUR) - Math.max(ls, cellStart)) / span;
+      if (frac <= 0) continue;
+      const d = new Date(cellStart);
+      const date = d.toISOString().split("T")[0];
+      const hour = d.getUTCHours();
+      const row = (rows[date] ||= {
+        hours: new Array(24).fill(0),
+        msgs: new Array(24).fill(0),
+        sessions: new Array(24).fill(0),
+        day_sessions: 0,
+      });
+      row.hours[hour] += iv.hours * frac;
+      row.msgs[hour] += iv.msgs * frac;
+      row.sessions[hour]++;
+      if (!touchedDates.has(date)) {
+        touchedDates.add(date);
+        row.day_sessions++;
+      }
+    }
+  }
+
+  return Object.entries(rows)
+    .map(([date, r]) => ({
+      date,
+      hours: r.hours.map((h) => Math.round(h * 100) / 100),
+      msgs: r.msgs.map((m) => Math.round(m)),
+      sessions: r.sessions,
+      day_sessions: r.day_sessions,
+    }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+
+export const getUserActivityPunchcard = query({
+  args: {
+    user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
+    days: v.optional(v.number()),
+    tz_offset_minutes: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+
+    const user = await ctx.db.get(args.user_id);
+    if (!user || user.hide_activity) return [];
+
+    const intervals = await collectUserActivityIntervals(ctx, userId, args, { preferCompleted: true });
+    return bucketPunchcardRows(intervals, args.tz_offset_minutes ?? 0);
+  },
+});
+
+// PUBLIC. The anonymized hour-of-day punchcard for /u/<handle> profile pages:
+// same countAll aggregation as the public heatmap (every session counts, no
+// identities), distributed across local-clock hour cells like the authed
+// Timeline tab. Gated identically: opt-in profile + activity not hidden.
+export const getPublicActivityPunchcard = query({
+  args: {
+    username: v.string(),
+    days: v.optional(v.number()),
+    tz_offset_minutes: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const handle = args.username.trim().toLowerCase();
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_username", (q) => q.eq("username", handle))
+      .first();
+    if (!user || !user.public_profile_enabled || user.hide_activity) return [];
+
+    const intervals = await collectUserActivityIntervals(
+      ctx,
+      null,
+      { user_id: user._id, days: args.days },
+      { preferCompleted: true, countAll: true }
+    );
+    return bucketPunchcardRows(intervals, args.tz_offset_minutes ?? 0);
   },
 });
 
@@ -1136,48 +1549,66 @@ export const getUserDocs = query({
   },
 });
 
+type ProfileFeedItem = {
+  type: string;
+  timestamp: number;
+  verb: string;
+  preview?: string;
+  entity_id?: string;
+  entity_type?: string;
+  entity_title?: string;
+  entity_short_id?: string;
+  count?: number;
+  meta?: Record<string, any>;
+};
+
 export const getUserProfileFeed = query({
   args: {
     user_id: v.id("users"),
     team_id: v.optional(v.id("teams")),
+    // Deployed web bundles (and the remote-URL Electron shell) outlive convex
+    // deploys by days — accept the pre-pagination {limit} shape and answer it
+    // with the pre-pagination array return. The export is cast below so the
+    // generated types only advertise the paginated signature.
+    paginationOpts: v.optional(paginationOptsValidator),
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
+    const legacy = !args.paginationOpts;
+    const legacyLimit = Math.min(args.limit ?? 30, 200);
+    const paginationOpts = args.paginationOpts ?? { numItems: 30, cursor: null };
+    const empty = legacy ? [] : { page: [], isDone: true, continueCursor: "" };
     const userId = await getAuthUserId(ctx);
-    if (!userId) return [];
+    if (!userId) return empty;
     const user = await ctx.db.get(args.user_id);
-    if (!user) return [];
-    const limit = Math.min(args.limit ?? 30, 200);
+    if (!user) return empty;
 
-    type FeedItem = {
-      type: string;
-      timestamp: number;
-      verb: string;
-      preview?: string;
-      entity_id?: string;
-      entity_type?: string;
-      entity_title?: string;
-      entity_short_id?: string;
-      count?: number;
-      meta?: Record<string, any>;
-    };
-    const items: FeedItem[] = [];
+    const items: ProfileFeedItem[] = [];
 
-    const recentConvos = args.team_id
-      ? await ctx.db
+    // Messages are the spine of the feed, so we paginate over the user's
+    // conversations (newest first) and pull each page's user-authored messages.
+    // The activity overlay (tasks/docs/commits) is appended only on the first
+    // page so it sits at the top without re-fetching on every "load more".
+    const isFirstPage = !paginationOpts.cursor;
+    const convoQuery = args.team_id
+      ? ctx.db
           .query("conversations")
           .withIndex("by_team_user_updated", (q: any) =>
             q.eq("team_id", args.team_id).eq("user_id", args.user_id)
           )
           .order("desc")
-          .take(30)
-      : await ctx.db
+      : ctx.db
           .query("conversations")
           .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
-          .order("desc")
-          .take(30);
+          .order("desc");
+    const convoPage = await convoQuery.paginate(paginationOpts);
 
-    const NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "Your task is to create a detailed summary", "Full transcript available at:", "Read the output file to retrieve the result:"];
+    // Privacy gate: (team_id, user_id) is routing, not visibility. Drop private
+    // conversations so a teammate's profile never exposes their message text.
+    const isVisible = await getProfileVisibilityPredicate(ctx, userId, args.user_id, args.team_id);
+    const recentConvos = convoPage.page.filter(isVisible);
+
+    const NOISE_PREFIXES = ["[Request interrupted", "This session is being continued", "Your task is to create a detailed summary", "Full transcript available at:", "Read the output file to retrieve the result:", "[Codecast import]"];
     const COMMAND_RE = /^(<command-name>|<command-message>|<local-command-stdout>|<local-command-stderr>|Caveat:|\/[a-z][\w-]*)/i;
     const SKILL_RE = /Base directory for this skill:\s/;
     function stripTags(s: string): string {
@@ -1195,6 +1626,10 @@ export const getUserProfileFeed = query({
       if (!content) return true;
       const t = content.trim();
       if (!t) return true;
+      // Session→session messages (cast send) land as user-role turns wrapped in
+      // <session-message from="..">. They're agent coordination, not something the
+      // human typed into this session — drop them from "what I wrote".
+      if (t.startsWith("<session-message")) return true;
       if (COMMAND_RE.test(t)) return true;
       if (SKILL_RE.test(t)) return true;
       if (t.startsWith("<task-notification>") && !t.replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "").trim()) return true;
@@ -1239,6 +1674,7 @@ export const getUserProfileFeed = query({
       }
     }
 
+    if (isFirstPage) {
     const tasks = await ctx.db
       .query("tasks")
       .withIndex("by_user_id", (q: any) => q.eq("user_id", args.user_id))
@@ -1306,11 +1742,20 @@ export const getUserProfileFeed = query({
         },
       });
     }
+    }
 
     items.sort((a, b) => b.timestamp - a.timestamp);
-    return items.slice(0, limit);
+    if (legacy) return items.slice(0, legacyLimit);
+    return { page: items, isDone: convoPage.isDone, continueCursor: convoPage.continueCursor };
   },
-});
+  // The runtime validator above also tolerates legacy {limit} callers, but the
+  // advertised type is paginated-only so usePaginatedQuery accepts it and new
+  // callers are steered to paginationOpts.
+}) as unknown as RegisteredQuery<
+  "public",
+  { user_id: Id<"users">; team_id?: Id<"teams">; paginationOpts: PaginationOptions },
+  Promise<PaginationResult<ProfileFeedItem>>
+>;
 
 export const getTeamMembers = query({
   args: {
@@ -1569,25 +2014,64 @@ async function getMatchingConversationsPage(
   return { page: matches, isDone: page.isDone, continueCursor: page.continueCursor };
 }
 
+// Visit every conversation matching `pathPrefix` (git_root first, then
+// project_path-only rows), calling `visit` until it returns false. Built on
+// `.take()` rather than `.paginate()`: Convex allows only ONE paginated query
+// per query/mutation execution, and this scan needs two index ranges — the
+// paginate version threw "ran multiple paginated queries" the moment the
+// git_root range didn't resolve the call, which silently broke every
+// delete-by-path flow for path-only conversations. take() has no such limit.
+// A batch that fills up is retried from the range start with double the size
+// (value-boundary cursors can't advance safely through runs of identical path
+// values), capped so one call can't blow the transaction read budget; ranges
+// larger than the cap are handled by the callers' delete→rescan loop.
+export async function scanConversationsForPath(
+  ctx: any,
+  userId: any,
+  pathPrefix: string,
+  visit: (conv: any) => boolean,
+) {
+  const MAX_TAKE = 1024;
+  const seen = new Set<string>();
+  for (const source of ["git_root", "project_path"] as const) {
+    const field = source === "git_root" ? "git_root" : "project_path";
+    const index = source === "git_root" ? "by_user_git_root" : "by_user_project_path";
+    let take = 128;
+    while (true) {
+      const rows = await ctx.db
+        .query("conversations")
+        .withIndex(index, (q: any) =>
+          q
+            .eq("user_id", userId)
+            .gte(field, pathPrefix)
+            .lt(field, getPathPrefixUpperBound(pathPrefix))
+        )
+        .take(take);
+      for (const conv of rows) {
+        if (source === "project_path" && conv.git_root) continue;
+        if (!matchesPathPrefix(getConversationProjectPath(conv), pathPrefix)) continue;
+        const id = conv._id.toString();
+        if (seen.has(id)) continue;
+        seen.add(id);
+        if (!visit(conv)) return;
+      }
+      if (rows.length < take || take >= MAX_TAKE) break;
+      take *= 2;
+    }
+  }
+}
+
 async function findNextConversationForPath(
   ctx: any,
   userId: any,
   pathPrefix: string,
 ) {
-  for (const source of ["git_root", "project_path"] as const) {
-    let cursor: string | undefined;
-    while (true) {
-      const page = await getMatchingConversationsPage(ctx, userId, pathPrefix, source, cursor, 16);
-      if (page.page.length > 0) {
-        return page.page[0];
-      }
-      if (page.isDone) {
-        break;
-      }
-      cursor = page.continueCursor;
-    }
-  }
-  return null;
+  let found: any = null;
+  await scanConversationsForPath(ctx, userId, pathPrefix, (conv) => {
+    found = conv;
+    return false;
+  });
+  return found;
 }
 
 // Queue a full re-resolution of every conversation whose path matches
@@ -1839,26 +2323,11 @@ async function countConversationsForPathInternal(
   userId: any,
   pathPrefix: string,
 ) {
-  const seen = new Set<string>();
   let count = 0;
-
-  for (const source of ["git_root", "project_path"] as const) {
-    let cursor: string | undefined;
-    while (true) {
-      const page = await getMatchingConversationsPage(ctx, userId, pathPrefix, source, cursor, 32);
-      for (const conv of page.page) {
-        const id = conv._id.toString();
-        if (seen.has(id)) continue;
-        seen.add(id);
-        count++;
-      }
-      if (page.isDone) {
-        break;
-      }
-      cursor = page.continueCursor;
-    }
-  }
-
+  await scanConversationsForPath(ctx, userId, pathPrefix, () => {
+    count++;
+    return true;
+  });
   return count;
 }
 

@@ -1,16 +1,19 @@
 "use client";
-import { useMemo, useState, useRef, useEffect } from "react";
-import { useQuery } from "convex/react";
+import { useMemo, useState } from "react";
+import { useQuery, usePaginatedQuery } from "convex/react";
+import { AppLoader } from "../../../components/AppLoader";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { DashboardLayout } from "../../../components/DashboardLayout";
 import { useParams, useRouter } from "next/navigation";
 import { useInboxStore } from "../../../store/inboxStore";
-import { useTheme } from "../../../components/ThemeProvider";
 import Link from "next/link";
-import { FileText, CheckCircle2, Circle, CircleDot, CircleDotDashed, XCircle, MessageSquare } from "lucide-react";
+import { FileText, CheckCircle2, Circle, CircleDot, CircleDotDashed, XCircle, User, Activity, CornerUpRight } from "lucide-react";
+import { SegmentedToggle } from "../../../components/SegmentedToggle";
 import { getLabelColor } from "../../../lib/labelColors";
 import { cleanContent } from "../../../lib/conversationProcessor";
+import { ActivityHeatmap } from "../../../components/ActivityHeatmap";
+import { TimelineCharts, fmtK, fmtDayLabel, type PunchRow } from "../../../components/ActivityCharts";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 
 export default function UserProfilePage() {
@@ -53,16 +56,14 @@ function ProfileSkeleton() {
 
 const NOISE_VERBS = new Set(["started", "finished"]);
 
-function fmtK(n: number): string {
-  if (n >= 1000) return `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k`;
-  return String(n);
-}
-
 function UserProfileContent() {
   const params = useParams();
   const username = params.username as string;
   const router = useRouter();
   const [view, setView] = useState<"feed" | "timeline" | "work">("feed");
+  // Default feed shows only what the user explicitly typed (their messages).
+  // The "All" segment re-adds automated activity: tasks, docs, commits, PRs.
+  const [showAll, setShowAll] = useState(false);
 
   const profileUser = useQuery(api.users.getUserByUsername, { username });
   const currentUser = useQuery(api.users.getCurrentUser);
@@ -79,9 +80,16 @@ function UserProfileContent() {
     profileUser?._id ? { user_id: profileUser._id, team_id: scopeTeamId } : "skip"
   );
 
-  const feed = useQuery(
+  // Stable args identity so usePaginatedQuery doesn't reset to page 1 on every
+  // re-render (incl. unrelated HMR churn) and lose accumulated "load more" pages.
+  const feedArgs = useMemo(
+    () => (profileUser?._id ? { user_id: profileUser._id, team_id: scopeTeamId } : "skip"),
+    [profileUser?._id, scopeTeamId]
+  );
+  const { results: feed, status: feedStatus, loadMore } = usePaginatedQuery(
     api.users.getUserProfileFeed,
-    profileUser?._id ? { user_id: profileUser._id, team_id: scopeTeamId, limit: 200 } : "skip"
+    feedArgs,
+    { initialNumItems: 15 }
   );
 
   const userTasks = useQuery(
@@ -93,8 +101,16 @@ function UserProfileContent() {
     profileUser?._id ? { user_id: profileUser._id, limit: 20 } : "skip"
   );
 
-  const filtered = useMemo(() => feed?.filter((i: any) => !NOISE_VERBS.has(i.verb)) ?? null, [feed]);
-  const days = useMemo(() => filtered ? groupByDay(filtered) : [], [filtered]);
+  const filtered = useMemo(() => {
+    return feed
+      .filter((i: any) => {
+        if (NOISE_VERBS.has(i.verb)) return false;
+        if (!showAll && i.type !== "message") return false; // default: only user-typed messages
+        return true;
+      })
+      .sort((a: any, b: any) => b.timestamp - a.timestamp); // keep newest-first across loaded pages
+  }, [feed, showAll]);
+  const days = useMemo(() => groupByDay(filtered), [filtered]);
   const groupedDays = useMemo(() => days.map(([date, items]) => [date, groupItemsBySessions(items)] as const), [days]);
 
   const heatmap = useQuery(
@@ -103,10 +119,20 @@ function UserProfileContent() {
   );
 
   const heatmapData = useMemo(() => heatmap || null, [heatmap]);
-  const timelineData = useMemo(() => heatmapData || [], [heatmapData]);
 
   if (!currentUser || profileUser === undefined) return <ProfileSkeleton />;
-  if (profileUser === null) return <div className="flex items-center justify-center min-h-[40vh]"><p className="text-sol-base01">User not found.</p></div>;
+  if (profileUser === null) return (
+    <div className="flex flex-col items-center justify-center gap-2 min-h-[40vh] text-center px-4">
+      <p className="text-sol-base01 text-sm">User not found.</p>
+      <p className="text-sol-base01/45 text-xs max-w-xs">This profile link may be out of date — the account was likely renamed or removed.</p>
+      <div className="flex items-center gap-3 mt-1 text-xs">
+        {currentUser?.github_username || currentUser?._id ? (
+          <Link href={`/team/${currentUser.github_username || currentUser._id}`} className="text-sol-cyan/70 hover:text-sol-cyan underline underline-offset-2">Your profile</Link>
+        ) : null}
+        <Link href="/inbox" className="text-sol-base01/60 hover:text-sol-text underline underline-offset-2">Back to inbox</Link>
+      </div>
+    </div>
+  );
 
   const dd = profileUser.daemon_last_seen ? Date.now() - profileUser.daemon_last_seen : Infinity;
   const online = dd < 60000;
@@ -163,6 +189,18 @@ function UserProfileContent() {
         <button onClick={() => setView("feed")} className={`px-3 py-1.5 text-[10px] font-semibold tracking-wide transition-colors border-b-2 ${view === "feed" ? "text-sol-text border-sol-yellow/60" : "text-sol-base01/35 border-transparent hover:text-sol-base01/60"}`}>Feed</button>
         <button onClick={() => setView("work")} className={`px-3 py-1.5 text-[10px] font-semibold tracking-wide transition-colors border-b-2 ${view === "work" ? "text-sol-text border-sol-violet/60" : "text-sol-base01/35 border-transparent hover:text-sol-base01/60"}`}>Work</button>
         <button onClick={() => setView("timeline")} className={`px-3 py-1.5 text-[10px] font-semibold tracking-wide transition-colors border-b-2 ${view === "timeline" ? "text-sol-text border-sol-cyan/60" : "text-sol-base01/35 border-transparent hover:text-sol-base01/60"}`}>Timeline</button>
+        {view === "feed" && (
+          <div className="ml-auto pb-1 scale-[0.82] origin-bottom-right">
+            <SegmentedToggle
+              value={showAll ? "all" : "mine"}
+              onChange={(k) => setShowAll(k === "all")}
+              items={[
+                { key: "mine", icon: User, label: "Typed", title: "Only messages you typed" },
+                { key: "all", icon: Activity, label: "All", title: "All activity — tasks, docs, commits, PRs" },
+              ]}
+            />
+          </div>
+        )}
       </div>
 
       {/* Feed view */}
@@ -171,10 +209,10 @@ function UserProfileContent() {
           {groupedDays.map(([date, groups]) => (
             <div key={date}>
               <DayHeader date={date} count={groups.reduce((n: number, g: SessionGroupData | EventItem) => n + (g.type === "session" ? g.messages.length : 1), 0)} items={groups.flatMap((g: SessionGroupData | EventItem) => g.type === "session" ? g.messages : [g.item])} />
-              <div className="space-y-1">
+              <div className="space-y-2">
                 {groups.map((group: SessionGroupData | EventItem, gi: number) =>
                   group.type === "session" ? (
-                    <SessionGroup key={`sg-${group.sessionId}-${gi}`} group={group} router={router} />
+                    <SessionGroup key={`sg-${group.sessionId}-${gi}`} group={group} router={router} avatarUrl={profileUser.github_avatar_url} displayName={profileUser.name} />
                   ) : (
                     <EventRow key={`ev-${group.item.timestamp}-${gi}`} item={group.item} router={router} />
                   )
@@ -182,8 +220,25 @@ function UserProfileContent() {
               </div>
             </div>
           ))}
-          {filtered && filtered.length === 0 && <div className="text-[11px] text-sol-base01/30 text-center py-16">{isOwn ? "No recent activity" : "No recent activity in this workspace"}</div>}
-          {!filtered && <div className="text-[11px] text-sol-base01/20 text-center py-16 animate-pulse">Loading...</div>}
+          {feedStatus !== "LoadingFirstPage" && filtered.length === 0 && (
+            <div className="text-[11px] text-sol-base01/30 text-center py-16">
+              {!showAll
+                ? <>No messages typed yet. <button onClick={() => setShowAll(true)} className="text-sol-cyan/50 hover:text-sol-cyan underline underline-offset-2 transition-colors">Show all activity</button></>
+                : (isOwn ? "No recent activity" : "No recent activity in this workspace")}
+            </div>
+          )}
+          {feedStatus === "LoadingFirstPage" && <AppLoader className="min-h-0 bg-transparent py-16" size={28} />}
+          {(feedStatus === "CanLoadMore" || feedStatus === "LoadingMore") && (
+            <div className="flex justify-center py-5">
+              <button
+                onClick={() => loadMore(20)}
+                disabled={feedStatus === "LoadingMore"}
+                className="text-[10.5px] font-medium tracking-wide text-sol-base01/50 hover:text-sol-text border border-sol-border/30 hover:border-sol-border/60 rounded-full px-4 py-1.5 transition-colors disabled:opacity-50"
+              >
+                {feedStatus === "LoadingMore" ? "Loading…" : "Load more"}
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -205,9 +260,8 @@ function UserProfileContent() {
         </div>
       )}
 
-      {/* Timeline chart view */}
-      {view === "timeline" && timelineData.length > 0 && <TimelineChart data={timelineData} />}
-      {view === "timeline" && timelineData.length === 0 && <div className="text-[11px] text-sol-base01/30 text-center py-16">No session data</div>}
+      {/* Timeline chart view — hour-granular punchcard + per-day series */}
+      {view === "timeline" && <TimelineSection userId={profileUser._id} teamId={scopeTeamId} />}
     </div>
   );
 }
@@ -216,255 +270,20 @@ function Sep() {
   return <span className="text-sol-base01/15 select-none">&middot;</span>;
 }
 
-/* ─── Activity Heatmap ─── */
-
-const HEAT_COLORS_LIGHT = ["#eee8d5", "#c3dfa0", "#8fbc5c", "#5f9e2f", "#3d7a1a"];
-const HEAT_COLORS_DARK = ["#073642", "#2d5016", "#3d7a1a", "#5f9e2f", "#8fbc5c"];
-
-function ActivityHeatmap({ data }: { data: any[] }) {
-  const { theme } = useTheme();
-  const colors = theme === "dark" ? HEAT_COLORS_DARK : HEAT_COLORS_LIGHT;
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [containerW, setContainerW] = useState(800);
-  const [tooltip, setTooltip] = useState<{ x: number; y: number; text: string } | null>(null);
-
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const measure = () => setContainerW(el.clientWidth);
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
-  // Fit a full year of weeks to the container width at a compact cell size
-  const gap = 2;
-  const weeks = Math.max(20, Math.min(53, Math.floor((containerW - gap) / (13 + gap))));
-
-  const { grid, maxHours, totalHours, totalSessions, months } = useMemo(() => {
-    const map: Record<string, { hours: number; sessions: number }> = {};
-    let max = 0, totalH = 0, totalS = 0;
-    for (const d of data) {
-      map[d.date] = { hours: d.hours, sessions: d.sessions };
-      if (d.hours > max) max = d.hours;
-      totalH += d.hours;
-      totalS += d.sessions;
-    }
-    if (max === 0) max = 1;
-
-    const today = new Date(); today.setHours(0, 0, 0, 0);
-    const startDay = new Date(today);
-    startDay.setDate(startDay.getDate() - startDay.getDay() - (weeks - 1) * 7);
-
-    const rows: Array<Array<{ date: string; hours: number; sessions: number }>> = [];
-    for (let w = 0; w < weeks; w++) {
-      const week: typeof rows[0] = [];
-      for (let d = 0; d < 7; d++) {
-        const cur = new Date(startDay); cur.setDate(cur.getDate() + w * 7 + d);
-        const key = `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, "0")}-${String(cur.getDate()).padStart(2, "0")}`;
-        week.push({ date: key, ...(map[key] || { hours: 0, sessions: 0 }) });
-      }
-      rows.push(week);
-    }
-
-    const monthLabels: { label: string; col: number }[] = [];
-    const mn = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    let lastM = -1;
-    for (let w = 0; w < rows.length; w++) {
-      const d = new Date(rows[w][0].date + "T12:00:00");
-      if (d.getMonth() !== lastM) { lastM = d.getMonth(); monthLabels.push({ label: mn[d.getMonth()], col: w }); }
-    }
-
-    return { grid: rows, maxHours: max, totalHours: totalH, totalSessions: totalS, months: monthLabels };
-  }, [data, weeks]);
-
-  // Exact cell size to fill the container width across the chosen number of weeks
-  const cellSize = Math.min(16, Math.max(8, Math.floor((containerW - grid.length * gap) / grid.length)));
-  const step = cellSize + gap;
-  const svgW = grid.length * step;
-  const svgH = 7 * step;
-
-  const getColor = (hours: number) => {
-    if (hours <= 0) return colors[0];
-    const r = hours / maxHours;
-    if (r < 0.15) return colors[1];
-    if (r < 0.4) return colors[2];
-    if (r < 0.7) return colors[3];
-    return colors[4];
-  };
-
-  return (
-    <div className="mt-2 mb-1 w-full">
-      <div className="flex items-baseline justify-between mb-1">
-        <span className="text-[9px] text-sol-base01/30 uppercase tracking-widest font-bold">Agent Activity</span>
-        <span className="text-[9px] text-sol-base01/35 tabular-nums">{totalHours.toFixed(0)}h across {totalSessions} sessions</span>
-      </div>
-      <div ref={containerRef} className="w-full overflow-x-auto relative" onMouseLeave={() => setTooltip(null)}>
-        {/* Month labels */}
-        <div className="flex" style={{ width: svgW, height: 14 }}>
-          {months.map((m, i) => (
-            <span key={i} className="text-[9px] text-sol-base01/30 select-none absolute" style={{ left: m.col * step }}>{m.label}</span>
-          ))}
-        </div>
-        {/* SVG grid */}
-        <svg width={svgW} height={svgH} className="block">
-          {grid.map((week, w) => week.map((cell, d) => (
-            <rect
-              key={`${w}-${d}`}
-              x={w * step} y={d * step}
-              width={cellSize} height={cellSize}
-              rx={2}
-              fill={getColor(cell.hours)}
-              className="cursor-crosshair"
-              onMouseEnter={(e) => {
-                const r = (e.target as SVGRectElement).getBoundingClientRect();
-                setTooltip({ x: r.left + r.width / 2, y: r.top - 4, text: `${cell.date}: ${cell.hours.toFixed(1)}h, ${cell.sessions} sessions` });
-              }}
-              onMouseLeave={() => setTooltip(null)}
-            />
-          )))}
-        </svg>
-        {/* Legend */}
-        <div className="flex items-center gap-1 mt-1.5">
-          <span className="text-[8px] text-sol-base01/25">Less</span>
-          {colors.map((c, i) => <div key={i} style={{ background: c, width: 10, height: 10, borderRadius: 2 }} />)}
-          <span className="text-[8px] text-sol-base01/25">More</span>
-        </div>
-        {/* Tooltip */}
-        {tooltip && (
-          <div className="fixed z-50 px-2 py-1 bg-sol-base03 text-sol-base2 text-[10px] rounded shadow-lg pointer-events-none" style={{ left: tooltip.x, top: tooltip.y, transform: "translate(-50%, -100%)" }}>
-            {tooltip.text}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/* ─── Timeline Chart (zoomable SVG) ─── */
-
-function TimelineChart({ data }: { data: Array<{ date: string; hours: number; sessions: number }> }) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [containerW, setContainerW] = useState(800);
-  const [hovered, setHovered] = useState<{ idx: number; x: number; y: number } | null>(null);
-
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const measure = () => setContainerW(el.clientWidth);
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
-  const sorted = useMemo(() => [...data].sort((a, b) => a.date.localeCompare(b.date)), [data]);
-
-  const allDays = useMemo(() => {
-    if (sorted.length === 0) return [];
-    const map: Record<string, { hours: number; sessions: number }> = {};
-    for (const d of sorted) map[d.date] = d;
-    const start = new Date(sorted[0].date + "T12:00:00");
-    const end = new Date(); end.setHours(0, 0, 0, 0);
-    const result: Array<{ date: string; hours: number; sessions: number }> = [];
-    const cur = new Date(start);
-    while (cur <= end) {
-      const key = `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, "0")}-${String(cur.getDate()).padStart(2, "0")}`;
-      const entry = map[key];
-      result.push(entry ? { date: key, hours: entry.hours, sessions: entry.sessions } : { date: key, hours: 0, sessions: 0 });
-      cur.setDate(cur.getDate() + 1);
-    }
-    return result;
-  }, [sorted]);
-
-  const maxH = useMemo(() => Math.max(...allDays.map(d => d.hours), 1), [allDays]);
-
-  if (allDays.length === 0) return <div className="text-[11px] text-sol-base01/30 text-center py-16">No data</div>;
-
-  const chartH = 180;
-  const padTop = 12;
-  const padBot = 28;
-  const padLeft = 32;
-  const padRight = 8;
-  const plotW = containerW - padLeft - padRight;
-  const plotH = chartH - padTop - padBot;
-  const stepX = plotW / Math.max(allDays.length - 1, 1);
-
-  const toX = (i: number) => padLeft + i * stepX;
-  const toY = (h: number) => padTop + plotH - (h / maxH) * plotH;
-
-  const linePath = allDays.map((d, i) => `${i === 0 ? "M" : "L"}${toX(i).toFixed(1)},${toY(d.hours).toFixed(1)}`).join(" ");
-  const areaPath = `${linePath} L${toX(allDays.length - 1).toFixed(1)},${toY(0).toFixed(1)} L${toX(0).toFixed(1)},${toY(0).toFixed(1)} Z`;
-
-  const yTicks = [0, maxH * 0.25, maxH * 0.5, maxH * 0.75, maxH];
-
-  const monthLabels = useMemo(() => {
-    const labels: { label: string; x: number }[] = [];
-    const mn = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    let lastM = -1;
-    for (let i = 0; i < allDays.length; i++) {
-      const d = new Date(allDays[i].date + "T12:00:00");
-      if (d.getMonth() !== lastM) { lastM = d.getMonth(); labels.push({ label: mn[d.getMonth()], x: toX(i) }); }
-    }
-    return labels;
-  }, [allDays, containerW]);
-
-  return (
-    <div className="mt-3">
-      <div className="flex items-baseline justify-between mb-2">
-        <span className="text-[9px] text-sol-base01/30 uppercase tracking-widest font-bold">Hours Per Day</span>
-        <span className="text-[9px] text-sol-base01/25 tabular-nums">{allDays.length} days</span>
-      </div>
-      <div ref={containerRef} className="w-full relative" onMouseLeave={() => setHovered(null)}>
-        <svg width={containerW} height={chartH} className="block">
-          {/* Y grid lines */}
-          {yTicks.map((v, i) => {
-            const y = toY(v);
-            return (
-              <g key={i}>
-                <line x1={padLeft} x2={containerW - padRight} y1={y} y2={y} stroke="currentColor" className="text-sol-border/8" strokeWidth={0.5} strokeDasharray={i === 0 ? "none" : "2,3"} />
-                <text x={padLeft - 4} y={y + 3} textAnchor="end" className="fill-sol-base01/25" style={{ fontSize: 8 }}>{v.toFixed(0)}h</text>
-              </g>
-            );
-          })}
-          {/* X month labels */}
-          {monthLabels.map((m, i) => (
-            <text key={i} x={m.x} y={chartH - 6} textAnchor="start" className="fill-sol-base01/25" style={{ fontSize: 9 }}>{m.label}</text>
-          ))}
-          {/* Area fill */}
-          <path d={areaPath} fill="#859900" opacity={0.12} />
-          {/* Line */}
-          <path d={linePath} fill="none" stroke="#859900" strokeWidth={1.5} opacity={0.7} />
-          {/* Data points on active days */}
-          {allDays.map((d, i) => d.sessions > 0 ? (
-            <circle
-              key={i}
-              cx={toX(i)} cy={toY(d.hours)}
-              r={d.sessions > 10 ? 3 : d.sessions > 3 ? 2.5 : 2}
-              fill="#859900"
-              opacity={hovered?.idx === i ? 1 : 0.6}
-              className="cursor-crosshair"
-              onMouseEnter={(e) => {
-                const r = (e.target as SVGCircleElement).getBoundingClientRect();
-                setHovered({ idx: i, x: r.left + r.width / 2, y: r.top });
-              }}
-            />
-          ) : null)}
-          {/* Hover vertical line */}
-          {hovered && (
-            <line x1={toX(hovered.idx)} x2={toX(hovered.idx)} y1={padTop} y2={padTop + plotH} stroke="#859900" strokeWidth={0.5} opacity={0.4} strokeDasharray="3,3" />
-          )}
-        </svg>
-        {/* Tooltip */}
-        {hovered && (
-          <div className="fixed z-50 px-2 py-1 bg-sol-base03 text-sol-base2 text-[10px] rounded shadow-lg pointer-events-none whitespace-nowrap" style={{ left: hovered.x, top: hovered.y - 4, transform: "translate(-50%, -100%)" }}>
-            {allDays[hovered.idx].date}: {allDays[hovered.idx].hours.toFixed(1)}h, {allDays[hovered.idx].sessions} sessions
-          </div>
-        )}
-      </div>
-    </div>
-  );
+/* ─── Timeline tab ─── */
+// Chart components live in components/ActivityCharts (shared with the public
+// profile). This wrapper just runs the authed punchcard query.
+function TimelineSection({ userId, teamId }: { userId: Id<"users">; teamId: Id<"teams"> | undefined }) {
+  // Hour-of-day cells only mean something in the viewer's local clock, so the
+  // server buckets with our tz offset (one offset for the whole range).
+  const tzOffset = useMemo(() => new Date().getTimezoneOffset(), []);
+  const punchcard = useQuery(api.users.getUserActivityPunchcard, {
+    user_id: userId,
+    team_id: teamId,
+    days: 371,
+    tz_offset_minutes: tzOffset,
+  }) as PunchRow[] | undefined;
+  return <TimelineCharts punchcard={punchcard} />;
 }
 
 
@@ -604,9 +423,9 @@ function groupItemsBySessions(items: any[]): (SessionGroupData | EventItem)[] {
   return result;
 }
 
-function TimeGutter({ ts }: { ts?: number }) {
+function TimeGutter({ ts, top }: { ts?: number; top?: boolean }) {
   return (
-    <span className="text-[9px] text-sol-base01/20 tabular-nums w-10 text-right flex-shrink-0 select-none pr-2 self-center">
+    <span className={`text-[9px] text-sol-base01/20 tabular-nums w-10 text-right flex-shrink-0 select-none pr-2 ${top ? "self-start mt-[3px]" : "self-center"}`}>
       {ts ? fmtTime(ts) : ""}
     </span>
   );
@@ -619,80 +438,62 @@ function oneLineOf(preview?: string): string | null {
   return c.replace(/\s+/g, " ").trim() || null;
 }
 
-function SessionGroup({ group, router }: { group: SessionGroupData; router: ReturnType<typeof useRouter> }) {
+// A small round avatar for the feed — the profile owner, making it explicit that
+// the messages below are theirs (i.e. "you sent this").
+function FeedAvatar({ url, name }: { url?: string; name?: string }) {
+  return url ? (
+    <img src={url} alt="" className="w-[18px] h-[18px] rounded-full flex-shrink-0 mt-px ring-1 ring-sol-border/25 object-cover" />
+  ) : (
+    <div className="w-[18px] h-[18px] rounded-full flex-shrink-0 mt-px bg-sol-base02 ring-1 ring-sol-border/25 flex items-center justify-center text-[9px] font-semibold text-sol-text/80">
+      {(name || "?")[0]?.toUpperCase()}
+    </div>
+  );
+}
+
+// One conversation's worth of messages YOU sent, framed as "[you] ↱ to <session>"
+// so authorship (the avatar) and destination (the session) are both unmistakable.
+function SessionGroup({ group, router, avatarUrl, displayName }: { group: SessionGroupData; router: ReturnType<typeof useRouter>; avatarUrl?: string; displayName?: string }) {
   const href = `/conversation/${group.sessionId}`;
   const meta = group.meta;
   const project = meta.project && meta.project !== "unknown" ? meta.project : null;
-  const duration = meta.duration_ms ? fmtDuration(meta.duration_ms) : null;
-  const msgCount = meta.message_count;
   const isLive = meta.status === "active" && group.messages.length > 0 && (Date.now() - group.messages[0].timestamp < 3600000);
-  const lastTs = group.messages[0]?.timestamp;
   const displayTitle = group.title === "Untitled" && project ? project : group.title;
-  const iconColor = isLive ? "text-sol-green" : meta.status === "idle" ? "text-sol-yellow/50" : "text-sol-blue/40";
-
-  // duration_ms is wall-clock across the session's whole lifetime; cap absurd values
-  const saneDuration = meta.duration_ms && meta.duration_ms < 24 * 3600000 ? duration : null;
-
-  const Meta = ({ showCount = true }: { showCount?: boolean }) => (
-    <>
-      {isLive && <span className="text-[8px] font-bold text-sol-green uppercase tracking-widest flex-shrink-0">live</span>}
-      <span className="flex-1" />
-      {project && project !== displayTitle && <span className="text-[9px] font-mono text-sol-cyan/40 flex-shrink-0">{project}</span>}
-      {showCount && msgCount > 0 && <span className="text-[9px] text-sol-base01/25 tabular-nums flex-shrink-0">{msgCount} msg</span>}
-      {saneDuration && <span className="text-[9px] text-sol-green/30 tabular-nums flex-shrink-0">{saneDuration}</span>}
-    </>
-  );
-
-  // Single message → collapse to one inline row: the message is primary, title is a dim trailing chip
-  if (group.messages.length === 1) {
-    const line = oneLineOf(group.messages[0].preview);
-    const titleEchoesMsg = line && displayTitle.toLowerCase().startsWith(line.slice(0, 18).toLowerCase());
-    return (
-      <div className="flex items-baseline pr-2 rounded hover:bg-sol-blue/[0.045] transition-colors cursor-pointer group" onClick={() => router.push(href)}>
-        <TimeGutter ts={lastTs} />
-        <div className="flex items-baseline gap-1.5 min-w-0 flex-1">
-          <MessageSquare className={`w-3 h-3 flex-shrink-0 self-center ${iconColor}`} />
-          {line
-            ? <span className="text-[11.5px] text-sol-text/65 truncate group-hover:text-sol-text/90 transition-colors">{line}</span>
-            : <span className="text-[12px] font-medium text-sol-text/70 truncate">{displayTitle}</span>}
-          {line && !titleEchoesMsg && <span className="text-[9px] text-sol-base01/30 truncate max-w-[160px] flex-shrink-0">in {displayTitle}</span>}
-          <Meta showCount={false} />
-        </div>
-      </div>
-    );
-  }
+  const accent = getLabelColor(group.sessionId);
+  const lastTs = group.messages[0]?.timestamp;
 
   return (
-    <div className={`rounded-md ${isLive ? "bg-sol-green/[0.02]" : ""}`}>
-      <div className="flex items-baseline pr-2 rounded hover:bg-sol-bg-alt/25 transition-colors cursor-pointer group" onClick={() => router.push(href)}>
-        <TimeGutter ts={lastTs} />
-        <div className="flex items-baseline gap-1.5 min-w-0 flex-1">
-          <MessageSquare className={`w-3 h-3 flex-shrink-0 self-center ${iconColor}`} />
-          <span className="text-[12px] font-semibold text-sol-text/75 truncate group-hover:text-sol-text transition-colors">{displayTitle}</span>
-          <Meta />
+    <div className="flex gap-2.5">
+      <FeedAvatar url={avatarUrl} name={displayName} />
+      <div className="min-w-0 flex-1">
+        {/* destination header: "↱ to <session>" */}
+        <div className="flex items-center gap-1.5 pr-2 cursor-pointer group/h" onClick={() => router.push(href)}>
+          <CornerUpRight className="w-3 h-3 flex-shrink-0 text-sol-base01/35" />
+          <span className="text-[9px] font-semibold uppercase tracking-wider text-sol-base01/35 flex-shrink-0">to</span>
+          <span className={`text-[11px] font-semibold truncate ${accent.text} opacity-90 group-hover/h:opacity-100 transition-opacity`}>{displayTitle}</span>
+          {isLive && <span className="text-[8px] font-bold text-sol-green uppercase tracking-widest flex-shrink-0">live</span>}
+          <span className="flex-1" />
+          {project && project !== displayTitle && <span className="text-[9px] font-mono text-sol-base01/30 flex-shrink-0">{project}</span>}
+          {lastTs && <span className="text-[9px] text-sol-base01/30 tabular-nums flex-shrink-0">{fmtTime(lastTs)}</span>}
         </div>
-      </div>
-      <div className="pb-0.5">
-        {group.messages.map((msg, i) => (
-          <MessageRow key={`${msg.timestamp}-${i}`} item={msg} router={router} />
-        ))}
+        {/* the message(s) you sent — accent spine ties them to the conversation */}
+        <div className={`mt-1 space-y-1.5 border-l-2 pl-3 ${accent.border}`}>
+          {group.messages.map((msg, i) => (
+            <MessageRow key={`${msg.timestamp}-${i}`} item={msg} router={router} />
+          ))}
+        </div>
       </div>
     </div>
   );
 }
 
+// One message you sent, rendered in full.
 function MessageRow({ item, router }: { item: any; router: ReturnType<typeof useRouter> }) {
-  const href = `/conversation/${item.entity_id}`;
   const oneLine = useMemo(() => oneLineOf(item.preview), [item.preview]);
   if (!oneLine) return null;
 
   return (
-    <div className="flex items-baseline pr-2 rounded hover:bg-sol-blue/[0.05] transition-colors cursor-pointer" onClick={() => router.push(href)}>
-      <TimeGutter ts={item.timestamp} />
-      <div className="flex items-baseline gap-1.5 min-w-0 flex-1 pl-[18px]">
-        <span className="text-sol-blue/25 flex-shrink-0 text-[11px] leading-none select-none translate-y-[1px]">›</span>
-        <span className="text-[11.5px] text-sol-text/55 truncate flex-1 leading-snug">{oneLine}</span>
-      </div>
+    <div className="rounded hover:bg-sol-blue/[0.05] -mx-1.5 px-1.5 py-[2px] cursor-pointer transition-colors" onClick={() => router.push(`/conversation/${item.entity_id}`)}>
+      <span className="text-[13px] text-sol-text/95 whitespace-normal break-words leading-relaxed">{oneLine}</span>
     </div>
   );
 }
@@ -764,19 +565,6 @@ function groupByDay(items: any[]): [string, any[]][] {
     (groups[key] ||= []).push(item);
   }
   return Object.entries(groups).sort(([a], [b]) => b.localeCompare(a));
-}
-
-function fmtDayLabel(dateStr: string): string {
-  const [y, m, d] = dateStr.split("-").map(Number);
-  const date = new Date(y, m - 1, d);
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  const diff = today.getTime() - date.getTime();
-  const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-  if (diff < 86400000) return `Today, ${dayNames[date.getDay()]}`;
-  if (diff < 172800000) return `Yesterday, ${dayNames[date.getDay()]}`;
-  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  return `${days[date.getDay()]} ${months[date.getMonth()]} ${date.getDate()}`;
 }
 
 function fmtTime(ts: number): string {

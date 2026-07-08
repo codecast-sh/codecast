@@ -1,30 +1,257 @@
 "use client";
 import { ReactNode, useState, useCallback, useMemo, useEffect, useRef } from "react";
-import { useRouter } from "next/navigation";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { useRouter, usePathname } from "next/navigation";
 import { useWatchEffect } from "../hooks/useWatchEffect";
-import { FilterDropdown } from "./FilterDropdown";
+import { formatShortcutLabel } from "../shortcuts";
+import { FilterDropdown, FilterOptionList } from "./FilterDropdown";
 import { useInboxStore } from "../store/inboxStore";
 import { toast } from "sonner";
-import { KeyCap } from "./KeyboardShortcutsHelp";
+import { SyncProgressBadge } from "./SyncProgressBadge";
 import {
   Plus,
   SlidersHorizontal,
+  ListFilter,
   X,
   Command,
   Check,
   Search,
   Bookmark,
+  Link2,
+  ChevronDown,
+  ChevronRight,
+  ChevronLeft,
+  ArrowUp,
+  ArrowDown,
 } from "lucide-react";
 
 export interface ListTab {
   key: string;
   label: string;
   count?: number;
+  /** Optional leading icon (lucide component). When present, the compact
+   *  dropdown can shed its text label and collapse to icon-only at tight widths. */
+  icon?: any;
+}
+
+/** Compact stand-in for the status pill row, shown when the header is too narrow
+ *  to fit every pill (see .cq-tabs-compact). Surfaces the active tab + count and
+ *  drops the full list into a popover so no status is ever scrolled out of reach. */
+function TabDropdown({
+  tabs,
+  activeTab,
+  onChange,
+}: {
+  tabs: ListTab[];
+  activeTab: string;
+  onChange: (key: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const active = tabs.find((t) => t.key === activeTab) ?? tabs[0];
+
+  useWatchEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  const ActiveIcon = active?.icon;
+  // The label/count only collapse when there's an icon to stand in for them, so
+  // icon-less consumers (e.g. Docs) keep their text at every width.
+  const labelCollapse = ActiveIcon ? "cq-tab-label" : "";
+
+  return (
+    <div ref={ref} className="relative flex-shrink-0">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-1.5 h-7 px-2 rounded-md bg-sol-bg-alt border border-sol-border/40 text-xs text-sol-text hover:border-sol-border transition-colors"
+        title={active?.label}
+      >
+        {ActiveIcon && <ActiveIcon className="w-3.5 h-3.5 flex-shrink-0 text-sol-text-muted" />}
+        <span className={`font-medium whitespace-nowrap ${labelCollapse}`}>{active?.label}</span>
+        {active?.count != null && active.count > 0 && (
+          <span className={`text-[10px] tabular-nums text-sol-text-dim ${labelCollapse}`}>{active.count}</span>
+        )}
+        <ChevronDown className="w-3 h-3 opacity-60 flex-shrink-0 cq-caret" />
+      </button>
+      {open && (
+        <div className="absolute top-full left-0 mt-1 w-48 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[60] py-1">
+          {tabs.map((t) => {
+            const TIcon = t.icon;
+            return (
+              <button
+                key={t.key}
+                onClick={() => { onChange(t.key); setOpen(false); }}
+                className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors ${
+                  t.key === activeTab ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt"
+                }`}
+              >
+                {TIcon && <TIcon className="w-3.5 h-3.5 flex-shrink-0 text-sol-text-dim" />}
+                <span className="flex-1 text-left whitespace-nowrap">{t.label}</span>
+                {t.count != null && t.count > 0 && (
+                  <span className="text-[10px] tabular-nums text-sol-text-dim">{t.count}</span>
+                )}
+                {t.key === activeTab && <Check className="w-3 h-3 text-sol-cyan flex-shrink-0" />}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export interface ListSortOption {
   value: string;
   label: string;
+}
+
+/** One selectable row inside the Display popover (a grouping or sort choice).
+ *  Picking a row does NOT close the popover — grouping and sorting are two
+ *  independent axes the user often sets in one sitting, so we keep it open and
+ *  let the checkmarks reflect state until they click away. */
+function DisplayOptionRow({
+  label,
+  selected,
+  onClick,
+}: {
+  label: string;
+  selected: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs transition-colors ${
+        selected ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt"
+      }`}
+    >
+      <span className="flex-1 text-left whitespace-nowrap">{label}</span>
+      {selected && <Check className="w-3 h-3 text-sol-cyan flex-shrink-0" />}
+    </button>
+  );
+}
+
+/** Linear-style "Display" popover. Folds two independent controls — Grouping and
+ *  Sorting (with a direction toggle) — plus any page-specific display options
+ *  (e.g. a List/Board switch passed as `extra`) behind one button, so the header
+ *  toolbar stays a single compact row. Same popover pattern as TabDropdown.
+ *
+ *  Grouping is optional: when `groupOptions` is omitted the section is hidden and
+ *  the popover is sort-only. Sorting always shows; the asc/desc toggle appears
+ *  only when the consumer wires `onSortDirChange`. */
+function DisplayMenu({
+  groupBy,
+  groupOptions,
+  onGroupChange,
+  sortBy,
+  sortOptions,
+  onSortChange,
+  sortDir,
+  onSortDirChange,
+  extra,
+  onCopyLink,
+}: {
+  groupBy?: string;
+  groupOptions?: ListSortOption[];
+  onGroupChange?: (v: string) => void;
+  sortBy: string;
+  sortOptions: ListSortOption[];
+  onSortChange: (v: string) => void;
+  sortDir?: "asc" | "desc";
+  onSortDirChange?: () => void;
+  extra?: ReactNode;
+  /** When set, the popover gains a "Copy link to this view" row so the current
+   *  filters/sort/tab are shareable even when no filter chip is showing (the
+   *  filter bar — the other home for this action — is hidden with no filters). */
+  onCopyLink?: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useWatchEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  const hasGrouping = !!(groupOptions && onGroupChange);
+  const DirIcon = sortDir === "asc" ? ArrowUp : ArrowDown;
+
+  return (
+    <div ref={ref} className="relative flex-shrink-0">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-1.5 h-7 px-2.5 rounded-md border border-sol-border/40 text-xs text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors"
+        title="Display options"
+      >
+        <SlidersHorizontal className="w-3 h-3 flex-shrink-0" />
+        <span className="cq-header-collapse">Display</span>
+        <ChevronDown className="w-3 h-3 opacity-60 flex-shrink-0 cq-caret" />
+      </button>
+      {open && (
+        <div className="absolute top-full right-0 mt-1 w-56 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[60] p-2 space-y-3">
+          {extra && <div className="flex flex-col gap-2">{extra}</div>}
+          {hasGrouping && (
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-sol-text-dim px-1 mb-1">Grouping</div>
+              <div className="space-y-0.5">
+                {groupOptions!.map((o) => (
+                  <DisplayOptionRow
+                    key={o.value}
+                    label={o.label}
+                    selected={o.value === groupBy}
+                    onClick={() => onGroupChange!(o.value)}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+          <div>
+            <div className="flex items-center justify-between px-1 mb-1">
+              <span className="text-[10px] uppercase tracking-wider text-sol-text-dim">Sorting</span>
+              {sortDir && onSortDirChange && (
+                <button
+                  onClick={onSortDirChange}
+                  className="flex items-center gap-1 h-5 px-1.5 rounded text-[10px] text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors"
+                  title={sortDir === "asc" ? "Ascending — click for descending" : "Descending — click for ascending"}
+                >
+                  <DirIcon className="w-3 h-3 flex-shrink-0" />
+                  <span>{sortDir === "asc" ? "Asc" : "Desc"}</span>
+                </button>
+              )}
+            </div>
+            <div className="space-y-0.5">
+              {sortOptions.map((o) => (
+                <DisplayOptionRow
+                  key={o.value}
+                  label={o.label}
+                  selected={o.value === sortBy}
+                  onClick={() => onSortChange(o.value)}
+                />
+              ))}
+            </div>
+          </div>
+          {onCopyLink && (
+            <button
+              onClick={() => { onCopyLink(); setOpen(false); }}
+              className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs text-sol-text-muted hover:bg-sol-bg-alt hover:text-sol-text transition-colors border-t border-sol-border/30 pt-2"
+            >
+              <Link2 className="w-3 h-3 flex-shrink-0" />
+              <span className="flex-1 text-left whitespace-nowrap">Copy link to this view</span>
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export interface ListFilterDef {
@@ -35,6 +262,104 @@ export interface ListFilterDef {
   options: { key: string; label: string; icon?: any; color?: string }[];
   onChange: (v: string) => void;
   multi?: boolean;
+}
+
+/** Add-filter menu: a two-level popover (category → that category's options) for
+ *  filters that aren't set yet. Active filters render as removable chips, so this
+ *  lists only the not-yet-applied categories. Two triggers: the header "Filter"
+ *  button (variant="header", the entry point when the filter bar is hidden) and
+ *  the dashed "+ Filter" inside the bar (variant="add", for adding more). */
+function AddFilterMenu({
+  defs,
+  variant = "add",
+  active = false,
+}: {
+  defs: ListFilterDef[];
+  variant?: "add" | "header";
+  active?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [catKey, setCatKey] = useState<string | null>(null);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useWatchEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) { setOpen(false); setCatKey(null); }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  const available = defs.filter((d) => !d.value);
+  const cat = defs.find((d) => d.key === catKey) || null;
+  const toggle = () => { setOpen((o) => !o); setCatKey(null); };
+
+  return (
+    <div ref={ref} className="relative">
+      {variant === "header" ? (
+        <button
+          onClick={toggle}
+          className={`flex items-center gap-1.5 text-xs h-7 px-2.5 rounded-md border transition-colors ${
+            open || active
+              ? "border-sol-cyan/40 text-sol-cyan bg-sol-cyan/5"
+              : "border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border"
+          }`}
+          title="Filter"
+        >
+          <ListFilter className="w-3 h-3 flex-shrink-0" />
+          <span className="cq-header-collapse">Filter</span>
+          {active && <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan flex-shrink-0" />}
+        </button>
+      ) : (
+        <button
+          onClick={toggle}
+          className="flex items-center gap-1 text-xs h-7 px-2 rounded-md border border-dashed border-sol-border/50 text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors"
+          title="Add filter"
+        >
+          <Plus className="w-3 h-3" />
+          <span className="cq-addfilter-label">Filter</span>
+        </button>
+      )}
+      {open && (
+        <div className={`absolute top-full ${variant === "header" ? "right-0" : "left-0"} mt-1 w-48 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[60] py-1 max-h-72 overflow-y-auto`}>
+          {!cat ? (
+            available.length === 0 ? (
+              <div className="px-3 py-1.5 text-xs text-sol-text-dim">All filters added</div>
+            ) : (
+              available.map((d) => (
+                <button
+                  key={d.key}
+                  onClick={() => setCatKey(d.key)}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-sol-text-muted hover:bg-sol-bg-alt transition-colors"
+                >
+                  <span className="flex-shrink-0 flex items-center">{d.icon}</span>
+                  <span className="flex-1 text-left">{d.label}</span>
+                  <ChevronRight className="w-3 h-3 opacity-50 flex-shrink-0" />
+                </button>
+              ))
+            )
+          ) : (
+            <>
+              <button
+                onClick={() => setCatKey(null)}
+                className="w-full flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium text-sol-text-dim hover:text-sol-text border-b border-sol-border/30 mb-1 transition-colors"
+              >
+                <ChevronLeft className="w-3 h-3" /> {cat.label}
+              </button>
+              <FilterOptionList
+                options={cat.options.filter((o) => o.key !== "")}
+                value={cat.value}
+                multi={cat.multi}
+                onChange={cat.onChange}
+                onPicked={() => { setOpen(false); setCatKey(null); }}
+              />
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export interface ListGroup<T> {
@@ -64,9 +389,20 @@ export interface GenericListViewProps<T> {
   activeTab: string;
   onTabChange: (tab: string) => void;
 
+  /** Grouping axis — independent of sort. Omit all three to render a sort-only
+   *  Display popover (no Grouping section). Convention: a `"none"` option value
+   *  means "don't group" (flat list). */
+  groupBy?: string;
+  groupOptions?: ListSortOption[];
+  onGroupChange?: (group: string) => void;
+
   sortBy: string;
   sortOptions: ListSortOption[];
   onSortChange: (sort: string) => void;
+  /** Sort direction. When provided alongside `onSortDirChange`, the Sorting
+   *  section shows an asc/desc toggle. */
+  sortDir?: "asc" | "desc";
+  onSortDirChange?: () => void;
 
   filters?: {
     hasActive: boolean;
@@ -74,6 +410,13 @@ export interface GenericListViewProps<T> {
     onClear: () => void;
     onSaveView?: (name: string) => void;
   };
+
+  /** Returns a shareable absolute URL encoding the current view (filters, sort,
+   *  active tab). When provided, a "copy link" action appears in the Display
+   *  popover and — when a filter is active — in the filter bar's action cluster.
+   *  The consumer serializes its own URL params (it owns the param schema);
+   *  this component owns the clipboard write + toast. */
+  shareUrl?: () => string;
 
   groups: ListGroup<T>[] | null;
   flatItems: T[];
@@ -99,10 +442,21 @@ export interface GenericListViewProps<T> {
   onItemEdit?: (item: T, newTitle: string) => void;
 
   getSearchText?: (item: T) => string;
+  /** Corpus to search when a query is typed, overriding the tab-filtered
+   *  groups/flatItems. Lets a search span items hidden by the active browse tab
+   *  (e.g. a docs search finding a doc whose type isn't the selected tab) instead
+   *  of silently returning "No results". When omitted, search stays scoped to the
+   *  visible groups/flatItems (unchanged behavior). */
+  searchAllItems?: T[];
+  /** When set, a subtle "syncing N" whisper renders next to the title while the
+   *  reconcile crawl for this scope ("tasks" | "docs") is still streaming in. */
+  syncScope?: string;
   headerExtra?: ReactNode;
+  /** Page-specific controls rendered inside the Display popover (e.g. a List/Board
+   *  view switch). Kept out of the always-visible toolbar to stay Linear-compact. */
+  displayExtra?: ReactNode;
   listFooter?: ReactNode;
   customContent?: (helpers: { openPaletteForItems: (items: T[], mode?: string) => void }) => ReactNode;
-  extraShortcuts?: { key: string; label: string }[];
   extraKeyHandler?: (e: KeyboardEvent, stop: () => void) => boolean;
   disableKeyboard?: boolean;
   activeItemId?: string;
@@ -114,10 +468,16 @@ export function GenericListView<T>({
   tabs,
   activeTab,
   onTabChange,
+  groupBy,
+  groupOptions,
+  onGroupChange,
   sortBy,
   sortOptions,
   onSortChange,
+  sortDir,
+  onSortDirChange,
   filters,
+  shareUrl,
   groups,
   flatItems,
   renderRow,
@@ -135,21 +495,33 @@ export function GenericListView<T>({
   renderPreview,
   onItemEdit,
   getSearchText,
+  searchAllItems,
+  syncScope,
   headerExtra,
+  displayExtra,
   listFooter,
   customContent,
-  extraShortcuts,
   extraKeyHandler,
   disableKeyboard,
   activeItemId,
   children,
 }: GenericListViewProps<T>) {
   const router = useRouter();
+  const currentPath = usePathname();
+
+  // Open/close a row's detail by driving the URL. Click and space both call this:
+  // navigating to the row's route opens it (instant when the route shares this
+  // page's component — e.g. /tasks), and navigating back to the list route closes
+  // it, so the detail toggles in place with no re-mount.
+  const toggleDetail = (item: T) => {
+    const route = getItemRoute(item);
+    const base = route.replace(/\/[^/]+$/, "");
+    router.push(currentPath === route ? base : route);
+  };
 
   const [focusIndex, setFocusIndex] = useState(0);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
-  const [showFilters, setShowFilters] = useState(() => !!filters?.hasActive);
   const storeOpenPalette = useInboxStore((s) => s.openPalette);
   const paletteIsOpen = useInboxStore((s) => s.palette.open);
   const [previewId, setPreviewId] = useState<string | null>(null);
@@ -162,21 +534,39 @@ export function GenericListView<T>({
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
 
+  const copyViewLink = useCallback(async () => {
+    if (!shareUrl) return;
+    const url = shareUrl();
+    try {
+      await navigator.clipboard.writeText(url);
+      toast.success("Link to this view copied");
+    } catch {
+      toast.error("Couldn't copy link");
+    }
+  }, [shareUrl]);
+
+  const searching = !!searchQuery && !!getSearchText;
+  // A search with a `searchAllItems` corpus spans the whole set (ignoring the
+  // active browse tab / grouping) and renders as a flat result list.
+  const crossScopeSearch = searching && !!searchAllItems;
+
   const displayGroups = useMemo((): ListGroup<T>[] | null => {
     if (!groups) return null;
-    if (!searchQuery || !getSearchText) return groups;
+    if (!searching) return groups;
+    if (crossScopeSearch) return null; // flat results from searchAllItems instead
     const q = searchQuery.toLowerCase();
     return groups
-      .map(g => ({ ...g, items: g.items.filter(item => getSearchText(item).toLowerCase().includes(q)) }))
+      .map(g => ({ ...g, items: g.items.filter(item => getSearchText!(item).toLowerCase().includes(q)) }))
       .filter(g => g.items.length > 0);
-  }, [groups, searchQuery, getSearchText]);
+  }, [groups, searching, crossScopeSearch, searchQuery, getSearchText]);
 
   const displayFlatItems = useMemo(() => {
-    if (groups) return flatItems;
-    if (!searchQuery || !getSearchText) return flatItems;
+    if (!searching) return flatItems;
     const q = searchQuery.toLowerCase();
-    return flatItems.filter(item => getSearchText(item).toLowerCase().includes(q));
-  }, [groups, flatItems, searchQuery, getSearchText]);
+    if (crossScopeSearch) return searchAllItems!.filter(item => getSearchText!(item).toLowerCase().includes(q));
+    if (groups) return flatItems; // grouped search handled in displayGroups
+    return flatItems.filter(item => getSearchText!(item).toLowerCase().includes(q));
+  }, [groups, flatItems, searching, crossScopeSearch, searchAllItems, searchQuery, getSearchText]);
 
   const visibleItems = useMemo(() => {
     if (displayGroups) {
@@ -188,6 +578,53 @@ export function GenericListView<T>({
   }, [displayGroups, collapsedGroups, displayFlatItems]);
 
   const focusedItem = visibleItems[focusIndex] || null;
+
+  // Flatten groups + items into a single ordered list of "rows" so the whole
+  // view (group headers AND item rows) can be virtualized as one stream. Each
+  // item row carries its index into `visibleItems` so keyboard focus and the
+  // rendered row stay in lockstep. Without virtualization every task/doc in the
+  // workspace was a live DOM node and re-rendered on every j/k press — O(N) per
+  // keystroke. Now only the visible window (~window height) is mounted.
+  type RowEntry =
+    | { kind: "header"; key: string; group: ListGroup<T>; collapsed: boolean }
+    | { kind: "item"; key: string; item: T; focusIndex: number };
+  const rowModel = useMemo<RowEntry[]>(() => {
+    const rows: RowEntry[] = [];
+    if (displayGroups) {
+      let fi = 0;
+      for (const g of displayGroups) {
+        const collapsed = collapsedGroups.has(g.key);
+        rows.push({ kind: "header", key: `__hdr_${g.key}`, group: g, collapsed });
+        if (!collapsed) {
+          for (const item of g.items) {
+            rows.push({ kind: "item", key: getItemId(item), item, focusIndex: fi });
+            fi++;
+          }
+        }
+      }
+    } else {
+      displayFlatItems.forEach((item, i) => {
+        rows.push({ kind: "item", key: getItemId(item), item, focusIndex: i });
+      });
+    }
+    return rows;
+  }, [displayGroups, displayFlatItems, collapsedGroups, getItemId]);
+
+  // focusIndex (index into visibleItems) → rowModel index, so keyboard nav can
+  // scroll the right virtual row into view.
+  const focusToRowIndex = useMemo(() => {
+    const map: number[] = [];
+    rowModel.forEach((r, idx) => { if (r.kind === "item") map[r.focusIndex] = idx; });
+    return map;
+  }, [rowModel]);
+
+  const rowVirtualizer = useVirtualizer({
+    count: rowModel.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: (i) => (rowModel[i]?.kind === "header" ? 38 : 45),
+    getItemKey: (i) => rowModel[i]?.key ?? i,
+    overscan: 12,
+  });
 
   useWatchEffect(() => {
     if (focusIndex >= visibleItems.length && visibleItems.length > 0) {
@@ -202,8 +639,8 @@ export function GenericListView<T>({
   }, [focusIndex]);
 
   useWatchEffect(() => {
-    const el = document.querySelector('[data-list-focused="true"]');
-    if (el) (el as HTMLElement).scrollIntoView({ block: "nearest" });
+    const rowIdx = focusToRowIndex[focusIndex];
+    if (rowIdx != null) rowVirtualizer.scrollToIndex(rowIdx, { align: "auto" });
   }, [focusIndex]);
 
   const toggleSelect = useCallback((id: string) => {
@@ -282,12 +719,9 @@ export function GenericListView<T>({
         setSelectedIds(new Set(visibleItems.map(getItemId)));
         return;
       }
-      if (e.key === " " && !e.metaKey && !e.ctrlKey && renderPreview) {
+      if (e.key === " " && !e.metaKey && !e.ctrlKey) {
         stop();
-        if (focusedItem) {
-          const id = getItemId(focusedItem);
-          setPreviewId((prev) => prev === id ? null : id);
-        }
+        if (focusedItem) toggleDetail(focusedItem);
         return;
       }
 
@@ -324,7 +758,7 @@ export function GenericListView<T>({
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [shortcutsPanelOpen, disableKeyboard, paletteIsOpen, editingId, focusedItem, visibleItems, focusIndex, tabs,
-    previewId, selectedIds, paletteShortcuts, onTabChange, getItemRoute, getItemId,
+    previewId, selectedIds, paletteShortcuts, onTabChange, getItemRoute, getItemId, currentPath,
     onCreate, openPalette, toggleSelect, router, extraKeyHandler, onItemEdit, renderPreview, getSearchText]);
 
   const previewItem = previewId ? flatItems.find((item) => getItemId(item) === previewId) || null : null;
@@ -357,7 +791,8 @@ export function GenericListView<T>({
       isFocused,
       isSelected,
       isEditing,
-      onClick: () => { setFocusIndex(globalIdx); router.push(getItemRoute(item)); },
+      // Click toggles the detail in place (same as space) by driving the URL.
+      onClick: () => { setFocusIndex(globalIdx); toggleDetail(item); },
       onSelect: () => toggleSelect(id),
       onContextMenu: (e: React.MouseEvent) => {
         e.preventDefault();
@@ -408,19 +843,60 @@ export function GenericListView<T>({
     );
   };
 
+  const renderGroupHeader = (g: ListGroup<T>, isCollapsed: boolean) => (
+    <div className="w-full flex items-center gap-2 px-4 py-2 bg-sol-bg-alt/30 border-b border-sol-border/20">
+      <button
+        onClick={() => toggleGroup(g.key)}
+        className="flex items-center gap-2 flex-1 hover:bg-sol-bg-alt/50 transition-colors text-left"
+      >
+        <svg
+          className={`w-3 h-3 text-sol-text-dim transition-transform ${isCollapsed ? "" : "rotate-90"}`}
+          fill="currentColor"
+          viewBox="0 0 20 20"
+        >
+          <path d="M6 4l8 6-8 6V4z" />
+        </svg>
+        {g.icon}
+        <span className="text-xs font-medium text-sol-text-dim uppercase tracking-wide">
+          {g.label}
+        </span>
+        <span className="text-xs text-sol-text-dim">({g.items.length})</span>
+        {g.badge}
+      </button>
+      {g.extra}
+    </div>
+  );
+
+  // The chip-able filter bar renders inside .cq-container (below). When it shows,
+  // the container's own bottom border would land at the bottom of the filter
+  // zone and stack with the next divider (a group header / first row) — at narrow
+  // width, where the action cluster wraps right up against it, that reads as a
+  // doubled line. So the container draws its bottom border only when the filter
+  // bar is hidden; when shown, the filter bar's own top border separates it from
+  // the toolbar and the content below owns the lower edge — one divider, not two.
+  const filterBarShown = !!filters && filters.defs.some((d) => d.value);
+
   return (
     <div className="h-full flex flex-col">
-      {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4 border-b border-sol-border/30 min-h-0">
-        <div className="flex items-center gap-4 min-w-0 overflow-hidden">
-          <h1 className="text-lg font-semibold text-sol-text tracking-tight flex-shrink-0 cq-hide-compact">{title}</h1>
-          <div className="flex gap-1 flex-nowrap overflow-hidden">
+      {/* Header. The outer wrapper is the container-query context; the inner
+          .cq-header row is what adapts (wraps the toolbar below the tabs) as the
+          panel narrows — a container can't query its own width, only a child's. */}
+      <div className={`cq-container ${filterBarShown ? "" : "border-b border-sol-border/30"}`}>
+        <div className="cq-header cq-header-pad flex flex-wrap items-center justify-between gap-x-2 gap-y-2 px-6 py-3">
+        <div className="flex items-center gap-2 min-w-0">
+          <h1 className="text-lg font-semibold text-sol-text tracking-tight flex-shrink-0 cq-header-collapse">{title}</h1>
+          {syncScope && <SyncProgressBadge scope={syncScope} />}
+          {/* Wide header: segmented pill row. Once too tight for one row (≤1210px,
+              see .cq-tabs-compact in globals.css): a single compact dropdown. */}
+          <div className="cq-tabs-pills flex items-center gap-0.5 p-0.5 rounded-lg bg-sol-bg-alt/40 border border-sol-border/30 flex-wrap">
             {tabs.map((tab) => (
               <button
                 key={tab.key}
                 onClick={() => { onTabChange(tab.key); setFocusIndex(0); }}
-                className={`text-xs px-2.5 py-1 rounded-md transition-colors flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
-                  activeTab === tab.key ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"
+                className={`text-xs px-2.5 h-6 rounded-md transition-colors flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
+                  activeTab === tab.key
+                    ? "bg-sol-bg-highlight text-sol-text shadow-sm"
+                    : "text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt/60"
                 }`}
               >
                 {tab.label}
@@ -428,8 +904,15 @@ export function GenericListView<T>({
               </button>
             ))}
           </div>
+          <div className="cq-tabs-compact">
+            <TabDropdown
+              tabs={tabs}
+              activeTab={activeTab}
+              onChange={(key) => { onTabChange(key); setFocusIndex(0); }}
+            />
+          </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="cq-header-toolbar flex flex-wrap items-center justify-end gap-1.5 ml-auto">
           {headerExtra}
           {selectedIds.size > 0 && (
             <span className="text-xs text-sol-cyan">{selectedIds.size} selected</span>
@@ -443,7 +926,7 @@ export function GenericListView<T>({
               }}
               placeholder="Search..."
               autoFocus
-              className="text-xs w-40 px-2.5 py-1.5 rounded-md bg-sol-bg-alt border border-sol-cyan/40 text-sol-text placeholder:text-sol-text-dim focus:outline-none"
+              className="text-xs w-40 h-7 px-2.5 rounded-md bg-sol-bg-alt border border-sol-cyan/40 text-sol-text placeholder:text-sol-text-dim focus:outline-none"
             />
           )}
           {getSearchText && (
@@ -462,53 +945,49 @@ export function GenericListView<T>({
               <Search className="w-3.5 h-3.5" />
             </button>
           )}
-          {filters && (
-            <button
-              onClick={() => setShowFilters((f) => !f)}
-              className={`flex items-center gap-1.5 text-xs px-2 py-1.5 rounded-md border transition-colors ${
-                showFilters || filters.hasActive
-                  ? "border-sol-cyan/40 text-sol-cyan bg-sol-cyan/5"
-                  : "border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border"
-              }`}
-              title="Toggle filters"
-            >
-              <SlidersHorizontal className="w-3 h-3" />
-              Filter
-              {filters.hasActive && <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan" />}
-            </button>
-          )}
-          <select
-            value={sortBy}
-            onChange={(e) => { onSortChange(e.target.value); setFocusIndex(0); }}
-            className="text-xs px-2 py-1 rounded-md bg-sol-bg-alt border border-sol-border/40 text-sol-text-dim focus:outline-none focus:border-sol-cyan cursor-pointer"
-          >
-            {sortOptions.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
-          </select>
+          {filters && <AddFilterMenu defs={filters.defs} variant="header" active={filters.defs.some((d) => d.value)} />}
+          <DisplayMenu
+            groupBy={groupBy}
+            groupOptions={groupOptions}
+            onGroupChange={onGroupChange ? (v) => { onGroupChange(v); setFocusIndex(0); } : undefined}
+            sortBy={sortBy}
+            sortOptions={sortOptions}
+            onSortChange={(v) => { onSortChange(v); setFocusIndex(0); }}
+            sortDir={sortDir}
+            onSortDirChange={onSortDirChange ? () => { onSortDirChange(); setFocusIndex(0); } : undefined}
+            extra={displayExtra}
+            onCopyLink={shareUrl ? copyViewLink : undefined}
+          />
           <button
             onClick={() => openPalette("root")}
-            className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors"
-            title="Command palette (Cmd+K)"
+            className="cq-header-collapse flex items-center gap-1.5 text-xs h-7 px-2.5 rounded-md border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors"
+            title={`Command palette (${formatShortcutLabel('palette.toggle')})`}
           >
             <Command className="w-3 h-3" />K
           </button>
           <button
             onClick={onCreate}
-            className="flex items-center justify-center w-7 h-7 rounded-full border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors"
+            className="flex items-center justify-center w-7 h-7 rounded-full border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors flex-shrink-0"
             title="Create new"
           >
             <Plus className="w-4 h-4" />
           </button>
         </div>
-      </div>
+        </div>
 
-      {/* Filter bar */}
-      {filters && showFilters && (
-        <div className="flex items-center gap-3 px-6 py-2.5 border-b border-sol-border/20 bg-sol-bg-alt/20">
-          {filters.defs.map((f) => (
+        {/* Filter bar — only present once at least one chip-able filter is set (NOT
+            filters.hasActive, which also counts the source toggle and would leave an
+            empty chipless row). The header "Filter" button adds the first one. Kept
+            INSIDE .cq-container so its labels and padding collapse with the panel
+            width — a container query needs a containment ancestor or it falls back to
+            the viewport (which is why these classes did nothing out here before). */}
+        {filterBarShown && (
+          <div className="cq-header-pad cq-filter-bar flex items-center flex-wrap gap-x-1.5 gap-y-1.5 px-6 py-2 border-t border-sol-border/30 bg-sol-bg-alt/20">
+          {/* Active filters as removable chips; everything unset lives behind "+ Filter". */}
+          {filters.defs.filter((f) => f.value).map((f) => (
             <FilterDropdown
               key={f.key}
+              chip
               label={f.label}
               icon={f.icon}
               value={f.value}
@@ -517,62 +996,86 @@ export function GenericListView<T>({
               multi={f.multi}
             />
           ))}
-          {filters.hasActive && (
-            <button
-              onClick={filters.onClear}
-              className="text-[10px] text-sol-text-dim hover:text-sol-text ml-1 flex items-center gap-1 transition-colors"
-            >
-              <X className="w-3 h-3" /> Clear
-            </button>
-          )}
-          {filters.onSaveView && !savingView && (
-            <button
-              onClick={() => { setSavingView(true); setSaveViewName(""); }}
-              className="text-[10px] text-sol-text-dim hover:text-sol-cyan ml-1 flex items-center gap-1 transition-colors"
-              title="Save current view as a shortcut"
-            >
-              <Bookmark className="w-3 h-3" /> Save View
-            </button>
-          )}
-          {filters.onSaveView && savingView && (
-            <form
-              className="flex items-center gap-1.5 ml-1"
-              onSubmit={(e) => {
-                e.preventDefault();
-                const name = saveViewName.trim();
-                if (name) {
-                  filters.onSaveView!(name);
-                  setSavingView(false);
-                  toast.success(`View "${name}" saved`);
-                }
-              }}
-            >
-              <input
-                autoFocus
-                value={saveViewName}
-                onChange={(e) => setSaveViewName(e.target.value)}
-                placeholder="View name..."
-                className="text-[11px] px-2 py-0.5 rounded bg-sol-bg border border-sol-border/60 text-sol-text outline-none focus:border-sol-cyan w-32"
-                onKeyDown={(e) => { if (e.key === "Escape") setSavingView(false); }}
-              />
+          <AddFilterMenu defs={filters.defs} />
+
+          {/* View actions — a tight right-aligned cluster. Each button shows its
+              label at roomy widths and collapses to icon-only (cq-header-collapse)
+              when the bar is narrow, so save / link / clear stay on one row
+              instead of each wrapping to its own line. */}
+          <div className="ml-auto flex items-center gap-0.5">
+            {shareUrl && (
               <button
-                type="submit"
-                disabled={!saveViewName.trim()}
-                className="text-[10px] text-sol-cyan hover:text-sol-cyan/80 disabled:opacity-30 disabled:cursor-default flex items-center gap-0.5"
+                onClick={copyViewLink}
+                title="Copy link to this view"
+                className="flex items-center gap-1 h-6 px-1.5 rounded-md text-[10px] text-sol-text-dim hover:text-sol-cyan hover:bg-sol-cyan/5 transition-colors"
               >
-                <Check className="w-3 h-3" /> Save
+                <Link2 className="w-3 h-3 flex-shrink-0" />
+                <span className="cq-header-collapse">Link</span>
               </button>
+            )}
+            {filters.onSaveView && !savingView && (
               <button
-                type="button"
-                onClick={() => setSavingView(false)}
-                className="text-[10px] text-sol-text-dim hover:text-sol-text"
+                onClick={() => { setSavingView(true); setSaveViewName(""); }}
+                title="Save current view as a shortcut"
+                className="flex items-center gap-1 h-6 px-1.5 rounded-md text-[10px] text-sol-text-dim hover:text-sol-cyan hover:bg-sol-cyan/5 transition-colors"
               >
-                <X className="w-3 h-3" />
+                <Bookmark className="w-3 h-3 flex-shrink-0" />
+                <span className="cq-header-collapse">Save view</span>
               </button>
-            </form>
-          )}
+            )}
+            {filters.onSaveView && savingView && (
+              <form
+                className="flex items-center gap-1.5"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const name = saveViewName.trim();
+                  if (name) {
+                    filters.onSaveView!(name);
+                    setSavingView(false);
+                    toast.success(`View "${name}" saved`);
+                  }
+                }}
+              >
+                <input
+                  autoFocus
+                  value={saveViewName}
+                  onChange={(e) => setSaveViewName(e.target.value)}
+                  placeholder="View name..."
+                  className="text-[11px] px-2 py-0.5 rounded bg-sol-bg border border-sol-border/60 text-sol-text outline-none focus:border-sol-cyan w-28"
+                  onKeyDown={(e) => { if (e.key === "Escape") setSavingView(false); }}
+                />
+                <button
+                  type="submit"
+                  disabled={!saveViewName.trim()}
+                  className="text-[10px] text-sol-cyan hover:text-sol-cyan/80 disabled:opacity-30 disabled:cursor-default flex items-center gap-0.5"
+                  title="Save"
+                >
+                  <Check className="w-3 h-3" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSavingView(false)}
+                  className="text-[10px] text-sol-text-dim hover:text-sol-text"
+                  title="Cancel"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </form>
+            )}
+            {filters.hasActive && (
+              <button
+                onClick={filters.onClear}
+                title="Clear filters"
+                className="flex items-center gap-1 h-6 px-1.5 rounded-md text-[10px] text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors"
+              >
+                <X className="w-3 h-3 flex-shrink-0" />
+                <span className="cq-header-collapse">Clear</span>
+              </button>
+            )}
+          </div>
         </div>
-      )}
+        )}
+      </div>
 
       {/* Content area */}
       {customContent ? customContent({ openPaletteForItems }) : (
@@ -588,16 +1091,24 @@ export function GenericListView<T>({
                   </button>
                 )}
               </div>
-            ) : displayGroups ? (
-              <GroupedList
-                groups={displayGroups}
-                collapsedGroups={collapsedGroups}
-                onToggleGroup={toggleGroup}
-                renderRow={renderItemRow}
-              />
             ) : (
-              <div>
-                {displayFlatItems.map((item, i) => renderItemRow(item, i))}
+              <div style={{ height: rowVirtualizer.getTotalSize(), width: "100%", position: "relative" }}>
+                {rowVirtualizer.getVirtualItems().map((vi) => {
+                  const row = rowModel[vi.index];
+                  if (!row) return null;
+                  return (
+                    <div
+                      key={vi.key}
+                      data-index={vi.index}
+                      ref={rowVirtualizer.measureElement}
+                      style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${vi.start}px)` }}
+                    >
+                      {row.kind === "header"
+                        ? renderGroupHeader(row.group, row.collapsed)
+                        : renderItemRow(row.item, row.focusIndex)}
+                    </div>
+                  );
+                })}
               </div>
             )}
 
@@ -619,75 +1130,7 @@ export function GenericListView<T>({
         </div>
       )}
 
-      {/* Shortcut footer */}
-      <div className="flex items-center gap-3 px-6 py-2 border-t border-sol-border/20 text-[10px] text-sol-text-dim overflow-hidden">
-        <span className="flex items-center gap-1 shrink-0"><span className="flex items-center gap-[2px]"><KeyCap size="xs">J</KeyCap><KeyCap size="xs">K</KeyCap></span> navigate</span>
-        <span className="flex items-center gap-1 shrink-0"><KeyCap size="xs">{"\u23CE"}</KeyCap> open</span>
-        <span className="flex items-center gap-1 shrink-0"><KeyCap size="xs">C</KeyCap> create</span>
-        <span className="flex items-center gap-1 shrink-0"><KeyCap size="xs">X</KeyCap> select</span>
-        {(paletteShortcuts || []).map(({ key, label }) => (
-          <span key={key} className="flex items-center gap-1 shrink-0"><KeyCap size="xs">{key}</KeyCap> {label}</span>
-        ))}
-        {renderPreview && (
-          <span className="flex items-center gap-1 shrink-0"><KeyCap size="xs">{"\u2423"}</KeyCap> peek</span>
-        )}
-        <span className="flex items-center gap-1 shrink-0"><span className="flex items-center gap-[2px]"><KeyCap size="xs">{"\u2318"}</KeyCap><KeyCap size="xs">K</KeyCap></span> cmd</span>
-        <span className="flex items-center gap-1 shrink-0"><KeyCap size="xs">?</KeyCap> help</span>
-        {(extraShortcuts || []).map(({ key, label }) => (
-          <span key={key} className="flex items-center gap-1 shrink-0"><KeyCap size="xs">{key}</KeyCap> {label}</span>
-        ))}
-      </div>
-
       {children}
     </div>
-  );
-}
-
-function GroupedList<T>({
-  groups,
-  collapsedGroups,
-  onToggleGroup,
-  renderRow,
-}: {
-  groups: ListGroup<T>[];
-  collapsedGroups: Set<string>;
-  onToggleGroup: (key: string) => void;
-  renderRow: (item: T, globalIdx: number) => ReactNode;
-}) {
-  let globalIdx = 0;
-  return (
-    <>
-      {groups.map((g) => {
-        const isCollapsed = collapsedGroups.has(g.key);
-        const startIdx = globalIdx;
-        if (!isCollapsed) globalIdx += g.items.length;
-        return (
-          <div key={g.key}>
-            <div className="w-full flex items-center gap-2 px-4 py-2 bg-sol-bg-alt/30 border-b border-sol-border/20">
-              <button
-                onClick={() => onToggleGroup(g.key)}
-                className="flex items-center gap-2 flex-1 hover:bg-sol-bg-alt/50 transition-colors text-left"
-              >
-                <svg
-                  className={`w-3 h-3 text-sol-text-dim transition-transform ${isCollapsed ? "" : "rotate-90"}`}
-                  fill="currentColor"
-                  viewBox="0 0 20 20"
-                >
-                  <path d="M6 4l8 6-8 6V4z" />
-                </svg>
-                {g.icon}
-                <span className="text-xs font-medium text-sol-text-dim uppercase tracking-wide">
-                  {g.label}
-                </span>
-                <span className="text-xs text-sol-text-dim">({g.items.length})</span>
-                {g.badge}
-              </button>
-              {g.extra}
-            </div>
-            {!isCollapsed && g.items.map((item, i) => renderRow(item, startIdx + i))}
-          </div>
-        );
-      })}
-    </>
   );
 }

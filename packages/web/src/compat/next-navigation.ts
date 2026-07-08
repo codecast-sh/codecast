@@ -7,8 +7,7 @@ import {
 } from "react-router";
 import { useTabContext } from "@/components/TabContent";
 import { useInboxStore } from "@/store/inboxStore";
-import { pathLabel } from "@/components/TabBar";
-import { shouldUseTabRouting } from "./tabRouting";
+import { interceptSettingsNav, shouldUseTabRouting, tabNavigate } from "./tabRouting";
 
 /**
  * Returns the current pathname. When tabs are active, reads from the active
@@ -35,18 +34,29 @@ export function useRouter() {
   const navigate = useNavigate();
   return useMemo(
     () => ({
-      push: (path: string) => {
+      // The second arg mirrors Next.js's `NavigateOptions` (e.g. `{ scroll }`).
+      // We don't act on it, but accepting it keeps `router.push/replace(path,
+      // { scroll: false })` call sites type-checking against this shim.
+      push: (path: string, _options?: { scroll?: boolean }) => {
+        const settings = interceptSettingsNav(path);
+        if (settings) {
+          if (settings.carryUrl) navigate(settings.carryUrl, { replace: true });
+          return;
+        }
         if (shouldUseTabRouting(path)) {
-          useInboxStore.getState().updateTab(useInboxStore.getState().activeTabId!, { path, title: pathLabel(path) });
-          window.history.replaceState(null, "", path);
+          tabNavigate(path, "push");
         } else {
           navigate(path);
         }
       },
-      replace: (path: string) => {
+      replace: (path: string, _options?: { scroll?: boolean }) => {
+        const settings = interceptSettingsNav(path);
+        if (settings) {
+          if (settings.carryUrl) navigate(settings.carryUrl, { replace: true });
+          return;
+        }
         if (shouldUseTabRouting(path)) {
-          useInboxStore.getState().updateTab(useInboxStore.getState().activeTabId!, { path, title: pathLabel(path) });
-          window.history.replaceState(null, "", path);
+          tabNavigate(path, "replace");
         } else {
           navigate(path, { replace: true });
         }

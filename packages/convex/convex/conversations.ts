@@ -1,6 +1,6 @@
-import { mutation, query, internalMutation, internalQuery, type QueryCtx, type MutationCtx } from "./_generated/server";
+import { mutation, query, internalMutation, internalQuery, type QueryCtx, type MutationCtx } from "./functions";
 import { v } from "convex/values";
-import { enqueueStartSession } from "./devices";
+import { enqueueStartSession, resolveOwnerDevice } from "./devices";
 import { findConversationBySessionReference } from "./conversationSessionLookup";
 import { paginationOptsValidator } from "convex/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
@@ -9,10 +9,13 @@ import { checkRateLimit } from "./rateLimit";
 import { verifyApiToken } from "./apiTokens";
 import { internal } from "./_generated/api";
 import { resetConversationPendingMessages } from "./pendingMessages";
+import { cancelTasksBoundToConversation } from "./agentTasks";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
-import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
-import { shouldShowInInbox, isSessionIdle } from "./inboxFilters";
-import { filterUserMessages } from "./userMessagesFilter";
+import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId } from "./daemonCommandUtils";
+import { AGENT_MODEL_CONFIG, modelAgentKey } from "@codecast/shared/contracts";
+import { shouldShowInInbox, isSessionIdle, deriveSessionActivity, classifyWorkState, normalizeWorkStateFilter, trustedAgentStatus, subagentKeepsParentWorking, type WorkState } from "./inboxFilters";
+import { subagentLinkFields } from "./ccAccountsShared";
+import { filterUserMessages, isImportNotice } from "./userMessagesFilter";
 import {
   isTeamMember,
   canTeamMemberAccess,
@@ -20,8 +23,46 @@ import {
   isConversationTeamVisible,
   createTeamFeedFilter,
   resolveTeamForPath,
+  resolveCreationPrivacy,
   resolveVisibilityMode,
+  buildShareUpdate,
+  buildPathRestampUpdate,
 } from "./privacy";
+import { batchScanConversations, paginateTeamFeed } from "./feedPagination";
+import { mergeUserMessageFeed, type FeedCandidate } from "./messageFeed";
+import { resolveLabelConvIds, matchBucketByName } from "./buckets";
+import { projectOverlaps } from "./projectPaths";
+import {
+  parseSearchTerms,
+  contentMatchesAnyTerm,
+  conversationMatchesAllTerms,
+  calculateProximityScore,
+  rankConversationsByCoverage,
+  type ParsedTerms,
+} from "./searchCore";
+
+// Single relevance-ranked search-index lookup shared by every message-search
+// surface (web searchConversations, searchForCLI, feedForCLI). One combined
+// lookup instead of a per-term fan-out: per-lookup overhead dominates on long
+// queries (a 7-term query = 7 index scans) and timed out the whole Convex query.
+// BM25 already ranks docs matching more/rarer terms first, so a single pool is
+// also the better candidate set for coverage ranking. The take() is the recall/speed
+// knob: message docs can be large (tool results), so a bigger pool costs bytes.
+//
+// NOTE: `.take()` bounds only what's RETURNED, not what the full-text index
+// SCANS. For a token that appears across a large fraction of the ~3.6M-row
+// messages table (any common word), the search scores the whole posting list and
+// exceeds a query's read budget regardless of the take size — surfacing as a
+// retryable InternalServerError/timeout that the reactive client spins on forever.
+// Lowering this number does not fix that; see ct-37627 for the real fix.
+async function fetchMessageSearchPool(ctx: QueryCtx, terms: ParsedTerms) {
+  if (terms.all.length === 0) return [];
+  const searchQuery = terms.all.join(" ");
+  return await ctx.db
+    .query("messages")
+    .withSearchIndex("search_content_v2", (q) => q.search("content", searchQuery))
+    .take(512);
+}
 
 const NOISE_TITLE_PREFIXES = ["[Using:", "[Request", "[SUGGESTION MODE:"];
 
@@ -82,10 +123,98 @@ async function getConvGitDiff(
   };
 }
 
+// Compress a raw message body into a short chip/snippet. Strips command/HTML
+// wrappers (e.g. `<command-name>/commit</command-name>`) and collapses
+// whitespace so a branch's divergent prompt reads cleanly in ~one line.
+function previewText(content: string | null | undefined): string | undefined {
+  if (!content) return undefined;
+  const cleaned = content.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  if (!cleaned) return undefined;
+  return cleaned.length > 100 ? cleaned.slice(0, 100) + "…" : cleaned;
+}
+
+// The first *genuine* user prompt on a branch after `afterTs` — i.e. the message
+// the human typed that sent this branch its own way. For a fork that's the
+// prompt past the fork cutoff; for the origin line it's the next human turn
+// after the fork point. This is what distinguishes otherwise-identical sibling
+// branches.
+//
+// Routes rows through the same `filterUserMessages` gate the message browser /
+// rewind navigator uses, so the chip label matches a prompt you could actually
+// navigate to. That gate strips harness context blocks (`<task-notification>`,
+// `<system-reminder>`, `<task-reminder>`) and drops noise (tool-result echoes,
+// interrupt stubs, compact boundaries, import notices) — without it a
+// background-task notification leaked through as a chip reading like its raw
+// ids ("w68f2jcpo toolu_01…"). Read window is generous because an
+// orchestration origin line can run many tool/notification rows between the
+// fork point and its next human prompt.
+async function firstDivergentPreview(
+  ctx: { db: any },
+  conversationId: Id<"conversations">,
+  afterTs: number,
+): Promise<string | undefined> {
+  const rows = await ctx.db
+    .query("messages")
+    .withIndex("by_conversation_timestamp", (q: any) =>
+      q.eq("conversation_id", conversationId).gt("timestamp", afterTs)
+    )
+    .order("asc")
+    .take(40);
+  for (const m of filterUserMessages(rows)) {
+    const p = previewText(m.content);
+    if (p) return p;
+  }
+  return undefined;
+}
+
+// The origin line is just another sibling branch in the UI, so it needs the
+// same "what prompt sent it this way" snippet the forks carry: its next user
+// turn after the fork point. Which line is "the origin" depends on where each
+// fork anchored — a child forked off THIS conversation (origin = this one),
+// while a sibling forked off our parent (origin = forked_from). Fork-point
+// timestamps come from a uuid lookup (it's shared history) so this needs no
+// loaded message window — callable from the meta-only query.
+async function computeOriginDivergentPreviews(
+  ctx: { db: any },
+  conversation: any,
+  forkChildrenDetails: Array<{ parent_message_uuid?: string }>,
+  forkSiblings: Array<{ parent_message_uuid?: string }>,
+): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  const fill = async (
+    forks: Array<{ parent_message_uuid?: string }>,
+    originLineId: Id<"conversations"> | undefined,
+  ) => {
+    if (!originLineId) return;
+    for (const fork of forks) {
+      const uuid = fork.parent_message_uuid;
+      if (!uuid || out[uuid]) continue;
+      const fp = await ctx.db
+        .query("messages")
+        .withIndex("by_message_uuid", (q: any) => q.eq("message_uuid", uuid))
+        .first();
+      if (!fp) continue;
+      const preview = await firstDivergentPreview(ctx, originLineId, fp.timestamp);
+      if (preview) out[uuid] = preview;
+    }
+  };
+  await fill(forkChildrenDetails, conversation._id);
+  await fill(forkSiblings, conversation.forked_from ?? undefined);
+  return out;
+}
+
 async function mapForkDetails(ctx: { db: any }, forks: any[]) {
   return Promise.all(
     forks.map(async (fork: any) => {
       const forkUser = await ctx.db.get(fork.user_id);
+      // The prompt that defines this branch: first user message past the fork
+      // cutoff. Drives the chip label so siblings read distinctly instead of by
+      // their convergent auto-titles.
+      const first_divergent_preview = await firstDivergentPreview(
+        ctx,
+        fork._id,
+        fork.fork_cutoff_timestamp ?? 0,
+      );
       return {
         _id: fork._id,
         user_id: fork.user_id,
@@ -96,9 +225,46 @@ async function mapForkDetails(ctx: { db: any }, forks: any[]) {
         parent_message_uuid: fork.parent_message_uuid,
         agent_type: fork.agent_type,
         message_count: fork.message_count,
+        first_divergent_preview,
+        // Free fields straight off the conversation row — no extra reads. The
+        // client subtracts fork_copied (messages inherited from the parent up to
+        // the fork point) from message_count to show this branch's *own* size,
+        // and uses updated_at to derive an unread badge against its local
+        // _seenMessageCount cursor. The rest enriches the hover.
+        updated_at: fork.updated_at,
+        last_message_preview: fork.last_message_preview,
+        last_message_role: fork.last_message_role,
+        last_user_message_at: fork.last_user_message_at,
+        status: fork.status,
+        git_branch: fork.git_branch,
+        fork_copied: fork.fork_copied,
       };
     })
   );
+}
+
+// Forks of `parentId` the viewer may actually open, shaped for the branch UI.
+// Filtering by access is load-bearing, not cosmetic: the client preloads every
+// returned branch into its local store for instant switching, so an unfiltered
+// list would both leak teammates' private forks into the inbox AND surface chips
+// that deny on click (the "branch spins forever" bug). Owner forks short-circuit
+// the access check, so the common all-mine case stays cheap.
+async function getAccessibleForkChildren(
+  ctx: QueryCtx,
+  authUserId: Id<"users"> | null,
+  parentId: Id<"conversations">,
+) {
+  const forks = await ctx.db
+    .query("conversations")
+    .withIndex("by_forked_from", (q) => q.eq("forked_from", parentId))
+    .collect();
+  const visible = [];
+  for (const fork of forks) {
+    if ((await checkConversationAccess(ctx, authUserId, fork)) !== "denied") {
+      visible.push(fork);
+    }
+  }
+  return mapForkDetails(ctx, visible);
 }
 
 async function getAuthenticatedUserId(
@@ -305,106 +471,6 @@ function generateShareToken(): string {
   return crypto.randomUUID();
 }
 
-function parseSearchTerms(query: string): { phrases: string[]; words: string[]; all: string[] } {
-  const phrases: string[] = [];
-  const words: string[] = [];
-  const regex = /"([^"]+)"|(\S+)/g;
-  let match;
-  while ((match = regex.exec(query)) !== null) {
-    if (match[1]) {
-      phrases.push(match[1].toLowerCase());
-    } else if (match[2]) {
-      words.push(match[2].toLowerCase());
-    }
-  }
-  return { phrases, words, all: [...phrases, ...words] };
-}
-
-function contentMatchesSearch(content: string, terms: { phrases: string[]; words: string[] }): boolean {
-  const lowerContent = content.toLowerCase();
-  for (const phrase of terms.phrases) {
-    if (!lowerContent.includes(phrase)) return false;
-  }
-  for (const word of terms.words) {
-    if (!lowerContent.includes(word)) return false;
-  }
-  return true;
-}
-
-function contentMatchesAnyTerm(content: string, terms: { phrases: string[]; words: string[]; all: string[] }): boolean {
-  const lowerContent = content.toLowerCase();
-  return terms.all.some(t => lowerContent.includes(t));
-}
-
-function conversationMatchesAllTerms(
-  messages: Array<{ content?: string | null }>,
-  terms: { phrases: string[]; words: string[] }
-): boolean {
-  const allContent = messages.map(m => (m.content || "").toLowerCase()).join(" ");
-  return contentMatchesSearch(allContent, terms);
-}
-
-function calculateProximityScore(
-  messages: Array<{ content?: string | null; _id: { toString(): string } }>,
-  terms: { all: string[] }
-): number {
-  if (terms.all.length <= 1) return 0;
-
-  const termPositions: Map<string, number[]> = new Map();
-  for (const term of terms.all) {
-    termPositions.set(term, []);
-  }
-
-  for (let msgIdx = 0; msgIdx < messages.length; msgIdx++) {
-    const content = (messages[msgIdx].content || "").toLowerCase();
-    for (const term of terms.all) {
-      if (content.includes(term)) {
-        termPositions.get(term)!.push(msgIdx);
-      }
-    }
-  }
-
-  // Check if all terms appear in same message (best case)
-  const messageIndicesWithAllTerms = new Set<number>();
-  for (let i = 0; i < messages.length; i++) {
-    const content = (messages[i].content || "").toLowerCase();
-    if (terms.all.every(t => content.includes(t))) {
-      return 0; // Best score - all terms in one message
-    }
-  }
-
-  // Calculate minimum span across messages
-  let minSpan = Infinity;
-  const firstTermPositions = termPositions.get(terms.all[0]) || [];
-
-  for (const startPos of firstTermPositions) {
-    let maxEnd = startPos;
-    let valid = true;
-
-    for (const term of terms.all.slice(1)) {
-      const positions = termPositions.get(term) || [];
-      if (positions.length === 0) {
-        valid = false;
-        break;
-      }
-      // Find closest position to current range
-      let closest = positions[0];
-      for (const pos of positions) {
-        if (Math.abs(pos - startPos) < Math.abs(closest - startPos)) {
-          closest = pos;
-        }
-      }
-      maxEnd = Math.max(maxEnd, closest);
-    }
-
-    if (valid) {
-      minSpan = Math.min(minSpan, maxEnd - startPos + 1);
-    }
-  }
-
-  return minSpan === Infinity ? 1000 : minSpan;
-}
-
 function formatSlugAsTitle(slug: string): string {
   return slug
     .split('-')
@@ -492,6 +558,22 @@ export const createConversation = mutation({
       v.literal("archived")
     )),
     subagent_description: v.optional(v.string()),
+    // Daemon-asserted subagent flag (transcript lives under a subagents/ dir).
+    // The parent LINK may resolve much later (parent not yet in the daemon's
+    // cache), so without this the row is born looking like a normal session
+    // and teammates get a "started coding" push for it.
+    is_subagent: v.optional(v.boolean()),
+    agent_team_name: v.optional(v.string()),
+    agent_name: v.optional(v.string()),
+    // Device id of the daemon syncing this transcript. The transcript (and any
+    // tmux session) lives on that machine, so it is the only daemon that can
+    // deliver messages here. Without this stamp, ownership was only set lazily
+    // when a daemon claimed the conversation's FIRST pending message — a
+    // broadcast race every one of the user's daemons entered, and a remote
+    // daemon (no transcript, no pane) sometimes won, silently black-holing
+    // delivery. Optional for older CLIs; claim-time stamping remains the
+    // fallback for conversations created without it.
+    owner_device_id: v.optional(v.string()),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -512,8 +594,8 @@ export const createConversation = mutation({
       .first();
 
     if (existing) {
+      const patch: Record<string, any> = {};
       if (args.parent_conversation_id) {
-        const patch: Record<string, any> = {};
         if (!existing.parent_conversation_id) {
           patch.parent_conversation_id = args.parent_conversation_id as Id<"conversations">;
         }
@@ -526,9 +608,27 @@ export const createConversation = mutation({
         if (args.subagent_description && !existing.subagent_description) {
           patch.subagent_description = args.subagent_description;
         }
-        if (Object.keys(patch).length > 0) {
-          await ctx.db.patch(existing._id, patch);
-        }
+      }
+      if (
+        args.is_subagent &&
+        !("is_subagent" in patch) &&
+        !existing.is_subagent &&
+        !existing.parent_message_uuid &&
+        !args.parent_message_uuid
+      ) {
+        patch.is_subagent = true;
+      }
+      if (args.agent_team_name && !existing.agent_team_name) {
+        patch.agent_team_name = args.agent_team_name;
+        if (args.agent_name && !existing.agent_name) patch.agent_name = args.agent_name;
+      }
+      // Adopt an unowned conversation; never steal one another device owns
+      // (explicit ownership transfers go through sessionOwnership).
+      if (args.owner_device_id && !existing.owner_device_id) {
+        patch.owner_device_id = args.owner_device_id;
+      }
+      if (Object.keys(patch).length > 0) {
+        await ctx.db.patch(existing._id, patch);
       }
       return existing._id;
     }
@@ -537,16 +637,8 @@ export const createConversation = mutation({
     const startedAt = args.started_at ?? now;
 
     const conversationPath = args.git_root || args.project_path;
-    const mappings = await ctx.db
-      .query("directory_team_mappings")
-      .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
-      .collect();
-
-    const { teamId: resolvedTeamId, isPrivate, autoShared } = resolveTeamForPath(
-      mappings,
-      conversationPath,
-      args.team_id as Id<"teams"> | undefined
-    );
+    const { team_id: resolvedTeamId, is_private: isPrivate, auto_shared: autoShared } =
+      await resolveCreationPrivacy(ctx, args.user_id, conversationPath, args.team_id as Id<"teams"> | undefined);
 
     let parentConversationId: Id<"conversations"> | undefined;
     if (args.parent_conversation_id) {
@@ -570,6 +662,7 @@ export const createConversation = mutation({
       title: args.title,
       project_hash: args.project_hash,
       project_path: args.project_path,
+      owner_device_id: args.owner_device_id,
       started_at: startedAt,
       updated_at: startedAt,
       message_count: 0,
@@ -578,7 +671,10 @@ export const createConversation = mutation({
       status: "active",
       parent_message_uuid: args.parent_message_uuid,
       parent_conversation_id: parentConversationId,
-      is_subagent: (!!parentConversationId && !args.parent_message_uuid) || undefined,
+      is_subagent: (args.is_subagent === true && !args.parent_message_uuid) ||
+        (!!parentConversationId && !args.parent_message_uuid) || undefined,
+      agent_team_name: args.agent_team_name,
+      agent_name: args.agent_name,
       git_commit_hash: args.git_commit_hash,
       git_branch: args.git_branch,
       git_remote_url: args.git_remote_url,
@@ -637,10 +733,19 @@ export const createConversation = mutation({
     }
 
     if (resolvedTeamId && !existing) {
-      await ctx.scheduler.runAfter(0, internal.notifications.notifyTeamSessionStart, {
-        conversation_id: conversationId,
-        user_id: args.user_id,
-      });
+      const bornSubagent =
+        args.is_subagent === true || (!!parentConversationId && !args.parent_message_uuid);
+      if (!bornSubagent) {
+        // Grace delay: subagent/spawned-by links are often stamped seconds
+        // after registration (linkSessions/linkSpawnedBy). notifyTeamSessionStart
+        // re-reads the conversation at fire time, so the delay lets a late
+        // link suppress the push instead of racing it.
+        const NOTIFY_GRACE_MS = 60 * 1000;
+        await ctx.scheduler.runAfter(NOTIFY_GRACE_MS, internal.notifications.notifyTeamSessionStart, {
+          conversation_id: conversationId,
+          user_id: args.user_id,
+        });
+      }
 
       await ctx.scheduler.runAfter(0, internal.teamActivity.recordTeamActivity, {
         team_id: resolvedTeamId,
@@ -685,21 +790,10 @@ export const createQuickSession = mutation({
     const sessionId = args.session_id || crypto.randomUUID();
     const agentType = args.agent_type || "claude_code";
 
-    const conversationPath = args.git_root || args.project_path;
-    const mappings = await ctx.db
-      .query("directory_team_mappings")
-      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-      .collect();
-
-    const { teamId: resolvedTeamId, isPrivate, autoShared } = resolveTeamForPath(
-      mappings,
-      conversationPath,
-      undefined
-    );
+    const privacy = await resolveCreationPrivacy(ctx, userId, args.git_root || args.project_path);
 
     const conversationId = await ctx.db.insert("conversations", {
       user_id: userId,
-      team_id: resolvedTeamId,
       agent_type: agentType,
       session_id: sessionId,
       project_path: args.project_path,
@@ -707,8 +801,7 @@ export const createQuickSession = mutation({
       started_at: now,
       updated_at: now,
       message_count: 0,
-      is_private: isPrivate,
-      auto_shared: autoShared || undefined,
+      ...privacy,
       status: "active",
     });
 
@@ -789,6 +882,23 @@ export const getConversations = query({
   },
 });
 
+// An anchor's session renders under its bot identity (acting_user_id), not the
+// human host that runs and bills it. Resolve that identity for the author chip;
+// returns null for ordinary sessions so callers fall back to the owner. Cheap:
+// only anchors set acting_user_id, so the extra read is sparse.
+async function resolveActingAuthor(
+  ctx: any,
+  conv: { acting_user_id?: Id<"users"> | null },
+): Promise<{ name: string; avatar: string | null } | null> {
+  if (!conv.acting_user_id) return null;
+  const bot = await ctx.db.get(conv.acting_user_id);
+  if (!bot) return null;
+  return {
+    name: (bot as any).name || "Anchor",
+    avatar: (bot as any).image || (bot as any).github_avatar_url || null,
+  };
+}
+
 export const webGet = query({
   args: {
     short_id: v.optional(v.string()),
@@ -814,6 +924,13 @@ export const webGet = query({
     const isOwner = conv.user_id.toString() === userId.toString();
     if (!isOwner && !(await canTeamMemberAccess(ctx, userId, conv))) return null;
 
+    // Author identity, only for teammates' sessions (own sessions skip the read).
+    // The reference pill/hover use this to show the author's avatar when the
+    // session isn't yours — same name/avatar convention as the inbox feed rows.
+    // An anchor always shows its bot identity, even on the host's own session.
+    const owner = isOwner ? null : await ctx.db.get(conv.user_id);
+    const acting = await resolveActingAuthor(ctx, conv);
+
     return {
       _id: conv._id,
       short_id: conv.short_id,
@@ -824,6 +941,18 @@ export const webGet = query({
       model: conv.model,
       agent_type: conv.agent_type,
       updated_at: conv.updated_at,
+      is_own: isOwner,
+      acting_user_id: conv.acting_user_id ?? null,
+      is_anchor: !!conv.anchor_id,
+      author_name: acting ? acting.name : owner ? (owner.name || owner.email?.split("@")[0] || "Unknown") : null,
+      author_avatar: acting ? acting.avatar : owner ? (owner.image || owner.github_avatar_url || null) : null,
+      // Summary/context fields (already on the doc — no extra reads). The pill
+      // card coalesces these into a one-line summary + last-message preview so
+      // an expanded session reference shows what it's about, not just metadata.
+      idle_summary: conv.idle_summary,
+      subtitle: conv.subtitle,
+      last_message_preview: conv.last_message_preview,
+      last_message_role: conv.last_message_role,
     };
   },
 });
@@ -922,15 +1051,7 @@ export const getAllMessages = query({
       return null;
     }
 
-    const isOwner = authUserId && conversation.user_id.toString() === authUserId.toString();
-    const isShared = !!conversation.share_token;
-    let hasTeamAccess = false;
-
-    if (authUserId && !isOwner) {
-      hasTeamAccess = await canTeamMemberAccess(ctx, authUserId, conversation);
-    }
-
-    if (!isOwner && !hasTeamAccess && !isShared) {
+    if ((await checkConversationAccess(ctx, authUserId, conversation)) === "denied") {
       return null;
     }
 
@@ -990,6 +1111,7 @@ export const getAllMessages = query({
         const originalUser = await ctx.db.get(originalConv.user_id);
         forkedFromDetails = {
           conversation_id: originalConv._id,
+          title: originalConv.title,
           share_token: originalConv.share_token,
           username: originalUser?.name || originalUser?.email?.split("@")[0] || "Unknown",
         };
@@ -1009,24 +1131,15 @@ export const getAllMessages = query({
       }
     }
 
-    const forkChildren = await ctx.db
-      .query("conversations")
-      .withIndex("by_forked_from", (q) => q.eq("forked_from", args.conversation_id))
-      .collect();
-
-    const forkChildrenDetails = await mapForkDetails(ctx, forkChildren);
+    const forkChildrenDetails = await getAccessibleForkChildren(ctx, authUserId, args.conversation_id);
 
     let forkSiblings: typeof forkChildrenDetails = [];
     if (conversation.forked_from) {
-      const siblings = await ctx.db
-        .query("conversations")
-        .withIndex("by_forked_from", (q: any) => q.eq("forked_from", conversation.forked_from))
-        .collect();
-      forkSiblings = await mapForkDetails(ctx, siblings);
+      forkSiblings = await getAccessibleForkChildren(ctx, authUserId, conversation.forked_from);
     }
 
     const mainMsgCountsByFork: Record<string, number> = {};
-    const forkPointUuids = new Set(forkChildren.map(f => f.parent_message_uuid).filter(Boolean));
+    const forkPointUuids = new Set(forkChildrenDetails.map(f => f.parent_message_uuid).filter(Boolean));
     if (forkPointUuids.size > 0) {
       for (const uuid of forkPointUuids) {
         const forkPointMsg = messages.find(m => m.message_uuid === uuid);
@@ -1113,6 +1226,10 @@ export const getProjectInfo = query({
       project_path: conv.project_path ?? null,
       git_root: conv.git_root ?? null,
       git_remote_url: conv.git_remote_url ?? null,
+      // Resume effort fallback: a session launched with --effort but never
+      // switched in-session has no transcript echo to re-pin from; the
+      // conversation row is the only durable record.
+      effort: conv.effort ?? null,
     };
   },
 });
@@ -1340,8 +1457,13 @@ export const listMessages = query({
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
     const conversation = await ctx.db.get(args.conversation_id);
+    // Missing conversation must return the empty-page shape, not throw — a
+    // client can hold a stale conversation_id (deleted row, lost access) in
+    // local state, and throwing crashes the React tree via usePaginatedQuery.
+    // Sibling queries (getConversationWithMeta, copyAllMessages) already
+    // degrade gracefully on this; align with them.
     if (!conversation) {
-      throw new Error("Conversation not found");
+      return { page: [], isDone: true, continueCursor: "" };
     }
 
     const isOwner = authUserId && conversation.user_id.toString() === authUserId.toString();
@@ -1376,15 +1498,11 @@ export const getConversationWithMeta = query({
       return null;
     }
 
-    const isOwner = authUserId && conversation.user_id.toString() === authUserId.toString();
-    const isShared = !!conversation.share_token;
-    let hasTeamAccess = false;
-    if (authUserId && !isOwner) {
-      hasTeamAccess = await canTeamMemberAccess(ctx, authUserId, conversation);
-    }
-    if (!isOwner && !hasTeamAccess && !isShared) {
+    const access = await checkConversationAccess(ctx, authUserId, conversation);
+    if (access === "denied") {
       return null;
     }
+    const isOwner = access === "owner";
 
     const user = await ctx.db.get(conversation.user_id);
 
@@ -1402,6 +1520,7 @@ export const getConversationWithMeta = query({
         const originalUser = await ctx.db.get(originalConv.user_id);
         forkedFromDetails = {
           conversation_id: originalConv._id,
+          title: originalConv.title,
           share_token: originalConv.share_token,
           username: originalUser?.name || originalUser?.email?.split("@")[0] || "Unknown",
         };
@@ -1419,21 +1538,19 @@ export const getConversationWithMeta = query({
       }
     }
 
-    const forkChildren = await ctx.db
-      .query("conversations")
-      .withIndex("by_forked_from", (q) => q.eq("forked_from", args.conversation_id))
-      .collect();
-
-    const forkChildrenDetails = await mapForkDetails(ctx, forkChildren);
+    const forkChildrenDetails = await getAccessibleForkChildren(ctx, authUserId, args.conversation_id);
 
     let forkSiblings: typeof forkChildrenDetails = [];
     if (conversation.forked_from) {
-      const siblings = await ctx.db
-        .query("conversations")
-        .withIndex("by_forked_from", (q: any) => q.eq("forked_from", conversation.forked_from))
-        .collect();
-      forkSiblings = await mapForkDetails(ctx, siblings);
+      forkSiblings = await getAccessibleForkChildren(ctx, authUserId, conversation.forked_from);
     }
+
+    const mainDivergentPreviewsByFork = await computeOriginDivergentPreviews(
+      ctx,
+      conversation,
+      forkChildrenDetails,
+      forkSiblings,
+    );
 
     let effective_team_visibility = conversation.team_visibility;
     if (!effective_team_visibility && conversation.team_id && isOwner) {
@@ -1477,6 +1594,7 @@ export const getConversationWithMeta = query({
       fork_children: forkChildrenDetails,
       fork_siblings: forkSiblings.length > 0 ? forkSiblings : undefined,
       parent_conversation_id: parentConversationId,
+      main_divergent_previews_by_fork: mainDivergentPreviewsByFork,
       active_plan,
       active_task,
     });
@@ -1731,6 +1849,9 @@ export const getOlderMessages = query({
   },
 });
 
+// The scan loop + the team-merge cursor protocol live in feedPagination.ts
+// (pure TS) so their no-skip / always-progress invariants are unit-testable.
+
 export const listConversations = query({
   args: {
     filter: v.union(v.literal("my"), v.literal("team")),
@@ -1832,38 +1953,34 @@ export const listConversations = query({
     };
 
     let conversations;
+    // Set only by the team-merge path, which owns its own cursor protocol.
+    let teamMergeNextCursor: string | null | undefined;
+    // Examination floors of scans that stopped before exhausting their index
+    // (read budget / per-member quota). The page cursor must never dip below an
+    // unfinished scan's floor — rows in the unexamined gap would be skipped
+    // forever (re-examining is safe, the client dedups; skipping is not) — and
+    // a short page must not report end-of-history while a floor remains.
+    const scanFloors: number[] = [];
     if (args.filter === "my") {
       if (needsBatchScan) {
-        const results: any[] = [];
-        let scanCursor = cursorTimestamp;
-        const batchSize = Math.min(limit * 3, 50);
-        const maxBatches = 5;
-
-        for (let i = 0; i < maxBatches && results.length < limit + 1; i++) {
-          const batch = await ctx.db
-            .query("conversations")
-            .withIndex("by_user_updated", (q) =>
-              scanCursor
-                ? q.eq("user_id", userId).lt("updated_at", scanCursor)
-                : q.eq("user_id", userId)
-            )
-            .order("desc")
-            .take(batchSize);
-
-          if (batch.length === 0) break;
-
-          for (const c of batch) {
-            if (matchesFilters(c)) {
-              results.push(c);
-              if (results.length >= limit + 1) break;
-            }
-          }
-
-          scanCursor = batch[batch.length - 1].updated_at;
-          if (batch.length < batchSize) break;
-        }
-
-        conversations = results;
+        const scan = await batchScanConversations({
+          fetchPage: (cursor, take) =>
+            ctx.db
+              .query("conversations")
+              .withIndex("by_user_updated", (q) =>
+                cursor
+                  ? q.eq("user_id", userId).lt("updated_at", cursor)
+                  : q.eq("user_id", userId)
+              )
+              .order("desc")
+              .take(take),
+          startCursor: cursorTimestamp,
+          want: limit + 1,
+          accept: matchesFilters,
+          batchSize: Math.min(limit * 3, 50),
+        });
+        conversations = scan.rows;
+        if (!scan.exhausted && scan.oldestSeen != null) scanFloors.push(scan.oldestSeen);
       } else {
         const query = ctx.db
           .query("conversations")
@@ -1886,53 +2003,33 @@ export const listConversations = query({
         return { conversations: [], nextCursor: null };
       }
 
-      const query = ctx.db
-        .query("conversations")
-        .withIndex("by_team_user_updated", (q) =>
-          cursorTimestamp
-            ? q.eq("team_id", effectiveTeamId!).eq("user_id", args.memberId!).lt("updated_at", cursorTimestamp)
-            : q.eq("team_id", effectiveTeamId!).eq("user_id", args.memberId!)
-        )
-        .order("desc");
-
-      const isVisible = (c: any): boolean => {
-        return feedFilter!.isVisible(c);
-      };
-      if (needsBatchScan) {
-        const results: any[] = [];
-        let memberScanCursor = cursorTimestamp;
-        const memberBatchSize = Math.min(limit * 3, 50);
-        for (let i = 0; i < 5 && results.length < limit + 1; i++) {
-          const batch = await ctx.db
+      // One scan covers both the filtered and unfiltered cases: visibility
+      // alone can drop rows, so even without extra filters a single take()
+      // could return a short page mid-history.
+      const scan = await batchScanConversations({
+        fetchPage: (cursor, take) =>
+          ctx.db
             .query("conversations")
             .withIndex("by_team_user_updated", (q) =>
-              memberScanCursor
-                ? q.eq("team_id", effectiveTeamId!).eq("user_id", args.memberId!).lt("updated_at", memberScanCursor)
+              cursor
+                ? q.eq("team_id", effectiveTeamId!).eq("user_id", args.memberId!).lt("updated_at", cursor)
                 : q.eq("team_id", effectiveTeamId!).eq("user_id", args.memberId!)
             )
             .order("desc")
-            .take(memberBatchSize);
-          if (batch.length === 0) break;
-          for (const c of batch) {
-            if (!isVisible(c)) continue;
-            if (!matchesFilters(c)) continue;
-            results.push(c);
-            if (results.length >= limit + 1) break;
-          }
-          memberScanCursor = batch[batch.length - 1].updated_at;
-          if (batch.length < memberBatchSize) break;
-        }
-        conversations = results;
-      } else {
-        const fetched = await query.take((limit + 1) * 2);
-        conversations = fetched.filter((c) => {
-          if (!isVisible(c)) return false;
-          return matchesFilters(c);
-        }).slice(0, limit + 1);
-      }
+            .take(take),
+        startCursor: cursorTimestamp,
+        want: limit + 1,
+        accept: (c) => feedFilter!.isVisible(c) && matchesFilters(c),
+        batchSize: Math.min(limit * 3, 50),
+      });
+      conversations = scan.rows;
+      if (!scan.exhausted && scan.oldestSeen != null) scanFloors.push(scan.oldestSeen);
     } else {
-      // Query recent conversations from each visible team member and merge
-      // This ensures all team members' conversations appear regardless of activity level
+      // Query recent conversations from each visible team member and merge.
+      // Pagination uses a composite per-member cursor (see feedPagination.ts):
+      // each member resumes below what THEY already returned, so pages never
+      // re-serve rows the client has, and one member's filtered-out band
+      // (e.g. a swarm of subagent sessions) can't stall everyone else.
       const visibleMembers = (feedFilter?.memberships ?? []).filter(m => {
         const visibility = (m as any).visibility || "summary";
         return visibility !== "hidden";
@@ -1945,35 +2042,44 @@ export const listConversations = query({
       ));
       const perMemberLimit = Math.max(3, Math.ceil((limit + 1) / Math.max(visibleMembers.length, 1)));
 
-      const memberConversations = await Promise.all(
-        visibleMembers.map(async (member) => {
-          const query = ctx.db
+      const page = await paginateTeamFeed({
+        memberIds: visibleMembers.map((m) => m.user_id.toString()),
+        cursor: args.cursor ?? null,
+        limit,
+        fetchPage: (memberId, cursor, take) =>
+          ctx.db
             .query("conversations")
             .withIndex("by_team_user_updated", (q) =>
-              cursorTimestamp
-                ? q.eq("team_id", effectiveTeamId!).eq("user_id", member.user_id).lt("updated_at", cursorTimestamp)
-                : q.eq("team_id", effectiveTeamId!).eq("user_id", member.user_id)
+              cursor
+                ? q.eq("team_id", effectiveTeamId!).eq("user_id", memberId as Id<"users">).lt("updated_at", cursor)
+                : q.eq("team_id", effectiveTeamId!).eq("user_id", memberId as Id<"users">)
             )
-            .order("desc");
-
-          const convs = await query.take(perMemberFetch);
-          return convs.filter((c) => {
-            if (!feedFilter!.isVisible(c)) return false;
-            if (!matchesFilters(c)) return false;
-            return true;
-          }).slice(0, perMemberLimit);
-        })
-      );
-
-      // Merge and sort by updated_at descending
-      const allFiltered = memberConversations.flat();
-      allFiltered.sort((a, b) => b.updated_at - a.updated_at);
-      conversations = allFiltered.slice(0, limit + 1);
+            .order("desc")
+            .take(take),
+        accept: (c) => feedFilter!.isVisible(c) && matchesFilters(c),
+        perMemberFetch,
+        perMemberWant: perMemberLimit,
+        maxBatches: 4,
+      });
+      conversations = page.rows;
+      teamMergeNextCursor = page.nextCursor;
     }
 
-    const hasMore = conversations.length > limit;
-    const resultConversations = hasMore ? conversations.slice(0, limit) : conversations;
-    const nextCursor = hasMore ? String(resultConversations[resultConversations.length - 1].updated_at) : null;
+    // The team merge computes its own composite continuation; the single-scan
+    // paths ("my", memberId) continue from the page's last row, but never below
+    // an unfinished scan's floor (those rows were never examined), and a short
+    // page with a remaining floor is NOT end-of-history — null means the scan
+    // truly ran its index dry.
+    const hasMore = teamMergeNextCursor !== undefined ? teamMergeNextCursor != null : conversations.length > limit;
+    const resultConversations = teamMergeNextCursor === undefined && hasMore ? conversations.slice(0, limit) : conversations;
+    let nextCursor: string | null;
+    if (teamMergeNextCursor !== undefined) {
+      nextCursor = teamMergeNextCursor;
+    } else {
+      const pageCursor = hasMore ? resultConversations[resultConversations.length - 1].updated_at : null;
+      const continuation = pageCursor != null ? [...scanFloors, pageCursor] : scanFloors;
+      nextCursor = continuation.length > 0 ? String(Math.max(...continuation)) : null;
+    }
 
     const conversationsWithUsers = await Promise.all(
       resultConversations.map(async (c) => {
@@ -1987,8 +2093,11 @@ export const listConversations = query({
           feedFilter?.getVisibility(c.user_id.toString()),
           args.filter === "team"
         );
-        const authorName = (conversationUser as any)?.name || (conversationUser as any)?.email?.split("@")[0] || "Unknown";
-        const authorAvatar = (conversationUser as any)?.image || (conversationUser as any)?.github_avatar_url || null;
+        let authorName = (conversationUser as any)?.name || (conversationUser as any)?.email?.split("@")[0] || "Unknown";
+        let authorAvatar = (conversationUser as any)?.image || (conversationUser as any)?.github_avatar_url || null;
+        // An anchor renders under its bot identity even on the host's own row.
+        const acting = await resolveActingAuthor(ctx, c);
+        if (acting) { authorName = acting.name; authorAvatar = acting.avatar; }
         const projectName = (c.project_path || c.git_root)?.split("/").pop() || "unknown project";
         const durationMs = c.updated_at - c.started_at;
         const isActive = c.status === "active" && (c.updated_at > fiveMinutesAgo || liveConvIds.has(c._id.toString()));
@@ -2001,6 +2110,8 @@ export const listConversations = query({
             visibility_mode: visibilityMode,
             author_name: authorName,
             author_avatar: authorAvatar,
+            acting_user_id: c.acting_user_id ?? null,
+            is_anchor: !!c.anchor_id,
             is_own: c.user_id.toString() === userId.toString(),
             is_active: isActive,
             updated_at: c.updated_at,
@@ -2025,6 +2136,8 @@ export const listConversations = query({
             subtitle: c.subtitle || null,
             author_name: authorName,
             author_avatar: authorAvatar,
+            acting_user_id: c.acting_user_id ?? null,
+            is_anchor: !!c.anchor_id,
             is_own: c.user_id.toString() === userId.toString(),
             is_active: isActive,
             updated_at: c.updated_at,
@@ -2066,6 +2179,8 @@ export const listConversations = query({
             is_active: isActive,
             author_name: authorName,
             author_avatar: authorAvatar,
+            acting_user_id: c.acting_user_id ?? null,
+            is_anchor: !!c.anchor_id,
             is_own: c.user_id.toString() === userId.toString(),
             parent_conversation_id: c.parent_conversation_id || null,
             parent_message_uuid: c.parent_message_uuid || null,
@@ -2079,6 +2194,7 @@ export const listConversations = query({
             git_branch: c.git_branch || null,
             git_remote_url: c.git_remote_url || null,
             is_favorite: c.is_favorite || false,
+            profile_pinned_at: c.profile_pinned_at,
             fork_count: c.fork_count || 0,
             forked_from: c.forked_from || null,
             is_private: c.is_private,
@@ -2139,7 +2255,9 @@ export const listConversations = query({
           }
           if (msg.role === "user") {
             const text = msg.content?.trim();
-            if (text) {
+            // isImportNotice: context-only import banner must not become the
+            // preview / first_user_message / fallback title.
+            if (text && !isImportNotice(text)) {
               const truncated = text.length > 120 ? text.slice(0, 120) + "..." : text;
               messageAlternates.push({ role: "user", content: truncated });
             }
@@ -2166,7 +2284,10 @@ export const listConversations = query({
 
         const fullTitle = c.title || firstUserMessage || "New Session";
 
-        let parentConversationId: string | null = c.parent_conversation_id || null;
+        // spawned_by (visible child → its lead) joins the same parent
+        // resolution so the "sub of"/"spawned by" row and title come free.
+        let parentConversationId: string | null =
+          c.parent_conversation_id || c.spawned_by_conversation_id || null;
         let parentTitle: string | null = null;
         if (!parentConversationId && c.parent_message_uuid) {
           const parentMsg = await ctx.db
@@ -2209,6 +2330,7 @@ export const listConversations = query({
           author_avatar: authorAvatar,
           is_own: c.user_id.toString() === userId.toString(),
           parent_conversation_id: visibilityMode === "full" ? parentConversationId : null,
+          spawned_by_conversation_id: visibilityMode === "full" ? (c.spawned_by_conversation_id || null) : null,
           parent_message_uuid: c.parent_message_uuid || null,
           is_subagent: !!(c.is_subagent || (c.parent_conversation_id && !c.parent_message_uuid)),
           is_workflow_sub: c.is_workflow_sub || false,
@@ -2220,6 +2342,7 @@ export const listConversations = query({
           git_branch: c.git_branch || null,
           git_remote_url: c.git_remote_url || null,
           is_favorite: c.is_favorite || false,
+          profile_pinned_at: c.profile_pinned_at,
           fork_count: c.fork_count || 0,
           forked_from: c.forked_from || null,
           is_private: c.is_private,
@@ -2282,6 +2405,47 @@ export const generateShareLink = mutation({
       share_token: shareToken,
     });
     return shareToken;
+  },
+});
+
+// Pin a session to the owner's PUBLIC profile. This is the consent act that
+// makes a session world-visible, so it also guarantees a share_token — the
+// profile card and the /share guest viewer both key off that token. Pinning a
+// session that was private/team-only does NOT change is_private; it grants
+// anonymous read of *this one session* via its share link, nothing more.
+export const pinToProfile = mutation({
+  args: { conversation_id: v.id("conversations") },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) throw new Error("Unauthorized: must be logged in");
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) throw new Error("Conversation not found");
+    if (conversation.user_id.toString() !== authUserId.toString())
+      throw new Error("Unauthorized: can only pin your own conversations");
+
+    const patch: { profile_pinned_at: number; share_token?: string } = {
+      profile_pinned_at: Date.now(),
+    };
+    if (!conversation.share_token) patch.share_token = generateShareToken();
+    await ctx.db.patch(args.conversation_id, patch);
+    return { pinned: true, share_token: conversation.share_token ?? patch.share_token };
+  },
+});
+
+// Remove a session from the public profile. Leaves the share_token intact — the
+// owner may have circulated that link elsewhere; un-pinning only delists it from
+// the profile (profilePublicSessionVisible then drops it).
+export const unpinFromProfile = mutation({
+  args: { conversation_id: v.id("conversations") },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) throw new Error("Unauthorized: must be logged in");
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) throw new Error("Conversation not found");
+    if (conversation.user_id.toString() !== authUserId.toString())
+      throw new Error("Unauthorized: can only unpin your own conversations");
+    await ctx.db.patch(args.conversation_id, { profile_pinned_at: undefined });
+    return { pinned: false };
   },
 });
 
@@ -2559,6 +2723,8 @@ export const listRecentSessions = query({
           _id: c._id,
           session_id: c.session_id,
           title: c.title,
+          subtitle: c.subtitle,
+          idle_summary: c.idle_summary,
           updated_at: c.updated_at,
           project_path: c.project_path,
           git_root: c.git_root,
@@ -2578,6 +2744,9 @@ export const searchConversations = query({
     limit: v.optional(v.number()),
     userOnly: v.optional(v.boolean()),
     activeTeamId: v.optional(v.id("teams")),
+    mineOnly: v.optional(v.boolean()),
+    since: v.optional(v.number()),
+    sort: v.optional(v.union(v.literal("recent"), v.literal("relevance"))),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -2595,7 +2764,12 @@ export const searchConversations = query({
       .collect();
     const userTeamIds = userMemberships.map(m => m.team_id);
 
-    const effectiveTeamIds = args.activeTeamId ? [args.activeTeamId] : userTeamIds;
+    // mineOnly never surfaces teammates' sessions, so skip the team roster +
+    // feed-filter loads entirely — the visibility filter below then only
+    // passes own conversations.
+    const effectiveTeamIds = args.mineOnly
+      ? []
+      : args.activeTeamId ? [args.activeTeamId] : userTeamIds;
 
     type UserDoc = NonNullable<Awaited<ReturnType<typeof ctx.db.get<"users">>>>;
     const allTeamUsers: UserDoc[] = [];
@@ -2627,15 +2801,7 @@ export const searchConversations = query({
     const userOnly = args.userOnly ?? false;
     const terms = parseSearchTerms(searchTerm);
     const searchQuery = terms.all.join(" ");
-
-    // Use full-text search on messages. The index returns by relevance, and
-    // message docs can be large (tool results, long turns), so this take is the
-    // recall/speed knob: a bigger pool catches more recency-ranked matches at the
-    // cost of pulling more bytes per query.
-    const searchResults = await ctx.db
-      .query("messages")
-      .withSearchIndex("search_content_v2", (q) => q.search("content", searchQuery))
-      .take(512);
+    const searchResults = await fetchMessageSearchPool(ctx, terms);
 
     // Group messages by conversation (keep messages matching ANY term for context)
     const conversationMessages = new Map<string, typeof searchResults>();
@@ -2661,19 +2827,33 @@ export const searchConversations = query({
       }
     }
 
-    // Titles aren't covered by the message index — search them directly so a
-    // session like "Poll render debug" surfaces even when no message body matches.
+    // Titles and summaries aren't covered by the message index — search them
+    // directly so a session like "Poll render debug" surfaces even when no
+    // message body matches. subtitle (multi-line generated summary) and
+    // idle_summary (one-line blurb) catch sessions the user remembers by their
+    // summary wording rather than their title.
     type ConvDoc = NonNullable<Awaited<ReturnType<typeof ctx.db.get<"conversations">>>>;
     const titleConvs = new Map<string, ConvDoc>();
     if (!userOnly) {
-      const titleHits = await ctx.db
-        .query("conversations")
-        .withSearchIndex("search_title_v2", (q) => q.search("title", searchQuery))
-        .take(50);
-      for (const conv of titleHits) {
+      const fieldHits = await Promise.all([
+        ctx.db
+          .query("conversations")
+          .withSearchIndex("search_title_v2", (q) => q.search("title", searchQuery))
+          .take(50),
+        ctx.db
+          .query("conversations")
+          .withSearchIndex("search_subtitle", (q) => q.search("subtitle", searchQuery))
+          .take(50),
+        ctx.db
+          .query("conversations")
+          .withSearchIndex("search_idle_summary", (q) => q.search("idle_summary", searchQuery))
+          .take(50),
+      ]);
+      for (const conv of fieldHits.flat()) {
         const convId = conv._id.toString();
-        if (conversationMatches.has(convId)) continue;
-        if (!contentMatchesAnyTerm(conv.title || "", terms)) continue;
+        if (conversationMatches.has(convId) || titleConvs.has(convId)) continue;
+        const directFields = `${conv.title || ""} ${conv.subtitle || ""} ${conv.idle_summary || ""}`;
+        if (!contentMatchesAnyTerm(directFields, terms)) continue;
         titleConvs.set(convId, conv);
       }
     }
@@ -2695,6 +2875,8 @@ export const searchConversations = query({
       messageCount: number;
       proximityScore: number;
       titleMatch: boolean;
+      projectPath: string | null;
+      agentType: string | null;
     }> = [];
 
     // Hydrate conversation docs for message matches in parallel (was a serial
@@ -2728,12 +2910,28 @@ export const searchConversations = query({
       return true;
     });
 
-    // Recency order, then keep only the page we'll return. Totals reflect the full
-    // visible set, not just the slice.
-    visible.sort((a, b) => b.conv.updated_at - a.conv.updated_at);
-    const totalMatches = visible.reduce((sum, c) => sum + c.messages.length, 0);
-    const totalSessions = visible.length;
-    const top = visible.slice(0, limit);
+    // Time-range filter applies before totals so the counts reflect what's
+    // actually browsable under the current filters.
+    const scoped = args.since
+      ? visible.filter((c) => c.conv.updated_at >= args.since!)
+      : visible;
+
+    // Score once up front — the relevance sort and the per-result payload share it.
+    const scored = scoped.map((c) => ({
+      ...c,
+      proximityScore: calculateProximityScore(c.messages, terms),
+    }));
+    if (args.sort === "relevance") {
+      scored.sort((a, b) =>
+        b.proximityScore - a.proximityScore ||
+        b.messages.length - a.messages.length ||
+        b.conv.updated_at - a.conv.updated_at);
+    } else {
+      scored.sort((a, b) => b.conv.updated_at - a.conv.updated_at);
+    }
+    const totalMatches = scored.reduce((sum, c) => sum + c.messages.length, 0);
+    const totalSessions = scored.length;
+    const top = scored.slice(0, limit);
 
     // First-message fetch only feeds a title fallback, so it's only needed for the
     // title-less conversations that actually made the displayed slice — fetch those
@@ -2762,7 +2960,7 @@ export const searchConversations = query({
       })
     );
 
-    for (const { conv, messages } of top) {
+    for (const { conv, messages, proximityScore } of top) {
       const isOwn = conv.user_id.toString() === userId.toString();
       const conversationUser = userById.get(conv.user_id.toString());
       const firstUserMessage = firstMsgByConv.get(conv._id.toString()) || "";
@@ -2771,8 +2969,6 @@ export const searchConversations = query({
         || firstUserMessage
         || (conv.slug ? formatSlugAsTitle(conv.slug) : null)
         || "New Session";
-
-      const proximityScore = calculateProximityScore(messages, terms);
 
       results.push({
         conversationId: conv._id,
@@ -2807,6 +3003,8 @@ export const searchConversations = query({
         messageCount: conv.message_count || 0,
         proximityScore,
         titleMatch: messages.length === 0,
+        projectPath: conv.project_path || null,
+        agentType: conv.agent_type || null,
       });
     }
 
@@ -2860,21 +3058,11 @@ export const setPrivacy = mutation({
       throw new Error("Unauthorized: can only change privacy of your own conversations");
     }
 
-    const updates: { is_private: boolean; team_id?: Id<"teams">; team_visibility?: "summary" | "full" | "private" } = {
-      is_private: args.is_private,
-    };
-
-    if (args.is_private) {
-      updates.team_visibility = "private";
-    }
-
-    // When unlocking, ensure team_id is synced to user's current team
-    if (!args.is_private) {
-      const user = await ctx.db.get(authUserId);
-      if (user?.team_id && conversation.team_id?.toString() !== user.team_id.toString()) {
-        updates.team_id = user.team_id;
-      }
-    }
+    // Sharing must guarantee a team_id (buildShareUpdate); locking forces the
+    // private visibility marker. Never let is_private:false and team_id diverge.
+    const updates = args.is_private
+      ? { is_private: true as const, team_visibility: "private" as const }
+      : await buildShareUpdate(ctx, conversation, authUserId);
 
     await ctx.db.patch(args.conversation_id, updates);
   },
@@ -2899,9 +3087,12 @@ export const setTeamVisibility = mutation({
       throw new Error("Unauthorized: can only change visibility of your own conversations");
     }
 
+    // Setting any team visibility shares the conversation, so guarantee a
+    // team_id alongside it (else it's shared-with-nobody).
+    const updates = await buildShareUpdate(ctx, conversation, authUserId);
     await ctx.db.patch(args.conversation_id, {
+      ...updates,
       team_visibility: args.team_visibility ?? undefined,
-      is_private: false,
     });
   },
 });
@@ -2928,9 +3119,14 @@ export const setPrivacyBySessionId = mutation({
       throw new Error(`Conversation not found with session_id: ${args.session_id}`);
     }
 
-    await ctx.db.patch(conversation._id, {
-      is_private: args.is_private,
-    });
+    // Same contract as setPrivacy: sharing must guarantee a team_id
+    // (buildShareUpdate), locking forces the private visibility marker. A raw
+    // is_private flip here was the one share path that skipped buildShareUpdate
+    // and could mint a "shared with nobody" row (non-private, teamless).
+    const updates = args.is_private
+      ? { is_private: true as const, team_visibility: "private" as const }
+      : await buildShareUpdate(ctx, conversation, authUserId);
+    await ctx.db.patch(conversation._id, updates);
 
     if (args.api_token) {
       await ctx.db.patch(authUserId, {
@@ -3193,6 +3389,20 @@ export const resolveConversation = query({
         .first();
     }
 
+    // Tombstone forwarding: a kill/restart that restored a deleted
+    // conversation stamped its replacement with the dead id — heal stale
+    // links/cards by resolving to the replacement (newest if ever several).
+    if (!conversation) {
+      const restored = await ctx.db
+        .query("conversations")
+        .withIndex("by_restored_from", (q) => q.eq("restored_from_conversation_id", args.id))
+        .collect();
+      conversation = restored.reduce(
+        (a: any, b: any) => ((b.updated_at ?? 0) > (a?.updated_at ?? 0) ? b : a),
+        null,
+      );
+    }
+
     if (!conversation) {
       return { access_level: "not_found" as const, conversation_id: null };
     }
@@ -3263,6 +3473,7 @@ export const searchForCLI = query({
     team_id: v.optional(v.id("teams")),
     member_name: v.optional(v.string()),
     mine_only: v.optional(v.boolean()),
+    label: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -3272,6 +3483,13 @@ export const searchForCLI = query({
     const user = await ctx.db.get(authUserId);
     if (!user) {
       return { error: "User not found" };
+    }
+
+    let labelConvIds: Set<string> | null = null;
+    if (args.label) {
+      const resolved = await resolveLabelConvIds(ctx, authUserId, args.label);
+      if ("error" in resolved) return { error: resolved.error };
+      labelConvIds = resolved.convIds;
     }
 
     const userMemberships = await ctx.db
@@ -3353,22 +3571,7 @@ export const searchForCLI = query({
     const userOnly = args.user_only ?? false;
     const terms = parseSearchTerms(searchTerm);
 
-    // Search for each term separately to ensure we get results for all terms
-    // Then combine and deduplicate by message ID
-    const allSearchResults = new Map<string, any>();
-    for (const term of terms.all) {
-      const results = await ctx.db
-        .query("messages")
-        .withSearchIndex("search_content_v2", (q) => q.search("content", term))
-        .take(200);
-      for (const msg of results) {
-        const msgId = msg._id.toString();
-        if (!allSearchResults.has(msgId)) {
-          allSearchResults.set(msgId, msg);
-        }
-      }
-    }
-    const searchResults = Array.from(allSearchResults.values());
+    const searchResults = await fetchMessageSearchPool(ctx, terms);
 
     // Group messages by conversation (keep messages matching ANY term for context)
     const conversationMessages = new Map<string, typeof searchResults>();
@@ -3384,13 +3587,10 @@ export const searchForCLI = query({
       conversationMessages.get(convId)!.push(msg);
     }
 
-    // Filter to conversations where ALL terms appear (across any messages)
-    const conversationMatches = new Map<string, typeof searchResults>();
-    for (const [convId, messages] of conversationMessages) {
-      if (conversationMatchesAllTerms(messages, terms)) {
-        conversationMatches.set(convId, messages);
-      }
-    }
+    // Best-coverage selection: full-coverage conversations first, then partial
+    // matches for longer queries, so a natural-language task description degrades
+    // to best-match instead of no-match. Quoted phrases stay required.
+    const rankedMatches = rankConversationsByCoverage(conversationMessages, terms);
 
     const results: Array<{
       id: string;
@@ -3399,6 +3599,7 @@ export const searchForCLI = query({
       updated_at: string;
       message_count: number;
       proximityScore: number;
+      coverage: number;
       user?: { name: string | null; email: string | null };
       matches: Array<{
         line: number;
@@ -3414,44 +3615,70 @@ export const searchForCLI = query({
     }> = [];
 
     let totalMatches = 0;
-    let conversationsSkipped = 0;
 
-    for (const [, messages] of conversationMatches) {
-      if (results.length >= limit) break;
-
-      const conv = await ctx.db.get(messages[0].conversation_id) as any;
-      if (!conv) continue;
+    // Hydrate candidate conversations in parallel (a serial await per candidate
+    // was a major latency source), then apply the sync filters before any
+    // further reads. Bounded to the best candidates — coverage order means the
+    // tail is the weakest matches anyway. The label filter applies before the
+    // bound: it's keyed by conversation id alone, and a small labeled set would
+    // otherwise vanish whenever it falls outside the top candidates.
+    const lci = labelConvIds;
+    const rankedEligible = lci
+      ? rankedMatches.filter((r) => lci.has(r.convId))
+      : rankedMatches;
+    const candidates = rankedEligible.slice(0, Math.max(50, offset + limit * 3));
+    const hydratedConvs = await Promise.all(
+      candidates.map(({ messages }) => ctx.db.get(messages[0].conversation_id))
+    );
+    const eligible: Array<{ conv: any; messages: typeof searchResults; coverage: number }> = [];
+    candidates.forEach(({ messages, coverage }, i) => {
+      const conv = hydratedConvs[i] as any;
+      if (!conv) return;
 
       const isOwn = conv.user_id.toString() === authUserId.toString();
       if (!isOwn) {
-        if (!conv.team_id || !effectiveTeamIdSet.has(conv.team_id.toString())) continue;
+        if (!conv.team_id || !effectiveTeamIdSet.has(conv.team_id.toString())) return;
         const cliFilter = cliFeedFilters.get(conv.team_id.toString());
-        if (!cliFilter || !cliFilter.isVisible(conv)) continue;
-        if (!teamUserIds.has(conv.user_id.toString())) continue;
+        if (!cliFilter || !cliFilter.isVisible(conv)) return;
+        if (!teamUserIds.has(conv.user_id.toString())) return;
       } else if (resolvedTeamId) {
         // Own sessions: filter by team when team is resolved from directory
         const convTeamId = (conv.team_id ?? conv.active_team_id)?.toString();
-        if (!convTeamId || !effectiveTeamIdSet.has(convTeamId)) continue;
+        if (!convTeamId || !effectiveTeamIdSet.has(convTeamId)) return;
       }
 
       // Filter by specific member (or self via --mine)
-      if (filterUserId && conv.user_id.toString() !== filterUserId) {
-        continue;
+      if (filterUserId && conv.user_id.toString() !== filterUserId) return;
+
+      // Filter to sessions the caller filed under the given label —
+      // project-bounded by default (the CLI passes cwd unless -g).
+      if (labelConvIds) {
+        if (!labelConvIds.has(conv._id.toString())) return;
+        if (projectPath && !(projectOverlaps(projectPath, conv.project_path) || projectOverlaps(projectPath, conv.git_root))) return;
       }
 
-      if (startTime && conv.updated_at < startTime) continue;
-      if (endTime && conv.updated_at > endTime) continue;
+      if (startTime && conv.updated_at < startTime) return;
+      if (endTime && conv.updated_at > endTime) return;
 
-      if (conversationsSkipped < offset) {
-        conversationsSkipped++;
-        continue;
-      }
+      eligible.push({ conv, messages, coverage });
+    });
 
-      const firstMessages = await ctx.db
-        .query("messages")
-        .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
-        .order("asc")
-        .take(20);
+    const page = eligible.slice(offset, offset + limit);
+
+    // Title-fallback first messages only for the returned page, in parallel.
+    const pageFirstMessages = await Promise.all(
+      page.map(({ conv }) =>
+        ctx.db
+          .query("messages")
+          .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
+          .order("asc")
+          .take(20)
+      )
+    );
+
+    for (let pageIdx = 0; pageIdx < page.length; pageIdx++) {
+      const { conv, messages, coverage } = page[pageIdx];
+      const firstMessages = pageFirstMessages[pageIdx];
 
       let firstUserMessage = "";
       for (const msg of firstMessages) {
@@ -3529,14 +3756,19 @@ export const searchForCLI = query({
         updated_at: new Date(conv.updated_at).toISOString(),
         message_count: conv.message_count || 0,
         proximityScore,
+        coverage,
         user: !isOwnConv && owner ? { name: owner.name || null, email: owner.email || null } : undefined,
         matches: formattedMatches,
         context: [],
       });
     }
 
-    // Sort by proximity first (lower = better), then by recency
+    // Sort by term coverage (full matches first), then proximity (lower =
+    // better), then recency.
     results.sort((a, b) => {
+      if (a.coverage !== b.coverage) {
+        return b.coverage - a.coverage;
+      }
       if (a.proximityScore !== b.proximityScore) {
         return a.proximityScore - b.proximityScore;
       }
@@ -3551,6 +3783,61 @@ export const searchForCLI = query({
   },
 });
 
+// Reactive tail of a conversation's recent messages, for `cast sessions -w
+// --messages` via ConvexClient.onUpdate (live push, no polling). Bounded take on
+// by_conversation_timestamp so a new message re-runs cheaply and pushes the
+// updated tail; the CLI dedupes by message_uuid. api_token authed; resolves a
+// short or full conversation id; same team-access check as readConversationMessages.
+export const conversationMessagesForCLI = query({
+  args: {
+    api_token: v.string(),
+    conversation_id: v.string(),
+    limit: v.optional(v.number()),
+    full_content: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthenticatedUserIdReadOnly(ctx, args.api_token);
+    if (!authUserId) return { error: "Unauthorized" };
+
+    let conv = null;
+    try { conv = await ctx.db.get(args.conversation_id as Id<"conversations">); } catch {}
+    if (!conv) {
+      conv = await ctx.db
+        .query("conversations")
+        .withIndex("by_short_id", (q) => q.eq("short_id", args.conversation_id))
+        .first();
+    }
+    if (!conv) return { error: "Conversation not found" };
+
+    const isOwn = conv.user_id.toString() === authUserId.toString();
+    if (!isOwn && !(await canTeamMemberAccess(ctx, authUserId, conv))) {
+      return { error: "Access denied" };
+    }
+
+    const limit = Math.min(Math.max(args.limit ?? 30, 1), 100);
+    const recent = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_timestamp", (q: any) => q.eq("conversation_id", conv._id))
+      .order("desc")
+      .take(limit * 2 + 20);
+    const tail = recent.filter(isNonEmptyMessage).slice(0, limit).reverse();
+    const inputCap = args.full_content ? 100000 : 500;
+    const resultCap = args.full_content ? 100000 : 1000;
+
+    return {
+      conversation: { id: conv._id, title: conv.title || "New Session", message_count: conv.message_count || 0 },
+      messages: tail.map((m: any) => ({
+        role: m.role,
+        content: m.content || "",
+        timestamp: new Date(m.timestamp).toISOString(),
+        message_uuid: m.message_uuid || undefined,
+        tool_calls: m.tool_calls?.map((tc: any) => ({ id: tc.id, name: tc.name, input: (tc.input || "").slice(0, inputCap) })),
+        tool_results: m.tool_results?.map((tr: any) => ({ tool_use_id: tr.tool_use_id, content: (tr.content || "").slice(0, resultCap), is_error: tr.is_error })),
+      })),
+    };
+  },
+});
+
 export const readConversationMessages = query({
   args: {
     api_token: v.string(),
@@ -3558,6 +3845,11 @@ export const readConversationMessages = query({
     start_line: v.optional(v.number()),
     end_line: v.optional(v.number()),
     full_content: v.optional(v.boolean()),
+    // Anchor the window on a specific message (its Convex _id, as in the web's
+    // `#msg-<id>` share links). When set without an explicit range, the result
+    // is a window of `context` messages on each side of the anchor.
+    around_message_id: v.optional(v.string()),
+    context: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserIdReadOnly(ctx, args.api_token);
@@ -3632,8 +3924,42 @@ export const readConversationMessages = query({
     const nonEmptyMessages = allMessages.filter(isNonEmptyMessage);
 
     const nonEmptyCount = nonEmptyMessages.length;
-    const startLine = args.start_line ?? 1;
-    const endLine = args.end_line ?? Math.min(nonEmptyCount, 20);
+
+    // When anchored to a specific message (e.g. from a #msg-<id> share link),
+    // resolve it to a line number so we can center the window on it. The id is
+    // the message's Convex _id, matching the web's `msg-<_id>` DOM anchors.
+    let targetLine: number | undefined;
+    let targetMissing = false;
+    if (args.around_message_id) {
+      let targetIdx = nonEmptyMessages.findIndex((m) => m._id === args.around_message_id);
+      if (targetIdx < 0) {
+        // The anchored message may have been filtered out as empty — snap to the
+        // nearest visible message so the window still lands in the right place.
+        const rawIdx = allMessages.findIndex((m) => m._id === args.around_message_id);
+        if (rawIdx >= 0) {
+          let before = 0;
+          for (let i = 0; i < rawIdx; i++) {
+            if (isNonEmptyMessage(allMessages[i])) before++;
+          }
+          targetIdx = Math.min(before, nonEmptyCount - 1);
+        }
+      }
+      if (targetIdx >= 0) targetLine = targetIdx + 1;
+      else targetMissing = true;
+    }
+
+    let startLine: number;
+    let endLine: number;
+    if (targetLine !== undefined && args.start_line === undefined && args.end_line === undefined) {
+      // Window of `context` messages on each side of the anchor, clamped to 24 so
+      // the anchor always stays inside the 50-message cap enforced below.
+      const ctxN = Math.min(24, Math.max(0, args.context ?? 10));
+      startLine = Math.max(1, targetLine - ctxN);
+      endLine = Math.min(nonEmptyCount, targetLine + ctxN);
+    } else {
+      startLine = args.start_line ?? 1;
+      endLine = args.end_line ?? Math.min(nonEmptyCount, 20);
+    }
 
     const startIdx = Math.max(0, startLine - 1);
     const count = Math.min(endLine - startLine + 1, 50);
@@ -3662,6 +3988,10 @@ export const readConversationMessages = query({
       };
 
       return {
+        // The message's Convex _id — the anchor the web's `#msg-<id>` deep links
+        // use, so `cast link` can mint a resolvable permalink to a line that
+        // `cast read` just showed.
+        id: m._id,
         line: startIdx + idx + 1,
         role: m.role,
         content: m.content || "",
@@ -3682,6 +4012,10 @@ export const readConversationMessages = query({
         updated_at: new Date(conv.updated_at).toISOString(),
       },
       messages,
+      // Line of the anchored message (1-based) so callers can highlight it.
+      target_line: targetLine,
+      target_message_id: targetLine !== undefined ? args.around_message_id : undefined,
+      target_missing: targetMissing || undefined,
     };
   },
 });
@@ -3754,6 +4088,7 @@ export const exportConversationMessages = query({
         message_uuid: m.message_uuid || undefined,
         tool_calls: m.tool_calls,
         tool_results: m.tool_results,
+        subtype: m.subtype || undefined,
       })),
     };
   },
@@ -3815,6 +4150,7 @@ export const exportConversationMessagesPage = query({
         message_uuid: m.message_uuid || undefined,
         tool_calls: m.tool_calls,
         tool_results: m.tool_results,
+        subtype: m.subtype || undefined,
       }));
 
     return {
@@ -3937,10 +4273,25 @@ export const updateProjectPath = mutation({
       return { updated: false };
     }
 
-    const patch: Record<string, string> = { project_path: args.project_path };
+    const patch: Record<string, any> = { project_path: args.project_path };
     if (args.git_root) {
       patch.git_root = args.git_root;
     }
+
+    // The path is being stamped after creation (pre-warmed/stub conversations
+    // are born pathless → private+teamless), so re-resolve team/privacy the
+    // way creation would have. Explicit user choices win inside the helper.
+    const mappings = await ctx.db
+      .query("directory_team_mappings")
+      .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
+      .collect();
+    const restamp = buildPathRestampUpdate(
+      conversation,
+      mappings,
+      args.git_root || args.project_path
+    );
+    if (restamp) Object.assign(patch, restamp);
+
     await ctx.db.patch(conversation._id, patch);
 
     return { updated: true, id: conversation._id };
@@ -4241,6 +4592,33 @@ export const _continueFork = internalMutation({
   },
 });
 
+// A fork continues the same thread of work, so it inherits the FORKER's label
+// on the source conversation. Labels are per-user filing (bucket_assignments),
+// which makes this naturally correct for foreign sources too: forking someone
+// else's session inherits nothing unless you had labeled it yourself. Archived
+// labels don't propagate.
+async function inheritLabelAssignment(
+  ctx: { db: any },
+  userId: Id<"users">,
+  sourceConvId: Id<"conversations">,
+  newConvId: Id<"conversations">,
+) {
+  const sourceAssignment = await ctx.db
+    .query("bucket_assignments")
+    .withIndex("by_user_conversation", (q: any) =>
+      q.eq("user_id", userId).eq("conversation_id", sourceConvId))
+    .first();
+  if (!sourceAssignment?.bucket_id) return;
+  const bucket = await ctx.db.get(sourceAssignment.bucket_id);
+  if (!bucket || bucket.archived_at) return;
+  await ctx.db.insert("bucket_assignments", {
+    user_id: userId,
+    conversation_id: newConvId,
+    bucket_id: sourceAssignment.bucket_id,
+    updated_at: Date.now(),
+  });
+}
+
 export const forkConversation = mutation({
   args: {
     share_token: v.string(),
@@ -4302,6 +4680,8 @@ export const forkConversation = mutation({
       fork_count: currentForkCount + 1,
     });
 
+    await inheritLabelAssignment(ctx, authUserId, original._id, newConversationId);
+
     // Copy the first batch synchronously so small forks finish in one RTT.
     // If more remains, advanceForkCopy schedules _continueFork to chain
     // subsequent batches as separate transactions.
@@ -4353,6 +4733,29 @@ export const forkFromMessage = mutation({
       }
     }
 
+    // Idempotency on the client-supplied session_id. The fork command rides the
+    // dispatch outbox, which is at-least-once: dispatchWithRetry resends the
+    // SAME args (session_id included) on any client-side error, and the outbox
+    // re-drives on reconnect. Without this guard a delivery that succeeded
+    // server-side but lost its response spawns a SECOND full-copy fork under the
+    // same session_id — the user works in one and the other is left as an empty
+    // "Fork: …" branch. Returning the existing row collapses every redelivery
+    // onto one conversation; the indexed read makes Convex's OCC serialize a
+    // truly-concurrent pair (the loser retries and finds the winner's insert).
+    if (args.session_id) {
+      const existing = await ctx.db
+        .query("conversations")
+        .withIndex("by_session_id", (q) => q.eq("session_id", args.session_id!))
+        .filter((q) => q.eq(q.field("user_id"), userId))
+        .first();
+      if (existing) {
+        return {
+          conversation_id: existing._id,
+          short_id: existing.short_id ?? existing._id.toString().slice(0, 7),
+        };
+      }
+    }
+
     // Resolve cutoff (for partial forks) without scanning the source. The
     // denormalized message_count on the conversation gives us an upper-bound
     // estimate for display; we don't need an exact total to drive the copy
@@ -4367,16 +4770,35 @@ export const forkFromMessage = mutation({
     // subsequent batches.
     let cutoffTimestamp: number;
     let isPartial = false;
+    let atTip = true; // no fork point = snapshot at "now" = the tip
     if (args.message_uuid) {
+      // Scope the lookup to THIS conversation. Forks copy messages verbatim,
+      // preserving message_uuid (forkCopy.ts), so a given uuid exists in the
+      // original AND every fork of it — the global by_message_uuid index is
+      // non-unique and .first() can return another fork's copy, spuriously
+      // failing the conversation match. by_conversation_uuid resolves the
+      // message within `original` directly.
       const forkPointMsg = await ctx.db
         .query("messages")
-        .withIndex("by_message_uuid", (q) => q.eq("message_uuid", args.message_uuid!))
+        .withIndex("by_conversation_uuid", (q) =>
+          q.eq("conversation_id", original._id).eq("message_uuid", args.message_uuid!))
         .first();
-      if (!forkPointMsg || forkPointMsg.conversation_id !== original._id) {
+      if (!forkPointMsg) {
         throw new Error("Fork point message not found");
       }
       cutoffTimestamp = forkPointMsg.timestamp;
       isPartial = true;
+      // Fork-at-tip: the fork point is the source's newest message, so the
+      // fork's history is the source's transcript verbatim — the daemon can
+      // copy the local JSONL byte-for-byte (keeping Claude's prompt cache
+      // warm) instead of rebuilding from an export.
+      const newestMsg = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_timestamp", (q) =>
+          q.eq("conversation_id", original._id))
+        .order("desc")
+        .first();
+      atTip = !!newestMsg && (newestMsg._id === forkPointMsg._id || forkPointMsg.timestamp >= newestMsg.timestamp);
     } else {
       cutoffTimestamp = now;
     }
@@ -4395,9 +4817,39 @@ export const forkFromMessage = mutation({
     // gets inserted by advanceForkCopy when fork_status flips to "complete".
     const daemonAgentType = agentType === "codex" ? "codex" : agentType === "gemini" ? "gemini" : "claude";
 
+    // A fork defaults to the same visibility a fresh session in this directory
+    // would get: re-resolve from the forker's directory mappings rather than
+    // hardcoding private. This keeps a fork consistent with its project's
+    // sharing policy (same git_root → same policy), so forking a team-shared
+    // session stays team-visible — and forking someone else's session follows
+    // YOUR mappings, never inadvertently broadcasting under their settings.
+    // Agent-switch forks are pure continuations and inherit the source's exact
+    // visibility instead.
+    const forkMappings = await ctx.db
+      .query("directory_team_mappings")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .collect();
+    const { teamId: forkTeamId, isPrivate: forkIsPrivate, autoShared: forkAutoShared } =
+      resolveTeamForPath(forkMappings, original.git_root || original.project_path, original.team_id);
+
+    // The fork lives where the parent's transcript lives: route daemon commands
+    // to the parent's owner device (it has the JSONL and the checkout). Falls
+    // back to project-root routing when the parent has no live owner.
+    const ownerTarget = await resolveOwnerDevice(ctx, userId, {
+      projectPath: original.project_path,
+      gitRoot: original.git_root,
+      ownerDeviceId: original.owner_device_id ?? null,
+    });
+    // Fast path applies when the fork's history is the parent's transcript
+    // verbatim AND the same claude binary will resume it — the daemon copies
+    // the parent's JSONL instead of waiting for the server copy + rebuild.
+    const isPlainFork = !args.target_agent_type || args.target_agent_type === original.agent_type;
+    const fastPathEligible = atTip && isPlainFork && daemonAgentType === "claude" &&
+      (original.agent_type === "claude_code" || !original.agent_type);
+
     const newConversationId = await ctx.db.insert("conversations", {
       user_id: userId,
-      team_id: original.team_id,
+      team_id: isAgentSwitch ? original.team_id : forkTeamId,
       agent_type: agentType,
       session_id: forkSessionId,
       slug: original.slug,
@@ -4409,8 +4861,8 @@ export const forkFromMessage = mutation({
       started_at: now,
       updated_at: now,
       message_count: 0,
-      is_private: isAgentSwitch ? original.is_private : true,
-      auto_shared: isAgentSwitch ? original.auto_shared : undefined,
+      is_private: isAgentSwitch ? original.is_private : forkIsPrivate,
+      auto_shared: isAgentSwitch ? original.auto_shared : (forkAutoShared || undefined),
       status: "active",
       forked_from: isAgentSwitch ? undefined : original._id,
       parent_message_uuid: isAgentSwitch ? "agent-switch" : args.message_uuid,
@@ -4430,18 +4882,47 @@ export const forkFromMessage = mutation({
       fork_copied: 0,
       fork_copy_cursor: 0,
       fork_cutoff_timestamp: cutoffTimestamp,
+      owner_device_id: ownerTarget ?? undefined,
     });
 
+    const forkDaemonArgs = {
+      fork: true,
+      session_id: forkSessionId,
+      agent_type: daemonAgentType,
+      conversation_id: newConversationId,
+      project_path: original.project_path || original.git_root,
+      // Copy-the-JSONL hints. The deferred (post-copy) command may also use
+      // them: copy-first is cache-stable even when the rebuild would be safe.
+      ...(fastPathEligible ? { fork_fast_path: true, parent_session_id: original.session_id } : {}),
+      _target_device_id: ownerTarget ?? undefined,
+    };
     await ctx.db.patch(newConversationId, {
       short_id: newConversationId.toString().slice(0, 7),
-      fork_daemon_args: JSON.stringify({
-        fork: true,
-        session_id: forkSessionId,
-        agent_type: daemonAgentType,
-        conversation_id: newConversationId,
-        project_path: original.project_path || original.git_root,
-      }),
+      fork_daemon_args: JSON.stringify(forkDaemonArgs),
     });
+
+    // At-tip forks don't need the server-side message copy to start the
+    // session — the daemon copies the parent's local JSONL. Emit immediately
+    // (strict: no export fallback while the copy is mid-flight) so the tmux
+    // session spins up in parallel with the copy. A dedicated command name:
+    // pre-fast-path daemons report "Unknown command" and stay inert instead of
+    // reconstituting a truncated fork from the half-copied export. The
+    // deferred resume_session emitted at copy completion is the safety net
+    // (resuming an already-attached session reuses the live tmux pane).
+    if (fastPathEligible) {
+      await ctx.db.insert("daemon_commands", {
+        user_id: userId,
+        command: "fork_session",
+        args: JSON.stringify({ ...forkDaemonArgs, _target_device_id: undefined, fork_fast_path_strict: true }),
+        created_at: now,
+        target_device_id: ownerTarget ?? undefined,
+      });
+    }
+
+    // Agent-switch continuations inherit too — they're the same thread of
+    // work under a different agent, exactly like the visibility inheritance
+    // above.
+    await inheritLabelAssignment(ctx, userId, original._id, newConversationId);
 
     // Carry the original's git_diff over to the fork's side row (off the hot doc).
     const originalGitDiff = await getConvGitDiff(ctx, original._id);
@@ -4525,7 +5006,80 @@ export const getConversationTree = query({
       status: string;
       agent_type?: string;
       is_current: boolean;
+      // The prompt that started THIS branch: the first user message after the
+      // fork point. Sibling forks share a title, so this is what actually
+      // tells them apart in the branch map.
+      branch_label?: string;
+      // Messages on this branch after the fork point (the branch's own work,
+      // excluding history inherited from the parent).
+      branch_message_count?: number;
       children: TreeNode[];
+    };
+
+    // First real user prompt out of a small message window, tags/whitespace
+    // stripped. Slash-command wrappers (<command-message>…) reduce to their
+    // inner text, which still reads usefully ("commit and deploy…").
+    const firstUserPrompt = (
+      msgs: Array<{ role: string; content?: unknown }>,
+    ): string | undefined => {
+      const clean = (s: string) => s.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+      for (const m of msgs) {
+        if (m.role === "user" && typeof m.content === "string") {
+          const c = clean(m.content);
+          if (c) return c.slice(0, 140);
+        }
+      }
+      for (const m of msgs) {
+        if (typeof m.content === "string") {
+          const c = clean(m.content);
+          if (c) return c.slice(0, 140);
+        }
+      }
+      return undefined;
+    };
+
+    // Per-branch summary. For a fork we locate the fork point by its uuid (one
+    // indexed lookup), then range-scan ONLY the divergent messages after it —
+    // never the history copied down from the parent. For the root (no fork
+    // point) we summarize from the top. Bounded by .take so a huge branch costs
+    // a constant ~30 reads.
+    const summarizeBranch = async (
+      node: typeof root,
+    ): Promise<{ label?: string; count?: number }> => {
+      const hasForkPoint =
+        !!node.parent_message_uuid && node.parent_message_uuid !== "agent-switch";
+      if (hasForkPoint) {
+        const forkPoint = await ctx.db
+          .query("messages")
+          .withIndex("by_conversation_uuid", (q) =>
+            q.eq("conversation_id", node._id).eq("message_uuid", node.parent_message_uuid!),
+          )
+          .first();
+        if (forkPoint) {
+          const ts = forkPoint.timestamp;
+          const head = await ctx.db
+            .query("messages")
+            .withIndex("by_conversation_timestamp", (q) =>
+              q.eq("conversation_id", node._id).gt("timestamp", ts),
+            )
+            .order("asc")
+            .take(30);
+          // The count is message_count minus the inherited history. fork_copied
+          // is the count copied down; fall back to the raw count for legacy
+          // forks that predate the cursor.
+          const count =
+            typeof node.fork_copied === "number"
+              ? Math.max(0, node.message_count - node.fork_copied)
+              : node.message_count;
+          return { label: firstUserPrompt(head), count };
+        }
+      }
+      const head = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_timestamp", (q) => q.eq("conversation_id", node._id))
+        .order("asc")
+        .take(30);
+      return { label: firstUserPrompt(head), count: node.message_count };
     };
 
     const buildTree = async (node: typeof root): Promise<TreeNode> => {
@@ -4534,7 +5088,10 @@ export const getConversationTree = query({
         .withIndex("by_forked_from", (q) => q.eq("forked_from", node._id))
         .collect();
 
-      const childTrees = await Promise.all(children.map((c) => buildTree(c)));
+      const [summary, childTrees] = await Promise.all([
+        summarizeBranch(node),
+        Promise.all(children.map((c) => buildTree(c))),
+      ]);
 
       return {
         id: node._id.toString(),
@@ -4546,6 +5103,8 @@ export const getConversationTree = query({
         status: node.status,
         agent_type: node.agent_type,
         is_current: node._id.toString() === conv!._id.toString(),
+        branch_label: summary.label,
+        branch_message_count: summary.count,
         children: childTrees,
       };
     };
@@ -4693,6 +5252,57 @@ export const listFavorites = query({
   },
 });
 
+// Favorites as FULL inbox session rows — the data source for the Favorites
+// top-level view. Deliberately a separate channel from listInboxSessions:
+//   • It enriches via enrichInboxSessionRow, so a favorite is byte-identical to
+//     an inbox row (same SessionCard, keyboard nav, project chips — no second
+//     shape to maintain, no schema drift clobbering rich rows with thin ones).
+//   • It is NOT windowed to the last 30 days. A favorite is a kept reference;
+//     the one you starred three months ago must still resolve. The index scan
+//     walks only this user's favorites, so the unbounded set is naturally small.
+//   • The client merges these into the same `sessions` cache but does NOT fold
+//     them into liveInboxIds — so an old favorite reaches the shelf without
+//     re-entering the active desk as if it were live work. A favorite that is
+//     also recently active rides listInboxSessions too and shows in both.
+// Mirrors listInboxSessions' include_liveness handling: the live web client
+// opts out and gets agent_status/is_idle/... from the sessionsLiveness overlay
+// (keyed by id, covers these rows for free) so this query doesn't re-run on
+// every heartbeat.
+export const listFavoriteSessions = query({
+  args: {
+    include_liveness: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { sessions: [] };
+    const includeLiveness = args.include_liveness !== false;
+    const now = Date.now();
+
+    const favorites = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_favorite", (q) =>
+        q.eq("user_id", userId).eq("is_favorite", true)
+      )
+      .take(500);
+
+    const maps = includeLiveness
+      ? await buildUserSessionMaps(ctx, userId, now)
+      : EMPTY_INBOX_MAPS;
+
+    const results: any[] = [];
+    for (const conv of favorites) {
+      if (!shouldShowInInbox(conv)) continue;
+      // clusterCutoff 0: favorites are deliberately kept — never gap-hide them.
+      const { row } = await enrichInboxSessionRow(ctx, conv, maps, now, 0);
+      results.push(row);
+    }
+
+    sortInboxRows(results);
+    if (!includeLiveness) for (const row of results) stripInboxLiveness(row);
+    return { sessions: results };
+  },
+});
+
 export const getMessageFeed = query({
   args: {
     filter: v.union(v.literal("my"), v.literal("team")),
@@ -4710,139 +5320,105 @@ export const getMessageFeed = query({
     }
 
     const limit = args.limit ?? 30;
+    const cursor = args.cursor; // exclusive upper bound on message timestamp
 
-    // Cache for conversation access and info
-    const conversationCache = new Map<string, {
-      hasAccess: boolean;
-      title: string;
-      session_id: string;
-      author_name: string;
-      is_own: boolean;
-    } | null>();
+    // --- 1. Candidate conversations ---------------------------------------
+    // The feed is driven by the conversations the viewer can see, NOT by a
+    // global scan of every message in the system. "my" = the viewer's own
+    // conversations; "team" = those plus teammates' team-visible ones. This
+    // keeps cost proportional to the viewer's own data. The old query walked
+    // the global by_timestamp index in batches of 200 full docs and discarded
+    // everything the viewer couldn't see — catastrophic for "my" (where the
+    // viewer's messages are sparse among everyone's) and it blew the 100MB
+    // read-byte cap, because each message doc carries its tool_results blobs
+    // and a 1024-float embedding.
+    const CONV_CAP = 500; // viewer's own conversations considered
+    const TEAM_MEMBER_CONV_CAP = 50; // recent conversations per teammate
 
-    const checkConversationAccess = async (convId: Id<"conversations">) => {
-      const cached = conversationCache.get(convId);
-      if (cached !== undefined) return cached;
+    type ConvDoc = NonNullable<Awaited<ReturnType<typeof ctx.db.get<"conversations">>>>;
+    const candidates = new Map<
+      string,
+      { conv: ConvDoc; isOwn: boolean; authorName: string }
+    >();
 
-      const conv = await ctx.db.get(convId);
-      if (!conv) {
-        conversationCache.set(convId, null);
-        return null;
-      }
+    const ownAuthor = user.name || user.email?.split("@")[0] || "Unknown";
+    const ownConvs = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_updated", (q) => q.eq("user_id", userId))
+      .order("desc")
+      .take(CONV_CAP);
+    for (const conv of ownConvs) {
+      candidates.set(conv._id.toString(), { conv, isOwn: true, authorName: ownAuthor });
+    }
 
-      const isOwn = conv.user_id.toString() === userId.toString();
-      let hasAccess = false;
+    if (args.filter === "team") {
+      const memberships = await ctx.db
+        .query("team_memberships")
+        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+        .collect();
+      const fetchedMembers = new Set<string>([userId.toString()]);
+      for (const membership of memberships) {
+        const ff = await createTeamFeedFilter(ctx, membership.team_id);
+        for (const member of ff.memberships) {
+          const memberId = member.user_id.toString();
+          if (fetchedMembers.has(memberId)) continue;
+          if ((member.visibility || "summary") === "hidden") continue;
+          fetchedMembers.add(memberId);
 
-      if (args.filter === "my") {
-        hasAccess = isOwn;
-      } else {
-        hasAccess = await canTeamMemberAccess(ctx, userId, conv);
-      }
-
-      if (!hasAccess) {
-        conversationCache.set(convId, null);
-        return null;
-      }
-
-      const convUser = await ctx.db.get(conv.user_id);
-      const info = {
-        hasAccess: true,
-        title: conv.title || (conv.slug ? formatSlugAsTitle(conv.slug) : "New Session"),
-        session_id: conv.session_id,
-        author_name: convUser?.name || convUser?.email?.split("@")[0] || "Unknown",
-        is_own: isOwn,
-      };
-      conversationCache.set(convId, info);
-      return info;
-    };
-
-    // Filter messages by access and content - fetch in batches if needed
-    const filteredMessages: Array<{
-      _id: string;
-      conversation_id: string;
-      role: string;
-      content: string | undefined;
-      timestamp: number;
-      has_tool_calls: boolean;
-      has_tool_results: boolean;
-      convInfo: NonNullable<Awaited<ReturnType<typeof checkConversationAccess>>>;
-    }> = [];
-
-    let currentCursor = args.cursor;
-    let attempts = 0;
-    const maxAttempts = 10; // Limit iterations to avoid timeout
-
-    while (filteredMessages.length < limit + 1 && attempts < maxAttempts) {
-      attempts++;
-
-      // Query messages using timestamp index
-      let msgQuery = ctx.db
-        .query("messages")
-        .withIndex("by_timestamp");
-
-      if (currentCursor !== undefined) {
-        const cursor = currentCursor;
-        msgQuery = msgQuery.filter((q) => q.lt(q.field("timestamp"), cursor));
-      }
-
-      const rawMessages = await msgQuery.order("desc").take(200);
-
-      if (rawMessages.length === 0) break; // No more messages
-
-      for (const msg of rawMessages) {
-        if (filteredMessages.length >= limit + 1) break;
-
-        // Only user/assistant messages
-        if (msg.role !== "user" && msg.role !== "assistant") continue;
-
-        // Skip messages with no meaningful content
-        const hasContent = msg.content && msg.content.trim().length > 10;
-        if (!hasContent) continue;
-
-        const convInfo = await checkConversationAccess(msg.conversation_id);
-        if (!convInfo) continue;
-
-        filteredMessages.push({
-          _id: msg._id,
-          conversation_id: msg.conversation_id,
-          role: msg.role,
-          content: msg.content,
-          timestamp: msg.timestamp,
-          has_tool_calls: (msg.tool_calls && msg.tool_calls.length > 0) || false,
-          has_tool_results: (msg.tool_results && msg.tool_results.length > 0) || false,
-          convInfo,
-        });
-      }
-
-      // Update cursor for next batch
-      if (rawMessages.length > 0) {
-        currentCursor = rawMessages[rawMessages.length - 1].timestamp;
+          const memberUser = await ctx.db.get(member.user_id);
+          const memberAuthor =
+            memberUser?.name || memberUser?.email?.split("@")[0] || "Unknown";
+          const memberConvs = await ctx.db
+            .query("conversations")
+            .withIndex("by_user_updated", (q) => q.eq("user_id", member.user_id))
+            .order("desc")
+            .take(TEAM_MEMBER_CONV_CAP);
+          for (const conv of memberConvs) {
+            if (candidates.has(conv._id.toString())) continue;
+            if (!ff.isVisible(conv as any)) continue;
+            candidates.set(conv._id.toString(), {
+              conv,
+              isOwn: false,
+              authorName: memberAuthor,
+            });
+          }
+        }
       }
     }
 
-    const hasMore = filteredMessages.length > limit;
-    const finalMessages = hasMore ? filteredMessages.slice(0, limit) : filteredMessages;
+    // --- 2. Merge user-role messages across conversations -----------------
+    // Only user-role messages are ever rendered in the feed (the client drops
+    // every other role), so we read just those via by_conversation_role_timestamp
+    // — never touching the large assistant/tool docs the old query paid to read
+    // and throw away. The merge + early-exit lives in messageFeed.ts so it can be
+    // unit-tested; here we just supply the candidates and an index-backed fetcher.
+    const feedCandidates: FeedCandidate[] = [...candidates.values()].map(
+      ({ conv, isOwn, authorName }) => ({
+        conversation_id: conv._id,
+        updated_at: conv.updated_at,
+        title: conv.title || (conv.slug ? formatSlugAsTitle(conv.slug) : "New Session"),
+        session_id: conv.session_id,
+        isOwn,
+        authorName,
+      })
+    );
 
-    const messagesWithConversation = finalMessages.map((msg) => ({
-      _id: msg._id,
-      conversation_id: msg.conversation_id,
-      role: msg.role,
-      content: msg.content,
-      timestamp: msg.timestamp,
-      has_tool_calls: msg.has_tool_calls,
-      has_tool_results: msg.has_tool_results,
-      conversation_title: msg.convInfo.title,
-      conversation_session_id: msg.convInfo.session_id,
-      author_name: msg.convInfo.author_name,
-      is_own: msg.convInfo.is_own,
-    }));
-
-    const nextCursor = hasMore ? finalMessages[finalMessages.length - 1].timestamp : null;
-
-    return {
-      messages: messagesWithConversation,
-      nextCursor,
-    };
+    return await mergeUserMessageFeed({
+      candidates: feedCandidates,
+      cursor,
+      limit,
+      fetchUserMessages: (conversationId, cur, take) =>
+        ctx.db
+          .query("messages")
+          .withIndex("by_conversation_role_timestamp", (q) => {
+            const base = q
+              .eq("conversation_id", conversationId as Id<"conversations">)
+              .eq("role", "user");
+            return cur !== undefined ? base.lt("timestamp", cur) : base;
+          })
+          .order("desc")
+          .take(take),
+    });
   },
 });
 
@@ -4883,6 +5459,8 @@ export const feedForCLI = query({
     member_name: v.optional(v.string()),
     mine_only: v.optional(v.boolean()),
     live_only: v.optional(v.boolean()),
+    state: v.optional(v.string()),
+    label: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -4958,28 +5536,38 @@ export const feedForCLI = query({
       filterUserId = matchingMember._id.toString();
     }
 
+    // Label filter: the labeled set IS the candidate pool. Labels exist to park
+    // old sessions, which the recency-window fetches below would miss, so when a
+    // label is given we hydrate its conversations directly instead.
+    let labelConvIds: Set<string> | null = null;
+    let labeledConvs: NonNullable<Awaited<ReturnType<typeof ctx.db.get<"conversations">>>>[] = [];
+    if (args.label) {
+      const resolved = await resolveLabelConvIds(ctx, authUserId, args.label);
+      if ("error" in resolved) return { error: resolved.error };
+      const hydrated = await Promise.all(
+        [...resolved.convIds].slice(0, 200).map((id) => ctx.db.get(id as Id<"conversations">))
+      );
+      labeledConvs = hydrated.filter((c): c is (typeof labeledConvs)[number] => c !== null);
+      // Labels are project-bounded by default: the CLI passes cwd unless -g.
+      if (args.project_path) {
+        const bound = args.project_path;
+        labeledConvs = labeledConvs.filter((c) =>
+          projectOverlaps(bound, c.project_path) || projectOverlaps(bound, (c as any).git_root)
+        );
+      }
+      labelConvIds = new Set(labeledConvs.map((c) => c._id.toString()));
+    }
+
     let matchingConvIds: Set<string> | null = null;
     let queryMatchedOwnConversations: typeof ownConversations = [];
     let queryMatchedTeamConversations: typeof ownConversations = [];
     if (query && query.length >= 2) {
-      // Search for each term separately to ensure we get results for all terms
+      // Single combined lookup (see fetchMessageSearchPool), then best-coverage
+      // selection instead of a strict all-terms AND.
       const terms = parseSearchTerms(query);
-      const allSearchResults = new Map<string, any>();
-      for (const term of terms.all) {
-        const results = await ctx.db
-          .query("messages")
-          .withSearchIndex("search_content_v2", (q) => q.search("content", term))
-          .take(200);
-        for (const msg of results) {
-          const msgId = msg._id.toString();
-          if (!allSearchResults.has(msgId)) {
-            allSearchResults.set(msgId, msg);
-          }
-        }
-      }
-      const searchResults = Array.from(allSearchResults.values());
+      const searchResults = await fetchMessageSearchPool(ctx, terms);
 
-      // Group messages by conversation and filter to those matching ALL terms
+      // Group messages by conversation, then keep the best-coverage matches
       const conversationMessages = new Map<string, typeof searchResults>();
       for (const msg of searchResults) {
         const convId = msg.conversation_id.toString();
@@ -4989,14 +5577,8 @@ export const feedForCLI = query({
         conversationMessages.get(convId)!.push(msg);
       }
 
-      // Only include conversations where ALL terms appear across messages
-      for (const [convId, messages] of conversationMessages) {
-        if (!conversationMatchesAllTerms(messages, terms)) {
-          conversationMessages.delete(convId);
-        }
-      }
-
-      matchingConvIds = new Set(conversationMessages.keys());
+      const rankedMatches = rankConversationsByCoverage(conversationMessages, terms);
+      matchingConvIds = new Set(rankedMatches.map((r) => r.convId));
 
       const matchedConvs = await Promise.all(
         Array.from(matchingConvIds).slice(0, 25).map(async (convId) => {
@@ -5030,11 +5612,13 @@ export const feedForCLI = query({
     const fetchLimit = query
       ? Math.min(offset + limit + 20, 100)
       : Math.min(offset + limit + 50, 200);
-    let ownConversations = await ctx.db
-      .query("conversations")
-      .withIndex("by_user_updated", (q) => q.eq("user_id", authUserId))
-      .order("desc")
-      .take(fetchLimit);
+    let ownConversations = labelConvIds
+      ? labeledConvs.filter((c) => c.user_id.toString() === authUserId.toString())
+      : await ctx.db
+          .query("conversations")
+          .withIndex("by_user_updated", (q) => q.eq("user_id", authUserId))
+          .order("desc")
+          .take(fetchLimit);
 
     // Merge in query-matched conversations that might be older
     if (queryMatchedOwnConversations.length > 0) {
@@ -5051,21 +5635,28 @@ export const feedForCLI = query({
         (u.activity_visibility || "detailed") !== "hidden"
       );
 
-      const teamMemberConvos = await Promise.all(
-        visibleTeamMembers.map(async (member) => {
-          const convos = await ctx.db
-            .query("conversations")
-            .withIndex("by_user_updated", (q) => q.eq("user_id", member._id))
-            .order("desc")
-            .take(10);
-          return convos.filter(c =>
-            c.team_id != null && effectiveTeamIdSet.has(c.team_id.toString()) &&
-            (cliFeedFilters.get(c.team_id!.toString())?.isVisible(c) ?? false)
-          );
-        })
-      );
+      const visibleMemberIds = new Set(visibleTeamMembers.map(u => u._id.toString()));
+      const isVisibleTeamConv = (c: typeof ownConversations[number]) =>
+        c.team_id != null && effectiveTeamIdSet.has(c.team_id.toString()) &&
+        (cliFeedFilters.get(c.team_id!.toString())?.isVisible(c) ?? false);
 
-      teamConversations = teamMemberConvos.flat();
+      if (labelConvIds) {
+        teamConversations = labeledConvs.filter(c =>
+          visibleMemberIds.has(c.user_id.toString()) && isVisibleTeamConv(c)
+        );
+      } else {
+        const teamMemberConvos = await Promise.all(
+          visibleTeamMembers.map(async (member) => {
+            const convos = await ctx.db
+              .query("conversations")
+              .withIndex("by_user_updated", (q) => q.eq("user_id", member._id))
+              .order("desc")
+              .take(10);
+            return convos.filter(isVisibleTeamConv);
+          })
+        );
+        teamConversations = teamMemberConvos.flat();
+      }
 
       // Merge in query-matched team conversations that might be older than top-20
       if (queryMatchedTeamConversations.length > 0) {
@@ -5076,10 +5667,32 @@ export const feedForCLI = query({
     }
 
     const isOwnConversation = (c: typeof ownConversations[number]) => c.user_id.toString() === authUserId.toString();
+    const isOwnedByMe = (c: typeof ownConversations[number]) =>
+      (c as any).owner_user_id?.toString() === authUserId.toString();
 
-    let filteredConversations = [...ownConversations, ...teamConversations]
+    // Second-party-owned sessions belong in the owner's feed even in --mine
+    // scope (they're run by another account, so the scans above miss them when
+    // mine_only skips team conversations entirely). Explicit assignment
+    // outranks default team visibility — mirror computeInboxSessions.
+    let ownedConversations: typeof ownConversations = [];
+    if (!args.member_name) {
+      const owned = await ctx.db
+        .query("conversations")
+        .withIndex("by_owner_updated", (q) => q.eq("owner_user_id" as any, authUserId))
+        .order("desc")
+        .take(50);
+      ownedConversations = owned.filter((c) => !isOwnConversation(c));
+    }
+
+    const candidateById = new Map<string, typeof ownConversations[number]>();
+    for (const c of [...ownConversations, ...teamConversations, ...ownedConversations]) {
+      candidateById.set(c._id.toString(), c);
+    }
+
+    let filteredConversations = [...candidateById.values()]
       .filter((c): c is typeof ownConversations[number] => {
-        if (filterUserId && c.user_id.toString() !== filterUserId) return false;
+        if (filterUserId && c.user_id.toString() !== filterUserId && !(args.mine_only && isOwnedByMe(c))) return false;
+        if (labelConvIds && !labelConvIds.has(c._id.toString())) return false;
 
         // Team filter: when team is resolved from directory, filter own sessions by team
         if (resolvedTeamId && isOwnConversation(c)) {
@@ -5103,21 +5716,101 @@ export const feedForCLI = query({
     const MANAGED_STALE_MS = 60 * 1000;
     const now = Date.now();
     const liveStatusMap = new Map<string, string | undefined>();
+    const managedMap = new Map<string, any>();
     for (const conv of filteredConversations) {
       const managed = await ctx.db
         .query("managed_sessions")
         .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conv._id))
         .first();
+      if (managed) managedMap.set(conv._id.toString(), managed);
       if (managed && (now - managed.last_heartbeat) < MANAGED_STALE_MS) {
         liveStatusMap.set(conv._id.toString(), managed.agent_status);
       }
     }
 
+    // Derive a session's work_state by reusing the exact inbox classifier so the
+    // CLI never re-implements the rule. The managed row is already cached above;
+    // the only extra DB cost is the awaiting_input read, gated to a live, non-idle
+    // session (the sole case that can be parked on an open AskUserQuestion). We
+    // run this lazily — see below — so the daemon's stable-context feed (no state
+    // filter, limit ~10) never pays it for the whole candidate set.
+    const workStateMap = new Map<string, WorkState>();
+    // The trust-coerced agent_status per conv, so the displayed `agent_status`
+    // field agrees with the bucketed work_state (a stale "working" shows as the
+    // coerced "idle", never contradicting a needs_input row).
+    const coercedStatusMap = new Map<string, string | undefined>();
+    const classifyConv = async (conv: typeof filteredConversations[number]): Promise<WorkState> => {
+      const cached = workStateMap.get(conv._id.toString());
+      if (cached) return cached;
+      const managed = managedMap.get(conv._id.toString());
+      const isLive = liveStatusMap.has(conv._id.toString());
+      // Stop trusting a frozen "active" status once the conversation has gone
+      // quiet past the trust TTL — the SAME coercion enrichInboxSessionRow does
+      // at its enrichment boundary (see trustedAgentStatus). A live daemon that
+      // finished re-asserts its last "working" on every heartbeat; without this
+      // the feed pins the session in WORKING forever even though the inbox /
+      // `cast monitor` (which read the coerced value) long since moved it to
+      // needs-input. This is the one place feedForCLI reads the raw managed
+      // status, so it must coerce here too or the two views drift.
+      const agentStatus = trustedAgentStatus(managed?.agent_status, conv.updated_at, now);
+      coercedStatusMap.set(conv._id.toString(), agentStatus);
+      const daemonAlive = agentStatus === "stopped" ? false : isLive;
+      const hasPending = !!(conv as any).has_pending_messages;
+      const activity = deriveSessionActivity({
+        agentStatus,
+        agentStatusUpdatedAt: managed?.agent_status_updated_at,
+        lastMessageRole: (conv as any).last_message_role,
+        lastMessagePreview: (conv as any).last_message_preview,
+        hasPending,
+        status: conv.status,
+        updatedAt: conv.updated_at,
+        daemonAlive,
+        now,
+      });
+      let awaitingInput = false;
+      if (!activity.isIdle && (conv.message_count || 0) > 0 && isLive) {
+        const lastMsg = await ctx.db
+          .query("messages")
+          .withIndex("by_conversation_timestamp", (q: any) => q.eq("conversation_id", conv._id))
+          .order("desc")
+          .first();
+        if (lastMsg?.role === "assistant" && lastMsg.tool_calls?.some((tc: any) => tc.name === "AskUserQuestion")) {
+          awaitingInput = true;
+        }
+      }
+      const ws = classifyWorkState({
+        agentStatus,
+        isIdle: activity.isIdle,
+        awaitingInput,
+        hasPending,
+        isUnresponsive: activity.isUnresponsive,
+        messageCount: conv.message_count || 0,
+      });
+      workStateMap.set(conv._id.toString(), ws);
+      return ws;
+    };
+
     if (args.live_only) {
       filteredConversations = filteredConversations.filter(c => liveStatusMap.has(c._id.toString()));
     }
 
+    const stateFilter = normalizeWorkStateFilter(args.state);
+    if (stateFilter === "pinned") {
+      filteredConversations = filteredConversations.filter(c => !!c.inbox_pinned_at);
+    } else if (stateFilter === "live") {
+      filteredConversations = filteredConversations.filter(c => liveStatusMap.has(c._id.toString()));
+    } else if (stateFilter) {
+      // A work_state filter needs every candidate classified before paginating.
+      for (const c of filteredConversations) await classifyConv(c);
+      filteredConversations = filteredConversations.filter(c => workStateMap.get(c._id.toString()) === stateFilter);
+    }
+
     const allConversations = filteredConversations.slice(offset, offset + Math.min(limit, 100));
+
+    // Classify only the rows we actually return (cached if a state filter above
+    // already classified the full set). Keeps the no-filter feed — including the
+    // daemon's stable-context build — bounded to ~limit awaiting_input reads.
+    for (const conv of allConversations) await classifyConv(conv);
 
     const results: Array<{
       id: string;
@@ -5130,7 +5823,12 @@ export const feedForCLI = query({
       agent_type?: string;
       is_live?: boolean;
       agent_status?: string;
+      work_state?: WorkState;
+      is_pinned?: boolean;
       user?: { name: string | null; email: string | null };
+      // Second-party owner (the member responsible for steering), when set.
+      owner?: { name: string | null; email: string | null };
+      owned_by_me?: boolean;
       preview: Array<{
         line: number;
         role: string;
@@ -5206,6 +5904,18 @@ export const feedForCLI = query({
       const owner = teamUserMap.get(conv.user_id.toString()) || (conv.user_id.toString() === authUserId.toString() ? user : null);
       const isOwnConv = conv.user_id.toString() === authUserId.toString();
 
+      // Second-party owner display (distinct from `owner` above, which is the
+      // RUNNER — historical local name). Owner docs are usually teammates and
+      // already loaded; fall back to a direct get for cross-team edge cases.
+      const sessionOwnerId = (conv as any).owner_user_id?.toString();
+      let sessionOwner: { name: string | null; email: string | null } | undefined;
+      if (sessionOwnerId) {
+        const ownerDoc =
+          teamUserMap.get(sessionOwnerId) ||
+          (sessionOwnerId === authUserId.toString() ? user : await ctx.db.get((conv as any).owner_user_id as Id<"users">));
+        if (ownerDoc) sessionOwner = { name: ownerDoc.name || null, email: ownerDoc.email || null };
+      }
+
       const convIsLive = liveStatusMap.has(conv._id.toString());
       results.push({
         id: conv._id,
@@ -5216,8 +5926,12 @@ export const feedForCLI = query({
         updated_at: new Date(conv.updated_at).toISOString(),
         message_count: conv.message_count || 0,
         agent_type: conv.agent_type,
-        ...(convIsLive ? { is_live: true, agent_status: liveStatusMap.get(conv._id.toString()) || undefined } : {}),
+        ...(convIsLive ? { is_live: true, agent_status: coercedStatusMap.get(conv._id.toString()) || undefined } : {}),
+        work_state: workStateMap.get(conv._id.toString()) || "idle",
+        is_pinned: !!conv.inbox_pinned_at,
         user: !isOwnConv && owner ? { name: owner.name || null, email: owner.email || null } : undefined,
+        ...(sessionOwner ? { owner: sessionOwner } : {}),
+        ...(sessionOwnerId === authUserId.toString() ? { owned_by_me: true } : {}),
         preview: preview.slice(0, 4),
       });
     }
@@ -5399,6 +6113,18 @@ export const getTeamUnreadCount = query({
   },
 });
 
+// Admin repair primitive: server-side patches that don't bump updated_at are
+// invisible to connected clients holding a cached row (the live inbox window
+// and the reconcile crawl are both updated_at-keyed). Touching re-enters the
+// row into both channels so the change propagates.
+export const touchConversation = internalMutation({
+  args: { conversation_id: v.id("conversations") },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.conversation_id, { updated_at: Date.now() });
+    return { touched: args.conversation_id };
+  },
+});
+
 export const markTeamConversationsSeen = mutation({
   args: {},
   handler: async (ctx) => {
@@ -5424,47 +6150,42 @@ export const backfillConversationTeamIds = internalMutation({
     const limit = args.limit ?? 500;
     let updated = 0;
 
-    const users = args.userId
-      ? [await ctx.db.get(args.userId)].filter(Boolean)
-      : await ctx.db.query("users").take(100);
+    // Only the id is needed (mappings index). Reading the full user doc made
+    // long scans OCC-fail: users rows are hot (scheduled jobs patch them), so
+    // any mutation slow enough to overlap a heartbeat could never commit.
+    const userIds = args.userId
+      ? [args.userId]
+      : (await ctx.db.query("users").take(100)).map((u) => u._id);
 
-    for (const user of users) {
-      if (!user) continue;
-
+    for (const userId of userIds) {
       const mappings = await ctx.db
         .query("directory_team_mappings")
-        .withIndex("by_user_id", (q) => q.eq("user_id", user._id))
+        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
         .collect();
 
       if (mappings.length === 0) continue;
 
+      // Newest first: born-blank strays come from the (recent) pre-warm/stub
+      // flows, so a bounded repair should reach them before old history.
       const conversations = await ctx.db
         .query("conversations")
-        .withIndex("by_user_id", (q) => q.eq("user_id", user._id))
+        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+        .order("desc")
         .take(limit);
 
       for (const conv of conversations) {
-        const projectPath = conv.git_root || conv.project_path;
-        if (!projectPath) continue;
-
-        const { teamId, isPrivate, autoShared } = resolveTeamForPath(
+        // Same guarded semantics as the live restamp paths: positive mapping
+        // matches only, explicit user choices (locked private / manual share)
+        // untouched. The old inline version cleared team_id on unmatched paths
+        // (breaking "shared must have a team") and could re-share a conv the
+        // user had locked private.
+        const patch = buildPathRestampUpdate(
+          conv,
           mappings,
-          projectPath,
-          (user as any).active_team_id || (user as any).team_id
+          conv.git_root || conv.project_path
         );
-
-        const patches: Record<string, any> = {};
-        if (teamId && conv.team_id?.toString() !== teamId.toString()) {
-          patches.team_id = teamId;
-        } else if (!teamId && conv.team_id) {
-          patches.team_id = undefined;
-        }
-        if (autoShared && conv.is_private !== false) {
-          patches.is_private = false;
-          patches.auto_shared = true;
-        }
-        if (Object.keys(patches).length > 0) {
-          await ctx.db.patch(conv._id, patches);
+        if (patch) {
+          await ctx.db.patch(conv._id, patch);
           updated++;
         }
       }
@@ -5676,6 +6397,37 @@ export const backfillAutoSharedConversations = internalMutation({
   },
 });
 
+// One-shot repair for conversations stuck "shared with nobody": is_private is
+// false but team_id is missing, so every teammate fails the !team_id gate and
+// the conversation reads as private. Re-resolves the team via buildShareUpdate
+// (directory mapping → owner's active/default team). User-scoped via the
+// by_user_private index so it never full-scans. unresolved = owner has no team.
+export const backfillSharedTeamlessTeamId = internalMutation({
+  args: { user_id: v.id("users"), dry_run: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const shared = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_private", (q) =>
+        q.eq("user_id", args.user_id).eq("is_private", false)
+      )
+      .collect();
+    const broken = shared.filter((c) => !c.team_id);
+
+    let fixed = 0;
+    const unresolved: Array<{ _id: string; title?: string; project_path?: string }> = [];
+    for (const c of broken) {
+      const { team_id } = await buildShareUpdate(ctx, c, args.user_id);
+      if (!team_id) {
+        unresolved.push({ _id: c._id, title: c.title, project_path: c.project_path });
+        continue;
+      }
+      if (!args.dry_run) await ctx.db.patch(c._id, { team_id });
+      fixed++;
+    }
+    return { broken: broken.length, fixed, unresolved, dry_run: !!args.dry_run };
+  },
+});
+
 export const revertBackfilledTeamVisibility = internalMutation({
   args: {
     cursor: v.optional(v.string()),
@@ -5842,9 +6594,697 @@ export const getConversationsBySessionIds = query({
   },
 });
 
+// ---- Shared inbox-session builders --------------------------------------
+// Used by BOTH listInboxSessions (the live, windowed subscription) and
+// listInboxSessionsPaginated (the additive completeness-floor crawl). Extracted
+// so the two queries emit BYTE-IDENTICAL enriched rows — schema drift between
+// the live channel and the crawl would clobber rich rows with thin ones when the
+// store overlays by id (sessions sync is isDelta). See inbox_no_authoritative_sessions_floor.
+const INBOX_HEARTBEAT_ALIVE_MS = 90 * 1000;
+const INBOX_DISMISSED_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+// How far back a session's last activity (updated_at) may be and still be
+// PROACTIVELY pulled into the inbox. This is a fetch bound only: both inbox
+// queries below stop sending older active/completed sessions, so a fresh client
+// loads lean. The client deliberately never prunes — its sessions cache is
+// isDelta (never-prune), so anything already cached, or opened on demand via
+// click/search (injectSession), stays. Pinned and recently-dismissed sessions
+// keep their own (separate) queries below and are unaffected by this window.
+const INBOX_SESSION_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+
+type InboxSessionMaps = {
+  agentStatusMap: Map<string, "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped" | "starting" | "resuming">;
+  agentStatusUpdatedAtMap: Map<string, number>;
+  tmuxSessionMap: Map<string, string>;
+  permissionModeMap: Map<string, string>;
+  liveConvIds: Set<string>;
+  userDaemonAlive: boolean;
+};
+
+// Build the per-user managed-session maps once, then look up by conversation id.
+async function buildUserSessionMaps(
+  ctx: any,
+  userId: Id<"users">,
+  now: number,
+): Promise<InboxSessionMaps> {
+  const managedSessions = await ctx.db
+    .query("managed_sessions")
+    .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+    .collect();
+
+  const liveConvIds = new Set<string>(
+    managedSessions
+      .filter((s: any) => now - s.last_heartbeat < INBOX_HEARTBEAT_ALIVE_MS && s.conversation_id)
+      .map((s: any) => s.conversation_id!.toString())
+  );
+
+  const agentStatusMap = new Map<string, any>();
+  const agentStatusUpdatedAtMap = new Map<string, number>();
+  const tmuxSessionMap = new Map<string, string>();
+  const permissionModeMap = new Map<string, string>();
+  for (const s of managedSessions) {
+    if (!s.conversation_id) continue;
+    const cid = s.conversation_id.toString();
+    if (s.tmux_session) tmuxSessionMap.set(cid, s.tmux_session);
+    if (s.permission_mode) permissionModeMap.set(cid, s.permission_mode);
+    if (!s.agent_status) continue;
+    if (s.agent_status_updated_at !== undefined) agentStatusUpdatedAtMap.set(cid, s.agent_status_updated_at);
+    const heartbeatAlive = now - s.last_heartbeat < INBOX_HEARTBEAT_ALIVE_MS;
+    if (s.agent_status === "stopped" || s.agent_status === "idle") {
+      agentStatusMap.set(cid, s.agent_status);
+    } else if (heartbeatAlive) {
+      agentStatusMap.set(cid, s.agent_status);
+    } else {
+      agentStatusMap.set(cid, "stopped");
+    }
+  }
+
+  const userDaemonAlive = managedSessions.some(
+    (s: any) => now - s.last_heartbeat < 6 * 60 * 1000
+  );
+
+  return { agentStatusMap, agentStatusUpdatedAtMap, tmuxSessionMap, permissionModeMap, liveConvIds, userDaemonAlive };
+}
+
+// Empty maps for the liveness-excluded path: computeInboxSessions({includeLiveness:false})
+// skips the managed_sessions read entirely (that read is what makes the inbox query
+// re-run on every heartbeat). The per-row liveness then computes from nothing and is
+// stripped below — the live values ride the separate `sessionsLiveness` overlay instead.
+const EMPTY_INBOX_MAPS: InboxSessionMaps = {
+  agentStatusMap: new Map(),
+  agentStatusUpdatedAtMap: new Map(),
+  tmuxSessionMap: new Map(),
+  permissionModeMap: new Map(),
+  liveConvIds: new Set(),
+  userDaemonAlive: false,
+};
+
+// Liveness for second-party-owned rows: their managed_sessions belong to the
+// RUNNING account, which buildUserSessionMaps (scoped to the viewer's user_id)
+// never sees. Fetch per conversation — owned foreign rows are sparse — and
+// merge with the exact same status-trust rules. Deliberately leaves
+// userDaemonAlive untouched: that flag describes the viewer's own daemon.
+async function mergeForeignConversationLiveness(
+  ctx: any,
+  maps: InboxSessionMaps,
+  convs: any[],
+  now: number,
+): Promise<void> {
+  for (const conv of convs) {
+    const cid = conv._id.toString();
+    const managed = await ctx.db
+      .query("managed_sessions")
+      .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conv._id))
+      .first();
+    if (!managed) continue;
+    const heartbeatAlive = now - managed.last_heartbeat < INBOX_HEARTBEAT_ALIVE_MS;
+    if (heartbeatAlive) maps.liveConvIds.add(cid);
+    if (managed.tmux_session) maps.tmuxSessionMap.set(cid, managed.tmux_session);
+    if (managed.permission_mode) maps.permissionModeMap.set(cid, managed.permission_mode);
+    if (!managed.agent_status) continue;
+    if (managed.agent_status_updated_at !== undefined) {
+      maps.agentStatusUpdatedAtMap.set(cid, managed.agent_status_updated_at);
+    }
+    if (managed.agent_status === "stopped" || managed.agent_status === "idle") {
+      maps.agentStatusMap.set(cid, managed.agent_status);
+    } else if (heartbeatAlive) {
+      maps.agentStatusMap.set(cid, managed.agent_status);
+    } else {
+      maps.agentStatusMap.set(cid, "stopped");
+    }
+  }
+}
+
+// The heartbeat-derived fields that move to the sessionsLiveness overlay. Stripped from
+// the base rows when liveness is excluded so the client can't read a stale value before
+// the overlay merges (it overlays these back, keyed by id, via syncOverlay).
+const INBOX_LIVENESS_FIELDS = [
+  "agent_status", "is_idle", "is_unresponsive", "awaiting_input",
+  "is_connected", "tmux_session", "permission_mode",
+] as const;
+function stripInboxLiveness(row: any): void {
+  for (const f of INBOX_LIVENESS_FIELDS) row[f] = null;
+}
+
+// Enrich one conversation into the inbox session row, including the AskUserQuestion
+// scrape, idle/grace classification, and plan/task/workflow context. `clusterCutoff`
+// of 0 disables the stale-cluster hide (the crawl passes 0 — completeness wins).
+async function enrichInboxSessionRow(
+  ctx: any,
+  conv: any,
+  maps: InboxSessionMaps,
+  now: number,
+  clusterCutoff: number,
+): Promise<{ row: any; subagentChildren: any[]; dismissed: boolean; stashed: boolean; hidden: boolean }> {
+  let hasPending = !!conv.has_pending_messages;
+  let lastMsgRole = conv.last_message_role;
+  let lastUserMessage = conv.last_message_preview || null;
+
+  // Fallback for un-backfilled conversations: single query to get last message
+  if (!lastMsgRole && conv.message_count > 0) {
+    const lastMsg = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_timestamp", (q: any) =>
+        q.eq("conversation_id", conv._id)
+      )
+      .order("desc")
+      .first();
+    if (lastMsg) {
+      lastMsgRole = lastMsg.role;
+      if (lastMsg.role === "user" && lastMsg.content?.trim()) {
+        lastUserMessage = lastMsg.content
+          .replace(/\[Image[:\s][^\]]*\]/gi, "")
+          .replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "")
+          .trim()
+          .slice(0, 200);
+      }
+    }
+  }
+
+  const pinned = !!conv.inbox_pinned_at;
+  const dismissed = !!conv.inbox_dismissed_at;
+  const stashed = !!conv.inbox_stashed_at;
+  const hidden = !dismissed && !stashed && clusterCutoff > 0 && conv.updated_at < clusterCutoff && !hasPending && !pinned;
+
+  // Stop trusting a frozen "active" status once the conversation has gone quiet
+  // past the trust TTL — otherwise a daemon re-asserting a stale "working" over
+  // content-free heartbeats pins the session in WORKING forever. Coerced here, at
+  // the single enrichment boundary, so is_idle / the row's agent_status / the CLI
+  // classifier all see the same trustworthy value.
+  const agentStatus = trustedAgentStatus(
+    maps.agentStatusMap.get(conv._id.toString()),
+    conv.updated_at,
+    now,
+  );
+  // Don't let userDaemonAlive resurrect sessions we know are stopped
+  const daemonAlive = agentStatus === "stopped"
+    ? false
+    : maps.liveConvIds.has(conv._id.toString()) ||
+      (maps.userDaemonAlive && (now - conv.updated_at) < 10 * 60 * 1000);
+
+  // Even when the agent reports idle, recent activity (assistant just
+  // finished streaming), pending messages, or a trailing user message all
+  // mean work is in flight — don't flag as idle yet. The grace is measured
+  // from the agent's status-change time, not conv.updated_at, so a syncing
+  // message backlog can't hold a finished agent in "working". See
+  // deriveSessionActivity / isSessionIdle.
+  const activity = deriveSessionActivity({
+    agentStatus,
+    agentStatusUpdatedAt: maps.agentStatusUpdatedAtMap.get(conv._id.toString()),
+    lastMessageRole: lastMsgRole,
+    lastMessagePreview: lastUserMessage,
+    hasPending,
+    status: conv.status,
+    updatedAt: conv.updated_at,
+    daemonAlive,
+    now,
+  });
+  let isIdle = activity.isIdle;
+  const isUnresponsive = activity.isUnresponsive;
+
+  // An open AskUserQuestion poll is the agent blocking on the user — it
+  // belongs in "needs input", never "working". The daemon's agent_status is
+  // raced (it sends permission_blocked once, then a later "working" signal
+  // overwrites it while the poll is still open), so we derive the fact from
+  // the authoritative data: the chronologically-latest message is the
+  // assistant's AskUserQuestion tool_use (an answer would be a later-timestamped
+  // tool_result, so if the poll is still last, it's unanswered).
+  //
+  // Gate only on the working bucket (!isIdle) to keep this off the idle path.
+  // Do NOT pre-filter on conv.last_message_role — that field reflects sync
+  // batch order, which can disagree with timestamp order (Claude writes the
+  // poll's tool_use line out of order relative to surrounding entries), so it
+  // would miss exactly the blocked sessions we care about. The order("desc")
+  // read below is authoritative.
+  let awaitingInput = false;
+  if (!isIdle && conv.message_count > 0) {
+    const lastMsg = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_timestamp", (q: any) =>
+        q.eq("conversation_id", conv._id)
+      )
+      .order("desc")
+      .first();
+    if (lastMsg?.role === "assistant" && lastMsg.tool_calls?.some((tc: any) => tc.name === "AskUserQuestion")) {
+      awaitingInput = true;
+      isIdle = true; // blocked on the user, not actively working
+    }
+  }
+
+  const deferred = conv.inbox_deferred_at && conv.inbox_deferred_at >= conv.updated_at;
+
+  let implementationSession: { _id: string; title?: string } | undefined;
+  const subagentChildren: any[] = [];
+  if (conv.message_count > 0) {
+    const children = await ctx.db
+      .query("conversations")
+      .withIndex("by_parent_conversation_id", (q: any) =>
+        q.eq("parent_conversation_id", conv._id)
+      )
+      .take(20);
+    const implChild = children.find(
+      (c: any) => c.parent_message_uuid === "plan-handoff" && !c.is_subagent
+    );
+    if (implChild) {
+      implementationSession = { _id: implChild._id.toString(), title: implChild.title };
+    }
+    // Keep an idle parent in "working" only while a subagent child is genuinely
+    // PRODUCING, not merely alive (see subagentKeepsParentWorking). A forked
+    // subagent that finished but whose daemon keeps heartbeating used to pin its
+    // parent in "working" forever. We pass the child's agent_status already
+    // coerced for heartbeat staleness, the same coercion the parent gets below.
+    if (isIdle && children.some((c: any) => {
+      const cid = c._id.toString();
+      return subagentKeepsParentWorking({
+        isSubagent: !!c.is_subagent,
+        convStatus: c.status,
+        updatedAt: c.updated_at,
+        isLive: maps.liveConvIds.has(cid),
+        agentStatus: trustedAgentStatus(maps.agentStatusMap.get(cid), c.updated_at, now),
+        now,
+      });
+    })) {
+      isIdle = false;
+    }
+    for (const c of children) {
+      if ((c.is_subagent || (c.parent_conversation_id && !c.parent_message_uuid)) && c.message_count > 0) {
+        subagentChildren.push(c);
+      }
+    }
+  }
+
+  let active_plan: { _id: string; short_id: string; title: string; status: string } | undefined;
+  if (conv.active_plan_id) {
+    const p = await ctx.db.get(conv.active_plan_id);
+    if (p) active_plan = { _id: p._id, short_id: p.short_id, title: p.title, status: p.status };
+  }
+
+  let active_task: { _id: string; short_id: string; title: string; status: string } | undefined;
+  if (conv.active_task_id) {
+    const t = await ctx.db.get(conv.active_task_id);
+    if (t) active_task = { _id: t._id, short_id: t.short_id, title: t.title, status: t.status };
+  }
+
+  let workflow_run_status: string | null = null;
+  if (conv.workflow_run_id) {
+    const run = await ctx.db.get(conv.workflow_run_id);
+    if (run) workflow_run_status = run.status;
+  }
+
+  // Anchor identity: a personal anchor's bot isn't in the team roster, so the
+  // client can't resolve it — stamp the bot's name/avatar here (self-guarded:
+  // returns null for ordinary rows) so the sidebar shows the bot chip.
+  const acting = await resolveActingAuthor(ctx, conv);
+
+  const row = {
+    _id: conv._id,
+    session_id: conv.session_id,
+    title: conv.title,
+    subtitle: conv.subtitle,
+    updated_at: conv.updated_at,
+    started_at: conv.started_at,
+    project_path: conv.project_path,
+    git_root: conv.git_root,
+    git_branch: conv.git_branch,
+    agent_type: conv.agent_type,
+    model: conv.model ?? null,
+    effort: conv.effort ?? null,
+    message_count: conv.message_count,
+    idle_summary: conv.idle_summary,
+    is_idle: isIdle,
+    awaiting_input: awaitingInput,
+    is_unresponsive: isUnresponsive,
+    is_connected: !!daemonAlive,
+    has_pending: hasPending,
+    is_deferred: !!deferred,
+    is_pinned: pinned,
+    inbox_pinned_at: conv.inbox_pinned_at ?? null,
+    inbox_dismissed_at: conv.inbox_dismissed_at ?? null,
+    inbox_stashed_at: conv.inbox_stashed_at ?? null,
+    agent_status: agentStatus,
+    tmux_session: maps.tmuxSessionMap.get(conv._id.toString()) ?? null,
+    permission_mode: maps.permissionModeMap.get(conv._id.toString()) ?? null,
+    last_user_message: lastUserMessage,
+    session_error: conv.session_error,
+    // True when the latest turn is an unresolved Claude Code auth/API-error
+    // banner ("Please run /login · API Error: 401 …", "You've hit your session
+    // limit · resets 11:30pm"). The CLI got signed out, rejected, or
+    // rate-limited mid-turn and the session is parked waiting on the user (or
+    // the limit reset). Cleared automatically once a real turn supersedes the
+    // banner (see messages.ts / apiErrorBatchAction). The kind ("auth" |
+    // "limit" | "error") picks the session-pill label.
+    pending_api_error: conv.pending_api_error === true,
+    pending_api_error_kind: conv.pending_api_error_kind ?? null,
+    implementation_session: implementationSession,
+    active_plan,
+    active_task,
+    worktree_name: conv.worktree_name,
+    worktree_branch: conv.worktree_branch,
+    workflow_run_id: conv.workflow_run_id || null,
+    is_workflow_primary: conv.is_workflow_primary || false,
+    workflow_run_status,
+    // Schedule that spawned this conversation as a run (see schema) — lets the
+    // sidebar badge and the schedule strip attribute ANY run, not just the
+    // latest one webList can resolve from last_run_session_uuid.
+    agent_task_id: conv.agent_task_id?.toString() || null,
+    forked_from: conv.forked_from?.toString() || null,
+    // Parent-link fields so a session emitted via THIS top-level scan self-identifies
+    // as a subagent and nests under its parent (a subagent active in the last 30d is
+    // pulled in here too — recentConversations has no subagent filter). Without them
+    // it renders as a loose flat card. See subagentLinkFields (ct-37439).
+    ...subagentLinkFields(conv),
+    // Visible-child pointer + agent-team identity (see schema): links a
+    // teammate/spawned session to its parent WITHOUT the subagent
+    // nesting/hiding that parent_conversation_id implies.
+    spawned_by_conversation_id: conv.spawned_by_conversation_id?.toString() || null,
+    agent_team_name: conv.agent_team_name ?? null,
+    agent_name: conv.agent_name ?? null,
+    parent_message_uuid: conv.parent_message_uuid || null,
+    icon: conv.icon,
+    icon_color: conv.icon_color,
+    team_id: conv.team_id ?? null,
+    is_private: conv.is_private ?? false,
+    owner_device_id: (conv as any).owner_device_id ?? null,
+    // Second-party owner (the member responsible for steering; see schema).
+    // author/owner display names are stamped by computeInboxSessions, which
+    // caches the user docs across rows.
+    owner_user_id: (conv as any).owner_user_id?.toString() ?? null,
+    user_id: conv.user_id,
+    acting_user_id: (conv as any).acting_user_id ?? null,
+    is_anchor: !!(conv as any).anchor_id,
+    author_name: acting ? acting.name : undefined,
+    author_avatar: acting ? acting.avatar : undefined,
+    // Carried through so the client can filter the same session cache into the
+    // Favorites view (a kept, long-term set) without a second row shape. The
+    // favorites query below force-loads these regardless of the recency window.
+    is_favorite: !!conv.is_favorite,
+  };
+
+  return { row, subagentChildren, dismissed, stashed, hidden };
+}
+
+// Build a subagent child row (lighter — children carry no AUQ/plan context).
+function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: number, parentId: Id<"conversations">) {
+  const childDaemon = maps.liveConvIds.has(child._id.toString());
+  const childAgentStatus = maps.agentStatusMap.get(child._id.toString());
+  const childRecentlyUpdated = (now - child.updated_at) < 45 * 1000;
+  const childHasPending = !!child.has_pending_messages;
+  const childAgentIdle = childAgentStatus
+    ? childAgentStatus !== "working" && childAgentStatus !== "compacting" && childAgentStatus !== "thinking" && childAgentStatus !== "connected" && childAgentStatus !== "starting" && childAgentStatus !== "resuming"
+    : false;
+  const childIsIdle = childAgentStatus
+    ? childAgentIdle && !childHasPending
+    : childDaemon
+      ? !childHasPending && !childRecentlyUpdated
+      : !childRecentlyUpdated;
+  return {
+    _id: child._id,
+    session_id: child.session_id,
+    title: child.title,
+    subtitle: child.subtitle,
+    updated_at: child.updated_at,
+    started_at: child.started_at,
+    project_path: child.project_path,
+    git_root: child.git_root,
+    git_branch: child.git_branch,
+    agent_type: child.agent_type,
+    model: child.model ?? null,
+    message_count: child.message_count,
+    idle_summary: child.idle_summary,
+    is_idle: childIsIdle,
+    awaiting_input: false,
+    is_unresponsive: false,
+    is_connected: !!childDaemon,
+    has_pending: !!child.has_pending_messages,
+    is_deferred: false,
+    is_pinned: false,
+    inbox_pinned_at: null,
+    inbox_dismissed_at: child.inbox_dismissed_at ?? null,
+    inbox_stashed_at: child.inbox_stashed_at ?? null,
+    agent_status: childAgentStatus,
+    tmux_session: maps.tmuxSessionMap.get(child._id.toString()) ?? null,
+    permission_mode: maps.permissionModeMap.get(child._id.toString()) ?? null,
+    last_user_message: null,
+    session_error: child.session_error,
+    pending_api_error: child.pending_api_error === true,
+    pending_api_error_kind: child.pending_api_error_kind ?? null,
+    // Same parent-link fields as the top-level scan (subagentLinkFields), so the
+    // two emission paths stay byte-consistent when the client dedups by _id. This
+    // path is for confirmed children, so is_subagent is forced true (covers the
+    // parent_message_uuid-less child that has no is_subagent flag of its own).
+    ...subagentLinkFields({ is_subagent: true, parent_conversation_id: parentId }),
+    spawned_by_conversation_id: child.spawned_by_conversation_id?.toString() || null,
+    agent_team_name: child.agent_team_name ?? null,
+    agent_name: child.agent_name ?? null,
+    worktree_name: child.worktree_name,
+    worktree_branch: child.worktree_branch,
+    workflow_run_id: null,
+    is_workflow_primary: false,
+    workflow_run_status: null,
+    icon: child.icon,
+    icon_color: child.icon_color,
+    team_id: child.team_id ?? null,
+    is_private: child.is_private ?? false,
+    user_id: child.user_id,
+  };
+}
+
+// Stable inbox ordering shared by the live query (the crawl leaves ordering to
+// the client, which re-sorts via sortSessions anyway).
+function sortInboxRows(results: any[]) {
+  results.sort((a, b) => {
+    if (a.is_pinned !== b.is_pinned) return a.is_pinned ? -1 : 1;
+    const aNew = a.message_count === 0;
+    const bNew = b.message_count === 0;
+    if (aNew !== bNew) return aNew ? -1 : 1;
+    if (a.is_idle !== b.is_idle) return a.is_idle ? -1 : 1;
+    if (a.is_deferred !== b.is_deferred) return a.is_deferred ? 1 : -1;
+    if (a.is_idle) return a.updated_at - b.updated_at;
+    return b.started_at - a.started_at;
+  });
+}
+
+// The live, windowed inbox computation. Extracted from the query handler so a
+// test harness can drive it with an explicit userId (the query is auth-gated and
+// can't be invoked via `npx convex run`).
+// Shared inbox-conversation scan: the recent/pinned/dismissed/stashed/owned windows,
+// explicit-extra hydration, per-user liveness maps, foreign-run liveness merge, and the
+// stale-cluster cutoff. Extracted so the full inbox enrichment (computeInboxSessions)
+// and the lightweight liveness overlay (computeSessionsLiveness) scan the SAME candidate
+// set the same way — they only differ in what they enrich per row.
+async function scanInboxConversations(
+  ctx: any,
+  userId: Id<"users">,
+  now: number,
+  opts: { includeLiveness: boolean; extraConvIds?: string[] },
+): Promise<{
+  conversations: any[];
+  maps: InboxSessionMaps;
+  extraIds: Set<string>;
+  clusterCutoff: number;
+}> {
+  const dismissedCutoff = now - INBOX_DISMISSED_WINDOW_MS;
+  const sessionWindowCutoff = now - INBOX_SESSION_WINDOW_MS;
+
+  // Recent window is bounded by both the row cap AND the 30d activity window:
+  // the index range stops the scan at the cutoff so old sessions are never read.
+  // Pinned/dismissed have their own (separate) queries below and stay exempt.
+  const recentConversations = await ctx.db
+    .query("conversations")
+    .withIndex("by_user_updated", (q: any) =>
+      q.eq("user_id", userId).gte("updated_at", sessionWindowCutoff)
+    )
+    .order("desc")
+    .filter((q: any) => q.or(
+      q.eq(q.field("status"), "active"),
+      q.eq(q.field("status"), "completed")
+    ))
+    .take(200);
+
+  const pinnedConversations = await ctx.db
+    .query("conversations")
+    .withIndex("by_user_pinned", (q: any) =>
+      q.eq("user_id", userId).gt("inbox_pinned_at", 0)
+    )
+    .take(20);
+
+  const dismissedConversations = await ctx.db
+    .query("conversations")
+    .withIndex("by_user_dismissed", (q: any) =>
+      q.eq("user_id", userId).gte("inbox_dismissed_at", dismissedCutoff)
+    )
+    .order("desc")
+    .take(200);
+
+  // Stashed (set aside, agent still alive) mirror the dismissed window so the
+  // Stashed bucket is populated even for rows older than the recent window.
+  const stashedConversations = await ctx.db
+    .query("conversations")
+    .withIndex("by_user_stashed", (q: any) =>
+      q.eq("user_id", userId).gte("inbox_stashed_at", dismissedCutoff)
+    )
+    .order("desc")
+    .take(200);
+
+  // Second-party-owned sessions — run by another member's account (e.g. Mr
+  // Bot) but assigned to this user — surface in the OWNER's inbox alongside
+  // their own. Explicit assignment outranks default team visibility: routing a
+  // session into someone's inbox is a deliberate act by someone who already
+  // had access. Same recency window as the main scan.
+  const ownedConversations = await ctx.db
+    .query("conversations")
+    .withIndex("by_owner_updated", (q: any) =>
+      q.eq("owner_user_id", userId).gte("updated_at", sessionWindowCutoff)
+    )
+    .order("desc")
+    .filter((q: any) => q.or(
+      q.eq(q.field("status"), "active"),
+      q.eq(q.field("status"), "completed")
+    ))
+    .take(100);
+
+  const byId = new Map<string, any>();
+  for (const c of recentConversations) byId.set(c._id.toString(), c);
+  for (const c of pinnedConversations) byId.set(c._id.toString(), c);
+  for (const c of dismissedConversations) byId.set(c._id.toString(), c);
+  for (const c of stashedConversations) byId.set(c._id.toString(), c);
+  for (const c of ownedConversations) byId.set(c._id.toString(), c);
+
+  // Hydrate explicitly-requested conversations the windows above missed.
+  // Own or owned-by-me sessions only (the inbox is "mine"); cap mirrors the
+  // window size.
+  const extraIds = new Set(opts.extraConvIds ?? []);
+  let extraBudget = 200;
+  for (const idStr of extraIds) {
+    if (byId.has(idStr) || extraBudget <= 0) continue;
+    let conv: any = null;
+    try { conv = await ctx.db.get(idStr as Id<"conversations">); } catch { conv = null; }
+    if (!conv) continue;
+    if (
+      conv.user_id.toString() !== userId.toString() &&
+      conv.owner_user_id?.toString() !== userId.toString()
+    ) continue;
+    if (conv.status !== "active" && conv.status !== "completed") continue;
+    byId.set(idStr, conv);
+    extraBudget--;
+  }
+  const conversations = Array.from(byId.values());
+
+  const maps = opts.includeLiveness
+    ? await buildUserSessionMaps(ctx, userId, now)
+    : EMPTY_INBOX_MAPS;
+
+  // buildUserSessionMaps only covers managed_sessions belonging to THIS user;
+  // an owned foreign-run session's daemon rows belong to the running account,
+  // so merge its liveness per-conversation or the row would always classify as
+  // dead/idle even while the runner's agent is actively working.
+  const foreignConvs = conversations.filter((c) => c.user_id.toString() !== userId.toString());
+  if (opts.includeLiveness && foreignConvs.length > 0) {
+    await mergeForeignConversationLiveness(ctx, maps, foreignConvs, now);
+  }
+
+  // Cluster cutoff hides stale active sessions when there's a clean time gap.
+  // Dismissed/stashed sessions have their own 30d window, and explicitly-requested
+  // extras are old by design — exclude both from the gap analysis.
+  let clusterCutoff = 0;
+  const activeConvs = conversations.filter(
+    (c) => !c.inbox_dismissed_at && !c.inbox_stashed_at && !extraIds.has(c._id.toString())
+  );
+  if (activeConvs.length > 0) {
+    const sorted = [...activeConvs].sort((a, b) => b.updated_at - a.updated_at);
+    for (let i = 1; i < sorted.length; i++) {
+      const gap = sorted[i - 1].updated_at - sorted[i].updated_at;
+      if (gap > 12 * 60 * 60 * 1000) {
+        clusterCutoff = sorted[i].updated_at;
+        break;
+      }
+    }
+  }
+
+  return { conversations, maps, extraIds, clusterCutoff };
+}
+
+async function computeInboxSessions(
+  ctx: any,
+  userId: Id<"users">,
+  opts: {
+    show_all?: boolean;
+    includeLiveness?: boolean;
+    // Explicitly-requested conversations (a label's filed set) hydrated into the
+    // candidate pool regardless of the recency window — labels exist to park old
+    // sessions. Deliberately filed, so also exempt from cluster-hiding.
+    extraConvIds?: string[];
+  },
+): Promise<{ sessions: any[]; hidden_count: number }> {
+  // Liveness (agent_status/is_idle/...) is heartbeat-derived and is the reason this
+  // query re-runs ~every second. The live web subscription opts OUT (includeLiveness:
+  // false) and gets those fields from the lightweight `sessionsLiveness` overlay; all
+  // other callers (inboxForCLI, listInboxSessionsPaginated) default to true and are
+  // unchanged. Default MUST stay true — inboxForCLI classifies work-state from it.
+  const includeLiveness = opts.includeLiveness !== false;
+  const now = Date.now();
+  const { conversations, maps, extraIds, clusterCutoff } =
+    await scanInboxConversations(ctx, userId, now, {
+      includeLiveness,
+      extraConvIds: opts.extraConvIds,
+    });
+
+  let hiddenCount = 0;
+  const results: any[] = [];
+  // User docs for run-by / owner display, cached across rows (both are sparse:
+  // only second-party-owned sessions ever hit this).
+  const userDocCache = new Map<string, any>();
+  const getUserDoc = async (id: any) => {
+    const key = id.toString();
+    if (!userDocCache.has(key)) {
+      let doc: any = null;
+      try { doc = await ctx.db.get(id); } catch { doc = null; }
+      userDocCache.set(key, doc);
+    }
+    return userDocCache.get(key);
+  };
+  for (const conv of conversations) {
+    if (!shouldShowInInbox(conv)) continue;
+    // Explicitly-requested rows are deliberately filed — never cluster-hide them.
+    const cutoff = extraIds.has(conv._id.toString()) ? 0 : clusterCutoff;
+    const { row, subagentChildren, dismissed, stashed, hidden } = await enrichInboxSessionRow(ctx, conv, maps, now, cutoff);
+    if (hidden) {
+      hiddenCount++;
+      if (!opts.show_all) continue;
+    }
+    if (conv.user_id.toString() !== userId.toString()) {
+      const author = await getUserDoc(conv.user_id);
+      row.author_name = author?.name ?? author?.email ?? null;
+      row.author_email = author?.email ?? null;
+    }
+    if (conv.owner_user_id) {
+      const ownerDoc = await getUserDoc(conv.owner_user_id);
+      row.owner_name = ownerDoc?.name ?? null;
+      row.owner_email = ownerDoc?.email ?? null;
+      row.owned_by_me = conv.owner_user_id.toString() === userId.toString();
+    }
+    results.push(row);
+    // Don't surface subagents under a dismissed/stashed parent — they used to be
+    // invisible (parent was excluded from the idle query entirely) and
+    // exposing them now would make active buckets pick them up as orphans.
+    if (dismissed || stashed) continue;
+    for (const child of subagentChildren) {
+      results.push(buildSubagentChildRow(child, maps, now, conv._id));
+    }
+  }
+
+  sortInboxRows(results);
+  if (!includeLiveness) for (const row of results) stripInboxLiveness(row);
+  return { sessions: results, hidden_count: hiddenCount };
+}
+
 export const listInboxSessions = query({
   args: {
     show_all: v.optional(v.boolean()),
+    // Live subscription opts out of heartbeat-derived liveness (it rides the
+    // separate `sessionsLiveness` overlay) so heartbeats stop re-pushing the whole
+    // inbox. Defaults to true so older / un-redeployed clients that read liveness
+    // straight off this query keep working unchanged.
+    include_liveness: v.optional(v.boolean()),
     // Ignored cache-buster: lets the recovery poll force a real round-trip
     // instead of being served the live subscription's stalled cache. See the
     // matching `_probe` arg on users.getCurrentUser.
@@ -5853,355 +7293,585 @@ export const listInboxSessions = query({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return { sessions: [], hidden_count: 0 };
+    return computeInboxSessions(ctx, userId, {
+      show_all: args.show_all,
+      includeLiveness: args.include_liveness,
+    });
+  },
+});
 
-    const now = Date.now();
-    const HEARTBEAT_ALIVE_MS = 90 * 1000;
-    const DISMISSED_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
-    const dismissedCutoff = now - DISMISSED_WINDOW_MS;
+// The 7 heartbeat-derived fields the sessionsLiveness overlay ships — the exact set the
+// full row (enrichInboxSessionRow) exposes and the web client merges via syncOverlay.
+type LivenessFields = {
+  agent_status: any;
+  is_idle: boolean;
+  is_unresponsive: boolean;
+  awaiting_input: boolean;
+  is_connected: boolean;
+  tmux_session: string | null;
+  permission_mode: string | null;
+};
 
-    const recentConversations = await ctx.db
-      .query("conversations")
-      .withIndex("by_user_updated", (q) => q.eq("user_id", userId))
+// Lightweight twin of enrichInboxSessionRow that computes ONLY those 7 fields. It reuses
+// the exact same derivations (trustedAgentStatus / deriveSessionActivity / the AUQ probe
+// / subagentKeepsParentWorking) so the overlay never drifts from the bundled row — but it
+// SKIPS everything the overlay throws away: the plan/task/workflow gets, the acting-author
+// resolution, and the subagent-row building. The one heavy read the full enrichment does
+// per row — the by_parent_conversation_id children scan (up to ~620/recompute, the cost
+// this task exists to cut) — runs here only in the single case that can change an output:
+// flipping an otherwise-idle parent back to "working" because a child is still producing.
+// So it's gated on isIdle (nothing to flip otherwise) and skipped for dismissed/stashed
+// rows (their children don't need live liveness). The AUQ probe is likewise gated on the
+// working bucket (!isIdle), matching enrichInboxSessionRow.
+async function enrichLivenessFields(
+  ctx: any,
+  conv: any,
+  maps: InboxSessionMaps,
+  now: number,
+): Promise<LivenessFields> {
+  const cid = conv._id.toString();
+  const hasPending = !!conv.has_pending_messages;
+  let lastMsgRole = conv.last_message_role;
+  let lastUserMessage = conv.last_message_preview || null;
+
+  // Fallback for un-backfilled conversations: one read for the last message so
+  // deriveSessionActivity sees the trailing role + the interrupt-marker preview.
+  if (!lastMsgRole && conv.message_count > 0) {
+    const lastMsg = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_timestamp", (q: any) =>
+        q.eq("conversation_id", conv._id)
+      )
       .order("desc")
-      .filter((q) => q.or(
-        q.eq(q.field("status"), "active"),
-        q.eq(q.field("status"), "completed")
-      ))
-      .take(200);
+      .first();
+    if (lastMsg) {
+      lastMsgRole = lastMsg.role;
+      if (lastMsg.role === "user" && lastMsg.content?.trim()) {
+        lastUserMessage = lastMsg.content
+          .replace(/\[Image[:\s][^\]]*\]/gi, "")
+          .replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "")
+          .trim()
+          .slice(0, 200);
+      }
+    }
+  }
 
-    const pinnedConversations = await ctx.db
+  const dismissed = !!conv.inbox_dismissed_at;
+  const stashed = !!conv.inbox_stashed_at;
+
+  const agentStatus = trustedAgentStatus(maps.agentStatusMap.get(cid), conv.updated_at, now);
+  const daemonAlive = agentStatus === "stopped"
+    ? false
+    : maps.liveConvIds.has(cid) ||
+      (maps.userDaemonAlive && (now - conv.updated_at) < 10 * 60 * 1000);
+
+  const activity = deriveSessionActivity({
+    agentStatus,
+    agentStatusUpdatedAt: maps.agentStatusUpdatedAtMap.get(cid),
+    lastMessageRole: lastMsgRole,
+    lastMessagePreview: lastUserMessage,
+    hasPending,
+    status: conv.status,
+    updatedAt: conv.updated_at,
+    daemonAlive,
+    now,
+  });
+  let isIdle = activity.isIdle;
+  const isUnresponsive = activity.isUnresponsive;
+
+  // An open AskUserQuestion poll is the agent blocking on the user — it belongs in
+  // "needs input", never "working". Same authoritative order("desc") probe (and same
+  // !isIdle gate) as enrichInboxSessionRow.
+  let awaitingInput = false;
+  if (!isIdle && conv.message_count > 0) {
+    const lastMsg = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_timestamp", (q: any) =>
+        q.eq("conversation_id", conv._id)
+      )
+      .order("desc")
+      .first();
+    if (lastMsg?.role === "assistant" && lastMsg.tool_calls?.some((tc: any) => tc.name === "AskUserQuestion")) {
+      awaitingInput = true;
+      isIdle = true; // blocked on the user, not actively working
+    }
+  }
+
+  // Keep an idle parent in "working" only while a subagent child is genuinely
+  // PRODUCING (see subagentKeepsParentWorking). This is the ONLY liveness effect of
+  // the children scan, so it runs only when isIdle is still true and never for
+  // dismissed/stashed rows.
+  if (isIdle && !dismissed && !stashed && conv.message_count > 0) {
+    const children = await ctx.db
       .query("conversations")
-      .withIndex("by_user_pinned", (q) =>
-        q.eq("user_id", userId).gt("inbox_pinned_at", 0)
+      .withIndex("by_parent_conversation_id", (q: any) =>
+        q.eq("parent_conversation_id", conv._id)
       )
       .take(20);
+    if (children.some((c: any) => subagentKeepsParentWorking({
+      isSubagent: !!c.is_subagent,
+      convStatus: c.status,
+      updatedAt: c.updated_at,
+      isLive: maps.liveConvIds.has(c._id.toString()),
+      agentStatus: trustedAgentStatus(maps.agentStatusMap.get(c._id.toString()), c.updated_at, now),
+      now,
+    }))) {
+      isIdle = false;
+    }
+  }
 
-    const dismissedConversations = await ctx.db
-      .query("conversations")
-      .withIndex("by_user_dismissed", (q) =>
-        q.eq("user_id", userId).gte("inbox_dismissed_at", dismissedCutoff)
-      )
-      .order("desc")
-      .take(200);
+  return {
+    agent_status: agentStatus,
+    is_idle: isIdle,
+    is_unresponsive: isUnresponsive,
+    awaiting_input: awaitingInput,
+    is_connected: !!daemonAlive,
+    tmux_session: maps.tmuxSessionMap.get(cid) ?? null,
+    permission_mode: maps.permissionModeMap.get(cid) ?? null,
+  };
+}
 
-    const byId = new Map<string, typeof recentConversations[number]>();
-    for (const c of recentConversations) byId.set(c._id.toString(), c);
-    for (const c of pinnedConversations) byId.set(c._id.toString(), c);
-    for (const c of dismissedConversations) byId.set(c._id.toString(), c);
-    const conversations = Array.from(byId.values());
+// Build the {convId: LivenessFields} overlay for the user's inbox window. Reuses the
+// shared scan (so the candidate set matches computeInboxSessions exactly) but enriches
+// each row through the lightweight enrichLivenessFields — NOT the full enrichInboxSessionRow
+// — so a heartbeat recompute no longer runs the plan/task/workflow gets, the acting-author
+// resolution, or a children scan for every row. Covers the whole window (dismissed/stashed
+// included) so the overlay is a superset of any row the client might hold; syncOverlay
+// ignores ids it doesn't have.
+async function computeSessionsLiveness(
+  ctx: any,
+  userId: Id<"users">,
+): Promise<Record<string, LivenessFields>> {
+  const now = Date.now();
+  const { conversations, maps } = await scanInboxConversations(ctx, userId, now, {
+    includeLiveness: true,
+  });
+  const liveness: Record<string, LivenessFields> = {};
+  for (const conv of conversations) {
+    if (!shouldShowInInbox(conv)) continue;
+    liveness[conv._id.toString()] = await enrichLivenessFields(ctx, conv, maps, now);
+  }
+  return liveness;
+}
 
-    const managedSessions = await ctx.db
-      .query("managed_sessions")
+// Heartbeat-derived liveness for the user's inbox sessions, keyed by conversation id —
+// the small, high-churn overlay that pairs with listInboxSessions({include_liveness:
+// false}). This is the only inbox query that re-runs on every heartbeat, so it computes
+// ONLY the 7 liveness fields (computeSessionsLiveness) instead of the full inbox
+// enrichment — the values are still identical to the bundled path because both derive
+// them the same way. Ships a tiny map the client merges via syncOverlay.
+export const sessionsLiveness = query({
+  args: {
+    show_all: v.optional(v.boolean()),
+    _probe: v.optional(v.number()),
+  },
+  handler: async (ctx, _args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { liveness: {} };
+    const liveness = await computeSessionsLiveness(ctx, userId);
+    return { liveness };
+  },
+});
+
+// CLI-facing inbox: the same fully-enriched, per-user session set the web inbox
+// renders (computeInboxSessions), collapsed to a single `work_state` per row via
+// the shared classifier and sorted most-actionable-first. Powers `cast monitor`
+// and `cast feed`'s precise `--state` view. api_token authed (CLI has no cookie).
+export const inboxForCLI = query({
+  args: {
+    api_token: v.string(),
+    show_all: v.optional(v.boolean()),
+    state: v.optional(v.string()),
+    limit: v.optional(v.number()),
+    label: v.optional(v.string()),
+    project_path: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) return { error: "Unauthorized" };
+
+    // Labels (buckets) are the user's personal filing, fetched BEFORE the inbox
+    // so a --label query can hydrate its full filed set below. One fetch serves
+    // the --label filter, the per-row label stamp, and the labels summary the
+    // CLI renders for --labels / --by-label.
+    const allBuckets = await ctx.db
+      .query("inbox_buckets")
       .withIndex("by_user_id", (q) => q.eq("user_id", userId))
       .collect();
-
-    const liveConvIds = new Set(
-      managedSessions
-        .filter((s) => now - s.last_heartbeat < HEARTBEAT_ALIVE_MS && s.conversation_id)
-        .map((s) => s.conversation_id!.toString())
-    );
-
-    const agentStatusMap = new Map<string, "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped" | "starting" | "resuming">();
-    const agentStatusUpdatedAtMap = new Map<string, number>();
-    const tmuxSessionMap = new Map<string, string>();
-    const permissionModeMap = new Map<string, string>();
-    for (const s of managedSessions) {
-      if (!s.conversation_id) continue;
-      const cid = s.conversation_id.toString();
-      if (s.tmux_session) tmuxSessionMap.set(cid, s.tmux_session);
-      if (s.permission_mode) permissionModeMap.set(cid, s.permission_mode);
-      if (!s.agent_status) continue;
-      if (s.agent_status_updated_at !== undefined) agentStatusUpdatedAtMap.set(cid, s.agent_status_updated_at);
-      const heartbeatAlive = now - s.last_heartbeat < HEARTBEAT_ALIVE_MS;
-      if (s.agent_status === "stopped" || s.agent_status === "idle") {
-        agentStatusMap.set(cid, s.agent_status);
-      } else if (heartbeatAlive) {
-        agentStatusMap.set(cid, s.agent_status);
-      } else {
-        agentStatusMap.set(cid, "stopped");
-      }
+    const activeBuckets = allBuckets
+      .filter((b) => !b.archived_at)
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.name.localeCompare(b.name));
+    const assignments = await ctx.db
+      .query("bucket_assignments")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .collect();
+    const bucketNameById = new Map(activeBuckets.map((b) => [b._id.toString(), b.name]));
+    const labelByConv = new Map<string, string>();
+    for (const a of assignments) {
+      const name = a.bucket_id ? bucketNameById.get(a.bucket_id.toString()) : undefined;
+      if (name) labelByConv.set(a.conversation_id.toString(), name);
     }
 
-    const userDaemonAlive = managedSessions.some(
-      (s) => now - s.last_heartbeat < 6 * 60 * 1000
-    );
-
-    // Cluster cutoff hides stale active sessions when there's a clean time gap.
-    // Dismissed sessions have their own 30d window, so exclude them from the gap analysis.
-    let clusterCutoff = 0;
-    const activeConvs = conversations.filter((c) => !c.inbox_dismissed_at);
-    if (activeConvs.length > 0) {
-      const sorted = [...activeConvs].sort((a, b) => b.updated_at - a.updated_at);
-      for (let i = 1; i < sorted.length; i++) {
-        const gap = sorted[i - 1].updated_at - sorted[i].updated_at;
-        if (gap > 12 * 60 * 60 * 1000) {
-          clusterCutoff = sorted[i].updated_at;
-          break;
-        }
-      }
-    }
-
-    let hiddenCount = 0;
-    const results = [];
-    for (const conv of conversations) {
-      if (!shouldShowInInbox(conv)) continue;
-
-      let hasPending = !!conv.has_pending_messages;
-      let lastMsgRole = conv.last_message_role;
-      let lastUserMessage = conv.last_message_preview || null;
-
-      // Fallback for un-backfilled conversations: single query to get last message
-      if (!lastMsgRole && conv.message_count > 0) {
-        const lastMsg = await ctx.db
-          .query("messages")
-          .withIndex("by_conversation_timestamp", (q) =>
-            q.eq("conversation_id", conv._id)
-          )
-          .order("desc")
-          .first();
-        if (lastMsg) {
-          lastMsgRole = lastMsg.role;
-          if (lastMsg.role === "user" && lastMsg.content?.trim()) {
-            lastUserMessage = lastMsg.content
-              .replace(/\[Image[:\s][^\]]*\]/gi, "")
-              .replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "")
-              .trim()
-              .slice(0, 200);
-          }
-        }
-      }
-
-      const pinned = !!conv.inbox_pinned_at;
-      const dismissed = !!conv.inbox_dismissed_at;
-
-      if (!dismissed && clusterCutoff > 0 && conv.updated_at < clusterCutoff && !hasPending && !pinned) {
-        hiddenCount++;
-        if (!args.show_all) continue;
-      }
-
-      const agentStatus = agentStatusMap.get(conv._id.toString());
-      // Don't let userDaemonAlive resurrect sessions we know are stopped
-      const daemonAlive = agentStatus === "stopped"
-        ? false
-        : liveConvIds.has(conv._id.toString()) ||
-          (userDaemonAlive && (now - conv.updated_at) < 10 * 60 * 1000);
-
-      const isInterruptMsg = !!lastUserMessage && (
-        lastUserMessage.startsWith("[Request interrupted") || lastUserMessage.startsWith("[Request cancelled")
+    // --label: resolve the filed conversation ids up front. Labels exist to park
+    // old sessions, which the inbox's recency window misses — so the filed set is
+    // hydrated INTO the inbox (extraConvIds) instead of merely filtering it, the
+    // same policy as feedForCLI's resolveLabelConvIds path. Same-named buckets
+    // merge into one label, so collect every matching bucket id.
+    let labelConvIds: Set<string> | null = null;
+    if (args.label) {
+      const matched = matchBucketByName(activeBuckets, args.label);
+      if ("error" in matched) return { error: matched.error };
+      const matchedBucketIds = new Set(
+        activeBuckets.filter((b) => b.name === matched.name).map((b) => b._id.toString())
       );
-      const lastRoleIsUser = lastMsgRole === "user" && !isInterruptMsg;
-      const recentlyUpdated = (now - conv.updated_at) < 45 * 1000;
-
-      const isUnresponsive = conv.status === "active" && !daemonAlive && (
-        (lastRoleIsUser && !recentlyUpdated) ||
-        (hasPending && !recentlyUpdated)
+      labelConvIds = new Set(
+        assignments
+          .filter((a) => a.bucket_id && matchedBucketIds.has(a.bucket_id.toString()))
+          .map((a) => a.conversation_id.toString())
       );
-
-      // Even when the agent reports idle, recent activity (assistant just
-      // finished streaming), pending messages, or a trailing user message all
-      // mean work is in flight — don't flag as idle yet. The grace is measured
-      // from the agent's status-change time, not conv.updated_at, so a syncing
-      // message backlog can't hold a finished agent in "working". See
-      // isSessionIdle.
-      let isIdle = isSessionIdle({
-        agentStatus,
-        agentStatusUpdatedAt: agentStatusUpdatedAtMap.get(conv._id.toString()),
-        hasPending,
-        lastRoleIsUser,
-        recentlyUpdated,
-        daemonAlive,
-        now,
-      });
-
-      // An open AskUserQuestion poll is the agent blocking on the user — it
-      // belongs in "needs input", never "working". The daemon's agent_status is
-      // raced (it sends permission_blocked once, then a later "working" signal
-      // overwrites it while the poll is still open), so we derive the fact from
-      // the authoritative data: the chronologically-latest message is the
-      // assistant's AskUserQuestion tool_use (an answer would be a later-timestamped
-      // tool_result, so if the poll is still last, it's unanswered).
-      //
-      // Gate only on the working bucket (!isIdle) to keep this off the idle path.
-      // Do NOT pre-filter on conv.last_message_role — that field reflects sync
-      // batch order, which can disagree with timestamp order (Claude writes the
-      // poll's tool_use line out of order relative to surrounding entries), so it
-      // would miss exactly the blocked sessions we care about. The order("desc")
-      // read below is authoritative.
-      let awaitingInput = false;
-      if (!isIdle && conv.message_count > 0) {
-        const lastMsg = await ctx.db
-          .query("messages")
-          .withIndex("by_conversation_timestamp", (q) =>
-            q.eq("conversation_id", conv._id)
-          )
-          .order("desc")
-          .first();
-        if (lastMsg?.role === "assistant" && lastMsg.tool_calls?.some((tc) => tc.name === "AskUserQuestion")) {
-          awaitingInput = true;
-          isIdle = true; // blocked on the user, not actively working
-        }
-      }
-
-      const deferred = conv.inbox_deferred_at && conv.inbox_deferred_at >= conv.updated_at;
-
-      let implementationSession: { _id: string; title?: string } | undefined;
-      const subagentChildren: typeof conversations = [];
-      if (conv.message_count > 0) {
-        const children = await ctx.db
-          .query("conversations")
-          .withIndex("by_parent_conversation_id", (q) =>
-            q.eq("parent_conversation_id", conv._id)
-          )
-          .take(20);
-        const implChild = children.find(
-          (c) => c.parent_message_uuid === "plan-handoff" && !c.is_subagent
-        );
-        if (implChild) {
-          implementationSession = { _id: implChild._id.toString(), title: implChild.title };
-        }
-        if (isIdle && children.some((c) => c.is_subagent && c.status === "active" &&
-            (liveConvIds.has(c._id.toString()) || (now - c.updated_at) < 5 * 60 * 1000))) {
-          isIdle = false;
-        }
-        for (const c of children) {
-          if ((c.is_subagent || (c.parent_conversation_id && !c.parent_message_uuid)) && c.message_count > 0) {
-            subagentChildren.push(c);
-          }
-        }
-      }
-
-      let active_plan: { _id: string; short_id: string; title: string; status: string } | undefined;
-      if (conv.active_plan_id) {
-        const p = await ctx.db.get(conv.active_plan_id);
-        if (p) active_plan = { _id: p._id, short_id: p.short_id, title: p.title, status: p.status };
-      }
-
-      let active_task: { _id: string; short_id: string; title: string; status: string } | undefined;
-      if (conv.active_task_id) {
-        const t = await ctx.db.get(conv.active_task_id);
-        if (t) active_task = { _id: t._id, short_id: t.short_id, title: t.title, status: t.status };
-      }
-
-      let workflow_run_status: string | null = null;
-      if (conv.workflow_run_id) {
-        const run = await ctx.db.get(conv.workflow_run_id);
-        if (run) workflow_run_status = run.status;
-      }
-
-      results.push({
-        _id: conv._id,
-        session_id: conv.session_id,
-        title: conv.title,
-        subtitle: conv.subtitle,
-        updated_at: conv.updated_at,
-        started_at: conv.started_at,
-        project_path: conv.project_path,
-        git_root: conv.git_root,
-        git_branch: conv.git_branch,
-        agent_type: conv.agent_type,
-        message_count: conv.message_count,
-        idle_summary: conv.idle_summary,
-        is_idle: isIdle,
-        awaiting_input: awaitingInput,
-        is_unresponsive: isUnresponsive,
-        is_connected: !!daemonAlive,
-        has_pending: hasPending,
-        is_deferred: !!deferred,
-        is_pinned: pinned,
-        inbox_dismissed_at: conv.inbox_dismissed_at ?? null,
-        agent_status: agentStatus,
-        tmux_session: tmuxSessionMap.get(conv._id.toString()) ?? null,
-        permission_mode: permissionModeMap.get(conv._id.toString()) ?? null,
-        last_user_message: lastUserMessage,
-        session_error: conv.session_error,
-        implementation_session: implementationSession,
-        active_plan,
-        active_task,
-        worktree_name: conv.worktree_name,
-        worktree_branch: conv.worktree_branch,
-        workflow_run_id: conv.workflow_run_id || null,
-        is_workflow_primary: conv.is_workflow_primary || false,
-        workflow_run_status,
-        forked_from: conv.forked_from?.toString() || null,
-        parent_message_uuid: conv.parent_message_uuid || null,
-        icon: conv.icon,
-        icon_color: conv.icon_color,
-        team_id: conv.team_id ?? null,
-        is_private: conv.is_private ?? false,
-        owner_device_id: (conv as any).owner_device_id ?? null,
-      });
-
-      // Don't surface subagents under a dismissed parent — they used to be
-      // invisible (parent was excluded from the idle query entirely) and
-      // exposing them now would make active buckets pick them up as orphans.
-      if (dismissed) continue;
-
-      for (const child of subagentChildren) {
-        const childDaemon = liveConvIds.has(child._id.toString());
-        const childAgentStatus = agentStatusMap.get(child._id.toString());
-        const childRecentlyUpdated = (now - child.updated_at) < 45 * 1000;
-        const childHasPending = !!child.has_pending_messages;
-        const childAgentIdle = childAgentStatus
-          ? childAgentStatus !== "working" && childAgentStatus !== "compacting" && childAgentStatus !== "thinking" && childAgentStatus !== "connected" && childAgentStatus !== "starting" && childAgentStatus !== "resuming"
-          : false;
-        const childIsIdle = childAgentStatus
-          ? childAgentIdle && !childHasPending
-          : childDaemon
-            ? !childHasPending && !childRecentlyUpdated
-            : !childRecentlyUpdated;
-        results.push({
-          _id: child._id,
-          session_id: child.session_id,
-          title: child.title,
-          subtitle: child.subtitle,
-          updated_at: child.updated_at,
-          started_at: child.started_at,
-          project_path: child.project_path,
-          git_root: child.git_root,
-          git_branch: child.git_branch,
-          agent_type: child.agent_type,
-          message_count: child.message_count,
-          idle_summary: child.idle_summary,
-          is_idle: childIsIdle,
-          awaiting_input: false,
-          is_unresponsive: false,
-          is_connected: !!childDaemon,
-          has_pending: !!child.has_pending_messages,
-          is_deferred: false,
-          is_pinned: false,
-          inbox_dismissed_at: child.inbox_dismissed_at ?? null,
-          agent_status: childAgentStatus,
-          tmux_session: tmuxSessionMap.get(child._id.toString()) ?? null,
-          permission_mode: permissionModeMap.get(child._id.toString()) ?? null,
-          last_user_message: null,
-          session_error: child.session_error,
-          is_subagent: true,
-          parent_conversation_id: conv._id,
-          worktree_name: child.worktree_name,
-          worktree_branch: child.worktree_branch,
-          workflow_run_id: null,
-          is_workflow_primary: false,
-          workflow_run_status: null,
-          icon: child.icon,
-          icon_color: child.icon_color,
-          team_id: child.team_id ?? null,
-          is_private: child.is_private ?? false,
-        });
-      }
     }
 
-    results.sort((a, b) => {
-      if (a.is_pinned !== b.is_pinned) return a.is_pinned ? -1 : 1;
-      const aNew = a.message_count === 0;
-      const bNew = b.message_count === 0;
-      if (aNew !== bNew) return aNew ? -1 : 1;
-      if (a.is_idle !== b.is_idle) return a.is_idle ? -1 : 1;
-      if (a.is_deferred !== b.is_deferred) return a.is_deferred ? 1 : -1;
-      if (a.is_idle) return a.updated_at - b.updated_at;
-      return b.started_at - a.started_at;
+    let { sessions, hidden_count } = await computeInboxSessions(ctx, userId, {
+      show_all: !!args.show_all,
+      extraConvIds: labelConvIds ? [...labelConvIds] : undefined,
     });
 
-    return { sessions: results, hidden_count: hiddenCount };
+    // Project bounding (label views): scope the inbox to one project so labels
+    // and their counts reflect the caller's cwd, not their whole filing cabinet.
+    // Overlap in either direction — a cwd deeper inside the repo still claims
+    // the repo's sessions, and a session created in a subdir still counts.
+    if (args.project_path) {
+      const bound = args.project_path;
+      sessions = sessions.filter((s) => projectOverlaps(bound, s.project_path) || projectOverlaps(bound, s.git_root));
+    }
+
+    if (labelConvIds) {
+      // Counts below reflect the label scope, like show_all narrows the whole view.
+      const lci = labelConvIds;
+      sessions = sessions.filter((s) => lci.has(s._id.toString()));
+    }
+    const stateFilter = normalizeWorkStateFilter(args.state);
+    const ORDER: Record<WorkState, number> = { needs_input: 0, working: 1, idle: 2 };
+
+    const counts = { working: 0, needs_input: 0, idle: 0, pinned: 0, live: 0, dismissed: 0, total: 0 };
+    const rows: Array<{
+      id: string;
+      session_id: string;
+      title: string;
+      project_path: string | null;
+      updated_at: string;
+      ts: number;
+      message_count: number;
+      agent_type?: string;
+      agent_status?: string;
+      work_state: WorkState;
+      is_pinned: boolean;
+      is_live: boolean;
+      is_unresponsive: boolean;
+      awaiting_input: boolean;
+      idle_summary: string | null;
+      last_user_message: string | null;
+      label: string | null;
+      active_plan: { short_id: string; title: string } | null;
+      active_task: { short_id: string; title: string } | null;
+      // Second-party ownership: run_by = the member whose account runs the
+      // session when that isn't the caller; owner = the assigned owner if any.
+      run_by: string | null;
+      owner: { name: string | null; email: string | null } | null;
+      owned_by_me: boolean;
+    }> = [];
+
+    for (const s of sessions) {
+      if (s.is_subagent) continue; // keep the monitor to top-level sessions
+      // Dismissed sessions are returned by computeInboxSessions but the web parks
+      // them in a separate collapsed group, out of the active buckets. Mirror that
+      // so cast monitor counts match the web inbox (don't inflate idle with
+      // already-triaged sessions). `cast monitor -a` includes them.
+      if ((s.inbox_dismissed_at || s.inbox_stashed_at) && !args.show_all) { counts.dismissed++; continue; }
+      const work_state = classifyWorkState({
+        agentStatus: s.agent_status,
+        isIdle: s.is_idle,
+        awaitingInput: s.awaiting_input,
+        hasPending: s.has_pending,
+        isUnresponsive: s.is_unresponsive,
+        messageCount: s.message_count || 0,
+      });
+      const is_live = !!s.is_connected;
+
+      counts.total++;
+      counts[work_state]++;
+      if (s.is_pinned) counts.pinned++;
+      if (is_live) counts.live++;
+      const rowLabel = labelByConv.get(s._id.toString()) ?? null;
+
+      if (stateFilter === "pinned" && !s.is_pinned) continue;
+      if (stateFilter === "live" && !is_live) continue;
+      if (stateFilter && stateFilter !== "pinned" && stateFilter !== "live" && work_state !== stateFilter) continue;
+
+      rows.push({
+        id: s._id,
+        session_id: s.session_id,
+        title: s.title || s.last_user_message || "New Session",
+        project_path: s.project_path || null,
+        updated_at: new Date(s.updated_at).toISOString(),
+        ts: s.updated_at,
+        message_count: s.message_count || 0,
+        agent_type: s.agent_type,
+        agent_status: s.agent_status,
+        work_state,
+        is_pinned: !!s.is_pinned,
+        is_live,
+        is_unresponsive: !!s.is_unresponsive,
+        awaiting_input: !!s.awaiting_input,
+        idle_summary: s.idle_summary || null,
+        last_user_message: s.last_user_message || null,
+        label: rowLabel,
+        active_plan: s.active_plan ? { short_id: s.active_plan.short_id, title: s.active_plan.title } : null,
+        active_task: s.active_task ? { short_id: s.active_task.short_id, title: s.active_task.title } : null,
+        run_by: s.author_name ?? null,
+        owner: s.owner_user_id ? { name: s.owner_name ?? null, email: s.owner_email ?? null } : null,
+        owned_by_me: !!s.owned_by_me,
+      });
+    }
+
+    // Most-actionable first: pinned, then needs_input → working → idle, recent first.
+    rows.sort((a, b) => {
+      if (a.is_pinned !== b.is_pinned) return a.is_pinned ? -1 : 1;
+      if (ORDER[a.work_state] !== ORDER[b.work_state]) return ORDER[a.work_state] - ORDER[b.work_state];
+      return b.ts - a.ts;
+    });
+
+    const limit = args.limit ?? 200;
+
+    // All active labels with counts from the user's FILING (assignments), not
+    // the recency-windowed rows — labels mostly hold parked sessions the window
+    // misses. Same-named buckets merge into one entry. In a project-bounded
+    // view, count only conversations filed in this project (hydrating the few
+    // not already in the inbox window, capped) and drop zero-count labels —
+    // they're other projects' filing.
+    const nameToConvIds = new Map<string, Set<string>>();
+    for (const a of assignments) {
+      const name = a.bucket_id ? bucketNameById.get(a.bucket_id.toString()) : undefined;
+      if (!name) continue;
+      if (!nameToConvIds.has(name)) nameToConvIds.set(name, new Set());
+      nameToConvIds.get(name)!.add(a.conversation_id.toString());
+    }
+    let inBound: ((id: string) => Promise<boolean>) | null = null;
+    if (args.project_path) {
+      const bound = args.project_path;
+      const pathById = new Map<string, { project_path?: string | null; git_root?: string | null } | null>();
+      for (const s of sessions) pathById.set(s._id.toString(), { project_path: s.project_path, git_root: s.git_root });
+      let hydrationBudget = 500;
+      inBound = async (id: string) => {
+        if (!pathById.has(id)) {
+          if (hydrationBudget-- <= 0) return false;
+          let conv: any = null;
+          try { conv = await ctx.db.get(id as Id<"conversations">); } catch { conv = null; }
+          pathById.set(
+            id,
+            conv && conv.user_id.toString() === userId.toString()
+              ? { project_path: conv.project_path, git_root: conv.git_root }
+              : null,
+          );
+        }
+        const p = pathById.get(id);
+        return !!p && (projectOverlaps(bound, p.project_path) || projectOverlaps(bound, p.git_root));
+      };
+    }
+    const labels: Array<{ name: string; count: number }> = [];
+    const seenLabelNames = new Set<string>();
+    for (const b of activeBuckets) {
+      if (seenLabelNames.has(b.name)) continue;
+      seenLabelNames.add(b.name);
+      const ids = nameToConvIds.get(b.name) ?? new Set<string>();
+      let count = 0;
+      for (const id of ids) {
+        if (!inBound || (await inBound(id))) count++;
+      }
+      if (args.project_path && count === 0) continue;
+      labels.push({ name: b.name, count });
+    }
+
+    return { sessions: rows.slice(0, limit), counts, hidden_count, labels, scope: "mine" };
+  },
+});
+
+// COMPLETENESS FLOOR: page through EVERY owned, non-dismissed active/completed
+// conversation that belongs in the inbox — not just the live channel's 200-row
+// recent window. Driven by the client's reconcile crawl (runReconcileCrawl,
+// additive/never-prune), this guarantees an idle, owned, non-dismissed session
+// is present even when it was never cached on this device AND the live
+// subscription was stale (the cross-device + saturation gap). One-shot paginated
+// query — bypasses the stalled live subscription. Returns the SAME enriched rows
+// as listInboxSessions so the store overlays them without schema drift.
+// `since` (optional) restricts to conversations updated at/after a watermark for
+// cheap incremental top-ups after the first full backfill.
+export const listInboxSessionsPaginated = query({
+  args: {
+    paginationOpts: paginationOptsValidator,
+    since: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { page: [], isDone: true, continueCursor: "" };
+
+    const now = Date.now();
+    const maps = await buildUserSessionMaps(ctx, userId, now);
+
+    // Owned conversations, most-recent first. Active OR completed (matches the
+    // live recent window's status filter). `since` trims to changed rows for
+    // incremental crawls. Dismissed are filtered in the LOOP (not the query) via
+    // the canonical `!conv.inbox_dismissed_at` truthiness check — a query-level
+    // `eq(field, undefined)` would wrongly drop sessions whose dismissal was
+    // cleared to null/0 rather than removed. Dismissed are excluded because they
+    // accumulate locally via their own keepWhere path; re-surfacing them here
+    // would fight that design. Cluster-cutoff is disabled (clusterCutoff=0):
+    // completeness is the whole point of the floor.
+    // The lower bound is the caller's watermark ONLY — it must be STABLE across
+    // every page of one crawl, or each page's continuation cursor belongs to a
+    // different query and Convex throws InvalidCursor. The 30d activity window is
+    // therefore applied client-side (the client seeds `since = now - 30d` on the
+    // first backfill); never fold a wall-clock value into the index range here.
+    const q = ctx.db
+      .query("conversations")
+      .withIndex("by_user_updated", (qb: any) =>
+        args.since !== undefined
+          ? qb.eq("user_id", userId).gte("updated_at", args.since)
+          : qb.eq("user_id", userId)
+      )
+      .order("desc")
+      .filter((qb: any) =>
+        qb.or(qb.eq(qb.field("status"), "active"), qb.eq(qb.field("status"), "completed"))
+      );
+
+    const result = await q.paginate(args.paginationOpts);
+
+    const rows: any[] = [];
+    for (const conv of result.page) {
+      if (conv.inbox_dismissed_at || conv.inbox_stashed_at) continue; // dismissed/stashed: own accumulation path
+      if (!shouldShowInInbox(conv)) continue;
+      const { row, subagentChildren } = await enrichInboxSessionRow(ctx, conv, maps, now, 0);
+      rows.push(row);
+      for (const child of subagentChildren) {
+        rows.push(buildSubagentChildRow(child, maps, now, conv._id));
+      }
+    }
+
+    return { page: rows, isDone: result.isDone, continueCursor: result.continueCursor };
+  },
+});
+
+// Durable cross-device dismiss reconcile. Returns ONLY {_id, inbox_dismissed_at}
+// for the caller's conversations dismissed within the live window — NO per-session
+// enrichment, so it's cheap to page even on a saturation-prone backend. This is the
+// backstop the live `listInboxSessions` subscription lacks: that channel only
+// reaches a CONNECTED client, and the session crawl (`listInboxSessionsPaginated`)
+// can't carry a dismiss at all — it's keyed on `updated_at` (a dismiss never moves
+// it) and skips dismissed rows outright. This query is keyed on the
+// `by_user_dismissed` index (inbox_dismissed_at — the field a dismiss DOES move),
+// so a device that was offline at dismiss time heals on its next reconcile.
+// The client overlays the result via applyDismissedReconcile (SET on reported,
+// CLEAR on no-longer-reported = un-dismissed elsewhere). Window mirrors the live
+// query's INBOX_DISMISSED_WINDOW_MS — keep them in sync.
+// Shared handler for the dismissed/stashed lite crawls. The window lower bound
+// MUST be a STABLE value supplied by the caller — it becomes the index range
+// bound, and a wall-clock value recomputed per page (Date.now() in the handler)
+// shifts the range between pages, so each continuation cursor belongs to a
+// different query and Convex throws InvalidCursor on page 2. That capped this
+// crawl at its FIRST page (~500 rows) — a heavy account's older dismisses then
+// never reconciled, so dismissed sessions resurfaced on other tabs/devices. The
+// client seeds `since = now - 30d` once per crawl (mirrors
+// listInboxSessionsPaginated). Never fold Date.now() into the range here. The
+// fallback is only for a single un-paginated probe call.
+async function listHiddenSessionsLite(
+  ctx: any,
+  args: { paginationOpts: any; since?: number },
+  index: "by_user_dismissed" | "by_user_stashed",
+  field: "inbox_dismissed_at" | "inbox_stashed_at",
+) {
+  const userId = await getAuthUserId(ctx);
+  if (!userId) return { page: [], isDone: true, continueCursor: "" };
+  const cutoff = args.since ?? Date.now() - INBOX_DISMISSED_WINDOW_MS;
+  const result = await ctx.db
+    .query("conversations")
+    .withIndex(index, (q: any) => q.eq("user_id", userId).gte(field, cutoff))
+    .order("desc")
+    .paginate(args.paginationOpts);
+  const page = result.page.map((c: any) => ({
+    _id: c._id,
+    [field]: c[field] ?? null,
+  }));
+  return { page, isDone: result.isDone, continueCursor: result.continueCursor };
+}
+
+export const listDismissedSessionsLite = query({
+  args: {
+    paginationOpts: paginationOptsValidator,
+    since: v.optional(v.number()),
+  },
+  handler: (ctx, args) =>
+    listHiddenSessionsLite(ctx, args, "by_user_dismissed", "inbox_dismissed_at"),
+});
+
+// Stashed twin of the dismissed reconcile — same contract, keyed on
+// inbox_stashed_at via by_user_stashed.
+export const listStashedSessionsLite = query({
+  args: {
+    paginationOpts: paginationOptsValidator,
+    since: v.optional(v.number()),
+  },
+  handler: (ctx, args) =>
+    listHiddenSessionsLite(ctx, args, "by_user_stashed", "inbox_stashed_at"),
+});
+
+// Which of these conversation ids still exist as the caller's own? Powers the
+// inbox ghost sweep: the client's never-prune sessions cache verifies before
+// dropping blank rows the empty-conversation GC (cleanup.gcEmptyConversations)
+// may have hard-deleted server-side. Verify-then-prune keeps the sweep safe —
+// a blank row the GC skipped (live terminal, parked draft) reports back as
+// existing and stays cached.
+export const existingConversationIds = query({
+  args: { ids: v.array(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    const out: string[] = [];
+    for (const raw of args.ids.slice(0, 200)) {
+      const id = ctx.db.normalizeId("conversations", raw);
+      if (!id) continue;
+      const conv = await ctx.db.get(id);
+      if (conv && conv.user_id.toString() === userId.toString()) out.push(raw);
+    }
+    return out;
+  },
+});
+
+// Change-feed batch fetch: current inbox-row state for a set of conversation ids
+// the user OWNS (the inbox is owner-only). Returns rows in the EXACT shape of the
+// listInboxSessions base payload (include_liveness:false — liveness stripped so
+// the sessionsLiveness overlay keeps owning it), so the client merges them through
+// the same syncTable("sessions") path. Reuses enrichInboxSessionRow — no
+// presentation filter, so a dismissed/stashed session comes back WITH its flag
+// (the client re-buckets it). Ids that are gone or foreign are simply omitted;
+// the feed's op:"delete" / absence drives the client's prune. See changeFeed.ts.
+export const getInboxSessionsByIds = query({
+  args: { ids: v.array(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { sessions: [] };
+    const now = Date.now();
+    const sessions: any[] = [];
+    for (const raw of args.ids.slice(0, 300)) {
+      const id = ctx.db.normalizeId("conversations", raw);
+      if (!id) continue;
+      const conv = await ctx.db.get(id);
+      if (!conv || conv.user_id.toString() !== userId.toString()) continue;
+      if (conv.status !== "active" && conv.status !== "completed") continue;
+      const { row } = await enrichInboxSessionRow(ctx, conv, EMPTY_INBOX_MAPS, now, 0);
+      stripInboxLiveness(row);
+      sessions.push(row);
+    }
+    return { sessions };
   },
 });
 
@@ -6249,6 +7919,13 @@ export const markSessionCompleted = mutation({
     if (!convId) return;
     const conv = await ctx.db.get(convId);
     if (!conv || conv.user_id !== userId) return;
+    // Anchors never auto-complete. This guard covers every reaping path that
+    // routes through markSessionCompleted (the daemon watchdog, the SessionEnd
+    // hook, daemon kill teardown). The direct-patch kill paths carry their own
+    // matching `persistent` guard (killSession + dispatch dismiss→kill). So a
+    // standing member that goes dormant is never flipped to "completed"; it is
+    // retired only by decommissionAnchor, which clears `persistent` first.
+    if (conv.persistent) return;
     if (conv.status === "active") {
       if (conv.has_pending_messages) {
         return;
@@ -6300,9 +7977,92 @@ export const dismissFromInbox = mutation({
   },
 });
 
+// Bulk-dismiss the caller's sessions whose last activity (updated_at) is older
+// than `older_than_days` (default 30). Clears the accumulated working set without
+// deleting anything — dismissed rows stay searchable and accessible. FIRE-ONCE:
+// the heavy work is handed to a self-draining background job, NOT looped from the
+// client. A client-side loop of dozens of write-mutations is fragile on a
+// saturation-prone deployment (one flaky call surfaced a scary error toast); a
+// single scheduled drainer can't fail the user's click and drains durably on the
+// server's own clock. The client has already dismissed locally (optimistic), so
+// this only needs to make it stick server-side / cross-device.
+export const dismissStaleInboxSessions = mutation({
+  args: {
+    older_than_days: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    const cutoff = Date.now() - (args.older_than_days ?? 30) * 24 * 60 * 60 * 1000;
+    await ctx.scheduler.runAfter(0, internal.conversations.drainStaleDismiss, {
+      userId,
+      cutoff,
+      cursor: null,
+      attempt: 0,
+    });
+    return { scheduled: true };
+  },
+});
+
+// Self-draining background dismiss. Dismisses one bounded page of the caller's
+// >cutoff-old sessions (skipping pinned + already-dismissed) and reschedules
+// itself with the next cursor until the whole backlog is cleared. Range-scans
+// only the OLD region (by_user_updated, lt cutoff). EVERYTHING stale but pinned
+// is dismissed — including subagents/orphans, because a dismissed parent promotes
+// its old subagent children to the top level and they'd refill the inbox. A
+// thrown page (transient backend hiccup) rolls back untouched and retries the
+// SAME cursor with backoff up to a cap; work is idempotent (dismissed rows are
+// skipped), so retries never double-count and a give-up only loses cross-device
+// completeness, never the local clear the user already saw.
+export const drainStaleDismiss = internalMutation({
+  args: {
+    userId: v.id("users"),
+    cutoff: v.number(),
+    cursor: v.union(v.string(), v.null()),
+    attempt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    try {
+      const result = await ctx.db
+        .query("conversations")
+        .withIndex("by_user_updated", (q) =>
+          q.eq("user_id", args.userId).lt("updated_at", args.cutoff)
+        )
+        .paginate({ cursor: args.cursor, numItems: 100 });
+
+      for (const conv of result.page) {
+        if (conv.inbox_dismissed_at) continue;
+        if (conv.inbox_pinned_at) continue;
+        await ctx.db.patch(conv._id, { inbox_dismissed_at: now });
+      }
+
+      if (!result.isDone) {
+        await ctx.scheduler.runAfter(150, internal.conversations.drainStaleDismiss, {
+          userId: args.userId,
+          cutoff: args.cutoff,
+          cursor: result.continueCursor,
+          attempt: 0,
+        });
+      }
+    } catch {
+      const attempt = args.attempt + 1;
+      if (attempt <= 6) {
+        await ctx.scheduler.runAfter(2000 * attempt, internal.conversations.drainStaleDismiss, {
+          userId: args.userId,
+          cutoff: args.cutoff,
+          cursor: args.cursor,
+          attempt,
+        });
+      }
+    }
+  },
+});
+
 const PATCHABLE_FIELDS = new Set([
   "inbox_dismissed_at",
   "inbox_deferred_at",
+  "inbox_pinned_at",
   "draft_message",
   "project_path",
   "git_root",
@@ -6417,6 +8177,12 @@ export const reconfigureSession = mutation({
     project_path: v.optional(v.string()),
     git_root: v.optional(v.string()),
     isolated: v.optional(v.boolean()),
+    // Launch model/effort for the (blank) session — option keys from the
+    // shared contract. "default" clears the stamp and omits the flag. Launch
+    // flags leave no transcript echo, so the stamp here is the only record
+    // until the first assistant turn confirms.
+    model: v.optional(v.string()),
+    effort: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -6428,6 +8194,33 @@ export const reconfigureSession = mutation({
 
     const patch: Record<string, any> = { updated_at: Date.now() };
     if (args.agent_type) patch.agent_type = args.agent_type;
+    // An agent flip invalidates the previous agent's model/effort stamps
+    // (claude-opus on a codex session is nonsense; effort scales differ too).
+    // An explicit model/effort in the same call re-stamps below.
+    if (args.agent_type && args.agent_type !== conv.agent_type) {
+      patch.model = undefined;
+      patch.effort = undefined;
+    }
+    const reconfAgent = args.agent_type || conv.agent_type || "claude_code";
+    const launchCfg = AGENT_MODEL_CONFIG[modelAgentKey(reconfAgent)];
+    const launchModelOpt = args.model ? launchCfg?.models.find((m) => m.key === args.model) : undefined;
+    if (args.model !== undefined) {
+      if (!launchModelOpt) throw new Error(`Unknown model: ${args.model}`);
+      if (launchModelOpt.midSessionOnly) throw new Error(`${launchModelOpt.label} can't be set at launch`);
+      patch.model = launchModelOpt.cliAlias
+        ? (modelAgentKey(reconfAgent) === "claude" ? `claude-${launchModelOpt.key}` : launchModelOpt.key)
+        : undefined;
+    }
+    if (args.effort !== undefined) {
+      // "default" clears the pin: no stamp, no --effort flag — the agent's own
+      // saved default wins (mirrors model "default").
+      if (args.effort === "default") {
+        patch.effort = undefined;
+      } else {
+        if (!launchCfg?.efforts.includes(args.effort)) throw new Error(`Unknown effort: ${args.effort}`);
+        patch.effort = args.effort;
+      }
+    }
     if (args.project_path !== undefined) {
       patch.project_path = args.project_path;
       patch.git_root = args.git_root ?? args.project_path;
@@ -6449,6 +8242,15 @@ export const reconfigureSession = mutation({
     const updated = { ...conv, ...patch };
     const agentType = updated.agent_type || "claude_code";
     const daemonAgentType = agentType === "codex" ? "codex" : agentType === "gemini" ? "gemini" : "claude";
+    // Re-derive the launch payload from the (possibly just-patched) stamps so
+    // an agent flip alone re-launches with the conversation's chosen model.
+    const stampedModelKey = (() => {
+      if (args.model !== undefined) return launchModelOpt?.cliAlias ? launchModelOpt.key : undefined;
+      const m = updated.model as string | undefined;
+      if (!m) return undefined;
+      const key = modelAgentKey(daemonAgentType === "codex" ? "codex" : "claude_code") === "claude" && m.startsWith("claude-") ? m.slice("claude-".length) : m;
+      return launchCfg?.models.some((o) => o.key === key && o.cliAlias) ? key : undefined;
+    })();
     await enqueueStartSession(ctx, userId, {
       conversationId: args.conversation_id,
       agentType: daemonAgentType,
@@ -6456,6 +8258,8 @@ export const reconfigureSession = mutation({
       gitRoot: updated.git_root,
       sessionId: updated.session_id,
       isolated: args.isolated,
+      ...(stampedModelKey ? { model: stampedModelKey } : {}),
+      ...(updated.effort && launchCfg?.efforts.includes(updated.effort) ? { effort: updated.effort } : {}),
     });
   },
 });
@@ -6489,6 +8293,52 @@ export const linkSessions = mutation({
         ? { subagent_description: args.subagent_description }
         : {}),
     });
+  },
+});
+
+// Link a VISIBLE child to the session that spawned it (agent-team teammate →
+// its lead). Unlike linkSessions this neither marks the child a subagent nor
+// dismisses it — the child stays a first-class inbox card; the pointer only
+// powers the "Parent" click-through and teammate-name resolution. Also stamps
+// both sides with the agent-team identity: the child's teamName/agentName come
+// from its JSONL stamps, and the lead (whose transcript is never stamped) gets
+// agent_name "team-lead" so siblings can resolve it by name.
+export const linkSpawnedBy = mutation({
+  args: {
+    parent_conversation_id: v.id("conversations"),
+    child_conversation_id: v.id("conversations"),
+    agent_team_name: v.optional(v.string()),
+    agent_name: v.optional(v.string()),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = args.api_token
+      ? await getAuthenticatedUserId(ctx, args.api_token)
+      : await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    const parent = await ctx.db.get(args.parent_conversation_id);
+    if (!parent || parent.user_id !== userId) throw new Error("Parent not found");
+
+    const child = await ctx.db.get(args.child_conversation_id);
+    if (!child || child.user_id !== userId) throw new Error("Child not found");
+
+    if (!child.spawned_by_conversation_id) {
+      await ctx.db.patch(args.child_conversation_id, {
+        spawned_by_conversation_id: args.parent_conversation_id,
+        ...(args.agent_team_name && !child.agent_team_name
+          ? { agent_team_name: args.agent_team_name }
+          : {}),
+        ...(args.agent_name && !child.agent_name ? { agent_name: args.agent_name } : {}),
+      });
+    }
+
+    if (args.agent_team_name && !parent.agent_team_name) {
+      await ctx.db.patch(args.parent_conversation_id, {
+        agent_team_name: args.agent_team_name,
+        ...(parent.agent_name ? {} : { agent_name: "team-lead" }),
+      });
+    }
   },
 });
 
@@ -6679,9 +8529,23 @@ export const updateSessionId = mutation({
       throw new Error("Not found");
     }
 
-    const patch: Record<string, string> = { session_id: args.session_id };
+    const patch: Record<string, any> = { session_id: args.session_id };
     if (args.project_path) patch.project_path = args.project_path;
     if (args.git_root) patch.git_root = args.git_root;
+
+    // Stubs are created before their real path exists, so their team/privacy
+    // resolved against nothing (→ private, teamless). Re-resolve against the
+    // reconciled path; explicit user choices win inside the helper.
+    const stampedPath = args.git_root || args.project_path;
+    if (stampedPath) {
+      const mappings = await ctx.db
+        .query("directory_team_mappings")
+        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+        .collect();
+      const restamp = buildPathRestampUpdate(conv, mappings, stampedPath);
+      if (restamp) Object.assign(patch, restamp);
+    }
+
     await ctx.db.patch(args.conversation_id, patch);
     return { updated: true };
   },
@@ -6911,6 +8775,89 @@ export const sendKeysToSession = mutation({
   },
 });
 
+// In-place model/effort switch for a running claude session. The daemon drives
+// the /model picker session-scoped (`s` commit) — never the one-shot
+// `/model <x>` / `/effort <x>` forms, which rewrite the user's GLOBAL default.
+// conversations.model/effort are stamped optimistically here (string fields
+// reconcile cleanly when the rollup confirms from the switch echo; the
+// optimistic model is the alias shape "claude-opus" — the echo replaces it with
+// the precise versioned id). model/effort are picker option keys from
+// @codecast/shared/contracts AGENT_MODEL_CONFIG; "default" = leave model as the
+// agent's saved default (effort-only switch).
+export const setSessionModel = mutation({
+  args: {
+    conversation_id: v.id("conversations"),
+    model: v.optional(v.string()),
+    effort: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    const conv = await ctx.db.get(args.conversation_id);
+    if (!conv || conv.user_id !== userId) throw new Error("Not authorized");
+    const agentKey = modelAgentKey(conv.agent_type);
+    const agentCfg = AGENT_MODEL_CONFIG[agentKey];
+    if (!agentCfg?.midSession) {
+      throw new Error(`In-place model switch not supported for ${conv.agent_type ?? "this agent"}`);
+    }
+    if (args.model !== undefined && !agentCfg.models.some((m) => m.key === args.model)) {
+      throw new Error(`Unknown model: ${args.model}`);
+    }
+    if (args.effort !== undefined && !agentCfg.efforts.includes(args.effort)) {
+      throw new Error(`Unknown effort: ${args.effort}`);
+    }
+    if (args.model === undefined && args.effort === undefined) return null;
+
+    // No server-side optimistic stamp: the web updates its local store
+    // instantly, and the durable truth arrives via the rollup parsing the
+    // picker's "Set model to … for this session only" echo. Stamping here
+    // would leave a wrong value behind whenever the daemon refuses (busy
+    // session, no tmux) — the command id lets the client watch for that.
+    //
+    // Target the owner device. Broadcast would race every daemon the user
+    // runs: an out-of-date one treats set_model as an unknown GLOBAL command
+    // and stamps "Unknown command: set_model" into the result before the
+    // owning daemon even sees it (observed live with a remote box on 1.1.58).
+    const target = await resolveOwnerDevice(ctx, userId, {
+      projectPath: conv.project_path ?? null,
+      gitRoot: conv.git_root ?? null,
+      ownerDeviceId: (conv as any).owner_device_id ?? null,
+    });
+    return await ctx.db.insert("daemon_commands", {
+      user_id: userId,
+      command: "set_model",
+      args: JSON.stringify({
+        conversation_id: args.conversation_id,
+        ...(args.model !== undefined ? { model: args.model } : {}),
+        ...(args.effort !== undefined ? { effort: args.effort } : {}),
+      }),
+      created_at: Date.now(),
+      target_device_id: target ?? undefined,
+    });
+  },
+});
+
+// Owner-scoped result watch for a single daemon command — the reactive channel
+// the model picker uses to confirm an in-place switch or surface the daemon's
+// refusal ("Session is busy…"). Old daemons never execute unknown commands, so
+// executed_at stays null forever — the client treats a long-pending command as
+// "daemon predates set_model".
+export const getDaemonCommandResult = query({
+  args: { command_id: v.id("daemon_commands") },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    const cmd = await ctx.db.get(args.command_id);
+    if (!cmd || cmd.user_id !== userId) return null;
+    return {
+      executed_at: cmd.executed_at ?? null,
+      result: cmd.result ?? null,
+      error: cmd.error ?? null,
+    };
+  },
+});
+
 export const rewindSession = mutation({
   args: {
     conversation_id: v.id("conversations"),
@@ -6932,129 +8879,308 @@ export const rewindSession = mutation({
   },
 });
 
+// ---------------------------------------------------------------------------
+// Kill / restart recovery.
+//
+// The conversation id a client acts on can be a GHOST: the row was deleted
+// server-side (GC sweeps, cleanup mutations) while the client's never-prune
+// cache keeps rendering it. The underlying agent session is still real — its
+// JSONL transcript (and sometimes tmux) lives on the daemon's machine — so
+// "kill & restart" must keep working. Recovery resolves a live target row for
+// the session instead of dead-ending: prefer the newest live twin bound to the
+// same session_id (the daemon's local conversation cache usually already syncs
+// there), else recreate a minimal row for the daemon to bind to. The context
+// fields (session_id/project_path/agent_type/title) ride in from the client's
+// cached copy, because for a deleted row the server knows nothing.
+// ---------------------------------------------------------------------------
+
+const RESTART_GHOST_ARGS = {
+  session_id: v.optional(v.string()),
+  project_path: v.optional(v.string()),
+  agent_type: v.optional(v.string()),
+  title: v.optional(v.string()),
+};
+
+type RestartGhostContext = {
+  session_id?: string;
+  project_path?: string;
+  agent_type?: string;
+  title?: string;
+};
+
+export async function resolveRestartTarget(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+  conversationId: Id<"conversations">,
+  ghost: RestartGhostContext,
+) {
+  const conv = await ctx.db.get(conversationId);
+  if (conv) {
+    // The runner, or the session's second-party owner — same rule as dispatch
+    // sendMessage/resumeSession. An owned session (Mr-Bot-run, assigned to this
+    // user) restarts from the owner's inbox exactly like their own; the daemon
+    // commands are routed to the runner by the callers.
+    if (conv.user_id !== userId && conv.owner_user_id !== userId) throw new Error("Not authorized");
+    return { conv, restored: false };
+  }
+  let sessionId = ghost.session_id;
+  if (!sessionId) {
+    // A prior restore already tombstoned this dead id onto its replacement —
+    // recover the session binding from there (covers old clients that send no
+    // ghost context, for any ghost that has been restored once before).
+    const prior = await ctx.db
+      .query("conversations")
+      .withIndex("by_restored_from", (q) => q.eq("restored_from_conversation_id", conversationId.toString()))
+      .collect();
+    const priorTarget = prior
+      .filter((t) => t.user_id === userId)
+      .reduce((a: any, b: any) => ((b.updated_at ?? 0) > (a?.updated_at ?? 0) ? b : a), null);
+    sessionId = priorTarget?.session_id;
+  }
+  if (!sessionId) {
+    // Old clients send no ghost context. The daemon's heartbeat rows can
+    // outlive the conversation row — recover the session from there.
+    const managed = await ctx.db
+      .query("managed_sessions")
+      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conversationId))
+      .collect();
+    const newest = managed
+      .filter((m) => m.user_id === userId)
+      .reduce((a: any, b: any) => ((b.last_heartbeat ?? 0) > (a?.last_heartbeat ?? 0) ? b : a), null);
+    sessionId = newest?.session_id;
+  }
+  if (!sessionId) {
+    // Deleted row and no recoverable session — nothing to bind a daemon
+    // command to. Distinct error so the UI can say what actually happened.
+    throw new Error("conversation_deleted");
+  }
+  // Live twin: pick the NEWEST row for this session. Never .first() — that's
+  // creation order, which resolves to the oldest twin (the foot-gun that made
+  // cleanup delete a live original instead of its doppelgänger; ct-36973).
+  const twins = await ctx.db
+    .query("conversations")
+    .withIndex("by_session_id", (q) => q.eq("session_id", sessionId!))
+    .collect();
+  const owned = twins.filter((t) => t.user_id === userId);
+  if (owned.length > 0) {
+    const twin = owned.reduce((a, b) => ((b.updated_at ?? 0) > (a.updated_at ?? 0) ? b : a));
+    // Restarting is an explicit "bring this back" — resurface it in the inbox,
+    // and tombstone the dead id so stale links resolve here from now on.
+    await ctx.db.patch(twin._id, {
+      status: "active",
+      inbox_dismissed_at: undefined,
+      inbox_killed_at: undefined,
+      restored_from_conversation_id: conversationId.toString(),
+      updated_at: Date.now(),
+    });
+    return { conv: (await ctx.db.get(twin._id))!, restored: true };
+  }
+  // No surviving row anywhere: recreate a minimal one (same in-file creation
+  // idiom as createQuickSession — team/privacy resolution + short_id).
+  const now = Date.now();
+  const mappings = await ctx.db
+    .query("directory_team_mappings")
+    .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+    .collect();
+  const { teamId, isPrivate, autoShared } = resolveTeamForPath(mappings, ghost.project_path, undefined);
+  const agentType =
+    ghost.agent_type === "codex" || ghost.agent_type === "cursor" || ghost.agent_type === "gemini"
+      ? ghost.agent_type
+      : "claude_code";
+  const newId = await ctx.db.insert("conversations", {
+    user_id: userId,
+    team_id: teamId,
+    agent_type: agentType,
+    session_id: sessionId,
+    title: ghost.title,
+    project_path: ghost.project_path,
+    started_at: now,
+    updated_at: now,
+    message_count: 0,
+    is_private: isPrivate,
+    auto_shared: autoShared || undefined,
+    status: "active",
+    restored_from_conversation_id: conversationId.toString(),
+  });
+  await ctx.db.patch(newId, { short_id: newId.toString().slice(0, 7) });
+  return { conv: (await ctx.db.get(newId))!, restored: true };
+}
+
+// Enqueue the kill→resume daemon command pair for a conversation, deduped
+// against an already-pending resume. Shared by restartSession (gentle resume
+// ladder on the daemon) and repairSession (force reconstitution from DB).
+export async function enqueueKillAndResume(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+  conv: { _id: Id<"conversations">; session_id?: string; project_path?: string; git_root?: string; agent_type?: string },
+  opts: { forceReconstitute?: boolean } = {},
+) {
+  const now = Date.now();
+  const pendingCommands = await ctx.db
+    .query("daemon_commands")
+    .withIndex("by_user_pending", (q) => q.eq("user_id", userId).eq("executed_at", undefined))
+    .collect();
+
+  if (hasRecentPendingDaemonCommand(pendingCommands as any, {
+    conversationId: conv._id.toString(),
+    command: "resume_session",
+    now,
+  })) {
+    await resetConversationPendingMessages(ctx, conv._id);
+    return { deduplicated: true };
+  }
+
+  await ctx.db.insert("daemon_commands", {
+    user_id: userId,
+    command: "kill_session",
+    args: JSON.stringify({ conversation_id: conv._id, session_id: conv.session_id }),
+    created_at: now,
+  });
+
+  await ctx.db.insert("daemon_commands", {
+    user_id: userId,
+    command: "resume_session",
+    args: JSON.stringify({
+      session_id: conv.session_id,
+      conversation_id: conv._id,
+      project_path: conv.project_path ?? conv.git_root,
+      agent_type: conv.agent_type === "codex" ? "codex" : conv.agent_type === "gemini" ? "gemini" : conv.agent_type === "cursor" ? "cursor" : "claude",
+      ...(opts.forceReconstitute ? { force_reconstitute: true } : {}),
+    }),
+    created_at: now + 1,
+  });
+
+  await resetConversationPendingMessages(ctx, conv._id);
+  return { deduplicated: false };
+}
+
 export const killSession = mutation({
   args: {
     conversation_id: v.id("conversations"),
     mark_completed: v.optional(v.boolean()),
+    session_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
     const conv = await ctx.db.get(args.conversation_id);
-    if (!conv || conv.user_id !== userId) throw new Error("Not authorized");
+    // The runner, or the session's second-party owner — same rule as
+    // restartSession/dispatch.sendMessage. An owned session kills from the
+    // owner's inbox exactly like their own.
+    if (conv && conv.user_id !== userId && conv.owner_user_id !== userId) throw new Error("Not authorized");
 
+    // Enqueue even when the row is gone: the daemon tears backends down from the
+    // conversation id alone (derived tmux names, local caches) plus the cached
+    // session_id the client passes along. Address the command to the RUNNER's
+    // daemon (conv.user_id) — an owner's kill must reach the machine actually
+    // running the session; ghost rows fall back to the caller.
     await ctx.db.insert("daemon_commands", {
-      user_id: userId,
+      user_id: conv?.user_id ?? userId,
       command: "kill_session",
-      args: JSON.stringify({ conversation_id: args.conversation_id }),
+      args: JSON.stringify({
+        conversation_id: args.conversation_id,
+        session_id: args.session_id ?? conv?.session_id,
+      }),
       created_at: Date.now(),
     });
 
-    const patch: Record<string, any> = { inbox_killed_at: Date.now() };
-    if (args.mark_completed) {
-      patch.status = "completed";
+    if (conv) {
+      const patch: Record<string, any> = { inbox_killed_at: Date.now() };
+      // A persistent anchor session never auto-completes — a dismiss/kill gesture
+      // on its pinned card puts it to sleep, it isn't retired. Only an explicit
+      // decommissionAnchor (which clears `persistent` first) may complete it.
+      if (args.mark_completed && !conv.persistent) {
+        patch.status = "completed";
+      }
+      await ctx.db.patch(args.conversation_id, patch);
+      // Kill must stick: cancel any armed schedule that injects into this
+      // conversation, or its next fire would resurrect the session the user
+      // just killed (see cancelTasksBoundToConversation). Scan the RUNNER's
+      // schedules (theirs are the ones bound to their session), plus the
+      // caller's when a second-party owner is killing.
+      await cancelTasksBoundToConversation(ctx, conv.user_id, args.conversation_id);
+      if (conv.user_id !== userId) {
+        await cancelTasksBoundToConversation(ctx, userId, args.conversation_id);
+      }
     }
-    await ctx.db.patch(args.conversation_id, patch);
+    return { existed: !!conv };
   },
 });
 
 export const restartSession = mutation({
   args: {
     conversation_id: v.id("conversations"),
+    ...RESTART_GHOST_ARGS,
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    const conv = await ctx.db.get(args.conversation_id);
-    if (!conv || conv.user_id !== userId) throw new Error("Not authorized");
+    const { conv, restored } = await resolveRestartTarget(ctx, userId, args.conversation_id, args);
     if (!conv.session_id) throw new Error("No session to restart");
 
-    const now = Date.now();
-    const pendingCommands = await ctx.db
-      .query("daemon_commands")
-      .withIndex("by_user_pending", (q) => q.eq("user_id", userId).eq("executed_at", undefined))
-      .collect();
-
-    if (hasRecentPendingDaemonCommand(pendingCommands as any, {
-      conversationId: args.conversation_id.toString(),
-      command: "resume_session",
-      now,
-    })) {
-      await resetConversationPendingMessages(ctx, args.conversation_id);
-      return;
-    }
-
-    await ctx.db.insert("daemon_commands", {
-      user_id: userId,
-      command: "kill_session",
-      args: JSON.stringify({ conversation_id: args.conversation_id }),
-      created_at: now,
-    });
-
-    await ctx.db.insert("daemon_commands", {
-      user_id: userId,
-      command: "resume_session",
-      args: JSON.stringify({
-        session_id: conv.session_id,
-        conversation_id: args.conversation_id,
-        project_path: conv.project_path,
-      }),
-      created_at: now + 1,
-    });
-
-    await resetConversationPendingMessages(ctx, args.conversation_id);
+    // Daemon commands are polled by the RUNNER's daemon — for a second-party
+    // owner restarting a session run by another account, address the commands
+    // to the runner, not the caller (same routing as dispatch.resumeSession).
+    await enqueueKillAndResume(ctx, conv.user_id, conv);
+    return { conversation_id: conv._id, restored };
   },
 });
 
 export const repairSession = mutation({
   args: {
     conversation_id: v.id("conversations"),
+    ...RESTART_GHOST_ARGS,
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    const conv = await ctx.db.get(args.conversation_id);
-    if (!conv || conv.user_id !== userId) throw new Error("Not authorized");
+    const { conv, restored } = await resolveRestartTarget(ctx, userId, args.conversation_id, args);
     if (!conv.session_id) throw new Error("No session to repair");
 
-    const now = Date.now();
-    const pendingCommands = await ctx.db
+    // Runner-routed for the same reason as restartSession above.
+    await enqueueKillAndResume(ctx, conv.user_id, conv, { forceReconstitute: true });
+    return { conversation_id: conv._id, restored };
+  },
+});
+
+// Live progress of a kill/restart for the footer: the daemon stamps each
+// command row with executed_at + result/error, so the client can show the real
+// ladder ("stopping" → "resuming" → resumed/reconstituted/started fresh/failed)
+// instead of an indefinite spinner. Scoped to the caller's own commands for one
+// conversation, last few only.
+export const getRestartProgress = query({
+  args: { conversation_id: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+
+    const pending = await ctx.db
       .query("daemon_commands")
       .withIndex("by_user_pending", (q) => q.eq("user_id", userId).eq("executed_at", undefined))
       .collect();
+    const executed = await ctx.db
+      .query("daemon_commands")
+      .withIndex("by_user_pending", (q) => q.eq("user_id", userId).gt("executed_at", 0))
+      .order("desc")
+      .take(50);
 
-    if (hasRecentPendingDaemonCommand(pendingCommands as any, {
-      conversationId: args.conversation_id.toString(),
-      command: "resume_session",
-      now,
-    })) {
-      await resetConversationPendingMessages(ctx, args.conversation_id);
-      return;
-    }
-
-    await ctx.db.insert("daemon_commands", {
-      user_id: userId,
-      command: "kill_session",
-      args: JSON.stringify({ conversation_id: args.conversation_id }),
-      created_at: now,
-    });
-
-    await ctx.db.insert("daemon_commands", {
-      user_id: userId,
-      command: "resume_session",
-      args: JSON.stringify({
-        session_id: conv.session_id,
-        conversation_id: args.conversation_id,
-        project_path: conv.project_path,
-        force_reconstitute: true,
-      }),
-      created_at: now + 1,
-    });
-
-    await resetConversationPendingMessages(ctx, args.conversation_id);
+    return [...pending, ...executed]
+      .filter((c) =>
+        (c.command === "kill_session" || c.command === "resume_session") &&
+        extractDaemonCommandConversationId(c.args) === args.conversation_id,
+      )
+      .sort((a, b) => a.created_at - b.created_at)
+      .slice(-6)
+      .map((c) => ({
+        command: c.command,
+        created_at: c.created_at,
+        executed_at: c.executed_at ?? null,
+        result: c.result ?? null,
+        error: c.error ?? null,
+      }));
   },
 });
 

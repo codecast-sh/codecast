@@ -168,6 +168,11 @@ const TOC = [
     { id: "context-handoff", label: "Context & Handoff" },
     { id: "blame-similar", label: "Blame & Similar" },
   ]},
+  { id: "editor-integration", label: "Editor Integration", children: [
+    { id: "blame-sessions", label: "Session Blame" },
+    { id: "vim-fugitive", label: "Vim / Neovim" },
+    { id: "vscode-cursor", label: "VS Code / Cursor" },
+  ]},
   { id: "plans", label: "Plans", children: [
     { id: "plans-overview", label: "Overview" },
     { id: "plans-commands", label: "Commands" },
@@ -264,7 +269,7 @@ export default function DocsPage() {
         <div className="max-w-[90rem] mx-auto px-6 py-3 flex items-center justify-between">
           <div className="flex items-center gap-6">
             <Link href="/">
-              <Logo size="md" className="text-[#002b36]" />
+              <Logo size="md" className="[--logo-c:#444444] text-[#002b36]" />
             </Link>
             <div className="hidden md:flex items-center gap-1">
               <span style={{ color: SOL.base01 }}>/</span>
@@ -277,6 +282,9 @@ export default function DocsPage() {
             </Link>
             <Link href="/security" className="font-medium text-sm px-3 py-1.5 hidden sm:block" style={{ color: SOL.base00 }}>
               Security
+            </Link>
+            <Link href="/changelog" className="font-medium text-sm px-3 py-1.5 hidden sm:block" style={{ color: SOL.base00 }}>
+              Changelog
             </Link>
             <Link href="/signup">
               <Button className="font-medium text-white text-sm" style={{ backgroundColor: SOL.base03 }}>
@@ -381,7 +389,7 @@ cast ask "why did we use Convex?"  # natural language query
 # Recall
 cast handoff                       # context transfer doc
 cast decisions list                # architectural decisions
-cast blame src/auth.ts             # sessions that touched a file`}</Code>
+cast blame src/auth.ts             # git blame, lines resolve to sessions`}</Code>
           <Callout type="info">
             The <InlineCode>cast ask</InlineCode> command uses RAG with your session history and requires an <InlineCode>ANTHROPIC_API_KEY</InlineCode> environment variable.
           </Callout>
@@ -393,7 +401,7 @@ cast blame src/auth.ts             # sessions that touched a file`}</Code>
             <CmdRow cmd='cast context "query"' desc="Pre-work intelligence: find relevant context before starting" />
             <CmdRow cmd="cast search ..." desc="Full-text search across sessions (see Search)" />
             <CmdRow cmd="cast decisions list" desc="Recall architectural decisions" />
-            <CmdRow cmd="cast blame <file>" desc="Which sessions touched a file" />
+            <CmdRow cmd="cast blame <file>" desc="Drop-in git blame; author column shows the session that wrote each line" />
           </CmdTable>
 
           <Heading id="memory-how-it-works" level={3}>How It Works</Heading>
@@ -511,15 +519,123 @@ $ cast handoff
   Next: Fix mobile viewport handling`}</Code>
 
           <Heading id="blame-similar" level={3}>Blame & Similar</Heading>
-          <Code>{`# Which sessions touched a file
+          <p className="mb-4" style={{ color: SOL.base00 }}>
+            <code className="font-mono" style={{ color: SOL.cyan }}>cast blame</code> is a drop-in{" "}
+            <code className="font-mono" style={{ color: SOL.cyan }}>git blame</code> whose author column is
+            the codecast session -- and person -- that wrote each line. Output matches git blame exactly,
+            so anything that parses it keeps working. See <a href="#editor-integration" className="underline" style={{ color: SOL.blue }}>Editor Integration</a> to
+            wire it into your editor.
+          </p>
+          <Code>{`# Line-level blame: each line resolves to the session that wrote it
 $ cast blame src/auth/callback.ts
-  5 sessions touched this file
-  abc123 Fixed OAuth callback     2d ago
-  def456 Add refresh token logic  5d ago
-  ...
+  aef1990f2 (jx74qbm Samvit Agent prompt guardrails  2026-05-13  1) export ...
+
+# Just one line
+$ cast blame src/auth/callback.ts:42
+
+# Session log for a file -- which sessions shaped it, newest first
+$ cast blame --log src/auth/callback.ts
 
 # Find sessions with related files
 $ cast similar --file src/api.ts`}</Code>
+          <p className="mb-4" style={{ color: SOL.base00 }}>
+            A line resolves when it was committed (or written) through a synced session you can see;
+            other lines fall back to the normal git author. It works across machines and teammates --
+            attribution rides on the commit, not the file's path on disk.
+          </p>
+
+          {/* Editor Integration */}
+          <Heading id="editor-integration" level={2}>Editor Integration</Heading>
+
+          <Heading id="blame-sessions" level={3}>Session Blame</Heading>
+          <p className="mb-4" style={{ color: SOL.base00 }}>
+            Bring session blame into your editor: hover a line to see which session (and teammate)
+            wrote it, and jump straight to that conversation -- anchored to the exact edit. Two
+            integrations ship today; both are thin clients over the <code className="font-mono" style={{ color: SOL.cyan }}>cast</code> CLI,
+            so they share one source of truth.
+          </p>
+
+          <Heading id="vim-fugitive" level={3}>Vim / Neovim (fugitive)</Heading>
+          <p className="mb-4" style={{ color: SOL.base00 }}>
+            If you use <a href="https://github.com/tpope/vim-fugitive" className="underline" style={{ color: SOL.blue }}>vim-fugitive</a>,
+            one command wires it up. It installs a tiny git shim that routes fugitive&apos;s blame
+            through codecast and writes the vim glue:
+          </p>
+          <Code>{`$ cast blame --install-fugitive
+# then add to your vimrc / init.vim:
+source ~/.codecast/fugitive.vim`}</Code>
+          <p className="mb-4" style={{ color: SOL.base00 }}>
+            Now in any git repo:
+          </p>
+          <div className="space-y-2 mb-4">
+            {[
+              [":Git blame", "the author column shows the codecast session that wrote each line"],
+              ["<CR> on a line", "opens that conversation, scrolled to the exact edit"],
+              [":Gslog", "session log for the file, newest first (the :Gclog equivalent)"],
+              ["<CR> / O in :Gslog", "open the conversation, or the file as it was at that session's commit"],
+            ].map(([k, v]) => (
+              <div key={k} className="flex gap-3 text-sm">
+                <code className="font-mono whitespace-nowrap" style={{ color: SOL.cyan }}>{k}</code>
+                <span style={{ color: SOL.base00 }}>{v}</span>
+              </div>
+            ))}
+          </div>
+
+          <Heading id="vscode-cursor" level={3}>VS Code / Cursor</Heading>
+          <p className="mb-4" style={{ color: SOL.base00 }}>
+            Two options. The <strong style={{ color: SOL.base1 }}>extension</strong> gives inline
+            blame on the current line plus commands to open the conversation and session log. The{" "}
+            <strong style={{ color: SOL.base1 }}>terminal tasks</strong> need no extension -- they
+            run <code className="font-mono" style={{ color: SOL.cyan }}>cast</code> from the integrated
+            terminal. Both require the CLI installed and authenticated
+            (<code className="font-mono" style={{ color: SOL.cyan }}>cast auth</code>).
+          </p>
+          <p className="mb-2 text-sm font-medium" style={{ color: SOL.base1 }}>Option 1 — Extension</p>
+          <a
+            href="https://dl.codecast.sh/codecast-blame.vsix"
+            className="inline-flex items-center gap-3 px-5 py-3 rounded-lg font-medium transition-colors mb-3"
+            style={{ backgroundColor: SOL.base03, color: SOL.base3 }}
+          >
+            <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+            Download the .vsix
+          </a>
+          <Code>{`# Install the downloaded extension (works in VS Code and Cursor)
+$ code --install-extension ~/Downloads/codecast-blame.vsix
+# or Cursor:  cursor --install-extension ~/Downloads/codecast-blame.vsix
+
+# If 'cast' isn't on your editor's PATH, set codecast.cliPath
+# (Settings -> Codecast -> Cli Path) to the output of:  which cast`}</Code>
+          <div className="space-y-2 mb-4">
+            {[
+              ["Inline blame", "the session + person who wrote the current line, at the end of the line"],
+              ["Cmd/Ctrl+Alt+B", "open the conversation for the current line"],
+              ["Cmd/Ctrl+Alt+L", "session log for the file -- pick one to open its conversation"],
+            ].map(([k, v]) => (
+              <div key={k} className="flex gap-3 text-sm">
+                <code className="font-mono whitespace-nowrap" style={{ color: SOL.cyan }}>{k}</code>
+                <span style={{ color: SOL.base00 }}>{v}</span>
+              </div>
+            ))}
+          </div>
+          <p className="mb-2 text-sm font-medium" style={{ color: SOL.base1 }}>Option 2 — Terminal tasks (no extension)</p>
+          <p className="mb-3" style={{ color: SOL.base00 }}>
+            Add a task and keybinding that run <code className="font-mono" style={{ color: SOL.cyan }}>cast</code> on
+            the current file and line -- works identically in VS Code and Cursor.
+          </p>
+          <Code title=".vscode/tasks.json">{`{
+  "version": "2.0.0",
+  "tasks": [
+    { "label": "cast: open session for line", "type": "shell",
+      "command": "cast blame \${file}:\${lineNumber} --open" },
+    { "label": "cast: session log", "type": "shell",
+      "command": "cast blame --log \${file}",
+      "presentation": { "reveal": "always", "panel": "shared" } }
+  ]
+}`}</Code>
+          <Code title="keybindings.json">{`{ "key": "cmd+alt+b", "command": "workbench.action.tasks.runTask",
+  "args": "cast: open session for line" },
+{ "key": "cmd+alt+l", "command": "workbench.action.tasks.runTask",
+  "args": "cast: session log" }`}</Code>
 
           {/* Plans */}
           <Heading id="plans" level={2}>Plans</Heading>
@@ -784,6 +900,8 @@ $ cast schedule add "Check for broken tests" --on push`}</Code>
               ["Ctrl+I", "Jump to needs input", "First session waiting for your input"],
               ["Ctrl+P", "Jump to pinned", "Jump to first pinned session"],
               ["Ctrl+Shift+P", "Pin/unpin", "Pin or unpin the current session"],
+              ["Ctrl+L", "Label session", "File the session under a label (type to filter or create)"],
+              ["Ctrl+,", "Cycle view", "Cycle inbox grouping: status / time / label"],
               ["Ctrl+Backspace", "Stash", "Remove session from queue"],
               ["Shift+Backspace", "Defer & advance", "Defer session and move to next"],
               ["Ctrl+Shift+Bksp", "Kill agent", "Kill the session's agent process"],
@@ -803,7 +921,7 @@ $ cast schedule add "Check for broken tests" --on push`}</Code>
                 className="grid grid-cols-[120px_140px_1fr] gap-4 px-4 py-2.5 text-sm items-center"
                 style={{
                   backgroundColor: i % 2 === 0 ? "transparent" : `${SOL.base2}40`,
-                  borderBottom: i < 16 ? `1px solid ${SOL.base2}` : undefined,
+                  borderBottom: i < 18 ? `1px solid ${SOL.base2}` : undefined,
                 }}
               >
                 <kbd className="font-mono text-xs px-2 py-1 rounded inline-block w-fit" style={{ backgroundColor: SOL.base2, color: SOL.base03 }}>{key}</kbd>

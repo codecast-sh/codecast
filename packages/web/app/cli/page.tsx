@@ -1,12 +1,5 @@
-import { useRouter } from "next/navigation";
-import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { SettingsRedirect } from "../../components/settings/SettingsRedirect";
 
 export default function CliPage() {
-  const router = useRouter();
-
-  useWatchEffect(() => {
-    router.replace("/settings/cli");
-  }, [router]);
-
-  return null;
+  return <SettingsRedirect hit={{ section: "cli", search: "" }} />;
 }

@@ -69,6 +69,37 @@ function compareVersions(a: string, b: string): number {
   return 0;
 }
 
+// Whether to apply the update even while the app is running (quit + swap +
+// relaunch) instead of deferring. A manual `--force` always does; otherwise only
+// when the installed app is below the server-pinned floor (min_desktop_version)
+// — the lever that drags always-open clients forward. Pure so it can be tested
+// without the surrounding fs/network side effects.
+// Whether checkForDesktopUpdate should run at all. macOS-only; a developer's
+// source checkout (cast/daemon under `bun src/…` → isDevMode) is skipped for
+// AUTOMATIC checks so it never swaps the installed app behind the dev's back —
+// but an explicit `force` (the in-app "Update now" button or
+// `cast desktop-update --force`) is a deliberate human action and must run even
+// from a dev environment. Without the force bypass a dev-mode machine can never
+// update through any path: every caller bailed here, leaving the in-app banner
+// stuck on "Updating…" forever. Pure so it can be tested without side effects.
+export function shouldAttemptDesktopUpdate(
+  platform: NodeJS.Platform,
+  isDev: boolean,
+  force: boolean,
+): boolean {
+  if (platform !== "darwin") return false;
+  if (isDev && !force) return false;
+  return true;
+}
+
+export function shouldApplyWhileRunning(
+  installed: string,
+  opts: { force?: boolean; minVersion?: string | null },
+): boolean {
+  if (opts.force === true) return true;
+  return !!opts.minVersion && compareVersions(installed, opts.minVersion) < 0;
+}
+
 function plistVersion(plistPath: string): string | null {
   try {
     const out = execFileSync(
@@ -83,9 +114,13 @@ function plistVersion(plistPath: string): string | null {
   }
 }
 
+// Matches ONLY the app's main process (helpers live under Frameworks/… and
+// don't contain this substring; killing main tears them down anyway).
+const APP_PROC_PATTERN = "Codecast.app/Contents/MacOS/Codecast";
+
 function isDesktopAppRunning(): boolean {
   try {
-    execFileSync("/usr/bin/pgrep", ["-f", "Codecast.app/Contents/MacOS/Codecast"], {
+    execFileSync("/usr/bin/pgrep", ["-f", APP_PROC_PATTERN], {
       stdio: ["ignore", "ignore", "ignore"],
     });
     return true; // exit 0 => at least one match
@@ -96,20 +131,45 @@ function isDesktopAppRunning(): boolean {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// Ensure the app isn't running before we swap its bundle. Normally we just
-// defer (return false) so we never disrupt an in-use app; when forced (manual
-// `cast desktop-update`) we quit it first and wait for it to exit.
+// Poll up to `tries` × 500ms for the app process to disappear.
+async function waitForExit(tries: number): Promise<boolean> {
+  for (let i = 0; i < tries && isDesktopAppRunning(); i++) await sleep(500);
+  return !isDesktopAppRunning();
+}
+
+function signalApp(extraArgs: string[]): void {
+  try {
+    execFileSync("/usr/bin/pkill", [...extraArgs, "-f", APP_PROC_PATTERN], {
+      stdio: ["ignore", "ignore", "ignore"],
+    });
+  } catch {}
+}
+
+// Ensure the app isn't running before we swap its bundle. Unforced, we just
+// defer (return false) so we never disrupt an in-use app. Forced, we MUST stop
+// it — and a graceful `quit` can't be trusted: the app keeps itself alive in the
+// dock/tray and silently swallows the quit Apple event (verified on macOS 26),
+// so an osascript-only quit left always-open clients stranded forever. Escalate
+// quit → SIGTERM → SIGKILL so the forced/min-version rollout can't stall.
 async function ensureAppNotRunning(force: boolean, log: Logger): Promise<boolean> {
   if (!isDesktopAppRunning()) return true;
   if (!force) return false;
+
   log("desktop update: quitting running app to apply (forced)");
   try {
     execFileSync("/usr/bin/osascript", ["-e", 'tell application "Codecast" to quit'], {
       stdio: ["ignore", "ignore", "ignore"],
     });
   } catch {}
-  for (let i = 0; i < 20 && isDesktopAppRunning(); i++) await sleep(500);
-  return !isDesktopAppRunning();
+  if (await waitForExit(8)) return true; // graceful, ~4s
+
+  log("desktop update: app ignored quit; sending SIGTERM");
+  signalApp([]);
+  if (await waitForExit(8)) return true; // ~4s
+
+  log("desktop update: app still running; sending SIGKILL");
+  signalApp(["-9"]);
+  return await waitForExit(8); // ~4s
 }
 
 // Parse only the fields we need from latest-mac.yml (avoids a YAML dependency).
@@ -171,11 +231,10 @@ function rmrf(p: string): void {
  */
 export async function checkForDesktopUpdate(
   log: Logger,
-  opts: { force?: boolean } = {},
+  opts: { force?: boolean; minVersion?: string | null } = {},
 ): Promise<boolean> {
   const force = opts.force === true;
-  // Only meaningful for a packaged daemon on macOS with the app installed.
-  if (process.platform !== "darwin" || isDevMode()) return false;
+  if (!shouldAttemptDesktopUpdate(process.platform, isDevMode(), force)) return false;
   if (!fs.existsSync(APP_PATH)) {
     if (force) log("desktop update: /Applications/Codecast.app not found");
     return false;
@@ -184,6 +243,14 @@ export async function checkForDesktopUpdate(
   try {
     const installed = plistVersion(APP_PLIST);
     if (!installed) return false;
+
+    // Server-pinned floor: when the installed app is below min_desktop_version,
+    // apply even while the app is running (quit + swap + relaunch) so an
+    // always-open client converges — the routine path only swaps when closed.
+    // A manual `--force` does the same. Unlike `--force`, the min-version path
+    // still respects the per-version retry throttle, so a persistently failing
+    // apply can't quit-and-relaunch the app every cycle.
+    const applyWhileRunning = shouldApplyWhileRunning(installed, opts);
 
     const res = await fetch(DESKTOP_FEED);
     if (!res.ok) return false;
@@ -204,10 +271,13 @@ export async function checkForDesktopUpdate(
       }
     }
 
-    // Don't disrupt an in-use app; the swap lands next time it's closed (which
-    // includes the moment right after the user clicks the broken "Restart").
-    // When forced, quit it first instead of deferring.
-    if (!(await ensureAppNotRunning(force, log))) {
+    // Routine path: defer early on an in-use app — the swap lands next time it's
+    // closed, and there's no point downloading ~95MB to throw away. The forced /
+    // below-floor path does NOT stop the app here; it downloads and verifies the
+    // new bundle FIRST, then stops + swaps just-in-time (below). Stopping only
+    // once a good bundle is in hand means a failed download can never leave the
+    // user with no app (and then get throttled out of retrying for hours).
+    if (!applyWhileRunning && isDesktopAppRunning()) {
       log(`desktop update: v${version} available (installed v${installed}); deferring — app is running`);
       return false;
     }
@@ -267,9 +337,11 @@ export async function checkForDesktopUpdate(
       return false;
     }
 
-    // Re-check the app didn't launch while we were downloading.
-    if (!(await ensureAppNotRunning(force, log))) {
-      log("desktop update: app launched mid-download; deferring swap");
+    // Bundle is downloaded + verified — only NOW stop the app and swap just in
+    // time. Forced/below-floor: graceful quit → SIGTERM → SIGKILL. Routine: this
+    // bails if the app launched mid-download (we'll swap on a later closed check).
+    if (!(await ensureAppNotRunning(applyWhileRunning, log))) {
+      log("desktop update: could not stop the app; deferring swap");
       rmrf(WORK_DIR);
       return false;
     }
@@ -313,10 +385,15 @@ export async function checkForDesktopUpdate(
     writeState({ appliedVersion: version });
     log(`desktop update: installed v${version}; relaunching`);
 
-    // Relaunch (matches the "Restart" intent that brought the user here).
-    // -g: don't steal focus, in case the user had intentionally quit.
+    // Relaunch. When the user explicitly asked for this (force — the in-app
+    // "Update now" command or `cast desktop-update --force`), bring the app to
+    // the FOREGROUND so the update doesn't look like it silently died: the
+    // foreground app vanished (we killed it) and a background `open -g` relaunch
+    // left nothing visible, which read as a hang. The silent below-floor rollout
+    // (minVersion, no force) still uses -g so it never steals focus uninvited.
     try {
-      execFileSync("/usr/bin/open", ["-g", APP_PATH], { stdio: ["ignore", "ignore", "ignore"] });
+      const openArgs = force ? [APP_PATH] : ["-g", APP_PATH];
+      execFileSync("/usr/bin/open", openArgs, { stdio: ["ignore", "ignore", "ignore"] });
     } catch {}
     return true;
   } catch (e) {

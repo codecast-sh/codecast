@@ -1,14 +1,11 @@
 import { useState, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { useMutation } from "convex/react";
-import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useMentionQuery } from "../hooks/useMentionQuery";
 import { useImageUpload } from "../hooks/useImageUpload";
+import { useInboxStore } from "../store/inboxStore";
 import { toast } from "sonner";
 import { ChevronRight } from "lucide-react";
 import { DocEditor } from "./editor/DocEditor";
-
-const api = _api as any;
 
 const DOC_TYPES = [
   { value: "note", label: "Note" },
@@ -39,8 +36,8 @@ const JOIN_POLICY_OPTIONS = [
 
 export function CreateDocModal({ onClose, initialType }: { onClose: () => void; initialType?: string }) {
   const router = useRouter();
-  const createDoc = useMutation(api.docs.webCreate);
-  const createPlan = useMutation(api.plans.webCreate);
+  const createDoc = useInboxStore((s) => s.createDoc);
+  const createPlan = useInboxStore((s) => s.createPlan);
   const handleMentionQuery = useMentionQuery();
   const handleImageUpload = useImageUpload();
 

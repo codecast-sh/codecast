@@ -73,8 +73,8 @@ const BINARIES: Record<string, string> = {
   "codecast-windows-x64.exe": "https://dl.codecast.sh/codecast-windows-x64.exe",
 };
 
-const MAC_DMG_URL = "https://dl.codecast.sh/Codecast-1.1.76-arm64.dmg";
-const MAC_DMG_VERSION = "1.1.76";
+const MAC_DMG_URL = "https://dl.codecast.sh/Codecast-1.1.81-arm64.dmg";
+const MAC_DMG_VERSION = "1.1.81";
 
 app.get("/api/health", (c) =>
   c.json({
@@ -87,6 +87,13 @@ app.get("/api/health", (c) =>
 
 app.get("/download/mac", (c) =>
   c.redirect(`${MAC_DMG_URL}?v=${MAC_DMG_VERSION}`, 302)
+);
+
+// Latest published desktop version, same-origin so the in-app update banner can
+// compare it against the running app's version without a cross-origin fetch to
+// the R2 feed. Bumped with every desktop release (alongside MAC_DMG_URL).
+app.get("/api/desktop/latest", (c) =>
+  c.json({ version: MAC_DMG_VERSION })
 );
 
 app.get("/download/:binary", (c) => {

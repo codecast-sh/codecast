@@ -1,9 +1,16 @@
 import { Check, CircleDot, MessageSquare } from "lucide-react";
-import type { ToolViewProps } from "@/lib/toolRegistry";
+
+interface ToolViewProps {
+  name: string;
+  input?: any;
+  output?: any;
+  timestamp: number;
+}
 
 interface QuestionOption {
   label: string;
   description?: string;
+  preview?: string;
 }
 
 interface Question {
@@ -11,6 +18,17 @@ interface Question {
   header?: string;
   options: QuestionOption[];
   multiSelect?: boolean;
+}
+
+// An AskUserQuestion option's `preview` is an ASCII/mockup string the terminal renders
+// in a side box. Shared so every surface that shows a question (the inline interactive
+// card in ConversationView and this registry view) renders the same monospace detail.
+export function OptionPreview({ preview }: { preview: string }) {
+  return (
+    <pre className="mt-1 w-full max-h-72 overflow-auto whitespace-pre rounded border border-sol-border/40 bg-sol-bg-alt/50 p-2 font-mono text-[10px] leading-[1.2] text-sol-text-secondary">
+      {preview}
+    </pre>
+  );
 }
 
 function parseAnswers(input: any, output: any): Record<string, string> {
@@ -30,9 +48,14 @@ function parseAnswers(input: any, output: any): Record<string, string> {
 
 function QuestionBlock({ question, answer }: { question: Question; answer?: string }) {
   const isAnswered = answer !== undefined;
-  const isCustomAnswer = isAnswered && !question.options.some(
-    o => o.label === answer || o.label.replace(" (Recommended)", "") === answer
+  // A multiSelect answer arrives as the chosen labels joined with ", " (the CLI's own
+  // join) — split it back so each chosen option lights up individually.
+  const answerParts = !isAnswered ? [] : question.multiSelect ? answer.split(", ") : [answer];
+  const matchesOption = (part: string) => question.options.some(
+    o => o.label === part || o.label.replace(" (Recommended)", "") === part
   );
+  const customAnswer = answerParts.filter(p => !matchesOption(p)).join(", ");
+  const isCustomAnswer = customAnswer !== "";
 
   return (
     <div className="space-y-2">
@@ -47,7 +70,7 @@ function QuestionBlock({ question, answer }: { question: Question; answer?: stri
       <div className="space-y-1 pl-1">
         {question.options.map((opt, i) => {
           const cleanLabel = opt.label.replace(" (Recommended)", "");
-          const isSelected = isAnswered && (opt.label === answer || cleanLabel === answer);
+          const isSelected = answerParts.some(p => opt.label === p || cleanLabel === p);
           return (
             <div
               key={i}
@@ -64,7 +87,7 @@ function QuestionBlock({ question, answer }: { question: Question; answer?: stri
                   <CircleDot className="w-3.5 h-3.5 opacity-30" />
                 )}
               </div>
-              <div>
+              <div className="min-w-0">
                 <span className={isSelected ? "text-foreground font-medium" : ""}>
                   {opt.label}
                 </span>
@@ -73,6 +96,7 @@ function QuestionBlock({ question, answer }: { question: Question; answer?: stri
                     {opt.description}
                   </span>
                 )}
+                {opt.preview && (isSelected || !isAnswered) && <OptionPreview preview={opt.preview} />}
               </div>
             </div>
           );
@@ -83,7 +107,7 @@ function QuestionBlock({ question, answer }: { question: Question; answer?: stri
               <MessageSquare className="w-3.5 h-3.5 text-blue-500" />
             </div>
             <div>
-              <span className="text-foreground font-medium">{answer}</span>
+              <span className="text-foreground font-medium">{customAnswer}</span>
               <span className="text-xs text-muted-foreground block mt-0.5">Custom response</span>
             </div>
           </div>

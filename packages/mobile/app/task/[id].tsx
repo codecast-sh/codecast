@@ -8,16 +8,15 @@ import {
   TextInput,
   ActionSheetIOS,
   ActivityIndicator,
-  Alert,
-  Platform,
 } from "react-native";
 import { useLocalSearchParams, useRouter, Stack } from "expo-router";
-import { useMutation } from "convex/react";
-import { api } from "@codecast/convex/convex/_generated/api";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { Theme, Spacing } from "@/constants/Theme";
-import { useInboxStore } from "@codecast/web/store/inboxStore";
+import { useInboxStore, type TaskItem } from "@codecast/web/store/inboxStore";
+import { useSyncTaskDetail } from "@codecast/web/hooks/useSyncTasks";
 import { useSyncTasks } from "@/hooks/useSyncTasks";
+import { MarkdownContent } from "@/components/MarkdownRenderer";
+import { formatRelativeTime } from "@/components/SessionItem";
 import {
   STATUS_CONFIG,
   STATUS_ORDER,
@@ -32,18 +31,25 @@ export default function TaskDetailScreen() {
   const router = useRouter();
   const tasks = useInboxStore((s) => s.tasks);
   const updateTask = useInboxStore((s) => s.updateTask);
+  const addTaskComment = useInboxStore((s) => s.addTaskComment);
   const { ready: tasksReady } = useSyncTasks();
+  // Fetch the per-task detail (full task + comments + history) and seed it into
+  // the store row via syncRecord, mirroring web's TaskDetailContent. This is what
+  // makes task.comments exist so the optimistic addTaskComment push lands; the
+  // enrichTasks list shape synced by useSyncTasks does NOT carry comments.
+  const directData = useSyncTaskDetail(id);
 
   const task = useMemo(() => {
-    return Object.values(tasks).find((t) => t.short_id === id);
-  }, [tasks, id]);
+    return (
+      Object.values(tasks).find((t) => t.short_id === id) ??
+      ((directData as TaskItem | null) ?? undefined)
+    );
+  }, [tasks, id, directData]);
 
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const titleInputRef = useRef<TextInput>(null);
   const [commentText, setCommentText] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const webAddComment = useMutation(api.tasks.webAddComment);
 
   useEffect(() => {
     if (editingTitle) {
@@ -98,18 +104,14 @@ export default function TaskDetailScreen() {
     );
   }, [task, updateTask]);
 
-  const handleAddComment = useCallback(async () => {
-    if (!task || !commentText.trim()) return;
-    setSubmitting(true);
-    try {
-      await webAddComment({ short_id: task.short_id, text: commentText.trim() });
-      setCommentText("");
-    } catch (err) {
-      Alert.alert("Error", err instanceof Error ? err.message : "Failed to add comment");
-    } finally {
-      setSubmitting(false);
-    }
-  }, [task, commentText, webAddComment]);
+  const handleAddComment = useCallback(() => {
+    const text = commentText.trim();
+    if (!task || !text) return;
+    // Optimistic, local-first: addTaskComment pushes onto task.comments and
+    // dispatches the same server write through the outbox. Clear synchronously.
+    addTaskComment(task.short_id, text, "note");
+    setCommentText("");
+  }, [task, commentText, addTaskComment]);
 
   const hasSynced = tasksReady;
 
@@ -140,6 +142,9 @@ export default function TaskDetailScreen() {
   const steps = task.steps ?? [];
   const criteria = task.acceptance_criteria ?? [];
   const labels = task.labels ?? [];
+  const comments = [...((task as any).comments ?? [])].sort(
+    (a: any, b: any) => (a.created_at ?? 0) - (b.created_at ?? 0),
+  );
 
   return (
     <>
@@ -281,7 +286,27 @@ export default function TaskDetailScreen() {
         )}
 
         <RNView style={styles.section}>
-          <RNText style={styles.sectionLabel}>Comment</RNText>
+          <RNText style={styles.sectionLabel}>Activity</RNText>
+          {comments.length > 0 ? (
+            comments.map((c: any) => (
+              <RNView key={c._id} style={styles.commentRow}>
+                <RNView style={styles.commentMeta}>
+                  <RNText style={styles.commentAuthor}>{c.author}</RNText>
+                  {c.comment_type && c.comment_type !== "note" && (
+                    <RNView style={styles.commentTypeBadge}>
+                      <RNText style={styles.commentTypeText}>{c.comment_type}</RNText>
+                    </RNView>
+                  )}
+                  {typeof c.created_at === "number" && (
+                    <RNText style={styles.commentTime}>{formatRelativeTime(c.created_at)}</RNText>
+                  )}
+                </RNView>
+                <MarkdownContent text={c.text} baseStyle={styles.commentBody} />
+              </RNView>
+            ))
+          ) : (
+            <RNText style={styles.commentEmpty}>No comments yet</RNText>
+          )}
           <RNView style={styles.commentInputRow}>
             <TextInput
               style={styles.commentInput}
@@ -292,15 +317,11 @@ export default function TaskDetailScreen() {
               multiline
             />
             <TouchableOpacity
-              style={[styles.commentSend, (!commentText.trim() || submitting) && { opacity: 0.3 }]}
+              style={[styles.commentSend, !commentText.trim() && { opacity: 0.3 }]}
               onPress={handleAddComment}
-              disabled={!commentText.trim() || submitting}
+              disabled={!commentText.trim()}
             >
-              {submitting ? (
-                <ActivityIndicator size="small" color={Theme.accent} />
-              ) : (
-                <FontAwesome name="arrow-up" size={14} color={Theme.accent} />
-              )}
+              <FontAwesome name="arrow-up" size={14} color={Theme.accent} />
             </TouchableOpacity>
           </RNView>
         </RNView>
@@ -478,7 +499,7 @@ const styles = StyleSheet.create({
   },
   fileText: {
     fontSize: 12,
-    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+    fontFamily: "JetBrainsMono",
     color: Theme.textMuted,
     lineHeight: 20,
   },
@@ -487,10 +508,53 @@ const styles = StyleSheet.create({
     color: Theme.textMuted0,
     marginTop: 4,
   },
+  commentRow: {
+    marginBottom: 14,
+  },
+  commentMeta: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 4,
+  },
+  commentAuthor: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: Theme.text,
+  },
+  commentTypeBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: 4,
+    backgroundColor: Theme.bgHighlight,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight,
+  },
+  commentTypeText: {
+    fontSize: 10,
+    fontWeight: "600",
+    color: Theme.textMuted,
+    textTransform: "lowercase",
+  },
+  commentTime: {
+    fontSize: 11,
+    color: Theme.textMuted0,
+  },
+  commentBody: {
+    fontSize: 14,
+    color: Theme.text,
+    lineHeight: 20,
+  },
+  commentEmpty: {
+    fontSize: 13,
+    color: Theme.textMuted0,
+    marginBottom: 12,
+  },
   commentInputRow: {
     flexDirection: "row",
     alignItems: "flex-end",
     gap: 8,
+    marginTop: 4,
   },
   commentInput: {
     flex: 1,

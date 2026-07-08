@@ -1,6 +1,7 @@
 import { useCallback, useRef, useEffect } from "react";
 import { X, Plus } from "lucide-react";
 import { useInboxStore, useTrackedStore, type AppTab } from "../store/inboxStore";
+import { useShortcutAction, formatShortcutLabel } from "../shortcuts";
 
 function tabTitle(tab: AppTab, sessions: Record<string, any>): string {
   if (tab.sessionId && sessions[tab.sessionId]) {
@@ -22,8 +23,9 @@ export function pathLabel(path: string): string {
     "/projects": "Projects",
     "/inbox": "Inbox",
     "/feed": "Feed",
+    "/crosstalk": "Crosstalk",
     "/settings": "Settings",
-    "/dashboard": "Dashboard",
+    "/team/activity": "Activity",
   };
   return segments[path] || path.split("/").pop() || "Tab";
 }
@@ -47,52 +49,36 @@ export function TabBar() {
     }
   }, [tabs.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Keyboard shortcuts: Cmd+T, Cmd+W, Cmd+Shift+[, Cmd+Shift+]
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      const meta = e.metaKey || e.ctrlKey;
-      if (!meta) return;
+  // Key bindings live in shortcuts/registry.ts (tab.*) — handlers return false
+  // when there's a single tab so Cmd+W falls through to close the window.
+  useShortcutAction('tab.new', useCallback(() => {
+    const state = useInboxStore.getState();
+    state.saveCurrentTabState();
+    const path = window.location.pathname;
+    state.openTab({ path, title: pathLabel(path), makeActive: true });
+  }, []));
 
-      if (e.key === "t" && !e.shiftKey) {
-        e.preventDefault();
-        const state = useInboxStore.getState();
-        state.saveCurrentTabState();
-        const path = window.location.pathname;
-        state.openTab({ path, title: pathLabel(path), makeActive: true });
-        return;
-      }
+  useShortcutAction('tab.close', useCallback(() => {
+    const state = useInboxStore.getState();
+    if (state.tabs.length <= 1) return false;
+    if (state.activeTabId) state.closeTab(state.activeTabId);
+  }, []));
 
-      if (e.key === "w" && !e.shiftKey) {
-        const state = useInboxStore.getState();
-        if (state.tabs.length <= 1) return;
-        e.preventDefault();
-        if (state.activeTabId) state.closeTab(state.activeTabId);
-        return;
-      }
+  useShortcutAction('tab.prev', useCallback(() => {
+    const state = useInboxStore.getState();
+    if (state.tabs.length <= 1) return false;
+    const idx = state.tabs.findIndex((t: AppTab) => t.id === state.activeTabId);
+    const prev = state.tabs[(idx - 1 + state.tabs.length) % state.tabs.length];
+    if (prev) { state.saveCurrentTabState(); state.switchTab(prev.id); }
+  }, []));
 
-      if ((e.code === "BracketLeft" || e.key === "{" || e.key === "[") && e.shiftKey) {
-        e.preventDefault();
-        const state = useInboxStore.getState();
-        if (state.tabs.length <= 1) return;
-        const idx = state.tabs.findIndex((t: AppTab) => t.id === state.activeTabId);
-        const prev = state.tabs[(idx - 1 + state.tabs.length) % state.tabs.length];
-        if (prev) { state.saveCurrentTabState(); state.switchTab(prev.id); }
-        return;
-      }
-
-      if ((e.code === "BracketRight" || e.key === "}" || e.key === "]") && e.shiftKey) {
-        e.preventDefault();
-        const state = useInboxStore.getState();
-        if (state.tabs.length <= 1) return;
-        const idx = state.tabs.findIndex((t: AppTab) => t.id === state.activeTabId);
-        const next = state.tabs[(idx + 1) % state.tabs.length];
-        if (next) { state.saveCurrentTabState(); state.switchTab(next.id); }
-        return;
-      }
-    };
-    window.addEventListener("keydown", handler, true);
-    return () => window.removeEventListener("keydown", handler, true);
-  }, []);
+  useShortcutAction('tab.next', useCallback(() => {
+    const state = useInboxStore.getState();
+    if (state.tabs.length <= 1) return false;
+    const idx = state.tabs.findIndex((t: AppTab) => t.id === state.activeTabId);
+    const next = state.tabs[(idx + 1) % state.tabs.length];
+    if (next) { state.saveCurrentTabState(); state.switchTab(next.id); }
+  }, []));
 
   const handleSwitch = useCallback(
     (tab: AppTab) => {
@@ -175,7 +161,7 @@ export function TabBar() {
       <button
         onClick={handleNewTab}
         className="flex-shrink-0 p-1 rounded text-sol-text-dim/40 hover:text-sol-text-dim hover:bg-sol-bg/50 transition-colors"
-        title="New tab (⌘T)"
+        title={`New tab (${formatShortcutLabel('tab.new')})`}
       >
         <Plus className="w-3 h-3" />
       </button>

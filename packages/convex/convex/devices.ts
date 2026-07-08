@@ -1,4 +1,4 @@
-import { mutation, query, internalMutation } from "./_generated/server";
+import { mutation, query, internalMutation } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
@@ -64,10 +64,40 @@ export async function getOnlineLocalRoots(
     .collect();
   const roots = new Set<string>();
   for (const d of devices) {
+    // A remote box's roots are its own $HOME work dirs — surfacing them as
+    // project suggestions invites blank/new sessions onto the remote. New
+    // sessions belong to local checkouts; the remote is reached by explicit move.
+    if (d.is_remote) continue;
     if (now - d.last_seen >= DEVICE_ONLINE_MS) continue;
     for (const r of d.local_project_roots ?? []) roots.add(r);
   }
   return Array.from(roots);
+}
+
+type ClaimDevice = { is_remote?: boolean; last_seen?: number } | null | undefined;
+
+export function planConversationOwnershipClaim(opts: {
+  ownerDeviceId?: string | null;
+  claimantDeviceId: string;
+  ownerDevice?: ClaimDevice;
+  claimantDevice?: ClaimDevice;
+  claimantIsRemote?: boolean;
+  now: number;
+}): { won: true } | { won: false; owner?: string } {
+  const owner = opts.ownerDeviceId ?? undefined;
+  if (owner && owner !== opts.claimantDeviceId) {
+    const ownerOnline =
+      opts.ownerDevice &&
+      !opts.ownerDevice.is_remote &&
+      typeof opts.ownerDevice.last_seen === "number" &&
+      opts.now - opts.ownerDevice.last_seen < DEVICE_ONLINE_MS;
+    if (ownerOnline) return { won: false, owner };
+  }
+  const claimantIsRemote = opts.claimantIsRemote ?? !!opts.claimantDevice?.is_remote;
+  if (owner !== opts.claimantDeviceId && claimantIsRemote) {
+    return { won: false, owner };
+  }
+  return { won: true };
 }
 
 /**
@@ -89,6 +119,11 @@ export async function enqueueStartSession(
     worktreeName?: string;
     prompt?: string;
     createdAt?: number;
+    // Per-session launch overrides (shared-contract option key + effort level).
+    // The daemon maps them to agent flags (claude --model/--effort, codex -m/-c);
+    // they ride the payload so old daemons just ignore them.
+    model?: string;
+    effort?: string;
   },
 ): Promise<Id<"daemon_commands">> {
   const conv = await ctx.db.get(opts.conversationId);
@@ -117,6 +152,8 @@ export async function enqueueStartSession(
   if (opts.isolated) args.isolated = true;
   if (opts.worktreeName) args.worktree_name = opts.worktreeName;
   if (opts.prompt) args.prompt = opts.prompt;
+  if (opts.model) args.model = opts.model;
+  if (opts.effort) args.effort = opts.effort;
 
   return await ctx.db.insert("daemon_commands", {
     user_id: userId,
@@ -387,149 +424,6 @@ export const reclaimAutoClaimedRemoteSessions = internalMutation({
   },
 });
 
-/** TEMP: run the live routing decision for a user's recent conversations. */
-export const _debugResolveOwner = internalMutation({
-  args: { user_id: v.string() },
-  handler: async (ctx, args) => {
-    const uid = ctx.db.normalizeId("users", args.user_id)!;
-    const convs = await ctx.db
-      .query("conversations")
-      .withIndex("by_user_id", (q: any) => q.eq("user_id", uid))
-      .order("desc")
-      .take(60);
-    const sample = convs.filter((c: any) => c.project_path && c.session_id).slice(0, 12);
-    const out = [];
-    for (const c of sample) {
-      const target = await resolveOwnerDevice(ctx, uid, {
-        projectPath: c.project_path,
-        gitRoot: c.git_root ?? null,
-        ownerDeviceId: c.owner_device_id ?? null,
-      });
-      out.push({
-        conv: c.short_id ?? String(c._id).slice(0, 8),
-        path: c.project_path,
-        current_owner: c.owner_device_id ? c.owner_device_id.slice(0, 8) : null,
-        routes_to: target ? target.slice(0, 8) : null,
-        routes_to_remote: target ? !!(await ctx.db
-          .query("devices")
-          .withIndex("by_user_device", (q: any) => q.eq("user_id", uid).eq("device_id", target))
-          .first())?.is_remote : false,
-      });
-    }
-    return out;
-  },
-});
-
-/** TEMP: list recent local idle conversations that are safe e2e repro targets. */
-export const _debugListLocalCandidates = internalMutation({
-  args: { user_id: v.string(), prefix: v.optional(v.string()) },
-  handler: async (ctx, args) => {
-    const uid = ctx.db.normalizeId("users", args.user_id)!;
-    const prefix = args.prefix ?? "/Users/ashot/src/codecast";
-    const convs = await ctx.db
-      .query("conversations")
-      .withIndex("by_user_id", (q: any) => q.eq("user_id", uid))
-      .order("desc")
-      .take(400);
-    const out = convs
-      .filter(
-        (c: any) =>
-          typeof c.project_path === "string" &&
-          c.project_path.startsWith(prefix) &&
-          c.session_id &&
-          !c.has_pending_messages &&
-          (c.status === "completed" || c.status === "active"),
-      )
-      .slice(0, 10)
-      .map((c: any) => ({
-        id: c._id,
-        short: c.short_id,
-        path: c.project_path,
-        status: c.status,
-        owner: c.owner_device_id ? c.owner_device_id.slice(0, 8) : null,
-        updated_s: Math.round((Date.now() - (c.updated_at ?? 0)) / 1000),
-      }));
-    return out;
-  },
-});
-
-/** TEMP: reproduce the auto-claim bug — force owner=remote, then enqueue a pending message. */
-export const _debugRepro = internalMutation({
-  args: { conversation_id: v.id("conversations"), content: v.string() },
-  handler: async (ctx, args) => {
-    const conv = await ctx.db.get(args.conversation_id);
-    if (!conv) throw new Error("no conv");
-    const remote = (await ctx.db.query("devices").collect()).find(
-      (d: any) => d.user_id.toString() === conv.user_id.toString() && d.is_remote,
-    );
-    if (!remote) throw new Error("no remote device for user");
-    await ctx.db.patch(args.conversation_id, { owner_device_id: remote.device_id });
-    const msgId = await ctx.db.insert("pending_messages", {
-      conversation_id: args.conversation_id,
-      from_user_id: conv.user_id,
-      content: args.content,
-      status: "pending" as const,
-      created_at: Date.now(),
-      retry_count: 0,
-    });
-    await ctx.db.patch(args.conversation_id, {
-      has_pending_messages: true,
-      updated_at: Date.now(),
-      ...(conv.status === "completed" ? { status: "active" as const } : {}),
-    });
-    return { forced_owner: remote.device_id.slice(0, 8), pending_message: msgId };
-  },
-});
-
-/** TEMP: report a conversation's owner + its pending-message statuses. */
-export const _debugConvState = internalMutation({
-  args: { conversation_id: v.id("conversations") },
-  handler: async (ctx, args) => {
-    const conv = await ctx.db.get(args.conversation_id);
-    if (!conv) throw new Error("no conv");
-    const pend = await ctx.db
-      .query("pending_messages")
-      .withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", args.conversation_id))
-      .collect();
-    return {
-      owner: conv.owner_device_id ? conv.owner_device_id.slice(0, 8) : null,
-      has_pending: conv.has_pending_messages ?? false,
-      status: conv.status,
-      session_error: (conv as any).session_error ?? null,
-      pending: pend.map((m: any) => ({ status: m.status, retry: m.retry_count, content: m.content.slice(0, 40) })),
-    };
-  },
-});
-
-/** TEMP diagnostic: device flags + remote-owned conversations. Remove after use. */
-export const _debugDeviceOwnership = internalMutation({
-  args: {},
-  handler: async (ctx) => {
-    const devices = await ctx.db.query("devices").collect();
-    const now = Date.now();
-    const deviceRows = devices.map((d: any) => ({
-      id: d.device_id.slice(0, 8),
-      label: d.label,
-      is_remote: d.is_remote ?? null,
-      roots: (d.local_project_roots ?? []).length,
-      seen_s: Math.round((now - d.last_seen) / 1000),
-    }));
-    const remoteOwned: any[] = [];
-    for (const d of devices) {
-      if (!d.is_remote) continue;
-      const convs = await ctx.db
-        .query("conversations")
-        .withIndex("by_owner_device", (q: any) =>
-          q.eq("user_id", d.user_id).eq("owner_device_id", d.device_id),
-        )
-        .collect();
-      for (const c of convs)
-        remoteOwned.push({ conv: c.short_id ?? String(c._id).slice(0, 10), path: c.project_path ?? null, status: c.status });
-    }
-    return { devices: deviceRows, remoteOwnedCount: remoteOwned.length, remoteOwned: remoteOwned.slice(0, 40) };
-  },
-});
-
 /**
  * Explicitly (re)assign which device runs a conversation, then resume it there.
  * Powers the web/mobile "Run on this device" / "Bring back here" controls — the
@@ -600,9 +494,72 @@ export const listDevices = query({
         last_seen: d.last_seen,
         is_remote: d.is_remote ?? false,
         local_project_roots: d.local_project_roots ?? [],
+        settings: d.settings ?? undefined,
         online: now - d.last_seen < ONLINE_MS,
       }))
       .sort((a: any, b: any) => b.last_seen - a.last_seen);
+  },
+});
+
+/**
+ * Web "Agent Features" page changed a setting for one device. Enqueue a
+ * device-targeted `apply_snippet` command (the daemon runs `cast install <slug>`
+ * / `--disable`, or `cast stable <mode>` for the stable hook, then heartbeats the
+ * new state back) and optimistically patch the device's `settings` so every
+ * viewer reflects the change instantly — the next heartbeat reconciles to the
+ * device's real state either way.
+ *
+ * The command carries a 5-min TTL, so a change only "lands" on a device that
+ * comes online within that window; the web gates the controls on `device.online`.
+ *
+ * Two shapes:
+ *   - a boolean snippet: `{ snippet, enabled }`
+ *   - the stable hook: `{ snippet: "stable", mode: "solo"|"team"|"off", global }`
+ *     (tri-state, so it carries a mode instead of a bare boolean).
+ */
+export const setDeviceSnippet = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    device_id: v.string(),
+    snippet: v.string(),
+    enabled: v.boolean(),
+    // Stable-only: the injection mode and whether it spans all projects.
+    mode: v.optional(v.union(v.literal("solo"), v.literal("team"), v.literal("off"))),
+    global: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication required");
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", args.device_id))
+      .first();
+    if (!device) throw new Error("Unknown device");
+
+    const isStable = args.snippet === "stable";
+    const mode = args.mode ?? (args.enabled ? "solo" : "off");
+
+    const commandId = await ctx.db.insert("daemon_commands", {
+      user_id: userId,
+      command: "apply_snippet" as const,
+      args: JSON.stringify(
+        isStable
+          ? { snippet: "stable", enabled: mode !== "off", mode, global: args.global === true }
+          : { snippet: args.snippet, enabled: args.enabled },
+      ),
+      created_at: Date.now(),
+      target_device_id: args.device_id,
+    });
+
+    // Optimistic mirror: keep the daemon as source of truth, but show the change
+    // immediately rather than waiting a heartbeat cycle.
+    const prev = (device as any).settings ?? {};
+    const next = isStable
+      ? { ...prev, stable_mode: mode, stable_global: args.global === true }
+      : { ...prev, snippets: { ...(prev.snippets ?? {}), [args.snippet]: args.enabled } };
+    await ctx.db.patch(device._id, { settings: next });
+
+    return { command_id: commandId };
   },
 });
 

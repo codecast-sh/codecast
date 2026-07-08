@@ -96,6 +96,47 @@ export function getAllSyncRecords(): SyncLedger {
   return store.getAll();
 }
 
+// First top-level `timestamp` found in a chunk of JSONL, as epoch ms. Lines
+// without one (agent-name rows, truncated tails) are skipped; content-embedded
+// timestamps can't match because only the parsed line's own field is read.
+export function oldestTimestampInChunk(chunk: string): number | null {
+  for (const line of chunk.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const t = Date.parse(JSON.parse(line)?.timestamp);
+      if (Number.isFinite(t)) return t;
+    } catch {
+      /* not a complete JSON line — skip */
+    }
+  }
+  return null;
+}
+
+// Age of the oldest unsynced content: read the lines just past the synced
+// position and return the first timestamp. Distinguishes "content has been
+// waiting for ages" (a wedged sync) from "a quiet file just burst back to life"
+// (a resumed session the sync loop simply hasn't drained yet). Null when the
+// file can't be read or no timestamped line exists in the window.
+export function readOldestUnsyncedTimestamp(
+  filePath: string,
+  position: number,
+  windowBytes: number = 64 * 1024
+): number | null {
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(filePath, "r");
+    const buf = Buffer.alloc(windowBytes);
+    const bytes = fs.readSync(fd, buf, 0, buf.length, Math.max(0, position));
+    return oldestTimestampInChunk(buf.toString("utf-8", 0, bytes));
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) {
+      try { fs.closeSync(fd); } catch { /* ignore */ }
+    }
+  }
+}
+
 export function getStaleFiles(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): string[] {
   const ledger = store.getAll();
   const now = Date.now();
@@ -146,25 +187,28 @@ export function findUnsyncedFiles(
             const stats = fs.statSync(fullPath);
             const fileAge = now - stats.mtimeMs;
 
-            // Skip files older than maxAge
-            if (fileAge > maxAgeMs) continue;
-
             const record = ledger[fullPath];
             const legacyPosition = positions[fullPath];
 
             if (record) {
-              // Check against sync ledger
-              if (stats.mtimeMs > record.lastSyncedAt || stats.size > record.lastSyncedPosition) {
+              // JSONL session files are append-only, so size > lastSyncedPosition
+              // is the only real signal of unsynced content. We surface those
+              // regardless of age — otherwise a sync that wedged 8+ days ago
+              // never recovers (the age filter, applied unconditionally, used to
+              // hide them forever). An mtime newer than lastSyncedAt is NOT a
+              // reliable proxy for new content (touch, compact-in-place, or just
+              // clock skew can update mtime without appending bytes); using it
+              // here surfaces dozens of false-positive "pending" files that the
+              // sync loop can't drain because size == position is a no-op.
+              if (stats.size > record.lastSyncedPosition) {
                 unsynced.push(fullPath);
               }
             } else if (legacyPosition !== undefined) {
-              // Fallback to legacy positions.json
               if (stats.size > legacyPosition) {
                 unsynced.push(fullPath);
               }
-              // If size == position, file is fully synced in legacy system
             } else {
-              // Never synced in either system
+              if (fileAge > maxAgeMs) continue;
               unsynced.push(fullPath);
             }
           } catch {

@@ -6,13 +6,18 @@ import {
   View as RNView,
   Text as RNText,
   Linking,
-  Clipboard,
   Modal,
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
+import { copyToClipboard } from '@/lib/clipboard';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { useRouter } from 'expo-router';
 import { Theme } from '@/constants/Theme';
+import { CastCanvas, canvasAvailable } from './CastCanvas';
+// Canonical "★ Insight ─────" parser shared with web (pure string/regex module,
+// Hermes-safe). Mobile used to carry its own narrower copy in session/[id].tsx
+// which silently missed most real-world insight forms — one parser, one truth.
+import { parseInsightBlocks } from '@codecast/web/components/insightBlocks';
 
 const SYNTAX_PATTERNS: Array<{ regex: RegExp; color: string }> = [
   { regex: /\/\/.*$/gm, color: '#586e75' },
@@ -166,7 +171,7 @@ export function CodeBlockFullscreen({ content, language, visible, onClose }: { c
             <RNText style={{ fontSize: 10, color: '#657b83' }}>{lines.length} lines</RNText>
           </RNView>
           <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-            <TouchableOpacity onPress={() => { Clipboard.setString(content); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setCopied(true); setTimeout(() => setCopied(false), 1500); }} activeOpacity={0.6}>
+            <TouchableOpacity onPress={() => { copyToClipboard(content); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setCopied(true); setTimeout(() => setCopied(false), 1500); }} activeOpacity={0.6}>
               {copied ? <FontAwesome name="check" size={14} color={Theme.green} /> : <FontAwesome name="clipboard" size={14} color="#657b83" />}
             </TouchableOpacity>
             <TouchableOpacity onPress={onClose} activeOpacity={0.6}>
@@ -197,7 +202,7 @@ export function CodeBlockWithCopy({ content, language }: { content: string; lang
   const [copied, setCopied] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const handleCopy = () => {
-    Clipboard.setString(content);
+    copyToClipboard(content);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
@@ -207,27 +212,22 @@ export function CodeBlockWithCopy({ content, language }: { content: string; lang
   const showLineNumbers = lines.length > 3;
   const isTall = lines.length > 15;
   const displayLines = isTall ? lines.slice(0, CODE_BLOCK_PREVIEW_LINES) : lines;
-  const displayContent = isTall ? displayLines.join('\n') : content;
-
   return (
     <RNView style={{ marginVertical: 2 }}>
-      <RNView style={{ backgroundColor: Theme.bgAlt, borderRadius: 6, borderWidth: StyleSheet.hairlineWidth, borderColor: Theme.borderLight, overflow: 'hidden' }}>
-        <ScrollView horizontal showsHorizontalScrollIndicator nestedScrollEnabled>
-          <RNView style={{ padding: 6 }}>
-            {showLineNumbers ? (
-              <RNView style={{ flexDirection: 'row' }}>
-                <RNView style={{ paddingRight: 8, marginRight: 8, borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: Theme.borderLight }}>
-                  {displayLines.map((_, i) => (
-                    <RNText key={i} style={{ fontSize: 10, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textDim, textAlign: 'right', minWidth: 20 }}>{i + 1}</RNText>
-                  ))}
-                </RNView>
-                <HighlightedCodeText content={displayContent} style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
-              </RNView>
-            ) : (
-              <HighlightedCodeText content={displayContent} style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
+      {/* Code WRAPS instead of scrolling horizontally so long lines stay readable
+          on a phone rather than clipping off-screen. Each line is its own row: the
+          line number sits at the top of a wrapped line (standard soft-wrap layout)
+          and the code fills the remaining width. Dropping the nested horizontal
+          ScrollView also removes the phantom vertical band it reserved in the list. */}
+      <RNView style={{ backgroundColor: Theme.bgAlt, borderRadius: 6, borderWidth: StyleSheet.hairlineWidth, borderColor: Theme.borderLight, overflow: 'hidden', padding: 6 }}>
+        {displayLines.map((line, i) => (
+          <RNView key={i} style={{ flexDirection: 'row' }}>
+            {showLineNumbers && (
+              <RNText style={{ fontSize: 10, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textDim, textAlign: 'right', minWidth: 22, marginRight: 8 }}>{i + 1}</RNText>
             )}
+            <HighlightedCodeText content={line || ' '} style={{ flex: 1, fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
           </RNView>
-        </ScrollView>
+        ))}
       </RNView>
       <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 4 }}>
         {isTall && (
@@ -262,10 +262,10 @@ export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false, o
 
     if (!trimmed) { i++; continue; }
 
-    const headerMatch = trimmed.match(/^(#{1,3})\s+(.+)/);
+    const headerMatch = trimmed.match(/^(#{1,6})\s+(.+)/);
     if (headerMatch) {
       const level = headerMatch[1].length;
-      const fontSize = level === 1 ? 18 : level === 2 ? 16 : 15;
+      const fontSize = [18, 16, 15, 14, 13, 13][level - 1];
       elements.push(
         <RNText key={`${blockKey}h${elKey++}`} style={[baseStyle, { fontSize, fontWeight: '700', marginTop: 8, marginBottom: 4 }]}>
           {renderInlineMarkdown(headerMatch[2], baseStyle, `${blockKey}h${elKey}`, isUser, onEntityPress)}
@@ -276,29 +276,34 @@ export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false, o
     }
 
     if (trimmed.match(/^[-*]\s/) || trimmed.match(/^\d+[.)]\s/)) {
-      const listItems: { text: string; ordered: boolean; num?: number; checked?: boolean }[] = [];
+      const listItems: { text: string; ordered: boolean; num?: number; checked?: boolean; depth: number }[] = [];
       while (i < lines.length) {
-        const l = lines[i].trim();
+        const raw = lines[i];
+        const l = raw.trim();
+        // Indentation depth from the UNtrimmed line \u2014 two spaces (or a tab) per
+        // level, capped so a pathological paste can't march off-screen.
+        const leading = raw.match(/^[ \t]*/)![0].replace(/\t/g, '  ').length;
+        const depth = Math.min(Math.floor(leading / 2), 3);
         const checkMatch = l.match(/^[-*]\s+\[([ xX])\]\s+(.*)/);
         const ulMatch = l.match(/^[-*]\s+(.*)/);
         const olMatch = l.match(/^(\d+)[.)]\s+(.*)/);
         if (checkMatch) {
-          listItems.push({ text: checkMatch[2], ordered: false, checked: checkMatch[1] !== ' ' });
+          listItems.push({ text: checkMatch[2], ordered: false, checked: checkMatch[1] !== ' ', depth });
           i++;
         } else if (ulMatch) {
-          listItems.push({ text: ulMatch[1], ordered: false });
+          listItems.push({ text: ulMatch[1], ordered: false, depth });
           i++;
         } else if (olMatch) {
-          listItems.push({ text: olMatch[2], ordered: true, num: parseInt(olMatch[1]) });
+          listItems.push({ text: olMatch[2], ordered: true, num: parseInt(olMatch[1]), depth });
           i++;
         } else break;
       }
       elements.push(
         <RNView key={`${blockKey}li${elKey++}`} style={mdStyles.listContainer}>
           {listItems.map((item, j) => (
-            <RNView key={j} style={mdStyles.listItem}>
+            <RNView key={j} style={[mdStyles.listItem, item.depth > 0 && { paddingLeft: item.depth * 14 }]}>
               <RNText style={[baseStyle, mdStyles.listBullet]}>
-                {item.checked !== undefined ? (item.checked ? '\u2611' : '\u2610') : item.ordered ? `${item.num}.` : '\u2022'}
+                {item.checked !== undefined ? (item.checked ? '\u2611' : '\u2610') : item.ordered ? `${item.num}.` : item.depth > 0 ? '\u25e6' : '\u2022'}
               </RNText>
               <RNText style={[baseStyle, { flex: 1 }, item.checked === true && { textDecorationLine: 'line-through', color: Theme.textMuted0 }]}>
                 {renderInlineMarkdown(item.text, baseStyle, `${blockKey}li${j}`, isUser, onEntityPress)}
@@ -310,7 +315,11 @@ export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false, o
       continue;
     }
 
-    if (trimmed.match(/^[-*_]{3,}$/)) {
+    // ASCII thematic breaks, plus box-drawing/em-dash rule runs (optionally
+    // `code`/**bold**-wrapped) \u2014 the residue of insight fences the block parser
+    // deliberately doesn't match (e.g. the open-ended titled form). A clean rule
+    // beats a wrapping line of \u2500 glyphs or a bogus inline-code chip.
+    if (trimmed.match(/^[-*_]{3,}$/) || trimmed.match(/^(?:`|\*\*)?[\u2500\u2501\u2550\u2014\u2013]{3,}(?:`|\*\*)?$/)) {
       elements.push(
         <RNView key={`${blockKey}hr${elKey++}`} style={mdStyles.horizontalRule} />
       );
@@ -393,15 +402,12 @@ export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false, o
   return <>{elements}</>;
 }
 
-export function MarkdownContent({ text, baseStyle, isUser = false }: { text: string; baseStyle: any; isUser?: boolean }) {
-  const router = useRouter();
-  const handleEntityPress = useCallback((id: string) => {
-    const prefix = id.split('-')[0];
-    if (prefix === 'ct') router.push(`/task/${id}`);
-    else if (prefix === 'pl') router.push(`/plan/${id}`);
-    else if (prefix === 'doc') router.push(`/doc/${id}`);
-  }, [router]);
-  const codeBlockRegex = /```(\w+)?\n([\s\S]*?)```/g;
+// The fence-splitting run of blocks — code fences to CodeBlockWithCopy /
+// CastCanvas, everything else to MarkdownTextBlock. Internal: MarkdownContent
+// wraps this with insight-block extraction; InsightCard bodies reuse it.
+function MarkdownBlocks({ text, baseStyle, isUser, keyPrefix, onEntityPress }: { text: string; baseStyle: any; isUser: boolean; keyPrefix: string; onEntityPress: (id: string) => void }) {
+  // Language may be hyphenated (cast-canvas, objective-c).
+  const codeBlockRegex = /```([\w-]+)?\n([\s\S]*?)```/g;
   const blocks: Array<{ type: 'text' | 'code'; content: string; language?: string }> = [];
   let lastIndex = 0;
   let match;
@@ -423,16 +429,68 @@ export function MarkdownContent({ text, baseStyle, isUser = false }: { text: str
   if (blocks.length === 0) blocks.push({ type: 'text', content: text });
 
   return (
-    <RNView>
+    <>
       {blocks.map((block, idx) => {
         if (block.type === 'code') {
+          // Keep the fence name in sync with web's HtmlSnippet.CANVAS_FENCE
+          // ("cast-canvas") — importing the web module would drag DOM-only code
+          // into the Hermes bundle. Binaries without the WebView native module
+          // fall through to the plain code block.
+          if (block.language === 'cast-canvas' && canvasAvailable) {
+            return <CastCanvas key={idx} code={block.content} />;
+          }
           return (
             <CodeBlockWithCopy key={idx} content={block.content} language={block.language || 'plaintext'} />
           );
         }
 
-        return <MarkdownTextBlock key={idx} text={block.content} baseStyle={baseStyle} blockKey={`b${idx}`} isUser={isUser} onEntityPress={handleEntityPress} />;
+        return <MarkdownTextBlock key={idx} text={block.content} baseStyle={baseStyle} blockKey={`${keyPrefix}b${idx}`} isUser={isUser} onEntityPress={onEntityPress} />;
       })}
+    </>
+  );
+}
+
+// "★ Insight ─────" callout — mirrors web's InsightCard (ConversationView):
+// violet-tinted card, star + uppercase label header, markdown body.
+function InsightCard({ label, content, baseStyle, onEntityPress }: { label: string; content: string; baseStyle: any; onEntityPress: (id: string) => void }) {
+  return (
+    <RNView style={mdStyles.insightCard}>
+      <RNView style={mdStyles.insightHeader}>
+        <FontAwesome name="star" size={11} color={Theme.violet} />
+        <RNText style={mdStyles.insightLabel}>{label}</RNText>
+      </RNView>
+      <RNView style={mdStyles.insightBody}>
+        <MarkdownBlocks text={content} baseStyle={baseStyle} isUser={false} keyPrefix="ins" onEntityPress={onEntityPress} />
+      </RNView>
+    </RNView>
+  );
+}
+
+export function MarkdownContent({ text, baseStyle, isUser = false }: { text: string; baseStyle: any; isUser?: boolean }) {
+  const router = useRouter();
+  const handleEntityPress = useCallback((id: string) => {
+    const prefix = id.split('-')[0];
+    if (prefix === 'ct') router.push(`/task/${id}`);
+    else if (prefix === 'pl') router.push(`/plan/${id}`);
+    else if (prefix === 'doc') router.push(`/doc/${id}`);
+  }, [router]);
+  // Insight extraction runs on every assistant text (same placement as web's
+  // assistant-message flat run) so cards show up on ALL surfaces that render
+  // markdown — message bubbles, tool results, plan/teammate cards.
+  const parts = useMemo(
+    () => (isUser ? [{ type: 'text' as const, content: text }] : parseInsightBlocks(text)),
+    [text, isUser],
+  );
+
+  return (
+    <RNView>
+      {parts.map((part, pIdx) =>
+        part.type === 'insight' ? (
+          <InsightCard key={pIdx} label={part.label} content={part.content} baseStyle={baseStyle} onEntityPress={handleEntityPress} />
+        ) : (
+          <MarkdownBlocks key={pIdx} text={part.content} baseStyle={baseStyle} isUser={isUser} keyPrefix={`p${pIdx}`} onEntityPress={handleEntityPress} />
+        )
+      )}
     </RNView>
   );
 }
@@ -449,11 +507,13 @@ export const mdStyles = StyleSheet.create({
   inlineCode: {
     fontFamily: 'SpaceMono',
     fontSize: 13,
-    backgroundColor: 'rgba(0,0,0,0.07)',
+    // Neutral text on a subtle surface, matching web (--tw-prose-code = --sol-text
+    // on --sol-bg-alt). The old red read like an error/warning on every snippet.
+    backgroundColor: Theme.bgAlt,
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 3,
-    color: Theme.red,
+    color: Theme.text,
   },
   inlineCodeUser: {
     fontFamily: 'SpaceMono',
@@ -465,8 +525,8 @@ export const mdStyles = StyleSheet.create({
     color: Theme.text,
   },
   mentionPill: {
-    backgroundColor: '#b5890020',
-    color: '#b58900',
+    backgroundColor: Theme.accent + '20',
+    color: Theme.accent,
     fontWeight: '600',
     fontSize: 13,
     paddingHorizontal: 5,
@@ -569,5 +629,34 @@ export const mdStyles = StyleSheet.create({
   },
   tableCellText: {
     fontSize: 11,
+  },
+  insightCard: {
+    marginVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: Theme.violet + '4d',
+    backgroundColor: Theme.violet + '0d',
+    overflow: 'hidden',
+  },
+  insightHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Theme.violet + '33',
+    backgroundColor: Theme.violet + '14',
+  },
+  insightLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    color: Theme.violet,
+  },
+  insightBody: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
   },
 });

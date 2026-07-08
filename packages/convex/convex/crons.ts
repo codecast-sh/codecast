@@ -32,6 +32,21 @@ crons.interval(
 );
 
 crons.interval(
+  // pending_permissions was never pruned — resolved rows matter for ~5 min and
+  // the daemon cancels its own after ~1h, so drop the leftovers hourly to keep
+  // the table (and every reader's scan) small.
+  "prune resolved pending_permissions",
+  { hours: 1 },
+  internal.permissions.prunePendingPermissions
+);
+
+crons.interval(
+  "prune expired ip_rate_limits windows",
+  { hours: 1 },
+  internal.ipRateLimit.pruneIpRateLimits
+);
+
+crons.interval(
   "backfill docs and tasks from sessions",
   { hours: 6 },
   internal.taskMining.backfillAllTeams
@@ -48,8 +63,46 @@ crons.interval(
   // Kicks off the retention drain; pruneOldLogs self-reschedules to chew through
   // the ~9.5M-row backlog, then settles into trimming rows past the 3-day window.
   "prune old daemon logs",
-  { minutes: 10 },
+  { minutes: 30 },
   internal.daemonLogs.pruneOldLogs,
+  {}
+);
+
+crons.interval(
+  // Sweeps abandoned "New Session" rows (quick-create pre-warms a conversation
+  // per summon; abandoning it strands an empty row). Rolling 2h band just past
+  // the 24h grace cutoff — see cleanup.gcEmptyConversations.
+  "gc abandoned empty conversations",
+  { hours: 1 },
+  internal.cleanup.gcEmptyConversations,
+  {}
+);
+
+crons.interval(
+  // Expired `cast auth` relay deposits (browser couldn't reach the CLI and the
+  // CLI never claimed). Revokes the orphaned token along with the row.
+  "sweep expired cli auth relays",
+  { minutes: 15 },
+  internal.cliAuth.sweepExpired,
+  {}
+);
+
+crons.interval(
+  // pending_api_error flags older than the 48h revive window stop meaning
+  // "current incident" — clear them so the blocked-sessions banner, badges,
+  // and mass-revive selection never count weeks-dead casualties.
+  "sweep stale api-error flags",
+  { hours: 1 },
+  internal.accountSwitch.sweepStaleApiErrorFlags,
+  {}
+);
+
+crons.interval(
+  // Slack dedup rows only need to outlive Slack's retry window (minutes); drop
+  // anything older than a day so the table can't grow unbounded.
+  "sweep slack dedup events",
+  { hours: 6 },
+  internal.slack.sweepSlackEvents,
   {}
 );
 

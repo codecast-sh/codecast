@@ -1,9 +1,11 @@
 import { useTheme } from "./ThemeProvider";
+import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 
 export function ThemeToggle() {
   const { theme, toggleTheme } = useTheme();
 
   return (
+    <ShortcutTooltip label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}>
     <button
       onClick={toggleTheme}
       className="p-2 rounded-lg transition-colors hover:bg-sol-bg-alt/50"
@@ -29,5 +31,6 @@ export function ThemeToggle() {
         </svg>
       )}
     </button>
+    </ShortcutTooltip>
   );
 }

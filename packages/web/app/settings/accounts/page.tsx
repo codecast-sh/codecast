@@ -5,6 +5,7 @@ import { useQuery, useMutation } from "convex/react";
 import { useAuthActions } from "@convex-dev/auth/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Card } from "../../../components/ui/card";
+import { AppLoader } from "../../../components/AppLoader";
 import { Button } from "../../../components/ui/button";
 
 function AccountsContent() {
@@ -24,7 +25,12 @@ function AccountsContent() {
     const urlError = searchParams.get("error");
     if (urlError) {
       setError(urlError);
-      router.replace("/settings/accounts", { scroll: false });
+      // Consume the param off the CURRENT URL — this panel renders inside the
+      // settings modal over whatever page carried the OAuth return.
+      const next = new URLSearchParams(searchParams.toString());
+      next.delete("error");
+      const q = next.toString();
+      router.replace(`${window.location.pathname}${q ? `?${q}` : ""}`, { scroll: false });
     }
   }, [searchParams, router]);
 
@@ -290,7 +296,7 @@ function AccountsContent() {
 
 export default function AccountsPage() {
   return (
-    <Suspense fallback={<div className="text-sol-text-muted">Loading...</div>}>
+    <Suspense fallback={<AppLoader className="min-h-0 bg-transparent py-12" size={28} />}>
       <AccountsContent />
     </Suspense>
   );

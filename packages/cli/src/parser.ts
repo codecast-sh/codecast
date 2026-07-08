@@ -6,11 +6,16 @@ type ContentBlock =
   | { type: "image"; source: { type: string; media_type: string; data: string } };
 
 export interface ClaudeSessionEntry {
-  type: "user" | "assistant" | "human" | "summary" | "file-history-snapshot" | "system" | "queue-operation";
+  type: "user" | "assistant" | "human" | "summary" | "file-history-snapshot" | "system" | "queue-operation" | "attachment";
   subtype?: "local_command" | "stop_hook_summary" | "compact_boundary";
   uuid?: string;
   parentUuid?: string;
   sessionId?: string;
+  // Agent-team stamps: Claude Code writes these on every line of a TEAMMATE
+  // session's transcript (the lead's transcript is never stamped). teamName is
+  // the team dir under ~/.claude/teams/; agentName is this member's name.
+  teamName?: string;
+  agentName?: string;
   slug?: string;
   timestamp?: string;
   content?: string;
@@ -26,6 +31,17 @@ export interface ClaudeSessionEntry {
   isMeta?: boolean;
   isCompactSummary?: boolean;
   isVisibleInTranscriptOnly?: boolean;
+  // A message the user queues with Ctrl+Enter (or that codecast's daemon injects
+  // while the agent is mid-turn) is written as type:"attachment" with this shape —
+  // the prompt lives in `attachment.prompt`, NOT in `message.content`. A text-only
+  // queued turn stores it as a bare string; a queued turn that also carries an image
+  // stores it as a content-block array (same shape as message.content).
+  attachment?: {
+    type?: string;
+    prompt?: string | ContentBlock[];
+    commandMode?: string;
+    origin?: { kind?: string };
+  };
 }
 
 export interface ToolCall {
@@ -57,6 +73,7 @@ export interface ParsedMessage {
   images?: ImageBlock[];
   subtype?: string;
   stopReason?: string;
+  model?: string;
 }
 
 export function parseSessionLine(line: string): ClaudeSessionEntry | null {
@@ -71,8 +88,30 @@ export function parseSessionLine(line: string): ClaudeSessionEntry | null {
   }
 }
 
+// Synthetic truncation notice injected by jsonlGenerator on cross-agent/truncated
+// imports. It exists for the model's context only — never show it to users.
+// New imports mark it isMeta (skipped by the generic meta-skip below); this prefix
+// guard also drops it from older JSONL files written before the flag existed.
+export const CODECAST_IMPORT_NOTICE_PREFIX = "[Codecast import]";
+
+// Queued prompts sometimes carry leading terminal control bytes (e.g. \x01\x0b,
+// bracketed-paste markers) captured with the keystrokes. Strip a leading run of
+// control chars — keeping tab/newline — so the synced content is clean and still
+// content-matches its pending-message row on the server. Coerce defensively: a
+// non-string slipping in here used to throw and wedge the WHOLE transcript's sync
+// forever (one bad queued-command line froze the file at its byte offset), so this
+// must never throw regardless of what shape the prompt field holds.
+function stripControlPrefix(text: unknown): string {
+  if (typeof text !== "string") return "";
+  return text.replace(/^[\x00-\x08\x0b-\x1f]+/, "");
+}
+
 export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] {
   const messages: ParsedMessage[] = [];
+  // A slash command's expansion (the command's .md body) is flagged isMeta by Claude Code,
+  // so the generic meta-skip below drops it. Keep it when it directly follows the command
+  // invocation — the UI folds it into the command block as an expandable "Show command".
+  let prevWasCommandInvocation = false;
 
   for (const entry of entries) {
     const timestamp = entry.timestamp ? new Date(entry.timestamp).getTime() : Date.now();
@@ -92,7 +131,50 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
 
     if (entry.type === "queue-operation") continue;
 
-    if (entry.isMeta || (entry.isVisibleInTranscriptOnly && !entry.isCompactSummary)) continue;
+    // A user turn the agent received while busy is recorded as type:"attachment"
+    // with attachment.type:"queued_command" (text in attachment.prompt) instead of a
+    // normal type:"user" entry. Idle turns land as type:"user" and sync fine; queued
+    // ones used to fall through the user/assistant skip below and get silently dropped
+    // — losing real user prompts (e.g. anything sent with Ctrl+Enter). Emit them as
+    // user messages. The server's addMessages dedups by uuid, then by content+timestamp,
+    // then against the pending-message row, so a queued turn that ALSO arrived as a
+    // normal echo (idle redelivery) never double-syncs.
+    if (entry.type === "attachment") {
+      if (entry.attachment?.type === "queued_command") {
+        // A text-only queued turn stores prompt as a string; a queued turn with an
+        // image stores it as a content-block array. Pull the text out and keep any
+        // images so the synced turn matches what the user actually sent.
+        const raw = entry.attachment.prompt;
+        const promptImages: ImageBlock[] = [];
+        let promptText = "";
+        if (Array.isArray(raw)) {
+          for (const block of raw) {
+            if (block.type === "text") {
+              promptText += block.text;
+            } else if (block.type === "image" && block.source) {
+              promptImages.push({ mediaType: block.source.media_type, data: block.source.data });
+            }
+          }
+        } else {
+          promptText = raw ?? "";
+        }
+        const prompt = stripControlPrefix(promptText);
+        if (prompt.trim() || promptImages.length > 0) {
+          messages.push({
+            uuid: entry.uuid,
+            role: "user",
+            content: prompt,
+            timestamp,
+            images: promptImages.length > 0 ? promptImages : undefined,
+          });
+        }
+      }
+      continue;
+    }
+
+    const isUserEntry = entry.type === "user" || entry.type === "human";
+    const isCommandExpansion = isUserEntry && entry.isMeta === true && prevWasCommandInvocation;
+    if (!isCommandExpansion && (entry.isMeta || (entry.isVisibleInTranscriptOnly && !entry.isCompactSummary))) continue;
 
     // Handle old format: type is "human" instead of "user"
     const normalizedType = entry.type === "human" ? "user" : entry.type;
@@ -161,10 +243,16 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
       }
     }
 
-    if (textContent || thinking || toolCalls.length > 0 || toolResults.length > 0 || images.length > 0) {
+    const isImportNotice = role === "user" && textContent.trimStart().startsWith(CODECAST_IMPORT_NOTICE_PREFIX);
+
+    if (!isImportNotice && (textContent || thinking || toolCalls.length > 0 || toolResults.length > 0 || images.length > 0)) {
       const stopReason = typeof entry.message === "object" && entry.message.stop_reason
         ? entry.message.stop_reason
         : undefined;
+      // "<synthetic>" marks system-generated assistant entries (error banners,
+      // interrupts) — not a real generation, so don't report a model for it.
+      const rawModel = typeof entry.message === "object" ? entry.message.model : undefined;
+      const model = rawModel && !rawModel.startsWith("<") ? rawModel : undefined;
       messages.push({
         uuid: entry.uuid,
         role,
@@ -175,8 +263,15 @@ export function extractMessages(entries: ClaudeSessionEntry[]): ParsedMessage[] 
         toolResults: toolResults.length > 0 ? toolResults : undefined,
         images: images.length > 0 ? images : undefined,
         stopReason,
+        model,
       });
     }
+
+    // Remember whether this was a slash-command invocation so the next entry (its isMeta
+    // .md expansion) is kept rather than skipped.
+    prevWasCommandInvocation =
+      normalizedType === "user" && entry.isMeta !== true &&
+      (textContent.trimStart().startsWith("<command-name>") || textContent.trimStart().startsWith("<command-message>"));
   }
 
   return messages;
@@ -218,6 +313,21 @@ export function extractSummaryTitle(content: string): string | undefined {
     const entry = parseSessionLine(line);
     if (entry?.type === "summary" && entry?.summary) {
       return entry.summary;
+    }
+  }
+  return undefined;
+}
+
+// Agent-team stamps from a TEAMMATE session's transcript (see
+// ClaudeSessionEntry.teamName). Any stamped line identifies the session's team
+// and member name; the lead's transcript carries no stamps, so undefined here
+// means "not a teammate" (or the stamped lines haven't been written yet).
+export function extractTeamInfo(content: string): { teamName: string; agentName: string } | undefined {
+  const lines = content.split("\n");
+  for (const line of lines) {
+    const entry = parseSessionLine(line);
+    if (entry?.teamName && entry?.agentName) {
+      return { teamName: entry.teamName, agentName: entry.agentName };
     }
   }
   return undefined;
@@ -668,6 +778,43 @@ export function extractCodexSessionId(content: string): string | undefined {
     } catch {}
   }
   return undefined;
+}
+
+// Codex Desktop forks a rollout on every resume/reopen: it writes a new file with a
+// fresh UUID, copies the prior history forward, and stacks one more session_meta record
+// at the top whose `forked_from_id` points at the parent. The whole ancestry is therefore
+// embedded as the leading run of session_meta records (newest first), back to the original
+// session that was forked from nothing. That original is the stable identity for the entire
+// lineage — resolving to it lets the daemon collapse every resume/fork of one logical
+// session into a single conversation instead of minting a duplicate per rollout file.
+//
+// Pass the leading session_meta block (see readCodexSessionMetaHead in the daemon); a file
+// whose head was truncated still resolves consistently because every fork embeds the same
+// ancestry. Returns the file's own id when there is no fork lineage, or undefined when no
+// session_meta is present at all.
+export function extractCodexForkRoot(content: string): string | undefined {
+  const parent = new Map<string, string | undefined>();
+  let ownId: string | undefined;
+  for (const line of content.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line);
+      if (entry.type !== "session_meta") continue;
+      const id: string | undefined = entry.payload?.id;
+      if (!id) continue;
+      if (!ownId) ownId = id; // the file's own session_meta is always first
+      if (!parent.has(id)) parent.set(id, entry.payload?.forked_from_id ?? undefined);
+    } catch {}
+  }
+  if (!ownId) return undefined;
+  // Walk forked_from links to the deepest ancestor recorded in this file.
+  let root = ownId;
+  const seen = new Set<string>();
+  while (parent.get(root) && !seen.has(root)) {
+    seen.add(root);
+    root = parent.get(root)!;
+  }
+  return root;
 }
 
 export interface CursorPrompt {

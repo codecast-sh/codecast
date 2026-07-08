@@ -3,13 +3,22 @@ import {
   isNoiseTitle,
   isOrphanOrSubagent,
   shouldShowInInbox,
+  isViableInboxParent,
   isSessionIdle,
   nextAgentStatusOnAddMessages,
   isApiErrorBanner,
+  classifyApiErrorBanner,
   apiErrorBatchAction,
+  classifyWorkState,
+  normalizeWorkStateFilter,
+  trustedAgentStatus,
+  subagentKeepsParentWorking,
+  SUBAGENT_PRODUCING_GRACE_MS,
+  STATUS_TRUST_TTL_MS,
   AGENT_IDLE_GRACE_MS,
   type ConversationDoc,
   type SessionIdleInput,
+  type WorkStateInput,
 } from "./inboxFilters";
 
 function conv(partial: Partial<ConversationDoc> = {}): ConversationDoc {
@@ -86,6 +95,32 @@ describe("isOrphanOrSubagent", () => {
   });
 });
 
+describe("isViableInboxParent", () => {
+  const USER = "usr_default";
+  test("null/undefined parent → not viable", () => {
+    expect(isViableInboxParent(null, USER)).toBe(false);
+    expect(isViableInboxParent(undefined, USER)).toBe(false);
+  });
+  test("ordinary active session owned by user → viable", () => {
+    expect(isViableInboxParent(conv(), USER)).toBe(true);
+  });
+  test("parent owned by a different user → not viable", () => {
+    expect(isViableInboxParent(conv({ user_id: "usr_other" as any }), USER)).toBe(false);
+  });
+  test("dismissed parent → not viable (children of a dismissed parent aren't surfaced)", () => {
+    expect(isViableInboxParent(conv({ inbox_dismissed_at: 100 }), USER)).toBe(false);
+  });
+  test("parent that is itself a subagent → not viable", () => {
+    expect(isViableInboxParent(conv({ is_subagent: true }), USER)).toBe(false);
+  });
+  test("killed (not pinned) parent → not viable", () => {
+    expect(isViableInboxParent(conv({ inbox_killed_at: 100 }), USER)).toBe(false);
+  });
+  test("completed parent with no messages → not viable", () => {
+    expect(isViableInboxParent(conv({ status: "completed", message_count: 0 }), USER)).toBe(false);
+  });
+});
+
 // Inbox visibility is now a single filter. Dismissed conversations stay in the
 // inbox — clients categorize them via the `inbox_dismissed_at` field.
 describe("shouldShowInInbox", () => {
@@ -108,11 +143,14 @@ describe("shouldShowInInbox", () => {
     expect(shouldShowInInbox(conv({ inbox_killed_at: 100 }))).toBe(false);
   });
 
-  test("killed + pinned → hide", () => {
+  // Pin revives a killed conversation, mirroring "dismissed + pinned" above.
+  // See 8f9490f7 "revive killed conversations on send or pin"; the filter only
+  // hides a killed conv when it is NOT pinned (inbox_killed_at && !inbox_pinned_at).
+  test("killed + pinned → in inbox (pin revives)", () => {
     expect(shouldShowInInbox(conv({
       inbox_killed_at: 100,
       inbox_pinned_at: 200,
-    }))).toBe(false);
+    }))).toBe(true);
   });
 
   test("killed + dismissed → hide", () => {
@@ -287,6 +325,30 @@ describe("isApiErrorBanner", () => {
     // Long content is never a banner even if it opens with the phrase.
     expect(isApiErrorBanner("API Error: 500 ".concat("x".repeat(500)))).toBe(false);
   });
+
+  test("matches real-world usage/session-limit banners", () => {
+    expect(isApiErrorBanner("You've hit your session limit · resets 11:30pm (America/New_York)")).toBe(true);
+    expect(isApiErrorBanner("You've hit your session limit")).toBe(true);
+    expect(isApiErrorBanner("You've hit your monthly spend limit · raise it at claude.ai/settings/usage")).toBe(true);
+    expect(isApiErrorBanner("You’ve hit your weekly limit · resets 3am (America/New_York)")).toBe(true); // curly apostrophe
+    expect(isApiErrorBanner("Claude usage limit reached. Your limit will reset at 3am (America/New_York).")).toBe(true);
+  });
+
+  test("does not flag prose that merely opens like a limit banner", () => {
+    // Real assistant sentences seen in transcripts — same prefix, but they
+    // continue as prose instead of the single-line `· detail` banner shape.
+    expect(isApiErrorBanner("You've hit your usage limit on the free plan, so video generation is paused right here.")).toBe(false);
+    expect(isApiErrorBanner("You've hit your trial usage limit. I can activate your full Pro subscription right now.")).toBe(false);
+    expect(isApiErrorBanner("You've hit your usage limit — the ad is fully planned, cast, and ready to generate.")).toBe(false);
+    expect(isApiErrorBanner("You've hit your session limit · resets 11:30pm\nWait, actually let me reconsider the approach here.")).toBe(false);
+  });
+
+  test("classifies banner kinds for the badge label", () => {
+    expect(classifyApiErrorBanner("Please run /login · API Error: 401 Invalid authentication credentials")).toBe("auth");
+    expect(classifyApiErrorBanner("You've hit your session limit · resets 11:30pm (America/New_York)")).toBe("limit");
+    expect(classifyApiErrorBanner("API Error: 529 Overloaded")).toBe("error");
+    expect(classifyApiErrorBanner("All good, deploy finished.")).toBe(null);
+  });
 });
 
 describe("apiErrorBatchAction", () => {
@@ -309,5 +371,245 @@ describe("apiErrorBatchAction", () => {
 
   test("a still-erroring session (pending, banner-only) does not supersede", () => {
     expect(apiErrorBatchAction({ batchHasRealTurn: false, batchHasBanner: true, conversationPending: true })).toBe("mark_pending");
+  });
+});
+
+describe("classifyWorkState", () => {
+  function wsi(partial: Partial<WorkStateInput> = {}): WorkStateInput {
+    return {
+      agentStatus: undefined,
+      isIdle: false,
+      awaitingInput: false,
+      hasPending: false,
+      isUnresponsive: false,
+      messageCount: 5,
+      ...partial,
+    };
+  }
+
+  test("active agent statuses → working", () => {
+    for (const agentStatus of ["working", "thinking", "compacting", "connected", "starting", "resuming"]) {
+      expect(classifyWorkState(wsi({ agentStatus }))).toBe("working");
+    }
+  });
+
+  test("deliverable pending work on a live daemon → working", () => {
+    expect(classifyWorkState(wsi({ hasPending: true }))).toBe("working");
+  });
+
+  test("permission_blocked with content → needs_input", () => {
+    expect(classifyWorkState(wsi({ agentStatus: "permission_blocked" }))).toBe("needs_input");
+  });
+
+  test("open AskUserQuestion poll → needs_input (even if daemon raced back to working)", () => {
+    expect(classifyWorkState(wsi({ agentStatus: "working", awaitingInput: true }))).toBe("needs_input");
+  });
+
+  test("dead (stopped) session with output → needs_input", () => {
+    expect(classifyWorkState(wsi({ agentStatus: "stopped", isIdle: true }))).toBe("needs_input");
+  });
+
+  test("THE RULE: a settled session with content → needs_input (matches the web inbox)", () => {
+    // The web inbox has no "idle with content" bucket — a finished turn waiting
+    // to be read is the user's ball, so it files under NEEDS INPUT. The CLI
+    // matches; "idle" is reserved for blank sessions.
+    expect(classifyWorkState(wsi({ isIdle: true }))).toBe("needs_input");
+  });
+
+  test("not yet idle with no active status (mid-grace / just-sent user message) → working", () => {
+    expect(classifyWorkState(wsi({ isIdle: false }))).toBe("working");
+  });
+
+  test("a pinned session that is actively working stays working (pin doesn't force needs_input)", () => {
+    expect(classifyWorkState(wsi({ agentStatus: "working", isIdle: false }))).toBe("working");
+  });
+
+  test("empty sessions never demand input (no content to read / answer)", () => {
+    // permission_blocked / stopped / settled-idle all require content to become
+    // needs_input; with zero messages they fall through to idle (startup noise).
+    expect(classifyWorkState(wsi({ messageCount: 0, agentStatus: "permission_blocked" }))).toBe("idle");
+    expect(classifyWorkState(wsi({ messageCount: 0, isIdle: true }))).toBe("idle");
+    expect(classifyWorkState(wsi({ messageCount: 0, agentStatus: "stopped", isIdle: true }))).toBe("idle");
+    expect(classifyWorkState(wsi({ messageCount: 0, isIdle: false }))).toBe("idle");
+    // ...but an actively-working empty session (just spawned) is still working.
+    expect(classifyWorkState(wsi({ messageCount: 0, agentStatus: "starting" }))).toBe("working");
+  });
+
+  test("an unresponsive (dead-daemon) session with queued work does NOT count as working", () => {
+    // canDeliver is false, so has_pending can't route it to working; with
+    // content it needs a human to read/restart it.
+    expect(classifyWorkState(wsi({ hasPending: true, isUnresponsive: true, isIdle: true }))).toBe("needs_input");
+  });
+});
+
+describe("normalizeWorkStateFilter", () => {
+  test("canonical tokens pass through", () => {
+    expect(normalizeWorkStateFilter("working")).toBe("working");
+    expect(normalizeWorkStateFilter("needs_input")).toBe("needs_input");
+    expect(normalizeWorkStateFilter("idle")).toBe("idle");
+    expect(normalizeWorkStateFilter("pinned")).toBe("pinned");
+    expect(normalizeWorkStateFilter("live")).toBe("live");
+  });
+
+  test("friendly aliases + spacing/casing normalize", () => {
+    expect(normalizeWorkStateFilter("needs-input")).toBe("needs_input");
+    expect(normalizeWorkStateFilter("needs input")).toBe("needs_input");
+    expect(normalizeWorkStateFilter("Blocked")).toBe("needs_input");
+    expect(normalizeWorkStateFilter("attention")).toBe("needs_input");
+    expect(normalizeWorkStateFilter("BUSY")).toBe("working");
+    expect(normalizeWorkStateFilter("running")).toBe("live");
+  });
+
+  test("unset / unknown / all → null (no filter)", () => {
+    expect(normalizeWorkStateFilter(undefined)).toBeNull();
+    expect(normalizeWorkStateFilter("")).toBeNull();
+    expect(normalizeWorkStateFilter("all")).toBeNull();
+    expect(normalizeWorkStateFilter("garbage")).toBeNull();
+  });
+});
+
+describe("trustedAgentStatus (stale 'working' trust TTL)", () => {
+  const NOW = 10_000_000;
+
+  test("fresh active status is trusted unchanged", () => {
+    expect(trustedAgentStatus("working", NOW - 60_000, NOW)).toBe("working");
+    expect(trustedAgentStatus("thinking", NOW - (STATUS_TRUST_TTL_MS - 1), NOW)).toBe("thinking");
+  });
+
+  test("an active status with no synced activity past the TTL collapses to idle", () => {
+    expect(trustedAgentStatus("working", NOW - STATUS_TRUST_TTL_MS, NOW)).toBe("idle");
+    expect(trustedAgentStatus("working", NOW - 24 * 60 * 60 * 1000, NOW)).toBe("idle");
+    // applies to every active status, not just "working"
+    for (const s of ["compacting", "thinking", "connected", "starting", "resuming"]) {
+      expect(trustedAgentStatus(s, NOW - STATUS_TRUST_TTL_MS, NOW)).toBe("idle");
+    }
+  });
+
+  test("non-active statuses are never coerced, however stale", () => {
+    for (const s of ["idle", "stopped", "permission_blocked"]) {
+      expect(trustedAgentStatus(s, NOW - 24 * 60 * 60 * 1000, NOW)).toBe(s);
+    }
+  });
+
+  test("undefined status / unknown updatedAt are left alone", () => {
+    expect(trustedAgentStatus(undefined, NOW - 24 * 60 * 60 * 1000, NOW)).toBeUndefined();
+    expect(trustedAgentStatus("working", undefined, NOW)).toBe("working");
+  });
+
+  // End-to-end: the exact composition enrichInboxSessionRow uses — coerce the
+  // status, recompute idle from it, then classify. This is the regression: a
+  // frozen "working" on a long-quiet conversation must NOT land in working.
+  function workStateFor(rawStatus: string, ageMs: number): string {
+    const now = NOW;
+    const updatedAt = now - ageMs;
+    const agentStatus = trustedAgentStatus(rawStatus, updatedAt, now);
+    const isIdle = isSessionIdle({
+      agentStatus,
+      agentStatusUpdatedAt: updatedAt, // status last changed at turn start
+      hasPending: false,
+      lastRoleIsUser: false,
+      recentlyUpdated: now - updatedAt < AGENT_IDLE_GRACE_MS,
+      daemonAlive: true,
+      now,
+    });
+    return classifyWorkState({
+      agentStatus,
+      isIdle,
+      awaitingInput: false,
+      hasPending: false,
+      isUnresponsive: false,
+      messageCount: 5,
+    });
+  }
+
+  test("a genuinely active session (recent activity) still reads working", () => {
+    expect(workStateFor("working", 30_000)).toBe("working");
+  });
+
+  test("a session frozen in 'working' for hours reads needs_input (finished), not working", () => {
+    expect(workStateFor("working", 18 * 60 * 60 * 1000)).toBe("needs_input");
+  });
+
+  // Regression for feedForCLI's classifyConv (powers `cast sessions` / the
+  // global feed): classifying on the RAW managed status — skipping the coercion
+  // — is exactly the bug that pinned long-quiet sessions in WORKING. This locks
+  // in that the feed path must coerce before it classifies, matching the inbox.
+  test("classifying the RAW status without coercion is the working-forever bug", () => {
+    const now = NOW;
+    const updatedAt = now - 12 * 60 * 60 * 1000; // quiet 12h, daemon still heartbeating
+    const rawWorkState = classifyWorkState({
+      agentStatus: "working", // raw managed_sessions.agent_status, re-asserted on heartbeat
+      isIdle: isSessionIdle({
+        agentStatus: "working",
+        agentStatusUpdatedAt: updatedAt,
+        hasPending: false,
+        lastRoleIsUser: false,
+        recentlyUpdated: false,
+        daemonAlive: true,
+        now,
+      }),
+      awaitingInput: false,
+      hasPending: false,
+      isUnresponsive: false,
+      messageCount: 5,
+    });
+    expect(rawWorkState).toBe("working"); // the symptom
+    expect(workStateFor("working", 12 * 60 * 60 * 1000)).toBe("needs_input"); // the coerced fix
+  });
+});
+
+describe("subagentKeepsParentWorking", () => {
+  const NOW = 10_000_000;
+  const base = {
+    isSubagent: true,
+    convStatus: "active",
+    updatedAt: NOW - 30 * 60 * 1000, // 30m ago: well past the producing grace
+    isLive: false,
+    agentStatus: "idle" as string | undefined,
+    now: NOW,
+  };
+
+  test("non-subagent children never pin the parent", () => {
+    expect(subagentKeepsParentWorking({ ...base, isSubagent: false, isLive: true, agentStatus: "working" })).toBe(false);
+  });
+
+  test("a completed-conversation child never pins the parent", () => {
+    expect(subagentKeepsParentWorking({ ...base, convStatus: "completed", isLive: true, agentStatus: "working" })).toBe(false);
+  });
+
+  // The actual bug: a forked subagent that finished (agent idle) but whose
+  // daemon keeps heartbeating — live, but not producing — must NOT keep its
+  // long-finished parent stuck in "working".
+  test("a live-but-idle subagent does NOT keep the parent working", () => {
+    expect(subagentKeepsParentWorking({ ...base, isLive: true, agentStatus: "idle" })).toBe(false);
+  });
+
+  test("a live subagent whose agent is genuinely active keeps the parent working", () => {
+    expect(subagentKeepsParentWorking({ ...base, isLive: true, agentStatus: "working" })).toBe(true);
+    expect(subagentKeepsParentWorking({ ...base, isLive: true, agentStatus: "thinking" })).toBe(true);
+  });
+
+  test("an active agent_status that isn't live (dead daemon) doesn't pin the parent", () => {
+    expect(subagentKeepsParentWorking({ ...base, isLive: false, agentStatus: "working" })).toBe(false);
+  });
+
+  // Recent output is its own proof of work — covers Task-tool subagents with no
+  // managed session (no agent_status to read, never "live").
+  test("a subagent that produced output within the grace keeps the parent working", () => {
+    expect(subagentKeepsParentWorking({
+      ...base,
+      updatedAt: NOW - (SUBAGENT_PRODUCING_GRACE_MS - 1_000),
+      isLive: false,
+      agentStatus: undefined,
+    })).toBe(true);
+  });
+
+  test("just past the producing grace with no live-active session, the parent settles", () => {
+    expect(subagentKeepsParentWorking({
+      ...base,
+      updatedAt: NOW - (SUBAGENT_PRODUCING_GRACE_MS + 1_000),
+      isLive: false,
+      agentStatus: undefined,
+    })).toBe(false);
   });
 });

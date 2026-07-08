@@ -28,6 +28,7 @@ export type ForkMessage = {
   tool_results?: unknown;
   images?: unknown;
   subtype?: string;
+  model?: string;
   timestamp: number;
   tokens_used?: unknown;
   usage?: unknown;
@@ -43,6 +44,7 @@ export type ForkConvRow = {
   fork_copied?: number;
   fork_cutoff_timestamp?: number;
   fork_daemon_args?: string;
+  message_count?: number;
 };
 
 // Minimal ctx shape needed by advanceForkCopy. The real Convex MutationCtx
@@ -92,11 +94,16 @@ async function emitForkDaemonCommand(ctx: ForkCopyCtx, fork: ForkConvRow): Promi
   } catch {
     return;
   }
+  // Routing hint stashed in the args by forkFromMessage (this emit runs in the
+  // copy-chain ctx, which can't query devices) — lift it onto the command row.
+  const targetDeviceId = typeof parsed._target_device_id === "string" ? parsed._target_device_id : undefined;
+  delete parsed._target_device_id;
   await ctx.db.insertDaemonCommand({
     user_id: fork.user_id,
     command: "resume_session",
     args: JSON.stringify(parsed),
     created_at: Date.now(),
+    target_device_id: targetDeviceId,
   });
   await ctx.db.patchConv(fork._id, { fork_daemon_args: undefined });
 }
@@ -126,10 +133,11 @@ export async function advanceForkCopy(
   });
 
   if (batch.length === 0) {
-    await ctx.db.patchConv(forkId, {
-      fork_status: "complete",
-      message_count: fork.fork_copied ?? 0,
-    });
+    // message_count is NOT patched here: per-batch increments already cover the
+    // copied rows, and the fast-path daemon may have attached the session
+    // mid-copy — live messages landed their own increments that an absolute
+    // set would erase.
+    await ctx.db.patchConv(forkId, { fork_status: "complete" });
     await emitForkDaemonCommand(ctx, fork);
     return { done: true, copied: 0 };
   }
@@ -152,6 +160,7 @@ export async function advanceForkCopy(
       tool_results: msg.tool_results,
       images: msg.images,
       subtype: msg.subtype,
+      model: msg.model,
       timestamp: msg.timestamp,
       tokens_used: msg.tokens_used,
       usage: msg.usage,
@@ -165,7 +174,11 @@ export async function advanceForkCopy(
   await ctx.db.patchConv(forkId, {
     fork_copy_cursor: lastTs,
     fork_copied: newCopied,
-    message_count: newCopied,
+    // Increment, never set: the fork session can be live mid-copy (fast-path
+    // daemon attach), so absolute writes would erase concurrent live-message
+    // increments. The mutation is one serializable transaction, so this
+    // composes with them correctly.
+    message_count: (fork.message_count ?? 0) + copied,
   });
 
   const moreExpected = copied < batch.length || batch.length === FORK_BATCH_DOCS;

@@ -4,9 +4,54 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore, useTrackedStore, isConvexId, ensureHydrated } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
+import { rowSigExcluding } from "../store/wakeSig";
 
 const EMPTY_MESSAGES: Message[] = [];
 const EMPTY_PENDING: Message[] = [];
+
+// Conversation fields that the daemon bumps on every ~1s heartbeat but that don't
+// change what the conversation view renders (idle duration is cosmetic and recomputed
+// from Date.now() on any render anyway). When two successive conversation objects
+// differ ONLY in these fields we hand back the previous object reference, so a bare
+// heartbeat no longer rebuilds `conversation` → re-renders the entire 11k-line
+// ConversationView monolith (~120ms each, ~4–5×/sec for a live session).
+const LIVENESS_ONLY_CONV_FIELDS = new Set([
+  "updated_at",
+  "last_heartbeat",
+  "last_metrics_at",
+  "last_active_at",
+  "last_message_at",
+]);
+function conversationRenderEqual(a: Record<string, any>, b: Record<string, any>): boolean {
+  if (a === b) return true;
+  // The message array is the primary render signal — a new/changed message must
+  // always re-render (mergedMessages keeps a stable ref when nothing changed).
+  if (a.messages !== b.messages) return false;
+  const aKeys = Object.keys(a);
+  if (aKeys.length !== Object.keys(b).length) return false;
+  for (const k of aKeys) {
+    if (LIVENESS_ONLY_CONV_FIELDS.has(k)) continue;
+    if (!Object.is(a[k], b[k])) return false;
+  }
+  return true;
+}
+
+// conversationRenderEqual stabilizes the conversation OBJECT, but useTrackedStore
+// still WAKES this hook whenever a subscribed row's Object.is identity changes —
+// and syncTable hands the session/conversation rows a fresh identity on every
+// ~1s liveness bump. A bare heartbeat would therefore re-render InboxConversation
+// → ConversationDiffLayout → the (un-memoized) 11k-line ConversationView even
+// though nothing visible changed. Subscribing to a SIGNATURE that ignores
+// LIVENESS_ONLY_CONV_FIELDS makes a bare heartbeat inert at the source: the dep
+// value is unchanged, so the hook never re-renders. Lossless for object-valued
+// fields via a stable per-reference id — a real change to a nested object still
+// flips the signature. Fail-safe denylist: omit a field and you re-render more
+// often, never render stale.
+// The single-row signature primitive lives in store/wakeSig.ts (rowSigExcluding);
+// the inbox sidebar uses the collection variant (sessionsWakeSig) for the same
+// reason. Keep the denylist here — it is conversation-specific.
+const metaWakeSig = (row: Record<string, any> | undefined | null): string =>
+  rowSigExcluding(row, LIVENESS_ONLY_CONV_FIELDS);
 
 type Message = {
   _id: string;
@@ -27,10 +72,23 @@ type Message = {
 };
 
 export function useConversationMessages(
-  conversationId: string,
+  requestedConversationId: string,
   targetMessageId?: string,
-  highlightQuery?: string
+  highlightQuery?: string,
+  // The target message's already-known timestamp (e.g. from a bookmark row).
+  // When supplied, the around-window query can fire on the FIRST render —
+  // centered on this value, matching the hover/eager prefetch — instead of
+  // waiting a round-trip for getMessageTimestamp. That's what turns a bookmark
+  // click into a direct open of the right window rather than tail-then-jump.
+  targetTimestamp?: number
 ) {
+  // Follow the optimistic-create rekey. When a stub conversation resolves to
+  // its real Convex id, rekeyId deletes the stub rows in the same store
+  // transaction that flips the current-session pointer — but consumers that
+  // render through useDeferredValue (InboxConversation) do one more urgent
+  // pass with the stale stub id. Without resolution that pass finds no rows,
+  // flashes the full-pane loader, and remounts the whole conversation tree.
+  const conversationId = useInboxStore((s) => s.resolveLiveSessionId(requestedConversationId));
   const canQuery = isConvexId(conversationId);
   const convId = conversationId as Id<"conversations">;
 
@@ -63,7 +121,7 @@ export function useConversationMessages(
       : "skip"
   );
 
-  const effectiveTargetTimestamp = targetMessageTimestamp?.timestamp ?? highlightMessageResult?.timestamp;
+  const effectiveTargetTimestamp = targetMessageTimestamp?.timestamp ?? targetTimestamp ?? highlightMessageResult?.timestamp;
   const highlightNotFound = !!(cleanedHighlightQuery && highlightMessageResult === null);
   const targetNotFound = !!(effectiveTargetMessageId && targetMessageTimestamp === null);
   const hasTarget = !!(
@@ -77,16 +135,33 @@ export function useConversationMessages(
   const [trackedConvId, setTrackedConvId] = useState(conversationId);
   const [jumpTimestamp, setJumpTimestamp] = useState<number | null>(null);
   const [jumpMode, setJumpMode] = useState<"start" | "center" | null>(null);
+  // jump-to-end means "leave the target, go to the live tail". The page keeps
+  // targetMessageId/highlight set for the WHOLE visit (cleared only on
+  // navigate-away — see QueuePageClient scrollTarget), so without remembering
+  // the dismissal the render-time sync below would flip targetMode right back
+  // on, and the end-jump would complete inside the re-engaged target window
+  // ("down arrow just scrolls to the bottom of the top page"). Keyed by target
+  // so a NEW deep-link mid-visit still engages target mode.
+  const targetKey = effectiveTargetMessageId ?? cleanedHighlightQuery ?? null;
+  const targetKeyRef = useRef(targetKey);
+  targetKeyRef.current = targetKey;
+  const dismissedTargetKeyRef = useRef<string | null>(null);
 
   if (trackedConvId !== conversationId) {
     setTrackedConvId(conversationId);
+    dismissedTargetKeyRef.current = null;
     setTargetMode(!!(effectiveTargetMessageId || cleanedHighlightQuery));
     setJumpTimestamp(null);
     setJumpMode(null);
   }
 
-  // Derive targetMode from hasTarget (deleted the useEffect, using render-time sync)
-  if (hasTarget && !targetMode) setTargetMode(true);
+  // Derive targetMode from hasTarget (render-time sync). A target the user
+  // explicitly dismissed via jump-to-end stays off; any other target value
+  // re-engages and clears the dismissal.
+  if (hasTarget && !targetMode && dismissedTargetKeyRef.current !== targetKey) {
+    dismissedTargetKeyRef.current = null;
+    setTargetMode(true);
+  }
   if (!hasTarget && jumpTimestamp === null && targetMode) setTargetMode(false);
 
   // IDB hydration — idempotent, no hooks, tracked by module-level Set
@@ -95,18 +170,44 @@ export function useConversationMessages(
   // =============================================
   // NORMAL MODE: Convex paginated subscription (background sync)
   // =============================================
-  const useNormalMode = !targetMode && canQuery;
+  // Kept alive during a jump-to-START (jumpMode === "start") even though that
+  // is technically target mode. Reason: usePaginatedQuery resets to its
+  // initial page when its args flip to "skip" and back, which would collapse
+  // the loaded window. Keeping it mounted preserves the accumulated pages so a
+  // CANCELLED start-jump can drop straight back to the exact scroll position
+  // (the window never shrank out from under the user). Deep-link / timestamp
+  // target navigation (jumpMode "center" or a targetMessageId) still turns it
+  // off — those genuinely replace the view and don't need the live window.
+  const useNormalMode = (!targetMode || jumpMode === "start") && canQuery;
 
   const { results: descResults, status: paginationStatus, loadMore } = usePaginatedQuery(
     api.conversations.listMessages,
     useNormalMode ? { conversation_id: convId } : "skip",
-    { initialNumItems: 40 }
+    // 200 (was 40): measured fetch cost is round-trip dominated — p50 ~370ms
+    // at 40 vs ~410-630ms at 200 on real conversations — while client cost is
+    // flat in window size (store write ~4ms, render virtualized). 40 gave
+    // only ~2-3 screenfuls before hitting a load boundary; 200 matches the
+    // loadOlder page so the first page and every subsequent one are one unit.
+    { initialNumItems: 200 }
   );
 
   // Ref avoids re-creating the sync callback when paginationStatus changes,
   // which would re-trigger useConvexSync's effect and loop: setMessages → re-render → new callback → effect → setMessages …
   const paginationStatusRef = useRef(paginationStatus);
   paginationStatusRef.current = paginationStatus;
+
+  // Fork-copy freeze: a freshly forked conversation is seeded locally with the
+  // parent's full message window (doFork), while the server copies messages
+  // oldest-first in background batches. Until fork_status leaves "copying" the
+  // server's window is an incomplete prefix — letting it replace the seeded
+  // list would visibly shrink the conversation and regrow it from the top.
+  // Freeze the paginated sync (and the recovery loop below) for the duration;
+  // the flip to "complete" changes this value, which re-triggers the
+  // useConvexSync effect and applies the latest full server page in one swap.
+  const forkCopying = useInboxStore((s) => {
+    const meta: any = s.conversations[conversationId] ?? s.sessions[conversationId];
+    return meta?.fork_status === "copying";
+  });
 
   // Sync Convex paginated results → Zustand store.
   // Guard: skip setMessages when the message list is unchanged to break the
@@ -116,6 +217,7 @@ export function useConversationMessages(
   useConvexSync(
     useNormalMode && paginationStatus !== "LoadingFirstPage" ? descResults : undefined,
     useCallback((results: any) => {
+      if (forkCopying && (useInboxStore.getState().messages[conversationId]?.length ?? 0) > 0) return;
       const messages: Message[] = [...results].reverse();
       const sig = { id: conversationId, len: messages.length, first: messages[0]?._id, last: messages[messages.length - 1]?._id };
       const prev = lastSyncedRef.current;
@@ -125,7 +227,7 @@ export function useConversationMessages(
         hasMoreAbove: paginationStatusRef.current === "CanLoadMore" || paginationStatusRef.current === "LoadingMore",
         initialized: true,
       });
-    }, [conversationId])
+    }, [conversationId, forkCopying])
   );
 
   // =============================================
@@ -137,6 +239,12 @@ export function useConversationMessages(
   );
 
   useConvexSync(remoteMeta, useCallback((meta: any) => {
+    // getConversationWithMeta returns null for missing or access-denied — feeding
+    // that into syncRecord trips Object.keys(null) when an existing cache entry
+    // is present (inboxStore.ts merge branch). Skip the sync; the cached entry
+    // stays put through transient auth blips, and a truly-deleted conversation
+    // just stops receiving updates.
+    if (!meta) return;
     useInboxStore.getState().syncRecord("conversations", conversationId, meta);
   }, [conversationId]));
 
@@ -177,6 +285,9 @@ export function useConversationMessages(
       const state = useInboxStore.getState();
       const meta = state.conversations[conversationId] ?? state.sessions[conversationId];
       const local = state.messages[conversationId] ?? [];
+      // While a fork copy is in flight the local seeded window is the complete
+      // view and the server count is a moving partial — nothing to recover.
+      if ((meta as any)?.fork_status === "copying") return;
       const serverCount = (meta as any)?.message_count ?? 0;
       if (serverCount === 0 || local.length >= serverCount) return;
       // Don't pile on while the initial paginated query is still inflight on
@@ -235,8 +346,11 @@ export function useConversationMessages(
   const s = useTrackedStore([
     s => s.messages[conversationId],
     s => s.pendingMessages[conversationId],
-    s => s.conversations[conversationId],
-    s => s.sessions[conversationId],
+    // Wake on render-relevant meta changes only — NOT the ~1s liveness bumps that
+    // would otherwise re-render the whole ConversationView tree 4–5×/sec. The full
+    // rows are still read live from `s` below; these deps just gate re-renders.
+    s => metaWakeSig(s.conversations[conversationId]),
+    s => metaWakeSig(s.sessions[conversationId]),
     s => s.pagination[conversationId],
   ]);
   const storeMessages = s.messages[conversationId] ?? EMPTY_MESSAGES;
@@ -247,10 +361,21 @@ export function useConversationMessages(
   // shadow real session fields like message_count before getConversationWithMeta resolves.
   // Must be memoized: the spread creates a new object every render, which breaks
   // downstream useMemo referential stability and triggers infinite tooltip ref cycles.
-  const storeMeta = useMemo(
-    () => _convMeta && _sessMeta ? { ..._sessMeta, ..._convMeta } : _convMeta ?? _sessMeta,
-    [_convMeta, _sessMeta],
-  );
+  // While a fork copy is in flight, the server reports message_count = fork_copied
+  // (a partial that grows 0→N as batches land); hold the rendered count at the
+  // locally seeded value so loadedStartIndex/"older messages" UI doesn't bounce.
+  const frozenForkCountRef = useRef<{ id: string; count: number } | null>(null);
+  const storeMeta = useMemo(() => {
+    const merged: any = _convMeta && _sessMeta ? { ..._sessMeta, ..._convMeta } : _convMeta ?? _sessMeta;
+    if (merged?.fork_status === "copying") {
+      if (frozenForkCountRef.current?.id !== conversationId) {
+        frozenForkCountRef.current = { id: conversationId, count: merged.message_count ?? 0 };
+      }
+      return { ...merged, message_count: Math.max(frozenForkCountRef.current.count, merged.message_count ?? 0) };
+    }
+    if (frozenForkCountRef.current?.id === conversationId) frozenForkCountRef.current = null;
+    return merged;
+  }, [_convMeta, _sessMeta, conversationId]);
   const storePagination = s.pagination[conversationId];
 
   // Merge server messages with unconfirmed pending messages (local-first)
@@ -275,9 +400,12 @@ export function useConversationMessages(
   const [targetHasMoreAbove, setTargetHasMoreAbove] = useState(false);
   const [targetHasMoreBelow, setTargetHasMoreBelow] = useState(false);
   const targetInitializedRef = useRef(false);
+  // Latches the target id once it lands in the window — see isJumpingToTarget below.
+  const targetArrivedRef = useRef<string | null>(null);
 
   if (trackedConvId !== conversationId) {
     targetInitializedRef.current = false;
+    targetArrivedRef.current = null;
     setTargetAroundData(null);
   }
 
@@ -368,7 +496,11 @@ export function useConversationMessages(
   // Unified message list: store for normal mode, local state for target mode
   // =============================================
   const rawMessages: Message[] = targetMode
-    ? (targetAroundData?.messages ?? mergedMessages)
+    // Prefer the local target copy; before the init effect copies it over, read
+    // the live around-window query directly so a warm (prefetched) result paints
+    // the right window on the FIRST frame instead of the stale tail. Falls back
+    // to the cached store list only while the around-window is still loading.
+    ? (targetAroundData?.messages ?? aroundData?.messages ?? mergedMessages)
     : mergedMessages;
 
   // =============================================
@@ -411,7 +543,13 @@ export function useConversationMessages(
     ? (targetIsLoadingOlder || (!!jumpMode && !targetInitializedRef.current))
     : paginationStatus === "LoadingMore";
 
-  const isLoadingNewer = targetMode ? targetIsLoadingNewer : false;
+  // In normal mode the "destination" of a jump-to-end is the live tail. While
+  // its first page is still being fetched (LoadingFirstPage) the store holds
+  // stale/empty content, so the jump-completion effect must treat this as "not
+  // ready yet" and hold the scroll — otherwise it scrolls against stale content
+  // and then jumps again when the real page lands. The button itself is hidden
+  // at the bottom, so this never surfaces a spurious spinner on initial load.
+  const isLoadingNewer = targetMode ? targetIsLoadingNewer : (paginationStatus === "LoadingFirstPage");
 
   const loadOlder = useCallback(() => {
     if (targetMode) {
@@ -454,6 +592,7 @@ export function useConversationMessages(
   }, []);
 
   const jumpToEnd = useCallback(() => {
+    dismissedTargetKeyRef.current = targetKeyRef.current;
     setTargetMode(false);
     targetInitializedRef.current = false;
     setTargetAroundData(null);
@@ -502,7 +641,7 @@ export function useConversationMessages(
   // Build conversation object FROM STORE (never null if store has pending)
   // =============================================
   const hasPending = storePending.length > 0;
-  const conversation: Record<string, any> | null = useMemo(() => {
+  const rawConversation: Record<string, any> | null = useMemo(() => {
     if (!storeMeta && !hasPending) return null;
     if (!hasPending && targetMode && !targetAroundData && rawMessages.length === 0) return null;
     // Return the conversation immediately with whatever messages are available.
@@ -516,6 +655,19 @@ export function useConversationMessages(
       child_conversation_map: childConversationMap,
     };
   }, [storeMeta, rawMessages, loadedStartIndex, compactionCount, childConversationMap, targetMode, targetAroundData, hasPending, conversationId]);
+
+  // Identity-stabilize against liveness-only churn: hand back the prior object when a
+  // heartbeat changed nothing the view renders. This is what keeps a working session's
+  // ~1s heartbeat from re-rendering the whole ConversationView. (See conversationRenderEqual.)
+  const stableConversationRef = useRef<Record<string, any> | null>(null);
+  const conversation = useMemo(() => {
+    const prev = stableConversationRef.current;
+    if (prev && rawConversation && conversationRenderEqual(prev, rawConversation)) {
+      return prev;
+    }
+    stableConversationRef.current = rawConversation;
+    return rawConversation;
+  }, [rawConversation]);
 
   // =============================================
   // Target search (auto-load older to find target)
@@ -575,6 +727,22 @@ export function useConversationMessages(
     ? rawMessages.some((m) => m._id === effectiveTargetMessageId)
     : true;
 
+  // Jump-in-flight: from the moment a target is requested until that message is
+  // actually in the rendered window. While the timestamp + around-window queries
+  // round-trip, rawMessages still shows the OLD window (deliberate, avoids a blank
+  // flash), so without this signal the view gives zero feedback that a jump is
+  // happening. Latched per target id: targetMessageId stays set for the whole
+  // visit, so a later window swap (jump to end/start) must not re-trigger it.
+  if (effectiveTargetMessageId && targetMessageFound) {
+    targetArrivedRef.current = effectiveTargetMessageId;
+  }
+  const isJumpingToTarget =
+    (!!effectiveTargetMessageId &&
+      canQuery &&
+      !targetNotFound &&
+      targetArrivedRef.current !== effectiveTargetMessageId) ||
+    isSearchingForTarget;
+
   return {
     conversation,
     hasMoreAbove,
@@ -589,5 +757,6 @@ export function useConversationMessages(
     isSearchingForTarget,
     targetMessageFound,
     effectiveTargetMessageId,
+    isJumpingToTarget,
   };
 }

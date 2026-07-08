@@ -1,9 +1,10 @@
-import { useMemo } from 'react';
-import { View as RNView, Text as RNText, StyleSheet } from 'react-native';
-import { useQuery } from 'convex/react';
+import { useCallback, useMemo } from 'react';
+import { ActionSheetIOS, Alert, Platform, Pressable, View as RNView, Text as RNText, StyleSheet } from 'react-native';
+import { useMutation, useQuery } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
+import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { Theme, Spacing } from '@/constants/Theme';
+import { Theme, Spacing, chipShell, chipText, chipTint, CHROME_FONT_CAP } from '@/constants/Theme';
 
 /**
  * Device awareness for the phone. A session runs on exactly one device; these
@@ -58,21 +59,112 @@ export function useDevices() {
   }, [devices]);
 }
 
-/** Compact pill for the conversation header: which device runs this session. */
-export function DeviceChip({ ownerDeviceId }: { ownerDeviceId?: string | null }) {
+/**
+ * Device picker for a session (mobile twin of the web's RunOnDeviceItems).
+ * Returns a callback that opens an action sheet listing every ONLINE device
+ * other than the current owner: locals offer "Run on <name>" (ownership
+ * reassign — the daemon there picks the session up), the remote Mac offers
+ * "Move to Remote Mac" (full worktree transfer performed by the source Mac).
+ */
+export function useRunOnDevice(
+  conversationId: string | null | undefined,
+  ownerDeviceId?: string | null,
+  opts?: { notify?: (msg: string) => void },
+): () => void {
+  const { devices, byId } = useDevices();
+  const reassign = useMutation(api.devices.reassignToDevice);
+  const moveToRemote = useMutation(api.devices.moveToRemote);
+  const notify = opts?.notify;
+
+  return useCallback(() => {
+    if (!conversationId) return;
+    const owner = ownerDeviceId ? byId.get(ownerDeviceId) : undefined;
+    const targets = devices
+      .filter((d) => d.online && d.device_id !== ownerDeviceId)
+      .sort((a, b) => Number(a.is_remote) - Number(b.is_remote) || b.last_seen - a.last_seen);
+
+    const currently = owner
+      ? `Currently on ${deviceDisplayName(owner)}${owner.online ? '' : ' (offline)'}.`
+      : 'Not assigned to a device yet.';
+
+    if (targets.length === 0) {
+      Alert.alert('Run on Device', `${currently} No other device is online to move it to.`);
+      return;
+    }
+
+    const labels = targets.map((d) =>
+      d.is_remote ? `Move to ${deviceDisplayName(d)}` : `Run on ${deviceDisplayName(d)}`,
+    );
+
+    const act = (d: Device) => {
+      const name = deviceDisplayName(d);
+      const fail = (e: unknown) =>
+        Alert.alert('Move failed', e instanceof Error ? e.message : String(e));
+      if (d.is_remote) {
+        moveToRemote({
+          conversation_id: conversationId as Id<'conversations'>,
+          to_device_id: d.device_id,
+        })
+          .then(() => notify?.(`Moving to ${name} — transferring the worktree…`))
+          .catch(fail);
+      } else {
+        // Ownership flips immediately; the header chip updates live.
+        reassign({
+          conversation_id: conversationId as Id<'conversations'>,
+          device_id: d.device_id,
+        })
+          .then(() => notify?.(`Now running on ${name}`))
+          .catch(fail);
+      }
+    };
+
+    if (Platform.OS === 'ios') {
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          title: 'Run on Device',
+          message: currently,
+          options: [...labels, 'Cancel'],
+          cancelButtonIndex: labels.length,
+        },
+        (idx) => {
+          if (idx < targets.length) act(targets[idx]);
+        },
+      );
+      return;
+    }
+    Alert.alert('Run on Device', currently, [
+      ...targets.map((d, i) => ({ text: labels[i], onPress: () => act(d) })),
+      { text: 'Cancel', style: 'cancel' as const },
+    ]);
+  }, [conversationId, ownerDeviceId, devices, byId, reassign, moveToRemote, notify]);
+}
+
+/**
+ * Compact pill for the conversation header: which device runs this session.
+ * With `onPress` it doubles as the move affordance (opens the device picker)
+ * and stays visible as "Unassigned" when no device owns the session yet.
+ */
+export function DeviceChip({ ownerDeviceId, onPress }: { ownerDeviceId?: string | null; onPress?: () => void }) {
   const { byId, loaded } = useDevices();
   if (!loaded) return null;
   const d = ownerDeviceId ? byId.get(ownerDeviceId) : undefined;
-  if (!d) return null;
-  const color = deviceColor(d);
-  return (
-    <RNView style={[styles.chip, { borderColor: color + '55', backgroundColor: color + '14' }]}>
-      <FontAwesome name={deviceIcon(d)} size={9} color={color} />
-      <RNText style={[styles.chipText, { color }]} numberOfLines={1}>
-        {deviceDisplayName(d)}
+  if (!d && !onPress) return null;
+  const color = d ? deviceColor(d) : Theme.textMuted0;
+  const chip = (
+    <RNView style={[styles.chip, chipTint(color)]}>
+      <FontAwesome name={d ? deviceIcon(d) : 'laptop'} size={10} color={color} />
+      <RNText style={[styles.chipText, { color }]} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>
+        {d ? deviceDisplayName(d) : 'Unassigned'}
       </RNText>
-      <RNView style={[styles.dot, { backgroundColor: d.online ? Theme.green : Theme.textMuted0 }]} />
+      <RNView style={[styles.dot, { backgroundColor: d?.online ? Theme.green : Theme.textMuted0 }]} />
+      {onPress && <FontAwesome name="angle-down" size={10} color={color} />}
     </RNView>
+  );
+  if (!onPress) return chip;
+  return (
+    <Pressable onPress={onPress} hitSlop={8}>
+      {chip}
+    </Pressable>
   );
 }
 
@@ -138,17 +230,8 @@ export function DevicesSection() {
 }
 
 const styles = StyleSheet.create({
-  chip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 6,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    maxWidth: 150,
-  },
-  chipText: { fontSize: 11, fontWeight: '600' },
+  chip: chipShell,
+  chipText: chipText,
   dot: { width: 6, height: 6, borderRadius: 3 },
   section: { marginBottom: Spacing.xl },
   sectionTitle: {

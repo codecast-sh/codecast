@@ -321,6 +321,57 @@ describe("advanceForkCopy", () => {
     expect(uuids.size).toBe(1500);
   });
 
+  test("live messages landing mid-copy are not erased from message_count", async () => {
+    // The fork-at-tip fast path attaches the daemon BEFORE the server copy
+    // finishes, so live messages can insert (and increment message_count)
+    // between batches. Copy batches must increment, never set — an absolute
+    // write would erase the live increments.
+    const source = { _id: "src10", messages: makeMessages(1500) };
+    const h = makeHarness(source, {
+      _id: "fork10",
+      user_id: "u1",
+      forked_from: "src10",
+      fork_cutoff_timestamp: 9_999_999,
+    });
+
+    await advanceForkCopy(h.ctx, "fork10");
+    let live = 0;
+    while (h.pendingContinuations.length > 0) {
+      // Simulate a live insert's own count increment between batches.
+      live++;
+      const row = h.conversations.get("fork10") as { message_count?: number };
+      row.message_count = (row.message_count ?? 0) + 1;
+      const id = h.pendingContinuations.shift()!;
+      await advanceForkCopy(h.ctx, id);
+    }
+
+    expect(live).toBeGreaterThan(0);
+    expect(h.conversations.get("fork10")!.fork_copied).toBe(1500);
+    expect((h.conversations.get("fork10") as { message_count?: number }).message_count).toBe(1500 + live);
+  });
+
+  test("emitForkDaemonCommand lifts _target_device_id onto the command row", async () => {
+    const source = { _id: "src11", messages: makeMessages(10) };
+    const h = makeHarness(source, {
+      _id: "fork11",
+      user_id: "u1",
+      forked_from: "src11",
+      fork_cutoff_timestamp: 9_999_999,
+      fork_daemon_args: JSON.stringify({
+        fork: true,
+        session_id: "sess11",
+        _target_device_id: "device-abc",
+      }),
+    });
+
+    await advanceForkCopy(h.ctx, "fork11");
+    expect(h.daemonCommands.length).toBe(1);
+    expect(h.daemonCommands[0].target_device_id).toBe("device-abc");
+    const args = JSON.parse(h.daemonCommands[0].args as string);
+    expect(args._target_device_id).toBeUndefined();
+    expect(args.session_id).toBe("sess11");
+  });
+
   test("messages added to source after cutoff are not picked up by later batches", async () => {
     // Simulates the "fork is a snapshot" guarantee: even if the chain runs
     // long enough that the source grows, batches with cutoff_lte=now don't

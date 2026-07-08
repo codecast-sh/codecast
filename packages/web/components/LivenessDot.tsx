@@ -1,5 +1,6 @@
-import { cn } from "@/lib/utils";
+import { cn, relTimeShort } from "@/lib/utils";
 import { useInboxStore } from "../store/inboxStore";
+import { isStatusTrustStale } from "@codecast/shared/contracts";
 
 export type LivenessState =
   | "active"
@@ -55,12 +56,17 @@ export function sessionLivenessState(session: {
   is_pinned?: boolean;
   is_unresponsive?: boolean;
   session_error?: string;
+  updated_at?: number;
 }): LivenessState {
   if (session.session_error) return "error";
   if (session.is_unresponsive) return "unresponsive";
   if (session.is_pinned && session.is_idle) return "pinned";
-  if (!session.is_idle && session.message_count > 0) return "active";
-  if (session.is_idle && session.message_count > 0) return "idle";
+  // "active" only if the working status is fresh — a frozen is_idle:false on an
+  // aged-out row no longer counts as live (same trust check the inbox uses), so
+  // it reads idle instead of pulsing green forever.
+  const live = !session.is_idle && session.message_count > 0 && !isStatusTrustStale(session, Date.now());
+  if (live) return "active";
+  if (session.message_count > 0) return "idle";
   return "new";
 }
 
@@ -95,28 +101,45 @@ export function planLivenessState(
 interface ActiveSessionBadgeProps {
   // _id is the Convex conversation _id and is what the side panel keys off of.
   // session_id (the chat session string) is kept for back-compat with older callers.
-  session: { _id?: string; session_id: string; title?: string; agent_status?: string; agent_type?: string };
+  // started_by = who owns/started the session (shown for non-live "origin"
+  // sessions, which may belong to a teammate). last_message_at = recency of the
+  // last message, rendered as a compact relative age.
+  session: { _id?: string; session_id: string; title?: string; agent_status?: string; agent_type?: string; started_by?: string; last_message_at?: number };
   compact?: boolean;
+  // Non-live linked session (e.g. the session a task originated from). Renders a
+  // dimmed, un-pulsed badge so it reads as history, not a running agent.
+  dormant?: boolean;
   className?: string;
 }
 
-export function ActiveSessionBadge({ session, compact, className }: ActiveSessionBadgeProps) {
-  const { _id, session_id, agent_status, agent_type, title } = session;
-  const isBlocked = agent_status === "permission_blocked";
-  const isIdle = agent_status === "idle" || agent_status === "stopped";
-  const state: LivenessState = isBlocked ? "blocked" : isIdle ? "idle" : "active";
-  const badgeClass = isBlocked
-    ? "bg-orange-500/15 text-orange-400 hover:bg-orange-500/25"
-    : isIdle
-      ? "bg-sol-bg-alt text-sol-text-dim hover:bg-sol-bg-highlight"
+export function ActiveSessionBadge({ session, compact, dormant, className }: ActiveSessionBadgeProps) {
+  const { _id, session_id, agent_status, agent_type, title, started_by, last_message_at } = session;
+  const isBlocked = !dormant && agent_status === "permission_blocked";
+  const isIdle = !dormant && (agent_status === "idle" || agent_status === "stopped");
+  const state: LivenessState = dormant ? "dormant" : isBlocked ? "blocked" : isIdle ? "idle" : "active";
+  const badgeClass = dormant || isIdle
+    ? "bg-sol-bg-alt text-sol-text-dim hover:bg-sol-bg-highlight"
+    : isBlocked
+      ? "bg-orange-500/15 text-orange-400 hover:bg-orange-500/25"
       : "bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25";
+  // First-name token keeps the badge tight ("Ashot Petrosian" -> "Ashot"); the
+  // full name lives in the tooltip.
+  const shortBy = started_by ? started_by.split(/\s+/)[0] : undefined;
+  // Status word is only a fallback for when we don't know who started the
+  // session — live/idle/blocked is conveyed by the dot's color regardless.
   const statusLabel = isBlocked ? "blocked" : isIdle ? "idle"
-    : agent_type === "codex" ? "codex" : agent_type === "cursor" ? "cursor" : agent_type === "gemini" ? "gemini" : "live";
+    : agent_type === "codex" ? "codex" : agent_type === "cursor" ? "cursor" : agent_type === "gemini" ? "gemini"
+    : dormant ? "session" : "live";
+  const rel = last_message_at ? relTimeShort(last_message_at) : undefined;
+  // Always lead with "who started it" ("ashot · 3m"); fall back to the status
+  // word when the owner is unknown. Live vs dormant is shown by the dot.
+  const lead = shortBy || statusLabel;
+  const label = rel ? `${lead} · ${rel}` : lead;
 
   const content = (
     <>
       <LivenessDot state={state} size="xs" />
-      {statusLabel}
+      <span className="truncate">{label}</span>
     </>
   );
 
@@ -128,16 +151,22 @@ export function ActiveSessionBadge({ session, compact, className }: ActiveSessio
     store.openSidePanel(targetId);
   };
 
+  const tooltip = [
+    title || (dormant ? "Originating session" : "Active session"),
+    started_by ? `started by ${started_by}` : null,
+    rel ? `last message ${rel} ago` : null,
+  ].filter(Boolean).join(" · ");
+
   return (
     <button
       onClick={handleClick}
       className={cn(
-        "inline-flex items-center gap-1 cursor-pointer transition-colors flex-shrink-0",
+        "inline-flex items-center gap-1 cursor-pointer transition-colors flex-shrink-0 max-w-[160px]",
         compact ? "px-1.5 py-0.5 rounded-full text-[9px]" : "px-1.5 py-0.5 rounded-full text-[10px]",
         badgeClass,
         className,
       )}
-      title={title || "Active session"}
+      title={tooltip}
     >
       {content}
     </button>

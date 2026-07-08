@@ -5,11 +5,14 @@ import { execSync } from "child_process";
 import pkg from "../package.json";
 
 const VERSION = pkg.version;
-const MEMORY_VERSION = "4";
+const MEMORY_VERSION = "11"; // bumped: cast label set/clear/ls/rename/rm (manage session labels)
 const TASK_VERSION = "1";
-const WORK_VERSION = "5";
+const WORK_VERSION = "6"; // bumped: messaging docs split out into MESSAGING_SNIPPET
 const PLAN_VERSION = "2";
 const WORKFLOW_VERSION = "1";
+const MESSAGING_VERSION = "4"; // bumped: messaging snippet tightened (teammate / peer-or-boss)
+const VISUAL_VERSION = "3"; // cast-canvas: broader Plot marks + declarative transforms
+const FORKS_VERSION = "2"; // bumped: --label flag on cast fork / cast spawn + default label inheritance on fork
 const LATEST_URL = "https://dl.codecast.sh/latest.json";
 const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
 
@@ -108,6 +111,18 @@ export function getPlanVersion(): string {
 
 export function getWorkflowVersion(): string {
   return WORKFLOW_VERSION;
+}
+
+export function getMessagingVersion(): string {
+  return MESSAGING_VERSION;
+}
+
+export function getVisualVersion(): string {
+  return VISUAL_VERSION;
+}
+
+export function getForksVersion(): string {
+  return FORKS_VERSION;
 }
 
 export async function checkForUpdates(force = false): Promise<string | null> {

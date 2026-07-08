@@ -1,0 +1,84 @@
+{
+  "name": "codecast-blame",
+  "displayName": "Codecast — session blame",
+  "description": "git blame, but the author column is the codecast session (and the person) that wrote each line. Open the conversation behind any line.",
+  "version": "0.1.4",
+  "publisher": "codecast",
+  "license": "MIT",
+  "icon": "icon.png",
+  "engines": { "vscode": "^1.75.0" },
+  "categories": ["SCM Providers", "Other"],
+  "keywords": ["blame", "git", "codecast", "session", "history"],
+  "repository": { "type": "git", "url": "https://github.com/ashot/codecast" },
+  "homepage": "https://codecast.sh",
+  "activationEvents": ["onStartupFinished"],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "codecast.openSession",
+        "title": "Codecast: Open Session for Current Line",
+        "category": "Codecast"
+      },
+      {
+        "command": "codecast.sessionLog",
+        "title": "Codecast: Session Log for File",
+        "category": "Codecast"
+      },
+      {
+        "command": "codecast.toggleInlineBlame",
+        "title": "Codecast: Toggle Inline Session Blame",
+        "category": "Codecast"
+      },
+      {
+        "command": "codecast.diagnostics",
+        "title": "Codecast: Run Diagnostics",
+        "category": "Codecast"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "codecast.openSession",
+        "key": "ctrl+alt+b",
+        "mac": "cmd+alt+b",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "codecast.sessionLog",
+        "key": "ctrl+alt+l",
+        "mac": "cmd+alt+l",
+        "when": "editorTextFocus"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        { "command": "codecast.openSession", "group": "navigation@99", "when": "editorTextFocus" }
+      ]
+    },
+    "configuration": {
+      "title": "Codecast",
+      "properties": {
+        "codecast.cliPath": {
+          "type": "string",
+          "default": "cast",
+          "description": "Path to the codecast CLI (`cast`). Use an absolute path if `cast` is not on the editor's PATH."
+        },
+        "codecast.inlineBlame": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the session that wrote the current line at the end of the line (like GitLens current-line blame)."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --minify",
+    "package": "npm run build && vsce package --no-dependencies -o codecast-blame.vsix"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "@types/vscode": "^1.75.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.2"
+  }
+}

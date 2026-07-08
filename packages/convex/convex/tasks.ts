@@ -1,5 +1,6 @@
 import { v } from "convex/values";
-import { internalMutation, mutation, query } from "./_generated/server";
+import { paginationOptsValidator } from "convex/server";
+import { internalMutation, mutation, query } from "./functions";
 import { verifyApiToken } from "./apiTokens";
 import { enqueueStartSession } from "./devices";
 import { Id } from "./_generated/dataModel";
@@ -7,8 +8,109 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { createDataContext, scopeByProject } from "./data";
 import { nextShortId } from "./counters";
 import { internal } from "./_generated/api";
+import { isViableInboxParent } from "./inboxFilters";
+import { pickInheritedGitMeta, type GitMetaSource } from "./projectPaths";
+import { enqueuePendingMessage } from "./pendingMessages";
+import { resolveTeamForPath } from "./privacy";
+// Owner-or-team access check for a task. Moved to lib/access.ts (Wave-1
+// auth/access seam). Imported for local use here and re-exported so existing
+// callers keep working unchanged.
+import { canAccessTask, canAccessConversation } from "./lib/access";
+export { canAccessTask };
 
 const VALID_TASK_STATUSES = ["backlog", "open", "in_progress", "in_review", "done", "dropped"] as const;
+
+// Resolve the orchestrator conversation a task's worker session should nest
+// under: the session that created the task's plan
+// (plans.created_from_conversation_id), which is the de-facto orchestrator and
+// — unlike plans.current_session_id — is stamped once and never churned by
+// per-worker auto-binding. Returns undefined when there's no plan, no recorded
+// creator, or the creator isn't a renderable inbox parent, in which case the
+// worker stays top-level and the client's plan-grouping fallback handles it.
+export async function resolveWorkerParentConversation(
+  ctx: any,
+  userId: Id<"users">,
+  planId: Id<"plans"> | undefined,
+): Promise<Id<"conversations"> | undefined> {
+  if (!planId) return undefined;
+  let plan;
+  try {
+    plan = await ctx.db.get(planId);
+  } catch {
+    return undefined;
+  }
+  const creatorId = plan?.created_from_conversation_id as Id<"conversations"> | undefined;
+  if (!creatorId) return undefined;
+  let parent;
+  try {
+    parent = await ctx.db.get(creatorId);
+  } catch {
+    return undefined;
+  }
+  return isViableInboxParent(parent, userId.toString()) ? creatorId : undefined;
+}
+
+/**
+ * Resolve the project/git context a task-bound session must launch in:
+ * `project_path` (the task's own, or its team's directory mapping), `git_root`,
+ * and the `git_remote_url` recovered from the task's source conversations (a task
+ * itself stores no remote). Shared by `dispatch.createSession` and
+ * `tasks.assignToAgent` so both task-launch paths stamp the conversation and
+ * route the daemon identically — without a project_path the conversation can't
+ * be started by any daemon (the "start agent run did nothing" bug). `seed` lets
+ * a caller-supplied path win over the task's.
+ */
+export async function resolveTaskGitContext(
+  ctx: any,
+  userId: Id<"users">,
+  task: any,
+  mappings: any[],
+  seed?: { project_path?: string; git_root?: string },
+): Promise<{ project_path?: string; git_root?: string; git_remote_url?: string }> {
+  let project_path = seed?.project_path;
+  let git_root = seed?.git_root;
+  let git_remote_url: string | undefined;
+
+  if (!project_path) {
+    if (task.project_path) {
+      project_path = task.project_path;
+    } else if (task.team_id) {
+      const teamMapping = mappings.find((m: any) => m.team_id?.toString() === task.team_id.toString());
+      if (teamMapping) project_path = teamMapping.path_prefix;
+    }
+    if (!git_root) git_root = project_path;
+  }
+
+  // A task stores project_path but never git_remote_url; recover it from the
+  // task's source conversations (which a daemon stamped git metadata onto) so a
+  // daemon on a different machine can remap a foreign path to the local checkout.
+  const sourceIds: Id<"conversations">[] = [];
+  if (task.created_from_conversation) sourceIds.push(task.created_from_conversation);
+  for (const cid of (task.conversation_ids ?? [])) {
+    if (!sourceIds.some((s) => s.toString() === cid.toString())) sourceIds.push(cid);
+  }
+  const sources: GitMetaSource[] = [];
+  for (const cid of sourceIds) {
+    const c = await ctx.db.get(cid).catch(() => null);
+    if (c && c.user_id.toString() === userId.toString()) {
+      sources.push({ git_remote_url: c.git_remote_url, git_root: c.git_root, updated_at: c.updated_at, started_at: c.started_at });
+    }
+  }
+  const inherited = pickInheritedGitMeta(sources);
+  if (inherited.git_remote_url) {
+    git_remote_url = inherited.git_remote_url;
+    // Prefer the real repo root over a foreign full path so the daemon can keep
+    // the in-repo subpath when remapping to a local checkout.
+    if (inherited.git_root && project_path
+        && project_path.startsWith(inherited.git_root)
+        && inherited.git_root !== git_root) {
+      git_root = inherited.git_root;
+    }
+  }
+
+  return { project_path, git_root, git_remote_url };
+}
+
 type TaskStatus = typeof VALID_TASK_STATUSES[number];
 
 function assertValidTaskStatus(status: string | undefined): asserts status is TaskStatus | undefined {
@@ -115,16 +217,6 @@ export async function recalcPlanProgress(ctx: any, planId: Id<"plans">, updatedT
 }
 
 
-async function canAccessTask(ctx: any, userId: Id<"users">, task: any): Promise<boolean> {
-  if (task.user_id === userId) return true;
-  if (!task.team_id) return false;
-  const membership = await ctx.db
-    .query("team_memberships")
-    .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", task.team_id))
-    .first();
-  return !!membership;
-}
-
 export const create = mutation({
   args: {
     api_token: v.string(),
@@ -201,11 +293,8 @@ export const create = mutation({
 
     let project_id: Id<"projects"> | undefined;
     if (args.project_id) {
-      const project = await ctx.db
-        .query("projects")
-        .filter((q) => q.eq(q.field("_id"), args.project_id as any))
-        .first();
-      if (project) project_id = project._id;
+      const pid = ctx.db.normalizeId("projects", args.project_id);
+      if (pid && (await ctx.db.get(pid))) project_id = pid;
     }
 
     let plan_id: Id<"plans"> | undefined;
@@ -351,7 +440,7 @@ export const snippet = query({
       if (u) userMap.set(uid.toString(), u.name || u.email || "unknown");
     }
 
-    let sessionPlans: { title: string; doc_type: string; content: string }[] = [];
+    let sessionPlans: { title: string; doc_type: string }[] = [];
     let activePlanSnippet = "";
     if (args.conversation_id) {
       const conv = await ctx.db
@@ -359,12 +448,22 @@ export const snippet = query({
         .withIndex("by_session_id", (q) => q.eq("session_id", args.conversation_id!))
         .first();
       if (conv) {
-        const allDocs = await db.query("docs").collect();
-
-        sessionPlans = allDocs
-          .filter((d: any) => !d.archived_at && (d.conversation_id === conv._id || d.project_path === conv.project_path))
-          .slice(0, 5)
-          .map((d: any) => ({ title: d.title, doc_type: d.doc_type, content: (d.content || "").slice(0, 500) }));
+        // Fetch only this conversation's docs through the by_conversation_id
+        // index. Collecting the whole team docs table (every row's full markdown
+        // content — which this snippet never even returns, only titles below)
+        // blew the 64 MB UDF heap for doc-heavy teams. db.get re-applies the
+        // workspace access the scoped db.query() used to provide.
+        const convDocs = await ctx.db
+          .query("docs")
+          .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
+          .collect();
+        for (const d of convDocs) {
+          if (sessionPlans.length >= 5) break;
+          if (d.archived_at) continue;
+          if (await db.get(d._id)) {
+            sessionPlans.push({ title: d.title, doc_type: d.doc_type });
+          }
+        }
 
         if (conv.active_plan_id) {
           const plan = await ctx.db.get(conv.active_plan_id);
@@ -465,6 +564,11 @@ export const list = query({
     }
 
     let tasks: any[];
+    // The assignee and project_id indexes are global — they return rows the
+    // caller may not be able to see, so those two branches get an explicit
+    // owner-or-team-member filter below. The other branches are already
+    // user/workspace-scoped.
+    let needsAccessFilter = false;
     if (resolvedAssignee) {
       // When filtering by assignee, query the assignee index directly so
       // tasks assigned to the user but missing team_id aren't dropped by
@@ -475,11 +579,13 @@ export const list = query({
           q.eq("assignee", resolvedAssignee)
         )
         .collect();
+      needsAccessFilter = true;
     } else if (args.project_id) {
       tasks = await ctx.db
         .query("tasks")
         .withIndex("by_project_id", (q) => q.eq("project_id", args.project_id as any))
         .collect();
+      needsAccessFilter = true;
     } else if (args.status && !args.team) {
       tasks = await ctx.db
         .query("tasks")
@@ -489,6 +595,18 @@ export const list = query({
         .collect();
     } else {
       tasks = await db.query("tasks").collect();
+    }
+
+    if (needsAccessFilter) {
+      const memberships = await ctx.db
+        .query("team_memberships")
+        .withIndex("by_user_id", (q: any) => q.eq("user_id", auth.userId))
+        .collect();
+      const memberTeamIds = new Set(memberships.map((m: any) => String(m.team_id)));
+      tasks = tasks.filter((t: any) =>
+        String(t.user_id) === String(auth.userId) ||
+        (t.team_id && memberTeamIds.has(String(t.team_id)))
+      );
     }
 
     if (!args.status && !args.include_done) {
@@ -563,7 +681,10 @@ export const get = query({
         .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id!))
         .first();
     } else if (args.id) {
-      task = await ctx.db.get(args.id as Id<"tasks">);
+      // CLI-supplied id may be malformed; normalizeId returns null rather than
+      // letting ctx.db.get throw "Invalid ID length". (Mirrors tasks.webGet.)
+      const taskId = ctx.db.normalizeId("tasks", args.id);
+      task = taskId ? await ctx.db.get(taskId) : null;
     }
 
     if (!task) return null;
@@ -816,12 +937,13 @@ export const addDep = mutation({
       if (!current.includes(args.blocks)) {
         await ctx.db.patch(task._id, { blocks: [...current, args.blocks], updated_at: Date.now() });
       }
-      // Also add reverse dep
+      // Also add reverse dep — only on a task the caller can access, so a
+      // dependency edge can't be forced onto someone else's task.
       const other = await ctx.db
         .query("tasks")
         .withIndex("by_short_id", (q) => q.eq("short_id", args.blocks!))
         .first();
-      if (other) {
+      if (other && (await canAccessTask(ctx, auth.userId, other))) {
         const otherBlocked = other.blocked_by || [];
         if (!otherBlocked.includes(args.short_id)) {
           await ctx.db.patch(other._id, { blocked_by: [...otherBlocked, args.short_id], updated_at: Date.now() });
@@ -834,12 +956,12 @@ export const addDep = mutation({
       if (!current.includes(args.blocked_by)) {
         await ctx.db.patch(task._id, { blocked_by: [...current, args.blocked_by], updated_at: Date.now() });
       }
-      // Also add reverse dep
+      // Also add reverse dep — only on a task the caller can access.
       const other = await ctx.db
         .query("tasks")
         .withIndex("by_short_id", (q) => q.eq("short_id", args.blocked_by!))
         .first();
-      if (other) {
+      if (other && (await canAccessTask(ctx, auth.userId, other))) {
         const otherBlocks = other.blocks || [];
         if (!otherBlocks.includes(args.short_id)) {
           await ctx.db.patch(other._id, { blocks: [...otherBlocks, args.short_id], updated_at: Date.now() });
@@ -899,16 +1021,19 @@ export const context = query({
       project = await ctx.db.get(task.project_id);
     }
 
-    // Get related docs/plans from linked conversations
+    // Get related docs/plans from linked conversations. Query by conversation_id
+    // so each scan loads only that conversation's docs — collecting the user's
+    // entire docs table (full markdown content and all) per linked conversation
+    // blew the 64 MB UDF heap for prolific doc authors.
     const relatedDocs: { title: string; doc_type: string; content: string }[] = [];
     if (task.conversation_ids) {
       for (const convId of task.conversation_ids.slice(-3)) {
         const docs = await ctx.db
           .query("docs")
-          .withIndex("by_user_id", (q) => q.eq("user_id", task.user_id))
+          .withIndex("by_conversation_id", (q) => q.eq("conversation_id", convId))
           .collect();
         for (const d of docs) {
-          if (d.conversation_id === convId && !d.archived_at) {
+          if (!d.archived_at) {
             relatedDocs.push({ title: d.title, doc_type: d.doc_type, content: d.content || "" });
           }
         }
@@ -926,6 +1051,61 @@ export const context = query({
 });
 
 // --- Web-facing queries (use Convex auth, no api_token) ---
+
+// Enrich a page of task rows in place with creator/assignee/plan/source info.
+// Shared by webList (the live delta channel) and webListPaginated (the full
+// reconcile crawl) so both return identical task shapes. Mutates `result` in
+// place — the spread form `{...t, ...}` doubled peak heap and was a top
+// contributor to TooMuchMemoryCarryOver on these UDFs.
+async function enrichTasks(ctx: any, result: any[]): Promise<any[]> {
+  const allUserIds = new Set<string>();
+  for (const t of result) {
+    allUserIds.add(t.user_id.toString());
+    if (t.assignee) allUserIds.add(t.assignee.toString());
+  }
+  const userMap = new Map<string, { name: string; image?: string; github_username?: string }>();
+  await Promise.all([...allUserIds].map(async (uid) => {
+    try {
+      const u = await ctx.db.get(uid as Id<"users">);
+      if (u) userMap.set(uid, { name: u.name || u.email || "Unknown", image: u.image || u.github_avatar_url, github_username: u.github_username });
+    } catch {
+      const lower = uid.toLowerCase();
+      const u = await ctx.db.query("users").withIndex("by_github_username", (q: any) => q.eq("github_username", uid)).first()
+        || await ctx.db.query("users").withIndex("by_github_username", (q: any) => q.eq("github_username", lower)).first();
+      if (u) {
+        userMap.set(uid, { name: u.name || u.email || "Unknown", image: u.image || u.github_avatar_url, github_username: u.github_username });
+      }
+    }
+  }));
+
+  const planIds = new Set<string>();
+  for (const t of result) {
+    if (t.plan_id) planIds.add(t.plan_id.toString());
+  }
+  const planMap = new Map<string, { _id: any; short_id: string; title: string; status: string }>();
+  await Promise.all([...planIds].map(async (pid) => {
+    try {
+      const p = await ctx.db.get(pid as Id<"plans">);
+      if (p) planMap.set(pid, { _id: p._id, short_id: p.short_id, title: p.title, status: p.status });
+    } catch {}
+  }));
+
+  // NOTE: session enrichment is intentionally NOT inlined here — reading
+  // managed_sessions or conversations from a list query subscribes it to tables
+  // that churn on every heartbeat/message, re-running the query and re-shipping
+  // a multi-MB response every few seconds (isolate memory churn + "too many
+  // system operations" timeouts under load). The live overlay is
+  // `webActiveSessions`; the dormant origin badge is `webTaskOrigins`, fetched
+  // one-shot by the client (a dormant session's badge data no longer changes).
+
+  for (const t of result) {
+    t.creator = userMap.get(t.user_id.toString()) || null;
+    t.assignee_info = t.assignee ? userMap.get(t.assignee.toString()) || null : null;
+    t.plan = t.plan_id ? planMap.get(t.plan_id.toString()) || null : null;
+    t.session_count = (t.conversation_ids || []).length;
+  }
+  return result;
+}
 
 export const webList = query({
   args: {
@@ -1094,60 +1274,6 @@ export const webList = query({
     // Client-side filtering handles everything; we never want to silently drop items.
     const result = tasks;
 
-    // Enrich with creator and assignee info
-    const allUserIds = new Set<string>();
-    for (const t of result) {
-      allUserIds.add(t.user_id.toString());
-      if (t.assignee) allUserIds.add(t.assignee.toString());
-    }
-    const userMap = new Map<string, { name: string; image?: string; github_username?: string }>();
-    for (const uid of allUserIds) {
-      try {
-        const u = await ctx.db.get(uid as Id<"users">);
-        if (u) userMap.set(uid, { name: u.name || u.email || "Unknown", image: u.image || u.github_avatar_url, github_username: u.github_username });
-      } catch {
-        const lower = uid.toLowerCase();
-        const u = await ctx.db.query("users").withIndex("by_github_username", (q: any) => q.eq("github_username", uid)).first()
-          || await ctx.db.query("users").withIndex("by_github_username", (q: any) => q.eq("github_username", lower)).first();
-        if (u) {
-          userMap.set(uid, { name: u.name || u.email || "Unknown", image: u.image || u.github_avatar_url, github_username: u.github_username });
-        }
-      }
-    }
-
-    const planIds = new Set<string>();
-    for (const t of result) {
-      if (t.plan_id) planIds.add(t.plan_id.toString());
-    }
-    const planMap = new Map<string, { _id: any; short_id: string; title: string; status: string }>();
-    for (const pid of planIds) {
-      try {
-        const p = await ctx.db.get(pid as Id<"plans">);
-        if (p) planMap.set(pid, { _id: p._id, short_id: p.short_id, title: p.title, status: p.status });
-      } catch {}
-    }
-
-    // NOTE: activeSession enrichment was previously inlined here, but it caused
-    // webList to subscribe to managed_sessions and conversations — both of
-    // which churn on every daemon heartbeat (~30s per active session). The
-    // result: a 13MB response re-shipped every few seconds, regardless of
-    // whether any task actually changed. Live-session overlay now lives in
-    // `webActiveSessions` (small, cheap to invalidate). Web client merges.
-
-    const sourceConvIds = new Set<string>();
-    for (const t of result) {
-      if (t.created_from_conversation) {
-        sourceConvIds.add(t.created_from_conversation.toString());
-      }
-    }
-    const sourceConvMap = new Map<string, { agent_type?: string; session_id?: string; title?: string }>();
-    for (const cid of sourceConvIds) {
-      try {
-        const c = await ctx.db.get(cid as Id<"conversations">);
-        if (c) sourceConvMap.set(cid, { agent_type: c.agent_type, session_id: c.session_id, title: c.title || undefined });
-      } catch {}
-    }
-
     // Compute the delta cursor from the *unfiltered* row set so the next
     // subscription doesn't keep re-fetching rows the local filters dropped.
     // For full-snapshot mode (no `since`) cursor still reflects the newest
@@ -1157,27 +1283,142 @@ export const webList = query({
       if (typeof t.updated_at === "number" && t.updated_at > cursor) cursor = t.updated_at;
     }
 
-    // In-place enrichment instead of `{...t, ...}` — the spread doubled peak
-    // heap (both `result` and the enriched array alive simultaneously) and
-    // was a top contributor to TooMuchMemoryCarryOver on this UDF.
-    for (const t of result as any[]) {
-      t.creator = userMap.get(t.user_id.toString()) || null;
-      t.assignee_info = t.assignee ? userMap.get(t.assignee.toString()) || null : null;
-      t.plan = t.plan_id ? planMap.get(t.plan_id.toString()) || null : null;
-      t.source_agent_type = t.created_from_conversation
-        ? sourceConvMap.get(t.created_from_conversation.toString())?.agent_type || null
-        : null;
-      if (t.created_from_conversation) {
-        const sc = sourceConvMap.get(t.created_from_conversation.toString());
-        t.origin_session = sc?.session_id
-          ? { conversation_id: t.created_from_conversation.toString(), session_id: sc.session_id, title: sc.title }
-          : null;
-      } else {
-        t.origin_session = null;
-      }
-      t.session_count = (t.conversation_ids || []).length;
-    }
+    await enrichTasks(ctx, result);
     return { items: result, hasMore: false, cursor, isDelta };
+  },
+});
+
+// Change-feed batch fetch: current state for a set of task ids the user can
+// access (own or team). Same enriched row shape as webList (reuses enrichTasks),
+// so the client merges via syncTable("tasks"). No status filter — a dropped task
+// comes back with status:"dropped" and the client's read-time filter hides it.
+// Inaccessible / gone ids are omitted; the feed drives the prune. See changeFeed.ts.
+export const webGetByIds = query({
+  args: { ids: v.array(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { items: [] };
+    const result: any[] = [];
+    for (const raw of args.ids.slice(0, 300)) {
+      const id = ctx.db.normalizeId("tasks", raw);
+      if (!id) continue;
+      const task = await ctx.db.get(id);
+      if (!task || !(await canAccessTask(ctx, userId, task))) continue;
+      result.push(task);
+    }
+    await enrichTasks(ctx, result);
+    return { items: result };
+  },
+});
+
+// Full, uncapped task loader — paginated so the client can crawl EVERY task in
+// a workspace into its store without the 96 MiB isolate OOM that an unbounded
+// collect triggers (TooMuchMemoryCarryOver). webList caps the live snapshot at
+// the 300 most-recently-updated rows; on a busy team that window is entirely
+// consumed by recently-dropped tasks, hiding cold open tasks (e.g. ones assigned
+// to teammates) forever — there was no "load more". This query is the load-more:
+// the client (useSyncTasks) pages through it one-shot (NOT a live subscription),
+// pacing the crawl, and surfaces a visible "loading all tasks" state.
+//
+// Soft-deleted (status="dropped") rows are excluded — they are deletions the UI
+// never renders; loading thousands of them would only waste pages and store.
+// Scoping mirrors webList: team view → all team tasks; personal/unscoped → mine.
+export const webListPaginated = query({
+  args: {
+    workspace: v.optional(v.union(v.literal("personal"), v.literal("team"), v.literal("all"))),
+    team_id: v.optional(v.id("teams")),
+    project_path: v.optional(v.string()),
+    include_derived: v.optional(v.boolean()),
+    paginationOpts: paginationOptsValidator,
+    // Incremental top-up: when set, only page rows with updated_at > since. The
+    // client passes its persisted watermark so a periodic reconcile re-crawls a
+    // handful of changed rows instead of the whole table (the "syncing 4,529"
+    // every few minutes). Omitted on the FIRST crawl for a workspace (cold cache)
+    // so that initial pass is a full backfill. Mirrors webList's `since` delta.
+    since: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { page: [], isDone: true, continueCursor: "" };
+
+    // Defensive clamp. Task docs are small (~2 KB avg, ~8 KB max observed), so
+    // 1000/page is ~16 MB worst case — still well under the 64 MB query memory cap
+    // — but cap it so a future task with a huge body can't blow the isolate
+    // mid-crawl. Bigger pages = fewer round trips = a faster cold-cache backfill.
+    const paginationOpts = {
+      ...args.paginationOpts,
+      numItems: Math.min(args.paginationOpts.numItems, 1000),
+    };
+
+    const since = args.since;
+    const isDelta = since !== undefined;
+
+    // Primary stream: newest-updated first, scoped to the workspace. Team view
+    // reads by_team_updated so EVERY team task (any assignee, any age) is
+    // reachable across pages — the whole point of the fix. In delta mode the
+    // index range is bounded to updated_at > since (only changed rows), so a
+    // top-up crawl is cheap regardless of how big the table is.
+    const range = (q: any) => (isDelta ? q.gt("updated_at", since!) : q);
+    const base = (args.workspace === "team" && args.team_id)
+      ? ctx.db.query("tasks").withIndex("by_team_updated", (q: any) => range(q.eq("team_id", args.team_id))).order("desc")
+      : ctx.db.query("tasks").withIndex("by_user_updated", (q: any) => range(q.eq("user_id", userId))).order("desc");
+
+    const result = await base.paginate(paginationOpts);
+
+    // Full backfill skips the dropped graveyard (never load thousands of dead
+    // rows). A delta pass KEEPS dropped rows: a task dropped on another device
+    // must flow through as a status="dropped" overlay so this client's read-time
+    // filter hides it — otherwise it would linger in the cache forever.
+    let rows = isDelta ? result.page : result.page.filter((t: any) => t.status !== "dropped");
+    if (args.project_path) rows = scopeByProject(rows, args.project_path);
+    await enrichTasks(ctx, rows);
+
+    return { page: rows, isDone: result.isDone, continueCursor: result.continueCursor };
+  },
+});
+
+// Companion to webList: the dormant origin-session badge data ("who · when" on
+// a task row's session pill). The client calls this ONE-SHOT (convex.query, not
+// a subscription) for conversation ids referenced by its task rows: a dormant
+// session's badge fields don't change, and a live one is covered by the
+// webActiveSessions overlay — so subscribing would only re-run a query per
+// message written to any referenced conversation, which is exactly the churn
+// enrichTasks used to inflict on webList. Access mirrors canAccessConversation;
+// ids the caller can't see are omitted.
+//
+// Returns: { [conversationId]: { conversation_id, session_id, title?, agent_type?, started_by?, last_message_at?, message_count? } }
+export const webTaskOrigins = query({
+  args: { conversation_ids: v.array(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return {};
+    const out: Record<string, any> = {};
+    const nameCache = new Map<string, string | undefined>();
+    const ownerName = async (uid: any): Promise<string | undefined> => {
+      const key = uid.toString();
+      if (nameCache.has(key)) return nameCache.get(key);
+      let name: string | undefined;
+      try { const u = await ctx.db.get(uid as Id<"users">); name = u ? (u.name || u.email || undefined) : undefined; } catch {}
+      nameCache.set(key, name);
+      return name;
+    };
+    await Promise.all(args.conversation_ids.slice(0, 300).map(async (raw) => {
+      const id = ctx.db.normalizeId("conversations", raw);
+      if (!id) return;
+      const c = await ctx.db.get(id);
+      if (!c || !c.session_id) return;
+      if (!(await canAccessConversation(ctx, userId, c as any))) return;
+      out[raw] = {
+        conversation_id: raw,
+        session_id: c.session_id,
+        title: c.title || undefined,
+        agent_type: c.agent_type || undefined,
+        started_by: await ownerName(c.user_id),
+        last_message_at: c.updated_at,
+        message_count: c.message_count,
+      };
+    }));
+    return out;
   },
 });
 
@@ -1185,7 +1426,7 @@ export const webList = query({
 // payload, but invalidates on every daemon heartbeat — keep it separate from
 // webList so the 13MB task payload doesn't re-ship on every heartbeat.
 //
-// Returns: { [taskId]: { _id, session_id, title?, agent_status?, agent_type? } }
+// Returns: { [taskId]: { _id, session_id, title?, agent_status?, agent_type?, started_by?, last_message_at? } }
 export const webActiveSessions = query({
   args: {},
   handler: async (ctx) => {
@@ -1199,7 +1440,22 @@ export const webActiveSessions = query({
       .withIndex("by_user_id", (q) => q.eq("user_id", userId))
       .collect();
 
-    const map: Record<string, { _id: string; session_id: string; title?: string; agent_status?: string; agent_type?: string }> = {};
+    // started_by = the session owner's display name, last_message_at =
+    // conv.updated_at (bumped on every message). Together the badge reads
+    // "who · when" ("ashot · now"), consistent with the dormant origin badge.
+    // Owner names are cached since this overlay is scoped to the viewer's own
+    // daemons — typically one or two distinct users.
+    const nameCache = new Map<string, string | undefined>();
+    const ownerName = async (uid: any): Promise<string | undefined> => {
+      const key = uid.toString();
+      if (nameCache.has(key)) return nameCache.get(key);
+      let name: string | undefined;
+      try { const u = await ctx.db.get(uid as Id<"users">); name = u ? (u.name || u.email || undefined) : undefined; } catch {}
+      nameCache.set(key, name);
+      return name;
+    };
+
+    const map: Record<string, { _id: string; session_id: string; title?: string; agent_status?: string; agent_type?: string; started_by?: string; last_message_at?: number }> = {};
     for (const s of managedSessions) {
       if (now - s.last_heartbeat >= HEARTBEAT_ALIVE_MS) continue;
       if (!s.conversation_id) continue;
@@ -1211,6 +1467,8 @@ export const webActiveSessions = query({
         title: conv.title || undefined,
         agent_status: s.agent_status || undefined,
         agent_type: conv.agent_type || undefined,
+        started_by: await ownerName(conv.user_id),
+        last_message_at: conv.updated_at,
       };
     }
     return map;
@@ -1229,13 +1487,14 @@ export const webMentionList = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
 
-    // Convex caps query return arrays at 8192. Cap aggressively below that —
-    // the mention dropdown only renders ~6–12 results, so older tasks aren't
-    // useful to ship over the wire. Falls back to `mentionSearch` for the
-    // long tail. Per-team cap keeps any single high-volume team from
-    // crowding out smaller teams the user also belongs to.
-    const MAX_TOTAL = 4000;
-    const MAX_PER_TEAM = 1500;
+    // Cap to a small recent slice — the mention dropdown only renders ~6–12
+    // results (top-6-per-type in useMentionQuery), and the long tail is served
+    // by `mentionSearch`. `.take()` loads whole rows, so a small cap keeps the
+    // scan well under both the 8192-array return limit and the 64 MB isolate
+    // memory cap (see docs.webMentionList). Per-team cap keeps any single
+    // high-volume team from crowding out smaller teams the user belongs to.
+    const MAX_TOTAL = 50;
+    const MAX_PER_TEAM = 25;
     const seen = new Set<string>();
     const tasks: any[] = [];
     const pushUnique = (t: any) => {
@@ -1331,7 +1590,13 @@ export const webGet = query({
         .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id!))
         .first();
     } else if (args.id) {
-      task = await ctx.db.get(args.id as Id<"tasks">);
+      // ids arrive from clickable pills/links embedded in untrusted message and
+      // doc content; a malformed or cross-table id would make ctx.db.get throw
+      // ("Invalid ID length") and crash the page. normalizeId returns null for
+      // anything that isn't a tasks id, so we degrade to "not found". (Mirrors
+      // docs.webGet.)
+      const taskId = ctx.db.normalizeId("tasks", args.id);
+      task = taskId ? await ctx.db.get(taskId) : null;
     }
 
     if (!task || !(await canAccessTask(ctx, userId, task))) return null;
@@ -1492,8 +1757,11 @@ export const assignToAgent = mutation({
   args: {
     short_id: v.string(),
     agent_type: v.union(v.literal("claude_code"), v.literal("codex"), v.literal("cursor"), v.literal("gemini")),
+    // Optional lead-in the user types before launch (defaults to "lets do this
+    // task" in the palette). Prepended to the structured task prompt below.
+    initial_message: v.optional(v.string()),
   },
-  handler: async (ctx, { short_id, agent_type }) => {
+  handler: async (ctx, { short_id, agent_type, initial_message }) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
@@ -1502,27 +1770,82 @@ export const assignToAgent = mutation({
       .withIndex("by_short_id", (q) => q.eq("short_id", short_id))
       .first();
     if (!task) throw new Error("Task not found");
-    if (task.user_id.toString() !== userId.toString()) throw new Error("Unauthorized");
+    // Allow the task's creator OR any member of its team — matches the access
+    // check in dispatch.createSession. Without the team clause, "start agent run"
+    // on a shared team task is silently rejected as Unauthorized.
+    const hasAccess = task.user_id.toString() === userId.toString()
+      || (task.team_id && !!(await ctx.db
+          .query("team_memberships")
+          .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", task.team_id))
+          .first()));
+    if (!hasAccess) throw new Error("Unauthorized");
 
     const now = Date.now();
     const sessionId = crypto.randomUUID();
+
+    const workerPlanId = (task as any).plan_id as Id<"plans"> | undefined;
+    const parentConversationId = await resolveWorkerParentConversation(ctx, userId, workerPlanId);
+
+    // Without a project_path the daemon has nowhere to launch the session, so the
+    // run silently never starts. Resolve it (and git_root/remote) from the task
+    // the same way dispatch.createSession does.
+    const mappings = await ctx.db
+      .query("directory_team_mappings")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+      .collect();
+    const { project_path, git_root, git_remote_url } = await resolveTaskGitContext(ctx, userId, task, mappings);
+
+    // Team/privacy come from the launcher's directory mappings, exactly like
+    // dispatch.createSession (the sibling launch path) — the task's team is
+    // only a routing fallback. A literal is_private here once minted
+    // "shared with nobody" rows: non-private but teamless, invisible to every
+    // teammate because the visibility gates short-circuit on !team_id.
+    const { teamId, isPrivate, autoShared } = resolveTeamForPath(
+      mappings,
+      git_root || project_path,
+      task.team_id
+    );
 
     const conversationId = await ctx.db.insert("conversations", {
       user_id: userId,
       agent_type,
       session_id: sessionId,
+      project_path,
+      git_root,
+      ...(git_remote_url ? { git_remote_url } : {}),
       started_at: now,
       updated_at: now,
       message_count: 0,
       status: "active",
-      is_private: false,
+      team_id: teamId,
+      is_private: isPrivate,
+      auto_shared: autoShared || undefined,
       active_task_id: task._id,
       title: task.title.slice(0, 80),
+      // Stamp the plan so the inbox can group plan workers even when there's no
+      // viable parent session to nest under (the grouping fallback).
+      ...(workerPlanId ? { active_plan_id: workerPlanId } : {}),
+      ...(parentConversationId
+        ? { parent_conversation_id: parentConversationId, is_subagent: true }
+        : {}),
     } as any);
     await ctx.db.patch(conversationId, { short_id: conversationId.toString().slice(0, 7) } as any);
 
-    // Update task assignee
-    await ctx.db.patch(task._id, { assignee: "agent", updated_at: now } as any);
+    // Link the new session to the task so it counts as a linked conversation —
+    // drives session_count, origin_session, and the "Has session" filter.
+    // Mirrors dispatch.createSession, which links the conversation before
+    // binding active_task_id. Without this an agent-run task shows a live
+    // session pill (from active_task_id) while session_count stays 0, so it
+    // wrongly drops out of the "Has session" filter.
+    const existingConvIds = task.conversation_ids || [];
+    if (!existingConvIds.some((id: any) => id.toString() === conversationId.toString())) {
+      await ctx.db.patch(task._id, { conversation_ids: [...existingConvIds, conversationId] } as any);
+    }
+
+    // NB: intentionally do NOT reassign the task to "agent" — the launcher stays
+    // the owner. The active run is already conveyed by the task status and the
+    // session linked via active_task_id, so clobbering assignee only lost the
+    // human owner and dropped the task out of the launcher's "assigned to me" view.
 
     // Build minimal task prompt
     const lines = [`You have been assigned the following task:\n\n**${task.title}**`];
@@ -1533,20 +1856,21 @@ export const assignToAgent = mutation({
     }
     lines.push(`\nTask ID: ${task.short_id} · Priority: ${(task as any).priority || "medium"}`);
 
-    await ctx.db.insert("pending_messages", {
-      conversation_id: conversationId,
-      from_user_id: userId,
-      content: lines.join("\n"),
-      status: "pending",
-      created_at: now,
-      retry_count: 0,
-    } as any);
-    await ctx.db.patch(conversationId, { has_pending_messages: true } as any);
+    // Lead with the user's instruction when supplied, then the task scaffold.
+    const lead = initial_message?.trim();
+    const content = lead ? `${lead}\n\n${lines.join("\n")}` : lines.join("\n");
+
+    // Single canonical writer: stamps owner_user_id for the daemon's delivery poll and flips
+    // has_pending_messages. The task session is the launcher's own, so owner == sender.
+    const taskConversation = await ctx.db.get(conversationId);
+    await enqueuePendingMessage(ctx, taskConversation, userId, { content });
 
     const daemonAgentType = agent_type === "claude_code" ? "claude" : agent_type === "codex" ? "codex" : agent_type === "cursor" ? "cursor" : "gemini";
     await enqueueStartSession(ctx, userId, {
       conversationId,
       agentType: daemonAgentType,
+      projectPath: project_path || git_root,
+      gitRoot: git_root,
       createdAt: now,
     });
 
@@ -1582,11 +1906,8 @@ export const webCreate = mutation({
 
     let project_id: Id<"projects"> | undefined;
     if (args.project_id) {
-      const project = await ctx.db
-        .query("projects")
-        .filter((q) => q.eq(q.field("_id"), args.project_id as any))
-        .first();
-      if (project) project_id = project._id;
+      const pid = ctx.db.normalizeId("projects", args.project_id);
+      if (pid && (await ctx.db.get(pid))) project_id = pid;
     }
 
     let plan_id: Id<"plans"> | undefined;
@@ -1813,7 +2134,7 @@ export const updateExecutionStatus = mutation({
 
 
 // Backfill: set team_id on tasks/docs missing it, and promoted on human/agent tasks
-export const backfillTeamScope = mutation({
+export const backfillTeamScope = internalMutation({
   args: {
     api_token: v.string(),
   },
@@ -1944,7 +2265,7 @@ export const backfillTaskTeamIds = internalMutation({
   },
 });
 
-export const backfillTriageStatus = mutation({
+export const backfillTriageStatus = internalMutation({
   args: {
     api_token: v.string(),
     cursor: v.optional(v.string()),
@@ -2177,7 +2498,7 @@ export const heartbeat = mutation({
       .query("tasks")
       .withIndex("by_short_id", (q: any) => q.eq("short_id", args.short_id))
       .first();
-    if (!task) throw new Error("Task not found");
+    if (!task || !(await canAccessTask(ctx, auth.userId, task))) throw new Error("Task not found");
 
     const updates: any = { last_heartbeat: Date.now() };
     if (args.progress_pct !== undefined) updates.progress_pct = args.progress_pct;

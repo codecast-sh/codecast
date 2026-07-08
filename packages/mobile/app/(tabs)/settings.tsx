@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
-import { StyleSheet, TouchableOpacity, Switch, Alert, ScrollView, View as RNView, Text as RNText, TextInput, ActionSheetIOS, KeyboardAvoidingView, Platform, Share, Clipboard, Image } from 'react-native';
+import { StyleSheet, TouchableOpacity, Switch, Alert, ScrollView, View as RNView, Text as RNText, TextInput, ActionSheetIOS, KeyboardAvoidingView, Platform, Share, Image } from 'react-native';
+import { copyToClipboard } from '@/lib/clipboard';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/lib/auth';
 import { useQuery, useMutation } from 'convex/react';
@@ -52,10 +53,10 @@ export default function SettingsScreen() {
     await Share.share({ message: `Join my team on Codecast: ${url}`, url });
   }, [activeTeam]);
 
-  const handleCopyInvite = useCallback(() => {
+  const handleCopyInvite = useCallback(async () => {
     if (!activeTeam?.invite_code) return;
     const url = `https://codecast.sh/join/${activeTeam.invite_code}`;
-    Clipboard.setString(url);
+    await copyToClipboard(url);
     Alert.alert('Copied', 'Invite link copied to clipboard');
   }, [activeTeam]);
 
@@ -746,22 +747,22 @@ const styles = StyleSheet.create({
   dangerSectionTitle: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#ef4444',
+    color: Theme.red,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
     marginBottom: Spacing.sm,
     marginLeft: Spacing.xs,
   },
   deleteButton: {
-    backgroundColor: '#ef444420',
+    backgroundColor: Theme.red + '20',
     padding: Spacing.lg,
     borderRadius: 12,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#ef4444',
+    borderColor: Theme.red,
   },
   deleteButtonText: {
-    color: '#ef4444',
+    color: Theme.red,
     fontSize: 16,
     fontWeight: '600',
   },

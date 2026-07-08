@@ -6,6 +6,7 @@ import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { isCommandMessage, cleanContent } from "../lib/conversationProcessor";
+import { isMachineDeliveredMessage } from "./sessionMessage";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { isConvexId, useInboxStore } from "../store/inboxStore";
 
@@ -155,10 +156,7 @@ function NavDropdown({
     if (onScrollToMessage) {
       onScrollToMessage(m._id);
     } else {
-      useInboxStore.setState({
-        pendingNavigateId: conversationId,
-        pendingScrollToMessageId: m._id,
-      });
+      useInboxStore.getState().requestNavigate(conversationId, { scrollToMessageId: m._id });
     }
   }, [conversationId, onPin, onScrollToMessage]);
 
@@ -224,6 +222,9 @@ function NavDropdown({
   const dropdownWidth = 420;
   const margin = 8;
   const left = Math.max(margin, triggerRect.left - dropdownWidth - 8);
+  // Top-align the panel to the trigger. The nav button itself sits below the
+  // header's sticky-message banner, so top-aligning here keeps the panel clear
+  // of that banner without pushing it unnecessarily far down.
   const top = Math.max(margin, triggerRect.top);
 
   const hasComments = comments.length > 0;
@@ -350,10 +351,7 @@ function NavDropdown({
                       if (onScrollToMessage) {
                         onScrollToMessage(c.message_id);
                       } else {
-                        useInboxStore.setState({
-                          pendingNavigateId: conversationId,
-                          pendingScrollToMessageId: c.message_id,
-                        });
+                        useInboxStore.getState().requestNavigate(conversationId, { scrollToMessageId: c.message_id });
                       }
                     }
                   }}
@@ -464,6 +462,9 @@ export function MessageNavButton({
 
   const processed: PM[] = messages
     ? messages
+        // Drop machine-delivered messages (cast send, teammate broadcasts): the navigator
+        // lists what the human typed, not cross-session/inter-agent messages.
+        .filter((m: { content?: string }) => !isMachineDeliveredMessage(m.content ?? ""))
         .map((m: { _id: string; content?: string; timestamp: number }) => ({
           _id: m._id,
           ...processUserMessage(m.content ?? ""),

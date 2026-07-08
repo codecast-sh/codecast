@@ -98,6 +98,7 @@ interface ReadResult {
     updated_at: string;
   };
   messages: ReadMessage[];
+  target_line?: number;
 }
 
 function formatDate(isoDate: string): string {
@@ -182,6 +183,34 @@ function truncateId(id: string): string {
 
 function formatRole(role: string): string {
   return `[${role}]`;
+}
+
+// Display metadata for the three work states the server emits. Shared by
+// `cast feed` and `cast monitor` so the colour/label of a state is identical
+// everywhere the CLI shows it.
+const WORK_STATE_LABEL: Record<string, string> = {
+  needs_input: "needs input",
+  working: "working",
+  idle: "idle",
+};
+
+function colorForState(ws: string): string {
+  if (ws === "needs_input") return c.yellow;
+  if (ws === "working") return c.green;
+  return c.gray;
+}
+
+// Compact one-token status badge: a liveness dot (● live / ○ not live), the
+// work-state word, the raw agent_status when it adds detail, and a pinned tag.
+function formatStateBadge(s: { work_state?: string; is_live?: boolean; is_pinned?: boolean; agent_status?: string }): string {
+  const ws = s.work_state || "idle";
+  const liveGlyph = s.is_live ? `${c.green}●${c.reset}` : `${c.gray}○${c.reset}`;
+  const label = WORK_STATE_LABEL[ws] ?? ws;
+  const detail = s.is_live && s.agent_status && s.agent_status !== ws && WORK_STATE_LABEL[s.agent_status] === undefined
+    ? `${c.dim}:${s.agent_status}${c.reset}`
+    : "";
+  const pin = s.is_pinned ? ` ${c.magenta}pinned${c.reset}` : "";
+  return `${liveGlyph} ${colorForState(ws)}${label}${c.reset}${detail}${pin}`;
 }
 
 function wrapText(text: string, indent: string, maxWidth: number = 72): string {
@@ -279,6 +308,7 @@ export function formatSearchResults(result: SearchResult, options: SearchOptions
 
 interface FormatOptions {
   full?: boolean;
+  targetLine?: number;
 }
 
 export function formatReadResult(result: ReadResult, options: FormatOptions = {}): string {
@@ -295,7 +325,13 @@ export function formatReadResult(result: ReadResult, options: FormatOptions = {}
     `${conv.message_count} msgs`,
     truncatePath(conv.project_path),
   ].filter(Boolean).join(" | ");
-  lines.push(`   ${meta}\n`);
+  lines.push(`   ${meta}`);
+
+  const targetLine = options.targetLine ?? result.target_line;
+  if (targetLine !== undefined) {
+    lines.push(`   ${fmt.muted(`↓ around linked message (line ${targetLine})`)}`);
+  }
+  lines.push("");
 
   for (const msg of result.messages) {
     // Skip empty messages (streaming artifacts)
@@ -306,9 +342,10 @@ export function formatReadResult(result: ReadResult, options: FormatOptions = {}
       continue;
     }
 
+    const isTarget = targetLine !== undefined && msg.line === targetLine;
     const lineNum = String(msg.line).padStart(4);
     const role = formatRole(msg.role);
-    lines.push(`${lineNum}: ${role}`);
+    lines.push(isTarget ? `${fmt.accent("►")}${lineNum.slice(1)}: ${role} ${fmt.accent("← linked")}` : `${lineNum}: ${role}`);
 
     if (hasContent) {
       const indentedContent = msg.content.split("\n").map((l) => "       " + l).join("\n");
@@ -355,6 +392,37 @@ export function formatReadResult(result: ReadResult, options: FormatOptions = {}
   return lines.join("\n");
 }
 
+// One message rendered for the `cast sessions <id> -w` live follow: a timestamped
+// role header + content, with tool calls summarized. Distinct from formatReadResult
+// (which is line-numbered for reading ranges) — a follow reads as a chat stream.
+export function formatStreamedMessage(msg: {
+  role: string;
+  content?: string | null;
+  timestamp?: string;
+  label?: string | null;
+  tool_calls?: Array<{ name?: string; input?: unknown }>;
+  tool_results?: Array<{ content?: string; isError?: boolean }>;
+}): string {
+  const time = msg.timestamp
+    ? new Date(msg.timestamp).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit" })
+    : "";
+  const roleColor = msg.role === "assistant" ? c.green : msg.role === "user" ? c.cyan : c.gray;
+  // In multi-session mode each line is prefixed with its session so the merged
+  // stream stays legible; single-session follow omits it.
+  const label = msg.label ? `${c.magenta}${msg.label}${c.reset}  ` : "";
+  const out: string[] = [`${c.dim}${time}${c.reset}  ${label}${roleColor}${msg.role}${c.reset}`];
+  const content = (msg.content || "").trim();
+  if (content) out.push(content.split("\n").map((l) => "       " + l).join("\n"));
+  if (msg.tool_calls && msg.tool_calls.length > 0) {
+    const first = summarizeToolCall(msg.tool_calls[0]);
+    const more = msg.tool_calls.length > 1 ? ` …(${msg.tool_calls.length - 1} more)` : "";
+    out.push(`       ${fmt.muted(`${first}${more}`)}`);
+  } else if (!content && msg.tool_results && msg.tool_results.length > 0) {
+    out.push(`       ${fmt.muted(`(${msg.tool_results.length} tool result${msg.tool_results.length > 1 ? "s" : ""})`)}`);
+  }
+  return out.join("\n");
+}
+
 interface FeedPreviewMessage {
   line: number;
   role: string;
@@ -371,7 +439,12 @@ interface FeedConversation {
   message_count: number;
   is_live?: boolean;
   agent_status?: string;
+  work_state?: string;
+  is_pinned?: boolean;
   user?: { name: string | null; email: string | null };
+  /** Second-party owner (steering member), when assigned. */
+  owner?: { name: string | null; email: string | null };
+  owned_by_me?: boolean;
   preview: FeedPreviewMessage[];
 }
 
@@ -694,14 +767,20 @@ export function formatFeedResults(result: FeedResult, options: FeedOptions = {})
     lines.push(header + padding);
 
     const userDisplay = conv.user?.name || conv.user?.email;
-    const liveLabel = conv.is_live ? `${c.green}[LIVE${conv.agent_status ? " " + conv.agent_status : ""}]${c.reset}` : "";
+    const ownerDisplay = conv.owned_by_me
+      ? "owned by you"
+      : conv.owner
+        ? `owner: ${conv.owner.name || conv.owner.email}`
+        : "";
+    const stateBadge = formatStateBadge(conv);
     const meta = [
       truncateId(conv.id),
-      liveLabel,
+      stateBadge,
       formatRelativeTime(conv.updated_at),
       `${conv.message_count} msgs`,
       truncatePath(conv.project_path),
       userDisplay ? `${c.yellow}${userDisplay}${c.reset}` : "",
+      ownerDisplay ? `${c.magenta}${ownerDisplay}${c.reset}` : "",
     ].filter(Boolean).join(" | ");
     lines.push(`   ${meta}\n`);
 
@@ -729,6 +808,222 @@ export function formatFeedResults(result: FeedResult, options: FeedOptions = {})
 
   lines.push("</FEED>");
 
+  return lines.join("\n");
+}
+
+interface MonitorSession {
+  id: string;
+  session_id: string;
+  title: string;
+  project_path: string | null;
+  updated_at: string;
+  message_count: number;
+  agent_type?: string;
+  agent_status?: string;
+  work_state: string;
+  is_pinned: boolean;
+  is_live: boolean;
+  awaiting_input: boolean;
+  idle_summary: string | null;
+  last_user_message: string | null;
+  label?: string | null;
+  active_plan: { short_id: string; title: string } | null;
+  active_task: { short_id: string; title: string } | null;
+  /** Second-party ownership: who RUNS it (when not the caller) / who OWNS it. */
+  run_by?: string | null;
+  owner?: { name: string | null; email: string | null } | null;
+  owned_by_me?: boolean;
+}
+
+interface MonitorResult {
+  sessions: MonitorSession[];
+  counts: { working: number; needs_input: number; idle: number; pinned: number; live: number; dismissed?: number; total: number };
+  labels?: Array<{ name: string; count: number }>;
+  scope: string;
+}
+
+interface MonitorOptions {
+  state?: string;
+  watch?: boolean;
+  interval?: number;
+  all?: boolean;
+  /** Group the snapshot by the user's labels instead of by work state. */
+  groupByLabel?: boolean;
+  /** "you" (solo) or "team" / "team: <member>" — shown in the header. */
+  scopeLabel?: string;
+  /** Command name for the header + hints (default "cast sessions"). */
+  command?: string;
+  /** Per-session change annotation for --watch: id -> "new" | "working→needs_input". */
+  changes?: Record<string, string>;
+}
+
+// Human label for a work_state transition shown in --watch when a session moves.
+function changeLabel(change: string): string {
+  if (change === "new") return `${c.cyan}NEW${c.reset}`;
+  const arrow = change.replace("_", " ").replace("→", `${c.reset}→${c.cyan}`);
+  return `${c.cyan}${arrow}${c.reset}`;
+}
+
+// One colored, natural-language line for a single work-state change — the unit
+// of the `cast sessions -w` change stream (append-only, never the full set).
+export function formatSessionChangeLine(ch: {
+  id: string; title?: string | null; from?: string | null; to: string;
+  is_pinned?: boolean; is_live?: boolean;
+}): string {
+  const time = new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit" });
+  const toLabel = WORK_STATE_LABEL[ch.to] ?? ch.to;
+  const dot = ch.is_live ? `${c.green}●${c.reset}` : `${c.gray}○${c.reset}`;
+  const pin = ch.is_pinned ? ` ${c.magenta}pinned${c.reset}` : "";
+  const delta = ch.from
+    ? `${c.dim}(${String(ch.from).replace("_", " ")} → ${toLabel})${c.reset}`
+    : `${c.cyan}(new)${c.reset}`;
+  return `${c.dim}${time}${c.reset}  ${dot} ${colorForState(ch.to)}${toLabel}${c.reset}${pin}  ${c.magenta}${truncateId(ch.id)}${c.reset}  ${ch.title || "New Session"}  ${delta}`;
+}
+
+// The `cast sessions` snapshot: a per-user, most-actionable-first view of every
+// session's work state. Renders flat when a --state filter is set, otherwise
+// grouped NEEDS INPUT → WORKING → IDLE. This is the STATIC view (no -w); watch
+// mode is a change stream rendered line-by-line via formatSessionChangeLine.
+export function formatMonitor(result: MonitorResult, options: MonitorOptions = {}): string {
+  const lines: string[] = [];
+  const counts = result.counts || { working: 0, needs_input: 0, idle: 0, pinned: 0, live: 0, total: 0 };
+  const changes = options.changes || {};
+  const command = options.command || "cast sessions";
+  const clock = new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
+  const scope = options.scopeLabel ? `${c.dim} · ${options.scopeLabel}${c.reset}` : "";
+  const live = options.watch ? `${c.dim} — live, every ${options.interval ?? 3}s (Ctrl-C to exit)${c.reset}` : "";
+  lines.push(`${c.bold}${command}${c.reset}${scope}${live}  ${c.dim}${clock}${c.reset}`);
+
+  const summary = [
+    `${c.yellow}needs input ${counts.needs_input}${c.reset}`,
+    `${c.green}working ${counts.working}${c.reset}`,
+    `${c.gray}idle ${counts.idle}${c.reset}`,
+  ];
+  const extra: string[] = [];
+  if (counts.pinned) extra.push(`${c.magenta}pinned ${counts.pinned}${c.reset}`);
+  if (counts.live) extra.push(`${c.green}live ${counts.live}${c.reset}`);
+  if (counts.dismissed) extra.push(`${c.dim}dismissed ${counts.dismissed}${c.reset}`);
+  lines.push(
+    summary.join(`  ${c.dim}·${c.reset}  `) +
+    (extra.length ? `   ${c.dim}(${extra.join(", ")})${c.reset}` : "")
+  );
+
+  // Events line (--watch only): summarize what changed since the previous frame.
+  const changeIds = Object.keys(changes);
+  if (options.watch && changeIds.length > 0) {
+    const newCount = changeIds.filter((id) => changes[id] === "new").length;
+    const moved = changeIds.length - newCount;
+    const bits = [
+      newCount ? `${newCount} new` : "",
+      moved ? `${moved} changed state` : "",
+    ].filter(Boolean).join(", ");
+    lines.push(`${c.cyan}Δ ${bits} since last refresh${c.reset}`);
+  }
+  lines.push("");
+
+  if (result.sessions.length === 0) {
+    lines.push(`${c.dim}Nothing${options.state ? ` in "${options.state}"` : " to show"}.${c.reset}`);
+    return lines.join("\n");
+  }
+
+  const renderRow = (s: MonitorSession) => {
+    const badge = formatStateBadge(s);
+    const idPart = `${c.magenta}${truncateId(s.id)}${c.reset}`;
+    const mark = changes[s.id] ? `  ${changeLabel(changes[s.id])}` : "";
+    // Second-party-owned rows: show who runs it (this inbox shows it because
+    // the caller OWNS it), or who it's assigned to when the caller is the runner.
+    const runBy = s.run_by && s.owned_by_me ? `  ${c.magenta}⇄ run by ${s.run_by}${c.reset}` : "";
+    const ownedBy = !s.owned_by_me && s.owner ? `  ${c.dim}→ owner ${s.owner.name || s.owner.email}${c.reset}` : "";
+    lines.push(`${badge}  ${idPart}  ${c.bold}${s.title || "New Session"}${c.reset}${runBy}${ownedBy}${mark}`);
+
+    const metaBits = [
+      formatRelativeTime(s.updated_at),
+      `${s.message_count} msgs`,
+      truncatePath(s.project_path),
+      s.agent_type,
+    ].filter(Boolean).join(`  ${c.dim}·${c.reset}  `);
+    // Label chip is redundant inside a --by-label group header.
+    const labelChip = s.label && !options.groupByLabel ? `  ${c.cyan}#${s.label}${c.reset}` : "";
+    lines.push(`   ${c.dim}${metaBits}${c.reset}${labelChip}`);
+
+    const ctx = s.active_plan
+      ? `${c.cyan}${s.active_plan.short_id}${c.reset} ${s.active_plan.title}`
+      : s.active_task
+        ? `${c.cyan}${s.active_task.short_id}${c.reset} ${s.active_task.title}`
+        : "";
+    if (ctx) lines.push(`   ${ctx}`);
+
+    const snippet = (s.idle_summary || s.last_user_message || "").replace(/\s+/g, " ").trim().slice(0, 88);
+    if (snippet) lines.push(`   ${c.dim}${snippet}${c.reset}`);
+    lines.push("");
+  };
+
+  if (options.groupByLabel) {
+    // Filing view: every row (idle included — labels mostly hold parked
+    // sessions), grouped in the user's label order, unlabeled last.
+    const groups: Array<{ title: string; items: MonitorSession[] }> = [];
+    for (const { name } of result.labels ?? []) {
+      const items = result.sessions.filter((s) => s.label === name);
+      if (items.length) groups.push({ title: `${c.cyan}${name}${c.reset}`, items });
+    }
+    const unlabeled = result.sessions.filter((s) => !s.label);
+    if (unlabeled.length) groups.push({ title: `${c.gray}unlabeled${c.reset}`, items: unlabeled });
+    for (const g of groups) {
+      lines.push(`${c.bold}${g.title}${c.reset} ${c.dim}(${g.items.length})${c.reset}`);
+      lines.push("");
+      g.items.forEach(renderRow);
+    }
+  } else if (options.state) {
+    result.sessions.forEach(renderRow);
+  } else {
+    // Default view stays focused on what's actionable: NEEDS INPUT + WORKING.
+    // Idle sessions are summarized as a one-liner unless -a/--all is passed.
+    const groups: Array<[string, string]> = [
+      ["needs_input", `${c.yellow}NEEDS INPUT${c.reset}`],
+      ["working", `${c.green}WORKING${c.reset}`],
+    ];
+    if (options.all) groups.push(["idle", `${c.gray}IDLE${c.reset}`]);
+
+    for (const [ws, label] of groups) {
+      const group = result.sessions.filter((s) => s.work_state === ws);
+      if (group.length === 0) continue;
+      lines.push(`${c.bold}${label}${c.reset} ${c.dim}(${group.length})${c.reset}`);
+      lines.push("");
+      group.forEach(renderRow);
+    }
+
+    if (!options.all) {
+      const idleCount = result.sessions.filter((s) => s.work_state === "idle").length;
+      if (idleCount > 0) lines.push(`${c.dim}+ ${idleCount} idle (${command} -a to show)${c.reset}`);
+      lines.push("");
+    }
+  }
+
+  lines.push(`${c.dim}cast read <id> <range>  ·  cast send <id> "msg"  ·  ${command} -w to watch${c.reset}`);
+  return lines.join("\n");
+}
+
+// `cast sessions --labels`: the user's labels with view-scoped session counts.
+export function formatLabelsList(result: MonitorResult, opts?: { project?: string | null }): string {
+  const labels = result.labels ?? [];
+  if (labels.length === 0) {
+    return opts?.project
+      ? `No labels with sessions in ${opts.project} — \`cast sessions --labels -g\` for all projects.`
+      : "No labels yet — file a session with `cast label set <name> <session>` (or use the web sessions sidebar → By label).";
+  }
+  const lines: string[] = [];
+  const labeled = labels.reduce((n, l) => n + l.count, 0);
+  const unlabeled = Math.max(0, (result.counts?.total ?? 0) - labeled);
+  const width = Math.max(...labels.map((l) => l.name.length));
+  const scope = opts?.project ? ` in ${opts.project} ${c.reset}${c.dim}(-g for all projects)` : "";
+  lines.push(`${c.bold}labels${c.reset} ${c.dim}· ${labels.length} labels, ${labeled} sessions filed${scope}${c.reset}\n`);
+  for (const l of labels) {
+    const count = l.count > 0 ? `${l.count}` : `${c.dim}0${c.reset}`;
+    lines.push(`  ${c.cyan}${l.name.padEnd(width)}${c.reset}  ${count}`);
+  }
+  if (unlabeled > 0) lines.push(`  ${c.dim}${"unlabeled".padEnd(width)}  ${unlabeled}${c.reset}`);
+  lines.push(`\n${c.dim}cast sessions --label <name>  ·  cast sessions --by-label${c.reset}`);
   return lines.join("\n");
 }
 

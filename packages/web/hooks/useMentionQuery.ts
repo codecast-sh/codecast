@@ -1,6 +1,10 @@
 import { useCallback } from "react";
+import { useQuery } from "convex/react";
+import { api } from "@codecast/convex/convex/_generated/api";
 import type { MentionItem } from "../components/editor/MentionList";
-import { useInboxStore } from "../store/inboxStore";
+import { useInboxStore, convBucketMap } from "../store/inboxStore";
+import type { BucketItem, BucketAssignmentItem } from "../store/inboxStore";
+import { useDebounce } from "./useDebounce";
 
 export type MentionScope =
   | { kind: "team"; teamId: string }
@@ -17,12 +21,107 @@ function inScope(item: { team_id?: string | null; user_id?: string | null }, sco
   return !itemTeam && (item.user_id ? String(item.user_id) === scope.userId : true);
 }
 
-function score(label: string, q: string): number {
+const EMPTY_SERVER_ITEMS: MentionItem[] = [];
+
+// People are fully covered by the local roster cache; these are the types whose
+// cache is windowed and therefore worth re-querying server-side on @-mention.
+export const SERVER_MENTION_TYPES = ["session", "task", "doc", "plan"];
+
+/**
+ * Debounced server-side mention lookup that reaches past the local cache —
+ * sessions older than the inbox sync window, entities never pulled down.
+ * Pass `null` while the dropdown is closed to fully disable it. `loading`
+ * covers both the debounce settling and the in-flight query, so callers can
+ * show a "searching" affordance from the first keystroke.
+ */
+export function useMentionServerSearch(
+  rawQuery: string | null,
+  opts?: { teamId?: string | null; types?: string[] },
+): { items: MentionItem[]; loading: boolean } {
+  const current = (rawQuery ?? "").trim();
+  const debounced = useDebounce(current, 250);
+  const wantNow = rawQuery != null && current.length >= 2;
+  const settled = debounced === current;
+  const results = useQuery(
+    api.docs.mentionSearch,
+    wantNow && settled
+      ? {
+          query: current,
+          ...(opts?.teamId ? { teamId: opts.teamId } : {}),
+          ...(opts?.types ? { types: opts.types } : {}),
+        }
+      : "skip",
+  ) as MentionItem[] | undefined;
+  return {
+    items: wantNow && settled && results ? results : EMPTY_SERVER_ITEMS,
+    loading: wantNow && (!settled || results === undefined),
+  };
+}
+
+// Labels (inbox buckets) as mention items. They're the user's personal filing —
+// always theirs, so team scope doesn't narrow them (like people, they come from
+// a local roster). Shared by every mention source: the hook below and
+// ConversationView's buildMentionItems (which feeds the conversation and
+// new-session composers).
+export function labelMentionItems(s: {
+  buckets?: Record<string, BucketItem>;
+  bucketAssignments?: Record<string, BucketAssignmentItem>;
+}): MentionItem[] {
+  const counts = new Map<string, number>();
+  for (const bucketId of Object.values(convBucketMap(s.bucketAssignments || {}))) {
+    if (bucketId) counts.set(bucketId, (counts.get(bucketId) ?? 0) + 1);
+  }
+  return Object.values(s.buckets || {})
+    .filter((b) => !b.archived_at)
+    .map((b) => {
+      const n = counts.get(String(b._id)) ?? 0;
+      return {
+        id: String(b._id),
+        type: "label",
+        label: b.name,
+        sublabel: `${n} session${n === 1 ? "" : "s"}`,
+        shortId: `label:${b._id}`,
+        updatedAt: b.updated_at || 0,
+      };
+    });
+}
+
+export function score(label: string, q: string): number {
   const l = label.toLowerCase();
   if (l === q) return 0;
   if (l.startsWith(q)) return 1;
   const idx = l.indexOf(q);
   return idx === -1 ? Infinity : 2 + idx;
+}
+
+// Multi-word query support. A single-word query falls straight through to
+// score() so existing ranking is byte-for-byte unchanged. A query with spaces
+// is split into words, and EVERY word must match some word in the text (as an
+// exact/prefix/substring hit), order-independent — so "plain road" finds
+// "...The Roadmap, in Plain Language". Returns Infinity when any required word
+// is absent, so callers drop the candidate exactly as they do for score().
+export function matchScore(text: string, query: string): number {
+  const q = query.trim().toLowerCase();
+  if (!q) return 0;
+  const tokens = q.split(/\s+/).filter(Boolean);
+  if (tokens.length <= 1) return score(text, q);
+  const lower = text.toLowerCase();
+  const words = lower.split(/[\s\-—,.;:/\\]+/).filter(Boolean);
+  let total = 0;
+  for (const tok of tokens) {
+    let best = Infinity;
+    for (const w of words) {
+      if (w === tok) { best = 0; break; }
+      if (w.startsWith(tok)) best = Math.min(best, 1);
+      else if (w.includes(tok)) best = Math.min(best, 2);
+    }
+    if (best === Infinity) {
+      if (lower.includes(tok)) best = 3; // spans a word boundary; still a hit
+      else return Infinity; // a required word is absent → not a match
+    }
+    total += best;
+  }
+  return total;
 }
 
 export function useMentionQuery(scope: MentionScope = { kind: "any" }) {
@@ -41,7 +140,7 @@ export function useMentionQuery(scope: MentionScope = { kind: "any" }) {
     const taskItems: Array<{ item: MentionItem; rank: number; updated: number }> = [];
     for (const t of Object.values(idx.tasks)) {
       if (!inScope(t, scope)) continue;
-      const r = q ? score(t.title || "", q) : 0;
+      const r = q ? matchScore(t.title || "", q) : 0;
       if (q && r === Infinity) {
         if (!t.short_id?.toLowerCase().includes(q)) continue;
       }
@@ -63,7 +162,7 @@ export function useMentionQuery(scope: MentionScope = { kind: "any" }) {
     const docItems: Array<{ item: MentionItem; rank: number; updated: number }> = [];
     for (const d of Object.values(idx.docs)) {
       if (!inScope(d, scope)) continue;
-      const r = q ? score(d.title || "", q) : 0;
+      const r = q ? matchScore(d.title || "", q) : 0;
       if (q && r === Infinity) continue;
       docItems.push({
         item: {
@@ -81,8 +180,8 @@ export function useMentionQuery(scope: MentionScope = { kind: "any" }) {
     const planItems: Array<{ item: MentionItem; rank: number; updated: number }> = [];
     for (const p of Object.values(idx.plans)) {
       if (!inScope(p, scope)) continue;
-      const labelHit = q ? score(p.title || "", q) : 0;
-      const goalHit = q && p.goal ? score(p.goal, q) : Infinity;
+      const labelHit = q ? matchScore(p.title || "", q) : 0;
+      const goalHit = q && p.goal ? matchScore(p.goal, q) : Infinity;
       const r = Math.min(labelHit, goalHit);
       if (q && r === Infinity) {
         if (!p.short_id?.toLowerCase().includes(q)) continue;
@@ -112,8 +211,8 @@ export function useMentionQuery(scope: MentionScope = { kind: "any" }) {
             ? sessTeam === scope.teamId
             : !sessTeam;
       if (!inScopeForSession) continue;
-      const titleHit = q ? score(sess.title || "", q) : 0;
-      const summaryHit = q && sess.idle_summary ? score(sess.idle_summary, q) : Infinity;
+      const titleHit = q ? matchScore(sess.title || "", q) : 0;
+      const summaryHit = q && sess.idle_summary ? matchScore(sess.idle_summary, q) : Infinity;
       const r = Math.min(titleHit, summaryHit);
       if (q && r === Infinity) continue;
       sessionItems.push({
@@ -122,6 +221,8 @@ export function useMentionQuery(scope: MentionScope = { kind: "any" }) {
           type: "session",
           label: sess.title || "Untitled Session",
           sublabel: sess.idle_summary?.slice(0, 80) || undefined,
+          // cc id (`jx…`), the 7-char prefix of _id — see ConversationView mention builder.
+          shortId: sess._id.slice(0, 7).toLowerCase(),
           messageCount: sess.message_count,
           projectPath: sess.project_path,
           status: sess.agent_status,
@@ -132,6 +233,13 @@ export function useMentionQuery(scope: MentionScope = { kind: "any" }) {
         rank: r === Infinity ? 99 : r,
         updated: sess.updated_at || 0,
       });
+    }
+
+    const labelItems: Array<{ item: MentionItem; rank: number; updated: number }> = [];
+    for (const item of labelMentionItems(s)) {
+      const r = q ? matchScore(item.label, q) : 0;
+      if (q && r === Infinity) continue;
+      labelItems.push({ item, rank: r, updated: item.updatedAt || 0 });
     }
 
     const personItems: Array<{ item: MentionItem; rank: number; updated: number }> = [];
@@ -162,6 +270,7 @@ export function useMentionQuery(scope: MentionScope = { kind: "any" }) {
 
     return [
       ...sortAndTake(personItems),
+      ...sortAndTake(labelItems),
       ...sortAndTake(sessionItems),
       ...sortAndTake(taskItems),
       ...sortAndTake(docItems),

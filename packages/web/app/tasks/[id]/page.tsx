@@ -1,13 +1,16 @@
 "use client";
 import { useState, useCallback, useRef } from "react";
 import { copyToClipboard, canonicalUrl } from "../../../lib/utils";
+import { compressImage } from "../../../lib/compressImage";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { useInboxStore, TaskDetail, TaskItem } from "../../../store/inboxStore";
+import { useInboxStore, TaskDetail, TaskItem, resolveAssigneeInfo } from "../../../store/inboxStore";
 import { useSyncTasks, useSyncTaskDetail } from "../../../hooks/useSyncTasks";
+import { useOpenLinkedSession } from "../../../hooks/useOpenLinkedSession";
 import { DetailSplitLayout } from "../../../components/DetailSplitLayout";
+import { AppLoader } from "../../../components/AppLoader";
 import { TaskListContent } from "../page";
 import { useMentionQuery } from "../../../hooks/useMentionQuery";
 import { useImageUpload } from "../../../hooks/useImageUpload";
@@ -21,7 +24,7 @@ import { AuthGuard } from "../../../components/AuthGuard";
 import { DashboardLayout } from "../../../components/DashboardLayout";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { ContextChatInput } from "../../../components/ContextChatInput";
-import { SessionCardInner } from "../../../components/ActivityFeed";
+import { FeedCard } from "../../../components/ActivityFeed";
 import { WatchButton } from "../../../components/WatchButton";
 
 const api = _api as any;
@@ -393,10 +396,12 @@ export default function TaskDetailPage() {
   );
 }
 
-function TaskDetailContent() {
+export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }: { taskId?: string; variant?: "page" | "inline"; onClose?: () => void; onOpen?: () => void } = {}) {
   const params = useParams();
   const router = useRouter();
-  const id = params.id as string;
+  const openLinkedSession = useOpenLinkedSession();
+  const id = taskId ?? (params?.id as string);
+  const isInline = variant === "inline";
 
   const directData = useSyncTaskDetail(id);
   useSyncTasks();
@@ -404,15 +409,25 @@ function TaskDetailContent() {
   const allTasks = useInboxStore((s) => s.tasks);
   const data = (allTasks[id] || Object.values(allTasks).find((t: any) => t.short_id === id) || directData) as TaskDetail | undefined;
   const taskTeamId = data?.team_id as string | undefined;
+  // The id may be a conversation's (legacy phantom-task cache rows, malformed
+  // /tasks/<conversationId> links). When the server says "not a task" and the
+  // id is a session we know, land in the conversation instead of a dead-end.
+  const sessionForBadId = useInboxStore((s) => (directData === null ? s.sessions[id] : undefined));
+  useWatchEffect(() => {
+    if (!isInline && directData === null && sessionForBadId) {
+      router.replace(`/conversation/${id}`);
+    }
+  }, [isInline, directData, sessionForBadId, id, router]);
   const handleMentionQuery = useMentionQuery();
   const handleImageUpload = useImageUpload();
   const updateTask = useInboxStore((s) => s.updateTask);
-  const webAddComment = useMutation(api.tasks.webAddComment);
+  const addTaskComment = useInboxStore((s) => s.addTaskComment);
   const currentUser = useQuery(api.users.getCurrentUser);
   const teamMembers = useQuery(api.teams.getTeamMembers, taskTeamId ? { team_id: taskTeamId as any } : "skip");
   const teamInfo = useQuery(api.teams.getTeam, taskTeamId ? { team_id: taskTeamId as any } : "skip");
+  // Derived so an optimistic re-assignment shows instantly (see resolveAssigneeInfo).
+  const assigneeInfo = resolveAssigneeInfo((data as any)?.assignee, (data as any)?.assignee_info, teamMembers as any[], currentUser);
   const [comment, setComment] = useState("");
-  const [submittingComment, setSubmittingComment] = useState(false);
   const [commentImages, setCommentImages] = useState<Array<{ file: File; previewUrl: string; storageId?: string; uploading: boolean }>>([]);
   const [isDragging, setIsDragging] = useState(false);
   const dragCounterRef = useRef(0);
@@ -435,8 +450,9 @@ function TaskDetailContent() {
     const previewUrl = URL.createObjectURL(file);
     setCommentImages(prev => [...prev, { file, previewUrl, uploading: true }]);
     try {
+      const uploaded = await compressImage(file);
       const uploadUrl = await generateUploadUrl({});
-      const result = await fetch(uploadUrl, { method: "POST", headers: { "Content-Type": file.type }, body: file });
+      const result = await fetch(uploadUrl, { method: "POST", headers: { "Content-Type": uploaded.type }, body: uploaded });
       if (!result.ok) throw new Error(`Upload failed: ${result.status} ${result.statusText}`);
       const { storageId } = await result.json();
       setCommentImages(prev => prev.map(img => img.previewUrl === previewUrl ? { ...img, storageId, uploading: false } : img));
@@ -471,24 +487,19 @@ function TaskDetailContent() {
   const handleAddComment = useCallback(async () => {
     const hasText = comment.trim().length > 0;
     const hasImages = commentImages.some(i => i.storageId);
-    if ((!hasText && !hasImages) || !data?.short_id || submittingComment) return;
+    if ((!hasText && !hasImages) || !data?.short_id) return;
     const anyUploading = commentImages.some(i => i.uploading);
     if (anyUploading) { toast.error("Wait for images to finish uploading"); return; }
     const text = comment.trim() || "(image)";
     const imageIds = commentImages.filter(i => i.storageId).map(i => i.storageId!);
     setComment("");
     setCommentImages([]);
-    setSubmittingComment(true);
-    try {
-      await webAddComment({ short_id: data.short_id, text, comment_type: "note", image_storage_ids: imageIds.length > 0 ? imageIds : undefined });
-      setCommentOpen(false);
-    } catch {
-      setComment(text);
-      toast.error("Failed to add comment");
-    } finally {
-      setSubmittingComment(false);
-    }
-  }, [comment, commentImages, data?.short_id, submittingComment, webAddComment]);
+    // Local-first: the optimistic comment renders instantly and the dispatch
+    // (which delegates to tasks.webAddComment for notifications + images)
+    // retries on its own, so no submit spinner or error rollback is needed.
+    addTaskComment(data.short_id, text, "note", imageIds.length > 0 ? imageIds : undefined);
+    setCommentOpen(false);
+  }, [comment, commentImages, data?.short_id, addTaskComment]);
 
   const getTaskContextBody = useCallback(() => {
     if (!data) return "";
@@ -558,7 +569,32 @@ function TaskDetailContent() {
   }, [paletteOpen, shortcutsPanelOpen, data, openCmd, startEditTitle, router]);
 
   if (!data) {
-    return <div className="flex items-center justify-center h-64 text-sol-text-dim text-sm">Loading...</div>;
+    // directData === null: webGetTaskDetail resolved but the id is not a task
+    // (e.g. a /tasks/<conversationId> link). undefined: query still in flight.
+    if (directData === null) {
+      // Full page redirects to the conversation (effect above); render the
+      // loader during the swap. Inline keeps the list visible and offers a link.
+      if (sessionForBadId && !isInline) {
+        return <AppLoader className="min-h-[16rem] h-full" />;
+      }
+      return (
+        <div className={`flex flex-col items-center justify-center h-full gap-3 text-center px-6 ${isInline ? "w-[480px] flex-shrink-0 border-l border-sol-border/30 bg-sol-bg" : ""}`}>
+          <div className="text-sol-text-muted text-sm">This task doesn&apos;t exist.</div>
+          <div className="text-sol-text-dim text-xs font-mono break-all">{id}</div>
+          {sessionForBadId && (
+            <Link href={`/conversation/${id}`} className="text-xs text-sol-cyan hover:underline">
+              It&apos;s a session — open it →
+            </Link>
+          )}
+          {isInline && onClose ? (
+            <button onClick={onClose} className="text-xs text-sol-cyan hover:underline">← Close</button>
+          ) : (
+            <Link href="/tasks" className="text-xs text-sol-cyan hover:underline">← Back to tasks</Link>
+          )}
+        </div>
+      );
+    }
+    return <AppLoader className={isInline ? "w-[480px] flex-shrink-0 border-l border-sol-border/30 min-h-[16rem] h-full" : "min-h-[16rem] h-full"} />;
   }
 
   const status = STATUS_MAP[data.status] || STATUS_MAP.open;
@@ -566,7 +602,7 @@ function TaskDetailContent() {
 
   return (
         <div
-          className="flex-1 h-full flex flex-col relative min-w-0"
+          className={isInline ? "w-[480px] flex-shrink-0 h-full flex flex-col relative min-w-0 border-l border-sol-border/30 bg-sol-bg" : "flex-1 h-full flex flex-col relative min-w-0"}
           onDragEnter={(e) => { e.preventDefault(); dragCounterRef.current++; setIsDragging(true); }}
           onDragOver={(e) => { e.preventDefault(); }}
           onDragLeave={(e) => { e.preventDefault(); dragCounterRef.current--; if (dragCounterRef.current <= 0) { dragCounterRef.current = 0; setIsDragging(false); } }}
@@ -579,15 +615,32 @@ function TaskDetailContent() {
         )}
         <div className="flex-1 overflow-y-auto">
         <div className="flex flex-col min-h-full">
-        <div className="flex-1 max-w-4xl mx-auto px-6 py-6 w-full">
-          <div className="flex items-center justify-between mb-5">
-            <Link
-              href="/tasks"
-              className="inline-flex items-center gap-1.5 text-xs text-sol-text-dim hover:text-sol-cyan transition-colors"
-            >
-              Tasks
-            </Link>
-            <div className="flex items-center gap-1">
+        <div className={isInline ? "flex-1 px-4 py-4 w-full" : "flex-1 max-w-4xl mx-auto px-6 py-6 w-full"}>
+          {/* Card header: id + badges + watch, with actions */}
+          <div className="flex items-center justify-between mb-3 gap-2">
+            <div className="flex items-center gap-2 min-w-0 text-xs text-sol-text-dim">
+              <button
+                onClick={() => { copyToClipboard(data.short_id); toast.success("Task ID copied"); }}
+                className="font-mono px-1.5 py-0.5 rounded bg-sol-bg-alt border border-sol-border/30 hover:border-sol-cyan/40 hover:text-sol-cyan transition-colors cursor-copy"
+                title="Click to copy ID"
+              >
+                {data.short_id}
+              </button>
+              {teamInfo && (
+                <span className="px-1.5 py-0.5 rounded bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 text-[10px]">{teamInfo.name}</span>
+              )}
+              {!taskTeamId && (
+                <span className="px-1.5 py-0.5 rounded bg-sol-text-dim/10 text-sol-text-dim border border-sol-text-dim/20 text-[10px]">Personal</span>
+              )}
+              {data.source === "insight" && (
+                <span className="px-1.5 py-0.5 rounded bg-sol-violet/10 text-sol-violet border border-sol-violet/20 text-[10px]">mined</span>
+              )}
+              <WatchButton entityType="task" entityId={data._id} />
+            </div>
+            <div className="flex items-center gap-1 flex-shrink-0">
+              {isInline && onOpen && (
+                <button onClick={onOpen} className="text-xs px-2 py-1 rounded-md text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt transition-colors" title="Open full page">Open</button>
+              )}
               <button
                 onClick={() => { copyToClipboard(canonicalUrl()).then(() => toast.success("Link copied")).catch(() => toast.error("Failed to copy")); }}
                 className="p-1 rounded-md text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt transition-colors"
@@ -598,7 +651,7 @@ function TaskDetailContent() {
                 </svg>
               </button>
               <button
-                onClick={() => router.push("/tasks")}
+                onClick={() => { if (isInline && onClose) onClose(); else router.push("/tasks"); }}
                 className="p-1 rounded-md text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors"
                 title="Close (Esc)"
               >
@@ -607,38 +660,10 @@ function TaskDetailContent() {
             </div>
           </div>
 
-          {/* Title row */}
-          <div className="flex items-start gap-3 mb-4">
-            <StatusIcon className={`w-5 h-5 mt-2 flex-shrink-0 ${status.color}`} />
+          {/* Title */}
+          <div className="flex items-start gap-2.5 mb-3">
+            <StatusIcon className={`w-5 h-5 mt-0.5 flex-shrink-0 ${status.color}`} />
             <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 text-xs text-sol-text-dim mb-1.5">
-                <button
-                  onClick={() => {
-                    copyToClipboard(data.short_id);
-                    toast.success("Task ID copied");
-                  }}
-                  className="font-mono px-1.5 py-0.5 rounded bg-sol-bg-alt border border-sol-border/30 hover:border-sol-cyan/40 hover:text-sol-cyan transition-colors cursor-copy"
-                  title="Click to copy ID"
-                >
-                  {data.short_id}
-                </button>
-                {teamInfo && (
-                  <span className="px-1.5 py-0.5 rounded bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 text-[10px]">
-                    {teamInfo.name}
-                  </span>
-                )}
-                {!taskTeamId && (
-                  <span className="px-1.5 py-0.5 rounded bg-sol-text-dim/10 text-sol-text-dim border border-sol-text-dim/20 text-[10px]">
-                    Personal
-                  </span>
-                )}
-                {data.source === "insight" && (
-                  <span className="px-1.5 py-0.5 rounded bg-sol-violet/10 text-sol-violet border border-sol-violet/20 text-[10px]">
-                    mined
-                  </span>
-                )}
-                <WatchButton entityType="task" entityId={data._id} />
-              </div>
               {editingTitle ? (
                 <input
                   ref={titleRef}
@@ -663,38 +688,27 @@ function TaskDetailContent() {
             </div>
           </div>
 
-          {/* Properties grid */}
-          <div className="mb-6 rounded-lg border border-sol-border/20 bg-sol-bg-alt/10 overflow-hidden">
-            {/* Status */}
-            <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors">
-              <span className="text-xs text-sol-text-dim">Status</span>
-              <Dropdown value={data.status} options={STATUS_OPTIONS} onChange={(v) => handleUpdate({ status: v })} shortcutHint="s to cycle" />
-            </div>
+          {/* Primary properties — inline, editable (the card look) */}
+          <div className="flex items-center gap-1 flex-wrap mb-4 -ml-1">
+            <Dropdown value={data.status} options={STATUS_OPTIONS} onChange={(v) => handleUpdate({ status: v })} shortcutHint="s to cycle" />
+            <Dropdown value={data.priority} options={PRIORITY_OPTIONS} onChange={(v) => handleUpdate({ priority: v })} shortcutHint="p to cycle" />
+            <button
+              onClick={() => openCmd("assign")}
+              className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs hover:bg-sol-bg-alt transition-colors text-left"
+            >
+              {assigneeInfo ? (
+                <>
+                  <Avatar name={assigneeInfo.name} image={assigneeInfo.image} />
+                  <span className="text-sol-text-muted">{assigneeInfo.name}</span>
+                </>
+              ) : (
+                <span className="text-sol-text-dim">Unassigned</span>
+              )}
+            </button>
+          </div>
 
-            {/* Priority */}
-            <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors">
-              <span className="text-xs text-sol-text-dim">Priority</span>
-              <Dropdown value={data.priority} options={PRIORITY_OPTIONS} onChange={(v) => handleUpdate({ priority: v })} shortcutHint="p to cycle" />
-            </div>
-
-            {/* Assignee */}
-            <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors">
-              <span className="text-xs text-sol-text-dim">Assignee</span>
-              <button
-                onClick={() => openCmd("assign")}
-                className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs hover:bg-sol-bg-alt transition-colors text-left"
-              >
-                {(data as any).assignee_info ? (
-                  <>
-                    <Avatar name={(data as any).assignee_info.name} image={(data as any).assignee_info.image} />
-                    <span className="text-sol-text-muted">{(data as any).assignee_info.name}</span>
-                  </>
-                ) : (
-                  <span className="text-sol-text-dim">Unassigned</span>
-                )}
-              </button>
-            </div>
-
+          {/* Secondary properties */}
+          <div className="mb-6 rounded-lg border border-sol-border/15 overflow-hidden">
             {/* Created */}
             <div className="grid grid-cols-[7rem_1fr] items-center px-4 py-1.5 hover:bg-sol-bg-alt/30 transition-colors">
               <span className="text-xs text-sol-text-dim">Created</span>
@@ -981,8 +995,8 @@ function TaskDetailContent() {
                   <div className="shrink-0">
                     <button
                       onClick={handleAddComment}
-                      disabled={(!comment.trim() && !commentImages.some(i => i.storageId)) || submittingComment}
-                      className={`w-7 h-7 rounded-full transition-colors flex items-center justify-center border ${(!comment.trim() && !commentImages.some(i => i.storageId)) || submittingComment ? "border-sol-border/30 text-sol-text-dim/25 cursor-not-allowed" : "border-sol-blue/50 bg-sol-blue/20 text-sol-blue hover:bg-sol-blue/30 hover:border-sol-blue"}`}
+                      disabled={!comment.trim() && !commentImages.some(i => i.storageId)}
+                      className={`w-7 h-7 rounded-full transition-colors flex items-center justify-center border ${(!comment.trim() && !commentImages.some(i => i.storageId)) ? "border-sol-border/30 text-sol-text-dim/25 cursor-not-allowed" : "border-sol-blue/50 bg-sol-blue/20 text-sol-blue hover:bg-sol-blue/30 hover:border-sol-blue"}`}
                     >
                       <ArrowUp className="w-3.5 h-3.5" />
                     </button>
@@ -993,7 +1007,7 @@ function TaskDetailContent() {
           </div>
 
         </div>
-        {data.linked_conversations && data.linked_conversations.length > 0 && (
+        {!isInline && data.linked_conversations && data.linked_conversations.length > 0 && (
           <div className="max-w-4xl mx-auto px-6 pb-4 w-full">
             <h2 className="text-xs font-medium text-sol-text-dim uppercase tracking-wide mb-2 flex items-center gap-1.5">
               <Radio className="w-3.5 h-3.5" />
@@ -1012,44 +1026,26 @@ function TaskDetailContent() {
                   if (!a.is_active && b.is_active) return 1;
                   return (b.updated_at || 0) - (a.updated_at || 0);
                 })
-                .map((conv: any) => {
-                  const sid = conv._id;
-                  return (
-                  <SessionCardInner
+                .map((conv: any) => (
+                  <FeedCard
                     key={conv._id}
-                    item={{ ...conv, conversation_id: sid, status: conv.is_active ? "active" : conv.status }}
-                    compact
-                    onNavigate={() => {
-                      const store = useInboxStore.getState();
-                      if (!store.sessions[sid]) {
-                        store.syncRecord('sessions', sid, {
-                          _id: conv._id,
-                          session_id: conv.session_id || conv._id,
-                          title: conv.title,
-                          project_path: conv.project_path,
-                          message_count: conv.message_count || 0,
-                          updated_at: conv.updated_at,
-                          started_at: conv.started_at,
-                          agent_type: conv.agent_type || 'claude',
-                          is_idle: !conv.is_active,
-                          has_pending: false,
-                        });
-                      }
-                      store.openSidePanel(sid);
-                    }}
+                    conv={conv as any}
+                    showActor={false}
+                    onNavigate={() => openLinkedSession(conv)}
                   />
-                  );
-                })}
+                ))}
             </div>
           </div>
         )}
-        <ContextChatInput
-          contextType="task"
-          contextTitle={data.title}
-          getContextBody={getTaskContextBody}
-          linkedObjectId={data._id}
-          projectPath={data.project_path}
-        />
+        {!isInline && (
+          <ContextChatInput
+            contextType="task"
+            contextTitle={data.title}
+            getContextBody={getTaskContextBody}
+            linkedObjectId={data._id}
+            projectPath={data.project_path}
+          />
+        )}
         </div>
         </div>
 

@@ -2,3 +2,6 @@ public/binaries/
 
 .env.local
 convex/_generated/
+
+# Local dev scratch harnesses (e.g. __harness.tsx mounting a component in isolation)
+__harness.*

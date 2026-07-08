@@ -34,3 +34,54 @@ export function normalizeProjectPath(raw: string): string | null {
   }
   return p;
 }
+
+/**
+ * Directory-overlap project bound: true when one path contains the other
+ * (e.g. ~/src/union-mobile vs ~/src/union-mobile/outreach), so a cwd deeper
+ * inside a repo still claims the repo's sessions and vice versa. Used by the
+ * CLI label views to scope "the current project" from the caller's cwd.
+ */
+export function projectOverlaps(boundRaw: string, raw: string | null | undefined): boolean {
+  if (!raw) return false;
+  const bound = boundRaw.replace(/\/+$/, "");
+  const p = raw.replace(/\/+$/, "");
+  return p === bound || p.startsWith(bound + "/") || bound.startsWith(p + "/");
+}
+
+export interface GitMetaSource {
+  git_remote_url?: string | null;
+  git_root?: string | null;
+  updated_at?: number | null;
+  started_at?: number | null;
+}
+
+/**
+ * Recover the git remote (and real repo root) for a session created from a task.
+ *
+ * A task stores `project_path` but NOT `git_remote_url`, so a conversation
+ * created from a task inherits the path with no remote. When that path is
+ * foreign — recorded on a different machine than the one now running the session
+ * (e.g. an EC2 box's `/Users/ec2-user/...`) — the owning daemon can't remap it
+ * to the user's local checkout: `resolveLocalProjectPath` needs the remote URL
+ * to find sibling checkouts and bails without it, surfacing a spurious "clone it
+ * first" banner even though the user has the repo locally under a different path.
+ *
+ * The remote was recorded by a daemon on the task's *source* conversations.
+ * Pick the most-recently-active source that carries a `git_remote_url`; return
+ * its repo root too so the caller can preserve the in-repo subpath on remap.
+ */
+export function pickInheritedGitMeta(
+  sources: GitMetaSource[],
+): { git_remote_url: string | null; git_root: string | null } {
+  let best: GitMetaSource | null = null;
+  let bestT = -Infinity;
+  for (const s of sources) {
+    if (!s?.git_remote_url) continue;
+    const t = s.updated_at ?? s.started_at ?? 0;
+    if (t > bestT) { bestT = t; best = s; }
+  }
+  return {
+    git_remote_url: best?.git_remote_url ?? null,
+    git_root: best?.git_root ?? null,
+  };
+}

@@ -3,8 +3,10 @@ import { useQuery, usePaginatedQuery, useConvex } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, DocDetail } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
-import { useMountEffect } from "./useMountEffect";
+import { useWatchEffect } from "./useWatchEffect";
+import { runReconcileCrawl } from "./reconcileCrawl";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
+import { useWorkspaceArgs, type WorkspaceArgs as StoreWorkspaceArgs } from "./useWorkspaceArgs";
 
 const api = _api as any;
 
@@ -30,67 +32,24 @@ function dedupeProjectPaths(paths: string[]): string[] {
   return Array.from(byName.values());
 }
 
-// Only the most-recent page is held LIVE (a single subscription). The rest is
-// loaded once into the IDB-persisted store cache by the background reconcile
-// below. We never want the old "auto-load every remaining page" behaviour: it
-// fanned every docs mount/refresh into ~totalDocs/pageSize sequential
-// round-trips against the (already saturated) backend, and held that many live
-// subscriptions per tab — each re-running on any doc write.
+// Recent docs held LIVE (one subscription). The rest are loaded once into the
+// IDB-persisted store cache by the background reconcile below. The server caps
+// webListPaginated at a small page (per-doc memory), so we never want the old
+// "auto-load every page" behaviour: that held ~totalDocs/pageSize live
+// subscriptions PER TAB, and each re-ran on any conversation/author write —
+// the dominant webListPaginated invalidation storm (~hundreds/s fleet-wide).
 const LIVE_PAGE_SIZE = 24;
 const RECONCILE_PAGE_SIZE = 24;
-// Full reconcile is a one-shot crawl, not a live subscription. Throttle it per
-// workspace so re-mounts and reactive re-renders lean on the cache instead of
-// re-crawling every time.
-export const RECONCILE_THROTTLE_MS = 5 * 60 * 1000;
-const RECONCILE_PAGE_DELAY_MS = 200; // pace the crawl so it never bursts the backend
-// Hard ceiling on pages per crawl so a runaway cursor can never walk forever.
-export const MAX_RECONCILE_PAGES = 1000;
-const reconcileLastRun = new Map<string, number>();
-
-/** Throttle gate: only start a fresh crawl once the window has elapsed. */
-export function shouldReconcile(lastRunAt: number, now: number, throttleMs: number): boolean {
-  return now - lastRunAt >= throttleMs;
-}
-
-type DocsPage = { page?: any[]; isDone?: boolean; continueCursor?: string | null };
-
-/**
- * Bounded one-shot crawl of every docs page. Stops at `isDone`, on a missing
- * cursor, when cancelled, or at `maxPages` — it never loops unbounded. Returns
- * the accumulated docs, or null when the crawl was aborted (cancelled or a
- * fetch threw) so the caller can skip the prune-on-snapshot.
- */
-export async function crawlAllPages(
-  fetchPage: (cursor: string | null) => Promise<DocsPage | null | undefined>,
-  opts: {
-    maxPages?: number;
-    isCancelled?: () => boolean;
-    onPage?: () => Promise<void> | void;
-  } = {}
-): Promise<any[] | null> {
-  const maxPages = opts.maxPages ?? MAX_RECONCILE_PAGES;
-  const all: any[] = [];
-  let cursor: string | null = null;
-  for (let i = 0; i < maxPages; i++) {
-    if (opts.isCancelled?.()) return null;
-    let page: DocsPage | null | undefined;
-    try {
-      page = await fetchPage(cursor);
-    } catch {
-      return null;
-    }
-    if (opts.isCancelled?.() || !page) return null;
-    all.push(...(page.page ?? []));
-    if (page.isDone || !page.continueCursor) break;
-    cursor = page.continueCursor;
-    if (opts.onPage) await opts.onPage();
-  }
-  return all;
-}
+// Full reconcile is a one-shot crawl, not a live subscription. The durable
+// throttle (syncMeta.backfilledAt, written by runReconcileCrawl on completion)
+// makes a fresh launch within the window skip the crawl and serve from the
+// hydrated IDB cache — same as tasks. The live first page keeps recent docs fresh.
+const RECONCILE_THROTTLE_MS = 30 * 60 * 1000;
+const RECONCILE_PAGE_DELAY_MS = 60; // pace the crawl so it never bursts the backend
 
 type WorkspaceArgs =
-  | { team_id: Id<"teams">; workspace: "team" }
-  | { workspace: "personal" }
+  | Extract<StoreWorkspaceArgs, { workspace: "team" }>
+  | Extract<StoreWorkspaceArgs, { workspace: "personal" }>
   | "skip";
 
 /**
@@ -98,10 +57,11 @@ type WorkspaceArgs =
  *
  * Lazy + heavily cached: a single LIVE subscription keeps the most-recent page
  * fresh (synced as a delta so it never prunes the cache), and a throttled,
- * paced background crawl loads the full set once and snapshot-syncs it
- * (authoritative → prunes server-side deletes). Everything else is served from
- * the persisted store cache, so re-mounts and older docs cost nothing — and
- * opening/refreshing the docs view never walks every page on every mount.
+ * paced background crawl loads the full set once and syncs it as a delta with
+ * a workspace-scoped absent-prune (authoritative for this workspace → removes
+ * server-side deletes without touching other workspaces' cached docs).
+ * Everything else is served from the persisted store cache, so re-mounts and
+ * older docs cost nothing.
  */
 export function useSyncDocsPaginated(wsArgs: WorkspaceArgs) {
   const convex = useConvex();
@@ -125,56 +85,75 @@ export function useSyncDocsPaginated(wsArgs: WorkspaceArgs) {
     }, [syncTable])
   );
 
+  // Header SyncStatusChip: spin only while the LIVE first page is loading on a
+  // cold open. The background reconcile crawl below is housekeeping (it pages
+  // every doc at a throttled pace, for minutes) and must NOT drive the chip.
+  useWatchEffect(() => {
+    useInboxStore.getState().setLiveLoading("docs", status === "LoadingFirstPage");
+  }, [status]);
+
   // 2) BACKGROUND RECONCILE: crawl every page once (one-shot queries, NOT live
-  //    subscriptions), then snapshot-sync the full set to prune deletions and
-  //    fill the cache. Throttled per workspace + paced + page-budget capped. A
-  //    nonce ticks every throttle window so long-lived sessions still pick up
-  //    docs deleted elsewhere (the live first page already catches recent ones).
+  //    subscriptions), then sync the full set with a workspace-scoped
+  //    absent-prune to drop deletions and fill the cache. Throttled per
+  //    workspace + paced. A nonce ticks every throttle window so long-lived
+  //    sessions still pick up docs deleted elsewhere (the live first page
+  //    already catches new/updated recent docs).
   const wsKey = wsArgs === "skip" ? "skip" : JSON.stringify(wsArgs);
+  // Gate on hydration so the durable watermark is restored before we decide
+  // whether to crawl — else a reload would full-crawl against an empty syncMeta
+  // before the persisted backfilledAt loads. Mirrors useSyncTasks.
+  const hydrated = useInboxStore((s) => s.clientStateInitialized);
   const [reconcileNonce, setReconcileNonce] = useState(0);
-  useMountEffect(() => {
+  useEffect(() => {
     const id = setInterval(() => setReconcileNonce((n) => n + 1), RECONCILE_THROTTLE_MS);
     return () => clearInterval(id);
-  });
-  // eslint-disable-next-line no-restricted-syntax
+  }, []);
   useEffect(() => {
-    if (wsArgs === "skip") return;
-    const last = reconcileLastRun.get(wsKey) ?? 0;
-    if (!shouldReconcile(last, Date.now(), RECONCILE_THROTTLE_MS)) return;
-    reconcileLastRun.set(wsKey, Date.now());
-
-    let cancelled = false;
-    (async () => {
-      const all = await crawlAllPages(
-        (cursor) =>
-          convex.query(api.docs.webListPaginated, {
-            ...(wsArgs as object),
-            paginationOpts: { numItems: RECONCILE_PAGE_SIZE, cursor },
-          }),
-        {
-          isCancelled: () => cancelled,
-          onPage: () => new Promise((r) => setTimeout(r, RECONCILE_PAGE_DELAY_MS)),
-        }
-      );
-      // Aborted mid-crawl (cancelled or backend hiccup): don't snapshot a
-      // partial set — that would prune real docs. Allow a retry next mount.
-      if (all === null) {
-        if (!cancelled) reconcileLastRun.set(wsKey, 0);
-        return;
-      }
-      if (cancelled) return;
-      const projectPaths = dedupeProjectPaths([
-        ...new Set(all.map((d) => d.project_path).filter(Boolean) as string[]),
-      ]);
-      useInboxStore
-        .getState()
-        .syncTable("docs", all, { extra: { docProjectPaths: projectPaths } });
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [convex, wsKey, reconcileNonce]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!hydrated) return;
+    runReconcileCrawl({
+      namespace: "docs",
+      wsKey,
+      throttleMs: RECONCILE_THROTTLE_MS,
+      pageDelayMs: RECONCILE_PAGE_DELAY_MS,
+      maxPages: 1000,
+      fetchPage: async (cursor) => {
+        const page = await convex.query(api.docs.webListPaginated, {
+          ...(wsArgs as object),
+          paginationOpts: { numItems: RECONCILE_PAGE_SIZE, cursor },
+        });
+        return { rows: page.page ?? [], isDone: page.isDone, continueCursor: page.continueCursor };
+      },
+      onPage: (rows) => syncTable("docs", rows, { isDelta: true }),
+      onComplete: (all) => {
+        const projectPaths = dedupeProjectPaths([
+          ...new Set(all.map((d) => d.project_path).filter(Boolean) as string[]),
+        ]);
+        // Only attach `extra` when the derived paths actually changed. `extra`
+        // forces syncTable past its no-op guard, so passing it every crawl would
+        // rewrite `docs` (and re-persist it) every 5 minutes even when nothing
+        // changed. When paths are stable, a plain sync lets the guard short-
+        // circuit an unchanged crawl entirely.
+        const prevPaths = useInboxStore.getState().docProjectPaths;
+        const pathsChanged =
+          prevPaths.length !== projectPaths.length ||
+          projectPaths.some((p, i) => prevPaths[i] !== p);
+        // The crawl is the COMPLETE set for this workspace, so docs of this
+        // workspace absent from it are server-side deletions — prune them
+        // (scoped, so the other workspace's cached docs are untouched). This is
+        // the only channel by which a doc deletion reaches a client's cache.
+        const pruneAbsentScope =
+          wsArgs === "skip"
+            ? undefined
+            : (wsArgs as any).workspace === "team"
+              ? (d: any) => d.team_id === (wsArgs as any).team_id
+              : (d: any) => !d.team_id;
+        const opts = pathsChanged
+          ? { isDelta: true, pruneAbsentScope, extra: { docProjectPaths: projectPaths } }
+          : { isDelta: true, pruneAbsentScope };
+        useInboxStore.getState().syncTable("docs", all, opts);
+      },
+    });
+  }, [convex, wsKey, reconcileNonce, hydrated]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return { ready: status !== "LoadingFirstPage" };
 }
@@ -183,16 +162,7 @@ export function useSyncDocsPaginated(wsArgs: WorkspaceArgs) {
  * Web-specific wrapper — reads workspace args from the store.
  */
 export function useSyncDocs() {
-  const activeTeamId = useInboxStore(
-    (s) => s.clientState.ui?.active_team_id
-  ) as Id<"teams"> | undefined;
-  const initialized = useInboxStore((s) => s.clientStateInitialized);
-
-  const wsArgs: WorkspaceArgs = !initialized ? "skip" : activeTeamId
-    ? { team_id: activeTeamId, workspace: "team" as const }
-    : { workspace: "personal" as const };
-
-  return useSyncDocsPaginated(wsArgs);
+  return useSyncDocsPaginated(useWorkspaceArgs());
 }
 
 /**
@@ -207,6 +177,11 @@ export function useSyncMentionDocs() {
   }, [syncMentionIndex]));
 }
 
+// Returns the raw query result so callers can tell the three states apart:
+//   undefined → still loading
+//   null      → resolved, but no accessible doc for this id (e.g. a stale or
+//               cross-table id from a malformed /docs/<id> link)
+//   object    → the doc detail
 export function useSyncDocDetail(id?: string) {
   const data = useQuery(
     api.taskMining.webGetDocDetail,
@@ -215,6 +190,10 @@ export function useSyncDocDetail(id?: string) {
   const syncRecord = useInboxStore((s) => s.syncRecord);
 
   useConvexSync(data, useCallback((d: any) => {
-    if (id) syncRecord("docDetails", id, d as unknown as DocDetail);
+    // Don't write a null result into the store — it would clobber a doc that the
+    // list query may have already provided, and the null is surfaced via the return.
+    if (id && d) syncRecord("docDetails", id, d as unknown as DocDetail);
   }, [id, syncRecord]));
+
+  return data as DocDetail | null | undefined;
 }

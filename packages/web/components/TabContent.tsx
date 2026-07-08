@@ -1,5 +1,6 @@
 import { lazy, Suspense, createContext, useContext, useRef, useEffect, useMemo } from "react";
 import { useInboxStore, useTrackedStore, type AppTab } from "../store/inboxStore";
+import { isFullWidthRoute, PageShell } from "../lib/pageLayout";
 
 // -- Tab params context: overrides next/navigation hooks when inside a tab --
 
@@ -7,6 +8,10 @@ export const TabParamsCtx = createContext<{
   pathname: string;
   params: Record<string, string>;
   searchParams: URLSearchParams;
+  // Whether this is the currently-visible tab. Background tabs stay mounted
+  // (display:none) so their scroll/state survive — a pane uses this to freeze
+  // itself on its own route/params instead of following global view state.
+  isActive: boolean;
 } | null>(null);
 
 export function useTabContext() {
@@ -16,7 +21,6 @@ export function useTabContext() {
 // -- Route map: path pattern → lazy component --
 
 const Tasks = lazy(() => import("@/app/tasks/page"));
-const TaskDetail = lazy(() => import("@/app/tasks/[id]/page"));
 const Docs = lazy(() => import("@/app/docs/page"));
 const DocDetail = lazy(() => import("@/app/docs/[id]/page"));
 const Plans = lazy(() => import("@/app/plans/page"));
@@ -27,9 +31,12 @@ const Conversation = lazy(() => import("@/app/conversation/[id]/page"));
 const ConversationDiff = lazy(() => import("@/app/conversation/[id]/diff/page"));
 const Inbox = lazy(() => import("@/app/inbox/page"));
 const Feed = lazy(() => import("@/app/feed/page"));
-const Dashboard = lazy(() => import("@/app/dashboard/page"));
-const Workflows = lazy(() => import("@/app/workflows/page"));
+const Crosstalk = lazy(() => import("@/app/crosstalk/page"));
+const Workflows = lazy(() => import("@/app/workflows/dashboard"));
+const Routines = lazy(() => import("@/app/workflows/page"));
+const Schedules = lazy(() => import("@/app/schedules/page"));
 const Sessions = lazy(() => import("@/app/sessions/page"));
+const Anchor = lazy(() => import("@/app/anchor/page"));
 const Team = lazy(() => import("@/app/team/page"));
 const TeamActivity = lazy(() => import("@/app/team/activity/page"));
 const TeamMember = lazy(() => import("@/app/team/[username]/page"));
@@ -49,7 +56,9 @@ const ROUTES: RouteEntry[] = [
   // Parameterized routes first (more specific)
   { pattern: /^\/conversation\/([^/]+)\/diff$/, paramNames: ["id"], component: ConversationDiff },
   { pattern: /^\/conversation\/([^/]+)$/, paramNames: ["id"], component: Conversation },
-  { pattern: /^\/tasks\/([^/]+)$/, paramNames: ["id"], component: TaskDetail },
+  // Same component as the list: /tasks and /tasks/<id> share one <Tasks> so
+  // selecting a task reconciles (instant) instead of swapping components (re-mount).
+  { pattern: /^\/tasks\/([^/]+)$/, paramNames: ["id"], component: Tasks },
   { pattern: /^\/docs\/([^/]+)$/, paramNames: ["id"], component: DocDetail },
   { pattern: /^\/plans\/([^/]+)$/, paramNames: ["id"], component: PlanDetail },
   { pattern: /^\/projects\/([^/]+)$/, paramNames: ["id"], component: ProjectDetail },
@@ -62,9 +71,12 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/projects$/, paramNames: [], component: Projects },
   { pattern: /^\/inbox$/, paramNames: [], component: Inbox },
   { pattern: /^\/feed$/, paramNames: [], component: Feed },
-  { pattern: /^\/dashboard$/, paramNames: [], component: Dashboard },
+  { pattern: /^\/crosstalk$/, paramNames: [], component: Crosstalk },
   { pattern: /^\/workflows$/, paramNames: [], component: Workflows },
+  { pattern: /^\/routines$/, paramNames: [], component: Routines },
+  { pattern: /^\/schedules$/, paramNames: [], component: Schedules },
   { pattern: /^\/sessions$/, paramNames: [], component: Sessions },
+  { pattern: /^\/anchor(\/|$)/, paramNames: [], component: Anchor },
   { pattern: /^\/team$/, paramNames: [], component: Team },
   { pattern: /^\/search$/, paramNames: [], component: Search },
   { pattern: /^\/windows$/, paramNames: [], component: Windows },
@@ -97,8 +109,9 @@ function TabPane({ tab, isActive }: { tab: AppTab; isActive: boolean }) {
       pathname,
       params: matched?.params ?? {},
       searchParams: new URLSearchParams(queryString ?? ""),
+      isActive,
     };
-  }, [tab.path, matched]);
+  }, [tab.path, matched, isActive]);
 
   // Sync browser URL when this tab is active
   useEffect(() => {
@@ -111,17 +124,27 @@ function TabPane({ tab, isActive }: { tab: AppTab; isActive: boolean }) {
   if (!matched) return null;
   const Component = matched.component;
 
+  // Full-width pages own their scroll/padding; everything else gets the shared
+  // PageShell so it is padded and centered (the global "always pad views" rule).
+  const page = (
+    <TabParamsCtx.Provider value={ctxValue}>
+      <Suspense>
+        <Component />
+      </Suspense>
+    </TabParamsCtx.Provider>
+  );
+
   return (
     <div
       data-tab-id={tab.id}
       className="h-full"
       style={{ display: isActive ? "block" : "none" }}
     >
-      <TabParamsCtx.Provider value={ctxValue}>
-        <Suspense>
-          <Component />
-        </Suspense>
-      </TabParamsCtx.Provider>
+      {isFullWidthRoute(ctxValue.pathname) ? (
+        page
+      ) : (
+        <PageShell pathname={ctxValue.pathname}>{page}</PageShell>
+      )}
     </div>
   );
 }
@@ -148,12 +171,14 @@ export function TabContent() {
   // On full-page navigation (address bar, external link), the active tab's
   // stored path may differ from the browser URL. Override it at render time so
   // TabPanes immediately render the correct content (no effect-timing race).
-  // The store is updated in the effect below.
+  // The store is updated in the effect below. Full-path compare: an entry URL
+  // that differs only in query (e.g. /search?q=new vs a restored /search?q=old)
+  // must also win, or the restored tab silently clobbers the typed query.
   const navUrl = useRef<string | null>(window.location.pathname + window.location.search);
   let renderTabs = tabs;
   if (navUrl.current && activeTabId) {
     const active = tabs.find((t: AppTab) => t.id === activeTabId);
-    if (active && active.path.split("?")[0] !== navUrl.current.split("?")[0]) {
+    if (active && active.path !== navUrl.current) {
       const url = navUrl.current;
       renderTabs = tabs.map((t: AppTab) =>
         t.id === activeTabId ? { ...t, path: url } : t
@@ -167,7 +192,7 @@ export function TabContent() {
     const store = useInboxStore.getState();
     if (!store.activeTabId) return;
     const active = store.tabs.find((t: AppTab) => t.id === store.activeTabId);
-    if (active && active.path.split("?")[0] !== url.split("?")[0]) {
+    if (active && active.path !== url) {
       store.updateTab(store.activeTabId, { path: url });
     }
   }, []);

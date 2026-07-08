@@ -5,12 +5,14 @@ import { useEventListener } from "../hooks/useEventListener";
 import { Panel, Group, Separator } from "react-resizable-panels";
 import { ConversationView, ConversationData, ConversationViewHandle } from "./ConversationView";
 import { useDiffViewerStore } from "../store/diffViewerStore";
-import { extractFileChanges } from "../lib/fileChangeExtractor";
+import { extractFileChanges, mergeFileChanges } from "../lib/fileChangeExtractor";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { FileDiffLayout, DiffFile } from "./FileDiffLayout";
 import type { FileChange } from "../store/diffViewerStore";
-import { useInboxStore } from "../store/inboxStore";
+import { useInboxStore, isConvexId } from "../store/inboxStore";
+import { useQuery } from "convex/react";
+import { api } from "@codecast/convex/convex/_generated/api";
 
 const MOBILE_BREAKPOINT = 768;
 const DEFAULT_DIFF_LAYOUT = { content: 40, diff: 60 };
@@ -37,6 +39,7 @@ interface ConversationDiffLayoutProps {
   highlightQuery?: string;
   onClearHighlight?: () => void;
   targetMessageId?: string;
+  isJumpingToTarget?: boolean;
   isOwner?: boolean;
   showMessageInput?: boolean;
   onSendAndAdvance?: () => void;
@@ -67,6 +70,7 @@ export function ConversationDiffLayout({
   onJumpToTimestamp,
   highlightQuery,
   targetMessageId,
+  isJumpingToTarget,
   onClearHighlight,
   isOwner,
   showMessageInput,
@@ -96,12 +100,21 @@ export function ConversationDiffLayout({
     diffPanelOpen,
   } = useDiffViewerStore();
 
+  // Complete set of changes, materialized server-side at ingest — independent of
+  // how many message pages are currently loaded. Undefined while loading; empty
+  // for conversations whose edits predate materialization (no backfill was run).
+  const serverFileChanges = useQuery(
+    api.messages.getConversationFileChanges,
+    conversation?._id && isConvexId(conversation._id) ? { conversation_id: conversation._id } : "skip",
+  );
+
   useWatchEffect(() => {
-    if (conversation?.messages) {
-      const extractedChanges = extractFileChanges(conversation.messages as any);
-      setChanges(extractedChanges);
-    }
-  }, [conversation?.messages, setChanges]);
+    // Merge the authoritative server set with the client window extraction: server
+    // gives completeness without scrolling; the client backfills un-materialized
+    // (pre-feature) conversations so nothing regresses to "scroll up to see it".
+    const clientChanges = conversation?.messages ? extractFileChanges(conversation.messages as any) : [];
+    setChanges(mergeFileChanges(serverFileChanges ?? [], clientChanges));
+  }, [conversation?.messages, serverFileChanges, setChanges]);
 
   useMountEffect(() => {
     setIsMobile(window.innerWidth < MOBILE_BREAKPOINT);
@@ -159,7 +172,7 @@ export function ConversationDiffLayout({
   const conversationViewProps = {
     ref: conversationRef,
     conversation,
-    backHref: backHrefProp || "/dashboard",
+    backHref: backHrefProp || "/team/activity",
     headerExtra: combinedHeaderExtra,
     headerLeft,
     headerEnd,
@@ -178,6 +191,7 @@ export function ConversationDiffLayout({
     onClearHighlight,
     embedded,
     targetMessageId,
+    isJumpingToTarget,
     isOwner,
     showMessageInput,
     onSendAndAdvance,
@@ -534,7 +548,15 @@ function ChangesBar({ changes }: { changes: FileChange[] }) {
   return (
     <button
       onClick={() => setDiffPanelOpen(true)}
-      className="absolute top-full right-0 mt-2 mr-3 z-30 flex items-center gap-2 px-2.5 py-1 rounded-md bg-sol-bg-alt/80 backdrop-blur-sm border border-sol-border/40 shadow-sm hover:border-sol-border/70 hover:bg-sol-bg-alt/95 transition-all group cursor-pointer select-none"
+      // --conv-sticky-h (set on the conversation header) pushes the pill below the
+      // sticky prompt card so the two never overlap at narrow widths. While pushed
+      // down it sits in the message tick rail's band, so it also shifts left
+      // (min() saturates at 2.5rem for any visible sticky) to clear the rail.
+      style={{
+        top: "calc(100% + var(--conv-sticky-h, 0px))",
+        right: "calc(0.75rem + min(var(--conv-sticky-h, 0px), 2.5rem))",
+      }}
+      className="absolute mt-2 z-30 flex items-center gap-2 px-2.5 py-1 rounded-md bg-sol-bg-alt/80 backdrop-blur-sm border border-sol-border/40 shadow-sm hover:border-sol-border/70 hover:bg-sol-bg-alt/95 transition-all group cursor-pointer select-none"
     >
       <div className="flex items-center gap-1">
         {displayFiles.map((f) => (

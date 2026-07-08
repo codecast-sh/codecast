@@ -1,34 +1,16 @@
-import { mutation, query, internalMutation, type MutationCtx } from "./_generated/server";
+import { mutation, query, internalMutation, type MutationCtx } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { shouldGenerateTitle } from "./titleGeneration";
-import { canTeamMemberAccess } from "./privacy";
+import { canTeamMemberAccess, checkConversationAccess } from "./privacy";
 import { redactSecrets } from "./redact";
 import { markPendingDelivered } from "./pendingMessages";
-import { nextAgentStatusOnAddMessages, isApiErrorBanner, apiErrorBatchAction } from "./inboxFilters";
-
-function classifyDocContent(content: string): "plan" | "design" | "spec" | "investigation" | "handoff" | "note" {
-  const first2k = content.slice(0, 2000).toLowerCase();
-  if (/implementation\s+plan|## phases?\b|## milestones?\b|## timeline/i.test(first2k)) return "plan";
-  if (/design\s+doc|architecture|## design|## approach|system\s+design/i.test(first2k)) return "design";
-  if (/## spec|specification|## requirements|## api\b|## endpoints/i.test(first2k)) return "spec";
-  if (/investigation|root\s+cause|## findings|## analysis|debugging/i.test(first2k)) return "investigation";
-  if (/handoff|## status|## context|## next\s+steps/i.test(first2k)) return "handoff";
-  return "note";
-}
-
-function extractTitleFromContent(content: string): string {
-  const h1 = content.match(/^#\s+(.+)/m);
-  if (h1) return h1[1].slice(0, 200);
-  const h2 = content.match(/^##\s+(.+)/m);
-  if (h2) return h2[1].slice(0, 200);
-  const firstLine = content.split("\n").find((l) => l.trim().length > 10);
-  if (firstLine) return firstLine.replace(/^[#*\->\s]+/, "").slice(0, 200);
-  return "Untitled Document";
-}
+import { nextAgentStatusOnAddMessages, isApiErrorBanner, classifyApiErrorBanner, apiErrorBatchAction } from "./inboxFilters";
+import { classifyDocContent, extractTitleFromContent, inlineDocSourceKey } from "./docExtraction";
+import { extractFileChanges, extractCommitHashFromContent, hasFileChangeToolCall, type FileChange } from "./fileChanges/extractor";
 
 type DocExtractionMessage = {
   role?: string;
@@ -45,7 +27,7 @@ type DocExtractionConversation = {
   team_visibility?: string;
 };
 
-function buildExistingMessagePatch(
+export function buildExistingMessagePatch(
   existing: {
     role: string;
     content?: string;
@@ -54,6 +36,7 @@ function buildExistingMessagePatch(
     tool_results?: unknown;
     images?: unknown;
     subtype?: string;
+    model?: string;
   },
   incoming: {
     role: string;
@@ -63,6 +46,7 @@ function buildExistingMessagePatch(
     tool_results?: unknown;
     images?: unknown;
     subtype?: string;
+    model?: string;
   },
 ): Record<string, unknown> | null {
   const patch: Record<string, unknown> = {};
@@ -76,6 +60,10 @@ function buildExistingMessagePatch(
     }
     if (incoming.subtype !== undefined && incoming.subtype !== existing.subtype) {
       patch.subtype = incoming.subtype;
+    }
+    // Backfills older rows when a transcript re-syncs (resume, fork, new device).
+    if (incoming.model !== undefined && incoming.model !== existing.model) {
+      patch.model = incoming.model;
     }
     if (incoming.tool_calls !== undefined && JSON.stringify(incoming.tool_calls) !== JSON.stringify(existing.tool_calls ?? null)) {
       patch.tool_calls = incoming.tool_calls;
@@ -92,22 +80,186 @@ function buildExistingMessagePatch(
   return Object.keys(patch).length > 0 ? patch : null;
 }
 
+// A /model switch emits a user line `<local-command-stdout>Set model to <Name>`
+// and NO assistant line until the next turn, so it must count as a model signal
+// or the rollup (and forks, which stamp conversations.model on every line) lag
+// one turn behind the switch. Maps the display name ("Fable 5") to the id shape
+// stored everywhere else ("claude-fable-5"). "Set model to Default" doesn't name
+// a concrete model — not a signal; the next assistant turn records the real one.
+const MODEL_SWITCH_RE =
+  /<local-command-stdout>Set model to (?:\u001b\[\d+m)*(opus|sonnet|haiku|fable)\s*([\d.]*)/i;
+export function modelFromSwitchLine(content: string | undefined): string | null {
+  const m = content?.match(MODEL_SWITCH_RE);
+  if (!m) return null;
+  const version = m[2] ? `-${m[2].replace(/\.$/, "").replace(/\./g, "-")}` : "";
+  return `claude-${m[1].toLowerCase()}${version}`;
+}
+
+// Newest model signal in a batch — rolled up to conversations.model so list
+// surfaces (inbox badge, session pickers) can read it without scanning messages.
+// Signals: assistant lines record the model a turn ran on; user /model switch
+// lines record where the session is headed. "<synthetic>" marks system-generated
+// assistant entries (error banners), never a real model.
+export function lastKnownModelFromBatch(
+  messages: Array<{ role: string; model?: string; content?: string; timestamp?: number }>,
+): string | null {
+  let best: { ts: number; model: string } | null = null;
+  for (const m of messages) {
+    const model =
+      m.role === "assistant" && m.model && m.model !== "<synthetic>"
+        ? m.model
+        : m.role === "user"
+          ? modelFromSwitchLine(m.content)
+          : null;
+    if (!model) continue;
+    const ts = m.timestamp || 0;
+    if (!best || ts >= best.ts) best = { ts, model };
+  }
+  return best?.model ?? null;
+}
+
+// Effort switch echoes come in two shapes: the /effort command prints
+// "Set effort level to high (…)", and the /model picker's session-only commit
+// appends "… with max effort" to its "Set model to …" line. Unlike model,
+// effort has NO per-message field in the transcript — these echoes are the
+// only signal, so the rollup is the sole source for conversations.effort.
+const EFFORT_SWITCH_RE =
+  /<local-command-stdout>[^<]*?(?:Set effort level to (?:\u001b\[\d+m)*(low|medium|high|xhigh|max|auto)\b|with (?:\u001b\[\d+m)*(low|medium|high|xhigh|max)(?:\u001b\[\d+m)* effort)/i;
+export function effortFromSwitchLine(content: string | undefined): string | null {
+  const m = content?.match(EFFORT_SWITCH_RE);
+  if (!m) return null;
+  const level = (m[1] ?? m[2]).toLowerCase();
+  // "auto" means "no explicit level" — clearer to keep the previous value.
+  return level === "auto" ? null : level;
+}
+
+// Newest effort signal in a batch — conversations.effort twin of
+// lastKnownModelFromBatch (user switch lines are the only carriers).
+export function lastKnownEffortFromBatch(
+  messages: Array<{ role: string; content?: string; timestamp?: number }>,
+): string | null {
+  let best: { ts: number; effort: string } | null = null;
+  for (const m of messages) {
+    const effort = m.role === "user" ? effortFromSwitchLine(m.content) : null;
+    if (!effort) continue;
+    const ts = m.timestamp || 0;
+    if (!best || ts >= best.ts) best = { ts, effort };
+  }
+  return best?.effort ?? null;
+}
+
+// Insert or update a file-synced doc for a markdown file an agent wrote. Shared
+// by the Write-tool path and the Bash-heredoc path so both classify the type,
+// derive the title, and dedup identically. Skips short files and no-op patches.
+async function upsertFileSyncDoc(
+  ctx: any,
+  conversation: DocExtractionConversation,
+  conversation_id: Id<"conversations">,
+  filePath: string,
+  content: string,
+  timestamp: number,
+) {
+  if (!filePath.endsWith(".md") || content.length < 200) return;
+  const fileName = filePath.split("/").pop() || filePath;
+  const docType = fileName.toLowerCase().includes("plan") ? "plan" as const
+    : fileName.toLowerCase().includes("design") ? "design" as const
+    : fileName.toLowerCase().includes("spec") ? "spec" as const
+    : classifyDocContent(content);
+  const existing = await ctx.db
+    .query("docs")
+    .withIndex("by_source_file", (q: any) => q.eq("source_file", filePath))
+    .first();
+  if (existing) {
+    if (existing.content === content) return; // idempotent: nothing changed
+    await ctx.db.patch(existing._id, {
+      title: extractTitleFromContent(content),
+      content,
+      doc_type: docType,
+      updated_at: timestamp,
+    });
+  } else {
+    await ctx.db.insert("docs", {
+      user_id: conversation.user_id,
+      team_id: conversation.team_id,
+      title: extractTitleFromContent(content),
+      content,
+      doc_type: docType,
+      source: "file_sync",
+      source_file: filePath,
+      conversation_id,
+      project_path: conversation.project_path,
+      is_private: conversation.is_private,
+      team_visibility: conversation.team_visibility,
+      created_at: timestamp,
+      updated_at: timestamp,
+    });
+  }
+}
+
+// Markdown files written via a Bash heredoc, e.g.
+//   cat > notes.md <<'EOF'\n...\nEOF      or      tee notes.md <<EOF ... EOF
+// (the redirect may sit before or after the `<<`). The content lives inline in
+// the command, so we capture it just like a Write. Files assembled by a script
+// (content never in the command) stay invisible — there's nothing to capture.
+export function extractHeredocMarkdownWrites(command: string): Array<{ file_path: string; content: string }> {
+  const out: Array<{ file_path: string; content: string }> = [];
+  const lines = command.split("\n");
+  const openRe = /<<-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1/;
+  // The target is either a `>`/`>>` redirect or a `tee [flags]` argument.
+  const mdQuoted = `(?:'([^']+\\.md)'|"([^"]+\\.md)"|([^\\s'";|&<>]+\\.md))`;
+  const redirectRe = new RegExp(`>>?\\s*${mdQuoted}`);
+  const teeRe = new RegExp(`\\btee\\b(?:\\s+-\\S+)*\\s+${mdQuoted}`);
+  for (let i = 0; i < lines.length; i++) {
+    const open = lines[i].match(openRe);
+    if (!open) continue;
+    const pathM = lines[i].match(redirectRe) || lines[i].match(teeRe);
+    if (!pathM) continue;
+    const filePath = pathM[1] || pathM[2] || pathM[3];
+    const delim = open[2];
+    const body: string[] = [];
+    let j = i + 1;
+    for (; j < lines.length && lines[j].trim() !== delim; j++) body.push(lines[j]);
+    if (j < lines.length) {
+      out.push({ file_path: filePath, content: body.join("\n") });
+      i = j; // skip past the heredoc body
+    }
+  }
+  return out;
+}
+
 async function extractDocsFromMessages(
   ctx: any,
   messages: DocExtractionMessage[],
   conversation: DocExtractionConversation,
   conversation_id: Id<"conversations">,
 ) {
+  // Existing docs for this conversation, fetched lazily on the first inline
+  // candidate. Dedup must be by stable key AND content: legacy inline docs were
+  // keyed by wall-clock (`inline://<conv>/<Date.now()>`), so a re-synced message
+  // never matches its old key — content equality is what stops re-inserts.
+  let convDocs: Array<{ source_file?: string; content: string }> | null = null;
   for (const msg of messages) {
     if (msg.role === "assistant" && msg.content && msg.content.length > 5000) {
       const headingCount = (msg.content.match(/^#{1,3}\s/gm) || []).length;
       if (headingCount >= 3) {
-        const syntheticPath = `inline://${conversation_id}/${Date.now()}`;
-        const existing = await ctx.db
-          .query("docs")
-          .withIndex("by_source_file", (q: any) => q.eq("source_file", syntheticPath))
-          .first();
+        const syntheticPath = inlineDocSourceKey(conversation.user_id, msg.timestamp);
+        if (convDocs === null) {
+          convDocs = (await ctx.db
+            .query("docs")
+            .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conversation_id))
+            .collect()) as Array<{ source_file?: string; content: string }>;
+        }
+        // Same-conversation guard first (covers legacy wall-clock-keyed docs by
+        // content); then the user+message key via the global index, which is what
+        // dedups across forks/resumes of the same transcript.
+        const existing =
+          convDocs.some((d) => d.source_file === syntheticPath || d.content === msg.content) ||
+          !!(await ctx.db
+            .query("docs")
+            .withIndex("by_source_file", (q: any) => q.eq("source_file", syntheticPath))
+            .first());
         if (!existing) {
+          convDocs.push({ source_file: syntheticPath, content: msg.content });
           await ctx.db.insert("docs", {
             user_id: conversation.user_id,
             team_id: conversation.team_id,
@@ -128,50 +280,37 @@ async function extractDocsFromMessages(
     }
     if (msg.tool_calls) {
       for (const tc of msg.tool_calls) {
+        const ts = msg.timestamp || Date.now();
+
+        // Bash heredocs: capture markdown written via `cat > x.md <<EOF ... EOF`.
+        if (tc.name === "Bash") {
+          let input: any;
+          try { input = JSON.parse(tc.input); } catch { continue; }
+          const command: string = input.command || "";
+          if (!command.includes(".md") || !command.includes("<<")) continue;
+          for (const w of extractHeredocMarkdownWrites(command)) {
+            await upsertFileSyncDoc(ctx, conversation, conversation_id, w.file_path, w.content, ts);
+          }
+          continue;
+        }
+
         if (tc.name !== "Write" && tc.name !== "Edit") continue;
         let input: any;
         try { input = JSON.parse(tc.input); } catch { continue; }
         const filePath: string = input.file_path || "";
         if (!filePath.endsWith(".md")) continue;
 
+        if (tc.name === "Write") {
+          await upsertFileSyncDoc(ctx, conversation, conversation_id, filePath, input.content || "", ts);
+          continue;
+        }
+
+        // Edit: patch the existing doc by applying the same find/replace.
         const existing = await ctx.db
           .query("docs")
           .withIndex("by_source_file", (q: any) => q.eq("source_file", filePath))
           .first();
-
-        if (tc.name === "Write") {
-          const content: string = input.content || "";
-          if (content.length < 200) continue;
-          const fileName = filePath.split("/").pop() || filePath;
-          const docType = fileName.toLowerCase().includes("plan") ? "plan" as const
-            : fileName.toLowerCase().includes("design") ? "design" as const
-            : fileName.toLowerCase().includes("spec") ? "spec" as const
-            : classifyDocContent(content);
-          if (existing) {
-            await ctx.db.patch(existing._id, {
-              title: extractTitleFromContent(content),
-              content,
-              doc_type: docType,
-              updated_at: msg.timestamp || Date.now(),
-            });
-          } else {
-            await ctx.db.insert("docs", {
-              user_id: conversation.user_id,
-              team_id: conversation.team_id,
-              title: extractTitleFromContent(content),
-              content,
-              doc_type: docType,
-              source: "file_sync",
-              source_file: filePath,
-              conversation_id,
-              project_path: conversation.project_path,
-              is_private: conversation.is_private,
-              team_visibility: conversation.team_visibility,
-              created_at: msg.timestamp || Date.now(),
-              updated_at: msg.timestamp || Date.now(),
-            });
-          }
-        } else if (tc.name === "Edit" && existing) {
+        if (tc.name === "Edit" && existing) {
           const oldStr: string = input.old_string || "";
           const newStr: string = input.new_string || "";
           if (!oldStr || !existing.content?.includes(oldStr)) continue;
@@ -181,7 +320,7 @@ async function extractDocsFromMessages(
           await ctx.db.patch(existing._id, {
             title: extractTitleFromContent(updatedContent),
             content: updatedContent,
-            updated_at: msg.timestamp || Date.now(),
+            updated_at: ts,
           });
         }
       }
@@ -202,6 +341,10 @@ function hasDocExtractionCandidate(messages: DocExtractionMessage[]): boolean {
     if (msg.tool_calls) {
       for (const tc of msg.tool_calls) {
         if ((tc.name === "Write" || tc.name === "Edit") && typeof tc.input === "string" && tc.input.includes(".md")) {
+          return true;
+        }
+        // Bash heredoc writing a .md file (`cat > x.md <<EOF`).
+        if (tc.name === "Bash" && typeof tc.input === "string" && tc.input.includes(".md") && tc.input.includes("<<")) {
           return true;
         }
       }
@@ -259,6 +402,138 @@ async function getAuthenticatedUserId(
   return null;
 }
 
+/**
+ * Materialize per-edit file changes for a freshly-inserted message into the
+ * file_changes table. Called only on genuine inserts (never the uuid/content
+ * dedup branches) so re-synced messages don't duplicate rows. Runs the shared
+ * extractor on the already-redacted tool calls, and is pre-filtered so an
+ * ordinary message (no edit tool calls) costs nothing.
+ */
+async function materializeFileChanges(
+  ctx: MutationCtx,
+  conversationId: Id<"conversations">,
+  messageId: Id<"messages">,
+  timestamp: number,
+  toolCalls: Array<{ id: string; name: string; input: string }> | undefined,
+  toolResults: Array<{ tool_use_id: string; content: string; is_error?: boolean }> | undefined,
+): Promise<void> {
+  // Late-arriving commit hashes: a `git commit` Bash RESULT lands on the next
+  // (user) message, after the commit row materialized hash-less. The string
+  // test gates the lookup, so only genuine commit outputs cost a point-read
+  // (change_key = the Bash call's toolCallId).
+  if (toolResults) {
+    for (const tr of toolResults) {
+      if (tr.is_error || !tr.tool_use_id) continue;
+      const hash = extractCommitHashFromContent(tr.content ?? "");
+      if (!hash) continue;
+      const row = await ctx.db
+        .query("file_changes")
+        .withIndex("by_conversation_change_key", (q) =>
+          q.eq("conversation_id", conversationId).eq("change_key", tr.tool_use_id),
+        )
+        .first();
+      if (row && row.change_type === "commit" && !row.commit_hash) {
+        await ctx.db.patch(row._id, { commit_hash: hash });
+      }
+    }
+  }
+
+  const msg = { _id: messageId, timestamp, tool_calls: toolCalls, tool_results: toolResults };
+  if (!hasFileChangeToolCall(msg)) return;
+  for (const fc of extractFileChanges([msg])) {
+    await ctx.db.insert("file_changes", {
+      conversation_id: conversationId,
+      change_key: fc.id,
+      message_id: messageId,
+      tool_call_id: fc.toolCallId,
+      seq: fc.sequenceIndex,
+      file_path: fc.filePath,
+      change_type: fc.changeType,
+      old_content: fc.oldContent,
+      new_content: fc.newContent,
+      commit_message: fc.commitMessage,
+      commit_hash: fc.commitHash,
+      timestamp: fc.timestamp,
+    });
+  }
+}
+
+/**
+ * Complete, pagination-independent list of file changes for a conversation,
+ * materialized at message ingest. The diff viewer merges this with its
+ * client-side window extraction, which backfills conversations whose edits
+ * predate materialization (no backfill was run).
+ */
+export const getConversationFileChanges = query({
+  args: { conversation_id: v.id("conversations") },
+  handler: async (ctx, args): Promise<FileChange[]> => {
+    // Access gate: this returns the full before/after source of every file the
+    // session edited — including private (owner-only) conversations. Match the
+    // other message readers: owner, team member, or share-token holder only.
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) return [];
+    const viewerId = await getAuthUserId(ctx);
+    if ((await checkConversationAccess(ctx, viewerId, conversation)) === "denied") {
+      return [];
+    }
+    const rows = await ctx.db
+      .query("file_changes")
+      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
+      .collect();
+    // Re-synced messages can leave duplicate rows; dedupe by the stable change_key,
+    // then order by (timestamp, in-message seq) to match the client extractor.
+    const byKey = new Map<string, (typeof rows)[number]>();
+    for (const r of rows) byKey.set(r.change_key, r);
+    return Array.from(byKey.values())
+      .sort((a, b) => a.timestamp - b.timestamp || a.seq - b.seq)
+      .map((r, i) => ({
+        id: r.change_key,
+        toolCallId: r.tool_call_id,
+        // Globally-ordered position so the result is correct on its own; the
+        // client merge re-derives this anyway when folding in window changes.
+        sequenceIndex: i,
+        messageId: r.message_id,
+        filePath: r.file_path,
+        changeType: r.change_type,
+        oldContent: r.old_content,
+        newContent: r.new_content,
+        commitMessage: r.commit_message,
+        commitHash: r.commit_hash,
+        timestamp: r.timestamp,
+      }));
+  },
+});
+
+// Storage ids embedded in an injected-image echo. The daemon delivers an image
+// as `[Image /tmp/codecast/images/<storageId>.png]` (downloadImage names the
+// file by its Convex storage id), so the agent's echoed user turn carries the
+// pending row's storage id verbatim.
+export function injectedImageStorageIds(content: string): string[] {
+  const ids: string[] = [];
+  const re = /\/codecast\/images\/([^/\s.\]]+)\.png/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(content)) !== null) ids.push(m[1]);
+  return ids;
+}
+
+// Does this echoed user turn ack the given pending image row? Both contents are
+// empty once `[Image …]` is stripped (an image-only send), so text can't match.
+// Prefer the storage id carried in the echo path — a deterministic signal that
+// holds no matter how long the session was busy before the inject. Fall back to
+// the ±120s window only for echoes with no parseable path (older/non-daemon).
+export function imageEchoMatchesPending(
+  pm: { image_storage_ids?: string[]; image_storage_id?: string; created_at?: number },
+  echoContent: string,
+  msgTimestamp: number,
+): boolean {
+  const echoed = injectedImageStorageIds(echoContent);
+  if (echoed.length > 0) {
+    const pendingIds = pm.image_storage_ids ?? (pm.image_storage_id ? [pm.image_storage_id] : []);
+    return pendingIds.some((id) => echoed.includes(id));
+  }
+  return Math.abs(msgTimestamp - (pm.created_at || 0)) < 120_000;
+}
+
 export const addMessage = mutation({
   args: {
     conversation_id: v.id("conversations"),
@@ -288,6 +563,7 @@ export const addMessage = mutation({
       tool_use_id: v.optional(v.string()),
     }))),
     subtype: v.optional(v.string()),
+    model: v.optional(v.string()),
     timestamp: v.optional(v.number()),
     api_token: v.optional(v.string()),
   },
@@ -338,6 +614,7 @@ export const addMessage = mutation({
           tool_results: safeToolResults,
           images: args.images,
           subtype: args.subtype,
+          model: args.model,
         });
         if (patch) {
           await ctx.db.patch(existing._id, patch);
@@ -386,7 +663,7 @@ export const addMessage = mutation({
         const contentMatch = cFlat === pcFlat || c === pc;
         if (!contentMatch) return false;
         if (!cFlat && !pcFlat) {
-          return Math.abs(msgTimestamp - (pm.created_at || 0)) < 120_000;
+          return imageEchoMatchesPending(pm, safeContent || "", msgTimestamp);
         }
         return true;
       });
@@ -414,15 +691,18 @@ export const addMessage = mutation({
       tool_results: safeToolResults,
       images,
       subtype: args.subtype,
+      model: args.model,
       client_id: clientIdToStore,
       timestamp: msgTimestamp,
     });
+    await materializeFileChanges(ctx, args.conversation_id, messageId, msgTimestamp, safeToolCalls, safeToolResults);
     const newMessageCount = conversation.message_count + 1;
     const now = Date.now();
 
     // Mirror addMessages' API-error banner supersession on the single-message
     // retry path so a banner inserted here is cleared once a real turn lands.
-    const msgIsBanner = args.role === "assistant" && isApiErrorBanner(contentToStore);
+    const msgBannerKind = args.role === "assistant" ? classifyApiErrorBanner(contentToStore) : null;
+    const msgIsBanner = msgBannerKind !== null;
     const msgIsRealTurn =
       !msgIsBanner &&
       ((args.role === "assistant" && (!!contentToStore?.trim() || (safeToolCalls?.length ?? 0) > 0)) ||
@@ -445,11 +725,23 @@ export const addMessage = mutation({
       updated_at: now,
       last_message_role: args.role,
     };
+    const msgModel = lastKnownModelFromBatch([{ role: args.role, model: args.model, content: contentToStore, timestamp: msgTimestamp }]);
+    if (msgModel && msgModel !== conversation.model) {
+      convPatch.model = msgModel;
+    }
+    const msgEffort = lastKnownEffortFromBatch([{ role: args.role, content: contentToStore, timestamp: msgTimestamp }]);
+    if (msgEffort && msgEffort !== conversation.effort) {
+      convPatch.effort = msgEffort;
+    }
     if (msgIsBanner !== wasPendingApiError) {
       convPatch.pending_api_error = msgIsBanner;
     }
+    const nextBannerKind = msgIsBanner ? msgBannerKind : undefined;
+    if ((conversation.pending_api_error_kind ?? undefined) !== nextBannerKind) {
+      convPatch.pending_api_error_kind = nextBannerKind;
+    }
     if (args.role === "user" && contentToStore?.trim()) {
-      convPatch.last_message_preview = redactSecrets(contentToStore).replace(/\[Image[:\s][^\]]*\]/gi, "").trim().slice(0, 200);
+      convPatch.last_message_preview = redactSecrets(contentToStore).replace(/\u001b\[\d+m/g, "").replace(/\[Image[:\s][^\]]*\]/gi, "").trim().slice(0, 200);
       convPatch.last_user_message_at = msgTimestamp;
     } else if (args.role === "user") {
       convPatch.last_user_message_at = msgTimestamp;
@@ -471,14 +763,6 @@ export const addMessage = mutation({
           agent_status_updated_at: Date.now(),
         });
       }
-    }
-
-    if (args.api_token || args.role === "user") {
-      await ctx.scheduler.runAfter(0, internal.users.updateUserActivity, {
-        userId: conversation.user_id,
-        daemonSeen: !!args.api_token,
-        messageTimestamp: args.role === "user" ? msgTimestamp : undefined,
-      });
     }
 
     if (!conversation.skip_title_generation && shouldGenerateTitle(newMessageCount)) {
@@ -591,8 +875,35 @@ const messageValidator = v.object({
     tool_use_id: v.optional(v.string()),
   }))),
   subtype: v.optional(v.string()),
+  model: v.optional(v.string()),
   timestamp: v.optional(v.number()),
 });
+
+export type AddMessagesAgentStatusProjection = {
+  has_assistant_message: boolean;
+  has_tool_result_reply: boolean;
+};
+
+export function getAddMessagesAgentStatusProjection(
+  messages: Array<{ role: string; tool_results?: unknown[] }>,
+): AddMessagesAgentStatusProjection | null {
+  const hasAssistantMsg = messages.some((m) => m.role === "assistant");
+  const hasToolResultReply = messages.some(
+    (m) => m.role === "user" && !!m.tool_results && m.tool_results.length > 0,
+  );
+  if (!hasAssistantMsg && !hasToolResultReply) return null;
+  return {
+    has_assistant_message: hasAssistantMsg,
+    has_tool_result_reply: hasToolResultReply,
+  };
+}
+
+export function shouldApplyAddMessagesAgentStatusProjection(
+  agentStatusUpdatedAt: number | undefined,
+  scheduledAt: number,
+): boolean {
+  return agentStatusUpdatedAt === undefined || agentStatusUpdatedAt <= scheduledAt;
+}
 
 export const addMessages = mutation({
   args: {
@@ -675,6 +986,7 @@ export const addMessages = mutation({
             tool_results: safeToolResults,
             images: msg.images,
             subtype: msg.subtype,
+            model: msg.model,
           });
           if (patch) {
             await ctx.db.patch(existing._id, patch);
@@ -734,7 +1046,7 @@ export const addMessages = mutation({
           const contentMatch = cFlat === pcFlat || c === pc;
           if (!contentMatch) return false;
           if (!cFlat && !pcFlat) {
-            return Math.abs(msgTimestamp - (pm.created_at || 0)) < 120_000;
+            return imageEchoMatchesPending(pm, safeContent || "", msgTimestamp);
           }
           return true;
         });
@@ -766,11 +1078,13 @@ export const addMessages = mutation({
         tool_results: safeToolResults,
         images,
         subtype: msg.subtype,
+        model: msg.model,
         client_id: clientIdToStore,
         timestamp: msgTimestamp,
       });
       ids.push(messageId);
       insertedCount++;
+      await materializeFileChanges(ctx, args.conversation_id, messageId, msgTimestamp, safeToolCalls, safeToolResults);
       if (msg.role === "user") lastUserContentStored = contentToStore;
     }
 
@@ -823,10 +1137,24 @@ export const addMessages = mutation({
         updated_at: Math.max(conversation.updated_at, maxMsgTs || Date.now()),
         last_message_role: lastMsg.role,
       };
+      const batchModel = lastKnownModelFromBatch(args.messages);
+      if (batchModel && batchModel !== conversation.model) {
+        convPatch.model = batchModel;
+      }
+      const batchEffort = lastKnownEffortFromBatch(args.messages);
+      if (batchEffort && batchEffort !== conversation.effort) {
+        convPatch.effort = batchEffort;
+      }
       // Keep the gate flag in lockstep with "newest message is a banner".
       const nextPendingApiError = isBannerMsg(newestMsg);
       if (nextPendingApiError !== wasPendingApiError) {
         convPatch.pending_api_error = nextPendingApiError;
+      }
+      const nextBannerKind = nextPendingApiError
+        ? classifyApiErrorBanner(newestMsg.content) ?? undefined
+        : undefined;
+      if ((conversation.pending_api_error_kind ?? undefined) !== nextBannerKind) {
+        convPatch.pending_api_error_kind = nextBannerKind;
       }
       const userMsgs = args.messages.filter((m) => m.role === "user");
       if (userMsgs.length > 0) {
@@ -836,45 +1164,32 @@ export const addMessages = mutation({
           convPatch.last_user_message_at = lastUserTs;
         }
         const previewSrc = lastUserContentStored || lastUserMsg.content;
-        const preview = redactSecrets(previewSrc || "").replace(/\[Image[:\s][^\]]*\]/gi, "").trim().slice(0, 200);
+        const preview = redactSecrets(previewSrc || "").replace(/\u001b\[\d+m/g, "").replace(/\[Image[:\s][^\]]*\]/gi, "").trim().slice(0, 200);
         if (preview) {
           convPatch.last_message_preview = preview;
         }
       }
       await ctx.db.patch(args.conversation_id, convPatch);
 
-      const hasAssistantMsg = args.messages.some((m) => m.role === "assistant");
-      const hasToolResultReply = args.messages.some(
-        (m) => m.role === "user" && !!m.tool_results && m.tool_results.length > 0,
-      );
-      if (hasAssistantMsg || hasToolResultReply) {
-        const session = await ctx.db
-          .query("managed_sessions")
-          .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", args.conversation_id))
-          .first();
-        const nextStatus = session
-          ? nextAgentStatusOnAddMessages(session.agent_status, hasAssistantMsg, hasToolResultReply)
-          : null;
-        if (session && nextStatus) {
-          await ctx.db.patch(session._id, {
-            agent_status: nextStatus,
-            agent_status_updated_at: Date.now(),
-          });
-        }
+      const agentStatusProjection = getAddMessagesAgentStatusProjection(args.messages);
+      if (agentStatusProjection) {
+        await ctx.scheduler.runAfter(0, internal.messages.projectAgentStatusOnAddMessages, {
+          conversation_id: args.conversation_id,
+          scheduled_at: Date.now(),
+          ...agentStatusProjection,
+        });
       }
 
-      const lastUserTs = userMsgs.length > 0
-        ? userMsgs.reduce((max, m) => Math.max(max, m.timestamp || 0), 0)
-        : 0;
-      // Only record user activity when there's a user-message timestamp to advance.
-      // daemon_last_seen is already refreshed by the 30s daemonHeartbeat, so we no
-      // longer schedule a write to the shared (per-user) doc on every assistant/tool
-      // batch — that scheduled mutation fired for all of a user's sessions at once and
-      // serialized on one hot doc. Assistant/tool-only batches now schedule nothing.
-      if (lastUserTs > 0) {
-        await ctx.scheduler.runAfter(0, internal.users.updateUserActivity, {
-          userId: conversation.user_id,
-          messageTimestamp: lastUserTs,
+      // Comment-thread agent reply: when this conversation is the hidden fork
+      // spawned to answer in a teammate comment thread, mirror its fresh reply
+      // back into the placeholder comment. Single cheap field check skips this for
+      // all ordinary traffic; the mirror runs off this transaction.
+      if (
+        (conversation as { comment_fork_comment_id?: unknown }).comment_fork_comment_id &&
+        args.messages.some((m) => m.role === "assistant" && !!m.content?.trim())
+      ) {
+        await ctx.scheduler.runAfter(0, internal.comments.mirrorAgentReply, {
+          fork_conversation_id: args.conversation_id,
         });
       }
 
@@ -907,6 +1222,37 @@ export const addMessages = mutation({
     }
 
     return { inserted: insertedCount, ids };
+  },
+});
+
+export const projectAgentStatusOnAddMessages = internalMutation({
+  args: {
+    conversation_id: v.id("conversations"),
+    scheduled_at: v.number(),
+    has_assistant_message: v.boolean(),
+    has_tool_result_reply: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const session = await ctx.db
+      .query("managed_sessions")
+      .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", args.conversation_id))
+      .first();
+    if (!session) return;
+    if (!shouldApplyAddMessagesAgentStatusProjection(session.agent_status_updated_at, args.scheduled_at)) {
+      return;
+    }
+
+    const nextStatus = nextAgentStatusOnAddMessages(
+      session.agent_status,
+      args.has_assistant_message,
+      args.has_tool_result_reply,
+    );
+    if (!nextStatus) return;
+
+    await ctx.db.patch(session._id, {
+      agent_status: nextStatus,
+      agent_status_updated_at: Date.now(),
+    });
   },
 });
 

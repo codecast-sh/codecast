@@ -5,6 +5,7 @@ import { useConvexAuth } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Button } from "../../../components/ui/button";
 import { Logo } from "../../../components/Logo";
+import { AppLoader } from "../../../components/AppLoader";
 
 export default function JoinTeamPage() {
   const params = useParams();
@@ -64,9 +65,7 @@ export default function JoinTeamPage() {
 
   if (authLoading || teamInfo === undefined) {
     return (
-      <main className="min-h-screen bg-gradient-to-br from-sol-bg via-sol-bg-alt to-sol-bg flex items-center justify-center px-4">
-        <div className="text-sol-text-muted">Loading...</div>
-      </main>
+<AppLoader className="bg-gradient-to-br from-sol-bg via-sol-bg-alt to-sol-bg px-4" />
     );
   }
 
@@ -132,7 +131,7 @@ export default function JoinTeamPage() {
               </p>
             </div>
             <Button
-              onClick={() => router.push("/dashboard")}
+              onClick={() => router.push("/team/activity")}
               className="w-full bg-amber-600 hover:bg-amber-500 text-white"
             >
               Go to Dashboard

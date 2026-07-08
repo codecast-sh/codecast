@@ -4,6 +4,7 @@ import { useAuthActions } from "@convex-dev/auth/react";
 import { useConvexAuth } from "convex/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Logo } from "../../components/Logo";
+import { AppLoader } from "../../components/AppLoader";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 
 function SignUpForm() {
@@ -28,9 +29,7 @@ function SignUpForm() {
 
   if (isLoading || isAuthenticated) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-sol-bg">
-        <div className="text-sol-text-muted">Loading...</div>
-      </div>
+<AppLoader />
     );
   }
 
@@ -224,9 +223,7 @@ function SignUpForm() {
 export default function SignUpPage() {
   return (
     <Suspense fallback={
-      <div className="min-h-screen flex items-center justify-center bg-sol-bg">
-        <div className="text-sol-text-muted">Loading...</div>
-      </div>
+<AppLoader />
     }>
       <SignUpForm />
     </Suspense>

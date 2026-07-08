@@ -1,8 +1,14 @@
 import { create as mutativeCreate, type Patch } from "mutative";
+import {
+  DISPATCH_FIELD_TABLE_MAP,
+  DISPATCH_TABLE_MAP,
+  isProtectedSyncCollection,
+} from "./clientSyncRegistry";
+import { consumeViewNav, noteViewNavApplied, recordNavEvent } from "./viewNav";
 
 type DispatchFn = (action: string, args: any, patches?: any, result?: any) => Promise<any>;
 type IDBWriteFn = (patches: Patch[], state: any) => void;
-type OutboxEntry = { id: string; action: string; args: any; patches: any; result: any; ts: number };
+type OutboxEntry = { id: string; action: string; args: any; patches: any; result: any; ts: number; attempts?: number };
 type OutboxEnqueueFn = (entry: OutboxEntry) => void;
 type OutboxRemoveFn = (id: string) => void;
 type OutboxLoadFn = () => Promise<OutboxEntry[]>;
@@ -39,37 +45,16 @@ function isSync(fn: any): boolean {
   return typeof fn === "function" && fn[SYNC_FLAG] === true;
 }
 
-type TableKind = "collection" | "singleton";
+const TABLE_MAP = DISPATCH_TABLE_MAP;
+const FIELD_TO_TABLE = DISPATCH_FIELD_TABLE_MAP;
 
-interface TableMapping {
-  table: string;
-  kind: TableKind;
-}
 
-const TABLE_MAP: Record<string, TableMapping> = {
-  conversations: { table: "conversations", kind: "collection" },
-  clientState: { table: "client_state", kind: "singleton" },
-};
-
-// Top-level store keys that dispatch as fields within a singleton table.
-// On patch, sends the full current value of the key (not granular sub-patches).
-const FIELD_TO_TABLE: Record<string, { table: string }> = {
-  tabs: { table: "client_state" },
-  activeTabId: { table: "client_state" },
-};
 
 const SINGLETON_KEY = "_";
 
 // Convex document ids are 32-char base32. Stub/local ids (e.g. fresh sessions
 // before server assignment) are shorter and would crash applyPatches server-side.
 const CONVEX_ID_RE = /^[a-z0-9]{32}$/;
-
-// Store keys that receive server sync data. The middleware auto-generates
-// pending entries when action() modifies these collections, preventing
-// server sync from overwriting local-first state.
-const PROTECTED_COLLECTIONS = new Set([
-  "sessions", "conversations", "tasks",
-]);
 
 function setNested(obj: any, path: (string | number)[], value: any): any {
   if (path.length === 0) return value;
@@ -95,7 +80,7 @@ function generateAutoPending(
     if (path.length < 2) continue;
 
     const storeKey = String(path[0]);
-    if (storeKey === "pending" || !PROTECTED_COLLECTIONS.has(storeKey)) continue;
+    if (storeKey === "pending" || !isProtectedSyncCollection(storeKey)) continue;
 
     const recordId = String(path[1]);
 
@@ -107,8 +92,10 @@ function generateAutoPending(
       // Record added to collection → include (keep until server acknowledges)
       if (!result) result = { ...currentPending };
       result[`${storeKey}:${recordId}`] = { type: "include", ts: now };
-    } else if ((patch.op === "replace" || patch.op === "add") && path.length >= 3) {
-      // Field modified on a collection record → protect field value
+    } else if ((patch.op === "replace" || patch.op === "add" || patch.op === "remove") && path.length >= 3) {
+      // Field modified (or cleared — remove op) on a collection record →
+      // protect field value; a cleared field protects as undefined, which
+      // matches the server echo once the null tombstone lands.
       const field = String(path[2]);
       if (!result) result = { ...currentPending };
       result[`${storeKey}:${recordId}:${field}`] = {
@@ -129,9 +116,18 @@ export function groupPatchesByTable(
   const result: Record<string, Record<string, Record<string, any>>> = {};
 
   for (const patch of patches) {
-    if (patch.op !== "replace" && patch.op !== "add") continue;
+    if (patch.op !== "replace" && patch.op !== "add" && patch.op !== "remove") continue;
     const path = patch.path as (string | number)[];
     if (path.length < 1) continue;
+
+    // A cleared field must reach the server as an explicit null tombstone:
+    // mutative encodes `obj.f = undefined` as replace-with-undefined and
+    // `delete obj.f` as a remove op, and sanitizeForConvex drops undefined
+    // keys from the payload — without the null, the clear silently never
+    // syncs (the server-side applyPatches turns null into a field removal).
+    // Field-level removes pass the op gate above; record-level removes
+    // (collection path.length === 2) still fall out at the length checks.
+    const value = patch.value === undefined ? null : patch.value;
 
     const storeKey = String(path[0]);
 
@@ -139,7 +135,7 @@ export function groupPatchesByTable(
     if (fieldMapping && state) {
       result[fieldMapping.table] ??= {};
       result[fieldMapping.table][SINGLETON_KEY] ??= {};
-      result[fieldMapping.table][SINGLETON_KEY][storeKey] = state[storeKey];
+      result[fieldMapping.table][SINGLETON_KEY][storeKey] = state[storeKey] === undefined ? null : state[storeKey];
       continue;
     }
 
@@ -161,12 +157,12 @@ export function groupPatchesByTable(
 
       result[table][docId] ??= {};
       if (nested.length === 0) {
-        result[table][docId][field] = patch.value;
+        result[table][docId][field] = value;
       } else {
         result[table][docId][field] = setNested(
           result[table][docId][field] ?? {},
           nested,
-          patch.value
+          value
         );
       }
     } else {
@@ -175,12 +171,12 @@ export function groupPatchesByTable(
 
       result[table][SINGLETON_KEY] ??= {};
       if (nested.length === 0) {
-        result[table][SINGLETON_KEY][field] = patch.value;
+        result[table][SINGLETON_KEY][field] = value;
       } else {
         result[table][SINGLETON_KEY][field] = setNested(
           result[table][SINGLETON_KEY][field] ?? {},
           nested,
-          patch.value
+          value
         );
       }
     }
@@ -189,7 +185,52 @@ export function groupPatchesByTable(
   return result;
 }
 
+// A replayed dispatch is stale by definition — it survived a reload. The
+// conversation pointer means "where the user is right now", so re-pushing an
+// old value from the outbox would repoint the user's other clients at a
+// position they already left. Drop it from replays; the rest of the patch
+// (and the action itself) still re-fires.
+export function stripStalePointerFromReplay(patches: any): any {
+  const cs = patches?.client_state?.[SINGLETON_KEY];
+  if (!cs || typeof cs !== "object" || !("current_conversation_id" in cs)) return patches;
+  const { current_conversation_id: _omit, ...rest } = cs;
+  if (Object.keys(rest).length > 0) {
+    return { ...patches, client_state: { ...patches.client_state, [SINGLETON_KEY]: rest } };
+  }
+  const { [SINGLETON_KEY]: _doc, ...otherDocs } = patches.client_state;
+  const { client_state: _table, ...otherTables } = patches;
+  if (Object.keys(otherDocs).length > 0) {
+    return { ...otherTables, client_state: otherDocs };
+  }
+  return Object.keys(otherTables).length > 0 ? otherTables : undefined;
+}
+
 const RETRY_DELAYS = [1000, 2000, 4000];
+
+// How many boots a failed outbox entry survives before it's given up on.
+// Each boot attempt already runs the full in-session retry ladder, so this
+// bounds permanently-broken dispatches (they'd otherwise slow every page
+// load forever) while letting writes stranded by an outage outlive reloads
+// that happen during that same outage.
+export const MAX_OUTBOX_BOOT_ATTEMPTS = 5;
+
+// Actions carrying user-authored content that MUST reach the server — losing
+// one silently drops something the user typed. These are never given up on:
+// they ride the outbox until the server acknowledges them, however many
+// reloads/outages that takes. The boot cap above only bounds low-stakes
+// bookkeeping writes (dismiss, client_state) whose loss is recoverable and
+// which must not slow every page load forever if permanently broken.
+// dispatch.sendMessage dedups on client_id, so unbounded retry is safe.
+export const MUST_DELIVER_ACTIONS = new Set(["sendMessage"]);
+
+// What to do with an outbox entry whose boot-time replay failed: keep it for
+// the next boot with the attempt counted, or give up at the cap. User sends
+// are never dropped — see MUST_DELIVER_ACTIONS.
+export function outboxFailureDisposition(entry: OutboxEntry): { keep: boolean; entry: OutboxEntry } {
+  const attempts = (entry.attempts ?? 0) + 1;
+  const mustDeliver = MUST_DELIVER_ACTIONS.has(entry.action);
+  return { keep: mustDeliver || attempts < MAX_OUTBOX_BOOT_ATTEMPTS, entry: { ...entry, attempts } };
+}
 
 // Convex rejects `undefined` anywhere in the payload. Action functions are
 // free to leave optional args/return values as `undefined`, so normalize at
@@ -213,7 +254,8 @@ async function dispatchWithRetry(
   args: any,
   grouped: any,
   result: any,
-  onError?: (action: string, error: unknown) => void,
+  onError?: (action: string, error: unknown, args?: unknown) => void,
+  retryDelays: number[] = RETRY_DELAYS,
 ): Promise<any> {
   const safeArgs = sanitizeForConvex(args);
   const safeGrouped = grouped !== undefined ? sanitizeForConvex(grouped) : undefined;
@@ -222,20 +264,54 @@ async function dispatchWithRetry(
     try {
       return await fn(action, safeArgs, safeGrouped, safeResult);
     } catch (e) {
-      if (attempt >= RETRY_DELAYS.length) {
-        onError?.(action, e);
+      if (attempt >= retryDelays.length) {
+        onError?.(action, e, args);
         throw e;
       }
-      await new Promise(r => setTimeout(r, RETRY_DELAYS[attempt]));
+      await new Promise(r => setTimeout(r, retryDelays[attempt]));
     }
   }
 }
 
-export function mutativeMiddleware(config: any): any {
+// The two fields that decide which conversation the user is looking at.
+// Changing either to a different conversation requires a declared
+// ViewNavSource (see viewNav.ts); an undeclared change is reverted and logged
+// instead of applied. Clearing to null is always allowed (it can't teleport
+// anyone) but still audited.
+const VIEW_FIELDS = ["currentSessionId", "pendingNavigateId"] as const;
+type ViewField = (typeof VIEW_FIELDS)[number];
+
+// Shared verdict for both write paths (action patches and raw setState).
+// Returns the fields that must be reverted to their previous values.
+function auditViewWrites(
+  changes: Array<{ field: ViewField; from: string | null; to: string | null }>,
+  actionName: string,
+): ViewField[] {
+  // Consume unconditionally: a token declared by a write that ended up not
+  // changing the view must not linger and authorize a later unrelated write.
+  const source = consumeViewNav();
+  if (changes.length === 0) return [];
+  const revert: ViewField[] = [];
+  for (const { field, from, to } of changes) {
+    if (source) {
+      recordNavEvent({ field, from, to, source });
+      if (field === "currentSessionId") noteViewNavApplied();
+    } else if (to == null) {
+      recordNavEvent({ field, from, to: null, source: `untracked:${actionName}` });
+    } else {
+      recordNavEvent({ field, from, to, source: `untracked:${actionName}`, blocked: "undeclared view change" });
+      revert.push(field);
+    }
+  }
+  return revert;
+}
+
+export function mutativeMiddleware(config: any, opts?: { retryDelays?: number[] }): any {
+  const retryDelays = opts?.retryDelays ?? RETRY_DELAYS;
   return (set: any, get: any, api: any) => {
     let dispatchFn: DispatchFn | null = null;
     let idbWriteFn: IDBWriteFn | null = null;
-    let dispatchErrorFn: ((action: string, error: unknown) => void) | undefined;
+    let dispatchErrorFn: ((action: string, error: unknown, args?: unknown) => void) | undefined;
     let outboxEnqueueFn: OutboxEnqueueFn | null = null;
     let outboxRemoveFn: OutboxRemoveFn | null = null;
     let outboxLoadFn: OutboxLoadFn | null = null;
@@ -245,21 +321,41 @@ export function mutativeMiddleware(config: any): any {
       return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     }
 
-    async function drainOutbox() {
+    let draining = false;
+    async function drainOutbox(countAttempts = true) {
       if (!dispatchFn || !outboxLoadFn) return;
-      const entries = await outboxLoadFn();
-      // The outbox exists to survive a reload that lands in the middle of an
-      // in-flight dispatch. Each entry gets exactly one boot-time attempt
-      // (with the standard retry ladder), then is removed regardless of
-      // outcome — keeping permanently-broken dispatches around forever would
-      // just slow every subsequent page load.
-      for (const entry of entries) {
-        try {
-          await dispatchWithRetry(dispatchFn, entry.action, entry.args, entry.patches, entry.result, dispatchErrorFn);
-        } catch {
-          // Reported via dispatchErrorFn; the entry is dropped below.
+      // One drain at a time. drainOutbox runs at boot AND on every reconnect /
+      // tab-visible / interval tick, so overlapping passes are easy to trigger;
+      // serializing them keeps a single in-flight entry from being dispatched
+      // twice at once (redelivery is safe — dispatch.sendMessage dedups on
+      // client_id — but pointless work isn't).
+      if (draining) return;
+      draining = true;
+      try {
+        const entries = await outboxLoadFn();
+        // The outbox exists to survive a reload that lands in the middle of an
+        // in-flight dispatch, AND to re-drive a send the live socket stranded:
+        // a flaky connection can exhaust the in-session retry ladder and park
+        // the write here with no boot in sight, so we also drain on reconnect.
+        // A BOOT replay that fails counts an attempt (capped at
+        // MAX_OUTBOX_BOOT_ATTEMPTS for low-stakes writes; user sends never drop
+        // — see outboxFailureDisposition). OPPORTUNISTIC reconnect drains pass
+        // countAttempts=false: a failure there leaves the entry exactly as-is,
+        // so routine reconnect churn can't burn through a write's boot budget.
+        for (const entry of entries) {
+          try {
+            await dispatchWithRetry(dispatchFn, entry.action, entry.args, stripStalePointerFromReplay(entry.patches), entry.result, dispatchErrorFn, retryDelays);
+            outboxRemoveFn?.(entry.id);
+          } catch {
+            // Reported via dispatchErrorFn.
+            if (!countAttempts) continue;
+            const disposition = outboxFailureDisposition(entry);
+            if (disposition.keep) outboxEnqueueFn?.(disposition.entry);
+            else outboxRemoveFn?.(entry.id);
+          }
         }
-        outboxRemoveFn?.(entry.id);
+      } finally {
+        draining = false;
       }
     }
 
@@ -301,6 +397,19 @@ export function mutativeMiddleware(config: any): any {
           }
         }
 
+        // View-motion guard: an undeclared change of the visible conversation
+        // is reverted before it ever renders (see viewNav.ts).
+        const viewChanges = VIEW_FIELDS.filter(
+          (f) => (state as any)[f] !== (finalState as any)[f],
+        ).map((f) => ({ field: f, from: (state as any)[f] ?? null, to: (finalState as any)[f] ?? null }));
+        const revertFields = auditViewWrites(viewChanges, key);
+        if (revertFields.length > 0) {
+          const reverted: Record<string, any> = {};
+          for (const f of revertFields) reverted[f] = (state as any)[f];
+          finalState = { ...finalState, ...reverted };
+          finalPatches = finalPatches.filter((p) => !revertFields.includes(String(p.path[0]) as ViewField));
+        }
+
         set(finalState, true);
 
         if (idbWriteFn && finalPatches.length > 0) {
@@ -329,7 +438,7 @@ export function mutativeMiddleware(config: any): any {
           });
           if (dispatchFn) {
             const promise = dispatchWithRetry(
-              dispatchFn, key, args, grouped, returnValue, dispatchErrorFn,
+              dispatchFn, key, args, grouped, returnValue, dispatchErrorFn, retryDelays,
             ).then((r) => {
               outboxRemoveFn?.(outboxId);
               return r;
@@ -349,6 +458,11 @@ export function mutativeMiddleware(config: any): any {
       drainOutbox();
     };
 
+    // Opportunistic re-drive: re-attempt every parked dispatch without counting
+    // a boot attempt. Wired to reconnect / tab-visible / interval so a send the
+    // live socket stranded reaches the server WITHOUT waiting for a reload.
+    wrapped._drainOutbox = () => { drainOutbox(false); };
+
     wrapped._setIDBWrite = (fn: IDBWriteFn) => {
       idbWriteFn = fn;
     };
@@ -359,13 +473,35 @@ export function mutativeMiddleware(config: any): any {
       outboxLoadFn = load;
     };
 
-    wrapped._setDispatchError = (fn: (action: string, error: unknown) => void) => {
+    wrapped._setDispatchError = (fn: (action: string, error: unknown, args?: unknown) => void) => {
       dispatchErrorFn = fn;
     };
 
     wrapped._dispatch = (action: string, args: any, patches?: any, result?: any) => {
       if (!dispatchFn) return Promise.reject(new Error("Dispatch not wired"));
-      return dispatchWithRetry(dispatchFn, action, args, patches, result, dispatchErrorFn);
+      return dispatchWithRetry(dispatchFn, action, args, patches, result, dispatchErrorFn, retryDelays);
+    };
+
+    // Police raw setState (writes from outside action()/sync()): the view
+    // fields obey the same declare-or-revert rule as store actions. The
+    // middleware's internal `set` is the pre-wrap reference, so action writes
+    // (already audited via patches above) are not double-counted. Functional
+    // partials are exempt — none touch the view fields; object literals are
+    // the only raw write shape for them in the codebase.
+    const origSetState = api.setState;
+    api.setState = (partial: any, replace?: boolean) => {
+      if (partial && typeof partial === "object") {
+        const prev = get();
+        const touched = VIEW_FIELDS.filter((f) => f in partial && partial[f] !== prev[f]).map(
+          (f) => ({ field: f, from: prev[f] ?? null, to: partial[f] ?? null }),
+        );
+        const revert = auditViewWrites(touched, "setState");
+        if (revert.length > 0) {
+          partial = { ...partial };
+          for (const f of revert) delete partial[f];
+        }
+      }
+      return origSetState(partial, replace);
     };
 
     return wrapped;

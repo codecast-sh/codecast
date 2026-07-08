@@ -1,13 +1,19 @@
 const { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, nativeImage, shell, screen, Notification, session } = require("electron");
-const { autoUpdater } = require("electron-updater");
 const path = require("path");
 const fs = require("fs");
+const https = require("https");
+const crypto = require("crypto");
+const { spawn, execFile } = require("child_process");
 
 app.name = "Codecast";
 
-// Squirrel.Mac registers its install helper as a launchd job named
-// "<build.appId>.ShipIt". Keep this in sync with electron-builder's appId.
-const SHIPIT_LABEL = "sh.codecast.desktop.ShipIt";
+// Disable Chromium's trackpad/overscroll swipe-to-navigate (back/forward).
+// We push a history entry per viewed conversation, so an accidental two-finger
+// horizontal swipe would walk backward through that stack and "randomly" jump
+// conversations. Deliberate back/forward (Cmd+[ / Cmd+], app menu) uses
+// webContents.goBack()/goForward() and is unaffected. The CSS overscroll-behavior
+// rule covers this too; this is the belt-and-suspenders native guard.
+app.commandLine.appendSwitch("disable-features", "OverscrollHistoryNavigation");
 
 // Pin Chromium's download path to our userData dir so macOS TCC never
 // probes ~/Documents or ~/Downloads and triggers the permission dialog.
@@ -54,6 +60,9 @@ const DEFAULT_SHORTCUTS = {
 
 let mainWindow = null;
 let paletteWindow = null;
+// Whether Codecast's own window was frontmost when the palette was summoned.
+// Decides where Enter's fire-and-forget hand-back lands (see compose-submit).
+let paletteSummonedOverSelf = false;
 let tray = null;
 let deepLinkUrl = null;
 let currentBaseUrl = BASE_URL;
@@ -136,10 +145,18 @@ app.on("open-url", (e, url) => {
 });
 
 function handleDeepLink(url) {
-  if (!mainWindow) return;
+  if (!mainWindow) { deepLinkUrl = url; return; }
   mainWindow.show();
   mainWindow.focus();
-  mainWindow.webContents.send("deep-link", url);
+  // While the main frame is still loading, the renderer (and the preload buffer
+  // that catches early sends) is about to be torn down and rebuilt — sending
+  // now would land in a soon-to-be-replaced context. Hold it for the page's
+  // did-finish-load, which fires once the new renderer (and its buffer) is live.
+  if (mainWindow.webContents.isLoadingMainFrame()) {
+    deepLinkUrl = url;
+  } else {
+    mainWindow.webContents.send("deep-link", url);
+  }
 }
 
 function getAutoZoomFactor() {
@@ -212,10 +229,6 @@ function createWindow() {
 
   mainWindow.once("ready-to-show", () => {
     mainWindow.show();
-    if (deepLinkUrl) {
-      handleDeepLink(deepLinkUrl);
-      deepLinkUrl = null;
-    }
   });
 
   mainWindow.webContents.on("did-finish-load", () => {
@@ -226,6 +239,20 @@ function createWindow() {
     mainWindow.webContents.executeJavaScript(
       "document.documentElement.classList.add('electron-desktop')"
     );
+    // The page is fully loaded, so the preload's deep-link listener and replay
+    // buffer are live — deliver any link that arrived during boot or a reload.
+    // did-finish-load only fires on a COMPLETE load, so if the first attempt
+    // failed/stalled the link stays pending and rides the retry's load instead.
+    if (deepLinkUrl) {
+      const url = deepLinkUrl;
+      deepLinkUrl = null;
+      mainWindow.webContents.send("deep-link", url);
+    }
+    // Replay the latest update status so a freshly-loaded (or reloaded) renderer
+    // doesn't miss a download that progressed/finished before it mounted.
+    if (lastUpdateStatus) {
+      mainWindow.webContents.send("update-status", lastUpdateStatus);
+    }
   });
 
 
@@ -246,8 +273,11 @@ function createWindow() {
 
 function createPaletteWindow() {
   const { width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().workAreaSize;
-  const winWidth = 620;
-  const winHeight = 520;
+  // The compose card fills this window (94vw × 88vh), so the window IS the box's
+  // size. ~30% wider than the old 740×580, only modestly taller — a proportional
+  // bump made the empty new-session state a cavern, so we grow width more.
+  const winWidth = 1000;
+  const winHeight = 680;
 
   paletteWindow = new BrowserWindow({
     width: winWidth,
@@ -309,8 +339,16 @@ function togglePalette() {
   }
 }
 
-function showPalette() {
+// Place the palette window (position only). Does NOT show/focus — that's
+// revealPaletteWindow, run AFTER the renderer reports the right face is painted,
+// so we never flash the previous face during the swap.
+function placePaletteWindow() {
   if (!paletteWindow) return;
+  // Capture BEFORE the palette takes focus: was Codecast's own window the one
+  // being summoned over? Enter's fire-and-forget hand-back (compose-submit)
+  // must step back into the main window in that case, not app.hide() past it
+  // to whatever app sits behind.
+  paletteSummonedOverSelf = !!(mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused());
   // Reposition to center of current display
   const cursor = screen.getCursorScreenPoint();
   const display = screen.getDisplayNearestPoint(cursor);
@@ -321,14 +359,89 @@ function showPalette() {
     Math.round(dx + (sw - winWidth) / 2),
     Math.round(dy + sh * 0.18)
   );
+}
+
+function revealPaletteWindow() {
+  if (!paletteWindow) return;
   paletteWindow.show();
+  // When summoned over another app (Chrome, etc.), show()+focus() alone do NOT
+  // make this a background app's window the OS "key window" on macOS — so the
+  // web autofocus lands on a non-key window and keystrokes go nowhere. Steal
+  // app activation (Spotlight-style) so the palette becomes key and its input
+  // actually receives focus. Enter's fire-and-forget app.hide() steps back out.
+  if (process.platform === "darwin") app.focus({ steal: true });
   paletteWindow.focus();
-  paletteWindow.webContents.send("palette-show");
+}
+
+// Switch the palette window to the requested face (compose/search), then reveal
+// it only once the renderer acks it has painted that face — so the previous face
+// never flashes before the swap. The fallback timer covers older web builds (no
+// ack) and any missed ack, so the window can't get stuck hidden.
+let revealFallbackTimer = null;
+let pendingRevealMode = null; // "compose" | "search" | null
+function showPaletteFace(channel) {
+  if (!paletteWindow) return;
+  placePaletteWindow();
+  pendingRevealMode = channel === "compose-show" ? "compose" : "search";
+  clearTimeout(revealFallbackTimer);
+  const waitingFor = pendingRevealMode;
+  revealFallbackTimer = setTimeout(() => finishReveal(waitingFor), 200);
+  paletteWindow.webContents.send(channel);
+}
+
+function finishReveal(mode) {
+  if (!pendingRevealMode) return;
+  // Reveal only when the renderer painted the face we asked for, so a stale ack
+  // for the previous face can't reveal it mid-swap. `mode` undefined = older web
+  // build whose ack carries no face → trust it (best effort).
+  if (mode && mode !== pendingRevealMode) return;
+  pendingRevealMode = null;
+  clearTimeout(revealFallbackTimer);
+  revealFallbackTimer = null;
+  revealPaletteWindow();
+}
+
+function showPalette() {
+  if (!paletteWindow) return;
+  showPaletteFace("palette-show");
+}
+
+// Summon the same palette window into new-session compose mode. Used by the
+// global "New Session" shortcut and the tray/dock/app menus.
+function showCompose() {
+  if (!paletteWindow) {
+    createPaletteWindow();
+    paletteWindow.once("ready-to-show", () => {
+      showPaletteFace("compose-show");
+    });
+    return;
+  }
+  showPaletteFace("compose-show");
 }
 
 function hidePalette() {
+  // Always cancel a pending reveal first — a late ack (or the fallback) must not
+  // pop a window the user has already dismissed.
+  pendingRevealMode = null;
+  clearTimeout(revealFallbackTimer);
+  revealFallbackTimer = null;
   if (!paletteWindow || !paletteWindow.isVisible()) return;
   paletteWindow.hide();
+}
+
+// Open a FULL new session in the main window (Ctrl+N model): bring the app
+// forward and let the web shell start the deferred session inline (it renders
+// NewSessionView for the empty conversation). This is the primary "New Session"
+// affordance — distinct from the Ctrl+Shift+N palette (showCompose), which is the
+// quick floating summon. The compose palette's "open full" hand-off also lands here.
+function openFullSessionInMain() {
+  hidePalette();
+  if (!mainWindow) return;
+  mainWindow.show();
+  mainWindow.focus();
+  mainWindow.webContents.executeJavaScript(
+    "window.__CODECAST_NEW_SESSION && window.__CODECAST_NEW_SESSION()"
+  );
 }
 
 function navigateMain(navPath) {
@@ -362,18 +475,25 @@ function toggleEnvironment() {
 }
 
 function createTray() {
-  const icon = nativeImage.createFromPath(path.join(__dirname, "assets", "trayTemplate@2x.png"));
+  // Load the base name so AppKit auto-picks the @2x file on Retina and renders
+  // the mark at its natural point size (the source PNGs are already sized for
+  // the menubar — 22×18 / 44×36 — so no squishing resize is needed).
+  const icon = nativeImage.createFromPath(path.join(__dirname, "assets", "trayTemplate.png"));
   icon.setTemplateImage(true);
-  tray = new Tray(icon.resize({ width: 18, height: 18 }));
+  tray = new Tray(icon);
   const menu = Menu.buildFromTemplate([
     { label: "Show Codecast", click: () => { mainWindow?.show(); mainWindow?.focus(); } },
+    { type: "separator" },
+    { label: "New Session", click: () => openFullSessionInMain() },
+    { label: "New Quick Session", click: () => showCompose() },
+    { label: "Command Palette", click: () => togglePalette() },
     { type: "separator" },
     { label: "Dashboard", click: () => navigateMain("/dashboard") },
     { label: "Inbox", click: () => navigateMain("/inbox") },
     { label: "Tasks", click: () => navigateMain("/tasks") },
     { type: "separator" },
-    { label: "New Session", click: () => { mainWindow?.show(); mainWindow?.focus(); mainWindow?.webContents.executeJavaScript("window.__CODECAST_NEW_SESSION && window.__CODECAST_NEW_SESSION()"); } },
-    { label: "Command Palette", click: () => togglePalette() },
+    { label: "Check for Updates…", click: () => checkForDesktopUpdate({ manual: true }) },
+    { label: `Version ${app.getVersion()}`, enabled: false },
     { type: "separator" },
     { label: "Quit Codecast", click: () => app.quit() },
   ]);
@@ -388,9 +508,9 @@ function buildAppMenu() {
       submenu: [
         { role: "about" },
         { type: "separator" },
-        { label: "Check for Updates...", click: () => autoUpdater.checkForUpdatesAndNotify() },
+        { label: "Check for Updates…", click: () => checkForDesktopUpdate({ manual: true }) },
         { type: "separator" },
-        { label: "Settings...", accelerator: "CommandOrControl+,", click: () => navigateMain("/settings") },
+        { label: "Settings…", accelerator: "CommandOrControl+,", click: () => navigateMain("/settings") },
         { type: "separator" },
         { role: "services" },
         { type: "separator" },
@@ -407,15 +527,14 @@ function buildAppMenu() {
         {
           label: "New Session",
           accelerator: "CommandOrControl+N",
-          click: () => {
-            if (!mainWindow) return;
-            mainWindow.show();
-            mainWindow.focus();
-            mainWindow.webContents.executeJavaScript(
-              "window.__CODECAST_NEW_SESSION && window.__CODECAST_NEW_SESSION()"
-            );
-          },
+          click: () => openFullSessionInMain(),
         },
+        // No accelerators here: these mirror native windows the global
+        // shortcuts already open (newSession / togglePalette), and binding the
+        // same keys in the menu would hijack them from the web app (the native
+        // menu intercepts before the renderer sees the keystroke).
+        { label: "New Quick Session", click: () => showCompose() },
+        { label: "Command Palette", click: () => togglePalette() },
         { type: "separator" },
         { role: "close" },
       ],
@@ -479,6 +598,11 @@ function buildAppMenu() {
     {
       role: "help",
       submenu: [
+        { label: "Documentation", click: () => shell.openExternal("https://codecast.sh/documentation") },
+        { label: "What's New", click: () => shell.openExternal("https://codecast.sh/changelog") },
+        { label: "Keyboard Shortcuts", click: () => navigateMain("/settings") },
+        { type: "separator" },
+        { label: "Check for Updates…", click: () => checkForDesktopUpdate({ manual: true }) },
         { label: "Codecast Website", click: () => shell.openExternal("https://codecast.sh") },
       ],
     },
@@ -486,46 +610,243 @@ function buildAppMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-// Install a downloaded update and relaunch.
+// ---------------------------------------------------------------------------
+// Self-contained desktop updater.
 //
-// electron-updater delegates to Electron's native Squirrel.Mac, which stages
-// the new bundle, registers the ShipIt launchd helper, and relies on launchd
-// to run it once the app quits. On macOS 26 (Darwin 25.x) launchd accepts the
-// job but never runs it: the app quits, nothing swaps the bundle, the app
-// never relaunches, and the "ready to install" banner reappears (verified --
-// the job sits "submitted, not running" and a manual `launchctl kickstart`
-// completes the install every time).
+// Squirrel.Mac (electron-updater's install step) is dead on macOS 26: launchd
+// accepts the ShipIt job but never runs it, so quitAndInstall() quits the app
+// and nothing ever swaps the bundle. So we don't touch Squirrel at all. Instead
+// we mirror the daemon's proven update channel in-process: read the published
+// electron-builder feed, stream-download the zip (with real progress), verify
+// its sha512 and that it's signed by OUR team, stage the verified bundle, and —
+// on a deliberate "Restart now" — hand a detached helper the job of swapping
+// the running bundle and relaunching us in the FOREGROUND once we exit.
 //
-// So we still call quitAndInstall() to stage + register the job, but also spawn
-// a detached watcher that survives our exit. It waits ~12s for the version on
-// disk to change (i.e. Squirrel's own trigger worked); if it never does, it
-// force-runs the already-registered ShipIt job itself. Gating on the version
-// change makes the kickstart a true fallback, so we never double-install.
-let updateInstallTriggered = false;
-function installUpdateAndRestart() {
-  if (updateInstallTriggered) return;
-  updateInstallTriggered = true;
-  if (process.platform === "darwin") {
-    try {
-      const { spawn } = require("child_process");
-      const uid = process.getuid();
-      const oldVersion = app.getVersion();
-      // .../Contents/MacOS/Codecast -> .../Contents/Info.plist
-      const infoPlist = path.join(path.dirname(path.dirname(app.getPath("exe"))), "Info.plist");
-      const script = [
-        `for i in $(seq 1 24); do`,
-        `  cur=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "${infoPlist}" 2>/dev/null)`,
-        `  if [ -n "$cur" ] && [ "$cur" != "${oldVersion}" ]; then exit 0; fi`,
-        `  sleep 0.5`,
-        `done`,
-        `/bin/launchctl kickstart -p gui/${uid}/${SHIPIT_LABEL}`,
-      ].join("\n");
-      spawn("/bin/sh", ["-c", script], { detached: true, stdio: "ignore" }).unref();
-    } catch (e) {
-      console.error("update install fallback failed to spawn:", e?.message);
+// This needs no launchd, no Squirrel, no daemon, and reports real download
+// progress to the renderer over the existing `update-status` IPC.
+// ---------------------------------------------------------------------------
+const DESKTOP_FEED = "https://dl.codecast.sh/desktop/latest-mac.yml";
+const DESKTOP_BASE = "https://dl.codecast.sh/desktop";
+// Our Apple Developer Team ID — the swapped bundle MUST be signed by us.
+const EXPECTED_TEAM_ID = "WRG9THCK9Q";
+
+// Most recent {status,version,percent}, replayed to any window that loads after
+// it was emitted (boot/reload) so the banner never misses the download.
+let lastUpdateStatus = null;
+// { version, incomingPath, bundlePath } once a verified bundle is staged.
+let stagedUpdate = null;
+let updateInFlight = false;
+
+function emitUpdateStatus(status) {
+  lastUpdateStatus = status;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("update-status", status);
+  }
+}
+
+// The .app bundle we're actually running from (NOT hardcoded to /Applications —
+// respect wherever the user installed it). exe is <bundle>/Contents/MacOS/Codecast.
+function installedBundlePath() {
+  const bundle = path.dirname(path.dirname(path.dirname(app.getPath("exe"))));
+  return bundle.endsWith(".app") ? bundle : null;
+}
+
+function cmpVersions(a, b) {
+  const pa = String(a).split(".").map(Number);
+  const pb = String(b).split(".").map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const na = pa[i] || 0, nb = pb[i] || 0;
+    if (na > nb) return 1;
+    if (na < nb) return -1;
+  }
+  return 0;
+}
+
+// Parse only the fields we need from latest-mac.yml (no YAML dependency).
+function parseFeed(text) {
+  const version = text.match(/^version:\s*(.+)$/m)?.[1]?.trim();
+  let zip, sha512;
+  const lines = text.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/url:\s*(\S+-mac\.zip)\s*$/);
+    if (m) {
+      zip = m[1].trim();
+      const sm = lines[i + 1]?.match(/sha512:\s*(\S+)\s*$/);
+      if (sm) sha512 = sm[1].trim();
+      break;
     }
   }
-  autoUpdater.quitAndInstall();
+  return { version, zip, sha512 };
+}
+
+// GET that follows redirects and resolves with the final 200 response stream.
+function httpsGetFollow(url, redirects = 3) {
+  return new Promise((resolve, reject) => {
+    https.get(url, (res) => {
+      const sc = res.statusCode;
+      if (sc >= 300 && sc < 400 && res.headers.location && redirects > 0) {
+        res.resume();
+        resolve(httpsGetFollow(new URL(res.headers.location, url).toString(), redirects - 1));
+      } else if (sc !== 200) {
+        res.resume();
+        reject(new Error(`HTTP ${sc}`));
+      } else {
+        resolve(res);
+      }
+    }).on("error", reject);
+  });
+}
+
+async function fetchText(url) {
+  const res = await httpsGetFollow(url);
+  let body = "";
+  res.setEncoding("utf8");
+  return new Promise((resolve, reject) => {
+    res.on("data", (c) => (body += c));
+    res.on("end", () => resolve(body));
+    res.on("error", reject);
+  });
+}
+
+// Stream a URL to disk, reporting integer percent, and resolve with the file's
+// sha512 (base64) so the caller can verify it against the feed.
+async function downloadWithProgress(url, dest, onProgress) {
+  const res = await httpsGetFollow(url);
+  const total = parseInt(res.headers["content-length"] || "0", 10);
+  let received = 0, lastPct = -1;
+  const hash = crypto.createHash("sha512");
+  const file = fs.createWriteStream(dest);
+  return new Promise((resolve, reject) => {
+    res.on("data", (chunk) => {
+      received += chunk.length;
+      hash.update(chunk);
+      if (total) {
+        const pct = Math.min(99, Math.round((received / total) * 100));
+        if (pct !== lastPct) { lastPct = pct; onProgress(pct); }
+      }
+    });
+    res.on("error", reject);
+    file.on("error", reject);
+    file.on("finish", () => file.close(() => resolve(hash.digest("base64"))));
+    res.pipe(file);
+  });
+}
+
+function execFileP(cmd, args) {
+  return new Promise((resolve) => {
+    execFile(cmd, args, { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
+      resolve({ ok: !err, stdout: stdout || "", stderr: stderr || "" });
+    });
+  });
+}
+
+// The extracted bundle must be a valid, untampered signature from our team.
+async function verifyBundleSignature(appPath) {
+  const verify = await execFileP("/usr/bin/codesign", ["--verify", "--strict", "--deep", appPath]);
+  if (!verify.ok) return false;
+  const info = await execFileP("/usr/bin/codesign", ["-dvv", appPath]);
+  return `${info.stdout}${info.stderr}`.includes(`TeamIdentifier=${EXPECTED_TEAM_ID}`);
+}
+
+function rmrf(p) {
+  try { fs.rmSync(p, { recursive: true, force: true }); } catch {}
+}
+
+// Check the feed and, if newer (or forced), download → verify → stage a bundle
+// ready to swap in on the next "Restart now". Fire-and-forget; never throws.
+async function checkForDesktopUpdate(opts = {}) {
+  if (process.platform !== "darwin" || !app.isPackaged) {
+    if (opts.manual) showNativeNotification("Updates unavailable", "Auto-update only runs in the installed desktop app.");
+    return;
+  }
+  if (updateInFlight) return;
+  // Already downloaded and waiting — just re-surface it for a manual check.
+  if (stagedUpdate) {
+    emitUpdateStatus({ status: "ready", version: stagedUpdate.version });
+    if (opts.manual) showNativeNotification(`Codecast ${stagedUpdate.version} is ready`, "Click to restart and install.", () => installUpdateAndRestart());
+    return;
+  }
+  const bundle = installedBundlePath();
+  if (!bundle) return;
+
+  updateInFlight = true;
+  const work = path.join(app.getPath("userData"), "update-stage");
+  try {
+    const { version, zip, sha512 } = parseFeed(await fetchText(DESKTOP_FEED));
+    if (!version || !zip || !sha512) throw new Error("could not parse feed");
+    if (cmpVersions(version, app.getVersion()) <= 0 && !opts.force) {
+      if (opts.manual) showNativeNotification("Codecast is up to date", `You're on the latest version (${app.getVersion()}).`);
+      return;
+    }
+
+    emitUpdateStatus({ status: "available", version });
+    rmrf(work);
+    fs.mkdirSync(work, { recursive: true });
+    const zipPath = path.join(work, zip);
+
+    emitUpdateStatus({ status: "downloading", version, percent: 0 });
+    const got = await downloadWithProgress(`${DESKTOP_BASE}/${zip}`, zipPath, (percent) =>
+      emitUpdateStatus({ status: "downloading", version, percent }));
+    if (got !== sha512) throw new Error("sha512 mismatch");
+
+    const extractDir = path.join(work, "extract");
+    fs.mkdirSync(extractDir, { recursive: true });
+    const ex = await execFileP("/usr/bin/ditto", ["-x", "-k", zipPath, extractDir]);
+    if (!ex.ok) throw new Error("extract failed");
+    const newApp = path.join(extractDir, "Codecast.app");
+    if (!fs.existsSync(newApp)) throw new Error("Codecast.app missing from archive");
+    if (!(await verifyBundleSignature(newApp))) throw new Error("signature/team verification failed");
+
+    // Pre-stage a sibling copy on the SAME volume as the running bundle so the
+    // post-quit swap is just two atomic renames (minimal downtime, no half-state).
+    const incoming = path.join(path.dirname(bundle), ".Codecast.app.incoming");
+    rmrf(incoming);
+    const cp = await execFileP("/usr/bin/ditto", [newApp, incoming]);
+    if (!cp.ok) throw new Error("stage copy failed");
+    rmrf(work);
+
+    stagedUpdate = { version, incomingPath: incoming, bundlePath: bundle };
+    emitUpdateStatus({ status: "ready", version });
+    showNativeNotification(
+      `Codecast ${version} is ready`,
+      "Click to restart and install the update.",
+      () => installUpdateAndRestart(),
+    );
+  } catch (e) {
+    console.error("desktop update:", e?.message || e);
+    rmrf(work);
+    emitUpdateStatus({ status: "error", version: lastUpdateStatus?.version });
+    if (opts.manual) showNativeNotification("Update check failed", "Couldn't reach the update server. Try again later.");
+  } finally {
+    updateInFlight = false;
+  }
+}
+
+// Apply the staged update: a detached helper waits for THIS process to exit,
+// swaps the bundle via two atomic renames, clears quarantine, then relaunches
+// us in the FOREGROUND. Quitting ourselves is what lets the rename succeed.
+let updateInstallTriggered = false;
+function installUpdateAndRestart() {
+  if (updateInstallTriggered || !stagedUpdate) return;
+  updateInstallTriggered = true;
+  const { incomingPath, bundlePath } = stagedUpdate;
+  const oldPath = path.join(path.dirname(bundlePath), ".Codecast.app.old");
+  const pid = process.pid;
+  const sh = (p) => `'${String(p).replace(/'/g, `'\\''`)}'`; // single-quote for /bin/sh
+  const script = [
+    `while kill -0 ${pid} 2>/dev/null; do sleep 0.2; done`,
+    `rm -rf ${sh(oldPath)}`,
+    `mv ${sh(bundlePath)} ${sh(oldPath)} && mv ${sh(incomingPath)} ${sh(bundlePath)} || { mv ${sh(oldPath)} ${sh(bundlePath)} 2>/dev/null; exit 1; }`,
+    `/usr/bin/xattr -dr com.apple.quarantine ${sh(bundlePath)} 2>/dev/null`,
+    `rm -rf ${sh(oldPath)}`,
+    `/usr/bin/open ${sh(bundlePath)}`,
+  ].join("\n");
+  try {
+    spawn("/bin/sh", ["-c", script], { detached: true, stdio: "ignore" }).unref();
+  } catch (e) {
+    console.error("update swap helper failed to spawn:", e?.message);
+  }
+  app.quit();
 }
 
 // IPC handlers
@@ -533,6 +854,7 @@ ipcMain.handle("get-app-version", () => app.getVersion());
 ipcMain.handle("set-badge-count", (_e, count) => app.setBadgeCount(count));
 ipcMain.handle("get-env", () => (currentBaseUrl === PROD_URL ? "prod" : "local"));
 ipcMain.handle("restart-for-update", () => installUpdateAndRestart());
+ipcMain.handle("check-for-update", (_e, opts) => checkForDesktopUpdate({ manual: opts?.manual === true }));
 ipcMain.handle("show-notification", (_e, { title, body, data }) => {
   showNativeNotification(title, body, () => {
     if (mainWindow) {
@@ -549,6 +871,12 @@ ipcMain.handle("show-notification", (_e, { title, body, data }) => {
 });
 
 // Palette IPC
+// The palette renderer has painted a face (compose/search) — reveal the window
+// if it's the one we asked for.
+ipcMain.on("palette-ready", (_e, mode) => {
+  finishReveal(mode);
+});
+
 ipcMain.on("palette-navigate", (_e, navPath) => {
   hidePalette();
   if (mainWindow) {
@@ -565,13 +893,31 @@ ipcMain.on("palette-hide", () => {
 });
 
 ipcMain.on("palette-new-session", () => {
+  openFullSessionInMain();
+});
+
+// The compose popup reports back after the user sends the first message. The
+// session was already created + the message sent from the popup's renderer; all
+// we do here is manage focus:
+//   navigate → bring Codecast forward on the new conversation (Cmd+Enter)
+//   else     → fire-and-forget: hide the popup and step out of the app (Enter)
+ipcMain.on("compose-submit", (_e, data) => {
   hidePalette();
-  if (mainWindow) {
+  if (data?.navigate && data?.conversationId && mainWindow) {
     mainWindow.show();
     mainWindow.focus();
     mainWindow.webContents.executeJavaScript(
-      "window.__CODECAST_NEW_SESSION && window.__CODECAST_NEW_SESSION()"
+      `window.dispatchEvent(new CustomEvent('codecast-navigate', { detail: ${JSON.stringify("/conversation/" + data.conversationId)} }))`
     );
+  } else if (!data?.navigate) {
+    if (paletteSummonedOverSelf && mainWindow && !mainWindow.isDestroyed()) {
+      // Summoned while Codecast was frontmost — "stepping back out" means
+      // returning to the main window, not hiding the whole app.
+      mainWindow.show();
+      mainWindow.focus();
+    } else if (process.platform === "darwin") {
+      app.hide();
+    }
   }
 });
 
@@ -609,12 +955,7 @@ function registerShortcuts() {
 
   if (shortcuts.newSession) {
     globalShortcut.register(shortcuts.newSession, () => {
-      if (!mainWindow) return;
-      mainWindow.show();
-      mainWindow.focus();
-      mainWindow.webContents.executeJavaScript(
-        "window.__CODECAST_NEW_SESSION && window.__CODECAST_NEW_SESSION()"
-      );
+      showCompose();
     });
   }
 
@@ -644,7 +985,7 @@ app.whenReady().then(() => {
   createPaletteWindow();
   if (app.dock) {
     app.dock.setMenu(Menu.buildFromTemplate([
-      { label: "New Session", click: () => { mainWindow?.show(); mainWindow?.focus(); mainWindow?.webContents.executeJavaScript("window.__CODECAST_NEW_SESSION && window.__CODECAST_NEW_SESSION()"); } },
+      { label: "New Session", click: () => openFullSessionInMain() },
       { label: "Dashboard", click: () => navigateMain("/dashboard") },
       { label: "Inbox", click: () => navigateMain("/inbox") },
     ]));
@@ -654,31 +995,12 @@ app.whenReady().then(() => {
   // No startup notification needed -- macOS registers the app when
   // Notification.show() is first called from any code path (idle, error, etc.).
 
-  // Auto-update
-  autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
-  let pendingVersion;
-  autoUpdater.on("update-available", (info) => {
-    pendingVersion = info.version;
-    mainWindow?.webContents.send("update-status", { status: "available", version: info.version });
-  });
-  autoUpdater.on("download-progress", (progress) => {
-    mainWindow?.webContents.send("update-status", { status: "downloading", version: pendingVersion, percent: Math.round(progress.percent) });
-  });
-  autoUpdater.on("update-downloaded", (info) => {
-    mainWindow?.webContents.send("update-status", { status: "ready", version: info.version });
-    // Notify the user instead of force-quitting. The update will also apply
-    // on next app quit thanks to autoInstallOnAppQuit, so dismissing is safe.
-    showNativeNotification(
-      `Codecast ${info.version} is ready`,
-      "Click to restart and install the update.",
-      () => installUpdateAndRestart(),
-    );
-  });
-  autoUpdater.on("error", (err) => {
-    console.error("Auto-update error:", err.message);
-  });
-  autoUpdater.checkForUpdatesAndNotify();
+  // Auto-update: download in the background shortly after launch (so it's
+  // usually already staged + "ready" by the time the user notices the banner),
+  // then re-check hourly. The actual install only happens on a deliberate
+  // "Restart now" — see checkForDesktopUpdate / installUpdateAndRestart.
+  setTimeout(() => { checkForDesktopUpdate(); }, 8000);
+  setInterval(() => { checkForDesktopUpdate(); }, 60 * 60 * 1000);
 });
 
 app.on("activate", () => {

@@ -43,9 +43,47 @@ export function useEnsureDispatch() {
 
   useMountEffect(() => {
     _setDispatch((action, args, patches, result) => dispatchRef.current({ action, args, patches, result }));
-    _setDispatchError((action, error) => {
+    _setDispatchError((action, error, args) => {
       console.error(`[sync] dispatch failed after retries: ${action}`, error);
       useInboxStore.setState(s => ({ dispatchErrors: s.dispatchErrors + 1 }));
+      if (action === "sendMessage" && Array.isArray(args)) {
+        // Args mirror dispatch.sendMessage: [conversation_id, content, image_ids, client_id].
+        const [convId, , , clientId] = args as [string?, unknown?, unknown?, string?];
+        // The optimistic bubble is the only copy of the user's text once the
+        // server rejects the send (nothing was written). Mark it failed so the
+        // reconcile prune keeps it and the thread shows "Failed to send"
+        // instead of silently dropping what the user typed.
+        if (typeof convId === "string" && typeof clientId === "string") {
+          useInboxStore.getState().markOptimisticAsFailed(convId, clientId);
+        }
+        // A send into a conversation whose server row was deleted (cached ghost).
+        // Flag it so the view can offer "restore" instead of failing silently.
+        if (typeof convId === "string" && /conversation_deleted/.test(String(error))) {
+          useInboxStore.getState().markServerDeleted(convId);
+        }
+      }
     });
+
+    // Re-drive any parked dispatch when the client likely has connectivity
+    // again. The boot drain only fires once on load, so a send the live socket
+    // stranded (in-session retries exhausted with no reload in sight) would sit
+    // undelivered indefinitely. Coming back online, refocusing the tab, and a
+    // slow heartbeat each give it a fresh chance to land — no reload required.
+    // `window` exists in React Native but has no browser event APIs (and there's
+    // no `document`), so an SSR-style `typeof window === "undefined"` check passes
+    // and then crashes on `window.addEventListener`. Require the real APIs.
+    if (typeof window === "undefined" || typeof document === "undefined" || typeof window.addEventListener !== "function") return;
+    // _drainOutbox is injected onto the store by mutativeMiddleware (a sibling
+    // of _setDispatch); typed at the call site so the wiring lives entirely here.
+    const drain = () => (useInboxStore.getState() as unknown as { _drainOutbox: () => void })._drainOutbox();
+    const onVisible = () => { if (document.visibilityState === "visible") drain(); };
+    window.addEventListener("online", drain);
+    document.addEventListener("visibilitychange", onVisible);
+    const interval = window.setInterval(drain, 30_000);
+    return () => {
+      window.removeEventListener("online", drain);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.clearInterval(interval);
+    };
   });
 }

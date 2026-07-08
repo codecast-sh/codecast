@@ -1,13 +1,16 @@
 "use client";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useMountEffect } from "../../../hooks/useMountEffect";
-import { shareOrigin, copyToClipboard } from "../../../lib/utils";
+import { useInboxStore } from "../../../store/inboxStore";
+import { shareOrigin, canonicalUrl } from "../../../lib/utils";
 import { AuthGuard } from "../../../components/AuthGuard";
+import { AppLoader } from "../../../components/AppLoader";
 import { DashboardLayout } from "../../../components/DashboardLayout";
 import { DocumentDetailLayout } from "../../../components/DocumentDetailLayout";
+import { SharePopover } from "../../../components/SharePopover";
 import "../../../components/editor/editor.css";
 import {
   PlanProgressBar,
@@ -22,14 +25,13 @@ import { WorkflowContextPanel } from "../../../components/WorkflowContextPanel";
 import { PlanBoardView } from "../../../components/PlanBoardView";
 import { PlanGraphView } from "../../../components/PlanGraphView";
 import { LivenessDot } from "../../../components/LivenessDot";
+import { mergeLiveTasks, computePlanProgress } from "../../../lib/liveEntities";
 import {
   Clock,
   CheckCircle2,
   Zap,
   Layers,
   GitBranch,
-  Link2,
-  Check,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -93,9 +95,9 @@ function PlanStatusSelector({
 }
 
 function EnsureDocTrigger({ planId }: { planId: any }) {
-  const ensureDoc = useMutation(api.plans.ensureDoc);
+  const ensureDoc = useInboxStore((s) => s.ensurePlanDoc);
   useMountEffect(() => {
-    ensureDoc({ plan_id: planId });
+    ensureDoc(planId);
   });
   return (
     <div className="flex items-center justify-center h-64 text-sol-text-dim text-sm">
@@ -110,30 +112,41 @@ export default function PlanDetailPage() {
 
   const queryArgs = id.startsWith("pl-") ? { short_id: id } : { id };
   const plan = useQuery(api.plans.webGet, queryArgs);
-  const webUpdate = useMutation(api.plans.webUpdate);
+  const webUpdate = useInboxStore((s) => s.updatePlan);
   const generateShareLink = useMutation(api.plans.generateShareLink);
 
-  const [activeTab, setActiveTab] = useState<PlanTab>("overview");
-  const [shareCopied, setShareCopied] = useState(false);
+  // plan.tasks / plan.progress / plan.status are a server-query snapshot, so
+  // optimistic edits (updateTask status/assignee, updatePlan status) wouldn't
+  // show here until the query re-runs. Overlay the live store rows (canonical
+  // helper) so dragged cards, status circles, assignee avatars, the progress
+  // bar and the plan status pill all update instantly — same as PlanDetailPanel.
+  const storeTasks = useInboxStore((s) => s.tasks);
+  const teamMembers = useInboxStore((s) => s.teamMembers);
+  const currentUser = useInboxStore((s) => s.currentUser);
+  const storePlans = useInboxStore((s) => s.plans);
 
-  const handleShare = useCallback(async () => {
-    if (!plan) return;
-    try {
-      const result = await generateShareLink({ short_id: plan.short_id });
-      const url = `${shareOrigin()}/share/plan/${result.share_token}`;
-      await copyToClipboard(url);
-      setShareCopied(true);
-      toast.success("Share link copied to clipboard");
-      setTimeout(() => setShareCopied(false), 2000);
-    } catch (e: any) {
-      toast.error(e.message || "Failed to generate share link");
-    }
-  }, [plan, generateShareLink]);
+  const [activeTab, setActiveTab] = useState<PlanTab>("overview");
+
+  const liveTasks = useMemo(
+    () => mergeLiveTasks((plan as any)?.tasks, storeTasks, teamMembers as any[], currentUser as any),
+    [plan, storeTasks, teamMembers, currentUser]
+  );
+  const liveProgress = useMemo(() => {
+    if (!Array.isArray(liveTasks)) return (plan as any)?.progress;
+    return { ...((plan as any)?.progress || {}), ...computePlanProgress(liveTasks) };
+  }, [liveTasks, plan]);
+  const liveStatus = useMemo(() => {
+    if (!plan) return undefined;
+    const storePlan = Object.values(storePlans).find(
+      (p: any) => p.short_id === plan.short_id || p._id === plan._id
+    ) as any;
+    return storePlan?.status ?? plan.status;
+  }, [plan, storePlans]);
 
   const handleTitleChange = useCallback(
     (title: string) => {
       if (!plan) return;
-      webUpdate({ short_id: plan.short_id, title });
+      webUpdate(plan.short_id, { title });
     },
     [plan, webUpdate]
   );
@@ -141,7 +154,7 @@ export default function PlanDetailPage() {
   const handleStatusChange = useCallback(
     (newStatus: string) => {
       if (!plan) return;
-      webUpdate({ short_id: plan.short_id, status: newStatus });
+      webUpdate(plan.short_id, { status: newStatus });
     },
     [plan, webUpdate]
   );
@@ -150,9 +163,7 @@ export default function PlanDetailPage() {
     return (
       <AuthGuard>
         <DashboardLayout>
-          <div className="flex items-center justify-center h-64 text-sol-text-dim text-sm">
-            Loading...
-          </div>
+          <AppLoader className="min-h-[16rem] h-full" />
         </DashboardLayout>
       </AuthGuard>
     );
@@ -180,7 +191,7 @@ export default function PlanDetailPage() {
     );
   }
 
-  const hasTasks = (plan.tasks || []).length > 0;
+  const hasTasks = (liveTasks || []).length > 0;
   const hasActiveSessions = (plan.sessions || []).some((s: any) => s.is_active);
 
   return (
@@ -196,22 +207,30 @@ export default function PlanDetailPage() {
           linkedObjectId={plan._id}
           placeholder="Write plan details, notes, or documentation..."
           contextType="plan"
+          leadContent={
+            plan.goal ? (
+              <p className="text-base text-sol-text-muted leading-relaxed">{plan.goal}</p>
+            ) : null
+          }
           topBarLeft={
             <>
-              <PlanStatusSelector value={plan.status} onChange={handleStatusChange} />
+              <PlanStatusSelector value={liveStatus} onChange={handleStatusChange} />
               {plan.drive_state && plan.drive_state.total_rounds > 0 && (
                 <DriveRoundIndicator driveState={plan.drive_state} />
               )}
             </>
           }
           topBarRight={
-            <button
-              onClick={handleShare}
-              className={`p-1.5 rounded-md transition-colors ${shareCopied ? "text-sol-green" : "text-sol-text-dim hover:text-sol-cyan"}`}
-              title="Copy share link"
-            >
-              {shareCopied ? <Check className="w-3.5 h-3.5" /> : <Link2 className="w-3.5 h-3.5" />}
-            </button>
+            <SharePopover
+              hasTeam={false}
+              hasShareToken={!!(plan as any).share_token}
+              shareUrl={(plan as any).share_token ? `${shareOrigin()}/share/plan/${(plan as any).share_token}` : null}
+              pageUrl={canonicalUrl()}
+              onGenerateShareLink={async () => {
+                const result = await generateShareLink({ short_id: plan.short_id });
+                return `${shareOrigin()}/share/plan/${result.share_token}`;
+              }}
+            />
           }
           metaContent={
             <>
@@ -235,9 +254,6 @@ export default function PlanDetailPage() {
                   <span>Updated {formatDate(plan.updated_at)}</span>
                 )}
               </div>
-              {plan.goal && (
-                <p className="mt-2 text-sm text-sol-text-muted leading-relaxed">{plan.goal}</p>
-              )}
               {plan.acceptance_criteria?.length > 0 && (
                 <div className="mt-3">
                   <h3 className="text-xs font-medium text-sol-text-dim uppercase tracking-wider mb-1">
@@ -274,8 +290,8 @@ export default function PlanDetailPage() {
             </>
           }
         >
-          {plan.progress && plan.progress.total > 0 && (
-            <PlanProgressBar progress={plan.progress} />
+          {liveProgress && liveProgress.total > 0 && (
+            <PlanProgressBar progress={liveProgress} />
           )}
 
           {(plan as any).workflow_id && !(plan as any).workflow_run_id && (
@@ -316,13 +332,13 @@ export default function PlanDetailPage() {
           )}
 
           {activeTab === "graph" ? (
-            <PlanGraphView tasks={plan.tasks || []} />
+            <PlanGraphView tasks={liveTasks || []} />
           ) : activeTab === "board" ? (
-            <PlanBoardView tasks={plan.tasks || []} planShortId={plan.short_id} />
+            <PlanBoardView tasks={liveTasks || []} planShortId={plan.short_id} />
           ) : activeTab === "overview" ? (
             <>
-              <OrchestrationHeader tasks={plan.tasks || []} sessions={plan.sessions || []} />
-              <PlanTaskSection planShortId={plan.short_id} tasks={plan.tasks || []} sessions={plan.sessions || []} />
+              <OrchestrationHeader tasks={liveTasks || []} sessions={plan.sessions || []} />
+              <PlanTaskSection planShortId={plan.short_id} tasks={liveTasks || []} sessions={plan.sessions || []} />
 
               {plan.comments?.length > 0 && (
                 <div className="mb-6">
@@ -373,7 +389,7 @@ export default function PlanDetailPage() {
               )}
             </>
           ) : (
-            <OrchestrationTab tasks={plan.tasks || []} sessions={plan.sessions || []} />
+            <OrchestrationTab tasks={liveTasks || []} sessions={plan.sessions || []} />
           )}
           </DocumentDetailLayout>
         </div>

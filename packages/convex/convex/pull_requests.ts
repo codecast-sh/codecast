@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { mutation, query } from "./functions";
 import { internal } from "./_generated/api";
 
 async function resolveActorUserIdForTeam(

@@ -15,6 +15,30 @@ NOTIF_TYPE=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin)
 SOURCE=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('source',''))" 2>/dev/null)
 PERM_MODE=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('permission_mode',''))" 2>/dev/null)
 
+# A pending AskUserQuestion buffers its whole turn (the reasoning prose AND the tool_use)
+# out of the JSONL until it's answered, so the daemon can't read the real questions from
+# the transcript. Drop the full tool_input in a per-session sidecar (too large for the
+# status URL) so the daemon builds a full-fidelity card — option descriptions, headers,
+# multiSelect — instead of scraping the box-art menu. Written atomically; best-effort.
+if [ "$EVENT" = "PreToolUse" ] || [ "$EVENT" = "PermissionRequest" ]; then
+  echo "$INPUT" | CC_SID="$SESSION_ID" python3 -c "
+import sys, json, os, tempfile, time
+try:
+    d = json.load(sys.stdin)
+    if d.get('tool_name') == 'AskUserQuestion':
+        qs = (d.get('tool_input') or {}).get('questions')
+        if qs:
+            dd = os.path.join(os.path.expanduser('~'), '.codecast', 'ask-input')
+            os.makedirs(dd, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(dir=dd)
+            with os.fdopen(fd, 'w') as f:
+                json.dump({'questions': qs, 'ts': int(time.time())}, f)
+            os.replace(tmp, os.path.join(dd, os.environ['CC_SID'] + '.json'))
+except Exception:
+    pass
+" 2>/dev/null
+fi
+
 STATUS=""
 EXTRA=""
 case "$EVENT" in

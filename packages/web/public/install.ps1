@@ -1,5 +1,13 @@
 # Codecast installer script for Windows
-# Usage: irm codecast.sh/install.ps1 | iex
+#
+# Usage (install only):
+#   irm codecast.sh/install.ps1 | iex
+#
+# Usage (install AND link this device with a setup token from Settings -> CLI):
+#   $env:CODECAST_SETUP_TOKEN="<token>"; irm codecast.sh/install.ps1 | iex
+#
+# A token is passed via env var rather than an argument because `irm | iex`
+# evaluates the script text and cannot forward positional parameters.
 
 $ErrorActionPreference = "Stop"
 
@@ -17,6 +25,8 @@ $downloadHost = "https://dl.codecast.sh"
 $binaryName = "codecast-windows-x64.exe"
 $installDir = "$env:LOCALAPPDATA\codecast"
 $downloadUrl = "$downloadHost/$binaryName"
+$targetPath = Join-Path $installDir "codecast.exe"
+$setupToken = $env:CODECAST_SETUP_TOKEN
 
 Write-Host "Platform: windows-$arch"
 Write-Host "Install directory: $installDir"
@@ -26,7 +36,8 @@ if (!(Test-Path $installDir)) {
     New-Item -ItemType Directory -Path $installDir -Force | Out-Null
 }
 
-# Download binary
+# Download binary. Invoke-WebRequest shows a progress bar by default, so the
+# ~70MB download doesn't look frozen.
 Write-Host "Downloading codecast..."
 $tempFile = [System.IO.Path]::GetTempFileName()
 try {
@@ -36,8 +47,20 @@ try {
     exit 1
 }
 
+# Stop a running daemon before replacing the binary it's executing from.
+if (Test-Path $targetPath) {
+    try {
+        Write-Host "Stopping running daemon..."
+        & $targetPath stop *> $null
+        # Windows locks a running .exe; give it a moment to release before we
+        # overwrite, or Move-Item fails with "file in use".
+        Start-Sleep -Seconds 1
+    } catch {
+        # No daemon running, or it couldn't be stopped — safe to continue.
+    }
+}
+
 # Install binary
-$targetPath = Join-Path $installDir "codecast.exe"
 Write-Host "Installing to $targetPath..."
 Move-Item -Path $tempFile -Destination $targetPath -Force
 
@@ -51,8 +74,15 @@ if ($userPath -notlike "*$installDir*") {
     Write-Host "PATH updated. You may need to restart your terminal."
 }
 
-# Verify installation
 Write-Host ""
 Write-Host "codecast installed successfully!" -ForegroundColor Green
 Write-Host ""
-Write-Host "Run 'codecast auth' to authenticate and start syncing."
+
+if ($setupToken) {
+    # Token path: links this device without the browser callback flow.
+    Write-Host "Linking device..."
+    & $targetPath login $setupToken
+} else {
+    Write-Host "Run 'codecast auth' to authenticate and start syncing."
+    Write-Host "Or generate a token at codecast.sh/settings/cli and run 'codecast login <token>'."
+}

@@ -1,4 +1,4 @@
-import { mutation, query } from "./_generated/server";
+import { mutation, query } from "./functions";
 import { getAuthUserId } from "@convex-dev/auth/server";
 
 export const get = query({

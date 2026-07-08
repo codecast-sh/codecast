@@ -1,4 +1,5 @@
 import { useState, useCallback, DragEvent } from "react";
+import { useRouter } from "next/navigation";
 import { useInboxStore } from "../store/inboxStore";
 import { TaskStatusBadge, getExecStatusConfig } from "./TaskStatusBadge";
 import { toast } from "sonner";
@@ -30,6 +31,7 @@ const PRIORITY_CONFIG: Record<string, { icon: typeof Minus; color: string }> = {
 
 export function PlanBoardView({ tasks, planShortId }: { tasks: any[]; planShortId: string }) {
   const updateTask = useInboxStore((s) => s.updateTask);
+  const router = useRouter();
   const [dragging, setDragging] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState<string | null>(null);
 
@@ -72,7 +74,7 @@ export function PlanBoardView({ tasks, planShortId }: { tasks: any[]; planShortI
   }, []);
 
   return (
-    <div className="grid grid-cols-5 gap-3 min-h-[300px]">
+    <div className="grid grid-cols-2 md:grid-cols-5 gap-3 min-h-[300px]">
       {BOARD_COLUMNS.map(col => {
         const ColIcon = col.icon;
         const columnTasks = tasks.filter(t => t.status === col.status);
@@ -109,9 +111,19 @@ export function PlanBoardView({ tasks, planShortId }: { tasks: any[]; planShortI
                   <div
                     key={task._id}
                     draggable
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Open task ${task.short_id}: ${task.title}`}
                     onDragStart={e => onDragStart(e, task.short_id)}
                     onDragEnd={onDragEnd}
-                    className={`rounded-md border border-sol-border/20 bg-sol-bg px-2.5 py-2 cursor-grab active:cursor-grabbing transition-opacity ${
+                    onClick={() => router.push(`/tasks/${task._id}`)}
+                    onKeyDown={e => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        router.push(`/tasks/${task._id}`);
+                      }
+                    }}
+                    className={`rounded-md border border-sol-border/20 bg-sol-bg px-2.5 py-2 cursor-grab active:cursor-grabbing transition-opacity focus:outline-none focus-visible:ring-1 focus-visible:ring-sol-blue/60 ${
                       isDragging ? "opacity-30" : "opacity-100 hover:border-sol-border/40"
                     }`}
                   >

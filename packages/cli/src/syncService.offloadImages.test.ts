@@ -69,7 +69,9 @@ describe("SyncService.offloadImages", () => {
     };
 
     // 12 images across messages; serial would peak at maxActive=1.
-    const messages = Array.from({ length: 12 }, (_, i) => ({
+    const messages: Array<{
+      images?: Array<{ mediaType: string; data?: string; storageId?: string; toolUseId?: string }>;
+    }> = Array.from({ length: 12 }, (_, i) => ({
       images: [{ mediaType: "image/png", data: String(i) }],
     }));
     await sync.offloadImages(messages);

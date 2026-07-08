@@ -1,0 +1,118 @@
+⏺ The Dismissed filter shows all 9 dismissed sessions — each dimmed, with the gray dismissed badge and a restore action. This
+  directly answers "clearly see which agents are dismissed vs not." Let me verify the restore write path on the top row, then
+  re-dismiss it to leave state unchanged:
+
+  Called claude-in-chrome 2 times (ctrl+o to expand)
+
+⏺ Restore works: Dismissed 9 → 8, and "Session move e2e validation" left the dismissed view. So the full dismiss/restore
+  round-trip is verified (restore via patchConversation({inbox_dismissed_at: null})).
+
+  I restored a session that was previously dismissed, so let me put it back to leave your state exactly as it was. I'll switch
+  I restored a session that was previously dismissed, so let me put it back to leave your state exactly as it was. I'll switch
+  to ascending sort (oldest first) to surface it:
+
+  Called claude-in-chrome 3 times (ctrl+o to expand)
+
+⏺ These ascending results are 2d+ old sessions (alive process, but no conversation activity in days — the two axes again).
+  "Session move e2e validation" (21h) is newer, so it's further down. Let me narrow to the Needs-input filter where it lives
+  (only 11 items) to find it quickly:
+
+  Called claude-in-chrome 2 times (ctrl+o to expand)
+
+⏺ Close — "Session move e2e validation" (21h 7m) sits just below these. Let me scroll down to find it (it'll now show without
+  a dismissed badge since I restored it):
+
+  Called claude-in-chrome (ctrl+o to expand)
+
+⏺ Found it — "Session move e2e validation" (pid:47137, 2390 msgs) now shows the needs input badge with a dismiss action
+  (confirming my restore worked — it's no longer dismissed). Let me re-dismiss it to restore your original state:
+
+  Called claude-in-chrome 2 times (ctrl+o to expand)
+
+⏺ Re-dismiss worked — "Session move e2e validation" shows the dismissed badge again with a restore action. Your original state
+  is restored (the one session I touched for testing is back to dismissed).
+
+  That completes the full verification. Let me mark the task done.
+
+⏺ Bash(cd /Users/ashot/src/codecast
+      cast task done ct-32970 -m "Sessions page triage: each row now shows its inbox state (needs-input/working badges, pinned
+      ★, dimmed+…)
+  ⎿  ok Completed ct-32970
+
+⏺ Done — all four states are now visible and actionable on /sessions, verified end-to-end against your real fleet.
+
+  What shipped                                                                                                                
+
+  Clearly see — each row now carries its inbox state on a lane separate from process-liveness:                                
+  - rose needs input / green working badges (idle stays quiet)
+  - amber ★ + amber card border for pinned                                                                                    
+  - dimmed row + gray dismissed badge for dismissed                  
+                                                   
+  Filter — a STATE row: All · Needs input · Working · Pinned · Dismissed, each with a live count.
+
+  Act — per-row pin/unpin and dismiss/restore buttons, next to the existing kill/prune.                                       
+
+  How it reuses what exists (no forked logic)                                                                                 
+
+  The inbox already computes these states and exports the predicates. So /sessions now also reads listInboxSessions, joins it 
+  by conversation_id, and calls the exact same isSessionWaitingForInput / isSessionEffectivelyIdle / isSessionDismissed. The
+  only backend change was a one-line addition of inbox_pinned_at to patchConversation's allowlist — dismiss/restore already   
+  had mutations. Total new server logic: that one line.              
+
+  Verified live (and cleaned up after myself)                                                                                 
+
+  - Pin → Pinned 3→4, and the session correctly left the Needs-input list (pinned wins, per the inbox's own rule); Unpin → 4→3
+  and it returned to Needs-input.                                    
+  - Restore a dismissed session → Dismissed 9→8; Dismiss it back → state returned to exactly where it started. The one session
+  I touched for testing is back to dismissed.                                                                                 
+  - All filters reorder/count correctly.
+  - My file typechecks clean; convex package clean; convex deployed.
+
+  ★ Insight ─────────────────────────────────────                                                                             
+  The win here was resisting the obvious-but-wrong path. The tempting move was to add awaiting_input/is_idle computation to
+  listActiveSessions — but that needs a per-message DB read on a timer-polled query, and it would fork the inbox's nuanced    
+  "needs input" logic (open-poll detection, permission blocks, pending-send races). Joining the two queries client-side
+  instead means there is exactly one definition of "needs input" in the codebase, and /sessions can never drift from /inbox.  
+  The cost — one extra reactive query on an occasional-use page — is the right trade.
+  ─────────────────────────────────────────────────
+
+  Deploy status
+
+  - Backend: deployed to prod self-hosted Convex (the inbox_pinned_at allowlist line — additive, safe with the current prod   
+  frontend).
+  - Frontend: live on local.codecast.sh only. Both this and the earlier last-active/sort work are not on prod codecast.sh yet
+  — that needs a commit + push to main (Railway auto-deploys), which I haven't done per your "push only when asked" rule.     
+
+  Both features (last-active/sort + triage) are sitting in your working tree. Want me to commit them — and push to main so    
+  they reach prod?                                                   
+
+✻ Baked for 42m 14s · 1 shell still running                          
+
+❯ want a killall on every page                                                                                                
+
+⏺ "Kill all" is a destructive, fleet-wide action, and "every page" is genuinely ambiguous to me — it could mean a global      
+  button on every route of the app, or always-on across every filter of the /sessions page. Since building the wrong one
+  (especially a global panic button) is costly and risky, let me confirm scope before I build. I'll gate whichever one behind 
+  a confirm step regardless.
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☐ Scope  ☐ Targets  ✔ Submit  →
+
+Where should the "kill all" button live, and what should it target?
+
+  1. Global, every route          ┌────────────────────────────────────────────────────────┐
+ 2. Sessions page, all filters    │ /sessions header:                                      │
+                                  │   Sessions  37 active … [⚠ Kill all 37]                │
+  3. Both                         │ Filter = Needs input → [⚠ Kill all 11]                 │
+                                  │ Filter = Pinned      → [⚠ Kill all 3]                  │
+                                  │ (acts on whatever's currently filtered)                │
+                                  └────────────────────────────────────────────────────────┘
+
+                                  Notes: press n to add notes
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Chat about this
+
+Enter to select · ↑/↓ to navigate · n to add notes · Tab to switch questions · Esc to cancel
+Killed: 9
+~/src/codecast (main *):

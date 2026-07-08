@@ -4,6 +4,7 @@ import { parseSessionFile } from "./parser.js";
 import { SyncService } from "./syncService.js";
 import { setPosition } from "./positionTracker.js";
 import { updateSyncRecord } from "./syncLedger.js";
+import { isTestScratchPath } from "./syncScope.js";
 
 const CONFIG_DIR = process.env.HOME + "/.codecast";
 const RECONCILIATION_FILE = path.join(CONFIG_DIR, "last-reconciliation.json");
@@ -94,7 +95,13 @@ export async function performReconciliation(
         if (entry.isDirectory()) {
           scanDir(fullPath);
         } else if (entry.name.endsWith(".jsonl") && !entry.name.startsWith("agent-")) {
-          // Skip subagent files for now, focus on main sessions
+          // Skip subagent files for now, focus on main sessions.
+          // Skip files the sync loop refuses to sync (test-scratch transcripts):
+          // the backend will never have them, so reconciliation would forever flag
+          // them `missing_backend` and "repair" them into zombie zero-position
+          // ledger entries that surface as phantom "stuck syncs". Reconciliation
+          // must honor the same scope rule as the sync loop.
+          if (isTestScratchPath(fullPath)) continue;
           try {
             const stats = fs.statSync(fullPath);
             if (now - stats.mtimeMs < maxAgeMs) {

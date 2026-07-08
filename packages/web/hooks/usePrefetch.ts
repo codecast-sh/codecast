@@ -18,7 +18,12 @@ export function usePrefetch() {
   const tasks = useQuery(api.tasks.webList, skipTasks ? "skip" : { ...workspaceArgs });
   const syncTable = useInboxStore((s) => s.syncTable);
 
+  // Overlay-only (isDelta): this warms the cache with the most-recent page from
+  // the live channel, which is hard-capped server-side (webList MAX_INITIAL=300).
+  // A snapshot sync here would treat that capped page as authoritative and PRUNE
+  // every other task the reconcile crawl loaded — flushing the store down to 300
+  // on every non-tasks page. The full reconcile in useSyncTasks owns pruning.
   useConvexSync(tasks, useCallback((data: any) => {
-    syncTable("tasks", (data?.items ?? data) as any);
+    syncTable("tasks", (data?.items ?? data) as any, { isDelta: true });
   }, [syncTable]));
 }

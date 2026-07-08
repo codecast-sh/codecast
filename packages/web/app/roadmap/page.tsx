@@ -1,5 +1,5 @@
-import { redirect } from "next/navigation";
+import { Navigate } from "react-router";
 
 export default function RoadmapPage() {
-  redirect("/team/activity");
+  return <Navigate to="/team/activity" replace />;
 }

@@ -1,5 +1,5 @@
 import { useRef, useCallback, useState } from "react";
-import { useInboxStore, InboxSession, getProjectName } from "../store/inboxStore";
+import { useInboxStore, InboxSession } from "../store/inboxStore";
 import { useEventListener } from "./useEventListener";
 import { usePathname } from "next/navigation";
 import { isInboxSessionView } from "../lib/inboxRouting";
@@ -15,7 +15,6 @@ const CLOSED: SwitcherState = { open: false, selectedIndex: 0, mruSessions: [] }
 export function useSessionSwitcher() {
   const setCurrentSession = useInboxStore((s) => s.setCurrentSession);
   const selectPanelSession = useInboxStore((s) => s.selectPanelSession);
-  const touchMru = useInboxStore((s) => s.touchMru);
   const pathname = usePathname();
   const inboxSource = useInboxStore((s) => s.currentConversation?.source);
   const isOnInboxPage = isInboxSessionView(pathname, inboxSource);
@@ -31,12 +30,15 @@ export function useSessionSwitcher() {
   const peekTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const getMruSessions = useCallback((): InboxSession[] => {
-    const { _lastViewedAt, sortedSessions, activeProjectFilter } = useInboxStore.getState();
-    const matchesFilter = (s: InboxSession) =>
-      !activeProjectFilter || getProjectName(s.git_root, s.project_path) === activeProjectFilter;
-    const all = sortedSessions().filter(matchesFilter);
-    all.sort((a, b) => (_lastViewedAt[b._id] ?? 0) - (_lastViewedAt[a._id] ?? 0));
-    return all;
+    // Pure most-recently-viewed: the sessions you've actually looked at, newest
+    // first. No category filters (subagent / dismissed / parent / project) — the
+    // switcher is "the last thing I looked at, period". Membership is just having
+    // a recorded view (recordSessionView fires from every navigation path), so
+    // anything you opened is reachable and never-opened sessions stay out.
+    const { _lastViewedAt, sessions } = useInboxStore.getState();
+    return Object.values(sessions)
+      .filter((s) => _lastViewedAt[s._id] != null)
+      .sort((a, b) => (_lastViewedAt[b._id] ?? 0) - (_lastViewedAt[a._id] ?? 0));
   }, []);
 
   const commit = useCallback((sessions: InboxSession[], idx: number) => {
@@ -45,9 +47,10 @@ export function useSessionSwitcher() {
     if (target) {
       const { sessions: all } = useInboxStore.getState();
       if (all[target._id]) {
+        // setCurrentSession / selectPanelSession record the view (MRU + divider
+        // anchor) themselves — no separate touchMru needed here.
         if (isOnInboxPage) setCurrentSession(target._id);
         else selectPanelSession(target._id);
-        touchMru(target._id);
       }
     }
     overlayOpen.current = false;
@@ -57,7 +60,7 @@ export function useSessionSwitcher() {
     pending.current = false;
     ctrlHeld.current = false;
     setRenderState(CLOSED);
-  }, [isOnInboxPage, setCurrentSession, selectPanelSession, touchMru]);
+  }, [isOnInboxPage, setCurrentSession, selectPanelSession]);
 
   const updateRender = useCallback(() => {
     setRenderState({

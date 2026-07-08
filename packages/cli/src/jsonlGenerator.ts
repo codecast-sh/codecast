@@ -8,6 +8,8 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
+import { CODECAST_IMPORT_NOTICE_PREFIX } from "./parser";
+import { claudeProjectDirName } from "./projectPathResolver.js";
 
 const uuidv4 = () => crypto.randomUUID();
 
@@ -19,6 +21,26 @@ export interface ExportedMessage {
   message_uuid?: string;
   tool_calls?: Array<{ id: string; name: string; input: string }>;
   tool_results?: Array<{ tool_use_id: string; content: string; is_error?: boolean }>;
+  /** Synthetic context-only message (e.g. import truncation notice): emitted with
+   * isMeta so Claude Code keeps it in context but no transcript/UI displays it. */
+  isMeta?: boolean;
+  /** Server-side message classification (e.g. "workflow_event") — set on rows the
+   * server injects into a conversation, never on rows synced from a transcript. */
+  subtype?: string;
+}
+
+/**
+ * Server-injected meta messages, e.g. the workflow-run anchor whose content is
+ * internal JSON the web renders as a live card. They were never spoken by the
+ * agent, so a synthetic transcript must not include them: once baked in, the
+ * daemon syncs them back as ordinary assistant prose and the conversation shows
+ * raw `{"__wf":...}` JSON. The content-prefix check covers export payloads that
+ * predate the `subtype` field.
+ */
+export function isServerMetaMessage(m: ExportedMessage): boolean {
+  if (m.subtype === "workflow_event") return true;
+  return m.role === "assistant" && !!m.content?.startsWith('{"__wf"')
+    && !m.tool_calls?.length && !m.tool_results?.length;
 }
 
 export interface ExportedConversation {
@@ -74,19 +96,43 @@ export function estimateClaudeImportTokens(data: ExportResult): number {
   return Math.ceil(total * 1.1);
 }
 
+/**
+ * A genuine human turn — text the person actually typed, not a tool-result
+ * carrier and not a synthetic import notice. These are the highest-signal,
+ * cheapest messages to keep when trimming a long import: they carry the human's
+ * intent across the whole conversation, so we surface every earlier one even
+ * when the bulk of the middle gets dropped. Mirrors the server's own first-user
+ * detection (conversations.ts: role==="user" && no tool_results && non-empty).
+ */
+export function isHumanInstruction(m: ExportedMessage): boolean {
+  if (m.role !== "user" || m.isMeta) return false;
+  if (m.tool_results && m.tool_results.length > 0) return false;
+  const text = m.content?.trim() ?? "";
+  return text.length > 0 && !text.startsWith(CODECAST_IMPORT_NOTICE_PREFIX);
+}
+
 export function chooseClaudeTailMessagesForTokenBudget(data: ExportResult, budgetTokens: number): number {
   if (budgetTokens <= 0) return 0;
   const messages = data.messages;
   if (messages.length === 0) return 0;
 
-  // Reserve a little space for the truncation notice + first user message.
-  const reserved = estimateTokensFromText("[Codecast import]") + 512;
+  // Reserve room for the import notice plus every earlier human instruction we
+  // prepend — those are surfaced no matter where the tail starts, so they come
+  // out of the budget first. Counting all of them (not just the ones before the
+  // eventual cutoff) is a safe over-estimate: it only shortens the tail slightly,
+  // it never overflows the window.
+  let reserved = estimateTokensFromText(CODECAST_IMPORT_NOTICE_PREFIX) + 512;
+  for (const m of messages) {
+    if (isHumanInstruction(m)) reserved += estimateTokensForMessage(m);
+  }
   const budget = Math.max(0, budgetTokens - reserved);
 
   let used = 0;
   let count = 0;
   for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const t = estimateTokensForMessage(messages[i]);
+    // Human instructions are already paid for in `reserved`; don't double-count
+    // the ones that fall inside the tail.
+    const t = isHumanInstruction(messages[i]) ? 0 : estimateTokensForMessage(messages[i]);
     if (count > 0 && used + t > budget) break;
     used += t;
     count += 1;
@@ -338,6 +384,125 @@ function truncate(text: string, max = 2000): string {
 
 // ── Claude Code JSONL ──────────────────────────────────────
 
+// Claude Code resolves the bare aliases opus/sonnet/haiku to the current model
+// of that line, so they never go stale. A pinned snapshot recorded in a
+// transcript dies once that snapshot is retired: `claude --resume` adopts it
+// and crashes with "the selected model ... may not exist". When reconstructing
+// a transcript for a conversation with no usable Claude model (never recorded,
+// or a non-Claude model from a codex conversation being converted), stamp the
+// alias so the transcript resolves to a live model forever.
+export function claudeTranscriptModel(conversationModel: string | null | undefined): string {
+  if (conversationModel && /^claude-/.test(conversationModel)) return conversationModel;
+  return "opus";
+}
+
+// A session's JSONL records the model it ran on — often a pinned snapshot like
+// claude-opus-4-6-20260205, which gets retired when a newer model ships. Return
+// the live short alias matching the recorded model so a resume lands on a live
+// model instead of a dead snapshot (if the recorded model is still current the
+// alias resolves to it anyway). Also matches a bare recorded alias.
+//
+// Two signals mark the model a session is on, and the LAST one of either kind
+// wins:
+//  - assistant lines record the model each turn actually ran on;
+//  - a /model switch emits a `<local-command-stdout>Set model to <Name>` user
+//    line with NO assistant line until the next turn, so it's the only trace of
+//    a switch-then-resume/fork-before-any-turn. Fork reconstructions stamp the
+//    conversation-level model uniformly on assistant lines but preserve this
+//    stdout line, so it's also what keeps forks on the switched model.
+// First-match scanning is what caused the original bug: it returned the model
+// the session STARTED on and reverted mid-session /model switches on every
+// resume. The ANSI escapes around the name arrive JSON-escaped (literal
+// `\u001b[1m` text) in raw transcript bytes; match the raw ESC byte too for
+// pre-parsed content. "Default" means the user's saved default — no override.
+const MODEL_ALIAS_RE =
+  /"model"\s*:\s*"(?:claude-)?(opus|sonnet|haiku|fable)\b|<local-command-stdout>Set model to (?:(?:\\u001b|\x1b)\[\d+m)*(opus|sonnet|haiku|fable|default)/gi;
+export function claudeModelAlias(jsonlContent: string): string | null {
+  let last: string | null = null;
+  MODEL_ALIAS_RE.lastIndex = 0;
+  for (let m = MODEL_ALIAS_RE.exec(jsonlContent); m; m = MODEL_ALIAS_RE.exec(jsonlContent)) {
+    const name = (m[1] ?? m[2]).toLowerCase();
+    last = name === "default" ? null : name;
+  }
+  return last;
+}
+
+// Pick the `--model` flag for a resume. We override the model on EVERY resume,
+// not just forks: the JSONL records whatever model the session last ran on,
+// which may be a now-retired pinned snapshot. An explicit --model in extraFlags
+// always wins.
+export function resumeModelFlag(jsonlContent: string, extraFlags: string): string {
+  if (/(^|\s)--model(\s|=)/.test(extraFlags)) return "";
+  const alias = claudeModelAlias(jsonlContent);
+  return alias ? ` --model ${alias}` : "";
+}
+
+// File variant of resumeModelFlag. We want the LAST recorded model, so scan a
+// bounded window from the END of the file (small transcripts fit entirely, so
+// the head-of-file case is covered too). If a huge transcript's tail window
+// somehow contains no model field (e.g. a giant trailing user message), fall
+// back to a head window rather than dropping the override — resuming with no
+// flag can land on a retired pinned snapshot and crash.
+const MODEL_SCAN_WINDOW_BYTES = 8 * 1024 * 1024;
+function readWindow(fd: number, position: number, length: number): string {
+  const buf = Buffer.alloc(length);
+  const bytesRead = fs.readSync(fd, buf, 0, length, position);
+  return buf.toString("utf-8", 0, bytesRead);
+}
+export function resumeModelFlagFromFile(jsonlPath: string, extraFlags: string): string {
+  if (/(^|\s)--model(\s|=)/.test(extraFlags)) return "";
+  return lastFlagFromFileWindows(jsonlPath, (tail) => resumeModelFlag(tail, extraFlags));
+}
+
+// Shared tail-then-head window scan for resume flag extraction (see
+// resumeModelFlagFromFile's rationale above).
+function lastFlagFromFileWindows(jsonlPath: string, scan: (content: string) => string): string {
+  try {
+    const fd = fs.openSync(jsonlPath, "r");
+    try {
+      const size = fs.fstatSync(fd).size;
+      const windowSize = Math.min(size, MODEL_SCAN_WINDOW_BYTES);
+      const tail = readWindow(fd, size - windowSize, windowSize);
+      const flag = scan(tail);
+      if (flag || size <= windowSize) return flag;
+      return scan(readWindow(fd, 0, windowSize));
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return "";
+  }
+}
+
+// Effort twin of claudeModelAlias/resumeModelFlag. Effort has NO per-message
+// field in the transcript — the only signals are the switch echoes: the
+// /effort command's "Set effort level to <x>" and the /model picker's
+// session-only commit suffix "… with <x> effort". Both arrive with the same
+// JSON-escaped-or-raw ANSI wrapping as model switch lines. "auto" clears the
+// override (resume with no flag = the user's saved default).
+const EFFORT_LEVEL_RE =
+  /<local-command-stdout>[^<]*?(?:Set effort level to (?:(?:\\u001b|\x1b)\[\d+m)*(low|medium|high|xhigh|max|auto)\b|with (?:(?:\\u001b|\x1b)\[\d+m)*(low|medium|high|xhigh|max)(?:(?:\\u001b|\x1b)\[\d+m)* effort)/gi;
+export function claudeEffortLevel(jsonlContent: string): string | null {
+  let last: string | null = null;
+  EFFORT_LEVEL_RE.lastIndex = 0;
+  for (let m = EFFORT_LEVEL_RE.exec(jsonlContent); m; m = EFFORT_LEVEL_RE.exec(jsonlContent)) {
+    const level = (m[1] ?? m[2]).toLowerCase();
+    last = level === "auto" ? null : level;
+  }
+  return last;
+}
+
+export function resumeEffortFlag(jsonlContent: string, extraFlags: string): string {
+  if (/(^|\s)--effort(\s|=)/.test(extraFlags)) return "";
+  const level = claudeEffortLevel(jsonlContent);
+  return level ? ` --effort ${level}` : "";
+}
+
+export function resumeEffortFlagFromFile(jsonlPath: string, extraFlags: string): string {
+  if (/(^|\s)--effort(\s|=)/.test(extraFlags)) return "";
+  return lastFlagFromFileWindows(jsonlPath, (tail) => resumeEffortFlag(tail, extraFlags));
+}
+
 export interface GenerateClaudeCodeJsonlOptions {
   tailMessages?: number;
   sessionId?: string;
@@ -382,28 +547,37 @@ export function generateClaudeCodeJsonl(
   let messages = data.messages;
   const tailMessages = typeof options.tailMessages === "number" ? options.tailMessages : undefined;
   if (tailMessages && tailMessages > 0 && messages.length > tailMessages) {
-    const cutoffIndex = messages.length - tailMessages;
-    const firstUserIndex = messages.findIndex((m) => m.role === "user");
-    const firstUser = firstUserIndex >= 0 ? messages[firstUserIndex] : null;
-    const tail = messages.slice(-tailMessages);
+    const originalCount = messages.length;
+    // The index in data.messages maps 1:1 to `cast read` line numbers (both walk
+    // the same isNonEmptyMessage-filtered, ascending message list), so the numbers
+    // below are directly usable in the notice's `cast read` hint.
+    const cutoffIndex = originalCount - tailMessages; // tail begins here (0-based)
+    const tailStartLine = cutoffIndex + 1;            // 1-based, `cast read` numbering
+    const tail = messages.slice(cutoffIndex);
+    // Keep every earlier human instruction, not just the first — they carry the
+    // human's intent through the whole conversation and cost little.
+    const earlierInstructions = messages.slice(0, cutoffIndex).filter(isHumanInstruction);
 
+    const convRef = data.conversation.id;
+    const kept = earlierInstructions.length;
     const notice: ExportedMessage = {
       role: "user",
       timestamp: data.conversation.started_at,
+      isMeta: true,
       content:
-        `[Codecast import] This Claude session was truncated to avoid overly-long context (which can break Claude Code /compact).\n` +
-        `Original: ${messages.length} messages. Included: last ${tailMessages} messages` +
-        (firstUser && firstUserIndex < cutoffIndex ? " + first user message." : "."),
+        `${CODECAST_IMPORT_NOTICE_PREFIX} This session was trimmed to fit Claude's context window ` +
+        `(an over-long session breaks Claude Code /compact). The full conversation is ${originalCount} messages.\n` +
+        `Kept here: ${kept > 0 ? `your ${kept} earlier instruction${kept === 1 ? "" : "s"} (below), then ` : ""}` +
+        `the last ${tailMessages} messages (starting at message ${tailStartLine}).\n` +
+        `Need anything from the omitted middle? Read it with: cast read ${convRef} <from>:<to> ` +
+        `— e.g. \`cast read ${convRef} 1:${Math.max(1, tailStartLine - 1)}\` for everything before the tail.`,
     };
 
-    messages = [notice];
-    if (firstUser && firstUserIndex < cutoffIndex) {
-      messages.push(firstUser);
-    }
-    messages.push(...tail);
+    messages = [notice, ...earlierInstructions, ...tail];
   }
 
   for (const msg of messages) {
+    if (isServerMetaMessage(msg)) continue;
     const uuid = msg.message_uuid || uuidv4();
 
     if (msg.role === "user") {
@@ -442,6 +616,7 @@ export function generateClaudeCodeJsonl(
           version: "2.1.29", gitBranch: "main", type: "user",
           message: { role: "user", content: msg.content },
           uuid, timestamp: msg.timestamp,
+          ...(msg.isMeta ? { isMeta: true } : {}),
           thinkingMetadata: { maxThinkingTokens: 31999 }, todos: [], permissionMode: "bypassPermissions",
         }));
         parentUuid = uuid;
@@ -466,7 +641,7 @@ export function generateClaudeCodeJsonl(
         parentUuid, isSidechain: false, userType: "external", cwd, sessionId,
         version: "2.1.29", gitBranch: "main",
         message: {
-          model: data.conversation.model || "claude-opus-4-6-20260205",
+          model: claudeTranscriptModel(data.conversation.model),
           id: msgId, type: "message", role: "assistant", content: contentBlocks,
           stop_reason: "end_turn", stop_sequence: null,
           usage: { input_tokens: 1000, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 500, service_tier: "standard" },
@@ -509,7 +684,7 @@ export function generateClaudeCodeJsonl(
 }
 
 export function writeClaudeCodeSession(jsonl: string, sessionId: string, projectPath?: string): { sessionId: string; filePath: string } {
-  const projectSlug = (projectPath || process.cwd()).replace(/\//g, "-");
+  const projectSlug = claudeProjectDirName(projectPath || process.cwd());
   const projectDir = path.join(process.env.HOME!, ".claude", "projects", projectSlug);
   fs.mkdirSync(projectDir, { recursive: true });
   const filePath = path.join(projectDir, `${sessionId}.jsonl`);
@@ -565,6 +740,7 @@ export function generateCodexJsonl(
   }));
 
   for (const msg of data.messages) {
+    if (isServerMetaMessage(msg)) continue;
     const ts = msg.timestamp;
 
     if (msg.role === "user") {

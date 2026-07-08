@@ -128,6 +128,9 @@ describe("parseInteractivePrompt option descriptions", () => {
     // not leak into the question/header.
     for (const o of prompt!.options) expect(o.label).not.toMatch(/[\[\]☐☑✔]/);
     expect(prompt!.question).not.toMatch(/Rollout|Submit|→/);
+    // The checkbox glyphs mark the menu as multiSelect — the only signal once the
+    // hook sidecar is stale, since a pending AUQ never reaches the JSONL on CC ≥2.1.201.
+    expect(prompt!.multiSelect).toBe(true);
   });
 
   // A checked multiSelect box ("[x]" / "[✓]") must strip just like the empty one.
@@ -146,6 +149,7 @@ describe("parseInteractivePrompt option descriptions", () => {
       { label: "Compression", description: undefined },
       { label: "Telemetry", description: undefined },
     ]);
+    expect(prompt!.multiSelect).toBe(true);
   });
 
   test("still parses same-line descriptions (legacy 2-space format)", () => {
@@ -161,6 +165,7 @@ describe("parseInteractivePrompt option descriptions", () => {
       { label: "mac2-m2pro.metal", description: "fastest, most expensive" },
       { label: "mac2.metal", description: "cheapest" },
     ]);
+    expect(prompt!.multiSelect).toBeUndefined();
   });
 
   test("options without descriptions stay description-free", () => {
@@ -358,5 +363,232 @@ describe("jsonlHasPendingAskUserQuestion", () => {
 
   test("empty input → false", () => {
     expect(jsonlHasPendingAskUserQuestion("")).toBe(false);
+  });
+});
+
+// Regression: a prose ANSWER whose numbered section headings look like menu options
+// must not parse as an interactive prompt. The old gate searched the entire pane tail
+// below the first "option" for footer-ish hints (including a loose ↑.*↓), so a normal
+// numbered answer — with the idle composer, hint bar, and a session-limit banner far
+// below it — was minted as a fake AskUserQuestion poll card (conv jx795ez, msg 160).
+// A real menu's footer sits inside the dialog, adjacent to the options.
+describe("parseInteractivePrompt rejects prose answers with numbered sections", () => {
+  const proseAnswer = (bottomChrome: string[]) =>
+    [
+      "❯ before this runs - some questions: 1) i thought we are running the ai experiment at 10%?",
+      "",
+      "⏺ Implementation is in flight. Here are the answers to your three questions, all verified against production:",
+      "",
+      "  1. ai_identity — you're right about 10%, and here's what reconciles the numbers",
+      "",
+      "  The flag (outreach-email-ai-identity) is variant-weighted 1000/9000 — exactly 10%, with 3,351 ai_identity vs 29,871",
+      "  control assignments all-time. The ~116 exposures you're seeing (live count: 17 + 105 = 122) are from the flag_exposures table.",
+      "",
+      "  2. The \"coach prompt\" experiment",
+      "",
+      "  It's tip-prompt — the system prompt for live coaching tips streamed to callers during calls (generateCallTip.ts:815).",
+      "  The experiment ran 2026-04-14 → 2026-04-20 and is marked completed, but the flag still splits contacts 50/50.",
+      "",
+      "  3. What \"51% real\" means",
+      "",
+      "  Of 122 exposures, 62 (51%) are from real production sends; the rest are previews. Replies trend ↑ while bookings trend ↓",
+      "  on the disclosure arm, which is the tension to resolve.",
+      "",
+      "⏺ Waiting on the tranche-1 workflow to land; implementers are mid-flight.",
+      "",
+      ...bottomChrome,
+    ].join("\n");
+
+  test("idle composer with a draft + hint bar + session-limit banner → null", () => {
+    const pane = proseAnswer([
+      "─".repeat(80),
+      "❯ 1 [Pasted text #1][Pasted text #2]",
+      "─".repeat(80),
+      "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents     You've used 94% of your session limit · resets 3:30am (America/New_York) · /upgrade to keep using Claude Code",
+    ]);
+    expect(parseInteractivePrompt(pane)).toBeNull();
+  });
+
+  test("bare composer + git-style ahead/behind statusline (↑3 ↓2) → null", () => {
+    const pane = proseAnswer([
+      "─".repeat(80),
+      "❯ ",
+      "─".repeat(80),
+      "main ↑3 ↓2 · union-mobile · 94% used",
+    ]);
+    expect(parseInteractivePrompt(pane)).toBeNull();
+  });
+
+  test("a REAL menu directly below the same prose still parses", () => {
+    const pane = proseAnswer([
+      "─".repeat(80),
+      "□ Next step",
+      "",
+      "Which fix should land first?",
+      "",
+      "❯ 1. Doom loop",
+      "  2. Pre-enrich dam",
+      "",
+      "Enter to select · ↑/↓ to navigate · Esc to cancel",
+    ]);
+    const prompt = parseInteractivePrompt(pane);
+    expect(prompt).not.toBeNull();
+    expect(prompt!.question).toBe("Which fix should land first?");
+    expect(prompt!.options.map(o => o.label)).toEqual(["Doom loop", "Pre-enrich dam"]);
+  });
+});
+
+// Regression: this codebase's sessions talk ABOUT terminal UIs, so assistant prose
+// routinely contains literal key-hint vocabulary ("Enter to confirm · Esc to cancel",
+// "←/→ to move between chips") and numbered spec lists. Content heuristics cannot
+// separate that from a real menu — but a real blocking dialog REPLACES the composer,
+// so a spinner row ("✢ Actualizing…"), a composer caret ("❯"), or the shortcut bar
+// visible BELOW the candidate options proves the pane is NOT blocked. Two real
+// incidents (conv jx730d3, 2026-06-11): a 4-item chord spec minted a poll, and prose
+// mentioning "enter to confirm"/"esc to cancel" minted a Continue/Cancel card.
+describe("parseInteractivePrompt rejects prose when the live composer is below it", () => {
+  const composerChrome = [
+    "✢ Actualizing… (3m 6s · ↓ 14.4k tokens · thought for 2s)",
+    "  Fable 5 is now consuming usage credits instead of your plan limits. Update C…",
+    "─".repeat(80),
+    "❯ ",
+    "─".repeat(80),
+    "  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt",
+  ];
+
+  test("numbered chord-spec prose with hint-like rows below → null (the jx730d3 poll)", () => {
+    const pane = [
+      "⏺ Let me re-read the request as a spec:",
+      "",
+      "  1. Global chords — work anywhere in the new-session view, not just when the textarea has focus",
+      "  2. ⌥K (vim up) in addition to ⌥↑ → focus the project picker",
+      "  3. ⌥H/⌥L alongside ←/→ to move between chips",
+      "  4. ⌥J from the picker → commit project and drop down to agent selection; Enter",
+      "",
+      "  Also: ↑/↓ inside the agent list should wrap, and the footer reads Enter to confirm · Esc to cancel",
+      "  like the other pickers. Let me check how the existing picker handles this.",
+      "",
+      ...composerChrome,
+    ].join("\n");
+    expect(parseInteractivePrompt(pane)).toBeNull();
+  });
+
+  test("prose mentioning enter/esc hints with the composer below → no confirmation card (the jx730d3 Continue/Cancel)", () => {
+    const pane = [
+      "⏺ Let me read the AgentSwitcher and find where both components are mounted:",
+      "",
+      "  The picker footer will say press Enter to confirm and Esc to cancel when open.",
+      "",
+      ...composerChrome,
+    ].join("\n");
+    expect(parseInteractivePrompt(pane)).toBeNull();
+  });
+
+  test("markdown-quoted numbered list ('> 1. …' cursor lookalike) with composer below → null", () => {
+    const pane = [
+      "⏺ From the PR description:",
+      "",
+      "  > 1. Add the new picker",
+      "  > 2. Wire the chords",
+      "",
+      "  Looks reasonable. Working on it now.",
+      "",
+      ...composerChrome,
+    ].join("\n");
+    expect(parseInteractivePrompt(pane)).toBeNull();
+  });
+
+  test("a single weak hint atom below options is not a footer even with no composer (cut pane)", () => {
+    // Pane bottom cut right after the prose: no composer chrome captured. The lone
+    // "←/→ …" prose row below the list must not validate the menu by itself.
+    const pane = [
+      "⏺ Spec recap:",
+      "",
+      "  1. Global chords — work anywhere in the view",
+      "  2. Focus the project picker from the prompt",
+      "",
+      "  ⌥H/⌥L alongside ←/→ to move between chips",
+    ].join("\n");
+    expect(parseInteractivePrompt(pane)).toBeNull();
+  });
+
+  test("a REAL menu still parses (no composer below a blocking dialog)", () => {
+    const pane = [
+      "⏺ I need a decision before wiring the chords.",
+      "",
+      "──────────────────────────────────────────────",
+      "□ Chord scope",
+      "",
+      "Should the chords be global or picker-only?",
+      "",
+      "❯ 1. Global",
+      "  2. Picker-only",
+      "",
+      "Enter to select · ↑/↓ to navigate · Esc to cancel",
+    ].join("\n");
+    const prompt = parseInteractivePrompt(pane);
+    expect(prompt).not.toBeNull();
+    expect(prompt!.question).toBe("Should the chords be global or picker-only?");
+    expect(prompt!.options.map(o => o.label)).toEqual(["Global", "Picker-only"]);
+  });
+
+  // Real captured pane (session 63d7b9cf, 2026-06-11): the usage-credit limit
+  // dialog blocks the agent with UNNUMBERED options, so it lands in the
+  // confirmation path. The question must come from below the dialog's ▔ top
+  // rule — the old extraction took the topmost non-hint line of the tail and
+  // shipped "singleton merge implementation:" (assistant prose above the
+  // dialog) as the card's question.
+  test("usage-limit dialog: real confirmation with the dialog's own question", () => {
+    const pane = [
+      "⏺ This is bug-fix work — let me create a task to track it, then find the",
+      "  singleton merge implementation:",
+      "",
+      "  Searched for 3 patterns, read 1 file, ran 3 shell commands",
+      "▔".repeat(80),
+      "   What do you want to do?                       Usage credit balance: $30.01",
+      "",
+      "   ❯ Adjust monthly spend limit: Unlimited              ← or → to set a limit",
+      "     Wait for limit to reset                 Resets 2:50pm (America/New_York)",
+      "",
+      "   Press ← or → to set a limit.",
+      "",
+      "   Enter to confirm · Esc to cancel",
+    ].join("\n");
+    const prompt = parseInteractivePrompt(pane);
+    expect(prompt?.isConfirmation).toBe(true);
+    expect(prompt?.question).toBe("What do you want to do?");
+    expect(prompt?.options.map(o => o.label)).toEqual(["Continue (confirm)", "Cancel (cancel)"]);
+  });
+
+  test("a REAL bare confirmation (no composer anywhere) still parses", () => {
+    const pane = [
+      "⏺ I'm about to delete the file.",
+      "",
+      "Press Enter to continue, Esc to cancel",
+    ].join("\n");
+    const prompt = parseInteractivePrompt(pane);
+    expect(prompt?.isConfirmation).toBe(true);
+    expect(prompt?.options.map(o => o.label)).toEqual(["Continue (continue)", "Cancel (cancel)"]);
+  });
+});
+
+// capture-pane -J fuses a full-width dialog rule onto the text row that follows it,
+// so the usage-limit dialog's question scraped as "▔▔▔…▔ What do you want to do?".
+describe("parseInteractivePrompt strips fused dialog rules from the question", () => {
+  test("▔-run glued onto the question row is dropped", () => {
+    const pane = [
+      "⏺ You've reached your usage limit.",
+      "",
+      "▔".repeat(80) + " What do you want to do?",
+      "",
+      "❯ 1. Switch to usage credits",
+      "  2. Wait for the reset",
+      "  3. Upgrade your plan",
+      "",
+      "Enter to select · ↑/↓ to navigate · Esc to cancel",
+    ].join("\n");
+    const prompt = parseInteractivePrompt(pane);
+    expect(prompt).not.toBeNull();
+    expect(prompt!.question).toBe("What do you want to do?");
   });
 });

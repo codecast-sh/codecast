@@ -1,9 +1,10 @@
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import { X, Keyboard } from "lucide-react";
 import { formatShortcutParts, getShortcutsForAction, getShortcutsByContext } from "../shortcuts";
 import type { ShortcutAction, ShortcutDef } from "../shortcuts";
 import { useTrackedStore } from "../store/inboxStore";
 import { useEventListener } from "../hooks/useEventListener";
+import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
 
 const KEYCAP_FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif';
 
@@ -126,15 +127,50 @@ export function MenuKeyCaps({ action }: { action: ShortcutAction }) {
   );
 }
 
+// Rich tooltip for icon buttons: label plus the bound shortcut rendered as
+// KeyCaps (never plain-text key glyphs — see UI conventions). Replaces native
+// `title` attributes, which can't render keycaps and double up with Radix.
+export function ShortcutTooltip({ label, action, hint, side = "bottom", children }: {
+  label: ReactNode;
+  action?: ShortcutAction;
+  // Optional trailing note rendered dimmed after the keycaps, e.g. "cycles" for a
+  // key that steps through options rather than toggling.
+  hint?: ReactNode;
+  side?: "top" | "bottom" | "left" | "right";
+  children: ReactNode;
+}) {
+  const defs = action ? getShortcutsForAction(action) : [];
+  const parts = defs.length > 0 ? formatShortcutParts(defs[0]) : null;
+  return (
+    <TooltipProvider delayDuration={300}>
+      <Tooltip>
+        <TooltipTrigger asChild>{children}</TooltipTrigger>
+        <TooltipContent side={side} className="flex items-center gap-1.5 bg-sol-bg text-sol-text border border-sol-border shadow-md">
+          <span>{label}</span>
+          {parts && (
+            <span className="flex items-center gap-[2px]">
+              {parts.map((part, i) => (
+                <KeyCap key={i} size="xs">{part}</KeyCap>
+              ))}
+            </span>
+          )}
+          {hint && <span className="text-sol-text-dim">{hint}</span>}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
 export function ShortcutsToggleButton() {
   const s = useTrackedStore([]);
   return (
-    <button
-      onClick={s.toggleShortcutsPanel}
-      className="p-1.5 rounded-md text-sol-text-dim/60 hover:text-sol-text-muted transition-colors"
-      title="Keyboard shortcuts (?)"
-    >
-      <Keyboard className="w-[18px] h-[18px]" />
-    </button>
+    <ShortcutTooltip label="Keyboard shortcuts" action="ui.toggleShortcutsHelp">
+      <button
+        onClick={s.toggleShortcutsPanel}
+        className="p-1.5 rounded-md text-sol-text-dim/60 hover:text-sol-text-muted transition-colors"
+      >
+        <Keyboard className="w-[18px] h-[18px]" />
+      </button>
+    </ShortcutTooltip>
   );
 }

@@ -4,6 +4,8 @@ import * as fs from "fs";
 import * as crypto from "crypto";
 import { SyncService } from "./syncService.js";
 import { hasTmux } from "./tmux.js";
+import { deviceId, isRemoteDevice } from "./remote/device.js";
+import { spawnAgentTmux } from "./delivery/spawnAgentTmux.js";
 
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 const _execAsync = promisify(exec);
@@ -19,6 +21,9 @@ interface RunningTask {
   startedAt: number;
   maxRuntimeMs: number;
   heartbeatTimer: ReturnType<typeof setInterval>;
+  // Claude session UUID assigned to this run via `--session-id`, so completion
+  // can link the run's conversation back to the task. Undefined for codex runs.
+  runSessionUuid?: string;
 }
 
 interface TaskSchedulerConfig {
@@ -35,6 +40,7 @@ export class TaskScheduler {
   private running = new Map<string, RunningTask>();
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private stopped = false;
+  private skipLogged = new Set<string>();
 
   constructor({ syncService, config, log }: TaskSchedulerConfig) {
     this.daemonId = crypto.randomUUID();
@@ -67,17 +73,59 @@ export class TaskScheduler {
     if (this.running.size >= MAX_CONCURRENCY) return;
 
     try {
-      const dueTasks = await this.syncService.getDueTasks(MAX_CONCURRENCY - this.running.size);
+      // Over-fetch so ineligible tasks (wrong machine) can't shadow eligible
+      // ones sitting just past the concurrency-sized window.
+      const dueTasks = await this.syncService.getDueTasks(10);
       if (!dueTasks || dueTasks.length === 0) return;
 
       for (const task of dueTasks) {
         if (this.running.size >= MAX_CONCURRENCY) break;
         if (this.running.has(task._id)) continue;
+        if (!this.canServeTask(task)) continue;
         await this.executeTask(task);
       }
     } catch (err) {
       this.log(`Poll error: ${err instanceof Error ? err.message : String(err)}`, "warn");
     }
+  }
+
+  /**
+   * Device affinity, checked BEFORE claiming: an ineligible daemon must leave
+   * the task due so the right Mac claims it on wake (the queue-until-wake rule
+   * from deviceRouting.pickOwnerDevice). The old behavior — claim, then spawn
+   * in $HOME when the checkout is missing — ran apply-mode tasks blind on the
+   * always-awake remote (same bug class as ct-32728/ct-36594).
+   *
+   * Primary rule: a task runs ONLY on the device that created it
+   * (created_device_id, stamped by `cast schedule add`). Web-created and
+   * legacy tasks carry no device id and fall back to checkout existence.
+   */
+  private canServeTask(task: any): boolean {
+    let eligible: boolean;
+    let reason: string;
+    if (task.created_device_id) {
+      eligible = task.created_device_id === deviceId();
+      reason = `created on device ${task.created_device_id.slice(0, 8)}, this is ${deviceId().slice(0, 8)}`;
+    } else if (task.originating_conversation_id) {
+      // Injection tasks (--context current) only enqueue a message; the
+      // server's device routing delivers it, so any daemon can enqueue.
+      eligible = true;
+      reason = "";
+    } else if (task.project_path) {
+      // Spawn tasks bind to a checkout: only a device that has it may claim.
+      eligible = fs.existsSync(task.project_path);
+      reason = `project_path ${task.project_path} does not exist on this device`;
+    } else {
+      // Path-less tasks run in $HOME — fine on the user's own Mac, wrong on a
+      // remote box (mirrors the daemon's blank-project start_session gate).
+      eligible = !isRemoteDevice();
+      reason = "path-less task on a remote device";
+    }
+    if (!eligible && !this.skipLogged.has(task._id)) {
+      this.skipLogged.add(task._id);
+      this.log(`Skipping task "${task.title}" (${task._id}): ${reason} — leaving it due for an eligible device`);
+    }
+    return eligible;
   }
 
   private async executeTask(task: any): Promise<void> {
@@ -101,7 +149,9 @@ export class TaskScheduler {
         // the agent's JSONL is parsed. The UI detects the <scheduled-task>
         // wrapper and renders it as a ScheduledTaskBlock, so we must not
         // also write a system-subtype row here -- that would double-render.
-        await this.syncService.sendMessageToSession(task.originating_conversation_id, wrappedPrompt);
+        // origin "scheduler": a machine wake must not clear the user's stash —
+        // a stashed session keeps running out of the active queue.
+        await this.syncService.sendMessageToSession(task.originating_conversation_id, wrappedPrompt, "scheduler");
         this.log(`Injected prompt into conversation ${task.originating_conversation_id.toString().slice(-8)} for task "${task.title}"`);
         await this.syncService.completeTaskRun(
           task._id,
@@ -119,8 +169,15 @@ export class TaskScheduler {
 
     const prompt = this.buildPrompt(task);
     const agentType = task.agent_type || "claude";
-    const projectPath = task.project_path || process.env.HOME || "/tmp";
-    const cwd = fs.existsSync(projectPath) ? projectPath : (process.env.HOME || "/tmp");
+    // canServeTask gated the claim; this catches the checkout vanishing between
+    // poll and spawn. Fail loudly — never fall back to $HOME, which runs the
+    // agent (possibly apply-mode) blind in an unrelated directory.
+    if (task.project_path && !fs.existsSync(task.project_path)) {
+      this.log(`project_path ${task.project_path} missing at spawn time for task "${task.title}"`, "error");
+      await this.syncService.failTaskRun(task._id, this.daemonId, `project_path not found on this device: ${task.project_path}`);
+      return;
+    }
+    const cwd = task.project_path || process.env.HOME || "/tmp";
     const shortId = task._id.toString().slice(-6);
     const tmuxSession = `ct-${agentType}-${shortId}`;
 
@@ -131,6 +188,11 @@ export class TaskScheduler {
     // Build agent command args (will be passed to the script, which quotes them via "$(cat promptFile)")
     let extraAgentArgs: string[] = [];
     let agentBin: string;
+    // Assigned for claude runs so completion can link the run's conversation back
+    // to the task. `claude --session-id <uuid>` writes <uuid>.jsonl, which the
+    // daemon syncs into a conversation keyed by session_id=<uuid>. Left undefined
+    // for codex (different session scheme).
+    let runSessionUuid: string | undefined;
     if (agentType === "codex") {
       agentBin = "codex";
       const extraArgs = this.config.codex_args;
@@ -151,6 +213,11 @@ export class TaskScheduler {
           if (!skip.has(arg) && !extraAgentArgs.includes(arg)) extraAgentArgs.push(arg);
         }
       }
+      // Only auto-assign if the operator didn't pin one via claude_args.
+      if (!extraAgentArgs.includes("--session-id")) {
+        runSessionUuid = crypto.randomUUID();
+        extraAgentArgs.push("--session-id", runSessionUuid);
+      }
     }
 
     // Write a shell script so the target shell (inside tmux) handles all quoting/expansion,
@@ -165,6 +232,10 @@ export class TaskScheduler {
       "#!/bin/bash",
       "unset CLAUDECODE",
       "unset ANTHROPIC_API_KEY",
+      // Hand the run's session UUID to the agent so a self-report via
+      // `cast schedule complete` can link the run's conversation back to the task
+      // (the agent's own session_id IS this UUID, assigned via --session-id above).
+      ...(runSessionUuid ? [`export CODECAST_RUN_SESSION_UUID='${runSessionUuid}'`] : []),
       agentInvocation,
       `rm -f ${promptFile} ${scriptFile}`,
       "",
@@ -177,17 +248,31 @@ export class TaskScheduler {
       return;
     }
 
-    try {
-      try { await execAsync(`tmux kill-session -t '${tmuxSession}' 2>/dev/null`); } catch {}
-      await execAsync(`tmux new-session -d -s '${tmuxSession}' -c '${cwd}'`);
-      await execAsync(`tmux send-keys -t '${tmuxSession}' ${JSON.stringify(`bash ${scriptFile}`)} Enter`);
-      this.log(`Spawned tmux session ${tmuxSession} for task "${task.title}"`);
-    } catch (err) {
-      const stderr = (err as any)?.stderr ? ` stderr: ${(err as any).stderr}` : "";
-      this.log(`Failed to spawn tmux for task "${task.title}": ${err instanceof Error ? err.message : String(err)}${stderr}`, "error");
-      await this.syncService.failTaskRun(task._id, this.daemonId, "Failed to spawn tmux session");
+    // Spawn through the shared delivery primitive: it re-validates the cwd (the
+    // recorded-but-absent refusal above is the first line of defense), and runs
+    // tmux via arg-array execFile with `send-keys -l`, so nothing the task
+    // carries is ever shell-interpolated by the daemon.
+    //
+    // We deliberately DON'T pass `sessionId`: a task tmux name is `ct-<agent>-<id>`,
+    // which the daemon's warm-restart sweep already picks up by name. Tagging it
+    // with `@codecast_session_id` would route it into managed-session registration
+    // with a TASKS-table id as if it were a session id. Only `@codecast_agent_type`
+    // is stamped, which is harmless.
+    const spawn = await spawnAgentTmux(
+      {
+        tmuxSession,
+        cwd,
+        agentType: agentType === "codex" ? "codex" : "claude",
+        command: `bash ${scriptFile}`,
+      },
+      { config: this.config, log: this.log },
+    );
+    if (!spawn.ok) {
+      this.log(`Failed to spawn tmux for task "${task.title}": ${spawn.reason}`, "error");
+      await this.syncService.failTaskRun(task._id, this.daemonId, `Failed to spawn tmux session: ${spawn.reason}`);
       return;
     }
+    this.log(`Spawned tmux session ${tmuxSession} for task "${task.title}"`);
 
     const heartbeatTimer = setInterval(async () => {
       const renewed = await this.syncService.renewTaskLease(task._id, this.daemonId);
@@ -207,7 +292,32 @@ export class TaskScheduler {
       startedAt: Date.now(),
       maxRuntimeMs,
       heartbeatTimer,
+      runSessionUuid,
     });
+
+    // Link the run's conversation to the task as soon as it syncs (bounded
+    // retries — the first JSONL write usually lands within seconds). This makes
+    // the schedule strip/badge work DURING the run and folds the previous
+    // completed run of a repeating schedule out of the inbox. completeTaskRun
+    // backfills the link at run end if every attempt here loses the race.
+    if (runSessionUuid) this.scheduleRunLink(task._id, runSessionUuid);
+  }
+
+  // Bounded retry chain for linkRunConversation; standalone timers (not tied
+  // to the RunningTask entry) so a fast run that completes before the first
+  // attempt doesn't orphan the link — the mutation is idempotent either way.
+  private scheduleRunLink(taskId: string, runSessionUuid: string, attempt = 0): void {
+    const delaysMs = [10_000, 30_000, 90_000];
+    if (attempt >= delaysMs.length) return;
+    setTimeout(async () => {
+      try {
+        const result = await this.syncService.linkRunConversation(taskId, runSessionUuid);
+        if (result.linked || !result.retry) return;
+      } catch {
+        // fall through to retry
+      }
+      this.scheduleRunLink(taskId, runSessionUuid, attempt + 1);
+    }, delaysMs[attempt]);
   }
 
   private async checkTaskCompletion(taskId: string): Promise<void> {
@@ -219,7 +329,7 @@ export class TaskScheduler {
       await execAsync(`tmux has-session -t '${entry.tmuxSession}' 2>/dev/null`);
     } catch {
       this.log(`tmux session ${entry.tmuxSession} ended for task ${taskId}`);
-      await this.syncService.completeTaskRun(taskId, this.daemonId, "Agent session ended");
+      await this.syncService.completeTaskRun(taskId, this.daemonId, "Agent session ended", undefined, entry.runSessionUuid);
       this.cleanupTask(taskId);
       return;
     }
@@ -229,7 +339,7 @@ export class TaskScheduler {
     if (elapsed > entry.maxRuntimeMs) {
       this.log(`Task ${taskId} exceeded max runtime (${entry.maxRuntimeMs}ms), killing`);
       try { await execAsync(`tmux kill-session -t '${entry.tmuxSession}'`); } catch {}
-      await this.syncService.failTaskRun(taskId, this.daemonId, `Exceeded max runtime (${Math.round(entry.maxRuntimeMs / 60000)}min)`);
+      await this.syncService.failTaskRun(taskId, this.daemonId, `Exceeded max runtime (${Math.round(entry.maxRuntimeMs / 60000)}min)`, entry.runSessionUuid);
       this.cleanupTask(taskId);
       return;
     }
@@ -244,7 +354,7 @@ export class TaskScheduler {
       if (lastLine.endsWith("$") || lastLine.endsWith("%") || lastLine.endsWith("#")) {
         this.log(`Task ${taskId} returned to shell prompt, cleaning up`);
         try { await execAsync(`tmux kill-session -t '${entry.tmuxSession}'`); } catch {}
-        await this.syncService.completeTaskRun(taskId, this.daemonId, "Agent exited");
+        await this.syncService.completeTaskRun(taskId, this.daemonId, "Agent exited", undefined, entry.runSessionUuid);
         this.cleanupTask(taskId);
       }
     } catch {
@@ -299,6 +409,7 @@ export class TaskScheduler {
     } else {
       parts.push(`- When done, run: cast schedule complete ${task._id} --summary "brief description of what was done"`);
     }
+    parts.push(`- A clean completion folds this run out of the user's inbox (the summary carries the outcome). If you found something the user must read or act on, add --needs-attention to keep this run in their inbox.`);
     parts.push('- To schedule follow-up: cast schedule add "..." --in <time>');
     if (task.originating_conversation_id) {
       parts.push(`- Run \`cast read ${task.originating_conversation_id}\` for full original context`);

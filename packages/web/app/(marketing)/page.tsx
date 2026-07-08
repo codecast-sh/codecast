@@ -7,6 +7,7 @@ import { useConvexAuth } from "convex/react";
 import { Button } from "@/components/ui/button";
 import { InstallTabs } from "@/components/install-tabs";
 import { Logo } from "@/components/Logo";
+import { AppLoader } from "@/components/AppLoader";
 import { isDesktop } from "@/lib/desktop";
 import { useWatchEffect } from "@/hooks/useWatchEffect";
 
@@ -127,9 +128,7 @@ export default function LandingPage() {
 
   if (isLoading || desktop) {
     return (
-      <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: '#fdf6e3' }}>
-        <div className="font-mono" style={{ color: '#93a1a1' }}>Loading...</div>
-      </div>
+      <AppLoader className="bg-[#fdf6e3] text-[#93a1a1]" />
     );
   }
 
@@ -142,13 +141,16 @@ export default function LandingPage() {
       {/* Nav */}
       <nav className="backdrop-blur-sm sticky top-0 z-50" style={{ borderBottom: '1px solid #eee8d5', backgroundColor: 'rgba(253,246,227,0.8)' }}>
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <Logo size="md" className="text-[#002b36]" />
+          <Logo size="md" className="[--logo-c:#444444] text-[#002b36]" />
           <div className="flex items-center gap-3">
             <Link href="/documentation" className="font-medium text-sm px-3 py-1.5 hidden sm:block transition-colors" style={{ color: '#657b83' }} onMouseEnter={e => (e.currentTarget.style.color = '#002b36')} onMouseLeave={e => (e.currentTarget.style.color = '#657b83')}>
               Docs
             </Link>
             <Link href="/features" className="font-medium text-sm px-3 py-1.5 hidden sm:block transition-colors" style={{ color: '#657b83' }} onMouseEnter={e => (e.currentTarget.style.color = '#002b36')} onMouseLeave={e => (e.currentTarget.style.color = '#657b83')}>
               CLI
+            </Link>
+            <Link href="/changelog" className="font-medium text-sm px-3 py-1.5 hidden sm:block transition-colors" style={{ color: '#657b83' }} onMouseEnter={e => (e.currentTarget.style.color = '#002b36')} onMouseLeave={e => (e.currentTarget.style.color = '#657b83')}>
+              Changelog
             </Link>
             <Link href="/security" className="font-medium text-sm px-3 py-1.5 hidden sm:block transition-colors" style={{ color: '#657b83' }} onMouseEnter={e => (e.currentTarget.style.color = '#002b36')} onMouseLeave={e => (e.currentTarget.style.color = '#657b83')}>
               Security
@@ -863,7 +865,7 @@ export default function LandingPage() {
         <div className="max-w-6xl mx-auto px-6 py-12">
           <div className="grid md:grid-cols-4 gap-8">
             <div>
-              <Logo size="md" className="text-[#002b36] mb-4" />
+              <Logo size="md" className="[--logo-c:#444444] text-[#002b36] mb-4" />
               <p className="text-sm text-[#657b83]">
                 The operating system for AI coding agents.
               </p>
@@ -873,6 +875,7 @@ export default function LandingPage() {
               <ul className="space-y-2 text-sm text-[#657b83]">
                 <li><Link href="/documentation" className="hover:text-[#073642]">Documentation</Link></li>
                 <li><Link href="/features" className="hover:text-[#073642]">CLI</Link></li>
+                <li><Link href="/changelog" className="hover:text-[#073642]">Changelog</Link></li>
                 <li><Link href="/download/mac" className="hover:text-[#073642]">Desktop App</Link></li>
                 <li><a href="https://apps.apple.com/app/id6757820850" target="_blank" rel="noopener noreferrer" className="hover:text-[#073642]">iOS App</a></li>
                 <li><Link href="/security" className="hover:text-[#073642]">Security</Link></li>

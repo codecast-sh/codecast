@@ -1,21 +1,35 @@
-import { useQuery } from "convex/react";
-import { api } from "@codecast/convex/convex/_generated/api";
+import { AppLoader } from "./AppLoader";
 import { useRef, useState, useMemo, useCallback } from "react";
 import { createPortal } from "react-dom";
+import { useQuery } from "convex/react";
+import { api } from "@codecast/convex/convex/_generated/api";
+import { Split, Search, GitFork, ChevronRight } from "lucide-react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
+import { useInboxStore, isConvexId } from "../store/inboxStore";
+import { KeyCap } from "./KeyboardShortcutsHelp";
+import { relativeTime } from "./BranchSelector";
+import {
+  useForkTree,
+  branchDisplayCount,
+  branchDisplayLabel,
+  branchUnread,
+  type FlatForkNode,
+  type BranchLive,
+  type ForkConversationLike,
+} from "../hooks/useForkTree";
 
-type TreeNode = {
-  id: string;
-  short_id?: string;
-  title: string;
-  message_count: number;
-  parent_message_uuid?: string;
-  started_at: number;
-  status: string;
-  agent_type?: string;
-  is_current: boolean;
-  children: TreeNode[];
-};
+// Branch map: the single keyboard hub for the fork family. It anchors above the
+// message input like a command palette and has two levels:
+//   • branches — the whole fork tree; ↑/↓/j/k move, Enter switches, → / l / f
+//     drills into a branch's messages, / filters, Esc closes.
+//   • messages — the drilled branch's prompts (fork points); ↑/↓/j/k move,
+//     f forks from that point (this is how you "fork higher" — drill into the
+//     root or any ancestor and fork from an early message), Enter rewinds the
+//     current branch there, ← / h / Esc go back, / filters.
+// The panel's root container carries data-owns-keys and takes focus while open,
+// so the global shortcut dispatcher's input guard suppresses conversation
+// shortcuts (h/t/d/r, y/n permission) while focus is inside it. The panel's own
+// window keydown handler then drives navigation without those keys leaking.
 
 const agentColors: Record<string, string> = {
   claude_code: "text-amber-400",
@@ -23,7 +37,6 @@ const agentColors: Record<string, string> = {
   cursor: "text-purple-400",
   gemini: "text-blue-400",
 };
-
 const agentLabels: Record<string, string> = {
   claude_code: "Claude",
   codex: "Codex",
@@ -31,330 +44,607 @@ const agentLabels: Record<string, string> = {
   gemini: "Gemini",
 };
 
-type FlatNode = { node: TreeNode; depth: number };
+type NavMsg = { _id: string; message_uuid?: string; content: string; timestamp: number };
 
-function flattenTree(node: TreeNode, depth = 0): FlatNode[] {
-  const result: FlatNode[] = [{ node, depth }];
-  for (const child of node.children) {
-    result.push(...flattenTree(child, depth + 1));
-  }
-  return result;
-}
-
-function TreeRow({
-  node,
-  depth = 0,
-  activeBranchIds,
-  onSwitchToConversation,
-  isSelected,
-  onMouseEnter,
-  rowRef,
-}: {
-  node: TreeNode;
-  depth?: number;
-  activeBranchIds: Set<string>;
-  onSwitchToConversation: (convId: string) => void;
-  isSelected: boolean;
-  onMouseEnter: () => void;
-  rowRef?: React.Ref<HTMLButtonElement>;
-}) {
-  const isActive = node.is_current || activeBranchIds.has(node.id);
-  const timeStr = new Date(node.started_at).toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-  });
-
-  return (
-    <button
-      ref={rowRef}
-      onClick={() => onSwitchToConversation(node.id)}
-      onMouseEnter={onMouseEnter}
-      className={`w-full flex items-center gap-2 py-1.5 px-2 rounded text-xs transition-colors text-left ${
-        isSelected
-          ? "bg-sol-cyan/20 ring-1 ring-inset ring-sol-cyan/40 text-sol-cyan"
-          : isActive
-            ? "bg-sol-cyan/15 text-sol-cyan border border-sol-cyan/30"
-            : "hover:bg-sol-bg-alt text-sol-text-secondary"
-      }`}
-      style={{ paddingLeft: `${depth * 14 + 8}px` }}
-    >
-      {depth > 0 && (
-        <span className="text-sol-text-dim text-[10px] flex-shrink-0">
-          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-          </svg>
-        </span>
-      )}
-      {node.agent_type && (
-        <span className={`text-[9px] font-medium flex-shrink-0 ${agentColors[node.agent_type] || "text-sol-text-dim"}`}>
-          {agentLabels[node.agent_type] || node.agent_type}
-        </span>
-      )}
-      <span className="truncate flex-1 min-w-0">{node.title}</span>
-      <span className="text-[9px] text-sol-text-dim flex-shrink-0 tabular-nums">
-        {node.message_count}
+function LiveDot({ live }: { live?: BranchLive }) {
+  if (live === "working") {
+    return (
+      <span className="relative flex w-2 h-2 flex-shrink-0" title="Agent working">
+        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sol-green opacity-50" />
+        <span className="relative inline-flex rounded-full w-2 h-2 bg-sol-green" />
       </span>
-      <span className="text-[9px] text-sol-text-dim flex-shrink-0">{timeStr}</span>
-    </button>
+    );
+  }
+  if (live === "needs_input") {
+    return <span className="w-2 h-2 rounded-full bg-sol-yellow flex-shrink-0" title="Needs input" />;
+  }
+  return <span className="w-2 h-2 rounded-full border border-sol-border flex-shrink-0" title={live ? "Idle" : undefined} />;
+}
+
+// Tree rails: one fixed-width column per ancestor level. guides[i] = that
+// ancestor has more siblings below (draw a full vertical line); the last column
+// is this node's elbow.
+function Rails({ guides }: { guides: boolean[] }) {
+  if (guides.length === 0) return null;
+  return (
+    <div className="flex self-stretch flex-shrink-0" aria-hidden>
+      {guides.slice(0, -1).map((g, i) => (
+        <span key={i} className="w-3.5 relative">
+          {g && <span className="absolute left-1/2 top-0 bottom-0 w-px bg-sol-border" />}
+        </span>
+      ))}
+      <span className="w-3.5 relative">
+        <span className={`absolute left-1/2 top-0 w-px bg-sol-border ${guides[guides.length - 1] ? "bottom-0" : "h-[15px]"}`} />
+        <span className="absolute left-1/2 top-[15px] w-1.5 h-px bg-sol-border" />
+      </span>
+    </div>
   );
 }
 
-// Shared tree body: fetches the full recursive fork tree, renders it as an
-// indented, keyboard-navigable list, and emits navigation on select. Both the
-// slide-in drawer (ForkTreePanel) and the header-anchored popover
-// (ForkTreePopover) render this so the tree looks and behaves identically.
-function ForkTreeContent({
-  conversationId,
-  open,
-  onClose,
-  activeBranchIds,
-  onSwitchToConversation,
+function BranchRow({
+  node, isCurrent, isSelected, unread, flatMode, showAgent, showAuthor, onClick, onDrill, onMouseEnter, rowRef,
 }: {
-  conversationId: string;
-  open: boolean;
-  onClose: () => void;
-  activeBranchIds: Set<string>;
-  onSwitchToConversation: (convId: string) => void;
+  node: FlatForkNode;
+  isCurrent: boolean;
+  isSelected: boolean;
+  unread: number;
+  flatMode: boolean;
+  showAgent: boolean;
+  showAuthor: boolean;
+  onClick: () => void;
+  onDrill: () => void;
+  onMouseEnter: () => void;
+  rowRef?: React.Ref<HTMLDivElement>;
 }) {
-  const selectedRef = useRef<HTMLButtonElement>(null);
-  const result = useQuery(
-    api.conversations.getConversationTree,
-    open ? { conversation_id: conversationId } : "skip"
+  const count = branchDisplayCount(node);
+  const label = branchDisplayLabel(node);
+  const isRoot = node.depth === 0;
+  const allUnread = unread > 0 && unread >= count;
+  const partialUnread = unread > 0 && unread < count;
+  return (
+    <div
+      ref={rowRef}
+      onClick={onClick}
+      onMouseEnter={onMouseEnter}
+      className={`group w-full flex items-stretch gap-1.5 pr-1 rounded text-xs text-left transition-colors relative cursor-pointer ${
+        isSelected ? "bg-sol-cyan/15" : "hover:bg-sol-bg-alt"
+      } ${isCurrent ? "text-sol-cyan" : "text-sol-text-secondary"}`}
+    >
+      {isSelected && <span className="absolute left-0 top-0.5 bottom-0.5 w-0.5 rounded-full bg-sol-cyan" />}
+      {!flatMode && <span className="pl-2 flex self-stretch flex-shrink-0"><Rails guides={node.guides} /></span>}
+      <span className={`flex flex-col gap-0.5 py-1.5 flex-1 min-w-0 ${flatMode ? "pl-2" : ""}`}>
+        <span className="flex items-center gap-1.5 min-w-0">
+          <LiveDot live={node.live} />
+          <span className={`truncate ${isCurrent ? "font-medium" : ""}`}>{label}</span>
+          {isCurrent && (
+            <span className="text-[8px] uppercase tracking-wider px-1 py-px rounded bg-sol-cyan/15 text-sol-cyan flex-shrink-0 font-semibold">you</span>
+          )}
+          {isRoot && !isCurrent && (
+            <span className="text-[8px] uppercase tracking-wider px-1 py-px rounded bg-sol-bg-alt text-sol-text-dim flex-shrink-0 font-semibold">root</span>
+          )}
+        </span>
+        <span className="flex items-center gap-1.5 pl-3.5 min-w-0 text-[9px] text-sol-text-dim">
+          <span
+            className={`tabular-nums inline-flex items-center gap-0.5 flex-shrink-0 ${allUnread ? "text-sol-cyan font-semibold" : ""}`}
+            title={isRoot ? `${count} messages` : `${count} message${count === 1 ? "" : "s"} on this branch since the fork${unread > 0 ? `, ${unread} unread` : ""}`}
+          >
+            <Split className="w-2.5 h-2.5 opacity-60" />{count}
+          </span>
+          {partialUnread && (
+            <span className="tabular-nums flex-shrink-0 px-1 rounded-full bg-sol-cyan text-sol-bg font-semibold leading-tight">+{unread}</span>
+          )}
+          {showAgent && node.agent_type && (
+            <span className={`font-medium flex-shrink-0 ${agentColors[node.agent_type] || ""}`}>{agentLabels[node.agent_type] || node.agent_type}</span>
+          )}
+          {showAuthor && node.username && <span className="truncate max-w-[90px]">{node.username}</span>}
+          {node.updated_at ? <span className="flex-shrink-0 ml-auto">{relativeTime(node.updated_at)}</span> : null}
+        </span>
+      </span>
+      {/* Drill affordance: reveals the branch's messages to fork from. */}
+      <button
+        onClick={(e) => { e.stopPropagation(); onDrill(); }}
+        title="Show this branch's messages to fork from"
+        className={`self-center flex-shrink-0 p-1 rounded text-sol-text-dim hover:text-sol-cyan hover:bg-sol-cyan/10 transition-colors ${isSelected ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
+      >
+        <ChevronRight className="w-3.5 h-3.5" />
+      </button>
+    </div>
   );
+}
 
-  const tree = result && !("error" in result) ? (result.tree as TreeNode) : null;
-
-  const flatNodes = useMemo(() => (tree ? flattenTree(tree) : []), [tree]);
-
-  const initialIdx = useMemo(() => {
-    const currentIdx = flatNodes.findIndex(
-      (f) => f.node.is_current || activeBranchIds.has(f.node.id)
-    );
-    return currentIdx >= 0 ? currentIdx : 0;
-  }, [flatNodes, activeBranchIds]);
-
-  const [selectedIdx, setSelectedIdx] = useState(initialIdx);
-
-  useWatchEffect(() => {
-    if (open) setSelectedIdx(initialIdx);
-  }, [open, initialIdx]);
-
-  useWatchEffect(() => {
-    selectedRef.current?.scrollIntoView({ block: "nearest" });
-  }, [selectedIdx]);
-
-  const handleSelect = useCallback(
-    (idx: number) => {
-      const flat = flatNodes[idx];
-      if (flat) onSwitchToConversation(flat.node.id);
-    },
-    [flatNodes, onSwitchToConversation]
+function MessageRow({
+  msg, num, isSelected, isCurrentBranch, onClick, onFork, onMouseEnter, rowRef,
+}: {
+  msg: NavMsg;
+  num: number;
+  isSelected: boolean;
+  isCurrentBranch: boolean;
+  onClick: () => void;
+  onFork: () => void;
+  onMouseEnter: () => void;
+  rowRef?: React.Ref<HTMLDivElement>;
+}) {
+  return (
+    <div
+      ref={rowRef}
+      onClick={onClick}
+      onMouseEnter={onMouseEnter}
+      className={`group w-full flex items-start gap-2 pl-2 pr-1 py-1.5 rounded text-xs text-left transition-colors relative cursor-pointer ${
+        isSelected ? "bg-sol-cyan/15 text-sol-text" : "hover:bg-sol-bg-alt text-sol-text-secondary"
+      }`}
+    >
+      {isSelected && <span className="absolute left-0 top-0.5 bottom-0.5 w-0.5 rounded-full bg-sol-cyan" />}
+      <span className={`font-mono text-[9px] mt-0.5 w-5 text-right flex-shrink-0 tabular-nums ${isSelected ? "text-sol-cyan" : "text-sol-text-dim/50"}`}>{num}</span>
+      <span className="flex-1 min-w-0 line-clamp-2 leading-snug">{msg.content}</span>
+      <button
+        onClick={(e) => { e.stopPropagation(); onFork(); }}
+        title="Fork from this message"
+        className={`self-center flex-shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] text-sol-text-dim hover:text-sol-cyan hover:bg-sol-cyan/10 transition-colors ${isSelected ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
+      >
+        <GitFork className="w-3 h-3" />fork
+      </button>
+    </div>
   );
+}
 
+type Mode = "branches" | "messages";
+
+function ForkTreeContent({
+  conversation, conversationId, currentBranchId, open, initialDrillId, containerRef, onClose, onSwitchToConversation, onForkFromBranch, onRewindCurrent,
+}: {
+  conversation: ForkConversationLike;
+  conversationId: string;
+  currentBranchId: string;
+  open: boolean;
+  // When set, the map opens directly drilled into this branch's messages
+  // (double-Esc into the current branch) instead of the branch list.
+  initialDrillId?: string | null;
+  // The [data-owns-keys] root box; the panel keeps focus here so global
+  // conversation shortcuts stay suppressed while it's open.
+  containerRef: React.RefObject<HTMLDivElement | null>;
+  onClose: () => void;
+  onSwitchToConversation: (convId: string) => void;
+  onForkFromBranch: (branchId: string, messageUuid: string, content: string) => void;
+  onRewindCurrent: (messageUuid: string, indexFromEnd: number) => void;
+}) {
+  const flat = useForkTree(conversation, open);
+  const seenMessageCount = useInboxStore((s) => s._seenMessageCount);
+  const currentUser = useInboxStore((s) => s.currentUser);
+
+  const [mode, setMode] = useState<Mode>("branches");
+  const [drillId, setDrillId] = useState<string | null>(null);
+  const [branchSel, setBranchSel] = useState<string | null>(conversationId);
+  const [msgSel, setMsgSel] = useState(0);
+  const [filter, setFilter] = useState("");
+  const [filtering, setFiltering] = useState(false);
+  // Did we reach the message level by drilling from the branch list? Controls
+  // where Esc goes: back to branches if you drilled in, close if you opened
+  // straight into messages (double-Esc).
+  const [drilledFromBranches, setDrilledFromBranches] = useState(false);
+
+  const filterRef = useRef<HTMLInputElement>(null);
+  const rowRef = useRef<HTMLDivElement | null>(null);
+
+  // Fresh open: either straight into the current branch's messages (double-Esc)
+  // or the branch list (Ctrl+B / icon), selected where you are.
+  useWatchEffect(() => {
+    if (open) {
+      if (initialDrillId) {
+        setMode("messages");
+        setDrillId(initialDrillId);
+        setDrilledFromBranches(false);
+      } else {
+        setMode("branches");
+        setDrillId(null);
+      }
+      setBranchSel(conversationId);
+      setFilter("");
+      setFiltering(false);
+    }
+  }, [open]);
+
+  const showAgent = useMemo(() => new Set(flat.map((n) => n.agent_type).filter(Boolean)).size > 1, [flat]);
+  const myNames = useMemo(() => {
+    const names = new Set<string>();
+    if (currentUser?.name) names.add(currentUser.name);
+    if (currentUser?.username) names.add(currentUser.username);
+    return names;
+  }, [currentUser]);
+
+  // Branch-level list (filtered).
+  const visibleBranches = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    if (!q) return flat;
+    return flat.filter((n) =>
+      branchDisplayLabel(n).toLowerCase().includes(q) ||
+      n.username?.toLowerCase().includes(q) ||
+      n.git_branch?.toLowerCase().includes(q) ||
+      n.short_id?.toLowerCase().includes(q));
+  }, [flat, filter]);
+  const branchIdx = Math.max(0, visibleBranches.findIndex((n) => n.id === branchSel));
+  const selectedBranch: FlatForkNode | undefined = visibleBranches[branchIdx];
+  const drillBranch = useMemo(() => flat.find((n) => n.id === drillId), [flat, drillId]);
+
+  // Message-level list for the drilled branch.
+  const drillMsgsRaw = useQuery(
+    api.conversations.getUserMessages,
+    mode === "messages" && drillId && isConvexId(drillId) ? { conversation_id: drillId as any } : "skip",
+  );
+  const drillMsgs: NavMsg[] = useMemo(() => {
+    const arr = Array.isArray(drillMsgsRaw) ? (drillMsgsRaw as NavMsg[]).slice() : [];
+    arr.sort((a, b) => a.timestamp - b.timestamp); // oldest → newest
+    return arr;
+  }, [drillMsgsRaw]);
+  const visibleMsgs = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    if (!q) return drillMsgs;
+    return drillMsgs.filter((m) => (m.content || "").toLowerCase().includes(q));
+  }, [drillMsgs, filter]);
+  const selectedMsg: NavMsg | undefined = visibleMsgs[msgSel];
+
+  // Default message selection to the newest (tip) whenever the list (re)loads.
+  useWatchEffect(() => {
+    if (mode === "messages") setMsgSel(Math.max(0, visibleMsgs.length - 1));
+  }, [mode, drillId, visibleMsgs.length]);
+
+  // Keep the selected row in view.
+  useWatchEffect(() => {
+    rowRef.current?.scrollIntoView({ block: "nearest" });
+  }, [branchIdx, msgSel, mode, visibleBranches.length, visibleMsgs.length]);
+
+  const enterFilter = useCallback(() => {
+    setFiltering(true);
+    requestAnimationFrame(() => filterRef.current?.focus());
+  }, []);
+  const exitFilter = useCallback(() => {
+    setFiltering(false);
+    setFilter("");
+    filterRef.current?.blur();
+  }, []);
+
+  const drillInto = useCallback((id: string) => {
+    setDrillId(id);
+    setMode("messages");
+    setDrilledFromBranches(true);
+    setFilter("");
+    setFiltering(false);
+  }, []);
+
+  const backToBranches = useCallback(() => {
+    setMode("branches");
+    setFilter("");
+    setFiltering(false);
+  }, []);
+
+  // Esc from the message level: back to the tree if you drilled in, else close
+  // (you opened straight into messages via double-Esc).
+  const messagesBack = useCallback(() => {
+    if (drilledFromBranches) backToBranches();
+    else onClose();
+  }, [drilledFromBranches, backToBranches, onClose]);
+
+  const switchToBranch = useCallback((id: string) => {
+    if (id !== conversationId) onSwitchToConversation(id);
+    onClose();
+  }, [conversationId, onSwitchToConversation, onClose]);
+
+  const forkFromMsg = useCallback((branchId: string, m: NavMsg | undefined) => {
+    if (!m?.message_uuid) return;
+    onForkFromBranch(branchId, m.message_uuid, m.content || "");
+    onClose();
+  }, [onForkFromBranch, onClose]);
+
+  const rewindToMsg = useCallback((branchId: string, idx: number, list: NavMsg[]) => {
+    const m = list[idx];
+    if (!m?.message_uuid) return;
+    if (branchId === currentBranchId) {
+      onRewindCurrent(m.message_uuid, list.length - 1 - idx);
+      onClose();
+    } else {
+      // Can't rewind a branch you're not on — forking is the safe equivalent.
+      forkFromMsg(branchId, m);
+    }
+  }, [currentBranchId, onRewindCurrent, onClose, forkFromMsg]);
+
+  // Keep focus inside the [data-owns-keys] container whenever the panel isn't in
+  // its filter input — on open, and after leaving filter mode (blurring the
+  // input drops focus to <body>). This is what makes the global dispatcher's
+  // input guard suppress conversation shortcuts (h/t/d/r, y/n) so navigating the
+  // map can never approve or deny a permission by accident.
+  useWatchEffect(() => {
+    if (open && !filtering) containerRef.current?.focus();
+  }, [open, filtering]);
+
+  // Command-mode keys on window. The container's focus + data-owns-keys keeps the
+  // global dispatcher from claiming these first; this handler drives the map's nav.
   useWatchEffect(() => {
     if (!open) return;
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" || e.key === "t") {
-        e.preventDefault();
-        e.stopPropagation();
-        onClose();
+    const handler = (e: KeyboardEvent) => {
+      if (filtering) return; // the filter input owns keys while active
+      const k = e.key;
+      const stop = () => { e.preventDefault(); e.stopPropagation(); };
+      if (k === "/") { stop(); enterFilter(); return; }
+      if (k === "Escape") {
+        stop();
+        if (mode === "messages") messagesBack();
+        else onClose();
         return;
       }
-      if (e.key === "j" || e.key === "ArrowDown") {
-        e.preventDefault();
-        e.stopPropagation();
-        setSelectedIdx((i) => Math.min(i + 1, flatNodes.length - 1));
+      if (k === "j" || k === "ArrowDown") {
+        stop();
+        if (mode === "branches") {
+          const next = visibleBranches[Math.min(branchIdx + 1, visibleBranches.length - 1)];
+          if (next) setBranchSel(next.id);
+        } else setMsgSel((i) => Math.min(i + 1, visibleMsgs.length - 1));
         return;
       }
-      if (e.key === "k" || e.key === "ArrowUp") {
-        e.preventDefault();
-        e.stopPropagation();
-        setSelectedIdx((i) => Math.max(i - 1, 0));
+      if (k === "k" || k === "ArrowUp") {
+        stop();
+        if (mode === "branches") {
+          const prev = visibleBranches[Math.max(branchIdx - 1, 0)];
+          if (prev) setBranchSel(prev.id);
+        } else setMsgSel((i) => Math.max(i - 1, 0));
         return;
       }
-      if (e.key === "Enter") {
+      if (mode === "branches") {
+        if (k === "Enter") { stop(); if (selectedBranch) switchToBranch(selectedBranch.id); return; }
+        if (k === "l" || k === "ArrowRight" || k === "f" || k === "F") {
+          stop();
+          if (selectedBranch) drillInto(selectedBranch.id);
+          return;
+        }
+      } else {
+        if (k === "f" || k === "F") { stop(); if (drillId) forkFromMsg(drillId, selectedMsg); return; }
+        if (k === "Enter") { stop(); if (drillId) rewindToMsg(drillId, msgSel, visibleMsgs); return; }
+        if (k === "h" || k === "ArrowLeft") { stop(); backToBranches(); return; }
+      }
+      // The map owns the keyboard while open: swallow stray plain keys as
+      // defense-in-depth (the dispatcher's input guard already skips them).
+      // Modifier combos (Ctrl+B to close, ⌘K palette) still pass through.
+      if (!e.metaKey && !e.ctrlKey && !e.altKey && k.length === 1) {
         e.preventDefault();
         e.stopPropagation();
-        handleSelect(selectedIdx);
-        return;
       }
     };
-    const raf = requestAnimationFrame(() => {
-      document.addEventListener("keydown", handleKey, true);
-    });
-    return () => {
-      cancelAnimationFrame(raf);
-      document.removeEventListener("keydown", handleKey, true);
-    };
-  }, [open, onClose, flatNodes.length, selectedIdx, handleSelect]);
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
+  }, [open, filtering, mode, branchIdx, visibleBranches, selectedBranch, visibleMsgs, msgSel, drillId, selectedMsg,
+      enterFilter, backToBranches, messagesBack, onClose, switchToBranch, drillInto, forkFromMsg, rewindToMsg]);
+
+  // Filter input: drives selection while typing.
+  const onFilterKey = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); exitFilter(); return; }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (mode === "branches") { const n = visibleBranches[Math.min(branchIdx + 1, visibleBranches.length - 1)]; if (n) setBranchSel(n.id); }
+      else setMsgSel((i) => Math.min(i + 1, visibleMsgs.length - 1));
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (mode === "branches") { const n = visibleBranches[Math.max(branchIdx - 1, 0)]; if (n) setBranchSel(n.id); }
+      else setMsgSel((i) => Math.max(i - 1, 0));
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (mode === "branches") { if (selectedBranch) switchToBranch(selectedBranch.id); }
+      else if (drillId) forkFromMsg(drillId, selectedMsg);
+      return;
+    }
+  }, [mode, visibleBranches, branchIdx, visibleMsgs, selectedBranch, selectedMsg, drillId, exitFilter, switchToBranch, forkFromMsg]);
+
+  const headerLabel = mode === "branches"
+    ? `${flat.length} branch${flat.length === 1 ? "" : "es"}`
+    : (drillBranch ? branchDisplayLabel(drillBranch) : "messages");
 
   return (
     <>
-      <div className="flex-1 overflow-y-auto p-2 space-y-0.5 min-h-0">
-        {!tree ? (
-          <div className="flex items-center justify-center py-8 text-sol-text-dim text-xs">
-            <svg className="w-4 h-4 animate-spin mr-2" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-            </svg>
-            Loading tree...
-          </div>
+      <div className="flex items-center gap-1.5 px-2 py-1.5 border-b border-sol-border shrink-0">
+        {mode === "messages" && (
+          <button onClick={backToBranches} title="Back to branches" className="p-0.5 rounded text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt">
+            <ChevronRight className="w-3.5 h-3.5 rotate-180" />
+          </button>
+        )}
+        {filtering ? (
+          <>
+            <Search className="w-3 h-3 text-sol-text-dim flex-shrink-0" />
+            <input
+              ref={filterRef}
+              autoFocus
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              onKeyDown={onFilterKey}
+              placeholder={mode === "branches" ? "Filter branches…" : "Filter messages…"}
+              className="flex-1 min-w-0 bg-transparent text-xs text-sol-text placeholder:text-sol-text-dim outline-none"
+            />
+          </>
         ) : (
-          flatNodes.map((flat, idx) => (
-            <TreeRow
-              key={flat.node.id}
-              node={flat.node}
-              depth={flat.depth}
-              activeBranchIds={activeBranchIds}
-              onSwitchToConversation={onSwitchToConversation}
-              isSelected={idx === selectedIdx}
-              onMouseEnter={() => setSelectedIdx(idx)}
-              rowRef={idx === selectedIdx ? selectedRef : undefined}
+          <>
+            <span className="text-[10px] text-sol-text-dim font-medium uppercase tracking-wider truncate flex-1 min-w-0">
+              {headerLabel}
+            </span>
+            <button onClick={enterFilter} title="Filter ( / )" className="p-0.5 rounded text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt flex-shrink-0">
+              <Search className="w-3 h-3" />
+            </button>
+          </>
+        )}
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-1.5 min-h-0">
+        {mode === "branches" ? (
+          flat.length === 0 ? (
+            <AppLoader className="min-h-0 bg-transparent py-8" size={24} />
+          ) : visibleBranches.length === 0 ? (
+            <div className="py-6 text-center text-[11px] text-sol-text-dim">No branches match</div>
+          ) : (
+            visibleBranches.map((node, idx) => (
+              <BranchRow
+                key={node.id}
+                node={node}
+                isCurrent={node.id === conversationId}
+                isSelected={idx === branchIdx}
+                unread={branchUnread(node, seenMessageCount[node.id], node.id === conversationId)}
+                flatMode={filter.trim().length > 0}
+                showAgent={showAgent}
+                showAuthor={!!node.username && !myNames.has(node.username)}
+                onClick={() => switchToBranch(node.id)}
+                onDrill={() => drillInto(node.id)}
+                onMouseEnter={() => setBranchSel(node.id)}
+                rowRef={idx === branchIdx ? rowRef : undefined}
+              />
+            ))
+          )
+        ) : drillMsgsRaw === undefined ? (
+          <AppLoader className="min-h-0 bg-transparent py-8" size={24} />
+        ) : visibleMsgs.length === 0 ? (
+          <div className="py-6 text-center text-[11px] text-sol-text-dim">{filter ? "No messages match" : "No messages on this branch"}</div>
+        ) : (
+          visibleMsgs.map((m, idx) => (
+            <MessageRow
+              key={m._id}
+              msg={m}
+              num={idx + 1}
+              isSelected={idx === msgSel}
+              isCurrentBranch={drillId === currentBranchId}
+              onClick={() => setMsgSel(idx)}
+              onFork={() => drillId && forkFromMsg(drillId, m)}
+              onMouseEnter={() => setMsgSel(idx)}
+              rowRef={idx === msgSel ? rowRef : undefined}
             />
           ))
         )}
       </div>
-      <div className="px-3 py-2 border-t border-sol-border text-[9px] text-sol-text-dim shrink-0 flex items-center gap-3">
-        <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border">j</kbd>/<kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border">k</kbd> navigate</span>
-        <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border">Enter</kbd> switch</span>
-        <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border">t</kbd> close</span>
+
+      <div className="px-3 py-2 border-t border-sol-border text-[9px] text-sol-text-dim shrink-0 flex items-center gap-3 flex-wrap">
+        <span className="inline-flex items-center gap-1"><KeyCap size="xs">↑</KeyCap><KeyCap size="xs">↓</KeyCap> move</span>
+        {mode === "branches" ? (
+          <>
+            <span className="inline-flex items-center gap-1"><KeyCap size="xs">↵</KeyCap> switch</span>
+            <span className="inline-flex items-center gap-1"><KeyCap size="xs">→</KeyCap> drill</span>
+            <span className="inline-flex items-center gap-1"><KeyCap size="xs">f</KeyCap> fork from…</span>
+          </>
+        ) : (
+          <>
+            <span className="inline-flex items-center gap-1"><KeyCap size="xs">f</KeyCap> fork here</span>
+            {drillId === currentBranchId && <span className="inline-flex items-center gap-1"><KeyCap size="xs">↵</KeyCap> rewind</span>}
+            <span className="inline-flex items-center gap-1"><KeyCap size="xs">←</KeyCap> back</span>
+          </>
+        )}
+        <span className="inline-flex items-center gap-1"><KeyCap size="xs">/</KeyCap> filter</span>
+        <span className="inline-flex items-center gap-1"><KeyCap size="xs">Esc</KeyCap> close</span>
       </div>
     </>
   );
 }
 
-export function ForkTreePanel({
-  conversationId,
-  open,
-  onClose,
-  activeBranchIds,
-  onSwitchToConversation,
-}: {
-  conversationId: string;
-  open: boolean;
-  onClose: () => void;
-  activeBranchIds: Set<string>;
-  onSwitchToConversation: (convId: string) => void;
-}) {
-  const panelRef = useRef<HTMLDivElement>(null);
 
+// The map's visual box: header + content. Two visual modes:
+//  - tray: melded INTO the composer box (like the quote ReviewBar) — tinted,
+//    bleeding to the box edges, rounded top, no floating chrome. This is the
+//    default in-composer presentation.
+//  - floating: a standalone bordered card with a shadow — used by the fixed
+//    fallback when there's no composer to meld into.
+export function ForkMapBox({
+  conversation, conversationId, currentBranchId, open, initialDrillId, className, getIgnore, onClose,
+  onSwitchToConversation, onForkFromBranch, onRewindCurrent, tray,
+}: {
+  conversation: ForkConversationLike;
+  conversationId: string;
+  currentBranchId: string;
+  open: boolean;
+  initialDrillId?: string | null;
+  className?: string;
+  getIgnore?: () => HTMLElement | null;
+  tray?: boolean;
+  onClose: () => void;
+  onSwitchToConversation: (convId: string) => void;
+  onForkFromBranch: (branchId: string, messageUuid: string, content: string) => void;
+  onRewindCurrent: (messageUuid: string, indexFromEnd: number) => void;
+}) {
+  const boxRef = useRef<HTMLDivElement>(null);
+  // Opening the map moves focus into the container (see ForkTreeContent) so the
+  // global dispatcher's input guard suppresses conversation shortcuts. Remember
+  // what was focused first (e.g. the composer when opened via Ctrl+B mid-typing)
+  // and hand focus back on close. Captured at first render, before the child's
+  // effect focuses the container.
+  const restoreFocusRef = useRef<HTMLElement | null>(
+    typeof document !== "undefined" ? (document.activeElement as HTMLElement | null) : null,
+  );
+  useWatchEffect(() => () => restoreFocusRef.current?.focus?.(), []);
+  // Close on a mousedown outside the box (and outside the toggle control, so a
+  // click on the header icon toggles rather than close-then-reopen).
   useWatchEffect(() => {
     if (!open) return;
-    const handleClick = (e: MouseEvent) => {
-      if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
-        onClose();
-      }
+    const handle = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (boxRef.current?.contains(t)) return;
+      if (getIgnore?.()?.contains(t)) return;
+      onClose();
     };
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, [open, onClose]);
-
-  if (!open) return null;
-
+    const raf = requestAnimationFrame(() => document.addEventListener("mousedown", handle));
+    return () => { cancelAnimationFrame(raf); document.removeEventListener("mousedown", handle); };
+  }, [open, onClose, getIgnore]);
+  // Tray mode mirrors the quote tray (.cc-review-tray): negative margins bleed it
+  // to the composer box edges (which pads px-4 py-2), a faint cyan tint sets it
+  // apart from the input, and only the top corners round to match the box.
+  const containerCls = tray
+    ? "flex flex-col overflow-hidden -mx-4 -mt-2 mb-2 rounded-t-[calc(1rem-1px)] bg-[color-mix(in_srgb,var(--sol-cyan)_5%,var(--sol-bg))] border-b border-[color-mix(in_srgb,var(--sol-cyan)_22%,var(--sol-border))]"
+    : "flex flex-col bg-sol-bg border border-sol-border shadow-2xl ring-1 ring-black/5 overflow-hidden";
+  const headCls = tray
+    ? "flex items-center justify-between px-3 pt-1.5 pb-1 shrink-0"
+    : "flex items-center justify-between px-3 py-2 border-b border-sol-border shrink-0";
   return (
     <div
-      ref={panelRef}
-      className="absolute right-0 top-0 bottom-0 w-[280px] bg-sol-bg border-l border-sol-border z-30 flex flex-col shadow-xl animate-in slide-in-from-right duration-200"
+      ref={boxRef}
+      data-owns-keys
+      tabIndex={-1}
+      className={`outline-none ${containerCls} ${className || ""}`}
     >
-      <div className="flex items-center justify-between px-3 py-2 border-b border-sol-border shrink-0">
-        <span className="text-[10px] text-sol-text-dim font-medium uppercase tracking-wider">
-          Fork Tree
+      <div className={headCls}>
+        <span className="text-[10px] text-sol-text-dim font-medium uppercase tracking-wider inline-flex items-center gap-1.5">
+          <Split className="w-3 h-3 text-sol-cyan" />Branch map
         </span>
-        <button
-          onClick={onClose}
-          className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text transition-colors"
-        >
+        <button onClick={onClose} className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text transition-colors">
           <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
           </svg>
         </button>
       </div>
       <ForkTreeContent
+        conversation={conversation}
         conversationId={conversationId}
+        currentBranchId={currentBranchId}
         open={open}
+        initialDrillId={initialDrillId}
+        containerRef={boxRef}
         onClose={onClose}
-        activeBranchIds={activeBranchIds}
         onSwitchToConversation={onSwitchToConversation}
+        onForkFromBranch={onForkFromBranch}
+        onRewindCurrent={onRewindCurrent}
       />
     </div>
   );
 }
 
-export function ForkTreePopover({
-  conversationId,
-  open,
-  onClose,
-  anchorEl,
-  activeBranchIds,
-  onSwitchToConversation,
-}: {
+// Fallback for when there's no composer to anchor to (e.g. an owner whose input
+// is replaced by a permission prompt). Fixed, centered near the bottom.
+export function ForkMapFallback(props: {
+  conversation: ForkConversationLike;
   conversationId: string;
+  currentBranchId: string;
   open: boolean;
+  initialDrillId?: string | null;
   onClose: () => void;
-  anchorEl: HTMLElement | null;
-  activeBranchIds: Set<string>;
   onSwitchToConversation: (convId: string) => void;
+  onForkFromBranch: (branchId: string, messageUuid: string, content: string) => void;
+  onRewindCurrent: (messageUuid: string, indexFromEnd: number) => void;
 }) {
-  const popRef = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(null);
-
-  useWatchEffect(() => {
-    if (!open || !anchorEl) {
-      setPos(null);
-      return;
-    }
-    const width = 340;
-    const rect = anchorEl.getBoundingClientRect();
-    const left = Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8));
-    setPos({ top: rect.bottom + 6, left, width });
-  }, [open, anchorEl]);
-
-  useWatchEffect(() => {
-    if (!open) return;
-    const handleClick = (e: MouseEvent) => {
-      const t = e.target as Node;
-      if (popRef.current?.contains(t)) return;
-      if (anchorEl?.contains(t)) return;
-      onClose();
-    };
-    const raf = requestAnimationFrame(() => {
-      document.addEventListener("mousedown", handleClick);
-    });
-    return () => {
-      cancelAnimationFrame(raf);
-      document.removeEventListener("mousedown", handleClick);
-    };
-  }, [open, onClose, anchorEl]);
-
-  if (!open || !pos) return null;
-
+  if (!props.open) return null;
   return createPortal(
-    <div
-      ref={popRef}
-      style={{ position: "fixed", top: pos.top, left: pos.left, width: pos.width }}
-      className="z-[9999] max-h-[60vh] flex flex-col rounded-lg bg-sol-bg border border-sol-border shadow-xl ring-1 ring-black/5 animate-in fade-in slide-in-from-top-1 duration-150"
-    >
-      <div className="flex items-center justify-between px-3 py-2 border-b border-sol-border shrink-0">
-        <span className="text-[10px] text-sol-text-dim font-medium uppercase tracking-wider">
-          Branch tree
-        </span>
-        <button
-          onClick={onClose}
-          className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text transition-colors"
-        >
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </button>
-      </div>
-      <ForkTreeContent
-        conversationId={conversationId}
-        open={open}
-        onClose={onClose}
-        activeBranchIds={activeBranchIds}
-        onSwitchToConversation={onSwitchToConversation}
-      />
+    <div className="fixed left-1/2 -translate-x-1/2 bottom-4 z-[9999] w-[min(560px,calc(100vw-32px))] animate-in fade-in slide-in-from-bottom-2 duration-150">
+      <ForkMapBox {...props} className="rounded-lg max-h-[60vh]" />
     </div>,
-    document.body
+    document.body,
   );
 }
