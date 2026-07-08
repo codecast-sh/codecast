@@ -1,3 +1,5 @@
+import { StyleSheet } from 'react-native';
+
 export const SolarizedLight = {
   bg: '#FBF5E2',
   bgAlt: '#eee8d5',
@@ -123,3 +125,29 @@ export const BorderRadius = {
   xl: 16,
   pill: 999,
 };
+
+// Chrome text (headers, footers, chips) caps Dynamic Type scaling so large
+// accessibility text sizes don't blow up the app shell; message content still
+// scales freely. Pass as maxFontSizeMultiplier on chrome <Text> nodes.
+export const CHROME_FONT_CAP = 1.2;
+
+// One shell for every metadata chip in the app chrome (session header strip,
+// device chip, model switcher, footer status): identical fixed height, radius,
+// padding, border weight and text size — only the tint changes. The fixed
+// height keeps mixed content (icons, text, dots) on one optical line.
+export const CHIP_HEIGHT = 22;
+export const chipShell = {
+  flexDirection: 'row',
+  alignItems: 'center',
+  gap: 4,
+  height: CHIP_HEIGHT,
+  borderWidth: StyleSheet.hairlineWidth,
+  borderRadius: 6,
+  paddingHorizontal: 7,
+  maxWidth: 160,
+} as const;
+export const chipText = {
+  fontSize: 11,
+  fontWeight: '600',
+} as const;
+export const chipTint = (color: string) => ({ borderColor: color + '40', backgroundColor: color + '14' });

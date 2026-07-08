@@ -160,11 +160,24 @@ export interface CreateConversationParams {
   gitInfo?: GitInfo;
   cliFlags?: string;
   subagentDescription?: string;
+  // Transcript path says subagents/ — assert it even when the parent
+  // conversation isn't resolvable yet, so the server never treats the row as
+  // a human-started session (teammate start notifications).
+  isSubagent?: boolean;
+  // Agent-team stamps from a teammate's JSONL (see parser.extractTeamInfo).
+  agentTeamName?: string;
+  agentName?: string;
 }
 
 export class SyncService {
   private client: ConvexHttpClient;
-  private subscriptionClient: ConvexClient;
+  // Lazy: ConvexClient opens its websocket at construction and reconnects
+  // forever. Only the daemon's live-subscription path (one call site) needs
+  // it — creating it eagerly meant every SyncService a TEST constructs leaked
+  // an immortal ws://…:0 reconnect loop that outlived the test file and
+  // spammed the suite (and bun's exit code) long after.
+  private subscriptionClient?: ConvexClient;
+  private convexUrl: string;
   private userId?: string;
   private apiToken?: string;
   private lastRequestTime = 0;
@@ -184,7 +197,7 @@ export class SyncService {
 
   constructor(config: SyncConfig) {
     this.client = new ConvexHttpClient(config.convexUrl);
-    this.subscriptionClient = new ConvexClient(config.convexUrl);
+    this.convexUrl = config.convexUrl;
     this.userId = config.userId;
     this.apiToken = config.authToken;
   }
@@ -206,7 +219,19 @@ export class SyncService {
     return this.client;
   }
 
+  /** Storage URL for an uploaded image, authed via api_token (the daemon's
+   * client has no cookie session — unauthenticated callers get null). */
+  async getImageUrl(storageId: string): Promise<string | null> {
+    return await this.client.query("images:getImageUrl" as any, {
+      storageId,
+      api_token: this.apiToken,
+    });
+  }
+
   getSubscriptionClient(): ConvexClient {
+    if (!this.subscriptionClient) {
+      this.subscriptionClient = new ConvexClient(this.convexUrl);
+    }
     return this.subscriptionClient;
   }
 
@@ -392,6 +417,14 @@ export class SyncService {
           worktree_path: gitInfo?.worktreePath,
           worktree_status: gitInfo?.worktreeName ? "active" : undefined,
           subagent_description: params.subagentDescription,
+          is_subagent: params.isSubagent || undefined,
+          agent_team_name: params.agentTeamName,
+          agent_name: params.agentName,
+          // The transcript this conversation is created from lives on THIS
+          // machine — stamp ownership up front so message delivery routes here
+          // instead of racing every daemon's first-claim (a remote daemon that
+          // won that race black-holed injects for freshly synced sessions).
+          owner_device_id: deviceId(),
           api_token: this.apiToken,
         }
       );
@@ -413,6 +446,35 @@ export class SyncService {
           parent_conversation_id: parentConversationId,
           child_conversation_id: childConversationId,
           subagent_description: subagentDescription,
+          api_token: this.apiToken,
+        }
+      );
+    } catch (error) {
+      if (isAuthError(error)) {
+        throw new AuthExpiredError();
+      }
+      throw error;
+    }
+  }
+
+  // Visible-child link: teammate/spawned session → the session that spawned it.
+  // Unlike linkSessions this neither hides the child nor marks it a subagent —
+  // it only powers the parent click-through (see conversations.linkSpawnedBy).
+  async linkSpawnedBy(
+    parentConversationId: string,
+    childConversationId: string,
+    agentTeamName?: string,
+    agentName?: string,
+  ): Promise<void> {
+    await this.throttle();
+    try {
+      await this.client.mutation(
+        "conversations:linkSpawnedBy" as any,
+        {
+          parent_conversation_id: parentConversationId,
+          child_conversation_id: childConversationId,
+          agent_team_name: agentTeamName,
+          agent_name: agentName,
           api_token: this.apiToken,
         }
       );
@@ -1088,7 +1150,10 @@ export class SyncService {
     }
   }
 
-  async sendMessageToSession(conversationId: string, content: string): Promise<string | null> {
+  // `origin: "scheduler"` marks a machine-initiated injection (task scheduler):
+  // the server then skips the stash-clear so a stashed looping session keeps
+  // working out of the user's active queue. Human/agent sends omit it.
+  async sendMessageToSession(conversationId: string, content: string, origin?: "scheduler"): Promise<string | null> {
     if (!this.apiToken) return null;
     try {
       const result = await this.client.mutation(
@@ -1096,6 +1161,7 @@ export class SyncService {
         {
           conversation_id: conversationId,
           content,
+          ...(origin ? { origin } : {}),
           api_token: this.apiToken,
         },
       );
@@ -1473,7 +1539,7 @@ export class SyncService {
     }
   }
 
-  async completeTaskRun(taskId: string, daemonId: string, summary?: string, conversationId?: string): Promise<boolean> {
+  async completeTaskRun(taskId: string, daemonId: string, summary?: string, conversationId?: string, runSessionUuid?: string): Promise<boolean> {
     if (!this.apiToken) return false;
     try {
       const result = await this.client.mutation(
@@ -1484,6 +1550,7 @@ export class SyncService {
           daemon_id: daemonId,
           summary,
           conversation_id: conversationId,
+          run_session_uuid: runSessionUuid,
         }
       );
       return result as boolean;
@@ -1492,16 +1559,34 @@ export class SyncService {
     }
   }
 
-  async failTaskRun(taskId: string, daemonId: string, error?: string): Promise<boolean> {
+  async failTaskRun(taskId: string, daemonId: string, error?: string, runSessionUuid?: string): Promise<boolean> {
     if (!this.apiToken) return false;
     try {
       const result = await this.client.mutation(
         "agentTasks:failTaskRun" as any,
-        { api_token: this.apiToken, task_id: taskId, daemon_id: daemonId, error }
+        { api_token: this.apiToken, task_id: taskId, daemon_id: daemonId, error, run_session_uuid: runSessionUuid }
       );
       return result as boolean;
     } catch {
       return false;
+    }
+  }
+
+  // Stamp agent_task_id on a spawned run's conversation (and fold the previous
+  // completed run of a repeating spawn schedule). { retry: true } means the
+  // run's conversation hasn't synced yet — call again shortly.
+  async linkRunConversation(taskId: string, runSessionUuid: string): Promise<{ linked: boolean; retry: boolean }> {
+    if (!this.apiToken) return { linked: false, retry: false };
+    try {
+      const result = await this.client.mutation(
+        "agentTasks:linkRunConversation" as any,
+        { api_token: this.apiToken, task_id: taskId, run_session_uuid: runSessionUuid }
+      );
+      return result as { linked: boolean; retry: boolean };
+    } catch {
+      // Unknown mutation (older deployed backend) or transient failure — the
+      // completeTaskRun backfill still stamps the link at run end.
+      return { linked: false, retry: false };
     }
   }
 }

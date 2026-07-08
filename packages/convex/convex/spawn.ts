@@ -3,7 +3,7 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
-import { resolveTeamForPath } from "./privacy";
+import { resolveCreationPrivacy } from "./privacy";
 import { enqueueStartSession } from "./devices";
 import { enqueuePendingMessage } from "./pendingMessages";
 
@@ -57,21 +57,10 @@ export const createSessionFromCli = mutation({
     const sessionId = crypto.randomUUID();
     const agentType = args.agent_type || "claude_code";
 
-    const conversationPath = args.git_root || args.project_path;
-    const mappings = await ctx.db
-      .query("directory_team_mappings")
-      .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
-      .collect();
-
-    const { teamId: resolvedTeamId, isPrivate, autoShared } = resolveTeamForPath(
-      mappings,
-      conversationPath,
-      undefined,
-    );
+    const privacy = await resolveCreationPrivacy(ctx, userId, args.git_root || args.project_path);
 
     const conversationId = await ctx.db.insert("conversations", {
       user_id: userId,
-      team_id: resolvedTeamId,
       agent_type: agentType,
       session_id: sessionId,
       project_path: args.project_path,
@@ -79,8 +68,7 @@ export const createSessionFromCli = mutation({
       started_at: now,
       updated_at: now,
       message_count: 0,
-      is_private: isPrivate,
-      auto_shared: autoShared || undefined,
+      ...privacy,
       status: "active",
     });
 

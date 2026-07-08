@@ -442,6 +442,9 @@ interface FeedConversation {
   work_state?: string;
   is_pinned?: boolean;
   user?: { name: string | null; email: string | null };
+  /** Second-party owner (steering member), when assigned. */
+  owner?: { name: string | null; email: string | null };
+  owned_by_me?: boolean;
   preview: FeedPreviewMessage[];
 }
 
@@ -764,6 +767,11 @@ export function formatFeedResults(result: FeedResult, options: FeedOptions = {})
     lines.push(header + padding);
 
     const userDisplay = conv.user?.name || conv.user?.email;
+    const ownerDisplay = conv.owned_by_me
+      ? "owned by you"
+      : conv.owner
+        ? `owner: ${conv.owner.name || conv.owner.email}`
+        : "";
     const stateBadge = formatStateBadge(conv);
     const meta = [
       truncateId(conv.id),
@@ -772,6 +780,7 @@ export function formatFeedResults(result: FeedResult, options: FeedOptions = {})
       `${conv.message_count} msgs`,
       truncatePath(conv.project_path),
       userDisplay ? `${c.yellow}${userDisplay}${c.reset}` : "",
+      ownerDisplay ? `${c.magenta}${ownerDisplay}${c.reset}` : "",
     ].filter(Boolean).join(" | ");
     lines.push(`   ${meta}\n`);
 
@@ -820,6 +829,10 @@ interface MonitorSession {
   label?: string | null;
   active_plan: { short_id: string; title: string } | null;
   active_task: { short_id: string; title: string } | null;
+  /** Second-party ownership: who RUNS it (when not the caller) / who OWNS it. */
+  run_by?: string | null;
+  owner?: { name: string | null; email: string | null } | null;
+  owned_by_me?: boolean;
 }
 
 interface MonitorResult {
@@ -918,7 +931,11 @@ export function formatMonitor(result: MonitorResult, options: MonitorOptions = {
     const badge = formatStateBadge(s);
     const idPart = `${c.magenta}${truncateId(s.id)}${c.reset}`;
     const mark = changes[s.id] ? `  ${changeLabel(changes[s.id])}` : "";
-    lines.push(`${badge}  ${idPart}  ${c.bold}${s.title || "New Session"}${c.reset}${mark}`);
+    // Second-party-owned rows: show who runs it (this inbox shows it because
+    // the caller OWNS it), or who it's assigned to when the caller is the runner.
+    const runBy = s.run_by && s.owned_by_me ? `  ${c.magenta}⇄ run by ${s.run_by}${c.reset}` : "";
+    const ownedBy = !s.owned_by_me && s.owner ? `  ${c.dim}→ owner ${s.owner.name || s.owner.email}${c.reset}` : "";
+    lines.push(`${badge}  ${idPart}  ${c.bold}${s.title || "New Session"}${c.reset}${runBy}${ownedBy}${mark}`);
 
     const metaBits = [
       formatRelativeTime(s.updated_at),

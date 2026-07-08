@@ -128,6 +128,9 @@ describe("parseInteractivePrompt option descriptions", () => {
     // not leak into the question/header.
     for (const o of prompt!.options) expect(o.label).not.toMatch(/[\[\]☐☑✔]/);
     expect(prompt!.question).not.toMatch(/Rollout|Submit|→/);
+    // The checkbox glyphs mark the menu as multiSelect — the only signal once the
+    // hook sidecar is stale, since a pending AUQ never reaches the JSONL on CC ≥2.1.201.
+    expect(prompt!.multiSelect).toBe(true);
   });
 
   // A checked multiSelect box ("[x]" / "[✓]") must strip just like the empty one.
@@ -146,6 +149,7 @@ describe("parseInteractivePrompt option descriptions", () => {
       { label: "Compression", description: undefined },
       { label: "Telemetry", description: undefined },
     ]);
+    expect(prompt!.multiSelect).toBe(true);
   });
 
   test("still parses same-line descriptions (legacy 2-space format)", () => {
@@ -161,6 +165,7 @@ describe("parseInteractivePrompt option descriptions", () => {
       { label: "mac2-m2pro.metal", description: "fastest, most expensive" },
       { label: "mac2.metal", description: "cheapest" },
     ]);
+    expect(prompt!.multiSelect).toBeUndefined();
   });
 
   test("options without descriptions stay description-free", () => {

@@ -182,6 +182,11 @@ export function useGlobalShortcutActions() {
     useInboxStore.getState().toggleSidePanel();
   }, []));
 
+  useShortcutAction('sidebar.toggleComments', useCallback(() => {
+    const store = useInboxStore.getState();
+    store.setCommentRailOpen(store.commentRailOpen !== true);
+  }, []));
+
   useShortcutAction('ui.undo', useCallback(() => {
     return performUndo() || false;
   }, []));

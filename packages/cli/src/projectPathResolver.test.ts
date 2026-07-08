@@ -1,7 +1,32 @@
 import { describe, test, expect } from "bun:test";
-import { resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath } from "./projectPathResolver.js";
+import { resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath, claudeProjectDirName } from "./projectPathResolver.js";
 
 const remote = "git@github.com:union-mobile/outreach.git";
+
+describe("claudeProjectDirName", () => {
+  // These expectations are NOT arbitrary: each was produced by running Claude
+  // 2.1.196 in the named cwd and reading the dir it created under
+  // ~/.claude/projects. The slug MUST match byte-for-byte or `claude --resume`
+  // can't find the JSONL we write and crashes with "No conversation found".
+  test("replaces dots with dashes (the bug: dotted cwd landed in a dir Claude never reads)", () => {
+    // A dot becomes "-"; combined with the leading slash's "-" it doubles up.
+    expect(claudeProjectDirName("/Users/ashot/.claude")).toBe("-Users-ashot--claude");
+  });
+
+  test("encodes a .claude/worktrees path like Claude does (cast ws / orchestrate)", () => {
+    expect(
+      claudeProjectDirName("/Users/ashot/src/union-mobile/outreach/.claude/worktrees/agent-a5c06b4"),
+    ).toBe("-Users-ashot-src-union-mobile-outreach--claude-worktrees-agent-a5c06b4");
+  });
+
+  test("underscores also become dashes; hyphens are preserved", () => {
+    expect(claudeProjectDirName("probe_x.y-z")).toBe("probe-x-y-z");
+  });
+
+  test("a plain repo path (no dots) is unchanged except slashes", () => {
+    expect(claudeProjectDirName("/Users/ashot/src/codecast")).toBe("-Users-ashot-src-codecast");
+  });
+});
 
 describe("resolveLocalProjectPath", () => {
   test("returns the recorded path unchanged when it exists locally", async () => {
@@ -89,6 +114,45 @@ describe("resolveLocalProjectPath", () => {
 
 describe("resolveLocalRepoPath", () => {
   const HOME = "/Users/ashot";
+
+  // THE WORKTREE BUG: an orchestrate/cast-ws worktree under <repo>/.claude/worktrees/<id>
+  // was destroyed, so its recorded cwd is gone. The old walk hit the ".claude"
+  // segment and resolved it to $HOME/.claude (always exists) → resume ran in the
+  // wrong dir and crashed via the slug mismatch. The session belongs to the
+  // PARENT repo, which is still on disk.
+  test("destroyed .claude/worktrees path resolves to the parent repo, not $HOME/.claude", () => {
+    const local = new Set(["/Users/ashot/src/union-mobile/outreach"]);
+    expect(
+      resolveLocalRepoPath({
+        remotePath: "/Users/ashot/src/union-mobile/outreach/.claude/worktrees/agent-a5c06b4",
+        home: HOME,
+        exists: (p) => local.has(p),
+      }),
+    ).toBe("/Users/ashot/src/union-mobile/outreach");
+  });
+
+  test("destroyed .codecast/worktrees path resolves to the parent repo", () => {
+    const local = new Set(["/Users/ashot/src/codecast"]);
+    expect(
+      resolveLocalRepoPath({
+        remotePath: "/Users/ashot/src/codecast/.codecast/worktrees/fix-auth",
+        home: HOME,
+        exists: (p) => local.has(p),
+      }),
+    ).toBe("/Users/ashot/src/codecast");
+  });
+
+  test("does NOT resolve a bare ~/.claude path to $HOME (home is never a project)", () => {
+    // worktreeParent would be $HOME here; the home guard must reject it so the
+    // walk (and ultimately a refusal) takes over instead.
+    expect(
+      resolveLocalRepoPath({
+        remotePath: "/Users/ashot/.claude/projects/gone",
+        home: HOME,
+        exists: (p) => p === "/Users/ashot",
+      }),
+    ).toBeNull();
+  });
 
   test("recorded path unchanged when it exists locally", () => {
     expect(

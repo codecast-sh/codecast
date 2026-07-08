@@ -1,5 +1,10 @@
 import { describe, it, expect } from "bun:test";
-import { InvalidateSync, delay, exponentialBackoffDelay } from "./invalidateSync.js";
+import { InvalidateSync, delay, exponentialBackoffDelay, createBackoff } from "./invalidateSync.js";
+
+const waitFor = async (pred: () => boolean, timeout = 5000): Promise<void> => {
+  const start = Date.now();
+  while (!pred() && Date.now() - start < timeout) await delay(20);
+};
 
 describe("InvalidateSync", () => {
   it("should execute command on invalidate", async () => {
@@ -137,6 +142,62 @@ describe("InvalidateSync debounce", () => {
     await delay(150);
 
     expect(executed).toBe(0);
+  });
+});
+
+describe("createBackoff maxRetries", () => {
+  it("gives up after maxRetries consecutive failures instead of looping forever", async () => {
+    let calls = 0;
+    const bounded = createBackoff({ minDelay: 1, maxDelay: 5, maxRetries: 4, onError: () => {} });
+    await expect(
+      bounded(async () => {
+        calls++;
+        throw new Error("always fails");
+      })
+    ).rejects.toThrow("always fails");
+    expect(calls).toBe(4);
+  });
+
+  it("retries indefinitely when maxRetries is unset (legacy behavior)", async () => {
+    let calls = 0;
+    const unbounded = createBackoff({ minDelay: 1, maxDelay: 3, onError: () => {} });
+    const result = await unbounded(async () => {
+      calls++;
+      if (calls < 6) throw new Error("transient");
+      return "ok";
+    });
+    expect(result).toBe("ok");
+    expect(calls).toBe(6);
+  });
+});
+
+describe("InvalidateSync give-up", () => {
+  it("stops a permanently-failing sync after maxRetries, then re-arms on the next invalidate", async () => {
+    // Regression for BUG 2: a sync whose command always throws (e.g. a deleted
+    // transcript) used to retry ~2/sec forever. It must now give up after a bounded
+    // number of tries, yet a later invalidate still starts a fresh attempt.
+    let attempts = 0;
+    let gaveUp = 0;
+    const sync = new InvalidateSync(
+      async () => {
+        attempts++;
+        throw new Error("permanent failure");
+      },
+      { maxRetries: 3, onGiveUp: () => { gaveUp++; } }
+    );
+
+    sync.invalidate();
+    await waitFor(() => gaveUp === 1);
+    expect(attempts).toBe(3);
+    expect(gaveUp).toBe(1);
+
+    // A real file change re-arms a fresh, bounded attempt — not a dead end.
+    sync.invalidate();
+    await waitFor(() => gaveUp === 2);
+    expect(attempts).toBe(6);
+    expect(gaveUp).toBe(2);
+
+    sync.stop();
   });
 });
 

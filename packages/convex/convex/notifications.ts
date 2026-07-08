@@ -4,6 +4,7 @@ import { internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { isConversationTeamVisible } from "./privacy";
+import { isAgentSpawnedConversation } from "./ccAccountsShared";
 
 export const sendPushNotification = internalAction({
   args: {
@@ -51,10 +52,13 @@ export const notifyTeamSessionStart = internalMutation({
       return;
     }
 
-    if (conversation.is_subagent || conversation.is_workflow_sub || (conversation.parent_conversation_id && !conversation.parent_message_uuid)) {
+    // Never notify about agent-spawned sessions — only human-initiated ones.
+    if (isAgentSpawnedConversation(conversation)) {
       return;
     }
 
+    // Fire time = registration + a 60s grace delay (see createConversation),
+    // so of this budget ~4min covers registration lag.
     const STALE_MS = 5 * 60 * 1000;
     if (conversation.started_at && Date.now() - conversation.started_at > STALE_MS) {
       return;
@@ -144,7 +148,11 @@ export const notifyTeamSessionStart = internalMutation({
   },
 });
 
-export const create = mutation({
+// internal: had zero callers and was a public mutation that let anyone deliver
+// an arbitrary-text notification to any user (spam/phishing). Real notifications
+// are created by the internal mutations and server-side inserts in this file and
+// in agentTasks/notificationRouter.
+export const create = internalMutation({
   args: {
     recipient_user_id: v.id("users"),
     type: v.union(
@@ -383,6 +391,40 @@ export const createSessionNotification = mutation({
       await ctx.scheduler.runAfter(0, internal.idleSummary.generateIdleSummary, {
         conversation_id: args.conversation_id,
       });
+    }
+
+    // Second-party ownership: the assigned owner is the one actually waiting
+    // on this session (a Mr Bot fix session parking with "ready to ship?"), so
+    // mirror the notification to them — same prefs gates, their own row+push.
+    const ownerUserId = conversation.owner_user_id;
+    if (ownerUserId && ownerUserId.toString() !== auth.userId.toString()) {
+      const owner = await ctx.db.get(ownerUserId);
+      const ownerPrefs = owner?.notification_preferences;
+      const ownerOptedOut =
+        (args.type === "session_idle" && ownerPrefs?.session_idle === false) ||
+        (args.type === "session_error" && ownerPrefs?.session_error === false) ||
+        (args.type === "permission_request" && ownerPrefs && !ownerPrefs.permission_request);
+      if (owner && !ownerOptedOut) {
+        await ctx.db.insert("notifications", {
+          recipient_user_id: ownerUserId,
+          type: args.type,
+          conversation_id: args.conversation_id,
+          message: args.message,
+          read: false,
+          created_at: Date.now(),
+        });
+        if (owner.push_token && owner.notifications_enabled) {
+          await ctx.scheduler.runAfter(0, internal.notifications.sendPushNotification, {
+            push_token: owner.push_token,
+            title: args.title,
+            body: args.message,
+            data: {
+              conversationId: args.conversation_id,
+              type: args.type,
+            },
+          });
+        }
+      }
     }
 
     return { notificationId };

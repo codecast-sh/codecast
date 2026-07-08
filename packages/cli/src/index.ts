@@ -19,7 +19,7 @@ import {
 } from "@codecast/shared/entities";
 import { SNIPPET_CATALOG, snippetBySlug, allSnippetSlugs } from "@codecast/shared/contracts";
 import { cliFetch, cliFetchRead } from "./cliHttp.js";
-import { listProfiles, saveProfile, useProfile, CcAccountError } from "./ccAccounts.js";
+import { listProfiles, saveProfile, useProfile, getAccountsHeartbeatPayload, CcAccountError } from "./ccAccounts.js";
 import { CODECAST_STATUS_HOOK } from "./statusHook.js";
 import { AuthServer } from "./authServer.js";
 import { startRelayPoller } from "./authRelay.js";
@@ -31,18 +31,23 @@ import { checkForDesktopUpdate } from "./desktopUpdate.js";
 import { glob } from "glob";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { encryptToken, decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
-import { getAllSyncRecords, findUnsyncedFiles } from "./syncLedger.js";
+import { getAllSyncRecords, findUnsyncedFiles, readOldestUnsyncedTimestamp } from "./syncLedger.js";
 import { isTestScratchPath } from "./syncScope.js";
 import { isAppServerManagedCodexSessionHead } from "./codexWatcher.js";
 import { getLastReconciliation, performReconciliation, repairDiscrepancies } from "./reconciliation.js";
 import { parseSessionFile, extractSlug } from "./parser.js";
 import { SyncService } from "./syncService.js";
-import { resolveLocalProjectPath } from "./projectPathResolver.js";
-import { deviceId } from "./remote/device.js";
+import { resolveLocalProjectPath, claudeProjectDirName } from "./projectPathResolver.js";
+import { runDoctor } from "./doctor.js";
+import { deviceId, deviceLabel } from "./remote/device.js";
 import {
+  buildDaemonLauncherScript,
   buildDaemonPlistXml,
   buildWatchdogPlistXml,
   buildWatchdogShellScript,
+  daemonPlistNeedsUpgrade,
+  DAEMON_LAUNCHER_FILENAME,
+  shellEscapeForSh,
   watchdogPlistNeedsUpgrade,
 } from "./supervision.js";
 import * as readline from "readline";
@@ -217,7 +222,7 @@ function findCurrentSessionFromProcess(projectRoot: string): string | null {
     if (debug) console.error(`[DEBUG] Claude start time: ${startTimeResult} (${claudeStartTime})`);
 
     // Find session file with matching creation time
-    const projectDir = projectRoot.replace(/\//g, "-");
+    const projectDir = claudeProjectDirName(projectRoot);
     const sessionsDir = path.join(process.env.HOME || "", ".claude", "projects", projectDir);
 
     if (debug) console.error(`[DEBUG] Sessions dir: ${sessionsDir}`);
@@ -312,7 +317,7 @@ function detectCurrentSessionId(): string | null {
     const fromProcess = findCurrentSessionFromProcess(projectRoot);
     if (fromProcess) return fromProcess;
 
-    const projectDir = projectRoot.replace(/\//g, "-");
+    const projectDir = claudeProjectDirName(projectRoot);
     const sessionsDir = path.join(process.env.HOME || "", ".claude", "projects", projectDir);
     if (!fs.existsSync(sessionsDir)) return null;
 
@@ -357,10 +362,7 @@ const VERSION_FILE = path.join(CONFIG_DIR, "daemon.version");
 const STATE_FILE = path.join(CONFIG_DIR, "daemon.state");
 const LOG_FILE = path.join(CONFIG_DIR, "daemon.log");
 const WATCHDOG_SCRIPT_PATH = path.join(CONFIG_DIR, "watchdog.sh");
-
-function shellEscapeForSh(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
-}
+const DAEMON_LAUNCHER_SCRIPT_PATH = path.join(CONFIG_DIR, DAEMON_LAUNCHER_FILENAME);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -388,6 +390,8 @@ interface DaemonState {
   lastWatchdogCheck?: number;
   runtimeVersion?: string;
   watchdogRestarts?: number;
+  /** Stamped on every daemon state write — lets `--wait` tell a fresh state file from a stale one. */
+  timestamp?: number;
 }
 
 function detectAgents(): DetectedAgent[] {
@@ -1187,6 +1191,14 @@ function getStuckSyncs(): StuckSync[] {
     if (unsynced < STUCK_SYNC_MIN_BYTES) continue;
     if (stats.mtimeMs <= record.lastSyncedAt) continue;
     if (now - record.lastSyncedAt < STUCK_SYNC_THRESHOLD_MS) continue;
+    // lastSyncedAt alone can't tell a wedge from a session that sat quiet for an
+    // hour and just burst back to life (dead session auto-resumed): both have a
+    // stale stamp, but the resumed session's unsynced bytes are seconds old and
+    // the daemon is already draining them. Only flag when the unsynced content
+    // itself has been waiting past the threshold; keep the conservative
+    // (flagging) behavior when no timestamp is readable.
+    const unsyncedBornAt = readOldestUnsyncedTimestamp(filePath, record.lastSyncedPosition);
+    if (unsyncedBornAt !== null && now - unsyncedBornAt < STUCK_SYNC_THRESHOLD_MS) continue;
 
     const base = path.basename(filePath, ".jsonl");
     const m = base.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/);
@@ -1208,6 +1220,51 @@ function formatBytesShort(n: number): string {
   if (n < 1024) return `${n}B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}KB`;
   return `${(n / 1024 / 1024).toFixed(1)}MB`;
+}
+
+// Block until the daemon is running AND connected to Convex, or the timeout
+// lapses. `startedAfterMs` guards against trusting a state file left behind by
+// the PREVIOUS daemon instance: saveDaemonState stamps `timestamp` on every
+// write, so requiring a stamp newer than the (re)start moment proves the state
+// (including `connected`) was written by the instance we just launched. This is
+// the productized form of the "poll `cast status | grep` in a shell loop"
+// ritual that every restart-and-verify workflow used to hand-roll.
+async function waitForDaemonHealthy(timeoutMs: number, startedAfterMs: number): Promise<{ ok: boolean; detail: string }> {
+  const deadline = Date.now() + timeoutMs;
+  let last = "daemon not running";
+  while (Date.now() < deadline) {
+    const pid = getDaemonPid();
+    const state = readDaemonState();
+    const fresh = ((state as any)?.timestamp ?? 0) >= startedAfterMs;
+    if (!pid) last = "daemon not running";
+    else if (!fresh) last = `daemon up (pid ${pid}), waiting for first state write`;
+    else if (state?.authExpired) return { ok: false, detail: "auth expired — run `cast auth`" };
+    else if (!state?.connected) last = `daemon up (pid ${pid}), Convex not connected yet`;
+    else return { ok: true, detail: `running (pid ${pid}), Convex connected` };
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return { ok: false, detail: last };
+}
+
+function printDaemonLogTail(lines = 15): void {
+  try {
+    const raw = fs.readFileSync(path.join(CONFIG_DIR, "daemon.log"), "utf-8");
+    const tail = raw.split("\n").filter(Boolean).slice(-lines);
+    if (tail.length === 0) return;
+    console.log(fmt.muted("  daemon.log tail:"));
+    for (const line of tail) console.log(`  ${c.dim}${line.slice(0, 160)}${c.reset}`);
+  } catch {}
+}
+
+async function finishWithHealthWait(startedAtMs: number, timeoutSec: number): Promise<void> {
+  const result = await waitForDaemonHealthy(timeoutSec * 1000, startedAtMs);
+  if (result.ok) {
+    console.log(`${fmt.success("✓")} ${result.detail}`);
+  } else {
+    console.log(`${fmt.error("✗")} not healthy after ${timeoutSec}s: ${result.detail}`);
+    printDaemonLogTail();
+    process.exit(1);
+  }
 }
 
 function checkDaemonHealth(): { blocked: boolean; restarted: boolean } {
@@ -1334,6 +1391,8 @@ function showStatus(): void {
   }
   console.log(`  ${fmt.muted("  Change:")} ${fmt.cmd("cast sync-settings")}`);
 
+  console.log("");
+  console.log(`  ${fmt.muted("Full self-test (live sync round-trip):")} ${fmt.cmd("cast doctor")}`);
   console.log("");
 }
 
@@ -1484,13 +1543,6 @@ function startDaemon(): void {
   }
 }
 
-function getDeviceName(): string {
-  const os = process.platform;
-  const hostname = require("os").hostname();
-  const platformName = os === "darwin" ? "macOS" : os === "win32" ? "Windows" : "Linux";
-  return `${platformName} - ${hostname}`;
-}
-
 // Shared post-authentication onboarding, run by BOTH the browser flow (runAuth)
 // and the setup-token flow (runLogin). Installs hooks + autostart unconditionally
 // (these must happen on every install), then runs the interactive setup wizard.
@@ -1635,7 +1687,7 @@ async function runAuth(): Promise<void> {
 
   const authServer = new AuthServer({ port: 42424, timeout: 300000 });
   const nonce = authServer.getNonce();
-  const deviceName = encodeURIComponent(getDeviceName());
+  const deviceName = encodeURIComponent(deviceLabel());
 
   // Bind the local callback listener FIRST, then build the URL from the port we
   // actually bound to. If 42424 was taken we move to the next port, and the
@@ -2911,7 +2963,7 @@ async function syncSingleSession(sessionId: string, projectRoot: string): Promis
     return false;
   }
 
-  const projectDir = projectRoot.replace(/\//g, "-");
+  const projectDir = claudeProjectDirName(projectRoot);
   const sessionsDir = path.join(process.env.HOME || "", ".claude", "projects", projectDir);
   const sessionFile = path.join(sessionsDir, `${sessionId}.jsonl`);
 
@@ -3166,6 +3218,45 @@ labelCmd
     console.log(`${c.green}ok${c.reset} removed label ${c.yellow}${result.label}${c.reset}${note}`);
   });
 
+program
+  .command("own")
+  .description(
+    "Assign a session's owner — the team member responsible for steering it\n\n" +
+    "The owner is distinct from whose account RUNS the session: an agent\n" +
+    "account (e.g. a bot on a shared machine) can park a session on a human\n" +
+    "reviewer, and the session then surfaces in the OWNER's inbox (web NEEDS\n" +
+    "INPUT + cast sessions/feed) marked with who runs it. The owner replies\n" +
+    "with cast send or the web composer to steer it.\n\n" +
+    "You can own any session you can see in the feed (your own, or one shared\n" +
+    "with a team you're in). Scripts should pass an exact email.\n\n" +
+    "Examples:\n" +
+    "  cast own jx7c6zk jason@example.com   # assign to a teammate\n" +
+    "  cast own jx7c6zk                     # claim it yourself\n" +
+    "  cast disown jx7c6zk                  # clear the owner"
+  )
+  .argument("<session_id>", "Session short ID (e.g. jx7c6zk), session UUID, or full ID")
+  .argument("[member]", "Team member email (exact) or name; defaults to you")
+  .action(async (sessionId: string, member: string | undefined) => {
+    const result = await cliPost("/cli/sessions/own", {
+      session_id: sessionId,
+      owner: member?.trim() || "me",
+    });
+    const ownerLabel = result.owner?.name || result.owner?.email || "you";
+    console.log(`${c.green}✓${c.reset} ${c.cyan}${result.short_id || sessionId}${c.reset} ${c.dim}owner →${c.reset} ${c.magenta}${ownerLabel}${c.reset}`);
+  });
+
+program
+  .command("disown")
+  .description("Clear a session's owner (see: cast own)")
+  .argument("<session_id>", "Session short ID (e.g. jx7c6zk), session UUID, or full ID")
+  .action(async (sessionId: string) => {
+    const result = await cliPost("/cli/sessions/own", {
+      session_id: sessionId,
+      owner: null,
+    });
+    console.log(`${c.green}✓${c.reset} ${c.cyan}${result.short_id || sessionId}${c.reset} ${c.dim}owner cleared${c.reset}`);
+  });
+
 const accountsCmd = program
   .command("accounts")
   .description(
@@ -3198,10 +3289,28 @@ accountsCmd
     }
   });
 
+// Best-effort direct push of the refreshed account inventory, so the web
+// Settings page reflects a CLI-side save/switch the moment the command
+// returns. The profile store lives in this process, not the daemon's, so
+// without this the change waits on the daemon's next heartbeat. Silent on
+// failure — the heartbeat republishes within ~30s regardless.
+async function publishAccountsInventory(): Promise<void> {
+  try {
+    const { siteUrl, apiToken } = getCliEndpoint();
+    const payload = getAccountsHeartbeatPayload();
+    if (!payload) return;
+    await cliFetch(`${siteUrl}/cli/accounts/publish`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: apiToken, device_id: deviceId(), cc_accounts: payload }),
+    });
+  } catch {}
+}
+
 accountsCmd
   .command("save <name>")
   .description("Snapshot the currently logged-in account as a profile")
-  .action((name: string) => {
+  .action(async (name: string) => {
     try {
       const meta = saveProfile(name);
       console.log(`${c.green}✓${c.reset} saved ${c.cyan}${name}${c.reset} (${meta.email ?? "unknown email"})`);
@@ -3209,6 +3318,7 @@ accountsCmd
       console.error(err instanceof CcAccountError ? err.message : String(err));
       process.exit(1);
     }
+    await publishAccountsInventory();
   });
 
 // A mass revive resumes one claude process per blocked session — past this
@@ -3259,6 +3369,7 @@ accountsCmd
       console.error(err instanceof CcAccountError ? err.message : String(err));
       process.exit(1);
     }
+    await publishAccountsInventory();
   });
 
 accountsCmd
@@ -3288,10 +3399,16 @@ accountsCmd
 program
   .command("start")
   .description("Start the background daemon to automatically watch and sync conversations")
-  .action(() => {
+  .option("--wait", "Block until the daemon is running and connected to Convex (exit 1 if not)")
+  .option("--timeout <seconds>", "How long --wait polls before giving up", "45")
+  .action(async (options: any) => {
+    const startedAt = Date.now();
     startDaemon();
     // Ensure autostart is configured so daemon restarts on reboot/crash
     ensureAutostart();
+    if (options.wait) {
+      await finishWithHealthWait(startedAt, Number.parseInt(options.timeout, 10) || 45);
+    }
   });
 
 program
@@ -3304,7 +3421,10 @@ program
 program
   .command("restart")
   .description("Restart the background daemon (update if available, then start)")
-  .action(async () => {
+  .option("--wait", "Block until the daemon is running and connected to Convex (exit 1 if not)")
+  .option("--timeout <seconds>", "How long --wait polls before giving up", "45")
+  .action(async (options: any) => {
+    const startedAt = Date.now();
     stopDaemon();
     const available = await checkForUpdates(true);
     if (available) {
@@ -3332,6 +3452,9 @@ program
     }
     startDaemon();
     ensureAutostart();
+    if (options.wait) {
+      await finishWithHealthWait(startedAt, Number.parseInt(options.timeout, 10) || 45);
+    }
   });
 
 program
@@ -3831,6 +3954,47 @@ program
       }
     }
     console.log("");
+  });
+
+program
+  .command("doctor")
+  .description(
+    "Verify codecast works end-to-end: daemon health, Convex connection, and a live\n" +
+    "sync round-trip (transcript → server → message delivery → tmux inject → echo back).\n" +
+    "The round-trip uses a throwaway stand-in agent — no Claude tokens, no browser —\n" +
+    "and cleans up after itself. Exit code 0 means the full loop is proven working."
+  )
+  .option("--no-e2e", "Only run the passive health checks, skip the live round-trip")
+  .option("--json", "Machine-readable report")
+  .option("--keep", "Keep the test tmux session, transcript, and server conversation for debugging")
+  .option("--project-dir <path>", "Scratch project dir for the test transcript (must be syncable)")
+  .action(async (options: any) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+    const report = await runDoctor(
+      {
+        config,
+        siteUrl: config.convex_url.replace(".cloud", ".site"),
+        apiToken: config.auth_token,
+        version: getVersion(),
+        configDir: CONFIG_DIR,
+        getDaemonPid,
+        getLaunchdStatus: getMacLaunchdDaemonStatus,
+        readDaemonState,
+        getStuckSyncs,
+      },
+      {
+        e2e: options.e2e !== false,
+        json: options.json === true,
+        keep: options.keep === true,
+        projectDir: options.projectDir,
+      },
+    );
+    if (options.json) console.log(JSON.stringify(report, null, 2));
+    process.exit(report.ok ? 0 : 1);
   });
 
 program
@@ -6148,7 +6312,7 @@ interface ReconstitutionContext {
 }
 
 function claudeSessionPath(sessionId: string, projectPath?: string | null): string {
-  const projectSlug = (projectPath || process.cwd()).replace(/\//g, "-");
+  const projectSlug = claudeProjectDirName(projectPath || process.cwd());
   const projectDir = path.join(os.homedir(), ".claude", "projects", projectSlug);
   return path.join(projectDir, `${sessionId}.jsonl`);
 }
@@ -6333,7 +6497,7 @@ function openInNewTab(cmd: string, cwd?: string | null): void {
 function launchClaude(sessionId: string, extraArgs?: string, showArgsHint?: boolean, projectPath?: string | null): void {
   let resumeId = sessionId;
   if (!CLAUDE_UUID_RE.test(sessionId)) {
-    const projectSlug = (projectPath || process.cwd()).replace(/\//g, "-");
+    const projectSlug = claudeProjectDirName(projectPath || process.cwd());
     const projectDir = path.join(os.homedir(), ".claude", "projects", projectSlug);
     const oldPath = path.join(projectDir, `${sessionId}.jsonl`);
     const rewrite = rewriteSubagentJsonlToUuid(sessionId, oldPath);
@@ -6752,6 +6916,19 @@ function installWatchdogScript(): void {
   fs.writeFileSync(WATCHDOG_SCRIPT_PATH, buildWatchdogShellScript({ isBinary, watchdogCommand }), { mode: 0o755 });
 }
 
+// The daemon LaunchAgent runs this script via /bin/sh instead of the binary
+// directly, so the login item's BTM identity survives binary self-updates
+// (see supervision.ts). Refreshed on every autostart pass, like the watchdog
+// script, so a moved binary path is picked up without touching the plist.
+function installDaemonLauncherScript(): void {
+  if (!fs.existsSync(CONFIG_DIR)) {
+    fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  }
+  const { executablePath, args } = getExecutableInfo();
+  const daemonCommand = [executablePath, ...args].map(shellEscapeForSh).join(" ");
+  fs.writeFileSync(DAEMON_LAUNCHER_SCRIPT_PATH, buildDaemonLauncherScript({ daemonCommand }), { mode: 0o755 });
+}
+
 // Bootstrap the watchdog LaunchAgent AND force its resident loop to start now. The
 // watchdog is a KeepAlive long-running loop (see supervision.ts), so RunAtLoad would
 // normally start it — but bootstrapping right before a sleep can leave it dormant
@@ -6790,13 +6967,10 @@ function setupMacOS(disable: boolean): void {
     fs.mkdirSync(launchAgentsDir, { recursive: true });
   }
 
-  // Daemon plist
+  // Daemon plist: /bin/sh launcher for a stable BTM identity (see supervision.ts)
   const { executablePath, args } = getExecutableInfo();
-  const programArgs = [executablePath, ...args]
-    .map((arg) => `    <string>${arg}</string>`)
-    .join("\n");
-
-  const plistContent = buildDaemonPlistXml({ programArgsXml: programArgs, configDir: CONFIG_DIR });
+  installDaemonLauncherScript();
+  const plistContent = buildDaemonPlistXml({ scriptPath: DAEMON_LAUNCHER_SCRIPT_PATH, configDir: CONFIG_DIR });
 
   spawnSync("launchctl", ["bootout", uid, plistPath], { stdio: "ignore" });
   fs.writeFileSync(plistPath, plistContent, { mode: 0o644 });
@@ -6897,15 +7071,21 @@ function ensureAutostart(): boolean {
           return content.includes("<string>bun</string>") || content.includes("<string>node</string>");
         } catch { return false; }
       };
+      const daemonNeedsUpgrade = (ppath: string): boolean => {
+        try {
+          return daemonPlistNeedsUpgrade(fs.readFileSync(ppath, "utf-8"));
+        } catch { return false; }
+      };
       const watchdogNeedsUpgrade = (ppath: string): boolean => {
         try {
           return watchdogPlistNeedsUpgrade(fs.readFileSync(ppath, "utf-8"));
         } catch { return false; }
       };
-      const daemonBroken = daemonExists && plistNeedsRepair(plistPath);
+      const daemonBroken = daemonExists && (plistNeedsRepair(plistPath) || daemonNeedsUpgrade(plistPath));
       const watchdogBroken = watchdogExists && (plistNeedsRepair(watchdogPlistPath) || watchdogNeedsUpgrade(watchdogPlistPath));
 
       installWatchdogScript();
+      installDaemonLauncherScript();
 
       if (daemonBroken) {
         spawnSync("launchctl", ["bootout", uid, plistPath], { stdio: "ignore" });
@@ -6924,9 +7104,7 @@ function ensureAutostart(): boolean {
       }
 
       if (!fs.existsSync(plistPath)) {
-        const { executablePath, args } = getExecutableInfo();
-        const programArgs = [executablePath, ...args].map((arg) => `    <string>${arg}</string>`).join("\n");
-        const plistContent = buildDaemonPlistXml({ programArgsXml: programArgs, configDir: CONFIG_DIR });
+        const plistContent = buildDaemonPlistXml({ scriptPath: DAEMON_LAUNCHER_SCRIPT_PATH, configDir: CONFIG_DIR });
         fs.writeFileSync(plistPath, plistContent, { mode: 0o644 });
         spawnSync("launchctl", ["bootstrap", uid, plistPath], { stdio: "ignore" });
       }
@@ -7311,7 +7489,7 @@ program
 
     if (!sessionId) {
       // Fallback: find most recently active session file
-      const projectDir = projectRoot.replace(/\//g, "-");
+      const projectDir = claudeProjectDirName(projectRoot);
       const sessionsDir = path.join(process.env.HOME || "", ".claude", "projects", projectDir);
 
       if (!fs.existsSync(sessionsDir)) {
@@ -8707,7 +8885,7 @@ program
       sessionId = findCurrentSessionFromProcess(projectRoot);
 
       if (!sessionId) {
-        const projectDir = projectRoot.replace(/\//g, "-");
+        const projectDir = claudeProjectDirName(projectRoot);
         const sessionsDir = path.join(process.env.HOME || "", ".claude", "projects", projectDir);
         if (fs.existsSync(sessionsDir)) {
           const now = Date.now();
@@ -9807,6 +9985,265 @@ const EVENT_SHORTHANDS: Record<string, { event_type: string; action?: string }> 
   push: { event_type: "push" },
 };
 
+// ── Anchors ──────────────────────────────────────────────────────────────────
+// A standing agent member: one per personal workspace, one per team. It owns a
+// long-lived, pinned session that never completes, is woken by events, and
+// delegates code work to ephemeral `cast spawn` hands.
+const anchor = program
+  .command("anchor")
+  .description("Manage your standing agent member (Anchor)")
+  .showHelpAfterError(true);
+
+anchor
+  .command("create")
+  .description("Provision the Anchor for your personal workspace or a team")
+  .option("--team [id]", "Make it the team's shared anchor (default: your active team)")
+  .option("--name <name>", "Display name (default: Anchor)")
+  .option("--avatar <url>", "Avatar image URL")
+  .option("--persona <skill>", "Persona skill name the anchor should adopt")
+  .option("-C, --dir <path>", "Project the anchor lives and works in (default: current)")
+  .option("--model <model>", "Model override (e.g. opus, sonnet)")
+  .option("--no-bootstrap", "Skip the 'I'm online' first message")
+  .option("--json", "Machine-readable output")
+  .action(async (options: any) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+
+    const dir = options.dir
+      ? path.resolve(options.dir.replace(/^~/, process.env.HOME || "~"))
+      : getRealCwd();
+
+    const scopeType = options.team ? "team" : "user";
+    const teamId = typeof options.team === "string" ? options.team : undefined;
+
+    const resp = await cliFetch(`${siteUrl}/cli/anchor/create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_token: config.auth_token,
+        scope_type: scopeType,
+        team_id: teamId,
+        name: options.name,
+        avatar_url: options.avatar,
+        persona: options.persona,
+        project_path: dir,
+        model: options.model,
+        bootstrap: options.bootstrap !== false,
+      }),
+    });
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+      console.error(`Anchor create failed: ${body.error || resp.statusText}`);
+      process.exit(1);
+    }
+    const result = (await resp.json()) as any;
+    if (options.json) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    const where = scopeType === "team" ? "team" : "your personal workspace";
+    if (result.already_existed) {
+      console.log(`${c.yellow}•${c.reset} ${where} already has an anchor ${c.cyan}${result.conversation_id ? String(result.conversation_id).slice(0, 7) : ""}${c.reset}`);
+    } else {
+      console.log(
+        `${c.green}✓${c.reset} anchor for ${c.bold}${where}${c.reset} provisioned ` +
+        `${c.dim}(${result.short_id})${c.reset} — coming online in ${c.dim}${dir.replace(process.env.HOME || "~", "~")}${c.reset}`,
+      );
+    }
+  });
+
+anchor
+  .command("ls")
+  .alias("list")
+  .description("List the anchors you can see")
+  .option("--json", "Machine-readable output")
+  .action(async (options: any) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const resp = await cliFetch(`${siteUrl}/cli/anchor/list`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: config.auth_token }),
+    });
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+      console.error(`Anchor list failed: ${body.error || resp.statusText}`);
+      process.exit(1);
+    }
+    const anchors = (await resp.json()) as any[];
+    if (options.json) {
+      console.log(JSON.stringify(anchors, null, 2));
+      return;
+    }
+    if (!anchors.length) {
+      console.log(`${c.dim}No anchors yet. Create one: cast anchor create${c.reset}`);
+      return;
+    }
+    for (const a of anchors) {
+      const scope = a.scope_type === "team" ? "team" : "personal";
+      const conv = a.conversation_id ? String(a.conversation_id).slice(0, 7) : "(no session)";
+      console.log(
+        `  ${c.cyan}${a.bot_name}${c.reset} ${c.dim}·${c.reset} ${scope} ${c.dim}·${c.reset} ${a.status} ${c.dim}· ${conv}${c.reset}`,
+      );
+    }
+  });
+
+anchor
+  .command("wake")
+  .description("Send a message to an anchor (auto-resumes it if dormant)")
+  .argument("<message>", "What to tell the anchor")
+  .option("--team [id]", "Target the team anchor (default: your personal anchor)")
+  .action(async (message: string, options: any) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const scopeType = options.team ? "team" : "user";
+    const teamId = typeof options.team === "string" ? options.team : undefined;
+
+    const resolveResp = await cliFetch(`${siteUrl}/cli/anchor/resolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: config.auth_token, scope_type: scopeType, team_id: teamId }),
+    });
+    const anchorRow = resolveResp.ok ? ((await resolveResp.json()) as any) : null;
+    if (!anchorRow?._id) {
+      console.error(`No ${scopeType === "team" ? "team" : "personal"} anchor found. Create one: cast anchor create${scopeType === "team" ? " --team" : ""}`);
+      process.exit(1);
+    }
+    const resp = await cliFetch(`${siteUrl}/cli/anchor/wake`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: config.auth_token, anchor_id: anchorRow._id, message }),
+    });
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+      console.error(`Anchor wake failed: ${body.error || resp.statusText}`);
+      process.exit(1);
+    }
+    console.log(`${c.green}✓${c.reset} woke ${c.cyan}${anchorRow.name}${c.reset}`);
+  });
+
+anchor
+  .command("rm")
+  .alias("decommission")
+  .description("Retire an anchor: stop it being persistent and drop its Slack mappings")
+  .option("--team [id]", "Target the team anchor (default: your personal anchor)")
+  .action(async (options: any) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const scopeType = options.team ? "team" : "user";
+    const teamId = typeof options.team === "string" ? options.team : undefined;
+    const resolveResp = await cliFetch(`${siteUrl}/cli/anchor/resolve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: config.auth_token, scope_type: scopeType, team_id: teamId }),
+    });
+    const anchorRow = resolveResp.ok ? ((await resolveResp.json()) as any) : null;
+    if (!anchorRow?._id) {
+      console.error(`No ${scopeType === "team" ? "team" : "personal"} anchor found.`);
+      process.exit(1);
+    }
+    const resp = await cliFetch(`${siteUrl}/cli/anchor/decommission`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: config.auth_token, anchor_id: anchorRow._id }),
+    });
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+      console.error(`Decommission failed: ${body.error || resp.statusText}`);
+      process.exit(1);
+    }
+    console.log(`${c.green}✓${c.reset} retired ${c.cyan}${anchorRow.name}${c.reset}`);
+  });
+
+anchor
+  .command("link-channel")
+  .description("Map a Slack channel to an anchor so @mentions there wake it")
+  .argument("<channel>", "Slack channel id (e.g. C0123ABCD)")
+  .option("--team [id]", "Link to the team anchor (default: your personal anchor)")
+  .option("--workspace <id>", "Slack workspace/team id")
+  .option("-C, --dir <path>", "Project cwd for work from this channel")
+  .action(async (channel: string, options: any) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const resp = await cliFetch(`${siteUrl}/cli/anchor/link-channel`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_token: config.auth_token,
+        channel,
+        team: !!options.team,
+        team_id: typeof options.team === "string" ? options.team : undefined,
+        workspace: options.workspace,
+        project_path: options.dir ? path.resolve(options.dir.replace(/^~/, process.env.HOME || "~")) : undefined,
+      }),
+    });
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }));
+      console.error(`Link failed: ${body.error || resp.statusText}`);
+      process.exit(1);
+    }
+    const result = (await resp.json()) as any;
+    if (!result.ok) {
+      console.error(`Link failed: ${result.error || "unknown"}`);
+      process.exit(1);
+    }
+    console.log(
+      `${c.green}✓${c.reset} ${channel} → your ${options.team ? "team" : "personal"} anchor` +
+      `${result.replaced ? ` ${c.dim}(replaced)${c.reset}` : ""}`,
+    );
+  });
+
+anchor
+  .command("say")
+  .description("Post a message to Slack as the anchor (used by the anchor itself)")
+  .requiredOption("--channel <id>", "Slack channel id")
+  .option("--thread <ts>", "Slack thread timestamp to reply in")
+  .argument("<text>", "Message text")
+  .action(async (text: string, options: any) => {
+    const config = readConfig();
+    if (!config?.auth_token || !config?.convex_url) {
+      console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+    const siteUrl = config.convex_url.replace(".cloud", ".site");
+    const resp = await cliFetch(`${siteUrl}/cli/anchor/say`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_token: config.auth_token,
+        channel: options.channel,
+        thread_ts: options.thread,
+        text,
+      }),
+    });
+    const result = resp.ok ? ((await resp.json()) as any) : { ok: false, error: `HTTP ${resp.status}` };
+    if (!result.ok) {
+      console.error(`Slack post failed: ${result.error || "unknown"}`);
+      process.exit(1);
+    }
+    console.log(`${c.green}✓${c.reset} posted to Slack`);
+  });
+
 const schedule = program
   .command("schedule")
   .alias("sched")
@@ -10031,6 +10468,7 @@ schedule
   .description("Mark a running task as completed (called by the agent)")
   .argument("<id>", "Task ID (full or last 8 chars)")
   .option("--summary <text>", "Summary of what was done")
+  .option("--needs-attention", "Flag the run for the user: it stays in the inbox instead of folding into the schedule's history")
   .action(async (id, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -10041,6 +10479,14 @@ schedule
     const taskId = await resolveTaskId(config, siteUrl, id);
     if (!taskId) return;
 
+    // Link this run's conversation back to the task. The daemon exports the run's
+    // session UUID when it spawns the agent; fall back to detecting our own
+    // session from the process tree (covers manual `cast schedule complete`).
+    const runSessionUuid =
+      process.env.CODECAST_RUN_SESSION_UUID ||
+      findCurrentSessionFromProcess(getRealCwd()) ||
+      undefined;
+
     try {
       const response = await cliFetch(`${siteUrl}/cli/tasks/complete`, {
         method: "POST",
@@ -10049,6 +10495,8 @@ schedule
           api_token: config.auth_token,
           task_id: taskId,
           summary: options.summary,
+          run_session_uuid: runSessionUuid,
+          ...(options.needsAttention ? { needs_attention: true } : {}),
         }),
       });
       const result = await response.json();
@@ -13872,7 +14320,8 @@ workflow
       }
     }
 
-    await runWorkflow(graph, runOpts);
+    const outcome = await runWorkflow(graph, runOpts);
+    if (outcome !== "completed") process.exitCode = 1;
   });
 
 workflow
@@ -13911,7 +14360,7 @@ workflow
       edges: wf.edges,
     };
     const projectPath = run.project_path || process.cwd();
-    await runWorkflow(graph as any, {
+    const outcome = await runWorkflow(graph as any, {
       runId,
       convexSiteUrl: siteUrl,
       apiToken: config.auth_token,
@@ -13920,6 +14369,7 @@ workflow
       taskId: run.task_short_id,
       planId: run.plan_short_id,
     });
+    if (outcome !== "completed") process.exitCode = 1;
   });
 
 workflow

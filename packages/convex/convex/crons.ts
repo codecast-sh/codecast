@@ -32,6 +32,21 @@ crons.interval(
 );
 
 crons.interval(
+  // pending_permissions was never pruned — resolved rows matter for ~5 min and
+  // the daemon cancels its own after ~1h, so drop the leftovers hourly to keep
+  // the table (and every reader's scan) small.
+  "prune resolved pending_permissions",
+  { hours: 1 },
+  internal.permissions.prunePendingPermissions
+);
+
+crons.interval(
+  "prune expired ip_rate_limits windows",
+  { hours: 1 },
+  internal.ipRateLimit.pruneIpRateLimits
+);
+
+crons.interval(
   "backfill docs and tasks from sessions",
   { hours: 6 },
   internal.taskMining.backfillAllTeams
@@ -79,6 +94,15 @@ crons.interval(
   "sweep stale api-error flags",
   { hours: 1 },
   internal.accountSwitch.sweepStaleApiErrorFlags,
+  {}
+);
+
+crons.interval(
+  // Slack dedup rows only need to outlive Slack's retry window (minutes); drop
+  // anything older than a day so the table can't grow unbounded.
+  "sweep slack dedup events",
+  { hours: 6 },
+  internal.slack.sweepSlackEvents,
   {}
 );
 

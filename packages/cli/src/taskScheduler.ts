@@ -21,6 +21,9 @@ interface RunningTask {
   startedAt: number;
   maxRuntimeMs: number;
   heartbeatTimer: ReturnType<typeof setInterval>;
+  // Claude session UUID assigned to this run via `--session-id`, so completion
+  // can link the run's conversation back to the task. Undefined for codex runs.
+  runSessionUuid?: string;
 }
 
 interface TaskSchedulerConfig {
@@ -146,7 +149,9 @@ export class TaskScheduler {
         // the agent's JSONL is parsed. The UI detects the <scheduled-task>
         // wrapper and renders it as a ScheduledTaskBlock, so we must not
         // also write a system-subtype row here -- that would double-render.
-        await this.syncService.sendMessageToSession(task.originating_conversation_id, wrappedPrompt);
+        // origin "scheduler": a machine wake must not clear the user's stash —
+        // a stashed session keeps running out of the active queue.
+        await this.syncService.sendMessageToSession(task.originating_conversation_id, wrappedPrompt, "scheduler");
         this.log(`Injected prompt into conversation ${task.originating_conversation_id.toString().slice(-8)} for task "${task.title}"`);
         await this.syncService.completeTaskRun(
           task._id,
@@ -183,6 +188,11 @@ export class TaskScheduler {
     // Build agent command args (will be passed to the script, which quotes them via "$(cat promptFile)")
     let extraAgentArgs: string[] = [];
     let agentBin: string;
+    // Assigned for claude runs so completion can link the run's conversation back
+    // to the task. `claude --session-id <uuid>` writes <uuid>.jsonl, which the
+    // daemon syncs into a conversation keyed by session_id=<uuid>. Left undefined
+    // for codex (different session scheme).
+    let runSessionUuid: string | undefined;
     if (agentType === "codex") {
       agentBin = "codex";
       const extraArgs = this.config.codex_args;
@@ -203,6 +213,11 @@ export class TaskScheduler {
           if (!skip.has(arg) && !extraAgentArgs.includes(arg)) extraAgentArgs.push(arg);
         }
       }
+      // Only auto-assign if the operator didn't pin one via claude_args.
+      if (!extraAgentArgs.includes("--session-id")) {
+        runSessionUuid = crypto.randomUUID();
+        extraAgentArgs.push("--session-id", runSessionUuid);
+      }
     }
 
     // Write a shell script so the target shell (inside tmux) handles all quoting/expansion,
@@ -217,6 +232,10 @@ export class TaskScheduler {
       "#!/bin/bash",
       "unset CLAUDECODE",
       "unset ANTHROPIC_API_KEY",
+      // Hand the run's session UUID to the agent so a self-report via
+      // `cast schedule complete` can link the run's conversation back to the task
+      // (the agent's own session_id IS this UUID, assigned via --session-id above).
+      ...(runSessionUuid ? [`export CODECAST_RUN_SESSION_UUID='${runSessionUuid}'`] : []),
       agentInvocation,
       `rm -f ${promptFile} ${scriptFile}`,
       "",
@@ -273,7 +292,32 @@ export class TaskScheduler {
       startedAt: Date.now(),
       maxRuntimeMs,
       heartbeatTimer,
+      runSessionUuid,
     });
+
+    // Link the run's conversation to the task as soon as it syncs (bounded
+    // retries — the first JSONL write usually lands within seconds). This makes
+    // the schedule strip/badge work DURING the run and folds the previous
+    // completed run of a repeating schedule out of the inbox. completeTaskRun
+    // backfills the link at run end if every attempt here loses the race.
+    if (runSessionUuid) this.scheduleRunLink(task._id, runSessionUuid);
+  }
+
+  // Bounded retry chain for linkRunConversation; standalone timers (not tied
+  // to the RunningTask entry) so a fast run that completes before the first
+  // attempt doesn't orphan the link — the mutation is idempotent either way.
+  private scheduleRunLink(taskId: string, runSessionUuid: string, attempt = 0): void {
+    const delaysMs = [10_000, 30_000, 90_000];
+    if (attempt >= delaysMs.length) return;
+    setTimeout(async () => {
+      try {
+        const result = await this.syncService.linkRunConversation(taskId, runSessionUuid);
+        if (result.linked || !result.retry) return;
+      } catch {
+        // fall through to retry
+      }
+      this.scheduleRunLink(taskId, runSessionUuid, attempt + 1);
+    }, delaysMs[attempt]);
   }
 
   private async checkTaskCompletion(taskId: string): Promise<void> {
@@ -285,7 +329,7 @@ export class TaskScheduler {
       await execAsync(`tmux has-session -t '${entry.tmuxSession}' 2>/dev/null`);
     } catch {
       this.log(`tmux session ${entry.tmuxSession} ended for task ${taskId}`);
-      await this.syncService.completeTaskRun(taskId, this.daemonId, "Agent session ended");
+      await this.syncService.completeTaskRun(taskId, this.daemonId, "Agent session ended", undefined, entry.runSessionUuid);
       this.cleanupTask(taskId);
       return;
     }
@@ -295,7 +339,7 @@ export class TaskScheduler {
     if (elapsed > entry.maxRuntimeMs) {
       this.log(`Task ${taskId} exceeded max runtime (${entry.maxRuntimeMs}ms), killing`);
       try { await execAsync(`tmux kill-session -t '${entry.tmuxSession}'`); } catch {}
-      await this.syncService.failTaskRun(taskId, this.daemonId, `Exceeded max runtime (${Math.round(entry.maxRuntimeMs / 60000)}min)`);
+      await this.syncService.failTaskRun(taskId, this.daemonId, `Exceeded max runtime (${Math.round(entry.maxRuntimeMs / 60000)}min)`, entry.runSessionUuid);
       this.cleanupTask(taskId);
       return;
     }
@@ -310,7 +354,7 @@ export class TaskScheduler {
       if (lastLine.endsWith("$") || lastLine.endsWith("%") || lastLine.endsWith("#")) {
         this.log(`Task ${taskId} returned to shell prompt, cleaning up`);
         try { await execAsync(`tmux kill-session -t '${entry.tmuxSession}'`); } catch {}
-        await this.syncService.completeTaskRun(taskId, this.daemonId, "Agent exited");
+        await this.syncService.completeTaskRun(taskId, this.daemonId, "Agent exited", undefined, entry.runSessionUuid);
         this.cleanupTask(taskId);
       }
     } catch {
@@ -365,6 +409,7 @@ export class TaskScheduler {
     } else {
       parts.push(`- When done, run: cast schedule complete ${task._id} --summary "brief description of what was done"`);
     }
+    parts.push(`- A clean completion folds this run out of the user's inbox (the summary carries the outcome). If you found something the user must read or act on, add --needs-attention to keep this run in their inbox.`);
     parts.push('- To schedule follow-up: cast schedule add "..." --in <time>');
     if (task.originating_conversation_id) {
       parts.push(`- Run \`cast read ${task.originating_conversation_id}\` for full original context`);

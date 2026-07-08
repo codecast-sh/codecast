@@ -52,6 +52,10 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
   const isReviewTarget = useInboxStore((s) => s.reviewMessageId === messageId);
   const activeBlock = useInboxStore((s) => (s.reviewMessageId === messageId ? s.reviewActiveBlock : -1));
   const editingId = useInboxStore((s) => s.reviewEditingId);
+  // Opt-in: the gutter "comment" handle (starting a NEW thread on a message) only
+  // shows when the user has turned comment tools on. Seeing/replying to existing
+  // comments doesn't depend on it.
+  const commentsEnabled = useInboxStore((s) => s.clientState.ui?.comments_enabled ?? false);
   const myComments = useInboxStore(
     useShallow((s) => (s.reviewComments[conversationId] ?? []).filter((c) => c.messageId === messageId)),
   );
@@ -369,7 +373,7 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
 
       {/* Mirror of the quote handle on the RIGHT gutter: open a teammate comment
           thread anchored to this whole message in the comment rail. */}
-      {hoverIndex !== null && editingId === null && (
+      {commentsEnabled && hoverIndex !== null && editingId === null && (
         <button
           type="button"
           data-cc-gutter

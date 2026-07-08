@@ -312,6 +312,75 @@ describe("classifyTmuxLiveState", () => {
   });
 });
 
+// Real capture from cc-claude-gkvbs98a3t3m (2026-07-06): six named teammates
+// split the daemon's default 80x24 window into 55x3 agent panes, squeezing the
+// lead pane to 24 columns. At that width the footer truncates mid-word — the
+// "esc to interrupt" busy marker is gone — and the teammate chip list renders
+// below the footer. Busy/idle can no longer be read from the footer, so the
+// chip list itself must carry the classification.
+const TEAMMATE_SPLIT_PANE = `✢ Crunching… (4m 52s)
+  ⎿  Tip: Use git
+     worktrees to run
+     multiple Claude
+     sessions in
+     parallel.
+
+────────────────────────
+❯
+────────────────────────
+  ⏵⏵ bypass         ·
+  Update available! R…
+
+  ⏺ main
+  ◯ navigator   Run… 15s
+  ◯ reviewer-1  Run… 14s
+  ◯ reviewer-2  Run… 12s
+  ◯ reviewer-3  Run… 11s
+  ◯ reviewer-4  Run…  9s
+                ↓ 1 more
+`;
+
+// The exact live region the daemon logged while conversation jx77h6jcsa0s was
+// frozen (2026-07-07 00:03Z, "Unrecognized live UI in cc-claude-y59tvn8a0bhr:0.0"):
+// the teammate split had shrunk the lead pane until its separators fell under
+// the 20-char detection threshold, so the no-separator 5-line fallback saw
+// nothing but the chip list. Pre-fix this classified "unknown" and every
+// delivery deferred — the thread froze for hours until the user killed it.
+const TEAMMATE_PANEL_ONLY_REGION = ` ◯ nav…
+ ◯ rev…
+ ◯ rev…
+ ◯ rev…
+        ↓ 2 more`;
+
+describe("teammate panel (in-process agents)", () => {
+  test("split-pane capture keeps the input box AND the chip list in the region", () => {
+    const region = extractTmuxLiveRegion(TEAMMATE_SPLIT_PANE);
+    expect(region).toContain("❯");
+    expect(region).toContain("◯ navigator");
+  });
+
+  test("lead pane with teammate chips classifies busy — never idle (truncated footer hides the busy marker, and an idle-paste's leading Escape would interrupt the lead's turn)", () => {
+    const region = extractTmuxLiveRegion(TEAMMATE_SPLIT_PANE);
+    expect(classifyTmuxLiveState(region)).toBe("busy");
+  });
+
+  test("the exact chips-only region that froze jx77h6jcsa0s classifies busy, not unknown", () => {
+    expect(classifyTmuxLiveState(TEAMMATE_PANEL_ONLY_REGION)).toBe("busy");
+  });
+
+  test("a single-teammate panel (⏺ main + one ◯ chip) also classifies busy", () => {
+    expect(classifyTmuxLiveState("  ⏺ main\n  ◯ navigator   Run… 15s")).toBe("busy");
+  });
+
+  test("one stray ◯ line without any panel signature stays unknown", () => {
+    expect(classifyTmuxLiveState("  ◯ some bullet in odd output")).toBe("unknown");
+  });
+
+  test("modal patterns still beat the chip list", () => {
+    expect(classifyTmuxLiveState("  ◯ navigator   Run… 15s\n  ◯ reviewer-1  Run… 14s\nWhat should Claude do instead?")).toBe("interrupted");
+  });
+});
+
 describe("end-to-end: the bug case", () => {
   test("the exact pane that bricked cc-resume-f61304a3 now classifies as idle", () => {
     // From `tmux capture-pane -p -J -t cc-resume-f61304a3:0.0 -S -15` taken

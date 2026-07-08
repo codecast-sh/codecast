@@ -9,6 +9,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
 import { CODECAST_IMPORT_NOTICE_PREFIX } from "./parser";
+import { claudeProjectDirName } from "./projectPathResolver.js";
 
 const uuidv4 = () => crypto.randomUUID();
 
@@ -23,6 +24,23 @@ export interface ExportedMessage {
   /** Synthetic context-only message (e.g. import truncation notice): emitted with
    * isMeta so Claude Code keeps it in context but no transcript/UI displays it. */
   isMeta?: boolean;
+  /** Server-side message classification (e.g. "workflow_event") — set on rows the
+   * server injects into a conversation, never on rows synced from a transcript. */
+  subtype?: string;
+}
+
+/**
+ * Server-injected meta messages, e.g. the workflow-run anchor whose content is
+ * internal JSON the web renders as a live card. They were never spoken by the
+ * agent, so a synthetic transcript must not include them: once baked in, the
+ * daemon syncs them back as ordinary assistant prose and the conversation shows
+ * raw `{"__wf":...}` JSON. The content-prefix check covers export payloads that
+ * predate the `subtype` field.
+ */
+export function isServerMetaMessage(m: ExportedMessage): boolean {
+  if (m.subtype === "workflow_event") return true;
+  return m.role === "assistant" && !!m.content?.startsWith('{"__wf"')
+    && !m.tool_calls?.length && !m.tool_results?.length;
 }
 
 export interface ExportedConversation {
@@ -559,6 +577,7 @@ export function generateClaudeCodeJsonl(
   }
 
   for (const msg of messages) {
+    if (isServerMetaMessage(msg)) continue;
     const uuid = msg.message_uuid || uuidv4();
 
     if (msg.role === "user") {
@@ -665,7 +684,7 @@ export function generateClaudeCodeJsonl(
 }
 
 export function writeClaudeCodeSession(jsonl: string, sessionId: string, projectPath?: string): { sessionId: string; filePath: string } {
-  const projectSlug = (projectPath || process.cwd()).replace(/\//g, "-");
+  const projectSlug = claudeProjectDirName(projectPath || process.cwd());
   const projectDir = path.join(process.env.HOME!, ".claude", "projects", projectSlug);
   fs.mkdirSync(projectDir, { recursive: true });
   const filePath = path.join(projectDir, `${sessionId}.jsonl`);
@@ -721,6 +740,7 @@ export function generateCodexJsonl(
   }));
 
   for (const msg of data.messages) {
+    if (isServerMetaMessage(msg)) continue;
     const ts = msg.timestamp;
 
     if (msg.role === "user") {
