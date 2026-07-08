@@ -83,7 +83,7 @@ import {
   removeForkArtifactJsonl,
   rewriteSubagentJsonlToUuid,
 } from "./resumeCommand.js";
-import { resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath, claudeProjectDirName } from "./projectPathResolver.js";
+import { resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
 import type { AgentStatus, DeviceSnippetSettings } from "@codecast/shared/contracts";
 import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG } from "@codecast/shared/contracts";
 import { parseModelPicker, planModelNavigation, SESSION_ONLY_COMMIT_RE, isSwitchConfirmDialog } from "./modelPicker";
@@ -479,6 +479,9 @@ interface DaemonState {
   connected?: boolean;
   lastSyncTime?: number;
   pendingQueueSize?: number;
+  pendingSyncMessages?: number;
+  pendingSyncConversations?: number;
+  pendingSyncOldestMs?: number;
   timestamp?: number;
   authExpired?: boolean;
   authFailureCount?: number;
@@ -1339,11 +1342,18 @@ function computeLocalProjectRoots(): string[] {
 // "sync stalled" warning while the daemon is still alive (fresh heartbeat but
 // data isn't flowing). Reads the live retry queue, not the persisted state
 // snapshot (which only refreshes inside the retry executor).
-function syncHealthFields(): { pending_sync_count: number; oldest_pending_ms: number } {
+function syncHealthFields(): {
+  pending_sync_count: number;
+  oldest_pending_ms: number;
+  pending_sync_messages: number;
+  pending_sync_conversations: number;
+} {
   const health = retryQueueRef?.getHealth();
   return {
     pending_sync_count: health?.pending ?? 0,
     oldest_pending_ms: health?.oldestPendingMs ?? 0,
+    pending_sync_messages: health?.messages ?? 0,
+    pending_sync_conversations: health?.conversations ?? 0,
   };
 }
 
@@ -3921,28 +3931,20 @@ async function syncMessagesBatch(
       return { authExpired: false, conversationNotFound: true };
     }
 
-    log(`Batch sync failed (${messages.length} msgs), retrying batch once: ${errMsg}`);
-    try {
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      await syncService.addMessages({
-        conversationId,
-        messages: prepared,
-      });
-      resetAuthFailureCount();
-      log(`Batch retry succeeded for ${messages.length} messages`);
-      return { authExpired: false, conversationNotFound: false };
-    } catch (retryErr) {
-      const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
-      if (isStaleConversationError(retryErrMsg)) {
-        return { authExpired: false, conversationNotFound: true };
-      }
-      log(`Batch retry also failed, queueing as batch: ${retryErrMsg}`);
-      retryQueue.add("addMessages", {
-        conversationId,
-        messages: prepared,
-      }, retryErrMsg);
-      return { authExpired: false, conversationNotFound: false };
-    }
+    // Hand the failed batch straight to the retry queue instead of burning a
+    // second full inline attempt here. The old inline retry slept 2s then ran
+    // another addMessages that could itself hit the 28s timeout — ~58s total
+    // holding this file's per-file InvalidateSync slot before the op even
+    // reached the queue, during which `cast status` and the live path saw
+    // nothing. The retry queue now drains fast (collapse-on-recovery), so it's
+    // the right owner of retries; a transient single blip just lands on the
+    // queue's short initial backoff (~seconds) instead of a sub-minute freeze.
+    log(`Batch sync failed (${messages.length} msgs), queueing for retry: ${errMsg}`);
+    retryQueue.add("addMessages", {
+      conversationId,
+      messages: prepared,
+    }, errMsg);
+    return { authExpired: false, conversationNotFound: false };
   }
 }
 
@@ -13515,14 +13517,25 @@ async function main(): Promise<void> {
     persistPath: `${CONFIG_DIR}/retry-queue.json`,
     droppedPath: `${CONFIG_DIR}/dropped-operations.json`,
     onLog: (message, level) => log(message, level || "info"),
+    // Refresh the persisted health snapshot as the queue accumulates, so `cast
+    // status` reflects backlog while it piles up — not only after the first
+    // drain. updateState is declared just below; onEnqueue only fires from
+    // add(), which runs well after setup, so the forward reference is safe.
+    onEnqueue: () => updateState(),
   });
 
   retryQueueRef = retryQueue;
 
   const updateState = () => {
+    const health = retryQueue.getHealth();
     saveDaemonState({
       lastSyncTime: Date.now(),
-      pendingQueueSize: retryQueue.getLogicalQueueSize(),
+      pendingQueueSize: health.pending,
+      // Honest backlog summary for `cast status` so "synced" stops lying while
+      // messages sit in the retry queue. One cheap pass over the queued ops.
+      pendingSyncMessages: health.messages,
+      pendingSyncConversations: health.conversations,
+      pendingSyncOldestMs: health.oldestPendingMs,
     });
   };
 
@@ -13673,6 +13686,11 @@ async function main(): Promise<void> {
 
   const watcher = new SessionWatcher();
   const fileSyncs = new Map<string, InvalidateSync>();
+  // One canonical transcript per session UUID. `claude --resume` copies the
+  // prior transcript into the new cwd's project dir, so the same UUID can be
+  // watched under two slugs and sync the SAME conversation twice. We pick the
+  // copy that lives in a real local checkout and skip the stale resume artifact.
+  const canonicalTranscripts = new Map<string, TranscriptCandidate>();
 
   watcher.on("ready", () => {
     log("Session watcher ready (depth=2)");
@@ -13713,6 +13731,28 @@ async function main(): Promise<void> {
       void processWorkflowSnapshot(filePath, event.sessionId, event.workflowRunId, projectPath);
       return;
     }
+
+    // Dedup duplicate-UUID transcripts: skip a resume-copy artifact whose
+    // resolved project dir doesn't exist locally when another already-watched
+    // copy lives in a real checkout. Server dedups by message_uuid, so this only
+    // trims redundant writes; it never drops the copy in a real local checkout.
+    let projectExists = false;
+    try { projectExists = fs.existsSync(projectPath) && fs.statSync(projectPath).isDirectory(); } catch {}
+    const incoming: TranscriptCandidate = { filePath, projectPath, projectExists };
+    const choice = chooseSessionTranscript(incoming, canonicalTranscripts.get(event.sessionId));
+    if (choice.action === "skip") {
+      const existing = fileSyncs.get(filePath);
+      if (existing) { existing.stop(); fileSyncs.delete(filePath); }
+      log(`Skipping duplicate transcript for session ${event.sessionId.slice(0, 8)}: ${choice.reason}`);
+      return;
+    }
+    // Incoming wins. If it supersedes a stale prior copy (the artifact registered
+    // first because it changed first), stop that copy's sync too.
+    if (choice.supersededFilePath) {
+      const stale = fileSyncs.get(choice.supersededFilePath);
+      if (stale) { stale.stop(); fileSyncs.delete(choice.supersededFilePath); }
+    }
+    canonicalTranscripts.set(event.sessionId, incoming);
 
     let sync = fileSyncs.get(filePath);
     if (!sync) {

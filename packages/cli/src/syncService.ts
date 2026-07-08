@@ -19,7 +19,17 @@ const IMAGE_UPLOAD_CONCURRENCY = 6;
 
 const MIN_REQUEST_INTERVAL_MS = 100;
 
-const ADD_MESSAGES_BATCH_TIMEOUT_MS = 60_000;
+// A batch is byte-bounded at MAX_BATCH_BYTES (~0.9MB), so a healthy backend
+// commits one in low single-digit seconds — the only reason a ~0.9MB mutation
+// sits past ~25-30s is a SATURATED backend, where waiting the rest of the way to
+// 60s won't help it commit; it just holds the per-conversation write-chain
+// (withConversationLock) hostage for a full minute, freezing that conversation's
+// web view. Fail over at 28s so a saturated mutation releases the chain ~2x
+// faster and the op re-queues for the recovery-drain path. This is comfortably
+// above the healthy commit time, so it never times out a legitimately-large
+// batch that would have landed — those are already split by MAX_BATCH_BYTES.
+// Image uploads keep their own (separate) UPLOAD_IMAGE_TIMEOUT_MS budget.
+const ADD_MESSAGES_BATCH_TIMEOUT_MS = 28_000;
 const ADD_MESSAGES_BATCH_SIZE = 25;
 // uploadImage runs *before* the timed addMessages batch, so an un-timed upload
 // hang (slow network / contended backend) wedges the whole chunk: the file-watcher

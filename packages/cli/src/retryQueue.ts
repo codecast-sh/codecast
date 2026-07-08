@@ -46,6 +46,12 @@ export interface RetryQueueConfig {
   /** Debounce window (ms) before coalesced mutations are written to disk. */
   persistDebounceMs?: number;
   onLog?: (message: string, level?: LogLevel) => void;
+  // Fired when the queue grows (an op is enqueued). Lets the daemon refresh its
+  // persisted health snapshot as backlog ACCUMULATES, not only when it drains —
+  // otherwise `cast status` reads a success-only snapshot and prints "Queue:
+  // empty" while messages pile into the queue. The drain side already refreshes
+  // via the executor, so this hook only needs to cover enqueue.
+  onEnqueue?: () => void;
 }
 
 const DEFAULT_INITIAL_DELAY = 1000;
@@ -98,6 +104,7 @@ export class RetryQueue {
   private persistTimer: ReturnType<typeof setTimeout> | null = null;
   private exitFlushRegistered = false;
   private log: (message: string, level?: LogLevel) => void;
+  private onEnqueue: () => void;
   private processing = false;
   private rateLimitedUntil = 0;
   private activeKeys = new Set<string>();
@@ -113,6 +120,7 @@ export class RetryQueue {
     this.droppedPath = config.droppedPath ?? null;
     this.persistDebounceMs = config.persistDebounceMs ?? DEFAULT_PERSIST_DEBOUNCE;
     this.log = config.onLog ?? (() => {});
+    this.onEnqueue = config.onEnqueue ?? (() => {});
     this.load();
   }
 
@@ -507,6 +515,9 @@ export class RetryQueue {
     this.schedulePersist();
     this.log(`Queued ${type} for retry${rateLimitDelay ? ` (rate limited, ${delay}ms)` : ''} (id: ${id})`);
     this.scheduleNextCheck();
+    // Refresh the daemon's health snapshot as backlog accumulates so `cast
+    // status` reflects the queue immediately, not only after the first drain.
+    this.onEnqueue();
     return id;
   }
 
@@ -615,6 +626,7 @@ export class RetryQueue {
         if (success) {
           this.queue.delete(op.id);
           this.log(`Retry succeeded for ${op.type} (id: ${op.id})`);
+          this.collapseBackoffOnRecovery(this.conversationKey(op));
         } else {
           this.handleFailure(op, "Operation returned false");
         }
@@ -642,6 +654,55 @@ export class RetryQueue {
     }
     this.processing = false;
     this.scheduleNextCheck();
+  }
+
+  // A successful drain is live proof the backend is reachable. The exponential
+  // backoff (and the 5-min network cap) only exists to avoid hammering a DOWN
+  // backend — once one op commits, every remaining op that is still parked on a
+  // stale backoff delay should retry immediately instead of waiting out minutes
+  // of accumulated delay. Without this, a conversation that hit a few 60s
+  // timeouts stays frozen on the web for minutes after the backend recovers,
+  // while its new messages pile up behind it.
+  //
+  // Scope is global, not just same-conversation: one commit proves the whole
+  // backend is up, so collapsing every conversation's backoff turns a fleet-wide
+  // stall into a fleet-wide recovery in seconds. This only changes WHEN ops run,
+  // never their order — per-conversation serialization (activeKeys) still runs
+  // same-conversation ops strictly one at a time, and an in-flight op (whose key
+  // is active) keeps its successors parked until it settles, so ordering and the
+  // "never two ops for one conversation at once" guarantee are untouched.
+  private collapseBackoffOnRecovery(succeededKey: string): void {
+    const now = Date.now();
+    // Don't pull retries earlier than a global rate-limit window; the backend is
+    // up but explicitly throttling us, so honor the cool-off it asked for.
+    const floor = this.rateLimitedUntil > now ? this.rateLimitedUntil : now;
+    let collapsed = 0;
+    for (const op of this.queue.values()) {
+      // Skip ops that are currently in flight: their attempt is already running,
+      // and an in-flight op for a serialized conversation will reschedule itself
+      // when it settles. Touching its fields here is a no-op at best and races
+      // the executor at worst.
+      if (this.activeOpIds.has(op.id)) continue;
+      if (op.nextRetryAt > floor) {
+        // The collapse benefit is ENTIRELY in pulling nextRetryAt to ~now so the
+        // op drains immediately instead of waiting out a stale multi-minute
+        // backoff. We deliberately do NOT zero `attempts`: the true attempt count
+        // must be preserved so a persistently-failing non-network op still reaches
+        // maxAttempts and gets dropped (zeroing it pardoned such ops forever across
+        // repeated recovery events). Clear only the rate-limit hold, since the
+        // backend just proved it isn't throttling us.
+        op.nextRetryAt = floor;
+        op.rateLimitDelayMs = undefined;
+        collapsed++;
+      }
+    }
+    if (collapsed > 0) {
+      this.log(
+        `Backend recovered (drained ${succeededKey}); collapsed backoff on ${collapsed} queued op(s) for immediate retry`
+      );
+      this.schedulePersist();
+      this.scheduleNextCheck();
+    }
   }
 
   private isNetworkError(error: string): boolean {
@@ -783,17 +844,51 @@ export class RetryQueue {
     return count + pendingAddMessagesConversations.size;
   }
 
-  // Live sync-backlog snapshot for the heartbeat. `oldestPendingMs` is the age
-  // of the longest-waiting queued op, which lets the web distinguish a real
-  // stall (op stuck for minutes) from a transient retry that self-heals.
-  getHealth(): { pending: number; oldestPendingMs: number } {
+  // Live sync-backlog snapshot for `cast status` and the heartbeat. The point is
+  // to make "synced" stop lying while data sits in the queue, so it reports what
+  // a human needs to gauge how far behind we are:
+  //   - ops:           queued retry operations (raw work units)
+  //   - pending:       logical size (per-conversation for addMessages) — kept for
+  //                    back-compat with the existing heartbeat field
+  //   - messages:      total messages waiting across all addMessages ops
+  //   - conversations: distinct conversations with any queued work
+  //   - oldestPendingMs: age of the longest-waiting op = how far behind we are
+  // One pass over the queued ops (not the messages on disk), so it stays cheap
+  // enough to call on every heartbeat across 100+ sessions.
+  getHealth(): {
+    ops: number;
+    pending: number;
+    messages: number;
+    conversations: number;
+    oldestPendingMs: number;
+  } {
     const now = Date.now();
     let oldestPendingMs = 0;
+    let messages = 0;
+    const conversations = new Set<string>();
+    const addMessagesConversations = new Set<string>();
+    let nonAddMessagesOps = 0;
     for (const op of this.queue.values()) {
       const age = now - op.createdAt;
       if (age > oldestPendingMs) oldestPendingMs = age;
+      const convId = typeof op.params.conversationId === "string" ? op.params.conversationId : null;
+      if (convId) conversations.add(convId);
+      if (op.type === "addMessages" && Array.isArray(op.params.messages)) {
+        messages += op.params.messages.length;
+        if (convId) addMessagesConversations.add(convId);
+        else nonAddMessagesOps++;
+      } else {
+        nonAddMessagesOps++;
+      }
     }
-    return { pending: this.getLogicalQueueSize(), oldestPendingMs };
+    return {
+      ops: this.queue.size,
+      // Logical size mirrors getLogicalQueueSize without a second pass.
+      pending: addMessagesConversations.size + nonAddMessagesOps,
+      messages,
+      conversations: conversations.size,
+      oldestPendingMs,
+    };
   }
 
   getPendingOperations(): RetryOperation[] {
