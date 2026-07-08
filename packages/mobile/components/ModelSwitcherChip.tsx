@@ -7,7 +7,7 @@ import { AGENT_MODEL_CONFIG, modelAgentKey, type ModelOption } from '@codecast/s
 import { useInboxStore, isConvexId } from '@codecast/web/store/inboxStore';
 import { commitModelChange, modelOptionKey, effortGlyph } from '@codecast/web/lib/modelSwitch';
 import { useModelCommandWatch } from '@codecast/web/hooks/useModelCommandWatch';
-import { Theme } from '../constants/Theme';
+import { Theme, chipShell, chipText, chipTint, CHROME_FONT_CAP } from '../constants/Theme';
 
 // Session-header model/effort chip + bottom-sheet switcher — the mobile
 // counterpart of the web's HeaderModelControl / LaunchModelPill. Same two
@@ -55,7 +55,7 @@ export function ModelSwitcherChip({
   const chip = (
     <View style={[styles.chip, busy && { opacity: 0.5 }]}>
       <Feather name="cpu" size={10} color={Theme.cyan} />
-      <Text style={styles.chipText} numberOfLines={1}>{label}</Text>
+      <Text style={styles.chipText} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>{label}</Text>
       {!!glyph && <Text style={styles.chipGlyph}>{glyph}</Text>}
       {interactive && <Feather name="chevron-down" size={9} color={Theme.cyan} style={{ opacity: 0.7 }} />}
     </View>
@@ -140,22 +140,13 @@ export function ModelSwitcherChip({
 }
 
 const styles = StyleSheet.create({
-  // Matches the session header's shared metaChip shell, cyan-tinted.
+  // The session header's shared chip shell, cyan-tinted.
   chip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 6,
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    maxWidth: 160,
-    borderColor: Theme.cyan + '40',
-    backgroundColor: Theme.cyan + '14',
+    ...chipShell,
+    ...chipTint(Theme.cyan),
   },
   chipText: {
-    fontSize: 11,
-    fontWeight: '600',
+    ...chipText,
     color: Theme.cyan,
   },
   chipGlyph: {
