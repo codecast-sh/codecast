@@ -1,7 +1,7 @@
 import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, TextInput, View as RNView, Text as RNText, Modal, Alert, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator, Image, ActionSheetIOS } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { api } from '@codecast/convex/convex/_generated/api';
-import { useState, useCallback, useRef, useMemo, useEffect } from 'react';
+import { Component, type ReactNode, useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import { useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing } from '@/constants/Theme';
@@ -326,6 +326,63 @@ function SearchResultItem({ result, onPress }: { result: SearchResult; onPress: 
   );
 }
 
+// A thrown Convex query error (e.g. searchConversations timing out on a
+// multi-word query) must cost the user the RESULTS LIST, not the whole inbox —
+// web survives this, so the phone must too. The boundary re-arms whenever the
+// query changes so the next keystroke retries cleanly.
+class SearchErrorBoundary extends Component<{ resetKey: string; children: ReactNode }, { error: Error | null }> {
+  state = { error: null as Error | null };
+  static getDerivedStateFromError(error: Error) { return { error }; }
+  componentDidUpdate(prev: { resetKey: string }) {
+    if (prev.resetKey !== this.props.resetKey && this.state.error) this.setState({ error: null });
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <RNView style={styles.emptyInbox}>
+          <FontAwesome name="exclamation-triangle" size={22} color={Theme.textMuted0} />
+          <RNText style={styles.emptyText}>Search failed</RNText>
+          <RNText style={styles.emptySubtext}>Try a shorter or simpler query</RNText>
+        </RNView>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+// Owns the search subscription so a server error surfaces inside the boundary
+// above instead of unmounting InboxScreen.
+function SearchResultsList({ query, userOnly, onOpen }: { query: string; userOnly: boolean; onOpen: (conversationId: string) => void }) {
+  const searchResults = useQuery(api.conversations.searchConversations, { query, limit: 30, userOnly });
+  const searchResultsList = useMemo(() => {
+    if (!searchResults) return [];
+    return 'results' in searchResults ? searchResults.results : (searchResults as SearchResult[]);
+  }, [searchResults]);
+  return (
+    <FlatList
+      data={searchResultsList}
+      renderItem={({ item }) => (
+        <SearchResultItem result={item} onPress={() => onOpen(item.conversationId)} />
+      )}
+      keyExtractor={(item) => item.conversationId}
+      contentContainerStyle={searchResultsList.length === 0 ? styles.emptyList : styles.listContent}
+      ListEmptyComponent={
+        searchResults === undefined ? (
+          <RNView style={styles.emptyInbox}>
+            <ActivityIndicator size="small" color={Theme.textMuted} />
+          </RNView>
+        ) : (
+          <RNView style={styles.emptyInbox}>
+            <RNText style={styles.emptyText}>No results for "{query}"</RNText>
+          </RNView>
+        )
+      }
+      showsVerticalScrollIndicator={false}
+      keyboardShouldPersistTaps="handled"
+    />
+  );
+}
+
 export default function InboxScreen() {
   const [showNewSession, setShowNewSession] = useState(false);
   const [showStashed, setShowStashed] = useState(false);
@@ -413,11 +470,6 @@ export default function InboxScreen() {
     if (!activeProjectFilter && !activeBucketFilter) return items;
     return items.filter(chipMatches);
   }, [activeProjectFilter, activeBucketFilter, chipMatches]);
-
-  const searchResults = useQuery(
-    api.conversations.searchConversations,
-    isSearching ? { query: debouncedQuery, limit: 30, userOnly } : "skip"
-  );
 
   const handleSearchChange = useCallback((text: string) => {
     setSearchQuery(text);
@@ -703,11 +755,6 @@ export default function InboxScreen() {
     </RNView>
   ), [showStashed, showKilled, filteredStashed, filteredKilled, router, handleRestore, confirmKill, confirmKillAllStashed]);
 
-  const searchResultsList = useMemo(() => {
-    if (!searchResults) return [];
-    return 'results' in searchResults ? searchResults.results : (searchResults as SearchResult[]);
-  }, [searchResults]);
-
   // View switcher — same options, names, and availability rules as web's
   // GlobalSessionPanel dropdown: label view appears once a label exists, plan
   // view once any session carries a plan. The choice writes the shared
@@ -835,30 +882,13 @@ export default function InboxScreen() {
       )}
 
       {isSearching ? (
-        <FlatList
-          data={searchResultsList}
-          renderItem={({ item }) => (
-            <SearchResultItem
-              result={item}
-              onPress={() => router.push(`/session/${item.conversationId}`)}
-            />
-          )}
-          keyExtractor={(item) => item.conversationId}
-          contentContainerStyle={searchResultsList.length === 0 ? styles.emptyList : styles.listContent}
-          ListEmptyComponent={
-            searchResults === undefined ? (
-              <RNView style={styles.emptyInbox}>
-                <ActivityIndicator size="small" color={Theme.textMuted} />
-              </RNView>
-            ) : (
-              <RNView style={styles.emptyInbox}>
-                <RNText style={styles.emptyText}>No results for "{debouncedQuery}"</RNText>
-              </RNView>
-            )
-          }
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-        />
+        <SearchErrorBoundary resetKey={`${debouncedQuery}|${userOnly}`}>
+          <SearchResultsList
+            query={debouncedQuery}
+            userOnly={userOnly}
+            onOpen={(conversationId) => router.push(`/session/${conversationId}`)}
+          />
+        </SearchErrorBoundary>
       ) : (
         <ScrollView
           refreshControl={
