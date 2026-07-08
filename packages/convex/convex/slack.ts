@@ -3,7 +3,7 @@ import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { getAuthenticatedUserId } from "./pendingMessages";
-import { deliverToAnchor, userCanAccessAnchor, visibleAnchorsForUser } from "./anchors";
+import { deliverToAnchor, userCanAccessAnchor, userCanAdminAnchor, visibleAnchorsForUser } from "./anchors";
 
 // The Slack adapter. Workspaces connect via the "Add to Slack" OAuth flow, which
 // stores a per-workspace bot token in `slack_installations` (replacing the single
@@ -79,8 +79,9 @@ export async function verifyState(state: string): Promise<Record<string, any> | 
   try {
     const payload = JSON.parse(atob(body));
     // Require a fresh timestamp — a state with no (or non-numeric) ts would never
-    // expire, defeating the replay window.
-    if (typeof payload.ts !== "number" || Date.now() - payload.ts > 15 * 60 * 1000) return null;
+    // expire, defeating the replay window. 5 min is ample for a real install and
+    // keeps the leaked-state window (a defense-in-depth concern) small.
+    if (typeof payload.ts !== "number" || Date.now() - payload.ts > 5 * 60 * 1000) return null;
     return payload;
   } catch {
     return null;
@@ -177,6 +178,10 @@ export const resolveInstallScope = internalQuery({
     if (!userId) return null;
     const anchor = await callerAnchor(ctx, userId, args.scope_type, args.team_id);
     if (!anchor) return null;
+    // Connecting the Slack workspace an anchor speaks through is a config action
+    // (like retire/rename) — gate it on admin, not mere team membership, so a
+    // plain member can't repoint a team anchor's Slack.
+    if (!(await userCanAdminAnchor(ctx, userId, anchor))) return null;
     return {
       user_id: userId.toString(),
       anchor_id: anchor._id.toString(),
@@ -317,6 +322,24 @@ export const storeInstallation = internalMutation({
       if (!sameScope) return { ok: false as const, error: "workspace_taken" };
       await ctx.db.patch(existing._id, fields);
       return { ok: true as const, id: existing._id };
+    }
+    // One install per scope: if the scope already connected a DIFFERENT workspace,
+    // supersede it (delete the old row) so installationForAnchor's .first() is
+    // deterministic and duplicates can't stack. Connect is admin-gated, so this is
+    // a deliberate "move the anchor's Slack to a new workspace", not a hijack.
+    const priorForScope = teamId
+      ? await ctx.db
+          .query("slack_installations")
+          .withIndex("by_team", (q: any) => q.eq("team_id", teamId))
+          .collect()
+      : scopeUserId
+        ? await ctx.db
+            .query("slack_installations")
+            .withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", scopeUserId))
+            .collect()
+        : [];
+    for (const p of priorForScope) {
+      if (p.workspace_id !== args.workspace_id) await ctx.db.delete(p._id);
     }
     const id = await ctx.db.insert("slack_installations", {
       ...fields,
