@@ -4,6 +4,7 @@ import { internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { isConversationTeamVisible } from "./privacy";
+import { isAgentSpawnedConversation } from "./ccAccountsShared";
 
 export const sendPushNotification = internalAction({
   args: {
@@ -51,10 +52,13 @@ export const notifyTeamSessionStart = internalMutation({
       return;
     }
 
-    if (conversation.is_subagent || conversation.is_workflow_sub || (conversation.parent_conversation_id && !conversation.parent_message_uuid)) {
+    // Never notify about agent-spawned sessions — only human-initiated ones.
+    if (isAgentSpawnedConversation(conversation)) {
       return;
     }
 
+    // Fire time = registration + a 60s grace delay (see createConversation),
+    // so of this budget ~4min covers registration lag.
     const STALE_MS = 5 * 60 * 1000;
     if (conversation.started_at && Date.now() - conversation.started_at > STALE_MS) {
       return;
