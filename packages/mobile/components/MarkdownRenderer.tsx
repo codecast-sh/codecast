@@ -13,6 +13,7 @@ import { copyToClipboard } from '@/lib/clipboard';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { useRouter } from 'expo-router';
 import { Theme } from '@/constants/Theme';
+import { CastCanvas, canvasAvailable } from './CastCanvas';
 
 const SYNTAX_PATTERNS: Array<{ regex: RegExp; color: string }> = [
   { regex: /\/\/.*$/gm, color: '#586e75' },
@@ -396,7 +397,8 @@ export function MarkdownContent({ text, baseStyle, isUser = false }: { text: str
     else if (prefix === 'pl') router.push(`/plan/${id}`);
     else if (prefix === 'doc') router.push(`/doc/${id}`);
   }, [router]);
-  const codeBlockRegex = /```(\w+)?\n([\s\S]*?)```/g;
+  // Language may be hyphenated (cast-canvas, objective-c).
+  const codeBlockRegex = /```([\w-]+)?\n([\s\S]*?)```/g;
   const blocks: Array<{ type: 'text' | 'code'; content: string; language?: string }> = [];
   let lastIndex = 0;
   let match;
@@ -421,6 +423,13 @@ export function MarkdownContent({ text, baseStyle, isUser = false }: { text: str
     <RNView>
       {blocks.map((block, idx) => {
         if (block.type === 'code') {
+          // Keep the fence name in sync with web's HtmlSnippet.CANVAS_FENCE
+          // ("cast-canvas") — importing the web module would drag DOM-only code
+          // into the Hermes bundle. Binaries without the WebView native module
+          // fall through to the plain code block.
+          if (block.language === 'cast-canvas' && canvasAvailable) {
+            return <CastCanvas key={idx} code={block.content} />;
+          }
           return (
             <CodeBlockWithCopy key={idx} content={block.content} language={block.language || 'plaintext'} />
           );

@@ -2463,6 +2463,128 @@ function CommandStatusLine({ content, timestamp }: { content: string; timestamp:
   );
 }
 
+// --- Workflow events (mobile twin of web's WorkflowEventBlock) ---
+// The server posts workflow lifecycle anchors as JSON message content
+// (convex/workflow_runs.ts). Fork/resume can round-trip them without the
+// workflow_event subtype, so detect by content shape, matching web.
+function parseWorkflowEventContent(content: string | undefined): Record<string, any> | null {
+  if (!content || !content.startsWith('{"__wf"')) return null;
+  try { return JSON.parse(content); } catch { return null; }
+}
+
+const WF_NODE_COLORS: Record<string, string> = {
+  agent: Theme.green,
+  command: Theme.accent,
+  human: Theme.magenta,
+  prompt: Theme.violet,
+};
+
+function WorkflowGateCard({ event }: { event: Record<string, any> }) {
+  const runId = typeof event.run_id === 'string' ? event.run_id : null;
+  const run = useQuery(
+    api.workflow_runs.get,
+    runId && isConvexId(runId) ? { id: runId as Id<'workflow_runs'> } : 'skip'
+  ) as { _id: string; status: string } | null | undefined;
+  const respondToGate = useMutation(api.workflow_runs.respondToGate);
+  const [responding, setResponding] = useState(false);
+
+  const choices = (event.choices ?? []) as Array<{ key: string; label: string }>;
+  const waiting = run?.status === 'paused';
+
+  const choose = async (key: string) => {
+    if (!run || responding) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setResponding(true);
+    try { await respondToGate({ id: run._id as Id<'workflow_runs'>, response: key }); }
+    catch { /* stays waiting; user can retry */ }
+    finally { setResponding(false); }
+  };
+
+  return (
+    <RNView style={styles.wfGateCard}>
+      <RNView style={styles.wfGateHeader}>
+        <FontAwesome name="question-circle" size={12} color={Theme.magenta} />
+        <RNText style={styles.wfGateHeaderText}>HUMAN GATE</RNText>
+        <RNText style={[styles.wfGateStatus, { color: waiting ? Theme.magenta : Theme.green }]}>
+          {waiting ? 'waiting…' : 'responded'}
+        </RNText>
+      </RNView>
+      {!!event.prompt && <RNText style={styles.wfGatePrompt}>{event.prompt}</RNText>}
+      {waiting && choices.length > 0 && (
+        <RNView style={styles.wfGateChoices}>
+          {choices.map((c) => (
+            <TouchableOpacity
+              key={c.key}
+              style={[styles.wfGateChoice, responding && { opacity: 0.4 }]}
+              onPress={() => choose(c.key)}
+              disabled={responding}
+              activeOpacity={0.7}
+            >
+              <RNText style={styles.wfGateChoiceKey}>[{c.key}]</RNText>
+              <RNText style={styles.wfGateChoiceLabel}>{String(c.label ?? '').replace(/^\[.\]\s*/, '')}</RNText>
+            </TouchableOpacity>
+          ))}
+        </RNView>
+      )}
+    </RNView>
+  );
+}
+
+function WorkflowEventBlock({ event }: { event: Record<string, any> }) {
+  const router = useRouter();
+  const wf = event.__wf as string;
+
+  if (wf === 'started') {
+    return (
+      <RNView style={styles.wfStartedRow}>
+        <FontAwesome name="bolt" size={11} color={Theme.violet} />
+        <RNText style={styles.wfStartedText} numberOfLines={2}>
+          Workflow started{event.goal ? ` — ${event.goal}` : ''}
+        </RNText>
+      </RNView>
+    );
+  }
+
+  if (wf === 'node_start' || wf === 'node_done' || wf === 'node_failed') {
+    const color = WF_NODE_COLORS[event.node_type as string] || WF_NODE_COLORS.agent;
+    const label = event.node_label || event.node_id;
+    return (
+      <RNView style={styles.wfNodeRow}>
+        {wf === 'node_done' && <FontAwesome name="check" size={10} color={Theme.greenBright} />}
+        {wf === 'node_failed' && <FontAwesome name="times" size={10} color={Theme.red} />}
+        {wf === 'node_start' && <RNView style={styles.wfNodePulse} />}
+        <RNView style={[styles.wfNodeTypeBadge, { backgroundColor: color + '20', borderColor: color + '50' }]}>
+          <RNText style={[styles.wfNodeTypeText, { color }]}>{event.node_type || 'agent'}</RNText>
+        </RNView>
+        <RNText style={styles.wfNodeLabel} numberOfLines={1}>{label}</RNText>
+        {!!event.session_id && (
+          <TouchableOpacity onPress={() => router.push(`/session/${event.session_id}`)} hitSlop={8}>
+            <RNText style={styles.wfNodeLink}>view</RNText>
+          </TouchableOpacity>
+        )}
+      </RNView>
+    );
+  }
+
+  if (wf === 'workflow_run') {
+    return (
+      <RNView style={styles.wfRunCard}>
+        <FontAwesome name="sitemap" size={12} color={Theme.violet} />
+        <RNView style={{ flex: 1, minWidth: 0 }}>
+          <RNText style={styles.wfRunName} numberOfLines={1}>{event.name || 'Workflow run'}</RNText>
+          {!!event.external_run_id && (
+            <RNText style={styles.wfRunId} numberOfLines={1}>{event.external_run_id}</RNText>
+          )}
+        </RNView>
+      </RNView>
+    );
+  }
+
+  if (wf === 'gate') return <WorkflowGateCard event={event} />;
+
+  return null;
+}
+
 function MessageBubble({ message, agentType, model, showHeader = true, forkChildren, conversationId, onFork, taskSubjectMap, globalToolResultMap, globalImageMap, openGallery, userName, showToast, collapsed: globalCollapsed, showThinkingGlobal, childConversationMap, bookmarkedSet }: {
   message: Message;
   agentType?: string;
@@ -2674,6 +2796,10 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
             const apiError = parseApiErrorContent(content);
             if (apiError) {
               return <ApiErrorCard {...apiError} />;
+            }
+            const wfEvent = parseWorkflowEventContent(content);
+            if (wfEvent) {
+              return <WorkflowEventBlock event={wfEvent} />;
             }
             if (isTaskNotification(content)) {
               return <TaskNotificationLine content={content} childConversationMap={childConversationMap} />;
@@ -3126,15 +3252,26 @@ const DESIGN_MOCK_CONVO: ConversationData = {
   fork_count: 3,
   git_branch: 'ashot/apollo-include-similar-titles-fix',
   git_remote_url: 'https://github.com/ashot/codecast.git',
-  messages: Array.from({ length: 16 }, (_, i) => ({
-    _id: `mock-msg-${i}`,
-    role: i % 2 === 0 ? 'user' : 'assistant',
-    content: i % 2 === 0
-      ? `Mock prompt ${i / 2 + 1}: tighten the counterparty matching heuristic and re-run the similar-titles backfill.`
-      : `Acknowledged. Working on step ${Math.ceil(i / 2)} — scanning the candidate set, scoring by title overlap, and parking the cleanup behind the Phase-0 reworks. This line is padded so the bubble has enough height to make the list scrollable for verifying the header collapse behavior.`,
-    timestamp: DESIGN_MOCK_STARTED + i * 60000,
-    message_uuid: `mock-uuid-${i}`,
-  })) as Message[],
+  messages: [
+    ...Array.from({ length: 16 }, (_, i) => ({
+      _id: `mock-msg-${i}`,
+      role: i % 2 === 0 ? 'user' : 'assistant',
+      content: i % 2 === 0
+        ? `Mock prompt ${i / 2 + 1}: tighten the counterparty matching heuristic and re-run the similar-titles backfill.`
+        : `Acknowledged. Working on step ${Math.ceil(i / 2)} — scanning the candidate set, scoring by title overlap, and parking the cleanup behind the Phase-0 reworks. This line is padded so the bubble has enough height to make the list scrollable for verifying the header collapse behavior.`,
+      timestamp: DESIGN_MOCK_STARTED + i * 60000,
+      message_uuid: `mock-uuid-${i}`,
+    })),
+    // Exercises the CastCanvas renderer: title extraction, sol tokens, table
+    // layout, chart placeholder, and the overflow -> "Show all" path.
+    {
+      _id: 'mock-msg-canvas',
+      role: 'assistant',
+      content: 'Here is the funnel summary:\n\n```cast-canvas\n<div data-canvas-title="Intro volume funnel">\n<div style="font-size:11px;letter-spacing:1px;color:var(--sol-text-dim);text-transform:uppercase">Intro volume funnel</div>\n<h2 style="margin:6px 0;color:var(--sol-text)">Weekly conversion</h2>\n<table style="width:100%;border-collapse:collapse">\n<tr style="border-bottom:1px solid var(--sol-border-light)"><th style="text-align:left;padding:6px;color:var(--sol-text-muted)">Stage</th><th style="text-align:right;padding:6px;color:var(--sol-text-muted)">Count</th></tr>\n<tr><td style="padding:6px">Intros sent</td><td style="text-align:right;padding:6px;color:var(--sol-blue)">412</td></tr>\n<tr style="background:var(--sol-bg-alt)"><td style="padding:6px">Replies</td><td style="text-align:right;padding:6px;color:var(--sol-cyan)">187</td></tr>\n<tr><td style="padding:6px">Meetings</td><td style="text-align:right;padding:6px;color:var(--sol-green)">63</td></tr>\n</table>\n<div class="cast-chart" data-spec=\'{"marks":[{"type":"barY"}]}\'></div>\n<p style="color:var(--sol-text-secondary)">Reply rate is <b style="color:var(--sol-orange)">45%</b>, up 6pts week over week. The drop from replies to meetings is the leak worth chasing.</p>\n<script>alert("must never run")</script>\n</div>\n```\n\nThe sanitizer strips the script above.',
+      timestamp: DESIGN_MOCK_STARTED + 17 * 60000,
+      message_uuid: 'mock-uuid-canvas',
+    },
+  ] as Message[],
 };
 
 // Height of the compact custom title bar (back + title + actions), below the
@@ -5029,6 +5166,140 @@ const styles = StyleSheet.create({
   },
   sendButtonDisabled: {
     backgroundColor: Theme.bgHighlight,
+  },
+  // Workflow event anchors
+  wfStartedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.violet + '40',
+    backgroundColor: Theme.violet + '14',
+    marginVertical: 4,
+  },
+  wfStartedText: {
+    flex: 1,
+    fontSize: 12,
+    color: Theme.textMuted,
+  },
+  wfNodeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 2,
+  },
+  wfNodePulse: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: Theme.accent,
+  },
+  wfNodeTypeBadge: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 4,
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+  },
+  wfNodeTypeText: {
+    fontSize: 9,
+    fontWeight: '600',
+  },
+  wfNodeLabel: {
+    flex: 1,
+    fontSize: 12,
+    color: Theme.textSecondary,
+  },
+  wfNodeLink: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: Theme.cyan,
+    textDecorationLine: 'underline',
+  },
+  wfRunCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.violet + '40',
+    backgroundColor: Theme.violet + '0d',
+    marginVertical: 4,
+  },
+  wfRunName: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Theme.text,
+  },
+  wfRunId: {
+    fontSize: 10,
+    fontFamily: 'SpaceMono',
+    color: Theme.textDim,
+    marginTop: 1,
+  },
+  wfGateCard: {
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.magenta + '55',
+    backgroundColor: Theme.magenta + '0d',
+    marginVertical: 4,
+    overflow: 'hidden',
+  },
+  wfGateHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Theme.magenta + '30',
+  },
+  wfGateHeaderText: {
+    fontSize: 9,
+    fontWeight: '700',
+    letterSpacing: 1,
+    color: Theme.magenta,
+  },
+  wfGateStatus: {
+    marginLeft: 'auto',
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  wfGatePrompt: {
+    fontSize: 13,
+    color: Theme.text,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  wfGateChoices: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingBottom: 10,
+  },
+  wfGateChoice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.border + '60',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
+  wfGateChoiceKey: {
+    fontSize: 11,
+    fontFamily: 'SpaceMono',
+    color: Theme.magenta,
+  },
+  wfGateChoiceLabel: {
+    fontSize: 12,
+    color: Theme.text,
   },
   // Specialized tool blocks
   specialToolBlock: {
