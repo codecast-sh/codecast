@@ -1958,18 +1958,6 @@ function ApiErrorCard({ statusCode, message, errorType, requestId }: { statusCod
 // (components/MarkdownRenderer.tsx, shared parser from web insightBlocks.ts)
 // so every markdown surface gets them, not just the message-bubble branch.
 
-function UnusedInsightCard({ label, content }: { label: string; content: string }) {
-  return (
-    <RNView style={styles.insightCard}>
-      <RNView style={styles.insightHeader}>
-        <RNText style={styles.insightStar}>{'\u2605'}</RNText>
-        <RNText style={styles.insightLabel}>{label}</RNText>
-      </RNView>
-      <MarkdownContent text={content} baseStyle={styles.insightContent} isUser={false} />
-    </RNView>
-  );
-}
-
 type ParsedContextBlock = { type: string; title: string; id?: string; status?: string; priority?: string };
 
 function parseContextBlocks(text: string): { contexts: ParsedContextBlock[]; remaining: string } {
@@ -2823,15 +2811,6 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
                 part.type === 'text'
                   ? <MarkdownContent key={idx} text={part.content} baseStyle={[styles.bubbleText, isUser ? styles.userText : styles.assistantText]} isUser={isUser} />
                   : <TeammateMessageCard key={idx} teammateId={part.teammateId} color={part.color} summary={part.summary} content={part.content} />
-              );
-            }
-            const insightParts = parseInsightBlocks(content);
-            const hasInsights = insightParts.some(p => p.type === 'insight');
-            if (hasInsights) {
-              return insightParts.map((part, idx) =>
-                part.type === 'insight'
-                  ? <InsightCard key={idx} label={part.label} content={part.content} />
-                  : <MarkdownContent key={idx} text={part.content} baseStyle={[styles.bubbleText, isUser ? styles.userText : styles.assistantText]} isUser={isUser} />
               );
             }
             if (isUser && content.includes('<context ')) {
@@ -6505,36 +6484,6 @@ const styles = StyleSheet.create({
     fontFamily: 'JetBrainsMono',
     color: Theme.textDim,
     marginTop: 4,
-  },
-  insightCard: {
-    marginVertical: 4,
-    padding: 10,
-    borderRadius: 6,
-    backgroundColor: Theme.violet + '12',
-    borderLeftWidth: 2,
-    borderLeftColor: Theme.violet,
-  },
-  insightHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginBottom: 4,
-  },
-  insightStar: {
-    fontSize: 12,
-    color: Theme.violet,
-  },
-  insightLabel: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: Theme.violet,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  insightContent: {
-    fontSize: 13,
-    color: Theme.textSecondary,
-    lineHeight: 19,
   },
   contextPillRow: {
     flexDirection: 'row',
