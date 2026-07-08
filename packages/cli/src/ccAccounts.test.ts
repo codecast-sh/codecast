@@ -1,9 +1,16 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
 import {
   buildProfile,
   parseProfile,
   profileMeta,
   assertValidProfileName,
+  deriveProfileName,
+  autoSaveActiveProfile,
+  getAccountsHeartbeatPayload,
+  invalidateAccountsCache,
   CcAccountError,
 } from "./ccAccounts.js";
 
@@ -95,5 +102,84 @@ describe("assertValidProfileName", () => {
     for (const bad of ["", "-lead", "has space", "a/b", "a;b", "x".repeat(50)]) {
       expect(() => assertValidProfileName(bad)).toThrow(CcAccountError);
     }
+  });
+});
+
+describe("deriveProfileName", () => {
+  it("uses the email domain's org part, lowercased", () => {
+    expect(deriveProfileName("ashot@footage.com", [])).toBe("footage");
+    expect(deriveProfileName("a@Union.APP", [])).toBe("union");
+  });
+
+  it("dedupes against taken names with -2/-3", () => {
+    expect(deriveProfileName("ashot@footage.com", ["footage"])).toBe("footage-2");
+    expect(deriveProfileName("ashot@footage.com", ["Footage", "footage-2"])).toBe("footage-3");
+  });
+
+  it("falls back to 'account' when the email yields no usable name", () => {
+    expect(deriveProfileName(undefined, [])).toBe("account");
+    expect(deriveProfileName("bad-email", [])).toBe("account");
+    expect(deriveProfileName(undefined, ["account"])).toBe("account-2");
+  });
+});
+
+// Exercises the real save path against a sandboxed $HOME: file-backed secret
+// store (CC_ACCOUNTS_FORCE_FILE) and an empty PATH so the keychain lookup
+// fails over to $HOME/.claude/.credentials.json.
+describe("autoSaveActiveProfile + heartbeat payload (sandboxed $HOME)", () => {
+  let home: string;
+  const savedEnv: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), "cc-accounts-test-"));
+    for (const k of ["HOME", "PATH", "CC_ACCOUNTS_FORCE_FILE"]) savedEnv[k] = process.env[k];
+    process.env.HOME = home;
+    process.env.PATH = path.join(home, "empty-path");
+    process.env.CC_ACCOUNTS_FORCE_FILE = "1";
+    fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+    fs.mkdirSync(path.join(home, ".codecast"), { recursive: true });
+    fs.writeFileSync(path.join(home, ".claude", ".credentials.json"), CRED);
+    fs.writeFileSync(path.join(home, ".claude.json"), JSON.stringify({ oauthAccount: OAUTH_ACCOUNT }));
+    invalidateAccountsCache();
+  });
+
+  afterEach(() => {
+    for (const [k, v] of Object.entries(savedEnv)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    fs.rmSync(home, { recursive: true, force: true });
+    invalidateAccountsCache();
+  });
+
+  it("saves an unsaved active login once, then reports covered", () => {
+    const saved = autoSaveActiveProfile();
+    expect(saved?.name).toBe("footage");
+    expect(saved?.email).toBe("ashot@footage.com");
+    // Idempotent: the account is now covered (matched by uuid).
+    expect(autoSaveActiveProfile()).toBeNull();
+    // Same email under a NEW uuid is still covered by the email match.
+    const rotated = { ...OAUTH_ACCOUNT, accountUuid: "different-uuid" };
+    fs.writeFileSync(path.join(home, ".claude.json"), JSON.stringify({ oauthAccount: rotated }));
+    expect(autoSaveActiveProfile()).toBeNull();
+  });
+
+  it("payload picks up cross-process saves via file mtimes, no invalidation call", () => {
+    expect(getAccountsHeartbeatPayload()?.profiles ?? []).toHaveLength(0);
+    // Write the index directly, the way a `cast accounts save` in ANOTHER
+    // process would — this process's in-memory cache gets no invalidation
+    // and must notice the file change on its own.
+    fs.writeFileSync(
+      path.join(home, ".codecast", "cc-accounts.json"),
+      JSON.stringify({ profiles: { footage: { email: "ashot@footage.com" } } }),
+    );
+    const after = getAccountsHeartbeatPayload();
+    expect(after?.profiles.map((p) => p.name)).toEqual(["footage"]);
+    expect(after?.active_email).toBe("ashot@footage.com");
+  });
+
+  it("returns null with no login at all", () => {
+    fs.writeFileSync(path.join(home, ".claude.json"), JSON.stringify({}));
+    expect(autoSaveActiveProfile()).toBeNull();
   });
 });

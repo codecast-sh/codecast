@@ -204,8 +204,9 @@ export default function ClaudeAccountsSettings() {
           Claude Accounts
         </h2>
         <p className="mt-1 text-sm text-sol-text-muted leading-relaxed">
-          Every Claude Code session on a machine shares one login. Save each account as a profile once,
-          then switch the whole machine instantly — no browser, no re-login. Switching never interrupts
+          Every Claude Code session on a machine shares one login. Each account you log into gets saved
+          as a profile automatically, so you can switch the whole machine instantly — no browser, no
+          re-login. Switching never interrupts
           running sessions: they keep their account until restarted, while new and resumed sessions use
           the new one. When sessions are parked on a usage limit, the inbox banner offers
           "switch &amp; continue" to revive them on the other account.
@@ -239,11 +240,12 @@ export default function ClaudeAccountsSettings() {
             account — this is the only time the browser is involved, ever.
           </li>
           <li>
-            Come back here and click <span className="text-sol-text">"Save as profile"</span> (it appears
-            once the new login is active), or run <CopyableCommand cmd="cast accounts save <name>" />.
+            That's it — the daemon saves the new login as a profile automatically and it appears here
+            within ~30 seconds. To pick the profile name yourself, run{" "}
+            <CopyableCommand cmd="cast accounts save <name>" /> instead.
           </li>
           <li>
-            Done — switch between saved accounts from here, the inbox banner, or{" "}
+            Switch between saved accounts from here, the inbox banner, or{" "}
             <CopyableCommand cmd="cast accounts use <name>" /> any time.
           </li>
         </ol>

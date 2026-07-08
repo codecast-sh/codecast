@@ -60,8 +60,14 @@ function useFileStore(): boolean {
   return process.platform !== "darwin" || process.env.CC_ACCOUNTS_FORCE_FILE === "1";
 }
 
+/** $HOME first (bun's os.homedir() caches at startup and ignores later env
+ * changes, which breaks $HOME-sandboxed tests), os.homedir() as fallback. */
+function homeDir(): string {
+  return process.env.HOME || os.homedir();
+}
+
 function codecastDir(): string {
-  return path.join(os.homedir(), ".codecast");
+  return path.join(homeDir(), ".codecast");
 }
 
 function profileFileDir(): string {
@@ -156,7 +162,7 @@ function keychainAcct(): string {
 
 export function writeActiveCredential(credentialJson: string): void {
   if (useFileStore()) {
-    atomicWriteFile(path.join(os.homedir(), ".claude", ".credentials.json"), credentialJson);
+    atomicWriteFile(path.join(homeDir(), ".claude", ".credentials.json"), credentialJson);
     return;
   }
   // -U updates in place, preserving the item (and its ACL) so claude keeps
@@ -174,7 +180,7 @@ export function writeActiveCredential(credentialJson: string): void {
 }
 
 function claudeJsonPath(): string {
-  return path.join(os.homedir(), ".claude.json");
+  return path.join(homeDir(), ".claude.json");
 }
 
 export function readOauthAccount(): Record<string, any> | null {
