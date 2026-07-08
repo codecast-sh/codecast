@@ -3226,6 +3226,7 @@ http.route({
         await ctx.runMutation(internal.slack.wakeFromSlackEvent, {
           event_id: eventId,
           channel: event.channel,
+          workspace: payload.team_id as string | undefined,
           user: event.user,
           text: String(event.text || ""),
           thread: event.thread_ts || event.ts,
@@ -3243,6 +3244,7 @@ http.route({
     });
   }),
 });
+
 
 function cliRoute(path: string, handler: (ctx: any, body: any) => Promise<any>) {
   const corsHeaders = {

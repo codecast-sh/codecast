@@ -459,7 +459,33 @@ export default defineSchema({
     created_at: v.number(),
   })
     .index("by_anchor", ["anchor_id"])
-    .index("by_surface_channel", ["surface", "channel_key"]),
+    .index("by_surface_channel", ["surface", "channel_key"])
+    // Channel ids are only unique WITHIN a workspace, so multi-workspace routing
+    // resolves on (surface, workspace, channel).
+    .index("by_workspace_channel", ["surface", "workspace_key", "channel_key"]),
+
+  // A Slack workspace connected via the "Add to Slack" OAuth flow. Holds the
+  // per-workspace bot token (replaces the single app-level SLACK_BOT_TOKEN env
+  // var) so many workspaces can install the one codecast Slack app. Bound to the
+  // codecast scope (team or user) that authorized it, which is how link/post
+  // authorize and how inbound events resolve the right token.
+  slack_installations: defineTable({
+    workspace_id: v.string(), // Slack team.id
+    workspace_name: v.optional(v.string()),
+    bot_user_id: v.string(), // Slack bot user id (self-loop detection)
+    bot_token: v.string(), // xoxb- per-workspace OAuth token
+    scopes: v.optional(v.string()),
+    app_id: v.optional(v.string()),
+    // The codecast scope that owns this install (exactly one set).
+    team_id: v.optional(v.id("teams")),
+    scope_user_id: v.optional(v.id("users")),
+    installed_by_user_id: v.id("users"),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_workspace", ["workspace_id"])
+    .index("by_team", ["team_id"])
+    .index("by_scope_user", ["scope_user_id"]),
 
   // Idempotency for inbound Slack events: Slack retries on slow/failed acks, and
   // a double-wake would make the anchor answer the same mention twice (Aivery's
