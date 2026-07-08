@@ -96,21 +96,6 @@ import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, type ParsedC
 import { ConversationTree } from "./ConversationTree";
 import { useInboxStore, isConvexId, computeNewDividerIndex, convBucketMap, type BucketItem, type ForkChild, type InboxSession, type OptimisticImage } from "../store/inboxStore";
 
-// Context for restoring a server-deleted (ghost) conversation: for a deleted
-// row the server knows nothing, so restartSession/repairSession take the
-// session binding from our cached copy. Shared by every restart call site
-// (composer recovery, auto-restart effect, header dropdown).
-function ghostRestartContextFor(conversationId: string) {
-  const s = useInboxStore.getState();
-  const row: any = s.conversations[conversationId] ?? s.sessions[conversationId];
-  if (!row) return {};
-  return {
-    session_id: row.session_id,
-    project_path: row.project_path ?? row.git_root,
-    agent_type: row.agent_type,
-    title: row.title,
-  };
-}
 
 // restartSession can answer with a DIFFERENT conversation: the ghost's live
 // twin, or a freshly recreated row. Follow it there, and clear the ghost from
@@ -148,7 +133,7 @@ import { pendingBannerState, isActiveAgentStatus, isBootingAgentStatus, type Liv
 import { sessionStartupState } from "../lib/sessionLifecycle";
 import { messageRowKey } from "../lib/messageRowKey";
 import { expandEntityMentions } from "../lib/mentionExpansion";
-import { useSessionRestart } from "../hooks/useSessionRestart";
+import { useSessionRestart, ghostRestartContextFor } from "../hooks/useSessionRestart";
 
 // An @-mention query may contain spaces so multi-word titles are searchable: a
 // first token (possibly empty, so a bare "@" still opens recents) plus up to 4
@@ -12149,11 +12134,17 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     (res: unknown) => (conversation?._id ? followRestoredConversation(res, conversation._id) : false),
     [conversation?._id],
   );
+  const restartNotify = useCallback((kind: "success" | "error" | "info", message: string) => {
+    if (kind === "error") toast.error(message);
+    else if (kind === "success") toast.success(message);
+    else toast(message);
+  }, []);
   const { restart: handleRestartSession } = useSessionRestart({
     conversationId: conversation?._id ?? "",
     isLive: restartLive,
     ghostContext: restartGhostContext,
     onRestored: onRestartRestored,
+    notify: restartNotify,
   });
 
   useWatchEffect(() => {

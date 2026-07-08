@@ -1,7 +1,7 @@
 import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, TextInput, View as RNView, Text as RNText, Modal, Alert, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator, Image, ActionSheetIOS } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { api } from '@codecast/convex/convex/_generated/api';
-import { useState, useCallback, useRef, useMemo, useEffect } from 'react';
+import { Component, type ReactNode, useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import { useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing } from '@/constants/Theme';
@@ -10,9 +10,12 @@ import {
   formatRelativeTime, projectName, styles as sessionStyles,
 } from '@/components/SessionItem';
 import {
-  useInboxStore, type InboxSession, categorizeSessions, partitionOldSessions, sessionsWithPendingSend,
-  chipMatchesSession, getProjectName,
+  useInboxStore, type InboxSession, type InboxViewMode, type BucketItem, categorizeSessions, partitionOldSessions, sessionsWithPendingSend,
+  chipMatchesSession, getProjectName, resolveInboxViewMode, flatViewSessions, convBucketMap,
+  groupSessionsForLabelView, groupSessionsByPlan, sortLabels, computeChipCounts,
 } from '@codecast/web/store/inboxStore';
+import { useSyncBuckets } from '@codecast/web/hooks/useSyncBuckets';
+import { labelHexColor } from '@/lib/labelColors';
 import { useSyncInboxSessions } from '@/hooks/useSyncInboxSessions';
 import { SessionListSkeleton } from '@/components/SkeletonLoader';
 import { useQuery } from 'convex/react';
@@ -323,6 +326,63 @@ function SearchResultItem({ result, onPress }: { result: SearchResult; onPress: 
   );
 }
 
+// A thrown Convex query error (e.g. searchConversations timing out on a
+// multi-word query) must cost the user the RESULTS LIST, not the whole inbox —
+// web survives this, so the phone must too. The boundary re-arms whenever the
+// query changes so the next keystroke retries cleanly.
+class SearchErrorBoundary extends Component<{ resetKey: string; children: ReactNode }, { error: Error | null }> {
+  state = { error: null as Error | null };
+  static getDerivedStateFromError(error: Error) { return { error }; }
+  componentDidUpdate(prev: { resetKey: string }) {
+    if (prev.resetKey !== this.props.resetKey && this.state.error) this.setState({ error: null });
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <RNView style={styles.emptyInbox}>
+          <FontAwesome name="exclamation-triangle" size={22} color={Theme.textMuted0} />
+          <RNText style={styles.emptyText}>Search failed</RNText>
+          <RNText style={styles.emptySubtext}>Try a shorter or simpler query</RNText>
+        </RNView>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+// Owns the search subscription so a server error surfaces inside the boundary
+// above instead of unmounting InboxScreen.
+function SearchResultsList({ query, userOnly, onOpen }: { query: string; userOnly: boolean; onOpen: (conversationId: string) => void }) {
+  const searchResults = useQuery(api.conversations.searchConversations, { query, limit: 30, userOnly });
+  const searchResultsList = useMemo(() => {
+    if (!searchResults) return [];
+    return 'results' in searchResults ? searchResults.results : (searchResults as SearchResult[]);
+  }, [searchResults]);
+  return (
+    <FlatList
+      data={searchResultsList}
+      renderItem={({ item }) => (
+        <SearchResultItem result={item} onPress={() => onOpen(item.conversationId)} />
+      )}
+      keyExtractor={(item) => item.conversationId}
+      contentContainerStyle={searchResultsList.length === 0 ? styles.emptyList : styles.listContent}
+      ListEmptyComponent={
+        searchResults === undefined ? (
+          <RNView style={styles.emptyInbox}>
+            <ActivityIndicator size="small" color={Theme.textMuted} />
+          </RNView>
+        ) : (
+          <RNView style={styles.emptyInbox}>
+            <RNText style={styles.emptyText}>No results for "{query}"</RNText>
+          </RNView>
+        )
+      }
+      showsVerticalScrollIndicator={false}
+      keyboardShouldPersistTaps="handled"
+    />
+  );
+}
+
 export default function InboxScreen() {
   const [showNewSession, setShowNewSession] = useState(false);
   const [showStashed, setShowStashed] = useState(false);
@@ -336,6 +396,7 @@ export default function InboxScreen() {
   const isSearching = debouncedQuery.length >= 2;
 
   useSyncInboxSessions();
+  useSyncBuckets();
 
   const sessions = useInboxStore((s) => s.sessions);
   const stashSession = useInboxStore((s) => s.stashSession);
@@ -353,6 +414,17 @@ export default function InboxScreen() {
   const toggleCollapsedSection = useInboxStore((s) => s.toggleCollapsedSection);
   const activeProjectFilter = useInboxStore((s) => s.activeProjectFilter);
   const setActiveProjectFilter = useInboxStore((s) => s.setActiveProjectFilter);
+  // Labels ("buckets") + the view-mode preference — all shared web-store state,
+  // so filing and filtering stay consistent across phone and desktop.
+  const buckets = useInboxStore((s) => s.buckets);
+  const bucketAssignments = useInboxStore((s) => s.bucketAssignments);
+  const activeBucketFilter = useInboxStore((s) => s.activeBucketFilter);
+  const setActiveBucketFilter = useInboxStore((s) => s.setActiveBucketFilter);
+  const setInboxViewMode = useInboxStore((s) => s.setInboxViewMode);
+  const clientState = useInboxStore((s) => s.clientState);
+  const viewMode = resolveInboxViewMode(clientState?.ui);
+  const bucketByConv = useMemo(() => convBucketMap(bucketAssignments), [bucketAssignments]);
+  const visibleBuckets = useMemo(() => sortLabels(buckets), [buckets]);
 
   const sessionsWithQueuedMessages = useInboxStore((s) => s.sessionsWithQueuedMessages);
   const liveInboxIds = useInboxStore((s) => s.liveInboxIds);
@@ -368,7 +440,7 @@ export default function InboxScreen() {
   // Full-args categorize (matches web): pendingSendIds keeps optimistic sends
   // in Working, and opts make isEngagedBlank work so the New section actually
   // surfaces freshly created blank sessions.
-  const { sorted: sortedAll, pinned, newSessions, needsInput, working, stashed: stashedSessions, dismissed: dismissedOnly } = useMemo(
+  const { sorted: sortedAll, subsByParent, pinned, newSessions, needsInput, working, stashed: stashedSessions, dismissed: dismissedOnly } = useMemo(
     () => categorizeSessions(visibleSessions, sessionsWithQueuedMessages, sessionsWithPendingSend(pendingMessages), {
       currentSessionId,
       pendingCreateIds: new Set(Object.keys(pendingSessionCreates)),
@@ -377,26 +449,27 @@ export default function InboxScreen() {
   );
   const activeSessions = useMemo(() => sortedAll.filter((s) => !s.is_deferred), [sortedAll]);
 
-  // Project filter chips — the web LabelChipsRow's project half. Counts come
-  // from non-hidden sessions; the active chip filters every bucket below.
-  const projectChips = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const s of sortedAll) {
-      const name = getProjectName(s.git_root ?? undefined, s.project_path ?? undefined);
-      if (name) counts.set(name, (counts.get(name) ?? 0) + 1);
-    }
-    return [...counts.entries()].sort((a, b) => b[1] - a[1]);
-  }, [sortedAll]);
-
-  const chipFilter = useCallback((items: InboxSession[]) => {
-    if (!activeProjectFilter) return items;
-    return items.filter((s) => chipMatchesSession(s, { projectFilter: activeProjectFilter, bucketByConv: {} }));
-  }, [activeProjectFilter]);
-
-  const searchResults = useQuery(
-    api.conversations.searchConversations,
-    isSearching ? { query: debouncedQuery, limit: 30, userOnly } : "skip"
+  // Label + project chip counts — same source as web's LabelChipsRow / palette
+  // view switcher (computeChipCounts), so the two clients can't disagree about
+  // what each chip contains.
+  const { bucketCounts, projectCounts } = useMemo(
+    () => computeChipCounts(sortedAll, bucketByConv),
+    [sortedAll, bucketByConv],
   );
+  // Zero-count labels stay out of the row unless actively filtered — mirror of
+  // web's rule (there they retreat to the +N popover; the phone just hides them).
+  const labelChips = useMemo(
+    () => visibleBuckets.filter((b) => (bucketCounts[b._id] || 0) > 0 || activeBucketFilter === b._id),
+    [visibleBuckets, bucketCounts, activeBucketFilter],
+  );
+
+  const chipMatches = useCallback((s: InboxSession) =>
+    chipMatchesSession(s, { projectFilter: activeProjectFilter, bucketFilter: activeBucketFilter, bucketByConv }),
+    [activeProjectFilter, activeBucketFilter, bucketByConv]);
+  const chipFilter = useCallback((items: InboxSession[]) => {
+    if (!activeProjectFilter && !activeBucketFilter) return items;
+    return items.filter(chipMatches);
+  }, [activeProjectFilter, activeBucketFilter, chipMatches]);
 
   const handleSearchChange = useCallback((text: string) => {
     setSearchQuery(text);
@@ -437,18 +510,56 @@ export default function InboxScreen() {
     ]);
   }, [killSessions]);
 
+  // Label filing — the web session-card context menu's "label" half. Picks from
+  // existing labels (tap the current one to unfile), creates on the fly (iOS
+  // Alert.prompt), all through the shared store's optimistic actions.
+  const openLabelPicker = useCallback((session: InboxSession) => {
+    const store = useInboxStore.getState();
+    const labels = sortLabels(store.buckets);
+    const current = convBucketMap(store.bucketAssignments)[session._id];
+    const pick = (bucket: BucketItem) =>
+      store.assignSessionToBucket(session._id, bucket._id === current ? null : bucket._id);
+    const createAndAssign = () => {
+      if (Platform.OS !== 'ios') return;
+      Alert.prompt('New Label', undefined, (name) => {
+        const trimmed = name?.trim();
+        if (!trimmed) return;
+        store.createBucket({ name: trimmed }).then((r: any) => {
+          if (r?._id) useInboxStore.getState().assignSessionToBucket(session._id, r._id);
+        });
+      });
+    };
+    if (Platform.OS === 'ios') {
+      const names = labels.map((b) => (b._id === current ? `✓ ${b.name}` : b.name));
+      const options = [...names, 'New Label…', 'Cancel'];
+      ActionSheetIOS.showActionSheetWithOptions(
+        { options, cancelButtonIndex: options.length - 1, title: 'Label' },
+        (index) => {
+          if (index < labels.length) pick(labels[index]);
+          else if (index === labels.length) createAndAssign();
+        },
+      );
+    } else {
+      Alert.alert('Label', undefined, [
+        ...labels.map((b) => ({ text: b._id === current ? `✓ ${b.name}` : b.name, onPress: () => pick(b) })),
+        { text: 'Cancel', style: 'cancel' as const },
+      ]);
+    }
+  }, []);
+
   const handleSessionLongPress = useCallback((session: InboxSession) => {
     const favoriteLabel = session.is_favorite ? 'Unfavorite' : 'Favorite';
     const toggleFavorite = () => useInboxStore.getState().toggleFavorite(session._id);
     const options = [
       session.is_pinned ? 'Unpin' : 'Pin',
       favoriteLabel,
+      'Label…',
       'Stash',
       'Kill Session',
       'Cancel',
     ];
-    const destructiveButtonIndex = 3;
-    const cancelButtonIndex = 4;
+    const destructiveButtonIndex = 4;
+    const cancelButtonIndex = 5;
 
     if (Platform.OS === 'ios') {
       ActionSheetIOS.showActionSheetWithOptions(
@@ -456,20 +567,22 @@ export default function InboxScreen() {
         (index) => {
           if (index === 0) handlePin(session._id);
           else if (index === 1) toggleFavorite();
-          else if (index === 2) handleStash(session._id);
-          else if (index === 3) confirmKill(session._id);
+          else if (index === 2) openLabelPicker(session);
+          else if (index === 3) handleStash(session._id);
+          else if (index === 4) confirmKill(session._id);
         },
       );
     } else {
       Alert.alert(cleanTitle(session.title), undefined, [
         { text: session.is_pinned ? 'Unpin' : 'Pin', onPress: () => handlePin(session._id) },
         { text: favoriteLabel, onPress: toggleFavorite },
+        { text: 'Label…', onPress: () => openLabelPicker(session) },
         { text: 'Stash', onPress: () => handleStash(session._id) },
         { text: 'Kill Session', style: 'destructive', onPress: () => confirmKill(session._id) },
         { text: 'Cancel', style: 'cancel' },
       ]);
     }
-  }, [handlePin, handleStash, confirmKill]);
+  }, [handlePin, handleStash, confirmKill, openLabelPicker]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
@@ -488,13 +601,16 @@ export default function InboxScreen() {
   ), [router, handleStash, handlePin, handleSessionLongPress]);
 
   // Collapsible section — collapse state lives in the shared store's
-  // collapsedSections (keyed by label, same keys as web), per-device.
-  const renderSection = useCallback((label: string, items: InboxSession[], color?: string) => {
+  // collapsedSections. Grouped-view sections keep their historical label keys;
+  // the label/plan/flat views pass web's keys (bucket_<id>, plan_<key>, all) so
+  // collapse state round-trips with desktop.
+  const renderSection = useCallback((label: string, items: InboxSession[], color?: string, collapseKey?: string) => {
     if (items.length === 0) return null;
-    const collapsed = !!collapsedSections?.[label];
+    const key = collapseKey ?? label;
+    const collapsed = !!collapsedSections?.[key];
     return (
-      <RNView key={label}>
-        <TouchableOpacity style={styles.sectionHeader} onPress={() => toggleCollapsedSection(label)} activeOpacity={0.7}>
+      <RNView key={key}>
+        <TouchableOpacity style={styles.sectionHeader} onPress={() => toggleCollapsedSection(key)} activeOpacity={0.7}>
           <FontAwesome name={collapsed ? "chevron-right" : "chevron-down"} size={9} color={Theme.textMuted0} />
           <RNText style={[styles.sectionTitle, color ? { color } : undefined]}>{label} ({items.length})</RNText>
         </TouchableOpacity>
@@ -524,12 +640,46 @@ export default function InboxScreen() {
         </RNView>
       )];
     }
+    // Flat views: one "All" run ordered by the shared comparator — "recent"
+    // reshuffles on activity, "time" is a stable creation chronology honoring
+    // any manual order dragged on desktop.
+    if (viewMode === "recent" || viewMode === "time") {
+      const flat = flatViewSessions(sortedAll, subsByParent, {
+        mode: viewMode,
+        showSubagents: clientState?.ui?.show_subagents ?? true,
+        focusedId: currentSessionId,
+        manualOrder: clientState?.ui?.inbox_manual_order,
+        chipMatches,
+      });
+      return [renderSection("All", flat, Theme.cyan, "all")].filter(Boolean);
+    }
+    // Label / plan lenses: pinned stays its own top section (pin is urgency,
+    // not theme); the active set regroups by label or plan, with unfiled
+    // sessions falling to auto-derived project groups — exactly web's layout.
+    if (viewMode === "bucket" || viewMode === "plan") {
+      const active = [...filteredNew, ...filteredNeedsInput, ...filteredWorking];
+      sections.push(renderSection("Pinned", filteredPinned, Theme.magenta));
+      if (viewMode === "bucket") {
+        const { labelGroups, projectGroups } = groupSessionsForLabelView(active, buckets, bucketByConv);
+        for (const { bucket, items } of labelGroups)
+          sections.push(renderSection(bucket.name, items, labelHexColor(bucket.name), `bucket_${bucket._id}`));
+        for (const { name, items } of projectGroups)
+          sections.push(renderSection(name, items, name === "other" ? Theme.textMuted0 : labelHexColor(name), `bucketproj_${name}`));
+      } else {
+        const { planGroups, projectGroups } = groupSessionsByPlan(active);
+        for (const { key, label, items } of planGroups)
+          sections.push(renderSection(label, items, "#2dd4bf", `plan_${key}`));
+        for (const { name, items } of projectGroups)
+          sections.push(renderSection(name, items, name === "other" ? Theme.textMuted0 : labelHexColor(name), `planproj_${name}`));
+      }
+      return sections.filter(Boolean);
+    }
     sections.push(renderSection("Pinned", filteredPinned, Theme.magenta));
     sections.push(renderSection("New", filteredNew, Theme.blue));
     sections.push(renderSection("Needs Input", filteredNeedsInput, Theme.accent));
     sections.push(renderSection("Working", filteredWorking, Theme.greenBright));
     return sections.filter(Boolean);
-  }, [activeSessions, sessions, filteredPinned, filteredWorking, filteredNeedsInput, filteredNew, renderSection]);
+  }, [activeSessions, sessions, filteredPinned, filteredWorking, filteredNeedsInput, filteredNew, renderSection, viewMode, sortedAll, subsByParent, clientState, currentSessionId, chipMatches, buckets, bucketByConv]);
 
   // Stashed (agent alive, kill-all) and Killed buckets — the web panel's two
   // hidden sections, collapsed by default behind count toggles.
@@ -605,10 +755,36 @@ export default function InboxScreen() {
     </RNView>
   ), [showStashed, showKilled, filteredStashed, filteredKilled, router, handleRestore, confirmKill, confirmKillAllStashed]);
 
-  const searchResultsList = useMemo(() => {
-    if (!searchResults) return [];
-    return 'results' in searchResults ? searchResults.results : (searchResults as SearchResult[]);
-  }, [searchResults]);
+  // View switcher — same options, names, and availability rules as web's
+  // GlobalSessionPanel dropdown: label view appears once a label exists, plan
+  // view once any session carries a plan. The choice writes the shared
+  // inbox_view_mode client pref, so phone and desktop stay on the same lens.
+  const hasPlanSessions = useMemo(() => activeSessions.some((x) => !!(x as any).active_plan), [activeSessions]);
+  const viewModeOptions = useMemo(() => ([
+    { key: "grouped", label: "By status", icon: "list-ul" },
+    { key: "recent", label: "By updated", icon: "flash" },
+    { key: "time", label: "By created", icon: "clock-o" },
+    ...(visibleBuckets.length > 0 ? [{ key: "bucket", label: "By label", icon: "tag" }] : []),
+    ...(hasPlanSessions ? [{ key: "plan", label: "By plan", icon: "sitemap" }] : []),
+  ] as Array<{ key: InboxViewMode; label: string; icon: any }>), [visibleBuckets.length, hasPlanSessions]);
+  const currentViewOption = viewModeOptions.find((o) => o.key === viewMode) ?? viewModeOptions[0];
+
+  const openViewModePicker = useCallback(() => {
+    if (Platform.OS === 'ios') {
+      const options = [...viewModeOptions.map((o) => (o.key === viewMode ? `✓ ${o.label}` : o.label)), 'Cancel'];
+      ActionSheetIOS.showActionSheetWithOptions(
+        { options, cancelButtonIndex: options.length - 1, title: 'Sort inbox' },
+        (index) => {
+          if (index < viewModeOptions.length) setInboxViewMode(viewModeOptions[index].key);
+        },
+      );
+    } else {
+      Alert.alert('Sort inbox', undefined, [
+        ...viewModeOptions.map((o) => ({ text: o.key === viewMode ? `✓ ${o.label}` : o.label, onPress: () => setInboxViewMode(o.key) })),
+        { text: 'Cancel', style: 'cancel' as const },
+      ]);
+    }
+  }, [viewModeOptions, viewMode, setInboxViewMode]);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -618,6 +794,14 @@ export default function InboxScreen() {
           <RNView style={styles.countBadge}>
             <RNText style={styles.countBadgeText}>{activeSessions.length}</RNText>
           </RNView>
+        )}
+        <RNView style={{ flex: 1 }} />
+        {!isSearching && (
+          <TouchableOpacity style={styles.viewModeBtn} onPress={openViewModePicker} activeOpacity={0.7} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <FontAwesome name={currentViewOption.icon} size={11} color={Theme.textMuted} />
+            <RNText style={styles.viewModeBtnText}>{currentViewOption.label}</RNText>
+            <FontAwesome name="angle-down" size={11} color={Theme.textMuted0} />
+          </TouchableOpacity>
         )}
       </RNView>
 
@@ -653,10 +837,32 @@ export default function InboxScreen() {
         )}
       </RNView>
 
-      {!isSearching && projectChips.length > 1 && (
+      {!isSearching && (labelChips.length > 0 || projectCounts.length > 1) && (
         <RNView style={styles.chipRowContainer}>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
-            {projectChips.map(([name, count]) => {
+            {/* Manual labels lead, auto-derived project chips follow — web's
+                LabelChipsRow order. The row is ONE filter: the store clears the
+                other axis when either chip kind activates. */}
+            {labelChips.map((bucket) => {
+              const active = activeBucketFilter === bucket._id;
+              const color = labelHexColor(bucket.name);
+              return (
+                <TouchableOpacity
+                  key={bucket._id}
+                  style={[styles.projectChip, active && { borderColor: color, backgroundColor: color + '18' }]}
+                  onPress={() => setActiveBucketFilter(active ? null : bucket._id)}
+                  activeOpacity={0.7}
+                >
+                  <RNView style={styles.labelChipInner}>
+                    <RNView style={[styles.labelChipDot, { backgroundColor: color }]} />
+                    <RNText style={[styles.projectChipText, active && { color, fontWeight: '600' }]} numberOfLines={1}>
+                      {bucket.name} <RNText style={styles.projectChipCount}>{bucketCounts[bucket._id] || 0}</RNText>
+                    </RNText>
+                  </RNView>
+                </TouchableOpacity>
+              );
+            })}
+            {projectCounts.map(([name, count]) => {
               const active = activeProjectFilter === name;
               return (
                 <TouchableOpacity
@@ -676,30 +882,13 @@ export default function InboxScreen() {
       )}
 
       {isSearching ? (
-        <FlatList
-          data={searchResultsList}
-          renderItem={({ item }) => (
-            <SearchResultItem
-              result={item}
-              onPress={() => router.push(`/session/${item.conversationId}`)}
-            />
-          )}
-          keyExtractor={(item) => item.conversationId}
-          contentContainerStyle={searchResultsList.length === 0 ? styles.emptyList : styles.listContent}
-          ListEmptyComponent={
-            searchResults === undefined ? (
-              <RNView style={styles.emptyInbox}>
-                <ActivityIndicator size="small" color={Theme.textMuted} />
-              </RNView>
-            ) : (
-              <RNView style={styles.emptyInbox}>
-                <RNText style={styles.emptyText}>No results for "{debouncedQuery}"</RNText>
-              </RNView>
-            )
-          }
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-        />
+        <SearchErrorBoundary resetKey={`${debouncedQuery}|${userOnly}`}>
+          <SearchResultsList
+            query={debouncedQuery}
+            userOnly={userOnly}
+            onOpen={(conversationId) => router.push(`/session/${conversationId}`)}
+          />
+        </SearchErrorBoundary>
       ) : (
         <ScrollView
           refreshControl={
@@ -769,6 +958,32 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     color: Theme.bg,
+  },
+  viewModeBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight,
+    backgroundColor: Theme.bg,
+  },
+  viewModeBtnText: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: Theme.textMuted,
+  },
+  labelChipInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  labelChipDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
   },
   listContent: {
     paddingBottom: Spacing.xl,

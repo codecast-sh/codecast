@@ -13,7 +13,19 @@ import { useProfile, saveProfile, getAccountsHeartbeatPayload } from "./ccAccoun
 import { CursorWatcher, type CursorSessionEvent } from "./cursorWatcher.js";
 import { CursorTranscriptWatcher, type CursorTranscriptEvent } from "./cursorTranscriptWatcher.js";
 import { CodexWatcher, isAppServerManagedCodexSessionHead, type CodexSessionEvent } from "./codexWatcher.js";
-import { watchdogHeartbeatStale, WATCHDOG_HEARTBEAT_FILENAME } from "./supervision.js";
+import {
+  buildDaemonLauncherScript,
+  buildDaemonPlistXml,
+  daemonPlistNeedsUpgrade,
+  daemonTickStale,
+  DAEMON_HEARTBEAT_STALE_MS,
+  DAEMON_LAUNCHER_FILENAME,
+  extractPlistProgramArguments,
+  shellEscapeForSh,
+  watchdogHeartbeatStale,
+  WATCHDOG_HEARTBEAT_FILENAME,
+  WATCHDOG_PASS_STAMP_FILENAME,
+} from "./supervision.js";
 import {
   CodexAppServer,
   threadItemsToMessages,
@@ -487,7 +499,8 @@ const MAX_LOG_QUEUE_SIZE = 500;
 const LOG_QUEUE_FILE = path.join(process.env.HOME || "", ".codecast", "log-queue.json");
 const EVENT_LOOP_CHECK_INTERVAL_MS = 30 * 1000; // 30 seconds
 const EVENT_LOOP_LAG_THRESHOLD_MS = 60 * 1000; // 1 minute of lag = frozen
-const HEARTBEAT_STALE_THRESHOLD_MS = 3 * 60 * 1000; // external watchdog: 3 min (6 missed 30s heartbeats) = deadlocked. Tight so recovery beats the 5-min "blocked" display after a sleep.
+// External-watchdog staleness threshold lives in supervision.ts
+// (DAEMON_HEARTBEAT_STALE_MS) so the shell script and the compiled pass agree.
 const STUCK_CONNECTION_THRESHOLD_MS = 3 * 60 * 1000; // 3 min disconnected = stuck, trigger self-heal
 const SELF_HEAL_COOLDOWN_MS = 10 * 60 * 1000; // 10 min between self-heal restarts
 
@@ -11735,12 +11748,67 @@ function isManagedByLaunchd(): boolean {
 // loaded-only check (the old behavior here) saw "fine" and never revived it. The
 // resident watchdog now stamps a heartbeat file every loop; we treat a stale stamp
 // as a dead loop and kickstart it, mirroring how the watchdog judges the daemon.
+// The detached bootout+bootstrap pair that makes an edited plist take effect:
+// launchd caches the job definition at bootstrap time, so kickstart alone would
+// keep running the old one. bootout kills us (we are the job instance); the same
+// detached shell then bootstraps the rewritten plist. Pure so the wiring is
+// testable without killing a live daemon.
+export function buildLaunchdPlistReloadCommand(uid: number, plistPath: string): string {
+  return `sleep 1; launchctl bootout gui/${uid}/${DAEMON_LAUNCHD_LABEL}; sleep 1; launchctl bootstrap gui/${uid} ${shellEscapeForSh(plistPath)}`;
+}
+
+// One-time fleet migration: rewrite a legacy daemon plist that points launchd
+// directly at the codecast binary into the /bin/sh + launcher-script form, so the
+// login item's BTM identity stops changing on every binary self-update — the
+// source of the repeated macOS "codecast can run in the background" notifications
+// (see supervision.ts). The existing ProgramArguments are preserved verbatim
+// inside the launcher, so compiled and from-source installs both keep their exact
+// command. Ends with a detached bootout+bootstrap that restarts us under the new
+// definition; after that the plist contains /bin/sh and this never fires again.
+function migrateDaemonPlistToStableLauncher(): void {
+  const home = process.env.HOME;
+  if (!home || !process.getuid) return;
+  try {
+    const plistPath = path.join(home, "Library", "LaunchAgents", "sh.codecast.daemon.plist");
+    let content: string;
+    try {
+      content = fs.readFileSync(plistPath, "utf-8");
+    } catch {
+      return; // no autostart configured — nothing to migrate
+    }
+    if (!daemonPlistNeedsUpgrade(content)) return;
+
+    const args = extractPlistProgramArguments(content);
+    // Only migrate a command we can vouch for — an absolute-path executable that
+    // exists. A launcher exec'ing a broken command would crash-loop under KeepAlive.
+    if (args.length === 0 || !args[0].startsWith("/") || !fs.existsSync(args[0])) {
+      log(`Daemon plist migration skipped: unrecognized ProgramArguments (${JSON.stringify(args)})`);
+      return;
+    }
+
+    const launcherPath = path.join(CONFIG_DIR, DAEMON_LAUNCHER_FILENAME);
+    const daemonCommand = args.map(shellEscapeForSh).join(" ");
+    fs.writeFileSync(launcherPath, buildDaemonLauncherScript({ daemonCommand }), { mode: 0o755 });
+    fs.writeFileSync(plistPath, buildDaemonPlistXml({ scriptPath: launcherPath, configDir: CONFIG_DIR }), { mode: 0o644 });
+
+    logLifecycle("plist_stable_identity_migration", `rewrote ${plistPath} to /bin/sh launcher, reloading job`);
+    persistLogQueue(); // the bootout below kills us before exit handlers run
+    spawn("sh", ["-c", buildLaunchdPlistReloadCommand(process.getuid(), plistPath)], {
+      detached: true,
+      stdio: "ignore",
+    }).unref();
+  } catch (err) {
+    log(`Daemon plist migration failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 let lastWatchdogEnsureAt = 0;
 function ensureWatchdogSupervised(force = false): void {
   if (platform !== "darwin" || !process.getuid || !isManagedByLaunchd()) return;
   const now = Date.now();
   if (!force && now - lastWatchdogEnsureAt < 4 * 60 * 1000) return;
   lastWatchdogEnsureAt = now;
+  migrateDaemonPlistToStableLauncher();
   try {
     const uid = process.getuid();
     const domain = `gui/${uid}`;
@@ -15055,17 +15123,32 @@ export async function runWatchdog(): Promise<void> {
     }
   }
 
-  // 2b. If process is alive, check if event loop is actually responsive
+  // 2b. If process is alive, check if event loop is actually responsive.
+  // The tick freezes during system sleep exactly like a wedged loop, and this
+  // pass usually runs before the woken daemon's 30s stamp interval fires — so a
+  // stale tick only counts when our OWN start-to-start gap shows we've been
+  // continuously awake (see daemonTickStale). Killing on tick age alone SIGKILLed
+  // a healthy daemon on nearly every wake of a napping laptop.
+  const passStampPath = path.join(CONFIG_DIR, WATCHDOG_PASS_STAMP_FILENAME);
+  const passNow = Date.now();
+  let prevPass = 0;
+  try { prevPass = parseInt(fs.readFileSync(passStampPath, "utf-8").trim(), 10) || 0; } catch {}
+  try { fs.writeFileSync(passStampPath, String(passNow)); } catch {}
+  const passGap = prevPass > 0 ? passNow - prevPass : null;
   if (daemonAlive && daemonPid > 0) {
     try {
       const state = readDaemonState();
       const lastTick = state.lastHeartbeatTick || state.lastWatchdogCheck || 0;
-      const staleness = Date.now() - lastTick;
-      if (lastTick > 0 && staleness > HEARTBEAT_STALE_THRESHOLD_MS) {
-        logLine(`Daemon PID ${daemonPid} is alive but event loop frozen for ${Math.round(staleness / 1000)}s, killing`);
-        try { process.kill(daemonPid, 9); } catch {}
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        daemonAlive = false;
+      const staleness = passNow - lastTick;
+      if (lastTick > 0 && staleness > DAEMON_HEARTBEAT_STALE_MS) {
+        if (daemonTickStale(staleness, passGap)) {
+          logLine(`Daemon PID ${daemonPid} is alive but event loop frozen for ${Math.round(staleness / 1000)}s, killing`);
+          try { process.kill(daemonPid, 9); } catch {}
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          daemonAlive = false;
+        } else {
+          logLine(`Daemon tick stale ${Math.round(staleness / 1000)}s but watchdog pass gap ${passGap === null ? "unknown" : Math.round(passGap / 1000) + "s"} implies system sleep — deferring one cycle`);
+        }
       }
     } catch {}
   }
