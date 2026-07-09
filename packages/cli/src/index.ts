@@ -18,7 +18,7 @@ import {
   type EntityType,
 } from "@codecast/shared/entities";
 import { SNIPPET_CATALOG, snippetBySlug, allSnippetSlugs } from "@codecast/shared/contracts";
-import { cliFetch, cliFetchRead } from "./cliHttp.js";
+import { cliFetch, cliFetchRead, cliSearchRequest } from "./cliHttp.js";
 import { listProfiles, saveProfile, useProfile, getAccountsHeartbeatPayload, CcAccountError } from "./ccAccounts.js";
 import { CODECAST_STATUS_HOOK } from "./statusHook.js";
 import { AuthServer } from "./authServer.js";
@@ -4946,28 +4946,22 @@ program
     }
 
     try {
-      const response = await cliFetchRead(`${siteUrl}/cli/search`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          api_token: config.auth_token,
-          query,
-          limit,
-          offset,
-          start_time: startTime,
-          end_time: endTime,
-          context_before: contextBefore,
-          context_after: contextAfter,
-          project_path: projectPath,
-          user_only: userOnly,
-          mode,
-          member_name: options.member,
-          mine_only: options.mine || undefined,
-          label: options.label,
-        }),
+      const result = await cliSearchRequest(siteUrl, {
+        api_token: config.auth_token,
+        query,
+        limit,
+        offset,
+        start_time: startTime,
+        end_time: endTime,
+        context_before: contextBefore,
+        context_after: contextAfter,
+        project_path: projectPath,
+        user_only: userOnly,
+        mode,
+        member_name: options.member,
+        mine_only: options.mine || undefined,
+        label: options.label,
       });
-
-      const result = await response.json();
 
       if (result.error) {
         console.error(`Error: ${result.details ? `${result.error}: ${result.details}` : result.error}`);
@@ -9612,22 +9606,17 @@ Question: ${query}`,
       }
       const runSearch = async (q: string) => {
         if (process.env.ASK_DEBUG) console.error(`[ask] hitting search with query="${q}"`);
-        const resp = await cliFetchRead(`${siteUrl}/cli/search`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            api_token: config.auth_token,
-            query: q,
-            limit: limit * 3,
-            offset: 0,
-            start_time: startTime,
-            end_time: endTime,
-            context_before: paddingLines,
-            context_after: paddingLines,
-            project_path: projectPath,
-          }),
+        return cliSearchRequest(siteUrl, {
+          api_token: config.auth_token,
+          query: q,
+          limit: limit * 3,
+          offset: 0,
+          start_time: startTime,
+          end_time: endTime,
+          context_before: paddingLines,
+          context_after: paddingLines,
+          project_path: projectPath,
         });
-        return resp.json();
       };
 
       let searchResult = await runSearch(searchQuery);
@@ -9875,21 +9864,15 @@ program
       const relatedFiles: Map<string, number> = new Map();
 
       if (searchQuery) {
-        const searchResponse = await cliFetchRead(`${siteUrl}/cli/search`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            api_token: config.auth_token,
-            query: searchQuery,
-            limit: limit,
-            offset: 0,
-            project_path: projectPath,
-            member_name: options.member,
-            mine_only: options.mine || undefined,
-          }),
+        const searchResult = await cliSearchRequest(siteUrl, {
+          api_token: config.auth_token,
+          query: searchQuery,
+          limit: limit,
+          offset: 0,
+          project_path: projectPath,
+          member_name: options.member,
+          mine_only: options.mine || undefined,
         });
-
-        const searchResult = await searchResponse.json();
 
         if (searchResult.error) {
           // A failed search must not read as "no relevant sessions" — agents
@@ -9904,8 +9887,11 @@ program
           }
           console.error(`Warning: text search failed (${detail}); continuing with file matches.`);
         } else if (searchResult.conversations) {
+          if (searchResult.content_search_error) {
+            console.error(`Warning: content search timed out (${searchResult.content_search_error}); matches below are title/summary only.`);
+          }
           for (const conv of searchResult.conversations) {
-            const preview = conv.matches?.[0]?.content?.slice(0, 100) + "..." || "";
+            const preview = conv.matches?.[0]?.content ? conv.matches[0].content.slice(0, 100) + "..." : "";
             sessions.set(conv.id, {
               id: conv.id,
               title: conv.title,
@@ -9913,7 +9899,7 @@ program
               updated_at: conv.updated_at,
               message_count: conv.message_count,
               preview,
-              match_type: "text",
+              match_type: conv.title_match ? "title" : "text",
               match_detail: searchQuery,
             });
           }
