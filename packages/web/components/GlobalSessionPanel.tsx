@@ -20,7 +20,7 @@ import { isStatusTrustStale } from "@codecast/shared/contracts";
 import { TooltipProvider } from "./ui/tooltip";
 import { cleanTitle, msgCountColor, formatModel } from "../lib/conversationProcessor";
 import { getLabelColor } from "../lib/labelColors";
-import { fmtDuration, describeTaskCadence } from "./scheduleCadence";
+import { fmtDuration, describeTaskCadence, taskStateLabel } from "./scheduleCadence";
 import { partitionScheduleInbox, type ScheduleRow, type TaskRow } from "./scheduleTasks";
 import { cleanUserMessage } from "./sessionMessage";
 import { SharePopover } from "./SharePopover";
@@ -579,16 +579,7 @@ function BlockedSessionsBanner({
 function ScheduleBarRow({ task, unread, onClick }: { task: TaskRow; unread?: boolean; onClick: () => void }) {
   const now = useCoarseNow(30_000);
   const paused = task.status === "paused";
-  const msUntil = task.run_at !== undefined ? task.run_at - now : undefined;
-  const stateLabel = paused
-    ? "paused"
-    : task.status === "running"
-      ? "running"
-      : msUntil === undefined
-        ? "event"
-        : msUntil > 0
-          ? fmtDuration(msUntil)
-          : "due";
+  const stateLabel = taskStateLabel(task, now);
   return (
     <button
       onClick={onClick}
@@ -636,19 +627,10 @@ function ScheduleRowItem({ row, activeSessionId, onOpen }: {
   const resume = useMutation(api.agentTasks.webResume);
   const runNow = useMutation(api.agentTasks.webRunNow);
   const paused = task.status === "paused";
-  const msUntil = task.run_at !== undefined ? task.run_at - now : undefined;
-  const stateLabel = paused
-    ? "paused"
-    : task.status === "running"
-      ? "running"
-      : msUntil === undefined
-        ? "event"
-        : msUntil > 0
-          ? fmtDuration(msUntil)
-          : "due";
+  const stateLabel = taskStateLabel(task, now);
   const isActive = !!row.openId && row.openId === activeSessionId;
   return (
-    <div className={`group/schedrow border-b border-sol-border/30 ${isActive ? "bg-sol-orange/[0.06]" : ""}`}>
+    <div className={`group/schedrow relative border-b border-sol-border/30 ${isActive ? "bg-sol-orange/[0.06]" : ""}`}>
       <button
         className="w-full text-left px-3 py-2 hover:bg-sol-bg-alt/60 transition-colors"
         onClick={() => row.openId && onOpen(row.openId)}
@@ -684,7 +666,10 @@ function ScheduleRowItem({ row, activeSessionId, onOpen }: {
           )}
         </div>
       </button>
-      <div className="hidden group-hover/schedrow:flex items-center gap-1 px-3 pb-1.5 -mt-0.5">
+      {/* Hover verbs OVERLAY the row (absolute, solid backdrop) instead of
+          inserting a line — appearing actions must never change the row's
+          height or the whole list shifts under the cursor. */}
+      <div className="hidden group-hover/schedrow:flex absolute right-2 bottom-1 z-10 items-center gap-1 rounded bg-sol-bg shadow-sm ring-1 ring-sol-border/40 p-0.5">
         <button
           onClick={(e) => { e.stopPropagation(); runNow({ task_id: task._id as Id<"agent_tasks"> }).catch(() => {}); toast.success("Run queued"); }}
           className="px-1.5 py-0.5 rounded text-[10px] font-medium text-sol-orange bg-sol-orange/10 hover:bg-sol-orange/20 border border-sol-orange/30 transition-colors"
@@ -755,7 +740,7 @@ function ScheduleDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen }:
           Schedules ({rows.length})
         </span>
         {nextIn !== undefined && (
-          <span className="text-[10px] text-sol-text-dim tabular-nums">· next {nextIn > 0 ? fmtDuration(nextIn) : "due"}</span>
+          <span className="text-[10px] text-sol-text-dim tabular-nums">· next {nextIn > 0 ? `in ${fmtDuration(nextIn)}` : "due"}</span>
         )}
         {unreadCount > 0 && (
           <span className="inline-flex items-center px-1.5 py-0 rounded-full text-[9px] font-semibold bg-sol-orange text-sol-bg">
@@ -1800,9 +1785,14 @@ export function SessionListPanel({
   );
   // A schedule row opens the conversation behind it — the loop's home session
   // or the newest run; the dismissed-peek path handles folded runs.
+  // Opening FROM a schedule surface (dock row, bar under a card) also asks the
+  // conversation's schedule strip to arrive expanded — the click means "show me
+  // this schedule", so the prompt should be visible without a second click.
   const openScheduleTarget = useCallback((convId: string) => {
     const sess = useInboxStore.getState().sessions[convId];
-    if (sess) handleSelect(sess);
+    if (!sess) return;
+    useInboxStore.getState().setScheduleStripExpand({ convId, nonce: Date.now() });
+    handleSelect(sess);
   }, [handleSelect]);
   // Schedule bars under cards: the schedules bound to a VISIBLE session — the
   // ones it originates (inject, any type) plus, for a run card, the schedule
@@ -2094,10 +2084,21 @@ export function SessionListPanel({
 
   // -- Hide & enter animations --
   // Stash: set aside, agent keeps running (Stashed group). The secondary remove.
-  // Deliberately no schedule handling: stash keeps schedules armed (a
-  // scheduler-origin injection preserves the stash), so nothing is canceled.
+  // Deliberately no schedule CHANGE: stash keeps schedules armed (a
+  // scheduler-origin injection preserves the stash), so nothing is canceled —
+  // but SAY so when one is armed, since that asymmetry (stash keeps the loop,
+  // dismiss/kill cancels it) is invisible unless the product states it.
   const handleAnimatedStash = useCallback((id: string) => {
     animatedHideSession(id, "stash");
+    const armed = schedulePartitionRef.current.armedInjectByConv.get(id);
+    if (armed?.length) {
+      toast(
+        armed.length === 1
+          ? `Stashed — schedule "${armed[0].title}" stays armed`
+          : `Stashed — ${armed.length} schedules stay armed`,
+        { description: "It keeps firing here quietly, without pulling the session back into your queue. Dismiss or kill would cancel it.", duration: 8000 },
+      );
+    }
   }, []);
   // Killing a session cancels the schedules that inject into it (server side,
   // on the hide transition) — surface that side effect instead of letting the
@@ -2483,10 +2484,10 @@ export function SessionListPanel({
                 />
                 {/* Schedule bars stack under their card the way subagent rows
                     do — full-width room for name/cadence/countdown instead of
-                    a cramped chip. Click selects the session (the strip above
-                    the conversation carries the controls). */}
+                    a cramped chip. Click selects the session with its schedule
+                    strip pre-expanded (openScheduleTarget). */}
                 {scheduleBarRowsFor(session).map((r) => (
-                  <ScheduleBarRow key={r.task._id} task={r.task} unread={r.unread} onClick={() => handleSelect(session)} />
+                  <ScheduleBarRow key={r.task._id} task={r.task} unread={r.unread} onClick={() => openScheduleTarget(session._id)} />
                 ))}
                 {visibleSubs.map((sub) => (
                   <SessionCard

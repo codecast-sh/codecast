@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { parseScheduleCadence, humanizeDurationToken, describeTaskCadence } from "./scheduleCadence";
+import { parseScheduleCadence, humanizeDurationToken, describeTaskCadence, taskStateLabel } from "./scheduleCadence";
 
 describe("humanizeDurationToken", () => {
   test("expands unit abbreviations to words", () => {
@@ -93,5 +93,27 @@ describe("describeTaskCadence", () => {
     expect(describeTaskCadence({ schedule_type: "once" })).toBe("once");
     // recurring without an interval (malformed row) degrades to once, not a crash
     expect(describeTaskCadence({ schedule_type: "recurring" })).toBe("once");
+  });
+});
+
+describe("taskStateLabel", () => {
+  const now = 1_000_000_000;
+
+  test("future fire reads as a sentence: in <time>", () => {
+    expect(taskStateLabel({ status: "scheduled", run_at: now + 2 * 3600_000 + 6 * 60_000 }, now)).toBe("in 2h 6m");
+    expect(taskStateLabel({ status: "scheduled", run_at: now + 45_000 }, now)).toBe("in 45s");
+  });
+
+  test("elapsed fire is due", () => {
+    expect(taskStateLabel({ status: "scheduled", run_at: now - 1 }, now)).toBe("due");
+  });
+
+  test("state words win over the clock", () => {
+    expect(taskStateLabel({ status: "paused", run_at: now + 60_000 }, now)).toBe("paused");
+    expect(taskStateLabel({ status: "running", run_at: now + 60_000 }, now)).toBe("running");
+  });
+
+  test("no timed fire means event", () => {
+    expect(taskStateLabel({ status: "scheduled" }, now)).toBe("event");
   });
 });
