@@ -31,7 +31,7 @@ import { toast } from "sonner";
 import { animatedHideSession } from "../store/undoActions";
 import { soundKill } from "../lib/sounds";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
-import { X, ChevronsLeft, ChevronsRight, ChevronRight, ChevronDown, List, Clock, Tag, GitFork, History, Star, Activity, Workflow } from "lucide-react";
+import { X, ChevronsLeft, ChevronsRight, ChevronRight, ChevronDown, List, Clock, Tag, GitFork, History, Star, Activity, Workflow, Play, Pause } from "lucide-react";
 import { FilterOptionList } from "./FilterDropdown";
 import { LabelChipsRow } from "./LabelChipsRow";
 import { TaskStatusBadge } from "./TaskStatusBadge";
@@ -578,7 +578,6 @@ function BlockedSessionsBanner({
 // the full prompt and controls.
 function ScheduleBarRow({ task, unread, onClick }: { task: TaskRow; unread?: boolean; onClick: () => void }) {
   const now = useCoarseNow(30_000);
-  const paused = task.status === "paused";
   const stateLabel = taskStateLabel(task, now);
   return (
     <button
@@ -592,15 +591,9 @@ function ScheduleBarRow({ task, unread, onClick }: { task: TaskRow; unread?: boo
       </svg>
       <span className="text-[10px] text-sol-text-dim truncate min-w-0">{task.title}</span>
       {unread && <span className="w-1 h-1 rounded-full bg-sol-orange shrink-0" />}
-      <span className="ml-auto shrink-0 text-[9px] text-sol-text-dim">{describeTaskCadence(task)}</span>
+      <span className="ml-auto shrink-0 text-[9px] font-medium text-sol-text-muted">{describeTaskCadence(task)}</span>
       <span
-        className={`shrink-0 inline-flex items-center px-1 py-0 rounded text-[9px] font-semibold tabular-nums border ${
-          paused
-            ? "bg-sol-bg-alt text-sol-text-dim border-sol-border/50"
-            : task.status === "running"
-              ? "bg-sol-green/10 text-sol-green border-sol-green/30"
-              : "bg-sol-orange/10 text-sol-orange border-sol-orange/30"
-        }`}
+        className={`shrink-0 inline-flex items-center justify-center min-w-[42px] px-1 py-0 rounded text-[9px] font-semibold tabular-nums border ${schedBadgeTone(task, now)}`}
       >
         {stateLabel}
       </span>
@@ -616,6 +609,34 @@ function ScheduleBarRow({ task, unread, onClick }: { task: TaskRow; unread?: boo
 // Clicking opens the conversation behind it (home session or latest run — the
 // dismissed-peek path handles folded runs). Everything a schedule does stays
 // behind its row; escalations and human-driven turns are ordinary cards.
+// Two INDEPENDENT facts a schedule row carries, kept separate so their colors
+// can't blur into each other:
+//   • the LEFT ACCENT = health/liveness — red ONLY when a run failed or the
+//     agent flagged it (red always means "look at this"); green while running;
+//     dim when paused; else the calm schedule-orange.
+//   • the BADGE = the NEXT fire — a brighter orange when it's imminent (<10m),
+//     but never red: "about to fire" is not "went wrong".
+type SchedAccent = "running" | "attention" | "paused" | "normal";
+function schedAccent(task: { status: string; last_run_failed?: boolean; last_run_needs_attention?: boolean }): SchedAccent {
+  if (task.status === "running") return "running";
+  if (task.last_run_failed || task.last_run_needs_attention) return "attention";
+  if (task.status === "paused") return "paused";
+  return "normal";
+}
+const SCHED_ACCENT: Record<SchedAccent, string> = {
+  running: "border-l-sol-green",
+  attention: "border-l-sol-red",
+  paused: "border-l-sol-border",
+  normal: "border-l-sol-orange/50",
+};
+function schedBadgeTone(task: { status: string; run_at?: number }, now: number): string {
+  if (task.status === "paused") return "bg-sol-bg-alt text-sol-text-dim border-sol-border/50";
+  if (task.status === "running") return "bg-sol-green/10 text-sol-green border-sol-green/30";
+  const ms = task.run_at !== undefined ? task.run_at - now : undefined;
+  if (ms !== undefined && ms <= 10 * 60_000) return "bg-sol-orange/20 text-sol-orange border-sol-orange/50 font-bold";
+  return "bg-sol-orange/10 text-sol-orange border-sol-orange/30";
+}
+
 function ScheduleRowItem({ row, activeSessionId, onOpen }: {
   row: ScheduleRow;
   activeSessionId?: string | null;
@@ -626,64 +647,88 @@ function ScheduleRowItem({ row, activeSessionId, onOpen }: {
   const pause = useMutation(api.agentTasks.webPause);
   const resume = useMutation(api.agentTasks.webResume);
   const runNow = useMutation(api.agentTasks.webRunNow);
+  const cancel = useMutation(api.agentTasks.webCancel);
+  const reactivate = useMutation(api.agentTasks.webReactivate);
+  const taskId = task._id as Id<"agent_tasks">;
   const paused = task.status === "paused";
   const stateLabel = taskStateLabel(task, now);
   const isActive = !!row.openId && row.openId === activeSessionId;
+  const accent = schedAccent(task);
   return (
-    <div className={`group/schedrow relative border-b border-sol-border/30 ${isActive ? "bg-sol-orange/[0.06]" : ""}`}>
+    <div className={`group/schedrow relative border-b border-sol-border/30 border-l-2 transition-colors ${isActive ? "bg-sol-orange/[0.08] border-l-sol-orange" : SCHED_ACCENT[accent]}`}>
       <button
-        className="w-full text-left px-3 py-2 hover:bg-sol-bg-alt/60 transition-colors"
+        className="w-full text-left cursor-pointer pl-2.5 pr-3 py-1.5 hover:bg-sol-bg-alt/60 transition-colors"
         onClick={() => row.openId && onOpen(row.openId)}
         title={task.prompt}
       >
         <div className="flex items-center gap-1.5 min-w-0">
-          <svg className="w-3 h-3 shrink-0 text-sol-orange" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-            <circle cx="12" cy="12" r="9" />
-            <path d="M12 7.5V12l3 2" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
+          {accent === "running" && (
+            <span className="relative flex h-2 w-2 shrink-0 items-center justify-center" title="running now">
+              <span className="absolute inline-flex h-2 w-2 rounded-full bg-sol-green/40 animate-ping motion-reduce:animate-none" />
+              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-sol-green" />
+            </span>
+          )}
+          {accent === "attention" && (
+            <span className="w-1.5 h-1.5 rounded-full bg-sol-red shrink-0" title={task.last_run_failed ? "Last run failed" : "Flagged for attention"} />
+          )}
           <span className="text-xs font-medium text-sol-text truncate min-w-0">{task.title}</span>
           {unread && <span className="w-1.5 h-1.5 rounded-full bg-sol-orange shrink-0" title="New outcome since you last opened this section" />}
           <span
-            className={`ml-auto shrink-0 inline-flex items-center px-1 py-0 rounded text-[9px] font-semibold tabular-nums border ${
-              paused
-                ? "bg-sol-bg-alt text-sol-text-dim border-sol-border/50"
-                : task.status === "running"
-                  ? "bg-sol-green/10 text-sol-green border-sol-green/30"
-                  : "bg-sol-orange/10 text-sol-orange border-sol-orange/30"
-            }`}
+            className={`ml-auto shrink-0 inline-flex items-center justify-center min-w-[46px] px-1 py-0 rounded text-[9px] font-semibold tabular-nums border transition-colors ${schedBadgeTone(task, now)}`}
           >
             {stateLabel}
           </span>
         </div>
-        <div className="flex items-center gap-2 mt-0.5 text-[10px] text-sol-text-dim min-w-0">
-          <span className="shrink-0">{describeTaskCadence(task)}</span>
-          {task.mode === "apply" && <span className="shrink-0 text-sol-red/70">apply</span>}
-          {task.run_count > 0 && <span className="shrink-0">{task.run_count} run{task.run_count === 1 ? "" : "s"}</span>}
+        <div className="flex items-center gap-1.5 mt-0.5 text-[10px] min-w-0">
+          <span className="shrink-0 font-medium text-sol-text-muted">{describeTaskCadence(task)}</span>
+          {task.mode === "apply" && (
+            <span className="shrink-0 px-1 rounded bg-sol-red/10 text-sol-red/80 font-medium" title="Runs in apply mode — the agent may make changes">apply</span>
+          )}
+          {task.run_count > 0 && (
+            <span className="shrink-0 text-sol-text-dim/70 before:content-['·'] before:mr-1.5 before:text-sol-text-dim/40">{task.run_count} run{task.run_count === 1 ? "" : "s"}</span>
+          )}
           {task.last_run_summary && (
-            <span className={`truncate min-w-0 ${task.last_run_failed ? "text-sol-red/80" : ""}`}>
+            <span className={`truncate min-w-0 before:content-['·'] before:mr-1.5 before:text-sol-text-dim/40 ${task.last_run_failed ? "text-sol-red/80" : "text-sol-text-dim/70"}`}>
               {task.last_run_summary}
             </span>
           )}
         </div>
       </button>
-      {/* Hover verbs OVERLAY the row (absolute, solid backdrop) instead of
-          inserting a line — appearing actions must never change the row's
-          height or the whole list shifts under the cursor. */}
-      <div className="hidden group-hover/schedrow:flex absolute right-2 bottom-1 z-10 items-center gap-1 rounded bg-sol-bg shadow-sm ring-1 ring-sol-border/40 p-0.5">
+      {/* Hover action rail — same idiom as the inbox session cards: a right-hand
+          strip that fades in over a gradient (so it reads as "revealed", not a
+          box dropped on top), holding compact icon verbs. Absolute + full-height
+          so revealing it never changes the row's height. */}
+      <div className="absolute top-0 bottom-0 right-0 flex items-center gap-0.5 pl-12 pr-2 opacity-0 group-hover/schedrow:opacity-100 transition-opacity duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] bg-gradient-to-r from-transparent via-sol-bg-alt/80 to-sol-bg-alt">
         <button
-          onClick={(e) => { e.stopPropagation(); runNow({ task_id: task._id as Id<"agent_tasks"> }).catch(() => {}); toast.success("Run queued"); }}
-          className="px-1.5 py-0.5 rounded text-[10px] font-medium text-sol-orange bg-sol-orange/10 hover:bg-sol-orange/20 border border-sol-orange/30 transition-colors"
+          title="Run now"
+          aria-label="Run now"
+          onClick={(e) => { e.stopPropagation(); runNow({ task_id: taskId }).catch(() => {}); toast.success("Run queued"); }}
+          className="p-1 rounded text-sol-text-dim hover:text-sol-orange hover:bg-sol-orange/10 transition-[color,background-color,transform] duration-100 active:scale-90"
         >
-          Run now
+          <Play className="w-3.5 h-3.5" fill="currentColor" strokeWidth={0} />
         </button>
         <button
+          title={paused ? "Resume schedule" : "Pause schedule"}
+          aria-label={paused ? "Resume schedule" : "Pause schedule"}
           onClick={(e) => {
             e.stopPropagation();
-            (paused ? resume({ task_id: task._id as Id<"agent_tasks"> }) : pause({ task_id: task._id as Id<"agent_tasks"> })).catch(() => {});
+            (paused ? resume({ task_id: taskId }) : pause({ task_id: taskId })).catch(() => {});
           }}
-          className="px-1.5 py-0.5 rounded text-[10px] font-medium text-sol-text-dim bg-sol-bg-alt hover:bg-sol-bg-alt/70 border border-sol-border/50 transition-colors"
+          className="p-1 rounded text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-[color,background-color,transform] duration-100 active:scale-90"
         >
-          {paused ? "Resume" : "Pause"}
+          {paused ? <Play className="w-3.5 h-3.5" fill="currentColor" strokeWidth={0} /> : <Pause className="w-3.5 h-3.5" fill="currentColor" strokeWidth={0} />}
+        </button>
+        <button
+          title="Cancel schedule"
+          aria-label="Cancel schedule"
+          onClick={(e) => {
+            e.stopPropagation();
+            cancel({ task_id: taskId }).catch(() => {});
+            toast("Schedule canceled", { description: task.title, action: { label: "Undo", onClick: () => { reactivate({ task_id: taskId }).catch(() => {}); } } });
+          }}
+          className="p-1 rounded text-sol-text-dim hover:text-sol-red hover:bg-sol-red/10 transition-[color,background-color,transform] duration-100 active:scale-90"
+        >
+          <X className="w-3.5 h-3.5" strokeWidth={2.5} />
         </button>
       </div>
     </div>
@@ -720,7 +765,7 @@ function ScheduleDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen }:
   return (
     <div className="relative shrink-0 border-t border-sol-border/40">
       {open && (
-        <div className="absolute bottom-full left-0 right-0 max-h-[55vh] overflow-y-auto bg-sol-bg border-t border-sol-border/60 shadow-[0_-8px_24px_rgba(0,0,0,0.18)] z-20">
+        <div className="animate-sched-roster-in absolute bottom-full left-0 right-0 max-h-[55vh] overflow-y-auto bg-sol-bg border-t border-sol-border/60 shadow-[0_-8px_24px_rgba(0,0,0,0.18)] z-20">
           {rows.map((r) => (
             <ScheduleRowItem
               key={r.task._id}
@@ -737,7 +782,7 @@ function ScheduleDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen }:
           <path d="M12 7.5V12l3 2" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
         <span className="text-[10px] font-semibold uppercase tracking-wider text-sol-orange">
-          Schedules ({rows.length})
+          Schedules <span className="text-sol-orange/60 tabular-nums">{rows.length}</span>
         </span>
         {nextIn !== undefined && (
           <span className="text-[10px] text-sol-text-dim tabular-nums">· next {nextIn > 0 ? `in ${fmtDuration(nextIn)}` : "due"}</span>
@@ -747,8 +792,13 @@ function ScheduleDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen }:
             {unreadCount} new
           </span>
         )}
-        {attention && <span className="text-[9px] font-semibold text-sol-red uppercase">attention</span>}
-        <svg className={`ml-auto w-3 h-3 transition-transform text-sol-text-dim ${open ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        {attention && (
+          <span className="inline-flex items-center gap-1 px-1.5 py-0 rounded-full text-[9px] font-semibold bg-sol-red/15 text-sol-red border border-sol-red/30">
+            <span className="w-1 h-1 rounded-full bg-sol-red" />
+            needs attention
+          </span>
+        )}
+        <svg className={`ml-auto w-3 h-3 transition-transform duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] text-sol-text-dim ${open ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
         </svg>
       </button>

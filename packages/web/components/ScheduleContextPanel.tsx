@@ -148,7 +148,7 @@ export function ScheduleContextPanel({
   };
 
   const actionBtn =
-    "px-1.5 py-0.5 rounded border text-[10px] font-medium transition-colors disabled:opacity-50";
+    "px-1.5 py-0.5 rounded border text-[10px] font-medium transition-[color,background-color,transform] duration-100 active:scale-[0.97] disabled:opacity-50 disabled:active:scale-100";
 
   return (
     <div className="border-b border-sol-border/30 bg-sol-bg-alt/20">
