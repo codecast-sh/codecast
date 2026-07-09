@@ -4,7 +4,7 @@ import { enqueueStartSession, resolveOwnerDevice } from "./devices";
 import { findConversationBySessionReference } from "./conversationSessionLookup";
 import { paginationOptsValidator } from "convex/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { Id } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import { checkRateLimit } from "./rateLimit";
 import { verifyApiToken } from "./apiTokens";
 import { internal } from "./_generated/api";
@@ -62,6 +62,127 @@ async function fetchMessageSearchPool(ctx: QueryCtx, terms: ParsedTerms) {
     .query("messages")
     .withSearchIndex("search_content_v2", (q) => q.search("content", searchQuery))
     .take(512);
+}
+
+// Team-scoped visibility context shared by the conversation-search queries:
+// the rosters of every team the caller can see, the per-team feed filters,
+// and the visibility predicate built from them. mineOnly skips roster loading
+// entirely — the predicate then only passes the caller's own conversations.
+async function loadConversationSearchScope(
+  ctx: QueryCtx,
+  userId: Id<"users">,
+  user: Doc<"users">,
+  args: { mineOnly?: boolean; activeTeamId?: Id<"teams"> },
+) {
+  const userMemberships = await ctx.db
+    .query("team_memberships")
+    .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+    .collect();
+  const userTeamIds = userMemberships.map(m => m.team_id);
+
+  const effectiveTeamIds = args.mineOnly
+    ? []
+    : args.activeTeamId ? [args.activeTeamId] : userTeamIds;
+
+  const allTeamUsers: Doc<"users">[] = [];
+  for (const teamId of effectiveTeamIds) {
+    const teamMemberships = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_team_id", (q) => q.eq("team_id", teamId))
+      .collect();
+    const memberUsers = await Promise.all(
+      teamMemberships.map(m => ctx.db.get(m.user_id))
+    );
+    allTeamUsers.push(...memberUsers.filter((u): u is Doc<"users"> => u !== null));
+  }
+  const teamUsers = [...new Map(allTeamUsers.map(u => [u._id.toString(), u])).values()];
+  const teamUserIds = new Set(teamUsers.map(u => u._id.toString()));
+  const effectiveTeamIdSet = new Set(effectiveTeamIds.map(id => id.toString()));
+
+  const feedFilters = new Map<string, Awaited<ReturnType<typeof createTeamFeedFilter>>>();
+  for (const teamId of effectiveTeamIds) {
+    feedFilters.set(teamId.toString(), await createTeamFeedFilter(ctx, teamId));
+  }
+
+  // Author identities for result rows: every visible conversation is authored
+  // by the caller or a loaded team member, so no per-result ctx.db.get needed.
+  const userById = new Map<string, Doc<"users">>(teamUsers.map(u => [u._id.toString(), u]));
+  userById.set(userId.toString(), user);
+
+  const isVisible = (conv: Doc<"conversations">): boolean => {
+    if (conv.user_id.toString() === userId.toString()) return true;
+    if (!conv.team_id || !effectiveTeamIdSet.has(conv.team_id.toString())) return false;
+    const filter = feedFilters.get(conv.team_id.toString());
+    if (!filter || !filter.isVisible(conv)) return false;
+    if (!teamUserIds.has(conv.user_id.toString())) return false;
+    return true;
+  };
+
+  return { userById, isVisible };
+}
+
+// Titles and summaries aren't covered by the message index — search them
+// directly so a session like "Poll render debug" surfaces even when no
+// message body matches. subtitle (multi-line generated summary) and
+// idle_summary (one-line blurb) catch sessions the user remembers by their
+// summary wording rather than their title. These scans run over the (small)
+// conversations table, so they stay within budget even when the message
+// full-text search can't (see the fetchMessageSearchPool NOTE) — which is why
+// searchConversationTitles exposes them on their own.
+async function fetchTitleFieldHits(ctx: QueryCtx, terms: ParsedTerms) {
+  const searchQuery = terms.all.join(" ");
+  const fieldHits = await Promise.all([
+    ctx.db
+      .query("conversations")
+      .withSearchIndex("search_title_v2", (q) => q.search("title", searchQuery))
+      .take(50),
+    ctx.db
+      .query("conversations")
+      .withSearchIndex("search_subtitle", (q) => q.search("subtitle", searchQuery))
+      .take(50),
+    ctx.db
+      .query("conversations")
+      .withSearchIndex("search_idle_summary", (q) => q.search("idle_summary", searchQuery))
+      .take(50),
+  ]);
+  const hits = new Map<string, Doc<"conversations">>();
+  for (const conv of fieldHits.flat()) {
+    const convId = conv._id.toString();
+    if (hits.has(convId)) continue;
+    const directFields = `${conv.title || ""} ${conv.subtitle || ""} ${conv.idle_summary || ""}`;
+    if (!contentMatchesAnyTerm(directFields, terms)) continue;
+    hits.set(convId, conv);
+  }
+  return hits;
+}
+
+// First-message fetch only feeds a title fallback, so it's only needed for
+// the title-less conversations that actually made the displayed slice.
+async function resolveFirstMessageTitles(ctx: QueryCtx, convs: Doc<"conversations">[]) {
+  const firstMsgByConv = new Map<string, string>();
+  await Promise.all(
+    convs.map(async (conv) => {
+      if (conv.title) return;
+      const firstMessages = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
+        .order("asc")
+        .take(10);
+      for (const msg of firstMessages) {
+        const hasToolResults = msg.tool_results && msg.tool_results.length > 0;
+        if (msg.role === "user" && !hasToolResults) {
+          const text = msg.content?.trim();
+          if (text) {
+            let firstUserMessage = text.slice(0, 120);
+            if (text.length > 120) firstUserMessage += "...";
+            firstMsgByConv.set(conv._id.toString(), firstUserMessage);
+            break;
+          }
+        }
+      }
+    })
+  );
+  return firstMsgByConv;
 }
 
 const NOISE_TITLE_PREFIXES = ["[Using:", "[Request", "[SUGGESTION MODE:"];
@@ -2758,39 +2879,7 @@ export const searchConversations = query({
       return [];
     }
 
-    const userMemberships = await ctx.db
-      .query("team_memberships")
-      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-      .collect();
-    const userTeamIds = userMemberships.map(m => m.team_id);
-
-    // mineOnly never surfaces teammates' sessions, so skip the team roster +
-    // feed-filter loads entirely — the visibility filter below then only
-    // passes own conversations.
-    const effectiveTeamIds = args.mineOnly
-      ? []
-      : args.activeTeamId ? [args.activeTeamId] : userTeamIds;
-
-    type UserDoc = NonNullable<Awaited<ReturnType<typeof ctx.db.get<"users">>>>;
-    const allTeamUsers: UserDoc[] = [];
-    for (const teamId of effectiveTeamIds) {
-      const teamMemberships = await ctx.db
-        .query("team_memberships")
-        .withIndex("by_team_id", (q) => q.eq("team_id", teamId))
-        .collect();
-      const memberUsers = await Promise.all(
-        teamMemberships.map(m => ctx.db.get(m.user_id))
-      );
-      allTeamUsers.push(...memberUsers.filter((u): u is UserDoc => u !== null));
-    }
-    const teamUsers = [...new Map(allTeamUsers.map(u => [u._id.toString(), u])).values()];
-    const teamUserIds = new Set(teamUsers.map(u => u._id.toString()));
-    const effectiveTeamIdSet = new Set(effectiveTeamIds.map(id => id.toString()));
-
-    const feedFilters = new Map<string, Awaited<ReturnType<typeof createTeamFeedFilter>>>();
-    for (const teamId of effectiveTeamIds) {
-      feedFilters.set(teamId.toString(), await createTeamFeedFilter(ctx, teamId));
-    }
+    const scope = await loadConversationSearchScope(ctx, userId, user, args);
 
     const searchTerm = args.query.trim();
     if (!searchTerm || searchTerm.length < 2) {
@@ -2800,7 +2889,6 @@ export const searchConversations = query({
     const limit = args.limit ?? 20;
     const userOnly = args.userOnly ?? false;
     const terms = parseSearchTerms(searchTerm);
-    const searchQuery = terms.all.join(" ");
     const searchResults = await fetchMessageSearchPool(ctx, terms);
 
     // Group messages by conversation (keep messages matching ANY term for context)
@@ -2827,33 +2915,10 @@ export const searchConversations = query({
       }
     }
 
-    // Titles and summaries aren't covered by the message index — search them
-    // directly so a session like "Poll render debug" surfaces even when no
-    // message body matches. subtitle (multi-line generated summary) and
-    // idle_summary (one-line blurb) catch sessions the user remembers by their
-    // summary wording rather than their title.
-    type ConvDoc = NonNullable<Awaited<ReturnType<typeof ctx.db.get<"conversations">>>>;
-    const titleConvs = new Map<string, ConvDoc>();
+    const titleConvs = new Map<string, Doc<"conversations">>();
     if (!userOnly) {
-      const fieldHits = await Promise.all([
-        ctx.db
-          .query("conversations")
-          .withSearchIndex("search_title_v2", (q) => q.search("title", searchQuery))
-          .take(50),
-        ctx.db
-          .query("conversations")
-          .withSearchIndex("search_subtitle", (q) => q.search("subtitle", searchQuery))
-          .take(50),
-        ctx.db
-          .query("conversations")
-          .withSearchIndex("search_idle_summary", (q) => q.search("idle_summary", searchQuery))
-          .take(50),
-      ]);
-      for (const conv of fieldHits.flat()) {
-        const convId = conv._id.toString();
-        if (conversationMatches.has(convId) || titleConvs.has(convId)) continue;
-        const directFields = `${conv.title || ""} ${conv.subtitle || ""} ${conv.idle_summary || ""}`;
-        if (!contentMatchesAnyTerm(directFields, terms)) continue;
+      for (const [convId, conv] of await fetchTitleFieldHits(ctx, terms)) {
+        if (conversationMatches.has(convId)) continue;
         titleConvs.set(convId, conv);
       }
     }
@@ -2885,7 +2950,7 @@ export const searchConversations = query({
     const matchConvs = await Promise.all(
       matchEntries.map((messages) => ctx.db.get(messages[0].conversation_id))
     );
-    const candidates: Array<{ conv: ConvDoc; messages: typeof searchResults }> = [];
+    const candidates: Array<{ conv: Doc<"conversations">; messages: typeof searchResults }> = [];
     matchEntries.forEach((messages, i) => {
       const conv = matchConvs[i];
       if (conv) candidates.push({ conv, messages });
@@ -2894,21 +2959,8 @@ export const searchConversations = query({
       candidates.push({ conv, messages: [] });
     }
 
-    // Author identities are already loaded above (current user + team members),
-    // and every visible candidate is authored by one of them — so resolve names
-    // from this map instead of a per-result ctx.db.get.
-    const userById = new Map<string, UserDoc>(teamUsers.map((u) => [u._id.toString(), u]));
-    userById.set(userId.toString(), user);
-
     // Visibility filter is synchronous (no DB) — drop non-visible candidates first.
-    const visible = candidates.filter(({ conv }) => {
-      if (conv.user_id.toString() === userId.toString()) return true;
-      if (!conv.team_id || !effectiveTeamIdSet.has(conv.team_id.toString())) return false;
-      const filter = feedFilters.get(conv.team_id.toString());
-      if (!filter || !filter.isVisible(conv)) return false;
-      if (!teamUserIds.has(conv.user_id.toString())) return false;
-      return true;
-    });
+    const visible = candidates.filter(({ conv }) => scope.isVisible(conv));
 
     // Time-range filter applies before totals so the counts reflect what's
     // actually browsable under the current filters.
@@ -2933,36 +2985,11 @@ export const searchConversations = query({
     const totalSessions = scored.length;
     const top = scored.slice(0, limit);
 
-    // First-message fetch only feeds a title fallback, so it's only needed for the
-    // title-less conversations that actually made the displayed slice — fetch those
-    // in parallel rather than one-per-candidate.
-    const firstMsgByConv = new Map<string, string>();
-    await Promise.all(
-      top.map(async ({ conv }) => {
-        if (conv.title) return;
-        const firstMessages = await ctx.db
-          .query("messages")
-          .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
-          .order("asc")
-          .take(10);
-        for (const msg of firstMessages) {
-          const hasToolResults = msg.tool_results && msg.tool_results.length > 0;
-          if (msg.role === "user" && !hasToolResults) {
-            const text = msg.content?.trim();
-            if (text) {
-              let firstUserMessage = text.slice(0, 120);
-              if (text.length > 120) firstUserMessage += "...";
-              firstMsgByConv.set(conv._id.toString(), firstUserMessage);
-              break;
-            }
-          }
-        }
-      })
-    );
+    const firstMsgByConv = await resolveFirstMessageTitles(ctx, top.map((c) => c.conv));
 
     for (const { conv, messages, proximityScore } of top) {
       const isOwn = conv.user_id.toString() === userId.toString();
-      const conversationUser = userById.get(conv.user_id.toString());
+      const conversationUser = scope.userById.get(conv.user_id.toString());
       const firstUserMessage = firstMsgByConv.get(conv._id.toString()) || "";
 
       const title = conv.title
@@ -3013,6 +3040,78 @@ export const searchConversations = query({
       totalMatches,
       totalSessions,
     };
+  },
+});
+
+// The cheap, reliable half of global search: only the conversation-level
+// search indexes (title/subtitle/idle_summary), never the messages full-text
+// index. Common tokens can blow the read budget on the message search (see
+// the fetchMessageSearchPool NOTE) and kill searchConversations wholesale —
+// clients call this alongside it, render these rows immediately, and merge in
+// message matches if/when the full search returns (dedup by conversationId,
+// message rows win). Result rows are shaped exactly like searchConversations
+// results so the merge is a plain concat. userOnly callers skip this query:
+// title matches aren't user-authored messages.
+export const searchConversationTitles = query({
+  args: {
+    query: v.string(),
+    limit: v.optional(v.number()),
+    activeTeamId: v.optional(v.id("teams")),
+    mineOnly: v.optional(v.boolean()),
+    since: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const empty = { results: [], totalMatches: 0, totalSessions: 0 };
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return empty;
+    const user = await ctx.db.get(userId);
+    if (!user) return empty;
+
+    const searchTerm = args.query.trim();
+    if (!searchTerm || searchTerm.length < 2) return empty;
+
+    const terms = parseSearchTerms(searchTerm);
+    if (terms.all.length === 0) return empty;
+    const scope = await loadConversationSearchScope(ctx, userId, user, args);
+    const hits = await fetchTitleFieldHits(ctx, terms);
+
+    const visible = [...hits.values()].filter((conv) => scope.isVisible(conv));
+    const scoped = args.since
+      ? visible.filter((conv) => conv.updated_at >= args.since!)
+      : visible;
+    scoped.sort((a, b) => b.updated_at - a.updated_at);
+    const top = scoped.slice(0, args.limit ?? 20);
+    const firstMsgByConv = await resolveFirstMessageTitles(ctx, top);
+
+    const results = top.map((conv) => {
+      const conversationUser = scope.userById.get(conv.user_id.toString());
+      const title = conv.title
+        || firstMsgByConv.get(conv._id.toString())
+        || (conv.slug ? formatSlugAsTitle(conv.slug) : null)
+        || "New Session";
+      return {
+        conversationId: conv._id as string,
+        title,
+        matchCount: 0,
+        matches: [] as Array<{
+          messageId: string;
+          content: string;
+          role: string;
+          timestamp: number;
+        }>,
+        updatedAt: conv.updated_at,
+        authorName: conversationUser?.name || "Unknown",
+        authorAvatar: (conversationUser as any)?.image || (conversationUser as any)?.github_avatar_url || null,
+        isOwn: conv.user_id.toString() === userId.toString(),
+        messageCount: conv.message_count || 0,
+        proximityScore: 0,
+        titleMatch: true,
+        projectPath: conv.project_path || null,
+        agentType: conv.agent_type || null,
+      };
+    });
+
+    return { results, totalMatches: 0, totalSessions: results.length };
   },
 });
 
@@ -3474,6 +3573,7 @@ export const searchForCLI = query({
     member_name: v.optional(v.string()),
     mine_only: v.optional(v.boolean()),
     label: v.optional(v.string()),
+    titles_only: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -3571,6 +3671,77 @@ export const searchForCLI = query({
     const userOnly = args.user_only ?? false;
     const terms = parseSearchTerms(searchTerm);
 
+    // Shared by the message-match path and the titles_only path: every filter
+    // that decides whether a conversation is in scope for this caller.
+    const isEligibleConv = (conv: any): boolean => {
+      const isOwn = conv.user_id.toString() === authUserId.toString();
+      if (!isOwn) {
+        if (!conv.team_id || !effectiveTeamIdSet.has(conv.team_id.toString())) return false;
+        const cliFilter = cliFeedFilters.get(conv.team_id.toString());
+        if (!cliFilter || !cliFilter.isVisible(conv)) return false;
+        if (!teamUserIds.has(conv.user_id.toString())) return false;
+      } else if (resolvedTeamId) {
+        // Own sessions: filter by team when team is resolved from directory
+        const convTeamId = (conv.team_id ?? conv.active_team_id)?.toString();
+        if (!convTeamId || !effectiveTeamIdSet.has(convTeamId)) return false;
+      }
+
+      // Filter by specific member (or self via --mine)
+      if (filterUserId && conv.user_id.toString() !== filterUserId) return false;
+
+      // Filter to sessions the caller filed under the given label —
+      // project-bounded by default (the CLI passes cwd unless -g).
+      if (labelConvIds) {
+        if (!labelConvIds.has(conv._id.toString())) return false;
+        if (projectPath && !(projectOverlaps(projectPath, conv.project_path) || projectOverlaps(projectPath, conv.git_root))) return false;
+      }
+
+      if (startTime && conv.updated_at < startTime) return false;
+      if (endTime && conv.updated_at > endTime) return false;
+      return true;
+    };
+
+    // titles_only: the reliable half of search — only the conversation-table
+    // indexes (title/subtitle/idle_summary), never the messages full-text
+    // index, which blows the read budget on common tokens (see the
+    // fetchMessageSearchPool NOTE). The CLI retries with this after a content
+    // search dies, so agents get title/summary hits instead of a hard error.
+    if (args.titles_only) {
+      const hits = await fetchTitleFieldHits(ctx, terms);
+      const visibleConvs = [...hits.values()]
+        .filter(isEligibleConv)
+        .sort((a, b) => b.updated_at - a.updated_at);
+      const page = visibleConvs.slice(offset, offset + limit);
+      const firstMsgByConv = await resolveFirstMessageTitles(ctx, page);
+      const conversations = page.map((conv) => {
+        const isOwnConv = conv.user_id.toString() === authUserId.toString();
+        const owner = teamUserMap.get(conv.user_id.toString()) || (isOwnConv ? user : null);
+        const title = conv.title
+          || firstMsgByConv.get(conv._id.toString())
+          || (conv.slug ? formatSlugAsTitle(conv.slug) : null)
+          || "New Session";
+        return {
+          id: conv.short_id || conv._id.toString().slice(0, 7),
+          title,
+          project_path: conv.project_path || null,
+          updated_at: new Date(conv.updated_at).toISOString(),
+          message_count: conv.message_count || 0,
+          proximityScore: 0,
+          coverage: 1,
+          user: !isOwnConv && owner ? { name: owner.name || null, email: owner.email || null } : undefined,
+          matches: [],
+          context: [],
+          title_match: true,
+        };
+      });
+      return {
+        total_matches: 0,
+        conversations,
+        search_scope: projectPath || "global",
+        titles_only: true,
+      };
+    }
+
     const searchResults = await fetchMessageSearchPool(ctx, terms);
 
     // Group messages by conversation (keep messages matching ANY term for context)
@@ -3634,32 +3805,7 @@ export const searchForCLI = query({
     candidates.forEach(({ messages, coverage }, i) => {
       const conv = hydratedConvs[i] as any;
       if (!conv) return;
-
-      const isOwn = conv.user_id.toString() === authUserId.toString();
-      if (!isOwn) {
-        if (!conv.team_id || !effectiveTeamIdSet.has(conv.team_id.toString())) return;
-        const cliFilter = cliFeedFilters.get(conv.team_id.toString());
-        if (!cliFilter || !cliFilter.isVisible(conv)) return;
-        if (!teamUserIds.has(conv.user_id.toString())) return;
-      } else if (resolvedTeamId) {
-        // Own sessions: filter by team when team is resolved from directory
-        const convTeamId = (conv.team_id ?? conv.active_team_id)?.toString();
-        if (!convTeamId || !effectiveTeamIdSet.has(convTeamId)) return;
-      }
-
-      // Filter by specific member (or self via --mine)
-      if (filterUserId && conv.user_id.toString() !== filterUserId) return;
-
-      // Filter to sessions the caller filed under the given label —
-      // project-bounded by default (the CLI passes cwd unless -g).
-      if (labelConvIds) {
-        if (!labelConvIds.has(conv._id.toString())) return;
-        if (projectPath && !(projectOverlaps(projectPath, conv.project_path) || projectOverlaps(projectPath, conv.git_root))) return;
-      }
-
-      if (startTime && conv.updated_at < startTime) return;
-      if (endTime && conv.updated_at > endTime) return;
-
+      if (!isEligibleConv(conv)) return;
       eligible.push({ conv, messages, coverage });
     });
 
