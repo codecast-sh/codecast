@@ -55,6 +55,7 @@ import type * as githubApi from "../githubApi.js";
 import type * as githubApp from "../githubApp.js";
 import type * as githubWebhooks from "../githubWebhooks.js";
 import type * as health from "../health.js";
+import type * as heartbeatBacklog from "../heartbeatBacklog.js";
 import type * as http from "../http.js";
 import type * as idleSummary from "../idleSummary.js";
 import type * as images from "../images.js";
@@ -100,6 +101,7 @@ import type * as testDb from "../testDb.js";
 import type * as titleGeneration from "../titleGeneration.js";
 import type * as userMessagesFilter from "../userMessagesFilter.js";
 import type * as users from "../users.js";
+import type * as webDocsPagination from "../webDocsPagination.js";
 import type * as workflow_runs from "../workflow_runs.js";
 import type * as workflows from "../workflows.js";
 
@@ -157,6 +159,7 @@ declare const fullApi: ApiFromModules<{
   githubApp: typeof githubApp;
   githubWebhooks: typeof githubWebhooks;
   health: typeof health;
+  heartbeatBacklog: typeof heartbeatBacklog;
   http: typeof http;
   idleSummary: typeof idleSummary;
   images: typeof images;
@@ -202,6 +205,7 @@ declare const fullApi: ApiFromModules<{
   titleGeneration: typeof titleGeneration;
   userMessagesFilter: typeof userMessagesFilter;
   users: typeof users;
+  webDocsPagination: typeof webDocsPagination;
   workflow_runs: typeof workflow_runs;
   workflows: typeof workflows;
 }>;
