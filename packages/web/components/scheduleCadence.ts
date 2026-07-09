@@ -55,6 +55,21 @@ export function describeTaskCadence(task: {
   return "once";
 }
 
+// Live state label for a schedule row: a countdown that reads as a sentence
+// ("in 2h 6m"), or the state word when there's no ticking clock ("due",
+// "paused", "running", "event"). Shared by every schedule row surface so the
+// wording can't drift between the dock, the bars, and the strip.
+export function taskStateLabel(
+  task: { status: string; run_at?: number },
+  now: number
+): string {
+  if (task.status === "paused") return "paused";
+  if (task.status === "running") return "running";
+  if (task.run_at === undefined) return "event";
+  const ms = task.run_at - now;
+  return ms > 0 ? `in ${fmtDuration(ms)}` : "due";
+}
+
 // Extract the human-readable cadence from `cast schedule add` args. The three timing flags are
 // mutually exclusive; absent all of them the task runs immediately ("now").
 export function parseScheduleCadence(args: string): string | null {
