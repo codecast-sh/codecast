@@ -14,6 +14,7 @@ import { resolveRecentVisits, visitTimeAgo, type ResolvedVisit } from "../lib/re
 import { PageIcon } from "./RecentlyViewedMenu";
 import { isNonTabRoute } from "../src/compat/tabRouting";
 import { score } from "../hooks/useMentionQuery";
+import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { isElectron } from "../lib/desktop";
 import { isInboxRoute } from "../lib/inboxRouting";
 import { useCurrentUser } from "../hooks/useCurrentUser";
@@ -1076,11 +1077,29 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     return () => clearTimeout(timer);
   }, [query, open]);
 
-  const searchResults = useQuery(
+  // Non-throwing: a broad term can blow the backend's query budget and return a
+  // terminal error — bare useQuery re-throws that in render and unmounts the
+  // whole palette into its ErrorBoundary (ct-37627).
+  const { data: searchResults, error: searchError } = useQueryNoThrow(
     api.conversations.searchConversations,
     open && debouncedQuery.length >= 2 ? { query: debouncedQuery, limit: 10 } : "skip"
   );
   const searchData = searchResults && "results" in searchResults ? searchResults : null;
+  // Cheap always-fast companion: title/subtitle/summary matches come from the
+  // small conversations table and land while (or even if never) the message
+  // content search resolves — so the user always gets something (ct-37627).
+  const { data: titleResults } = useQueryNoThrow(
+    api.conversations.searchConversationTitles,
+    open && debouncedQuery.length >= 2 ? { query: debouncedQuery, limit: 10 } : "skip"
+  );
+  const titleData = titleResults && "results" in titleResults ? titleResults : null;
+  const searchRows = useMemo(() => {
+    const msgRows = searchData?.results ?? [];
+    const titleRows = titleData?.results ?? [];
+    if (!titleRows.length) return msgRows;
+    const seen = new Set(msgRows.map((r: any) => r.conversationId));
+    return [...msgRows, ...titleRows.filter((r: any) => !seen.has(r.conversationId))];
+  }, [searchData, titleData]);
 
   const projects = useMemo(() => {
     const dirMap = new Map<string, number>();
@@ -1896,10 +1915,10 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         {/* Async conversation search results */}
         {debouncedQuery.length >= 2 && (
           <CommandPrimitive.Group
-            heading={searchData ? `Search Results (${searchData.results?.length || 0})` : "Searching..."}
+            heading={searchData || titleData ? `Search Results (${searchRows.length})` : searchError ? "Search Results" : "Searching..."}
             className={groupClass}
           >
-            {!searchData && (
+            {!searchData && !searchError && searchRows.length === 0 && (
               <CommandPrimitive.Item
                 value="__search__ loading"
                 disabled
@@ -1908,7 +1927,18 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 Searching conversations...
               </CommandPrimitive.Item>
             )}
-            {searchData?.results?.map((result: any) => (
+            {searchError && (
+              <CommandPrimitive.Item
+                value="__search__ error"
+                disabled
+                className="px-4 py-3 text-center text-xs text-sol-text-dim cursor-default"
+              >
+                {searchRows.length > 0
+                  ? "Content search timed out — showing title matches only."
+                  : "Search timed out — broad terms scan your whole history. Try a more specific word or a quoted phrase."}
+              </CommandPrimitive.Item>
+            )}
+            {searchRows.map((result: any) => (
               <CommandPrimitive.Item
                 key={`search-${result.conversationId}`}
                 value={`__search__ ${result.title} ${result.matches?.[0]?.content?.slice(0, 100) || ""}|||${result.conversationId}`}
@@ -1955,7 +1985,16 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{timeAgo(result.updatedAt)}</span>
               </CommandPrimitive.Item>
             ))}
-            {searchData?.results?.length === 0 && (
+            {!searchData && !searchError && searchRows.length > 0 && (
+              <CommandPrimitive.Item
+                value="__search__ content-loading"
+                disabled
+                className="px-4 py-2 text-center text-[11px] text-sol-text-dim animate-pulse cursor-default"
+              >
+                Searching message content...
+              </CommandPrimitive.Item>
+            )}
+            {searchData && searchRows.length === 0 && (
               <CommandPrimitive.Item
                 value="__search__ empty"
                 disabled
