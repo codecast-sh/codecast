@@ -74,6 +74,10 @@ interface SearchResult {
   total_matches: number;
   conversations: SearchConversation[];
   search_scope?: string;
+  // Set when the server answered in titles_only mode (content search died on a
+  // read-budget/capacity error and the CLI fell back — see cliSearchRequest).
+  titles_only?: boolean;
+  content_search_error?: string;
 }
 
 interface SearchOptions {
@@ -256,14 +260,21 @@ export function formatSearchResults(result: SearchResult, options: SearchOptions
 
   lines.push("<SEARCHRESULTS>");
 
-  if (result.total_matches === 0) {
+  if (result.titles_only) {
+    lines.push(`${c.yellow}Content search unavailable${c.reset}${c.dim} (${result.content_search_error || "backend overloaded"}) — showing title/summary matches only. Try a more specific word for full-text results.${c.reset}`);
+    lines.push("");
+  }
+
+  if (result.total_matches === 0 && result.conversations.length === 0) {
     lines.push("No matches found.");
     lines.push("Use --mine for only your sessions, -g for all teams.");
     lines.push("</SEARCHRESULTS>");
     return lines.join("\n");
   }
 
-  lines.push(`Found ${result.total_matches} match${result.total_matches === 1 ? "" : "es"} in ${result.conversations.length} conversation${result.conversations.length === 1 ? "" : "s"}\n`);
+  lines.push(result.titles_only
+    ? `Found ${result.conversations.length} session${result.conversations.length === 1 ? "" : "s"} by title/summary\n`
+    : `Found ${result.total_matches} match${result.total_matches === 1 ? "" : "es"} in ${result.conversations.length} conversation${result.conversations.length === 1 ? "" : "s"}\n`);
 
   for (const conv of result.conversations) {
     lines.push(""); // Extra spacing before each conversation
