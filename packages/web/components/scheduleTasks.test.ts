@@ -63,6 +63,19 @@ describe("partitionScheduleInbox rows", () => {
     expect(p.nextRunAt).toBe(now + 60_000);
   });
 
+  it("puts a live (running) schedule at the very top, above sooner-scheduled ones", () => {
+    const now = Date.now();
+    const p = partitionScheduleInbox(
+      [
+        task("soon", { run_at: now + 60_000 }),
+        task("live", { status: "running", run_at: now + 5_000_000 }),
+        task("paused", { status: "paused", run_at: now + 1 }),
+      ],
+      {},
+    );
+    expect(p.rows.map((r) => r.task._id)).toEqual(["live", "soon", "paused"]);
+  });
+
   it("counts unread outcomes against the watermark", () => {
     const now = Date.now();
     const p = partitionScheduleInbox(

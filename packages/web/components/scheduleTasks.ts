@@ -163,9 +163,16 @@ export function partitionScheduleInbox(
     rows.push({ task, openId: newestAbsorbed?._id ?? task.last_run_conversation_id, unread });
   }
 
-  // Soonest fire first; event triggers and paused schedules (no meaningful
-  // run_at) sink to the bottom, newest-created first among themselves.
+  // Ordered in tiers of "what's happening now → what's happening next → what's
+  // idle": live runs at the very top, then scheduled by soonest fire, then
+  // paused / event / no-run_at at the bottom (newest-created first among those).
+  // (Running previously sank to the bottom because its status isn't
+  // "scheduled" — the opposite of what a roster wants to surface.)
+  const tier = (t: ScheduleRow["task"]) =>
+    t.status === "running" ? 0 : t.status === "scheduled" ? 1 : 2;
   rows.sort((a, b) => {
+    const ta = tier(a.task), tb = tier(b.task);
+    if (ta !== tb) return ta - tb;
     const ar = a.task.status === "scheduled" ? a.task.run_at ?? Infinity : Infinity;
     const br = b.task.status === "scheduled" ? b.task.run_at ?? Infinity : Infinity;
     if (ar !== br) return ar - br;
