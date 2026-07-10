@@ -7077,6 +7077,24 @@ export function extractTmuxLiveRegion(paneContent: string): string {
   return tail.slice(-5).join("\n");
 }
 
+// Every tmux launch types `env -u CLAUDECODE … <agent> …` into a fresh shell,
+// so pane content ABOVE that echoed command is shell-startup noise, not agent
+// output. On a machine whose rc files print errors at startup (e.g. a bash
+// completions file sourced by zsh emitting "command not found"), scanning the
+// whole pane tripped the fatal-error check on the first readiness poll and
+// killed every auto-resume in a loop — the tmux existed for <1s at a time, so
+// the web "attach" command never found it. Returns only content BELOW the echo
+// line (the echo itself is excluded: it contains the agent binary name and, on
+// fancy shell themes, a ❯ prompt glyph — both false-positive readiness
+// signals). When no echo is visible the agent TUI has scrolled it away — along
+// with the noise above it — so the full capture is safe to scan.
+export function paneContentAfterLaunchEcho(paneContent: string): string {
+  const idx = paneContent.indexOf("env -u CLAUDECODE");
+  if (idx < 0) return paneContent;
+  const nl = paneContent.indexOf("\n", idx);
+  return nl >= 0 ? paneContent.slice(nl + 1) : "";
+}
+
 export type TmuxLiveState =
   | "idle"          // empty input prompt — safe to paste
   | "busy"          // spinner / "esc to interrupt" — wait
@@ -10493,12 +10511,15 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
         await new Promise(resolve => setTimeout(resolve, 250));
         try {
           const { stdout: paneContent } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmuxSession, "-S", "-20"]);
-          if (fatalErrors.some(e => paneContent.includes(e))) {
-            const fatalReason = agentType === "claude" ? classifyClaudeResumeFatalReason(paneContent) : null;
+          // Scan only output below the echoed launch command — shell rc noise
+          // above it must not read as an agent crash (see paneContentAfterLaunchEcho).
+          const agentPane = paneContentAfterLaunchEcho(paneContent);
+          if (fatalErrors.some(e => agentPane.includes(e))) {
+            const fatalReason = agentType === "claude" ? classifyClaudeResumeFatalReason(agentPane) : null;
             if (fatalReason) {
               resumeFatalReasons.set(sessionId, fatalReason);
             }
-            logDelivery(`Auto-resume FATAL for ${shortId}: agent crashed. Pane: ${paneContent.slice(0, 300)}`);
+            logDelivery(`Auto-resume FATAL for ${shortId}: agent crashed. Pane: ${agentPane.slice(0, 300)}`);
             try { await tmuxExec(["kill-session", "-t", tmuxSession]); } catch {}
             return false;
           }
@@ -10510,12 +10531,12 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
           // bare-shell exit is transient (an identical resume succeeds moments later once
           // any prior holder is gone), so the delivery loop's short-cooldown retry path
           // takes over instead of locking the session for 5 minutes.
-          if (classifyTmuxLiveState(extractTmuxLiveRegion(paneContent)) === "exited") {
-            logDelivery(`Auto-resume EXITED for ${shortId}: resume dropped to a bare shell, aborting (transient). Pane: ${paneContent.slice(-200)}`);
+          if (classifyTmuxLiveState(extractTmuxLiveRegion(agentPane)) === "exited") {
+            logDelivery(`Auto-resume EXITED for ${shortId}: resume dropped to a bare shell, aborting (transient). Pane: ${agentPane.slice(-200)}`);
             try { await tmuxExec(["kill-session", "-t", tmuxSession]); } catch {}
             return false;
           }
-          if (promptPattern.test(paneContent) && await isTmuxAgentAlive(tmuxSession)) {
+          if (promptPattern.test(agentPane) && await isTmuxAgentAlive(tmuxSession)) {
             // A bare ❯/› also renders as the cursor of a blocking selection menu (e.g. Claude's
             // "Resume from summary?" prompt). Matching that would publish a false "connected" while
             // the agent is frozen awaiting a choice. Keep polling until the menu clears. Only guard
@@ -11229,8 +11250,11 @@ async function deliverMessage(
           await new Promise(resolve => setTimeout(resolve, 250));
           try {
             const { stdout: paneContent } = await tmuxExec(["capture-pane", "-p", "-J", "-t", entry.tmuxSession, "-S", "-20"]);
-            if (fatalErrors.some(e => paneContent.includes(e))) {
-              log(`Started session ${entry.tmuxSession} hit fatal error, falling through. Pane: ${paneContent.slice(0, 200)}`);
+            // Scan only output below the echoed launch command — shell rc noise
+            // above it must not read as a fatal launch error (see paneContentAfterLaunchEcho).
+            const agentPane = paneContentAfterLaunchEcho(paneContent);
+            if (fatalErrors.some(e => agentPane.includes(e))) {
+              log(`Started session ${entry.tmuxSession} hit fatal error, falling through. Pane: ${agentPane.slice(0, 200)}`);
               deleteStartedSession(conversationId);
               return false;
             }
@@ -11241,7 +11265,7 @@ async function deliverMessage(
               await new Promise(resolve => setTimeout(resolve, 2000));
               continue;
             }
-            if (promptPattern.test(paneContent)) {
+            if (promptPattern.test(agentPane)) {
               // Verify it's the actual input prompt, not the trust prompt's ❯
               const lastLines = paneContent.split("\n").slice(-10).join("\n");
               if (trustPromptPatterns.test(lastLines)) continue;

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { classifyBypassBlock, classifyTmuxLiveState, extractTmuxLiveRegion, isPhantomBypassPermissionBlock } from "./daemon.js";
+import { classifyBypassBlock, classifyTmuxLiveState, extractTmuxLiveRegion, isPhantomBypassPermissionBlock, paneContentAfterLaunchEcho } from "./daemon.js";
 
 describe("isPhantomBypassPermissionBlock", () => {
   test("suppresses auto-approved tool permission_blocked in bypass mode", () => {
@@ -406,5 +406,48 @@ describe("end-to-end: the bug case", () => {
     const region = extractTmuxLiveRegion(buggedPane);
     const state = classifyTmuxLiveState(region);
     expect(state).toBe("idle");
+  });
+});
+
+describe("paneContentAfterLaunchEcho", () => {
+  // Real pane capture from intern (2026-07-10): its zshrc sourced a bash-only
+  // completions file, so every fresh tmux shell printed "command not found"
+  // BEFORE the daemon's launch command ran. The whole-pane fatal scan matched
+  // that noise on the first 250ms poll and killed every auto-resume of
+  // cc-resume-6760480d in a loop — the web attach button never found the tmux.
+  const RC_NOISE = `R () {
+\tgit commit --all --message="$1" && git push && ssh -t host 'deploy'
+}
+/Users/ec2-user/.claude/hooks/peon-ping/completions.bash:28: command not found: complete
+complete:13: command not found: compdef
+~: env -u CLAUDECODE CLAUDE_CODE_RESUME_THRESHOLD_MINUTES=999999999 claude --resume 6760480d-2736-463c-ba12-e303c3cbf8de --model fable --permission-mode bypassPermissions
+`;
+
+  test("strips shell rc noise above the echoed launch command", () => {
+    const scanned = paneContentAfterLaunchEcho(RC_NOISE);
+    expect(scanned).not.toContain("command not found");
+  });
+
+  test("excludes the echo line itself (binary name, fancy-prompt ❯ glyph)", () => {
+    const fancyPrompt = `❯ env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT gemini --resume latest\n`;
+    const scanned = paneContentAfterLaunchEcho(fancyPrompt);
+    expect(scanned).not.toContain("❯");
+    expect(scanned).not.toContain("gemini");
+  });
+
+  test("keeps agent output below the echo, including real fatal errors", () => {
+    const pane = RC_NOISE + `No conversation found with session ID 6760480d\n~: `;
+    const scanned = paneContentAfterLaunchEcho(pane);
+    expect(scanned).toContain("No conversation found");
+  });
+
+  test("returns the full pane when no echo is visible (TUI scrolled it away)", () => {
+    const pane = "⏺ Bash(ls)\n────\n❯\n────\n";
+    expect(paneContentAfterLaunchEcho(pane)).toBe(pane);
+  });
+
+  test("returns empty when the echo is the last line (command not yet executed)", () => {
+    const pane = `~: env -u CLAUDECODE claude --resume abc`;
+    expect(paneContentAfterLaunchEcho(pane)).toBe("");
   });
 });
