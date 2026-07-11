@@ -254,6 +254,23 @@ export function resolveTeamForPath(
   return { teamId: resolvedTeamId, isPrivate, autoShared };
 }
 
+// Work items (tasks/plans/docs) inherit a linked conversation's team only when
+// the conversation is actually team-visible. On conversations team_id is
+// routing — stamped even on private sessions — but on work items team_id alone
+// grants every team member full read access (canAccessTask has no privacy
+// gate), so propagating it from a private session leaks the item to the team.
+export function teamVisibleConvTeam<T = Id<"teams">>(conv: {
+  team_id?: T;
+  is_private?: boolean;
+  auto_shared?: boolean;
+  team_visibility?: string;
+} | null | undefined): T | undefined {
+  if (!conv?.team_id) return undefined;
+  if (!conv.is_private || conv.auto_shared) return conv.team_id;
+  if (conv.team_visibility && conv.team_visibility !== "private") return conv.team_id;
+  return undefined;
+}
+
 // Creation-time team/privacy resolution. Every conversation insert must derive
 // team_id / is_private / auto_shared from this (or inherit them from an
 // existing conversation, as forks do) — writing literals at an insert site is

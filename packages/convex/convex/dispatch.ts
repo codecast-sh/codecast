@@ -42,7 +42,8 @@ const TABLE_CONFIG: Record<string, TableConfig> = {
       // Anchor invariants are server-owned (set by provisionAnchor / cleared by
       // decommissionAnchor) — a client must not flip these via a generic patch.
       "persistent", "acting_user_id", "anchor_id",
-      // Second-party ownership has a single validated writer (setSessionOwner).
+      // Second-party ownership is server-assigned only: setSessionOwner, plus
+      // performSessionSend's auto-own on cross-user sends into unowned sessions.
       "owner_user_id",
     ]),
     // No beforePatch hook: dismiss is an absolute flag, so the server has no
@@ -693,19 +694,19 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
 
   createTask: async (ctx, userId, [opts]: [any]) => {
     let teamId: Id<"teams"> | undefined;
-    if (opts.team_id) {
+    if (opts.workspace === "personal") {
+      teamId = undefined;
+    } else if (opts.team_id) {
       teamId = opts.team_id as Id<"teams">;
     } else {
+      // Directory mapping is the whole rule: unmapped ("Only Me") paths — and
+      // no path at all — stay personal. The old active-team fallback here is
+      // how tasks from private directories leaked to the team (ct-38419).
       const mappings = await ctx.db
         .query("directory_team_mappings")
         .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
         .collect();
-      // Fall back to user's active team if no directory mapping matches —
-      // mirrors session creation so tasks land on the same team as the
-      // session that spawned them.
-      const user = await ctx.db.get(userId);
-      const fallbackTeam = (user?.active_team_id || (user as any)?.team_id) as Id<"teams"> | undefined;
-      teamId = resolveTeamForPath(mappings, opts.project_path, fallbackTeam).teamId;
+      teamId = resolveTeamForPath(mappings, opts.project_path, undefined).teamId;
     }
 
     const shortId = await nextShortId(ctx.db, "ct");
