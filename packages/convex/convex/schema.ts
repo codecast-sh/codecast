@@ -398,6 +398,10 @@ export default defineSchema({
     // its persistent-conversation set without scanning the table.
     .index("by_user_persistent", ["user_id", "persistent"])
     .index("by_anchor_id", ["anchor_id"])
+    // Declared to match prod: Ashot's undeployed searchMirror experiment added
+    // this index from his working tree (2026-07-09). Kept so deploys from main
+    // don't drop it while his code is unpushed. Remove once his tree merges.
+    .index("by_agent_task", ["agent_task_id"])
     .searchIndex("search_title_v2", {
       searchField: "title",
       filterFields: ["user_id"],
@@ -411,6 +415,28 @@ export default defineSchema({
     .searchIndex("search_idle_summary", {
       searchField: "idle_summary",
       filterFields: ["user_id"],
+    }),
+
+  // Ashot's undeployed searchMirror experiment (live in prod since ~2026-07-09,
+  // ~270k rows): a lightweight mirror of recent message text for fast content
+  // search. The populating code (searchMirror.ts) lives only in his unpushed
+  // tree — this declaration exists so deploys from main coexist additively
+  // (table + indexes survive; mirroring pauses until he redeploys). All fields
+  // optional: main never writes rows, it only needs existing docs to validate.
+  // Replace with his real definition when his tree merges.
+  message_search_recent: defineTable({
+    content: v.optional(v.string()),
+    conversation_id: v.optional(v.string()),
+    message_id: v.optional(v.string()),
+    role: v.optional(v.string()),
+    source_created_at: v.optional(v.number()),
+    timestamp: v.optional(v.number()),
+  })
+    .index("by_message_id", ["message_id"])
+    .index("by_source_created_at", ["source_created_at"])
+    .searchIndex("search_content", {
+      searchField: "content",
+      filterFields: ["conversation_id"],
     }),
 
   // ── Anchors ─────────────────────────────────────────────────────────────────

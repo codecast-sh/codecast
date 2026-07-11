@@ -96,6 +96,7 @@ import type * as systemConfig from "../systemConfig.js";
 import type * as taskMining from "../taskMining.js";
 import type * as tasks from "../tasks.js";
 import type * as teamActivity from "../teamActivity.js";
+import type * as teamScopeSweep from "../teamScopeSweep.js";
 import type * as teams from "../teams.js";
 import type * as testDb from "../testDb.js";
 import type * as titleGeneration from "../titleGeneration.js";
@@ -200,6 +201,7 @@ declare const fullApi: ApiFromModules<{
   taskMining: typeof taskMining;
   tasks: typeof tasks;
   teamActivity: typeof teamActivity;
+  teamScopeSweep: typeof teamScopeSweep;
   teams: typeof teams;
   testDb: typeof testDb;
   titleGeneration: typeof titleGeneration;
