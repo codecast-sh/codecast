@@ -1,4 +1,4 @@
-import { mutation } from "./functions";
+import { mutation, internalMutation } from "./functions";
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
@@ -10,7 +10,8 @@ import { checkConversationAccess } from "./privacy";
 // a "ready to ship?" question and self-owns onto the responsible founder, whose
 // inbox then treats it as actionable). Ownership only affects where a session
 // SURFACES and who may reply from the web composer — the send/steer mechanics
-// (pending_messages) are unchanged.
+// (pending_messages) are unchanged. Besides this explicit path, a cross-user
+// send into an UNOWNED session auto-owns it onto the sender (performSessionSend).
 
 type OwnerInfo = { user_id: string; name: string | null; email: string | null };
 
@@ -77,6 +78,15 @@ export async function performSetSessionOwner(
     }
   }
 
+  // Bots may CALL this to park a session on a human (the Aivery flow), but may
+  // never BE the owner — ownership means "this human's inbox is responsible,"
+  // and nobody reads a bot's inbox.
+  if (ownerUser.is_bot) {
+    throw new Error(
+      `${ownerUser.name || ownerUser.email || "That user"} is an agent account — sessions can only be owned by a human team member`
+    );
+  }
+
   await ctx.db.patch(conversation._id, { owner_user_id: ownerUser._id });
   return {
     ok: true,
@@ -84,6 +94,42 @@ export async function performSetSessionOwner(
     owner: { user_id: ownerUser._id.toString(), name: ownerUser.name ?? null, email: ownerUser.email ?? null },
   };
 }
+
+// Admin: flag a full agent member account (e.g. Mr Bot) as is_bot so the
+// ownership guards apply to it. Anchor identities get the flag at creation;
+// agent accounts that predate it (or are created by plain signup) need this
+// one-off. Run via `npx convex run sessionOwnership:flagBotAccount '{"ref":"…"}'`.
+// Idempotent; `ref` matches exact email, exact name, or unique substring.
+export const flagBotAccount = internalMutation({
+  args: { ref: v.string() },
+  handler: async (ctx, args) => {
+    const needle = args.ref.trim().toLowerCase();
+    const users = await ctx.db.query("users").collect();
+    const matches = users.filter(
+      (u: any) =>
+        (u.email || "").toLowerCase() === needle ||
+        (u.name || "").toLowerCase() === needle ||
+        (u.email || "").toLowerCase().includes(needle) ||
+        (u.name || "").toLowerCase().includes(needle)
+    );
+    // Prefer exact hits so a substring can't shadow an exact match.
+    const exact = matches.filter(
+      (u: any) => (u.email || "").toLowerCase() === needle || (u.name || "").toLowerCase() === needle
+    );
+    const pool = exact.length > 0 ? exact : matches;
+    if (pool.length !== 1) {
+      const names = pool.map((u: any) => `${u.name ?? "?"} <${u.email ?? "?"}>`).join(", ");
+      throw new Error(
+        pool.length === 0
+          ? `No user matching "${args.ref}"`
+          : `"${args.ref}" matches multiple users (${names}) — use an exact email`
+      );
+    }
+    const user = pool[0];
+    if (!user.is_bot) await ctx.db.patch(user._id, { is_bot: true });
+    return { user_id: user._id.toString(), name: user.name ?? null, email: user.email ?? null, already_flagged: !!user.is_bot };
+  },
+});
 
 export const setSessionOwner = mutation({
   args: {
