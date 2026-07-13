@@ -9,7 +9,7 @@ import { nextShortId } from "./counters";
 // auth/access seam). Imported for local use here and re-exported so existing
 // callers keep working unchanged.
 import { canAccessPlan } from "./lib/access";
-import { isTeamMember } from "./privacy";
+import { isTeamMember, teamVisibleConvTeam } from "./privacy";
 export { canAccessPlan };
 
 async function recalcProgress(ctx: any, taskIds: Id<"tasks">[]) {
@@ -103,22 +103,33 @@ export const create = mutation({
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
 
-    const db = await createDataContext(ctx, { userId: auth.userId, project_path: args.project_path });
+    // Resolve the source conversation first: a team-visible session hands its
+    // team to the plan (mirrors tasks.create); a private one contributes
+    // nothing and the directory mapping decides.
+    let created_from_conversation_id: Id<"conversations"> | undefined;
+    let convTeamId: Id<"teams"> | undefined;
+    if (args.conversation_id) {
+      const conv = await ctx.db
+        .query("conversations")
+        .withIndex("by_session_id", (q) => q.eq("session_id", args.conversation_id!))
+        .first();
+      if (conv) {
+        created_from_conversation_id = conv._id;
+        convTeamId = teamVisibleConvTeam(conv);
+      }
+    }
+
+    const db = await createDataContext(ctx, {
+      userId: auth.userId,
+      project_path: args.project_path,
+      ...(convTeamId ? { workspace: "team" as const, team_id: convTeamId } : {}),
+    });
     const short_id = await nextShortId(ctx.db, "pl");
 
     let project_id: Id<"projects"> | undefined;
     if (args.project_id) {
       const pid = ctx.db.normalizeId("projects", args.project_id);
       if (pid && (await ctx.db.get(pid))) project_id = pid;
-    }
-
-    let created_from_conversation_id: Id<"conversations"> | undefined;
-    if (args.conversation_id) {
-      const conv = await ctx.db
-        .query("conversations")
-        .withIndex("by_session_id", (q) => q.eq("session_id", args.conversation_id!))
-        .first();
-      if (conv) created_from_conversation_id = conv._id;
     }
 
     const id = await db.insert("plans", {

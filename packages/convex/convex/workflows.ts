@@ -64,7 +64,9 @@ export const upsert = mutation({
 
     const id = await ctx.db.insert("workflows", {
       user_id: result.userId,
-      team_id: user.team_id,
+      // Personal by default: workflows carry no project_path to resolve a
+      // directory mapping against, and stamping the active team here would
+      // expose them wholesale the day a team read path lands on by_team_id.
       name: args.name,
       slug: args.slug,
       goal: args.goal,
