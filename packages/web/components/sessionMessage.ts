@@ -97,6 +97,82 @@ export function isMachineDeliveredMessage(rawContent: string | null | undefined)
   return isSessionMessage(rawContent) || isTeammateMessage(rawContent) || isScheduledTaskMessage(rawContent);
 }
 
+// --- Spawned schedule-run prompt ------------------------------------------------------
+// A spawned run's opening message is the plain-text prompt the daemon hands to
+// `claude -p` (taskScheduler.buildPrompt) — there's no wrapper tag, the wire format
+// IS the first user message of the run's transcript:
+//
+//   [Codecast Task: <title>]
+//   Task ID: <id>
+//   Mode: <propose|apply>
+//   <blank>
+//   <the actual prompt…>
+//   ---                                        (only if context/prior-run present)
+//   Context from originating session (<id8>):  (optional)
+//   Previous run (<ago>):                      (optional)
+//   ---
+//   Instructions:
+//   - …completion-protocol boilerplate…
+//
+// Every separator is an exact `---` line. The prompt itself may contain `---`
+// lines, so the Instructions tail is found from the END and the context/prior-run
+// divider is matched by its label, not position.
+
+export interface SpawnedTaskPrompt {
+  title: string;
+  taskId: string;
+  mode: string;
+  prompt: string;
+  contextSummary?: string;
+  previousRun?: { ago: string; summary: string };
+  instructions?: string;
+}
+
+const SPAWNED_TASK_HEADER = /^\[Codecast Task: (.*)\]\nTask ID: ([^\n]+)\nMode: ([^\n]+)\n+/;
+
+export function isSpawnedTaskPrompt(rawContent: string | null | undefined): boolean {
+  return !!rawContent && SPAWNED_TASK_HEADER.test(rawContent.trim());
+}
+
+export function parseSpawnedTaskPrompt(rawContent: string | null | undefined): SpawnedTaskPrompt | null {
+  if (!rawContent) return null;
+  const text = rawContent.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "").trim();
+  const header = text.match(SPAWNED_TASK_HEADER);
+  if (!header) return null;
+  let rest = text.slice(header[0].length);
+
+  let instructions: string | undefined;
+  const instrIdx = rest.lastIndexOf("\n---\nInstructions:");
+  if (instrIdx !== -1) {
+    instructions = rest.slice(instrIdx + "\n---\n".length).replace(/^Instructions:\s*/, "").trim();
+    rest = rest.slice(0, instrIdx);
+  }
+
+  let contextSummary: string | undefined;
+  let previousRun: SpawnedTaskPrompt["previousRun"];
+  // buildPrompt puts a blank line between `---` and `Previous run (…)` but none
+  // before `Context from originating session` — tolerate any run of newlines.
+  const metaDivider = rest.match(/\n---\n+(?=Context from originating session|Previous run \()/);
+  if (metaDivider && metaDivider.index !== undefined) {
+    const meta = rest.slice(metaDivider.index + metaDivider[0].length);
+    rest = rest.slice(0, metaDivider.index);
+    const prevMatch = meta.match(/(?:^|\n)Previous run \(([^)]*)\):\n?([\s\S]*)$/);
+    if (prevMatch) previousRun = { ago: prevMatch[1], summary: prevMatch[2].trim() };
+    const ctxMatch = meta.match(/^Context from originating session[^:]*:\n?([\s\S]*?)(?=\n*Previous run \(|$)/);
+    if (ctxMatch && ctxMatch[1].trim()) contextSummary = ctxMatch[1].trim();
+  }
+
+  return {
+    title: header[1],
+    taskId: header[2].trim(),
+    mode: header[3].trim(),
+    prompt: rest.trim(),
+    contextSummary,
+    previousRun,
+    instructions,
+  };
+}
+
 // --- Card-preview cleaning ------------------------------------------------------------
 // Shared by every "what the human last said" preview surface (web inbox cards, the sticky
 // fallback, the mobile inbox/team cards). Lives here — not in a component file — because
@@ -117,6 +193,10 @@ export function cleanUserMessage(raw: string | null | undefined): string | null 
   // A machine-delivered message (cast send, or an inter-agent teammate broadcast) isn't the
   // user's own prompt — skip it so it never surfaces as the sticky fallback or card preview.
   if (isMachineDeliveredMessage(raw)) return null;
+  // A spawned schedule run's only "user prompt" is the schedule's — preview the
+  // actual task text, not the wire-format header/boilerplate around it.
+  const spawned = parseSpawnedTaskPrompt(raw);
+  if (spawned) return spawned.prompt || spawned.title;
   const cleaned = raw
     .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "")
     .replace(/\[Image[:\s][^\]]*\]/gi, "")

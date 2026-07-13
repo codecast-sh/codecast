@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { parseSessionMessage, parseInboundSessionMessage, isSessionMessage, formatSessionMessage, isTeammateMessage, stripTeammateFraming, isTeammateFramingOnly, isMachineDeliveredMessage } from "./sessionMessage";
+import { parseSessionMessage, parseInboundSessionMessage, isSessionMessage, formatSessionMessage, isTeammateMessage, stripTeammateFraming, isTeammateFramingOnly, isMachineDeliveredMessage, parseSpawnedTaskPrompt, isSpawnedTaskPrompt, cleanUserMessage } from "./sessionMessage";
 
 // A real inter-agent broadcast as the multi-agent harness delivers it: a lead-in line, one
 // or more <teammate-message> blocks (the second a JSON status event), and the trailing
@@ -148,5 +148,89 @@ describe("parseInboundSessionMessage", () => {
     const parsed = parseInboundSessionMessage(raw);
     expect(parsed?.from).toBe("jx7c6zk");
     expect(parsed?.name).toBeUndefined();
+  });
+});
+
+// The exact wire format taskScheduler.buildPrompt hands to `claude -p` — a spawned
+// run's transcript opens with this as its first user message.
+const SPAWNED_FULL = `[Codecast Task: Verify the invariants dashboard is green]
+Task ID: rx78nadpm3d4kgpps3qknvy22n8a40mn
+Mode: propose
+
+Verify the invariants dashboard is green: run xrun api GET /admin/invariants.
+Report findings to task ct-38176.
+
+---
+Context from originating session (2n8a40mn):
+The dedup deploy went out at 20:00 UTC.
+
+Previous run (3h ago):
+Failed: Exceeded max runtime (10min)
+
+---
+Instructions:
+- When done, run: cast schedule complete rx78nadpm3d4kgpps3qknvy22n8a40mn --summary "brief description of what was done"
+- A clean completion folds this run out of the user's inbox (the summary carries the outcome). If you found something the user must read or act on, add --needs-attention to keep this run in their inbox.
+- To schedule follow-up: cast schedule add "..." --in <time>`;
+
+describe("parseSpawnedTaskPrompt", () => {
+  test("parses the full buildPrompt format", () => {
+    const r = parseSpawnedTaskPrompt(SPAWNED_FULL);
+    expect(r?.title).toBe("Verify the invariants dashboard is green");
+    expect(r?.taskId).toBe("rx78nadpm3d4kgpps3qknvy22n8a40mn");
+    expect(r?.mode).toBe("propose");
+    expect(r?.prompt).toBe("Verify the invariants dashboard is green: run xrun api GET /admin/invariants.\nReport findings to task ct-38176.");
+    expect(r?.contextSummary).toBe("The dedup deploy went out at 20:00 UTC.");
+    expect(r?.previousRun).toEqual({ ago: "3h ago", summary: "Failed: Exceeded max runtime (10min)" });
+    expect(r?.instructions).toContain("cast schedule complete");
+    expect(r?.instructions?.startsWith("- When done")).toBe(true);
+  });
+
+  test("parses a first-run prompt (no context, no previous run)", () => {
+    const raw = `[Codecast Task: Check CI]\nTask ID: rx7abc\nMode: apply\n\nCheck if CI is green on main.\n\n---\nInstructions:\n- When done, run: cast schedule complete rx7abc --summary "..."`;
+    const r = parseSpawnedTaskPrompt(raw);
+    expect(r?.mode).toBe("apply");
+    expect(r?.prompt).toBe("Check if CI is green on main.");
+    expect(r?.contextSummary).toBeUndefined();
+    expect(r?.previousRun).toBeUndefined();
+    expect(r?.instructions).toContain("cast schedule complete");
+  });
+
+  test("previous run without context section (real format: blank line after ---)", () => {
+    // buildPrompt emits `---\n\nPrevious run (…)` when there's no context section.
+    const raw = `[Codecast Task: T]\nTask ID: rx71\nMode: propose\n\nDo the thing.\n\n---\n\nPrevious run (2d ago):\nAll green.\n\n---\nInstructions:\n- done`;
+    const r = parseSpawnedTaskPrompt(raw);
+    expect(r?.contextSummary).toBeUndefined();
+    expect(r?.prompt).toBe("Do the thing.");
+    expect(r?.previousRun).toEqual({ ago: "2d ago", summary: "All green." });
+  });
+
+  test("previous run with unknown time (failed prior run — last_run_at unset)", () => {
+    const raw = `[Codecast Task: T]\nTask ID: rx71\nMode: propose\n\nDo the thing.\n\n---\n\nPrevious run (unknown time ago):\nFailed: Exceeded max runtime (10min)\n\n---\nInstructions:\n- done`;
+    const r = parseSpawnedTaskPrompt(raw);
+    expect(r?.previousRun).toEqual({ ago: "unknown time ago", summary: "Failed: Exceeded max runtime (10min)" });
+  });
+
+  test("a --- inside the prompt body is not a section divider", () => {
+    const raw = `[Codecast Task: T]\nTask ID: rx71\nMode: propose\n\nFirst half.\n---\nSecond half.\n\n---\nInstructions:\n- done`;
+    const r = parseSpawnedTaskPrompt(raw);
+    expect(r?.prompt).toBe("First half.\n---\nSecond half.");
+    expect(r?.instructions).toBe("- done");
+  });
+
+  test("returns null for ordinary messages and the inject-format wrapper", () => {
+    expect(parseSpawnedTaskPrompt("fix the login bug")).toBeNull();
+    expect(parseSpawnedTaskPrompt('<scheduled-task title="T" task-id="rx71">do it</scheduled-task>')).toBeNull();
+    expect(parseSpawnedTaskPrompt(null)).toBeNull();
+    expect(parseSpawnedTaskPrompt(undefined)).toBeNull();
+  });
+
+  test("isSpawnedTaskPrompt agrees with the parser", () => {
+    expect(isSpawnedTaskPrompt(SPAWNED_FULL)).toBe(true);
+    expect(isSpawnedTaskPrompt("fix the login bug")).toBe(false);
+  });
+
+  test("cleanUserMessage previews the task text, not the wire header", () => {
+    expect(cleanUserMessage(SPAWNED_FULL)).toBe("Verify the invariants dashboard is green: run xrun api GET /admin/invariants.\nReport findings to task ct-38176.");
   });
 });
