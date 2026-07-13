@@ -134,7 +134,7 @@ import { pendingBannerState, isActiveAgentStatus, isBootingAgentStatus, type Liv
 import { sessionStartupState } from "../lib/sessionLifecycle";
 import { messageRowKey } from "../lib/messageRowKey";
 import { expandEntityMentions } from "../lib/mentionExpansion";
-import { useSessionRestart, ghostRestartContextFor } from "../hooks/useSessionRestart";
+import { useSessionRestart, ghostRestartContextFor, deriveRestartStage, type RestartProgressRow, type RestartPhase, type RestartStage } from "../hooks/useSessionRestart";
 
 // An @-mention query may contain spaces so multi-word titles are searchable: a
 // first token (possibly empty, so a bare "@" still opens recents) plus up to 4
@@ -169,34 +169,9 @@ const PENDING_BOOT_GRACE_MS = 60_000;     // starting / connected: session launc
 const PENDING_RESUME_GRACE_MS = 120_000;  // resuming is the slowest path
 
 
-// Live label for a kill+restart in flight, derived from the daemon command
-// rows (conversations.getRestartProgress — the daemon stamps executed_at +
-// result/error on each). Shared by the composer footer ladder and the
-// on-message retry bar so both report the same real progress.
-type RestartProgressRow = { command: string; created_at: number; executed_at: number | null; result: string | null; error: string | null };
-function deriveRestartStage(
-  restartProgress: RestartProgressRow[] | null | undefined,
-  waitingLong: boolean,
-): { label: string; tone: "active" | "warn" | "error" } | null {
-  if (!restartProgress?.length) return null;
-  const last = [...restartProgress].reverse();
-  const resume = last.find((c) => c.command === "resume_session");
-  const kill = last.find((c) => c.command === "kill_session");
-  if (resume?.executed_at) {
-    if (resume.error) return { label: `Restart failed: ${resume.error}`, tone: "error" };
-    try {
-      const r = resume.result ? JSON.parse(resume.result) : null;
-      if (r?.reconstituted) return { label: "Rebuilt session from history — reconnecting…", tone: "active" };
-      if (r?.started_fresh) return { label: "Couldn't resume the old session — started a fresh one", tone: "active" };
-      if (r?.resumed) return { label: "Session resumed — reconnecting…", tone: "active" };
-      if (r?.skipped) return { label: "Session is already starting…", tone: "active" };
-    } catch { /* plain-string results fall through to the generic label */ }
-    return { label: "Restarting session…", tone: "active" };
-  }
-  if (kill?.executed_at) return { label: "Old session stopped — starting replacement…", tone: "active" };
-  if (waitingLong) return { label: "Waiting for the daemon to pick this up — is that device online?", tone: "warn" };
-  return { label: "Restart requested — waiting for daemon…", tone: "active" };
-}
+// deriveRestartStage (the live label for a kill+restart in flight) lives in
+// hooks/useSessionRestart so the composer footer ladder, the on-message retry
+// bar, and the header restart strip all report the same real progress.
 
 const sacredInputs = new Map<string, { text: string; images?: any[] }>();
 
@@ -2259,6 +2234,58 @@ function useConversationTaskStats(conversationId: string | undefined) {
     enabled && conversationId && isConvexId(conversationId) ? { conversation_id: conversationId } : "skip"
   );
   return toolStats?.taskStats ?? null;
+}
+
+// Full-width strip at the header's bottom edge narrating a kill+restart the
+// moment it's requested — before any server ack — through the daemon's
+// kill→resume ladder, to a green "back live" confirmation or a red give-up.
+// Driven entirely by useSessionRestart's phase/stage; mounted only while a
+// restart is in some visible state, so the 1s elapsed tick costs nothing
+// otherwise.
+function RestartStatusStrip({ phase, stage, failure, startedAt, onRetry }: {
+  phase: RestartPhase;
+  stage: RestartStage | null;
+  failure: string | null;
+  startedAt: number | null;
+  onRetry: () => void;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (phase !== "restarting") return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [phase]);
+  if (phase === "idle") return null;
+  const tone = phase === "restored" ? "ok" : phase === "failed" ? "error" : (stage?.tone ?? "active");
+  const label =
+    phase === "restored" ? "Session is back live"
+    : phase === "failed" ? (failure ?? "Restart failed")
+    : (stage?.label ?? "Restarting session — contacting daemon…");
+  const toneClass = {
+    active: { wrap: "bg-sol-orange/10 text-sol-orange", dot: "bg-sol-orange" },
+    warn: { wrap: "bg-sol-yellow/10 text-sol-yellow", dot: "bg-sol-yellow" },
+    error: { wrap: "bg-sol-red/10 text-sol-red", dot: "bg-sol-red" },
+    ok: { wrap: "bg-sol-green/10 text-sol-green", dot: "bg-sol-green" },
+  }[tone];
+  const elapsed = phase === "restarting" && startedAt ? Math.max(0, Math.round((now - startedAt) / 1000)) : null;
+  return (
+    <div className={`flex items-center gap-2 px-4 py-1.5 text-[12px] ${toneClass.wrap}`}>
+      <span className={`w-2 h-2 rounded-full shrink-0 ${toneClass.dot} ${tone === "error" ? "" : "animate-pulse"}`} />
+      <span className="min-w-0 truncate">{label}</span>
+      {elapsed !== null && elapsed >= 3 && (
+        <span className="shrink-0 tabular-nums opacity-60">{elapsed}s</span>
+      )}
+      {phase === "failed" && (
+        <button
+          type="button"
+          onClick={onRetry}
+          className="shrink-0 ml-auto font-medium hover:underline"
+        >
+          Try again
+        </button>
+      )}
+    </div>
+  );
 }
 
 const ConversationTaskProgress = memo(function ConversationTaskProgress({ conversationId }: { conversationId: string }) {
@@ -12259,7 +12286,14 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     else if (kind === "success") toast.success(message);
     else toast(message);
   }, []);
-  const { restart: handleRestartSession } = useSessionRestart({
+  const {
+    restart: handleRestartSession,
+    isRestarting: isHeaderRestarting,
+    phase: restartPhase,
+    stage: restartStripStage,
+    failure: restartFailure,
+    startedAt: restartStartedAt,
+  } = useSessionRestart({
     conversationId: conversation?._id ?? "",
     isLive: restartLive,
     ghostContext: restartGhostContext,
@@ -12999,11 +13033,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
                     {effectiveIsOwner && conversation?.session_id && (
-                      <DropdownMenuItem onSelect={() => { setTimeout(() => handleRestartSession()); }}>
-                        <svg className="w-3 h-3 mr-1.5 text-orange-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <DropdownMenuItem disabled={isHeaderRestarting} onSelect={() => { setTimeout(() => handleRestartSession()); }}>
+                        <svg className={`w-3 h-3 mr-1.5 text-orange-400 ${isHeaderRestarting ? "animate-spin" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                         </svg>
-                        Restart session
+                        {isHeaderRestarting ? "Restarting…" : "Restart session"}
                       </DropdownMenuItem>
                     )}
                     {conversation?.short_id && (
@@ -13230,6 +13264,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             {headerEnd && <div className="flex-shrink-0">{headerEnd}</div>}
           </div>
           {conversation?._id && <ConversationTaskProgress conversationId={conversation._id} />}
+          <RestartStatusStrip
+            phase={restartPhase}
+            stage={restartStripStage}
+            failure={restartFailure}
+            startedAt={restartStartedAt}
+            onRetry={handleRestartSession}
+          />
         </div>
         {conversation && (
           <div className="absolute top-full right-3 mt-24 z-30">
