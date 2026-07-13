@@ -35,9 +35,13 @@ import {
 } from "./codexAppServer.js";
 import {
   choosePreferredCodexCandidate,
+  collectAncestorPids,
   hasCodexSessionFileOpen,
   isResumeInvocation,
   matchStartedConversation,
+  parsePidPpidMap,
+  resolveSpawnerSessionId,
+  type SessionAgentType,
 } from "./sessionProcessMatcher.js";
 import { GeminiWatcher, type GeminiSessionEvent } from "./geminiWatcher.js";
 import { parseSessionFile, parseCodexSessionFile, parseGeminiSessionFile, parseCursorTranscriptFile, extractSlug, extractParentUuid, extractSummaryTitle, extractCwd, extractCodexCwd, extractCodexForkRoot, extractGeminiProjectHash, extractTeamInfo, detectCliFlags, type ParsedMessage } from "./parser.js";
@@ -4124,6 +4128,96 @@ async function maybeLinkTeamSpawn(
   log(`Linked teammate ${info.agentName} (${sessionId.slice(0, 8)}) -> lead conversation ${parentConvId.slice(0, 12)} (team ${info.teamName})`);
 }
 
+// ── Spawned-agent parent linking (process ancestry) ─────────────────────────
+// A headless agent launched by another session's Bash tool (`codex exec ...`,
+// `claude -p ...`) writes a brand-new top-level transcript that neither the
+// subagents/ path check nor tmux-spawn tracking can attribute — so it used to
+// surface as a loose first-class inbox card. While the child runs, though, its
+// ppid chain leads to the spawning agent's pid, which Claude Code registers in
+// ~/.claude/sessions/<pid>.json with its CURRENT session id. Resolve that to a
+// conversation and stamp the child as its subagent. Sessions that fail to
+// resolve at creation get a few bounded retries on later sync passes (the
+// child process may not have been visible yet), then stay first-class.
+const spawnLinkAttempts = new Map<string, number>();
+const SPAWN_LINK_MAX_ATTEMPTS = 3;
+
+function readPidRegistrySessionId(pid: number): string | null {
+  try {
+    const regPath = path.join(process.env.HOME || "", ".claude", "sessions", `${pid}.json`);
+    if (!fs.existsSync(regPath)) return null;
+    const reg = JSON.parse(fs.readFileSync(regPath, "utf-8"));
+    return typeof reg?.sessionId === "string" ? reg.sessionId : null;
+  } catch {
+    return null;
+  }
+}
+
+// lsof-by-file finds the transcript's writer even when it has no tty, which is
+// exactly the headless case findSessionProcess skips by design.
+async function pidsWithFileOpen(filePath: string): Promise<number[]> {
+  try {
+    const { stdout } = await execAsync(`lsof -t -- ${JSON.stringify(filePath)} 2>/dev/null`);
+    return stdout
+      .trim()
+      .split("\n")
+      .map((s) => parseInt(s.trim(), 10))
+      .filter((n) => !isNaN(n) && n !== process.pid);
+  } catch {
+    return []; // lsof exits non-zero when nothing has the file open
+  }
+}
+
+async function resolveSpawnerConversation(
+  filePath: string,
+  sessionId: string,
+  agentType: SessionAgentType,
+  conversationCache: ConversationCache,
+): Promise<string | null> {
+  let pids = await pidsWithFileOpen(filePath);
+  if (pids.length === 0) {
+    const proc = await findSessionProcess(sessionId, agentType).catch(() => null);
+    if (proc) pids = [proc.pid];
+  }
+  if (pids.length === 0) return null;
+  const { stdout: psOut } = await execAsync("ps -axo pid=,ppid=");
+  const pidToPpid = parsePidPpidMap(psOut);
+  for (const pid of pids) {
+    const spawnerSessionId = resolveSpawnerSessionId(
+      collectAncestorPids(pidToPpid, pid),
+      readPidRegistrySessionId,
+      sessionId,
+    );
+    if (spawnerSessionId && conversationCache[spawnerSessionId]) {
+      return conversationCache[spawnerSessionId];
+    }
+  }
+  return null;
+}
+
+// Retry a failed create-time resolution on a later sync pass; links
+// retroactively via linkSessions (which no-ops if a parent appeared meanwhile).
+async function maybeRetrySpawnLink(
+  filePath: string,
+  sessionId: string,
+  agentType: SessionAgentType,
+  conversationId: string,
+  syncService: SyncService,
+  conversationCache: ConversationCache,
+): Promise<void> {
+  const attempts = spawnLinkAttempts.get(sessionId);
+  if (attempts === undefined || attempts >= SPAWN_LINK_MAX_ATTEMPTS) return;
+  spawnLinkAttempts.set(sessionId, attempts + 1);
+  const parentConvId = await resolveSpawnerConversation(filePath, sessionId, agentType, conversationCache).catch(() => null);
+  if (!parentConvId || parentConvId === conversationId) return;
+  spawnLinkAttempts.delete(sessionId);
+  try {
+    await syncService.linkSessions(parentConvId, conversationId);
+    log(`Linked spawned ${agentType} session ${sessionId.slice(0, 8)} -> parent ${parentConvId.slice(0, 12)} via process ancestry (retry)`);
+  } catch (err) {
+    log(`Failed retroactive spawn link for ${sessionId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 const bakImageRecoveryDone = new Set<string>();
 
 function recoverImagesFromBackup(
@@ -4606,6 +4700,20 @@ async function processSessionFile(
         // identity at create so the row never exists without it. The parent
         // LINK still happens via maybeLinkTeamSpawn below (lead resolution).
         const teamInfo = !isSubagent && newContent.includes('"teamName"') ? extractTeamInfo(newContent) : undefined;
+        // A headless claude child (`claude -p` run from another session's Bash)
+        // nests under its spawner as a subagent. Fork lineage (parentMessageUuid)
+        // and agent-team teammates keep their first-class semantics — teammates
+        // link via linkSpawnedBy, never via parent_conversation_id.
+        if (!parentConversationId && !isSubagent && !parentMessageUuid && !teamInfo) {
+          try {
+            const spawnerConvId = await resolveSpawnerConversation(filePath, sessionId, "claude", conversationCache);
+            if (spawnerConvId) {
+              parentConversationId = spawnerConvId;
+              log(`Detected spawned claude session ${sessionId.slice(0, 8)} -> parent ${spawnerConvId.slice(0, 12)} via process ancestry`);
+            }
+          } catch {}
+          if (!parentConversationId) spawnLinkAttempts.set(sessionId, 1);
+        }
         conversationId = await syncService.createConversation({
           userId,
           teamId,
@@ -4773,6 +4881,12 @@ async function processSessionFile(
       setPosition(filePath, lastPosition + bytesConsumed);
       return;
     }
+  }
+
+  // Spawned-child link that failed at creation (child process not visible
+  // yet) — bounded retries on later passes, no-op once resolved or exhausted.
+  if (conversationId && spawnLinkAttempts.has(sessionId)) {
+    maybeRetrySpawnLink(filePath, sessionId, "claude", conversationId, syncService, conversationCache).catch(() => {});
   }
 
   // Intercept plan mode tool calls (ExitPlanMode, TaskCreate, TaskUpdate) and sync to Convex
@@ -5704,6 +5818,20 @@ async function processCodexSession(
           const firstUserMessage = messages.find(msg => msg.role === "user");
           const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
 
+          // A codex session spawned by another session's Bash tool (`codex
+          // exec`) nests under its spawner as a subagent instead of surfacing
+          // as a loose first-class card. Only fresh, unmatched sessions get
+          // here — started stubs and forks resolved above stay first-class.
+          let parentConversationId: string | undefined;
+          try {
+            const spawnerConvId = await resolveSpawnerConversation(filePath, sessionId, "codex", conversationCache);
+            if (spawnerConvId) {
+              parentConversationId = spawnerConvId;
+              log(`Detected spawned codex session ${sessionId.slice(0, 8)} -> parent ${spawnerConvId.slice(0, 12)} via process ancestry`);
+            }
+          } catch {}
+          if (!parentConversationId) spawnLinkAttempts.set(sessionId, 1);
+
           conversationId = await syncService.createConversation({
             userId,
             teamId,
@@ -5714,6 +5842,7 @@ async function processCodexSession(
             title,
             startedAt: firstMessageTimestamp,
             parentMessageUuid: undefined,
+            parentConversationId,
             gitInfo: undefined,
           });
           setConversationCache(conversationId);
@@ -5824,6 +5953,12 @@ async function processCodexSession(
     syncStats.messagesSynced += messages.length;
     syncStats.sessionsActive.add(sessionId);
     tryRegisterSessionProcess(sessionId, "codex");
+
+    // Spawned-child link that failed at creation (child process not visible
+    // yet) — bounded retries on later passes, no-op once resolved or exhausted.
+    if (conversationId && spawnLinkAttempts.has(sessionId)) {
+      maybeRetrySpawnLink(filePath, sessionId, "codex", conversationId, syncService, conversationCache).catch(() => {});
+    }
 
     // Agent status tracking for Codex sessions (skip if managed by app-server)
     if (conversationId && !appServerConversations.has(conversationId)) {
