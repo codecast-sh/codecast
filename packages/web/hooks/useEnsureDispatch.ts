@@ -2,6 +2,7 @@ import { useRef } from "react";
 import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
+import { isPermanentDispatchError } from "../store/mutativeMiddleware";
 import { useMountEffect } from "./useMountEffect";
 
 function deepMerge(target: any, source: any): any {
@@ -46,6 +47,14 @@ export function useEnsureDispatch() {
     _setDispatchError((action, error, args) => {
       console.error(`[sync] dispatch failed after retries: ${action}`, error);
       useInboxStore.setState(s => ({ dispatchErrors: s.dispatchErrors + 1 }));
+      // A permanent rejection is dropped from the outbox (no re-drive will
+      // land it), so it's the user's only chance to hear their action didn't
+      // take — record it for the platform's feedback surface to render.
+      if (isPermanentDispatchError(error)) {
+        useInboxStore.setState({
+          lastDispatchFailure: { action, args, message: String((error as Error)?.message ?? error), at: Date.now() },
+        });
+      }
       if (action === "sendMessage" && Array.isArray(args)) {
         // Args mirror dispatch.sendMessage: [conversation_id, content, image_ids, client_id].
         const [convId, , , clientId] = args as [string?, unknown?, unknown?, string?];

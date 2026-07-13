@@ -2016,6 +2016,11 @@ interface InboxStoreState {
   _setDispatchError: (fn: (action: string, error: unknown, args?: unknown) => void) => void;
   _dispatch: (action: string, args: any, patches?: any, result?: any) => Promise<any>;
   dispatchErrors: number;
+  // Last PERMANENT dispatch rejection (server ran the write and refused it) —
+  // ephemeral, raw-set by the dispatch error handler; a platform-specific
+  // surface (web: toast bridge in providers.tsx) turns it into user feedback.
+  // Transient failures never land here: the outbox keeps re-driving those.
+  lastDispatchFailure: { action: string; args: unknown; message: string; at: number } | null;
 
   // -- Wrapped actions (middleware creates aliases from do_* -> *) --
   stashSession: (id: string) => void;
@@ -3116,6 +3121,7 @@ export const useInboxStore = create<InboxStoreState>(
   sessions: {},
   pending: {},
   dispatchErrors: 0,
+  lastDispatchFailure: null,
   currentSessionId: null,
   lastFocusedConversationId: null,
   showDismissed: false,
