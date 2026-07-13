@@ -377,3 +377,39 @@ describe("SyncService.addMessages remote reconciliation", () => {
     expect(mutations).toBe(0);
   });
 });
+
+describe("SyncService mutation queue bypass (skipQueue)", () => {
+  it("runs independent mutations concurrently instead of FIFO through the client's mutation queue", async () => {
+    const sync = new SyncService({ convexUrl: "http://localhost:0", userId: "u", authToken: "t" });
+    // Keep the REAL ConvexHttpClient and stub only its network leg: the client
+    // FIFO-serializes queued mutations per instance, so on the default (queued)
+    // path the second request cannot start while the first is still in flight.
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    let started = 0;
+    (sync as any).client.fetch = async () => {
+      started++;
+      if (started === 1) await firstGate;
+      return new Response(JSON.stringify({ status: "success", value: null }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+
+    const first = sync.updateTitle("conv-a", "one");
+    const second = sync.updateTitle("conv-b", "two");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // With skipQueue both fetches are in flight even though the first hangs.
+    expect(started).toBe(2);
+    releaseFirst();
+    await Promise.all([first, second]);
+  });
+
+  it("has no direct client.mutation call sites outside the mutate() helper", async () => {
+    const src = await Bun.file(new URL("./syncService.ts", import.meta.url)).text();
+    const direct = src.split("\n").filter((line) => line.includes("this.client.mutation("));
+    // Exactly one: the body of mutate(), which pins skipQueue on every mutation.
+    expect(direct).toHaveLength(1);
+    expect(direct[0]).toContain("skipQueue: true");
+  });
+});

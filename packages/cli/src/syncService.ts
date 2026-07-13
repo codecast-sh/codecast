@@ -212,6 +212,19 @@ export class SyncService {
     this.apiToken = config.authToken;
   }
 
+  // Every daemon mutation must bypass ConvexHttpClient's built-in mutation
+  // queue (mutations are FIFO-serialized per client instance by default).
+  // Ordering is already ours: same-conversation writes chain through
+  // withConversationLock and each flow awaits its own calls, so the client's
+  // global queue adds nothing — and it caps the whole daemon at one mutation
+  // in flight. Under a backlog burst (post-sleep, backend brownout) queue
+  // wait exceeds ADD_MESSAGES_BATCH_TIMEOUT_MS, so callers time out while
+  // their abandoned entries still run, retries re-enqueue duplicates, and
+  // sync clogs against a perfectly healthy backend.
+  private mutate(name: string, args: Record<string, unknown>): Promise<any> {
+    return this.client.mutation(name as any, args, { skipQueue: true });
+  }
+
   private async throttle(): Promise<void> {
     const ticket = this.throttleQueue.then(async () => {
       const now = Date.now();
@@ -259,7 +272,7 @@ export class SyncService {
   // what triggers the auto-resume that adopts the freshly swapped credential.
   async enqueueUserMessage(conversationId: string, content: string, clientId?: string): Promise<void> {
     await this.throttle();
-    await this.client.mutation("pendingMessages:sendMessageToSession" as any, {
+    await this.mutate("pendingMessages:sendMessageToSession" as any, {
       conversation_id: conversationId,
       content,
       client_id: clientId,
@@ -360,7 +373,7 @@ export class SyncService {
     }
     try {
       const uploadUrl = await withTimeout(
-        this.client.mutation(
+        this.mutate(
           "images:generateUploadUrl" as any,
           { api_token: this.apiToken }
         ),
@@ -400,7 +413,7 @@ export class SyncService {
       : undefined;
     const gitInfo = params.gitInfo;
     try {
-      const result = await this.client.mutation(
+      const result = await this.mutate(
         "conversations:createConversation" as any,
         {
           user_id: params.userId,
@@ -450,7 +463,7 @@ export class SyncService {
   async linkSessions(parentConversationId: string, childConversationId: string, subagentDescription?: string): Promise<void> {
     await this.throttle();
     try {
-      await this.client.mutation(
+      await this.mutate(
         "conversations:linkSessions" as any,
         {
           parent_conversation_id: parentConversationId,
@@ -478,7 +491,7 @@ export class SyncService {
   ): Promise<void> {
     await this.throttle();
     try {
-      await this.client.mutation(
+      await this.mutate(
         "conversations:linkSpawnedBy" as any,
         {
           parent_conversation_id: parentConversationId,
@@ -499,7 +512,7 @@ export class SyncService {
   async linkPlanHandoff(parentConversationId: string, childConversationId: string): Promise<void> {
     await this.throttle();
     try {
-      await this.client.mutation(
+      await this.mutate(
         "conversations:linkPlanHandoff" as any,
         {
           parent_conversation_id: parentConversationId,
@@ -522,7 +535,7 @@ export class SyncService {
   }): Promise<string | null> {
     await this.throttle();
     try {
-      const result = await this.client.mutation(
+      const result = await this.mutate(
         "docs:create" as any,
         {
           api_token: this.apiToken,
@@ -550,7 +563,7 @@ export class SyncService {
   }): Promise<string | null> {
     await this.throttle();
     try {
-      const result = await this.client.mutation(
+      const result = await this.mutate(
         "tasks:create" as any,
         {
           api_token: this.apiToken,
@@ -576,7 +589,7 @@ export class SyncService {
   async updateTaskStatus(shortId: string, status: string, sessionId?: string): Promise<void> {
     await this.throttle();
     try {
-      await this.client.mutation(
+      await this.mutate(
         "tasks:update" as any,
         {
           api_token: this.apiToken,
@@ -665,7 +678,7 @@ export class SyncService {
     }
 
     try {
-      const messageId = await this.client.mutation(
+      const messageId = await this.mutate(
         "messages:addMessage" as any,
         {
           conversation_id: params.conversationId,
@@ -808,7 +821,7 @@ export class SyncService {
         await this.throttle();
         try {
           const result = await withTimeout(
-            this.client.mutation(
+            this.mutate(
               "messages:addMessages" as any,
               {
                 conversation_id: params.conversationId,
@@ -861,7 +874,7 @@ export class SyncService {
     }
     const filePathHash = hashPath(params.filePath);
     try {
-      await this.client.mutation("syncCursors:updateSyncCursor" as any, {
+      await this.mutate("syncCursors:updateSyncCursor" as any, {
         user_id: this.userId,
         file_path_hash: filePathHash,
         last_position: params.byteOffset,
@@ -900,7 +913,7 @@ export class SyncService {
 
   async updateTitle(conversationId: string, title: string): Promise<void> {
     try {
-      await this.client.mutation("conversations:updateTitle" as any, {
+      await this.mutate("conversations:updateTitle" as any, {
         conversation_id: conversationId,
         title,
         api_token: this.apiToken,
@@ -915,7 +928,7 @@ export class SyncService {
 
   async setAvailableSkills(conversationId: string | undefined, skills: string, projectPath?: string): Promise<void> {
     try {
-      await this.client.mutation("conversations:setAvailableSkills" as any, {
+      await this.mutate("conversations:setAvailableSkills" as any, {
         ...(conversationId ? { conversation_id: conversationId } : {}),
         ...(projectPath ? { project_path: projectPath } : {}),
         skills,
@@ -926,7 +939,7 @@ export class SyncService {
 
   async updateProjectPath(sessionId: string, projectPath: string, gitRoot?: string): Promise<{ updated: boolean } | null> {
     try {
-      const result = await this.client.mutation("conversations:updateProjectPath" as any, {
+      const result = await this.mutate("conversations:updateProjectPath" as any, {
         session_id: sessionId,
         project_path: projectPath,
         git_root: gitRoot,
@@ -940,7 +953,7 @@ export class SyncService {
 
   async updateSessionId(conversationId: string, sessionId: string, projectPath?: string, gitRoot?: string): Promise<void> {
     try {
-      await this.client.mutation("conversations:updateSessionId" as any, {
+      await this.mutate("conversations:updateSessionId" as any, {
         conversation_id: conversationId,
         session_id: sessionId,
         project_path: projectPath,
@@ -983,7 +996,7 @@ export class SyncService {
 
   async registerManagedSession(sessionId: string, pid: number, tmuxSession?: string, conversationId?: string): Promise<{ notOwner?: boolean; owner?: string } | void> {
     try {
-      const res = await this.client.mutation("managedSessions:registerManagedSession" as any, {
+      const res = await this.mutate("managedSessions:registerManagedSession" as any, {
         session_id: sessionId,
         pid,
         tmux_session: tmuxSession,
@@ -1003,7 +1016,7 @@ export class SyncService {
     agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped" | "starting" | "resuming",
   ): Promise<{ found: boolean; dismissed?: boolean } | undefined> {
     try {
-      return await this.client.mutation("managedSessions:heartbeat" as any, {
+      return await this.mutate("managedSessions:heartbeat" as any, {
         session_id: sessionId,
         api_token: this.apiToken,
         ...(agentStatus ? { agent_status: agentStatus, client_ts: Date.now() } : {}),
@@ -1024,7 +1037,7 @@ export class SyncService {
   ): Promise<{ updated: number } | undefined> {
     if (sessions.length === 0) return;
     try {
-      return await this.client.mutation("managedSessions:heartbeatBatch" as any, {
+      return await this.mutate("managedSessions:heartbeatBatch" as any, {
         api_token: this.apiToken,
         sessions,
       });
@@ -1033,7 +1046,7 @@ export class SyncService {
 
   async reportSessionMetrics(sessionId: string, cpu: number, memory: number, pidCount: number, agentPid?: number, awakeIdleMs?: number): Promise<void> {
     try {
-      await this.client.mutation("managedSessions:reportMetrics" as any, {
+      await this.mutate("managedSessions:reportMetrics" as any, {
         session_id: sessionId,
         cpu,
         memory,
@@ -1081,7 +1094,7 @@ export class SyncService {
 
   async ackInjectedMessages(conversationId: string): Promise<void> {
     try {
-      await this.client.mutation("pendingMessages:ackInjectedMessages" as any, {
+      await this.mutate("pendingMessages:ackInjectedMessages" as any, {
         conversation_id: conversationId,
         api_token: this.apiToken,
         device_id: deviceId(),
@@ -1096,7 +1109,7 @@ export class SyncService {
 
   async resetInjectedMessages(conversationId: string): Promise<void> {
     try {
-      await this.client.mutation("pendingMessages:resetInjectedMessages" as any, {
+      await this.mutate("pendingMessages:resetInjectedMessages" as any, {
         conversation_id: conversationId,
         api_token: this.apiToken,
         device_id: deviceId(),
@@ -1114,7 +1127,7 @@ export class SyncService {
     deliveredAt?: number;
   }): Promise<void> {
     try {
-      await this.client.mutation("pendingMessages:updateMessageStatus" as any, {
+      await this.mutate("pendingMessages:updateMessageStatus" as any, {
         message_id: params.messageId,
         status: params.status,
         delivered_at: params.deliveredAt,
@@ -1131,7 +1144,7 @@ export class SyncService {
 
   async retryMessage(messageId: string): Promise<void> {
     try {
-      await this.client.mutation("pendingMessages:retryMessage" as any, {
+      await this.mutate("pendingMessages:retryMessage" as any, {
         message_id: messageId,
         api_token: this.apiToken,
         device_id: deviceId(),
@@ -1146,7 +1159,7 @@ export class SyncService {
 
   async claimPendingMessageForDelivery(messageId: string): Promise<PendingMessageForDelivery | null> {
     try {
-      const result = await this.client.mutation("pendingMessages:claimPendingMessageForDelivery" as any, {
+      const result = await this.mutate("pendingMessages:claimPendingMessageForDelivery" as any, {
         message_id: messageId,
         api_token: this.apiToken,
         device_id: deviceId(),
@@ -1166,7 +1179,7 @@ export class SyncService {
   async sendMessageToSession(conversationId: string, content: string, origin?: "scheduler"): Promise<string | null> {
     if (!this.apiToken) return null;
     try {
-      const result = await this.client.mutation(
+      const result = await this.mutate(
         "pendingMessages:sendMessageToSession" as any,
         {
           conversation_id: conversationId,
@@ -1188,7 +1201,7 @@ export class SyncService {
   async setSessionError(conversationId: string, error?: string): Promise<void> {
     if (!this.apiToken) return;
     try {
-      await this.client.mutation(
+      await this.mutate(
         "conversations:setSessionError" as any,
         {
           conversation_id: conversationId,
@@ -1207,7 +1220,7 @@ export class SyncService {
   async claimSession(conversationId: string): Promise<void> {
     if (!this.apiToken) return;
     try {
-      await this.client.mutation(
+      await this.mutate(
         "devices:claimConversation" as any,
         {
           conversation_id: conversationId,
@@ -1227,7 +1240,7 @@ export class SyncService {
   async claimConversationForStart(conversationId: string): Promise<{ won: boolean; owner?: string }> {
     if (!this.apiToken) return { won: true };
     try {
-      const res = await this.client.mutation(
+      const res = await this.mutate(
         "devices:claimConversationForStart" as any,
         {
           conversation_id: conversationId,
@@ -1244,7 +1257,7 @@ export class SyncService {
   async markSessionCompleted(conversationId: string): Promise<void> {
     if (!this.apiToken) return;
     try {
-      await this.client.mutation(
+      await this.mutate(
         "conversations:markSessionCompleted" as any,
         {
           conversation_id: conversationId,
@@ -1257,7 +1270,7 @@ export class SyncService {
   async markSessionActive(conversationId: string): Promise<void> {
     if (!this.apiToken) return;
     try {
-      await this.client.mutation(
+      await this.mutate(
         "conversations:markSessionActive" as any,
         {
           conversation_id: conversationId,
@@ -1270,7 +1283,7 @@ export class SyncService {
   async updateSessionAgentStatus(conversationId: string, status: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped" | "starting" | "resuming", clientTs?: number, permissionMode?: string): Promise<void> {
     if (!this.apiToken) return;
     try {
-      await this.client.mutation(
+      await this.mutate(
         "managedSessions:updateAgentStatus" as any,
         {
           conversation_id: conversationId,
@@ -1318,7 +1331,7 @@ export class SyncService {
     arguments_preview: string;
   }): Promise<string> {
     try {
-      const permissionId = await this.client.mutation(
+      const permissionId = await this.mutate(
         "permissions:createPermissionRequest" as any,
         {
           conversation_id: params.conversation_id,
@@ -1339,7 +1352,7 @@ export class SyncService {
 
   async cancelPermissionRequest(permissionId: string): Promise<boolean> {
     try {
-      const ok = await this.client.mutation(
+      const ok = await this.mutate(
         "permissions:cancelPermissionRequest" as any,
         {
           permission_id: permissionId,
@@ -1357,7 +1370,7 @@ export class SyncService {
 
   async cancelPendingPermissions(sessionId: string, createdBefore?: number): Promise<number> {
     try {
-      const cancelled = await this.client.mutation(
+      const cancelled = await this.mutate(
         "permissions:cancelPendingPermissions" as any,
         {
           session_id: sessionId,
@@ -1438,7 +1451,7 @@ export class SyncService {
       return null;
     }
     try {
-      const result = await this.client.mutation(
+      const result = await this.mutate(
         "daemonLogs:insertBatch" as any,
         {
           api_token: this.apiToken,
@@ -1459,7 +1472,7 @@ export class SyncService {
   }): Promise<void> {
     if (!this.apiToken) return;
     try {
-      await this.client.mutation(
+      await this.mutate(
         "notifications:createSessionNotification" as any,
         {
           api_token: this.apiToken,
@@ -1527,7 +1540,7 @@ export class SyncService {
   async claimTask(taskId: string, daemonId: string): Promise<any> {
     if (!this.apiToken) return null;
     try {
-      return await this.client.mutation(
+      return await this.mutate(
         "agentTasks:claimTask" as any,
         { api_token: this.apiToken, task_id: taskId, daemon_id: daemonId }
       );
@@ -1539,7 +1552,7 @@ export class SyncService {
   async renewTaskLease(taskId: string, daemonId: string): Promise<boolean> {
     if (!this.apiToken) return false;
     try {
-      const result = await this.client.mutation(
+      const result = await this.mutate(
         "agentTasks:renewLease" as any,
         { api_token: this.apiToken, task_id: taskId, daemon_id: daemonId }
       );
@@ -1552,7 +1565,7 @@ export class SyncService {
   async completeTaskRun(taskId: string, daemonId: string, summary?: string, conversationId?: string, runSessionUuid?: string): Promise<boolean> {
     if (!this.apiToken) return false;
     try {
-      const result = await this.client.mutation(
+      const result = await this.mutate(
         "agentTasks:completeTaskRun" as any,
         {
           api_token: this.apiToken,
@@ -1572,7 +1585,7 @@ export class SyncService {
   async failTaskRun(taskId: string, daemonId: string, error?: string, runSessionUuid?: string): Promise<boolean> {
     if (!this.apiToken) return false;
     try {
-      const result = await this.client.mutation(
+      const result = await this.mutate(
         "agentTasks:failTaskRun" as any,
         { api_token: this.apiToken, task_id: taskId, daemon_id: daemonId, error, run_session_uuid: runSessionUuid }
       );
@@ -1588,7 +1601,7 @@ export class SyncService {
   async linkRunConversation(taskId: string, runSessionUuid: string): Promise<{ linked: boolean; retry: boolean }> {
     if (!this.apiToken) return { linked: false, retry: false };
     try {
-      const result = await this.client.mutation(
+      const result = await this.mutate(
         "agentTasks:linkRunConversation" as any,
         { api_token: this.apiToken, task_id: taskId, run_session_uuid: runSessionUuid }
       );

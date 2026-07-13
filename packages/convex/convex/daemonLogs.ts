@@ -1,5 +1,6 @@
 import { mutation, query, internalMutation } from "./functions";
 import { internal } from "./_generated/api";
+import type { MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
@@ -419,6 +420,65 @@ export const clearOfflineAlerts = internalMutation({
 // live traffic. The one-time backlog reclaim belongs in a low-traffic maintenance
 // window, not here. ctx.db.delete only — never raw SQL.
 const PRUNE_PER_TICK = 300;
+
+// Cursor-based sweep shared by the cron tick and the backlog drain. A deleted
+// row leaves a tombstone in the index until INDEX_RETENTION_DELAY (3d) purges
+// it, so a scan that restarts at the index head re-walks every tombstone this
+// pruner ever created — after ~60k backlog deletions even a take(1) blew the
+// system-op budget, which killed the drain's self-reschedule chain AND every
+// cron tick after it (2026-07-13). The cursor (log_prune_state singleton,
+// search_mirror_state pattern) resumes each tick just past the last deleted
+// row, so a tick never re-reads its own graveyard.
+//
+// The cursor advances only THROUGH deleted rows and parks at the first
+// still-live one: rows expire later as the cutoff slides, so parking (never
+// skipping) keeps them reachable. A late-uploaded old-timestamp row that sits
+// above a parked live row is swept once the cutoff passes the parked row —
+// retention slack, not a leak. Concurrent cron+drain ticks OCC-conflict on the
+// state row; the loser retries against the advanced cursor and continues
+// cleanly.
+async function advanceLogPrune(ctx: MutationCtx, batchArg?: number, seedCursor?: number) {
+  const cutoff = Date.now() - RETENTION_MS;
+  const batch = Math.min(batchArg ?? PRUNE_PER_TICK, 2000);
+  let state = await ctx.db.query("log_prune_state").first();
+  if (!state) {
+    // seedCursor lets the first run start past an existing tombstone field
+    // (derived externally, e.g. oldest live row's _creationTime - 1). A failed
+    // mutation rolls back its insert, so a budget-blown unseeded first run
+    // cannot poison the seed.
+    const id = await ctx.db.insert("log_prune_state", {
+      cursor: seedCursor ?? 0,
+      updated_at: Date.now(),
+    });
+    state = (await ctx.db.get(id))!;
+  }
+
+  const candidates = await ctx.db
+    .query("daemon_logs")
+    .withIndex("by_creation_time", (q) => q.gt("_creationTime", state.cursor))
+    .order("asc")
+    .take(batch);
+
+  let deleted = 0;
+  let cursor = state.cursor;
+  // Short page and all-deleted = end of table; a live row mid-page = reached
+  // the retention frontier. Either way the backlog below the cutoff is gone.
+  let caughtUp = candidates.length < batch;
+  for (const log of candidates) {
+    if (log.timestamp >= cutoff) {
+      caughtUp = true;
+      break;
+    }
+    await ctx.db.delete(log._id);
+    cursor = log._creationTime;
+    deleted++;
+  }
+  if (cursor !== state.cursor) {
+    await ctx.db.patch(state._id, { cursor, updated_at: Date.now() });
+  }
+  return { deleted, scanned: candidates.length, caughtUp, cursor };
+}
+
 export const pruneOldLogs = internalMutation({
   args: {
     // Maintenance-window override: `npx convex run daemonLogs:pruneOldLogs
@@ -426,31 +486,7 @@ export const pruneOldLogs = internalMutation({
     // latency). The cron always runs the gentle default.
     batch: v.optional(v.number()),
   },
-  handler: async (ctx, args) => {
-    const cutoff = Date.now() - RETENTION_MS;
-
-    const candidates = await ctx.db
-      .query("daemon_logs")
-      .order("asc")
-      .take(Math.min(args.batch ?? PRUNE_PER_TICK, 2000));
-
-    let deleted = 0;
-    for (const log of candidates) {
-      if (log.timestamp < cutoff) {
-        await ctx.db.delete(log._id);
-        deleted++;
-      }
-    }
-
-    // caughtUp: the oldest surviving rows are inside the retention window —
-    // the backlog is gone and the external drain loop can stop.
-    return {
-      deleted,
-      scanned: candidates.length,
-      caughtUp: deleted < candidates.length || candidates.length === 0,
-      oldestTs: candidates[0]?.timestamp ?? null,
-    };
-  },
+  handler: async (ctx, args) => advanceLogPrune(ctx, args.batch),
 });
 
 // One-time paced drain of the multi-million-row pre-gate backlog. Deletes one
@@ -465,32 +501,22 @@ export const drainLogBacklog = internalMutation({
   args: {
     batch: v.optional(v.number()),
     pauseMs: v.optional(v.number()),
+    // First-run seed for log_prune_state.cursor (see advanceLogPrune) —
+    // ignored once the state row exists.
+    cursor: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const batch = Math.min(args.batch ?? 1000, 2000);
     const pauseMs = Math.max(args.pauseMs ?? 45_000, 5_000);
-    const cutoff = Date.now() - RETENTION_MS;
 
-    const candidates = await ctx.db
-      .query("daemon_logs")
-      .order("asc")
-      .take(batch);
+    const result = await advanceLogPrune(ctx, batch, args.cursor);
 
-    let deleted = 0;
-    for (const log of candidates) {
-      if (log.timestamp < cutoff) {
-        await ctx.db.delete(log._id);
-        deleted++;
-      }
-    }
-
-    const caughtUp = deleted < candidates.length || candidates.length === 0;
-    if (!caughtUp) {
+    if (!result.caughtUp) {
       await ctx.scheduler.runAfter(pauseMs, internal.daemonLogs.drainLogBacklog, {
         batch,
         pauseMs,
       });
     }
-    return { deleted, caughtUp };
+    return { deleted: result.deleted, caughtUp: result.caughtUp, cursor: result.cursor };
   },
 });

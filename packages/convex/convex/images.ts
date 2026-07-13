@@ -60,7 +60,10 @@ export const getImageUrls = query({
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
-    if (!userId) return {};
+    // null (not {}) so the client can tell "not signed in yet" from "these
+    // storage objects don't exist" — an empty object would make it cache every
+    // requested id as missing and silently hide the images all session.
+    if (!userId) return null;
     const urls: Record<string, string | null> = {};
     for (const id of args.storageIds) {
       urls[id] = await ctx.storage.getUrl(id);

@@ -4,6 +4,7 @@ import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
 import type { PaginationOptions, PaginationResult, RegisteredQuery } from "convex/server";
 import type { Id } from "./_generated/dataModel";
+import type { QueryCtx } from "./_generated/server";
 import { enqueueStartSession, getOnlineLocalRoots } from "./devices";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
@@ -15,6 +16,20 @@ import { deviceSettingsValidator } from "./deviceSettingsShared";
 import { normalizeProjectPath } from "./projectPaths";
 import { backlogFieldsPatch } from "./heartbeatBacklog";
 
+// Skills moved off the heartbeat-hot users doc into user_skills (see schema
+// note); overlay them back so clients keep reading currentUser.available_skills
+// unchanged. Falls back to the legacy on-doc field for users who haven't
+// written skills since the split.
+async function getUserWithSkills(ctx: QueryCtx, userId: Id<"users">) {
+  const user = await ctx.db.get(userId);
+  if (!user) return null;
+  const skillsRow = await ctx.db
+    .query("user_skills")
+    .withIndex("by_user", (q) => q.eq("user_id", userId))
+    .first();
+  return skillsRow ? { ...user, available_skills: skillsRow.skills_json } : user;
+}
+
 export const getCurrentUser = query({
   args: {},
   handler: async (ctx) => {
@@ -22,7 +37,7 @@ export const getCurrentUser = query({
     if (!userId) {
       return null;
     }
-    return await ctx.db.get(userId);
+    return await getUserWithSkills(ctx, userId);
   },
 });
 
@@ -41,7 +56,7 @@ export const getCurrentUserProbe = query({
     if (!userId) {
       return null;
     }
-    return await ctx.db.get(userId);
+    return await getUserWithSkills(ctx, userId);
   },
 });
 
