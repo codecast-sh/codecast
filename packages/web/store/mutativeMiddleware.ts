@@ -207,6 +207,20 @@ export function stripStalePointerFromReplay(patches: any): any {
 
 const RETRY_DELAYS = [1000, 2000, 4000];
 
+// A rejection from the Convex client means the backend ANSWERED — network
+// drops never reject (the WS client re-queues those internally across
+// reconnects). Answers split two ways:
+//  - the function itself threw ("Uncaught Error: …" / "Uncaught ConvexError: …")
+//    or the args failed validation ("ArgumentValidationError"): deterministic —
+//    replaying the identical payload can only fail the identical way, so the
+//    retry ladder and the outbox re-drives just multiply the same refusal.
+//  - backend system errors ("Your request timed out…", "Try again later"):
+//    transient overload, carry neither marker, and stay retryable.
+export function isPermanentDispatchError(error: unknown): boolean {
+  const msg = String((error as { message?: unknown })?.message ?? error ?? "");
+  return /\bUncaught\b|ArgumentValidationError|Could not find public function/.test(msg);
+}
+
 // How many boots a failed outbox entry survives before it's given up on.
 // Each boot attempt already runs the full in-session retry ladder, so this
 // bounds permanently-broken dispatches (they'd otherwise slow every page
@@ -264,7 +278,7 @@ async function dispatchWithRetry(
     try {
       return await fn(action, safeArgs, safeGrouped, safeResult);
     } catch (e) {
-      if (attempt >= retryDelays.length) {
+      if (attempt >= retryDelays.length || isPermanentDispatchError(e)) {
         onError?.(action, e, args);
         throw e;
       }
@@ -346,8 +360,18 @@ export function mutativeMiddleware(config: any, opts?: { retryDelays?: number[] 
           try {
             await dispatchWithRetry(dispatchFn, entry.action, entry.args, stripStalePointerFromReplay(entry.patches), entry.result, dispatchErrorFn, retryDelays);
             outboxRemoveFn?.(entry.id);
-          } catch {
+          } catch (e) {
             // Reported via dispatchErrorFn.
+            // A permanent rejection IS delivery — the server ran the write and
+            // refused it. Re-driving it every boot/reconnect/interval tick can
+            // only repeat the refusal (this loop hammered a "Not authorized"
+            // setSessionModel 4× per 30s drain), so drop it regardless of the
+            // must-deliver/boot-cap retention rules below, which exist for
+            // writes the server never answered.
+            if (isPermanentDispatchError(e)) {
+              outboxRemoveFn?.(entry.id);
+              continue;
+            }
             if (!countAttempts) continue;
             const disposition = outboxFailureDisposition(entry);
             if (disposition.keep) outboxEnqueueFn?.(disposition.entry);
@@ -442,6 +466,11 @@ export function mutativeMiddleware(config: any, opts?: { retryDelays?: number[] 
             ).then((r) => {
               outboxRemoveFn?.(outboxId);
               return r;
+            }, (e) => {
+              // Permanent rejection: the server answered and said no — remove
+              // the parked copy so the drain loops don't re-litigate it forever.
+              if (isPermanentDispatchError(e)) outboxRemoveFn?.(outboxId);
+              throw e;
             });
             if (isAsyncAct) return promise;
             promise.catch(() => {});

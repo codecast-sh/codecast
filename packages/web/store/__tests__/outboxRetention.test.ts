@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
   action,
+  isPermanentDispatchError,
   mutativeMiddleware,
   outboxFailureDisposition,
   MAX_OUTBOX_BOOT_ATTEMPTS,
@@ -25,7 +26,7 @@ type Entry = {
   attempts?: number;
 };
 
-function makeHarness() {
+function makeHarness(retryDelays: number[] = []) {
   const outbox = new Map<string, Entry>();
   let state: any;
   const set = (next: any) => { state = next; };
@@ -37,7 +38,7 @@ function makeHarness() {
         this.items[id] = { _id: id };
       }),
     }),
-    { retryDelays: [] }, // fail fast — no real-time sleeps in tests
+    { retryDelays }, // default [] — fail fast, no real-time sleeps in tests
   )(set, get, {});
   state = wrapped;
   wrapped._setOutbox(
@@ -150,6 +151,73 @@ describe("must-deliver retention (user sends never drop)", () => {
 
     expect(outbox.has("e1")).toBe(true);
     expect(outbox.get("e1")?.action).toBe("sendMessage");
+  });
+});
+
+// A permanent rejection means the server RAN the write and refused it —
+// replaying the identical payload can only repeat the refusal. Before this
+// classification, a "Not authorized" convCommand parked in the outbox re-fired
+// its full retry ladder on every boot/reconnect/30s interval drain, forever
+// (the setSessionModel loop that flooded prod logs on 2026-07-13). These pin:
+// no ladder retries, dropped from the outbox on every path, must-deliver
+// notwithstanding — a served refusal IS delivery.
+describe("permanent rejections", () => {
+  // Real shape per convex-js createHybridErrorStacktrace: server errorMessage
+  // prefixed with the udf path, "Called by client" appended.
+  const refusal = () =>
+    Promise.reject(new Error("[CONVEX M(dispatch:dispatch)] Uncaught Error: Not authorized\n  Called by client"));
+
+  it("classifies server refusals as permanent and overload as transient", () => {
+    expect(isPermanentDispatchError(new Error("[CONVEX M(x)] Uncaught Error: Not authorized"))).toBe(true);
+    expect(isPermanentDispatchError(new Error("[CONVEX M(x)] Uncaught ConvexError: nope"))).toBe(true);
+    expect(isPermanentDispatchError(new Error("ArgumentValidationError: Value does not match validator"))).toBe(true);
+    expect(isPermanentDispatchError(new Error("Your request timed out performing too many system operations."))).toBe(false);
+    expect(isPermanentDispatchError(new Error("Your request couldn't be completed. Try again later."))).toBe(false);
+    expect(isPermanentDispatchError(new Error("offline"))).toBe(false);
+  });
+
+  it("dispatches exactly once — no ladder retries on a refusal", async () => {
+    const { wrapped } = makeHarness([1, 1, 1]); // ladder present but must not be used
+    let attempts = 0;
+    wrapped._setDispatch(() => {
+      attempts++;
+      return refusal();
+    });
+    await settle();
+
+    wrapped.poke("a");
+    await settle();
+    expect(attempts).toBe(1);
+  });
+
+  it("drops a refused entry from the outbox on the live dispatch path", async () => {
+    const { wrapped, outbox } = makeHarness();
+    wrapped._setDispatch(refusal);
+    await settle();
+
+    wrapped.poke("a");
+    await settle();
+    expect(outbox.size).toBe(0);
+  });
+
+  it("drops a refused entry on an opportunistic drain, even a sendMessage", async () => {
+    const { wrapped, outbox } = makeHarness();
+    wrapped._setDispatch(refusal);
+    await settle();
+
+    outbox.set("e1", seedEntry({ action: "sendMessage" }));
+    wrapped._drainOutbox(); // countAttempts=false path — used to keep it as-is forever
+    await settle();
+    expect(outbox.size).toBe(0);
+  });
+
+  it("drops a refused entry on a boot drain without burning boot attempts", async () => {
+    const { wrapped, outbox } = makeHarness();
+    outbox.set("e1", seedEntry());
+
+    wrapped._setDispatch(refusal); // boot drain fires on wiring
+    await settle();
+    expect(outbox.size).toBe(0);
   });
 });
 
