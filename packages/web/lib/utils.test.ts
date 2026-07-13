@@ -6,6 +6,7 @@ import {
   parentDir,
   commonParentDir,
   isExplicitPath,
+  buildProjectPathOptions,
 } from "./utils";
 
 const HOME = "/Users/ashot";
@@ -123,5 +124,57 @@ describe("parentDir / commonParentDir / isExplicitPath", () => {
     expect(isExplicitPath("~/rel")).toBe(true);
     expect(isExplicitPath("weekend-hack")).toBe(false);
     expect(isExplicitPath("a/b")).toBe(false);
+  });
+});
+
+describe("buildProjectPathOptions", () => {
+  const recents = [
+    "/Users/ashot/src/codecast",
+    "/Users/ashot/src/union-mobile",
+    "/Users/ashot/src/footage-app",
+  ];
+  const base = "/Users/ashot/src";
+  const build = (query: string, extra?: { currentPath?: string; defaultLimit?: number }) =>
+    buildProjectPathOptions({ query, recentPaths: recents, home: HOME, base, ...extra });
+
+  test("no query lists the first N recents, no custom row", () => {
+    expect(build("")).toEqual(recents.map((path) => ({ path })));
+    expect(build("", { defaultLimit: 2 })).toEqual(recents.slice(0, 2).map((path) => ({ path })));
+  });
+
+  test("a bare name filters recents by project name", () => {
+    expect(build("co")).toEqual([{ path: "/Users/ashot/src/codecast" }]);
+  });
+
+  test("a bare name with no matches offers it resolved against the base", () => {
+    expect(build("weekend-hack")).toEqual([
+      { path: "/Users/ashot/src/weekend-hack", custom: true },
+    ]);
+  });
+
+  test("a bare name that matches recents does NOT offer a custom row", () => {
+    // Plain filtering stays clean: "co" means codecast, not ~/src/co.
+    expect(build("co").some((o) => o.custom)).toBe(false);
+  });
+
+  test("an explicit path always offers its folder alongside matching recents", () => {
+    expect(build("~/src/code")).toEqual([
+      { path: "/Users/ashot/src/codecast" },
+      { path: "/Users/ashot/src/code", custom: true },
+    ]);
+  });
+
+  test("an explicit path that IS a recent doesn't duplicate it as custom", () => {
+    expect(build("~/src/codecast")).toEqual([{ path: "/Users/ashot/src/codecast" }]);
+  });
+
+  test("the current path is never offered as a custom row", () => {
+    expect(build("~/elsewhere", { currentPath: "/Users/ashot/elsewhere" })).toEqual([]);
+  });
+
+  test("an unresolvable query (no home for ~/…) just filters", () => {
+    expect(
+      buildProjectPathOptions({ query: "~/nope", recentPaths: recents, home: undefined, base: undefined }),
+    ).toEqual([]);
   });
 });

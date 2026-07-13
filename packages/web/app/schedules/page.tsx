@@ -618,7 +618,11 @@ function msToDurationToken(ms: number): string {
 
 function deriveInitial(t: any | undefined) {
   if (!t) {
-    return { prompt: "", title: "", kind: "in" as SchedKind, duration: "30m", eventKey: "pr_comment", mode: "propose" as const, agent: "claude" as const, project: "" };
+    // Human-created schedules default to apply: you wrote the prompt, it just
+    // does the task. Read-only is the marked exception (the checkbox below).
+    // Agent-created schedules (cast schedule add) still default to propose —
+    // their prompts were never reviewed by a person.
+    return { prompt: "", title: "", kind: "in" as SchedKind, duration: "30m", eventKey: "pr_comment", mode: "apply" as const, agent: "claude" as const, project: "" };
   }
   let kind: SchedKind = "in";
   let duration = "30m";
@@ -798,19 +802,15 @@ function ScheduleForm({ onClose, editTask, seedTask, embedded }: {
       </div>
 
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2 mt-3">
-        <div className="flex items-center gap-1 bg-sol-bg-alt rounded-lg p-0.5">
-          <ShortcutTooltip label="propose: runs are read-only — the agent investigates and reports" hint="default">
-            <button className={seg(mode === "propose")} onClick={() => setMode("propose")}>propose</button>
-          </ShortcutTooltip>
-          <ShortcutTooltip label="apply: runs may change things — edit files, run write commands">
-            <button
-              className={`${seg(mode === "apply")} ${mode === "apply" ? "!text-sol-orange" : ""}`}
-              onClick={() => setMode("apply")}
-            >
-              apply
-            </button>
-          </ShortcutTooltip>
-        </div>
+        <label className="flex items-center gap-1.5 text-xs text-sol-text-muted cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={mode === "propose"}
+            onChange={(e) => setMode(e.target.checked ? "propose" : "apply")}
+            className="accent-sol-cyan"
+          />
+          Read-only — report, don&apos;t change anything
+        </label>
         <div className="flex items-center gap-1 bg-sol-bg-alt rounded-lg p-0.5">
           <button className={seg(agent === "claude")} onClick={() => setAgent("claude")}>claude</button>
           <button className={seg(agent === "codex")} onClick={() => setAgent("codex")}>codex</button>
@@ -827,9 +827,6 @@ function ScheduleForm({ onClose, editTask, seedTask, embedded }: {
         </datalist>
       </div>
 
-      {mode === "apply" && (
-        <p className="text-[11px] text-sol-orange mt-2">apply mode: the agent can make changes without review</p>
-      )}
 
       <div className="flex items-center justify-between mt-3">
         <span className="text-[11px] text-sol-text-dim">Runs on your daemon — it polls every 30s</span>
