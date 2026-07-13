@@ -48,6 +48,22 @@ export const findConversationBySessionReference = async (
 // resolve to someone else's row, so the traversal probes every shape and returns the
 // first conversation `accept` approves. This is the single ref→conversation resolver;
 // callers supply the access rule (own-only, or own-or-team for `cast send`).
+// short_id is exactly the first 7 chars of the conversation id; accept a longer
+// paste by truncating, so a full id pasted as a "short id" still matches. The
+// index scan ascends by creation time; return newest first — short ids
+// circulate for recent sessions, so when a short id collides the newest match
+// is the one the caller almost certainly means.
+const shortIdCandidatesNewestFirst = async (
+  ctx: LookupCtx,
+  ref: string
+): Promise<LookupRecord[]> => {
+  const candidates = await ctx.db
+    .query("conversations")
+    .withIndex("by_short_id", (q: any) => q.eq("short_id", ref.slice(0, 7)))
+    .take(16);
+  return [...candidates].reverse();
+};
+
 export const findConversationByAnyRefWhere = async (
   ctx: LookupCtx,
   ref: string,
@@ -56,14 +72,7 @@ export const findConversationByAnyRefWhere = async (
   const trimmed = (ref ?? "").trim();
   if (!trimmed) return null;
 
-  // short_id is exactly the first 7 chars of the conversation id; accept a longer
-  // paste by truncating, so a full id pasted as a "short id" still matches.
-  const shortId = trimmed.slice(0, 7);
-  const byShortIdCandidates = await ctx.db
-    .query("conversations")
-    .withIndex("by_short_id", (q: any) => q.eq("short_id", shortId))
-    .take(16);
-  for (const candidate of byShortIdCandidates) {
+  for (const candidate of await shortIdCandidatesNewestFirst(ctx, trimmed)) {
     if (await accept(candidate)) return candidate;
   }
 
@@ -104,3 +113,38 @@ export const findConversationByAnyRef = async (
   findConversationByAnyRefWhere(ctx, ref, (conversation) =>
     hasMatchingUser(conversation, authUserId)
   );
+
+// Access-ranked resolver for the read paths (`cast read`/summary/export, webGet,
+// fork), where "found but not accessible" must stay distinguishable from "not
+// found": instead of an accept predicate that hides inaccessible rows, this
+// always returns SOME candidate when the ref matches, ranked own > accessible >
+// anything (newest first within each rank), and the caller runs its usual
+// access check on the result. A full conversation id wins outright; for a
+// colliding short id this guarantees someone else's older conversation can
+// never shadow the caller's own session.
+export const resolveConversationRefRanked = async (
+  ctx: LookupCtx,
+  ref: string,
+  authUserId: { toString(): string } | string,
+  canAccess: (conversation: LookupRecord) => boolean | Promise<boolean>
+): Promise<LookupRecord | null> => {
+  const trimmed = (ref ?? "").trim();
+  if (!trimmed) return null;
+
+  try {
+    const byId = await ctx.db.get(trimmed as any);
+    if (byId) return byId;
+  } catch {
+    // Not a full Convex id — fall through to the short-id index.
+  }
+
+  const candidates = await shortIdCandidatesNewestFirst(ctx, trimmed);
+  if (candidates.length <= 1) return candidates[0] ?? null;
+
+  const own = candidates.find((c) => hasMatchingUser(c, authUserId));
+  if (own) return own;
+  for (const candidate of candidates) {
+    if (await canAccess(candidate)) return candidate;
+  }
+  return candidates[0];
+};

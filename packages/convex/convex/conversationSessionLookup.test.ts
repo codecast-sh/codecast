@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { findConversationBySessionReference, findConversationByAnyRef } from "./conversationSessionLookup";
+import { findConversationBySessionReference, findConversationByAnyRef, resolveConversationRefRanked } from "./conversationSessionLookup";
 
 const createLookupCtx = ({
   conversationsBySessionId = {},
@@ -184,5 +184,85 @@ describe("findConversationByAnyRef", () => {
   test("returns null for an empty ref", async () => {
     const result = await findConversationByAnyRef(createLookupCtx({}), "  ", "user-1");
     expect(result).toBeNull();
+  });
+
+  test("prefers the NEWEST own conversation when the user owns several colliders", async () => {
+    // Index scans ascend by creation time; the fake db stores candidates in
+    // that order. Short ids circulate for recent sessions, so newest must win.
+    const older = { _id: "jx7c6zkOLD", user_id: "user-1", short_id: "jx7c6zk" };
+    const newer = { _id: "jx7c6zkNEW", user_id: "user-1", short_id: "jx7c6zk" };
+    const result = await findConversationByAnyRef(
+      createLookupCtx({ conversationsByShortId: { "jx7c6zk": [older, newer] } }),
+      "jx7c6zk",
+      "user-1"
+    );
+    expect(result).toEqual(newer);
+  });
+});
+
+describe("resolveConversationRefRanked", () => {
+  const never = () => false;
+
+  test("caller's own session wins over someone else's OLDER collider (cast read jx75d4p regression)", async () => {
+    // The bug: .first() returned the oldest collider — another user's private
+    // conversation — so `cast read <short-id>` said "Access denied" for the
+    // caller's own session.
+    const theirs = { _id: "jx75d4pTHEIRS", user_id: "user-2", short_id: "jx75d4p" };
+    const mine = { _id: "jx75d4pMINE", user_id: "user-1", short_id: "jx75d4p" };
+    const result = await resolveConversationRefRanked(
+      createLookupCtx({ conversationsByShortId: { "jx75d4p": [theirs, mine] } }),
+      "jx75d4p",
+      "user-1",
+      never
+    );
+    expect(result).toEqual(mine);
+  });
+
+  test("falls back to the newest candidate the caller can access", async () => {
+    const older = { _id: "a", user_id: "user-2", short_id: "jx7aaaa" };
+    const newer = { _id: "b", user_id: "user-3", short_id: "jx7aaaa" };
+    const result = await resolveConversationRefRanked(
+      createLookupCtx({ conversationsByShortId: { "jx7aaaa": [older, newer] } }),
+      "jx7aaaa",
+      "user-1",
+      async (c) => c._id !== "a"
+    );
+    expect(result).toEqual(newer);
+  });
+
+  test("still returns a candidate when none are accessible, so the caller can say Access denied (not found)", async () => {
+    const theirs = { _id: "a", user_id: "user-2", short_id: "jx7bbbb" };
+    const result = await resolveConversationRefRanked(
+      createLookupCtx({ conversationsByShortId: { "jx7bbbb": [theirs] } }),
+      "jx7bbbb",
+      "user-1",
+      never
+    );
+    expect(result).toEqual(theirs);
+  });
+
+  test("a full conversation id resolves directly and wins over short-id candidates", async () => {
+    const full = { _id: "jx75d4pvw40zz4yaekqdz612ed8aejvp", user_id: "user-2", short_id: "jx75d4p" };
+    const result = await resolveConversationRefRanked(
+      createLookupCtx({
+        conversationsById: { [full._id]: full },
+        conversationsByShortId: { "jx75d4p": [{ _id: "other", user_id: "user-1", short_id: "jx75d4p" }] },
+      }),
+      full._id,
+      "user-1",
+      never
+    );
+    expect(result).toEqual(full);
+  });
+
+  test("a longer-than-7 ref is truncated to its short id when no full id matches", async () => {
+    const conv = { _id: "jx7ccccfull", user_id: "user-1", short_id: "jx7cccc" };
+    const result = await resolveConversationRefRanked(
+      createLookupCtx({ conversationsByShortId: { "jx7cccc": [conv] } }),
+      "jx7ccccXYZ",
+      "user-1",
+      never
+    );
+    expect(result).toEqual(conv);
   });
 });
