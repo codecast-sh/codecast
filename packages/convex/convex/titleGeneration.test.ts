@@ -7,6 +7,7 @@ import {
   sampleEvenly,
   shouldGenerateTitle,
 } from "./titleGeneration";
+import { isRefusalProse } from "./idleSummary";
 
 describe("extractTitleJson", () => {
   test("parses bare JSON", () => {
@@ -150,5 +151,28 @@ describe("shouldGenerateTitle", () => {
     expect(shouldGenerateTitle(80)).toBe(true);
     expect(shouldGenerateTitle(100)).toBe(true);
     expect(shouldGenerateTitle(81)).toBe(false);
+  });
+});
+
+// Regression (2026-07-13, seen on inbox card "Scheduled rows layout fix"):
+// Haiku can comply with the JSON envelope while writing refusal prose INSIDE
+// the subtitle value. extractTitleJson rightly parses that envelope — the
+// subtitle-value guard (isRefusalProse in generateTitle / generateTaskSummary)
+// is what must reject it, keeping the last good subtitle instead.
+describe("subtitle-value refusal guard", () => {
+  const REFUSAL_ENVELOPE =
+    '{"title": "Scheduled rows layout fix", "subtitle": "I don\'t see a recent conversation to analyze. Please provide the conversation history between the agent and user so I can write the appropriate summary."}';
+
+  test("the envelope parses — the parser is not the guard", () => {
+    const parsed = extractTitleJson(REFUSAL_ENVELOPE);
+    expect(parsed?.title).toBe("Scheduled rows layout fix");
+    expect(parsed?.subtitle).toMatch(/^I don/);
+  });
+
+  test("isRefusalProse rejects the refusal value but passes legit subtitles", () => {
+    const parsed = extractTitleJson(REFUSAL_ENVELOPE);
+    expect(isRefusalProse(parsed!.subtitle!)).toBe(true);
+    expect(isRefusalProse("- Compacted ScheduleRowItem to two-line display")).toBe(false);
+    expect(isRefusalProse("Fixed search timeout and batch overflow hazard")).toBe(false);
   });
 });

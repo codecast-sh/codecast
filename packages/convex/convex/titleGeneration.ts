@@ -2,18 +2,24 @@ import { internalMutation, internalAction, internalQuery } from "./functions";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
+import { isRefusalProse } from "./idleSummary";
 
 export const setTitleAndSubtitle = internalMutation({
   args: {
     conversation_id: v.id("conversations"),
     title: v.string(),
-    subtitle: v.string(),
+    // Optional: when the generated subtitle fails the refusal guard, the
+    // caller omits it and the conversation keeps its last good subtitle
+    // (a stale summary beats refusal prose on the inbox card).
+    subtitle: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const conv = await ctx.db.get(args.conversation_id);
     if (!conv) return;
-    const patch: { title?: string; subtitle?: string } = { subtitle: args.subtitle };
+    const patch: { title?: string; subtitle?: string } = {};
+    if (args.subtitle !== undefined) patch.subtitle = args.subtitle;
     if (!conv.title_is_custom) patch.title = args.title;
+    if (Object.keys(patch).length === 0) return;
     await ctx.db.patch(args.conversation_id, patch);
   },
 });
@@ -77,10 +83,17 @@ export const generateTitle = internalAction({
       const title = parsed?.title?.trim();
 
       if (title && title.length < 200) {
+        // The JSON fence stops refusals from replacing the whole output, but
+        // not a model that complies with the format while writing refusal
+        // prose INSIDE the subtitle value ("I don't see a recent
+        // conversation…"). Guard the value itself; on refusal keep the last
+        // good subtitle by omitting the field.
+        const rawSubtitle = parsed?.subtitle?.trim() || "";
+        const subtitle = rawSubtitle && isRefusalProse(rawSubtitle) ? undefined : rawSubtitle;
         await ctx.runMutation(internal.titleGeneration.setTitleAndSubtitle, {
           conversation_id: args.conversation_id,
           title,
-          subtitle: parsed?.subtitle?.trim() || "",
+          ...(subtitle !== undefined ? { subtitle } : {}),
         });
       } else {
         console.error("Title generation returned no usable JSON:", text.slice(0, 120));
