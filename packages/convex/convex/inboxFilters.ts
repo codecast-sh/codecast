@@ -363,6 +363,43 @@ export function normalizeWorkStateFilter(raw: string | undefined | null): WorkSt
   }
 }
 
+// The "waiting" flavor behind a needs_input verdict — the server mirror of the
+// web's waitingSoundKey kind (useSyncInboxSessions), so the needs-input push
+// and the client idle sound describe the same transition. Combined with
+// message_count it forms the notification dedupe key: a new turn (count grew)
+// or a different flavor notifies again; a re-assertion of the same waiting
+// episode does not.
+export function needsInputKind(input: {
+  awaitingInput: boolean;
+  agentStatus?: string;
+  isUnresponsive: boolean;
+}): string {
+  if (input.awaitingInput) return "awaiting_input";
+  if (input.agentStatus === "permission_blocked") return "permission_blocked";
+  return input.agentStatus || (input.isUnresponsive ? "unresponsive" : "idle");
+}
+
+// Scheduling delays for the needs-input push re-check (notifications.checkNeedsInput).
+//
+// Idle: isSessionIdle only settles AGENT_IDLE_GRACE_MS after the status change
+// (the same grace that keeps the web from flickering to "needs input" the
+// instant a turn ends), so the check fires just past it — the first moment the
+// verdict can be true, and the same moment the client sound fires.
+export const NEEDS_INPUT_IDLE_CHECK_DELAY_MS = AGENT_IDLE_GRACE_MS + 5_000;
+// Permission blocks are needs_input immediately, but the daemon creates its
+// pending_permissions record (with its own push) asynchronously right after
+// the status write — wait for it so the record-existence dedupe is reliable.
+export const NEEDS_INPUT_PERMISSION_CHECK_DELAY_MS = 10_000;
+// AskUserQuestion arrival: the poll is authoritative in the messages table the
+// moment it syncs; the small delay just lets the same batch's conversation
+// patch (message_count) settle before the dedupe key is computed.
+export const NEEDS_INPUT_AUQ_CHECK_DELAY_MS = 2_000;
+
+// Daemon liveness window shared by the needs-input check. 90s everywhere:
+// conversations.ts (INBOX_HEARTBEAT_ALIVE_MS / HEARTBEAT_ALIVE_MS) keeps its
+// own local copies that predate this export.
+export const HEARTBEAT_ALIVE_MS = 90 * 1000;
+
 export function classifyWorkState(input: WorkStateInput): WorkState {
   const { agentStatus, isIdle, awaitingInput, hasPending, isUnresponsive, messageCount } = input;
   const dead = !!agentStatus && DEAD_AGENT_STATUSES.has(agentStatus);
