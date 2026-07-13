@@ -882,7 +882,8 @@ function Section({ title, count, subtitle, children, defaultOpen = true }: {
 
 interface SchedStats {
   active: number;
-  apply: number;
+  // Apply is the norm; read-only (propose) is the marked exception worth counting.
+  readOnly: number;
   recurring: number;
   totalRuns: number;
   failing: number; // active tasks mid-retry or failed-but-rescheduled
@@ -891,14 +892,14 @@ interface SchedStats {
 }
 
 function computeStats(all: any[], now: number): SchedStats {
-  let active = 0, apply = 0, recurring = 0, totalRuns = 0, failing = 0, running = 0;
+  let active = 0, readOnly = 0, recurring = 0, totalRuns = 0, failing = 0, running = 0;
   let nextRunAt: number | null = null;
   for (const t of all) {
     totalRuns += t.run_count ?? 0;
     const isActive = t.status === "scheduled" || t.status === "running";
     if (isActive) {
       active++;
-      if (t.mode === "apply") apply++;
+      if (t.mode !== "apply") readOnly++;
       if (t.schedule_type === "recurring") recurring++;
       if (t.status === "running") running++;
       if (t.retry_count > 0) failing++;
@@ -907,7 +908,7 @@ function computeStats(all: any[], now: number): SchedStats {
       }
     }
   }
-  return { active, apply, recurring, totalRuns, failing, nextRunAt, running };
+  return { active, readOnly, recurring, totalRuns, failing, nextRunAt, running };
 }
 
 function StatCell({ value, label, accent = "text-sol-text", title, onClick, active }: {
@@ -940,11 +941,11 @@ function StatCell({ value, label, accent = "text-sol-text", title, onClick, acti
   return <ShortcutTooltip label={title}>{cell}</ShortcutTooltip>;
 }
 
-function StatStrip({ stats, now, applyActive, onToggleApply }: {
+function StatStrip({ stats, now, readOnlyActive, onToggleReadOnly }: {
   stats: SchedStats;
   now: number;
-  applyActive?: boolean;
-  onToggleApply?: () => void;
+  readOnlyActive?: boolean;
+  onToggleReadOnly?: () => void;
 }) {
   const nextLabel =
     stats.running > 0
@@ -957,12 +958,12 @@ function StatStrip({ stats, now, applyActive, onToggleApply }: {
     <div className="reveal flex flex-wrap items-center gap-x-7 gap-y-3 mb-5 px-1">
       <StatCell value={stats.active} label="active" />
       <StatCell
-        value={stats.apply}
-        label="apply mode"
-        accent={stats.apply > 0 ? "text-sol-orange" : "text-sol-text-dim"}
-        title="Runs that can make changes without review — click to filter"
-        onClick={onToggleApply}
-        active={applyActive}
+        value={stats.readOnly}
+        label="read-only"
+        accent={stats.readOnly > 0 ? "text-sol-cyan" : "text-sol-text-dim"}
+        title="Runs that only investigate and report — click to filter"
+        onClick={onToggleReadOnly}
+        active={readOnlyActive}
       />
       <StatCell value={nextLabel} label={stats.running > 0 ? "running" : "next run"} accent={nextAccent} />
       <StatCell value={stats.totalRuns} label="total runs" title="Agent runs fired across all schedules" />
@@ -1328,10 +1329,10 @@ function SchedulesContent() {
   const hasCodex = useMemo(() => (tasks ?? []).some((t: any) => t.agent_type === "codex"), [tasks]);
 
   const activeSubtitle = useMemo(() => {
-    const apply = active.filter((t: any) => t.mode === "apply").length;
+    const readOnly = active.filter((t: any) => t.mode !== "apply").length;
     const recurring = active.filter((t: any) => t.schedule_type === "recurring").length;
     const parts: string[] = [];
-    if (apply > 0) parts.push(`${apply} apply`);
+    if (readOnly > 0) parts.push(`${readOnly} read-only`);
     if (recurring > 0) parts.push(`${recurring} recurring`);
     return parts.join(" · ") || undefined;
   }, [active]);
@@ -1366,8 +1367,8 @@ function SchedulesContent() {
           <StatStrip
             stats={stats}
             now={now}
-            applyActive={filters.mode === "apply"}
-            onToggleApply={() => update({ mode: filters.mode === "apply" ? "all" : "apply" })}
+            readOnlyActive={filters.mode === "propose"}
+            onToggleReadOnly={() => update({ mode: filters.mode === "propose" ? "all" : "propose" })}
           />
         )}
         {hasTasks && <AttentionBanner tasks={failingActive} />}

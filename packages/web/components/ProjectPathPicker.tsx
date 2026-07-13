@@ -11,6 +11,7 @@ import {
   displayPath,
   inferHomeDir,
   inferProjectBase,
+  isExplicitPath,
   resolveCustomPath,
 } from "../lib/utils";
 
@@ -82,12 +83,17 @@ export function ProjectPathPicker({
     inputRef.current?.blur();
   };
 
-  // Preserve typed-but-unpicked intent: resolve what's in the box, else keep it
-  // verbatim (the daemon takes the cwd as given). An empty box keeps the value —
-  // focusing clears the text for browsing, and that alone must not clear a pick.
+  // Preserve typed-but-unpicked intent on blur — but only when the text NAMED a
+  // folder: an explicit path, or a bare name the dropdown was offering as its
+  // "use this folder" row. Abandoned filter text ("co" narrowing to codecast)
+  // must not be committed as a phantom sibling folder. An empty box keeps the
+  // value — focusing clears the text for browsing, and that alone can't unpick.
   const commitQuery = () => {
     const q = query.trim();
-    if (q) onChange(resolveCustomPath(q, home, base) ?? q);
+    if (q) {
+      const custom = resolveCustomPath(q, home, base);
+      if (custom && (isExplicitPath(q) || options.some((o) => o.custom))) onChange(custom);
+    }
     setQuery("");
     setOpen(false);
   };
