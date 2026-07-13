@@ -67,6 +67,10 @@ const DEFAULT_PERSIST_DEBOUNCE = 1000;
 // blob got re-queued forever, jamming the concurrency=5 slots.
 const RETRY_BATCH_CHUNK = 25;
 const RETRY_BATCH_MAX_BYTES = 900_000;
+// Age ceiling for overload-class ops (which are exempt from maxAttempts).
+// Generous on purpose: it only exists to shed an op that keeps timing out on a
+// HEALTHY backend, and no real brownout has approached this length.
+const OVERLOAD_MAX_AGE_MS = 48 * 60 * 60 * 1000;
 
 function chunkRetryMessages<T>(
   messages: T[],
@@ -687,7 +691,7 @@ export class RetryQueue {
         // The collapse benefit is ENTIRELY in pulling nextRetryAt to ~now so the
         // op drains immediately instead of waiting out a stale multi-minute
         // backoff. We deliberately do NOT zero `attempts`: the true attempt count
-        // must be preserved so a persistently-failing non-network op still reaches
+        // must be preserved so a persistently-failing non-transient op still reaches
         // maxAttempts and gets dropped (zeroing it pardoned such ops forever across
         // repeated recovery events). Clear only the rate-limit hold, since the
         // backend just proved it isn't throttling us.
@@ -709,6 +713,23 @@ export class RetryQueue {
     const networkPatterns = ["typo in the url", "unable to connect", "fetch failed", "econnrefused", "enotfound", "etimedout", "network", "socket"];
     const lower = error.toLowerCase();
     return networkPatterns.some(p => lower.includes(p));
+  }
+
+  // The backend is reachable but saturated: the request was shed by load, not
+  // rejected on its merits. Client-side batch timeouts and Convex backpressure
+  // ("Try again later") / system-operation budget errors all mean this. These
+  // must never hit the attempt cap — a backend brownout (e.g. the daily pg_dump
+  // window, 2026-07-13) lasts hours, while maxAttempts at the 60s backoff cap
+  // is exhausted in ~20 minutes, which permanently dropped messages that would
+  // have synced fine on recovery. Treated like network errors (indefinite retry,
+  // capped backoff), with an age ceiling as the poison-op escape hatch.
+  private isBackendOverloadError(error: string): boolean {
+    const lower = error.toLowerCase();
+    return /timed out after \d+/.test(lower) ||
+      lower.includes("couldn't be completed") ||
+      lower.includes("try again later") ||
+      lower.includes("too many system operations") ||
+      lower.includes("your request timed out");
   }
 
   // Errors that mean the cached conversation_id is permanently invalid against the
@@ -738,15 +759,30 @@ export class RetryQueue {
     }
 
     const isNetwork = this.isNetworkError(error);
+    const isOverload = !isNetwork && this.isBackendOverloadError(error);
+    const isTransient = isNetwork || isOverload;
 
-    if (isNetwork && Date.now() - op.createdAt > 24 * 60 * 60 * 1000) {
+    if (isTransient && Date.now() - op.createdAt > 24 * 60 * 60 * 1000) {
       this.log(
-        `Network op retrying >24h: ${op.type} (${op.attempts} attempts, id: ${op.id}). Still persisting.`,
+        `${isNetwork ? "Network" : "Overloaded-backend"} op retrying >24h: ${op.type} (${op.attempts} attempts, id: ${op.id}). Still persisting.`,
         "error"
       );
     }
 
-    if (op.attempts >= this.maxAttempts && !isNetwork) {
+    // Overload ops outlive the attempt cap, but not the age ceiling: an op
+    // still timing out this long after the rest of the queue recovered is
+    // itself the problem (the poison case the attempt cap existed for).
+    if (isOverload && Date.now() - op.createdAt > OVERLOAD_MAX_AGE_MS) {
+      this.log(
+        `Overload-class op still failing after 48h — unsyncable. DROPPED: ${op.type} after ${op.attempts} attempts. Last error: ${error}. Session: ${op.params.sessionId || 'unknown'}`,
+        "error"
+      );
+      this.recordDroppedOperation(op);
+      this.queue.delete(op.id);
+      return;
+    }
+
+    if (op.attempts >= this.maxAttempts && !isTransient) {
       this.log(
         `Max retries reached. DROPPED: ${op.type} after ${op.attempts} attempts. Last error: ${error}. Session: ${op.params.sessionId || 'unknown'}`,
         "error"
@@ -757,16 +793,17 @@ export class RetryQueue {
     }
 
     const rateLimitDelay = parseRateLimitDelay(error);
-    // Network errors cap at 5 min backoff and retry indefinitely
-    const maxDelay = isNetwork ? 5 * 60 * 1000 : this.maxDelayMs;
-    // After many attempts, network errors settle at max delay instead of growing
-    const effectiveAttempts = isNetwork ? Math.min(op.attempts, 10) : op.attempts;
+    // Transient errors (network, overloaded backend) cap at 5 min backoff and
+    // retry indefinitely
+    const maxDelay = isTransient ? 5 * 60 * 1000 : this.maxDelayMs;
+    // After many attempts, transient errors settle at max delay instead of growing
+    const effectiveAttempts = isTransient ? Math.min(op.attempts, 10) : op.attempts;
     const baseDelay = rateLimitDelay ?? this.calculateNextDelay(effectiveAttempts);
     const nextDelay = Math.min(baseDelay, maxDelay);
     op.nextRetryAt = Date.now() + nextDelay;
     op.rateLimitDelayMs = rateLimitDelay ?? undefined;
     this.log(
-      `Retry failed for ${op.type}: ${error}. Next retry in ${nextDelay}ms${rateLimitDelay ? ' (rate limited)' : ''}${isNetwork ? ' (network, indefinite)' : ''} (id: ${op.id})`,
+      `Retry failed for ${op.type}: ${error}. Next retry in ${nextDelay}ms${rateLimitDelay ? ' (rate limited)' : ''}${isNetwork ? ' (network, indefinite)' : ''}${isOverload ? ' (backend overloaded, indefinite)' : ''} (id: ${op.id})`,
       "warn"
     );
   }
