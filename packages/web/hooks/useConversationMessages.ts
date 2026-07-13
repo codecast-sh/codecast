@@ -4,6 +4,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore, useTrackedStore, isConvexId, ensureHydrated } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
+import { prefetchStorageImageUrls } from "./useStorageImageUrl";
 import { rowSigExcluding } from "../store/wakeSig";
 
 const EMPTY_MESSAGES: Message[] = [];
@@ -502,6 +503,21 @@ export function useConversationMessages(
     // to the cached store list only while the around-window is still loading.
     ? (targetAroundData?.messages ?? aroundData?.messages ?? mergedMessages)
     : mergedMessages;
+
+  // Resolve image URLs as soon as messages arrive — BEFORE the virtualized
+  // ImageBlocks mount — so an image scrolled into view never waits on the
+  // id→URL round-trip (the bytes themselves are a plain <img> fetch).
+  // eslint-disable-next-line no-restricted-syntax -- prefetch side effect keyed to message arrival
+  useEffect(() => {
+    const ids: string[] = [];
+    for (const m of rawMessages) {
+      if (!m.images) continue;
+      for (const img of m.images) {
+        if (img?.storage_id) ids.push(img.storage_id);
+      }
+    }
+    if (ids.length) prefetchStorageImageUrls(convex, ids);
+  }, [rawMessages, convex]);
 
   // =============================================
   // Child conversation map

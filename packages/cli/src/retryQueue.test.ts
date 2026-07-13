@@ -4,6 +4,19 @@ import * as os from "os";
 import * as path from "path";
 import { RetryQueue } from "./retryQueue.js";
 
+// Poll until the queue reaches the expected STATE instead of asserting counts
+// after a fixed sleep — fixed windows flake under load (a parallel suite can
+// starve the event loop past any margin; these tests tripped the CLI release
+// gate that way, 2026-07-13). The generous deadline only bounds a genuinely
+// broken invariant, it never paces a healthy run.
+async function until(cond: () => boolean, timeoutMs = 15_000, stepMs = 10): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!cond()) {
+    if (Date.now() > deadline) throw new Error("until(): condition not met before deadline");
+    await new Promise((r) => setTimeout(r, stepMs));
+  }
+}
+
 describe("RetryQueue", () => {
   let queue: RetryQueue;
   let logs: string[];
@@ -72,10 +85,9 @@ describe("RetryQueue", () => {
 
     queue.add("createConversation", { sessionId: "test" });
 
-    await new Promise((r) => setTimeout(r, 600));
+    await until(() => queue.getQueueSize() === 0);
 
     expect(attempts).toBe(3);
-    expect(queue.getQueueSize()).toBe(0);
 
     const maxRetriesLog = logs.find((l) => l.includes("Max retries reached"));
     expect(maxRetriesLog).toBeDefined();
@@ -92,11 +104,10 @@ describe("RetryQueue", () => {
 
     queue.add("addMessage", { content: "test" });
 
-    // Wait long enough for 6+ attempts (maxAttempts=3, but network errors are unlimited)
-    await new Promise((r) => setTimeout(r, 3000));
+    // maxAttempts=3, but network errors retry unlimited — drain = success on 6th
+    await until(() => queue.getQueueSize() === 0);
 
     expect(attempts).toBe(6);
-    expect(queue.getQueueSize()).toBe(0);
 
     const droppedLog = logs.find((l) => l.includes("DROPPED"));
     expect(droppedLog).toBeUndefined();
@@ -211,9 +222,7 @@ describe("RetryQueue", () => {
       });
 
       q.add("addMessage", { content: "test" });
-      await new Promise((r) => setTimeout(r, 300));
-
-      expect(q.getQueueSize()).toBe(0);
+      await until(() => q.getQueueSize() === 0);
       q.stop();
     }
   });
@@ -233,12 +242,8 @@ describe("RetryQueue", () => {
     });
 
     q.add("addMessage", { content: "test" });
-    // Wait enough for several attempts past maxAttempts=2
-    // With 20ms initial: delays are 20, 40, 80, 160... need ~1s for 4+ attempts
-    await new Promise((r) => setTimeout(r, 2000));
-
-    // Should have retried well past the maxAttempts of 2
-    expect(attempts).toBeGreaterThan(2);
+    // Should retry well past the maxAttempts of 2
+    await until(() => attempts > 2);
     // Should still be in queue (not dropped)
     expect(q.getQueueSize()).toBe(1);
     q.stop();
@@ -273,15 +278,13 @@ describe("RetryQueue", () => {
 
       // Single-message batch so the timed-out split path can't consume the failure.
       q.add("addMessages", { conversationId: "conv1", messages: [{ message_uuid: "u1", content: "x" }] });
-      // Backoff caps at maxDelayMs=50 here, so this window fits many attempts.
-      await new Promise((r) => setTimeout(r, 700));
+      await until(() => attempts > 2);
 
-      expect(attempts).toBeGreaterThan(2);
       expect(q.getQueueSize()).toBe(1);
       expect(testLogs.some((l) => l.includes("DROPPED"))).toBe(false);
       q.stop();
     }
-  }, 15000);
+  }, 60000);
 
   it("drops overload-class ops past the 48h age ceiling (poison-op escape hatch)", async () => {
     let attempts = 0;
@@ -304,9 +307,8 @@ describe("RetryQueue", () => {
     });
 
     q.add("addMessages", { conversationId: "conv1", messages: [{ message_uuid: "u1", content: "x" }] });
-    await new Promise((r) => setTimeout(r, 1000));
+    await until(() => q.getQueueSize() === 0);
 
-    expect(q.getQueueSize()).toBe(0);
     expect(testLogs.some((l) => l.includes("DROPPED"))).toBe(true);
     q.stop();
   });
@@ -334,12 +336,10 @@ describe("RetryQueue", () => {
     });
 
     q.add("addMessage", { content: "test" });
-    // Wait for at least 3 attempts (createdAt is backdated after attempt 1, warning fires on attempt 2+)
-    await new Promise((r) => setTimeout(r, 1000));
+    // createdAt is backdated after attempt 1, so the warning fires on attempt 2+
+    await until(() => testLogs.some((l) => l.includes("retrying >24h")));
 
     expect(attempts).toBeGreaterThanOrEqual(2);
-    const staleWarning = testLogs.find((l) => l.includes("retrying >24h"));
-    expect(staleWarning).toBeDefined();
     expect(q.getQueueSize()).toBeGreaterThanOrEqual(1);
     q.stop();
   });

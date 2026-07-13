@@ -13551,12 +13551,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     <Link
                       key={child._id}
                       href={convLink(child._id)}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs bg-sol-cyan/15 text-sol-text-secondary border border-sol-cyan/30 hover:bg-sol-cyan/25 hover:text-sol-text transition-colors truncate max-w-[400px]"
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs bg-sol-cyan/15 text-sol-text-secondary border border-sol-cyan/30 hover:bg-sol-cyan/25 hover:text-sol-text transition-colors max-w-[400px]"
                     >
                       <svg className="w-2.5 h-2.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
                       </svg>
-                      {child.title}
+                      <span className="truncate min-w-0">{child.title}</span>
                     </Link>
                   ))}
                 </div>

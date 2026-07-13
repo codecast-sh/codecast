@@ -681,7 +681,7 @@ export function ConversationCard({ conv, filter, isFocused, onNavigate, hasTeam 
                 </span>
               )}
               {(conv as any).active_plan && (
-                <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 text-[10px] font-medium max-w-[120px] truncate" title={(conv as any).active_plan.title}>
+                <span className="inline-block align-middle px-1.5 py-0.5 rounded bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 text-[10px] font-medium max-w-[120px] truncate" title={(conv as any).active_plan.title}>
                   {(conv as any).active_plan.title}
                 </span>
               )}

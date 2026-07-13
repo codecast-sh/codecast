@@ -123,6 +123,19 @@ export default defineSchema({
     .index("by_team_id", ["team_id"])
     .index("by_last_heartbeat", ["last_heartbeat"]),
 
+  // Per-user skills blob, split out of the users doc. The users doc is patched
+  // on every heartbeat, and Convex versions the WHOLE doc per patch — carrying
+  // a 30-100KB skills map on it cost ~20GB of version churn per retention
+  // window. Skills live here (written only when they actually change);
+  // getCurrentUser overlays them back so clients still read
+  // currentUser.available_skills. users.available_skills is legacy: shed on the
+  // next setAvailableSkills write per user, kept in schema for dormant users.
+  user_skills: defineTable({
+    user_id: v.id("users"),
+    skills_json: v.string(),
+    updated_at: v.number(),
+  }).index("by_user", ["user_id"]),
+
   daemon_commands: defineTable({
     user_id: v.id("users"),
     command: daemonCommandValidator,
@@ -628,6 +641,15 @@ export default defineSchema({
   // subscribed query reads may live here (reactivity: reading this row would
   // re-run every open search each tick).
   search_mirror_state: defineTable({
+    cursor: v.number(),
+    updated_at: v.number(),
+  }),
+
+  // Singleton: _creationTime position of the daemon_logs retention sweep
+  // (advanceLogPrune). Same pattern and same reactivity warning as
+  // search_mirror_state above — patched on every prune tick, so no subscribed
+  // query may read it.
+  log_prune_state: defineTable({
     cursor: v.number(),
     updated_at: v.number(),
   }),

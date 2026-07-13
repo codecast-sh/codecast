@@ -4405,15 +4405,34 @@ export const setAvailableSkills = mutation({
     const user = await ctx.db.get(authUserId);
     if (!user) return;
     const key = args.project_path || "global";
+    // Skills live in user_skills, not on the users doc (see schema note): the
+    // users doc is heartbeat-hot and versioning the whole map per patch was the
+    // single biggest source of DB bloat. Seed from the side table, falling back
+    // to the legacy on-doc field for users who haven't written since the split.
+    const skillsRow = await ctx.db
+      .query("user_skills")
+      .withIndex("by_user", (q) => q.eq("user_id", authUserId))
+      .first();
     let skillsMap: Record<string, any> = {};
-    if (user.available_skills) {
+    const seedJson = skillsRow?.skills_json ?? user.available_skills;
+    if (seedJson) {
       try {
-        const parsed = JSON.parse(user.available_skills);
+        const parsed = JSON.parse(seedJson);
         skillsMap = Array.isArray(parsed) ? { global: parsed } : parsed;
       } catch {}
     }
     skillsMap[key] = JSON.parse(args.skills);
-    await ctx.db.patch(authUserId, { available_skills: JSON.stringify(skillsMap) });
+    const skillsJson = JSON.stringify(skillsMap);
+    if (skillsRow) {
+      await ctx.db.patch(skillsRow._id, { skills_json: skillsJson, updated_at: Date.now() });
+    } else {
+      await ctx.db.insert("user_skills", { user_id: authUserId, skills_json: skillsJson, updated_at: Date.now() });
+    }
+    // One-time diet per user: shed the legacy blob so future heartbeat patches
+    // stop re-versioning it.
+    if (user.available_skills !== undefined) {
+      await ctx.db.patch(authUserId, { available_skills: undefined });
+    }
     if (args.conversation_id) {
       const conversation = await ctx.db.get(args.conversation_id);
       if (conversation && conversation.user_id.toString() === authUserId.toString()) {
