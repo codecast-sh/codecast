@@ -38,6 +38,9 @@ export function useOpenLinkedSession() {
         agent_type: conv.agent_type || "claude",
         is_idle: !conv.is_active,
         has_pending: false,
+        // Carried by workflow-agent sessions; keeps the seeded stub classified as a
+        // subagent by inbox filters instead of surfacing as a top-level row.
+        parent_conversation_id: conv.parent_conversation_id,
       });
     }
     const narrow = typeof window !== "undefined" && window.innerWidth < MOBILE_MAX_WIDTH;
