@@ -1036,7 +1036,7 @@ function ScheduleDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen }:
           <circle cx="12" cy="12" r="9" />
           <path d="M12 7.5V12l3 2" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-sol-orange">
+        <span className="shrink-0 whitespace-nowrap text-[10px] font-semibold uppercase tracking-wider text-sol-orange">
           Schedules <span className="text-sol-orange/60 tabular-nums">{rows.length}</span>
         </span>
         {nextIn !== undefined && (
@@ -1047,31 +1047,31 @@ function ScheduleDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen }:
         )}
         {unreadCount > 0 && (
           <ShortcutTooltip label={`${unreadCount} outcome${unreadCount === 1 ? "" : "s"} landed since you last opened this list`} hint="marked inside">
-            <span className="inline-flex items-center px-1.5 py-0 rounded-full text-[9px] font-semibold bg-sol-orange text-sol-bg">
+            <span className="shrink-0 inline-flex items-center whitespace-nowrap px-1.5 py-0 rounded-full text-[9px] font-semibold bg-sol-orange text-sol-bg">
               {unreadCount} new
             </span>
           </ShortcutTooltip>
         )}
         {runningCount > 0 && (
-          <span className="inline-flex items-center gap-1 px-1.5 py-0 rounded-full text-[9px] font-semibold bg-sol-green/10 text-sol-green border border-sol-green/30">
+          <span className="shrink-0 inline-flex items-center whitespace-nowrap gap-1 px-1.5 py-0 rounded-full text-[9px] font-semibold bg-sol-green/10 text-sol-green border border-sol-green/30">
             <span className="w-1 h-1 rounded-full bg-sol-green animate-pulse motion-reduce:animate-none" />
             {runningCount} running
           </span>
         )}
         {overdueCount > 0 && (
           <ShortcutTooltip label="Due but unclaimed for over 2 minutes — is the daemon for that machine running?">
-            <span className="inline-flex items-center px-1.5 py-0 rounded-full text-[9px] font-semibold bg-sol-red/15 text-sol-red border border-sol-red/30">
+            <span className="shrink-0 inline-flex items-center whitespace-nowrap px-1.5 py-0 rounded-full text-[9px] font-semibold bg-sol-red/15 text-sol-red border border-sol-red/30">
               {overdueCount} overdue
             </span>
           </ShortcutTooltip>
         )}
         {attention && (
-          <span className="inline-flex items-center gap-1 px-1.5 py-0 rounded-full text-[9px] font-semibold bg-sol-red/15 text-sol-red border border-sol-red/30">
+          <span className="shrink-0 inline-flex items-center whitespace-nowrap gap-1 px-1.5 py-0 rounded-full text-[9px] font-semibold bg-sol-red/15 text-sol-red border border-sol-red/30">
             <span className="w-1 h-1 rounded-full bg-sol-red" />
             needs attention
           </span>
         )}
-        <svg className={`ml-auto w-3 h-3 transition-transform duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] text-sol-text-dim ${open ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg className={`ml-auto shrink-0 w-3 h-3 transition-transform duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] text-sol-text-dim ${open ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
         </svg>
       </button>
