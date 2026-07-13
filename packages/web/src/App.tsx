@@ -59,6 +59,7 @@ const ProjectDetail = lazy(() => import("@/app/projects/[id]/page"));
 const Routines = lazy(() => import("@/app/workflows/page"));
 const Workflows = lazy(() => import("@/app/workflows/dashboard"));
 const Schedules = lazy(() => import("@/app/schedules/page"));
+const Anchor = lazy(() => import("@/app/anchor/page"));
 
 const Team = lazy(() => import("@/app/team/page"));
 const TeamActivity = lazy(() => import("@/app/team/activity/page"));
@@ -155,6 +156,7 @@ export function App() {
               <Route path="routines" element={<E name="Routines"><Routines /></E>} />
               <Route path="schedules" element={<E name="Schedules"><Schedules /></E>} />
               <Route path="sessions" element={<E name="Sessions"><Sessions /></E>} />
+              <Route path="anchor" element={<E name="Anchor"><Anchor /></E>} />
               <Route path="team" element={<E name="Team"><Team /></E>} />
               <Route path="team/activity" element={<E name="TeamActivity"><TeamActivity /></E>} />
               <Route path="team/:username" element={<E name="TeamMember"><TeamMember /></E>} />
