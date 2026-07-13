@@ -336,10 +336,12 @@ describe("RetryQueue", () => {
     });
 
     q.add("addMessage", { content: "test" });
-    // createdAt is backdated after attempt 1, so the warning fires on attempt 2+
+    // createdAt is backdated inside attempt 1's executor, so the warning can
+    // fire as early as attempt 1's own failure handling.
     await until(() => testLogs.some((l) => l.includes("retrying >24h")));
+    // Still retrying after the warning — stale network ops persist, never drop.
+    await until(() => attempts >= 2);
 
-    expect(attempts).toBeGreaterThanOrEqual(2);
     expect(q.getQueueSize()).toBeGreaterThanOrEqual(1);
     q.stop();
   });
