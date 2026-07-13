@@ -26,10 +26,14 @@ export default defineSchema({
     created_at: v.optional(v.number()),
     team_id: v.optional(v.id("teams")),
     role: v.optional(v.union(v.literal("member"), v.literal("admin"))),
-    // Synthetic agent identity (an Anchor's bot user). `is_bot` users have no
-    // login and exist only to give a standing agent member its own name/avatar in
-    // the author chip, team roster, and feed. They never host or bill a session —
-    // a human (the anchor's host) does that; the bot is identity only. See anchors.
+    // Agent (non-human) account. Two flavors: a synthetic anchor identity (no
+    // login; gives a standing agent member its own name/avatar in author chips
+    // while a human host runs and bills the session — see anchors), or a full
+    // agent member account like Mr Bot (own login + daemon). Either way no
+    // human reads this account's inbox, so bots can never HOLD session
+    // ownership: performSessionSend skips auto-own for bot senders and
+    // performSetSessionOwner refuses a bot as the owner value (bots may still
+    // CALL it to park sessions on humans).
     is_bot: v.optional(v.boolean()),
     bot_kind: v.optional(v.union(v.literal("anchor"))),
     active_team_id: v.optional(v.id("teams")),
@@ -399,11 +403,11 @@ export default defineSchema({
     .index("by_user_dismissed", ["user_id", "inbox_dismissed_at"])
     .index("by_owner_device", ["user_id", "owner_device_id"])
     .index("by_restored_from", ["restored_from_conversation_id"])
-    // `persistent` and `anchor_id` are plain fields with no index: anchors
-    // resolve their conversation via anchors.conversation_id, and no query
-    // scans conversations by either field. Indexes on written-to tables are
-    // not free (each one adds rows to the backing `indexes` table and
-    // tombstone cost on every delete) — don't add indexes speculatively.
+    // `by_user_persistent` / `by_anchor_id`: no merged query scans these, but
+    // they exist in prod from Ashot's unpushed searchMirror/anchor work — kept
+    // so a deploy from main doesn't drop them. Remove once his tree merges.
+    .index("by_user_persistent", ["user_id", "persistent"])
+    .index("by_anchor_id", ["anchor_id"])
     // Sparse: only spawned schedule runs carry agent_task_id. Powers the run
     // history strip (agentTasks.webListRuns) — every run of one schedule.
     .index("by_agent_task", ["agent_task_id"])

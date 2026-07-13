@@ -245,3 +245,41 @@ describe("buildPathRestampUpdate — late path stamp re-resolves born-blank visi
     } as any);
   });
 });
+
+// Work items inherit a linked conversation's team only when the conversation
+// is team-visible. The bug this prevents: tasks.create copied conv.team_id
+// unconditionally ("regardless of conversation privacy"), so a task created
+// from a PRIVATE session in a team-routed conversation became readable by the
+// whole team (canAccessTask gates on team_id alone).
+describe("teamVisibleConvTeam — private sessions never hand their team to work items", () => {
+  const { teamVisibleConvTeam } = require("./privacy");
+
+  test("THE BUG: a private conversation contributes no team", () => {
+    expect(teamVisibleConvTeam({ team_id: "t1", is_private: true })).toBeUndefined();
+  });
+
+  test("a shared conversation hands over its team", () => {
+    expect(teamVisibleConvTeam({ team_id: "t1", is_private: false })).toBe("t1");
+  });
+
+  test("auto_shared counts as team-visible", () => {
+    expect(teamVisibleConvTeam({ team_id: "t1", is_private: true, auto_shared: true })).toBe("t1");
+  });
+
+  test("a team_visibility override reveals an otherwise-private conversation", () => {
+    expect(teamVisibleConvTeam({ team_id: "t1", is_private: true, team_visibility: "summary" })).toBe("t1");
+  });
+
+  test("team_visibility:'private' stays private", () => {
+    expect(teamVisibleConvTeam({ team_id: "t1", is_private: true, team_visibility: "private" })).toBeUndefined();
+  });
+
+  test("no team_id → nothing to hand over, shared or not", () => {
+    expect(teamVisibleConvTeam({ is_private: false })).toBeUndefined();
+  });
+
+  test("null/undefined conversation → undefined", () => {
+    expect(teamVisibleConvTeam(undefined)).toBeUndefined();
+    expect(teamVisibleConvTeam(null)).toBeUndefined();
+  });
+});

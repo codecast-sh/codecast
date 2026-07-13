@@ -11,7 +11,7 @@ import { internal } from "./_generated/api";
 import { isViableInboxParent } from "./inboxFilters";
 import { pickInheritedGitMeta, type GitMetaSource } from "./projectPaths";
 import { enqueuePendingMessage } from "./pendingMessages";
-import { resolveTeamForPath } from "./privacy";
+import { resolveTeamForPath, teamVisibleConvTeam } from "./privacy";
 // Owner-or-team access check for a task. Moved to lib/access.ts (Wave-1
 // auth/access seam). Imported for local use here and re-exported so existing
 // callers keep working unchanged.
@@ -269,23 +269,16 @@ export const create = mutation({
       if (conv) {
         conversation_ids = [conv._id];
         created_from_conversation = conv._id;
-        // Always propagate team_id from conversation — tasks are work items
-        // tracked at the team level regardless of conversation privacy.
-        if (conv.team_id) {
-          convTeamId = conv.team_id;
-        }
+        // Only team-visible conversations hand their team to the task — a
+        // private session's team_id is routing, and copying it here would make
+        // the task readable by the whole team (see teamVisibleConvTeam).
+        convTeamId = teamVisibleConvTeam(conv);
       }
     }
 
-    // Mirror conversation creation: when no directory mapping resolves, fall
-    // back to the user's active team so tasks created from a shared session
-    // inherit that team automatically (instead of becoming orphans).
-    const creator = await ctx.db.get(auth.userId);
-    const activeTeamId = (creator?.active_team_id || (creator as any)?.team_id) as Id<"teams"> | undefined;
     const db = await createDataContext(ctx, {
       userId: auth.userId,
       project_path: args.project_path,
-      active_team_id: activeTeamId,
       ...(convTeamId ? { workspace: "team" as const, team_id: convTeamId } : {}),
     });
     const now = Date.now();
@@ -1897,11 +1890,10 @@ export const webCreate = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
 
-    // Same fallback as tasks:create — without this, web-created tasks with no
-    // directory mapping become orphans (no team_id, invisible in team view).
-    const creator = await ctx.db.get(userId);
-    const activeTeamId = (creator?.active_team_id || (creator as any)?.team_id) as Id<"teams"> | undefined;
-    const db = await createDataContext(ctx, { userId, workspace: args.workspace, team_id: args.team_id, active_team_id: activeTeamId, project_path: args.project_path });
+    // Workspace comes from the client's explicit picker or the directory
+    // mapping — never from the user's active team. An unmapped project_path
+    // with no explicit workspace lands personal ("Only Me"), matching sessions.
+    const db = await createDataContext(ctx, { userId, workspace: args.workspace, team_id: args.team_id, project_path: args.project_path });
     const short_id = await nextShortId(ctx.db, "ct");
 
     let project_id: Id<"projects"> | undefined;
@@ -2132,138 +2124,6 @@ export const updateExecutionStatus = mutation({
   },
 });
 
-
-// Backfill: set team_id on tasks/docs missing it, and promoted on human/agent tasks
-export const backfillTeamScope = internalMutation({
-  args: {
-    api_token: v.string(),
-  },
-  handler: async (ctx, args) => {
-    const auth = await verifyApiToken(ctx, args.api_token);
-    if (!auth) throw new Error("Unauthorized");
-
-    const allUsers = await ctx.db.query("users").collect();
-    const userTeamMap = new Map<string, any>();
-    for (const u of allUsers) {
-      userTeamMap.set(u._id.toString(), u.active_team_id || (u as any).team_id);
-    }
-
-    let tasksFixed = 0;
-    let tasksPromoted = 0;
-    let docsFixed = 0;
-
-    const allTasks = await ctx.db.query("tasks").collect();
-    for (const t of allTasks) {
-      const patches: Record<string, any> = {};
-
-      if (!t.team_id) {
-        // Prefer conversation's team (matches the webList visibility logic)
-        let tid: any;
-        const cid = (t as any).conversation_ids?.[0] || t.created_from_conversation;
-        if (cid) {
-          const conv = await ctx.db.get(cid) as any;
-          if (conv?.team_id && (!conv.is_private || conv.auto_shared
-            || (conv.team_visibility && conv.team_visibility !== "private"))) {
-            tid = conv.team_id;
-          }
-        }
-        // Fall back to user's active team
-        if (!tid) tid = userTeamMap.get(t.user_id.toString());
-        if (tid) patches.team_id = tid;
-      }
-
-      if (t.promoted === undefined && (t.source === "human" || t.source === "agent")) {
-        patches.promoted = true;
-      }
-
-      if (!(t as any).triage_status) {
-        patches.triage_status = (t.source === "insight" && !t.promoted) ? "suggested" : "active";
-      }
-      // Fix agent-sourced tasks incorrectly set to "suggested"
-      if ((t as any).triage_status === "suggested" && t.source === "agent") {
-        patches.triage_status = "active";
-      }
-
-      if (Object.keys(patches).length > 0) {
-        await ctx.db.patch(t._id, patches);
-        if (patches.team_id) tasksFixed++;
-        if (patches.promoted) tasksPromoted++;
-      }
-    }
-
-    const allDocs = await ctx.db.query("docs").collect();
-    for (const d of allDocs) {
-      if (!d.team_id) {
-        const tid = userTeamMap.get(d.user_id.toString());
-        if (tid) {
-          await ctx.db.patch(d._id, { team_id: tid });
-          docsFixed++;
-        }
-      }
-    }
-
-    return { tasksFixed, tasksPromoted, docsFixed, totalTasks: allTasks.length, totalDocs: allDocs.length };
-  },
-});
-
-// Internal version for admin CLI: npx convex run tasks:backfillTaskTeamIds
-// Paginated — pass cursor from previous result to continue.
-// One-shot: assign team_id to a specific set of orphan tasks by short_id.
-// Pulls the team from the creator's active_team_id, mirroring the fix to
-// the create paths so existing orphans get the same treatment.
-export const backfillOrphanTasksByShortIds = internalMutation({
-  args: { short_ids: v.array(v.string()) },
-  handler: async (ctx, args) => {
-    const results: Array<{ short_id: string; status: string; team_id?: string }> = [];
-    for (const sid of args.short_ids) {
-      const t = await ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", sid)).first();
-      if (!t) { results.push({ short_id: sid, status: "not_found" }); continue; }
-      if (t.team_id) { results.push({ short_id: sid, status: "already_set", team_id: String(t.team_id) }); continue; }
-      const creator = await ctx.db.get(t.user_id) as any;
-      const tid = creator?.active_team_id || creator?.team_id;
-      if (!tid) { results.push({ short_id: sid, status: "no_team_on_creator" }); continue; }
-      await ctx.db.patch(t._id, { team_id: tid });
-      results.push({ short_id: sid, status: "patched", team_id: String(tid) });
-    }
-    return results;
-  },
-});
-
-export const backfillTaskTeamIds = internalMutation({
-  args: { cursor: v.optional(v.string()) },
-  handler: async (ctx, args) => {
-    const allUsers = await ctx.db.query("users").collect();
-    const userTeamMap = new Map<string, any>();
-    for (const u of allUsers) {
-      userTeamMap.set(u._id.toString(), (u as any).active_team_id || (u as any).team_id);
-    }
-
-    const page = await ctx.db.query("tasks").paginate({
-      cursor: (args.cursor || null) as any,
-      numItems: 200,
-    });
-
-    let fixed = 0;
-    for (const t of page.page) {
-      if (t.team_id) continue;
-      let tid: any;
-      const cid = (t as any).conversation_ids?.[0] || t.created_from_conversation;
-      if (cid) {
-        const conv = await ctx.db.get(cid) as any;
-        if (conv?.team_id && (!conv.is_private || conv.auto_shared
-          || (conv.team_visibility && conv.team_visibility !== "private"))) {
-          tid = conv.team_id;
-        }
-      }
-      if (!tid) tid = userTeamMap.get(t.user_id.toString());
-      if (tid) {
-        await ctx.db.patch(t._id, { team_id: tid });
-        fixed++;
-      }
-    }
-    return { fixed, isDone: page.isDone, cursor: page.continueCursor };
-  },
-});
 
 export const backfillTriageStatus = internalMutation({
   args: {
