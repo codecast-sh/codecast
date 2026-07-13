@@ -112,20 +112,23 @@ export function GlobalSearch() {
   useEventListener("resize", recomputePanelTop);
 
   // Non-throwing: when the budget blowout comes back as a TERMINAL error, bare
-  // useQuery re-throws it in render and crashes the component (ct-37627).
+  // useQuery re-throws it in render and crashes the component (ct-37627). The
+  // breaker unsubscribes a never-resolving search so its silent retry loop
+  // stops flapping the shared websocket (1011) for the rest of the app.
   const { data: searchResults, error: searchError } = useQueryNoThrow(
     api.conversations.searchConversations,
     debouncedQuery.length >= 2
       ? { query: debouncedQuery, limit: 30, userOnly, activeTeamId: selectedTeamId ?? undefined }
-      : "skip"
+      : "skip",
+    { breakAfterMs: 15_000 }
   );
 
   // A broad term scans the whole message history and can exceed Convex's per-query
   // budget; the reactive client treats that system error as retryable and never
   // hands it to useQuery, so searchResults stays undefined and the panel would spin
   // forever. After a grace period, surface a "too broad" hint instead of a bare
-  // spinner. The query stays subscribed — if it does eventually resolve we show
-  // results; this only changes what an unresolved load looks like. (see ct-37627)
+  // spinner. The query stays subscribed until the 15s breaker trips — if it
+  // resolves before then we show results. (see ct-37627)
   useWatchEffect(() => {
     setSearchIsSlow(false);
     if (debouncedQuery.length < 2 || searchResults !== undefined) return;
