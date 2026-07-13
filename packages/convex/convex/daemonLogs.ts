@@ -420,14 +420,19 @@ export const clearOfflineAlerts = internalMutation({
 // window, not here. ctx.db.delete only — never raw SQL.
 const PRUNE_PER_TICK = 300;
 export const pruneOldLogs = internalMutation({
-  args: {},
-  handler: async (ctx) => {
+  args: {
+    // Maintenance-window override: `npx convex run daemonLogs:pruneOldLogs
+    // '{"batch":N}'` from a PACED external loop (sleep between calls, watch
+    // latency). The cron always runs the gentle default.
+    batch: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
     const cutoff = Date.now() - RETENTION_MS;
 
     const candidates = await ctx.db
       .query("daemon_logs")
       .order("asc")
-      .take(PRUNE_PER_TICK);
+      .take(Math.min(args.batch ?? PRUNE_PER_TICK, 2000));
 
     let deleted = 0;
     for (const log of candidates) {
@@ -437,6 +442,55 @@ export const pruneOldLogs = internalMutation({
       }
     }
 
-    return { deleted, scanned: candidates.length };
+    // caughtUp: the oldest surviving rows are inside the retention window —
+    // the backlog is gone and the external drain loop can stop.
+    return {
+      deleted,
+      scanned: candidates.length,
+      caughtUp: deleted < candidates.length || candidates.length === 0,
+      oldestTs: candidates[0]?.timestamp ?? null,
+    };
+  },
+});
+
+// One-time paced drain of the multi-million-row pre-gate backlog. Deletes one
+// bounded batch, then reschedules itself pauseMs later until the oldest rows
+// are inside the retention window. The pause IS the safety mechanism: the May
+// incident (see pruneOldLogs NOTE) came from a drain that rescheduled with no
+// gap and monopolized the worker pool. Kick off manually:
+//   npx convex run daemonLogs:drainLogBacklog '{"batch":1000,"pauseMs":45000}'
+// Stop it by letting it hit caughtUp, or deploy with this function body
+// short-circuited, or cancel the pending run in _scheduled_functions.
+export const drainLogBacklog = internalMutation({
+  args: {
+    batch: v.optional(v.number()),
+    pauseMs: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const batch = Math.min(args.batch ?? 1000, 2000);
+    const pauseMs = Math.max(args.pauseMs ?? 45_000, 5_000);
+    const cutoff = Date.now() - RETENTION_MS;
+
+    const candidates = await ctx.db
+      .query("daemon_logs")
+      .order("asc")
+      .take(batch);
+
+    let deleted = 0;
+    for (const log of candidates) {
+      if (log.timestamp < cutoff) {
+        await ctx.db.delete(log._id);
+        deleted++;
+      }
+    }
+
+    const caughtUp = deleted < candidates.length || candidates.length === 0;
+    if (!caughtUp) {
+      await ctx.scheduler.runAfter(pauseMs, internal.daemonLogs.drainLogBacklog, {
+        batch,
+        pauseMs,
+      });
+    }
+    return { deleted, caughtUp };
   },
 });
