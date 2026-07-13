@@ -133,6 +133,39 @@ export function displayPath(abs: string, home: string | undefined): string {
   return abs;
 }
 
+// The option list a project-path picker offers for a query: matching recents,
+// plus a synthetic "use this folder" row when the text NAMES a directory, so
+// any path stays reachable — not just previously-used ones. An explicit path
+// (absolute or ~/…) always offers it; a bare name resolves against `base` and
+// offers it only when nothing in recents matches (plain filtering stays clean).
+// With no query: the first `defaultLimit` recents.
+export function buildProjectPathOptions(opts: {
+  query: string;
+  recentPaths: string[];
+  home: string | undefined;
+  base: string | undefined;
+  /** Excluded from the custom offer — "open the folder you're already in" is a no-op. */
+  currentPath?: string;
+  defaultLimit?: number;
+}): Array<{ path: string; custom?: boolean }> {
+  const { query, recentPaths, home, base, currentPath, defaultLimit = 8 } = opts;
+  if (!query.trim()) return recentPaths.slice(0, defaultLimit).map((path) => ({ path }));
+  const explicit = isExplicitPath(query);
+  const custom = resolveCustomPath(query, home, base);
+  // Explicit paths match recents by their resolved absolute form (so "~/…"
+  // still filters previously-used folders); bare names match by name.
+  const matchQuery = explicit ? (custom ?? query) : query;
+  const matches = recentPaths
+    .filter((p) => matchesProjectQuery(p, matchQuery))
+    .map((path) => ({ path }));
+  const offerCustom =
+    !!custom &&
+    custom !== currentPath &&
+    !matches.some((m) => m.path === custom) &&
+    (explicit || matches.length === 0);
+  return offerCustom ? [...matches, { path: custom!, custom: true }] : matches;
+}
+
 export async function copyToClipboard(text: string): Promise<void> {
   // Sync execCommand first - must run before dropdown/popup closes and shifts focus
   const textArea = document.createElement("textarea");

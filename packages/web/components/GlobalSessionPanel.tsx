@@ -692,18 +692,16 @@ function ScheduleRowItem({ row, activeSessionId, onOpen, attached, highlighted, 
         {/* Attached rows wear the subagent child idiom: the SAME ↳ corner arrow
             the subagent rows below carry (in schedule-orange, not subagent
             violet), so the connectors line up and the row reads as this card's
-            child instead of a glyph floating in indented space. The clock rides
-            right after as the schedules' identity mark (same as the strip
-            header). */}
+            child instead of a glyph floating in indented space. The orange
+            alone marks it as a schedule — no extra identity icon. */}
         <div className="flex gap-1.5 min-w-0">
         {attached && (
-          <span className="flex items-center gap-1 mt-[2px] shrink-0 text-sol-orange/70" role="img" aria-label="Schedule — fires into this session">
+          <span className="flex items-center mt-[2px] shrink-0 text-sol-orange/70" role="img" aria-label="Schedule — fires into this session">
             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
               <title>Schedule — fires into this session</title>
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
               <path strokeLinecap="round" strokeLinejoin="round" d="M14 12l4 4-4 4" />
             </svg>
-            <Clock className="w-3 h-3" aria-hidden />
           </span>
         )}
         <div className="min-w-0 flex-1">
@@ -775,33 +773,32 @@ function ScheduleRowItem({ row, activeSessionId, onOpen, attached, highlighted, 
             </ShortcutTooltip>
           );
           if (attached) {
+            // Two lines, ALWAYS — an attached bar never grows a third. When
+            // the last run left a report, the report IS the second line: the
+            // robot speaking (same voice idiom as the card's blue "> message"
+            // line) outranks the static gist, which retreats into the report's
+            // tooltip. A schedule that hasn't reported yet shows the gist.
             const agoEl = ago ? (
               <span className={`shrink-0 text-[10px] tabular-nums ${task.last_run_failed ? "text-sol-red/80" : "text-sol-text-dim"}`}>{ago}</span>
             ) : null;
             return (
-              <>
-                <div className="flex items-baseline gap-1.5 mt-0.5 min-w-0">
-                  <span className="flex-1 min-w-0 truncate text-[11px] leading-snug text-sol-text-dim">
-                    {sparkle}
-                    {gist}
-                  </span>
-                  {retrying}
-                  {!task.last_run_summary && agoEl}
-                </div>
-                {/* The last run's report is the robot SPEAKING — so it wears the
-                    same voice idiom as the card's blue "> message" line (11px,
-                    semibold, dim ">" prefix), tinted by how the run went. Plain
-                    ink here read as anonymous body text; a tooltip buried it. */}
-                {task.last_run_summary && (
-                  <div className="flex items-baseline gap-1.5 mt-0.5 min-w-0">
+              <div className="flex items-baseline gap-1.5 mt-0.5 min-w-0">
+                {task.last_run_summary ? (
+                  <ShortcutTooltip label={gist} hint="the schedule's standing prompt">
                     <span className={`flex-1 min-w-0 truncate text-[11px] leading-snug font-semibold ${task.last_run_failed ? "text-sol-red/90" : "text-sol-green"}`}>
                       <span className={`mr-0.5 ${task.last_run_failed ? "text-sol-red/50" : "text-sol-green/50"}`}>&gt;</span>
                       {task.last_run_summary}
                     </span>
-                    {agoEl}
-                  </div>
+                  </ShortcutTooltip>
+                ) : (
+                  <span className="flex-1 min-w-0 truncate text-[11px] leading-snug text-sol-text-dim">
+                    {sparkle}
+                    {gist}
+                  </span>
                 )}
-              </>
+                {retrying}
+                {agoEl}
+              </div>
             );
           }
           // Where a fire lands: an injecting schedule wakes its home session —
