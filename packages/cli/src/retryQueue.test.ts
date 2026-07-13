@@ -244,6 +244,73 @@ describe("RetryQueue", () => {
     q.stop();
   });
 
+  it("keeps retrying overload-class errors past maxAttempts (backend brownout must not drop data)", async () => {
+    // 2026-07-13 regression: the daily pg_dump window saturated the backend for
+    // ~2h; addMessages timed out at 28s per attempt, exhausted maxAttempts in
+    // ~20 minutes, and 60 messages were permanently dropped. These errors reach
+    // the server (so they are not "network"), but they mean saturation, not a
+    // bad op — they must retry indefinitely like network errors.
+    const overloadErrors = [
+      "addMessages batch (1 msgs) timed out after 28000ms",
+      "Your request couldn't be completed. Try again later.",
+      "Your request timed out performing too many system operations",
+    ];
+
+    for (const errMsg of overloadErrors) {
+      let attempts = 0;
+      const testLogs: string[] = [];
+      const q = new RetryQueue({
+        initialDelayMs: 20,
+        maxDelayMs: 50,
+        maxAttempts: 2,
+        onLog: (msg) => testLogs.push(msg),
+      });
+
+      q.setExecutor(async () => {
+        attempts++;
+        throw new Error(errMsg);
+      });
+
+      // Single-message batch so the timed-out split path can't consume the failure.
+      q.add("addMessages", { conversationId: "conv1", messages: [{ message_uuid: "u1", content: "x" }] });
+      // Backoff caps at maxDelayMs=50 here, so this window fits many attempts.
+      await new Promise((r) => setTimeout(r, 700));
+
+      expect(attempts).toBeGreaterThan(2);
+      expect(q.getQueueSize()).toBe(1);
+      expect(testLogs.some((l) => l.includes("DROPPED"))).toBe(false);
+      q.stop();
+    }
+  }, 15000);
+
+  it("drops overload-class ops past the 48h age ceiling (poison-op escape hatch)", async () => {
+    let attempts = 0;
+    const testLogs: string[] = [];
+    const q = new RetryQueue({
+      initialDelayMs: 20,
+      maxDelayMs: 50,
+      maxAttempts: 2,
+      onLog: (msg) => testLogs.push(msg),
+    });
+
+    q.setExecutor(async () => {
+      attempts++;
+      if (attempts === 1) {
+        for (const op of q.getPendingOperations()) {
+          op.createdAt = Date.now() - 49 * 60 * 60 * 1000;
+        }
+      }
+      throw new Error("addMessages batch (1 msgs) timed out after 28000ms");
+    });
+
+    q.add("addMessages", { conversationId: "conv1", messages: [{ message_uuid: "u1", content: "x" }] });
+    await new Promise((r) => setTimeout(r, 1000));
+
+    expect(q.getQueueSize()).toBe(0);
+    expect(testLogs.some((l) => l.includes("DROPPED"))).toBe(true);
+    q.stop();
+  });
+
   it("should log 24h warning for stale network ops", async () => {
     const testLogs: string[] = [];
     let attempts = 0;
