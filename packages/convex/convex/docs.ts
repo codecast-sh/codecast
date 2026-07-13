@@ -5,7 +5,7 @@ import { paginationOptsValidator } from "convex/server";
 import { verifyApiToken } from "./apiTokens";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createDataContext, scopedFetch, resolveEffectiveTeam } from "./data";
-import { resolveTeamForPath, isTeamMember, createTeamFeedFilter } from "./privacy";
+import { resolveTeamForPath, isTeamMember, createTeamFeedFilter, teamVisibleConvTeam } from "./privacy";
 import {
   webDocsNeedsUserDoc,
   resolveWebDocsTeamId,
@@ -386,9 +386,7 @@ export const create = mutation({
       if (conv) {
         conversation_id = conv._id;
         if (!team_id) {
-          const shared = !conv.is_private || conv.auto_shared
-            || (conv.team_visibility && conv.team_visibility !== "private");
-          team_id = shared ? conv.team_id : undefined;
+          team_id = teamVisibleConvTeam(conv);
         }
       }
     }
@@ -1461,9 +1459,13 @@ export const mentionSearch = query({
     const db = await createDataContext(ctx, {
       userId,
       project_path: args.projectPath,
-      active_team_id: user?.active_team_id || (user as any)?.team_id,
     });
-    const teamId = args.teamId || (db.workspace.type === "team" ? db.workspace.teamId : undefined);
+    // Read-path scoping, not creation: falling back to the active team here
+    // only widens what the member themselves can search, so it stays.
+    const teamId = args.teamId
+      || (db.workspace.type === "team" ? db.workspace.teamId : undefined)
+      || user?.active_team_id
+      || (user as any)?.team_id;
     const q = args.query.toLowerCase();
     const limit = args.limit || 10;
     const types = args.types || ["person", "doc", "task", "session", "plan"];
@@ -1997,7 +1999,6 @@ export const webCreate = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
 
-    const user = await ctx.db.get(userId);
     const now = Date.now();
 
     // If adding under a parent, compute sort_order as last child
@@ -2014,7 +2015,10 @@ export const webCreate = mutation({
 
     const id = await ctx.db.insert("docs", {
       user_id: userId,
-      team_id: user?.active_team_id,
+      // Personal by default: web doc creation carries no workspace choice and
+      // no path to resolve a mapping against. Stamping the active team here
+      // auto-shared every web-created doc with the whole team. The creator
+      // still sees personal docs in team view (scopedFetch's untagged rescue).
       title: args.title,
       content: args.content || "",
       doc_type: (args.doc_type || "note") as any,

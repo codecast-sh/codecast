@@ -12,7 +12,7 @@ const OUTSIDER = "users_outsider";
 function fixtures() {
   return makeFakeDb({
     users: [
-      { _id: BOT, name: "Mr Bot", email: "bot@union.ai" },
+      { _id: BOT, name: "Mr Bot", email: "bot@union.ai", is_bot: true },
       { _id: JASON, name: "Jason Benn", email: "jason@union.ai" },
       { _id: ASHOT, name: "Ashot P", email: "ashot@union.ai" },
       { _id: OUTSIDER, name: "Stranger", email: "stranger@example.com" },
@@ -109,16 +109,45 @@ describe("performSetSessionOwner", () => {
     ).rejects.toThrow(/No session found/);
   });
 
-  test("teamless session rejects a named owner but allows 'me' for the runner", async () => {
+  test("teamless session rejects a named owner but allows 'me' for a human runner", async () => {
     const db = fixtures();
     await expect(
       performSetSessionOwner({ db }, BOT as any, { session_id: "jx2abcd", owner: "jason@union.ai" })
     ).rejects.toThrow(/has no team/);
-    const result = await performSetSessionOwner({ db }, BOT as any, {
-      session_id: "jx2abcd",
+    // A human runner claims their own teamless session fine.
+    db._tables.conversations.push({
+      _id: "jx3abcd_convex_id",
+      short_id: "jx3abcd",
+      session_id: "sess-uuid-3",
+      user_id: JASON,
+      team_id: undefined,
+      is_private: true,
+      status: "active",
+    });
+    const result = await performSetSessionOwner({ db }, JASON as any, {
+      session_id: "jx3abcd",
       owner: "me",
     });
-    expect(result.owner?.user_id).toBe(BOT);
+    expect(result.owner?.user_id).toBe(JASON);
+  });
+
+  test("a bot can never BE the owner — neither via 'me' nor by email — but may assign humans", async () => {
+    const db = fixtures();
+    // Mr Bot claiming its own session with "me" is rejected.
+    await expect(
+      performSetSessionOwner({ db }, BOT as any, { session_id: "jx2abcd", owner: "me" })
+    ).rejects.toThrow(/agent account/);
+    // A human assigning the bot as owner is rejected too.
+    await expect(
+      performSetSessionOwner({ db }, JASON as any, { session_id: "jx1abcd", owner: "bot@union.ai" })
+    ).rejects.toThrow(/agent account/);
+    expect(db._tables.conversations[0].owner_user_id).toBeUndefined();
+    // The Aivery flow survives: the bot CALLS setSessionOwner to park on a human.
+    const result = await performSetSessionOwner({ db }, BOT as any, {
+      session_id: "jx1abcd",
+      owner: "jason@union.ai",
+    });
+    expect(result.owner?.user_id).toBe(JASON);
   });
 
   test("ambiguous substring match is rejected with the candidates", async () => {

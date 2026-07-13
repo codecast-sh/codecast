@@ -3,7 +3,7 @@ import { internalMutation, internalQuery, internalAction, action, query } from "
 import { internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id, Doc } from "./_generated/dataModel";
-import { createDataContext } from "./data";
+import { teamVisibleConvTeam } from "./privacy";
 import { nextShortId } from "./counters";
 import { classifyDocContent, extractTitleFromContent, inlineDocSourceKey } from "./docExtraction";
 
@@ -231,6 +231,7 @@ export const mineTasksFromInsights = internalMutation({
 
     const newTaskIds: Id<"tasks">[] = [];
     const newTaskThemes: string[][] = [];
+    const newTaskTeams: (Id<"teams"> | undefined)[] = [];
 
     for (const insight of args.insights) {
       const ts = insight.generated_at || Date.now();
@@ -238,7 +239,10 @@ export const mineTasksFromInsights = internalMutation({
       const conv = await ctx.db.get(insight.conversation_id);
       const base = {
         user_id: args.user_id,
-        team_id: args.team_id,
+        // Mined tasks from private sessions stay personal — team_id on a task
+        // grants the whole team read access, so only team-visible source
+        // sessions may hand their team over.
+        team_id: teamVisibleConvTeam(conv),
         labels,
         conversation_ids: [insight.conversation_id],
         created_from_conversation: insight.conversation_id,
@@ -348,6 +352,7 @@ export const mineTasksFromInsights = internalMutation({
         existingTasks.push({ ...base, _id: taskId, title, status, task_type: taskType, priority, short_id: "", description: "", attempt_count: 0, created_at: ts, updated_at: ts } as any);
         newTaskIds.push(taskId);
         newTaskThemes.push(insight.themes);
+        newTaskTeams.push(base.team_id);
         tasksCreated++;
       }
 
@@ -420,10 +425,16 @@ export const mineTasksFromInsights = internalMutation({
 
       if (dominantTheme && grouped.size >= 3) {
         const groupedTaskIds = [...grouped].map((i) => newTaskIds[i]);
+        // The auto-grouped plan follows its tasks: it may carry the team only
+        // when every grouped task is team-scoped. One private-session task in
+        // the group keeps the whole plan personal.
+        const planTeamId = [...grouped].every(
+          (i) => newTaskTeams[i] && String(newTaskTeams[i]) === String(args.team_id)
+        ) ? args.team_id : undefined;
         const now = Date.now();
         const planId = await ctx.db.insert("plans", {
           user_id: args.user_id,
-          team_id: args.team_id,
+          team_id: planTeamId,
           short_id: await nextShortId(ctx.db, "pl"),
           title: `${dominantTheme.charAt(0).toUpperCase() + dominantTheme.slice(1)} tasks`,
           goal: `Auto-grouped ${groupedTaskIds.length} related tasks around "${dominantTheme}"`,
@@ -518,8 +529,8 @@ export const mineDocsFromSessions = internalMutation({
         contentParts.push(`## Project\n\`${session.project_path}\``);
 
       const conv = await ctx.db.get(session.conversation_id);
-      const convTeamId = conv && (!conv.is_private || conv.auto_shared
-        || (conv.team_visibility && conv.team_visibility !== "private")) ? conv.team_id : args.team_id;
+      // Private source session → personal doc; no active-team fallback.
+      const convTeamId = teamVisibleConvTeam(conv);
 
       await ctx.db.insert("docs", {
         user_id: args.user_id,
@@ -869,7 +880,8 @@ export const insertExtractedDocs = internalMutation({
 
       await ctx.db.insert("docs", {
         user_id: args.user_id,
-        team_id: args.team_id,
+        // Private source session → personal doc (canAccessDoc has no privacy gate).
+        team_id: teamVisibleConvTeam(conv),
         title,
         content: doc.content,
         doc_type: docType as any,

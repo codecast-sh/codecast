@@ -3358,9 +3358,6 @@ cliRoute("/cli/work/promote", async (ctx, body) => {
 cliRoute("/cli/work/snippet", async (ctx, body) => {
   return await ctx.runQuery(api.tasks.snippet, body);
 });
-cliRoute("/cli/work/backfill", async (ctx, body) => {
-  return await ctx.runMutation(internal.tasks.backfillTeamScope, body);
-});
 cliRoute("/cli/work/heartbeat", async (ctx, body) => {
   return await ctx.runMutation(api.tasks.heartbeat, body);
 });
