@@ -43,8 +43,53 @@ export type TaskRow = {
   last_run_conversation_title?: string;
   last_run_session_uuid?: string;
   originating_conversation_id?: string;
+  originating_conversation_title?: string;
   target_conversation_id?: string;
+  retry_count?: number;
+  // Haiku-distilled presentation fields (agentTasks.generateDisplaySummary).
+  // display_title only exists when the stored title was a prompt slice; an
+  // explicit human title is left alone, so preferring display_title is safe.
+  display_title?: string;
+  display_summary?: string;
 };
+
+// A prompt-slice title is cut at 60 chars mid-word or mid-parenthesis
+// ("Check the deploy (sha 9ee76"). Trim the dangling fragment so the fallback
+// reads like a name, not a cut. Only slice-width titles get the word trim —
+// a short explicit title is already whole.
+export function cleanPromptSliceTitle(title: string): string {
+  let t = title.trim();
+  const open = t.lastIndexOf("(");
+  if (open !== -1 && !t.includes(")", open)) t = t.slice(0, open);
+  if (title.length >= 60) t = t.replace(/\s+\S{1,3}$/, "");
+  t = t.trim().replace(/[\s,;:.—-]+$/, "");
+  return t || title;
+}
+
+// The readable name for a schedule, shared by every row surface.
+export function taskDisplayTitle(t: Pick<TaskRow, "display_title" | "title">): string {
+  return t.display_title?.trim() || cleanPromptSliceTitle(t.title);
+}
+
+// Optimistic webList patch for schedule verbs (run now / pause / resume /
+// cancel): flip the row's fields in Convex's local query cache so the UI
+// renders the result of the click synchronously — local-first — and the server
+// echo reconciles. Shared by every surface that mutates schedules off the
+// webList subscription (rows, dock, /schedules page).
+export function patchTaskInWebList(
+  localStore: { getQuery: (q: unknown, a: unknown) => unknown; setQuery: (q: unknown, a: unknown, v: unknown) => void },
+  webListQuery: unknown,
+  taskId: string,
+  patch: Partial<TaskRow>,
+) {
+  const rows = localStore.getQuery(webListQuery, {}) as TaskRow[] | undefined;
+  if (!rows) return;
+  localStore.setQuery(
+    webListQuery,
+    {},
+    rows.map((t) => (t._id === taskId ? { ...t, ...patch } : t)),
+  );
+}
 
 export interface ScheduleRow {
   task: TaskRow;

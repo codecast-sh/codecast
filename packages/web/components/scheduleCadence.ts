@@ -23,6 +23,16 @@ export function fmtDuration(ms: number): string {
   return remHours ? `${days}d ${remHours}h` : `${days}d`;
 }
 
+// Absolute wall-clock label: "9:58 PM" today, "Jul 12 9:58 PM" otherwise.
+// Pairs with fmtDuration: countdown answers "how long", this answers "when".
+export function fmtClock(ts: number): string {
+  const d = new Date(ts);
+  const sameDay = new Date().toDateString() === d.toDateString();
+  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (sameDay) return time;
+  return `${d.toLocaleDateString([], { month: "short", day: "numeric" })} ${time}`;
+}
+
 const DURATION_RE = /^(\d+)\s*(s|sec|m|min|h|hr|hour|d|day)s?$/i;
 const DURATION_UNIT_NAMES: Record<string, string> = { s: "second", m: "minute", h: "hour", d: "day" };
 
@@ -55,10 +65,17 @@ export function describeTaskCadence(task: {
   return "once";
 }
 
+// A schedule due for more than this without being claimed is stuck — the
+// daemon normally picks work up within ~30s, so minutes of overdue means no
+// eligible device is listening (daemon down, wrong machine, laptop asleep).
+export const TASK_OVERDUE_MS = 2 * 60_000;
+
 // Live state label for a schedule row: a countdown that reads as a sentence
 // ("in 2h 6m"), or the state word when there's no ticking clock ("due",
-// "paused", "running", "event"). Shared by every schedule row surface so the
-// wording can't drift between the dock, the bars, and the strip.
+// "paused", "running", "event"). Once a due task sits unclaimed past the
+// overdue threshold the label says HOW stuck it is ("due 12m") — that's an
+// operational signal, not a countdown. Shared by every schedule row surface
+// so the wording can't drift between the dock, the rows, and the strip.
 export function taskStateLabel(
   task: { status: string; run_at?: number },
   now: number
@@ -67,7 +84,16 @@ export function taskStateLabel(
   if (task.status === "running") return "running";
   if (task.run_at === undefined) return "event";
   const ms = task.run_at - now;
-  return ms > 0 ? `in ${fmtDuration(ms)}` : "due";
+  if (ms > 0) return `in ${fmtDuration(ms)}`;
+  return -ms >= TASK_OVERDUE_MS ? `due ${fmtDuration(-ms)}` : "due";
+}
+
+// True when a scheduled task has sat unclaimed past the overdue threshold.
+export function isTaskOverdue(
+  task: { status: string; run_at?: number },
+  now: number
+): boolean {
+  return task.status === "scheduled" && task.run_at !== undefined && now - task.run_at >= TASK_OVERDUE_MS;
 }
 
 // Extract the human-readable cadence from `cast schedule add` args. The three timing flags are

@@ -1,6 +1,29 @@
 import { describe, expect, it } from "bun:test";
-import { partitionScheduleInbox, type TaskRow } from "./scheduleTasks";
+import { cleanPromptSliceTitle, partitionScheduleInbox, taskDisplayTitle, type TaskRow } from "./scheduleTasks";
 import { isSessionHardBlocked, visualOrderSessions, type InboxSession } from "../store/inboxStore";
+
+describe("taskDisplayTitle / cleanPromptSliceTitle", () => {
+  it("prefers the haiku display_title", () => {
+    expect(taskDisplayTitle({ display_title: "Growth blocker sweep", title: "MATCH/INTRO GROWTH WATCH (pl-126). ALL fixable blockers CLEA" })).toBe("Growth blocker sweep");
+  });
+
+  it("trims a dangling parenthetical from a slice title", () => {
+    expect(cleanPromptSliceTitle("Check the deploy status and report back to the thread (sha 9")).toBe("Check the deploy status and report back to the thread");
+  });
+
+  it("drops a cut-off trailing word only at slice width", () => {
+    // 60-char slice ending mid-word
+    const sliced = "Verify the dashboards and alerting pipeline for the whole se";
+    expect(sliced.length).toBe(61 - 1);
+    expect(cleanPromptSliceTitle(sliced)).toBe("Verify the dashboards and alerting pipeline for the whole");
+    // short explicit titles are untouched
+    expect(cleanPromptSliceTitle("CI watch")).toBe("CI watch");
+  });
+
+  it("never returns empty", () => {
+    expect(cleanPromptSliceTitle("(unclosed fragment")).toBe("(unclosed fragment");
+  });
+});
 
 // The schedule → inbox projection under the synthesis model: one row per armed
 // schedule, sessions absorbed behind rows (resting loop homes + uneventful

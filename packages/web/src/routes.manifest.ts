@@ -100,6 +100,7 @@ const JoinTeam = lazy(() => import("@/app/join/[code]/page"));
 // Dashboard / tab-routable
 const Inbox = lazy(() => import("@/app/inbox/page"));
 const Feed = lazy(() => import("@/app/feed/page"));
+const Crosstalk = lazy(() => import("@/app/crosstalk/page"));
 const Search = lazy(() => import("@/app/search/page"));
 const Notifications = lazy(() => import("@/app/notifications/page"));
 const Conversation = lazy(() => import("@/app/conversation/[id]/page"));
@@ -118,6 +119,7 @@ const Routines = lazy(() => import("@/app/workflows/page"));
 const Workflows = lazy(() => import("@/app/workflows/dashboard"));
 const Schedules = lazy(() => import("@/app/schedules/page"));
 const Sessions = lazy(() => import("@/app/sessions/page"));
+const Anchor = lazy(() => import("@/app/anchor/page"));
 const Team = lazy(() => import("@/app/team/page"));
 const TeamActivity = lazy(() => import("@/app/team/activity/page"));
 const TeamMember = lazy(() => import("@/app/team/[username]/page"));
@@ -190,6 +192,7 @@ export const ROUTES: RouteEntry[] = [
   // -- Dashboard tab shell (DashboardShell) — tab-routable; conversation routes are guest-OK --
   { path: "inbox", component: cast(Inbox), layout: "dashboardShell", tab: "/inbox", fullWidth: true },
   { path: "feed", component: cast(Feed), layout: "dashboardShell", tab: "/feed" },
+  { path: "crosstalk", component: cast(Crosstalk), layout: "dashboardShell", tab: "/crosstalk", fullWidth: true },
   { path: "search", component: cast(Search), layout: "dashboardShell", tab: "/search" },
   { path: "notifications", component: cast(Notifications), layout: "dashboardShell", tab: "/notifications" },
   { path: "conversation/:id", component: cast(Conversation), layout: "dashboardShell", tab: "/conversation/:id", fullWidth: true, guestOk: true, guestKind: "shell" },
@@ -206,6 +209,8 @@ export const ROUTES: RouteEntry[] = [
   { path: "routines", component: cast(Routines), layout: "dashboardShell", tab: "/routines", fullWidth: true },
   { path: "schedules", component: cast(Schedules), layout: "dashboardShell", tab: "/schedules", fullWidth: true },
   { path: "sessions", component: cast(Sessions), layout: "dashboardShell", tab: "/sessions" },
+  // Full-bleed via pageLayout's FULL_WIDTH_PATTERNS (like /sessions), not an isOnXPage flag.
+  { path: "anchor", component: cast(Anchor), layout: "dashboardShell", tab: "/anchor" },
   { path: "team", component: cast(Team), layout: "dashboardShell", tab: "/team" },
   { path: "team/activity", component: cast(TeamActivity), layout: "dashboardShell", tab: "/team/activity" },
   { path: "team/:username", component: cast(TeamMember), layout: "dashboardShell", tab: "/team/:username" },

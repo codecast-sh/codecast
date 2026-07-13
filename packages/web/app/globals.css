@@ -570,6 +570,22 @@ html[data-idle] *::after {
   @keyframes schedRosterFade { from { opacity: 0; } to { opacity: 1; } }
 }
 
+/* Click feedback on a schedule row (dock roster or bar under a card): a quick
+   schedule-orange wash that fades out. The row's resting selected tint is the
+   cyan shared with subagent rows, so this pulse is the moment of confirmation
+   that the schedule itself took the click. Kept under reduced-motion (shorter)
+   — it's a state-change confirmation, not decoration. */
+.sched-click-flash {
+  animation: schedRowFlash 600ms ease-out forwards;
+}
+@keyframes schedRowFlash {
+  0% { background: color-mix(in srgb, var(--sol-orange) 35%, transparent); }
+  100% { background: transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sched-click-flash { animation-duration: 200ms; }
+}
+
 /* Indeterminate hairline shimmer used by AppLoader. Colored by currentColor;
    mirrored by the pre-React #boot-shell in index.html — keep the two in sync. */
 .app-loader-bar {

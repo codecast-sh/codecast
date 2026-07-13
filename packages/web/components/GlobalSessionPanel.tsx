@@ -20,8 +20,9 @@ import { isStatusTrustStale } from "@codecast/shared/contracts";
 import { TooltipProvider } from "./ui/tooltip";
 import { cleanTitle, msgCountColor, formatModel } from "../lib/conversationProcessor";
 import { getLabelColor } from "../lib/labelColors";
-import { fmtDuration, describeTaskCadence, taskStateLabel } from "./scheduleCadence";
-import { partitionScheduleInbox, type ScheduleRow, type TaskRow } from "./scheduleTasks";
+import Link from "next/link";
+import { fmtClock, fmtDuration, describeTaskCadence, isTaskOverdue, taskStateLabel } from "./scheduleCadence";
+import { partitionScheduleInbox, patchTaskInWebList, taskDisplayTitle, type ScheduleRow, type TaskRow } from "./scheduleTasks";
 import { cleanUserMessage } from "./sessionMessage";
 import { SharePopover } from "./SharePopover";
 import { shareOrigin } from "../lib/utils";
@@ -31,7 +32,7 @@ import { toast } from "sonner";
 import { animatedHideSession } from "../store/undoActions";
 import { soundKill } from "../lib/sounds";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
-import { X, ChevronsLeft, ChevronsRight, ChevronRight, ChevronDown, List, Clock, Tag, GitFork, History, Star, Activity, Workflow, Play, Pause } from "lucide-react";
+import { X, ChevronsLeft, ChevronsRight, ChevronRight, ChevronDown, List, Clock, Tag, GitFork, History, Star, Activity, Workflow, Play, Pause, Settings2 } from "lucide-react";
 import { FilterOptionList } from "./FilterDropdown";
 import { LabelChipsRow } from "./LabelChipsRow";
 import { TaskStatusBadge } from "./TaskStatusBadge";
@@ -568,39 +569,6 @@ function BlockedSessionsBanner({
   );
 }
 
-// A slim schedule bar rendered UNDER its session card — stacked when the
-// session has several, the way subagent rows stack under a parent. This is the
-// roomy replacement for the old cramped countdown chip: the schedule's name,
-// cadence, and live state get a whole line instead of competing with the
-// card's chip row. Bars appear wherever the owning card renders (an escalated
-// run, a loop you're driving, a once follow-up on an ordinary conversation).
-// Click selects the owning session — the strip above the conversation carries
-// the full prompt and controls.
-function ScheduleBarRow({ task, unread, onClick }: { task: TaskRow; unread?: boolean; onClick: () => void }) {
-  const now = useCoarseNow(30_000);
-  const stateLabel = taskStateLabel(task, now);
-  return (
-    <button
-      onClick={onClick}
-      title={task.prompt}
-      className="w-full flex items-center gap-1.5 pl-7 pr-3 py-1 text-left bg-sol-orange/[0.045] hover:bg-sol-orange/10 border-t border-sol-border/20 transition-colors min-w-0"
-    >
-      <svg className="w-2.5 h-2.5 shrink-0 text-sol-orange" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-        <circle cx="12" cy="12" r="9" />
-        <path d="M12 7.5V12l3 2" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-      <span className="text-[10px] text-sol-text-dim truncate min-w-0">{task.title}</span>
-      {unread && <span className="w-1 h-1 rounded-full bg-sol-orange shrink-0" />}
-      <span className="ml-auto shrink-0 text-[9px] font-medium text-sol-text-muted">{describeTaskCadence(task)}</span>
-      <span
-        className={`shrink-0 inline-flex items-center justify-center min-w-[42px] px-1 py-0 rounded text-[9px] font-semibold tabular-nums border ${schedBadgeTone(task, now)}`}
-      >
-        {stateLabel}
-      </span>
-    </button>
-  );
-}
-
 // -- The SCHEDULES section (every armed schedule, schedule-first) --
 
 // One row per armed schedule — recurring, once, or event; inject or spawn; no
@@ -632,104 +600,311 @@ const SCHED_ACCENT: Record<SchedAccent, string> = {
 function schedBadgeTone(task: { status: string; run_at?: number }, now: number): string {
   if (task.status === "paused") return "bg-sol-bg-alt text-sol-text-dim border-sol-border/50";
   if (task.status === "running") return "bg-sol-green/10 text-sol-green border-sol-green/30";
+  // Stuck-due is the one badge state that earns red: the daemon should claim
+  // due work within seconds, so minutes overdue means nothing is listening.
+  if (isTaskOverdue(task, now)) return "bg-sol-red/10 text-sol-red border-sol-red/40 font-bold";
   const ms = task.run_at !== undefined ? task.run_at - now : undefined;
   if (ms !== undefined && ms <= 10 * 60_000) return "bg-sol-orange/20 text-sol-orange border-sol-orange/50 font-bold";
   return "bg-sol-orange/10 text-sol-orange border-sol-orange/30";
 }
 
-function ScheduleRowItem({ row, activeSessionId, onOpen }: {
+// One schedule row, used EVERYWHERE a schedule renders as a row: the dock
+// roster and the bars stacked under a session card (attached). One anatomy so
+// the surfaces can't drift: readable name, one-sentence gist of what each run
+// does (Haiku-distilled display fields), cadence + live countdown, last
+// outcome, and hover verbs (run now / pause / cancel) on every surface.
+function ScheduleRowItem({ row, activeSessionId, onOpen, attached, highlighted, projectChip }: {
   row: ScheduleRow;
   activeSessionId?: string | null;
   onOpen: (convId: string) => void;
+  // Rendered under its owning session card — tinted like the subagent stack
+  // and top-joined to the card instead of list-bordered below.
+  attached?: boolean;
+  // Keyboard cursor (roster arrow-nav) — visual only; Enter acts on it.
+  highlighted?: boolean;
+  // Short project name, shown when the roster spans several projects so
+  // cross-project schedules stop being indistinguishable.
+  projectChip?: string;
 }) {
   const { task, unread } = row;
   const now = useCoarseNow(30_000);
-  const pause = useMutation(api.agentTasks.webPause);
-  const resume = useMutation(api.agentTasks.webResume);
-  const runNow = useMutation(api.agentTasks.webRunNow);
-  const cancel = useMutation(api.agentTasks.webCancel);
-  const reactivate = useMutation(api.agentTasks.webReactivate);
+  // Every verb patches the local webList cache in the same write (local-first):
+  // the row flips the instant it's clicked; the server echo reconciles.
+  const pause = useMutation(api.agentTasks.webPause).withOptimisticUpdate(
+    (ls: any, args: any) => patchTaskInWebList(ls, api.agentTasks.webList, args.task_id, { status: "paused" }),
+  );
+  const resume = useMutation(api.agentTasks.webResume).withOptimisticUpdate(
+    (ls: any, args: any) => patchTaskInWebList(ls, api.agentTasks.webList, args.task_id, { status: "scheduled" }),
+  );
+  const runNow = useMutation(api.agentTasks.webRunNow).withOptimisticUpdate(
+    (ls: any, args: any) => patchTaskInWebList(ls, api.agentTasks.webList, args.task_id, { status: "scheduled", run_at: Date.now() }),
+  );
+  const cancel = useMutation(api.agentTasks.webCancel).withOptimisticUpdate(
+    (ls: any, args: any) => patchTaskInWebList(ls, api.agentTasks.webList, args.task_id, { status: "completed" }),
+  );
+  const reactivate = useMutation(api.agentTasks.webReactivate).withOptimisticUpdate(
+    (ls: any, args: any) =>
+      patchTaskInWebList(ls, api.agentTasks.webList, args.task_id, {
+        status: "scheduled",
+        run_at: Date.now() + (task.schedule_type === "recurring" && task.interval_ms ? task.interval_ms : 60_000),
+      }),
+  );
   const taskId = task._id as Id<"agent_tasks">;
   const paused = task.status === "paused";
   const stateLabel = taskStateLabel(task, now);
   const isActive = !!row.openId && row.openId === activeSessionId;
   const accent = schedAccent(task);
+  const gist = task.display_summary?.trim() || task.prompt;
+  // Click feedback: an orange wash that fades (keyed so re-clicks re-trigger).
+  // Selection alone can't confirm the click — the row's session is often
+  // already active, and the resting selected tint is the shared cyan — so the
+  // schedule-orange pulse is what says "this schedule heard you".
+  const [clickFlash, setClickFlash] = useState(0);
   return (
-    <div className={`group/schedrow relative border-b border-sol-border/30 border-l-2 transition-colors ${isActive ? "bg-sol-orange/[0.08] border-l-sol-orange" : SCHED_ACCENT[accent]}`}>
+    <div
+      data-schedrow={task._id}
+      className={`group/schedrow relative transition-colors ${
+        // Attached rows sit flush under their card — no separator line above and
+        // no left accent bar. The ↳ arrow carries the parent/child connection,
+        // and health/liveness stays readable via the title dots + "retrying"
+        // text, so a colored (esp. red) left rail would only add noise here.
+        attached ? "" : "border-b border-sol-border/30"
+      } ${
+        isActive
+          ? attached
+            ? "bg-sol-cyan/[0.10]"
+            : "border-l border-l-sol-cyan/40 bg-sol-cyan/[0.10]"
+          : attached
+            ? ""
+            : `border-l-2 ${SCHED_ACCENT[accent]}`
+      } ${
+        highlighted ? "bg-[color-mix(in_srgb,var(--sol-bg-alt)_70%,transparent)] ring-1 ring-inset ring-sol-orange/40" : ""
+      }`}
+    >
       <button
-        className="w-full text-left cursor-pointer pl-2.5 pr-3 py-1.5 hover:bg-sol-bg-alt/60 transition-colors"
-        onClick={() => row.openId && onOpen(row.openId)}
-        title={task.prompt}
+        className={`w-full text-left cursor-pointer pr-3 ${attached ? "pl-2 py-1" : "pl-2.5 py-1.5"} hover:bg-sol-orange/[0.05] transition-[background-color,opacity] ${paused ? "opacity-55 hover:opacity-90" : ""}`}
+        onClick={() => {
+          if (!row.openId) return;
+          setClickFlash((n) => n + 1);
+          onOpen(row.openId);
+        }}
       >
+        {/* Attached rows wear the subagent child idiom: the SAME ↳ corner arrow
+            the subagent rows below carry (in schedule-orange, not subagent
+            violet), so the connectors line up and the row reads as this card's
+            child instead of a glyph floating in indented space. The clock rides
+            right after as the schedules' identity mark (same as the strip
+            header). */}
+        <div className="flex gap-1.5 min-w-0">
+        {attached && (
+          <span className="flex items-center gap-1 mt-[2px] shrink-0 text-sol-orange/70" role="img" aria-label="Schedule — fires into this session">
+            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+              <title>Schedule — fires into this session</title>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M14 12l4 4-4 4" />
+            </svg>
+            <Clock className="w-3 h-3" aria-hidden />
+          </span>
+        )}
+        <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5 min-w-0">
           {accent === "running" && (
-            <span className="relative flex h-2 w-2 shrink-0 items-center justify-center" title="running now">
-              <span className="absolute inline-flex h-2 w-2 rounded-full bg-sol-green/40 animate-ping motion-reduce:animate-none" />
-              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-sol-green" />
-            </span>
+            <ShortcutTooltip label="Running now">
+              <span className="relative flex h-2 w-2 shrink-0 items-center justify-center">
+                <span className="absolute inline-flex h-2 w-2 rounded-full bg-sol-green/40 animate-ping motion-reduce:animate-none" />
+                <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-sol-green" />
+              </span>
+            </ShortcutTooltip>
           )}
           {accent === "attention" && (
-            <span className="w-1.5 h-1.5 rounded-full bg-sol-red shrink-0" title={task.last_run_failed ? "Last run failed" : "Flagged for attention"} />
+            <ShortcutTooltip label={task.last_run_failed ? "Last run failed" : "Flagged for attention"}>
+              <span className="w-1.5 h-1.5 rounded-full bg-sol-red shrink-0" />
+            </ShortcutTooltip>
           )}
-          <span className="text-xs font-medium text-sol-text truncate min-w-0">{task.title}</span>
-          {unread && <span className="w-1.5 h-1.5 rounded-full bg-sol-orange shrink-0" title="New outcome since you last opened this section" />}
-          <span
-            className={`ml-auto shrink-0 inline-flex items-center justify-center min-w-[46px] px-1 py-0 rounded text-[9px] font-semibold tabular-nums border transition-colors ${schedBadgeTone(task, now)}`}
-          >
-            {stateLabel}
-          </span>
-        </div>
-        <div className="flex items-center gap-1.5 mt-0.5 text-[10px] min-w-0">
-          <span className="shrink-0 font-medium text-sol-text-muted">{describeTaskCadence(task)}</span>
+          <span className={`text-xs font-medium truncate min-w-0 ${attached ? "text-sol-text-secondary" : "text-sol-text"}`}>{taskDisplayTitle(task)}</span>
+          {projectChip && (
+            <ShortcutTooltip label={task.project_path || projectChip}>
+              <span className={`shrink-0 px-1 rounded text-[9px] font-medium border ${getLabelColor(projectChip).bg} ${getLabelColor(projectChip).text} ${getLabelColor(projectChip).border}`}>
+                {projectChip}
+              </span>
+            </ShortcutTooltip>
+          )}
           {task.mode === "apply" && (
-            <span className="shrink-0 px-1 rounded bg-sol-red/10 text-sol-red/80 font-medium" title="Runs in apply mode — the agent may make changes">apply</span>
+            <ShortcutTooltip label="apply mode: runs may change things — edit files, run write commands" hint="propose is the read-only default">
+              <span className="shrink-0 px-1 rounded bg-sol-red/10 text-sol-red/80 text-[9px] font-medium">apply</span>
+            </ShortcutTooltip>
           )}
-          {task.run_count > 0 && (
-            <span className="shrink-0 text-sol-text-dim/70 before:content-['·'] before:mr-1.5 before:text-sol-text-dim/40">{task.run_count} run{task.run_count === 1 ? "" : "s"}</span>
+          {/* Same pill as the dock bar's "N new" count, so opening the roster
+              shows exactly which rows that number pointed at. */}
+          {unread && (
+            <ShortcutTooltip label="Outcome landed since you last opened this list">
+              <span className="shrink-0 px-1 rounded-full bg-sol-orange text-sol-bg text-[9px] font-semibold">new</span>
+            </ShortcutTooltip>
           )}
-          {task.last_run_summary && (
-            <span className={`truncate min-w-0 before:content-['·'] before:mr-1.5 before:text-sol-text-dim/40 ${task.last_run_failed ? "text-sol-red/80" : "text-sol-text-dim/70"}`}>
-              {task.last_run_summary}
-            </span>
-          )}
+          <span className="ml-auto shrink-0 text-[10px] font-medium text-sol-text-muted">{describeTaskCadence(task)}</span>
+          {(() => {
+            const badge = (
+              <span className={`shrink-0 inline-flex items-center justify-center min-w-[46px] px-1 py-0 rounded text-[9px] font-semibold tabular-nums border transition-colors ${schedBadgeTone(task, now)}`}>
+                {stateLabel}
+              </span>
+            );
+            if (task.status !== "scheduled") return badge;
+            return (
+              <ShortcutTooltip label={task.run_at !== undefined ? `Fires at ${fmtClock(task.run_at)}` : `Fires ${describeTaskCadence(task)}`}>
+                {badge}
+              </ShortcutTooltip>
+            );
+          })()}
+        </div>
+        {/* Attached rows are TWO lines, always: the gist shares its line with
+            the last-outcome meta (retrying, recency) so a bar under a card
+            never grows a third line. The roster has room to let the sentence
+            breathe across two, with the outcome report on its own line below.
+            A fresh schedule whose Haiku gist hasn't landed yet shows the raw
+            prompt with a pulse. */}
+        {(() => {
+          const sparkle = !task.display_summary && now - task.created_at < 5 * 60_000 && (
+            <ShortcutTooltip label="Haiku is distilling a summary of this prompt">
+              <span className="text-sol-orange/70 animate-pulse motion-reduce:animate-none">✦ </span>
+            </ShortcutTooltip>
+          );
+          const ago = task.last_run_at !== undefined ? `${fmtDuration(Math.max(0, now - task.last_run_at))} ago` : undefined;
+          const retrying = (task.retry_count ?? 0) > 0 && (
+            <ShortcutTooltip label="The last run errored; the daemon is retrying">
+              <span className="shrink-0 text-[10px] text-sol-red/80 font-medium">retrying ×{task.retry_count}</span>
+            </ShortcutTooltip>
+          );
+          if (attached) {
+            const agoEl = ago ? (
+              <span className={`shrink-0 text-[10px] tabular-nums ${task.last_run_failed ? "text-sol-red/80" : "text-sol-text-dim"}`}>{ago}</span>
+            ) : null;
+            return (
+              <>
+                <div className="flex items-baseline gap-1.5 mt-0.5 min-w-0">
+                  <span className="flex-1 min-w-0 truncate text-[11px] leading-snug text-sol-text-dim">
+                    {sparkle}
+                    {gist}
+                  </span>
+                  {retrying}
+                  {!task.last_run_summary && agoEl}
+                </div>
+                {/* The last run's report is the robot SPEAKING — so it wears the
+                    same voice idiom as the card's blue "> message" line (11px,
+                    semibold, dim ">" prefix), tinted by how the run went. Plain
+                    ink here read as anonymous body text; a tooltip buried it. */}
+                {task.last_run_summary && (
+                  <div className="flex items-baseline gap-1.5 mt-0.5 min-w-0">
+                    <span className={`flex-1 min-w-0 truncate text-[11px] leading-snug font-semibold ${task.last_run_failed ? "text-sol-red/90" : "text-sol-green"}`}>
+                      <span className={`mr-0.5 ${task.last_run_failed ? "text-sol-red/50" : "text-sol-green/50"}`}>&gt;</span>
+                      {task.last_run_summary}
+                    </span>
+                    {agoEl}
+                  </div>
+                )}
+              </>
+            );
+          }
+          // Where a fire lands: an injecting schedule wakes its home session —
+          // named, so the roster row isn't a mystery verb. Hidden when the home
+          // session is just named after the schedule itself (says nothing).
+          const target =
+            task.originating_conversation_title &&
+            task.originating_conversation_title.trim().toLowerCase() !== taskDisplayTitle(task).trim().toLowerCase()
+              ? task.originating_conversation_title
+              : undefined;
+          const meta = [
+            task.run_count > 0 ? `${task.run_count} run${task.run_count === 1 ? "" : "s"}` : undefined,
+            ago,
+          ].filter(Boolean).join(" · ");
+          return (
+            <>
+              <div className="mt-0.5 text-[11px] leading-snug text-sol-text-dim min-w-0 line-clamp-2">
+                {sparkle}
+                {gist}
+              </div>
+              {(task.run_count > 0 || task.last_run_summary || (task.retry_count ?? 0) > 0 || target) && (
+                <div className="flex items-baseline gap-1.5 mt-0.5 min-w-0">
+                  {target && (
+                    <ShortcutTooltip label={`Fires into: ${target}`}>
+                      <span className="shrink-0 max-w-[40%] truncate text-[10px] text-sol-text-dim">→ {target}</span>
+                    </ShortcutTooltip>
+                  )}
+                  {retrying}
+                  {/* The last run's report in the same voice idiom as the
+                      attached rows (and the card's blue "> message" line):
+                      semibold, status-tinted, dim ">" prefix. */}
+                  {task.last_run_summary && (
+                    <span className={`truncate min-w-0 text-[11px] font-semibold ${task.last_run_failed ? "text-sol-red/90" : "text-sol-green"}`}>
+                      <span className={`mr-0.5 ${task.last_run_failed ? "text-sol-red/50" : "text-sol-green/50"}`}>&gt;</span>
+                      {task.last_run_summary}
+                    </span>
+                  )}
+                  {meta && <span className="ml-auto shrink-0 text-[10px] text-sol-text-dim tabular-nums">{meta}</span>}
+                </div>
+              )}
+            </>
+          );
+        })()}
+        </div>
         </div>
       </button>
+      {/* Keyed remount replays the animation on every click; it ends fully
+          transparent (fill-mode forwards), so the spent span can just stay —
+          no animationend cleanup, which never fires in occluded windows. */}
+      {clickFlash > 0 && (
+        <span key={clickFlash} aria-hidden className="sched-click-flash absolute inset-0 pointer-events-none" />
+      )}
       {/* Hover action rail — same idiom as the inbox session cards: a right-hand
           strip that fades in over a gradient (so it reads as "revealed", not a
           box dropped on top), holding compact icon verbs. Absolute + full-height
           so revealing it never changes the row's height. */}
       <div className="absolute top-0 bottom-0 right-0 flex items-center gap-0.5 pl-12 pr-2 opacity-0 group-hover/schedrow:opacity-100 transition-opacity duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] bg-gradient-to-r from-transparent via-sol-bg-alt/80 to-sol-bg-alt">
-        <button
-          title="Run now"
-          aria-label="Run now"
-          onClick={(e) => { e.stopPropagation(); runNow({ task_id: taskId }).catch(() => {}); toast.success("Run queued"); }}
-          className="p-1 rounded text-sol-text-dim hover:text-sol-orange hover:bg-sol-orange/10 transition-[color,background-color,transform] duration-100 active:scale-90"
-        >
-          <Play className="w-3.5 h-3.5" fill="currentColor" strokeWidth={0} />
-        </button>
-        <button
-          title={paused ? "Resume schedule" : "Pause schedule"}
-          aria-label={paused ? "Resume schedule" : "Pause schedule"}
-          onClick={(e) => {
-            e.stopPropagation();
-            (paused ? resume({ task_id: taskId }) : pause({ task_id: taskId })).catch(() => {});
-          }}
-          className="p-1 rounded text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-[color,background-color,transform] duration-100 active:scale-90"
-        >
-          {paused ? <Play className="w-3.5 h-3.5" fill="currentColor" strokeWidth={0} /> : <Pause className="w-3.5 h-3.5" fill="currentColor" strokeWidth={0} />}
-        </button>
-        <button
-          title="Cancel schedule"
-          aria-label="Cancel schedule"
-          onClick={(e) => {
-            e.stopPropagation();
-            cancel({ task_id: taskId }).catch(() => {});
-            toast("Schedule canceled", { description: task.title, action: { label: "Undo", onClick: () => { reactivate({ task_id: taskId }).catch(() => {}); } } });
-          }}
-          className="p-1 rounded text-sol-text-dim hover:text-sol-red hover:bg-sol-red/10 transition-[color,background-color,transform] duration-100 active:scale-90"
-        >
-          <X className="w-3.5 h-3.5" strokeWidth={2.5} />
-        </button>
+        <ShortcutTooltip label="Open in Schedules" hint="edit, history, full detail" side="top">
+          <Link
+            href={`/schedules?task=${task._id}`}
+            aria-label="Open in Schedules"
+            onClick={(e) => e.stopPropagation()}
+            className="p-1 rounded text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-[color,background-color,transform] duration-100 active:scale-90"
+          >
+            <Settings2 className="w-3.5 h-3.5" />
+          </Link>
+        </ShortcutTooltip>
+        {task.status !== "running" && (
+          <ShortcutTooltip label="Run now" side="top">
+            <button
+              aria-label="Run now"
+              onClick={(e) => { e.stopPropagation(); runNow({ task_id: taskId }).catch(() => {}); toast.success("Run queued"); }}
+              className="p-1 rounded text-sol-text-dim hover:text-sol-orange hover:bg-sol-orange/10 transition-[color,background-color,transform] duration-100 active:scale-90"
+            >
+              <Play className="w-3.5 h-3.5" fill="currentColor" strokeWidth={0} />
+            </button>
+          </ShortcutTooltip>
+        )}
+        <ShortcutTooltip label={paused ? "Resume schedule" : "Pause schedule"} side="top">
+          <button
+            aria-label={paused ? "Resume schedule" : "Pause schedule"}
+            onClick={(e) => {
+              e.stopPropagation();
+              (paused ? resume({ task_id: taskId }) : pause({ task_id: taskId })).catch(() => {});
+            }}
+            className="p-1 rounded text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-[color,background-color,transform] duration-100 active:scale-90"
+          >
+            {paused ? <Play className="w-3.5 h-3.5" fill="currentColor" strokeWidth={0} /> : <Pause className="w-3.5 h-3.5" fill="currentColor" strokeWidth={0} />}
+          </button>
+        </ShortcutTooltip>
+        <ShortcutTooltip label="Cancel schedule" side="top">
+          <button
+            aria-label="Cancel schedule"
+            onClick={(e) => {
+              e.stopPropagation();
+              cancel({ task_id: taskId }).catch(() => {});
+              toast("Schedule canceled", { description: taskDisplayTitle(task), action: { label: "Undo", onClick: () => { reactivate({ task_id: taskId }).catch(() => {}); } } });
+            }}
+            className="p-1 rounded text-sol-text-dim hover:text-sol-red hover:bg-sol-red/10 transition-[color,background-color,transform] duration-100 active:scale-90"
+          >
+            <X className="w-3.5 h-3.5" strokeWidth={2.5} />
+          </button>
+        </ShortcutTooltip>
       </div>
     </div>
   );
@@ -744,8 +919,9 @@ function ScheduleRowItem({ row, activeSessionId, onOpen }: {
 // line docked under the list. The line is the briefing: how many are armed,
 // when the next fires, how many outcomes landed since you last looked, and a
 // red accent when one failed or flagged itself. Expanding opens a roster
-// overlay of full schedule rows (same anatomy as /schedules); opening or
-// closing marks the briefing read (schedules_seen_at).
+// overlay of full schedule rows (same anatomy as /schedules); CLOSING it marks
+// the briefing read (schedules_seen_at) — while open, the per-row "new" pills
+// stay visible so the count on the bar points at something.
 function ScheduleDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen }: {
   rows: ScheduleRow[];
   unreadCount: number;
@@ -754,29 +930,110 @@ function ScheduleDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen }:
   onOpen: (convId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  // Keyboard cursor into the roster: −1 = nothing selected (mouse mode).
+  const [cursor, setCursor] = useState(-1);
   const now = useCoarseNow(30_000);
-  if (rows.length === 0) return null;
-  const nextIn = nextRunAt !== undefined ? Math.max(0, nextRunAt - now) : undefined;
-  const attention = rows.some((r) => r.task.last_run_failed || r.task.last_run_needs_attention);
-  const toggle = () => {
+  // Mark the briefing read on CLOSE, not open: the per-row "new" pills are
+  // derived from schedules_seen_at, so stamping on open erased them the moment
+  // the roster appeared — you'd see "4 new" on the bar and nothing marked
+  // inside. While open, the pills stay; every exit path funnels through here.
+  const close = useCallback(() => {
     useInboxStore.getState().updateClientUI({ schedules_seen_at: Date.now() });
-    setOpen((o) => !o);
-  };
+    setOpen(false);
+  }, []);
+  // The roster is a popup, and popups owe the keyboard everything the mouse
+  // gets: Esc exits, arrows move a cursor, Enter opens the selected schedule.
+  // Arrow keys only bind once the roster is open, so global shortcuts and the
+  // session list's own nav never contend with it.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        close();
+        return;
+      }
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        setCursor((c) => {
+          const next = e.key === "ArrowDown" ? Math.min(c + 1, rows.length - 1) : Math.max(c - 1, 0);
+          const id = rows[next]?.task._id;
+          if (id) {
+            document.querySelector(`[data-schedrow="${id}"]`)?.scrollIntoView({ block: "nearest" });
+          }
+          return next;
+        });
+        return;
+      }
+      if (e.key === "Enter") {
+        const target = rows[cursor];
+        if (target?.openId) {
+          e.preventDefault();
+          close();
+          onOpen(target.openId);
+        }
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, rows, cursor, onOpen, close]);
+  // A closed roster has no cursor — reopening starts fresh in mouse mode.
+  useEffect(() => {
+    if (!open) setCursor(-1);
+  }, [open]);
+  if (rows.length === 0) return null;
+  const applyCount = rows.filter((r) => r.task.mode === "apply").length;
+  const overdueCount = rows.filter((r) => isTaskOverdue(r.task, now)).length;
+  const runningCount = rows.filter((r) => r.task.status === "running").length;
+  // Project chips only when the roster actually mixes projects — a
+  // single-project roster doesn't need every row stamped with the same name.
+  const projects = new Set(rows.map((r) => r.task.project_path).filter(Boolean));
+  const chipFor = (p?: string) => (projects.size > 1 && p ? p.split("/").filter(Boolean).pop() : undefined);
+  const nextIn = nextRunAt !== undefined ? Math.max(0, nextRunAt - now) : undefined;
+  // Name WHAT fires next, not just when — "next in 1h" says nothing. Running
+  // state lives in its own pill, so this slot is purely the next fire.
+  const nextTask = rows.find((r) => r.task.status === "scheduled" && r.task.run_at === nextRunAt)?.task;
+  const attention = rows.some((r) => r.task.last_run_failed || r.task.last_run_needs_attention);
+  const toggle = () => (open ? close() : setOpen(true));
   return (
     <div className="relative shrink-0 border-t border-sol-border/40">
       {open && (
-        <div className="animate-sched-roster-in absolute bottom-full left-0 right-0 max-h-[55vh] overflow-y-auto bg-sol-bg border-t border-sol-border/60 shadow-[0_-8px_24px_rgba(0,0,0,0.18)] z-20">
-          {rows.map((r) => (
-            <ScheduleRowItem
-              key={r.task._id}
-              row={r}
-              activeSessionId={activeSessionId}
-              onOpen={(id) => { setOpen(false); onOpen(id); }}
-            />
-          ))}
-        </div>
+        <>
+          {/* Click-away backdrop: anywhere outside the roster closes it. */}
+          <div className="fixed inset-0 z-10" onClick={close} aria-hidden />
+          <div className="animate-sched-roster-in absolute bottom-full left-0 right-0 max-h-[55vh] overflow-y-auto bg-sol-bg border-t border-sol-border/60 shadow-[0_-8px_24px_rgba(0,0,0,0.18)] z-20">
+            {/* Roster header: what this popup holds and the two exits — the
+                full page, and creating a new schedule without hunting for it.
+                Solid alt band (not the row background) so the popup's edge
+                reads against the session list it floats over. */}
+            <div className="sticky top-0 z-10 flex items-center gap-2 px-3 py-1.5 bg-sol-bg-alt/95 backdrop-blur-sm border-b border-sol-border/60 text-[10px]">
+              <span className="font-medium text-sol-text-muted">
+                {rows.length} armed{applyCount > 0 ? ` · ${applyCount} in apply mode` : ""}
+              </span>
+              <span className="ml-auto flex items-center gap-2.5">
+                <Link href="/schedules?new=1" onClick={close} className="text-sol-cyan hover:underline">+ New</Link>
+                <Link href="/schedules" onClick={close} className="text-sol-cyan hover:underline">Manage</Link>
+              </span>
+            </div>
+            {rows.map((r, i) => (
+              <ScheduleRowItem
+                key={r.task._id}
+                row={r}
+                activeSessionId={activeSessionId}
+                onOpen={(id) => { close(); onOpen(id); }}
+                highlighted={i === cursor}
+                projectChip={chipFor(r.task.project_path)}
+              />
+            ))}
+          </div>
+        </>
       )}
-      <button onClick={toggle} className="w-full flex items-center gap-1.5 px-3 py-1.5 bg-sol-bg hover:bg-sol-bg-alt/60 transition-colors">
+      <button
+        onClick={toggle}
+        aria-expanded={open}
+        aria-haspopup="true"
+        aria-label={`Schedules: ${rows.length} armed`}
+        className="w-full flex items-center gap-1.5 px-3 py-1.5 bg-sol-bg hover:bg-sol-bg-alt/60 transition-colors"
+      >
         <svg className={`w-3 h-3 shrink-0 ${attention ? "text-sol-red" : "text-sol-orange"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
           <circle cx="12" cy="12" r="9" />
           <path d="M12 7.5V12l3 2" strokeLinecap="round" strokeLinejoin="round" />
@@ -785,12 +1042,30 @@ function ScheduleDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen }:
           Schedules <span className="text-sol-orange/60 tabular-nums">{rows.length}</span>
         </span>
         {nextIn !== undefined && (
-          <span className="text-[10px] text-sol-text-dim tabular-nums">· next {nextIn > 0 ? `in ${fmtDuration(nextIn)}` : "due"}</span>
+          <span className="text-[10px] text-sol-text-dim truncate min-w-0">
+            · next{nextTask ? <> <span className="text-sol-text-muted">{taskDisplayTitle(nextTask)}</span></> : null}{" "}
+            <span className="tabular-nums">{nextIn > 0 ? `in ${fmtDuration(nextIn)}` : "due"}</span>
+          </span>
         )}
         {unreadCount > 0 && (
-          <span className="inline-flex items-center px-1.5 py-0 rounded-full text-[9px] font-semibold bg-sol-orange text-sol-bg">
-            {unreadCount} new
+          <ShortcutTooltip label={`${unreadCount} outcome${unreadCount === 1 ? "" : "s"} landed since you last opened this list`} hint="marked inside">
+            <span className="inline-flex items-center px-1.5 py-0 rounded-full text-[9px] font-semibold bg-sol-orange text-sol-bg">
+              {unreadCount} new
+            </span>
+          </ShortcutTooltip>
+        )}
+        {runningCount > 0 && (
+          <span className="inline-flex items-center gap-1 px-1.5 py-0 rounded-full text-[9px] font-semibold bg-sol-green/10 text-sol-green border border-sol-green/30">
+            <span className="w-1 h-1 rounded-full bg-sol-green animate-pulse motion-reduce:animate-none" />
+            {runningCount} running
           </span>
+        )}
+        {overdueCount > 0 && (
+          <ShortcutTooltip label="Due but unclaimed for over 2 minutes — is the daemon for that machine running?">
+            <span className="inline-flex items-center px-1.5 py-0 rounded-full text-[9px] font-semibold bg-sol-red/15 text-sol-red border border-sol-red/30">
+              {overdueCount} overdue
+            </span>
+          </ShortcutTooltip>
         )}
         {attention && (
           <span className="inline-flex items-center gap-1 px-1.5 py-0 rounded-full text-[9px] font-semibold bg-sol-red/15 text-sol-red border border-sol-red/30">
@@ -2532,12 +2807,20 @@ export function SessionListPanel({
                   sessionLabel={labelByConv[session._id] ?? null}
                   isFavorite={cardIsFavorite(session)}
                 />
-                {/* Schedule bars stack under their card the way subagent rows
-                    do — full-width room for name/cadence/countdown instead of
-                    a cramped chip. Click selects the session with its schedule
-                    strip pre-expanded (openScheduleTarget). */}
+                {/* Schedule rows stack under their card the way subagent rows
+                    do — the same full row anatomy as the dock roster (name,
+                    gist, cadence, countdown, hover verbs). Click selects the
+                    session with its schedule strip expanded (openScheduleTarget
+                    — the strip re-expands even if the session is already
+                    active). */}
                 {scheduleBarRowsFor(session).map((r) => (
-                  <ScheduleBarRow key={r.task._id} task={r.task} unread={r.unread} onClick={() => openScheduleTarget(session._id)} />
+                  <ScheduleRowItem
+                    key={r.task._id}
+                    row={{ ...r, openId: session._id }}
+                    activeSessionId={activeSessionId}
+                    onOpen={openScheduleTarget}
+                    attached
+                  />
                 ))}
                 {visibleSubs.map((sub) => (
                   <SessionCard
