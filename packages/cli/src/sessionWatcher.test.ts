@@ -2,7 +2,7 @@ import { describe, test, expect, afterEach } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { SessionWatcher, isTestProjectDir, type SessionEvent } from "./sessionWatcher.js";
+import { SessionWatcher, isTestProjectDir, isWorkflowAgentTranscript, watchFilter, type SessionEvent } from "./sessionWatcher.js";
 
 function tmpDir(prefix: string): string {
   return path.join(
@@ -247,6 +247,47 @@ describe("SessionWatcher", () => {
     expect(isTestProjectDir("-tmp-codecast-fake-claude-AbC")).toBe(true);
     expect(isTestProjectDir("-Users-ashot-src-codecast")).toBe(false);
     expect(isTestProjectDir("real-project-abc123")).toBe(false);
+  });
+
+  test("watchFilter matches workflow agent transcripts, not their neighbors", () => {
+    const wfDir = ["proj", "sess-uuid", "subagents", "workflows", "wf_8300ef22-6b5"].join(path.sep);
+    expect(isWorkflowAgentTranscript(`${wfDir}${path.sep}agent-af865cb759119c484.jsonl`)).toBe(true);
+    expect(watchFilter(`${wfDir}${path.sep}agent-af865cb759119c484.jsonl`)).toBe(true);
+    // The runtime's run journal sits alongside agent transcripts — not a session.
+    expect(watchFilter(`${wfDir}${path.sep}journal.jsonl`)).toBe(false);
+    // Task-tool subagents (historical depth) still match via the plain .jsonl rule.
+    expect(watchFilter(["proj", "sess-uuid", "subagents", "agent-abc.jsonl"].join(path.sep))).toBe(true);
+    // Top-level transcripts and workflow snapshots unchanged.
+    expect(watchFilter(["proj", "sess-uuid.jsonl"].join(path.sep))).toBe(true);
+    expect(watchFilter(["proj", "sess-uuid", "workflows", "wf_x.json"].join(path.sep))).toBe(true);
+    // A stray deep .jsonl that matches no known shape stays excluded.
+    expect(watchFilter(["proj", "sess-uuid", "tool-results", "deep", "deeper", "x.jsonl"].join(path.sep))).toBe(false);
+  });
+
+  test("emits workflow agent transcripts as sessions, skips the run journal", async () => {
+    const root = tmpDir("sw-wf-agent");
+    const wfDir = path.join(root, "proj1", "host-session-uuid", "subagents", "workflows", "wf_run123");
+    fs.mkdirSync(wfDir, { recursive: true });
+
+    const events: SessionEvent[] = [];
+    const watcher = new SessionWatcher(root);
+    cleanups.push(() => { watcher.stop(); fs.rmSync(root, { recursive: true, force: true }); });
+
+    watcher.on("session", (e) => events.push(e));
+    watcher.start();
+    await new Promise(r => setTimeout(r, 200));
+
+    const eventPromise = waitForSessionEvent(watcher, (e) => e.sessionId === "agent-a1b2c3");
+    fs.writeFileSync(path.join(wfDir, "agent-a1b2c3.jsonl"), '{"role":"user","content":"go"}\n');
+    fs.writeFileSync(path.join(wfDir, "journal.jsonl"), '{"agent":"a1b2c3"}\n');
+
+    const event = await eventPromise;
+    expect(event.sessionId).toBe("agent-a1b2c3");
+    expect(event.projectPath).toBe("proj1");
+    expect(event.workflowRunId).toBeUndefined();
+
+    await new Promise(r => setTimeout(r, 300));
+    expect(events.some(e => e.filePath.endsWith("journal.jsonl"))).toBe(false);
   });
 
   test("does not start twice", () => {

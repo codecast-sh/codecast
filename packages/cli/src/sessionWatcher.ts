@@ -43,8 +43,6 @@ export function isTestProjectDir(projectDirName: string): boolean {
 
 // Dynamic-workflow run snapshot: <projectDir>/<session>/workflows/wf_<id>.json
 // (the runtime materializes the whole run here; the daemon ingests it for the dash).
-// NB: the per-agent transcripts live deeper under subagents/workflows/<runId>/ and
-// are intentionally NOT matched here — the snapshot already carries their state.
 export function isWorkflowSnapshot(relativePath: string): boolean {
   const parts = relativePath.split(path.sep);
   if (parts.length < 2) return false;
@@ -52,6 +50,30 @@ export function isWorkflowSnapshot(relativePath: string): boolean {
   return parts[parts.length - 2] === "workflows"
     && parts[parts.length - 3] !== "subagents"
     && /^wf_.*\.json$/.test(base);
+}
+
+// Dynamic-workflow per-agent transcript:
+// <projectDir>/<session>/subagents/workflows/<wf_runId>/agent-<id>.jsonl
+// These sync as regular subagent conversations (session_id = filename base), which is
+// what makes workflow agent sessions clickable in the run UI. Matched explicitly —
+// NOT via the generic .jsonl rule — so raising the watch depth doesn't sweep in other
+// deep files (e.g. the runtime's journal.jsonl alongside them).
+export function isWorkflowAgentTranscript(relativePath: string): boolean {
+  const parts = relativePath.split(path.sep);
+  return parts.length === 6
+    && parts[2] === "subagents"
+    && parts[3] === "workflows"
+    && /^agent-.+\.jsonl$/.test(parts[5]);
+}
+
+// Single source of truth for what the watcher (and the priming scan) considers a
+// syncable file. Plain .jsonl matching keeps its historical depth (session transcripts
+// and Task-tool subagents, <= 4 segments); deeper paths must match a specific shape.
+export function watchFilter(relativePath: string): boolean {
+  const depth = relativePath.split(path.sep).length;
+  return (relativePath.endsWith(".jsonl") && depth <= 4)
+    || isWorkflowSnapshot(relativePath)
+    || isWorkflowAgentTranscript(relativePath);
 }
 
 export class SessionWatcher extends EventEmitter {
@@ -78,9 +100,11 @@ export class SessionWatcher extends EventEmitter {
 
     this.watcher = new RecursiveWatcher({
       path: this.projectsPath,
-      filter: (rel) => rel.endsWith(".jsonl") || isWorkflowSnapshot(rel),
+      filter: watchFilter,
       callback: (filePath, eventType) => this.handleFileEvent(filePath, eventType),
-      maxDepth: 4,
+      // Deep enough for workflow agent transcripts (6 segments); watchFilter keeps
+      // the extra depth from matching anything else.
+      maxDepth: 6,
       debounceMs: 100,
     });
 
@@ -95,14 +119,14 @@ export class SessionWatcher extends EventEmitter {
     const now = Date.now();
 
     const scanDir = (dir: string, depth: number) => {
-      if (depth > 4) return;
+      if (depth > 5) return;
       try {
         const entries = fs.readdirSync(dir, { withFileTypes: true });
         for (const entry of entries) {
           const fullPath = path.join(dir, entry.name);
           if (entry.isDirectory()) {
             scanDir(fullPath, depth + 1);
-          } else if (entry.name.endsWith(".jsonl") || isWorkflowSnapshot(path.relative(this.projectsPath, fullPath))) {
+          } else if (watchFilter(path.relative(this.projectsPath, fullPath))) {
             try {
               const fileStat = fs.statSync(fullPath);
               files.push({ path: fullPath, size: fileStat.size, mtimeMs: fileStat.mtimeMs });
