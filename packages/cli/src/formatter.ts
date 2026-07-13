@@ -866,11 +866,17 @@ function changeLabel(change: string): string {
 
 // One colored, natural-language line for a single work-state change — the unit
 // of the `cast sessions -w` change stream (append-only, never the full set).
+// to === null means the session left the watched set (stopped matching the
+// --state filter, or was dismissed).
 export function formatSessionChangeLine(ch: {
-  id: string; title?: string | null; from?: string | null; to: string;
+  id: string; title?: string | null; from?: string | null; to: string | null;
   is_pinned?: boolean; is_live?: boolean;
 }): string {
   const time = new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit" });
+  if (ch.to == null) {
+    const was = String(ch.from ?? "").replace("_", " ");
+    return `${c.dim}${time}${c.reset}  ${c.gray}○${c.reset} ${c.gray}gone${c.reset}  ${c.magenta}${truncateId(ch.id)}${c.reset}  ${ch.title || "New Session"}  ${c.dim}(left the watched set${was ? ` — was ${was}` : ""})${c.reset}`;
+  }
   const toLabel = WORK_STATE_LABEL[ch.to] ?? ch.to;
   const dot = ch.is_live ? `${c.green}●${c.reset}` : `${c.gray}○${c.reset}`;
   const pin = ch.is_pinned ? ` ${c.magenta}pinned${c.reset}` : "";

@@ -2011,13 +2011,20 @@ cast link <id> [line]             # mint a deep link to any object (session+line
 
 # Explore sessions — 3 axes: QUERY (which) × CONTENT (state | --messages) × LIVENESS (snapshot | -w)
 cast sessions                     # state snapshot, grouped most-actionable-first
-cast sessions -w                  # stream state changes live (one line per transition)
-cast sessions --state needs-input # narrow the query (also --team, -m <name>, or a session id)
+cast sessions -w                  # live change stream: one line per work-state change, silent otherwise
+cast sessions -w --json           # …as NDJSON: {"event":"new"|"transition"|"gone","id","from","to",…}
+cast sessions <id> [<id>…] -w     # watch an explicit set of sessions (ids also narrow the snapshot)
+cast sessions --label fleet -w    # watch every session filed under a label
+cast sessions --state needs-input # narrow to one state (also --team, -m <name>; with -w, new/gone events fire on enter/leave)
 cast sessions --labels            # my labels + counts, current project (--by-label groups, --label <name> filters, -g all projects)
 cast sessions --messages -w       # follow MESSAGES across my live sessions (multi-session)
 cast sessions <id> --messages -w  # …focused on one session
-cast sessions --json   |   -w --json   # any view as JSON / NDJSON
-# Monitor + wait-for-input: background a -w stream (narrow with --state), get woken on a transition (e.g. → needs-input), then act.
+# ORCHESTRATE a fleet: spawn workers under a label, run the watch in the background, act on events.
+#   cast spawn --label fleet "task A" "task B"
+#   cast sessions --label fleet -w --json     ← emits {"event":"transition","to":"needs_input",…}
+#   worker flips to needs_input = finished or blocked → cast read <id>, then cast send <id> "next step"
+# The -w stream prints nothing until something changes, so wake-on-output is a reliable signal.
+# Event states use underscores ("needs_input"); the --state flag accepts either form.
 # --state: working | needs-input | idle | pinned | live (also works on cast feed)
 # needs-input = ball in your court (finished turn, open question, permission prompt, dead with
 # output) — same as the web inbox's NEEDS INPUT. idle = blank sessions with nothing to act on.
@@ -5040,19 +5047,33 @@ program
   });
 
 program
-  .command("sessions [session_id]")
+  .command("sessions [session_ids...]")
   .alias("monitor")
   .description(
     "Explore sessions — three independent axes:\n\n" +
-    "  QUERY (which sessions): a session id, --state, --team / -m … narrow the set\n" +
+    "  QUERY (which sessions): session ids, --state, --label, --team / -m … narrow the set\n" +
     "  CONTENT: work state by default (grouped NEEDS INPUT → WORKING → IDLE), or\n" +
     "           --messages for conversation messages\n" +
-    "  LIVENESS: a one-shot snapshot, or -w to stream live\n\n" +
+    "  LIVENESS: a one-shot snapshot, or -w to stream changes live\n\n" +
     "NEEDS INPUT = ball in your court (finished turn, open question, permission prompt, dead\n" +
     "with output) — matches the web inbox. IDLE = blank sessions. --json swaps any view to JSON.\n\n" +
+    "Watch mode (-w) is the monitoring primitive: it prints NOTHING until something changes,\n" +
+    "then one line per change — safe to run in the background and wake on output. With --json\n" +
+    "each line is one NDJSON event:\n" +
+    '  {"ts":…,"event":"new"|"transition"|"gone","id":…,"title":…,"from":…,"to":…,"label":…}\n' +
+    "new = session entered the watched set · transition = work_state changed · gone = left\n" +
+    'the set (stopped matching --state, or dismissed). Event states use underscores\n' +
+    '("needs_input"); the --state flag accepts either form.\n\n' +
+    "Orchestrate a fleet: spawn workers under a label, watch that label, act when a worker\n" +
+    "flips to needs_input (finished or blocked):\n" +
+    '  cast spawn --label fleet "task A" "task B"\n' +
+    "  cast sessions --label fleet -w --json   # → {\"event\":\"transition\",\"to\":\"needs_input\",…}\n" +
+    '  cast read <id>  /  cast send <id> "next step"\n\n' +
     "Examples:\n" +
     "  cast sessions                  # state snapshot of your sessions\n" +
     "  cast sessions -w               # stream state changes live\n" +
+    "  cast sessions jx7abc jx7def -w # watch an explicit set of sessions\n" +
+    "  cast sessions --label fleet -w --json   # NDJSON events for one label's sessions\n" +
     "  cast sessions --state needs-input   # only what's waiting on you\n" +
     "  cast sessions --team -w        # stream the whole team's state changes\n" +
     "  cast sessions --messages -w    # follow messages across your live sessions\n" +
@@ -5062,8 +5083,8 @@ program
     "  cast sessions --labels -g      # …across all projects\n" +
     "  cast sessions --by-label -a    # group all sessions by label"
   )
-  .option("-w, --watch", "Stream live instead of a one-shot snapshot (state changes, or messages with -M)")
-  .option("--state <state>", "Filter: needs-input | working | idle | pinned | live")
+  .option("-w, --watch", "Stream changes live instead of a one-shot snapshot (state transitions, or messages with -M); silent until something changes")
+  .option("--state <state>", "Filter: needs-input | working | idle | pinned | live (with -w: new/gone events fire as sessions enter/leave the filter)")
   .option("-t, --team", "Show the team's sessions (default: just yours)")
   .option("-g, --global", "All teams (implies --team)")
   .option("-m, --member <name>", "Filter by team member (implies --team)")
@@ -5074,14 +5095,23 @@ program
   .option("-a, --all", "Include idle / dismissed sessions")
   .option("-n, --limit <n>", "Max sessions to show", "200")
   .option("-M, --messages", "Show conversation messages instead of work state (live with -w)")
-  .option("--json", "Output as JSON instead of the colored view")
-  .action(async (sessionId, options) => {
+  .option("--json", "Output as JSON (with -w: NDJSON, one event object per line)")
+  .action(async (sessionIds, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
       console.error("Not authenticated. Run: cast auth");
       process.exit(1);
     }
     const siteUrl = config.convex_url.replace(".cloud", ".site");
+
+    // Session ids are a QUERY filter: any number of them narrows every view to
+    // that explicit set (full ids or unambiguous prefixes like the short jx7 id).
+    // Explicit ids imply show_all — naming a session means you want it even if
+    // it was dismissed from the inbox.
+    const ids: string[] = (sessionIds || []).map((x: string) => x.trim()).filter(Boolean);
+    const matchesId = (s: any) =>
+      ids.length === 0 || ids.some((x) => s.id === x || (s.id || "").startsWith(x) || s.session_id === x);
+    const showAll = options.all || ids.length > 0 || undefined;
 
     // MESSAGE MODE (--messages): show conversation MESSAGES, not work state. The query
     // picks the sessions — a session id narrows to one, else the live sessions in the
@@ -5090,7 +5120,7 @@ program
     if (options.messages) {
       const fullContent = options.all || undefined;
       const { formatStreamedMessage, formatReadResult } = await import("./formatter.js");
-      const single = !!sessionId;
+      const single = ids.length === 1;
       // Reactive subscriptions are cheap (server pushes only on change), so follow
       // ALL active sessions — the ceiling is just a sanity backstop, not a real limit.
       const MAX_FOLLOW = 60;
@@ -5104,13 +5134,17 @@ program
         return r.json();
       };
 
-      // Resolve which sessions to read from the query: one explicit id, else the live
+      // Resolve which sessions to read from the query: explicit ids, else the live
       // sessions in the inbox (only live ones produce messages), capped.
       const resolveSet = async (): Promise<Array<{ id: string; title: string }>> => {
-        if (sessionId) {
-          const head = await readMessages(sessionId, 1, 1);
-          if (head.error) { console.error(`Error: ${head.error}`); process.exit(1); }
-          return [{ id: head.conversation?.id || sessionId, title: head.conversation?.title || sessionId }];
+        if (ids.length > 0) {
+          const set: Array<{ id: string; title: string }> = [];
+          for (const id of ids) {
+            const head = await readMessages(id, 1, 1);
+            if (head.error) { console.error(`Error (${id}): ${head.error}`); process.exit(1); }
+            set.push({ id: head.conversation?.id || id, title: head.conversation?.title || id });
+          }
+          return set;
         }
         const r = await cliFetchRead(`${siteUrl}/cli/inbox`, {
           method: "POST", headers: { "Content-Type": "application/json" },
@@ -5203,15 +5237,16 @@ program
       const initial = await resolveSet();
       for (const s of initial) subscribe(s);
       const what = single
-        ? `${(initial[0]?.id || sessionId).slice(0, 7)} ${titles.get(initial[0]?.id) || ""}`.trim()
-        : `${initial.length} live session${initial.length === 1 ? "" : "s"}`;
+        ? `${(initial[0]?.id || ids[0]).slice(0, 7)} ${titles.get(initial[0]?.id) || ""}`.trim()
+        : `${initial.length} ${ids.length > 0 ? "" : "live "}session${initial.length === 1 ? "" : "s"}`;
       const header = `cast sessions: following ${what} — live messages stream below… Ctrl-C to stop`;
       if (options.json) { if (process.stderr.isTTY) process.stderr.write(header + "\n"); }
       else console.log(`${header}\n`);
 
       process.on("SIGINT", () => { try { client.close(); } catch {} process.exit(0); });
-      // Multi mode: pick up newly-active sessions over time (subscribe to them too).
-      if (!single) setInterval(async () => { try { for (const s of await resolveSet()) subscribe(s); } catch {} }, 15000);
+      // Inbox-derived set: pick up newly-active sessions over time (subscribe to
+      // them too). An explicit id set is fixed — no re-resolve.
+      if (ids.length === 0) setInterval(async () => { try { for (const s of await resolveSet()) subscribe(s); } catch {} }, 15000);
       await new Promise(() => {}); // stay alive; WebSocket pushes drive all output
       return;
     }
@@ -5257,7 +5292,7 @@ program
         const response = await cliFetchRead(`${siteUrl}/cli/inbox`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ api_token: config.auth_token, show_all: options.all || undefined, state: options.state, label: options.label, project_path: labelProjectPath, limit }),
+          body: JSON.stringify({ api_token: config.auth_token, show_all: showAll, state: options.state, label: options.label, project_path: labelProjectPath, limit }),
         });
         result = await response.json();
       } else {
@@ -5278,11 +5313,9 @@ program
         const feed = await response.json();
         result = feed?.error ? feed : feedToSessions(feed);
       }
-      // A session id is a query filter — narrow the state view to that one session.
-      if (sessionId && result && !result.error && Array.isArray(result.sessions)) {
-        const match = (s: any) =>
-          s.id === sessionId || (s.id || "").startsWith(sessionId) || (s.id || "").slice(0, 7) === sessionId || s.session_id === sessionId;
-        result = { ...result, sessions: result.sessions.filter(match) };
+      // Session ids are a query filter — narrow the state view to that set.
+      if (ids.length > 0 && result && !result.error && Array.isArray(result.sessions)) {
+        result = { ...result, sessions: result.sessions.filter(matchesId) };
       }
       return result;
     };
@@ -5324,43 +5357,56 @@ program
     const stateClient = new ConvexClient(config.convex_url!);
     process.on("SIGINT", () => { try { stateClient.close(); } catch {} process.exit(0); });
 
-    const header = `cast sessions: watching ${scopeLabel}${options.state ? ` (${options.state})` : ""} for changes… Ctrl-C to stop`;
+    const narrowed = [
+      ids.length ? `${ids.length} id${ids.length === 1 ? "" : "s"}` : "",
+      options.label ? `label: ${options.label}` : "",
+      options.state || "",
+    ].filter(Boolean).join(", ");
+    const header = `cast sessions: watching ${scopeLabel}${narrowed ? ` (${narrowed})` : ""} for changes… Ctrl-C to stop`;
     if (options.json) { if (process.stderr.isTTY) process.stderr.write(header + "\n"); }
     else console.log(`${header}\n`);
 
-    let prevStates: Record<string, string> = {};
+    // Diff frames on (membership, work_state). Three event kinds cover every
+    // observable change of the watched set:
+    //   new        — session entered the set (spawned, or started matching the query)
+    //   transition — a member's work_state changed
+    //   gone       — session left the set (stopped matching --state, or dismissed)
+    let prevRows: Record<string, { state: string; title: string | null; session_id: string | null }> = {};
     let firstFrame = true;
-    const matchesId = (s: any) =>
-      !sessionId || s.id === sessionId || (s.id || "").startsWith(sessionId) || (s.id || "").slice(0, 7) === sessionId || s.session_id === sessionId;
+    const emit = (ev: { event: string; id: string; session_id: string | null; title: string | null; from: string | null; to: string | null; is_pinned?: boolean; is_live?: boolean; label?: string | null }) => {
+      if (options.json) console.log(JSON.stringify({ ts: new Date().toISOString(), ...ev, is_pinned: !!ev.is_pinned, is_live: !!ev.is_live, label: ev.label ?? null }));
+      else console.log(formatSessionChangeLine({ id: ev.id, title: ev.title, from: ev.from, to: ev.to, is_pinned: !!ev.is_pinned, is_live: !!ev.is_live }));
+    };
     const onSessions = (sessions: any[]) => {
       if (process.env.CAST_DEBUG) process.stderr.write(`[push: ${sessions.length} sessions]\n`);
-      const cur: Record<string, string> = {};
+      const cur: typeof prevRows = {};
       for (const s of sessions) {
         if (!matchesId(s)) continue;
-        cur[s.id] = s.work_state;
+        cur[s.id] = { state: s.work_state, title: s.title ?? null, session_id: s.session_id ?? null };
         if (firstFrame) continue;
-        const prev = prevStates[s.id];
+        const prev = prevRows[s.id];
         const isNew = prev === undefined;
-        if (!isNew && prev === s.work_state) continue; // unchanged — skip
-        const from = isNew ? null : prev;
-        if (options.json) {
-          console.log(JSON.stringify({ ts: new Date().toISOString(), event: isNew ? "new" : "transition", id: s.id, session_id: s.session_id ?? null, title: s.title ?? null, from, to: s.work_state, is_pinned: !!s.is_pinned, is_live: !!s.is_live }));
-        } else {
-          console.log(formatSessionChangeLine({ id: s.id, title: s.title, from, to: s.work_state, is_pinned: !!s.is_pinned, is_live: !!s.is_live }));
+        if (!isNew && prev.state === s.work_state) continue; // unchanged — skip
+        emit({ event: isNew ? "new" : "transition", id: s.id, session_id: s.session_id ?? null, title: s.title ?? null, from: isNew ? null : prev.state, to: s.work_state, is_pinned: !!s.is_pinned, is_live: !!s.is_live, label: s.label ?? null });
+      }
+      if (!firstFrame) {
+        for (const [id, p] of Object.entries(prevRows)) {
+          if (cur[id]) continue;
+          emit({ event: "gone", id, session_id: p.session_id, title: p.title, from: p.state, to: null });
         }
       }
-      prevStates = cur;
+      prevRows = cur;
       firstFrame = false;
     };
 
     if (!teamMode) {
       stateClient.onUpdate("conversations:inboxForCLI" as any,
-        { api_token: config.auth_token, state: options.state, show_all: options.all || undefined },
+        { api_token: config.auth_token, state: options.state, show_all: showAll, label: options.label, project_path: labelProjectPath, limit },
         (result: any) => { if (result && !result.error) onSessions(result.sessions || []); });
     } else {
       const projectPath = options.global ? undefined : getRealCwd();
       stateClient.onUpdate("conversations:feedForCLI" as any,
-        { api_token: config.auth_token, project_path: projectPath, member_name: options.member, mine_only: options.mine || undefined, state: options.state, limit },
+        { api_token: config.auth_token, project_path: projectPath, member_name: options.member, mine_only: options.mine || undefined, state: options.state, label: options.label, limit },
         (feed: any) => { if (feed && !feed.error) onSessions(feedToSessions(feed).sessions); });
     }
     await new Promise(() => {}); // stay alive; WebSocket pushes drive all output
