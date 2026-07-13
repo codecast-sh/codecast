@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { copyToClipboard } from "../lib/utils";
 import { useDaemonHealth, formatDuration } from "../hooks/useDaemonHealth";
+import { useAppOffline } from "../hooks/useAppOffline";
 
 interface ChipView {
   colorVar: string;
@@ -50,6 +51,10 @@ function viewFor(health: ReturnType<typeof useDaemonHealth>): ChipView | null {
 
 export function DaemonStatusChip() {
   const health = useDaemonHealth();
+  // When this client itself is disconnected, daemon_last_seen is stale because
+  // WE can't sync — the ConnectionBanner owns that story; a "daemon stale"
+  // chip would misattribute it.
+  const { offline: appOffline } = useAppOffline();
   const [mounted, setMounted] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -57,7 +62,7 @@ export function DaemonStatusChip() {
     setMounted(true);
   });
 
-  if (!mounted) return null;
+  if (!mounted || appOffline) return null;
 
   const view = viewFor(health);
   if (!view) return null;

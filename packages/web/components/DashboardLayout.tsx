@@ -26,6 +26,7 @@ import { Plus, PanelLeft, PanelRight, MessageSquare } from "lucide-react";
 import { SetupPromptBanner } from "./SetupPromptBanner";
 import { DesktopAppBanner } from "./DesktopAppBanner";
 import { CliOfflineBanner } from "./CliOfflineBanner";
+import { ConnectionBanner } from "./ConnectionBanner";
 import { DaemonStatusChip } from "./DaemonStatusChip";
 import { SyncStatusChip } from "./SyncStatusChip";
 import { TmuxMissingBanner } from "./TmuxMissingBanner";
@@ -842,6 +843,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       </header>
 
       <ErrorBoundary name="Banners" level="inline">
+        <ConnectionBanner />
         <DesktopAppBanner />
         <SetupPromptBanner />
         <CliOfflineBanner />

@@ -3,7 +3,8 @@ import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router";
 import { initAnalytics, setupErrorToasts } from "../lib/analytics";
 import { armChunkReloadGuardReset } from "../components/ErrorBoundary";
-import { installIdleAnimationPause } from "../lib/desktop";
+import { installIdleAnimationPause, isDesktop } from "../lib/desktop";
+import { hasStoredAuthToken } from "../lib/localAuth";
 import { App } from "./App";
 import "../store/inboxStore";
 import "../app/globals.css";
@@ -26,6 +27,19 @@ const idle: (cb: () => void) => void =
   ((cb) => setTimeout(cb, 1));
 
 idle(() => initAnalytics());
+
+// Install the offline app shell (service worker precache) once the app is
+// interactive. First visit installs it in the background; every later boot —
+// including fully offline desktop launches — serves the shell from it.
+// Only for app users (signed in, or the desktop shell): the precache pulls the
+// whole bundle, which anonymous share-link visitors shouldn't pay for.
+// No-op in dev (vite-plugin-pwa only emits the worker on build).
+idle(() => {
+  if (!hasStoredAuthToken() && !isDesktop()) return;
+  import("virtual:pwa-register")
+    .then(({ registerSW }) => registerSW({ immediate: true }))
+    .catch(() => {});
+});
 
 // If this load stays up (no immediate chunk re-crash), clear the auto-reload
 // guard so a future stale-chunk crash in this tab can recover on its own.

@@ -9,6 +9,7 @@ import { ConversationData } from "../../../components/ConversationView";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { useConversationMessages } from "../../../hooks/useConversationMessages";
 import { useInboxStore } from "../../../store/inboxStore";
+import { useLocalAuth } from "../../../lib/localAuth";
 
 /**
  * Every accessible conversation renders through the inbox — single codepath —
@@ -219,6 +220,11 @@ export default function ConversationPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const { isAuthenticated, isLoading: isAuthLoading } = useConvexAuth();
+  // Local-first: a token in local storage means this is our signed-in user —
+  // render the authed path immediately instead of holding a skeleton until
+  // the Convex WebSocket confirms (which never happens offline).
+  const localAuthed = useLocalAuth();
+  const treatAsAuthed = isAuthenticated || localAuthed;
   const id = params.id as string;
   const highlightQuery = searchParams.get("highlight") || undefined;
   const [targetMessageId] = useState<string | undefined>(() => {
@@ -239,7 +245,7 @@ export default function ConversationPage() {
   if (!id) return <NotFoundView />;
   if (effective === undefined) return <ConversationLoadingSkeleton />;
   if (effective.access_level === "denied") {
-    if (!isAuthLoading && !isAuthenticated) {
+    if (!isAuthLoading && !treatAsAuthed) {
       const returnTo = `/conversation/${id}${window.location.hash}`;
       router.replace(`/login?return_to=${encodeURIComponent(returnTo)}`);
       return <ConversationLoadingSkeleton />;
@@ -251,11 +257,12 @@ export default function ConversationPage() {
   // Wait for auth to settle before committing to a render path: while loading,
   // resolveConversation may have answered with the anonymous identity, and we
   // don't want to flash the guest view at a signed-in owner (or vice versa).
-  if (isAuthLoading) return <ConversationLoadingSkeleton />;
+  // A locally stored token already settles it — this is our signed-in user.
+  if (isAuthLoading && !localAuthed) return <ConversationLoadingSkeleton />;
 
   // Unauthenticated visitor on a shared link: the inbox is behind AuthGuard
   // (it would bounce them to the marketing root), so render read-only in place.
-  if (!isAuthenticated) {
+  if (!treatAsAuthed) {
     return (
       <GuestConversationView
         id={effective.conversation_id}
