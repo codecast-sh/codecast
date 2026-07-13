@@ -10474,9 +10474,14 @@ schedule
               ? fmt.muted(formatRunAt(t.run_at))
               : "";
 
-        console.log(`  ${c.cyan}${shortId}${c.reset}  ${statusStr}  ${t.title}  ${scheduleInfo}`);
+        // Prefer the haiku-distilled name/gist (display_title/display_summary,
+        // generated server-side) — the stored title is usually prompt.slice(0,60).
+        console.log(`  ${c.cyan}${shortId}${c.reset}  ${statusStr}  ${t.display_title?.trim() || t.title}  ${scheduleInfo}`);
+        if (t.display_summary) {
+          console.log(`           ${fmt.muted(t.display_summary.slice(0, 100))}`);
+        }
         if (t.last_run_summary) {
-          console.log(`           ${fmt.muted(t.last_run_summary.slice(0, 80))}`);
+          console.log(`           ${fmt.muted(`last: ${t.last_run_summary.slice(0, 80)}`)}`);
         }
       }
 

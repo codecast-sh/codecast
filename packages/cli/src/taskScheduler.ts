@@ -205,6 +205,20 @@ export class TaskScheduler {
     } else {
       agentBin = "claude";
       extraAgentArgs.push("--dangerously-skip-permissions");
+      // propose (the default) is mechanically enforced as far as the CLI
+      // allows: the file-mutation tools are removed outright, and a
+      // system-prompt-strength mandate covers what tool filters can't (Bash
+      // write commands, commits). Headless runs bypass permission prompts,
+      // so this — not the permission system — is the propose fence. Bash
+      // itself must stay available: propose monitors legitimately shell out
+      // for reads (API GETs, SQL SELECTs, log greps).
+      if (task.mode !== "apply") {
+        extraAgentArgs.push("--disallowedTools", "Edit", "Write", "NotebookEdit");
+        extraAgentArgs.push(
+          "--append-system-prompt",
+          "This is a PROPOSE-mode scheduled run: strictly read-only. Investigate and report. Never modify files, run state-changing commands, commit, push, or deploy. If the task appears to require changes, describe them in your completion summary instead of making them.",
+        );
+      }
       const extraArgs = this.config.claude_args;
       if (extraArgs) {
         const skip = new Set(["--chrome", "--dangerously-skip-permissions"]);
@@ -402,6 +416,11 @@ export class TaskScheduler {
     parts.push("");
     parts.push("---");
     parts.push("Instructions:");
+    // The Mode: header line above is wire format (the web UI parses it into a
+    // chip) — the mandate that gives "propose" teeth lives here instead.
+    if (task.mode !== "apply") {
+      parts.push("- This run is PROPOSE mode: strictly read-only. Investigate and report; never modify files, run state-changing commands, commit, push, or deploy. If the task appears to require changes, describe them in your completion summary instead of making them.");
+    }
     if (task.target_conversation_id) {
       parts.push(`- Your summary will be posted as a message in the originating conversation thread.`);
       parts.push(`- When done, run: cast schedule complete ${task._id} --summary "your full response to post in the thread"`);
