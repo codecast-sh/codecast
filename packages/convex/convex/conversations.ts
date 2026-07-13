@@ -8878,6 +8878,26 @@ export const backfillDenormalizedFields = internalMutation({
   },
 });
 
+// Authorize a session command and return its live target. A session may be
+// commanded by its RUNNER (conv.user_id — the account whose daemon executes
+// commands) or its second-party owner (conv.owner_user_id — e.g. a Mr-Bot-run
+// session assigned to a human). Callers MUST stamp the resulting
+// daemon_commands row with conv.user_id: daemons poll by their own account, so
+// an actor-stamped row lands on the actor's machines and fails "No session
+// found" (the 2026-07-13 setSessionModel loop). killSession/restartSession
+// keep their own variants — they must proceed on ghost rows this rejects.
+export async function requireSessionCommandTarget(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+  conversationId: Id<"conversations">,
+): Promise<Doc<"conversations">> {
+  const conv = await ctx.db.get(conversationId);
+  if (!conv || (conv.user_id !== userId && conv.owner_user_id !== userId)) {
+    throw new Error("Not authorized");
+  }
+  return conv;
+}
+
 export const sendEscapeToSession = mutation({
   args: {
     conversation_id: v.id("conversations"),
@@ -8886,12 +8906,7 @@ export const sendEscapeToSession = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    const conv = await ctx.db.get(args.conversation_id);
-    // The runner, or the session's second-party owner — same rule and runner
-    // routing as killSession/setSessionModel (daemons poll by their own account).
-    if (!conv || (conv.user_id !== userId && conv.owner_user_id !== userId)) {
-      throw new Error("Not authorized");
-    }
+    const conv = await requireSessionCommandTarget(ctx, userId, args.conversation_id);
 
     await ctx.db.insert("daemon_commands", {
       user_id: conv.user_id,
@@ -8911,11 +8926,7 @@ export const sendKeysToSession = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    const conv = await ctx.db.get(args.conversation_id);
-    // Runner or second-party owner; command stamped for the runner's daemon.
-    if (!conv || (conv.user_id !== userId && conv.owner_user_id !== userId)) {
-      throw new Error("Not authorized");
-    }
+    const conv = await requireSessionCommandTarget(ctx, userId, args.conversation_id);
 
     await ctx.db.insert("daemon_commands", {
       user_id: conv.user_id,
@@ -8945,13 +8956,7 @@ export const setSessionModel = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    const conv = await ctx.db.get(args.conversation_id);
-    // The runner, or the session's second-party owner — same rule as
-    // killSession/restartSession. An owned session (Mr-Bot-run, assigned to
-    // this user) switches model from the owner's inbox exactly like their own.
-    if (!conv || (conv.user_id !== userId && conv.owner_user_id !== userId)) {
-      throw new Error("Not authorized");
-    }
+    const conv = await requireSessionCommandTarget(ctx, userId, args.conversation_id);
     const agentKey = modelAgentKey(conv.agent_type);
     const agentCfg = AGENT_MODEL_CONFIG[agentKey];
     if (!agentCfg?.midSession) {
@@ -9041,11 +9046,7 @@ export const rewindSession = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    const conv = await ctx.db.get(args.conversation_id);
-    // Runner or second-party owner; command stamped for the runner's daemon.
-    if (!conv || (conv.user_id !== userId && conv.owner_user_id !== userId)) {
-      throw new Error("Not authorized");
-    }
+    const conv = await requireSessionCommandTarget(ctx, userId, args.conversation_id);
 
     await ctx.db.insert("daemon_commands", {
       user_id: conv.user_id,
@@ -9380,13 +9381,10 @@ export const switchSessionProject = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    const conv = await ctx.db.get(args.conversation_id);
-    // Runner or second-party owner. Both the kill and the relaunch are routed
-    // under the runner's account — the session stays on the machine that runs
-    // it, whichever party asked for the switch (paths are that machine's).
-    if (!conv || (conv.user_id !== userId && conv.owner_user_id !== userId)) {
-      throw new Error("Not authorized");
-    }
+    // Both the kill and the relaunch are routed under the runner's account —
+    // the session stays on the machine that runs it, whichever party asked
+    // for the switch (paths are that machine's).
+    const conv = await requireSessionCommandTarget(ctx, userId, args.conversation_id);
 
     const now = Date.now();
 
@@ -9423,12 +9421,9 @@ export const switchSessionAgent = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    const conv = await ctx.db.get(args.conversation_id);
-    // Runner or second-party owner; kill + relaunch routed under the runner's
-    // account so the session stays on the machine that runs it.
-    if (!conv || (conv.user_id !== userId && conv.owner_user_id !== userId)) {
-      throw new Error("Not authorized");
-    }
+    // Kill + relaunch routed under the runner's account so the session stays
+    // on the machine that runs it.
+    const conv = await requireSessionCommandTarget(ctx, userId, args.conversation_id);
 
     await ctx.db.patch(args.conversation_id, { agent_type: args.agent_type });
 
