@@ -2887,7 +2887,7 @@ export const deleteAccount = mutation({
 
     const daemonLogs = await ctx.db
       .query("daemon_logs")
-      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .withIndex("by_user_timestamp", (q) => q.eq("user_id", userId))
       .take(500);
     for (const dl of daemonLogs) {
       await ctx.db.delete(dl._id);

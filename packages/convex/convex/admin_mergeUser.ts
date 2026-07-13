@@ -38,7 +38,7 @@ const USER_REFS: Array<{ table: string; field: string; index: string | null }> =
   { table: "workflows", field: "user_id", index: "by_user_id" },
   { table: "workflow_runs", field: "user_id", index: "by_user_id" },
   { table: "client_state", field: "user_id", index: "by_user_id" },
-  { table: "daemon_logs", field: "user_id", index: "by_user_id" },
+  { table: "daemon_logs", field: "user_id", index: "by_user_timestamp" },
   { table: "plan_templates", field: "user_id", index: "by_user_id" },
   { table: "entity_subscriptions", field: "user_id", index: "by_user" },
   { table: "authSessions", field: "userId", index: "userId" },
