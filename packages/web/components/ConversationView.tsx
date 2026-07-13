@@ -23,6 +23,7 @@ import { getBuiltinCommands } from "../lib/builtinCommands";
 import { resolveSessionSkills } from "../lib/sessionSkills";
 import { entityRoute } from "../lib/entityLinks";
 import { pendingImageUploads, persistDraftImages, restoreDraftImages, settleDraftImageUpload } from "../lib/draftImages";
+import { isResentCopyOfSentMessage } from "../lib/staleDraft";
 import type { SkillItem } from "../lib/conversationProcessor";
 import { createReducer, reducer } from "../lib/messageReducer";
 import { UsageDisplay } from "./UsageDisplay";
@@ -90,7 +91,7 @@ import { PlanBadge, TaskBadge } from "./PlanTaskHoverCard";
 import { EntityIdPill, EntityAwareCode, EntityAwareLink, renderWithMentions } from "./EntityIdPill";
 import { FormattedSummary } from "./FormattedSummary";
 import { entityRemarkPlugins } from "../lib/remarkEntityIds";
-import { parseInboundSessionMessage, isTeammateFramingOnly, isMachineDeliveredMessage } from "./sessionMessage";
+import { parseInboundSessionMessage, isTeammateFramingOnly, isMachineDeliveredMessage, isSpawnedTaskPrompt, parseSpawnedTaskPrompt } from "./sessionMessage";
 import { CollabComposer, CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
 import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, type ParsedCastCommand } from "./castCommand";
 import { ConversationTree } from "./ConversationTree";
@@ -198,6 +199,15 @@ function deriveRestartStage(
 }
 
 const sacredInputs = new Map<string, { text: string; images?: any[] }>();
+
+// True when a persisted draft is just a copy of a message already sent in this
+// conversation (see lib/staleDraft.ts) — refuse it at restore time. Reads the
+// loaded message window; on a cold first visit it may be empty, in which case
+// the draft shows once more and heals on the next mount.
+function isStaleSentDraft(conversationId: string, text: string | null | undefined): boolean {
+  return isResentCopyOfSentMessage(useInboxStore.getState().messages[conversationId], text);
+}
+
 const EMPTY_PENDING: any[] = [];
 const EMPTY_MESSAGES: any[] = [];
 const EMPTY_MATCH_IDS: string[] = [];
@@ -1604,6 +1614,14 @@ function cleanStickyContent(content: string): string {
     const prompt = stMatch[2].trim();
     return prompt ? `${title} — ${prompt}` : title;
   }
+  const spawned = parseSpawnedTaskPrompt(content);
+  if (spawned) {
+    // A spawn task's title is usually the prompt's first ~60 chars — showing
+    // "title — prompt" would stutter, so prefer the prompt alone when it
+    // subsumes the title.
+    if (!spawned.prompt) return spawned.title;
+    return spawned.prompt.startsWith(spawned.title) ? spawned.prompt : `${spawned.title} — ${spawned.prompt}`;
+  }
   return stripSystemTags(content)
     .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "")
     .replace(/<teammate-message\s+[^>]*>[\s\S]*?<\/teammate-message>/g, "")
@@ -1932,6 +1950,9 @@ function classifyUserMessage(
   const tNoReminders = t.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').replace(/<task-reminder>[\s\S]*?<\/task-reminder>/g, '').trim();
   const tStripped = stripSystemTags(t).trim();
   if (tNoReminders.startsWith('<scheduled-task')) return { kind: 'scheduled_task' };
+  // A spawned schedule run's opening prompt (plain-text wire format from
+  // taskScheduler.buildPrompt) gets the same rich block as injected schedules.
+  if (isSpawnedTaskPrompt(tNoReminders)) return { kind: 'scheduled_task' };
   const sessionMsg = parseInboundSessionMessage(t);
   if (sessionMsg) return { kind: 'session_message', from: sessionMsg.from, body: sessionMsg.body, name: sessionMsg.name };
   if (t.startsWith('{') && t.includes('__cc_poll')) {
@@ -5156,22 +5177,74 @@ function TaskNotificationLine({ content, timestamp, agentNameToChildMap }: { con
   );
 }
 
+// Renders BOTH scheduled-run delivery formats: the `<scheduled-task>` wrapper an
+// inject-type schedule drops into an existing conversation, and the plain-text
+// prompt header (taskScheduler.buildPrompt) that opens a spawned run's transcript.
+// Same block so the two paths read identically; the spawned format additionally
+// carries mode, prior-run outcome, and completion-protocol boilerplate (collapsed —
+// it's machine plumbing, not something the user should wade through).
 function ScheduledTaskBlock({ content: rawContent, timestamp }: { content: string; timestamp: number }) {
+  const [showPlumbing, setShowPlumbing] = useState(false);
   const content = rawContent.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
-  const match = content.match(/<scheduled-task\s+title="([^"]*)"(?:\s+task-id="([^"]*)")?[^>]*>([\s\S]*?)<\/scheduled-task>/);
-  const title = match?.[1]?.replace(/&quot;/g, '"') || "Scheduled Task";
-  const taskId = match?.[2]?.slice(-8);
-  const prompt = match?.[3]?.trim() || cleanStickyContent(content);
+  const spawned = parseSpawnedTaskPrompt(content);
+  const match = spawned ? null : content.match(/<scheduled-task\s+title="([^"]*)"(?:\s+task-id="([^"]*)")?[^>]*>([\s\S]*?)<\/scheduled-task>/);
+  const title = spawned?.title || match?.[1]?.replace(/&quot;/g, '"') || "Scheduled Task";
+  const prompt = spawned?.prompt ?? (match?.[3]?.trim() || cleanStickyContent(content));
+  const prevFailed = !!spawned?.previousRun && /^Failed/i.test(spawned.previousRun.summary);
 
   return (
     <div className="mb-2 mx-1 rounded border-l-2 border-sol-violet/60 bg-sol-violet/5">
       <div className="flex items-center gap-2 px-3 pt-2 pb-1">
-        <Clock className="w-3.5 h-3.5 text-sol-violet/70" />
-        <span className="text-[11px] font-medium tracking-wide uppercase text-sol-violet/70">Scheduled</span>
+        <Clock className="w-3.5 h-3.5 text-sol-violet/70 shrink-0" />
+        <span className="text-[11px] font-medium tracking-wide uppercase text-sol-violet/70 shrink-0">{spawned ? "Scheduled run" : "Scheduled"}</span>
+        {spawned && (
+          <span
+            className={`px-1 py-0 rounded border text-[9px] font-semibold shrink-0 ${
+              spawned.mode === "apply"
+                ? "border-sol-red/40 text-sol-red/90 bg-sol-red/10"
+                : "border-sol-border/50 text-sol-text-dim"
+            }`}
+            title={spawned.mode === "apply" ? "Agent may make changes" : "Read-only: agent proposes, never applies"}
+          >
+            {spawned.mode}
+          </span>
+        )}
         <span className="text-xs text-sol-text-muted truncate">{title}</span>
         <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
       </div>
-      <div className="px-3 pb-2 text-sm text-sol-text">{prompt}</div>
+      {spawned ? (
+        <div className="px-3 pb-2 text-sm text-sol-text prose prose-invert prose-sm max-w-none">
+          <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={MD_COMPONENTS_NO_IMG}>{prompt}</ReactMarkdown>
+        </div>
+      ) : (
+        <div className="px-3 pb-2 text-sm text-sol-text">{prompt}</div>
+      )}
+      {spawned?.contextSummary && (
+        <div className="mx-3 mb-2 rounded border border-sol-border/30 bg-sol-bg/40 px-2 py-1.5 text-[11px] leading-relaxed text-sol-text-muted">
+          <span className="font-medium text-sol-text-dim">Context from originating session: </span>
+          {spawned.contextSummary}
+        </div>
+      )}
+      {spawned?.previousRun && (
+        <div className={`mx-3 mb-2 rounded border px-2 py-1.5 text-[11px] leading-relaxed ${prevFailed ? "border-sol-red/30 bg-sol-red/5 text-sol-red/90" : "border-sol-border/30 bg-sol-bg/40 text-sol-text-muted"}`}>
+          <span className={`font-medium ${prevFailed ? "text-sol-red" : "text-sol-text-dim"}`}>Previous run ({spawned.previousRun.ago}): </span>
+          {spawned.previousRun.summary}
+        </div>
+      )}
+      {spawned?.instructions && (
+        <div className="px-3 pb-2">
+          <button
+            onClick={() => setShowPlumbing(!showPlumbing)}
+            className="flex items-center gap-1 text-[10px] text-sol-text-dim hover:text-sol-text-muted transition-colors"
+          >
+            {showPlumbing ? <ChevronDown className="w-2.5 h-2.5" /> : <ChevronRight className="w-2.5 h-2.5" />}
+            run instructions
+          </button>
+          {showPlumbing && (
+            <pre className="mt-1 whitespace-pre-wrap break-words rounded border border-sol-border/30 bg-sol-bg/60 p-2 text-[10px] leading-relaxed text-sol-text-dim font-mono">{spawned.instructions}</pre>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -7507,7 +7580,16 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // Fallback to the conversation-keyed entry: when a new session gets its
   // session_id stamped the key flips (conv id → session id) and this component
   // remounts — the freshest text lives under the conversation id.
-  const [message, _setMessage] = useState(() => sacredInputs.get(sacredKey)?.text ?? sacredInputs.get(conversationId)?.text ?? cached?.draft_message ?? initialDraft ?? "");
+  const [message, _setMessage] = useState(() => {
+    const sacred = sacredInputs.get(sacredKey)?.text ?? sacredInputs.get(conversationId)?.text;
+    if (sacred != null) return sacred;
+    const persisted = cached?.draft_message ?? initialDraft ?? "";
+    // Sacred text is live user input and always restores; the persisted
+    // sources go through the stale-sent-draft check (a draft with images
+    // attached is kept — the images make it more than a resent copy).
+    if (!cached?.draft_image_storage_ids?.length && isStaleSentDraft(conversationId, persisted)) return "";
+    return persisted;
+  });
   const setMessage = useCallback((val: string) => {
     sacredInputs.set(sacredKeyRef.current, { text: val });
     // Mirror under the conversation id so the text survives the key flip above.
@@ -8112,15 +8194,27 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
 
   const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // The text that counts as the user's draft right now. While an UNEDITED
+  // fork-rewrite preview is active (Alt+J/K message selection), the composer
+  // displays an already-sent message — display state, not input. Persisting it
+  // is how old messages used to resurrect as drafts; the real draft is what
+  // the user had typed before selecting. The moment they edit the preview it
+  // becomes typed input and persists like any other draft.
+  const draftTextForPersist = useCallback(() => (
+    prevSelectionRef.current !== null && !isSelectionEditedRef.current
+      ? (savedDraftRef.current ?? "")
+      : messageRef.current
+  ), []);
+
   const saveDraftSnapshot = useCallback((targetId: string) => {
     if (sendingRef.current) return;
-    const msg = messageRef.current;
+    const msg = draftTextForPersist();
     // Uploading rows are kept: their pending upload lives in the module-level
     // registry, so a successor composer instance can restore and re-attach.
     const imgs = pastedImagesRef.current.filter(i => i.storageId || i.uploading);
     if (!msg && imgs.length === 0) return;
     persistDraftImages(targetId, msg, imgs);
-  }, []);
+  }, [draftTextForPersist]);
 
   useWatchEffect(() => {
     const keyChanged = sacredKeyRef.current !== sacredKey;
@@ -8129,7 +8223,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         clearTimeout(draftTimerRef.current);
         draftTimerRef.current = null;
       }
-      sacredInputs.set(sacredKeyRef.current, { text: messageRef.current });
+      sacredInputs.set(sacredKeyRef.current, { text: draftTextForPersist() });
       saveDraftSnapshot(convIdRef.current);
       sacredKeyRef.current = sacredKey;
       convIdRef.current = conversationId;
@@ -8141,11 +8235,20 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     } else if (convIdRef.current !== conversationId) {
       convIdRef.current = conversationId;
     }
-  }, [sacredKey, conversationId, saveDraftSnapshot]);
+  }, [sacredKey, conversationId, saveDraftSnapshot, draftTextForPersist]);
 
-  useMountEffect(() => () => {
-    if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
-    saveDraftSnapshot(convIdRef.current);
+  useMountEffect(() => {
+    // One-shot heal for drafts poisoned before draftTextForPersist existed: a
+    // persisted draft that duplicates a sent message would otherwise resurface
+    // on every surface that reads the draft store.
+    const d = useInboxStore.getState().getDraft(conversationId);
+    if (d?.draft_message && !d.draft_image_storage_ids?.length && isStaleSentDraft(conversationId, d.draft_message)) {
+      useInboxStore.getState().clearDraftFinal(conversationId);
+    }
+    return () => {
+      if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+      saveDraftSnapshot(convIdRef.current);
+    };
   });
 
   const handleMessageChange = useCallback((val: string) => {
@@ -8204,9 +8307,21 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     if (isActive && !wasActive) {
       savedDraftRef.current = message;
       isSelectionEditedRef.current = false;
-      setMessage(selectedMessageContent);
+      // _setMessage, not setMessage: the preview must never enter sacredInputs
+      // — that cache seeds successor composer instances, and a preview that
+      // leaks there comes back as a phantom draft of an already-sent message.
+      _setMessage(selectedMessageContent);
     } else if (isActive && wasActive) {
-      setMessage(selectedMessageContent);
+      // Switching to another message discards edits to the previous preview
+      // (as Escape would) — scrub them from sacredInputs too, so they can't
+      // reseed a successor composer as a phantom draft.
+      if (isSelectionEditedRef.current) {
+        const real = savedDraftRef.current ?? "";
+        sacredInputs.set(sacredKeyRef.current, { text: real });
+        if (convIdRef.current !== sacredKeyRef.current) sacredInputs.set(convIdRef.current, { text: real });
+        isSelectionEditedRef.current = false;
+      }
+      _setMessage(selectedMessageContent);
     } else if (!isActive && wasActive) {
       const restored = savedDraftRef.current ?? "";
       savedDraftRef.current = null;
@@ -11239,6 +11354,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     setSelectedMessageContent(null);
     setSelectedMessageUuid(null);
   }, [forkSetSelectedIndex]);
+  // Selection is scoped to its conversation, and ConversationView stays
+  // mounted across session switches — without this, a rewrite preview left
+  // active while switching would inject the old conversation's message into
+  // the next composer.
+  useWatchEffect(() => () => handleClearSelection(), [conversation?._id, handleClearSelection]);
   const forkSelectionIdx = useForkNavigationStore((s) => s.selectedIndex);
   const { selectedIndex: _forkSelIdx } = useMessageSelection({
     timeline: timeline as any,
