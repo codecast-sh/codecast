@@ -35,8 +35,8 @@ const NON_TAB_PREFIXES = ["/settings", "/auth", "/join", "/share"];
 // this set equals the manifest's in-shell single-segment routes, so drift fails loudly.
 const IN_SHELL_ROOT_SEGMENTS = new Set([
   // Tab pages (TabContent patterns)
-  "inbox", "feed", "search", "notifications", "docs", "plans", "tasks",
-  "projects", "workflows", "routines", "schedules", "sessions", "team", "config",
+  "inbox", "feed", "crosstalk", "search", "notifications", "docs", "plans", "tasks",
+  "projects", "workflows", "routines", "schedules", "sessions", "anchor", "team", "config",
   // Standalone shell pages (own <Route>, not in TabContent)
   "explore", "timeline", "windows", "orchestration", "roadmap", "cli",
 ]);

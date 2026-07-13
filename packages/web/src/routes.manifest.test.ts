@@ -108,7 +108,17 @@ function parseTabContentPatterns(src: string): { tab: string }[] {
   const entryRe = /pattern:\s*\/\^(.*?)\$\/\s*,\s*paramNames:\s*\[([^\]]*)\]/;
   for (const line of src.split("\n")) {
     const m = line.match(entryRe);
-    if (!m) continue;
+    if (!m) {
+      // A pattern line the strict parser can't read would otherwise be silently
+      // skipped and escape every parity check below (this is how /anchor's
+      // `(\/|$)` pattern drifted unguarded). Anchored `^...$` patterns only.
+      if (/pattern:\s*\//.test(line)) {
+        throw new Error(
+          `Unparseable TabContent pattern (must be /^...$/ with paramNames on one line): ${line.trim()}`,
+        );
+      }
+      continue;
+    }
     const rawBody = m[1]; // regex body between ^ and $, still escaped
     const paramNames = m[2]
       .split(",")

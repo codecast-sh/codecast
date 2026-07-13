@@ -76,7 +76,7 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/routines$/, paramNames: [], component: Routines },
   { pattern: /^\/schedules$/, paramNames: [], component: Schedules },
   { pattern: /^\/sessions$/, paramNames: [], component: Sessions },
-  { pattern: /^\/anchor(\/|$)/, paramNames: [], component: Anchor },
+  { pattern: /^\/anchor$/, paramNames: [], component: Anchor },
   { pattern: /^\/team$/, paramNames: [], component: Team },
   { pattern: /^\/search$/, paramNames: [], component: Search },
   { pattern: /^\/windows$/, paramNames: [], component: Windows },

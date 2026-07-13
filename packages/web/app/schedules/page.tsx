@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useQuery, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -8,7 +8,9 @@ import { toast } from "sonner";
 import { AuthGuard } from "../../components/AuthGuard";
 import { AppLoader } from "../../components/AppLoader";
 import { DashboardLayout } from "../../components/DashboardLayout";
-import { fmtDuration } from "../../components/scheduleCadence";
+import { fmtDuration, fmtClock } from "../../components/scheduleCadence";
+import { ShortcutTooltip } from "../../components/KeyboardShortcutsHelp";
+import { patchTaskInWebList, taskDisplayTitle } from "../../components/scheduleTasks";
 import { useInboxStore } from "../../store/inboxStore";
 import {
   Clock,
@@ -68,13 +70,6 @@ function timeAgo(ts?: number): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
-function fmtClock(ts: number): string {
-  const d = new Date(ts);
-  const sameDay = new Date().toDateString() === d.toDateString();
-  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  if (sameDay) return time;
-  return `${d.toLocaleDateString([], { month: "short", day: "numeric" })} ${time}`;
-}
 
 // Mirrors the CLI's EVENT_SHORTHANDS so web-created event tasks match `--on <event>`.
 const EVENT_SHORTHANDS: Record<string, { event_type: string; action?: string }> = {
@@ -180,7 +175,7 @@ function HorizonRail({ tasks, now }: { tasks: any[]; now: number }) {
             >
               <div className={`rounded-full ${cls} group-hover:scale-150 transition-transform`} />
               <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block z-10 whitespace-nowrap rounded-md border border-sol-border bg-sol-bg-highlight px-2 py-1 text-[11px] text-sol-text shadow-lg pointer-events-none">
-                <span className="font-medium">{pt.task.title}</span>
+                <span className="font-medium">{taskDisplayTitle(pt.task)}</span>
                 <span className="text-sol-text-dim"> · {pt.kind === "running" ? "running now" : pt.kind === "due" ? "due now" : fmtClock(pt.at)}</span>
               </div>
             </div>
@@ -233,24 +228,55 @@ function ScheduleChip({ task, now }: { task: any; now: number }) {
 // dot for scheduled/paused (red when a scheduled task is mid-retry after a failure).
 function RowIndicator({ task }: { task: any }) {
   if (task.status === "running")
-    return <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse flex-shrink-0" title="running" />;
+    return (
+      <ShortcutTooltip label="Running now">
+        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse flex-shrink-0" />
+      </ShortcutTooltip>
+    );
   if (task.status === "failed")
     return <XCircle className="w-4 h-4 text-sol-red flex-shrink-0" />;
   if (task.status === "completed")
     return <CheckCircle2 className="w-4 h-4 text-sol-text-dim flex-shrink-0" />;
   const color = task.status === "paused" ? "bg-sol-yellow" : task.retry_count > 0 ? "bg-sol-red" : "bg-sol-cyan";
-  return <span className={`w-2 h-2 rounded-full flex-shrink-0 ${color}`} title={task.status} />;
+  return (
+    <ShortcutTooltip label={task.retry_count > 0 ? `${task.status} — retrying after a failure` : task.status}>
+      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${color}`} />
+    </ShortcutTooltip>
+  );
 }
 
 function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boolean }) {
-  const [expanded, setExpanded] = useState(false);
+  // ?task=<id> deep-links here from an inbox schedule row's gear verb: that
+  // row arrives expanded and scrolled into view. Read once at mount — after
+  // that the page behaves normally.
+  const [expanded, setExpanded] = useState(
+    () => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("task") === task._id,
+  );
+  const rowRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (rowRef.current && new URLSearchParams(window.location.search).get("task") === task._id) {
+      rowRef.current.scrollIntoView({ block: "center" });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [formMode, setFormMode] = useState<null | "edit" | "duplicate">(null);
-  const pause = useMutation(api.agentTasks.webPause);
-  const resume = useMutation(api.agentTasks.webResume);
-  const runNow = useMutation(api.agentTasks.webRunNow);
-  const cancel = useMutation(api.agentTasks.webCancel);
+  // Verbs flip the row in the local webList cache synchronously (local-first);
+  // the server echo reconciles. Same helper the inbox schedule rows use.
+  const pause = useMutation(api.agentTasks.webPause).withOptimisticUpdate(
+    (ls: any, args: any) => patchTaskInWebList(ls, api.agentTasks.webList, args.task_id, { status: "paused" }),
+  );
+  const resume = useMutation(api.agentTasks.webResume).withOptimisticUpdate(
+    (ls: any, args: any) => patchTaskInWebList(ls, api.agentTasks.webList, args.task_id, { status: "scheduled" }),
+  );
+  const runNow = useMutation(api.agentTasks.webRunNow).withOptimisticUpdate(
+    (ls: any, args: any) => patchTaskInWebList(ls, api.agentTasks.webList, args.task_id, { status: "scheduled", run_at: Date.now() }),
+  );
+  const cancel = useMutation(api.agentTasks.webCancel).withOptimisticUpdate(
+    (ls: any, args: any) => patchTaskInWebList(ls, api.agentTasks.webList, args.task_id, { status: "completed" }),
+  );
   const del = useMutation(api.agentTasks.webDelete);
+  const regenSummary = useMutation(api.agentTasks.webRegenerateSummary);
 
   const isActive = task.status === "scheduled" || task.status === "running";
   const isHistory = task.status === "completed" || task.status === "failed";
@@ -298,6 +324,7 @@ function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boole
 
   return (
     <div
+      ref={rowRef}
       className={`group rounded-lg border bg-sol-card hover:bg-sol-card-hover transition-[background-color,border-color,transform,box-shadow] duration-150 cursor-pointer hover:-translate-y-px hover:shadow-md hover:shadow-black/20 ${
         task.status === "failed" ? "border-sol-red/30" : "border-sol-border"
       } ${task.status === "running" ? "border-emerald-400/40" : ""} ${
@@ -309,17 +336,18 @@ function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boole
         <RowIndicator task={task} />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2.5 min-w-0">
-            <span
-              className={`text-sm font-medium truncate ${isHistory ? "text-sol-text-muted" : "text-sol-text"}`}
-              title={task.title}
-            >
-              {task.title}
-            </span>
+            <ShortcutTooltip label={taskDisplayTitle(task)}>
+              <span className={`text-sm font-medium truncate ${isHistory ? "text-sol-text-muted" : "text-sol-text"}`}>
+                {taskDisplayTitle(task)}
+              </span>
+            </ShortcutTooltip>
             <ScheduleChip task={task} now={now} />
             {task.mode === "apply" && (
-              <span className="text-[10px] font-semibold uppercase tracking-wide text-sol-orange border border-sol-orange/40 rounded px-1 py-px flex-shrink-0">
-                apply
-              </span>
+              <ShortcutTooltip label="apply mode: runs may change things — edit files, run write commands" hint="propose is the read-only default">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-sol-orange border border-sol-orange/40 rounded px-1 py-px flex-shrink-0">
+                  apply
+                </span>
+              </ShortcutTooltip>
             )}
             {isNext && (
               <span className="text-[10px] font-medium uppercase tracking-wide text-sol-cyan flex-shrink-0">
@@ -327,6 +355,13 @@ function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boole
               </span>
             )}
           </div>
+          {task.display_summary && (
+            <ShortcutTooltip label={task.display_summary}>
+              <div className="text-[11px] text-sol-text-dim truncate mt-0.5">
+                {task.display_summary}
+              </div>
+            </ShortcutTooltip>
+          )}
           <div className="flex items-center gap-2 mt-1 text-[11px] text-sol-text-dim min-w-0">
             {/* quiet meta */}
             {task.status === "running" && <span className="text-emerald-400 flex-shrink-0">running now</span>}
@@ -342,9 +377,11 @@ function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boole
               </span>
             )}
             {task.project_path && (
-              <span className="hidden sm:inline-flex items-center gap-1 flex-shrink-0" title={task.project_path}>
-                <Folder className="w-3 h-3" />{projectName(task.project_path)}
-              </span>
+              <ShortcutTooltip label={task.project_path}>
+                <span className="hidden sm:inline-flex items-center gap-1 flex-shrink-0">
+                  <Folder className="w-3 h-3" />{projectName(task.project_path)}
+                </span>
+              </ShortcutTooltip>
             )}
 
             {/* The run, surfaced as a clear clickable session — the thing you
@@ -352,21 +389,22 @@ function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boole
                 daemon recorded it, else the originating session. Truncates last
                 (min-w-0) so it's never pushed off the row like the old buried link. */}
             {sessionId ? (
-              <Link
-                href={`/conversation/${sessionId}`}
-                onClick={(e) => e.stopPropagation()}
-                title={sessionTitle ? `${sessionVerb}: ${sessionTitle}` : sessionVerb}
-                className={`group/sess inline-flex items-center gap-1 min-w-0 rounded px-1.5 py-0.5 -my-0.5 transition-colors hover:bg-sol-cyan/10 ${
-                  failedSummary ? "text-sol-red hover:bg-sol-red/10" : "text-sol-cyan"
-                }`}
-              >
-                <MessageSquare className="w-3 h-3 flex-shrink-0" />
-                <span className="truncate">
-                  {task.last_run_summary || sessionTitle || sessionVerb}
-                </span>
-                {task.last_run_at && <span className="text-sol-text-dim/80 flex-shrink-0">· {timeAgo(task.last_run_at)}</span>}
-                <ArrowUpRight className="w-3 h-3 flex-shrink-0 opacity-50 group-hover/sess:opacity-100 transition-opacity" />
-              </Link>
+              <ShortcutTooltip label={sessionVerb} hint={sessionTitle || undefined}>
+                <Link
+                  href={`/conversation/${sessionId}`}
+                  onClick={(e) => e.stopPropagation()}
+                  className={`group/sess inline-flex items-center gap-1 min-w-0 rounded px-1.5 py-0.5 -my-0.5 transition-colors hover:bg-sol-cyan/10 ${
+                    failedSummary ? "text-sol-red hover:bg-sol-red/10" : "text-sol-cyan"
+                  }`}
+                >
+                  <MessageSquare className="w-3 h-3 flex-shrink-0" />
+                  <span className="truncate">
+                    {task.last_run_summary || sessionTitle || sessionVerb}
+                  </span>
+                  {task.last_run_at && <span className="text-sol-text-dim/80 flex-shrink-0">· {timeAgo(task.last_run_at)}</span>}
+                  <ArrowUpRight className="w-3 h-3 flex-shrink-0 opacity-50 group-hover/sess:opacity-100 transition-opacity" />
+                </Link>
+              </ShortcutTooltip>
             ) : task.last_run_summary ? (
               <span className={`inline-flex items-center gap-1.5 min-w-0`}>
                 <span className={`truncate ${failedSummary ? "text-sol-red" : ""}`}>{task.last_run_summary}</span>
@@ -380,41 +418,56 @@ function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boole
 
         <div className="flex items-center gap-0.5 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
           {isEditable && (
-            <button className={iconBtn} title="Edit" onClick={openForm("edit")}>
-              <Pencil className="w-3.5 h-3.5" />
-            </button>
+            <ShortcutTooltip label="Edit">
+              <button className={iconBtn} aria-label="Edit" onClick={openForm("edit")}>
+                <Pencil className="w-3.5 h-3.5" />
+              </button>
+            </ShortcutTooltip>
           )}
           {isActive && (
             <>
-              <button className={iconBtn} title="Run now (daemon picks it up within ~30s)" onClick={act(() => runNow({ task_id: task._id }), "Queued — runs within ~30s")}>
-                <Play className="w-3.5 h-3.5" />
-              </button>
-              <button className={iconBtn} title="Pause" onClick={act(() => pause({ task_id: task._id }), "Paused")}>
-                <Pause className="w-3.5 h-3.5" />
-              </button>
-              <button className={iconBtn} title="Cancel" onClick={act(() => cancel({ task_id: task._id }), "Cancelled")}>
-                <X className="w-3.5 h-3.5" />
-              </button>
+              <ShortcutTooltip label="Run now" hint="daemon picks it up within ~30s">
+                <button className={iconBtn} aria-label="Run now" onClick={act(() => runNow({ task_id: task._id }), "Queued — runs within ~30s")}>
+                  <Play className="w-3.5 h-3.5" />
+                </button>
+              </ShortcutTooltip>
+              <ShortcutTooltip label="Pause">
+                <button className={iconBtn} aria-label="Pause" onClick={act(() => pause({ task_id: task._id }), "Paused")}>
+                  <Pause className="w-3.5 h-3.5" />
+                </button>
+              </ShortcutTooltip>
+              <ShortcutTooltip label="Cancel">
+                <button className={iconBtn} aria-label="Cancel" onClick={act(() => cancel({ task_id: task._id }), "Cancelled")}>
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </ShortcutTooltip>
             </>
           )}
           {task.status === "paused" && (
             <>
-              <button className={iconBtn} title="Resume" onClick={act(() => resume({ task_id: task._id }), "Resumed")}>
-                <Play className="w-3.5 h-3.5" />
-              </button>
-              <button className={iconBtn} title="Cancel" onClick={act(() => cancel({ task_id: task._id }), "Cancelled")}>
-                <X className="w-3.5 h-3.5" />
-              </button>
+              <ShortcutTooltip label="Resume">
+                <button className={iconBtn} aria-label="Resume" onClick={act(() => resume({ task_id: task._id }), "Resumed")}>
+                  <Play className="w-3.5 h-3.5" />
+                </button>
+              </ShortcutTooltip>
+              <ShortcutTooltip label="Cancel">
+                <button className={iconBtn} aria-label="Cancel" onClick={act(() => cancel({ task_id: task._id }), "Cancelled")}>
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </ShortcutTooltip>
             </>
           )}
           {isHistory && (
             <>
-              <button className={iconBtn} title="Run again" onClick={act(() => runNow({ task_id: task._id }), "Re-armed — runs within ~30s")}>
-                <RotateCcw className="w-3.5 h-3.5" />
-              </button>
+              <ShortcutTooltip label="Run again" hint="re-arms, runs within ~30s">
+                <button className={iconBtn} aria-label="Run again" onClick={act(() => runNow({ task_id: task._id }), "Re-armed — runs within ~30s")}>
+                  <RotateCcw className="w-3.5 h-3.5" />
+                </button>
+              </ShortcutTooltip>
+              <ShortcutTooltip label={confirmDelete ? "Click again to delete" : "Delete"}>
               <button
                 className={`${iconBtn} ${confirmDelete ? "text-sol-red hover:text-sol-red" : ""}`}
-                title={confirmDelete ? "Click again to delete" : "Delete"}
+                aria-label="Delete"
                 onClick={(e) => {
                   e.stopPropagation();
                   if (!confirmDelete) {
@@ -427,6 +480,7 @@ function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boole
               >
                 <Trash2 className="w-3.5 h-3.5" />
               </button>
+              </ShortcutTooltip>
             </>
           )}
         </div>
@@ -458,6 +512,14 @@ function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boole
               ) : null}
               <ArrowUpRight className="w-3.5 h-3.5" />
             </Link>
+          )}
+          {task.display_summary && (
+            <>
+              <div className="text-[10px] uppercase tracking-widest text-sol-text-dim mt-3 mb-1">What it does</div>
+              <div className="text-xs text-sol-text leading-relaxed">
+                {task.display_summary}
+              </div>
+            </>
           )}
           <div className="text-[10px] uppercase tracking-widest text-sol-text-dim mt-3 mb-1">Prompt</div>
           <div className="text-xs text-sol-text-muted font-mono whitespace-pre-wrap bg-sol-bg-alt rounded-md p-3">
@@ -522,6 +584,18 @@ function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boole
             <button onClick={copyPrompt} className={detailBtn}>
               <Copy className="w-3 h-3" /> Copy prompt
             </button>
+            <ShortcutTooltip label="Re-run the Haiku distillation of this prompt into title + summary">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  regenSummary({ task_id: task._id }).catch(() => {});
+                  toast.success("Summary refreshing — lands in a few seconds");
+                }}
+                className={detailBtn}
+              >
+                <RotateCcw className="w-3 h-3" /> Refresh summary
+              </button>
+            </ShortcutTooltip>
           </div>
         </div>
       )}
@@ -687,7 +761,7 @@ function ScheduleForm({ onClose, editTask, seedTask, embedded }: {
       <input
         value={title}
         onChange={(e) => setTitle(e.target.value)}
-        placeholder="Title (optional — defaults to the prompt)"
+        placeholder="Title (optional — auto-named from the prompt)"
         className="w-full mt-2 bg-sol-bg-alt border border-sol-border rounded-lg px-3 py-1.5 text-xs text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-cyan/60"
       />
 
@@ -724,14 +798,18 @@ function ScheduleForm({ onClose, editTask, seedTask, embedded }: {
       </div>
 
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2 mt-3">
-        <div className="flex items-center gap-1 bg-sol-bg-alt rounded-lg p-0.5" title="propose: read-only · apply: agent can make changes">
-          <button className={seg(mode === "propose")} onClick={() => setMode("propose")}>propose</button>
-          <button
-            className={`${seg(mode === "apply")} ${mode === "apply" ? "!text-sol-orange" : ""}`}
-            onClick={() => setMode("apply")}
-          >
-            apply
-          </button>
+        <div className="flex items-center gap-1 bg-sol-bg-alt rounded-lg p-0.5">
+          <ShortcutTooltip label="propose: runs are read-only — the agent investigates and reports" hint="default">
+            <button className={seg(mode === "propose")} onClick={() => setMode("propose")}>propose</button>
+          </ShortcutTooltip>
+          <ShortcutTooltip label="apply: runs may change things — edit files, run write commands">
+            <button
+              className={`${seg(mode === "apply")} ${mode === "apply" ? "!text-sol-orange" : ""}`}
+              onClick={() => setMode("apply")}
+            >
+              apply
+            </button>
+          </ShortcutTooltip>
         </div>
         <div className="flex items-center gap-1 bg-sol-bg-alt rounded-lg p-0.5">
           <button className={seg(agent === "claude")} onClick={() => setAgent("claude")}>claude</button>
@@ -849,24 +927,20 @@ function StatCell({ value, label, accent = "text-sol-text", title, onClick, acti
       <span className="text-[10px] uppercase tracking-widest text-sol-text-dim">{label}</span>
     </>
   );
-  if (onClick) {
-    return (
-      <button
-        onClick={onClick}
-        title={title}
-        className={`flex flex-col gap-0.5 text-left rounded-md -mx-1.5 px-1.5 py-0.5 transition-colors ${
-          active ? "bg-sol-bg-highlight" : "hover:bg-sol-bg-highlight/60"
-        }`}
-      >
-        {inner}
-      </button>
-    );
-  }
-  return (
-    <div className="flex flex-col gap-0.5" title={title}>
+  const cell = onClick ? (
+    <button
+      onClick={onClick}
+      className={`flex flex-col gap-0.5 text-left rounded-md -mx-1.5 px-1.5 py-0.5 transition-colors ${
+        active ? "bg-sol-bg-highlight" : "hover:bg-sol-bg-highlight/60"
+      }`}
+    >
       {inner}
-    </div>
+    </button>
+  ) : (
+    <div className="flex flex-col gap-0.5">{inner}</div>
   );
+  if (!title) return cell;
+  return <ShortcutTooltip label={title}>{cell}</ShortcutTooltip>;
 }
 
 function StatStrip({ stats, now, applyActive, onToggleApply }: {
@@ -922,7 +996,7 @@ function AttentionBanner({ tasks }: { tasks: any[] }) {
         <div className="mt-1 flex flex-col gap-0.5 text-sol-text-dim">
           {tasks.slice(0, 3).map((t) => (
             <span key={t._id} className="truncate">
-              <span className="text-sol-text-muted">{t.title}</span>
+              <span className="text-sol-text-muted">{taskDisplayTitle(t)}</span>
               {" — "}
               {t.retry_count} {t.retry_count === 1 ? "retry" : "retries"}
               {t.last_run_summary ? ` · ${t.last_run_summary.replace(/^Failed:?\s*/, "")}` : ""}
@@ -958,7 +1032,7 @@ function matchesFilters(t: any, f: Filters): boolean {
   if (f.project !== "all" && t.project_path !== f.project) return false;
   const q = f.search.trim().toLowerCase();
   if (q) {
-    const hay = `${t.title ?? ""} ${t.prompt ?? ""} ${t.last_run_summary ?? ""}`.toLowerCase();
+    const hay = `${t.title ?? ""} ${t.display_title ?? ""} ${t.display_summary ?? ""} ${t.prompt ?? ""} ${t.last_run_summary ?? ""}`.toLowerCase();
     if (!hay.includes(q)) return false;
   }
   return true;
@@ -997,13 +1071,15 @@ function FilterBar({ filters, update, projects, hasCodex, shown, total, grouped,
             className="w-full bg-sol-bg-alt border border-sol-border rounded-lg pl-8 pr-7 py-1.5 text-xs text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-cyan/60"
           />
           {filters.search && (
-            <button
-              onClick={() => update({ search: "" })}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-sol-text-dim hover:text-sol-text"
-              title="Clear search"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
+            <ShortcutTooltip label="Clear search">
+              <button
+                onClick={() => update({ search: "" })}
+                aria-label="Clear search"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-sol-text-dim hover:text-sol-text"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </ShortcutTooltip>
           )}
         </div>
         <select className={filterSelectCls} value={filters.mode} onChange={(e) => update({ mode: e.target.value })}>
@@ -1030,15 +1106,17 @@ function FilterBar({ filters, update, projects, hasCodex, shown, total, grouped,
             <option value="codex">codex</option>
           </select>
         )}
-        <button
-          onClick={() => setGrouped(!grouped)}
-          title="Group by project"
-          className={`p-1.5 rounded-lg border transition-colors ${
-            grouped ? "border-sol-cyan/50 text-sol-cyan bg-sol-cyan/10" : "border-sol-border text-sol-text-dim hover:text-sol-text"
-          }`}
-        >
-          <LayoutGrid className="w-3.5 h-3.5" />
-        </button>
+        <ShortcutTooltip label="Group by project">
+          <button
+            onClick={() => setGrouped(!grouped)}
+            aria-label="Group by project"
+            className={`p-1.5 rounded-lg border transition-colors ${
+              grouped ? "border-sol-cyan/50 text-sol-cyan bg-sol-cyan/10" : "border-sol-border text-sol-text-dim hover:text-sol-text"
+            }`}
+          >
+            <LayoutGrid className="w-3.5 h-3.5" />
+          </button>
+        </ShortcutTooltip>
         {active && (
           <span className="inline-flex items-center gap-2 text-[11px] text-sol-text-dim">
             <span className="tabular-nums">{shown} of {total}</span>
@@ -1205,7 +1283,11 @@ function FilteredEmpty({ onClear }: { onClear: () => void }) {
 
 function SchedulesContent() {
   const tasks = useQuery(api.agentTasks.webList, {});
-  const [showForm, setShowForm] = useState(false);
+  // ?new=1 arrives from the inbox dock's "+ New" — land with the create form
+  // already open instead of making the user find the button again.
+  const [showForm, setShowForm] = useState(
+    () => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("new") === "1",
+  );
   const [now, setNow] = useState(() => Date.now());
 
   // Tick so countdowns ("in 23m", "due now") stay live without resubscribing.
