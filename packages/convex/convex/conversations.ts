@@ -8951,10 +8951,14 @@ export const sendEscapeToSession = mutation({
     if (!userId) throw new Error("Not authenticated");
 
     const conv = await ctx.db.get(args.conversation_id);
-    if (!conv || conv.user_id !== userId) throw new Error("Not authorized");
+    // The runner, or the session's second-party owner — same rule and runner
+    // routing as killSession/setSessionModel (daemons poll by their own account).
+    if (!conv || (conv.user_id !== userId && conv.owner_user_id !== userId)) {
+      throw new Error("Not authorized");
+    }
 
     await ctx.db.insert("daemon_commands", {
-      user_id: userId,
+      user_id: conv.user_id,
       command: "escape",
       args: JSON.stringify({ conversation_id: args.conversation_id }),
       created_at: Date.now(),
@@ -8972,10 +8976,13 @@ export const sendKeysToSession = mutation({
     if (!userId) throw new Error("Not authenticated");
 
     const conv = await ctx.db.get(args.conversation_id);
-    if (!conv || conv.user_id !== userId) throw new Error("Not authorized");
+    // Runner or second-party owner; command stamped for the runner's daemon.
+    if (!conv || (conv.user_id !== userId && conv.owner_user_id !== userId)) {
+      throw new Error("Not authorized");
+    }
 
     await ctx.db.insert("daemon_commands", {
-      user_id: userId,
+      user_id: conv.user_id,
       command: "send_keys",
       args: JSON.stringify({ conversation_id: args.conversation_id, keys: args.keys }),
       created_at: Date.now(),
@@ -9099,10 +9106,13 @@ export const rewindSession = mutation({
     if (!userId) throw new Error("Not authenticated");
 
     const conv = await ctx.db.get(args.conversation_id);
-    if (!conv || conv.user_id !== userId) throw new Error("Not authorized");
+    // Runner or second-party owner; command stamped for the runner's daemon.
+    if (!conv || (conv.user_id !== userId && conv.owner_user_id !== userId)) {
+      throw new Error("Not authorized");
+    }
 
     await ctx.db.insert("daemon_commands", {
-      user_id: userId,
+      user_id: conv.user_id,
       command: "rewind",
       args: JSON.stringify({ conversation_id: args.conversation_id, steps_back: args.steps_back }),
       created_at: Date.now(),
@@ -9425,12 +9435,17 @@ export const switchSessionProject = mutation({
     if (!userId) throw new Error("Not authenticated");
 
     const conv = await ctx.db.get(args.conversation_id);
-    if (!conv || conv.user_id !== userId) throw new Error("Not authorized");
+    // Runner or second-party owner. Both the kill and the relaunch are routed
+    // under the runner's account — the session stays on the machine that runs
+    // it, whichever party asked for the switch (paths are that machine's).
+    if (!conv || (conv.user_id !== userId && conv.owner_user_id !== userId)) {
+      throw new Error("Not authorized");
+    }
 
     const now = Date.now();
 
     await ctx.db.insert("daemon_commands", {
-      user_id: userId,
+      user_id: conv.user_id,
       command: "kill_session",
       args: JSON.stringify({ conversation_id: args.conversation_id }),
       created_at: now,
@@ -9443,7 +9458,7 @@ export const switchSessionProject = mutation({
 
     const agentType = conv.agent_type || "claude_code";
     const daemonAgentType = agentType === "codex" ? "codex" : agentType === "gemini" ? "gemini" : "claude";
-    await enqueueStartSession(ctx, userId, {
+    await enqueueStartSession(ctx, conv.user_id, {
       conversationId: args.conversation_id,
       agentType: daemonAgentType,
       projectPath: args.project_path,
@@ -9463,7 +9478,11 @@ export const switchSessionAgent = mutation({
     if (!userId) throw new Error("Not authenticated");
 
     const conv = await ctx.db.get(args.conversation_id);
-    if (!conv || conv.user_id !== userId) throw new Error("Not authorized");
+    // Runner or second-party owner; kill + relaunch routed under the runner's
+    // account so the session stays on the machine that runs it.
+    if (!conv || (conv.user_id !== userId && conv.owner_user_id !== userId)) {
+      throw new Error("Not authorized");
+    }
 
     await ctx.db.patch(args.conversation_id, { agent_type: args.agent_type });
 
@@ -9475,13 +9494,13 @@ export const switchSessionAgent = mutation({
     const daemonAgentType = args.agent_type === "claude_code" ? "claude" : args.agent_type === "codex" ? "codex" : args.agent_type === "cursor" ? "cursor" : "gemini";
 
     await ctx.db.insert("daemon_commands", {
-      user_id: userId,
+      user_id: conv.user_id,
       command: "kill_session",
       args: JSON.stringify({ conversation_id: args.conversation_id }),
       created_at: now,
     });
 
-    await enqueueStartSession(ctx, userId, {
+    await enqueueStartSession(ctx, conv.user_id, {
       conversationId: args.conversation_id,
       agentType: daemonAgentType,
       projectPath: conv.project_path || conv.git_root,

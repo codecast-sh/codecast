@@ -140,8 +140,8 @@ function HorizonRail({ tasks, now }: { tasks: any[]; now: number }) {
       <div className="flex items-center justify-between mb-3">
         <span className="text-[10px] font-medium uppercase tracking-widest text-sol-text-dim">Next 24 hours</span>
         <span className="text-[10px] text-sol-text-dim flex items-center gap-3">
-          <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-sol-cyan inline-block" /> propose</span>
-          <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-sol-orange inline-block" /> apply</span>
+          <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-sol-cyan inline-block" /> read-only</span>
+          <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-sol-orange inline-block" /> makes changes</span>
           <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-sol-cyan/30 inline-block" /> recurring</span>
         </span>
       </div>
@@ -342,10 +342,10 @@ function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boole
               </span>
             </ShortcutTooltip>
             <ScheduleChip task={task} now={now} />
-            {task.mode === "apply" && (
-              <ShortcutTooltip label="apply mode: runs may change things — edit files, run write commands" hint="propose is the read-only default">
-                <span className="text-[10px] font-semibold uppercase tracking-wide text-sol-orange border border-sol-orange/40 rounded px-1 py-px flex-shrink-0">
-                  apply
+            {task.mode !== "apply" && (
+              <ShortcutTooltip label="Read-only run — investigates and reports, changes nothing" hint="file-editing tools are disabled">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-sol-cyan border border-sol-cyan/40 rounded px-1 py-px flex-shrink-0">
+                  read-only
                 </span>
               </ShortcutTooltip>
             )}
@@ -1081,8 +1081,8 @@ function FilterBar({ filters, update, projects, hasCodex, shown, total, grouped,
         </div>
         <select className={filterSelectCls} value={filters.mode} onChange={(e) => update({ mode: e.target.value })}>
           <option value="all">all modes</option>
-          <option value="apply">apply</option>
-          <option value="propose">propose</option>
+          <option value="apply">makes changes</option>
+          <option value="propose">read-only</option>
         </select>
         <select className={filterSelectCls} value={filters.type} onChange={(e) => update({ type: e.target.value })}>
           <option value="all">all types</option>
