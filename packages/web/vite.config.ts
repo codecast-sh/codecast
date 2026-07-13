@@ -32,7 +32,7 @@ export default defineConfig({
   server: {
     port: 3000,
     host: true,
-    allowedHosts: ["local.codecast.sh", "local.1.codecast.sh", "local.2.codecast.sh"],
+    allowedHosts: ["local.codecast.sh", "local.1.codecast.sh", "local.2.codecast.sh", "local.3.codecast.sh"],
     // NOTE: server.warmup is deliberately omitted. Warming up a 10k-LOC
     // module (ConversationView.tsx) on boot kicks the optimizer into a
     // dep-discovery cycle that races real page requests, producing
