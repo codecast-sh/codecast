@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Logo } from "../../components/Logo";
 import { AppLoader } from "../../components/AppLoader";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { useLocalAuth } from "../../lib/localAuth";
 
 function LoginForm() {
   const [email, setEmail] = useState("");
@@ -15,6 +16,10 @@ function LoginForm() {
 
   const { signIn } = useAuthActions();
   const { isAuthenticated, isLoading } = useConvexAuth();
+  // Local-first: an already-signed-in visitor (token in storage) bounces to
+  // the app immediately — no waiting on the server handshake, which offline
+  // would pin this page on the loader forever.
+  const localAuthed = useLocalAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
   const reason = searchParams.get("reason");
@@ -22,12 +27,12 @@ function LoginForm() {
   const redirectTo = returnTo || "/inbox";
 
   useWatchEffect(() => {
-    if (!isLoading && isAuthenticated) {
+    if (localAuthed || (!isLoading && isAuthenticated)) {
       router.replace(redirectTo);
     }
-  }, [isAuthenticated, isLoading, router, redirectTo]);
+  }, [localAuthed, isAuthenticated, isLoading, router, redirectTo]);
 
-  if (isLoading || isAuthenticated) {
+  if (localAuthed || isLoading || isAuthenticated) {
     return (
 <AppLoader />
     );

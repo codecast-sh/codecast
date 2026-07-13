@@ -13,6 +13,7 @@ import { useLocalStorageMigration } from "@/hooks/useLocalStorageMigration";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { identifyUser, resetUser } from "@/lib/analytics";
 import { durableAuthStorage } from "@/lib/durableAuthStorage";
+import { CONVEX_URL } from "@/lib/localAuth";
 
 function PrefsMigration() {
   useLocalStorageMigration();
@@ -39,7 +40,7 @@ function AnalyticsIdentify() {
 
 const convex: ConvexReactClient =
   import.meta.hot?.data?.convexClient ??
-  new ConvexReactClient(import.meta.env.VITE_CONVEX_URL || "https://convex.codecast.sh", {
+  new ConvexReactClient(CONVEX_URL, {
     unsavedChangesWarning: false,
   });
 

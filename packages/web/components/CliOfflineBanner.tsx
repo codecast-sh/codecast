@@ -10,6 +10,7 @@ import {
   useDaemonHealth,
   type OfflineTier,
 } from "../hooks/useDaemonHealth";
+import { useAppOffline } from "../hooks/useAppOffline";
 
 const DISMISS_DURATION_MS = 30 * 60 * 1000;
 
@@ -40,10 +41,14 @@ export function CliOfflineBanner() {
   // the false "offline" banner that climbs while a stalled subscription freezes
   // daemon_last_seen).
   const health = useDaemonHealth();
+  // When this client itself has no connection, daemon_last_seen is stale
+  // because WE can't sync — that's the ConnectionBanner's story, not the CLI's.
+  const { offline: appOffline } = useAppOffline();
 
   useMountEffect(() => { setMounted(true); });
 
   if (!mounted) return null;
+  if (appOffline) return null;
   if (user === undefined) return null;
   if (health.kind !== "offline") return null;
 
