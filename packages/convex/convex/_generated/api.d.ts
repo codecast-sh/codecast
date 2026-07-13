@@ -85,6 +85,7 @@ import type * as rateLimit from "../rateLimit.js";
 import type * as redact from "../redact.js";
 import type * as reviews from "../reviews.js";
 import type * as searchCore from "../searchCore.js";
+import type * as searchMirror from "../searchMirror.js";
 import type * as sessionInsights from "../sessionInsights.js";
 import type * as sessionOwnership from "../sessionOwnership.js";
 import type * as sessionThreads from "../sessionThreads.js";
@@ -189,6 +190,7 @@ declare const fullApi: ApiFromModules<{
   redact: typeof redact;
   reviews: typeof reviews;
   searchCore: typeof searchCore;
+  searchMirror: typeof searchMirror;
   sessionInsights: typeof sessionInsights;
   sessionOwnership: typeof sessionOwnership;
   sessionThreads: typeof sessionThreads;

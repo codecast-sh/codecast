@@ -265,6 +265,11 @@ export default defineSchema({
     skip_title_generation: v.optional(v.boolean()),
     title_is_custom: v.optional(v.boolean()),
     idle_summary: v.optional(v.string()),
+    // Dedupe for the needs-input push: "<message_count>:<kind>" of the last
+    // waiting episode already notified (see notifications.checkNeedsInput).
+    // Mirrors the web idle-sound's notified-keys map so one episode pushes
+    // once but each new turn can push again.
+    needs_input_notified_key: v.optional(v.string()),
     // Absolute flag: a truthy value means dismissed until a user action clears
     // it. Never compare against `updated_at` — dozens of mutations bump that
     // field and a relative check re-opens the session. Set by:
@@ -394,10 +399,14 @@ export default defineSchema({
     .index("by_user_dismissed", ["user_id", "inbox_dismissed_at"])
     .index("by_owner_device", ["user_id", "owner_device_id"])
     .index("by_restored_from", ["restored_from_conversation_id"])
-    // Sparse in practice (only anchors are persistent) — lets the daemon refresh
-    // its persistent-conversation set without scanning the table.
-    .index("by_user_persistent", ["user_id", "persistent"])
-    .index("by_anchor_id", ["anchor_id"])
+    // `persistent` and `anchor_id` are plain fields with no index: anchors
+    // resolve their conversation via anchors.conversation_id, and no query
+    // scans conversations by either field. Indexes on written-to tables are
+    // not free (each one adds rows to the backing `indexes` table and
+    // tombstone cost on every delete) — don't add indexes speculatively.
+    // Sparse: only spawned schedule runs carry agent_task_id. Powers the run
+    // history strip (agentTasks.webListRuns) — every run of one schedule.
+    .index("by_agent_task", ["agent_task_id"])
     .searchIndex("search_title_v2", {
       searchField: "title",
       filterFields: ["user_id"],
@@ -583,6 +592,52 @@ export default defineSchema({
       searchField: "content",
       filterFields: ["conversation_id"],
     }),
+
+  // Recent-window mirror of message text for content search (see
+  // searchMirror.ts). search_content_v2 above scans its whole posting list per
+  // term across every message ever written, so common tokens exceed the query
+  // budget; this table holds only the trailing window, making the scan small
+  // by construction. Rows are written solely by the searchMirror cron walker.
+  message_search_recent: defineTable({
+    message_id: v.id("messages"),
+    conversation_id: v.id("conversations"),
+    role: v.union(
+      v.literal("user"),
+      v.literal("assistant"),
+      v.literal("system"),
+      v.literal("tool")
+    ),
+    content: v.string(),
+    timestamp: v.number(),
+    tool_calls_count: v.optional(v.number()),
+    tool_results_count: v.optional(v.number()),
+    // _creationTime of the SOURCE message — the window/GC axis. Distinct from
+    // `timestamp` (client event time): imported old transcripts get fresh
+    // creation times and should be searchable, not instantly GC'd.
+    source_created_at: v.number(),
+  })
+    .index("by_message_id", ["message_id"])
+    .index("by_source_created_at", ["source_created_at"])
+    .searchIndex("search_content", {
+      searchField: "content",
+      filterFields: ["conversation_id"],
+    }),
+
+  // Single row: the searchMirror walker's watermark. `cursor` = _creationTime
+  // of the last mirrored message. Patched EVERY cron tick — nothing that a
+  // subscribed query reads may live here (reactivity: reading this row would
+  // re-run every open search each tick).
+  search_mirror_state: defineTable({
+    cursor: v.number(),
+    updated_at: v.number(),
+  }),
+
+  // Single row, read by fetchMessageSearchPool: is the mirror serveable? The
+  // walker writes it ONLY when liveness transitions (with hysteresis), so open
+  // search subscriptions stay stable across cron ticks.
+  search_mirror_live: defineTable({
+    live: v.boolean(),
+  }),
 
   // Story & Summary densities. Both are chunked first-person retellings cached
   // as JSON. `story` is an array of beats (each spans several turns); `summary`
@@ -1378,6 +1433,13 @@ export default defineSchema({
     last_run_session_uuid: v.optional(v.string()),
     run_count: v.number(),
     created_at: v.number(),
+    // Haiku-generated presentation fields (agentTasks.generateDisplaySummary).
+    // Most titles are just prompt.slice(0, 60) — unreadable in rows — so the
+    // model distills a short name and a one-sentence gist of what each run
+    // does. Regenerated when the prompt changes; display_title yields to an
+    // explicit human title.
+    display_title: v.optional(v.string()),
+    display_summary: v.optional(v.string()),
   })
     .index("by_user_status", ["user_id", "status"])
     .index("by_user_run_at", ["user_id", "run_at"])
@@ -2036,9 +2098,11 @@ export default defineSchema({
     platform: v.optional(v.string()),
     timestamp: v.number(),
   })
-    .index("by_user_id", ["user_id"])
-    .index("by_user_timestamp", ["user_id", "timestamp"])
-    .index("by_user_level", ["user_id", "level"]),
+    // Deliberately the ONLY index: this is the highest-row-count table in the
+    // DB (telemetry), and every index multiplies both its footprint in the
+    // Convex `indexes` table and the tombstone cost of pruning it. user_id
+    // lookups use this index's prefix; there is no by-level query path.
+    .index("by_user_timestamp", ["user_id", "timestamp"]),
 
   plan_templates: defineTable({
     user_id: v.id("users"),
