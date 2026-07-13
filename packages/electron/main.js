@@ -7,6 +7,13 @@ const { spawn, execFile } = require("child_process");
 
 app.name = "Codecast";
 
+// Isolated profile for dev/test runs so a from-source instance can run beside
+// the installed app: its own singleton lock, service-worker cache, IndexedDB,
+// and localStorage. Must be set before anything reads userData paths.
+if (process.env.CODECAST_USER_DATA) {
+  app.setPath("userData", process.env.CODECAST_USER_DATA);
+}
+
 // Disable Chromium's trackpad/overscroll swipe-to-navigate (back/forward).
 // We push a history entry per viewed conversation, so an accidental two-finger
 // horizontal swipe would walk backward through that stack and "randomly" jump

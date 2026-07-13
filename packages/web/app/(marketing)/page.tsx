@@ -9,6 +9,7 @@ import { InstallTabs } from "@/components/install-tabs";
 import { Logo } from "@/components/Logo";
 import { AppLoader } from "@/components/AppLoader";
 import { isDesktop } from "@/lib/desktop";
+import { useLocalAuth } from "@/lib/localAuth";
 import { useWatchEffect } from "@/hooks/useWatchEffect";
 
 function Highlight({ children, color }: { children: React.ReactNode; color: "amber" | "green" | "blue" | "rose" }) {
@@ -112,21 +113,25 @@ function StatCard({ value, label }: { value: string; label: string }) {
 
 export default function LandingPage() {
   const { isAuthenticated, isLoading } = useConvexAuth();
+  // Local-first: a stored token routes straight to the inbox without waiting
+  // for the server to confirm — the desktop app lands here on every boot, and
+  // offline that confirmation never comes.
+  const localAuthed = useLocalAuth();
   const router = useRouter();
   const [desktop, setDesktop] = useState(false);
 
   useWatchEffect(() => {
+    if (localAuthed || (!isLoading && isAuthenticated)) {
+      router.replace("/inbox");
+      return;
+    }
     if (isDesktop()) {
       setDesktop(true);
       router.replace("/login");
-      return;
     }
-    if (!isLoading && isAuthenticated) {
-      router.replace("/inbox");
-    }
-  }, [isAuthenticated, isLoading, router]);
+  }, [localAuthed, isAuthenticated, isLoading, router]);
 
-  if (isLoading || desktop) {
+  if (localAuthed || isLoading || desktop) {
     return (
       <AppLoader className="bg-[#fdf6e3] text-[#93a1a1]" />
     );

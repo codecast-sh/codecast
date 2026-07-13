@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Logo } from "../../components/Logo";
 import { AppLoader } from "../../components/AppLoader";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { useLocalAuth } from "../../lib/localAuth";
 
 function SignUpForm() {
   const [email, setEmail] = useState("");
@@ -21,13 +22,16 @@ function SignUpForm() {
   const returnTo = searchParams.get("return_to");
   const redirectTo = returnTo ? decodeURIComponent(returnTo) : "/inbox";
 
+  // Local-first: same instant bounce as the login page for a stored token.
+  const localAuthed = useLocalAuth();
+
   useWatchEffect(() => {
-    if (!isLoading && isAuthenticated) {
+    if (localAuthed || (!isLoading && isAuthenticated)) {
       router.replace(redirectTo);
     }
-  }, [isAuthenticated, isLoading, router, redirectTo]);
+  }, [localAuthed, isAuthenticated, isLoading, router, redirectTo]);
 
-  if (isLoading || isAuthenticated) {
+  if (localAuthed || isLoading || isAuthenticated) {
     return (
 <AppLoader />
     );
