@@ -210,10 +210,13 @@ export default function SearchPage() {
 
   const searchActive = debouncedQuery.length >= 2;
   // Non-throwing: a broad term can exceed the backend's query budget and return
-  // a terminal error — bare useQuery re-throws it in render (ct-37627).
+  // a terminal error — bare useQuery re-throws it in render (ct-37627). The
+  // breaker unsubscribes a never-resolving search so its silent retry loop
+  // stops flapping the shared websocket (1011) for the rest of the app.
   const { data: searchResults, error: searchError } = useQueryNoThrow(
     api.conversations.searchConversations,
-    searchActive ? { query: debouncedQuery, limit, userOnly, mineOnly, since, sort } : "skip"
+    searchActive ? { query: debouncedQuery, limit, userOnly, mineOnly, since, sort } : "skip",
+    { breakAfterMs: 15_000 }
   );
 
   const freshData = searchResults && "results" in searchResults ? searchResults : null;
@@ -396,6 +399,16 @@ export default function SearchPage() {
               {searchError
                 ? "Content search timed out — showing title matches only. Try a more specific word or a quoted phrase."
                 : "Title matches — still searching message content…"}
+            </div>
+          )}
+
+          {/* The recent tier bounds content matches to a trailing window;
+              titles cover all time. Only worth saying when the selected range
+              exceeds the window. */}
+          {searchActive && searchData?.contentTier === "recent" &&
+            (range === "all" || RANGE_MS[range] > (searchData.contentWindowDays ?? 30) * 86_400_000) && (
+            <div className="text-xs text-sol-text-dim">
+              Content matches cover the last {searchData.contentWindowDays ?? 30} days — older sessions match by title and summary.
             </div>
           )}
 

@@ -1079,10 +1079,13 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
 
   // Non-throwing: a broad term can blow the backend's query budget and return a
   // terminal error — bare useQuery re-throws that in render and unmounts the
-  // whole palette into its ErrorBoundary (ct-37627).
+  // whole palette into its ErrorBoundary (ct-37627). The breaker unsubscribes a
+  // never-resolving search so its silent retry loop stops flapping the shared
+  // websocket (1011) for the rest of the app.
   const { data: searchResults, error: searchError } = useQueryNoThrow(
     api.conversations.searchConversations,
-    open && debouncedQuery.length >= 2 ? { query: debouncedQuery, limit: 10 } : "skip"
+    open && debouncedQuery.length >= 2 ? { query: debouncedQuery, limit: 10 } : "skip",
+    { breakAfterMs: 15_000 }
   );
   const searchData = searchResults && "results" in searchResults ? searchResults : null;
   // Cheap always-fast companion: title/subtitle/summary matches come from the
