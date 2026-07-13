@@ -727,9 +727,10 @@ function ScheduleRowItem({ row, activeSessionId, onOpen, attached, highlighted, 
               </span>
             </ShortcutTooltip>
           )}
-          {task.mode === "apply" && (
-            <ShortcutTooltip label="apply mode: runs may change things — edit files, run write commands" hint="propose is the read-only default">
-              <span className="shrink-0 px-1 rounded bg-sol-red/10 text-sol-red/80 text-[9px] font-medium">apply</span>
+          {/* Apply is the norm and unmarked; read-only is the exception worth a chip. */}
+          {task.mode !== "apply" && (
+            <ShortcutTooltip label="Read-only run — investigates and reports, changes nothing" hint="file-editing tools are disabled">
+              <span className="shrink-0 px-1 rounded bg-sol-cyan/10 text-sol-cyan/80 text-[9px] font-medium">read-only</span>
             </ShortcutTooltip>
           )}
           {/* Same pill as the dock bar's "N new" count, so opening the roster
@@ -978,7 +979,7 @@ function ScheduleDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen }:
     if (!open) setCursor(-1);
   }, [open]);
   if (rows.length === 0) return null;
-  const applyCount = rows.filter((r) => r.task.mode === "apply").length;
+  const readOnlyCount = rows.filter((r) => r.task.mode !== "apply").length;
   const overdueCount = rows.filter((r) => isTaskOverdue(r.task, now)).length;
   const runningCount = rows.filter((r) => r.task.status === "running").length;
   // Project chips only when the roster actually mixes projects — a
@@ -1004,7 +1005,7 @@ function ScheduleDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen }:
                 reads against the session list it floats over. */}
             <div className="sticky top-0 z-10 flex items-center gap-2 px-3 py-1.5 bg-sol-bg-alt/95 backdrop-blur-sm border-b border-sol-border/60 text-[10px]">
               <span className="font-medium text-sol-text-muted">
-                {rows.length} armed{applyCount > 0 ? ` · ${applyCount} in apply mode` : ""}
+                {rows.length} armed{readOnlyCount > 0 ? ` · ${readOnlyCount} read-only` : ""}
               </span>
               <span className="ml-auto flex items-center gap-2.5">
                 <Link href="/schedules?new=1" onClick={close} className="text-sol-cyan hover:underline">+ New</Link>

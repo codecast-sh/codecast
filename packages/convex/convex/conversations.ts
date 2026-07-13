@@ -9326,21 +9326,31 @@ export const repairSession = mutation({
 // Live progress of a kill/restart for the footer: the daemon stamps each
 // command row with executed_at + result/error, so the client can show the real
 // ladder ("stopping" → "resuming" → resumed/reconstituted/started fresh/failed)
-// instead of an indefinite spinner. Scoped to the caller's own commands for one
-// conversation, last few only.
+// instead of an indefinite spinner. Scoped to one conversation, last few only.
 export const getRestartProgress = query({
   args: { conversation_id: v.string() },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return null;
 
+    // Restart commands are stamped with the RUNNER's user_id (see
+    // enqueueKillAndResume callers) — a second-party owner watching a restart
+    // must scan the runner's rows. Anyone else keeps scanning their own (and
+    // sees nothing for a conversation they can't command).
+    let scanUserId = userId;
+    const convId = ctx.db.normalizeId("conversations", args.conversation_id);
+    if (convId) {
+      const conv = await ctx.db.get(convId);
+      if (conv && conv.owner_user_id === userId && conv.user_id !== userId) scanUserId = conv.user_id;
+    }
+
     const pending = await ctx.db
       .query("daemon_commands")
-      .withIndex("by_user_pending", (q) => q.eq("user_id", userId).eq("executed_at", undefined))
+      .withIndex("by_user_pending", (q) => q.eq("user_id", scanUserId).eq("executed_at", undefined))
       .collect();
     const executed = await ctx.db
       .query("daemon_commands")
-      .withIndex("by_user_pending", (q) => q.eq("user_id", userId).gt("executed_at", 0))
+      .withIndex("by_user_pending", (q) => q.eq("user_id", scanUserId).gt("executed_at", 0))
       .order("desc")
       .take(50);
 
