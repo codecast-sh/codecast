@@ -13447,6 +13447,7 @@ async function main(): Promise<void> {
         workflowProgress?: Array<{
           type: string; agentId?: string; label?: string; phaseTitle?: string;
           state?: string; tokens?: number; durationMs?: number; startedAt?: number; resultPreview?: string;
+          lastToolName?: string; lastToolSummary?: string;
         }>;
         totalTokens?: number; agentCount?: number; startTime?: number;
       };
@@ -13461,6 +13462,8 @@ async function main(): Promise<void> {
           duration_ms: e.durationMs,
           started_at: e.startedAt,
           result_preview: e.resultPreview,
+          last_tool_name: e.lastToolName,
+          last_tool_summary: e.lastToolSummary,
         }));
       const siteUrl = (config.convex_url || "").replace(".cloud", ".site");
       const token = config.auth_token;

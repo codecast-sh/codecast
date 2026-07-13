@@ -1925,6 +1925,8 @@ export default defineSchema({
       phase: v.optional(v.string()),
       tokens: v.optional(v.number()),
       result_preview: v.optional(v.string()),
+      // Live "what it's doing" line for a running agent (runtime's last tool-call summary)
+      activity: v.optional(v.string()),
     })),
     goal_override: v.optional(v.string()),
     project_path: v.optional(v.string()),
