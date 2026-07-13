@@ -218,10 +218,13 @@ export async function requestNotificationPermission(): Promise<boolean> {
 }
 
 export async function notifyNative(title: string, body: string, data?: { conversationId?: string }) {
+  // OS notifications are for the unfocused app: when the window has focus the
+  // user already sees the bell/inbox update (and hears the idle sound), so a
+  // native banner on top is noise. Applies to desktop and browser alike.
+  if (typeof document !== "undefined" && document.hasFocus()) return;
   if (isElectron()) {
     bridge("showNotification")?.(title, body, data);
   } else if (hasBrowserNotificationPermission()) {
-    if (document.hasFocus()) return;
     const n = new Notification(title, { body, icon: "/icon-192.png", tag: data?.conversationId });
     if (data?.conversationId) {
       n.onclick = () => {
