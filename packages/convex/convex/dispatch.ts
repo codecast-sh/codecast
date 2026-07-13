@@ -935,10 +935,16 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   convCommand: async (ctx, userId, [convId, command, extraArgs]: [string, string, Record<string, any>?]) => {
     const fn = (SESSION_COMMANDS as Record<string, any>)[command];
     if (!fn) throw new Error(`convCommand: unknown command ${command}`);
-    return await (ctx as any).runMutation(fn, {
-      conversation_id: convId,
-      ...(extraArgs || {}),
-    });
+    try {
+      return await (ctx as any).runMutation(fn, {
+        conversation_id: convId,
+        ...(extraArgs || {}),
+      });
+    } catch (e: any) {
+      // Re-throw with routing context: the bare "Not authorized" from the
+      // target mutation is undiagnosable in server logs (no args are logged).
+      throw new Error(`convCommand ${command} conv=${convId} user=${userId}: ${e?.message ?? e}`);
+    }
   },
 };
 
