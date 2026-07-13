@@ -1,10 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
   choosePreferredCodexCandidate,
+  collectAncestorPids,
   hasCodexSessionFileOpen,
   isResumeInvocation,
   matchSingleFreshStartedConversation,
   matchStartedConversation,
+  parsePidPpidMap,
+  resolveSpawnerSessionId,
 } from "./sessionProcessMatcher.js";
 
 describe("isResumeInvocation", () => {
@@ -181,5 +184,64 @@ describe("matchSingleFreshStartedConversation", () => {
       { now: 10_000, freshnessMs: 500 }
     );
     expect(match).toBeNull();
+  });
+});
+
+describe("spawn-parent resolution", () => {
+  test("parsePidPpidMap parses ps -axo pid=,ppid= output with irregular whitespace", () => {
+    const psOut = "    1     0\n  500     1\n 8123   500\n98765  8123\n\nbad line\n";
+    const map = parsePidPpidMap(psOut);
+    expect(map.get(98765)).toBe(8123);
+    expect(map.get(8123)).toBe(500);
+    expect(map.get(500)).toBe(1);
+    expect(map.has(NaN)).toBe(false);
+  });
+
+  test("collectAncestorPids walks nearest-first and stops at pid 1", () => {
+    // codex(98765) <- bash(8123) <- claude(500) <- zsh(400) <- launchd(1)
+    const map = new Map([[98765, 8123], [8123, 500], [500, 400], [400, 1], [1, 0]]);
+    expect(collectAncestorPids(map, 98765)).toEqual([8123, 500, 400]);
+  });
+
+  test("collectAncestorPids is cycle-safe and depth-capped", () => {
+    const cyclic = new Map([[10, 20], [20, 30], [30, 10]]);
+    expect(collectAncestorPids(cyclic, 10)).toEqual([20, 30]);
+
+    const deep = new Map<number, number>();
+    for (let pid = 100; pid < 200; pid++) deep.set(pid, pid + 1);
+    expect(collectAncestorPids(deep, 100, 5)).toHaveLength(5);
+  });
+
+  test("resolveSpawnerSessionId returns the nearest registered ancestor", () => {
+    const registry = new Map([
+      [500, "parent-session"],
+      [400, "grandparent-session"],
+    ]);
+    const sid = resolveSpawnerSessionId(
+      [8123, 500, 400],
+      (pid) => registry.get(pid) ?? null,
+      "child-session",
+    );
+    expect(sid).toBe("parent-session");
+  });
+
+  test("resolveSpawnerSessionId skips an ancestor registered with the child's own session id", () => {
+    // A claude child registers its own pid; if the walk ever includes it
+    // (or a wrapper re-registered the same session), it must not self-link.
+    const registry = new Map([
+      [8123, "child-session"],
+      [500, "parent-session"],
+    ]);
+    const sid = resolveSpawnerSessionId(
+      [8123, 500],
+      (pid) => registry.get(pid) ?? null,
+      "child-session",
+    );
+    expect(sid).toBe("parent-session");
+  });
+
+  test("resolveSpawnerSessionId returns null when no ancestor is registered", () => {
+    const sid = resolveSpawnerSessionId([8123, 500, 400], () => null, "child-session");
+    expect(sid).toBeNull();
   });
 });
