@@ -5,6 +5,7 @@ import { verifyApiToken } from "./apiTokens";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { extractTitleJson } from "./titleGeneration";
+import { isRefusalProse } from "./idleSummary";
 
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_MAX_RUNTIME_MS = 10 * 60 * 1000; // 10 min
@@ -1078,7 +1079,10 @@ export const generateDisplaySummary = internalAction({
       const parsed = extractTitleJson(text);
       const title = parsed?.title?.trim();
       const summary = parsed?.subtitle?.trim();
-      if (!summary || summary.length > 400) {
+      // isRefusalProse: valid JSON can still carry refusal/meta prose in the
+      // value ("I don't see a recent conversation…") — same guard as the
+      // conversation subtitle writer in titleGeneration.
+      if (!summary || summary.length > 400 || isRefusalProse(summary)) {
         console.error("Task summary returned no usable JSON:", text.slice(0, 120));
         return;
       }
