@@ -391,24 +391,14 @@ export function ScheduleContextPanel({
                 <span className="tabular-nums">next at {fmtClock(primary.run_at)}</span>
               </ShortcutTooltip>
             )}
-            <ShortcutTooltip
-              label={
-                primary.mode === "apply"
-                  ? "apply mode: runs may change things — edit files, run write commands"
-                  : "propose mode: runs are read-only — the agent investigates and reports, changes nothing"
-              }
-              hint={primary.mode === "apply" ? "propose is the read-only default" : "default"}
-            >
-              <span
-                className={`px-1.5 py-px rounded border font-medium ${
-                  primary.mode === "apply"
-                    ? "border-sol-red/40 text-sol-red/90 bg-sol-red/10"
-                    : "border-sol-border/50 text-sol-text-dim"
-                }`}
-              >
-                {primary.mode === "apply" ? "apply" : "propose"}
-              </span>
-            </ShortcutTooltip>
+            {/* Apply is the norm and unmarked; read-only is the exception worth a chip. */}
+            {primary.mode !== "apply" && (
+              <ShortcutTooltip label="Read-only run — investigates and reports, changes nothing" hint="file-editing tools are disabled">
+                <span className="px-1.5 py-px rounded border font-medium border-sol-cyan/40 text-sol-cyan/90 bg-sol-cyan/10">
+                  read-only
+                </span>
+              </ShortcutTooltip>
+            )}
           </div>
 
           {(primary.last_run_at || primary.last_run_summary) && (

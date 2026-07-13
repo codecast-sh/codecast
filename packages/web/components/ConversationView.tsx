@@ -5224,17 +5224,13 @@ function ScheduledTaskBlock({ content: rawContent, timestamp }: { content: strin
       <div className="flex items-center gap-2 px-3 pt-2 pb-1">
         <Clock className="w-3.5 h-3.5 text-sol-violet/70 shrink-0" />
         <span className="text-[11px] font-medium tracking-wide uppercase text-sol-violet/70 shrink-0">{spawned ? "Scheduled run" : "Scheduled"}</span>
-        {spawned && (
-          <span
-            className={`px-1 py-0 rounded border text-[9px] font-semibold shrink-0 ${
-              spawned.mode === "apply"
-                ? "border-sol-red/40 text-sol-red/90 bg-sol-red/10"
-                : "border-sol-border/50 text-sol-text-dim"
-            }`}
-            title={spawned.mode === "apply" ? "Agent may make changes" : "Read-only: agent proposes, never applies"}
-          >
-            {spawned.mode}
-          </span>
+        {/* Apply is the norm and unmarked; read-only runs get the chip. */}
+        {spawned && spawned.mode !== "apply" && (
+          <ShortcutTooltip label="Read-only run — investigates and reports, changes nothing" hint="file-editing tools are disabled">
+            <span className="px-1 py-0 rounded border text-[9px] font-semibold shrink-0 border-sol-cyan/40 text-sol-cyan/90 bg-sol-cyan/10">
+              read-only
+            </span>
+          </ShortcutTooltip>
         )}
         <span className="text-xs text-sol-text-muted truncate">{title}</span>
         <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
