@@ -5,7 +5,7 @@ import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { shouldGenerateTitle } from "./titleGeneration";
-import { canTeamMemberAccess, checkConversationAccess } from "./privacy";
+import { canTeamMemberAccess, checkConversationAccess, teamVisibleConvTeam } from "./privacy";
 import { redactSecrets } from "./redact";
 import { markPendingDelivered } from "./pendingMessages";
 import { nextAgentStatusOnAddMessages, isApiErrorBanner, classifyApiErrorBanner, apiErrorBatchAction, NEEDS_INPUT_AUQ_CHECK_DELAY_MS } from "./inboxFilters";
@@ -180,7 +180,9 @@ async function upsertFileSyncDoc(
   } else {
     await ctx.db.insert("docs", {
       user_id: conversation.user_id,
-      team_id: conversation.team_id,
+      // Docs mirrored out of a private session stay personal — team_id alone
+      // grants teammates access (canAccessDoc has no privacy gate).
+      team_id: teamVisibleConvTeam(conversation),
       title: extractTitleFromContent(content),
       content,
       doc_type: docType,
@@ -262,7 +264,7 @@ async function extractDocsFromMessages(
           convDocs.push({ source_file: syntheticPath, content: msg.content });
           await ctx.db.insert("docs", {
             user_id: conversation.user_id,
-            team_id: conversation.team_id,
+            team_id: teamVisibleConvTeam(conversation),
             title: extractTitleFromContent(msg.content),
             content: msg.content,
             doc_type: classifyDocContent(msg.content),

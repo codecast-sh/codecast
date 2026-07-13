@@ -247,6 +247,10 @@ export const listForWorkflow = query({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
+    // Gate on the parent workflow's owner — without this, any authenticated
+    // user who guessed a workflow id could read another user's run history.
+    const workflow = await ctx.db.get(args.workflow_id);
+    if (!workflow || workflow.user_id !== userId) return [];
     return await ctx.db
       .query("workflow_runs")
       .withIndex("by_workflow_id", (q) => q.eq("workflow_id", args.workflow_id))

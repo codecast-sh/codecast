@@ -3152,6 +3152,9 @@ program
     if (result.target_live === false) {
       console.log(`${c.yellow}!${c.reset} ${c.dim}that session has no live daemon right now — queued; you'll be told if it can't be delivered${c.reset}`);
     }
+    if (result.auto_owned) {
+      console.log(`${c.dim}you now own this session — it'll sit in your inbox until dismissed (cast disown ${result.to_short_id || sessionId} to release)${c.reset}`);
+    }
   });
 
 // ── cast label ────────────────────────────────────────────────────────────────
