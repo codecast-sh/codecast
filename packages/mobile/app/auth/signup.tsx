@@ -27,9 +27,13 @@ export default function SignupScreen() {
     try {
       await signInWithApple();
     } catch (error: any) {
-      if (error?.code !== 'ERR_REQUEST_CANCELED') {
-        Alert.alert('Error', 'Apple sign up failed. Please try again.');
-      }
+      // Mirrors login.tsx: silent on cancel and on the no-Apple-Account case
+      // (iOS shows its own Settings dialog); real failures carry the reason.
+      if (error?.code === 'ERR_REQUEST_CANCELED' || error?.code === 'ERR_REQUEST_UNKNOWN') return;
+      const detail = typeof error?.message === 'string' && error.message.trim()
+        ? `\n\n${error.message.trim().slice(0, 140)}`
+        : '';
+      Alert.alert('Error', `Apple sign up failed. Please try again.${detail}`);
     } finally {
       setLoading(false);
     }

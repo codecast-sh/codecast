@@ -20,15 +20,28 @@ import { usePushNotifications } from '@/hooks/usePushNotifications';
 import { initAnalytics, identifyUser, resetUser, wrapRoot } from '@/lib/analytics';
 import { api } from '@codecast/convex/convex/_generated/api';
 
+// Keychain failures must degrade to "signed out", never hang auth: a rejected
+// getItem propagates into @convex-dev/auth's boot read, which is fired as
+// `void readStateFromStorage()` — the rejection is swallowed, isLoading stays
+// true forever, and the user is soft-locked on the skeleton inbox with no way
+// to reach the login screen.
 const secureStorage = {
   getItem: async (key: string) => {
-    return await SecureStore.getItemAsync(key);
+    try {
+      return await SecureStore.getItemAsync(key);
+    } catch {
+      return null;
+    }
   },
   setItem: async (key: string, value: string) => {
-    await SecureStore.setItemAsync(key, value);
+    try {
+      await SecureStore.setItemAsync(key, value);
+    } catch {}
   },
   removeItem: async (key: string) => {
-    await SecureStore.deleteItemAsync(key);
+    try {
+      await SecureStore.deleteItemAsync(key);
+    } catch {}
   },
 };
 

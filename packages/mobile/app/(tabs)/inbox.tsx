@@ -399,6 +399,11 @@ export default function InboxScreen() {
   useSyncBuckets();
 
   const sessions = useInboxStore((s) => s.sessions);
+  // First-payload state of the live sessions subscription (set by
+  // useSyncInboxSessions). Distinguishes "still loading" from "account has no
+  // sessions" — a brand-new account (e.g. App Review's demo login) otherwise
+  // sits on the skeleton list forever.
+  const sessionsFirstLoad = useInboxStore((s) => s.liveLoading.sessions);
   const stashSession = useInboxStore((s) => s.stashSession);
   const restoreSession = useInboxStore((s) => s.restoreSession);
   const pinSession = useInboxStore((s) => s.pinSession);
@@ -629,7 +634,20 @@ export default function InboxScreen() {
   const listData = useMemo(() => {
     const sections: React.ReactNode[] = [];
     if (Object.keys(sessions).length === 0) {
-      return [<SessionListSkeleton key="skeleton" />];
+      // Skeletons only while the live subscription hasn't delivered its first
+      // payload (undefined = sync hook not mounted yet). Once it has, an empty
+      // collection means a genuinely session-less account — show a real empty
+      // state, not an eternal skeleton.
+      if (sessionsFirstLoad !== false) {
+        return [<SessionListSkeleton key="skeleton" />];
+      }
+      return [(
+        <RNView key="empty" style={styles.emptyInbox}>
+          <FontAwesome name="inbox" size={32} color={Theme.textMuted0} />
+          <RNText style={styles.emptyText}>No sessions yet</RNText>
+          <RNText style={styles.emptySubtext}>Sessions you run with the codecast CLI will appear here</RNText>
+        </RNView>
+      )];
     }
     if (activeSessions.length === 0) {
       return [(
@@ -679,7 +697,7 @@ export default function InboxScreen() {
     sections.push(renderSection("Needs Input", filteredNeedsInput, Theme.accent));
     sections.push(renderSection("Working", filteredWorking, Theme.greenBright));
     return sections.filter(Boolean);
-  }, [activeSessions, sessions, filteredPinned, filteredWorking, filteredNeedsInput, filteredNew, renderSection, viewMode, sortedAll, subsByParent, clientState, currentSessionId, chipMatches, buckets, bucketByConv]);
+  }, [activeSessions, sessions, sessionsFirstLoad, filteredPinned, filteredWorking, filteredNeedsInput, filteredNew, renderSection, viewMode, sortedAll, subsByParent, clientState, currentSessionId, chipMatches, buckets, bucketByConv]);
 
   // Stashed (agent alive, kill-all) and Killed buckets — the web panel's two
   // hidden sections, collapsed by default behind count toggles.
