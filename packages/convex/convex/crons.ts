@@ -60,6 +60,22 @@ crons.interval(
 );
 
 crons.interval(
+  // Recent-window content-search mirror (searchMirror.ts, ct-37627): walks
+  // messages forward by _creationTime — backfill, tail sync, and window GC in
+  // one step. Content search cuts over to the mirror automatically once the
+  // cursor is fresh (see fetchMessageSearchPool).
+  // batch 1200 = the max per tick, not the steady load: caught up, a tick
+  // scans only the new tail (usually <100 rows). The headroom exists so the
+  // cron re-drives its own backfill after any outage without a client loop.
+  // 1200 (not more) keeps a full batch under the ~4096 ops/transaction
+  // ceiling together with searchMirror's MAX_UPSERTS_PER_RUN break.
+  "advance search mirror",
+  { seconds: 15 },
+  internal.searchMirror.advance,
+  { batch: 1200 }
+);
+
+crons.interval(
   // Kicks off the retention drain; pruneOldLogs self-reschedules to chew through
   // the ~9.5M-row backlog, then settles into trimming rows past the 3-day window.
   "prune old daemon logs",

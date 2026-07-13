@@ -40,6 +40,7 @@ import {
   rankConversationsByCoverage,
   type ParsedTerms,
 } from "./searchCore";
+import { MIRROR_WINDOW_MS } from "./searchMirror";
 
 // Single relevance-ranked search-index lookup shared by every message-search
 // surface (web searchConversations, searchForCLI, feedForCLI). One combined
@@ -50,19 +51,75 @@ import {
 // knob: message docs can be large (tool results), so a bigger pool costs bytes.
 //
 // NOTE: `.take()` bounds only what's RETURNED, not what the full-text index
-// SCANS. For a token that appears across a large fraction of the ~3.6M-row
-// messages table (any common word), the search scores the whole posting list and
-// exceeds a query's read budget regardless of the take size — surfacing as a
-// retryable InternalServerError/timeout that the reactive client spins on forever.
-// Lowering this number does not fix that; see ct-37627 for the real fix.
-async function fetchMessageSearchPool(ctx: QueryCtx, terms: ParsedTerms) {
-  if (terms.all.length === 0) return [];
+// SCANS. For a token that appears across a large fraction of the multi-million-
+// row messages table (any common word), search_content_v2 scores the whole
+// posting list and exceeds the query budget regardless of take size. That is
+// why content search serves from the message_search_recent mirror (bounded
+// corpus, see searchMirror.ts) whenever its cron is caught up — the deep index
+// below is only the fallback while the mirror is cold or its walker is behind
+// (its staleness then shows as timeouts again, ct-37627).
+// The narrow shape every search consumer actually reads. Both tiers project
+// to it so the mirror and the deep index are interchangeable downstream
+// (_id is the real messages id either way — deep links depend on it).
+type SearchPoolMessage = {
+  _id: Id<"messages">;
+  conversation_id: Id<"conversations">;
+  role: Doc<"messages">["role"];
+  content: string;
+  timestamp: number;
+  tool_calls_count?: number;
+  tool_results_count?: number;
+};
+
+async function fetchMessageSearchPool(
+  ctx: QueryCtx,
+  terms: ParsedTerms,
+): Promise<{ pool: SearchPoolMessage[]; tier: "recent" | "deep" }> {
+  if (terms.all.length === 0) return { pool: [], tier: "deep" };
   const searchQuery = terms.all.join(" ");
-  return await ctx.db
+  // search_mirror_live changes only on liveness transitions, so this read
+  // keeps open search subscriptions stable (the walker's per-tick cursor row
+  // must never be read here — it would re-run every open search each tick).
+  const mirror = await ctx.db.query("search_mirror_live").first();
+  if (mirror?.live) {
+    const rows = await ctx.db
+      .query("message_search_recent")
+      .withSearchIndex("search_content", (q) => q.search("content", searchQuery))
+      .take(512);
+    return {
+      tier: "recent",
+      pool: rows.map((r) => ({
+        _id: r.message_id,
+        conversation_id: r.conversation_id,
+        role: r.role,
+        content: r.content,
+        timestamp: r.timestamp,
+        tool_calls_count: r.tool_calls_count,
+        tool_results_count: r.tool_results_count,
+      })),
+    };
+  }
+  const docs = await ctx.db
     .query("messages")
     .withSearchIndex("search_content_v2", (q) => q.search("content", searchQuery))
     .take(512);
+  return {
+    tier: "deep",
+    pool: docs.map((m) => ({
+      _id: m._id,
+      conversation_id: m.conversation_id,
+      role: m.role,
+      content: m.content ?? "",
+      timestamp: m.timestamp,
+      tool_calls_count: m.tool_calls?.length,
+      tool_results_count: m.tool_results?.length,
+    })),
+  };
 }
+
+// Days of message history the recent tier covers — returned to clients so UI
+// copy about content-search coverage stays truthful if the window changes.
+const CONTENT_WINDOW_DAYS = Math.round(MIRROR_WINDOW_MS / 86_400_000);
 
 // Team-scoped visibility context shared by the conversation-search queries:
 // the rosters of every team the caller can see, the per-team feed filters,
@@ -2889,7 +2946,7 @@ export const searchConversations = query({
     const limit = args.limit ?? 20;
     const userOnly = args.userOnly ?? false;
     const terms = parseSearchTerms(searchTerm);
-    const searchResults = await fetchMessageSearchPool(ctx, terms);
+    const { pool: searchResults, tier: contentTier } = await fetchMessageSearchPool(ctx, terms);
 
     // Group messages by conversation (keep messages matching ANY term for context)
     const conversationMessages = new Map<string, typeof searchResults>();
@@ -3039,6 +3096,11 @@ export const searchConversations = query({
       results,
       totalMatches,
       totalSessions,
+      // Which pool served content matches ("recent" mirror vs "deep" full
+      // index) and the mirror's coverage, so UI copy about time filters
+      // beyond the window stays truthful (see searchMirror.ts).
+      contentTier,
+      contentWindowDays: CONTENT_WINDOW_DAYS,
     };
   },
 });
@@ -3742,7 +3804,7 @@ export const searchForCLI = query({
       };
     }
 
-    const searchResults = await fetchMessageSearchPool(ctx, terms);
+    const { pool: searchResults } = await fetchMessageSearchPool(ctx, terms);
 
     // Group messages by conversation (keep messages matching ANY term for context)
     const conversationMessages = new Map<string, typeof searchResults>();
@@ -3882,8 +3944,8 @@ export const searchForCLI = query({
           role: m.role,
           content: snippet,
           timestamp: new Date(m.timestamp).toISOString(),
-          tool_calls_count: m.tool_calls?.length,
-          tool_results_count: m.tool_results?.length,
+          tool_calls_count: m.tool_calls_count,
+          tool_results_count: m.tool_results_count,
         };
       });
 
@@ -5711,7 +5773,7 @@ export const feedForCLI = query({
       // Single combined lookup (see fetchMessageSearchPool), then best-coverage
       // selection instead of a strict all-terms AND.
       const terms = parseSearchTerms(query);
-      const searchResults = await fetchMessageSearchPool(ctx, terms);
+      const { pool: searchResults } = await fetchMessageSearchPool(ctx, terms);
 
       // Group messages by conversation, then keep the best-coverage matches
       const conversationMessages = new Map<string, typeof searchResults>();
@@ -8941,7 +9003,12 @@ export const setSessionModel = mutation({
     if (!userId) throw new Error("Not authenticated");
 
     const conv = await ctx.db.get(args.conversation_id);
-    if (!conv || conv.user_id !== userId) throw new Error("Not authorized");
+    // The runner, or the session's second-party owner — same rule as
+    // killSession/restartSession. An owned session (Mr-Bot-run, assigned to
+    // this user) switches model from the owner's inbox exactly like their own.
+    if (!conv || (conv.user_id !== userId && conv.owner_user_id !== userId)) {
+      throw new Error("Not authorized");
+    }
     const agentKey = modelAgentKey(conv.agent_type);
     const agentCfg = AGENT_MODEL_CONFIG[agentKey];
     if (!agentCfg?.midSession) {
@@ -8965,13 +9032,16 @@ export const setSessionModel = mutation({
     // runs: an out-of-date one treats set_model as an unknown GLOBAL command
     // and stamps "Unknown command: set_model" into the result before the
     // owning daemon even sees it (observed live with a remote box on 1.1.58).
-    const target = await resolveOwnerDevice(ctx, userId, {
+    // Address the command to the RUNNER's daemon (conv.user_id) — same routing
+    // as killSession. An owner's switch must reach the machine actually running
+    // the session, and that daemon polls commands under the runner's account.
+    const target = await resolveOwnerDevice(ctx, conv.user_id, {
       projectPath: conv.project_path ?? null,
       gitRoot: conv.git_root ?? null,
       ownerDeviceId: (conv as any).owner_device_id ?? null,
     });
     return await ctx.db.insert("daemon_commands", {
-      user_id: userId,
+      user_id: conv.user_id,
       command: "set_model",
       args: JSON.stringify({
         conversation_id: args.conversation_id,
@@ -8995,7 +9065,22 @@ export const getDaemonCommandResult = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) return null;
     const cmd = await ctx.db.get(args.command_id);
-    if (!cmd || cmd.user_id !== userId) return null;
+    if (!cmd) return null;
+    if (cmd.user_id !== userId) {
+      // Commands on an owned session are stamped with the RUNNER's user_id so
+      // the runner's daemon executes them (see setSessionModel/killSession).
+      // The second-party owner who issued one may still read its verdict —
+      // authorized through the target conversation, same rule as issuing.
+      let rawConvId: unknown;
+      try {
+        rawConvId = JSON.parse(cmd.args ?? "{}").conversation_id;
+      } catch {
+        return null;
+      }
+      const convId = typeof rawConvId === "string" ? ctx.db.normalizeId("conversations", rawConvId) : null;
+      const conv = convId ? await ctx.db.get(convId) : null;
+      if (!conv || (conv.user_id !== userId && conv.owner_user_id !== userId)) return null;
+    }
     return {
       executed_at: cmd.executed_at ?? null,
       result: cmd.result ?? null,
