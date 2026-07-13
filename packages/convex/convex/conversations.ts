@@ -1,7 +1,7 @@
 import { mutation, query, internalMutation, internalQuery, type QueryCtx, type MutationCtx } from "./functions";
 import { v } from "convex/values";
 import { enqueueStartSession, resolveOwnerDevice } from "./devices";
-import { findConversationBySessionReference } from "./conversationSessionLookup";
+import { findConversationBySessionReference, resolveConversationRefRanked } from "./conversationSessionLookup";
 import { paginationOptsValidator } from "convex/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Doc, Id } from "./_generated/dataModel";
@@ -1077,6 +1077,21 @@ async function resolveActingAuthor(
   };
 }
 
+// Resolve a conversation reference (full id or 7-char short id) for a signed-in
+// caller. Short ids collide across users (they're just the id's first 7 chars),
+// so this ranks candidates own > team-accessible > newest via the shared
+// resolver, keeping "found but not accessible" distinguishable from "not
+// found" — callers still run their usual access check on the result.
+export async function resolveConversationRef(
+  ctx: any,
+  ref: string,
+  userId: Id<"users">,
+): Promise<Doc<"conversations"> | null> {
+  return resolveConversationRefRanked(ctx, ref, userId, (conversation) =>
+    canTeamMemberAccess(ctx, userId, conversation)
+  );
+}
+
 export const webGet = query({
   args: {
     short_id: v.optional(v.string()),
@@ -1088,10 +1103,7 @@ export const webGet = query({
 
     let conv;
     if (args.short_id) {
-      conv = await ctx.db
-        .query("conversations")
-        .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id!))
-        .first();
+      conv = await resolveConversationRef(ctx, args.short_id, userId);
     } else if (args.id) {
       try {
         conv = await ctx.db.get(args.id as Id<"conversations">);
@@ -4007,14 +4019,7 @@ export const conversationMessagesForCLI = query({
     const authUserId = await getAuthenticatedUserIdReadOnly(ctx, args.api_token);
     if (!authUserId) return { error: "Unauthorized" };
 
-    let conv = null;
-    try { conv = await ctx.db.get(args.conversation_id as Id<"conversations">); } catch {}
-    if (!conv) {
-      conv = await ctx.db
-        .query("conversations")
-        .withIndex("by_short_id", (q) => q.eq("short_id", args.conversation_id))
-        .first();
-    }
+    const conv = await resolveConversationRef(ctx, args.conversation_id, authUserId);
     if (!conv) return { error: "Conversation not found" };
 
     const isOwn = conv.user_id.toString() === authUserId.toString();
@@ -4069,22 +4074,7 @@ export const readConversationMessages = query({
       return { error: "User not found" };
     }
 
-    let conv = null;
-
-    try {
-      conv = await ctx.db.get(args.conversation_id as Id<"conversations">);
-    } catch {
-      // ID format invalid, try prefix search
-    }
-
-    if (!conv) {
-      // Try indexed short_id lookup (O(1) instead of iterating)
-      conv = await ctx.db
-        .query("conversations")
-        .withIndex("by_short_id", (q) => q.eq("short_id", args.conversation_id))
-        .first();
-    }
-
+    const conv = await resolveConversationRef(ctx, args.conversation_id, authUserId);
     if (!conv) {
       return { error: "Conversation not found" };
     }
@@ -4243,18 +4233,7 @@ export const exportConversationMessages = query({
       return { error: "User not found" };
     }
 
-    let conv = null;
-    try {
-      conv = await ctx.db.get(args.conversation_id as Id<"conversations">);
-    } catch {
-      // ID format invalid, try prefix search
-    }
-    if (!conv) {
-      conv = await ctx.db
-        .query("conversations")
-        .withIndex("by_short_id", (q) => q.eq("short_id", args.conversation_id))
-        .first();
-    }
+    const conv = await resolveConversationRef(ctx, args.conversation_id, authUserId);
     if (!conv) {
       return { error: "Conversation not found" };
     }
@@ -4319,17 +4298,7 @@ export const exportConversationMessagesPage = query({
       return { error: "User not found" };
     }
 
-    let conv = null;
-    try {
-      conv = await ctx.db.get(args.conversation_id as Id<"conversations">);
-    } catch {
-    }
-    if (!conv) {
-      conv = await ctx.db
-        .query("conversations")
-        .withIndex("by_short_id", (q) => q.eq("short_id", args.conversation_id))
-        .first();
-    }
+    const conv = await resolveConversationRef(ctx, args.conversation_id, authUserId);
     if (!conv) {
       return { error: "Conversation not found" };
     }
@@ -4918,18 +4887,7 @@ export const forkFromMessage = mutation({
       throw new Error("Unauthorized");
     }
 
-    let original = null;
-    try {
-      original = await ctx.db.get(args.conversation_id as Id<"conversations">);
-    } catch {
-      // not a valid Convex ID, try short_id
-    }
-    if (!original) {
-      original = await ctx.db
-        .query("conversations")
-        .withIndex("by_short_id", (q) => q.eq("short_id", args.conversation_id))
-        .first();
-    }
+    const original = await resolveConversationRef(ctx, args.conversation_id, userId);
     if (!original) {
       throw new Error("Conversation not found");
     }
@@ -5170,18 +5128,7 @@ export const getConversationTree = query({
       return { error: "Unauthorized" };
     }
 
-    let conv = null;
-    try {
-      conv = await ctx.db.get(args.conversation_id as Id<"conversations">);
-    } catch {
-      // try short_id
-    }
-    if (!conv) {
-      conv = await ctx.db
-        .query("conversations")
-        .withIndex("by_short_id", (q) => q.eq("short_id", args.conversation_id))
-        .first();
-    }
+    const conv = await resolveConversationRef(ctx, args.conversation_id, userId);
     if (!conv) {
       return { error: "Conversation not found" };
     }
@@ -5333,18 +5280,7 @@ export const getForkBranchMessages = query({
       return { error: "Unauthorized" };
     }
 
-    let conv = null;
-    try {
-      conv = await ctx.db.get(args.conversation_id as Id<"conversations">);
-    } catch {
-      // try short_id
-    }
-    if (!conv) {
-      conv = await ctx.db
-        .query("conversations")
-        .withIndex("by_short_id", (q) => q.eq("short_id", args.conversation_id))
-        .first();
-    }
+    const conv = await resolveConversationRef(ctx, args.conversation_id, userId);
     if (!conv) {
       return { error: "Conversation not found" };
     }
