@@ -107,6 +107,16 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "meta", key: "lastFocusedConversationId" },
     hydration: "manual",
   },
+  // Persisted twin of the in-memory liveInboxIds Set — the server-authoritative
+  // active-inbox id set. A plain string array (the native store JSON-serializes
+  // meta blobs; Sets don't survive, and the generic object-union hydration merge
+  // would wreck one anyway). Hydrated manually: the boot block seeds
+  // liveInboxIds from it so the FIRST painted frame filters the never-prune
+  // cache down to the last-known authoritative set instead of flashing cruft.
+  liveInboxIdList: {
+    persistence: { kind: "meta", key: "liveInboxIdList" },
+    hydration: "manual",
+  },
   _lastViewedAt: {
     persistence: { kind: "meta", key: "_lastViewedAt" },
   },

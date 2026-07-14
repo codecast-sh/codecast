@@ -315,9 +315,16 @@ const NeedsInputCountBadge = memo(function NeedsInputCountBadge() {
   const inboxSessions = useInboxStore((s) => s.sessions);
   const sessionsWithQueuedMessages = useInboxStore((s) => s.sessionsWithQueuedMessages);
   const pendingMessages = useInboxStore((s) => s.pendingMessages);
+  // Count the AUTHORITATIVE active set, not the raw never-prune cache — otherwise
+  // this badge tallies every aged-out "needs input" card the panel already hides,
+  // and the sidebar number never matches what you see. liveInboxIds + showOld make
+  // categorizeSessions drop "old" rows (see its opts). Change-guarded, so no extra
+  // churn beyond the s.sessions subscription this badge already carries.
+  const liveInboxIds = useInboxStore((s) => s.liveInboxIds);
+  const showOld = useInboxStore((s) => s.showOldSessions);
   const needsInputCount = useMemo(
-    () => categorizeSessions(inboxSessions, sessionsWithQueuedMessages, sessionsWithPendingSend(pendingMessages)).needsInput.length,
-    [inboxSessions, sessionsWithQueuedMessages, pendingMessages],
+    () => categorizeSessions(inboxSessions, sessionsWithQueuedMessages, sessionsWithPendingSend(pendingMessages), { liveInboxIds, showOld }).needsInput.length,
+    [inboxSessions, sessionsWithQueuedMessages, pendingMessages, liveInboxIds, showOld],
   );
   if (needsInputCount === 0) return null;
   return (

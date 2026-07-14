@@ -80,10 +80,15 @@ const ActiveAgentsBadge = memo(function ActiveAgentsBadge({ isOnInboxPage }: { i
     s => s.sessions,
     s => s.sessionsWithQueuedMessages,
     s => s.pendingMessages,
+    s => s.liveInboxIds,
+    s => s.showOldSessions,
   ]);
+  // Count only the AUTHORITATIVE active set — a stale "working" card that aged out
+  // of the live inbox must not inflate the active-agents badge (its frozen daemon
+  // status never un-sets). liveInboxIds + showOld make categorizeSessions drop it.
   const working = useMemo(
-    () => categorizeSessions(s.sessions, s.sessionsWithQueuedMessages, sessionsWithPendingSend(s.pendingMessages)).working,
-    [s.sessions, s.sessionsWithQueuedMessages, s.pendingMessages],
+    () => categorizeSessions(s.sessions, s.sessionsWithQueuedMessages, sessionsWithPendingSend(s.pendingMessages), { liveInboxIds: s.liveInboxIds, showOld: s.showOldSessions }).working,
+    [s.sessions, s.sessionsWithQueuedMessages, s.pendingMessages, s.liveInboxIds, s.showOldSessions],
   );
   if (working.length === 0) return null;
   const activeAgentCount = working.length;

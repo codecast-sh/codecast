@@ -263,7 +263,9 @@ function ActionSubmenu({
       st.sessions,
       st.sessionsWithQueuedMessages,
       sessionsWithPendingSend(st.pendingMessages),
-      { currentSessionId: st.currentSessionId, pendingCreateIds: new Set(Object.keys(st.pendingSessionCreates)) },
+      // liveInboxIds + showOld: the chip counts must reflect the SAME authoritative
+      // active set the panel renders, not the raw never-prune cache.
+      { currentSessionId: st.currentSessionId, pendingCreateIds: new Set(Object.keys(st.pendingSessionCreates)), liveInboxIds: st.liveInboxIds, showOld: st.showOldSessions },
     );
     const active = [...pinned, ...newSessions, ...needsInput, ...working];
     return computeChipCounts(active, convBucketMap(st.bucketAssignments as Record<string, BucketAssignmentItem>));

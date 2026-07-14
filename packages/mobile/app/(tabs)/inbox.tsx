@@ -433,14 +433,15 @@ export default function InboxScreen() {
 
   const sessionsWithQueuedMessages = useInboxStore((s) => s.sessionsWithQueuedMessages);
   const liveInboxIds = useInboxStore((s) => s.liveInboxIds);
-  // Hide "old" rows exactly like web (GlobalSessionPanel): the never-prune
-  // cache holds every session ever synced (including teammates' threads opened
-  // from the feed), but only rows the live inbox subscription still returns are
-  // actionable. Without this partition the phone's Needs Input bucket fills
-  // with hundreds of dead threads desktop doesn't show.
+  // Hide "old" rows exactly like web (GlobalSessionPanel): the never-prune cache
+  // holds every session ever synced (including teammates' threads opened from the
+  // feed), but only rows the live inbox subscription still returns are actionable.
+  // Same EPHEMERAL flag web reads (store.showOldSessions, off every boot) so the
+  // phone and desktop render one identical authoritative set by default.
+  const showOld = useInboxStore((s) => s.showOldSessions);
   const { visibleSessions } = useMemo(
-    () => partitionOldSessions(sessions, liveInboxIds, false, currentSessionId),
-    [sessions, liveInboxIds, currentSessionId],
+    () => partitionOldSessions(sessions, liveInboxIds, showOld, currentSessionId),
+    [sessions, liveInboxIds, showOld, currentSessionId],
   );
   // Full-args categorize (matches web): pendingSendIds keeps optimistic sends
   // in Working, and opts make isEngagedBlank work so the New section actually
