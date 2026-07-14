@@ -356,6 +356,167 @@ export function useProfile(name: string): SwitchResult {
 }
 
 // ---------------------------------------------------------------------------
+// Proactive token refresh — keep the machine-global login from lapsing
+// ---------------------------------------------------------------------------
+//
+// A running `claude` self-refreshes its ~8h access token from the stored
+// refresh token; nothing does when no session is running, so an idle machine's
+// grant eventually expires ("Login expired · run /login"). These helpers let
+// the daemon mint a fresh token during idle gaps and keep saved profiles in
+// step with the live credential. The refresh token ROTATES on use, so this must
+// only ever run on the primary device — a remote refreshing its pushed copy
+// would invalidate the laptop's token (the one-way rule the remote push obeys).
+
+// Claude Code's own OAuth client. A refresh must reuse the exact client_id that
+// minted the tokens, so these mirror the installed CLI. Env-overridable because
+// Anthropic has moved the endpoint before (console.anthropic.com → platform):
+// a drift becomes a config change, not a code change.
+const CC_OAUTH_CLIENT_ID =
+  process.env.CODECAST_CC_OAUTH_CLIENT_ID || "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+const CC_OAUTH_TOKEN_URL =
+  process.env.CODECAST_CC_OAUTH_TOKEN_URL || "https://platform.claude.com/v1/oauth/token";
+
+/** The parsed `claudeAiOauth` block of the active credential (null for API-key
+ * logins, missing/corrupt credentials). */
+export function readActiveOauth(): Record<string, any> | null {
+  const raw = readActiveCredential();
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw)?.claudeAiOauth ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Epoch-ms expiry of the active access token, or null if unknown. */
+export function activeCredentialExpiresAt(): number | null {
+  const exp = readActiveOauth()?.expiresAt;
+  return typeof exp === "number" ? exp : null;
+}
+
+export interface RefreshResult {
+  refreshed: boolean;
+  expiresAt?: number;
+  reason?: string;
+}
+
+/**
+ * Mint a fresh access token from the stored refresh token and write the rotated
+ * blob back to the active credential store. Defensive by construction: it only
+ * overwrites once a complete, valid new blob is in hand, and preserves every
+ * field it isn't sure changed (subscription, tier, scopes — and the old refresh
+ * token when the server doesn't rotate it). Any failure returns
+ * `{refreshed:false, reason}` and leaves the existing credential untouched, so
+ * the worst case is "token still lapses, user runs /login" — never a login we
+ * broke ourselves. `fetchImpl`/`now` are injectable for tests.
+ */
+export async function refreshActiveCredential(
+  opts: { fetchImpl?: typeof fetch; now?: number } = {},
+): Promise<RefreshResult> {
+  const fetchImpl = opts.fetchImpl ?? fetch;
+  const now = opts.now ?? Date.now();
+  const raw = readActiveCredential();
+  if (!raw) return { refreshed: false, reason: "no active credential" };
+  let cred: any;
+  try {
+    cred = JSON.parse(raw);
+  } catch {
+    return { refreshed: false, reason: "active credential is not JSON" };
+  }
+  const oauth = cred?.claudeAiOauth;
+  const refreshToken = oauth?.refreshToken;
+  if (!refreshToken) {
+    return { refreshed: false, reason: "no refresh token (API-key login?)" };
+  }
+
+  let resp: Response;
+  try {
+    resp = await fetchImpl(CC_OAUTH_TOKEN_URL, {
+      method: "POST",
+      // Form-encoded: the endpoint may time out on application/json.
+      headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: refreshToken,
+        client_id: CC_OAUTH_CLIENT_ID,
+      }).toString(),
+    });
+  } catch (err) {
+    return { refreshed: false, reason: `request failed: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    return { refreshed: false, reason: `token endpoint ${resp.status}: ${text.slice(0, 120)}` };
+  }
+  let data: any;
+  try {
+    data = await resp.json();
+  } catch {
+    return { refreshed: false, reason: "token response is not JSON" };
+  }
+  const accessToken = data?.access_token;
+  const expiresInSec = Number(data?.expires_in);
+  if (typeof accessToken !== "string" || !accessToken || !Number.isFinite(expiresInSec)) {
+    return { refreshed: false, reason: "token response missing access_token/expires_in" };
+  }
+  const expiresAt = now + expiresInSec * 1000;
+  // Only override the three fields a refresh actually changes; preserve the
+  // rest of the blob verbatim (subscriptionType, rateLimitTier, scopes, …).
+  const newCred = {
+    ...cred,
+    claudeAiOauth: {
+      ...oauth,
+      accessToken,
+      refreshToken: typeof data.refresh_token === "string" && data.refresh_token
+        ? data.refresh_token
+        : refreshToken,
+      expiresAt,
+    },
+  };
+  writeActiveCredential(JSON.stringify(newCred));
+  invalidateAccountsCache();
+  return { refreshed: true, expiresAt };
+}
+
+/**
+ * Re-snapshot the active login into the saved profile that covers it whenever
+ * the live credential is FRESHER than the stored one — i.e. a manual /login or
+ * a proactive refresh rotated the tokens. Freshness is compared by the token's
+ * own expiry, so this is a cheap no-op when they're already in step. Returns the
+ * updated profile name, or null when there's nothing to do (no login, not saved
+ * yet — first-time saves are `autoSaveActiveProfile`'s job — or already fresh).
+ */
+export function resnapshotIfActiveFresher(): string | null {
+  const active = activeAccountSummary();
+  if (!active?.uuid && !active?.email) return null;
+  const activeExpiry = activeCredentialExpiresAt() ?? 0;
+  const index = readProfileIndex();
+  const match = Object.entries(index.profiles).find(
+    ([, meta]) =>
+      (active.uuid && meta.uuid === active.uuid) || (active.email && meta.email === active.email),
+  );
+  if (!match) return null;
+  const [name] = match;
+  const raw = readProfileSecret(name);
+  let storedExpiry = 0;
+  if (raw) {
+    try {
+      const e = parseProfile(raw).credentials?.claudeAiOauth?.expiresAt;
+      if (typeof e === "number") storedExpiry = e;
+    } catch {
+      /* stored blob unreadable — treat as stale, re-save below */
+    }
+  }
+  if (activeExpiry <= storedExpiry) return null;
+  try {
+    saveProfile(name);
+    return name;
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Heartbeat payload (non-secret) — lets the web render the switcher
 // ---------------------------------------------------------------------------
 

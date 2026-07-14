@@ -9,7 +9,15 @@ import { watch as chokidarWatch } from "chokidar";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
 import { deviceId, deviceLabel, isRemoteDevice } from "./remote/device.js";
 import { copyCredentialToRemoteAsync, loadRemoteHost, remoteHostsRegistered } from "./remote/session-move.js";
-import { useProfile, saveProfile, getAccountsHeartbeatPayload, autoSaveActiveProfile } from "./ccAccounts.js";
+import {
+  useProfile,
+  saveProfile,
+  getAccountsHeartbeatPayload,
+  autoSaveActiveProfile,
+  activeCredentialExpiresAt,
+  refreshActiveCredential,
+  resnapshotIfActiveFresher,
+} from "./ccAccounts.js";
 import { CursorWatcher, type CursorSessionEvent } from "./cursorWatcher.js";
 import { CursorTranscriptWatcher, type CursorTranscriptEvent } from "./cursorTranscriptWatcher.js";
 import { CodexWatcher, isAppServerManagedCodexSessionHead, type CodexSessionEvent } from "./codexWatcher.js";
@@ -1365,6 +1373,49 @@ async function pushCredentialToRemoteHosts(reason: string): Promise<void> {
     log(`[REMOTE-AUTH] credential push failed (${reason}): ${err instanceof Error ? err.message : String(err)}`);
   } finally {
     remoteCredPushInFlight = false;
+  }
+}
+
+// Keep THIS machine's Claude Code login from lapsing. A running `claude`
+// self-refreshes its ~8h access token from the stored refresh token; nothing
+// does when no session runs, so an idle grant eventually expires ("Login
+// expired · run /login"). On a slow tick, if the active login is near/past
+// expiry, mint a fresh token from the refresh token and write it back — then
+// re-snapshot the covering saved profile so a manual /login (or this refresh)
+// never leaves a dormant profile carrying stale tokens.
+//
+// Primary devices only (same gate as the remote push): remotes run a pushed
+// COPY of this credential and must never rotate the shared refresh token, or
+// they'd invalidate the laptop's. The expiry threshold is itself the idle
+// detector — a live claude keeps expiry ~8h out, so we almost always act only
+// in idle gaps; a rare race with an active session self-heals because CC
+// re-reads the credential store on a 401.
+const CC_TOKEN_MAINT_INTERVAL_MS = 10 * 60 * 1000;
+const CC_TOKEN_REFRESH_THRESHOLD_MS = 30 * 60 * 1000;
+let ccTokenMaintInFlight = false;
+
+async function maintainActiveCcToken(reason: string): Promise<void> {
+  if (isRemoteDevice() || ccTokenMaintInFlight) return;
+  ccTokenMaintInFlight = true;
+  try {
+    const expiresAt = activeCredentialExpiresAt();
+    if (expiresAt != null && expiresAt - Date.now() < CC_TOKEN_REFRESH_THRESHOLD_MS) {
+      const res = await refreshActiveCredential();
+      if (res.refreshed) {
+        const mins = Math.round(((res.expiresAt ?? Date.now()) - Date.now()) / 60000);
+        log(`[CC-AUTH] Refreshed active login (${mins}m to next expiry; ${reason})`);
+      } else {
+        log(`[CC-AUTH] Proactive refresh skipped: ${res.reason} (${reason})`);
+      }
+    }
+    // Propagate a fresher active credential (a manual /login OR the refresh
+    // above) into its saved profile. Cheap no-op when already in step.
+    const updated = resnapshotIfActiveFresher();
+    if (updated) log(`[CC-AUTH] Re-snapshotted profile "${updated}" from fresher active login`);
+  } catch (err) {
+    log(`[CC-AUTH] Token maintenance failed (${reason}): ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    ccTokenMaintInFlight = false;
   }
 }
 
@@ -13456,6 +13507,11 @@ async function main(): Promise<void> {
   // Keep the remote Mac's copied credential fresh (it can't /login itself).
   setTimeout(() => { pushCredentialToRemoteHosts("daemon start").catch(() => {}); }, 60_000);
   setInterval(() => { pushCredentialToRemoteHosts("periodic").catch(() => {}); }, REMOTE_CRED_REFRESH_INTERVAL_MS);
+
+  // Keep THIS machine's login from lapsing during idle gaps + propagate a
+  // manual /login into its saved profile (primary devices only).
+  setTimeout(() => { maintainActiveCcToken("daemon start").catch(() => {}); }, 45_000);
+  setInterval(() => { maintainActiveCcToken("periodic").catch(() => {}); }, CC_TOKEN_MAINT_INTERVAL_MS);
 
   // Auto-dispatch: detect active plans with bound workflows that haven't started
   const notifiedPlanWorkflows = new Set<string>();
