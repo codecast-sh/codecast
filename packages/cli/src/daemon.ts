@@ -670,10 +670,24 @@ const compactionRedeliveryBypass = new Set<string>(); // messageIds that should 
 // 60s dedup window would skip re-delivery of the message Convex just reset back to pending.
 // Each entry stores the conversation_id so kill_session can find matching ids without
 // maintaining a reverse index.
+//
+// `confirmed` = the "injected" status write reached Convex. Until then the row is still
+// "pending" server-side, so the pending scanner sees the message on every pass and ONLY the
+// local dedup entry stands between the agent and a duplicate. Confirmed entries expire on
+// the short TTL (the 120s retry cron re-pending a stale "injected" row is the intended
+// lost-injection recovery); unconfirmed entries must outlive any backend brownout, because
+// during one BOTH the mark and the JSONL echo ack stall past the TTL (2026-07-13 storm:
+// 'gogo' processed 7x, ct-38507). The hard cap is the last-resort redelivery deadline when
+// confirmation never arrives.
 const messagesInFlight = new Map<string, { ts: number; conversationId: string }>();
-const injectedMessageTs = new Map<string, { ts: number; conversationId: string }>();
+const injectedMessageTs = new Map<string, { ts: number; conversationId: string; confirmed: boolean }>();
 const IN_FLIGHT_HARD_TTL_MS = 240_000; // > DELIVERY_TIMEOUT_MS (180s)
 const INJECTION_DEDUP_TTL_MS = 60_000;
+const UNCONFIRMED_INJECTION_DEDUP_MAX_MS = 30 * 60_000;
+
+export function injectionDedupWindowMs(entry: { confirmed: boolean }): number {
+  return entry.confirmed ? INJECTION_DEDUP_TTL_MS : UNCONFIRMED_INJECTION_DEDUP_MAX_MS;
+}
 // Per-conversation delivery lock: prevents multiple messages targeting the same tmux pane
 // from being injected concurrently (which causes an interrupt storm where each injection
 // Escapes the previous, none complete, and the retry cron resets them all to pending).
@@ -686,25 +700,80 @@ const conversationDeliveryActive = new Set<string>();
 // updateMessageStatus before the paste was wedging deliverMessage for the full 180s timeout
 // under Convex load, so the send-keys never ran and the message never reached the agent.
 const MARK_INJECTED_TIMEOUT_MS = 8_000;
+// Backoff for re-attempting an unconfirmed mark. Total ~2.5min of persistence covers a
+// transient stall; anything longer is a real brownout, where the unconfirmed dedup entry
+// (not the mark) is what holds redelivery back.
+const MARK_INJECTED_RETRY_DELAYS_MS: readonly number[] = [5_000, 15_000, 45_000, 90_000];
+const markInjectedRetryActive = new Set<string>();
+
 export function markInjectedBestEffort(
   syncService: Pick<SyncService, "updateMessageStatus">,
   messageId: string,
   timeoutMs: number = MARK_INJECTED_TIMEOUT_MS,
+  opts?: { conversationId?: string; retryDelaysMs?: readonly number[] },
 ): Promise<void> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  return Promise.race([
-    syncService.updateMessageStatus({ messageId, status: "injected" }),
-    new Promise<void>((_, reject) => {
-      timer = setTimeout(() => reject(new Error("mark_injected_timeout")), timeoutMs);
-    }),
-  ]).catch(err => {
-    logDelivery(`mark-injected best-effort skipped for msg=${messageId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
-  }).finally(() => { if (timer) clearTimeout(timer); });
+  // Register the dedup entry BEFORE the first attempt: the paste follows within ms of this
+  // call, so from here on a pending-scanner pass must treat the message as injected. The
+  // delivery result handler restamps ts on success and deletes the entry on failure.
+  if (opts?.conversationId) {
+    const prior = injectedMessageTs.get(messageId);
+    injectedMessageTs.set(messageId, {
+      ts: Date.now(),
+      conversationId: opts.conversationId,
+      confirmed: prior?.confirmed ?? false,
+    });
+  }
+  const attempt = (): Promise<boolean> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    return Promise.race([
+      syncService.updateMessageStatus({ messageId, status: "injected" }).then(() => true),
+      new Promise<boolean>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("mark_injected_timeout")), timeoutMs);
+      }),
+    ]).catch(err => {
+      logDelivery(`mark-injected best-effort skipped for msg=${messageId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
+      return false;
+    }).finally(() => { if (timer) clearTimeout(timer); });
+  };
+  const confirm = () => {
+    const entry = injectedMessageTs.get(messageId);
+    if (entry) entry.confirmed = true;
+  };
+  return attempt().then(ok => {
+    if (ok) { confirm(); return; }
+    // Retry detached until the write lands: while unconfirmed, the row stays "pending"
+    // server-side and only the local dedup entry prevents redelivery — so persistence here
+    // directly shortens the storm window (ct-38507). Abort when the dedup entry disappears:
+    // a kill/crash clear deliberately re-pended the message for a new pane, and a late
+    // "injected" write would strand it un-redelivered.
+    if (!opts?.conversationId || markInjectedRetryActive.has(messageId)) return;
+    markInjectedRetryActive.add(messageId);
+    void (async () => {
+      try {
+        for (const delayMs of opts.retryDelaysMs ?? MARK_INJECTED_RETRY_DELAYS_MS) {
+          await new Promise<void>(resolve => {
+            const t = setTimeout(resolve, delayMs);
+            (t as unknown as { unref?: () => void }).unref?.();
+          });
+          const entry = injectedMessageTs.get(messageId);
+          if (!entry || entry.confirmed) return;
+          if (await attempt()) {
+            confirm();
+            logDelivery(`mark-injected confirmed on retry for msg=${messageId.slice(0, 8)}`);
+            return;
+          }
+        }
+      } finally {
+        markInjectedRetryActive.delete(messageId);
+      }
+    })();
+  });
 }
 
-function clearMessageDeliveryStateForConversation(conversationId: string): { inFlight: number; dedup: number } {
+export function clearMessageDeliveryStateForConversation(conversationId: string): { inFlight: number; dedup: number; preserved: number } {
   let inFlight = 0;
   let dedup = 0;
+  let preserved = 0;
   for (const [id, entry] of messagesInFlight) {
     if (entry.conversationId === conversationId) {
       messagesInFlight.delete(id);
@@ -713,12 +782,22 @@ function clearMessageDeliveryStateForConversation(conversationId: string): { inF
   }
   for (const [id, entry] of injectedMessageTs) {
     if (entry.conversationId === conversationId) {
+      // An injected-but-unconfirmed message survives the clear: its row is still "pending"
+      // server-side (the mark never landed), so dropping the entry would hand the pending
+      // scanner an immediate duplicate — the exact 2026-07-13 storm ([HEARTBEAT-HEALTH]
+      // clears during the brownout re-sent already-injected messages, ct-38507). The entry
+      // releases on confirmation (then the normal 120s-cron re-pend + expired TTL path
+      // redelivers if the agent never echoed) or on the unconfirmed hard cap.
+      if (!entry.confirmed) {
+        preserved++;
+        continue;
+      }
       injectedMessageTs.delete(id);
       dedup++;
     }
   }
   conversationDeliveryActive.delete(conversationId);
-  return { inFlight, dedup };
+  return { inFlight, dedup, preserved };
 }
 
 // Single source of truth for "this session/conversation just lost its tmux pane".
@@ -746,8 +825,8 @@ async function clearConversationDeliveryAndResumeState(
   }
 
   const cleared = clearMessageDeliveryStateForConversation(conversationId);
-  if (cleared.inFlight || cleared.dedup) {
-    log(`[${context}] Cleared delivery state for conversation ${conversationId.slice(0, 12)}: ${cleared.inFlight} in-flight, ${cleared.dedup} dedup`);
+  if (cleared.inFlight || cleared.dedup || cleared.preserved) {
+    log(`[${context}] Cleared delivery state for conversation ${conversationId.slice(0, 12)}: ${cleared.inFlight} in-flight, ${cleared.dedup} dedup, ${cleared.preserved} unconfirmed-injected preserved`);
   }
   recentSessionInjections.delete(conversationId);
 }
@@ -11460,7 +11539,7 @@ async function deliverMessage(
         // "delivered". If we marked after and the ack won the race it would find no row and the
         // daemon's later mark would strand the row "injected", which the 120s retry cron re-pends
         // → duplicate reply. Marking first guarantees the ack always has a row to promote.
-        markInjectedBestEffort(syncService, messageId);
+        markInjectedBestEffort(syncService, messageId, undefined, { conversationId });
         await injectViaTmux(startedTmuxTarget, content);
         syncService.updateSessionAgentStatus(conversationId, "connected").catch(logConvexFailure);
         log(`Injected message to started session tmux ${entry.tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
@@ -11575,7 +11654,7 @@ async function deliverMessage(
       // promotes an EXISTING row to "delivered". If we marked after and the ack ran first it would
       // find no row, the daemon's later mark would strand the row "injected", and the 120s retry
       // cron would re-pend it → duplicate reply. Marking first guarantees the ack has a row.
-      markInjectedBestEffort(syncService, messageId);
+      markInjectedBestEffort(syncService, messageId, undefined, { conversationId });
       await injectViaTmux(injectTarget, content);
       // A process-discovered pane can go stale between scan and inject — verify the agent
       // survived and fall through to auto-resume if it crashed (the original optimistic path).
@@ -11606,7 +11685,7 @@ async function deliverMessage(
     try {
       // Mark "injected" best-effort (non-blocking) BEFORE the terminal paste — same ack-race
       // reasoning and same wedge-safety (fire-and-forget 8s timeout) as the tmux paths above.
-      markInjectedBestEffort(syncService, messageId);
+      markInjectedBestEffort(syncService, messageId, undefined, { conversationId });
       await injectViaTerminal(live.proc.tty, content, live.proc.termProgram);
       logDelivery(`Injected via ${termLabel} tty=${live.proc.tty}`);
       return true;
@@ -11635,7 +11714,7 @@ async function deliverMessage(
   // to "delivered" when Claude echoes the message to JSONL, so this status write is not
   // load-bearing. Keeping it non-blocking ensures a slow/stalled Convex mark can't wedge the
   // resume+inject — the same failure mode fixed on the live-tmux path above.
-  markInjectedBestEffort(syncService, messageId);
+  markInjectedBestEffort(syncService, messageId, undefined, { conversationId });
   const resumed = await autoResumeSession(sessionId, content, titleCache, undefined, conversationId);
   if (resumed) {
     resetSessionDeliveryFailures(sessionId);
@@ -15073,14 +15152,18 @@ async function main(): Promise<void> {
               syncService.updateSessionAgentStatus(msg.conversation_id, "connected").catch(logConvexFailure);
 
               // If recently injected to tmux, skip re-delivery (prevents retry race causing duplicates).
-              // TTL ensures we allow re-delivery if the agent dropped/crashed after injection.
+              // Confirmed entries expire on the short TTL so a genuinely lost injection is redelivered;
+              // unconfirmed entries (the "injected" mark never reached Convex, so this row is still
+              // "pending" and reappears on every scanner pass) hold much longer — until the mark's
+              // background retry confirms, the agent's echo promotes the row, or the hard cap lapses.
               // Exception: compaction recovery bypass allows re-delivery of messages dropped during CC compaction.
               const isCompactionRecovery = compactionRedeliveryBypass.delete(msg._id);
               const lastInjected = injectedMessageTs.get(msg._id);
-              if (lastInjected && (Date.now() - lastInjected.ts) < INJECTION_DEDUP_TTL_MS && !isCompactionRecovery) {
-                logDelivery(`DEDUP: msg=${msg._id.slice(0, 8)} injected ${Math.round((Date.now() - lastInjected.ts) / 1000)}s ago, updating status only`);
+              if (lastInjected && (Date.now() - lastInjected.ts) < injectionDedupWindowMs(lastInjected) && !isCompactionRecovery) {
+                logDelivery(`DEDUP: msg=${msg._id.slice(0, 8)} injected ${Math.round((Date.now() - lastInjected.ts) / 1000)}s ago${lastInjected.confirmed ? "" : " (unconfirmed)"}, updating status only`);
                 try {
                   await syncService.updateMessageStatus({ messageId: msg._id, status: "injected" });
+                  lastInjected.confirmed = true; // a served status write IS the confirmation
                 } catch {}
                 messagesInFlight.delete(msg._id);
                 conversationDeliveryActive.delete(msg.conversation_id);
@@ -15107,7 +15190,13 @@ async function main(): Promise<void> {
                 ]);
                 if (delivered) {
                   logDelivery(`SUCCESS: msg=${msg._id.slice(0, 8)} injected${isCompactionRecovery ? " (compaction recovery)" : ""}`);
-                  injectedMessageTs.set(msg._id, { ts: Date.now(), conversationId: msg.conversation_id });
+                  // Restamp ts but keep the confirmed flag: markInjectedBestEffort registered the
+                  // entry pre-paste and may have already confirmed the status write.
+                  injectedMessageTs.set(msg._id, {
+                    ts: Date.now(),
+                    conversationId: msg.conversation_id,
+                    confirmed: injectedMessageTs.get(msg._id)?.confirmed ?? false,
+                  });
                   // Track for post-compaction recovery: if CC compacts and goes idle,
                   // we can re-inject this message. Skip on recovery re-injections to
                   // prevent infinite compaction->recovery loops.
@@ -15118,20 +15207,26 @@ async function main(): Promise<void> {
                       ts: Date.now(),
                     });
                   }
-                  // GC: evict expired entries to prevent unbounded growth
+                  // GC: evict expired entries to prevent unbounded growth (per-entry window:
+                  // confirmed = short TTL, unconfirmed = hard cap)
                   if (injectedMessageTs.size > 500) {
                     const now = Date.now();
                     for (const [id, entry] of injectedMessageTs) {
-                      if (now - entry.ts > INJECTION_DEDUP_TTL_MS) injectedMessageTs.delete(id);
+                      if (now - entry.ts > injectionDedupWindowMs(entry)) injectedMessageTs.delete(id);
                     }
                   }
                 } else {
                   logDelivery(`FAILED: msg=${msg._id.slice(0, 8)} delivery returned false, scheduling retry ${(msg.retry_count ?? 0) + 1}`);
+                  // The pre-paste dedup entry must not survive a failed delivery — it would
+                  // block the retry it just scheduled (and abort the mark's background retry,
+                  // which is correct: an "injected" write for an undelivered message strands it).
+                  injectedMessageTs.delete(msg._id);
                   scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, messageContent);
                 }
               } catch (err) {
                 const errMsg = err instanceof Error ? err.message : String(err);
                 logDelivery(`ERROR: msg=${msg._id.slice(0, 8)} exception: ${errMsg}`);
+                injectedMessageTs.delete(msg._id);
                 scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, msg.content);
               } finally {
                 if (timeoutHandle) clearTimeout(timeoutHandle);
