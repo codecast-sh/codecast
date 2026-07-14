@@ -144,6 +144,15 @@ export function profileMeta(profile: CcProfile): Omit<CcProfileMeta, "name" | "a
 // ---------------------------------------------------------------------------
 
 export function readActiveCredential(): string | null {
+  // Mirror writeActiveCredential's store selection so reads and writes always
+  // hit the SAME place. Without this the file-store gate (non-darwin, or
+  // CC_ACCOUNTS_FORCE_FILE) would write the file while reads still probed the
+  // keychain — the source of the sandbox reading the machine's real login.
+  if (useFileStore()) {
+    const f = path.join(homeDir(), ".claude", ".credentials.json");
+    if (!fs.existsSync(f)) return null;
+    return fs.readFileSync(f, "utf-8");
+  }
   return readLocalCredential();
 }
 
