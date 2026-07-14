@@ -3547,10 +3547,16 @@ cliRoute("/cli/labels/remove", async (ctx, body) => ctx.runMutation(api.buckets.
 // until then.
 cliRoute("/cli/spawn", async (ctx, body) => ctx.runMutation((api as any).spawn.createSessionFromCli, body));
 
-// Second-party session ownership (cast own / cast disown, or scripts routing an
-// agent-run session into a human's inbox). body: { api_token, session_id,
-// owner: "<email|name>" | "me" | null }.
-cliRoute("/cli/sessions/own", async (ctx, body) => ctx.runMutation(api.sessionOwnership.setSessionOwner, body));
+// Session OWNERS (cast own / disown / owners, or scripts routing an agent-run
+// session into a human's inbox). A session has a SET of owners — it can sit in
+// several teammates' inboxes at once — so `own` ADDS and `disown` REMOVES one,
+// leaving the others alone. `owners/set` replaces the set wholesale (the web
+// multi-select, and `cast disown --all`).
+// body: { api_token, session_id, owner: "<email|name>" | "me" }.
+cliRoute("/cli/sessions/own", async (ctx, body) => ctx.runMutation(api.sessionOwnership.addSessionOwner, body));
+cliRoute("/cli/sessions/disown", async (ctx, body) => ctx.runMutation(api.sessionOwnership.removeSessionOwner, body));
+cliRoute("/cli/sessions/owners/set", async (ctx, body) => ctx.runMutation(api.sessionOwnership.setSessionOwners, body));
+cliRoute("/cli/sessions/owners", async (ctx, body) => ctx.runQuery(api.sessionOwnership.listOwners, body));
 
 // CC account switching: route the swap + blocked-session revive through the
 // daemon fleet / nudge limit-parked sessions after a window reset.
