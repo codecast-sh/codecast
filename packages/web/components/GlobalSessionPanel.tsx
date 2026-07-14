@@ -1912,6 +1912,7 @@ export function SessionListPanel({
     s => s.clientState.show_dismissed,
     s => s.clientState.show_stashed,
     s => s.liveInboxIds,
+    s => s.showOldSessions,
     // Wake only on STRUCTURAL session change (bucket/order/identity), not on every
     // ~1s liveness heartbeat. Subscribing to the raw s.sessions map re-rendered the
     // whole panel (categorize O(N) + 100 cards) ~17x/sec with 17 live sessions —
@@ -1964,14 +1965,19 @@ export function SessionListPanel({
     () => ({ currentSessionId: activeSessionId ?? s.currentSessionId, pendingCreateIds: new Set(Object.keys(s.pendingSessionCreates)) }),
     [activeSessionId, s.currentSessionId, s.pendingSessionCreates],
   );
-  // "Show old sessions" is a pure client-side filter (default: show). "Old" =
-  // a cached top-level session the live (recent) subscription no longer returns
-  // — the completeness crawl keeps it in the never-prune cache, so hiding it is
-  // a render decision, never a server re-fetch. liveInboxIds is empty until the
-  // first live payload lands; treat that as "nothing to hide yet" so we never
-  // blank the list. Optimistic stubs (non-Convex id), pinned, the open session,
-  // and dismissed/stashed rows are always kept.
-  const showAllSessions = s.clientState.ui?.show_old_sessions ?? true;
+  // "Show old sessions" — an EPHEMERAL browse gesture (store.showOldSessions,
+  // never persisted or server-synced). "Old" = a cached top-level session the
+  // live (authoritative) subscription no longer returns; the completeness crawl
+  // keeps it in the never-prune cache for search/open, so hiding it is a pure
+  // render decision, never a server re-fetch. Off by default on every boot, so
+  // the actionable inbox always renders exactly the server's active set
+  // (store.liveInboxIds) — identical on every client — instead of each client's
+  // divergent, ever-growing local cache. liveInboxIds seeds from its persisted
+  // twin at hydration, so even the first cold frame filters correctly; an empty
+  // set (fresh install) means "nothing old yet" and never blanks the list.
+  // Optimistic stubs, pinned, the open session, and dismissed/stashed rows are
+  // always kept.
+  const showAllSessions = s.showOldSessions;
   const focusedId = activeSessionId ?? s.currentSessionId;
   // The wake signature ignores updated_at, so the panel no longer re-renders on
   // every heartbeat. categorizeSessions still retires a stale "working" to
@@ -1980,6 +1986,8 @@ export function SessionListPanel({
   // sweep alive without coupling it back to heartbeat churn. 15s is well under the
   // minutes-scale TTL. See useCoarseNow / store/wakeSig.ts.
   const coarseNow = useCoarseNow(15_000);
+  // visibleSessions (cache minus "old") backs BOTH the categorize buckets and the
+  // schedule-inbox partition below, so the panel keeps this explicit pass.
   const { visibleSessions, oldCount } = useMemo(
     () => partitionOldSessions(s.sessions, s.liveInboxIds, showAllSessions, focusedId),
     [s.sessions, s.liveInboxIds, showAllSessions, focusedId],
@@ -2949,7 +2957,7 @@ export function SessionListPanel({
           )}
           {oldCount > 0 && (
             <button
-              onClick={() => s.updateClientUI({ show_old_sessions: !showAllSessions })}
+              onClick={() => s.setShowOldSessions(!showAllSessions)}
               title={showAllSessions ? `Hide ${oldCount} old session${oldCount === 1 ? "" : "s"}` : `Show ${oldCount} old session${oldCount === 1 ? "" : "s"}`}
               className={`px-1 py-[3px] rounded-[5px] transition-colors ${
                 showAllSessions
