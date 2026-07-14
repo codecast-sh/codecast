@@ -1,5 +1,6 @@
-import { mutation, query, internalMutation } from "./functions";
+import { mutation, query, internalMutation, internalAction } from "./functions";
 import { v } from "convex/values";
+import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
@@ -385,18 +386,24 @@ export const listOwners = query({
 });
 
 // Seed the session_owners join table from the legacy single-owner_user_id field.
-// Idempotent (skips rows already present) and re-runnable. Paginated so it stays
-// under the mutation limits on a large conversations table; call repeatedly with
-// the returned cursor until done:true:
-//   npx convex run sessionOwnership:backfillSessionOwners '{}'
-//   npx convex run sessionOwnership:backfillSessionOwners '{"cursor":"<continueCursor>"}'
+// This migration is LOAD-BEARING, not optional: the inbox's owner merge reads the
+// join table only (there is no index on owner_user_id anymore), so a legacy owned
+// session stays out of its owner's inbox until its row exists here. The other
+// owner paths (notifications, auto-claim, access) union in the owner_user_id
+// cache and are safe either way.
+//
+// Idempotent and re-runnable. Drive it with the action below — one call:
+//   npx convex run sessionOwnership:runBackfillSessionOwners '{}'
 export const backfillSessionOwners = internalMutation({
   args: {
     cursor: v.optional(v.union(v.string(), v.null())),
     batch: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const numItems = args.batch ?? 500;
+    // Each owned row costs an extra index lookup + insert on top of the page
+    // read, so keep the page small — 1000 blows the per-transaction
+    // system-operation budget once it reaches the (recent) owned rows.
+    const numItems = args.batch ?? 400;
     const page = await ctx.db
       .query("conversations")
       .paginate({ cursor: args.cursor ?? null, numItems });
@@ -415,5 +422,37 @@ export const backfillSessionOwners = internalMutation({
       scanned: page.page.length,
       migrated,
     };
+  },
+});
+
+// One-shot driver for the backfill: loops the paginated mutation SERVER-SIDE
+// until it's done, so the migration is a single call instead of hundreds of CLI
+// round-trips (each `npx convex run` costs ~1.5s of startup, which dominates the
+// actual work — and a mid-run failure in a shell loop loses the cursor).
+//   npx convex run sessionOwnership:runBackfillSessionOwners '{}'
+export const runBackfillSessionOwners = internalAction({
+  args: { batch: v.optional(v.number()) },
+  handler: async (ctx, args): Promise<{ pages: number; scanned: number; migrated: number }> => {
+    const batch = args.batch ?? 400;
+    let cursor: string | null = null;
+    let pages = 0;
+    let scanned = 0;
+    let migrated = 0;
+
+    for (;;) {
+      const res: any = await ctx.runMutation(
+        internal.sessionOwnership.backfillSessionOwners,
+        { cursor, batch },
+      );
+      pages++;
+      scanned += res.scanned ?? 0;
+      migrated += res.migrated ?? 0;
+      if (res.done) break;
+      cursor = res.cursor;
+      // Backstop: a cursor that stops advancing would otherwise spin forever.
+      if (pages > 5000) throw new Error(`backfill did not converge after ${pages} pages`);
+    }
+
+    return { pages, scanned, migrated };
   },
 });
