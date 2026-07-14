@@ -12,7 +12,7 @@ import { sessionCardSummary } from "../lib/sessionSummary";
 import { sessionStartupState } from "../lib/sessionLifecycle";
 import { compressImage } from "../lib/compressImage";
 import { useConversationMessages } from "../hooks/useConversationMessages";
-import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, categorizeSessions, partitionOldSessions, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, isSessionHidden, resolveSessionAuthor, convBucketMap, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, categorizeSessions, partitionOldSessions, filterInboxScope, isInterruptControlMessage, getProjectName, isFork, convHasPendingSend, isAgentActive, sessionsWithPendingSend, isSessionHidden, resolveSessionAuthor, convBucketMap, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
 import { sessionsWakeSig } from "../store/inboxStore";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { isBlockedConversation, isSubagentConversation, nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
@@ -32,7 +32,7 @@ import { toast } from "sonner";
 import { animatedHideSession } from "../store/undoActions";
 import { soundKill } from "../lib/sounds";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
-import { X, ChevronsLeft, ChevronsRight, ChevronRight, ChevronDown, List, Clock, Tag, GitFork, History, Star, Activity, Workflow, Play, Pause, Settings2 } from "lucide-react";
+import { X, ChevronsLeft, ChevronsRight, ChevronRight, ChevronDown, List, Clock, Tag, GitFork, History, Star, Activity, Workflow, Play, Pause, Settings2, Users } from "lucide-react";
 import { FilterOptionList } from "./FilterDropdown";
 import { LabelChipsRow } from "./LabelChipsRow";
 import { TaskStatusBadge } from "./TaskStatusBadge";
@@ -1189,6 +1189,19 @@ export const SessionCard = memo(function SessionCard({
     () => resolveSessionAuthor(session, convMeta, currentUser, teamMembers),
     [session.user_id, session.author_name, session.author_avatar, convMeta, currentUser, teamMembers],
   );
+  // A teammate's session (surfaced by team mode) is READ-ONLY here: dismiss /
+  // stash / pin / kill all mutate GLOBAL conversation fields, so acting on a
+  // foreign card would hide or tear down the session in the owner's inbox too.
+  // Steering rights (owner) or your own authorship keep it triageable. Clicking
+  // through to open/read the session is always allowed (team-visible).
+  const isForeignSession = useMemo(() => {
+    const meId = currentUser?._id?.toString?.();
+    if (!meId || !session.user_id) return false;
+    if (session.user_id === meId) return false;
+    if (session.owned_by_me) return false;
+    if (session.owner_user_id && session.owner_user_id === meId) return false;
+    return true;
+  }, [currentUser, session.user_id, session.owned_by_me, session.owner_user_id]);
   const [isDragOver, setIsDragOver] = useState(false);
   const dragCounter = useRef(0);
   const generateUploadUrl = useMutation(api.images.generateUploadUrl);
@@ -1368,7 +1381,7 @@ export const SessionCard = memo(function SessionCard({
             </div>
           )}
         </div>
-        {(onDismiss || onDefer || onPin) && (
+        {!isForeignSession && (onDismiss || onDefer || onPin) && (
           <div className={`absolute top-0 bottom-0 right-0 flex items-center py-1 opacity-0 group-hover:opacity-100 transition-opacity pl-8 pr-2 bg-gradient-to-r from-transparent to-sol-bg-alt`}>
             {onDismiss && (
               <button
@@ -1382,7 +1395,7 @@ export const SessionCard = memo(function SessionCard({
             )}
           </div>
         )}
-        {(onRestore || onKill) && (
+        {!isForeignSession && (onRestore || onKill) && (
           <div className="absolute top-1 right-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
             {onKill && (
               <button
@@ -1666,7 +1679,7 @@ export const SessionCard = memo(function SessionCard({
           </ShortcutTooltip>
         </div>
       )}
-      {(onDismiss || onStash || onDefer || onPin) && (
+      {!isForeignSession && (onDismiss || onStash || onDefer || onPin) && (
         <div className={`absolute top-0 bottom-0 right-0 flex flex-col items-center justify-between py-1 opacity-0 group-hover:opacity-100 transition-opacity pl-16 pr-2 ${isActive ? '' : 'bg-gradient-to-r from-transparent via-sol-bg-alt/60 to-sol-bg-alt'}`} style={isActive ? { background: 'linear-gradient(to right, transparent, color-mix(in srgb, color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)) 60%, transparent), color-mix(in srgb, var(--sol-cyan) 15%, var(--sol-bg-alt)))' } : undefined}>
           {/* Pin slot, first so it anchors the top of the toolbar. When the row is
               already pinned, the persistent badge above IS the pin — here we render
@@ -1732,7 +1745,7 @@ export const SessionCard = memo(function SessionCard({
           )}
         </div>
       )}
-      {(onRestore || onKill) && (
+      {!isForeignSession && (onRestore || onKill) && (
         <div className="absolute top-1.5 right-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
           {onKill && (
             <ShortcutTooltip label={isStashed ? "Kill" : "Remove from list"} action={isStashed ? "session.kill" : undefined} side="left">
@@ -1912,6 +1925,9 @@ export function SessionListPanel({
     s => s.clientState.show_dismissed,
     s => s.clientState.show_stashed,
     s => s.liveInboxIds,
+    // Team-mode active set + viewer identity — gate the scope pre-filter below.
+    s => s.teamInboxIds,
+    s => s.currentUser?._id,
     // Wake only on STRUCTURAL session change (bucket/order/identity), not on every
     // ~1s liveness heartbeat. Subscribing to the raw s.sessions map re-rendered the
     // whole panel (categorize O(N) + 100 cards) ~17x/sec with 17 live sessions —
@@ -1973,6 +1989,15 @@ export function SessionListPanel({
   // and dismissed/stashed rows are always kept.
   const showAllSessions = s.clientState.ui?.show_old_sessions ?? true;
   const focusedId = activeSessionId ?? s.currentSessionId;
+  // Inbox scope: "mine" (personal inbox) or "team" (shared team board). The
+  // scope pre-filter (filterInboxScope) runs BEFORE the old-session partition so
+  // "mine" never shows a teammate row and "team" shows exactly the team set.
+  const inboxScope = s.clientState.ui?.inbox_scope ?? "mine";
+  const meId = s.currentUser?._id?.toString?.() ?? null;
+  const scopedSessions = useMemo(
+    () => filterInboxScope(s.sessions, inboxScope, meId, s.teamInboxIds, focusedId),
+    [s.sessions, inboxScope, meId, s.teamInboxIds, focusedId],
+  );
   // The wake signature ignores updated_at, so the panel no longer re-renders on
   // every heartbeat. categorizeSessions still retires a stale "working" to
   // needs-input by comparing updated_at to Date.now() (the trust-TTL sweep), which
@@ -1980,9 +2005,14 @@ export function SessionListPanel({
   // sweep alive without coupling it back to heartbeat churn. 15s is well under the
   // minutes-scale TTL. See useCoarseNow / store/wakeSig.ts.
   const coarseNow = useCoarseNow(15_000);
+  // Team mode has no "old" partition — the board is already a bounded, team-
+  // visible set, so every scoped row shows and the show-old toggle stays hidden
+  // (oldCount 0). Mine mode keeps the completeness-crawl old-session hiding.
   const { visibleSessions, oldCount } = useMemo(
-    () => partitionOldSessions(s.sessions, s.liveInboxIds, showAllSessions, focusedId),
-    [s.sessions, s.liveInboxIds, showAllSessions, focusedId],
+    () => inboxScope === "team"
+      ? { visibleSessions: scopedSessions, oldCount: 0 }
+      : partitionOldSessions(scopedSessions, s.liveInboxIds, showAllSessions, focusedId),
+    [scopedSessions, inboxScope, s.liveInboxIds, showAllSessions, focusedId],
   );
 
   const { sorted: sortedSessions, pinned, newSessions, needsInput, working, stashed: stashedList, dismissed: dismissedList, subsByParent: globalSubByParent, forksByParent: globalForksByParent } = useMemo(
@@ -2895,6 +2925,23 @@ export function SessionListPanel({
         <div className="flex items-center flex-shrink-0 ml-auto gap-1.5">
           <div className="flex items-center flex-shrink-0 rounded-md border border-sol-border/40 bg-sol-bg/70 p-px">
           {!favoritesView && <>
+          {/* Inbox scope: Mine ⇄ Team. Team turns the inbox into a shared board
+              of every team-visible session across the active team (a superset of
+              Mine). Blue when active so it reads as a mode, not a filter toggle. */}
+          <ShortcutTooltip label={inboxScope === "team" ? "Team inbox — everyone's visible sessions" : "Show the whole team's inbox"} side="bottom">
+            <button
+              onClick={() => s.updateClientUI({ inbox_scope: inboxScope === "team" ? "mine" : "team" })}
+              className={`flex items-center gap-0.5 px-1 py-[3px] rounded-[5px] transition-colors ${
+                inboxScope === "team"
+                  ? "bg-sol-blue/15 text-sol-blue"
+                  : "text-sol-text-dim/70 hover:text-sol-text"
+              }`}
+            >
+              <Users className="w-3 h-3" />
+              {inboxScope === "team" && <span className="text-[10px] font-semibold leading-none">Team</span>}
+            </button>
+          </ShortcutTooltip>
+          <div className="w-px h-3 bg-sol-border/40" />
           {(() => {
             const viewModeOptions = [
               { key: "grouped", label: "By status", icon: List },

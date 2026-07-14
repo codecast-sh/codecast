@@ -315,9 +315,12 @@ const NeedsInputCountBadge = memo(function NeedsInputCountBadge() {
   const inboxSessions = useInboxStore((s) => s.sessions);
   const sessionsWithQueuedMessages = useInboxStore((s) => s.sessionsWithQueuedMessages);
   const pendingMessages = useInboxStore((s) => s.pendingMessages);
+  // Mine-scoped: the sidebar's "needs input" badge is your personal attention
+  // count, so a teammate row cached from a team-board visit must not inflate it.
+  const meId = useInboxStore((s) => s.currentUser?._id);
   const needsInputCount = useMemo(
-    () => categorizeSessions(inboxSessions, sessionsWithQueuedMessages, sessionsWithPendingSend(pendingMessages)).needsInput.length,
-    [inboxSessions, sessionsWithQueuedMessages, pendingMessages],
+    () => categorizeSessions(filterInboxScope(inboxSessions, "mine", meId ? meId.toString() : null), sessionsWithQueuedMessages, sessionsWithPendingSend(pendingMessages)).needsInput.length,
+    [inboxSessions, meId, sessionsWithQueuedMessages, pendingMessages],
   );
   if (needsInputCount === 0) return null;
   return (
