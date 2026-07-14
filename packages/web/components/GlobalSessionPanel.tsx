@@ -719,7 +719,11 @@ function ScheduleRowItem({ row, activeSessionId, onOpen, attached, highlighted, 
               <span className="w-1.5 h-1.5 rounded-full bg-sol-red shrink-0" />
             </ShortcutTooltip>
           )}
-          <span className={`text-xs font-medium truncate min-w-0 ${attached ? "text-sol-text-secondary" : "text-sol-text"}`}>{taskDisplayTitle(task)}</span>
+          {/* Attached rows recede to the SAME muted title treatment the subagent
+              child rows below use (text-gray-400, normal weight) so the parent
+              card stays the primary read and the two child idioms match in both
+              themes; the roster version keeps full prominence. */}
+          <span className={`text-xs truncate min-w-0 ${attached ? "text-gray-400 font-normal" : "text-sol-text font-medium"}`}>{taskDisplayTitle(task)}</span>
           {projectChip && (
             <ShortcutTooltip label={task.project_path || projectChip}>
               <span className={`shrink-0 px-1 rounded text-[9px] font-medium border ${getLabelColor(projectChip).bg} ${getLabelColor(projectChip).text} ${getLabelColor(projectChip).border}`}>
@@ -1307,7 +1311,7 @@ export const SessionCard = memo(function SessionCard({
               : isWorking
                 ? "hover:bg-violet-500/[0.06] border-l border-l-violet-400/25"
                 : isStashed
-                  ? "opacity-75 hover:opacity-100 hover:bg-violet-500/[0.04]"
+                  ? "opacity-60 hover:opacity-100 hover:bg-violet-500/[0.04]"
                   : isDismissed
                     ? "opacity-40 hover:opacity-60 hover:bg-violet-500/[0.04]"
                     : "hover:bg-violet-500/[0.06] border-l border-l-violet-500/15"
@@ -1439,7 +1443,7 @@ export const SessionCard = memo(function SessionCard({
           : isWorking
             ? "bg-sol-green/[0.04] border-l-2 border-l-sol-green/40 hover:bg-sol-green/[0.08]"
             : isStashed
-              ? "opacity-85 hover:opacity-100 hover:bg-sol-bg-alt/80"
+              ? "opacity-75 hover:opacity-100 hover:bg-sol-bg-alt/80"
               : isDismissed
                 ? "opacity-60 hover:opacity-80 hover:bg-sol-bg-alt/80"
                 : "hover:bg-sol-bg-alt/80"
