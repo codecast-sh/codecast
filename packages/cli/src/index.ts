@@ -2107,7 +2107,7 @@ You can schedule follow-up work that runs autonomously after this session ends. 
 cast schedule add "Check if CI is green on main" --in 30m
 cast schedule add "Review open PRs and summarize findings" --every 4h
 cast schedule add "Respond to new PR review comments" --on pr_comment
-cast schedule add "Continue the auth refactor" --in 2h --context current --mode apply
+cast schedule add "Watch the funnel and report anything off" --every 4h --safe
 
 # Report completion (when running inside a task)
 cast schedule complete <task_id> --summary "what was done"
@@ -2126,7 +2126,7 @@ Options:
 - \`--every <duration>\`: recurring interval
 - \`--on <event>\`: trigger on webhook (pr_comment, pr_opened, pr_merged, push)
 - \`--context current\`: capture current session context for the follow-up
-- \`--mode apply\`: allow the task agent to make changes (default: propose = read-only)
+- \`--safe\`: read-only run — investigate and report, never modify (default is permissive: the run can act)
 - \`--project <path>\`: set working directory (defaults to current)
 - \`--max-runtime <duration>\`: override max runtime (default: 10m)
 
@@ -10332,7 +10332,8 @@ schedule
   .option("--on <event>", "Run on event (pr_comment, pr_opened, pr_merged, push)")
   .option("--title <title>", "Short title (defaults to first 60 chars of prompt)")
   .option("--context <mode>", "Context capture: 'current' to grab running session")
-  .option("--mode <mode>", "Agent mode: propose (default) or apply", "propose")
+  .option("--safe", "Safe mode: read-only run — investigate and report, never modify files or run state-changing commands")
+  .option("--mode <mode>", "Agent mode: apply (default, can act) or propose (read-only). Prefer --safe.")
   .option("--project <path>", "Project path for agent cwd")
   .option("--agent <type>", "Agent type: claude (default) or codex", "claude")
   .option("--max-runtime <duration>", "Max runtime (default: 10m)")
@@ -10430,7 +10431,7 @@ schedule
           run_at,
           interval_ms,
           event_filter,
-          mode: options.mode,
+          mode: options.safe ? "propose" : options.mode,
           max_runtime_ms: maxRuntimeMs,
         }),
       });

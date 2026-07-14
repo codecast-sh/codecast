@@ -172,7 +172,10 @@ async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTaskArgs) 
     run_at,
     interval_ms: args.interval_ms,
     event_filter: args.event_filter,
-    mode: (args.mode === "apply" ? "apply" : "propose") as "propose" | "apply",
+    // Permissive by default: a schedule can act unless it explicitly opts into
+    // safe (read-only) mode. Only an explicit "propose" restricts. Existing
+    // tasks keep their stored mode, so nothing already armed changes.
+    mode: (args.mode === "propose" ? "propose" : "apply") as "propose" | "apply",
     max_runtime_ms: args.max_runtime_ms || DEFAULT_MAX_RUNTIME_MS,
     status: "scheduled" as const,
     retry_count: 0,
