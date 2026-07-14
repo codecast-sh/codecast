@@ -4893,6 +4893,11 @@ export const forkFromMessage = mutation({
     message_uuid: v.optional(v.string()),
     api_token: v.optional(v.string()),
     session_id: v.optional(v.string()),
+    // The branch's seed prompt (cast fork "<direction>"). Used ONLY to title the
+    // new row — sibling branches otherwise all read "Fork: <parent title>" and
+    // are indistinguishable in the inbox (the direction itself arrives later as
+    // a separate seed message).
+    direction: v.optional(v.string()),
     target_agent_type: v.optional(v.union(
       v.literal("claude_code"),
       v.literal("codex"),
@@ -5038,7 +5043,14 @@ export const forkFromMessage = mutation({
       agent_type: agentType,
       session_id: forkSessionId,
       slug: original.slug,
-      title: original.title ? `${titlePrefix}${original.title}` : undefined,
+      // A direction-seeded branch is titled by what IT will do, not by its
+      // parent — otherwise N sibling branches all render as identical
+      // "Fork: <parent>" cards. previewText compresses the prompt to one line.
+      title: (() => {
+        const directionSnippet = previewText(args.direction);
+        if (directionSnippet) return `${titlePrefix}${directionSnippet}`;
+        return original.title ? `${titlePrefix}${original.title}` : undefined;
+      })(),
       subtitle: original.subtitle,
       project_hash: original.project_hash,
       project_path: original.project_path,
