@@ -33,13 +33,14 @@ import { TmuxMissingBanner } from "./TmuxMissingBanner";
 import { FindBar } from "./FindBar";
 import { KeyboardShortcutsPanel, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { SettingsModal } from "./settings/SettingsModal";
-import { useInboxStore, useTrackedStore, categorizeSessions, sessionsWithPendingSend, isSessionHidden, getProjectName } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, categorizeSessions, filterInboxScope, sessionsWithPendingSend, isSessionHidden, getProjectName } from "../store/inboxStore";
 import { useShortcutAction, useShortcutContext, useGlobalShortcutActions } from "../shortcuts";
 import { usePrefetch } from "../hooks/usePrefetch";
 import { desktopHeaderClass, setupDesktopDrag, isElectron } from "../lib/desktop";
 import { SessionListPanel, ConversationColumn } from "./GlobalSessionPanel";
 import { EdgePeek } from "./EdgePeek";
 import { useSyncInboxSessions } from "../hooks/useSyncInboxSessions";
+import { useSyncTeamInboxSessions } from "../hooks/useSyncTeamInboxSessions";
 import { useSyncChangeFeed } from "../hooks/useSyncChangeFeed";
 import { useSyncBuckets } from "../hooks/useSyncBuckets";
 import { useSyncDocs, useSyncMentionDocs } from "../hooks/useSyncDocs";
@@ -80,10 +81,16 @@ const ActiveAgentsBadge = memo(function ActiveAgentsBadge({ isOnInboxPage }: { i
     s => s.sessions,
     s => s.sessionsWithQueuedMessages,
     s => s.pendingMessages,
+    s => s.currentUser?._id,
   ]);
+  // Ambient "active agents" count stays MINE-scoped regardless of inbox scope: a
+  // teammate row can linger in the shared cache after a team-board visit, but the
+  // dock badge counts YOUR working sessions, not the team's. filterInboxScope with
+  // "mine" drops any definitively-foreign row (no-op when the cache is all mine).
+  const meId = s.currentUser?._id?.toString?.() ?? null;
   const working = useMemo(
-    () => categorizeSessions(s.sessions, s.sessionsWithQueuedMessages, sessionsWithPendingSend(s.pendingMessages)).working,
-    [s.sessions, s.sessionsWithQueuedMessages, s.pendingMessages],
+    () => categorizeSessions(filterInboxScope(s.sessions, "mine", meId), s.sessionsWithQueuedMessages, sessionsWithPendingSend(s.pendingMessages)).working,
+    [s.sessions, meId, s.sessionsWithQueuedMessages, s.pendingMessages],
   );
   if (working.length === 0) return null;
   const activeAgentCount = working.length;
@@ -138,6 +145,7 @@ function DashboardSyncEffects() {
   useSyncMentionDocs();
   useSyncMentionPlans();
   useSyncInboxSessions();
+  useSyncTeamInboxSessions();
   useSyncChangeFeed();
   useSyncBuckets();
   return null;

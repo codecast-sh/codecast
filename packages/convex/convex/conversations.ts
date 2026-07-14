@@ -6774,6 +6774,15 @@ const INBOX_DISMISSED_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 // keep their own (separate) queries below and are unaffected by this window.
 const INBOX_SESSION_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 
+// Bounds on the team-mode ("team scope") candidate scan. The board pulls each
+// teammate's recent team-visible sessions; caps keep a single recompute within
+// the isolate's read budget even for a large team. Teams are small in practice,
+// so these are generous — a per-member overflow just means the oldest of that
+// member's recent sessions wait for the client's paginated crawl (not built yet
+// for team scope; acceptable for the recency-windowed board).
+const TEAM_INBOX_MEMBER_CAP = 50;
+const TEAM_INBOX_PER_MEMBER_CAP = 60;
+
 type InboxSessionMaps = {
   agentStatusMap: Map<string, "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped" | "starting" | "resuming">;
   agentStatusUpdatedAtMap: Map<string, number>;
@@ -7238,7 +7247,7 @@ async function scanInboxConversations(
   ctx: any,
   userId: Id<"users">,
   now: number,
-  opts: { includeLiveness: boolean; extraConvIds?: string[] },
+  opts: { includeLiveness: boolean; extraConvIds?: string[]; teamScope?: Id<"teams"> },
 ): Promise<{
   conversations: any[];
   maps: InboxSessionMaps;
@@ -7312,6 +7321,42 @@ async function scanInboxConversations(
   for (const c of stashedConversations) byId.set(c._id.toString(), c);
   for (const c of ownedConversations) byId.set(c._id.toString(), c);
 
+  // TEAM SCOPE (inbox "team mode"): fold every teammate's team-visible session
+  // into the candidate set, on top of the caller's own sessions above — so the
+  // team board is a SUPERSET of the personal inbox. Visibility uses the exact
+  // same rule as the team feed and search (createTeamFeedFilter), so the two can
+  // never disagree about what's shared. Only the recent window is scanned per
+  // member (active/completed, not their personally dismissed/stashed rows — that
+  // is the teammate's own triage, not this board's). The caller's own rows are
+  // skipped here; they were already gathered by the by_user scans above (which
+  // also cover the caller's PRIVATE sessions, correctly visible to themselves).
+  if (opts.teamScope) {
+    const teamFilter = await createTeamFeedFilter(ctx, opts.teamScope);
+    const memberIds = teamFilter.memberships
+      .map((m) => m.user_id)
+      .filter((id) => id.toString() !== userId.toString())
+      .slice(0, TEAM_INBOX_MEMBER_CAP);
+    for (const memberId of memberIds) {
+      const memberRecent = await ctx.db
+        .query("conversations")
+        .withIndex("by_team_user_updated", (q: any) =>
+          q.eq("team_id", opts.teamScope).eq("user_id", memberId).gte("updated_at", sessionWindowCutoff)
+        )
+        .order("desc")
+        .filter((q: any) => q.or(
+          q.eq(q.field("status"), "active"),
+          q.eq(q.field("status"), "completed")
+        ))
+        .take(TEAM_INBOX_PER_MEMBER_CAP);
+      for (const c of memberRecent) {
+        if (byId.has(c._id.toString())) continue;
+        if (c.inbox_dismissed_at || c.inbox_stashed_at) continue; // teammate's own triage
+        if (!teamFilter.isVisible(c)) continue;
+        byId.set(c._id.toString(), c);
+      }
+    }
+  }
+
   // Hydrate explicitly-requested conversations the windows above missed.
   // Own or owned-by-me sessions only (the inbox is "mine"); cap mirrors the
   // window size.
@@ -7376,6 +7421,9 @@ async function computeInboxSessions(
     // candidate pool regardless of the recency window — labels exist to park old
     // sessions. Deliberately filed, so also exempt from cluster-hiding.
     extraConvIds?: string[];
+    // Inbox "team mode": also fold in every teammate's team-visible session from
+    // this team (superset of the personal inbox). See scanInboxConversations.
+    teamScope?: Id<"teams">;
   },
 ): Promise<{ sessions: any[]; hidden_count: number }> {
   // Liveness (agent_status/is_idle/...) is heartbeat-derived and is the reason this
@@ -7389,6 +7437,7 @@ async function computeInboxSessions(
     await scanInboxConversations(ctx, userId, now, {
       includeLiveness,
       extraConvIds: opts.extraConvIds,
+      teamScope: opts.teamScope,
     });
 
   let hiddenCount = 0;
@@ -7460,6 +7509,49 @@ export const listInboxSessions = query({
       show_all: args.show_all,
       includeLiveness: args.include_liveness,
     });
+  },
+});
+
+// Resolve which team the inbox "team mode" scopes to, membership-gated. A client
+// may pass any activeTeamId, so this is a real access check, not a hint: the
+// caller must actually belong to the team or nothing is returned. Falls back to
+// the user's active/default team when no explicit team is passed.
+async function resolveInboxTeamScope(
+  ctx: any,
+  userId: Id<"users">,
+  activeTeamId?: Id<"teams">,
+): Promise<Id<"teams"> | null> {
+  const user = await ctx.db.get(userId);
+  const teamId = activeTeamId ?? user?.active_team_id ?? user?.team_id;
+  if (!teamId) return null;
+  if (!(await isTeamMember(ctx, userId, teamId))) return null;
+  return teamId as Id<"teams">;
+}
+
+// Inbox "team mode": the same fully-enriched inbox rows as listInboxSessions, but
+// the candidate set is the whole team's team-visible sessions (superset of the
+// caller's own). Membership-gated via resolveInboxTeamScope. Mirrors the
+// personal query's liveness split — the live subscription passes
+// include_liveness:false and rides teamSessionsLiveness — so team mode is as
+// heartbeat-cheap as the personal inbox.
+export const listTeamInboxSessions = query({
+  args: {
+    activeTeamId: v.optional(v.id("teams")),
+    show_all: v.optional(v.boolean()),
+    include_liveness: v.optional(v.boolean()),
+    _probe: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { sessions: [], hidden_count: 0, team_id: null };
+    const teamScope = await resolveInboxTeamScope(ctx, userId, args.activeTeamId);
+    if (!teamScope) return { sessions: [], hidden_count: 0, team_id: null };
+    const result = await computeInboxSessions(ctx, userId, {
+      show_all: args.show_all,
+      includeLiveness: args.include_liveness,
+      teamScope,
+    });
+    return { ...result, team_id: teamScope.toString() };
   },
 });
 
@@ -7604,10 +7696,12 @@ async function enrichLivenessFields(
 async function computeSessionsLiveness(
   ctx: any,
   userId: Id<"users">,
+  teamScope?: Id<"teams">,
 ): Promise<Record<string, LivenessFields>> {
   const now = Date.now();
   const { conversations, maps } = await scanInboxConversations(ctx, userId, now, {
     includeLiveness: true,
+    teamScope,
   });
   const liveness: Record<string, LivenessFields> = {};
   for (const conv of conversations) {
@@ -7632,6 +7726,25 @@ export const sessionsLiveness = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) return { liveness: {} };
     const liveness = await computeSessionsLiveness(ctx, userId);
+    return { liveness };
+  },
+});
+
+// Team-mode twin of sessionsLiveness: the same tiny heartbeat overlay, but over
+// the team-scoped candidate set (so teammate rows on the board refresh their
+// live status without the full team list re-pushing every heartbeat). Membership
+// gated. Mounted by the client only while team mode is active.
+export const teamSessionsLiveness = query({
+  args: {
+    activeTeamId: v.optional(v.id("teams")),
+    _probe: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { liveness: {} };
+    const teamScope = await resolveInboxTeamScope(ctx, userId, args.activeTeamId);
+    if (!teamScope) return { liveness: {} };
+    const liveness = await computeSessionsLiveness(ctx, userId, teamScope);
     return { liveness };
   },
 });

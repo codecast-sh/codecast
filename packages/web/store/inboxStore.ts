@@ -257,6 +257,13 @@ export type InboxSession = {
   user_id?: string;
   author_name?: string | null;
   author_avatar?: string | null;
+  // Second-party owner (the member routed to steer a session run by another
+  // account) and the caller-relative "this session is mine to triage" verdict,
+  // both stamped by the server (computeInboxSessions). Team mode reads these to
+  // keep a foreign teammate row READ-ONLY — dismiss/stash/pin/kill mutate global
+  // conversation fields, so acting on a teammate's card would hide it from them.
+  owner_user_id?: string | null;
+  owned_by_me?: boolean;
   // An Anchor's session renders under its bot identity (acting_user_id), shown
   // even on the host's own row; is_anchor marks it a standing member.
   acting_user_id?: string | null;
@@ -559,6 +566,11 @@ export type ClientUI = {
   saved_views?: SavedView[];
   show_subagents?: boolean;
   show_old_sessions?: boolean;
+  // Inbox scope. "mine" (default) is the personal inbox: your own sessions plus
+  // any explicitly routed to you. "team" turns the inbox into a shared board of
+  // every team-visible session across the active team (a superset of "mine").
+  // Persisted (LWW) so the chosen scope survives reloads and follows the user.
+  inbox_scope?: "mine" | "team";
   // Show each session's model as a badge in the inbox list. Off by default.
   show_model_badge?: boolean;
   // Opt in to the teammate-comment tools (the gutter "comment" handle + the
@@ -741,6 +753,63 @@ export function partitionOldSessions(
   }
   if (showAll || oldCount === 0) return { visibleSessions: sessions, oldCount };
   return { visibleSessions, oldCount };
+}
+
+// Is this cached row definitively someone ELSE's session — i.e. not the caller's
+// to see in the personal inbox? A row is "mine" if it's my own authored session,
+// one routed to me to steer (owner), an optimistic stub not yet server-keyed, or
+// a thin row with no known author. Everything else is a teammate's row that only
+// entered the shared cache via team mode / a deep-link / search, and must not
+// linger in "mine".
+function isForeignRow(s: InboxSession, meId: string | null | undefined): boolean {
+  if (!meId) return false; // unknown viewer → don't hide anything
+  if (!isConvexId(s._id)) return false; // optimistic stub — always mine
+  const uid = s.user_id;
+  if (!uid) return false; // thin/legacy row with no author → keep
+  if (uid === meId) return false;
+  if (s.owned_by_me) return false;
+  if (s.owner_user_id && s.owner_user_id === meId) return false;
+  return true;
+}
+
+// Scope the never-prune sessions cache to the current inbox scope BEFORE the
+// old-session partition runs. This is what makes "mine" and "team" coherent even
+// though both read the same shared cache:
+//   • "mine": drop rows that are definitively a teammate's, so team-mode rows (or
+//     a teammate session opened via deep-link/search) never leak into the
+//     personal inbox — regardless of the show-old toggle.
+//   • "team": keep exactly the rows the team subscription reported (teamInboxIds),
+//     plus the open session and any optimistic stub. Before the first team payload
+//     lands (empty set) fall back to the mine filter so the board shows your own
+//     work immediately instead of flashing empty.
+// The focused row is always kept so the session you're viewing never vanishes.
+const EMPTY_TEAM_INBOX_IDS: ReadonlySet<string> = new Set<string>();
+
+export function filterInboxScope(
+  sessions: Record<string, InboxSession>,
+  scope: "mine" | "team",
+  meId: string | null | undefined,
+  teamInboxIds: ReadonlySet<string> = EMPTY_TEAM_INBOX_IDS,
+  focusedId?: string | null,
+): Record<string, InboxSession> {
+  if (scope === "team" && teamInboxIds.size > 0) {
+    const out: Record<string, InboxSession> = {};
+    for (const [id, s] of Object.entries(sessions)) {
+      if (teamInboxIds.has(id) || id === focusedId || !isConvexId(id)) out[id] = s;
+    }
+    return out;
+  }
+  // "mine" (and team before its first payload): hide definitively-foreign rows.
+  let anyForeign = false;
+  for (const s of Object.values(sessions)) {
+    if (s._id !== focusedId && isForeignRow(s, meId)) { anyForeign = true; break; }
+  }
+  if (!anyForeign) return sessions; // referentially stable when nothing to drop
+  const out: Record<string, InboxSession> = {};
+  for (const [id, s] of Object.entries(sessions)) {
+    if (id === focusedId || !isForeignRow(s, meId)) out[id] = s;
+  }
+  return out;
 }
 
 // Window the cross-device dismiss reconcile is authoritative over. Mirrors the
@@ -1914,6 +1983,13 @@ interface InboxStoreState {
   // exactly the cached top-level sessions NOT in this set. The "show old
   // sessions" toggle filters against it client-side (see GlobalSessionPanel).
   liveInboxIds: Set<string>;
+  // Team-mode active set: the ids the team board is currently showing (own +
+  // teammates' team-visible), fed by the listTeamInboxSessions subscription.
+  // The analogue of liveInboxIds for inbox_scope "team" — the panel gates the
+  // visible set on this instead of liveInboxIds while team mode is on. Empty in
+  // "mine" mode. Rows themselves live in the shared (never-prune) sessions cache;
+  // this is only the membership set for the current team view.
+  teamInboxIds: Set<string>;
   // MRU "entered at" per session — bumped only when you switch INTO a session.
   // Drives the Tab switcher order + message eviction. Kept separate from
   // _seenUpToAt so the current session is always strictly the most recent (no
@@ -3140,6 +3216,7 @@ export const useInboxStore = create<InboxStoreState>(
   showFavorites: false,
   setShowFavorites: (show: boolean) => set({ showFavorites: show, ...(show ? { showMySessions: false } : {}) }),
   liveInboxIds: new Set<string>(),
+  teamInboxIds: new Set<string>(),
   _lastViewedAt: {},
   _seenUpToAt: {},
   _seenMessageCount: {},
