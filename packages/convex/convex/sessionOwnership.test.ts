@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { performSetSessionOwner } from "./sessionOwnership";
+import {
+  performSetSessionOwner,
+  performSetSessionOwners,
+  performAddSessionOwner,
+  performRemoveSessionOwner,
+} from "./sessionOwnership";
 
 // Fixtures: Mr Bot runs a team-visible session; Jason and Ashot are teammates.
 const TEAM = "teams_1";
@@ -172,5 +177,121 @@ describe("performSetSessionOwner", () => {
       owner: "ashot@union.ai",
     });
     expect(result.owner?.user_id).toBe(ASHOT);
+  });
+});
+
+// ── Multi-owner: the owner SET (session_owners) is canonical ─────────────────
+// A session can sit in several teammates' inboxes at once. owner_user_id is only
+// a denormalized cache of the PRIMARY (first-added) owner, resynced after every
+// write — these tests pin both the set and the cache.
+
+const ownerIds = (db: any) =>
+  (db._tables.session_owners ?? []).map((r: any) => r.user_id);
+const primaryCache = (db: any) =>
+  db._tables.conversations.find((c: any) => c._id === "jx1abcd_convex_id").owner_user_id;
+
+describe("multi-owner session ownership", () => {
+  test("addSessionOwner accumulates owners instead of replacing them", async () => {
+    const db = fixtures();
+    await performAddSessionOwner({ db }, BOT as any, {
+      session_id: "jx1abcd",
+      owner: "jason@union.ai",
+    });
+    const result = await performAddSessionOwner({ db }, BOT as any, {
+      session_id: "jx1abcd",
+      owner: "ashot@union.ai",
+    });
+
+    expect(ownerIds(db).sort()).toEqual([ASHOT, JASON].sort());
+    expect(result.owners.map((o) => o.user_id).sort()).toEqual([ASHOT, JASON].sort());
+    // Only the newly-added owner is notified — Jason isn't re-pinged.
+    expect(result.added.map(String)).toEqual([ASHOT]);
+    // Cache tracks the FIRST-added owner.
+    expect(primaryCache(db)).toBe(JASON);
+  });
+
+  test("adding an existing owner is idempotent and notifies nobody", async () => {
+    const db = fixtures();
+    await performAddSessionOwner({ db }, BOT as any, { session_id: "jx1abcd", owner: "jason@union.ai" });
+    const result = await performAddSessionOwner({ db }, BOT as any, { session_id: "jx1abcd", owner: "jason@union.ai" });
+
+    expect(ownerIds(db)).toEqual([JASON]);
+    expect(result.added.map(String)).toEqual([]);
+  });
+
+  test("removeSessionOwner drops one owner and leaves the rest", async () => {
+    const db = fixtures();
+    await performAddSessionOwner({ db }, BOT as any, { session_id: "jx1abcd", owner: "jason@union.ai" });
+    await performAddSessionOwner({ db }, BOT as any, { session_id: "jx1abcd", owner: "ashot@union.ai" });
+
+    const result = await performRemoveSessionOwner({ db }, BOT as any, {
+      session_id: "jx1abcd",
+      owner: "jason@union.ai",
+    });
+
+    expect(result.removed.map(String)).toEqual([JASON]);
+    expect(ownerIds(db)).toEqual([ASHOT]);
+    // Primary cache re-derives to the surviving owner — never left dangling.
+    expect(primaryCache(db)).toBe(ASHOT);
+  });
+
+  test("removing the last owner clears the primary cache", async () => {
+    const db = fixtures();
+    await performAddSessionOwner({ db }, BOT as any, { session_id: "jx1abcd", owner: "jason@union.ai" });
+    await performRemoveSessionOwner({ db }, BOT as any, { session_id: "jx1abcd", owner: "jason@union.ai" });
+
+    expect(ownerIds(db)).toEqual([]);
+    expect(primaryCache(db)).toBeUndefined();
+  });
+
+  test("setSessionOwners replaces the whole set, reporting added and removed", async () => {
+    const db = fixtures();
+    await performAddSessionOwner({ db }, BOT as any, { session_id: "jx1abcd", owner: "jason@union.ai" });
+
+    const result = await performSetSessionOwners({ db }, BOT as any, {
+      session_id: "jx1abcd",
+      owners: ["ashot@union.ai"],
+    });
+
+    expect(result.added.map(String)).toEqual([ASHOT]);
+    expect(result.removed.map(String)).toEqual([JASON]);
+    expect(ownerIds(db)).toEqual([ASHOT]);
+    expect(primaryCache(db)).toBe(ASHOT);
+  });
+
+  test("setSessionOwners with an empty list disowns everyone", async () => {
+    const db = fixtures();
+    await performAddSessionOwner({ db }, BOT as any, { session_id: "jx1abcd", owner: "jason@union.ai" });
+    await performAddSessionOwner({ db }, BOT as any, { session_id: "jx1abcd", owner: "ashot@union.ai" });
+
+    const result = await performSetSessionOwners({ db }, BOT as any, {
+      session_id: "jx1abcd",
+      owners: [],
+    });
+
+    expect(result.removed.map(String).sort()).toEqual([ASHOT, JASON].sort());
+    expect(ownerIds(db)).toEqual([]);
+    expect(primaryCache(db)).toBeUndefined();
+  });
+
+  test("a bot may assign owners but may never BE one", async () => {
+    const db = fixtures();
+    await expect(
+      performAddSessionOwner({ db }, JASON as any, { session_id: "jx1abcd", owner: "bot@union.ai" }),
+    ).rejects.toThrow(/agent account/);
+    expect(ownerIds(db)).toEqual([]);
+  });
+
+  test("the back-compat single-owner form still REPLACES the set", async () => {
+    const db = fixtures();
+    await performAddSessionOwner({ db }, BOT as any, { session_id: "jx1abcd", owner: "jason@union.ai" });
+
+    const result = await performSetSessionOwner({ db }, BOT as any, {
+      session_id: "jx1abcd",
+      owner: "ashot@union.ai",
+    });
+
+    expect(result.owner?.user_id).toBe(ASHOT);
+    expect(ownerIds(db)).toEqual([ASHOT]);
   });
 });

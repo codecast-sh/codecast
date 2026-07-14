@@ -193,6 +193,35 @@ export default defineSchema({
     .index("by_user_team", ["user_id", "team_id"])
     .index("by_team_id", ["team_id"]),
 
+  // The SET of team members who OWN a session — the humans whose inboxes it
+  // appears in and who receive its notifications. A session has zero or more
+  // owners, each an independent, separately-removable assignment. This is one of
+  // a session's three independent ownership axes and is deliberately distinct
+  // from the other two: conversations.user_id (the account that RUNS + bills it)
+  // and conversations.owner_device_id (the machine it runs ON). Reassigning
+  // owners never moves the device, and vice versa.
+  //
+  // This table is the canonical owner store. conversations.owner_user_id is a
+  // denormalized cache of the PRIMARY (first-added, still-present) owner, kept in
+  // lockstep by the owner mutations for back-compat while readers migrate off it.
+  // Seeded from owner_user_id by sessionOwnership.backfillSessionOwners.
+  session_owners: defineTable({
+    conversation_id: v.id("conversations"),
+    user_id: v.id("users"), // the human owner (bots may never be owners)
+    added_by: v.id("users"), // who assigned them — provenance + "X assigned you" notif
+    added_at: v.number(),
+  })
+    // Powers the owner's inbox merge: newest-first owner rows for a user, then
+    // hydrate the conversations and filter by the activity window in JS.
+    // Deliberately NOT keyed on the conversation's updated_at — denormalizing
+    // that here would make every conversation heartbeat fan out and patch all of
+    // its owner rows (write amplification). The owned set per user is small.
+    .index("by_user", ["user_id", "added_at"])
+    // List the owners of one session (owner chips, notification fan-out).
+    .index("by_conversation", ["conversation_id"])
+    // Membership check / dedupe — is this user already an owner of this session?
+    .index("by_conversation_user", ["conversation_id", "user_id"]),
+
   conversations: defineTable({
     user_id: v.id("users"),
     team_id: v.optional(v.id("teams")),
@@ -361,12 +390,19 @@ export default defineSchema({
     // only manages sessions whose owner_device_id matches its own device id.
     // "Move to remote" flips this from the local device to the Mac's device.
     owner_device_id: v.optional(v.string()),
-    // Second-party ownership: the team member RESPONSIBLE for this session,
-    // distinct from user_id (the member whose account runs it). Set when an
-    // agent account (e.g. Mr Bot) parks a session on a human reviewer — the
-    // session then surfaces in the owner's inbox/CLI needs-input views and the
-    // owner may reply into it from the web composer. Absent = unowned, classic
-    // behavior. Unrelated to owner_device_id (which DEVICE's daemon runs it).
+    // DENORMALIZED CACHE of the PRIMARY (first-added, still-present) owner. The
+    // canonical owner store is the session_owners join table — a session may have
+    // SEVERAL owners and this single field cannot express that, so never branch
+    // inbox/feed membership on it (use session_owners; see scanInboxConversations).
+    // Kept because the row-level UI shows one owner chip and it's a cheap fast
+    // path in checkConversationAccess. Maintained in lockstep by the owner
+    // mutations. Absent = unowned.
+    //
+    // An owner is the team member RESPONSIBLE for a session — whose inbox it
+    // appears in and who may reply into it — distinct from user_id (the account
+    // that RUNS + bills it) and owner_device_id (the DEVICE its daemon runs on).
+    // These three axes move independently: reassigning owners never moves the
+    // device, and reparenting the device never changes the owners.
     owner_user_id: v.optional(v.id("users")),
     // Tombstone forwarding: the id of a DELETED conversation this row replaced
     // when a kill/restart restored its session (resolveRestartTarget). Lets
@@ -401,9 +437,12 @@ export default defineSchema({
     .index("by_user_private", ["user_id", "is_private"])
     .index("by_team_id", ["team_id"])
     .index("by_team_user_updated", ["team_id", "user_id", "updated_at"])
-    // Sparse: only second-party-owned sessions carry owner_user_id. Powers the
-    // owner's inbox merge (computeInboxSessions) and feed --mine.
-    .index("by_owner_updated", ["owner_user_id", "updated_at"])
+    // (Removed: by_owner_updated. The owner's inbox merge and feed --mine now
+    // read the canonical owner SET from session_owners — a single owner_user_id
+    // can't express multiple owners. It was also not free: Convex indexes every
+    // document (a missing optional field indexes as undefined), so with
+    // updated_at as the second key EVERY conversation heartbeat rewrote an entry
+    // in it. Nothing reads it anymore.)
     .index("by_share_token", ["share_token"])
     .index("by_session_id", ["session_id"])
     .index("by_short_id", ["short_id"])
@@ -1250,6 +1289,7 @@ export default defineSchema({
       v.literal("session_idle"),
       v.literal("permission_request"),
       v.literal("session_error"),
+      v.literal("session_assigned"),
       v.literal("team_session_start"),
       v.literal("task_completed"),
       v.literal("task_failed"),
