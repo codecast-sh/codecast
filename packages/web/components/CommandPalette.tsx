@@ -9,7 +9,7 @@ import { Command as CommandPrimitive } from "cmdk";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { commitModelChange, canControlModel, modelOptionKey } from "./ModelEffortPicker";
 import { AGENT_MODEL_CONFIG, modelAgentKey } from "@codecast/shared/contracts";
-import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, categorizeSessions, sessionsWithPendingSend, convBucketMap, sortLabels, computeChipCounts, getProjectName, RecentVisit } from "../store/inboxStore";
+import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, categorizeSessions, filterInboxScope, sessionsWithPendingSend, convBucketMap, sortLabels, computeChipCounts, getProjectName, RecentVisit } from "../store/inboxStore";
 import { resolveRecentVisits, visitTimeAgo, type ResolvedVisit } from "../lib/recentVisits";
 import { PageIcon } from "./RecentlyViewedMenu";
 import { isNonTabRoute } from "../src/compat/tabRouting";
@@ -259,8 +259,18 @@ function ActionSubmenu({
   const viewChipData = useMemo(() => {
     if (mode !== "view") return null;
     const st = useInboxStore.getState();
-    const { pinned, newSessions, needsInput, working } = categorizeSessions(
+    // Scope the chip counts the same way the inbox panel scopes its list, so the
+    // picker never counts sessions the panel isn't showing (a teammate row cached
+    // from a team-board visit, or the whole team while team mode is on).
+    const scoped = filterInboxScope(
       st.sessions,
+      st.clientState.ui?.inbox_scope ?? "mine",
+      st.currentUser?._id?.toString?.() ?? null,
+      st.teamInboxIds,
+      st.currentSessionId,
+    );
+    const { pinned, newSessions, needsInput, working } = categorizeSessions(
+      scoped,
       st.sessionsWithQueuedMessages,
       sessionsWithPendingSend(st.pendingMessages),
       { currentSessionId: st.currentSessionId, pendingCreateIds: new Set(Object.keys(st.pendingSessionCreates)) },

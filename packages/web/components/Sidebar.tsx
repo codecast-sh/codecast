@@ -13,7 +13,7 @@ import { visitTimeAgo } from "../lib/recentVisits";
 import { getLabelColor } from "../lib/labelColors";
 import { shouldShowSession } from "../lib/sessionFilters";
 import { nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
-import { useInboxStore, categorizeSessions, sessionsWithPendingSend } from "../store/inboxStore";
+import { useInboxStore, categorizeSessions, filterInboxScope, sessionsWithPendingSend } from "../store/inboxStore";
 import { useConvexSync } from "../hooks/useConvexSync";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { TeamIcon } from "./TeamIcon";

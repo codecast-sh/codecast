@@ -1791,13 +1791,15 @@ export function computeVisualOrder(state: {
   showFavorites?: boolean;
   favorites?: any[];
   liveInboxIds: Set<string>;
+  teamInboxIds?: Set<string>;
+  currentUser?: { _id?: string } | null;
   recentFreezeOrder?: string[] | null;
   collapsedSections?: Record<string, boolean>;
   // Ephemeral schedule projection published by GlobalSessionPanel (see
   // setScheduleNavSets) so grouped-mode nav skips sessions absorbed behind
   // SCHEDULES rows. Null until the panel has schedule data.
   scheduleNavSets?: { absorbed: ReadonlySet<string> } | null;
-  clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; inbox_manual_order?: Record<string, number>; show_subagents?: boolean; show_old_sessions?: boolean } };
+  clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; inbox_manual_order?: Record<string, number>; show_subagents?: boolean; show_old_sessions?: boolean; inbox_scope?: "mine" | "team" } };
 }): InboxSession[] {
   // Favorites view walks its own project-grouped order so Ctrl+J/K moves through
   // the shelf, not the active desk underneath it.
@@ -1815,12 +1817,26 @@ export function computeVisualOrder(state: {
   // card. This previously guarded only the flat views; grouped/bucket walked the
   // full session map and so stepped onto hidden old sessions.
   const focusedId = state.currentSessionId ?? null;
-  const { visibleSessions } = partitionOldSessions(
+  // Scope FIRST, exactly as the panel does (filterInboxScope → partitionOldSessions),
+  // so nav walks precisely the rows on screen: in team mode the team board's set,
+  // in mine mode never a teammate row left in the shared cache. Team mode has no
+  // "old" partition (the board is already a bounded set), matching the panel.
+  const scope = state.clientState.ui?.inbox_scope ?? "mine";
+  const scopedSessions = filterInboxScope(
     state.sessions,
-    state.liveInboxIds,
-    state.clientState.ui?.show_old_sessions ?? true,
+    scope,
+    state.currentUser?._id?.toString?.() ?? null,
+    state.teamInboxIds,
     focusedId,
   );
+  const { visibleSessions } = scope === "team"
+    ? { visibleSessions: scopedSessions }
+    : partitionOldSessions(
+        scopedSessions,
+        state.liveInboxIds,
+        state.clientState.ui?.show_old_sessions ?? true,
+        focusedId,
+      );
   if (mode === "time" || mode === "recent") {
     // The flat views render under a single collapsible "All" section; collapsing
     // it hides every card, so nav must walk nothing (else it lands on a hidden
