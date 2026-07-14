@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { Command } from "commander";
+import { randomUUID } from "node:crypto";
 import { registerWorkspaceCommand } from "./workspace/cli.js";
 import { registerRemoteCommand } from "./remote/cli.js";
 import open from "open";
@@ -9038,11 +9039,18 @@ program
     if (directions.length > 0) {
       const roster: { short_id: string; conversation_id: string; direction: string; seeded: boolean }[] = [];
       for (const direction of directions) {
+        // session_id = per-branch idempotency key: forkFromMessage collapses any
+        // retry/redelivery carrying the same key onto the one existing row, which
+        // is what makes retries safe here (a fork POST that times out may have
+        // committed server-side — without the key, retrying minted a duplicate
+        // empty "Fork:" card that haunted the inbox). direction titles the branch
+        // so N siblings don't all render as identical "Fork: <parent>" rows.
+        const forkKey = `forked-cli-${randomUUID()}`;
         const response = await cliFetch(`${siteUrl}/cli/fork`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ api_token: config.auth_token, conversation_id: id, message_uuid: messageUuid }),
-        });
+          body: JSON.stringify({ api_token: config.auth_token, conversation_id: id, message_uuid: messageUuid, session_id: forkKey, direction }),
+        }, { retries: 2 });
         if (!response.ok) {
           const body = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
           console.error(`Fork failed for "${direction}": ${body.error || response.statusText}`);
@@ -9101,8 +9109,10 @@ program
           api_token: config.auth_token,
           conversation_id: id,
           message_uuid: messageUuid,
+          // Idempotency key — see the multi-direction fork above.
+          session_id: `forked-cli-${randomUUID()}`,
         }),
-      });
+      }, { retries: 2 });
 
       if (!response.ok) {
         const body = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));

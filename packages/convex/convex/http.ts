@@ -2613,7 +2613,11 @@ http.route({
     };
     try {
       const body = await request.json();
-      const { api_token, conversation_id, message_uuid } = body;
+      // session_id is the CLI-supplied idempotency key: forkFromMessage returns
+      // the existing row when it's seen before, so a retried/redelivered fork
+      // can't mint a duplicate "Fork:" conversation. Dropping it here silently
+      // disabled that guard for every CLI fork. direction titles the branch.
+      const { api_token, conversation_id, message_uuid, session_id, direction } = body;
       if (!api_token || !conversation_id) {
         return new Response(JSON.stringify({ error: "Missing api_token or conversation_id" }), {
           status: 400,
@@ -2624,6 +2628,8 @@ http.route({
         conversation_id,
         message_uuid,
         api_token,
+        session_id,
+        direction,
       });
       return new Response(JSON.stringify(result), {
         status: 200,
