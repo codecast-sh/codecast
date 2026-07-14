@@ -1,8 +1,10 @@
 import { Id } from "./_generated/dataModel";
+import { isSessionOwner } from "./sessionOwners";
 
 type DbCtx = { db: any };
 
 type ConversationForAccess = {
+  _id?: Id<"conversations">;
   user_id: Id<"users">;
   team_id?: Id<"teams">;
   is_private: boolean;
@@ -96,11 +98,14 @@ export async function checkConversationAccess(
 ): Promise<AccessLevel> {
   if (viewerId) {
     if (conversation.user_id.toString() === viewerId.toString()) return "owner";
-    // The second-party owner (owner_user_id — the member ASSIGNED to steer a
-    // session run by another account, e.g. a Mr Bot fix session parked on a
-    // founder) steers with full owner rights: assignment is an explicit grant
-    // made by someone who already had runner-or-team access (setSessionOwner).
+    // An OWNER (a member of the session's owner set — the humans ASSIGNED to
+    // steer a session run by another account, e.g. a Mr Bot fix session parked
+    // on a founder) steers with full owner rights: assignment is an explicit
+    // grant made by someone who already had runner-or-team access. owner_user_id
+    // is the denormalized primary-owner fast path; the session_owners lookup
+    // covers secondary owners (a session may have several).
     if ((conversation as any).owner_user_id?.toString() === viewerId.toString()) return "owner";
+    if (conversation._id && (await isSessionOwner(ctx, conversation._id, viewerId))) return "owner";
     if (await canTeamMemberAccess(ctx, viewerId, conversation)) return "team";
   }
   if (conversation.share_token) return "shared";
