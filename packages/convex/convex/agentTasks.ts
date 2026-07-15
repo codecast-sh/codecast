@@ -254,19 +254,19 @@ export const listTasks = query({
     const auth = await verifyApiToken(ctx, args.api_token, false);
     if (!auth) throw new Error("Unauthorized");
 
-    if (args.status) {
-      return await ctx.db
-        .query("agent_tasks")
-        .withIndex("by_user_status", (q) =>
-          q.eq("user_id", auth.userId).eq("status", args.status as any)
-        )
-        .collect();
-    }
+    const tasks = args.status
+      ? await ctx.db
+          .query("agent_tasks")
+          .withIndex("by_user_status", (q) =>
+            q.eq("user_id", auth.userId).eq("status", args.status as any)
+          )
+          .collect()
+      : await ctx.db
+          .query("agent_tasks")
+          .withIndex("by_user_status", (q) => q.eq("user_id", auth.userId))
+          .collect();
 
-    return await ctx.db
-      .query("agent_tasks")
-      .withIndex("by_user_status", (q) => q.eq("user_id", auth.userId))
-      .collect();
+    return await withResolvedRunConversations(ctx, auth.userId, tasks);
   },
 });
 
@@ -652,6 +652,72 @@ export const runTaskNow = cliTaskAction(applyRunNow);
 
 // --- Web (session-auth) surface, used by the /schedules page ---
 
+// Attach resolved last-run/originating conversation info to task rows.
+// completeTaskRun stores the run's session UUID raw (the run's conversation
+// may not have synced yet at that instant), so UUID → conversation resolution
+// happens here at read time. Shared by webList (the /schedules page) and
+// listTasks (the CLI's /cli/tasks/list) so both surfaces agree on
+// last_run_conversation_id — `cast schedule log` reads it from listTasks.
+async function withResolvedRunConversations(
+  ctx: TaskCtx,
+  userId: Id<"users">,
+  tasks: Doc<"agent_tasks">[]
+) {
+  // Enrich with conversation titles so rows can link to the last run and
+  // the originating session without N client queries.
+  const convIds = new Set<Id<"conversations">>();
+  for (const t of tasks) {
+    if (t.last_run_conversation_id) convIds.add(t.last_run_conversation_id);
+    if (t.originating_conversation_id) convIds.add(t.originating_conversation_id);
+  }
+  const titles = new Map<string, string>();
+  await Promise.all(
+    [...convIds].map(async (id) => {
+      const conv = await ctx.db.get(id);
+      if (conv) titles.set(id, conv.title || "Untitled");
+    })
+  );
+
+  // Only needed when the run didn't already record a conversation_id
+  // directly (the --context-current path).
+  const uuidToConv = new Map<string, { id: Id<"conversations">; title: string }>();
+  const pendingUuids = [
+    ...new Set(
+      tasks
+        .filter((t) => t.last_run_session_uuid && !t.last_run_conversation_id)
+        .map((t) => t.last_run_session_uuid as string)
+    ),
+  ];
+  await Promise.all(
+    pendingUuids.map(async (uuid) => {
+      const conv = await ctx.db
+        .query("conversations")
+        .withIndex("by_session_id", (q: any) => q.eq("session_id", uuid))
+        .filter((q: any) => q.eq(q.field("user_id"), userId))
+        .first();
+      if (conv) uuidToConv.set(uuid, { id: conv._id, title: conv.title || "Untitled" });
+    })
+  );
+
+  return tasks.map((t) => {
+    const resolved =
+      !t.last_run_conversation_id && t.last_run_session_uuid
+        ? uuidToConv.get(t.last_run_session_uuid)
+        : undefined;
+    const lastRunConvId = t.last_run_conversation_id ?? resolved?.id;
+    return {
+      ...t,
+      last_run_conversation_id: lastRunConvId,
+      last_run_conversation_title: t.last_run_conversation_id
+        ? titles.get(t.last_run_conversation_id)
+        : resolved?.title,
+      originating_conversation_title: t.originating_conversation_id
+        ? titles.get(t.originating_conversation_id)
+        : undefined,
+    };
+  });
+}
+
 export const webList = query({
   args: {},
   handler: async (ctx) => {
@@ -663,61 +729,7 @@ export const webList = query({
       .withIndex("by_user_status", (q) => q.eq("user_id", userId))
       .collect();
 
-    // Enrich with conversation titles so rows can link to the last run and
-    // the originating session without N client queries.
-    const convIds = new Set<Id<"conversations">>();
-    for (const t of tasks) {
-      if (t.last_run_conversation_id) convIds.add(t.last_run_conversation_id);
-      if (t.originating_conversation_id) convIds.add(t.originating_conversation_id);
-    }
-    const titles = new Map<string, string>();
-    await Promise.all(
-      [...convIds].map(async (id) => {
-        const conv = await ctx.db.get(id);
-        if (conv) titles.set(id, conv.title || "Untitled");
-      })
-    );
-
-    // Resolve spawned-run session UUIDs to their conversation (by_session_id).
-    // Done at read time because the run's conversation may not have synced yet
-    // when the daemon reported completion. Only needed when the run didn't
-    // already record a conversation_id directly (the --context-current path).
-    const uuidToConv = new Map<string, { id: Id<"conversations">; title: string }>();
-    const pendingUuids = [
-      ...new Set(
-        tasks
-          .filter((t) => t.last_run_session_uuid && !t.last_run_conversation_id)
-          .map((t) => t.last_run_session_uuid as string)
-      ),
-    ];
-    await Promise.all(
-      pendingUuids.map(async (uuid) => {
-        const conv = await ctx.db
-          .query("conversations")
-          .withIndex("by_session_id", (q) => q.eq("session_id", uuid))
-          .filter((q) => q.eq(q.field("user_id"), userId))
-          .first();
-        if (conv) uuidToConv.set(uuid, { id: conv._id, title: conv.title || "Untitled" });
-      })
-    );
-
-    return tasks.map((t) => {
-      const resolved =
-        !t.last_run_conversation_id && t.last_run_session_uuid
-          ? uuidToConv.get(t.last_run_session_uuid)
-          : undefined;
-      const lastRunConvId = t.last_run_conversation_id ?? resolved?.id;
-      return {
-        ...t,
-        last_run_conversation_id: lastRunConvId,
-        last_run_conversation_title: t.last_run_conversation_id
-          ? titles.get(t.last_run_conversation_id)
-          : resolved?.title,
-        originating_conversation_title: t.originating_conversation_id
-          ? titles.get(t.originating_conversation_id)
-          : undefined,
-      };
-    });
+    return await withResolvedRunConversations(ctx, userId, tasks);
   },
 });
 
