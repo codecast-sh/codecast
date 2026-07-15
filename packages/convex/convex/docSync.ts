@@ -17,25 +17,37 @@ async function requireAuth(ctx: any): Promise<Id<"users">> {
 }
 
 /**
- * The web editor seeds the collaborative snapshot from the doc's markdown the
- * first time a doc is opened. If that markdown prop hadn't loaded yet (the
- * snapshot query resolves before the heavier doc-detail query), it seeds an
- * EMPTY doc — and submitSnapshot would then overwrite the real markdown in
- * `doc.content` with "". This predicate detects that racy initial empty seed so
- * the mutation can reject it wholesale: no empty snapshot is written and the
- * markdown is preserved, so the doc re-seeds correctly on the next open.
+ * The web editor has two paths that can replace the whole collaborative doc
+ * with EMPTY content while the doc's markdown prop is still loading (the
+ * snapshot query resolves before the heavier doc-detail query):
  *
- * Scoped to the initial snapshot (version <= 1) only — a genuine full clear of
- * an existing doc arrives at version > 1 and must be allowed through.
+ * 1. First open of a doc with no snapshot yet: the editor seeds one from the
+ *    markdown prop. An empty prop seeds an empty v1 snapshot.
+ * 2. First open of a CLI-edited doc (`cli_edited_at` set): ExternalEditSync
+ *    pushes the markdown prop into the live editor via setContent, arriving as
+ *    a whole-doc replace step at version > 1.
+ *
+ * Either way, submitSnapshot would then overwrite the real markdown in
+ * `doc.content` with "". This predicate detects both shapes so the mutation
+ * can reject them wholesale: no empty snapshot is written and the markdown is
+ * preserved. The clients are gated too (contentReady); this is the backstop
+ * that protects against old/cached clients.
+ *
+ * A genuine full clear by a person arrives at version > 1 on a doc without a
+ * CLI stamp and is allowed through. On a CLI-edited doc a legit clear is also
+ * blocked here — the collab layer still empties for collaborators, only the
+ * markdown mirror keeps its last value; the next non-empty snapshot overwrites
+ * it. That stale mirror is a far smaller cost than silently destroying a doc.
  */
-export function isRacyEmptySeed(args: {
+export function isRacyEmptyOverwrite(args: {
   version: number;
   derivedMarkdown: string;
   existingContent: string | undefined | null;
+  cliEditedAt: number | undefined | null;
 }): boolean {
-  if (args.version > 1) return false;
   if (args.derivedMarkdown.trim() !== "") return false;
-  return (args.existingContent ?? "").trim() !== "";
+  if ((args.existingContent ?? "").trim() === "") return false;
+  return args.version <= 1 || args.cliEditedAt != null;
 }
 
 export const getSnapshot = query({
@@ -75,9 +87,9 @@ export const submitSnapshot = mutation({
       .first();
     if (existing) return;
 
-    // Parse once and guard against the racy empty seed BEFORE writing anything.
-    // Otherwise a v1 empty snapshot from a not-yet-loaded editor would clobber
-    // the doc's real markdown (see isRacyEmptySeed).
+    // Parse once and guard against a racy empty overwrite BEFORE writing
+    // anything. Otherwise an empty snapshot from a not-yet-loaded editor would
+    // clobber the doc's real markdown (see isRacyEmptyOverwrite).
     let parsed: any;
     try {
       parsed = JSON.parse(args.content);
@@ -93,12 +105,20 @@ export const submitSnapshot = mutation({
     const docId = ctx.db.normalizeId("docs", args.id);
     const docForGuard = docId ? await ctx.db.get(docId) : null;
     if (
-      isRacyEmptySeed({
+      isRacyEmptyOverwrite({
         version: args.version,
         derivedMarkdown: md,
         existingContent: (docForGuard as any)?.content,
+        cliEditedAt: (docForGuard as any)?.cli_edited_at,
       })
     ) {
+      // Rare and always suspicious — log it so wipe attempts from stale
+      // clients are visible in prod logs.
+      console.log("submitSnapshot: blocked empty overwrite", {
+        id: args.id,
+        version: args.version,
+        existingLen: ((docForGuard as any)?.content ?? "").length,
+      });
       return;
     }
 
