@@ -580,22 +580,213 @@ export function resnapshotIfActiveFresher(): string | null {
 }
 
 // ---------------------------------------------------------------------------
+// Usage snapshots — per-account limit utilization from the OAuth usage API
+// ---------------------------------------------------------------------------
+//
+// Anthropic's usage endpoint is keyed only by the Bearer token, so every saved
+// profile's usage is fetchable with the access token already in its keychain
+// snapshot. The probe is READ-ONLY — it never refreshes, so it can't rotate a
+// dormant grant that may be active on another machine. Dormant tokens live
+// ~8h past their last snapshot; after that the profile keeps its last reading
+// (staleness is visible via fetched_at, and the windows move slowly anyway).
+// ~/.codecast/cc-usage.json caches snapshots — percentages only, non-secret.
+
+const CC_USAGE_URL =
+  process.env.CODECAST_CC_USAGE_URL || "https://api.anthropic.com/api/oauth/usage";
+
+export interface CcUsageWindow {
+  percent: number;
+  resets_at?: number; // epoch ms
+  label?: string; // scoped window's model display name (e.g. "Fable")
+}
+
+export interface CcUsageSnapshot {
+  fetched_at: number;
+  session?: CcUsageWindow; // rolling 5h window
+  weekly?: CcUsageWindow; // 7d, all models
+  weekly_scoped?: CcUsageWindow; // 7d, model-scoped (the /usage screen's third bar)
+  extra?: { percent: number; enabled: boolean }; // overflow usage credits
+}
+
+/** Normalize the usage API response to the compact snapshot we store/publish.
+ * Prefers the `limits[]` array (what the /usage screen renders); falls back to
+ * the legacy five_hour/seven_day blocks. Exported for tests. */
+export function parseUsageResponse(data: any, now: number): CcUsageSnapshot {
+  const snap: CcUsageSnapshot = { fetched_at: now };
+  const toMs = (iso: unknown): number | undefined => {
+    if (typeof iso !== "string") return undefined;
+    const t = Date.parse(iso);
+    return Number.isFinite(t) ? t : undefined;
+  };
+  for (const lim of Array.isArray(data?.limits) ? data.limits : []) {
+    if (typeof lim?.percent !== "number") continue;
+    const w: CcUsageWindow = { percent: lim.percent, resets_at: toMs(lim.resets_at) };
+    if (lim.kind === "session") snap.session = w;
+    else if (lim.kind === "weekly_all") snap.weekly = w;
+    else if (lim.kind === "weekly_scoped") {
+      const label = lim.scope?.model?.display_name;
+      if (typeof label === "string" && label) w.label = label;
+      // Several scoped windows may exist; keep the most utilized one.
+      if (!snap.weekly_scoped || w.percent > snap.weekly_scoped.percent) snap.weekly_scoped = w;
+    }
+  }
+  if (!snap.session && typeof data?.five_hour?.utilization === "number") {
+    snap.session = { percent: data.five_hour.utilization, resets_at: toMs(data.five_hour.resets_at) };
+  }
+  if (!snap.weekly && typeof data?.seven_day?.utilization === "number") {
+    snap.weekly = { percent: data.seven_day.utilization, resets_at: toMs(data.seven_day.resets_at) };
+  }
+  const extra = data?.extra_usage;
+  if (extra && typeof extra.utilization === "number") {
+    snap.extra = { percent: extra.utilization, enabled: extra.is_enabled === true };
+  }
+  return snap;
+}
+
+export async function fetchUsageSnapshot(
+  accessToken: string,
+  opts: { fetchImpl?: typeof fetch; now?: number } = {},
+): Promise<CcUsageSnapshot> {
+  const fetchImpl = opts.fetchImpl ?? fetch;
+  const resp = await fetchImpl(CC_USAGE_URL, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "anthropic-beta": "oauth-2025-04-20",
+      "User-Agent": "codecast-daemon",
+      Accept: "application/json",
+    },
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!resp.ok) {
+    throw new CcAccountError(`usage endpoint ${resp.status}`);
+  }
+  return parseUsageResponse(await resp.json(), opts.now ?? Date.now());
+}
+
+function usageCachePath(): string {
+  return path.join(codecastDir(), "cc-usage.json");
+}
+
+interface UsageCache {
+  // Keyed by account uuid (email fallback) — the same identity the profile
+  // index carries, so a profile covering the active login shares one entry.
+  accounts: Record<string, CcUsageSnapshot>;
+}
+
+export function readUsageCache(): UsageCache {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(usageCachePath(), "utf-8"));
+    if (parsed && typeof parsed.accounts === "object") return parsed;
+  } catch {}
+  return { accounts: {} };
+}
+
+export interface UsageRefreshSummary {
+  probed: string[];
+  skipped: string[];
+  failed: Array<{ name: string; reason: string }>;
+}
+
+/**
+ * Refresh usage snapshots for the active login + every saved profile whose
+ * access token is still live. Expired dormant tokens are skipped (their last
+ * snapshot survives) — we never refresh a dormant grant. Per-account probes
+ * are throttled by `minIntervalMs` so callers can invoke this freely.
+ */
+export async function refreshUsageSnapshots(
+  opts: { fetchImpl?: typeof fetch; now?: number; minIntervalMs?: number } = {},
+): Promise<UsageRefreshSummary> {
+  const now = opts.now ?? Date.now();
+  const minInterval = opts.minIntervalMs ?? 4 * 60 * 1000;
+  const cache = readUsageCache();
+  const summary: UsageRefreshSummary = { probed: [], skipped: [], failed: [] };
+
+  const jobs = new Map<string, { label: string; token: string }>();
+  const active = activeAccountSummary();
+  const activeKey = active?.uuid || active?.email;
+  const activeCred = readActiveCredential();
+  if (activeKey && activeCred && credentialHealth(activeCred, now).pushable) {
+    try {
+      const token = JSON.parse(activeCred)?.claudeAiOauth?.accessToken;
+      if (typeof token === "string" && token) jobs.set(activeKey, { label: "active", token });
+    } catch {}
+  }
+  const index = readProfileIndex();
+  const knownKeys = new Set<string>();
+  for (const [name, meta] of Object.entries(index.profiles)) {
+    const key = meta.uuid || meta.email;
+    if (!key) continue;
+    knownKeys.add(key);
+    if (jobs.has(key)) continue; // active covers it with the freshest token
+    const raw = readProfileSecret(name);
+    if (!raw) continue;
+    let profile: CcProfile;
+    try {
+      profile = parseProfile(raw);
+    } catch {
+      continue;
+    }
+    if (!credentialHealth(JSON.stringify(profile.credentials), now).pushable) {
+      summary.skipped.push(name); // dormant token expired — keep last snapshot
+      continue;
+    }
+    const token = profile.credentials?.claudeAiOauth?.accessToken;
+    if (typeof token === "string" && token) jobs.set(key, { label: name, token });
+  }
+  if (activeKey) knownKeys.add(activeKey);
+
+  for (const [key, job] of jobs) {
+    const prev = cache.accounts[key];
+    if (prev && now - prev.fetched_at < minInterval) {
+      summary.skipped.push(job.label);
+      continue;
+    }
+    try {
+      cache.accounts[key] = await fetchUsageSnapshot(job.token, { fetchImpl: opts.fetchImpl, now });
+      summary.probed.push(job.label);
+    } catch (err) {
+      summary.failed.push({ name: job.label, reason: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  if (summary.probed.length > 0) {
+    // Drop entries for deleted profiles so the cache can't grow unbounded.
+    for (const key of Object.keys(cache.accounts)) {
+      if (!knownKeys.has(key)) delete cache.accounts[key];
+    }
+    atomicWriteFile(usageCachePath(), JSON.stringify(cache, null, 2), 0o644);
+  }
+  return summary;
+}
+
+// ---------------------------------------------------------------------------
 // Heartbeat payload (non-secret) — lets the web render the switcher
 // ---------------------------------------------------------------------------
 
 export interface AccountsHeartbeatPayload {
   active_email?: string;
   active_uuid?: string;
-  profiles: Array<{ name: string; email?: string; tier?: string; subscription?: string }>;
+  profiles: Array<{
+    name: string;
+    email?: string;
+    tier?: string;
+    subscription?: string;
+    usage?: CcUsageSnapshot;
+  }>;
 }
 
-// Keyed on the mtimes of the two files the payload derives from (the profile
-// index and ~/.claude.json's oauthAccount) rather than a TTL: a `cast accounts
-// save` in another process or a fresh /login shows up on the very next
-// heartbeat instead of after a blind expiry window. Recompute is two small
-// file reads — never the keychain — so the cache only exists to skip parsing
-// ~/.claude.json when nothing changed.
-let accountsCache: { value: AccountsHeartbeatPayload | null; indexMtime: number; claudeMtime: number } | null = null;
+// Keyed on the mtimes of the three files the payload derives from (the profile
+// index, ~/.claude.json's oauthAccount, and the usage cache) rather than a TTL:
+// a `cast accounts save` in another process, a fresh /login, or a usage refresh
+// shows up on the very next heartbeat instead of after a blind expiry window.
+// Recompute is small file reads — never the keychain — so the cache only
+// exists to skip parsing ~/.claude.json when nothing changed.
+let accountsCache: {
+  value: AccountsHeartbeatPayload | null;
+  indexMtime: number;
+  claudeMtime: number;
+  usageMtime: number;
+} | null = null;
 
 function mtimeOf(p: string): number {
   try {
@@ -612,17 +803,25 @@ export function invalidateAccountsCache(): void {
 export function getAccountsHeartbeatPayload(): AccountsHeartbeatPayload | null {
   const indexMtime = mtimeOf(indexPath());
   const claudeMtime = mtimeOf(claudeJsonPath());
-  if (accountsCache && accountsCache.indexMtime === indexMtime && accountsCache.claudeMtime === claudeMtime) {
+  const usageMtime = mtimeOf(usageCachePath());
+  if (
+    accountsCache &&
+    accountsCache.indexMtime === indexMtime &&
+    accountsCache.claudeMtime === claudeMtime &&
+    accountsCache.usageMtime === usageMtime
+  ) {
     return accountsCache.value;
   }
   let value: AccountsHeartbeatPayload | null = null;
   try {
     const active = activeAccountSummary();
-    const profiles = listProfiles().map(({ name, email, tier, subscription }) => ({
+    const usage = readUsageCache().accounts;
+    const profiles = listProfiles().map(({ name, email, uuid, tier, subscription }) => ({
       name,
       email,
       tier,
       subscription,
+      usage: usage[uuid || email || ""] ?? undefined,
     }));
     if (active?.email || profiles.length > 0) {
       value = { active_email: active?.email, active_uuid: active?.uuid, profiles };
@@ -630,7 +829,7 @@ export function getAccountsHeartbeatPayload(): AccountsHeartbeatPayload | null {
   } catch {
     value = null;
   }
-  accountsCache = { value, indexMtime, claudeMtime };
+  accountsCache = { value, indexMtime, claudeMtime, usageMtime };
   return value;
 }
 

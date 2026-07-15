@@ -28,13 +28,13 @@ import { DesktopAppBanner } from "./DesktopAppBanner";
 import { CliOfflineBanner } from "./CliOfflineBanner";
 import { ConnectionBanner } from "./ConnectionBanner";
 import { DaemonStatusChip } from "./DaemonStatusChip";
-import { AccountUsageChip } from "./AccountUsageChip";
 import { SyncStatusChip } from "./SyncStatusChip";
 import { TmuxMissingBanner } from "./TmuxMissingBanner";
 import { FindBar } from "./FindBar";
 import { KeyboardShortcutsPanel, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { SettingsModal } from "./settings/SettingsModal";
-import { useInboxStore, useTrackedStore, categorizeSessions, filterInboxScope, sessionsWithPendingSend, isSessionHidden, getProjectName } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, categorizeSessions, filterInboxScope, sessionsWithPendingSend, sessionsWakeSig, pendingSendWakeSig, isSessionHidden, getProjectName } from "../store/inboxStore";
+import { useCoarseNow } from "../hooks/useCoarseNow";
 import { useShortcutAction, useShortcutContext, useGlobalShortcutActions } from "../shortcuts";
 import { usePrefetch } from "../hooks/usePrefetch";
 import { desktopHeaderClass, setupDesktopDrag, isElectron } from "../lib/desktop";
@@ -79,13 +79,24 @@ const DashboardNestCtx: React.Context<boolean> =
 // keyboard panel, main content) on every tick.
 const ActiveAgentsBadge = memo(function ActiveAgentsBadge({ isOnInboxPage }: { isOnInboxPage: boolean }) {
   const s = useTrackedStore([
-    s => s.sessions,
+    // Wake on STRUCTURAL change (bucket/order/identity), never on the ~1s
+    // liveness heartbeat: the raw s.sessions ref flips on every tick, and this
+    // badge was measured re-running categorizeSessions over the whole
+    // never-prune cache ~3x/sec at ~50ms a pass. The body still reads
+    // s.sessions for data; these signatures only gate the re-render. Same for
+    // pendingMessages — only the pending-send MEMBERSHIP matters here.
+    // See store/wakeSig.ts and the identical gate on SessionListPanel.
+    s => sessionsWakeSig(s.sessions),
     s => s.sessionsWithQueuedMessages,
-    s => s.pendingMessages,
+    s => pendingSendWakeSig(s.pendingMessages),
     s => s.currentUser?._id,
     s => s.liveInboxIds,
     s => s.showOldSessions,
   ]);
+  // categorizeSessions' trust-TTL sweep (stale "working" → needs-input) is
+  // time-driven, not field-driven — keep it alive with a coarse clock, exactly
+  // like SessionListPanel (see useCoarseNow / store/wakeSig.ts).
+  const coarseNow = useCoarseNow(15_000);
   // Ambient "active agents" count stays MINE-scoped regardless of inbox scope: a
   // teammate row can linger in the shared cache after a team-board visit, but the
   // dock badge counts YOUR working sessions, not the team's. filterInboxScope with
@@ -95,9 +106,12 @@ const ActiveAgentsBadge = memo(function ActiveAgentsBadge({ isOnInboxPage }: { i
   // daemon status never un-sets). liveInboxIds + showOld make categorizeSessions
   // drop it.
   const meId = s.currentUser?._id?.toString?.() ?? null;
+  // Deps are the wake signatures (memoized by ref — free to re-call here), not
+  // the raw s.sessions/s.pendingMessages refs those flip on every heartbeat.
   const working = useMemo(
     () => categorizeSessions(filterInboxScope(s.sessions, "mine", meId), s.sessionsWithQueuedMessages, sessionsWithPendingSend(s.pendingMessages), { liveInboxIds: s.liveInboxIds, showOld: s.showOldSessions }).working,
-    [s.sessions, meId, s.sessionsWithQueuedMessages, s.pendingMessages, s.liveInboxIds, s.showOldSessions],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sessionsWakeSig(s.sessions), meId, s.sessionsWithQueuedMessages, pendingSendWakeSig(s.pendingMessages), s.liveInboxIds, s.showOldSessions, coarseNow],
   );
   if (working.length === 0) return null;
   const activeAgentCount = working.length;
@@ -810,9 +824,6 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
 
           {/* Right section: Actions */}
           <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
-            <ErrorBoundary name="AccountUsageChip" level="inline">
-              <AccountUsageChip />
-            </ErrorBoundary>
             <ErrorBoundary name="DaemonStatusChip" level="inline">
               <DaemonStatusChip />
             </ErrorBoundary>
