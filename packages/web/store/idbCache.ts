@@ -7,6 +7,7 @@ import {
   isPersistedClientStoreKey,
 } from "./clientSyncRegistry";
 import { diffCollection } from "./idbCollectionDiff";
+import { isConvexId } from "../lib/entityLinks";
 
 export type OutboxEntry = {
   id: string;
@@ -222,6 +223,56 @@ export function writePatchesToIDB(patches: Patch[], state: any) {
   }
 }
 
+// Retention for the persisted sessions collection, applied at hydration. The
+// in-memory sessions map is never-prune BY DESIGN (rows the UI holds must not
+// vanish mid-session), which means the on-disk cache is append-only across
+// months: every team-board visit, deep link, and crawl top-up leaves a row
+// forever. A long-lived install was measured hydrating ~7,000 rows (5k+ older
+// than 30 days, 4k belonging to teammates) into a map whose live inbox renders
+// ~134 — and every O(N) pass (syncTable, wake signatures, categorizeSessions,
+// sortSessions) paid the 7k price on each liveness flip, pinning the main
+// thread. Boot is the one safe moment to shed that weight: nothing holds refs
+// yet, and everything the UI can actually reach is kept —
+//   • the server-authoritative live inbox set (liveInboxIdList),
+//   • the restored focus target,
+//   • optimistic stubs (non-Convex ids — local truths the server can't restore),
+//   • pinned rows (an explicit keep),
+//   • stashed/dismissed rows inside the reconcile window (the Stashed/Killed
+//     browse views),
+//   • anything touched inside the TTL, capped at the newest MAX_CACHED_SESSIONS.
+// Anything older is dropped from memory AND disk; it stays reachable via
+// search/deep-link, which re-fetch from the server and re-seed the cache.
+const SESSION_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // mirrors DISMISS_RECONCILE_WINDOW_MS / the server crawl window
+const MAX_CACHED_SESSIONS = 1200;
+
+export function partitionSessionRetention(
+  rows: any[],
+  liveInboxIdList: string[] | undefined,
+  lastFocusedId: string | null | undefined,
+  now: number,
+): { keep: any[]; drop: string[] } {
+  const liveIds = new Set(liveInboxIdList ?? []);
+  const pinnedKeep: any[] = [];
+  const windowed: any[] = [];
+  const drop: string[] = [];
+  for (const row of rows) {
+    const stampedAt = Math.max(row.updated_at ?? 0, row._creationTime ?? 0, row.inbox_stashed_at ?? 0, row.inbox_dismissed_at ?? 0);
+    if (liveIds.has(row._id) || row._id === lastFocusedId || !isConvexId(row._id) || row.is_pinned) {
+      pinnedKeep.push(row);
+    } else if (now - stampedAt <= SESSION_CACHE_TTL_MS) {
+      windowed.push(row);
+    } else {
+      drop.push(row._id);
+    }
+  }
+  // Cap the TTL-window survivors (never the always-keep set), newest first.
+  if (windowed.length > MAX_CACHED_SESSIONS) {
+    windowed.sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
+    for (const row of windowed.splice(MAX_CACHED_SESSIONS)) drop.push(row._id);
+  }
+  return { keep: pinnedKeep.concat(windowed), drop };
+}
+
 export async function loadCache(): Promise<Record<string, any> | null> {
   try {
     const result: Record<string, any> = {};
@@ -233,8 +284,13 @@ export async function loadCache(): Promise<Record<string, any> | null> {
       db.meta.toArray(),
     ]);
 
+    // Meta lookup first — the sessions retention pass below needs
+    // liveInboxIdList and lastFocusedConversationId from the same snapshot.
+    const metaByKey: Record<string, any> = {};
+    for (const row of metaRows) metaByKey[row.key] = row.value;
+
     collectionEntries.forEach(([key, table], i) => {
-      const rows = collectionResults[i];
+      let rows = collectionResults[i];
       // Seed the persistence shadow with what's on disk (even an empty table) so
       // the first write after hydrate diffs against reality and can prune rows
       // the server has since deleted.
@@ -244,6 +300,16 @@ export async function loadCache(): Promise<Record<string, any> | null> {
       // the registry) are excluded from hydration AND removed from disk, so the
       // cache self-heals instead of resurrecting phantoms on every load.
       const invalid: string[] = [];
+      if (key === "sessions" && rows.length > 0) {
+        const { keep, drop } = partitionSessionRetention(
+          rows,
+          metaByKey.liveInboxIdList,
+          metaByKey.lastFocusedConversationId,
+          Date.now(),
+        );
+        rows = keep;
+        if (drop.length) table.bulkDelete(drop).catch(() => {});
+      }
       if (rows.length > 0) {
         const map: Record<string, any> = {};
         for (const row of rows) {
@@ -262,6 +328,23 @@ export async function loadCache(): Promise<Record<string, any> | null> {
     for (const row of metaRows) {
       result[row.key] = row.value;
       hasData = true;
+    }
+
+    // The conversations map is the sessions cache's twin (same ids, richer
+    // metadata) persisted as ONE meta blob — every put structured-clones the
+    // whole thing on the main thread, so an unpruned blob (measured at ~2,700
+    // entries) costs hundreds of ms per write and at boot. Apply the same
+    // retention policy; the pruned blob reaches disk on its next natural put.
+    if (result.conversations && typeof result.conversations === "object") {
+      const { keep } = partitionSessionRetention(
+        Object.values(result.conversations),
+        metaByKey.liveInboxIdList,
+        metaByKey.lastFocusedConversationId,
+        Date.now(),
+      );
+      const pruned: Record<string, any> = {};
+      for (const row of keep) pruned[row._id] = row;
+      result.conversations = pruned;
     }
 
     return hasData ? result : null;

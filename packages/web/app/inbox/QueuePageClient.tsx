@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, memo, useMemo, useDeferredValue } from "react";
+import { useState, useCallback, useEffect, useRef, memo, useMemo, useDeferredValue } from "react";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useEventListener } from "../../hooks/useEventListener";
@@ -16,7 +16,7 @@ import { ConversationDiffLayout } from "../../components/ConversationDiffLayout"
 import { ConversationData } from "../../components/ConversationView";
 import { shareOrigin } from "../../lib/utils";
 import { useConversationMessages } from "../../hooks/useConversationMessages";
-import { useInboxStore, isConvexId, sortSessions, isInterruptControlMessage, ensureHydrated } from "../../store/inboxStore";
+import { useInboxStore, useTrackedStore, isConvexId, sortSessions, sessionsWakeSig, isInterruptControlMessage, ensureHydrated } from "../../store/inboxStore";
 import { SharePopover } from "../../components/SharePopover";
 import { ActivityFeed } from "../../components/ActivityFeed";
 import { PlanContextPanel } from "../../components/PlanContextPanel";
@@ -235,7 +235,13 @@ export function QueuePageClient() {
   });
 
 
-  const sessions = useInboxStore((s) => s.sessions);
+  // Wake on STRUCTURAL session change (membership/bucket/order), never on the
+  // ~1s liveness heartbeat: the raw s.sessions ref flips on every tick, and this
+  // page was measured re-sorting the whole never-prune cache per flip. Every use
+  // below is presence checks and ordering — all covered by the signature; field
+  // freshness rides the next structural render. See store/wakeSig.ts.
+  const trackedSessions = useTrackedStore([s => sessionsWakeSig(s.sessions)]);
+  const sessions = trackedSessions.sessions;
   const clientStateInitialized = useInboxStore((s) => s.clientStateInitialized);
   const currentSessionId = useInboxStore((s) => s.currentSessionId);
   const advanceToNext = useInboxStore((s) => s.advanceToNext);
@@ -531,15 +537,19 @@ export function QueuePageClient() {
   });
 
 
-  // Warm IDB cache for visible sessions — no hooks, no components
-  const seen = new Set<string>();
-  if (currentSession) seen.add(currentSession._id);
-  for (const s of sortedSessions) {
-    if (!seen.has(s._id)) {
-      seen.add(s._id);
-      ensureHydrated(s._id);
+  // Warm the IDB message cache for the sessions most likely to be opened next.
+  // This used to iterate the WHOLE never-prune map in the render body — with a
+  // long-lived cache that meant thousands of IDB probes per render, ~2x/sec
+  // (ensureHydrated dedupes only in-flight loads, so conversations with nothing
+  // cached were re-probed forever). Warm only the top of the actionable inbox,
+  // once per structural change, off the render path.
+  const currentSessionIdForWarm = currentSession?._id ?? null;
+  useEffect(() => {
+    if (currentSessionIdForWarm) ensureHydrated(currentSessionIdForWarm);
+    for (const s of sortedSessions.slice(0, 50)) {
+      if (s._id !== currentSessionIdForWarm) ensureHydrated(s._id);
     }
-  }
+  }, [sortedSessions, currentSessionIdForWarm]);
 
   const handleClearHighlight = useCallback(() => {
     setActiveHighlight(undefined);
