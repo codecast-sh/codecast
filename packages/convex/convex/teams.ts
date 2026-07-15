@@ -278,6 +278,10 @@ export const getTeamMembers = query({
           name: user.name,
           email: user.email,
           image: user.image,
+          // Agent accounts (Mr Bot, Anchors). Callers that offer a member picker
+          // for a HUMAN-only role (e.g. the session owners multi-select) filter
+          // these out — a bot's inbox is nobody's, so it can't be an owner.
+          is_bot: !!user.is_bot,
           role: m.role,
           daemon_last_seen: user.daemon_last_seen,
           github_username: user.github_username,
