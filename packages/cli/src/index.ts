@@ -3342,6 +3342,30 @@ program
     );
   });
 
+program
+  .command("pull")
+  .description(
+    "Pull a session onto THIS machine — reparent its DEVICE axis to here\n\n" +
+    "A session's three ownership axes move independently: this changes only\n" +
+    "WHERE it runs, never its author or its owners. If the session currently\n" +
+    "runs under a teammate's account, account follows device — it then runs and\n" +
+    "bills under YOUR account, while the original author is preserved. You can\n" +
+    "pull any session you run or own.\n\n" +
+    "  cast pull jx7c6zk    # run this session on this machine"
+  )
+  .argument("<session_id>", "Session short ID (e.g. jx7c6zk), session UUID, or full ID")
+  .action(async (sessionId: string) => {
+    const result = await cliPost("/cli/sessions/reparent", {
+      session_id: sessionId,
+      device_id: deviceId(),
+    });
+    const where = result.label || deviceLabel();
+    const acct = result.cross_user ? ` ${c.dim}(now runs under your account)${c.reset}` : "";
+    console.log(
+      `${c.green}✓${c.reset} ${c.cyan}${sessionId}${c.reset} ${c.dim}→ device${c.reset} ${c.magenta}${where}${c.reset}${acct}`
+    );
+  });
+
 const accountsCmd = program
   .command("accounts")
   .description(
