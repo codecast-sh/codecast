@@ -18,11 +18,14 @@ export type InitiatorRef =
 
 export function resolveInitiatorRef(conv: {
   user_id: Id<"users">;
+  author_user_id?: Id<"users"> | null;
   agent_task_id?: Id<"agent_tasks"> | null;
   spawned_by_conversation_id?: Id<"conversations"> | null;
 }): InitiatorRef {
   if (conv.agent_task_id) return { kind: "schedule", agent_task_id: conv.agent_task_id };
   if (conv.spawned_by_conversation_id)
     return { kind: "session", conversation_id: conv.spawned_by_conversation_id };
-  return { kind: "user", user_id: conv.user_id };
+  // author_user_id pins the original author across an account-follows-device
+  // reparent that rewrote user_id; fall back to user_id when it was never moved.
+  return { kind: "user", user_id: conv.author_user_id ?? conv.user_id };
 }

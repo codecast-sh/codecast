@@ -3342,6 +3342,32 @@ program
     );
   });
 
+program
+  .command("pull")
+  .description(
+    "Pull a session onto THIS machine — reparent its DEVICE axis to here\n\n" +
+    "A session's three ownership axes move independently: this changes only\n" +
+    "WHERE it runs, never its author or its owners. If the session currently\n" +
+    "runs under a teammate's account, account follows device — it then runs and\n" +
+    "bills under YOUR account, while the original author is preserved. You can\n" +
+    "pull any session you run or own.\n\n" +
+    "  cast pull jx7c6zk    # run this session on this machine"
+  )
+  .argument("<session_id>", "Session short ID (e.g. jx7c6zk), session UUID, or full ID")
+  .option("--remote <url>", "Git remote for the destination clone (when the session has none recorded)")
+  .action(async (sessionId: string, opts: { remote?: string }) => {
+    const result = await cliPost("/cli/sessions/reparent", {
+      session_id: sessionId,
+      device_id: deviceId(),
+      ...(opts.remote ? { remote_url: opts.remote } : {}),
+    });
+    const where = result.label || deviceLabel();
+    const acct = result.cross_user ? ` ${c.dim}(now runs under your account)${c.reset}` : "";
+    console.log(
+      `${c.green}✓${c.reset} ${c.cyan}${sessionId}${c.reset} ${c.dim}→ device${c.reset} ${c.magenta}${where}${c.reset}${acct}`
+    );
+  });
+
 const accountsCmd = program
   .command("accounts")
   .description(
@@ -10698,11 +10724,21 @@ schedule
     }
 
     if (!t.last_run_conversation_id) {
-      console.log(fmt.muted("No run history yet."));
+      if (t.last_run_at) {
+        // The task has run but its conversation can't be resolved (yet) —
+        // distinct from never having run at all.
+        console.log(fmt.muted(`Last run ${formatMs(Date.now() - t.last_run_at)} ago — run conversation not synced yet.`));
+        if (t.last_run_summary) console.log(t.last_run_summary);
+      } else {
+        console.log(fmt.muted("No run history yet."));
+      }
       return;
     }
 
-    console.log(`Last run conversation: ${c.cyan}${t.last_run_conversation_id}${c.reset}`);
+    const title = t.last_run_conversation_title ? ` ${fmt.muted(`(${t.last_run_conversation_title})`)}` : "";
+    console.log(`Last run conversation: ${c.cyan}${t.last_run_conversation_id}${c.reset}${title}`);
+    if (t.last_run_at) console.log(fmt.muted(`Ran ${formatMs(Date.now() - t.last_run_at)} ago`));
+    if (t.last_run_summary) console.log(t.last_run_summary);
     console.log(fmt.muted(`Use: cast read ${t.last_run_conversation_id}`));
   });
 

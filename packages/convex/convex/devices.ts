@@ -3,6 +3,8 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
+import { isSessionOwner } from "./sessionOwners";
+import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import {
   DEVICE_ONLINE_MS,
   pathUnderRoot,
@@ -471,6 +473,137 @@ export const reassignToDevice = mutation({
       target_device_id: args.device_id,
     });
     return { ok: true, command_id: commandId, device_id: args.device_id, label: device.label };
+  },
+});
+
+// Cross-user device reparent — the device axis across accounts. Unlike
+// reassignToDevice (same-user "run on this device"), the caller may pull a
+// session RUN BY A TEAMMATE onto their OWN machine, provided they already run or
+// own it. Account follows device: the session then runs and bills under the
+// caller (user_id -> caller), and the immutable author is pinned (author_user_id)
+// so it survives the user_id rewrite. Owners are untouched — the device axis and
+// the owner axis move independently.
+//
+// Narrow by design: you may only pull onto YOUR OWN device. Moving a session
+// onto a third party's machine would need their consent and credential, which we
+// never transfer. Factored out so tests can drive it with an explicit userId.
+// The destination daemon can only clone the repo if it knows the git remote —
+// but git_remote_url stamping is unreliable (ct-38666: daemon-created
+// conversations often lack it). Resolve it at pull time from the best source:
+// the conversation itself, else any SIBLING conversation of the same runner in
+// the same git_root that did get stamped, else the caller's explicit
+// --remote override.
+async function resolveRemoteForReparent(
+  ctx: { db: any },
+  conv: any,
+  explicit?: string,
+): Promise<string | undefined> {
+  if (explicit?.trim()) return explicit.trim();
+  if (conv.git_remote_url) return conv.git_remote_url;
+  if (!conv.git_root) return undefined;
+  const siblings = await ctx.db
+    .query("conversations")
+    .withIndex("by_user_git_root", (q: any) =>
+      q.eq("user_id", conv.user_id).eq("git_root", conv.git_root))
+    .take(50);
+  return siblings.find((s: any) => s.git_remote_url)?.git_remote_url;
+}
+
+export async function performReparentSessionToDevice(
+  ctx: { db: any },
+  userId: Id<"users">,
+  args: { session_id: string; device_id: string; remote_url?: string },
+): Promise<{ ok: true; command_id: any; device_id: string; label: string; cross_user: boolean }> {
+  // Authorization is folded into resolution: the caller must already RUN it
+  // (user_id) or OWN it (owner set / cached primary). Team visibility alone is
+  // NOT enough — reparenting changes who bills, so it can't be a team-wide power.
+  // Accepts any ref (short id, session UUID, or conversation id) like cast own.
+  const conv = await findConversationByAnyRefWhere(ctx, args.session_id, async (candidate: any) => {
+    const runs = candidate.user_id.toString() === userId.toString();
+    const owns =
+      candidate.owner_user_id?.toString() === userId.toString() ||
+      (await isSessionOwner(ctx, candidate._id, userId));
+    return runs || owns;
+  });
+  if (!conv) {
+    throw new Error(
+      `No session found for "${args.session_id}" that you run or own (you can only reparent a session you run or own)`,
+    );
+  }
+  const isRunner = conv.user_id.toString() === userId.toString();
+
+  // The target device must be the CALLER's own — you pull onto your machine.
+  const device = await ctx.db
+    .query("devices")
+    .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", args.device_id))
+    .first();
+  if (!device) throw new Error("Unknown device (you can only reparent onto your own device)");
+
+  const crossUser = !isRunner; // account actually changes hands
+
+  const patch: any = {
+    owner_device_id: args.device_id,
+    session_error: undefined,
+    status: "active" as const,
+    updated_at: Date.now(),
+  };
+  if (crossUser) {
+    // Account follows device: the caller now runs + bills it. Pin the author
+    // (the pre-move runner) the first time it crosses accounts so it survives.
+    if (!conv.author_user_id) patch.author_user_id = conv.user_id;
+    patch.user_id = userId;
+  }
+  await ctx.db.patch(conv._id, patch);
+
+  // Resume on the caller's daemon: the command goes in the CALLER's queue
+  // (user_id: userId), targeted at their device. A teammate's daemon polls its
+  // own user's queue, so this reaches the right machine. The destination daemon
+  // resolves its own local checkout (clones if missing) — the source machine's
+  // project_path is only a hint. `reparented` marks it so the daemon takes the
+  // fresh-machine resume path (clone + transcript from Convex) rather than
+  // assuming the local worktree + JSONL already exist.
+  const agentType =
+    conv.agent_type === "codex" ? "codex" : conv.agent_type === "gemini" ? "gemini" : "claude";
+  // Resolve the git remote NOW and embed it in the command, so the destination
+  // daemon can clone without depending on the conversation's own (often
+  // missing) git_remote_url — see resolveRemoteForReparent.
+  const remoteUrl = await resolveRemoteForReparent(ctx, conv, args.remote_url);
+  const commandId = await ctx.db.insert("daemon_commands", {
+    user_id: userId,
+    command: "resume_session" as const,
+    args: JSON.stringify({
+      session_id: conv.session_id,
+      agent_type: agentType,
+      conversation_id: conv._id,
+      ...(conv.project_path ? { project_path: conv.project_path } : {}),
+      ...(remoteUrl ? { git_remote_url: remoteUrl } : {}),
+      reparented: true,
+    }),
+    created_at: Date.now(),
+    target_device_id: args.device_id,
+  });
+
+  return { ok: true, command_id: commandId, device_id: args.device_id, label: device.label, cross_user: crossUser };
+}
+
+export const reparentSessionToDevice = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    // Any ref: short_id (jx…), Claude session UUID, or conversation _id.
+    session_id: v.string(),
+    device_id: v.string(),
+    // Explicit git remote for the destination clone (cast pull --remote) when
+    // neither the conversation nor a sibling has one recorded.
+    remote_url: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication required");
+    return performReparentSessionToDevice(ctx, userId, {
+      session_id: args.session_id,
+      device_id: args.device_id,
+      remote_url: args.remote_url,
+    });
   },
 });
 

@@ -424,6 +424,14 @@ export default defineSchema({
     // the author chip / feed show the bot, while `user_id` stays the human host
     // that actually runs and bills the session. Absent = render as user_id.
     acting_user_id: v.optional(v.id("users")),
+    // The ORIGINAL human author, pinned the first time a session is reparented
+    // ACROSS accounts (reparentSessionToDevice). Author is immutable, but
+    // account-follows-device rewrites user_id when a session moves to another
+    // user's machine — so before that overwrite we stamp the pre-move user_id
+    // here, and resolveInitiatorRef prefers it. Absent = author is still user_id
+    // (never reparented across accounts). Distinct from acting_user_id (rendered
+    // identity) and owner_user_id (inbox responsibility).
+    author_user_id: v.optional(v.id("users")),
     // Back-link to the owning anchors row when this conversation IS an anchor's
     // standing session (vs an ephemeral hand it spawned).
     anchor_id: v.optional(v.id("anchors")),
