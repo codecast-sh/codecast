@@ -28,6 +28,7 @@ import { DesktopAppBanner } from "./DesktopAppBanner";
 import { CliOfflineBanner } from "./CliOfflineBanner";
 import { ConnectionBanner } from "./ConnectionBanner";
 import { DaemonStatusChip } from "./DaemonStatusChip";
+import { AccountUsageChip } from "./AccountUsageChip";
 import { SyncStatusChip } from "./SyncStatusChip";
 import { TmuxMissingBanner } from "./TmuxMissingBanner";
 import { FindBar } from "./FindBar";
@@ -824,6 +825,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
 
           {/* Right section: Actions */}
           <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
+            <ErrorBoundary name="AccountUsageChip" level="inline">
+              <AccountUsageChip />
+            </ErrorBoundary>
             <ErrorBoundary name="DaemonStatusChip" level="inline">
               <DaemonStatusChip />
             </ErrorBoundary>
