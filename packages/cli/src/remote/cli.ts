@@ -23,8 +23,10 @@ import {
   refreshRemoteCredential,
   loadRemoteHost,
   performMoveToRemote,
+  verifyRemoteSync,
   type MoveResult,
   type RemoteHost,
+  type SyncVerification,
 } from "./session-move.js";
 import { deviceInfo, deviceId } from "./device.js";
 import { decryptToken } from "../tokenEncryption.js";
@@ -67,6 +69,56 @@ function parseJson(out: string): { result?: string; session_id?: string } {
   try { return JSON.parse(out); } catch { return { result: out.slice(0, 200) }; }
 }
 
+/** One line stating what the transfer verification proved (or couldn't). */
+function describeVerification(v: SyncVerification | undefined): string {
+  if (!v) return "no git verification available (non-git directory, synced via rsync)";
+  if (!v.headsMatch) {
+    return `WARNING: destination HEAD ${v.remoteHead ? v.remoteHead.slice(0, 8) : "unknown"} does not match source ${v.localHead.slice(0, 8)} on branch ${v.branch} — the transfer may be incomplete`;
+  }
+  const tree = v.remoteDirty === 0 ? "clean working tree"
+    : v.remoteDirty == null ? "working-tree state unknown"
+    : `WARNING: ${v.remoteDirty} uncommitted change(s) already in the destination tree`;
+  return `branch ${v.branch} at ${v.localHead.slice(0, 8)}, destination HEAD matches, ${tree}`;
+}
+
+/**
+ * Tell the moved agent its world changed. The move is invisible from inside
+ * the session (same transcript, same conversation), but the machine under it
+ * is different — this lands as the first turn after the resume so the agent
+ * re-grounds instead of acting on stale machine-local assumptions.
+ */
+function moveNotice(opts: {
+  destination: string;   // "m1@51.159.120.28" or the local hostname
+  newCwd: string;
+  oldCwd: string;
+  verification: SyncVerification | undefined;
+}): string {
+  return [
+    `[codecast] This session was just moved to a different machine. It now runs on ${opts.destination} in ${opts.newCwd} (previously ${opts.oldCwd}).`,
+    `Code transfer: any uncommitted changes were committed as a wip snapshot on the branch, then pushed. Verification: ${describeVerification(opts.verification)}.`,
+    `Environment differences: different home directory, hostname, and credentials; processes, ports, and files outside the worktree from the previous machine are NOT here.`,
+    `Before continuing your task, run git status and git log --oneline -3 and confirm the code state matches what you expect. If anything looks wrong or missing, say so instead of proceeding.`,
+  ].join("\n");
+}
+
+/** Queue the notice onto the conversation's normal delivery rail (it arrives
+ * after the resume lands, since delivery waits for a live session). */
+async function sendMoveNotice(
+  client: any, api: any, token: string,
+  conversationId: string, notice: string,
+): Promise<void> {
+  try {
+    await client.mutation(api.pendingMessages.sendMessageToSession, {
+      api_token: token,
+      conversation_id: conversationId,
+      content: notice,
+      client_id: `move-notice-${conversationId}-${Date.now()}`,
+    });
+  } catch (err) {
+    console.error(`  (move notice not sent: ${err instanceof Error ? err.message : String(err)})`);
+  }
+}
+
 export function registerRemoteCommand(program: Command): void {
   const remote = program
     .command("remote")
@@ -97,6 +149,7 @@ export function registerRemoteCommand(program: Command): void {
       const moves = readMoves();
       moves[sessionId] = move;
       writeMoves(moves);
+      console.log(`  ${describeVerification(move.verification)}`);
       console.log(`ready on remote: ${move.remoteCwd}`);
       console.log(`  resume there: ssh ${host.user}@${host.address} 'cd ${move.remoteCwd} && claude --resume ${sessionId}'`);
       console.log(`  or drive it:  cast remote run ${sessionId} "<message>"`);
@@ -183,6 +236,7 @@ export function registerRemoteCommand(program: Command): void {
       console.log(`moving ${sessionId} -> ${host.user}@${host.address} (device ${macDevice.device_id.slice(0, 8)})`);
       console.log("  [1/4] transfer worktree + transcript + credential");
       const move = pushSession(sessionId, host);
+      console.log(`        ${describeVerification(move.verification)}`);
       console.log("  [2/4] prepare remote claude (onboarding + folder trust)");
       ensureRemoteClaudeReady(host, move.remoteCwd);
       refreshRemoteCredential(host);
@@ -192,6 +246,14 @@ export function registerRemoteCommand(program: Command): void {
         project_path: move.remoteCwd, resume: true,
       });
       const moves = readMoves(); moves[sessionId] = move; writeMoves(moves);
+      // Land after the resume: tell the agent its machine changed and what the
+      // transfer verification proved, so it re-grounds before continuing.
+      await sendMoveNotice(client, api, token, conv._id, moveNotice({
+        destination: `${host.user}@${host.address}`,
+        newCwd: move.remoteCwd,
+        oldCwd: `${move.localCwd} on ${os.hostname()}`,
+        verification: move.verification,
+      }));
       console.log("  [4/4] done — session now runs on the Mac");
       console.log(`  watch: ssh ${host.user}@${host.address} 'tmux attach -t cc-resume-${sessionId.slice(0, 8)}'`);
       console.log(`  command_id=${r.command_id}`);
@@ -215,11 +277,21 @@ export function registerRemoteCommand(program: Command): void {
       console.log("  [1/2] pull transcript + working tree (git ff)");
       const pr = pullSession(sessionId, host, move);
       if (!pr.ff) { console.error(`CONFLICT: ${pr.reason}`); process.exit(2); }
+      // After a clean fast-forward local and remote sit on the same tip —
+      // verify it (same check as the outbound move, roles reversed).
+      const verification = verifyRemoteSync(host, move.localCwd, move.remoteCwd);
+      console.log(`        ${describeVerification(verification)}`);
       console.log("  [2/2] flip ownership back to this device + resume locally");
       await client.mutation(api.devices.moveSessionToDevice, {
         api_token: token, conversation_id: conv._id, owner_device_id: deviceId(),
         project_path: move.localCwd, resume: true,
       });
+      await sendMoveNotice(client, api, token, conv._id, moveNotice({
+        destination: `${os.hostname()} (back on the original machine)`,
+        newCwd: move.localCwd,
+        oldCwd: `${move.remoteCwd} on ${host.user}@${host.address}`,
+        verification,
+      }));
       console.log("  done — session is local again");
     });
 }

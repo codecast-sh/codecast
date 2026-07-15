@@ -14,7 +14,9 @@ import {
   refreshActiveCredential,
   resnapshotIfActiveFresher,
   activeCredentialExpiresAt,
+  credentialHealth,
   saveProfile,
+  useProfile,
   listProfiles,
   CcAccountError,
 } from "./ccAccounts.js";
@@ -128,6 +130,51 @@ describe("deriveProfileName", () => {
   });
 });
 
+// The shape /logout leaves behind: metadata intact, tokens EMPTY, expiry 0.
+const LOGGED_OUT_STUB = JSON.stringify({
+  claudeAiOauth: {
+    accessToken: "",
+    refreshToken: "",
+    expiresAt: 0,
+    refreshTokenExpiresAt: 1786524960503,
+    scopes: ["user:inference"],
+    subscriptionType: "max",
+    rateLimitTier: "default_claude_max_20x",
+  },
+});
+
+describe("credentialHealth", () => {
+  const NOW = 1_800_000_000_000;
+
+  it("live credential is usable and pushable", () => {
+    const raw = JSON.stringify({ claudeAiOauth: { accessToken: "at", refreshToken: "rt", expiresAt: NOW + 60_000 } });
+    expect(credentialHealth(raw, NOW)).toMatchObject({ usable: true, pushable: true, expiresAt: NOW + 60_000 });
+  });
+
+  it("flags the post-/logout stub (empty tokens) as unusable", () => {
+    const h = credentialHealth(LOGGED_OUT_STUB, NOW);
+    expect(h.usable).toBe(false);
+    expect(h.pushable).toBe(false);
+    expect(h.reason).toMatch(/logged-out/);
+  });
+
+  it("expired-but-refreshable is usable locally but never pushable", () => {
+    const raw = JSON.stringify({ claudeAiOauth: { accessToken: "at", refreshToken: "rt", expiresAt: NOW - 1 } });
+    expect(credentialHealth(raw, NOW)).toMatchObject({ usable: true, pushable: false });
+  });
+
+  it("blank access token with a refresh token is refreshable, not pushable", () => {
+    const raw = JSON.stringify({ claudeAiOauth: { accessToken: "", refreshToken: "rt", expiresAt: 0 } });
+    expect(credentialHealth(raw, NOW)).toMatchObject({ usable: true, pushable: false });
+  });
+
+  it("missing/garbage/API-key blobs are unusable", () => {
+    expect(credentialHealth(null, NOW).usable).toBe(false);
+    expect(credentialHealth("not json", NOW).usable).toBe(false);
+    expect(credentialHealth(JSON.stringify({ apiKey: "sk-..." }), NOW).usable).toBe(false);
+  });
+});
+
 // Exercises the real save path against a sandboxed $HOME: file-backed secret
 // store (CC_ACCOUNTS_FORCE_FILE) and an empty PATH so the keychain lookup
 // fails over to $HOME/.claude/.credentials.json.
@@ -186,6 +233,64 @@ describe("autoSaveActiveProfile + heartbeat payload (sandboxed $HOME)", () => {
   it("returns null with no login at all", () => {
     fs.writeFileSync(path.join(home, ".claude.json"), JSON.stringify({}));
     expect(autoSaveActiveProfile()).toBeNull();
+  });
+});
+
+// Regression for the 2026-07-15 outage: a /logout left the active credential
+// as a blank stub, save-on-switch snapshotted the stub over the profile's good
+// tokens, and a later switch back activated it — "Login expired" on every
+// session locally AND on the remote Mac (the push replicated the stub there).
+// Containment is three gates: never SAVE a stub, never ACTIVATE a stub, and
+// (in session-move) never PUSH one.
+describe("logged-out stub containment (sandboxed $HOME)", () => {
+  let home: string;
+  const savedEnv: Record<string, string | undefined> = {};
+  const credPath = () => path.join(home, ".claude", ".credentials.json");
+
+  beforeEach(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), "cc-accounts-test-"));
+    for (const k of ["HOME", "PATH", "CC_ACCOUNTS_FORCE_FILE"]) savedEnv[k] = process.env[k];
+    process.env.HOME = home;
+    process.env.PATH = path.join(home, "empty-path");
+    process.env.CC_ACCOUNTS_FORCE_FILE = "1";
+    fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+    fs.mkdirSync(path.join(home, ".codecast"), { recursive: true });
+    fs.writeFileSync(credPath(), CRED);
+    fs.writeFileSync(path.join(home, ".claude.json"), JSON.stringify({ oauthAccount: OAUTH_ACCOUNT }));
+    invalidateAccountsCache();
+  });
+
+  afterEach(() => {
+    for (const [k, v] of Object.entries(savedEnv)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    fs.rmSync(home, { recursive: true, force: true });
+    invalidateAccountsCache();
+  });
+
+  it("saveProfile refuses to snapshot a logged-out stub over a good profile", () => {
+    saveProfile("footage");
+    fs.writeFileSync(credPath(), LOGGED_OUT_STUB);
+    expect(() => saveProfile("footage")).toThrow(/unusable/);
+    // The good snapshot survives.
+    const stored = JSON.parse(
+      fs.readFileSync(path.join(home, ".codecast", "cc-accounts", "footage.json"), "utf-8"),
+    );
+    expect(stored.credentials.claudeAiOauth.accessToken).toBe("at-123");
+  });
+
+  it("useProfile refuses to activate a poisoned profile and leaves the active login untouched", () => {
+    saveProfile("footage");
+    // Poison the stored profile the way the old save-on-switch bug did.
+    fs.writeFileSync(
+      path.join(home, ".codecast", "cc-accounts", "footage.json"),
+      JSON.stringify({ credentials: JSON.parse(LOGGED_OUT_STUB), oauthAccount: OAUTH_ACCOUNT, saved_at: 1 }),
+    );
+    expect(() => useProfile("footage")).toThrow(/unusable|logged-out/);
+    // The switch failed BEFORE writing anything: the active credential still
+    // has its real tokens.
+    expect(JSON.parse(fs.readFileSync(credPath(), "utf-8")).claudeAiOauth.accessToken).toBe("at-123");
   });
 });
 

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   isBlockedConversation,
+  isRemoteAuthBlocked,
   isSubagentConversation,
   isDeviceOnline,
   isValidProfileName,
@@ -35,6 +36,23 @@ describe("isBlockedConversation", () => {
     // The account swap only affects claude's credential — codex/cursor banners
     // are someone else's login problem.
     expect(isBlockedConversation({ ...base, agent_type: "codex" })).toBe(false);
+  });
+});
+
+describe("isRemoteAuthBlocked", () => {
+  const remotes = new Set(["mac-1"]);
+
+  test("selects auth-parked conversations owned by a remote device", () => {
+    expect(isRemoteAuthBlocked({ pending_api_error_kind: "auth", owner_device_id: "mac-1" }, remotes)).toBe(true);
+  });
+
+  test("limit-kind, local owners, and unowned conversations are out of scope", () => {
+    // Limit banners aren't fixed by a credential push — the account is fine.
+    expect(isRemoteAuthBlocked({ pending_api_error_kind: "limit", owner_device_id: "mac-1" }, remotes)).toBe(false);
+    // A local owner can /login itself; the push changes nothing for it.
+    expect(isRemoteAuthBlocked({ pending_api_error_kind: "auth", owner_device_id: "laptop-1" }, remotes)).toBe(false);
+    expect(isRemoteAuthBlocked({ pending_api_error_kind: "auth" }, remotes)).toBe(false);
+    expect(isRemoteAuthBlocked({ pending_api_error_kind: "auth", owner_device_id: "mac-1" }, new Set())).toBe(false);
   });
 });
 

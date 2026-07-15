@@ -17,6 +17,7 @@ import { getAuthenticatedUserId, enqueuePendingMessage } from "./pendingMessages
 import {
   ccAccountsValidator,
   isBlockedConversation,
+  isRemoteAuthBlocked,
   isSubagentConversation,
   isDeviceOnline,
   isValidProfileName,
@@ -239,6 +240,42 @@ export const requestAccountSwitch = mutation({
       unreachable: blocked.length - routed,
       command_ids: commandIds,
     };
+  },
+});
+
+// The recovery nudge for remote Macs: they run a COPY of the primary's
+// credential and cannot /login themselves, so when that copy goes stale their
+// sessions park on an auth banner ("Login expired") until a fresh push lands.
+// The primary daemon calls this right after pushing a CHANGED credential —
+// the causal event that makes recovery possible (CC re-reads the credential
+// store on its next turn, so a plain "continue" completes it). Selection
+// stays narrow on purpose: auth-kind banners only, conversations owned by
+// remote devices only, inside the recent-incident window, subagents excluded.
+export const reviveAuthBlockedOnRemotes = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication failed: invalid token or session");
+
+    const devices: Doc<"devices">[] = await ctx.db
+      .query("devices")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+      .collect();
+    const remoteIds = new Set(devices.filter((d) => d.is_remote === true).map((d) => d.device_id));
+    if (remoteIds.size === 0) return { continued: 0 };
+
+    const { blocked } = await listBlockedConversations(ctx, userId, false);
+    const targets = blocked.filter((c) => isRemoteAuthBlocked(c, remoteIds));
+    const bucket = Math.floor(Date.now() / 60_000);
+    for (const conv of targets) {
+      await enqueuePendingMessage(ctx, conv, userId, {
+        content: "continue",
+        client_id: `remote-auth-revive-${conv._id}-${bucket}`,
+      });
+    }
+    return { continued: targets.length };
   },
 });
 

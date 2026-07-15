@@ -54,6 +54,22 @@ export function isBlockedConversation(conv: {
   );
 }
 
+/** Target of the post-credential-push recovery nudge: an auth-parked
+ * conversation owned by a remote device (remotes run a pushed COPY of the
+ * primary's credential — a fresh push is what makes their recovery possible,
+ * so limit-kind and local owners are out of scope). Callers pre-filter with
+ * isBlockedConversation, which carries the dismissed/agent-type gates. */
+export function isRemoteAuthBlocked(
+  conv: { pending_api_error_kind?: string | null; owner_device_id?: string | null },
+  remoteDeviceIds: ReadonlySet<string>,
+): boolean {
+  return (
+    conv.pending_api_error_kind === "auth" &&
+    !!conv.owner_device_id &&
+    remoteDeviceIds.has(conv.owner_device_id)
+  );
+}
+
 // A subagent for REVIVE purposes: spawned by/for another session. These are
 // excluded from the default revive — a worker whose parent moved on is work
 // nobody is waiting for, and resuming it burns the fresh account's window.

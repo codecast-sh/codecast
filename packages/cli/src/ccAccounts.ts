@@ -127,6 +127,50 @@ export function parseProfile(raw: string): CcProfile {
   };
 }
 
+export interface CredentialHealth {
+  /** Real tokens present — a login that can work (possibly after a refresh). */
+  usable: boolean;
+  /** Usable AND the access token is still live — safe to copy to a remote,
+   * which must never refresh on its own (a rotated refresh token would
+   * invalidate the primary's). */
+  pushable: boolean;
+  expiresAt: number | null;
+  reason?: string;
+}
+
+/**
+ * Classify a credential blob before trusting it anywhere. The dangerous shape
+ * is the logged-out stub CC leaves behind after /logout: intact metadata
+ * (scopes, tier, refreshTokenExpiresAt) but EMPTY tokens and expiresAt 0.
+ * Snapshotting that stub silently overwrites a good profile with a broken one;
+ * activating or pushing it turns every session on the machine (and any remote
+ * running a pushed copy) into "Login expired · run /login". An expired blob
+ * with a refresh token is still usable locally (CC refreshes on first use) but
+ * never pushable — a live access token is the only thing worth shipping.
+ */
+export function credentialHealth(raw: string | null, now: number = Date.now()): CredentialHealth {
+  if (!raw) return { usable: false, pushable: false, expiresAt: null, reason: "no credential" };
+  let oauth: any;
+  try {
+    oauth = JSON.parse(raw)?.claudeAiOauth;
+  } catch {
+    return { usable: false, pushable: false, expiresAt: null, reason: "credential is not valid JSON" };
+  }
+  if (!oauth || typeof oauth !== "object") {
+    return { usable: false, pushable: false, expiresAt: null, reason: "no claudeAiOauth block (API-key login?)" };
+  }
+  const accessToken = typeof oauth.accessToken === "string" ? oauth.accessToken : "";
+  const refreshToken = typeof oauth.refreshToken === "string" ? oauth.refreshToken : "";
+  const expiresAt = typeof oauth.expiresAt === "number" ? oauth.expiresAt : null;
+  if (!accessToken && !refreshToken) {
+    return { usable: false, pushable: false, expiresAt, reason: "logged-out stub (empty tokens)" };
+  }
+  if (!accessToken || expiresAt == null || expiresAt <= now) {
+    return { usable: true, pushable: false, expiresAt, reason: "access token expired (locally refreshable, not pushable)" };
+  }
+  return { usable: true, pushable: true, expiresAt };
+}
+
 /** Non-secret metadata for the index / heartbeat / UI. */
 export function profileMeta(profile: CcProfile): Omit<CcProfileMeta, "name" | "active"> {
   const oauth = profile.credentials?.claudeAiOauth ?? {};
@@ -289,6 +333,15 @@ export function saveProfile(name: string): CcProfileMeta {
       "No active Claude Code credential found — run claude and /login first",
     );
   }
+  // Never snapshot an unusable credential: a save-on-switch that runs while
+  // the machine is logged out would overwrite the profile's good tokens with
+  // the blank stub, and the poison resurfaces on the next switch back.
+  const health = credentialHealth(cred);
+  if (!health.usable) {
+    throw new CcAccountError(
+      `Active credential is unusable (${health.reason}) — refusing to snapshot it. Run /login first.`,
+    );
+  }
   const profile = buildProfile(cred, readOauthAccount(), Date.now());
   writeProfileSecret(name, JSON.stringify(profile));
   const meta = profileMeta(profile);
@@ -345,6 +398,16 @@ export function useProfile(name: string): SwitchResult {
     );
   }
   const target = parseProfile(raw);
+  // Activating a logged-out snapshot guarantees "Login expired" everywhere the
+  // credential lands (this machine AND any remote it's pushed to) — fail the
+  // switch instead, with the fix in hand.
+  const targetHealth = credentialHealth(JSON.stringify(target.credentials));
+  if (!targetHealth.usable) {
+    throw new CcAccountError(
+      `Profile "${name}" holds an unusable credential (${targetHealth.reason}) — ` +
+        `log into that account once and re-save it: cast accounts save ${name}`,
+    );
+  }
   const fromEmail = activeAccountSummary()?.email;
   const from = resnapshotActiveProfile();
   writeActiveCredential(JSON.stringify(target.credentials));
