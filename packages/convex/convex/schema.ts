@@ -309,6 +309,9 @@ export default defineSchema({
     short_id: v.optional(v.string()),
     auto_shared: v.optional(v.boolean()),
     skip_title_generation: v.optional(v.boolean()),
+    // Last time generateTitle was scheduled for this conversation — floors the
+    // re-scheduling rate (see titleGeneration.maybeScheduleTitleGeneration).
+    title_gen_scheduled_at: v.optional(v.number()),
     title_is_custom: v.optional(v.boolean()),
     idle_summary: v.optional(v.string()),
     // Dedupe for the needs-input push: "<message_count>:<kind>" of the last

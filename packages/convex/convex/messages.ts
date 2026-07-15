@@ -4,7 +4,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
-import { shouldGenerateTitle } from "./titleGeneration";
+import { maybeScheduleTitleGeneration } from "./titleGeneration";
 import { canTeamMemberAccess, checkConversationAccess, teamVisibleConvTeam } from "./privacy";
 import { redactSecrets } from "./redact";
 import { markPendingDelivered } from "./pendingMessages";
@@ -775,11 +775,7 @@ export const addMessage = mutation({
       });
     }
 
-    if (!conversation.skip_title_generation && shouldGenerateTitle(newMessageCount)) {
-      await ctx.scheduler.runAfter(0, internal.titleGeneration.generateTitle, {
-        conversation_id: args.conversation_id,
-      });
-    }
+    await maybeScheduleTitleGeneration(ctx, conversation, newMessageCount - 1, newMessageCount);
 
     try {
       await extractDocsFromMessages(ctx, [args], conversation, args.conversation_id);
@@ -1203,20 +1199,7 @@ export const addMessages = mutation({
         });
       }
 
-      if (!conversation.skip_title_generation) {
-        let shouldGen = false;
-        for (let c = conversation.message_count + 1; c <= newMessageCount; c++) {
-          if (shouldGenerateTitle(c)) { shouldGen = true; break; }
-        }
-        if (!shouldGen && conversation.subtitle === undefined && newMessageCount > 2) {
-          shouldGen = true;
-        }
-        if (shouldGen) {
-          await ctx.scheduler.runAfter(0, internal.titleGeneration.generateTitle, {
-            conversation_id: args.conversation_id,
-          });
-        }
-      }
+      await maybeScheduleTitleGeneration(ctx, conversation, conversation.message_count, newMessageCount);
 
     }
 

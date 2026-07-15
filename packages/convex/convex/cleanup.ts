@@ -336,6 +336,47 @@ export const gcEmptyConversations = internalMutation({
   },
 });
 
+// Scheduler-backlog recovery: cancel pending scheduled jobs whose function
+// name is in `names`, scanning _scheduled_functions in creation-time order
+// from `cursor`. Each call returns the next cursor; loop until done:
+//   npx convex run cleanup:cancelPendingJobs '{"names":[...],"cursor":<ms>}'
+// probe:true only reports the state mix at the cursor without canceling — use
+// it to bisect for the completed→pending frontier so the purge can start there
+// instead of scanning days of completed rows.
+export const cancelPendingJobs = internalMutation({
+  args: {
+    names: v.array(v.string()),
+    cursor: v.optional(v.number()),
+    batch: v.optional(v.number()),
+    probe: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const batch = args.probe ? 50 : (args.batch ?? 1000);
+    const names = new Set(args.names);
+    const q = ctx.db.system.query("_scheduled_functions");
+    const rows = await (args.cursor !== undefined
+      ? q.withIndex("by_creation_time", (x) => x.gte("_creationTime", args.cursor!))
+      : q
+    ).take(batch);
+    const states: Record<string, number> = {};
+    let canceled = 0;
+    for (const job of rows) {
+      states[job.state.kind] = (states[job.state.kind] ?? 0) + 1;
+      if (!args.probe && job.state.kind === "pending" && names.has(job.name)) {
+        await ctx.scheduler.cancel(job._id);
+        canceled++;
+      }
+    }
+    return {
+      canceled,
+      scanned: rows.length,
+      states,
+      cursor: rows.length ? rows[rows.length - 1]._creationTime : null,
+      done: rows.length < batch,
+    };
+  },
+});
+
 export const clearRateLimits = internalMutation({
   args: {},
   handler: async (ctx) => {
