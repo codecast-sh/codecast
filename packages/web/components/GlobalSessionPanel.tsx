@@ -337,9 +337,17 @@ function AuthErrorBadge({ kind }: { kind?: string | null }) {
 function BlockedSessionsBanner({
   blocked,
   onOpen,
+  forced,
+  onClearForced,
 }: {
   blocked: InboxSession[];
   onOpen?: (session: InboxSession) => void;
+  // The header's blocked-pill is the PERMANENT trigger for this banner: it
+  // force-shows it past the snooze and the 2-session floor, so the actions are
+  // always reachable while any session is blocked (the banner alone is
+  // transient — it snoozes on X and after acting).
+  forced?: boolean;
+  onClearForced?: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [includeSubs, setIncludeSubs] = useState(false);
@@ -355,10 +363,11 @@ function BlockedSessionsBanner({
   const snoozedTs = useInboxStore((st) => st.clientState.dismissed?.blocked_sessions_banner ?? 0);
   const promoDismissed = useInboxStore((st) => st.clientState.dismissed?.cc_accounts_promo ?? false);
   const updateDismissed = useInboxStore((st) => st.updateClientDismissed);
-  const accountData = useQuery(api.accountSwitch.listAccountProfiles, blocked.length >= 2 ? {} : "skip");
+  const accountData = useQuery(api.accountSwitch.listAccountProfiles, blocked.length >= (forced ? 1 : 2) ? {} : "skip");
 
   const snoozed = snoozedTs > 0 && Date.now() - snoozedTs < 24 * 60 * 60 * 1000;
-  if (!clientStateInitialized || blocked.length < 2 || snoozed) return null;
+  if (!clientStateInitialized || blocked.length === 0) return null;
+  if (!forced && (blocked.length < 2 || snoozed)) return null;
 
   // Subagent workers default OUT of the acted set: their parent has usually
   // moved on, so reviving them spends the fresh account on work nobody is
@@ -382,12 +391,20 @@ function BlockedSessionsBanner({
     }
   }
 
+  // Every way the banner closes goes through here: snooze 24h AND drop the
+  // forced-open flag, so the header pill (which never hides while sessions
+  // are blocked) is the one durable way back in.
+  const closeBanner = () => {
+    updateDismissed("blocked_sessions_banner", Date.now());
+    onClearForced?.();
+  };
+
   const handleContinueAll = async () => {
     setBusy("continue");
     try {
       const res = await continueAll({ include_subagents: includeSubs });
       toast.success(`Queued "continue" to ${res.continued} blocked session${res.continued === 1 ? "" : "s"}`);
-      updateDismissed("blocked_sessions_banner", Date.now());
+      closeBanner();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to queue continues");
     } finally {
@@ -403,7 +420,7 @@ function BlockedSessionsBanner({
         `Switching to "${profile}" — ${res.conversations} blocked session${res.conversations === 1 ? "" : "s"} will restart on it` +
           (res.unreachable > 0 ? ` (${res.unreachable} unreachable: daemon offline)` : ""),
       );
-      updateDismissed("blocked_sessions_banner", Date.now());
+      closeBanner();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Account switch failed");
     } finally {
@@ -434,7 +451,7 @@ function BlockedSessionsBanner({
             title={expanded ? "Hide the affected sessions" : "Show which sessions are blocked"}
           >
             <ChevronRight className={`h-3 w-3 shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`} />
-            {blocked.length} sessions blocked on {authCount > 0 && limitCount === 0 ? "login" : "usage limits"}
+            {blocked.length} session{blocked.length === 1 ? "" : "s"} blocked on {authCount > 0 && limitCount === 0 ? "login" : "usage limits"}
             {subagents.length > 0 && (
               <span className="font-normal text-sol-text-dim">({subagents.length} subagents)</span>
             )}
@@ -463,9 +480,9 @@ function BlockedSessionsBanner({
           )}
         </div>
         <button
-          onClick={() => updateDismissed("blocked_sessions_banner", Date.now())}
+          onClick={closeBanner}
           className="shrink-0 rounded p-0.5 text-sol-text-dim hover:bg-sol-bg-alt hover:text-sol-text"
-          title="Hide for 24h (use 'Dismiss all permanently' to clear these for good)"
+          title="Hide for 24h — the amber pill in the header brings it back anytime"
           aria-label="Snooze this banner"
         >
           <X className="h-3.5 w-3.5" />
@@ -553,7 +570,7 @@ function BlockedSessionsBanner({
                 : "bg-amber-500/15 text-amber-500 hover:bg-amber-500/25"
             }`}
           >
-            {busy === "continue" ? "Queueing…" : `Continue all ${limitCount}`}
+            {busy === "continue" ? "Queueing…" : limitCount === 1 ? "Continue it" : `Continue all ${limitCount}`}
           </button>
         )}
         <button
@@ -562,7 +579,7 @@ function BlockedSessionsBanner({
           title="Never restart these — clear all of them from the blocked set permanently"
           className="ml-auto rounded px-2 py-1 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors disabled:opacity-60"
         >
-          Dismiss all {blocked.length} permanently
+          {blocked.length === 1 ? "Dismiss it permanently" : `Dismiss all ${blocked.length} permanently`}
         </button>
       </div>
     </div>
@@ -2241,6 +2258,15 @@ export function SessionListPanel({
         (sess.updated_at ?? 0) > since,
     );
   }, [s.sessions]);
+  // The banner is transient (snoozes on X and after acting); the header pill is
+  // the permanent trigger. Clicking it force-opens the banner — past the snooze
+  // and even for a single blocked session — and scrolls it into view.
+  const [blockedBannerForced, setBlockedBannerForced] = useState(false);
+  const openBlockedBanner = useCallback(() => {
+    setBlockedBannerForced(true);
+    useInboxStore.getState().setShowFavorites(false);
+    scrollContainerRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+  }, []);
 
   const handleDismissStale = useCallback(async () => {
     const ids = staleSessions.map((sess) => sess._id);
@@ -2668,6 +2694,19 @@ export function SessionListPanel({
                   sessionLabel={labelByConv[session._id] ?? null}
                   isFavorite={cardIsFavorite(session)}
                 />
+                {/* Stashing is the standing-loop workflow — a loop's home rests
+                    here while its schedule keeps firing — so the stashed/killed
+                    buckets carry the same schedule bars as the live sections;
+                    without them an expanded bucket hides that a card is a loop. */}
+                {scheduleBarRowsFor(session).map((r) => (
+                  <ScheduleRowItem
+                    key={r.task._id}
+                    row={{ ...r, openId: session._id }}
+                    activeSessionId={activeSessionId}
+                    onOpen={openScheduleTarget}
+                    attached
+                  />
+                ))}
                 {(subMap.get(session._id) ?? []).filter((sub) => showSubagents || sub._id === activeSessionId).map((sub) => (
                   <SessionCard
                     key={sub._id}
@@ -2943,6 +2982,21 @@ export function SessionListPanel({
             view controls hide (favorites is always project-grouped) and the
             pill collapses to just the amber star, which stays put. */}
         <div className="flex items-center flex-shrink-0 ml-auto gap-1.5">
+          {/* Permanent trigger for the blocked-fleet actions: visible whenever
+              ANY session is parked on a limit/login banner, no matter how the
+              banner itself was snoozed. Panel chrome, so it never scrolls away. */}
+          {blockedSessions.length > 0 && (
+            <button
+              onClick={openBlockedBanner}
+              title={`${blockedSessions.length} session${blockedSessions.length === 1 ? "" : "s"} blocked on a usage limit or login — restart them all`}
+              className="flex items-center gap-1 px-1.5 py-[3px] rounded-[5px] text-[10px] font-semibold bg-amber-500/10 text-amber-500 border border-amber-500/30 hover:bg-amber-500/20 transition-colors"
+            >
+              <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                <path d="M6 3h12M6 21h12M8 3v3.5c0 2 4 4 4 5.5s-4 3.5-4 5.5V21M16 3v3.5c0 2-4 4-4 5.5s4 3.5 4 5.5V21" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              {blockedSessions.length}
+            </button>
+          )}
           <div className="flex items-center flex-shrink-0 rounded-md border border-sol-border/40 bg-sol-bg/70 p-px">
           {!favoritesView && <>
           {/* Inbox scope: Mine ⇄ Team. Team turns the inbox into a shared board
@@ -3075,7 +3129,12 @@ export function SessionListPanel({
             </div>
           )
         ) : (<>
-        <BlockedSessionsBanner blocked={blockedSessions} onOpen={handleSelect} />
+        <BlockedSessionsBanner
+          blocked={blockedSessions}
+          onOpen={handleSelect}
+          forced={blockedBannerForced}
+          onClearForced={() => setBlockedBannerForced(false)}
+        />
         {showStalePrompt && (
           <div className="m-2 rounded-md border border-sol-yellow/30 bg-sol-yellow/[0.06] px-3 py-2.5">
             <div className="flex items-start justify-between gap-2">
