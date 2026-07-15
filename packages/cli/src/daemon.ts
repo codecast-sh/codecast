@@ -17,6 +17,7 @@ import {
   activeCredentialExpiresAt,
   refreshActiveCredential,
   resnapshotIfActiveFresher,
+  refreshUsageSnapshots,
 } from "./ccAccounts.js";
 import { CursorWatcher, type CursorSessionEvent } from "./cursorWatcher.js";
 import { CursorTranscriptWatcher, type CursorTranscriptEvent } from "./cursorTranscriptWatcher.js";
@@ -1612,6 +1613,32 @@ async function maintainActiveCcToken(reason: string): Promise<void> {
     log(`[CC-AUTH] Token maintenance failed (${reason}): ${err instanceof Error ? err.message : String(err)}`);
   } finally {
     ccTokenMaintInFlight = false;
+  }
+}
+
+// Per-account usage snapshots: probe the OAuth usage API for the active login
+// and every saved profile with a live token, cache to ~/.codecast/cc-usage.json.
+// The next heartbeat picks the file change up via the payload's mtime-keyed
+// cache, so the web's meters follow within a beat. Primary devices only —
+// remotes have no profile inventory of their own.
+const CC_USAGE_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+let ccUsageRefreshInFlight = false;
+
+async function maintainCcUsageSnapshots(reason: string): Promise<void> {
+  if (isRemoteDevice() || ccUsageRefreshInFlight) return;
+  ccUsageRefreshInFlight = true;
+  try {
+    const res = await refreshUsageSnapshots();
+    if (res.probed.length > 0 || res.failed.length > 0) {
+      const failNote = res.failed.length
+        ? ` failed=${res.failed.map((f) => `${f.name}(${f.reason})`).join(",")}`
+        : "";
+      log(`[ACCOUNTS] Usage refreshed for ${res.probed.length} account(s) (${reason})${failNote}`);
+    }
+  } catch (err) {
+    log(`[ACCOUNTS] Usage refresh failed (${reason}): ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    ccUsageRefreshInFlight = false;
   }
 }
 
@@ -13727,6 +13754,10 @@ async function main(): Promise<void> {
   // manual /login into its saved profile (primary devices only).
   setTimeout(() => { maintainActiveCcToken("daemon start").catch(() => {}); }, 45_000);
   setInterval(() => { maintainActiveCcToken("periodic").catch(() => {}); }, CC_TOKEN_MAINT_INTERVAL_MS);
+
+  // Per-account usage snapshots for the web's meters + auto-switch decisions.
+  setTimeout(() => { maintainCcUsageSnapshots("daemon start").catch(() => {}); }, 75_000);
+  setInterval(() => { maintainCcUsageSnapshots("periodic").catch(() => {}); }, CC_USAGE_REFRESH_INTERVAL_MS);
 
   // Auto-dispatch: detect active plans with bound workflows that haven't started
   const notifiedPlanWorkflows = new Set<string>();

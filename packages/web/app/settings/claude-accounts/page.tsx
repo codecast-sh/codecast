@@ -11,19 +11,24 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { isValidProfileName } from "@codecast/convex/convex/ccAccountsShared";
+import { isValidProfileName, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
 import { Card } from "../../../components/ui/card";
 import { AppLoader } from "../../../components/AppLoader";
 import { Button } from "../../../components/ui/button";
+import { Switch } from "../../../components/ui/switch";
 import { toast } from "sonner";
-import { Check, Copy, KeyRound } from "lucide-react";
+import { Check, Copy, KeyRound, Zap } from "lucide-react";
+import { AccountUsageBars, formatAgo } from "../../../components/AccountUsageMeter";
+import { useCoarseNow } from "../../../hooks/useCoarseNow";
 
 type DeviceAccounts = {
   device_id: string;
   label: string;
   is_remote: boolean;
   active_email?: string;
-  profiles: Array<{ name: string; email?: string; tier?: string; subscription?: string }>;
+  profiles: Array<{ name: string; email?: string; tier?: string; subscription?: string; usage?: CcUsage }>;
+  auto_switch: boolean;
+  auto_switch_state?: { last_action_at?: number; last_action?: string; exhausted_at?: number };
 };
 
 function planLabel(p: { tier?: string; subscription?: string }): string | null {
@@ -102,8 +107,63 @@ function SaveCurrentForm({ device, suggestedName }: { device: DeviceAccounts; su
   );
 }
 
+function AutoSwitchToggle({ device }: { device: DeviceAccounts }) {
+  const setAutoSwitch = useMutation(api.accountSwitch.setAutoSwitchAccounts);
+  const now = useCoarseNow(30_000);
+  const [pending, setPending] = useState<boolean | null>(null);
+
+  const enabled = pending ?? device.auto_switch;
+  const state = device.auto_switch_state;
+  const exhausted = !!state?.exhausted_at;
+
+  const handleToggle = async (next: boolean) => {
+    setPending(next);
+    try {
+      await setAutoSwitch({ device_id: device.device_id, enabled: next });
+      toast.success(next ? "Auto-switch on" : "Auto-switch off");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Toggle failed");
+    } finally {
+      setPending(null);
+    }
+  };
+
+  return (
+    <div
+      className={`mt-3 rounded-md border p-3 ${
+        enabled ? "border-sol-cyan/30 bg-sol-cyan/[0.04]" : "border-sol-border/50"
+      }`}
+    >
+      <div className="flex items-center gap-2.5">
+        <Zap className={`h-4 w-4 shrink-0 ${enabled ? "text-sol-cyan" : "text-sol-text-dim"}`} />
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-medium text-sol-text">Auto-switch accounts on usage limits</div>
+          <p className="mt-0.5 text-[11px] leading-relaxed text-sol-text-dim">
+            When sessions park on a usage limit, switch this machine to the saved account with the
+            most headroom and continue them — retrying through accounts (and window resets) until
+            everything is unblocked or every account is spent. Subagent workers are left out.
+          </p>
+        </div>
+        <Switch checked={enabled} onCheckedChange={handleToggle} disabled={pending !== null} />
+      </div>
+      {enabled && exhausted && (
+        <div className="mt-2 rounded bg-sol-red/10 px-2 py-1 text-[11px] text-sol-red">
+          All accounts are at their limits — auto-switch will retry at the next window reset.
+        </div>
+      )}
+      {enabled && !exhausted && state?.last_action && state.last_action_at && (
+        <div className="mt-2 text-[11px] text-sol-text-dim">
+          Last action: {state.last_action.replace("switch:", "switched to ")}{" "}
+          {formatAgo(now - state.last_action_at)}.
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DeviceAccountsCard({ device }: { device: DeviceAccounts }) {
   const requestSwitch = useMutation(api.accountSwitch.requestAccountSwitch);
+  const now = useCoarseNow(30_000);
   const [busy, setBusy] = useState<string | null>(null);
 
   const activeProfile = device.profiles.find((p) => p.email && p.email === device.active_email);
@@ -146,31 +206,36 @@ function DeviceAccountsCard({ device }: { device: DeviceAccounts }) {
           return (
             <div
               key={p.name}
-              className={`flex items-center gap-2.5 rounded-md border px-3 py-2 ${
+              className={`rounded-md border px-3 py-2 ${
                 isActive ? "border-sol-green/30 bg-sol-green/[0.05]" : "border-sol-border/50"
               }`}
             >
-              <span className={`h-2 w-2 shrink-0 rounded-full ${isActive ? "bg-sol-green" : "bg-sol-border"}`} />
-              <span className="text-sm font-medium text-sol-text">{p.name}</span>
-              <span className="min-w-0 flex-1 truncate text-xs text-sol-text-muted">{p.email}</span>
-              {plan && (
-                <span className="shrink-0 rounded border border-sol-cyan/30 bg-sol-cyan/10 px-1.5 py-0.5 text-[10px] text-sol-cyan">
-                  {plan}
-                </span>
-              )}
-              {isActive ? (
-                <span className="shrink-0 text-[11px] font-medium text-sol-green">active</span>
-              ) : (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={busy !== null || device.is_remote}
-                  onClick={() => handleSwitch(p.name)}
-                  className="h-6 px-2 text-[11px]"
-                >
-                  {busy === p.name ? "Switching…" : "Switch"}
-                </Button>
-              )}
+              <div className="flex items-center gap-2.5">
+                <span className={`h-2 w-2 shrink-0 rounded-full ${isActive ? "bg-sol-green" : "bg-sol-border"}`} />
+                <span className="text-sm font-medium text-sol-text">{p.name}</span>
+                <span className="min-w-0 flex-1 truncate text-xs text-sol-text-muted">{p.email}</span>
+                {plan && (
+                  <span className="shrink-0 rounded border border-sol-cyan/30 bg-sol-cyan/10 px-1.5 py-0.5 text-[10px] text-sol-cyan">
+                    {plan}
+                  </span>
+                )}
+                {isActive ? (
+                  <span className="shrink-0 text-[11px] font-medium text-sol-green">active</span>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={busy !== null || device.is_remote}
+                    onClick={() => handleSwitch(p.name)}
+                    className="h-6 px-2 text-[11px]"
+                  >
+                    {busy === p.name ? "Switching…" : "Switch"}
+                  </Button>
+                )}
+              </div>
+              <div className="mt-2 pl-[18px]">
+                <AccountUsageBars usage={p.usage} now={now} />
+              </div>
             </div>
           );
         })}
@@ -180,6 +245,8 @@ function DeviceAccountsCard({ device }: { device: DeviceAccounts }) {
           </div>
         )}
       </div>
+
+      {!device.is_remote && <AutoSwitchToggle device={device} />}
 
       {!device.is_remote && device.active_email && !activeProfile && (
         <SaveCurrentForm device={device} suggestedName={suggested} />

@@ -8,6 +8,7 @@ import { maybeScheduleTitleGeneration } from "./titleGeneration";
 import { canTeamMemberAccess, checkConversationAccess, teamVisibleConvTeam } from "./privacy";
 import { redactSecrets } from "./redact";
 import { markPendingDelivered } from "./pendingMessages";
+import { scheduleAutoSwitchCheck } from "./accountSwitch";
 import { nextAgentStatusOnAddMessages, isApiErrorBanner, classifyApiErrorBanner, apiErrorBatchAction, NEEDS_INPUT_AUQ_CHECK_DELAY_MS } from "./inboxFilters";
 import { classifyDocContent, extractTitleFromContent, inlineDocSourceKey } from "./docExtraction";
 import { extractFileChanges, extractCommitHashFromContent, hasFileChangeToolCall, type FileChange } from "./fileChanges/extractor";
@@ -742,6 +743,15 @@ export const addMessage = mutation({
     if ((conversation.pending_api_error_kind ?? undefined) !== nextBannerKind) {
       convPatch.pending_api_error_kind = nextBannerKind;
     }
+    // A fresh limit park is the auto-switch trigger event (the debounced check
+    // no-ops unless the user's primary device has auto-switch enabled).
+    if (
+      msgIsBanner &&
+      msgBannerKind === "limit" &&
+      (!wasPendingApiError || conversation.pending_api_error_kind !== "limit")
+    ) {
+      await scheduleAutoSwitchCheck(ctx, conversation.user_id);
+    }
     if (args.role === "user" && contentToStore?.trim()) {
       convPatch.last_message_preview = redactSecrets(contentToStore).replace(/\u001b\[\d+m/g, "").replace(/\[Image[:\s][^\]]*\]/gi, "").trim().slice(0, 200);
       convPatch.last_user_message_at = msgTimestamp;
@@ -1161,6 +1171,14 @@ export const addMessages = mutation({
         : undefined;
       if ((conversation.pending_api_error_kind ?? undefined) !== nextBannerKind) {
         convPatch.pending_api_error_kind = nextBannerKind;
+      }
+      // A fresh limit park is the auto-switch trigger event (see addMessage).
+      if (
+        nextPendingApiError &&
+        nextBannerKind === "limit" &&
+        (!wasPendingApiError || conversation.pending_api_error_kind !== "limit")
+      ) {
+        await scheduleAutoSwitchCheck(ctx, conversation.user_id);
       }
       const userMsgs = args.messages.filter((m) => m.role === "user");
       if (userMsgs.length > 0) {
