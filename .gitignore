@@ -88,3 +88,4 @@ TESTING_PERMISSIONS.md
 
 # Watchman transient cookies
 .watchman-cookie-*
+.env.local.deployhold*
