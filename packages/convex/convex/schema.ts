@@ -2,7 +2,7 @@ import { defineSchema, defineTable } from "convex/server";
 import { authTables } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { AGENT_STATUSES, DAEMON_COMMANDS } from "@codecast/shared/contracts";
-import { ccAccountsValidator } from "./ccAccountsShared";
+import { ccAccountsValidator, ccAutoSwitchStateValidator } from "./ccAccountsShared";
 import { deviceSettingsValidator } from "./deviceSettingsShared";
 
 // Derived from the single source of truth in @codecast/shared/contracts so the
@@ -993,6 +993,12 @@ export default defineSchema({
     // Saved CC account profiles on this machine (names/emails/tiers only,
     // never tokens) — heartbeat-reported, drives the web account switcher.
     cc_accounts: v.optional(ccAccountsValidator),
+    // Auto-switch on usage limits: when on, limit-parked sessions trigger a
+    // server-side check that switches this machine to the best saved profile
+    // and revives them, retrying until unblocked or every account is spent.
+    // Web-set (setAutoSwitchAccounts); the heartbeat never writes these.
+    cc_auto_switch: v.optional(v.boolean()),
+    cc_auto_switch_state: v.optional(ccAutoSwitchStateValidator),
     // Installed agent-feature snippets (by slug) + stable mode on this machine
     // — heartbeat-reported, drives the web Settings page (per-device toggles).
     settings: v.optional(deviceSettingsValidator),
