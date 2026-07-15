@@ -4,6 +4,7 @@ import {
   buildTitlePrompt,
   extractTitleJson,
   isLowSignalPrompt,
+  maybeScheduleTitleGeneration,
   sampleEvenly,
   shouldGenerateTitle,
 } from "./titleGeneration";
@@ -174,5 +175,61 @@ describe("subtitle-value refusal guard", () => {
     expect(isRefusalProse(parsed!.subtitle!)).toBe(true);
     expect(isRefusalProse("- Compacted ScheduleRowItem to two-line display")).toBe(false);
     expect(isRefusalProse("Fixed search timeout and batch overflow hazard")).toBe(false);
+  });
+});
+
+// The no-subtitle fallback fires on every sync batch of an untitled
+// conversation. Unthrottled, a lagging scheduler turns that into a feedback
+// loop: subtitles stop being written, so every active conversation enqueues a
+// generateTitle job per batch and the queue grows faster than it drains (the
+// 2026-07 scheduler wedge). maybeScheduleTitleGeneration is the single gate —
+// it must schedule immediately for a fresh conversation but never twice within
+// the interval for the same one.
+describe("maybeScheduleTitleGeneration", () => {
+  const makeCtx = () => {
+    const calls: { patches: any[]; scheduled: any[] } = { patches: [], scheduled: [] };
+    const ctx = {
+      db: { patch: async (id: any, p: any) => { calls.patches.push({ id, ...p }); } },
+      scheduler: { runAfter: async (_d: any, _f: any, a: any) => { calls.scheduled.push(a); } },
+    } as any;
+    return { ctx, calls };
+  };
+  const conv = (over: Record<string, unknown> = {}) =>
+    ({ _id: "c1", message_count: 0, ...over }) as any;
+
+  test("first milestone on a fresh conversation schedules immediately", async () => {
+    const { ctx, calls } = makeCtx();
+    await maybeScheduleTitleGeneration(ctx, conv(), 1, 2);
+    expect(calls.scheduled.length).toBe(1);
+    expect(calls.patches[0].title_gen_scheduled_at).toBeGreaterThan(0);
+  });
+
+  test("no-subtitle fallback fires without a milestone but respects the throttle", async () => {
+    const { ctx, calls } = makeCtx();
+    // 3 -> 4 crosses no milestone; subtitle missing => self-heal fires
+    await maybeScheduleTitleGeneration(ctx, conv(), 3, 4);
+    expect(calls.scheduled.length).toBe(1);
+    // same conversation, stamped moments ago => suppressed
+    const { ctx: ctx2, calls: calls2 } = makeCtx();
+    await maybeScheduleTitleGeneration(ctx2, conv({ title_gen_scheduled_at: Date.now() - 1000 }), 3, 4);
+    expect(calls2.scheduled.length).toBe(0);
+    // stamp older than the interval => fires again
+    const { ctx: ctx3, calls: calls3 } = makeCtx();
+    await maybeScheduleTitleGeneration(ctx3, conv({ title_gen_scheduled_at: Date.now() - 6 * 60 * 1000 }), 3, 4);
+    expect(calls3.scheduled.length).toBe(1);
+  });
+
+  test("batch spanning a milestone schedules; skip flag and subtitle-present quiet batches do not", async () => {
+    const { ctx, calls } = makeCtx();
+    // 21 -> 33 crosses the 30 milestone
+    await maybeScheduleTitleGeneration(ctx, conv({ subtitle: "- has one" }), 21, 33);
+    expect(calls.scheduled.length).toBe(1);
+    const { ctx: ctx2, calls: calls2 } = makeCtx();
+    await maybeScheduleTitleGeneration(ctx2, conv({ skip_title_generation: true }), 1, 2);
+    expect(calls2.scheduled.length).toBe(0);
+    // no milestone in (31, 33], subtitle exists => nothing to do
+    const { ctx: ctx3, calls: calls3 } = makeCtx();
+    await maybeScheduleTitleGeneration(ctx3, conv({ subtitle: "- has one" }), 31, 33);
+    expect(calls3.scheduled.length).toBe(0);
   });
 });
