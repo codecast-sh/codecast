@@ -151,6 +151,30 @@ describe("absorption (behind-the-row) rules", () => {
     expect(p.rows).toHaveLength(3); // rows exist regardless — only absorption is conditional
   });
 
+  it("the focused session is never absorbed — loop home or spawn run alike", () => {
+    // Deep-linking into a resting loop home: its card must stay in the list so
+    // selection highlight and auto-scroll have something to land on.
+    const sessions = {
+      home: session("home", { last_user_message: MACHINE_TURN }),
+      run: session("run", { agent_task_id: "sp" }),
+    };
+    const focusedHome = partitionScheduleInbox(
+      [task("loop", { originating_conversation_id: "home" }), task("sp", {})],
+      sessions,
+      { focusedId: "home" },
+    );
+    expect(focusedHome.absorbedIds.has("home")).toBe(false);
+    expect(focusedHome.absorbedIds.has("run")).toBe(true);
+
+    const focusedRun = partitionScheduleInbox(
+      [task("loop", { originating_conversation_id: "home" }), task("sp", {})],
+      sessions,
+      { focusedId: "run" },
+    );
+    expect(focusedRun.absorbedIds.has("home")).toBe(true);
+    expect(focusedRun.absorbedIds.has("run")).toBe(false);
+  });
+
   it("uneventful spawn runs absorb; hard-blocked or flagged-latest runs escalate", () => {
     const sessions = {
       quiet: session("quiet", { agent_task_id: "sp", updated_at: 100 }),

@@ -130,6 +130,10 @@ export function partitionScheduleInbox(
     sessionsWithQueuedMessages?: Set<string>;
     // clientState.ui.schedules_seen_at — outcomes newer than this are unread.
     seenAt?: number;
+    // The session open in the conversation pane. Never absorbed — same rule as
+    // partitionOldSessions/blank-hiding: the session you're viewing always has
+    // a card, so selection highlight and auto-scroll can land on it.
+    focusedId?: string | null;
   } = {},
 ): ScheduleInboxPartition {
   if (!tasks?.length) return EMPTY;
@@ -176,6 +180,7 @@ export function partitionScheduleInbox(
         const home = sessions[convId];
         if (
           home &&
+          convId !== opts.focusedId &&
           !home.is_pinned &&
           home.message_count > 0 &&
           !isSessionHidden(home) &&
@@ -201,7 +206,7 @@ export function partitionScheduleInbox(
       const escalated =
         isSessionHardBlocked(run, opts.sessionsWithQueuedMessages) ||
         (isLatest && (!!task.last_run_failed || !!task.last_run_needs_attention));
-      if (escalated) continue;
+      if (escalated || run._id === opts.focusedId) continue;
       absorbedIds.add(run._id);
       if (!newestAbsorbed) newestAbsorbed = run;
     }

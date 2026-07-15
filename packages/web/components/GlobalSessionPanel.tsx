@@ -616,7 +616,7 @@ function schedBadgeTone(task: { status: string; run_at?: number }, now: number):
 function ScheduleRowItem({ row, activeSessionId, onOpen, attached, highlighted, projectChip }: {
   row: ScheduleRow;
   activeSessionId?: string | null;
-  onOpen: (convId: string) => void;
+  onOpen: (row: ScheduleRow) => void;
   // Rendered under its owning session card — tinted like the subagent stack
   // and top-joined to the card instead of list-bordered below.
   attached?: boolean;
@@ -684,9 +684,8 @@ function ScheduleRowItem({ row, activeSessionId, onOpen, attached, highlighted, 
       <button
         className={`w-full text-left cursor-pointer pr-3 ${attached ? "pl-2 py-1" : "pl-2.5 py-1.5"} hover:bg-sol-orange/[0.05] transition-[background-color,opacity] ${paused ? "opacity-55 hover:opacity-90" : ""}`}
         onClick={() => {
-          if (!row.openId) return;
           setClickFlash((n) => n + 1);
-          onOpen(row.openId);
+          onOpen(row);
         }}
       >
         {/* Attached rows wear the subagent child idiom: the SAME ↳ corner arrow
@@ -929,7 +928,7 @@ function ScheduleDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen }:
   unreadCount: number;
   nextRunAt?: number;
   activeSessionId?: string | null;
-  onOpen: (convId: string) => void;
+  onOpen: (row: ScheduleRow) => void;
 }) {
   const [open, setOpen] = useState(false);
   // Keyboard cursor into the roster: −1 = nothing selected (mouse mode).
@@ -968,10 +967,10 @@ function ScheduleDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen }:
       }
       if (e.key === "Enter") {
         const target = rows[cursor];
-        if (target?.openId) {
+        if (target) {
           e.preventDefault();
           close();
-          onOpen(target.openId);
+          onOpen(target);
         }
       }
     };
@@ -1021,7 +1020,7 @@ function ScheduleDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen }:
                 key={r.task._id}
                 row={r}
                 activeSessionId={activeSessionId}
-                onOpen={(id) => { close(); onOpen(id); }}
+                onOpen={(r) => { close(); onOpen(r); }}
                 highlighted={i === cursor}
                 projectChip={chipFor(r.task.project_path)}
               />
@@ -1953,6 +1952,7 @@ export function SessionListPanel({
     s => s.favorites,
     s => s.recentFreezeOrder,
   ]);
+  const router = useRouter();
   const handleKillDismissed = useCallback((id: string) => {
     soundKill();
     if (isConvexId(id)) {
@@ -2047,8 +2047,9 @@ export function SessionListPanel({
     () => partitionScheduleInbox(scheduleTasks, visibleSessions, {
       sessionsWithQueuedMessages: s.sessionsWithQueuedMessages,
       seenAt: schedulesSeenAt,
+      focusedId,
     }),
-    [scheduleTasks, visibleSessions, s.sessionsWithQueuedMessages, schedulesSeenAt],
+    [scheduleTasks, visibleSessions, s.sessionsWithQueuedMessages, schedulesSeenAt, focusedId],
   );
   // Kill-gesture handlers read the partition through a ref so their identities
   // stay stable (SessionCard is memoized on them).
@@ -2153,12 +2154,19 @@ export function SessionListPanel({
   // Opening FROM a schedule surface (dock row, bar under a card) also asks the
   // conversation's schedule strip to arrive expanded — the click means "show me
   // this schedule", so the prompt should be visible without a second click.
-  const openScheduleTarget = useCallback((convId: string) => {
-    const sess = useInboxStore.getState().sessions[convId];
-    if (!sess) return;
-    useInboxStore.getState().setScheduleStripExpand({ convId, nonce: Date.now() });
+  // No conversation to land on (a spawn schedule that has never run, or one
+  // whose conversation isn't in the local cache) falls back to the schedule's
+  // own row on /schedules — ?task= arrives expanded and scrolled into view —
+  // so a row click is never a silent no-op.
+  const openScheduleTarget = useCallback((row: ScheduleRow) => {
+    const sess = row.openId ? useInboxStore.getState().sessions[row.openId] : undefined;
+    if (!sess) {
+      router.push(`/schedules?task=${row.task._id}`);
+      return;
+    }
+    useInboxStore.getState().setScheduleStripExpand({ convId: sess._id, nonce: Date.now() });
     handleSelect(sess);
-  }, [handleSelect]);
+  }, [handleSelect, router]);
   // Schedule bars under cards: the schedules bound to a VISIBLE session — the
   // ones it originates (inject, any type) plus, for a run card, the schedule
   // that spawned it. Keyed off partition.rows so bars share the unread state.

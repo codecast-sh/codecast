@@ -26,7 +26,7 @@ import { AuthServer } from "./authServer.js";
 import { startRelayPoller } from "./authRelay.js";
 import { c, fmt, icons } from "./colors.js";
 import { ensureTmux, tryInstallTmux, tmuxRun } from "./tmux.js";
-import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, ensureCastAlias } from "./update.js";
+import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure } from "./update.js";
 import { type SnippetTarget, getSnippetTargets, MESSAGING_SNIPPET_END, installMessagingSnippet, ensureMessagingForMemory } from "./snippets.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
 import { glob } from "glob";
@@ -9405,6 +9405,11 @@ program
       console.log("Auto-updates enabled.");
     }
 
+    if (isDevMode()) {
+      console.log("cast is running from a source checkout; update it with git pull instead.");
+      return;
+    }
+
     const available = await checkForUpdates(true);
     if (!available) {
       // Even if version matches, force reinstall to fix corrupted binaries
@@ -14758,8 +14763,19 @@ messaging
 checkForUpdates().then(async (available) => {
   if (!available) return;
 
+  // Source checkouts can't self-update (performUpdate refuses in dev mode);
+  // updating happens via git there, so don't bounce the daemon or nag.
+  if (isDevMode()) return;
+
   const config = readConfig();
   if (config?.auto_update === false) {
+    showUpdateNotice(available);
+    return;
+  }
+
+  // A version that just failed to install would fail again on the next
+  // invocation — back off to the passive notice instead of a daemon bounce.
+  if (updateRecentlyFailed(available)) {
     showUpdateNotice(available);
     return;
   }
@@ -14788,6 +14804,7 @@ checkForUpdates().then(async (available) => {
       console.log(`Updated to v${available}.\n`);
     }
   } else {
+    recordUpdateFailure(available);
     if (daemonWasRunning) {
       startDaemon();
     }
