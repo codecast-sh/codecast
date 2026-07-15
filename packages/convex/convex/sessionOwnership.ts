@@ -79,6 +79,33 @@ async function resolveOwnerRef(
   if (ownerRef.toLowerCase() === "me") return ctx.db.get(authUserId);
 
   const shortId = conversation.short_id ?? conversation._id.toString().slice(0, 7);
+
+  // A raw user id — the web owners picker passes each member's _id directly
+  // (the CLI passes email/name). Resolve it, then apply the same access rule as
+  // a lookup: the caller may always claim THEMSELVES (no team needed, e.g. a
+  // private session), but adding anyone ELSE requires the session to have a team
+  // they belong to — a teammate can't own a session they can't even see.
+  if (/^[a-z0-9]{16,}$/i.test(ownerRef)) {
+    let candidate: any = null;
+    try { candidate = await ctx.db.get(ownerRef as Id<"users">); } catch { candidate = null; }
+    if (candidate && (candidate.email !== undefined || candidate.name !== undefined)) {
+      if (candidate._id.toString() === authUserId.toString()) return candidate; // self-claim
+      if (!conversation.team_id) {
+        throw new Error(`Session ${shortId} has no team — you can only add teammates to a shared/team session. Claim it yourself instead.`);
+      }
+      const membership = await ctx.db
+        .query("team_memberships")
+        .withIndex("by_user_team", (q: any) =>
+          q.eq("user_id", candidate._id).eq("team_id", conversation.team_id))
+        .first();
+      if (!membership) {
+        throw new Error(`${candidate.name || candidate.email || "That user"} isn't a member of this session's team`);
+      }
+      return candidate;
+    }
+    // Not a user id (or unresolvable) — fall through to name/email matching.
+  }
+
   if (!conversation.team_id) {
     throw new Error(`Session ${shortId} has no team — an owner must be a teammate. Use "me" to claim it yourself.`);
   }
