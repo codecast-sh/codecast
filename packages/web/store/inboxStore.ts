@@ -1172,6 +1172,23 @@ export function sessionStructuralSig(s: InboxSession): string {
 // Collection wake signature over the whole session map (memoized by map ref).
 export const sessionsWakeSig = makeCollectionSig<InboxSession>(sessionStructuralSig);
 
+// Membership signature over pending sends, memoized by the pendingMessages ref.
+// pendingMessages mutates on every send-lifecycle tick, but categorizeSessions
+// only cares WHICH conversations have an unconfirmed send — subscribe to this
+// instead of the raw map and a badge/panel wakes only when that set changes.
+let _pendingSendSigRef: unknown;
+let _pendingSendSig = "";
+export function pendingSendWakeSig(pendingMessages: Record<string, Message[]>): string {
+  if (pendingMessages === _pendingSendSigRef) return _pendingSendSig;
+  const ids: string[] = [];
+  for (const id in pendingMessages) {
+    if (convHasPendingSend(pendingMessages[id])) ids.push(id);
+  }
+  _pendingSendSigRef = pendingMessages;
+  _pendingSendSig = ids.sort().join(",");
+  return _pendingSendSig;
+}
+
 export interface CategorizedSessions {
   sorted: InboxSession[];
   pinned: InboxSession[];
@@ -4204,6 +4221,20 @@ export const useInboxStore = create<InboxStoreState>(
     const kind = config.kind ?? "collection";
 
     if (kind === "scalar" || kind === "list") {
+      // No-op re-pushes are common — a list-kind subscription re-emits on any
+      // read-set change (teamMembers was measured re-pushing ~every 2s on
+      // presence heartbeats) — and a wholesale assign registers as a change:
+      // every subscriber wakes and the persistence layer re-puts the whole meta
+      // blob to IDB. Bail when the payload is value-identical. Skipped when a
+      // transform/extra is registered (bookmarks reconciles local pending state
+      // even against an identical payload). These lists are small rosters, so
+      // the JSON compare is far cheaper than the wake + IDB put it avoids.
+      if (!config.transform && !config.extra) {
+        const current = (this as any)[field];
+        if (Object.is(current, incoming)) return;
+        if (kind === "list" && Array.isArray(current) && Array.isArray(incoming) &&
+            JSON.stringify(current) === JSON.stringify(incoming)) return;
+      }
       (this as any)[field] = incoming;
       if (config.transform) config.transform(this, incoming, incoming, false);
       if (config.extra) Object.assign(this, config.extra);
@@ -5875,10 +5906,16 @@ if (PERSISTENCE_AVAILABLE) {
       }
     }
 
-    // Preload messages for all active inbox sessions so clicks are instant
-    for (const id of Object.keys(cached.sessions || {})) {
-      ensureHydrated(id);
-    }
+    // Preload messages for the active inbox sessions so clicks are instant.
+    // Scope: the authoritative live set + the restored focus target — NOT every
+    // cached session row. Iterating the whole cache here meant thousands of IDB
+    // probes at boot and loaded messages for hundreds of conversations straight
+    // into memory for the eviction cap to fight back out. Anything else
+    // hydrates on demand (ensureHydrated on open / the inbox warm loop).
+    const preloadIds = new Set<string>(cached.liveInboxIdList ?? []);
+    const focusId = useInboxStore.getState().currentSessionId;
+    if (focusId) preloadIds.add(focusId);
+    for (const id of preloadIds) ensureHydrated(id);
 
     // Deferred: list views + secondary data hydrate just after first paint.
     // setTimeout, NOT requestAnimationFrame: rAF is paused in background tabs, so
