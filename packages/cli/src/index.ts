@@ -206,9 +206,12 @@ function findCurrentSessionFromProcess(projectRoot: string): string | null {
       return null;
     }
 
-    // Check for session ID in args: --resume, --session, -s (various agent CLIs)
-    const sessionMatch = claudeArgs.match(/(?:--resume|--session|-s)\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i)
-      || claudeArgs.match(/(?:--resume|--session|-s)\s+([a-z0-9_-]{10,})/i);
+    // Check for session ID in args: --resume, --session, --session-id, -s.
+    // --session-id is how the daemon starts every session (claude --session-id
+    // <uuid>), so missing it silently broke resolution for daemon-run sessions
+    // and schedules created from them lost their conversation link.
+    const sessionMatch = claudeArgs.match(/(?:--resume|--session(?:-id)?|-s)\s+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i)
+      || claudeArgs.match(/(?:--resume|--session(?:-id)?|-s)\s+([a-z0-9_-]{10,})/i);
     if (sessionMatch) {
       return sessionMatch[1];
     }
@@ -10412,6 +10415,7 @@ schedule
   .option("--project <path>", "Project path for agent cwd")
   .option("--agent <type>", "Agent type: claude (default) or codex", "claude")
   .option("--max-runtime <duration>", "Max runtime (default: 10m)")
+  .option("--for <session>", "Bind the schedule to a session (short id, conversation id, or Claude session uuid): runs inject into it instead of spawning fresh agents. Defaults to the calling session when run from inside one.")
   .option("--thread", "Post results back to the current conversation thread")
   .action(async (prompt, options) => {
     const config = readConfig();
@@ -10462,7 +10466,9 @@ schedule
 
     // Always try to capture the originating session so scheduled tasks inject
     // back into the live conversation instead of spawning fresh agents.
-    const sessionId = findCurrentSessionFromProcess(getRealCwd());
+    // --for overrides detection: the ref is resolved server-side (own sessions
+    // only), so a schedule can be bound to a session from any shell.
+    const sessionId = options.for ? null : findCurrentSessionFromProcess(getRealCwd());
     if (sessionId) {
       try {
         const resp = await cliFetchRead(`${siteUrl}/cli/sessions`, {
@@ -10485,6 +10491,17 @@ schedule
       console.error("Could not resolve current conversation for --thread");
       process.exit(1);
     }
+    // A schedule without an originating conversation is a SPAWN schedule: each
+    // run launches a fresh headless agent instead of injecting into a live
+    // session. That's a silent behavior fork, so say it out loud — an agent
+    // creating a loop for its own session must see when the link didn't take.
+    if (!originating_conversation_id && !options.for) {
+      console.error(
+        "note: could not link this schedule to a session — runs will spawn fresh agents in " +
+          (options.project || getRealCwd()) +
+          " (use --for <session> to bind one)"
+      );
+    }
 
     try {
       const response = await cliFetch(`${siteUrl}/cli/tasks/create`, {
@@ -10496,6 +10513,7 @@ schedule
           prompt,
           context_summary,
           originating_conversation_id,
+          originating_session_ref: options.for,
           target_conversation_id,
           project_path: options.project || getRealCwd(),
           agent_type: options.agent,
