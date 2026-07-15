@@ -82,15 +82,21 @@ const ActiveAgentsBadge = memo(function ActiveAgentsBadge({ isOnInboxPage }: { i
     s => s.sessionsWithQueuedMessages,
     s => s.pendingMessages,
     s => s.currentUser?._id,
+    s => s.liveInboxIds,
+    s => s.showOldSessions,
   ]);
   // Ambient "active agents" count stays MINE-scoped regardless of inbox scope: a
   // teammate row can linger in the shared cache after a team-board visit, but the
   // dock badge counts YOUR working sessions, not the team's. filterInboxScope with
   // "mine" drops any definitively-foreign row (no-op when the cache is all mine).
+  // On top of that, count only the AUTHORITATIVE active set — a stale "working"
+  // card that aged out of the live inbox must not inflate the badge (its frozen
+  // daemon status never un-sets). liveInboxIds + showOld make categorizeSessions
+  // drop it.
   const meId = s.currentUser?._id?.toString?.() ?? null;
   const working = useMemo(
-    () => categorizeSessions(filterInboxScope(s.sessions, "mine", meId), s.sessionsWithQueuedMessages, sessionsWithPendingSend(s.pendingMessages)).working,
-    [s.sessions, meId, s.sessionsWithQueuedMessages, s.pendingMessages],
+    () => categorizeSessions(filterInboxScope(s.sessions, "mine", meId), s.sessionsWithQueuedMessages, sessionsWithPendingSend(s.pendingMessages), { liveInboxIds: s.liveInboxIds, showOld: s.showOldSessions }).working,
+    [s.sessions, meId, s.sessionsWithQueuedMessages, s.pendingMessages, s.liveInboxIds, s.showOldSessions],
   );
   if (working.length === 0) return null;
   const activeAgentCount = working.length;

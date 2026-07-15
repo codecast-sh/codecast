@@ -15,6 +15,7 @@ import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId } fro
 import { AGENT_MODEL_CONFIG, modelAgentKey } from "@codecast/shared/contracts";
 import { shouldShowInInbox, isSessionIdle, deriveSessionActivity, classifyWorkState, normalizeWorkStateFilter, trustedAgentStatus, subagentKeepsParentWorking, type WorkState } from "./inboxFilters";
 import { subagentLinkFields } from "./ccAccountsShared";
+import { isSessionOwner } from "./sessionOwners";
 import { filterUserMessages, isImportNotice } from "./userMessagesFilter";
 import {
   isTeamMember,
@@ -4893,6 +4894,11 @@ export const forkFromMessage = mutation({
     message_uuid: v.optional(v.string()),
     api_token: v.optional(v.string()),
     session_id: v.optional(v.string()),
+    // The branch's seed prompt (cast fork "<direction>"). Used ONLY to title the
+    // new row — sibling branches otherwise all read "Fork: <parent title>" and
+    // are indistinguishable in the inbox (the direction itself arrives later as
+    // a separate seed message).
+    direction: v.optional(v.string()),
     target_agent_type: v.optional(v.union(
       v.literal("claude_code"),
       v.literal("codex"),
@@ -5038,7 +5044,14 @@ export const forkFromMessage = mutation({
       agent_type: agentType,
       session_id: forkSessionId,
       slug: original.slug,
-      title: original.title ? `${titlePrefix}${original.title}` : undefined,
+      // A direction-seeded branch is titled by what IT will do, not by its
+      // parent — otherwise N sibling branches all render as identical
+      // "Fork: <parent>" cards. previewText compresses the prompt to one line.
+      title: (() => {
+        const directionSnippet = previewText(args.direction);
+        if (directionSnippet) return `${titlePrefix}${directionSnippet}`;
+        return original.title ? `${titlePrefix}${original.title}` : undefined;
+      })(),
       subtitle: original.subtitle,
       project_hash: original.project_hash,
       project_path: original.project_path,
@@ -5830,21 +5843,32 @@ export const feedForCLI = query({
     }
 
     const isOwnConversation = (c: typeof ownConversations[number]) => c.user_id.toString() === authUserId.toString();
-    const isOwnedByMe = (c: typeof ownConversations[number]) =>
-      (c as any).owner_user_id?.toString() === authUserId.toString();
 
-    // Second-party-owned sessions belong in the owner's feed even in --mine
-    // scope (they're run by another account, so the scans above miss them when
-    // mine_only skips team conversations entirely). Explicit assignment
-    // outranks default team visibility — mirror computeInboxSessions.
-    let ownedConversations: typeof ownConversations = [];
-    if (!args.member_name) {
-      const owned = await ctx.db
-        .query("conversations")
-        .withIndex("by_owner_updated", (q) => q.eq("owner_user_id" as any, authUserId))
-        .order("desc")
-        .take(50);
-      ownedConversations = owned.filter((c) => !isOwnConversation(c));
+    // Sessions this user OWNS belong in their feed even in --mine scope (they're
+    // run by another account, so the scans above miss them when mine_only skips
+    // team conversations entirely). Explicit assignment outranks default team
+    // visibility — mirror computeInboxSessions. Reads the canonical owner SET
+    // (session_owners), so a SECONDARY owner is included, not just the primary
+    // held in the owner_user_id cache.
+    const myOwnerRows = args.member_name
+      ? []
+      : await ctx.db
+          .query("session_owners")
+          .withIndex("by_user", (q: any) => q.eq("user_id", authUserId))
+          .order("desc")
+          .take(50);
+    const myOwnedIds = new Set<string>(
+      myOwnerRows.map((r: any) => r.conversation_id.toString())
+    );
+    const isOwnedByMe = (c: { _id: { toString(): string } }) =>
+      myOwnedIds.has(c._id.toString());
+
+    const ownedConversations: typeof ownConversations = [];
+    for (const r of myOwnerRows) {
+      let conv: any = null;
+      try { conv = await ctx.db.get((r as any).conversation_id); } catch { conv = null; }
+      if (!conv || isOwnConversation(conv)) continue;
+      ownedConversations.push(conv);
     }
 
     const candidateById = new Map<string, typeof ownConversations[number]>();
@@ -7253,6 +7277,9 @@ async function scanInboxConversations(
   maps: InboxSessionMaps;
   extraIds: Set<string>;
   clusterCutoff: number;
+  // Conversations in this user's owner set — drives the owned_by_me flag during
+  // enrichment without a per-row session_owners lookup.
+  ownedByMeIds: Set<string>;
 }> {
   const dismissedCutoff = now - INBOX_DISMISSED_WINDOW_MS;
   const sessionWindowCutoff = now - INBOX_SESSION_WINDOW_MS;
@@ -7297,22 +7324,34 @@ async function scanInboxConversations(
     .order("desc")
     .take(200);
 
-  // Second-party-owned sessions — run by another member's account (e.g. Mr
-  // Bot) but assigned to this user — surface in the OWNER's inbox alongside
-  // their own. Explicit assignment outranks default team visibility: routing a
-  // session into someone's inbox is a deliberate act by someone who already
-  // had access. Same recency window as the main scan.
-  const ownedConversations = await ctx.db
-    .query("conversations")
-    .withIndex("by_owner_updated", (q: any) =>
-      q.eq("owner_user_id", userId).gte("updated_at", sessionWindowCutoff)
-    )
+  // Sessions this user OWNS — run by another member's account (e.g. Mr Bot) but
+  // assigned to them — surface in the OWNER's inbox alongside their own.
+  // Explicit assignment outranks default team visibility: routing a session into
+  // someone's inbox is a deliberate act by someone who already had access.
+  //
+  // Reads the canonical owner SET (session_owners), NOT the denormalized
+  // owner_user_id cache: a session may have several owners and the cache only
+  // holds the primary, so a secondary owner's inbox would otherwise miss it.
+  // Owner rows are keyed by user alone (no denormalized updated_at — that would
+  // make every conversation heartbeat fan out and patch all of its owner rows),
+  // so hydrate here and apply the same recency/status window as the main scan.
+  const ownerRows = await ctx.db
+    .query("session_owners")
+    .withIndex("by_user", (q: any) => q.eq("user_id", userId))
     .order("desc")
-    .filter((q: any) => q.or(
-      q.eq(q.field("status"), "active"),
-      q.eq(q.field("status"), "completed")
-    ))
-    .take(100);
+    .take(200);
+  const ownedByMeIds = new Set<string>(
+    ownerRows.map((r: any) => r.conversation_id.toString())
+  );
+  const ownedConversations: any[] = [];
+  for (const r of ownerRows) {
+    let conv: any = null;
+    try { conv = await ctx.db.get(r.conversation_id); } catch { conv = null; }
+    if (!conv) continue;
+    if ((conv.updated_at ?? 0) < sessionWindowCutoff) continue;
+    if (conv.status !== "active" && conv.status !== "completed") continue;
+    ownedConversations.push(conv);
+  }
 
   const byId = new Map<string, any>();
   for (const c of recentConversations) byId.set(c._id.toString(), c);
@@ -7367,10 +7406,15 @@ async function scanInboxConversations(
     let conv: any = null;
     try { conv = await ctx.db.get(idStr as Id<"conversations">); } catch { conv = null; }
     if (!conv) continue;
-    if (
-      conv.user_id.toString() !== userId.toString() &&
-      conv.owner_user_id?.toString() !== userId.toString()
-    ) continue;
+    if (conv.user_id.toString() !== userId.toString()) {
+      // Not the runner — admit only if they're an owner. ownedByMeIds covers the
+      // rows the owner scan already saw; the lookup catches one filed past its
+      // cap. Record it so enrichment stamps owned_by_me.
+      const owned =
+        ownedByMeIds.has(idStr) || (await isSessionOwner(ctx, conv._id, userId));
+      if (!owned) continue;
+      ownedByMeIds.add(idStr);
+    }
     if (conv.status !== "active" && conv.status !== "completed") continue;
     byId.set(idStr, conv);
     extraBudget--;
@@ -7408,7 +7452,7 @@ async function scanInboxConversations(
     }
   }
 
-  return { conversations, maps, extraIds, clusterCutoff };
+  return { conversations, maps, extraIds, clusterCutoff, ownedByMeIds };
 }
 
 async function computeInboxSessions(
@@ -7433,7 +7477,7 @@ async function computeInboxSessions(
   // unchanged. Default MUST stay true — inboxForCLI classifies work-state from it.
   const includeLiveness = opts.includeLiveness !== false;
   const now = Date.now();
-  const { conversations, maps, extraIds, clusterCutoff } =
+  const { conversations, maps, extraIds, clusterCutoff, ownedByMeIds } =
     await scanInboxConversations(ctx, userId, now, {
       includeLiveness,
       extraConvIds: opts.extraConvIds,
@@ -7468,11 +7512,15 @@ async function computeInboxSessions(
       row.author_name = author?.name ?? author?.email ?? null;
       row.author_email = author?.email ?? null;
     }
+    // owned_by_me reflects membership in the session's owner SET (any owner, not
+    // just the cached primary) — precomputed by the scan, so no per-row lookup.
+    // owner_name/email stay the PRIMARY owner's: the list row shows a single
+    // chip, and the full owner set is fetched on demand by the session panel.
+    row.owned_by_me = ownedByMeIds.has(conv._id.toString());
     if (conv.owner_user_id) {
       const ownerDoc = await getUserDoc(conv.owner_user_id);
       row.owner_name = ownerDoc?.name ?? null;
       row.owner_email = ownerDoc?.email ?? null;
-      row.owned_by_me = conv.owner_user_id.toString() === userId.toString();
     }
     results.push(row);
     // Don't surface subagents under a dismissed/stashed parent — they used to be
