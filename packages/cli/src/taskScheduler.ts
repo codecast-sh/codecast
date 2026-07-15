@@ -15,6 +15,36 @@ const POLL_INTERVAL_MS = 30_000;
 const HEARTBEAT_INTERVAL_MS = 60_000;
 const MAX_CONCURRENCY = 2;
 
+// Schedules run permissive by default (`mode: "apply"`); safe mode
+// (`cast schedule add --safe`, stored as mode: "propose") is the exception, so
+// its fence has to be real rather than advisory. ONE mandate string, used both
+// as the agent's system prompt and as a line in the run prompt.
+const SAFE_MODE_MANDATE =
+  "This is a SAFE-mode scheduled run: strictly read-only. Investigate and report. Never modify files, run state-changing commands, commit, push, or deploy. If the task appears to require changes, describe them in your completion summary instead of making them.";
+
+// Shell commands a safe-mode run may never execute. Deny rules bind
+// MECHANICALLY — Claude Code honors them even under the --dangerously-skip-permissions
+// that headless runs require (verified) — so unlike the mandate above these are a
+// wall, not a request. Scoped to the subcommand, so reads through the same
+// binaries still work (`git log`, `gh pr view`), as does the run's own
+// `cast schedule complete` self-report.
+// Accepted residual gap: a write smuggled through shell redirection
+// (`echo x > f`) or an interpreter (`node -e`) is not prefix-matchable, so the
+// mandate — not this list — is what covers those.
+const SAFE_MODE_DENY_RULES = [
+  // Repository state and history
+  "Bash(git push:*)", "Bash(git commit:*)", "Bash(git merge:*)", "Bash(git rebase:*)",
+  "Bash(git reset:*)", "Bash(git checkout:*)", "Bash(git restore:*)", "Bash(git clean:*)",
+  "Bash(git stash:*)", "Bash(git apply:*)", "Bash(git tag:*)",
+  // Destructive filesystem
+  "Bash(rm:*)", "Bash(mv:*)", "Bash(dd:*)", "Bash(truncate:*)", "Bash(tee:*)",
+  "Bash(chmod:*)", "Bash(chown:*)",
+  // Deploy and publish
+  "Bash(npm publish:*)", "Bash(convex deploy:*)", "Bash(npx convex deploy:*)",
+  // Remote repo writes
+  "Bash(gh pr merge:*)", "Bash(gh pr create:*)", "Bash(gh release:*)",
+];
+
 interface RunningTask {
   taskId: string;
   tmuxSession: string;
@@ -144,6 +174,12 @@ export class TaskScheduler {
     if (task.originating_conversation_id) {
       try {
         const safeTitle = (task.title || "").replace(/"/g, "&quot;");
+        // The injected prompt carries the task and NOTHING about permissions: an
+        // inject run is just another turn in an already-running session, so the
+        // rules that session was started with are the rules — inherited, not
+        // restated. `mode` therefore governs SPAWNED runs only (the branch
+        // below, where a fresh agent's toolset can actually be narrowed at
+        // birth); on this path it is deliberately ignored.
         const wrappedPrompt = `<scheduled-task title="${safeTitle}" task-id="${task._id}">${task.prompt}</scheduled-task>`;
         // The injected message becomes a user-row in the messages table once
         // the agent's JSONL is parsed. The UI detects the <scheduled-task>
@@ -205,19 +241,14 @@ export class TaskScheduler {
     } else {
       agentBin = "claude";
       extraAgentArgs.push("--dangerously-skip-permissions");
-      // propose (the default) is mechanically enforced as far as the CLI
-      // allows: the file-mutation tools are removed outright, and a
-      // system-prompt-strength mandate covers what tool filters can't (Bash
-      // write commands, commits). Headless runs bypass permission prompts,
-      // so this — not the permission system — is the propose fence. Bash
-      // itself must stay available: propose monitors legitimately shell out
-      // for reads (API GETs, SQL SELECTs, log greps).
+      // Safe mode is fenced in three layers, strongest first: the file-mutation
+      // tools are removed outright; SAFE_MODE_DENY_RULES block the
+      // state-changing shell commands (deny rules bind even under
+      // --dangerously-skip-permissions); and the mandate covers what neither can
+      // pattern-match. Anything not "apply" fences — fail closed on a bad value.
       if (task.mode !== "apply") {
-        extraAgentArgs.push("--disallowedTools", "Edit", "Write", "NotebookEdit");
-        extraAgentArgs.push(
-          "--append-system-prompt",
-          "This is a PROPOSE-mode scheduled run: strictly read-only. Investigate and report. Never modify files, run state-changing commands, commit, push, or deploy. If the task appears to require changes, describe them in your completion summary instead of making them.",
-        );
+        extraAgentArgs.push("--disallowedTools", "Edit", "Write", "NotebookEdit", ...SAFE_MODE_DENY_RULES);
+        extraAgentArgs.push("--append-system-prompt", SAFE_MODE_MANDATE);
       }
       const extraArgs = this.config.claude_args;
       if (extraArgs) {
@@ -389,7 +420,10 @@ export class TaskScheduler {
 
     parts.push(`[Codecast Task: ${task.title}]`);
     parts.push(`Task ID: ${task._id}`);
-    parts.push(`Mode: ${task.mode || "propose"}`);
+    // Wire format: sessionMessage.ts parses `Mode: <propose|apply>` into the
+    // run's chip, so the literals stay even though the user-facing name for
+    // propose is now "safe". Absent mode falls back to the permissive default.
+    parts.push(`Mode: ${task.mode || "apply"}`);
     parts.push("");
     parts.push(task.prompt);
 
@@ -417,9 +451,10 @@ export class TaskScheduler {
     parts.push("---");
     parts.push("Instructions:");
     // The Mode: header line above is wire format (the web UI parses it into a
-    // chip) — the mandate that gives "propose" teeth lives here instead.
+    // chip) — the mandate that gives safe mode teeth lives here instead, and is
+    // the same string the agent gets as its system prompt.
     if (task.mode !== "apply") {
-      parts.push("- This run is PROPOSE mode: strictly read-only. Investigate and report; never modify files, run state-changing commands, commit, push, or deploy. If the task appears to require changes, describe them in your completion summary instead of making them.");
+      parts.push(`- ${SAFE_MODE_MANDATE}`);
     }
     if (task.target_conversation_id) {
       parts.push(`- Your summary will be posted as a message in the originating conversation thread.`);

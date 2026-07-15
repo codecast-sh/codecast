@@ -2126,7 +2126,7 @@ Options:
 - \`--every <duration>\`: recurring interval
 - \`--on <event>\`: trigger on webhook (pr_comment, pr_opened, pr_merged, push)
 - \`--context current\`: capture current session context for the follow-up
-- \`--safe\`: read-only run — investigate and report, never modify (default is permissive: the run can act)
+- \`--safe\`: read-only spawned run — write tools removed, state-changing commands blocked. Default is permissive: the run can act. A run that continues an existing session inherits that session's rules.
 - \`--project <path>\`: set working directory (defaults to current)
 - \`--max-runtime <duration>\`: override max runtime (default: 10m)
 
@@ -10332,7 +10332,7 @@ schedule
   .option("--on <event>", "Run on event (pr_comment, pr_opened, pr_merged, push)")
   .option("--title <title>", "Short title (defaults to first 60 chars of prompt)")
   .option("--context <mode>", "Context capture: 'current' to grab running session")
-  .option("--safe", "Safe mode: read-only run — investigate and report, never modify files or run state-changing commands")
+  .option("--safe", "Read-only: a spawned run gets write tools removed and state-changing commands blocked. A run that continues an existing session inherits that session's rules instead.")
   .option("--mode <mode>", "Agent mode: apply (default, can act) or propose (read-only). Prefer --safe.")
   .option("--project <path>", "Project path for agent cwd")
   .option("--agent <type>", "Agent type: claude (default) or codex", "claude")

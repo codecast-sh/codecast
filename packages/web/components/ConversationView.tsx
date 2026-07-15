@@ -82,7 +82,7 @@ const api = _typedApi as any;
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { DeviceBadge, RunOnDeviceItems } from "./DeviceBadge";
 import { PermissionStack } from "./PermissionCard";
-import { copyToClipboard, shareOrigin, matchesProjectQuery, inferHomeDir, resolveCustomPath, displayPath, inferProjectBase, isExplicitPath } from "../lib/utils";
+import { copyToClipboard, shareOrigin, buildProjectPathOptions, inferHomeDir, resolveCustomPath, displayPath, inferProjectBase } from "../lib/utils";
 import { MarkdownRenderer, isMarkdownFile, isPlanFile, CollapsibleImage } from "./tools/MarkdownRenderer";
 import { OptionPreview } from "./tools/AskUserQuestionToolView";
 import { useImageGallery, ImageGalleryProvider } from "./ImageGallery";
@@ -745,7 +745,7 @@ function FolderPlusGlyph({ className = "w-3 h-3" }: { className?: string }) {
 }
 
 // Project-path helpers (inferHomeDir / resolveCustomPath / displayPath /
-// inferProjectBase / isExplicitPath) live in lib/utils so they're unit-tested.
+// inferProjectBase / buildProjectPathOptions) live in lib/utils so they're unit-tested.
 
 // Picker hint rows render key names as <KeyCap> caps (the keyboard-shortcuts
 // panel component) — never as plain text in the surrounding font.
@@ -852,18 +852,13 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
   // needs, and the chip shows that path so a wrong base guess is visible first.
   const pickList = useMemo<{ path: string; custom?: boolean }[]>(() => {
     if (filter.trim()) {
-      const explicit = isExplicitPath(filter);
-      const custom = resolveCustomPath(filter, homeDir, projectBase);
-      // An explicit path matches recents against its resolved absolute form (so
-      // "~/src/…" filters previously-used folders too); a bare name keeps
-      // name-prefix matching against the raw text.
-      const matchQuery = explicit ? (custom ?? filter) : filter;
-      const matches = recentProjects.filter((p: { path: string }) => matchesProjectQuery(p.path, matchQuery));
-      const offerCustom = !!custom && custom !== currentPath
-        && !matches.some((p: { path: string }) => p.path === custom)
-        && (explicit || matches.length === 0);
-      if (offerCustom) return [...matches, { path: custom!, custom: true }];
-      return matches;
+      return buildProjectPathOptions({
+        query: filter,
+        recentPaths: recentProjects.map((p: { path: string }) => p.path),
+        home: homeDir,
+        base: projectBase,
+        currentPath,
+      });
     }
     const base: { path: string }[] = currentPath ? [{ path: currentPath }] : [];
     return base.concat(visibleProjects);
