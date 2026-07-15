@@ -190,6 +190,25 @@ describe("absorption (behind-the-row) rules", () => {
     expect(p.absorbedIds.has("latest")).toBe(false);
   });
 
+  it("a loop home with a flagged latest run (failed / needs-attention) escapes absorption", () => {
+    const sessions = {
+      flagged: session("flagged", { last_user_message: MACHINE_TURN }),
+      failed: session("failed", { last_user_message: MACHINE_TURN }),
+      resting: session("resting", { last_user_message: MACHINE_TURN }),
+    };
+    const p = partitionScheduleInbox(
+      [
+        task("t1", { originating_conversation_id: "flagged", last_run_needs_attention: true }),
+        task("t2", { originating_conversation_id: "failed", last_run_failed: true }),
+        task("t3", { originating_conversation_id: "resting" }),
+      ],
+      sessions,
+    );
+    expect(p.absorbedIds.has("flagged")).toBe(false);
+    expect(p.absorbedIds.has("failed")).toBe(false);
+    expect(p.absorbedIds.has("resting")).toBe(true);
+  });
+
   it("row openId prefers home conv (inject) / newest absorbed run, falling back to last recorded run", () => {
     const sessions = {
       home: session("home"),

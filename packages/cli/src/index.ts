@@ -10640,7 +10640,7 @@ schedule
   .description("Mark a running task as completed (called by the agent)")
   .argument("<id>", "Task ID (full or last 8 chars)")
   .option("--summary <text>", "Summary of what was done")
-  .option("--needs-attention", "Flag the run for the user: it stays in the inbox instead of folding into the schedule's history")
+  .option("--needs-attention", "Flag the run for the user: it stays in the inbox instead of folding into the schedule's history, and a stashed/killed session is pulled back into the queue")
   .action(async (id, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
