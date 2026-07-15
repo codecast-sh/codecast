@@ -6,6 +6,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { extractTitleJson } from "./titleGeneration";
 import { isRefusalProse } from "./idleSummary";
+import { findConversationByAnyRef } from "./conversationSessionLookup";
 
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_MAX_RUNTIME_MS = 10 * 60 * 1000; // 10 min
@@ -236,11 +237,20 @@ export const createTask = mutation({
     mode: v.optional(v.string()),
     max_runtime_ms: v.optional(v.number()),
     max_retries: v.optional(v.number()),
+    // Any session ref (short id, conversation _id, or Claude session uuid) the
+    // schedule should inject into — `cast schedule add --for <session>`.
+    // Resolved own-only: you can bind a schedule only to your own session.
+    originating_session_ref: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
-    const { api_token: _token, ...taskArgs } = args;
+    const { api_token: _token, originating_session_ref, ...taskArgs } = args;
+    if (originating_session_ref) {
+      const conv = await findConversationByAnyRef(ctx, originating_session_ref, auth.userId);
+      if (!conv) throw new Error(`No session of yours matches "${originating_session_ref}"`);
+      taskArgs.originating_conversation_id = conv._id.toString();
+    }
     return await insertTask(ctx, auth.userId, taskArgs);
   },
 });
