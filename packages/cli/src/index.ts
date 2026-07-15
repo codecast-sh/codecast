@@ -3161,6 +3161,90 @@ program
     }
   });
 
+// ── cast dismiss / undismiss / kill ──────────────────────────────────────────
+// Inbox visibility management: hide a session from the human's inbox, bring it
+// back, or retire it outright. Same server transitions as the web inbox
+// gestures (stash / restore / kill), so an agent tidying its workers behaves
+// exactly like the human pressing the buttons.
+
+program
+  .command("dismiss")
+  .alias("stash")
+  .description(
+    "Hide a session from the inbox — the agent keeps running\n\n" +
+    "Moves the session to the Stashed bucket: out of the active inbox, agent\n" +
+    "alive and resumable. Use it to tidy finished or parked workers out of the\n" +
+    "human's view without killing them. An empty never-used session is cleaned\n" +
+    "up entirely. Reverse with cast undismiss.\n\n" +
+    "Examples:\n" +
+    "  cast dismiss jx7c6zk\n" +
+    "  cast dismiss             # current session (tidy yourself away when done)"
+  )
+  .argument("[session]", "Session short ID (default: current session)")
+  .action(async (session: string | undefined) => {
+    const target = session || detectCurrentSessionId();
+    if (!target) {
+      console.error("No session given and none detected — pass a short ID (e.g. cast dismiss jx7c6zk)");
+      process.exit(1);
+    }
+    const result = await cliPost("/cli/sessions/dismiss", { session: target });
+    const note = result.outcome === "reap"
+      ? ` ${c.dim}(empty session — cleaned up entirely)${c.reset}`
+      : ` ${c.dim}— hidden from inbox, agent still alive (cast undismiss ${result.short_id} to bring back)${c.reset}`;
+    console.log(`${c.green}ok${c.reset} dismissed ${c.cyan}${result.short_id}${c.reset}${note}`);
+  });
+
+program
+  .command("undismiss")
+  .alias("restore")
+  .description(
+    "Bring a dismissed or killed session back into the inbox\n\n" +
+    "Clears the hide flags so the session shows in the active inbox again. A\n" +
+    "killed session comes back as a card the human can restart — this does not\n" +
+    "relaunch the agent by itself.\n\n" +
+    "Examples:\n" +
+    "  cast undismiss jx7c6zk\n" +
+    "  cast undismiss           # current session (resurface yourself for attention)"
+  )
+  .argument("[session]", "Session short ID (default: current session)")
+  .action(async (session: string | undefined) => {
+    const target = session || detectCurrentSessionId();
+    if (!target) {
+      console.error("No session given and none detected — pass a short ID (e.g. cast undismiss jx7c6zk)");
+      process.exit(1);
+    }
+    const result = await cliPost("/cli/sessions/undismiss", { session: target });
+    if (result.was_hidden) {
+      console.log(`${c.green}ok${c.reset} restored ${c.cyan}${result.short_id}${c.reset} ${c.dim}— back in the inbox${c.reset}`);
+    } else {
+      console.log(`${c.dim}${result.short_id} was already visible in the inbox${c.reset}`);
+    }
+  });
+
+program
+  .command("kill")
+  .description(
+    "Kill a session's agent and retire it from the inbox\n\n" +
+    "Tears the agent down, marks the session completed, cancels schedules bound\n" +
+    "to it, and files it under the Killed bucket. The transcript stays readable\n" +
+    "and the session stays restartable. Deliberate action — the session ID is\n" +
+    "required (killing your OWN session cuts you off mid-turn).\n\n" +
+    "Example:\n" +
+    "  cast kill jx7c6zk"
+  )
+  .argument("<session>", "Session short ID (e.g. jx7c6zk)")
+  .action(async (session: string) => {
+    const result = await cliPost("/cli/sessions/kill", { session });
+    if (result.outcome === "none") {
+      console.log(`${c.dim}${result.short_id} was already dismissed — nothing to tear down${c.reset}`);
+      return;
+    }
+    const note = result.outcome === "reap"
+      ? ` ${c.dim}(empty session — cleaned up entirely)${c.reset}`
+      : ` ${c.dim}— agent torn down, schedules canceled (cast undismiss ${result.short_id} to resurface)${c.reset}`;
+    console.log(`${c.green}ok${c.reset} killed ${c.cyan}${result.short_id}${c.reset}${note}`);
+  });
+
 // ── cast label ────────────────────────────────────────────────────────────────
 // Labels are personal filing: a session is filed under at most ONE label, which
 // you can then filter by (cast sessions/feed/search --label <name>). The catalog
