@@ -10,8 +10,7 @@ import { nextShortId } from "./counters";
 import { resolveAssigneeStr, resolveAssigneeToUserId, recalcPlanProgress, notifySubscribers, subscribeUser, resolveWorkerParentConversation, resolveTaskGitContext } from "./tasks";
 import { api, internal } from "./_generated/api";
 import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey } from "@codecast/shared/contracts";
-import { conversationHasNoWork, reapEmptyConversation, enqueueKillSessionCommand } from "./cleanup";
-import { cancelTasksBoundToConversation } from "./agentTasks";
+import { applyHideTransition } from "./cleanup";
 import { canAccessDoc } from "./docs";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { findConversationBySessionReference } from "./conversationSessionLookup";
@@ -118,31 +117,10 @@ function deepMergeField(existing: any, incoming: any): any {
   return incoming;
 }
 
-// Pure decision for the conversation hide-transition hook (exported for tests).
-//
-//  "reap" — a never-prompted EMPTY pre-warm got hidden (dismissed OR stashed).
-//           Quick-create eagerly boots a real agent per summon; a 0-message
-//           pre-warm has nothing to preserve — leaving it running leaks a
-//           zombie tmux that keeps the conversation is_connected and
-//           re-surfaces it as a phantom "New session" card.
-//           reapEmptyConversation kills the agent and then deletes the row.
-//  "kill" — dismiss = kill. Stash is the keep-alive set-aside; dismiss retires
-//           the session: tear the agent down and mark it completed (mirrors the
-//           explicit killSession mutation). Gated on the TRANSITION (`doc` is
-//           the pre-patch row) so a re-asserted dismiss can't re-kill, and an
-//           undo (dismissed → null) never reaches here. Stays resumable.
-//  "none" — a stash of a session with real work (the whole point of stash), or
-//           a re-asserted dismiss.
-export function classifyHideTransition(
-  patch: { inbox_dismissed_at?: any; inbox_stashed_at?: any },
-  doc: { inbox_dismissed_at?: number | null },
-  hasNoWork: boolean,
-): "reap" | "kill" | "none" {
-  if (!patch.inbox_dismissed_at && !patch.inbox_stashed_at) return "none";
-  if (hasNoWork) return "reap";
-  if (patch.inbox_dismissed_at && !doc.inbox_dismissed_at) return "kill";
-  return "none";
-}
+// The hide-transition decision + side effects live in cleanup.ts
+// (classifyHideTransition / applyHideTransition), shared with the CLI
+// visibility mutation. Re-exported here for the existing tests.
+export { classifyHideTransition } from "./cleanup";
 
 async function applyPatches(
   ctx: HandlerCtx,
@@ -178,27 +156,7 @@ async function applyPatches(
         // dismiss/stash path funnels through here — the inbox shortcuts, the
         // palette, the /sessions toggle (patchConversation), and any future one.
         if (table === "conversations" && ((finalSafe as any).inbox_dismissed_at || (finalSafe as any).inbox_stashed_at)) {
-          const action = classifyHideTransition(finalSafe, doc as any, await conversationHasNoWork(ctx, doc));
-          if (action === "reap") {
-            await reapEmptyConversation(ctx, doc as any);
-          } else if (action === "kill") {
-            await enqueueKillSessionCommand(ctx, doc as any);
-            // A persistent anchor never auto-completes on a dismiss/kill — it goes
-            // dormant, not retired (only decommissionAnchor clears `persistent`).
-            const killPatch: Record<string, any> = { inbox_killed_at: Date.now() };
-            if (!(doc as any)?.persistent) killPatch.status = "completed";
-            await ctx.db.patch(docKey as Id<any>, killPatch);
-            // Dismiss retires the session — a standing schedule that injects
-            // into it must die with it, or its next fire would silently
-            // resurrect a session the user just retired. User gestures only:
-            // bulk cleanup sweeps patch inbox_dismissed_at directly (not via
-            // dispatch) and deliberately leave standing schedules armed. An
-            // anchor going dormant keeps its schedules too. Task owner = the
-            // conversation's runner (a second-party owner may be triaging).
-            if (!(doc as any)?.persistent) {
-              await cancelTasksBoundToConversation(ctx, (doc as any).user_id, docKey as Id<"conversations">);
-            }
-          }
+          await applyHideTransition(ctx, doc, finalSafe as any);
         }
       } else {
         const existing = await ctx.db
