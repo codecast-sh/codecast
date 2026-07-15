@@ -295,3 +295,62 @@ describe("multi-owner session ownership", () => {
     expect(ownerIds(db)).toEqual([ASHOT]);
   });
 });
+
+// ── Owner-ref resolution by user id (the web owners picker path) ─────────────
+// The CLI passes an email/name/"me"; the web multi-select passes each roster
+// member's _id directly. resolveOwnerRef must accept a raw user id, allow
+// self-claim without a team, and require team membership for anyone else.
+describe("owner ref resolution by user id", () => {
+  const XTEAM = "teams_x";
+  const RUNNER = "a".repeat(32); // id-shaped so the id branch triggers
+  const MATE = "b".repeat(32);
+  const OUTSIDER = "c".repeat(32);
+  const idDb = () =>
+    makeFakeDb({
+      users: [
+        { _id: RUNNER, name: "Runner", email: "runner@x.ai" },
+        { _id: MATE, name: "Mate", email: "mate@x.ai" },
+        { _id: OUTSIDER, name: "Outsider", email: "out@x.ai" },
+      ],
+      team_memberships: [
+        { _id: "mx1", user_id: RUNNER, team_id: XTEAM, visibility: "full" },
+        { _id: "mx2", user_id: MATE, team_id: XTEAM, visibility: "full" },
+      ],
+      conversations: [
+        { _id: "conv_team", short_id: "team1", session_id: "s-team", user_id: RUNNER, team_id: XTEAM, is_private: false, status: "active" },
+        { _id: "conv_solo", short_id: "solo1", session_id: "s-solo", user_id: RUNNER, team_id: undefined, is_private: true, status: "active" },
+      ],
+      session_owners: [],
+    });
+  const owners = (db: any) => (db._tables.session_owners ?? []).map((r: any) => r.user_id);
+
+  test("adds a team member passed by user id", async () => {
+    const db = idDb();
+    const result = await performAddSessionOwner({ db }, RUNNER as any, { session_id: "team1", owner: MATE });
+    expect(result.added.map(String)).toEqual([MATE]);
+    expect(owners(db)).toEqual([MATE]);
+  });
+
+  test("self-claim by user id works even on a teamless private session", async () => {
+    const db = idDb();
+    const result = await performAddSessionOwner({ db }, RUNNER as any, { session_id: "solo1", owner: RUNNER });
+    expect(result.added.map(String)).toEqual([RUNNER]);
+    expect(owners(db)).toEqual([RUNNER]);
+  });
+
+  test("adding a teammate to a teamless session is refused", async () => {
+    const db = idDb();
+    await expect(
+      performAddSessionOwner({ db }, RUNNER as any, { session_id: "solo1", owner: MATE }),
+    ).rejects.toThrow(/no team/);
+    expect(owners(db)).toEqual([]);
+  });
+
+  test("adding a non-member by user id is refused", async () => {
+    const db = idDb();
+    await expect(
+      performAddSessionOwner({ db }, RUNNER as any, { session_id: "team1", owner: OUTSIDER }),
+    ).rejects.toThrow(/isn't a member/);
+    expect(owners(db)).toEqual([]);
+  });
+});
