@@ -81,6 +81,7 @@ import { DynamicRunView, wfStatusMeta, wfFmtTokens } from "./DynamicRunView";
 const api = _typedApi as any;
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { DeviceBadge, RunOnDeviceItems } from "./DeviceBadge";
+import { OwnersBadge } from "./OwnersBadge";
 import { PermissionStack } from "./PermissionCard";
 import { copyToClipboard, shareOrigin, buildProjectPathOptions, inferHomeDir, resolveCustomPath, displayPath, inferProjectBase } from "../lib/utils";
 import { MarkdownRenderer, isMarkdownFile, isPlanFile, CollapsibleImage } from "./tools/MarkdownRenderer";
@@ -12858,7 +12859,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 )}
 
                 {isOwner && (
-                  <DeviceBadge ownerDeviceId={(conversation as any).owner_device_id} />
+                  <>
+                    <DeviceBadge ownerDeviceId={(conversation as any).owner_device_id} />
+                    <OwnersBadge conversationId={conversation._id} />
+                  </>
                 )}
 
                 {!isOwner && conversation.user && (

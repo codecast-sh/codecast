@@ -262,9 +262,10 @@ function ActionSubmenu({
     // Scope the chip counts the same way the inbox panel scopes its list, so the
     // picker never counts sessions the panel isn't showing (a teammate row cached
     // from a team-board visit, or the whole team while team mode is on).
+    const scope = st.clientState.ui?.inbox_scope ?? "mine";
     const scoped = filterInboxScope(
       st.sessions,
-      st.clientState.ui?.inbox_scope ?? "mine",
+      scope,
       st.currentUser?._id?.toString?.() ?? null,
       st.teamInboxIds,
       st.currentSessionId,
@@ -273,7 +274,13 @@ function ActionSubmenu({
       scoped,
       st.sessionsWithQueuedMessages,
       sessionsWithPendingSend(st.pendingMessages),
-      { currentSessionId: st.currentSessionId, pendingCreateIds: new Set(Object.keys(st.pendingSessionCreates)) },
+      // liveInboxIds + showOld: the chip counts must reflect the SAME authoritative
+      // active set the panel renders, not the raw never-prune cache. Mine-scope
+      // only, exactly like the panel: the team board is already a bounded set and
+      // its rows aren't in liveInboxIds, so hide-old there would drop teammates.
+      scope === "team"
+        ? { currentSessionId: st.currentSessionId, pendingCreateIds: new Set(Object.keys(st.pendingSessionCreates)) }
+        : { currentSessionId: st.currentSessionId, pendingCreateIds: new Set(Object.keys(st.pendingSessionCreates)), liveInboxIds: st.liveInboxIds, showOld: st.showOldSessions },
     );
     const active = [...pinned, ...newSessions, ...needsInput, ...working];
     return computeChipCounts(active, convBucketMap(st.bucketAssignments as Record<string, BucketAssignmentItem>));

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { Command } from "commander";
+import { randomUUID } from "node:crypto";
 import { registerWorkspaceCommand } from "./workspace/cli.js";
 import { registerRemoteCommand } from "./remote/cli.js";
 import open from "open";
@@ -3268,21 +3269,32 @@ labelCmd
     console.log(`${c.green}ok${c.reset} removed label ${c.yellow}${result.label}${c.reset}${note}`);
   });
 
+// Render an owner set as a comma-separated list of names, or "nobody".
+const formatOwners = (owners: Array<{ name?: string | null; email?: string | null }> | undefined) =>
+  owners?.length
+    ? owners.map((o) => o.name || o.email || "?").join(", ")
+    : "nobody";
+
 program
   .command("own")
   .description(
-    "Assign a session's owner — the team member responsible for steering it\n\n" +
-    "The owner is distinct from whose account RUNS the session: an agent\n" +
-    "account (e.g. a bot on a shared machine) can park a session on a human\n" +
-    "reviewer, and the session then surfaces in the OWNER's inbox (web NEEDS\n" +
-    "INPUT + cast sessions/feed) marked with who runs it. The owner replies\n" +
-    "with cast send or the web composer to steer it.\n\n" +
+    "Add an owner to a session — a team member responsible for steering it\n\n" +
+    "A session has a SET of owners: it can sit in several teammates' inboxes at\n" +
+    "once, and each owner gets a notification when they're added. `own` ADDS an\n" +
+    "owner without displacing the existing ones (use `disown` to remove one).\n\n" +
+    "An owner is distinct from whose account RUNS the session, and from which\n" +
+    "DEVICE it runs on — all three move independently. An agent account (e.g. a\n" +
+    "bot on a shared machine) can park a session on a human reviewer; it then\n" +
+    "surfaces in the OWNER's inbox (web NEEDS INPUT + cast sessions/feed) marked\n" +
+    "with who runs it. Owners reply with cast send or the web composer.\n\n" +
     "You can own any session you can see in the feed (your own, or one shared\n" +
     "with a team you're in). Scripts should pass an exact email.\n\n" +
     "Examples:\n" +
-    "  cast own jx7c6zk jason@example.com   # assign to a teammate\n" +
+    "  cast own jx7c6zk jason@example.com   # hand off to a teammate (notifies them)\n" +
     "  cast own jx7c6zk                     # claim it yourself\n" +
-    "  cast disown jx7c6zk                  # clear the owner"
+    "  cast owners jx7c6zk                  # who owns it\n" +
+    "  cast disown jx7c6zk                  # step off it yourself\n" +
+    "  cast disown jx7c6zk --all            # clear every owner"
   )
   .argument("<session_id>", "Session short ID (e.g. jx7c6zk), session UUID, or full ID")
   .argument("[member]", "Team member email (exact) or name; defaults to you")
@@ -3291,20 +3303,43 @@ program
       session_id: sessionId,
       owner: member?.trim() || "me",
     });
-    const ownerLabel = result.owner?.name || result.owner?.email || "you";
-    console.log(`${c.green}✓${c.reset} ${c.cyan}${result.short_id || sessionId}${c.reset} ${c.dim}owner →${c.reset} ${c.magenta}${ownerLabel}${c.reset}`);
+    const added = result.added?.length > 0;
+    const note = added ? "" : ` ${c.dim}(already an owner)${c.reset}`;
+    console.log(
+      `${c.green}✓${c.reset} ${c.cyan}${result.short_id || sessionId}${c.reset} ` +
+      `${c.dim}owners →${c.reset} ${c.magenta}${formatOwners(result.owners)}${c.reset}${note}`
+    );
   });
 
 program
   .command("disown")
-  .description("Clear a session's owner (see: cast own)")
+  .description("Remove an owner from a session — defaults to you (see: cast own)")
+  .argument("<session_id>", "Session short ID (e.g. jx7c6zk), session UUID, or full ID")
+  .argument("[member]", "Team member email (exact) or name; defaults to you")
+  .option("--all", "Clear EVERY owner, not just one")
+  .action(async (sessionId: string, member: string | undefined, opts: { all?: boolean }) => {
+    const result = opts.all
+      ? await cliPost("/cli/sessions/owners/set", { session_id: sessionId, owners: [] })
+      : await cliPost("/cli/sessions/disown", {
+          session_id: sessionId,
+          owner: member?.trim() || "me",
+        });
+    console.log(
+      `${c.green}✓${c.reset} ${c.cyan}${result.short_id || sessionId}${c.reset} ` +
+      `${c.dim}owners →${c.reset} ${c.magenta}${formatOwners(result.owners)}${c.reset}`
+    );
+  });
+
+program
+  .command("owners")
+  .description("List a session's owners — whose inboxes it sits in (see: cast own)")
   .argument("<session_id>", "Session short ID (e.g. jx7c6zk), session UUID, or full ID")
   .action(async (sessionId: string) => {
-    const result = await cliPost("/cli/sessions/own", {
-      session_id: sessionId,
-      owner: null,
-    });
-    console.log(`${c.green}✓${c.reset} ${c.cyan}${result.short_id || sessionId}${c.reset} ${c.dim}owner cleared${c.reset}`);
+    const result = await cliPost("/cli/sessions/owners", { session_id: sessionId });
+    console.log(
+      `${c.cyan}${result.short_id || sessionId}${c.reset} ` +
+      `${c.dim}owners:${c.reset} ${c.magenta}${formatOwners(result.owners)}${c.reset}`
+    );
   });
 
 const accountsCmd = program
@@ -9038,11 +9073,18 @@ program
     if (directions.length > 0) {
       const roster: { short_id: string; conversation_id: string; direction: string; seeded: boolean }[] = [];
       for (const direction of directions) {
+        // session_id = per-branch idempotency key: forkFromMessage collapses any
+        // retry/redelivery carrying the same key onto the one existing row, which
+        // is what makes retries safe here (a fork POST that times out may have
+        // committed server-side — without the key, retrying minted a duplicate
+        // empty "Fork:" card that haunted the inbox). direction titles the branch
+        // so N siblings don't all render as identical "Fork: <parent>" rows.
+        const forkKey = `forked-cli-${randomUUID()}`;
         const response = await cliFetch(`${siteUrl}/cli/fork`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ api_token: config.auth_token, conversation_id: id, message_uuid: messageUuid }),
-        });
+          body: JSON.stringify({ api_token: config.auth_token, conversation_id: id, message_uuid: messageUuid, session_id: forkKey, direction }),
+        }, { retries: 2 });
         if (!response.ok) {
           const body = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
           console.error(`Fork failed for "${direction}": ${body.error || response.statusText}`);
@@ -9101,8 +9143,10 @@ program
           api_token: config.auth_token,
           conversation_id: id,
           message_uuid: messageUuid,
+          // Idempotency key — see the multi-direction fork above.
+          session_id: `forked-cli-${randomUUID()}`,
         }),
-      });
+      }, { retries: 2 });
 
       if (!response.ok) {
         const body = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));

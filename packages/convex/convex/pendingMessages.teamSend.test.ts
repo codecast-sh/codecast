@@ -196,6 +196,30 @@ describe("team send — authorization", () => {
     expect(tables.conversations.find((c) => c._id === "convBob")!.owner_user_id).toBe("uCarol");
   });
 
+  // session_owners is the canonical owner store; owner_user_id is only a cache
+  // of the primary. An owner recorded ONLY in the table (no cache yet) must still
+  // block a steal — otherwise a secondary owner could be silently displaced.
+  test("the owner SET is authoritative — a join-table owner with no cached primary blocks auto-claim", async () => {
+    const { ctx, tables } = world({ now: Date.now() });
+    tables.session_owners = [
+      { _id: "so1", conversation_id: "convBob", user_id: "uCarol", added_by: "uCarol", added_at: 1 },
+    ];
+    const res = await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "fyi" });
+    expect(res.auto_owned).toBe(false);
+    expect(tables.session_owners.map((r: any) => r.user_id)).toEqual(["uCarol"]);
+  });
+
+  // The reverse guard: a legacy row with a cached owner but no join row (written
+  // before the session_owners backfill) must not be auto-claimed either.
+  test("auto-claim writes the canonical join row, not just the owner_user_id cache", async () => {
+    const { ctx, tables } = world({ now: Date.now() });
+    const res = await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "on it" });
+    expect(res.auto_owned).toBe(true);
+    expect((tables.session_owners ?? []).map((r: any) => r.user_id)).toEqual(["uAlice"]);
+    // …and the cache is resynced from the set.
+    expect(tables.conversations.find((c) => c._id === "convBob")!.owner_user_id).toBe("uAlice");
+  });
+
   test("a self-send (Bob → his own session) sets no failure channel and keeps owner == sender", async () => {
     const { ctx, db, tables } = world({ now: 1_000_000_000_000 });
     const res = await performSessionSend(ctx as any, "uBob" as any, { to: "jxbob01", from: "jxbob01", body: "note to self" });

@@ -6,6 +6,7 @@ import { Id } from "./_generated/dataModel";
 import { findConversationByAnyRef, findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { checkConversationAccess } from "./privacy";
 import { hasGrantedSendAccess } from "./collab";
+import { addSessionOwnerRow, listSessionOwnerIds, syncPrimaryOwnerCache } from "./sessionOwners";
 
 export async function getAuthenticatedUserId(
   ctx: { db: any },
@@ -362,17 +363,26 @@ export async function performSessionSend(
   const isCrossUser = target.user_id.toString() !== authUserId.toString();
   const senderUser = isCrossUser ? await ctx.db.get(authUserId) : null;
 
-  // Sending into an UNOWNED teammate session claims it: the sender becomes the
-  // second-party owner, so the thread follows them (inbox presence, idle/error
+  // Sending into an UNOWNED teammate session claims it: the sender joins the
+  // owner set, so the thread follows them (inbox presence, idle/error
   // notifications) until resolved or dismissed. Engaging with a thread is a
-  // statement of caring about its outcome — but never steal an existing owner;
-  // reassignment stays explicit via setSessionOwner (cast own/disown). Bot
-  // accounts never own: nobody reads their inbox, and a bot claiming a thread
-  // would block the first HUMAN engager from auto-owning it.
+  // statement of caring about its outcome — but never displace existing owners;
+  // reassignment stays explicit (cast own/disown). Bot accounts never own:
+  // nobody reads their inbox, and a bot claiming a thread would block the first
+  // HUMAN engager from auto-owning it.
+  //
+  // "Unowned" means the canonical owner SET is empty. The owner_user_id cache is
+  // ALSO checked as a safety net: a legacy row written before the session_owners
+  // backfill has a cached owner but no join row, and must never be auto-claimed
+  // out from under them. Claiming writes through both.
   let autoOwned = false;
-  if (isCrossUser && !target.owner_user_id && !senderUser?.is_bot) {
-    await ctx.db.patch(target._id, { owner_user_id: authUserId });
-    autoOwned = true;
+  if (isCrossUser && !senderUser?.is_bot) {
+    const existingOwners = await listSessionOwnerIds(ctx, target._id);
+    if (existingOwners.length === 0 && !target.owner_user_id) {
+      await addSessionOwnerRow(ctx, target._id, authUserId, authUserId);
+      await syncPrimaryOwnerCache(ctx, target._id);
+      autoOwned = true;
+    }
   }
 
   // Resolve the sender to its short_id for attribution. The CLI passes whatever

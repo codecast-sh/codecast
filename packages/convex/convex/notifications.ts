@@ -5,6 +5,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { isConversationTeamVisible } from "./privacy";
 import { isAgentSpawnedConversation } from "./ccAccountsShared";
+import { listSessionOwnerIds } from "./sessionOwners";
 import {
   trustedAgentStatus,
   deriveSessionActivity,
@@ -171,6 +172,7 @@ export const create = internalMutation({
       v.literal("session_idle"),
       v.literal("permission_request"),
       v.literal("session_error"),
+      v.literal("session_assigned"),
       v.literal("team_session_start"),
       v.literal("task_completed"),
       v.literal("task_failed"),
@@ -335,7 +337,11 @@ export const markAllAsRead = mutation({
   },
 });
 
-type SessionNotifType = "session_idle" | "permission_request" | "session_error";
+type SessionNotifType =
+  | "session_idle"
+  | "permission_request"
+  | "session_error"
+  | "session_assigned";
 
 function sessionNotifOptedOut(
   prefs: Record<string, any> | undefined,
@@ -343,6 +349,9 @@ function sessionNotifOptedOut(
 ): boolean {
   if (type === "session_idle") return prefs?.session_idle === false;
   if (type === "session_error") return prefs?.session_error === false;
+  // Opt-out, not opt-in: being handed a session is something you need to know
+  // about, so it's on unless explicitly disabled.
+  if (type === "session_assigned") return prefs?.session_assigned === false;
   return !!prefs && !prefs.permission_request;
 }
 
@@ -384,10 +393,11 @@ async function deliverSessionNotification(
   return true;
 }
 
-// Row owner + assigned owner. Second-party ownership: the assigned owner is
-// the one actually waiting on this session (a Mr Bot fix session parking with
-// "ready to ship?"), so mirror the notification to them — same prefs gates,
-// their own row+push.
+// The runner (user_id) plus every OWNER. An owner is a human actually waiting on
+// this session (a Mr Bot fix session parking with "ready to ship?"), so mirror
+// the notification to them — same prefs gates, their own row+push. Reads the
+// canonical owner SET: a session can have several owners, and they all need to
+// hear about it, not just the one cached in owner_user_id.
 async function deliverSessionNotificationToParties(
   ctx: any,
   conversation: { _id: any; user_id: any; owner_user_id?: any },
@@ -398,11 +408,63 @@ async function deliverSessionNotificationToParties(
   let delivered = await deliverSessionNotification(
     ctx, conversation.user_id, conversation._id, type, title, message,
   );
-  const ownerUserId = conversation.owner_user_id;
-  if (ownerUserId && ownerUserId.toString() !== conversation.user_id.toString()) {
-    if (await deliverSessionNotification(ctx, ownerUserId, conversation._id, type, title, message)) {
+
+  // Recipients are the UNION of the canonical owner set and the owner_user_id
+  // cache. The cache is a safety net, not a second source of truth: a legacy row
+  // written before the session_owners backfill has a cached owner but no join
+  // row, and it must not silently stop notifying them in the window between
+  // deploy and backfill. Once backfilled the two agree, and the Set de-dupes.
+  const recipients = await listSessionOwnerIds(ctx, conversation._id);
+  if (conversation.owner_user_id) recipients.push(conversation.owner_user_id);
+
+  const seen = new Set<string>([conversation.user_id.toString()]); // runner: done above
+  for (const ownerId of recipients) {
+    const key = ownerId.toString();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (await deliverSessionNotification(ctx, ownerId, conversation._id, type, title, message)) {
       delivered = true;
     }
+  }
+  return delivered;
+}
+
+// "X assigned you this session" — fired when users are ADDED to a session's
+// owner set. Their inbox already surfaces the session (the owner scan does that
+// on its own); this is what actually TELLS them it landed there, which is the
+// difference between a handoff and a silent reassignment.
+//
+// Never notifies the actor about their own action: claiming a session for
+// yourself shouldn't ping you.
+export async function notifySessionAssigned(
+  ctx: any,
+  conversationId: any,
+  recipientIds: any[],
+  actorUserId: any,
+): Promise<number> {
+  if (recipientIds.length === 0) return 0;
+  const conversation = await ctx.db.get(conversationId);
+  if (!conversation) return 0;
+
+  const actor = await ctx.db.get(actorUserId);
+  const actorName = actor?.name || actor?.email || "A teammate";
+  const label =
+    (conversation.title || "").trim() ||
+    conversation.short_id ||
+    "a session";
+
+  let delivered = 0;
+  for (const recipientId of recipientIds) {
+    if (recipientId.toString() === actorUserId.toString()) continue;
+    const ok = await deliverSessionNotification(
+      ctx,
+      recipientId,
+      conversationId,
+      "session_assigned",
+      "Session assigned to you",
+      `${actorName} assigned you "${label}"`,
+    );
+    if (ok) delivered++;
   }
   return delivered;
 }

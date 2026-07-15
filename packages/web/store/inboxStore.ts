@@ -565,7 +565,10 @@ export type ClientUI = {
   plan_view?: PlanViewPrefs;
   saved_views?: SavedView[];
   show_subagents?: boolean;
-  show_old_sessions?: boolean;
+  // show_old_sessions once lived here (server-synced). It's now the store's
+  // ephemeral showOldSessions: a persisted "show my whole divergent cache" mode
+  // is exactly the cross-client cruft bug. Stale values may linger in server
+  // client_state docs; nothing reads them.
   // Inbox scope. "mine" (default) is the personal inbox: your own sessions plus
   // any explicitly routed to you. "team" turns the inbox into a shared board of
   // every team-visible session across the active team (a superset of "mine").
@@ -1179,13 +1182,32 @@ export interface CategorizedSessions {
   dismissed: InboxSession[];
   subsByParent: Map<string, InboxSession[]>;
   forksByParent: Map<string, InboxSession[]>;
+  // Count of cached rows hidden as "old" (absent from the live/authoritative
+  // inbox set) — drives the "show N old sessions" toggle badge. 0 when showOld
+  // is on or no liveInboxIds was supplied.
+  oldCount: number;
 }
 
 export function categorizeSessions(
   sessions: Record<string, InboxSession>,
   sessionsWithQueuedMessages: Set<string>,
   pendingSendIds: ReadonlySet<string> = EMPTY_PENDING_SEND_IDS,
-  opts: { currentSessionId?: string | null; pendingCreateIds?: ReadonlySet<string> } = {},
+  opts: {
+    currentSessionId?: string | null;
+    pendingCreateIds?: ReadonlySet<string>;
+    // The AUTHORITATIVE active-inbox id set (server's listInboxSessions result,
+    // piped into store.liveInboxIds). When supplied, a cached top-level row absent
+    // from it is "old" — backfilled by the completeness crawl for search/open, but
+    // NOT part of the actionable inbox. Folding this in (instead of a separate
+    // partitionOldSessions pre-pass every caller must remember) is what makes EVERY
+    // consumer — panel, sidebar badge, dashboard badge, palette — render the same
+    // server-authoritative set, so the inbox is identical across web/desktop/mobile
+    // and never accumulates aged-out cruft. Omit it (or pass showOld) to keep the
+    // whole cache — the safe fallback used before the first live payload lands.
+    liveInboxIds?: Set<string>;
+    // Default HIDE old. Pass true for the "show old sessions" browse toggle.
+    showOld?: boolean;
+  } = {},
 ): CategorizedSessions {
   // Single walk over the whole input, splitting it into the three top-level
   // slices below in one pass instead of three separate Object.values scans. This
@@ -1198,14 +1220,27 @@ export function categorizeSessions(
   const activeKeyed: RankedSession[] = [];
   const dismissed: InboxSession[] = [];
   const stashed: InboxSession[] = [];
+  // Fold the "old" (absent-from-authoritative-set) hiding into this single walk
+  // instead of a separate partitionOldSessions pass — one scan, and every caller
+  // gets it for free. Only hide when we actually have the live set (size>0) and
+  // showOld is off; an empty set means the first live payload hasn't landed, so
+  // show everything (never blank the inbox on cold open). isOldSession already
+  // exempts pinned / focused / dismissed / stashed / subagents, so hiding here
+  // only ever removes stale top-level active cards — their dismissed/stashed twins
+  // still fall through to those buckets below.
+  const canHideOld = !opts.showOld && !!opts.liveInboxIds && opts.liveInboxIds.size > 0;
+  const focusedId = opts.currentSessionId ?? null;
+  let oldCount = 0;
   for (const s of Object.values(sessions)) {
+    const isOld = canHideOld && isOldSession(s, opts.liveInboxIds!, focusedId);
+    if (isOld) oldCount++;
     // An anchor's standing thread lives in its dedicated /anchor space, not the
     // inbox — surface it here ONLY when it's genuinely blocked on the user (an open
     // poll, permission prompt, auth error, or a dead session with output), NOT
     // every time it finishes a turn and goes idle. It drops back to its space once
     // handled.
     const hiddenAnchor = !!s.is_anchor && !isSessionHardBlocked(s);
-    if (!isSessionHidden(s) && !hiddenAnchor) activeKeyed.push({ s, rank: sessionSortRank(s) });
+    if (!isOld && !isSessionHidden(s) && !hiddenAnchor) activeKeyed.push({ s, rank: sessionSortRank(s) });
     if (isSessionDismissed(s)) dismissed.push(s);
     if (isSessionStashed(s)) stashed.push(s);
   }
@@ -1336,7 +1371,7 @@ export function categorizeSessions(
     });
   const working = sorted.filter((s) => (!waitingForInput.get(s._id) && (s.message_count > 0 || hasPendingSend(s)) && !s.is_pinned) && isFlat(s));
 
-  return { sorted, pinned, newSessions, needsInput, working, stashed, dismissed, subsByParent, forksByParent };
+  return { sorted, pinned, newSessions, needsInput, working, stashed, dismissed, subsByParent, forksByParent, oldCount };
 }
 
 export function visualOrderSessions(
@@ -1799,7 +1834,8 @@ export function computeVisualOrder(state: {
   // setScheduleNavSets) so grouped-mode nav skips sessions absorbed behind
   // SCHEDULES rows. Null until the panel has schedule data.
   scheduleNavSets?: { absorbed: ReadonlySet<string> } | null;
-  clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; inbox_manual_order?: Record<string, number>; show_subagents?: boolean; show_old_sessions?: boolean; inbox_scope?: "mine" | "team" } };
+  showOldSessions: boolean;
+  clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; inbox_manual_order?: Record<string, number>; show_subagents?: boolean; inbox_scope?: "mine" | "team" } };
 }): InboxSession[] {
   // Favorites view walks its own project-grouped order so Ctrl+J/K moves through
   // the shelf, not the active desk underneath it.
@@ -1834,7 +1870,7 @@ export function computeVisualOrder(state: {
     : partitionOldSessions(
         scopedSessions,
         state.liveInboxIds,
-        state.clientState.ui?.show_old_sessions ?? true,
+        state.showOldSessions, // ephemeral browse flag — nav must walk exactly what the panel renders
         focusedId,
       );
   if (mode === "time" || mode === "recent") {
@@ -2006,6 +2042,22 @@ interface InboxStoreState {
   // "mine" mode. Rows themselves live in the shared (never-prune) sessions cache;
   // this is only the membership set for the current team view.
   teamInboxIds: Set<string>;
+  // Persisted twin of liveInboxIds (plain array: the native store JSON-serializes
+  // meta blobs and generic hydration merges don't understand Sets). Written only
+  // by setLiveInboxIds, hydrated manually at boot into liveInboxIds — so the FIRST
+  // painted frame already renders the last-known authoritative set instead of
+  // flashing the whole never-prune cache until the live payload lands.
+  liveInboxIdList: string[];
+  // Replace the authoritative active-inbox set (both twins) from a server
+  // payload. sync(): persists, never dispatches — this is server truth.
+  setLiveInboxIds: (ids: string[]) => void;
+  // "Show old sessions" — a transient browse gesture, deliberately NOT persisted
+  // and NOT server-synced. It was a synced client_state.ui flag once; one browse
+  // click then permanently reverted every client to rendering its whole divergent
+  // cache (the recurring-cruft complaint). Ephemeral means every boot starts from
+  // the authoritative set, on every client.
+  showOldSessions: boolean;
+  setShowOldSessions: (show: boolean) => void;
   // MRU "entered at" per session — bumped only when you switch INTO a session.
   // Drives the Tab switcher order + message eviction. Kept separate from
   // _seenUpToAt so the current session is always strictly the most recent (no
@@ -3233,6 +3285,16 @@ export const useInboxStore = create<InboxStoreState>(
   setShowFavorites: (show: boolean) => set({ showFavorites: show, ...(show ? { showMySessions: false } : {}) }),
   liveInboxIds: new Set<string>(),
   teamInboxIds: new Set<string>(),
+  liveInboxIdList: [],
+  // sync(): the id set is server truth (or its persisted snapshot) — persist to
+  // IDB via patches, never dispatch. Both twins move together so the persisted
+  // array can never drift from what the UI filtered against.
+  setLiveInboxIds: sync(function (this: Draft, ids: string[]) {
+    this.liveInboxIds = new Set(ids);
+    this.liveInboxIdList = ids;
+  }),
+  showOldSessions: false,
+  setShowOldSessions: (show: boolean) => set({ showOldSessions: show }),
   _lastViewedAt: {},
   _seenUpToAt: {},
   _seenMessageCount: {},
@@ -5643,6 +5705,20 @@ export function feedPagePersistence(page: { rowCount: number; nextCursor: string
 
 // -- IndexedDB cache: wire patch-driven writes + hydrate on load --
 
+// Boot-seed liveInboxIds from its persisted twin. Guarded: only a non-empty
+// cached array lands, and only while the in-memory set is still empty — if a
+// live payload raced hydration and landed first (size > 0), the fresher server
+// truth wins and the stale snapshot is discarded. Raw setState on purpose: the
+// value came FROM disk, so re-persisting it through the sync() action would be
+// a pointless IDB write during hydration.
+export function seedLiveInboxIdsFromCache(cachedList: unknown) {
+  if (!Array.isArray(cachedList) || cachedList.length === 0) return;
+  if (useInboxStore.getState().liveInboxIds.size > 0) return;
+  const ids = cachedList.filter((id): id is string => typeof id === "string");
+  if (ids.length === 0) return;
+  useInboxStore.setState({ liveInboxIds: new Set(ids), liveInboxIdList: ids });
+}
+
 if (PERSISTENCE_AVAILABLE) {
   (useInboxStore.getState() as any)._setIDBWrite(writePatchesToIDB);
   (useInboxStore.getState() as any)._setOutbox(enqueueDispatch, removeDispatch, loadOutbox);
@@ -5760,6 +5836,14 @@ if (PERSISTENCE_AVAILABLE) {
     // "manual" handling, so a new key can never silently skip hydration (the
     // ct-34920 / buckets-pop-in bug class).
     apply(HYDRATION_CRITICAL_KEYS);
+
+    // Seed the authoritative active set from its persisted twin (manual
+    // hydration — see clientSyncRegistry). Same synchronous pass as the
+    // sessions apply above, so the first frame that shows cached sessions
+    // already filters them to the last-known server set: no cold-boot flash of
+    // aged-out rows. The live subscription / recovery poll replace it within
+    // ~1s of connecting.
+    seedLiveInboxIdsFromCache(cached.liveInboxIdList);
 
     // Always mark initialized after IDB hydration completes — even if cached
     // clientState was missing — so app gates don't hang on fresh users.
