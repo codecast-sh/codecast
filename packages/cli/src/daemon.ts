@@ -281,6 +281,70 @@ async function refuseResumeNoLocalCheckout(
   }
 }
 
+// Deterministic per-remote checkout dir for a reparented session. Keyed by a
+// hash of the remote so two repos with the same basename never collide.
+function reparentCheckoutDir(remote: string): string {
+  const home = process.env.HOME || "/tmp";
+  const name = (remote.split("/").pop() || "repo").replace(/\.git$/, "").replace(/[^A-Za-z0-9._-]/g, "-");
+  const hash = createHash("sha1").update(remote).digest("hex").slice(0, 8);
+  return path.join(home, ".codecast", "reparented", `${name}-${hash}`);
+}
+
+// A session reparented onto THIS machine (cast pull / reparentSessionToDevice)
+// may have its repo checked out on the SOURCE machine only. When no local
+// checkout resolves, clone the git remote into a deterministic dir and learn the
+// mapping, so the resume — and its reconstruct-from-Convex JSONL write, which
+// lands under the resolved cwd — has a real directory to run in. Returns the
+// local checkout path, or undefined if nothing could be prepared (the caller
+// then falls through to the normal refuse-with-banner path). Idempotent: never
+// re-clones an existing checkout. The clone is ASYNC (execFileAsync) so a large
+// repo never blocks the daemon's event loop and stalls other live sessions.
+async function ensureReparentedCheckout(
+  conversationId: string | undefined,
+  recordedPath: string | undefined,
+): Promise<string | undefined> {
+  // Already resolvable locally (a prior reparent clone, or the repo happens to
+  // be here)? Reuse it — don't clone twice.
+  const existing = await resolveResumeCwdOrRefuse({
+    recordedCwd: recordedPath,
+    cwdOverride: recordedPath,
+    conversationId,
+  }).catch(() => null);
+  if (existing) return existing;
+  if (!conversationId || !syncServiceRef) return undefined;
+
+  const info = await syncServiceRef.getProjectInfo(conversationId).catch(() => null);
+  const remote = info?.git_remote_url;
+  if (!remote) return undefined; // nothing to clone → normal refuse handles it
+
+  const dest = reparentCheckoutDir(remote);
+  try {
+    if (!fs.existsSync(path.join(dest, ".git"))) {
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      log(`[REPARENT] cloning ${remote} → ${dest}`);
+      try {
+        // Uses the machine's own git credentials (SSH/helper) — the destination
+        // user must have access to the repo, which mirrors the ownership model.
+        await _execFileAsync("git", ["clone", remote, dest], {
+          timeout: 10 * 60_000,
+          maxBuffer: 64 * 1024 * 1024,
+        });
+      } catch (cloneErr: any) {
+        log(`[REPARENT] clone failed: ${(cloneErr?.stderr || cloneErr?.message || String(cloneErr)).slice(0, 200)}`);
+        // Remove a partial clone so a retry starts clean.
+        try { if (fs.existsSync(dest)) fs.rmSync(dest, { recursive: true, force: true }); } catch {}
+        return undefined;
+      }
+    }
+    // Learn the mapping so subsequent resolves (and re-resumes) find it directly.
+    recordProjectMapping(path.basename(dest), dest);
+    return dest;
+  } catch (e) {
+    log(`[REPARENT] checkout prep error: ${e instanceof Error ? e.message : String(e)}`);
+    return undefined;
+  }
+}
+
 function validatePath(p: string): string | null {
   if (!p || typeof p !== "string") return null;
   if (!path.isAbsolute(p)) return null;
@@ -2860,8 +2924,11 @@ async function executeRemoteCommand(
             }
           }
         }
-        const projectPath = parsed.project_path;
+        let projectPath = parsed.project_path;
         const forceReconstitute = parsed.force_reconstitute === true;
+        // Set by reparentSessionToDevice (cast pull): this session may be running
+        // on this machine for the first time, so its repo isn't checked out here.
+        const reparented = parsed.reparented === true;
         const resumeAgentType: "claude" | "codex" | "cursor" | "gemini" | undefined =
           parsed.agent_type === "codex" || parsed.agent_type === "cursor" || parsed.agent_type === "gemini"
             ? parsed.agent_type : undefined;
@@ -2924,6 +2991,18 @@ async function executeRemoteCommand(
           }
         }
         restartingSessionIds.set(sessionId, Date.now());
+        // Reparented onto this machine: ensure the repo is checked out locally
+        // (clone if missing) BEFORE resolving the resume cwd, so the resume and
+        // its reconstruct-from-Convex JSONL write have a real directory. If no
+        // checkout can be prepared, fall through — the normal resolution then
+        // surfaces the "clone it first" banner as usual.
+        if (reparented) {
+          const cloned = await ensureReparentedCheckout(conversationId, projectPath);
+          if (cloned) {
+            projectPath = cloned;
+            log(`[REPARENT] ${sessionId.slice(0, 8)} resuming in local checkout ${cloned}`);
+          }
+        }
         let resumed = false;
         if (forceReconstitute) {
           log(`[REMOTE] Force-reconstituting session ${sessionId.slice(0, 8)} from DB${projectPath ? ` in ${projectPath}` : ""}`);
