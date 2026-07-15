@@ -15,6 +15,7 @@ const VISUAL_VERSION = "3"; // cast-canvas: broader Plot marks + declarative tra
 const FORKS_VERSION = "2"; // bumped: --label flag on cast fork / cast spawn + default label inheritance on fork
 const LATEST_URL = "https://dl.codecast.sh/latest.json";
 const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
+const UPDATE_RETRY_INTERVAL = 6 * 60 * 60 * 1000; // 6 hours
 
 interface LatestInfo {
   version: string;
@@ -31,6 +32,8 @@ interface UpdateState {
   lastCheck?: string;
   availableVersion?: string;
   dismissed?: string;
+  failedVersion?: string;
+  failedAt?: string;
 }
 
 const CONFIG_DIR = process.env.HOME + "/.codecast";
@@ -168,6 +171,19 @@ export function isDevMode(): boolean {
   return exe.includes("bun") || (!exe.includes("codecast") && !exe.includes("/cast"));
 }
 
+export function updateRecentlyFailed(version: string): boolean {
+  const state = readUpdateState();
+  if (state.failedVersion !== version || !state.failedAt) return false;
+  return Date.now() - new Date(state.failedAt).getTime() < UPDATE_RETRY_INTERVAL;
+}
+
+export function recordUpdateFailure(version: string): void {
+  const state = readUpdateState();
+  state.failedVersion = version;
+  state.failedAt = new Date().toISOString();
+  writeUpdateState(state);
+}
+
 export async function performUpdate(): Promise<{ success: boolean; error?: string }> {
   if (isDevMode()) {
     return { success: false, error: "dev_mode" };
@@ -220,6 +236,8 @@ export async function performUpdate(): Promise<{ success: boolean; error?: strin
     // Update state
     const state = readUpdateState();
     state.availableVersion = undefined;
+    state.failedVersion = undefined;
+    state.failedAt = undefined;
     writeUpdateState(state);
 
     console.log(`Updated to v${latest.version}`);
