@@ -3354,10 +3354,12 @@ program
     "  cast pull jx7c6zk    # run this session on this machine"
   )
   .argument("<session_id>", "Session short ID (e.g. jx7c6zk), session UUID, or full ID")
-  .action(async (sessionId: string) => {
+  .option("--remote <url>", "Git remote for the destination clone (when the session has none recorded)")
+  .action(async (sessionId: string, opts: { remote?: string }) => {
     const result = await cliPost("/cli/sessions/reparent", {
       session_id: sessionId,
       device_id: deviceId(),
+      ...(opts.remote ? { remote_url: opts.remote } : {}),
     });
     const where = result.label || deviceLabel();
     const acct = result.cross_user ? ` ${c.dim}(now runs under your account)${c.reset}` : "";
