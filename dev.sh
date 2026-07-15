@@ -18,6 +18,8 @@ fi
 CONVEX_PID=""
 CONVEX_RESTARTS=0
 CONVEX_LAST_START=0
+CONVEX_BLOCKED=0
+LAST_BLOCK_RETRY=0
 MAX_RAPID_RESTARTS=5
 RAPID_WINDOW=60
 WEB_FAIL_COUNT=0
@@ -126,7 +128,34 @@ check_rapid_restarts() {
     fi
 }
 
+# The convex dev watcher pushes whole-tree snapshots to PROD on every save: a
+# tree behind origin/main deletes newer functions and routes from prod (the
+# 2026-07-15 reparent-route outage). Never start the watcher from a stale tree.
+# Offline (fetch fails), judge by the last-known origin/main rather than
+# blocking local dev.
+convex_tree_is_fresh() {
+    git -C "$ROOT_DIR" fetch origin --quiet 2>/dev/null || true
+    git -C "$ROOT_DIR" merge-base --is-ancestor origin/main HEAD 2>/dev/null
+}
+
 start_convex() {
+    $SHUTTING_DOWN && return
+
+    if ! convex_tree_is_fresh; then
+        if [ "$CONVEX_BLOCKED" != "1" ]; then
+            log_err "REFUSING to start the convex watcher: this tree is BEHIND origin/main."
+            git -C "$ROOT_DIR" log --oneline HEAD..origin/main 2>/dev/null | head -5 | while read -r c; do
+                log_err "  missing: $c"
+            done
+            log_err "Run: git pull — web keeps running; the watcher starts automatically after the pull."
+        fi
+        CONVEX_BLOCKED=1
+        CONVEX_PID=""
+        return
+    fi
+    [ "$CONVEX_BLOCKED" = "1" ] && log "Tree is fresh again, starting convex watcher"
+    CONVEX_BLOCKED=0
+
     local now=$(date +%s)
     if [ $((now - CONVEX_LAST_START)) -gt $RAPID_WINDOW ]; then
         CONVEX_RESTARTS=0
@@ -242,6 +271,12 @@ while true; do
 
     if [ -n "$CONVEX_PID" ] && ! kill -0 $CONVEX_PID 2>/dev/null; then
         log_err "Convex died (was pid $CONVEX_PID), restarting..."
+        start_convex
+    elif [ "$CONVEX_BLOCKED" = "1" ] && [ $(( $(date +%s) - LAST_BLOCK_RETRY )) -ge 60 ]; then
+        # Stale-tree block: re-check once a minute so a pull unblocks the
+        # watcher without restarting dev.sh. start_convex refuses quietly
+        # while the tree stays stale.
+        LAST_BLOCK_RETRY=$(date +%s)
         start_convex
     fi
 
