@@ -8956,6 +8956,15 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     }
   };
 
+  // Form submission — the arrow send button, and the expanded editor's Cmd+Enter —
+  // must honor the compose-popup contract the same way plain Enter does in
+  // handleKeyDown: send, then dismiss the popup with fire-and-forget intent.
+  // Outside the popup (no onSubmitWithIntent) this is exactly handleSubmit.
+  const handleFormSubmit = (e: React.FormEvent) => {
+    void handleSubmit(e);
+    onSubmitWithIntent?.(false);
+  };
+
   const canSubmit = hasContent || reviewCount > 0;
   // When the send is carried entirely by attached quotes, tint the button cyan to
   // match the tray so it reads as "this sends the quotes".
@@ -9291,7 +9300,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
               </div>
             );
           })()}
-          <form onSubmit={handleSubmit} className={bareComposer ? "w-full" : `mx-auto px-2 sm:px-4 transition-all duration-200 ease-out ${isExpanded ? "conv-col" : "max-w-md"}`}>
+          <form onSubmit={handleFormSubmit} className={bareComposer ? "w-full" : `mx-auto px-2 sm:px-4 transition-all duration-200 ease-out ${isExpanded ? "conv-col" : "max-w-md"}`}>
             <div className={`flex flex-col ${bareComposer ? "" : "border"} transition-colors duration-150 ${bareComposer ? "px-2.5 py-0.5 rounded-lg bg-sol-text/[0.04] focus-within:bg-sol-text/[0.07]" : `border px-4 py-2 shadow-lg bg-sol-bg-alt ${isExpanded ? "rounded-2xl" : "rounded-full"}`} ${composeMode ? "min-h-[40vh]" : ""} ${isSelectionActive ? "border-sol-cyan/40 ring-1 ring-sol-cyan/20" : composeMode ? "border-sol-cyan/20" : bareComposer ? "" : "border-sol-border"}`}>
               {isSelectionActive && (
                 <div className="flex items-center gap-2 pb-1.5 mb-1.5 border-b border-sol-cyan/20 text-[10px] text-sol-cyan">
@@ -9393,7 +9402,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                       initialContent={message}
                       onMentionQuery={composeMentionQuery}
                       onImagePaste={uploadImage}
-                      onSubmit={() => handleSubmit({ preventDefault: () => {} } as any)}
+                      onSubmit={() => handleFormSubmit({ preventDefault: () => {} } as any)}
                       onExit={toggleCompose}
                       onContentChange={setComposeHasContent}
                       placeholder="Compose your message... / for commands, @ to mention"

@@ -280,6 +280,18 @@ export class SyncService {
     });
   }
 
+  // After this (primary) daemon pushes a CHANGED credential to the remote
+  // Macs, nudge their auth-blocked sessions with "continue" — CC re-reads the
+  // credential store on its next turn, so the nudge is the whole recovery.
+  // Selection (auth-kind, remote owners, recent window) lives server-side.
+  async reviveRemoteAuthBlocked(): Promise<number> {
+    await this.throttle();
+    const res = await this.mutate("accountSwitch:reviveAuthBlockedOnRemotes" as any, {
+      api_token: this.apiToken,
+    });
+    return res?.continued ?? 0;
+  }
+
   private async existingMessageUuids(conversationId: string, messageUuids: string[]): Promise<Set<string> | null> {
     if (messageUuids.length === 0) return new Set();
     await this.throttle();

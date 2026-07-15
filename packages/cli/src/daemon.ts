@@ -8,7 +8,7 @@ import { execSync, execFileSync, exec, execFile, spawn, spawnSync } from "child_
 import { watch as chokidarWatch } from "chokidar";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
 import { deviceId, deviceLabel, isRemoteDevice } from "./remote/device.js";
-import { copyCredentialToRemoteAsync, loadRemoteHost, remoteHostsRegistered } from "./remote/session-move.js";
+import { copyCredentialToRemoteAsync, loadRemoteHost, readPushableCredential, remoteHostsRegistered } from "./remote/session-move.js";
 import {
   useProfile,
   saveProfile,
@@ -1433,21 +1433,58 @@ function syncHealthFields(): {
 // machine's credential and cannot /login itself. The copy is pushed at move
 // time, but between moves it expires and every session on the remote starts
 // answering 401. This machine's credential stays fresh (CC self-refreshes
-// locally), so push it on a slow loop whenever a remote host is registered.
+// locally), so push it whenever a remote host is registered: a fast tick that
+// pushes only when the blob CHANGED (a /login, an account switch, CC's own
+// self-refresh — propagates within ~a minute), plus a slow forced push as the
+// safety net against remote-side drift the hash can't see.
 // One-way by design: the laptop is canonical — the remote must never refresh
 // itself, or its rotated refresh token would invalidate the local one.
+// copyCredentialToRemoteAsync only ships a blob with a LIVE access token, so a
+// logged-out stub or expired credential skips instead of replicating the
+// outage to the remote (which cannot /login itself); the fast tick then
+// delivers the healthy blob within a minute of the local login recovering.
 const REMOTE_CRED_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
+const REMOTE_CRED_CHANGE_TICK_MS = 60 * 1000;
 let remoteCredPushInFlight = false;
+let lastPushedCredHash: string | null = null;
+let lastCredSkipReason: string | null = null;
 
-async function pushCredentialToRemoteHosts(reason: string): Promise<void> {
+async function pushCredentialToRemoteHosts(
+  reason: string,
+  opts: { onlyIfChanged?: boolean } = {},
+): Promise<void> {
   if (isRemoteDevice() || remoteCredPushInFlight || !remoteHostsRegistered()) return;
   remoteCredPushInFlight = true;
   try {
     const host = loadRemoteHost();
-    const ok = await copyCredentialToRemoteAsync(host);
-    log(ok
-      ? `[REMOTE-AUTH] pushed fresh credential to ${host.user}@${host.address} (${reason})`
-      : `[REMOTE-AUTH] no local credential to push (${reason})`);
+    if (opts.onlyIfChanged) {
+      const gate = readPushableCredential();
+      const hash = gate.cred ? createHash("sha256").update(gate.cred).digest("hex") : null;
+      if (hash !== null && hash === lastPushedCredHash) return; // in step — the common case
+    }
+    const res = await copyCredentialToRemoteAsync(host);
+    if (!res.pushed) {
+      // Log a skip once per distinct reason, not every 60s tick: the state is
+      // what matters ("local login is down"), not the polling.
+      if (res.reason !== lastCredSkipReason) {
+        log(`[REMOTE-AUTH] push skipped (${reason}): ${res.reason}`);
+        lastCredSkipReason = res.reason ?? "unknown";
+      }
+      return;
+    }
+    lastCredSkipReason = null;
+    const hash = createHash("sha256").update(res.cred!).digest("hex");
+    const changed = hash !== lastPushedCredHash;
+    lastPushedCredHash = hash;
+    log(`[REMOTE-AUTH] pushed fresh credential to ${host.user}@${host.address} (${reason}${changed ? ", changed" : ""})`);
+    // A changed credential is the recovery event for remote sessions parked on
+    // "Login expired" (CC re-reads the store on its next turn) — nudge them.
+    if (changed && syncServiceRef) {
+      syncServiceRef
+        .reviveRemoteAuthBlocked()
+        .then((n) => { if (n > 0) log(`[REMOTE-AUTH] queued continue for ${n} auth-blocked remote session(s)`); })
+        .catch((err) => log(`[REMOTE-AUTH] remote auth revive failed: ${err instanceof Error ? err.message : String(err)}`));
+    }
   } catch (err) {
     log(`[REMOTE-AUTH] credential push failed (${reason}): ${err instanceof Error ? err.message : String(err)}`);
   } finally {
@@ -1483,6 +1520,9 @@ async function maintainActiveCcToken(reason: string): Promise<void> {
       if (res.refreshed) {
         const mins = Math.round(((res.expiresAt ?? Date.now()) - Date.now()) / 60000);
         log(`[CC-AUTH] Refreshed active login (${mins}m to next expiry; ${reason})`);
+        // The remotes run a pushed copy — hand them the fresh token now rather
+        // than on the next tick.
+        pushCredentialToRemoteHosts("token_refresh").catch(() => {});
       } else {
         log(`[CC-AUTH] Proactive refresh skipped: ${res.reason} (${reason})`);
       }
@@ -13586,6 +13626,10 @@ async function main(): Promise<void> {
   // Keep the remote Mac's copied credential fresh (it can't /login itself).
   setTimeout(() => { pushCredentialToRemoteHosts("daemon start").catch(() => {}); }, 60_000);
   setInterval(() => { pushCredentialToRemoteHosts("periodic").catch(() => {}); }, REMOTE_CRED_REFRESH_INTERVAL_MS);
+  // Fast tick: propagate any local credential change (a /login, an account
+  // switch, CC's own self-refresh) within ~a minute. Hash-gated, so the
+  // common no-change tick costs one keychain read and no ssh.
+  setInterval(() => { pushCredentialToRemoteHosts("credential_changed", { onlyIfChanged: true }).catch(() => {}); }, REMOTE_CRED_CHANGE_TICK_MS);
 
   // Keep THIS machine's login from lapsing during idle gaps + propagate a
   // manual /login into its saved profile (primary devices only).
