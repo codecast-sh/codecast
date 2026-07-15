@@ -26,7 +26,10 @@
     "productName": "Codecast",
     "files": [
       "main.js",
-      "preload.js"
+      "preload.js",
+      "assets/icon.png",
+      "assets/trayTemplate.png",
+      "assets/trayTemplate@2x.png"
     ],
     "directories": {
       "buildResources": "assets"
