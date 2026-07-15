@@ -1,8 +1,43 @@
-import { internalMutation, internalAction, internalQuery } from "./functions";
+import { internalMutation, internalAction, internalQuery, type MutationCtx } from "./functions";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import { isRefusalProse } from "./idleSummary";
+
+// Floor between generateTitle schedulings for one conversation. The
+// no-subtitle fallback fires on every sync batch of an untitled conversation;
+// without a floor, one busy untitled session enqueues a job per batch (~1/s),
+// and once the scheduler lags, subtitles stop being written, which makes every
+// active conversation untitled — jobs then arrive faster than they run and the
+// queue never recovers (the 2026-07 scheduler wedge). The stamp starts unset,
+// so a new session still gets its first title at message 2.
+const TITLE_GEN_MIN_INTERVAL_MS = 5 * 60 * 1000;
+
+// Single gate for scheduling title generation from message writes. Covers the
+// count milestones for every count in (prevMessageCount, newMessageCount] plus
+// the no-subtitle self-heal, then rate-limits by title_gen_scheduled_at.
+export async function maybeScheduleTitleGeneration(
+  ctx: MutationCtx,
+  conversation: Doc<"conversations">,
+  prevMessageCount: number,
+  newMessageCount: number,
+): Promise<void> {
+  if (conversation.skip_title_generation) return;
+  let shouldGen = false;
+  for (let c = prevMessageCount + 1; c <= newMessageCount; c++) {
+    if (shouldGenerateTitle(c)) { shouldGen = true; break; }
+  }
+  if (!shouldGen && conversation.subtitle === undefined && newMessageCount > 2) {
+    shouldGen = true;
+  }
+  if (!shouldGen) return;
+  const now = Date.now();
+  if (now - (conversation.title_gen_scheduled_at ?? 0) < TITLE_GEN_MIN_INTERVAL_MS) return;
+  await ctx.db.patch(conversation._id, { title_gen_scheduled_at: now });
+  await ctx.scheduler.runAfter(0, internal.titleGeneration.generateTitle, {
+    conversation_id: conversation._id,
+  });
+}
 
 export const setTitleAndSubtitle = internalMutation({
   args: {
@@ -101,6 +136,48 @@ export const generateTitle = internalAction({
     } catch (error) {
       console.error("Failed to generate title:", error);
     }
+  },
+});
+
+// One-shot recovery sweep: schedule generateTitle for every recent
+// conversation that never got a subtitle (untitled cards in the inbox). Live
+// conversations self-heal via maybeScheduleTitleGeneration on their next sync;
+// this catches the idle ones nothing will touch again. Walks _creationTime
+// from `cursor`; loop until done:
+//   npx convex run titleGeneration:sweepUntitled '{"cursor": <start_ms>}'
+export const sweepUntitled = internalMutation({
+  args: {
+    cursor: v.number(),
+    batch: v.optional(v.number()),
+    // Seconds between scheduled generations, so the sweep itself doesn't
+    // flood the scheduler or the Anthropic API.
+    spread_s: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const batch = args.batch ?? 200;
+    const rows = await ctx.db
+      .query("conversations")
+      .withIndex("by_creation_time", (q) => q.gte("_creationTime", args.cursor))
+      .take(batch);
+    const now = Date.now();
+    let scheduled = 0;
+    for (const c of rows) {
+      if (c.skip_title_generation || c.subtitle !== undefined) continue;
+      if ((c.message_count ?? 0) <= 2) continue;
+      await ctx.db.patch(c._id, { title_gen_scheduled_at: now });
+      await ctx.scheduler.runAfter(
+        scheduled * (args.spread_s ?? 2) * 1000,
+        internal.titleGeneration.generateTitle,
+        { conversation_id: c._id },
+      );
+      scheduled++;
+    }
+    return {
+      scheduled,
+      scanned: rows.length,
+      cursor: rows.length ? rows[rows.length - 1]._creationTime : null,
+      done: rows.length < batch,
+    };
   },
 });
 
