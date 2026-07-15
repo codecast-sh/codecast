@@ -449,9 +449,41 @@ export const completeTaskRun = mutation({
       runConv &&
       !runConv.inbox_pinned_at &&
       !runConv.inbox_dismissed_at &&
+      !runConv.inbox_stashed_at &&
       !runConv.has_pending_messages
     ) {
       await ctx.db.patch(runConv._id, { inbox_dismissed_at: now });
+    }
+
+    // --needs-attention is the agent's claim on the user's eyes, and stash/kill
+    // must not swallow it: if the conversation the flag points at (the inject
+    // loop's home, or this spawn run) sits in Stashed or Killed, pull it back
+    // into the active inbox — the just-finished turn then triages as
+    // needs-input. One-shot at completion: re-stashing silences the loop again
+    // until the NEXT flagged run.
+    if (args.needs_attention) {
+      const attentionConvId =
+        task.originating_conversation_id ??
+        runConv?._id ??
+        (args.conversation_id
+          ? (args.conversation_id as Id<"conversations">)
+          : undefined);
+      const conv =
+        runConv && runConv._id === attentionConvId
+          ? runConv
+          : attentionConvId
+            ? await ctx.db.get(attentionConvId)
+            : null;
+      if (
+        conv &&
+        conv.user_id === auth.userId &&
+        (conv.inbox_stashed_at || conv.inbox_dismissed_at)
+      ) {
+        await ctx.db.patch(conv._id, {
+          inbox_stashed_at: undefined,
+          inbox_dismissed_at: undefined,
+        });
+      }
     }
 
     if (isLateSummary) {

@@ -175,7 +175,10 @@ export function partitionScheduleInbox(
       // Absorption requires a LOOP: a once follow-up is a reminder on an
       // ordinary conversation, never a reason to hide it. A loop's home rests
       // behind the row only while the machine is driving — pinned, blocked,
-      // blank, hidden, or human-engaged conversations triage normally.
+      // blank, hidden, or human-engaged conversations triage normally. A
+      // flagged latest run (failed / --needs-attention) escapes too, same as
+      // spawn runs below: the flag is a claim on the user until the next clean
+      // run overwrites it.
       if (task.schedule_type === "recurring" || task.schedule_type === "event") {
         const home = sessions[convId];
         if (
@@ -185,6 +188,8 @@ export function partitionScheduleInbox(
           home.message_count > 0 &&
           !isSessionHidden(home) &&
           !isSessionHardBlocked(home, opts.sessionsWithQueuedMessages) &&
+          !task.last_run_failed &&
+          !task.last_run_needs_attention &&
           (!home.last_user_message || isMachineDeliveredMessage(home.last_user_message))
         ) {
           absorbedIds.add(convId);

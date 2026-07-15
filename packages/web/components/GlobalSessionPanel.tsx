@@ -2495,7 +2495,7 @@ export function SessionListPanel({
         armed.length === 1
           ? `Stashed — schedule "${armed[0].title}" stays armed`
           : `Stashed — ${armed.length} schedules stay armed`,
-        { description: "It keeps firing here quietly, without pulling the session back into your queue. Dismiss or kill would cancel it.", duration: 8000 },
+        { description: "It keeps firing here quietly — the session comes back to your queue only if a run flags needs-attention. Dismiss or kill would cancel it.", duration: 8000 },
       );
     }
   }, []);
@@ -2631,6 +2631,13 @@ export function SessionListPanel({
   }) => {
     const { label, items, expanded, onToggle, variant, onKill, headerAction } = opts;
     if (items.length === 0) return null;
+    // A hidden bucket is not a dead bucket: a stashed agent keeps running, and
+    // an armed schedule can keep driving a killed/stashed conversation. Same
+    // predicate as the card's green dot (isLive) so header and rows can't
+    // disagree; coarseNow keeps the trust-stale check on the panel's ticker.
+    const isBucketLive = (sess: InboxSession) =>
+      !sess.is_idle && sess.message_count > 0 && !isStatusTrustStale(sess, coarseNow);
+    const liveCount = items.filter(isBucketLive).length;
     const allIds = new Set(items.map((sess) => sess._id));
     const subMap = new Map<string, InboxSession[]>();
     for (const sess of items) {
@@ -2647,6 +2654,13 @@ export function SessionListPanel({
     const orphanedSub = (sess: InboxSession) =>
       !subsWithParent.has(sess._id) && sess.parent_conversation_id && s.sessions[sess.parent_conversation_id];
     const topLevel = items.filter((sess) => !subsWithParent.has(sess._id) && !orphanedSub(sess));
+    // Activity floats: running rows (or idle parents with a running subagent)
+    // sort to the top of the opened bucket, so background work is one glance
+    // away instead of buried under newest-stashed-first. Stable sort keeps the
+    // existing newest-first order within each half.
+    const rowLive = (sess: InboxSession) =>
+      isBucketLive(sess) || (subMap.get(sess._id) ?? []).some(isBucketLive);
+    topLevel.sort((a, b) => Number(rowLive(b)) - Number(rowLive(a)));
     return (
       <div className="border-t border-sol-border/30">
         <div className="w-full bg-sol-bg border-b border-sol-border/30 flex items-center">
@@ -2657,6 +2671,12 @@ export function SessionListPanel({
             <span className="text-[10px] font-semibold uppercase tracking-wider text-sol-text-dim">
               {label}{items.length > 0 ? ` (${items.length})` : ""}
             </span>
+            {liveCount > 0 && (
+              <span className="ml-1.5 shrink-0 inline-flex items-center whitespace-nowrap gap-1 px-1.5 py-0 rounded-full text-[9px] font-semibold bg-sol-green/10 text-sol-green border border-sol-green/30 normal-case tracking-normal">
+                <span className="w-1 h-1 rounded-full bg-sol-green animate-pulse motion-reduce:animate-none" />
+                {liveCount} running
+              </span>
+            )}
           </button>
           {headerAction}
           <button onClick={onToggle} className="shrink-0 pl-2 pr-3 py-1.5">
