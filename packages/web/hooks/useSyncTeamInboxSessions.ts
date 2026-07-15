@@ -1,4 +1,4 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { useConvex, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -67,13 +67,16 @@ export function useSyncTeamInboxSessions() {
     lastLivenessRef.current = Date.now();
   }, []), { coalesceMs: 300 });
 
-  // Leaving team mode clears the active set so the panel gate flips back to the
-  // personal liveInboxIds immediately (the teammate rows stay in the never-prune
-  // cache but the "mine" scope filter hides them). Guarded so it's a no-op once
-  // already empty.
-  if (!active && useInboxStore.getState().teamInboxIds.size > 0) {
+  // Leaving team mode clears the active set (the teammate rows stay in the
+  // never-prune cache; the "mine" scope filter is what hides them). This is
+  // hygiene, not correctness — filterInboxScope only reads teamInboxIds in team
+  // scope — but it keeps the set honest so a later switch back to team can't
+  // briefly render another team's stale membership after an active-team change.
+  useEffect(() => {
+    if (active) return;
+    if (useInboxStore.getState().teamInboxIds.size === 0) return;
     useInboxStore.setState({ teamInboxIds: new Set<string>() });
-  }
+  }, [active]);
 
   // Recovery: a Convex subscription can silently stall after sleep/reconnect. When
   // team mode is active, probe a novel-token round-trip to re-sync the list and

@@ -852,7 +852,7 @@ $ cast schedule add "Check for broken tests" --on push`}</Code>
             <Param name="--every <duration>" desc="Recurring interval" />
             <Param name="--on <event>" desc="GitHub event: pr_comment, pr_opened, pr_merged, push" />
             <Param name="--context current" desc="Capture current session context for the task" />
-            <Param name="--mode apply" desc="Allow agent to make changes (default: propose = read-only)" />
+            <Param name="--safe" desc="Read-only run: investigate and report, never modify (default: the run can act)" />
             <Param name="--max-runtime <dur>" desc="Override max runtime (default: 10m)" />
           </CmdTable>
 
