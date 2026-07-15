@@ -14,6 +14,7 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id, Doc } from "./_generated/dataModel";
 import { getAuthenticatedUserId, enqueuePendingMessage } from "./pendingMessages";
+import { classifyApiErrorBanner } from "./inboxFilters";
 import {
   ccAccountsValidator,
   isBlockedConversation,
@@ -359,6 +360,43 @@ export const sweepStaleApiErrorFlags = internalMutation({
     }
     if (swept > 0) console.log(`sweepStaleApiErrorFlags: cleared ${swept} stale flag(s)`);
     return { swept };
+  },
+});
+
+// Backfill for classifier upgrades: when a new banner form is added to
+// apiErrorBanner.ts (e.g. "Login expired · Please run /login"), sessions
+// already parked on that banner were never stamped — the flag is written at
+// message-insert time. Re-classify the newest message of each recent
+// conversation and stamp the ones the upgraded classifier now recognizes, so
+// they join the blocked set (badge + banner + revive) without waiting for a
+// fresh banner. Run via:
+//   npx convex run accountSwitch:restampApiErrorFlags '{"user_id":"..."}'
+export const restampApiErrorFlags = internalMutation({
+  args: { user_id: v.id("users") },
+  handler: async (ctx, args) => {
+    const since = Date.now() - BLOCKED_WINDOW_MS;
+    const recent = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_updated", (q) => q.eq("user_id", args.user_id).gt("updated_at", since))
+      .order("desc")
+      .take(1000);
+    let stamped = 0;
+    for (const conv of recent) {
+      if (conv.pending_api_error === true) continue;
+      if (conv.last_message_role !== "assistant") continue;
+      const newest = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_timestamp", (q) => q.eq("conversation_id", conv._id))
+        .order("desc")
+        .first();
+      if (!newest || newest.role !== "assistant") continue;
+      const kind = classifyApiErrorBanner(newest.content);
+      if (!kind) continue;
+      await ctx.db.patch(conv._id, { pending_api_error: true, pending_api_error_kind: kind });
+      stamped++;
+    }
+    if (stamped > 0) console.log(`restampApiErrorFlags: stamped ${stamped} conversation(s)`);
+    return { scanned: recent.length, stamped };
   },
 });
 
