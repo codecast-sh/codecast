@@ -349,6 +349,14 @@ describe("isApiErrorBanner", () => {
     expect(classifyApiErrorBanner("API Error: 529 Overloaded")).toBe("error");
     expect(classifyApiErrorBanner("All good, deploy finished.")).toBe(null);
   });
+
+  test("expired-grant banner forms classify as auth", () => {
+    expect(classifyApiErrorBanner("Login expired · Please run /login")).toBe("auth");
+    expect(classifyApiErrorBanner("Login expired · run /login")).toBe("auth");
+    expect(classifyApiErrorBanner("Login expired")).toBe("auth");
+    // Prose about someone's login is not this session's banner.
+    expect(classifyApiErrorBanner("Logins expired for three users last week, so we rotated keys.")).toBe(null);
+  });
 });
 
 describe("apiErrorBatchAction", () => {
