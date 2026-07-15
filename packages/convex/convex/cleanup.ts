@@ -1,6 +1,7 @@
 import { internalMutation, mutation } from "./functions";
 import { v } from "convex/values";
 import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
+import { cancelTasksBoundToConversation } from "./agentTasks";
 
 // ---------------------------------------------------------------------------
 // Abandoned empty-conversation GC.
@@ -251,6 +252,66 @@ export async function reapEmptyConversation(
   for (const d of diffs) await ctx.db.delete(d._id);
   await ctx.db.delete(conv._id);
   return "deleted";
+}
+
+// Pure decision for the conversation hide-transition hook (exported for tests).
+//
+//  "reap" — a never-prompted EMPTY pre-warm got hidden (dismissed OR stashed).
+//           Quick-create eagerly boots a real agent per summon; a 0-message
+//           pre-warm has nothing to preserve — leaving it running leaks a
+//           zombie tmux that keeps the conversation is_connected and
+//           re-surfaces it as a phantom "New session" card.
+//           reapEmptyConversation kills the agent and then deletes the row.
+//  "kill" — dismiss = kill. Stash is the keep-alive set-aside; dismiss retires
+//           the session: tear the agent down and mark it completed (mirrors the
+//           explicit killSession mutation). Gated on the TRANSITION (`doc` is
+//           the pre-patch row) so a re-asserted dismiss can't re-kill, and an
+//           undo (dismissed → null) never reaches here. Stays resumable.
+//  "none" — a stash of a session with real work (the whole point of stash), or
+//           a re-asserted dismiss.
+export function classifyHideTransition(
+  patch: { inbox_dismissed_at?: any; inbox_stashed_at?: any },
+  doc: { inbox_dismissed_at?: number | null },
+  hasNoWork: boolean,
+): "reap" | "kill" | "none" {
+  if (!patch.inbox_dismissed_at && !patch.inbox_stashed_at) return "none";
+  if (hasNoWork) return "reap";
+  if (patch.inbox_dismissed_at && !doc.inbox_dismissed_at) return "kill";
+  return "none";
+}
+
+// Run the lifecycle side effects of a hide patch AFTER it has landed. `doc` is
+// the PRE-patch row (the transition gate above needs the old flags). Shared by
+// every hide path — the web dispatch layer and the CLI visibility mutation
+// (cast dismiss/kill) — so a hide always gets the same teardown no matter which
+// surface asked for it.
+export async function applyHideTransition(
+  ctx: { db: any },
+  doc: any,
+  patch: { inbox_dismissed_at?: any; inbox_stashed_at?: any },
+): Promise<"reap" | "kill" | "none"> {
+  const action = classifyHideTransition(patch, doc, await conversationHasNoWork(ctx, doc));
+  if (action === "reap") {
+    await reapEmptyConversation(ctx, doc);
+  } else if (action === "kill") {
+    await enqueueKillSessionCommand(ctx, doc);
+    // A persistent anchor never auto-completes on a dismiss/kill — it goes
+    // dormant, not retired (only decommissionAnchor clears `persistent`).
+    const killPatch: Record<string, any> = { inbox_killed_at: Date.now() };
+    if (!doc?.persistent) killPatch.status = "completed";
+    await ctx.db.patch(doc._id, killPatch);
+    // Dismiss retires the session — a standing schedule that injects
+    // into it must die with it, or its next fire would silently
+    // resurrect a session the user just retired. User gestures only:
+    // bulk cleanup sweeps patch inbox_dismissed_at directly (not via
+    // dispatch) and deliberately leave standing schedules armed. An
+    // anchor going dormant keeps its schedules too. Task owner = the
+    // conversation's runner (a second-party owner may be triaging).
+    if (!doc?.persistent) {
+      await cancelTasksBoundToConversation(ctx, doc.user_id, doc._id);
+    }
+  }
+  return action;
 }
 
 export const gcEmptyConversations = internalMutation({

@@ -1,7 +1,8 @@
 import { mutation, query, internalMutation, internalQuery, type QueryCtx, type MutationCtx } from "./functions";
 import { v } from "convex/values";
 import { enqueueStartSession, resolveOwnerDevice } from "./devices";
-import { findConversationBySessionReference, resolveConversationRefRanked } from "./conversationSessionLookup";
+import { findConversationBySessionReference, resolveConversationRefRanked, findConversationByAnyRefWhere } from "./conversationSessionLookup";
+import { applyHideTransition } from "./cleanup";
 import { paginationOptsValidator } from "convex/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Doc, Id } from "./_generated/dataModel";
@@ -8298,6 +8299,61 @@ export const dismissFromInbox = mutation({
     await ctx.db.patch(args.conversation_id, {
       inbox_dismissed_at: Date.now(),
     });
+  },
+});
+
+// Agent-facing inbox visibility (cast dismiss / undismiss / kill via
+// /cli/sessions/*). Field semantics are IDENTICAL to the web inbox gestures and
+// run the same hide-transition side effects (applyHideTransition):
+//   dismiss   — stash: hide from the active inbox, agent keeps running
+//               (Stashed bucket). An EMPTY pre-warm gets reaped instead.
+//   kill      — retire: sets inbox_dismissed_at, which tears the agent down,
+//               marks the session completed (unless persistent), and cancels
+//               schedules bound to it (Killed bucket).
+//   undismiss — restore: clears both hide flags; a killed session comes back
+//               as a restartable card (mirrors the web restoreSession).
+// Access: the runner or the second-party owner — the same rule as killSession
+// and the dispatch triage path.
+export const cliSetSessionVisibility = mutation({
+  args: {
+    session: v.string(),
+    action: v.union(v.literal("dismiss"), v.literal("kill"), v.literal("undismiss")),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = args.api_token
+      ? await getAuthenticatedUserId(ctx, args.api_token)
+      : await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    const conv = await findConversationByAnyRefWhere(ctx, args.session, (c) =>
+      c.user_id?.toString() === userId.toString() ||
+      c.owner_user_id?.toString() === userId.toString()
+    );
+    if (!conv) {
+      throw new Error(
+        `No session found for "${args.session}" (you can only manage sessions you run or own)`
+      );
+    }
+    const shortId = conv.short_id ?? conv._id.toString().slice(0, 7);
+
+    if (args.action === "undismiss") {
+      const wasHidden = !!(conv.inbox_dismissed_at || conv.inbox_stashed_at);
+      await ctx.db.patch(conv._id, {
+        inbox_dismissed_at: undefined,
+        inbox_stashed_at: undefined,
+      });
+      return { ok: true as const, short_id: shortId, action: args.action, was_hidden: wasHidden };
+    }
+
+    const patch =
+      args.action === "kill"
+        ? { inbox_dismissed_at: Date.now() }
+        : { inbox_stashed_at: Date.now() };
+    await ctx.db.patch(conv._id, patch);
+    // `conv` is the pre-patch row — applyHideTransition gates on the transition.
+    const outcome = await applyHideTransition(ctx, conv, patch);
+    return { ok: true as const, short_id: shortId, action: args.action, outcome };
   },
 });
 

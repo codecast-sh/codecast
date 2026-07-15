@@ -3553,6 +3553,14 @@ cliRoute("/cli/spawn", async (ctx, body) => ctx.runMutation((api as any).spawn.c
 // leaving the others alone. `owners/set` replaces the set wholesale (the web
 // multi-select, and `cast disown --all`).
 // body: { api_token, session_id, owner: "<email|name>" | "me" }.
+// Inbox visibility (cast dismiss / undismiss / kill): hide a session from the
+// user's inbox (agent keeps running), restore it, or retire it (teardown +
+// Killed bucket). One mutation, action pinned per route so the URLs stay
+// self-documenting. body: { api_token, session }.
+cliRoute("/cli/sessions/dismiss", async (ctx, body) => ctx.runMutation(api.conversations.cliSetSessionVisibility, { ...body, action: "dismiss" }));
+cliRoute("/cli/sessions/undismiss", async (ctx, body) => ctx.runMutation(api.conversations.cliSetSessionVisibility, { ...body, action: "undismiss" }));
+cliRoute("/cli/sessions/kill", async (ctx, body) => ctx.runMutation(api.conversations.cliSetSessionVisibility, { ...body, action: "kill" }));
+
 cliRoute("/cli/sessions/own", async (ctx, body) => ctx.runMutation(api.sessionOwnership.addSessionOwner, body));
 cliRoute("/cli/sessions/disown", async (ctx, body) => ctx.runMutation(api.sessionOwnership.removeSessionOwner, body));
 cliRoute("/cli/sessions/owners/set", async (ctx, body) => ctx.runMutation(api.sessionOwnership.setSessionOwners, body));

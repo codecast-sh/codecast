@@ -51,6 +51,21 @@ It lands as a new turn attributed to you; inbound arrives wrapped as \`<session-
 \`\`\`bash
 cast send <session_id> "<text>"            # Message a teammate session
 \`\`\`
+
+### Inbox visibility
+
+You can also manage which sessions the human sees in their inbox — the same gestures they have in the web UI. Use these to tidy up after fan-out work: dismiss finished workers so the inbox stays readable, kill sessions that are truly done, resurface one that needs the human's attention.
+
+\`\`\`bash
+cast dismiss [session_id]      # Hide from the inbox; the agent KEEPS RUNNING (Stashed bucket).
+                               # No ID = current session — tidy yourself away when done.
+cast undismiss [session_id]    # Bring a dismissed/killed session back into the inbox.
+cast kill <session_id>         # Tear the agent down, mark completed, cancel its schedules
+                               # (Killed bucket; transcript stays, restartable). ID required —
+                               # killing your OWN session cuts you off mid-turn.
+\`\`\`
+
+Dismiss is reversible and keeps the agent alive; kill is the deliberate "done with it". When you hide or kill sessions on the human's behalf, tell them which ones and why.
 ${MESSAGING_SNIPPET_END}
 `;
 
