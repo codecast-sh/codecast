@@ -10717,11 +10717,21 @@ schedule
     }
 
     if (!t.last_run_conversation_id) {
-      console.log(fmt.muted("No run history yet."));
+      if (t.last_run_at) {
+        // The task has run but its conversation can't be resolved (yet) —
+        // distinct from never having run at all.
+        console.log(fmt.muted(`Last run ${formatMs(Date.now() - t.last_run_at)} ago — run conversation not synced yet.`));
+        if (t.last_run_summary) console.log(t.last_run_summary);
+      } else {
+        console.log(fmt.muted("No run history yet."));
+      }
       return;
     }
 
-    console.log(`Last run conversation: ${c.cyan}${t.last_run_conversation_id}${c.reset}`);
+    const title = t.last_run_conversation_title ? ` ${fmt.muted(`(${t.last_run_conversation_title})`)}` : "";
+    console.log(`Last run conversation: ${c.cyan}${t.last_run_conversation_id}${c.reset}${title}`);
+    if (t.last_run_at) console.log(fmt.muted(`Ran ${formatMs(Date.now() - t.last_run_at)} ago`));
+    if (t.last_run_summary) console.log(t.last_run_summary);
     console.log(fmt.muted(`Use: cast read ${t.last_run_conversation_id}`));
   });
 
