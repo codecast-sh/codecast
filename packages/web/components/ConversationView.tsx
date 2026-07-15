@@ -1675,12 +1675,14 @@ function parseApiErrorContent(content?: string | null): ParsedApiError | null {
   }
   if (!message) {
     if (isAuth) {
-      // The card states the /login remedy itself, so drop the leading
-      // "Please run /login" instruction and the status prefix and keep just the
-      // descriptive detail (e.g. "The socket connection was closed unexpectedly").
+      // The card states the /login remedy itself, so drop the "Please run
+      // /login" instruction (leading or trailing — "Login expired · Please run
+      // /login") and the status prefix and keep just the descriptive detail
+      // (e.g. "Login expired", "The socket connection was closed unexpectedly").
       message =
         trimmed
           .replace(/^please run \/login\s*[·.\-:]*\s*/i, "")
+          .replace(/\s*[·.\-:]*\s*please run \/login\s*$/i, "")
           .replace(/^api error:\s*\d{3}\s*/i, "")
           .trim() || "This session was signed out.";
     } else if (isLimit) {

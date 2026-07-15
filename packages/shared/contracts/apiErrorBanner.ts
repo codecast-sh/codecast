@@ -14,9 +14,11 @@
 
 export type ApiErrorBannerKind = "auth" | "limit" | "error";
 
-// Auth subset — the user can act by re-running /login.
+// Auth subset — the user can act by re-running /login. "Login expired" covers
+// the CLI's expired-grant banner forms ("Login expired · Please run /login",
+// "Login expired · run /login").
 const AUTH_BANNER_RE =
-  /^(?:please run \/login|not logged in|invalid api key|credit balance is too low|oauth (?:token|authentication))/i;
+  /^(?:please run \/login|login expired\b|not logged in|invalid api key|credit balance is too low|oauth (?:token|authentication))/i;
 
 // Usage/session/spend limit banners. Real-world forms:
 //   "You've hit your session limit · resets 11:30pm (America/New_York)"
