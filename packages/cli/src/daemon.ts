@@ -302,6 +302,7 @@ function reparentCheckoutDir(remote: string): string {
 async function ensureReparentedCheckout(
   conversationId: string | undefined,
   recordedPath: string | undefined,
+  remoteHint?: string,
 ): Promise<string | undefined> {
   // Already resolvable locally (a prior reparent clone, or the repo happens to
   // be here)? Reuse it — don't clone twice.
@@ -310,12 +311,24 @@ async function ensureReparentedCheckout(
     cwdOverride: recordedPath,
     conversationId,
   }).catch(() => null);
-  if (existing) return existing;
+  if (existing) {
+    log(`[REPARENT] checkout already resolvable locally: ${existing}`);
+    return existing;
+  }
   if (!conversationId || !syncServiceRef) return undefined;
 
-  const info = await syncServiceRef.getProjectInfo(conversationId).catch(() => null);
-  const remote = info?.git_remote_url;
-  if (!remote) return undefined; // nothing to clone → normal refuse handles it
+  // The mutation resolves the remote at pull time and embeds it in the command
+  // (conversation git_remote_url stamping is unreliable — ct-38666); fall back
+  // to the conversation record for older commands.
+  let remote = remoteHint;
+  if (!remote) {
+    const info = await syncServiceRef.getProjectInfo(conversationId).catch(() => null);
+    remote = info?.git_remote_url ?? undefined;
+  }
+  if (!remote) {
+    log(`[REPARENT] no local checkout and no git remote known for ${conversationId.slice(0, 12)} — cannot clone; falling through to the normal refuse path`);
+    return undefined;
+  }
 
   const dest = reparentCheckoutDir(remote);
   try {
@@ -2997,7 +3010,7 @@ async function executeRemoteCommand(
         // checkout can be prepared, fall through — the normal resolution then
         // surfaces the "clone it first" banner as usual.
         if (reparented) {
-          const cloned = await ensureReparentedCheckout(conversationId, projectPath);
+          const cloned = await ensureReparentedCheckout(conversationId, projectPath, parsed.git_remote_url);
           if (cloned) {
             projectPath = cloned;
             log(`[REPARENT] ${sessionId.slice(0, 8)} resuming in local checkout ${cloned}`);
