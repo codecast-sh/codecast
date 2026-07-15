@@ -3,6 +3,31 @@
 
 import { v } from "convex/values";
 
+// Per-account usage snapshot the daemon probes from the OAuth usage API
+// (percentages + reset times only — non-secret). Mirrors CcUsageSnapshot in
+// cli/src/ccAccounts.ts.
+const usageWindowValidator = v.object({
+  percent: v.number(),
+  resets_at: v.optional(v.number()),
+  label: v.optional(v.string()),
+});
+
+export const ccUsageValidator = v.object({
+  fetched_at: v.number(),
+  session: v.optional(usageWindowValidator), // rolling 5h window
+  weekly: v.optional(usageWindowValidator), // 7d, all models
+  weekly_scoped: v.optional(usageWindowValidator), // 7d, model-scoped
+  extra: v.optional(v.object({ percent: v.number(), enabled: v.boolean() })),
+});
+
+export type CcUsage = {
+  fetched_at: number;
+  session?: { percent: number; resets_at?: number; label?: string };
+  weekly?: { percent: number; resets_at?: number; label?: string };
+  weekly_scoped?: { percent: number; resets_at?: number; label?: string };
+  extra?: { percent: number; enabled: boolean };
+};
+
 // Validator for the daemon-reported account inventory (names/emails/tiers
 // only — never tokens). Stored per device row; consumed by the web switcher.
 export const ccAccountsValidator = v.object({
@@ -14,9 +39,128 @@ export const ccAccountsValidator = v.object({
       email: v.optional(v.string()),
       tier: v.optional(v.string()),
       subscription: v.optional(v.string()),
+      usage: v.optional(ccUsageValidator),
     }),
   ),
 });
+
+// Auto-switch bookkeeping, stored on the primary device row. `attempts` is the
+// per-incident memory that stops the loop from re-trying an account that
+// already parked sessions this window; `exhausted_at` is the UI's "every
+// account is spent" signal; `next_check_at` dedupes scheduled re-checks.
+export const ccAutoSwitchStateValidator = v.object({
+  last_action_at: v.optional(v.number()),
+  last_action: v.optional(v.string()), // "switch:<profile>" | "continue"
+  attempts: v.optional(v.array(v.object({ profile: v.string(), at: v.number() }))),
+  exhausted_at: v.optional(v.number()),
+  next_check_at: v.optional(v.number()),
+});
+
+/** The worst (highest) utilization across an account's limit windows — what a
+ * single summary meter should show. Null when no usage data exists. */
+export function worstUsagePercent(usage: CcUsage | undefined | null): number | null {
+  if (!usage) return null;
+  const pcts = [usage.session, usage.weekly, usage.weekly_scoped]
+    .filter((w): w is NonNullable<typeof w> => !!w)
+    .map((w) => w.percent);
+  return pcts.length ? Math.max(...pcts) : null;
+}
+
+/** An account with no headroom RIGHT NOW: some window is pegged and its reset
+ * is still in the future. A pegged window whose reset has passed doesn't count
+ * — the snapshot is just stale, the window has rolled. */
+export function isUsageExhausted(usage: CcUsage | undefined | null, now: number): boolean {
+  if (!usage) return false;
+  for (const w of [usage.session, usage.weekly, usage.weekly_scoped]) {
+    if (w && w.percent >= 100 && (w.resets_at ?? Number.POSITIVE_INFINITY) > now) return true;
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// Auto-switch decision — pure; accountSwitch.autoSwitchCheck supplies inputs
+// and executes the outcome
+// ---------------------------------------------------------------------------
+
+// An account that parked sessions is spent for its rolling 5h window; after
+// that it becomes a candidate again even without fresh usage data.
+export const AUTO_SWITCH_SESSION_WINDOW_MS = 5 * 60 * 60 * 1000;
+// The attempt-history key for a same-account "continue" (no profile involved).
+export const AUTO_SWITCH_CONTINUE_KEY = "__continue__";
+
+export interface AutoSwitchProfile {
+  name: string;
+  email?: string;
+  usage?: CcUsage;
+}
+
+export type AutoSwitchDecision =
+  | { action: "continue" } // active account's window rolled — plain continue un-parks for free
+  | { action: "switch"; profile: string }
+  | { action: "exhausted"; retry_at: number }; // every account spent — when to look again
+
+/**
+ * Pick the cheapest recovery for limit-parked sessions:
+ *  1. no switch — the active account's 5h session window reset AFTER the newest
+ *     park (resets_at is an absolute timestamp, so even a stale snapshot stays
+ *     truthful) and we haven't already tried a continue for this park;
+ *  2. switch — the saved profile with the most usage headroom, skipping the
+ *     active account, accounts with a pegged un-reset window, and accounts
+ *     already tried this window (an attempt OLDER than the newest park means
+ *     sessions parked again after we switched to it — it's spent until its
+ *     window rolls). Unknown usage ranks after known headroom: eligible, just
+ *     unproven.
+ *  3. exhausted — retry at the earliest known window reset (hourly fallback).
+ */
+export function decideAutoSwitch(input: {
+  now: number;
+  parkedAt: number; // newest limit-park among the blocked conversations
+  activeEmail?: string;
+  profiles: AutoSwitchProfile[];
+  attempts: Array<{ profile: string; at: number }>;
+}): AutoSwitchDecision {
+  const { now, parkedAt, activeEmail, profiles, attempts } = input;
+  const lastAttemptAt = (profile: string): number | null =>
+    attempts.reduce<number | null>(
+      (max, a) => (a.profile === profile && a.at > (max ?? 0) ? a.at : max),
+      null,
+    );
+
+  const active = profiles.find((p) => p.email && p.email === activeEmail);
+  const sessionResetAt = active?.usage?.session?.resets_at;
+  const lastContinue = lastAttemptAt(AUTO_SWITCH_CONTINUE_KEY);
+  if (
+    sessionResetAt &&
+    sessionResetAt > parkedAt &&
+    sessionResetAt <= now &&
+    !isUsageExhausted(active?.usage, now) &&
+    (!lastContinue || lastContinue < parkedAt)
+  ) {
+    return { action: "continue" };
+  }
+
+  const candidates = profiles.filter((p) => {
+    if (!p.email || p.email === activeEmail) return false;
+    if (isUsageExhausted(p.usage, now)) return false;
+    const att = lastAttemptAt(p.name);
+    if (att && att >= parkedAt) return false; // switch in flight — wait
+    if (att && now - att < AUTO_SWITCH_SESSION_WINDOW_MS) return false; // spent this window
+    return true;
+  });
+  const score = (p: AutoSwitchProfile): number =>
+    p.usage ? worstUsagePercent(p.usage) ?? 0 : 101;
+  candidates.sort((a, b) => score(a) - score(b));
+  if (candidates[0]) return { action: "switch", profile: candidates[0].name };
+
+  const resets: number[] = [];
+  for (const p of profiles) {
+    for (const w of [p.usage?.session, p.usage?.weekly, p.usage?.weekly_scoped]) {
+      if (w?.resets_at && w.resets_at > now) resets.push(w.resets_at);
+    }
+  }
+  const retryAt = (resets.length ? Math.min(...resets) : now + 60 * 60 * 1000) + 2 * 60 * 1000;
+  return { action: "exhausted", retry_at: retryAt };
+}
 
 // Profile names live in keychain service names and shell commands — keep them
 // boring. Mirrors the CLI-side validation in cli/src/ccAccounts.ts.

@@ -18,6 +18,9 @@ import {
   saveProfile,
   useProfile,
   listProfiles,
+  parseUsageResponse,
+  refreshUsageSnapshots,
+  readUsageCache,
   CcAccountError,
 } from "./ccAccounts.js";
 
@@ -439,5 +442,180 @@ describe("resnapshotIfActiveFresher (sandboxed $HOME)", () => {
   it("no-ops when no saved profile covers the active login", () => {
     writeActive(1000); // nothing saved yet
     expect(resnapshotIfActiveFresher()).toBeNull();
+  });
+});
+
+describe("parseUsageResponse", () => {
+  // Mirrors the live response shape verified against api.anthropic.com on
+  // 2026-07-15 (fields we don't consume trimmed).
+  const LIVE_SHAPE = {
+    five_hour: { utilization: 28.0, resets_at: "2026-07-15T17:39:59.532998+00:00" },
+    seven_day: { utilization: 27.0, resets_at: "2026-07-21T21:59:59.533030+00:00" },
+    extra_usage: { is_enabled: true, monthly_limit: 40000, used_credits: 31502.0, utilization: 78.755 },
+    limits: [
+      { kind: "session", group: "session", percent: 28, severity: "normal", resets_at: "2026-07-15T17:39:59.532998+00:00", scope: null, is_active: false },
+      { kind: "weekly_all", group: "weekly", percent: 27, severity: "normal", resets_at: "2026-07-21T21:59:59.533030+00:00", scope: null, is_active: false },
+      { kind: "weekly_scoped", group: "weekly", percent: 42, severity: "normal", resets_at: "2026-07-21T21:59:59.533379+00:00", scope: { model: { id: null, display_name: "Fable" }, surface: null }, is_active: true },
+    ],
+  };
+
+  it("normalizes the limits array into session/weekly/scoped windows", () => {
+    const snap = parseUsageResponse(LIVE_SHAPE, 5000);
+    expect(snap.fetched_at).toBe(5000);
+    expect(snap.session?.percent).toBe(28);
+    expect(snap.session?.resets_at).toBe(Date.parse("2026-07-15T17:39:59.532998+00:00"));
+    expect(snap.weekly?.percent).toBe(27);
+    expect(snap.weekly_scoped?.percent).toBe(42);
+    expect(snap.weekly_scoped?.label).toBe("Fable");
+    expect(snap.extra).toEqual({ percent: 78.755, enabled: true });
+  });
+
+  it("keeps the most utilized scoped window when several exist", () => {
+    const snap = parseUsageResponse(
+      {
+        limits: [
+          { kind: "weekly_scoped", percent: 10, scope: { model: { display_name: "Sonnet" } } },
+          { kind: "weekly_scoped", percent: 55, scope: { model: { display_name: "Fable" } } },
+        ],
+      },
+      0,
+    );
+    expect(snap.weekly_scoped?.percent).toBe(55);
+    expect(snap.weekly_scoped?.label).toBe("Fable");
+  });
+
+  it("falls back to five_hour/seven_day when limits are absent", () => {
+    const snap = parseUsageResponse(
+      {
+        five_hour: { utilization: 12, resets_at: "2026-07-15T17:00:00+00:00" },
+        seven_day: { utilization: 34, resets_at: "2026-07-21T21:00:00+00:00" },
+      },
+      0,
+    );
+    expect(snap.session?.percent).toBe(12);
+    expect(snap.weekly?.percent).toBe(34);
+  });
+
+  it("tolerates junk without throwing", () => {
+    expect(parseUsageResponse(null, 1).fetched_at).toBe(1);
+    expect(parseUsageResponse({ limits: "nope" }, 1).session).toBeUndefined();
+    expect(parseUsageResponse({ limits: [{ kind: "session", percent: "high" }] }, 1).session).toBeUndefined();
+  });
+});
+
+describe("refreshUsageSnapshots (sandboxed $HOME, injected fetch)", () => {
+  let home: string;
+  const savedEnv: Record<string, string | undefined> = {};
+  const NOW = 1_781_000_000_000;
+  const LIVE_EXPIRY = NOW + 4 * 3600_000;
+
+  const credFor = (token: string, expiresAt = LIVE_EXPIRY) =>
+    JSON.stringify({
+      claudeAiOauth: { accessToken: token, refreshToken: `rt-${token}`, expiresAt, subscriptionType: "max" },
+    });
+  const profileFor = (token: string, uuid: string, email: string, expiresAt = LIVE_EXPIRY) =>
+    JSON.stringify({
+      credentials: JSON.parse(credFor(token, expiresAt)),
+      oauthAccount: { accountUuid: uuid, emailAddress: email },
+      saved_at: NOW - 1000,
+    });
+
+  beforeEach(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), "cc-usage-test-"));
+    for (const k of ["HOME", "PATH", "CC_ACCOUNTS_FORCE_FILE"]) savedEnv[k] = process.env[k];
+    process.env.HOME = home;
+    process.env.PATH = path.join(home, "empty-path");
+    process.env.CC_ACCOUNTS_FORCE_FILE = "1";
+    fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+    fs.mkdirSync(path.join(home, ".codecast", "cc-accounts"), { recursive: true });
+    // Active login = account A; profiles a (covers active) + b (dormant, live
+    // token) + c (dormant, expired token).
+    fs.writeFileSync(path.join(home, ".claude", ".credentials.json"), credFor("at-active"));
+    fs.writeFileSync(
+      path.join(home, ".claude.json"),
+      JSON.stringify({ oauthAccount: { accountUuid: "uuid-a", emailAddress: "a@x.com" } }),
+    );
+    fs.writeFileSync(path.join(home, ".codecast", "cc-accounts", "a.json"), profileFor("at-a-stale", "uuid-a", "a@x.com"));
+    fs.writeFileSync(path.join(home, ".codecast", "cc-accounts", "b.json"), profileFor("at-b", "uuid-b", "b@x.com"));
+    fs.writeFileSync(
+      path.join(home, ".codecast", "cc-accounts", "c.json"),
+      profileFor("at-c", "uuid-c", "c@x.com", NOW - 1000),
+    );
+    fs.writeFileSync(
+      path.join(home, ".codecast", "cc-accounts.json"),
+      JSON.stringify({
+        profiles: {
+          a: { uuid: "uuid-a", email: "a@x.com" },
+          b: { uuid: "uuid-b", email: "b@x.com" },
+          c: { uuid: "uuid-c", email: "c@x.com" },
+        },
+      }),
+    );
+    invalidateAccountsCache();
+  });
+
+  afterEach(() => {
+    for (const [k, v] of Object.entries(savedEnv)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    fs.rmSync(home, { recursive: true, force: true });
+    invalidateAccountsCache();
+  });
+
+  const usageFetch = (calls: string[]): typeof fetch =>
+    (async (_url: any, init: any) => {
+      const token = String(init?.headers?.Authorization ?? "").replace("Bearer ", "");
+      calls.push(token);
+      return new Response(
+        JSON.stringify({ limits: [{ kind: "session", percent: token === "at-b" ? 90 : 28, resets_at: "2026-07-15T17:39:59+00:00" }] }),
+        { status: 200 },
+      );
+    }) as any;
+
+  it("probes the active token + live dormant tokens, skips expired ones, keys by uuid", async () => {
+    const calls: string[] = [];
+    const res = await refreshUsageSnapshots({ now: NOW, fetchImpl: usageFetch(calls) });
+    // Active covers profile a (freshest token wins); b probed with its own
+    // token; c skipped — its dormant token is expired and must never refresh.
+    expect(calls.sort()).toEqual(["at-active", "at-b"]);
+    expect(res.probed.sort()).toEqual(["active", "b"]);
+    expect(res.skipped).toContain("c");
+    const cache = readUsageCache();
+    expect(cache.accounts["uuid-a"]?.session?.percent).toBe(28);
+    expect(cache.accounts["uuid-b"]?.session?.percent).toBe(90);
+    expect(cache.accounts["uuid-c"]).toBeUndefined();
+  });
+
+  it("throttles per-account probes within minIntervalMs", async () => {
+    const calls: string[] = [];
+    await refreshUsageSnapshots({ now: NOW, fetchImpl: usageFetch(calls) });
+    await refreshUsageSnapshots({ now: NOW + 60_000, fetchImpl: usageFetch(calls) });
+    expect(calls.length).toBe(2); // second pass: both entries fresh, no probes
+    const later: string[] = [];
+    await refreshUsageSnapshots({ now: NOW + 10 * 60_000, fetchImpl: usageFetch(later) });
+    expect(later.length).toBe(2);
+  });
+
+  it("keeps the previous snapshot when a probe fails", async () => {
+    const calls: string[] = [];
+    await refreshUsageSnapshots({ now: NOW, fetchImpl: usageFetch(calls) });
+    const res = await refreshUsageSnapshots({
+      now: NOW + 10 * 60_000,
+      fetchImpl: (async () => new Response("overloaded", { status: 529 })) as any,
+    });
+    expect(res.failed.length).toBe(2);
+    // Old readings survive — stale beats blank.
+    expect(readUsageCache().accounts["uuid-b"]?.session?.percent).toBe(90);
+  });
+
+  it("attaches usage to the heartbeat payload by account identity", async () => {
+    await refreshUsageSnapshots({ now: NOW, fetchImpl: usageFetch([]) });
+    invalidateAccountsCache();
+    const payload = getAccountsHeartbeatPayload();
+    const byName = Object.fromEntries((payload?.profiles ?? []).map((p) => [p.name, p]));
+    expect(byName.a.usage?.session?.percent).toBe(28);
+    expect(byName.b.usage?.session?.percent).toBe(90);
+    expect(byName.c.usage).toBeUndefined();
   });
 });

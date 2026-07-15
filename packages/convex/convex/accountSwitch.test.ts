@@ -6,8 +6,14 @@ import {
   isDeviceOnline,
   isValidProfileName,
   shouldSweepStaleFlag,
+  decideAutoSwitch,
+  isUsageExhausted,
+  worstUsagePercent,
+  AUTO_SWITCH_CONTINUE_KEY,
+  AUTO_SWITCH_SESSION_WINDOW_MS,
   DEVICE_ONLINE_MS,
   STALE_FLAG_AFTER_MS,
+  type CcUsage,
 } from "./ccAccountsShared";
 
 describe("isBlockedConversation", () => {
@@ -101,5 +107,199 @@ describe("shouldSweepStaleFlag", () => {
       shouldSweepStaleFlag({ pending_api_error: true, updated_at: now - STALE_FLAG_AFTER_MS + 60_000 }, now),
     ).toBe(false);
     expect(shouldSweepStaleFlag({ pending_api_error: false, updated_at: 0 }, now)).toBe(false);
+  });
+});
+
+describe("usage predicates", () => {
+  const now = 1_000_000;
+  const usage = (session: number, weekly: number, scoped?: number): CcUsage => ({
+    fetched_at: now - 60_000,
+    session: { percent: session, resets_at: now + 3600_000 },
+    weekly: { percent: weekly, resets_at: now + 86_400_000 },
+    ...(scoped != null ? { weekly_scoped: { percent: scoped, resets_at: now + 86_400_000, label: "Fable" } } : {}),
+  });
+
+  test("worstUsagePercent takes the max across windows, null without data", () => {
+    expect(worstUsagePercent(usage(28, 27, 42))).toBe(42);
+    expect(worstUsagePercent(usage(90, 10))).toBe(90);
+    expect(worstUsagePercent(undefined)).toBeNull();
+    expect(worstUsagePercent({ fetched_at: 1 })).toBeNull();
+  });
+
+  test("isUsageExhausted requires a pegged window whose reset is still ahead", () => {
+    expect(isUsageExhausted(usage(100, 20), now)).toBe(true);
+    expect(isUsageExhausted(usage(99, 20), now)).toBe(false);
+    expect(isUsageExhausted(undefined, now)).toBe(false);
+    // Pegged but the reset already passed — the snapshot is stale, the window rolled.
+    const rolled: CcUsage = { fetched_at: 1, session: { percent: 100, resets_at: now - 1 } };
+    expect(isUsageExhausted(rolled, now)).toBe(false);
+    // Pegged with no reset time known — treat as exhausted (can't prove it rolled).
+    const noReset: CcUsage = { fetched_at: 1, weekly: { percent: 100 } };
+    expect(isUsageExhausted(noReset, now)).toBe(true);
+  });
+});
+
+describe("decideAutoSwitch", () => {
+  const now = 10_000_000_000;
+  const parkedAt = now - 5 * 60_000; // sessions parked 5 minutes ago
+  const mkUsage = (worst: number, opts: { sessionResetAt?: number } = {}): CcUsage => ({
+    fetched_at: now - 60_000,
+    session: { percent: worst, resets_at: opts.sessionResetAt ?? now + 3600_000 },
+    weekly: { percent: Math.min(worst, 60), resets_at: now + 86_400_000 },
+  });
+
+  test("switches to the profile with the most headroom", () => {
+    const d = decideAutoSwitch({
+      now,
+      parkedAt,
+      activeEmail: "a@x.com",
+      profiles: [
+        { name: "a", email: "a@x.com", usage: mkUsage(100) },
+        { name: "b", email: "b@x.com", usage: mkUsage(70) },
+        { name: "c", email: "c@x.com", usage: mkUsage(20) },
+      ],
+      attempts: [],
+    });
+    expect(d).toEqual({ action: "switch", profile: "c" });
+  });
+
+  test("known headroom beats unknown usage; unknown still beats nothing", () => {
+    const known = decideAutoSwitch({
+      now,
+      parkedAt,
+      activeEmail: "a@x.com",
+      profiles: [
+        { name: "a", email: "a@x.com" },
+        { name: "mystery", email: "b@x.com" },
+        { name: "fresh", email: "c@x.com", usage: mkUsage(30) },
+      ],
+      attempts: [],
+    });
+    expect(known).toEqual({ action: "switch", profile: "fresh" });
+
+    const unknownOnly = decideAutoSwitch({
+      now,
+      parkedAt,
+      activeEmail: "a@x.com",
+      profiles: [
+        { name: "a", email: "a@x.com" },
+        { name: "mystery", email: "b@x.com" },
+      ],
+      attempts: [],
+    });
+    expect(unknownOnly).toEqual({ action: "switch", profile: "mystery" });
+  });
+
+  test("never picks the active account or an exhausted one", () => {
+    const d = decideAutoSwitch({
+      now,
+      parkedAt,
+      activeEmail: "a@x.com",
+      profiles: [
+        { name: "a", email: "a@x.com", usage: mkUsage(10) }, // active — excluded despite headroom
+        { name: "b", email: "b@x.com", usage: mkUsage(100) }, // pegged
+      ],
+      attempts: [],
+    });
+    expect(d.action).toBe("exhausted");
+  });
+
+  test("skips a profile already tried this window, retries it after the window rolls", () => {
+    const profiles = [
+      { name: "a", email: "a@x.com", usage: mkUsage(100) },
+      { name: "b", email: "b@x.com" }, // no usage data — eligibility rides on attempts
+    ];
+    // Tried b 30 minutes before the newest park → sessions parked again on it → spent.
+    const spent = decideAutoSwitch({
+      now,
+      parkedAt,
+      activeEmail: "a@x.com",
+      profiles,
+      attempts: [{ profile: "b", at: parkedAt - 30 * 60_000 }],
+    });
+    expect(spent.action).toBe("exhausted");
+
+    // Same attempt, but its 5h window has rolled — b is a candidate again.
+    const rolled = decideAutoSwitch({
+      now: now + AUTO_SWITCH_SESSION_WINDOW_MS,
+      parkedAt: now + AUTO_SWITCH_SESSION_WINDOW_MS - 60_000,
+      activeEmail: "a@x.com",
+      profiles,
+      attempts: [{ profile: "b", at: parkedAt - 30 * 60_000 }],
+    });
+    expect(rolled).toEqual({ action: "switch", profile: "b" });
+  });
+
+  test("waits on a switch that is still in flight (attempt newer than the park)", () => {
+    const d = decideAutoSwitch({
+      now,
+      parkedAt,
+      activeEmail: "a@x.com",
+      profiles: [
+        { name: "a", email: "a@x.com", usage: mkUsage(100) },
+        { name: "b", email: "b@x.com", usage: mkUsage(10) },
+      ],
+      attempts: [{ profile: "b", at: parkedAt + 60_000 }],
+    });
+    expect(d.action).toBe("exhausted");
+  });
+
+  test("prefers a free same-account continue when the session window rolled after the park", () => {
+    const d = decideAutoSwitch({
+      now,
+      parkedAt,
+      activeEmail: "a@x.com",
+      profiles: [
+        // Session window reset between the park and now; weekly has headroom.
+        { name: "a", email: "a@x.com", usage: mkUsage(100, { sessionResetAt: parkedAt + 60_000 }) },
+        { name: "b", email: "b@x.com", usage: mkUsage(10) },
+      ],
+      attempts: [],
+    });
+    expect(d).toEqual({ action: "continue" });
+  });
+
+  test("does not re-try a continue that already failed for this park", () => {
+    const d = decideAutoSwitch({
+      now,
+      parkedAt,
+      activeEmail: "a@x.com",
+      profiles: [
+        { name: "a", email: "a@x.com", usage: mkUsage(100, { sessionResetAt: parkedAt + 60_000 }) },
+        { name: "b", email: "b@x.com", usage: mkUsage(10) },
+      ],
+      attempts: [{ profile: AUTO_SWITCH_CONTINUE_KEY, at: parkedAt + 120_000 }],
+    });
+    // Continue was already attempted after this park — fall through to a switch.
+    expect(d).toEqual({ action: "switch", profile: "b" });
+  });
+
+  test("exhausted carries the earliest future reset (plus settle margin)", () => {
+    const resetSoon = now + 30 * 60_000;
+    const d = decideAutoSwitch({
+      now,
+      parkedAt,
+      activeEmail: "a@x.com",
+      profiles: [
+        {
+          name: "a",
+          email: "a@x.com",
+          usage: {
+            fetched_at: now,
+            session: { percent: 100, resets_at: resetSoon },
+            weekly: { percent: 100, resets_at: now + 86_400_000 },
+          },
+        },
+      ],
+      attempts: [],
+    });
+    expect(d.action).toBe("exhausted");
+    if (d.action === "exhausted") expect(d.retry_at).toBe(resetSoon + 2 * 60_000);
+  });
+
+  test("exhausted with no usage data falls back to an hourly retry", () => {
+    const d = decideAutoSwitch({ now, parkedAt, activeEmail: undefined, profiles: [], attempts: [] });
+    expect(d.action).toBe("exhausted");
+    if (d.action === "exhausted") expect(d.retry_at).toBe(now + 60 * 60_000 + 2 * 60_000);
   });
 });
