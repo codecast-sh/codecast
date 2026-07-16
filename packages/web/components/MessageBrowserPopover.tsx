@@ -6,7 +6,7 @@ import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { isCommandMessage, cleanContent } from "../lib/conversationProcessor";
-import { isMachineDeliveredMessage } from "./sessionMessage";
+import { parseMachineDeliveredMessage, type MachineDeliveredKind } from "./sessionMessage";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { isConvexId, useInboxStore } from "../store/inboxStore";
 
@@ -24,6 +24,26 @@ function processUserMessage(content: string): { display: string; isCmd: boolean 
   return { display: cleanContent(content), isCmd: false };
 }
 
+const MACHINE_KIND_LABEL: Record<MachineDeliveredKind, string> = {
+  schedule: "schedule",
+  session: "session",
+  teammate: "teammate",
+};
+
+function MachineKindIcon({ kind }: { kind: MachineDeliveredKind }) {
+  const d =
+    kind === "schedule"
+      ? "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+      : kind === "session"
+      ? "M13 7l5 5m0 0l-5 5m5-5H6"
+      : "M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z";
+  return (
+    <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={d} />
+    </svg>
+  );
+}
+
 function formatTimeAgo(ts: number): string {
   const diff = Date.now() - ts;
   const minutes = Math.floor(diff / 60000);
@@ -36,7 +56,15 @@ function formatTimeAgo(ts: number): string {
   return new Date(ts).toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
-type PM = { _id: string; display: string; isCmd: boolean; timestamp: number; commentCount: number };
+type PM = {
+  _id: string;
+  display: string;
+  isCmd: boolean;
+  timestamp: number;
+  commentCount: number;
+  kind: "user" | MachineDeliveredKind;
+  source?: string;
+};
 
 type CommentEntry = {
   _id: string;
@@ -46,6 +74,8 @@ type CommentEntry = {
   user: { name?: string; github_username?: string; github_avatar_url?: string };
 };
 
+// originalIndex is the human-message ordinal (what the row numbers show);
+// machine-delivered rows carry -1 and render unnumbered.
 type IndexedPM = PM & { originalIndex: number };
 
 function HoverPreview({ message, rect, onMouseEnter, onMouseLeave, onDropdownEnter, onDropdownLeave }: { message: IndexedPM; rect: DOMRect; onMouseEnter: () => void; onMouseLeave: () => void; onDropdownEnter: () => void; onDropdownLeave: () => void }) {
@@ -66,7 +96,14 @@ function HoverPreview({ message, rect, onMouseEnter, onMouseLeave, onDropdownEnt
         style={{ width: previewWidth, maxHeight: "60vh" }}
       >
         <div className="flex items-center gap-2 p-3 pb-1 flex-shrink-0">
-          <span className="text-[10px] text-sol-text-dim tabular-nums">#{message.originalIndex + 1}</span>
+          {message.kind === "user" ? (
+            <span className="text-[10px] text-sol-text-dim tabular-nums">#{message.originalIndex + 1}</span>
+          ) : (
+            <span className="text-[10px] text-sol-violet/80 flex items-center gap-1">
+              <MachineKindIcon kind={message.kind} />
+              {message.source}
+            </span>
+          )}
           <span className="text-sol-text-dim/30">·</span>
           <span className="text-sol-text-dim text-[10px]">{formatTimeAgo(message.timestamp)}</span>
           {message.commentCount > 0 && (
@@ -120,6 +157,7 @@ function NavDropdown({
 }) {
   const [mounted, setMounted] = useState(false);
   const [search, setSearch] = useState("");
+  const [showMachine, setShowMachine] = useState(true);
   const [focusIndex, setFocusIndex] = useState(-1);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [hoveredRect, setHoveredRect] = useState<DOMRect | null>(null);
@@ -144,10 +182,17 @@ function NavDropdown({
     }
   }, [mounted]);
 
-  const indexed: IndexedPM[] = messages.map((m, i) => ({ ...m, originalIndex: i }));
+  let humanOrdinal = 0;
+  const indexed: IndexedPM[] = messages.map((m) => ({
+    ...m,
+    originalIndex: m.kind === "user" ? humanOrdinal++ : -1,
+  }));
+  const humanCount = humanOrdinal;
+  const machineCount = indexed.length - humanCount;
+  const pool = showMachine ? indexed : indexed.filter((m) => m.kind === "user");
   const filtered = search
-    ? indexed.filter(m => m.display.toLowerCase().includes(search.toLowerCase()))
-    : indexed;
+    ? pool.filter(m => `${m.display} ${m.source ?? ""}`.toLowerCase().includes(search.toLowerCase()))
+    : pool;
 
   useEffect(() => { setFocusIndex(-1); }, [search]);
 
@@ -193,6 +238,7 @@ function NavDropdown({
     setHoveredId(id);
     if (previewLeaveTimerRef.current) clearTimeout(previewLeaveTimerRef.current);
     if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    if (!msg.display) return; // nothing to preview (machine row whose parsed body is empty)
     hoverTimerRef.current = setTimeout(() => {
       setHoveredRect(el.getBoundingClientRect());
       setPreviewMsg(msg);
@@ -240,15 +286,33 @@ function NavDropdown({
         onClick={onPin}
       >
         {tab === "messages" && (
-          <div className="px-3 pt-3 pb-2">
+          <div className="px-3 pt-3 pb-2 flex items-center gap-1.5">
             <input
               ref={searchRef}
               type="text"
               value={search}
               onChange={e => setSearch(e.target.value)}
-              placeholder={`Search ${messages.length} messages...`}
-              className="w-full bg-sol-bg-alt/60 border border-sol-border/20 rounded-lg px-3 py-1.5 text-[12px] text-sol-text placeholder:text-sol-text-dim/40 outline-none focus:border-sol-cyan/40 transition-colors"
+              placeholder={`Search ${humanCount} messages...`}
+              className="flex-1 min-w-0 bg-sol-bg-alt/60 border border-sol-border/20 rounded-lg px-3 py-1.5 text-[12px] text-sol-text placeholder:text-sol-text-dim/40 outline-none focus:border-sol-cyan/40 transition-colors"
             />
+            {machineCount > 0 && (
+              <button
+                onClick={(e) => { e.stopPropagation(); setShowMachine(v => !v); }}
+                title={showMachine
+                  ? `Hide ${machineCount} automated message${machineCount !== 1 ? "s" : ""} (schedules, sessions, teammates)`
+                  : `Show ${machineCount} automated message${machineCount !== 1 ? "s" : ""}`}
+                className={`flex items-center gap-1 px-2 py-1.5 rounded-lg border text-[10px] tabular-nums transition-colors flex-shrink-0 ${
+                  showMachine
+                    ? "border-sol-violet/30 text-sol-violet/80 hover:text-sol-violet"
+                    : "border-sol-border/20 text-sol-text-dim/40 hover:text-sol-text-dim"
+                }`}
+              >
+                <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+                {machineCount}
+              </button>
+            )}
           </div>
         )}
         {hasComments && (
@@ -261,7 +325,7 @@ function NavDropdown({
                   : "text-sol-text-dim hover:text-sol-text-muted border-transparent"
               }`}
             >
-              Messages ({messages.length})
+              Messages ({humanCount})
             </button>
             <button
               onClick={() => onTabChange("comments")}
@@ -287,6 +351,43 @@ function NavDropdown({
               const isFocused = filterIdx === focusIndex;
               const isHovered = m._id === hoveredId;
               const isActive = isFocused || isHovered;
+              if (m.kind !== "user") {
+                // Machine-delivered row: one subdued line naming what delivered it
+                // and from where — the body stays behind the hover preview.
+                return (
+                  <div
+                    key={m._id}
+                    data-focus-index={filterIdx}
+                    onMouseEnter={(e) => handleItemHover(m._id, e.currentTarget, m)}
+                    onMouseLeave={handleItemLeave}
+                    onClick={() => navigateToMessage(m)}
+                    className={`px-3 py-1 cursor-pointer transition-colors ${
+                      isActive ? "bg-sol-blue/15" : "hover:bg-sol-bg-highlight"
+                    }`}
+                  >
+                    <div className={`flex items-center gap-2 transition-opacity ${isActive ? "opacity-90" : "opacity-45"}`}>
+                      <span className="w-4 flex-shrink-0 flex justify-end text-sol-violet">
+                        <MachineKindIcon kind={m.kind} />
+                      </span>
+                      <span className="text-[10px] text-sol-text-dim flex-shrink-0">
+                        {MACHINE_KIND_LABEL[m.kind]}
+                      </span>
+                      <span className="text-[11px] text-sol-text-muted truncate min-w-0">{m.source}</span>
+                      {m.commentCount > 0 && (
+                        <span className="text-[10px] text-sol-cyan flex items-center gap-0.5 flex-shrink-0">
+                          <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+                          </svg>
+                          {m.commentCount}
+                        </span>
+                      )}
+                      <span className="text-[10px] text-sol-text-dim/50 tabular-nums ml-auto flex-shrink-0">
+                        {formatTimeAgo(m.timestamp)}
+                      </span>
+                    </div>
+                  </div>
+                );
+              }
               return (
                 <div
                   key={m._id}
@@ -462,19 +563,38 @@ export function MessageNavButton({
 
   const processed: PM[] = messages
     ? messages
-        // Drop machine-delivered messages (cast send, teammate broadcasts): the navigator
-        // lists what the human typed, not cross-session/inter-agent messages.
-        .filter((m: { content?: string }) => !isMachineDeliveredMessage(m.content ?? ""))
-        .map((m: { _id: string; content?: string; timestamp: number }) => ({
-          _id: m._id,
-          ...processUserMessage(m.content ?? ""),
-          timestamp: m.timestamp,
-          commentCount: commentsByMessage.get(m._id) || 0,
-        }))
-        .filter((m: PM) => m.display.length > 0)
+        .map((m: { _id: string; content?: string; timestamp: number }): PM => {
+          const content = m.content ?? "";
+          const commentCount = commentsByMessage.get(m._id) || 0;
+          // Machine-delivered messages (cast send, teammate broadcasts, schedule
+          // triggers) list as compact subdued rows rather than being dropped —
+          // human rows keep their numbering regardless.
+          const machine = parseMachineDeliveredMessage(content);
+          if (machine) {
+            return {
+              _id: m._id,
+              display: machine.body,
+              isCmd: false,
+              timestamp: m.timestamp,
+              commentCount,
+              kind: machine.kind,
+              source: machine.source,
+            };
+          }
+          return {
+            _id: m._id,
+            ...processUserMessage(content),
+            timestamp: m.timestamp,
+            commentCount,
+            kind: "user" as const,
+          };
+        })
+        .filter((m: PM) => m.kind !== "user" || m.display.length > 0)
     : [];
 
   const total = processed.length;
+  const humanTotal = processed.filter((m) => m.kind === "user").length;
+  const machineTotal = total - humanTotal;
   const effectiveId = currentMessageId === "__fallback__" ? null : currentMessageId;
   const currentIndex = effectiveId ? processed.findIndex((m) => m._id === effectiveId) : -1;
   const activeIndex =
@@ -562,13 +682,14 @@ export function MessageNavButton({
         className={`flex flex-col gap-[3px] items-end justify-center px-2 py-1.5 rounded transition-colors relative ${
           open ? "text-sol-cyan" : "text-sol-text-dim hover:text-sol-text-secondary"
         }`}
-        title={`${total} message${total !== 1 ? "s" : ""}${hasComments ? ` / ${topLevelComments.length} comment${topLevelComments.length !== 1 ? "s" : ""}` : ""}`}
+        title={`${humanTotal} message${humanTotal !== 1 ? "s" : ""}${machineTotal > 0 ? ` / ${machineTotal} automated` : ""}${hasComments ? ` / ${topLevelComments.length} comment${topLevelComments.length !== 1 ? "s" : ""}` : ""}`}
       >
         {Array.from({ length: displayCount }).map((_, i) => {
           const mappedIndex = total <= MAX_BARS ? i : Math.round((i / (displayCount - 1)) * (total - 1));
           const isActive = mappedIndex === activeIndex;
           const msg = processed[mappedIndex];
           const hasComment = msg && msg.commentCount > 0;
+          const isMachine = msg && msg.kind !== "user";
           return (
             <span
               key={i}
@@ -577,6 +698,8 @@ export function MessageNavButton({
                   ? "bg-sol-text w-4 h-[2.5px]"
                   : hasComment
                   ? "bg-sol-cyan w-3.5 h-[2px] opacity-70"
+                  : isMachine
+                  ? "bg-current w-2 h-px opacity-20"
                   : "bg-current w-3 h-px opacity-35"
               }`}
             />

@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { parseSessionMessage, parseInboundSessionMessage, isSessionMessage, formatSessionMessage, isTeammateMessage, stripTeammateFraming, isTeammateFramingOnly, isMachineDeliveredMessage, parseSpawnedTaskPrompt, isSpawnedTaskPrompt, cleanUserMessage } from "./sessionMessage";
+import { parseSessionMessage, parseInboundSessionMessage, isSessionMessage, formatSessionMessage, isTeammateMessage, stripTeammateFraming, isTeammateFramingOnly, isMachineDeliveredMessage, parseMachineDeliveredMessage, parseSpawnedTaskPrompt, isSpawnedTaskPrompt, cleanUserMessage } from "./sessionMessage";
 
 // A real inter-agent broadcast as the multi-agent harness delivers it: a lead-in line, one
 // or more <teammate-message> blocks (the second a JSON status event), and the trailing
@@ -148,6 +148,65 @@ describe("parseInboundSessionMessage", () => {
     const parsed = parseInboundSessionMessage(raw);
     expect(parsed?.from).toBe("jx7c6zk");
     expect(parsed?.name).toBeUndefined();
+  });
+});
+
+describe("parseMachineDeliveredMessage", () => {
+  test("classifies a cast send message with sender and body", () => {
+    const r = parseMachineDeliveredMessage(formatSessionMessage("jx7c6zk", "take the auth half"));
+    expect(r).toEqual({ kind: "session", source: "jx7c6zk", body: "take the auth half" });
+  });
+
+  test("prefers the sender display name when present", () => {
+    const raw = '<session-message from="unknown" name="Ada Lovelace">\nship it\n</session-message>';
+    expect(parseMachineDeliveredMessage(raw)).toEqual({ kind: "session", source: "Ada Lovelace", body: "ship it" });
+  });
+
+  test("recovers sender + partial body from a truncated session message (500-char server slice)", () => {
+    const truncated = formatSessionMessage("jx7c6zk", "y".repeat(600)).slice(0, 500);
+    const r = parseMachineDeliveredMessage(truncated);
+    expect(r?.kind).toBe("session");
+    expect(r?.source).toBe("jx7c6zk");
+    expect(r?.body.startsWith("yyy")).toBe(true);
+  });
+
+  test("classifies a schedule trigger with its title", () => {
+    const r = parseMachineDeliveredMessage('<scheduled-task title="Check CI" task-id="rx71">run the checks</scheduled-task>');
+    expect(r).toEqual({ kind: "schedule", source: "Check CI", body: "run the checks" });
+  });
+
+  test("schedule trigger tolerates a missing closing tag and unescapes quotes", () => {
+    const r = parseMachineDeliveredMessage('<scheduled-task title="Watch &quot;main&quot;">keep an eye on');
+    expect(r?.kind).toBe("schedule");
+    expect(r?.source).toBe('Watch "main"');
+    expect(r?.body).toBe("keep an eye on");
+  });
+
+  test("classifies a teammate broadcast by teammate_id with framing stripped", () => {
+    const r = parseMachineDeliveredMessage(TEAMMATE_BROADCAST);
+    expect(r?.kind).toBe("teammate");
+    expect(r?.source).toBe("tracker-stale");
+    expect(r?.body).toContain("coherence tracker updates landed");
+    expect(r?.body).not.toContain("permission laundering");
+    expect(r?.body).not.toContain("Another Claude session");
+  });
+
+  test("returns null for human-typed prompts and nullish input", () => {
+    expect(parseMachineDeliveredMessage("fix the login bug")).toBeNull();
+    expect(parseMachineDeliveredMessage("")).toBeNull();
+    expect(parseMachineDeliveredMessage(null)).toBeNull();
+    expect(parseMachineDeliveredMessage(undefined)).toBeNull();
+  });
+
+  test("agrees with isMachineDeliveredMessage on all three kinds", () => {
+    for (const raw of [
+      formatSessionMessage("jx7c6zk", "hi"),
+      '<scheduled-task title="T">x</scheduled-task>',
+      TEAMMATE_BROADCAST,
+      "plain human prompt",
+    ]) {
+      expect(parseMachineDeliveredMessage(raw) !== null).toBe(isMachineDeliveredMessage(raw));
+    }
   });
 });
 

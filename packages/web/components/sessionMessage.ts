@@ -97,6 +97,37 @@ export function isMachineDeliveredMessage(rawContent: string | null | undefined)
   return isSessionMessage(rawContent) || isTeammateMessage(rawContent) || isScheduledTaskMessage(rawContent);
 }
 
+export type MachineDeliveredKind = "schedule" | "session" | "teammate";
+
+// Parse a machine-delivered message into a compact entry: which machinery sent it
+// (kind), who/what from (source — schedule title, sender session id/name, teammate
+// id), and the unwrapped body. Mirrors isMachineDeliveredMessage's three branches.
+// Callers may hand in previews/server rows sliced mid-message (getUserMessages cuts
+// content at 500 chars), so every branch tolerates a missing closing tag.
+export function parseMachineDeliveredMessage(
+  rawContent: string | null | undefined,
+): { kind: MachineDeliveredKind; source: string; body: string } | null {
+  if (!rawContent) return null;
+  if (isScheduledTaskMessage(rawContent)) {
+    const m = rawContent.match(/<scheduled-task\s+title="([^"]*)"[^>]*>([\s\S]*?)(?:<\/scheduled-task>|$)/);
+    const title = (m?.[1] ?? "").replace(/&quot;/g, '"');
+    return { kind: "schedule", source: title || "scheduled run", body: (m?.[2] ?? "").trim() };
+  }
+  if (isSessionMessage(rawContent)) {
+    const parsed = parseInboundSessionMessage(rawContent);
+    if (parsed) return { kind: "session", source: parsed.name || parsed.from, body: parsed.body };
+    const open = rawContent.match(/<session-message\s+from="([^"]*)"(?:\s+name="([^"]*)")?[^>]*>([\s\S]*)$/);
+    const body = (open?.[3] ?? "").replace(/<\/session-message>[\s\S]*$/, "").trim();
+    return { kind: "session", source: open?.[2] || open?.[1] || "session", body };
+  }
+  if (isTeammateMessage(rawContent)) {
+    const from = rawContent.match(/<teammate-message[^>]*\steammate_id="([^"]*)"/)?.[1];
+    const body = stripTeammateFraming(rawContent.replace(/<\/?teammate-message[^>]*>/g, "")).trim();
+    return { kind: "teammate", source: from || "teammate", body };
+  }
+  return null;
+}
+
 // --- Spawned schedule-run prompt ------------------------------------------------------
 // A spawned run's opening message is the plain-text prompt the daemon hands to
 // `claude -p` (taskScheduler.buildPrompt) — there's no wrapper tag, the wire format
