@@ -178,12 +178,15 @@ export function isDeviceOnline(device: { last_seen: number }, now: number): bool
 }
 
 // Selection predicate for the revive actions: a conversation parked on a
-// LIMIT or AUTH banner — the two states where the account is the problem and
-// a switch/continue is the cure. kind "error" (transient 529/500 provider
-// failures) is deliberately OUT: those retry fine on the next message and must
-// not paint a session as "blocked on usage limits" (a mid-conversation 500
-// otherwise throws the active session into the fleet banner). Dismissed is an
-// explicit user "go away" — never auto-revive.
+// LIMIT, AUTH, or CONNECTION banner — the states where the session won't heal
+// itself and a switch/continue is the cure. kind "connection" (the provider
+// never replied: "Connection closed mid-response", "Connection error.") means
+// the turn died at the prompt — a plain continue resumes it, same as limit.
+// kind "error" (statusful 529/500 provider failures) is deliberately OUT:
+// the CLI retries those itself and they must not paint a mid-retry session
+// as blocked (a mid-conversation 500 otherwise throws the active session
+// into the fleet banner). Dismissed is an explicit user "go away" — never
+// auto-revive.
 export function isBlockedConversation(conv: {
   pending_api_error?: boolean;
   pending_api_error_kind?: string | null;
@@ -192,7 +195,9 @@ export function isBlockedConversation(conv: {
 }): boolean {
   return (
     conv.pending_api_error === true &&
-    (conv.pending_api_error_kind === "limit" || conv.pending_api_error_kind === "auth") &&
+    (conv.pending_api_error_kind === "limit" ||
+      conv.pending_api_error_kind === "auth" ||
+      conv.pending_api_error_kind === "connection") &&
     conv.agent_type === "claude_code" &&
     !conv.inbox_dismissed_at
   );

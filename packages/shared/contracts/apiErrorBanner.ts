@@ -12,7 +12,7 @@
 // (e.g. "You've hit your usage limit on the free plan, so video generation is
 // paused…") from being mistaken for a banner.
 
-export type ApiErrorBannerKind = "auth" | "limit" | "error";
+export type ApiErrorBannerKind = "auth" | "limit" | "error" | "connection";
 
 // Auth subset — the user can act by re-running /login. "Login expired" covers
 // the CLI's expired-grant banner forms ("Login expired · Please run /login",
@@ -30,8 +30,17 @@ const AUTH_BANNER_RE =
 const LIMIT_BANNER_RE =
   /^(?:you['’]ve hit your [\w -]{1,40}limit(?:\s*[·∙][^\n]*)?|claude (?:ai )?usage limit reached\b[^\n]*)$/i;
 
-// Generic provider failure ("API Error: 529 Overloaded", "API Error: Connection error.").
+// Generic provider failure, split by whether the provider actually replied:
+// a status code ("API Error: 529 Overloaded", "API Error: 500 {...}") means an
+// HTTP response came back — the CLI usually retries these itself, so kind
+// "error" stays out of the blocked/revive set. No status code ("API Error:
+// Connection closed mid-response. The response above may be incomplete.",
+// "API Error: Connection error.", "API Error: Request timed out.") means the
+// connection itself failed and the turn died at the prompt — kind
+// "connection" joins the blocked set: a plain "continue" resumes it, same as
+// a limit banner after the window resets.
 const GENERIC_BANNER_RE = /^api error\b/i;
+const STATUSFUL_BANNER_RE = /^api error:?\s*\(?\d{3}\b/i;
 
 export function classifyApiErrorBanner(
   content: string | null | undefined,
@@ -41,7 +50,8 @@ export function classifyApiErrorBanner(
   if (trimmed.length === 0 || trimmed.length > 400) return null;
   if (AUTH_BANNER_RE.test(trimmed)) return "auth";
   if (LIMIT_BANNER_RE.test(trimmed)) return "limit";
-  if (GENERIC_BANNER_RE.test(trimmed)) return "error";
+  if (STATUSFUL_BANNER_RE.test(trimmed)) return "error";
+  if (GENERIC_BANNER_RE.test(trimmed)) return "connection";
   return null;
 }
 

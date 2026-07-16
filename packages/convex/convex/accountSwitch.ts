@@ -88,8 +88,8 @@ async function listBlockedConversations(
   };
 }
 
-// Send "continue" to every session parked on a usage-limit (or transient
-// provider-error) banner — the post-reset nudge, no account change. The
+// Send "continue" to every session parked on a usage-limit or dropped
+// connection banner — the post-reset nudge, no account change. The
 // processes are typically still alive at the prompt, so plain injection
 // retries them; dead ones auto-resume via the delivery rail's repair ladder.
 // auth-kind banners are excluded by default: continuing a logged-out session
@@ -109,9 +109,11 @@ export const continueAllBlocked = mutation({
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) throw new Error("Authentication failed: invalid token or session");
 
-    // limit-only by default: auth-blocked sessions need a switch (plain
-    // continue re-fails) and error-kind never enters the selection at all.
-    const kinds = new Set(args.kinds ?? ["limit"]);
+    // limit + connection by default: both un-park with a plain continue (the
+    // limit window rolled / the dropped turn resumes). auth-blocked sessions
+    // need a switch (plain continue re-fails) and error-kind (statusful
+    // 529/500, self-retrying) never enters the selection at all.
+    const kinds = new Set(args.kinds ?? ["limit", "connection"]);
     const { blocked: candidates, topLevelCount, subagentCount, totalBlocked } =
       await listBlockedConversations(ctx, userId, args.include_subagents === true);
     const blocked = candidates.filter((c) => kinds.has(c.pending_api_error_kind ?? "error"));
@@ -631,7 +633,9 @@ export const restampApiErrorFlags = internalMutation({
       .take(1000);
     let stamped = 0;
     for (const conv of recent) {
-      if (conv.pending_api_error === true) continue;
+      // Already-flagged rows are re-checked too: a kind split (e.g. statusless
+      // connection drops moving out of "error") leaves them stamped with the
+      // old kind, outside the blocked set, until re-classified here.
       if (conv.last_message_role !== "assistant") continue;
       const newest = await ctx.db
         .query("messages")
@@ -641,6 +645,7 @@ export const restampApiErrorFlags = internalMutation({
       if (!newest || newest.role !== "assistant") continue;
       const kind = classifyApiErrorBanner(newest.content);
       if (!kind) continue;
+      if (conv.pending_api_error === true && conv.pending_api_error_kind === kind) continue;
       await ctx.db.patch(conv._id, { pending_api_error: true, pending_api_error_kind: kind });
       stamped++;
     }
