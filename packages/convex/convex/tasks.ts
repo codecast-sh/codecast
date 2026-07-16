@@ -139,12 +139,14 @@ async function findTeamMemberId(
   const exact = members.find((u: any) =>
     u.github_username?.toLowerCase() === lower ||
     u.name?.toLowerCase() === lower ||
-    u.email?.toLowerCase() === lower
+    u.email?.toLowerCase() === lower ||
+    u.alternate_emails?.some((e: string) => e.toLowerCase() === lower)
   );
   if (exact) return exact._id;
   const partial = members.filter((u: any) =>
     u.name?.toLowerCase().includes(lower) ||
-    u.email?.toLowerCase().includes(lower)
+    u.email?.toLowerCase().includes(lower) ||
+    u.alternate_emails?.some((e: string) => e.toLowerCase().includes(lower))
   );
   return partial.length === 1 ? partial[0]._id : null;
 }
