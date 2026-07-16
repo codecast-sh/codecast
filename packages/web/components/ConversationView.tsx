@@ -80,8 +80,7 @@ import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
 import { DynamicRunView, wfStatusMeta, wfFmtTokens } from "./DynamicRunView";
 const api = _typedApi as any;
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { DeviceBadge, RunOnDeviceItems } from "./DeviceBadge";
-import { OwnersBadge } from "./OwnersBadge";
+import { AssignmentBadge } from "./AssignmentBadge";
 import { PermissionStack } from "./PermissionCard";
 import { copyToClipboard, shareOrigin, buildProjectPathOptions, inferHomeDir, resolveCustomPath, displayPath, inferProjectBase } from "../lib/utils";
 import { MarkdownRenderer, isMarkdownFile, isPlanFile, CollapsibleImage } from "./tools/MarkdownRenderer";
@@ -12993,10 +12992,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 )}
 
                 {isOwner && (
-                  <>
-                    <DeviceBadge ownerDeviceId={(conversation as any).owner_device_id} />
-                    <OwnersBadge conversationId={conversation._id} />
-                  </>
+                  <AssignmentBadge
+                    conversationId={conversation._id}
+                    ownerDeviceId={(conversation as any).owner_device_id}
+                  />
                 )}
 
                 {!isOwner && conversation.user && (
@@ -13187,16 +13186,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                       </svg>
                       Copy all messages
                     </DropdownMenuItem>
-                    {isOwner && (
-                      <>
-                        <DropdownMenuSeparator />
-                        <RunOnDeviceItems
-                          conversationId={conversation._id}
-                          ownerDeviceId={(conversation as any).owner_device_id}
-                        />
-                        <DropdownMenuSeparator />
-                      </>
-                    )}
                     {isOwner && (
                       <DropdownMenuItem onSelect={() => setTimeout(() => useInboxStore.setState({ renamingSessionId: conversation._id }))}>
                         <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">

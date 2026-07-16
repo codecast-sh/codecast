@@ -15,7 +15,7 @@ import { parseInboundSessionMessage, isScheduledTaskMessage } from '@codecast/we
 import { useConversationMessages } from '@codecast/web/hooks/useConversationMessages';
 import { useEnsureDispatch } from '@codecast/web/hooks/useEnsureDispatch';
 import { PermissionCard } from '@/components/PermissionCard';
-import { DeviceChip, useRunOnDevice } from '@/components/DevicesSection';
+import { AssignmentChip } from '@/components/AssignmentChip';
 import { ModelSwitcherChip } from '@/components/ModelSwitcherChip';
 import { renderInlineMarkdown, MarkdownContent, MarkdownTextBlock, CodeBlockWithCopy, CodeBlockFullscreen, HighlightedCodeText } from '@/components/MarkdownRenderer';
 import { EntityPill } from '@/components/EntityPill';
@@ -3913,12 +3913,6 @@ export default function SessionDetailScreen() {
     router.back();
   }, [id, stashSession, router]);
 
-  const showRunOnDevice = useRunOnDevice(
-    conversation && isConvexId(conversation._id) ? conversation._id : null,
-    (conversation as any)?.owner_device_id,
-    { notify: showToast },
-  );
-
   const lastMessageAt = conversation?.messages?.length
     ? conversation.messages[conversation.messages.length - 1]?.timestamp
     : undefined;
@@ -3952,7 +3946,6 @@ export default function SessionDetailScreen() {
     if (conversation && isConvexId(conversation._id)) {
       options.push(isRestarting ? 'Restarting…' : 'Restart Session');
     }
-    options.push('Run on Device…');
     options.push(collapsed ? 'Expand Messages' : 'Collapse Messages');
     // git_diff lives off the conversation doc now and is fetched lazily on
     // expand; surface "View Diff" whenever there's a branch (panel stays empty
@@ -3981,7 +3974,6 @@ export default function SessionDetailScreen() {
           else if (label === 'Copy') handleCopyMenu();
           else if (label === 'Copy Resume Command') handleCopyResume();
           else if (label === 'Restart Session') restartSession();
-          else if (label === 'Run on Device…') showRunOnDevice();
           else if (label === 'Expand Messages' || label === 'Collapse Messages') setCollapsed(c => !c);
           else if (label === 'View Diff' || label === 'Hide Diff') setDiffExpanded(d => !d);
           else if (label === 'Fork Tree') setTreeModalVisible(true);
@@ -4002,7 +3994,6 @@ export default function SessionDetailScreen() {
           else if (label === 'Copy') handleCopyMenu();
           else if (label === 'Copy Resume Command') handleCopyResume();
           else if (label === 'Restart Session') restartSession();
-          else if (label === 'Run on Device…') showRunOnDevice();
           else if (label === 'Expand Messages' || label === 'Collapse Messages') setCollapsed(c => !c);
           else if (label === 'View Diff' || label === 'Hide Diff') setDiffExpanded(d => !d);
           else if (label === 'Fork Tree') setTreeModalVisible(true);
@@ -4011,7 +4002,7 @@ export default function SessionDetailScreen() {
       })),
       { text: 'Cancel', style: 'cancel' },
     ]);
-  }, [conversation, collapsed, diffExpanded, treeResult, handleToggleFavorite, handleShareConversation, handleCopyMenu, handleCopyResume, handleDismiss, showRunOnDevice, restartSession, isRestarting]);
+  }, [conversation, collapsed, diffExpanded, treeResult, handleToggleFavorite, handleShareConversation, handleCopyMenu, handleCopyResume, handleDismiss, restartSession, isRestarting]);
 
   const handleConfirmShareSelection = useCallback(async () => {
     if (selectedMessageIds.size === 0) return;
@@ -4357,7 +4348,11 @@ export default function SessionDetailScreen() {
                     <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.metaChipText, { color: Theme.green }]} numberOfLines={1}>{conversation.git_branch}</RNText>
                   </Pressable>
                 )}
-                <DeviceChip ownerDeviceId={(conversation as any).owner_device_id} onPress={showRunOnDevice} />
+                <AssignmentChip
+                  conversationId={isConvexId(conversation._id) ? conversation._id : null}
+                  ownerDeviceId={(conversation as any).owner_device_id}
+                  showToast={showToast}
+                />
                 {latestUsage && (
                   <RNView style={[styles.metaChip, chipTint(Theme.textDim)]}>
                     <FontAwesome name="bar-chart" size={10} color={Theme.textDim} />

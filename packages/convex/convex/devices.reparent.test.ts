@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { performReparentSessionToDevice } from "./devices";
+import { performReassignToDevice, performReparentSessionToDevice } from "./devices";
 
 // Cross-user device reparent: an OWNER pulls a session run by a TEAMMATE onto
 // their OWN machine. Account follows device (user_id -> caller), the immutable
@@ -153,5 +153,50 @@ describe("performReparentSessionToDevice", () => {
       expect(a.device_changed).toBe(true);
       expect(a.from_device).toBeUndefined();
     });
+  });
+});
+
+// The web/mobile "Run on this device" control calls reassignToDevice for every
+// session in the inbox — including ones the caller owns but a teammate runs.
+// Those must take the cross-user reparent path instead of failing with "not
+// your conversation" (the bug this covers).
+describe("performReassignToDevice", () => {
+  test("same-user move keeps the plain restamp path — no reparented flag, no account change", async () => {
+    const db = fixtures({ user_id: ME });
+    const result = await performReassignToDevice({ db }, ME as any, {
+      conversation_id: "conv1" as any,
+      device_id: "mydev",
+    });
+    expect(result.cross_user).toBeUndefined();
+    expect(conv(db).user_id).toBe(ME);
+    expect(conv(db).owner_device_id).toBe("mydev");
+    const cmds = commands(db);
+    expect(cmds.length).toBe(1);
+    expect(JSON.parse(cmds[0].args).reparented).toBeUndefined();
+  });
+
+  test("owner-but-not-runner move delegates to the cross-user reparent", async () => {
+    const db = fixtures();
+    const result = await performReassignToDevice({ db }, ME as any, {
+      conversation_id: "conv1" as any,
+      device_id: "mydev",
+    });
+    expect(result.cross_user).toBe(true);
+    expect(conv(db).user_id).toBe(ME); // account followed the device
+    expect(conv(db).author_user_id).toBe(JASON);
+    expect(conv(db).owner_device_id).toBe("mydev");
+    expect(JSON.parse(commands(db)[0].args).reparented).toBe(true);
+  });
+
+  test("a stranger (neither runner nor owner) is still rejected", async () => {
+    const db = fixtures({}, []);
+    db._tables.conversations[0].owner_user_id = undefined;
+    db._tables.devices.push({ _id: "d3", user_id: STRANGER, device_id: "strangerdev", label: "S" });
+    await expect(
+      performReassignToDevice({ db }, STRANGER as any, {
+        conversation_id: "conv1" as any,
+        device_id: "strangerdev",
+      }),
+    ).rejects.toThrow(/run or own/);
   });
 });

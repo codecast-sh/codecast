@@ -69,7 +69,7 @@ export function relativeSeen(lastSeen: number): string {
   return `${Math.round(h / 24)}d ago`;
 }
 
-function DeviceIcon({ d, className = "w-3 h-3" }: { d: Device; className?: string }) {
+export function DeviceIcon({ d, className = "w-3 h-3" }: { d: Device; className?: string }) {
   if (d.is_remote) {
     // cloud / remote box
     return (
@@ -201,7 +201,7 @@ export function RunOnDeviceItems({
 
   return (
     <>
-      <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-gray-400">Run on device</DropdownMenuLabel>
+      <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">Run on device · which machine</DropdownMenuLabel>
       {locals.map((d) => {
         const isOwner = d.device_id === ownerDeviceId;
         return (
