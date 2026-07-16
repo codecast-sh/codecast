@@ -5,6 +5,37 @@ import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { findConversationBySessionReference } from "./conversationSessionLookup";
 import { AGENT_STATUSES } from "@codecast/shared/contracts";
+import { internal } from "./_generated/api";
+import {
+  NEEDS_INPUT_IDLE_CHECK_DELAY_MS,
+  NEEDS_INPUT_PERMISSION_CHECK_DELAY_MS,
+} from "./inboxFilters";
+
+// A status CHANGE is the entry point to the needs-input push (see
+// notifications.checkNeedsInput). "idle" only settles into needs_input after
+// the idle grace, so its check fires just past it; a permission block is
+// needs_input immediately, but the daemon's own permission record (with its
+// own push) lands asynchronously right after this write — the short delay lets
+// the check see it and stand down. Any newer status change makes a scheduled
+// check a no-op: it re-validates agent_status_updated_at at fire time.
+async function scheduleNeedsInputCheck(
+  ctx: any,
+  conversationId: Id<"conversations">,
+  agentStatus: string,
+  statusTs: number,
+): Promise<void> {
+  const delay =
+    agentStatus === "idle"
+      ? NEEDS_INPUT_IDLE_CHECK_DELAY_MS
+      : agentStatus === "permission_blocked"
+        ? NEEDS_INPUT_PERMISSION_CHECK_DELAY_MS
+        : null;
+  if (delay === null) return;
+  await ctx.scheduler.runAfter(delay, internal.notifications.checkNeedsInput, {
+    conversation_id: conversationId,
+    status_ts: statusTs,
+  });
+}
 
 async function getAuthenticatedUserId(
   ctx: { db: any },
@@ -23,6 +54,18 @@ async function getAuthenticatedUserId(
   }
 
   return null;
+}
+
+// A cross-user reclaim of a managed session is legitimate only when the
+// current owner's daemon is gone (the same session resurfacing after a local
+// logout/login). Heartbeat rows are at most ~60s stale by design
+// (HEARTBEAT_REFRESH_MS throttling); 3 minutes clears that with a full
+// outage's margin. A fresh heartbeat means a live daemon still manages the
+// session, and handing its row to another user silently reroutes message
+// delivery — the freeze that motivated this guard.
+export const CROSS_USER_RECLAIM_STALE_MS = 3 * 60 * 1000;
+export function canReclaimCrossUser(existingLastHeartbeat: number, now: number): boolean {
+  return now - existingLastHeartbeat >= CROSS_USER_RECLAIM_STALE_MS;
 }
 
 export const registerManagedSession = mutation({
@@ -87,7 +130,15 @@ export const registerManagedSession = mutation({
       // resurface under a different local user (e.g. after a logout/login),
       // and the daemon making this call has the legitimate live process.
       // Without this, the next heartbeat throws Unauthorized in a loop.
+      // Guarded by canReclaimCrossUser: a live owner (fresh heartbeat) is
+      // never robbed — see the helper's comment for the freeze this prevents.
       if (existing.user_id.toString() !== authUserId.toString()) {
+        if (!canReclaimCrossUser(existing.last_heartbeat, now)) {
+          console.warn(
+            `[registerManagedSession] refusing cross-user reclaim of ${args.session_id}: owner ${existing.user_id} heartbeat is fresh`,
+          );
+          return { notOwner: true as const, owner: existing.user_id.toString() } as any;
+        }
         console.warn(
           `[registerManagedSession] reclaiming session ${args.session_id} from ${existing.user_id} -> ${authUserId}`,
         );
@@ -331,6 +382,12 @@ export const heartbeat = mutation({
     const patch = buildHeartbeatPatch(session, args.agent_status, args.client_ts, now);
     if (patch) await ctx.db.patch(session._id, patch);
 
+    // The heartbeat self-heals dropped status transitions (a lost Stop hook) —
+    // those healed transitions must feed the needs-input push like any other.
+    if (patch?.agent_status && patch.agent_status_updated_at && session.conversation_id) {
+      await scheduleNeedsInputCheck(ctx, session.conversation_id, patch.agent_status, patch.agent_status_updated_at);
+    }
+
     let dismissed = false;
     if (session.conversation_id) {
       const conv = await ctx.db.get(session.conversation_id);
@@ -382,6 +439,10 @@ export const heartbeatBatch = mutation({
       const patch = buildHeartbeatPatch(session, entry.agent_status, entry.client_ts, now);
       if (!patch) continue;
       await ctx.db.patch(session._id, patch);
+      // Same self-healed-transition hook as the single heartbeat above.
+      if (patch.agent_status && patch.agent_status_updated_at && session.conversation_id) {
+        await scheduleNeedsInputCheck(ctx, session.conversation_id, patch.agent_status, patch.agent_status_updated_at);
+      }
       updated++;
     }
     return { updated };
@@ -623,6 +684,12 @@ export const updateAgentStatus = mutation({
 
     if (Object.keys(patch).length > 0) {
       await ctx.db.patch(session._id, patch);
+    }
+
+    // agent_status_updated_at is only set on an ACTUAL status change — the
+    // needs-input push keys off transitions, never re-assertions.
+    if (patch.agent_status_updated_at) {
+      await scheduleNeedsInputCheck(ctx, args.conversation_id, args.agent_status, patch.agent_status_updated_at);
     }
 
     // Active processing states prove the message reached the session — ack injected messages

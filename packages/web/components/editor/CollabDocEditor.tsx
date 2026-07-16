@@ -632,7 +632,10 @@ export function CollabDocEditor({
           composeHandleRef={composeHandleRef}
           onContentChange={onContentChange}
         />
-        {cliEditedAt && (
+        {/* Gated on contentReady like the seed path above: mounting this with a
+            still-loading (empty) markdownContent prop replaces the whole collab
+            doc with an empty paragraph and wipes doc.content server-side. */}
+        {cliEditedAt && contentReady && (
           <ExternalEditSync
             key={cliEditedAt}
             markdownContent={markdownContent}

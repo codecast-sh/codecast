@@ -34,11 +34,21 @@ export const generateUploadUrl = mutation({
   },
 });
 
+// Auth (cookie or api_token) is required: an unauthenticated caller gets null.
+// A storage id is an unguessable, random handle that only ever reaches a client
+// through a conversation/message it already had access to, so requiring auth
+// stops an anonymous internet client from resolving signed URLs by id while
+// legitimate viewers keep working. The api_token arg exists for the daemon —
+// its convex client carries no cookie session, so its downloadImage otherwise
+// resolved null and web-sent images were silently dropped from tmux injection.
 export const getImageUrl = query({
   args: {
     storageId: v.id("_storage"),
+    api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) return null;
     return await ctx.storage.getUrl(args.storageId);
   },
 });
@@ -46,47 +56,18 @@ export const getImageUrl = query({
 export const getImageUrls = query({
   args: {
     storageIds: v.array(v.id("_storage")),
+    api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    // null (not {}) so the client can tell "not signed in yet" from "these
+    // storage objects don't exist" — an empty object would make it cache every
+    // requested id as missing and silently hide the images all session.
+    if (!userId) return null;
     const urls: Record<string, string | null> = {};
     for (const id of args.storageIds) {
       urls[id] = await ctx.storage.getUrl(id);
     }
     return urls;
-  },
-});
-
-export const debugMessagesWithImages = query({
-  args: {
-    conversation_id: v.optional(v.string()),
-  },
-  handler: async (ctx, args) => {
-    let messages;
-    if (args.conversation_id) {
-      messages = await ctx.db.query("messages")
-        .withIndex("by_conversation_timestamp", (q) =>
-          q.eq("conversation_id", args.conversation_id as Id<"conversations">)
-        )
-        .collect();
-    } else {
-      messages = await ctx.db.query("messages").order("desc").take(2000);
-    }
-    const withImages = messages.filter(m => m.images && m.images.length > 0);
-    return {
-      totalChecked: messages.length,
-      withImages: withImages.length,
-      samples: withImages.slice(0, 5).map(m => ({
-        id: m._id,
-        imagesCount: m.images?.length,
-        images: m.images?.map(i => ({
-          hasStorageId: !!i.storage_id,
-          hasData: !!i.data,
-          mediaType: i.media_type,
-          toolUseId: i.tool_use_id || null,
-        })),
-        role: m.role,
-        conversationId: m.conversation_id,
-      })),
-    };
   },
 });

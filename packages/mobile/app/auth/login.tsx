@@ -29,9 +29,18 @@ export default function LoginScreen() {
     try {
       await signInWithApple();
     } catch (error: any) {
-      if (error?.code !== 'ERR_REQUEST_CANCELED') {
-        Alert.alert('Error', 'Apple sign in failed. Please try again.');
-      }
+      // Canceled: the user dismissed the sheet. Unknown (ASAuthorizationError
+      // 1000): the device has no usable Apple Account and iOS just showed its
+      // own "Sign in to your Apple Account in Settings" dialog — stacking a
+      // generic failure alert on top reads as an app bug (App Review flagged
+      // exactly this wording). Stay silent for both.
+      if (error?.code === 'ERR_REQUEST_CANCELED' || error?.code === 'ERR_REQUEST_UNKNOWN') return;
+      // Real failures: surface the underlying reason so the cause is
+      // diagnosable from the alert itself instead of a generic string.
+      const detail = typeof error?.message === 'string' && error.message.trim()
+        ? `\n\n${error.message.trim().slice(0, 140)}`
+        : '';
+      Alert.alert('Error', `Apple sign in failed. Please try again.${detail}`);
     } finally {
       setLoading(false);
     }

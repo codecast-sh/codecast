@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   StyleSheet,
   ScrollView,
@@ -11,8 +11,14 @@ import {
 import * as Haptics from 'expo-haptics';
 import { copyToClipboard } from '@/lib/clipboard';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { useRouter } from 'expo-router';
 import { Theme } from '@/constants/Theme';
+import { CastCanvas, canvasAvailable } from './CastCanvas';
+import { EntityPill, isEntityId } from './EntityPill';
+import { parseEntityUrl } from '@codecast/shared/entities';
+// Canonical "★ Insight ─────" parser shared with web (pure string/regex module,
+// Hermes-safe). Mobile used to carry its own narrower copy in session/[id].tsx
+// which silently missed most real-world insight forms — one parser, one truth.
+import { parseInsightBlocks } from '@codecast/web/components/insightBlocks';
 
 const SYNTAX_PATTERNS: Array<{ regex: RegExp; color: string }> = [
   { regex: /\/\/.*$/gm, color: '#586e75' },
@@ -60,15 +66,13 @@ export function HighlightedCodeText({ content, style }: { content: string; style
   );
 }
 
-const MENTION_COLORS: Record<string, string> = {
-  ct: '#cb4b16',
-  pl: '#6c71c4',
-  doc: Theme.cyan,
-};
+// Trailing "<name> <entity-id>" inside an @[…] mention — same shape web's
+// MENTION_RE extracts (the id renders as a pill; the name is its fallback).
+const MENTION_ENTITY_RE = /^(.*?)\s*\b(ct-\w+|pl-\w+|jx[a-z0-9]{5,}|doc:\w+)$/i;
 
-export function renderInlineMarkdown(text: string, baseStyle: any, keyPrefix = '', isUser = false, onEntityPress?: (id: string) => void): React.ReactNode[] {
+export function renderInlineMarkdown(text: string, baseStyle: any, keyPrefix = '', isUser = false): React.ReactNode[] {
   const result: React.ReactNode[] = [];
-  const pattern = /(`[^`]+`|\*\*(.+?)\*\*|\*(.+?)\*|~~(.+?)~~|\[([^\]]+)\]\(([^)]+)\)|(https?:\/\/[^\s<>\])"',]+)|@\[([^\]]+)\]|@(\w+)|((?:ct|pl|doc)-[a-z0-9]{4,}))/g;
+  const pattern = /(`[^`]+`|\*\*(.+?)\*\*|\*(.+?)\*|~~(.+?)~~|\[([^\]]+)\]\(([^)]+)\)|(https?:\/\/[^\s<>\])"',]+)|@\[([^\]]+)\]|@(\w+)|\b((?:ct|pl)-[a-z0-9]{4,}|jx[a-z0-9]{5,}|doc:[a-z0-9]{20,}|doc-[a-z0-9]{4,})\b)/g;
   let lastIndex = 0;
   let match;
   let key = 0;
@@ -80,9 +84,15 @@ export function renderInlineMarkdown(text: string, baseStyle: any, keyPrefix = '
 
     if (match[0].startsWith('`')) {
       const code = match[0].slice(1, -1);
-      result.push(
-        <RNText key={`${keyPrefix}c${key++}`} style={isUser ? mdStyles.inlineCodeUser : mdStyles.inlineCode}>{code}</RNText>
-      );
+      // `jx…`/`ct-…` in backticks is an object reference, not code — pill it
+      // (web's EntityAwareCode does the same).
+      if (isEntityId(code)) {
+        result.push(<EntityPill key={`${keyPrefix}c${key++}`} shortId={code} />);
+      } else {
+        result.push(
+          <RNText key={`${keyPrefix}c${key++}`} style={isUser ? mdStyles.inlineCodeUser : mdStyles.inlineCode}>{code}</RNText>
+        );
+      }
     } else if (match[2] !== undefined) {
       result.push(
         <RNText key={`${keyPrefix}b${key++}`} style={{ fontWeight: '700' }}>{match[2]}</RNText>
@@ -97,49 +107,69 @@ export function renderInlineMarkdown(text: string, baseStyle: any, keyPrefix = '
       );
     } else if (match[5] && match[6]) {
       const url = match[6];
-      result.push(
-        <RNText key={`${keyPrefix}l${key++}`} style={isUser ? mdStyles.linkTextUser : mdStyles.linkText} onPress={() => Linking.openURL(url)}>
-          {match[5]}
-        </RNText>
-      );
+      // A codecast object URL becomes a rich in-app pill, not an external link
+      // (web's EntityAwareLink parity).
+      const entityRef = parseEntityUrl(url);
+      if (entityRef) {
+        result.push(<EntityPill key={`${keyPrefix}l${key++}`} type={entityRef.type} id={entityRef.id} />);
+      } else {
+        result.push(
+          <RNText key={`${keyPrefix}l${key++}`} style={isUser ? mdStyles.linkTextUser : mdStyles.linkText} onPress={() => Linking.openURL(url)}>
+            {match[5]}
+          </RNText>
+        );
+      }
     } else if (match[7]) {
       const url = match[7];
-      let displayUrl = url;
-      if (url.length > 50) {
-        try {
-          const parsed = new URL(url);
-          const path = parsed.pathname.length > 1 ? parsed.pathname.slice(0, 20) + '...' : '';
-          displayUrl = parsed.hostname + path;
-        } catch { displayUrl = url.slice(0, 40) + '...'; }
+      const entityRef = parseEntityUrl(url);
+      if (entityRef) {
+        result.push(<EntityPill key={`${keyPrefix}u${key++}`} type={entityRef.type} id={entityRef.id} />);
+      } else {
+        let displayUrl = url;
+        if (url.length > 50) {
+          try {
+            const parsed = new URL(url);
+            const path = parsed.pathname.length > 1 ? parsed.pathname.slice(0, 20) + '...' : '';
+            displayUrl = parsed.hostname + path;
+          } catch { displayUrl = url.slice(0, 40) + '...'; }
+        }
+        result.push(
+          <RNText key={`${keyPrefix}u${key++}`} style={isUser ? mdStyles.linkTextUser : mdStyles.linkText} onPress={() => Linking.openURL(url)}>
+            {displayUrl}
+          </RNText>
+        );
       }
-      result.push(
-        <RNText key={`${keyPrefix}u${key++}`} style={isUser ? mdStyles.linkTextUser : mdStyles.linkText} onPress={() => Linking.openURL(url)}>
-          {displayUrl}
-        </RNText>
-      );
     } else if (match[8]) {
-      // @[Bracket mention] syntax
+      // @[Bracket mention] syntax — a trailing entity id ("@[Title jx7c6zk]")
+      // renders as that object's pill; a plain name stays a mention chip.
       const name = match[8];
-      result.push(
-        <RNText key={`${keyPrefix}m${key++}`} style={mdStyles.mentionPill}>@{name}</RNText>
-      );
+      const em = name.match(MENTION_ENTITY_RE);
+      if (em && em[2]) {
+        const entityId = em[2];
+        result.push(
+          entityId.toLowerCase().startsWith('doc:')
+            ? <EntityPill key={`${keyPrefix}m${key++}`} type="doc" id={entityId.slice(4)} />
+            : <EntityPill key={`${keyPrefix}m${key++}`} shortId={entityId} />
+        );
+      } else {
+        result.push(
+          <RNText key={`${keyPrefix}m${key++}`} style={mdStyles.mentionPill}>@{name}</RNText>
+        );
+      }
     } else if (match[9]) {
       // @word mention
       result.push(
         <RNText key={`${keyPrefix}m${key++}`} style={mdStyles.mentionPill}>@{match[9]}</RNText>
       );
     } else if (match[10]) {
-      // Entity ID (ct-xxxx, pl-xxxx, doc-xxxx)
+      // Entity ID (jx… session, ct-/pl- task/plan, doc reference)
       const id = match[10];
-      const prefix = id.split('-')[0];
-      const color = MENTION_COLORS[prefix] || Theme.cyan;
-      const route = prefix === 'ct' ? `/task/${id}` : prefix === 'pl' ? `/plan/${id}` : prefix === 'doc' ? `/doc/${id}` : null;
       result.push(
-        <RNText
-          key={`${keyPrefix}e${key++}`}
-          style={[mdStyles.entityPill, { backgroundColor: color + '20', color }]}
-          onPress={route && onEntityPress ? () => onEntityPress(id) : undefined}
-        >{id}</RNText>
+        id.toLowerCase().startsWith('doc:')
+          ? <EntityPill key={`${keyPrefix}e${key++}`} type="doc" id={id.slice(4)} />
+          : id.toLowerCase().startsWith('doc-')
+            ? <EntityPill key={`${keyPrefix}e${key++}`} type="doc" id={id} />
+            : <EntityPill key={`${keyPrefix}e${key++}`} shortId={id} />
       );
     }
 
@@ -245,7 +275,7 @@ export function CodeBlockWithCopy({ content, language }: { content: string; lang
   );
 }
 
-export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false, onEntityPress }: { text: string; baseStyle: any; blockKey: string; isUser?: boolean; onEntityPress?: (id: string) => void }) {
+export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false }: { text: string; baseStyle: any; blockKey: string; isUser?: boolean }) {
   const lines = text.split('\n');
   const elements: React.ReactNode[] = [];
   let i = 0;
@@ -257,13 +287,13 @@ export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false, o
 
     if (!trimmed) { i++; continue; }
 
-    const headerMatch = trimmed.match(/^(#{1,3})\s+(.+)/);
+    const headerMatch = trimmed.match(/^(#{1,6})\s+(.+)/);
     if (headerMatch) {
       const level = headerMatch[1].length;
-      const fontSize = level === 1 ? 18 : level === 2 ? 16 : 15;
+      const fontSize = [18, 16, 15, 14, 13, 13][level - 1];
       elements.push(
         <RNText key={`${blockKey}h${elKey++}`} style={[baseStyle, { fontSize, fontWeight: '700', marginTop: 8, marginBottom: 4 }]}>
-          {renderInlineMarkdown(headerMatch[2], baseStyle, `${blockKey}h${elKey}`, isUser, onEntityPress)}
+          {renderInlineMarkdown(headerMatch[2], baseStyle, `${blockKey}h${elKey}`, isUser)}
         </RNText>
       );
       i++;
@@ -271,32 +301,37 @@ export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false, o
     }
 
     if (trimmed.match(/^[-*]\s/) || trimmed.match(/^\d+[.)]\s/)) {
-      const listItems: { text: string; ordered: boolean; num?: number; checked?: boolean }[] = [];
+      const listItems: { text: string; ordered: boolean; num?: number; checked?: boolean; depth: number }[] = [];
       while (i < lines.length) {
-        const l = lines[i].trim();
+        const raw = lines[i];
+        const l = raw.trim();
+        // Indentation depth from the UNtrimmed line \u2014 two spaces (or a tab) per
+        // level, capped so a pathological paste can't march off-screen.
+        const leading = raw.match(/^[ \t]*/)![0].replace(/\t/g, '  ').length;
+        const depth = Math.min(Math.floor(leading / 2), 3);
         const checkMatch = l.match(/^[-*]\s+\[([ xX])\]\s+(.*)/);
         const ulMatch = l.match(/^[-*]\s+(.*)/);
         const olMatch = l.match(/^(\d+)[.)]\s+(.*)/);
         if (checkMatch) {
-          listItems.push({ text: checkMatch[2], ordered: false, checked: checkMatch[1] !== ' ' });
+          listItems.push({ text: checkMatch[2], ordered: false, checked: checkMatch[1] !== ' ', depth });
           i++;
         } else if (ulMatch) {
-          listItems.push({ text: ulMatch[1], ordered: false });
+          listItems.push({ text: ulMatch[1], ordered: false, depth });
           i++;
         } else if (olMatch) {
-          listItems.push({ text: olMatch[2], ordered: true, num: parseInt(olMatch[1]) });
+          listItems.push({ text: olMatch[2], ordered: true, num: parseInt(olMatch[1]), depth });
           i++;
         } else break;
       }
       elements.push(
         <RNView key={`${blockKey}li${elKey++}`} style={mdStyles.listContainer}>
           {listItems.map((item, j) => (
-            <RNView key={j} style={mdStyles.listItem}>
+            <RNView key={j} style={[mdStyles.listItem, item.depth > 0 && { paddingLeft: item.depth * 14 }]}>
               <RNText style={[baseStyle, mdStyles.listBullet]}>
-                {item.checked !== undefined ? (item.checked ? '\u2611' : '\u2610') : item.ordered ? `${item.num}.` : '\u2022'}
+                {item.checked !== undefined ? (item.checked ? '\u2611' : '\u2610') : item.ordered ? `${item.num}.` : item.depth > 0 ? '\u25e6' : '\u2022'}
               </RNText>
               <RNText style={[baseStyle, { flex: 1 }, item.checked === true && { textDecorationLine: 'line-through', color: Theme.textMuted0 }]}>
-                {renderInlineMarkdown(item.text, baseStyle, `${blockKey}li${j}`, isUser, onEntityPress)}
+                {renderInlineMarkdown(item.text, baseStyle, `${blockKey}li${j}`, isUser)}
               </RNText>
             </RNView>
           ))}
@@ -305,7 +340,11 @@ export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false, o
       continue;
     }
 
-    if (trimmed.match(/^[-*_]{3,}$/)) {
+    // ASCII thematic breaks, plus box-drawing/em-dash rule runs (optionally
+    // `code`/**bold**-wrapped) \u2014 the residue of insight fences the block parser
+    // deliberately doesn't match (e.g. the open-ended titled form). A clean rule
+    // beats a wrapping line of \u2500 glyphs or a bogus inline-code chip.
+    if (trimmed.match(/^[-*_]{3,}$/) || trimmed.match(/^(?:`|\*\*)?[\u2500\u2501\u2550\u2014\u2013]{3,}(?:`|\*\*)?$/)) {
       elements.push(
         <RNView key={`${blockKey}hr${elKey++}`} style={mdStyles.horizontalRule} />
       );
@@ -322,7 +361,7 @@ export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false, o
       elements.push(
         <RNView key={`${blockKey}q${elKey++}`} style={isUser ? mdStyles.blockquoteUser : mdStyles.blockquote}>
           <RNText style={[baseStyle, mdStyles.blockquoteText]}>
-            {renderInlineMarkdown(quoteLines.join('\n'), baseStyle, `${blockKey}q${elKey}`, isUser, onEntityPress)}
+            {renderInlineMarkdown(quoteLines.join('\n'), baseStyle, `${blockKey}q${elKey}`, isUser)}
           </RNText>
         </RNView>
       );
@@ -357,7 +396,7 @@ export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false, o
                 {row.map((cell, ci) => (
                   <RNView key={ci} style={mdStyles.tableCell}>
                     <RNText style={[baseStyle, mdStyles.tableCellText]}>
-                      {renderInlineMarkdown(cell, baseStyle, `${blockKey}tbl${ri}${ci}`, isUser, onEntityPress)}
+                      {renderInlineMarkdown(cell, baseStyle, `${blockKey}tbl${ri}${ci}`, isUser)}
                     </RNText>
                   </RNView>
                 ))}
@@ -379,7 +418,7 @@ export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false, o
     if (paraLines.length > 0) {
       elements.push(
         <RNText key={`${blockKey}p${elKey++}`} style={[baseStyle, { marginBottom: 6 }]} selectable>
-          {renderInlineMarkdown(paraLines.join('\n'), baseStyle, `${blockKey}p${elKey}`, isUser, onEntityPress)}
+          {renderInlineMarkdown(paraLines.join('\n'), baseStyle, `${blockKey}p${elKey}`, isUser)}
         </RNText>
       );
     }
@@ -388,15 +427,12 @@ export function MarkdownTextBlock({ text, baseStyle, blockKey, isUser = false, o
   return <>{elements}</>;
 }
 
-export function MarkdownContent({ text, baseStyle, isUser = false }: { text: string; baseStyle: any; isUser?: boolean }) {
-  const router = useRouter();
-  const handleEntityPress = useCallback((id: string) => {
-    const prefix = id.split('-')[0];
-    if (prefix === 'ct') router.push(`/task/${id}`);
-    else if (prefix === 'pl') router.push(`/plan/${id}`);
-    else if (prefix === 'doc') router.push(`/doc/${id}`);
-  }, [router]);
-  const codeBlockRegex = /```(\w+)?\n([\s\S]*?)```/g;
+// The fence-splitting run of blocks — code fences to CodeBlockWithCopy /
+// CastCanvas, everything else to MarkdownTextBlock. Internal: MarkdownContent
+// wraps this with insight-block extraction; InsightCard bodies reuse it.
+function MarkdownBlocks({ text, baseStyle, isUser, keyPrefix }: { text: string; baseStyle: any; isUser: boolean; keyPrefix: string }) {
+  // Language may be hyphenated (cast-canvas, objective-c).
+  const codeBlockRegex = /```([\w-]+)?\n([\s\S]*?)```/g;
   const blocks: Array<{ type: 'text' | 'code'; content: string; language?: string }> = [];
   let lastIndex = 0;
   let match;
@@ -418,16 +454,61 @@ export function MarkdownContent({ text, baseStyle, isUser = false }: { text: str
   if (blocks.length === 0) blocks.push({ type: 'text', content: text });
 
   return (
-    <RNView>
+    <>
       {blocks.map((block, idx) => {
         if (block.type === 'code') {
+          // Keep the fence name in sync with web's HtmlSnippet.CANVAS_FENCE
+          // ("cast-canvas") — importing the web module would drag DOM-only code
+          // into the Hermes bundle. Binaries without the WebView native module
+          // fall through to the plain code block.
+          if (block.language === 'cast-canvas' && canvasAvailable) {
+            return <CastCanvas key={idx} code={block.content} />;
+          }
           return (
             <CodeBlockWithCopy key={idx} content={block.content} language={block.language || 'plaintext'} />
           );
         }
 
-        return <MarkdownTextBlock key={idx} text={block.content} baseStyle={baseStyle} blockKey={`b${idx}`} isUser={isUser} onEntityPress={handleEntityPress} />;
+        return <MarkdownTextBlock key={idx} text={block.content} baseStyle={baseStyle} blockKey={`${keyPrefix}b${idx}`} isUser={isUser} />;
       })}
+    </>
+  );
+}
+
+// "★ Insight ─────" callout — mirrors web's InsightCard (ConversationView):
+// violet-tinted card, star + uppercase label header, markdown body.
+function InsightCard({ label, content, baseStyle }: { label: string; content: string; baseStyle: any }) {
+  return (
+    <RNView style={mdStyles.insightCard}>
+      <RNView style={mdStyles.insightHeader}>
+        <FontAwesome name="star" size={11} color={Theme.violet} />
+        <RNText style={mdStyles.insightLabel}>{label}</RNText>
+      </RNView>
+      <RNView style={mdStyles.insightBody}>
+        <MarkdownBlocks text={content} baseStyle={baseStyle} isUser={false} keyPrefix="ins" />
+      </RNView>
+    </RNView>
+  );
+}
+
+export function MarkdownContent({ text, baseStyle, isUser = false }: { text: string; baseStyle: any; isUser?: boolean }) {
+  // Insight extraction runs on every assistant text (same placement as web's
+  // assistant-message flat run) so cards show up on ALL surfaces that render
+  // markdown — message bubbles, tool results, plan/teammate cards.
+  const parts = useMemo(
+    () => (isUser ? [{ type: 'text' as const, content: text }] : parseInsightBlocks(text)),
+    [text, isUser],
+  );
+
+  return (
+    <RNView>
+      {parts.map((part, pIdx) =>
+        part.type === 'insight' ? (
+          <InsightCard key={pIdx} label={part.label} content={part.content} baseStyle={baseStyle} />
+        ) : (
+          <MarkdownBlocks key={pIdx} text={part.content} baseStyle={baseStyle} isUser={isUser} keyPrefix={`p${pIdx}`} />
+        )
+      )}
     </RNView>
   );
 }
@@ -466,15 +547,6 @@ export const mdStyles = StyleSheet.create({
     color: Theme.accent,
     fontWeight: '600',
     fontSize: 13,
-    paddingHorizontal: 5,
-    paddingVertical: 1,
-    borderRadius: 4,
-    overflow: 'hidden',
-  },
-  entityPill: {
-    fontFamily: 'SpaceMono',
-    fontSize: 11,
-    fontWeight: '600',
     paddingHorizontal: 5,
     paddingVertical: 1,
     borderRadius: 4,
@@ -566,5 +638,34 @@ export const mdStyles = StyleSheet.create({
   },
   tableCellText: {
     fontSize: 11,
+  },
+  insightCard: {
+    marginVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: Theme.violet + '4d',
+    backgroundColor: Theme.violet + '0d',
+    overflow: 'hidden',
+  },
+  insightHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Theme.violet + '33',
+    backgroundColor: Theme.violet + '14',
+  },
+  insightLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    color: Theme.violet,
+  },
+  insightBody: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
   },
 });

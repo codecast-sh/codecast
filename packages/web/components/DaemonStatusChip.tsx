@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { copyToClipboard } from "../lib/utils";
 import { useDaemonHealth, formatDuration } from "../hooks/useDaemonHealth";
+import { useAppOffline } from "../hooks/useAppOffline";
 
 interface ChipView {
   colorVar: string;
@@ -30,10 +31,18 @@ function viewFor(health: ReturnType<typeof useDaemonHealth>): ChipView | null {
   }
   if (health.kind === "sync_stalled") {
     const stalled = formatDuration(health.stalledMs);
+    // Prefer the honest message count; fall back to logical ops for older
+    // daemons that don't report it yet.
+    const count = health.messages > 0 ? health.messages : health.pending;
+    const unit = health.messages > 0 ? "message" : "operation";
+    const convoNote =
+      health.conversations > 0
+        ? ` across ${health.conversations} conversation${health.conversations === 1 ? "" : "s"}`
+        : "";
     return {
       colorVar: "--sol-yellow",
-      label: `sync stalled (${health.pending})`,
-      title: `Daemon is online but ${health.pending} sync operation${health.pending === 1 ? "" : "s"} have been stuck for ${stalled}. Run cast status to inspect (click to copy).`,
+      label: `syncing ${count}, oldest ${stalled} behind`,
+      title: `Daemon is online but ${count} ${unit}${count === 1 ? "" : "s"}${convoNote} have been waiting to sync for ${stalled}. Run cast status to inspect (click to copy).`,
       command: "cast status",
     };
   }
@@ -42,6 +51,10 @@ function viewFor(health: ReturnType<typeof useDaemonHealth>): ChipView | null {
 
 export function DaemonStatusChip() {
   const health = useDaemonHealth();
+  // When this client itself is disconnected, daemon_last_seen is stale because
+  // WE can't sync — the ConnectionBanner owns that story; a "daemon stale"
+  // chip would misattribute it.
+  const { offline: appOffline } = useAppOffline();
   const [mounted, setMounted] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -49,7 +62,7 @@ export function DaemonStatusChip() {
     setMounted(true);
   });
 
-  if (!mounted) return null;
+  if (!mounted || appOffline) return null;
 
   const view = viewFor(health);
   if (!view) return null;

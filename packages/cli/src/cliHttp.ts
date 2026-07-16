@@ -93,3 +93,48 @@ export async function cliFetchRead(
 ): Promise<Response> {
   return cliFetch(url, init, { retries: 1, ...opts });
 }
+
+/**
+ * POST /cli/search with graceful degradation: common tokens make the messages
+ * full-text index blow its read budget server-side (the whole query dies — see
+ * convex/conversations.ts fetchMessageSearchPool), which surfaces here as the
+ * http route's catch-all {error: "Internal error"} or a transport failure. On
+ * that class of failure, retry once in titles_only mode (conversation-table
+ * indexes only, reliably cheap) so callers get title/summary hits instead of a
+ * hard error. The fallback result carries titles_only from the server plus
+ * content_search_error for display; auth/validation errors pass through.
+ */
+export async function cliSearchRequest(
+  siteUrl: string,
+  body: Record<string, unknown>,
+): Promise<any> {
+  const post = async (payload: Record<string, unknown>) => {
+    const resp = await cliFetchRead(`${siteUrl}/cli/search`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return resp.json();
+  };
+  let result: any;
+  let transportError: unknown;
+  try {
+    result = await post(body);
+  } catch (err) {
+    transportError = err;
+  }
+  const contentSearchDied = transportError !== undefined || result?.error === "Internal error";
+  if (contentSearchDied && !body.titles_only) {
+    const detail = transportError instanceof Error
+      ? transportError.message
+      : result?.details || result?.error;
+    try {
+      const fallback = await post({ ...body, titles_only: true });
+      if (!fallback?.error) {
+        return { ...fallback, content_search_error: detail };
+      }
+    } catch { /* fall through to the original failure */ }
+  }
+  if (transportError !== undefined) throw transportError;
+  return result;
+}

@@ -62,6 +62,10 @@ export const addComment = mutation({
     const actor = await ctx.db.get(userId);
     const actorName = actor?.name || actor?.github_username || actor?.email || "Someone";
 
+    // Track who we've already pinged so nobody gets two notifications for one
+    // comment (e.g. the owner who is also the person being replied to).
+    const notified = new Set<string>();
+
     await ctx.runMutation(internal.notificationRouter.ensureSubscribed, {
       user_id: userId,
       entity_type: "conversation",
@@ -102,13 +106,16 @@ export const addComment = mutation({
             comment_id: commentId,
             direct_recipient_id: mentionedUser._id,
           });
+          notified.add(mentionedUser._id.toString());
         }
       }
     }
 
+    // Reply → ping the comment's author.
     if (args.parent_comment_id) {
       const parentComment = await ctx.db.get(args.parent_comment_id);
-      if (parentComment && parentComment.user_id.toString() !== userId.toString()) {
+      const parentAuthor = parentComment?.user_id?.toString();
+      if (parentComment && parentAuthor && parentAuthor !== userId.toString() && !notified.has(parentAuthor)) {
         await ctx.runMutation(internal.notificationRouter.emit, {
           event_type: "comment_reply",
           actor_user_id: userId,
@@ -119,8 +126,20 @@ export const addComment = mutation({
           comment_id: commentId,
           direct_recipient_id: parentComment.user_id,
         });
+        notified.add(parentAuthor);
       }
-    } else if (conversation.user_id.toString() !== userId.toString()) {
+    }
+
+    // ALWAYS ping the conversation owner for ANY comment left on their conversation
+    // (top-level or reply) — unless they authored it or were already pinged above.
+    const ownerId = conversation.user_id.toString();
+    if (ownerId !== userId.toString() && !notified.has(ownerId)) {
+      await ctx.runMutation(internal.notificationRouter.ensureSubscribed, {
+        user_id: conversation.user_id,
+        entity_type: "conversation",
+        entity_id: args.conversation_id.toString(),
+        reason: "watching",
+      });
       await ctx.runMutation(internal.notificationRouter.emit, {
         event_type: "conversation_comment",
         actor_user_id: userId,
@@ -131,6 +150,7 @@ export const addComment = mutation({
         comment_id: commentId,
         direct_recipient_id: conversation.user_id,
       });
+      notified.add(ownerId);
     }
 
     let prIdToSync = args.pr_id;
@@ -340,7 +360,10 @@ export const getConversationCommentSummary = query({
   },
 });
 
-export const updateGitHubCommentId = mutation({
+// internal: only githubApi (a server action) calls this, to record the GitHub
+// comment id after mirroring. Was a public mutation that let anyone stamp an
+// arbitrary github_comment_id onto any comment.
+export const updateGitHubCommentId = internalMutation({
   args: {
     comment_id: v.id("comments"),
     github_comment_id: v.number(),

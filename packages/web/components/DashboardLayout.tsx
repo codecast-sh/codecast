@@ -22,22 +22,27 @@ import { TeamSwitcher } from "./TeamSwitcher";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { subscribeComposeOptimistic } from "../lib/composeBridge";
 import { NEW_SESSION_EVENT } from "../lib/utils";
-import { Plus, PanelLeft, PanelRight } from "lucide-react";
+import { Plus, PanelLeft, PanelRight, MessageSquare } from "lucide-react";
 import { SetupPromptBanner } from "./SetupPromptBanner";
 import { DesktopAppBanner } from "./DesktopAppBanner";
 import { CliOfflineBanner } from "./CliOfflineBanner";
+import { ConnectionBanner } from "./ConnectionBanner";
 import { DaemonStatusChip } from "./DaemonStatusChip";
+import { AccountUsageChip } from "./AccountUsageChip";
 import { SyncStatusChip } from "./SyncStatusChip";
 import { TmuxMissingBanner } from "./TmuxMissingBanner";
 import { FindBar } from "./FindBar";
 import { KeyboardShortcutsPanel, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { SettingsModal } from "./settings/SettingsModal";
-import { useInboxStore, useTrackedStore, categorizeSessions, sessionsWithPendingSend, isSessionHidden, getProjectName } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, categorizeSessions, filterInboxScope, sessionsWithPendingSend, sessionsWakeSig, pendingSendWakeSig, isSessionHidden, getProjectName } from "../store/inboxStore";
+import { useCoarseNow } from "../hooks/useCoarseNow";
 import { useShortcutAction, useShortcutContext, useGlobalShortcutActions } from "../shortcuts";
 import { usePrefetch } from "../hooks/usePrefetch";
 import { desktopHeaderClass, setupDesktopDrag, isElectron } from "../lib/desktop";
-import { CollapsedSessionRail, SessionListPanel, ConversationColumn } from "./GlobalSessionPanel";
+import { SessionListPanel, ConversationColumn } from "./GlobalSessionPanel";
+import { EdgePeek } from "./EdgePeek";
 import { useSyncInboxSessions } from "../hooks/useSyncInboxSessions";
+import { useSyncTeamInboxSessions } from "../hooks/useSyncTeamInboxSessions";
 import { useSyncChangeFeed } from "../hooks/useSyncChangeFeed";
 import { useSyncBuckets } from "../hooks/useSyncBuckets";
 import { useSyncDocs, useSyncMentionDocs } from "../hooks/useSyncDocs";
@@ -75,13 +80,39 @@ const DashboardNestCtx: React.Context<boolean> =
 // keyboard panel, main content) on every tick.
 const ActiveAgentsBadge = memo(function ActiveAgentsBadge({ isOnInboxPage }: { isOnInboxPage: boolean }) {
   const s = useTrackedStore([
-    s => s.sessions,
+    // Wake on STRUCTURAL change (bucket/order/identity), never on the ~1s
+    // liveness heartbeat: the raw s.sessions ref flips on every tick, and this
+    // badge was measured re-running categorizeSessions over the whole
+    // never-prune cache ~3x/sec at ~50ms a pass. The body still reads
+    // s.sessions for data; these signatures only gate the re-render. Same for
+    // pendingMessages — only the pending-send MEMBERSHIP matters here.
+    // See store/wakeSig.ts and the identical gate on SessionListPanel.
+    s => sessionsWakeSig(s.sessions),
     s => s.sessionsWithQueuedMessages,
-    s => s.pendingMessages,
+    s => pendingSendWakeSig(s.pendingMessages),
+    s => s.currentUser?._id,
+    s => s.liveInboxIds,
+    s => s.showOldSessions,
   ]);
+  // categorizeSessions' trust-TTL sweep (stale "working" → needs-input) is
+  // time-driven, not field-driven — keep it alive with a coarse clock, exactly
+  // like SessionListPanel (see useCoarseNow / store/wakeSig.ts).
+  const coarseNow = useCoarseNow(15_000);
+  // Ambient "active agents" count stays MINE-scoped regardless of inbox scope: a
+  // teammate row can linger in the shared cache after a team-board visit, but the
+  // dock badge counts YOUR working sessions, not the team's. filterInboxScope with
+  // "mine" drops any definitively-foreign row (no-op when the cache is all mine).
+  // On top of that, count only the AUTHORITATIVE active set — a stale "working"
+  // card that aged out of the live inbox must not inflate the badge (its frozen
+  // daemon status never un-sets). liveInboxIds + showOld make categorizeSessions
+  // drop it.
+  const meId = s.currentUser?._id?.toString?.() ?? null;
+  // Deps are the wake signatures (memoized by ref — free to re-call here), not
+  // the raw s.sessions/s.pendingMessages refs those flip on every heartbeat.
   const working = useMemo(
-    () => categorizeSessions(s.sessions, s.sessionsWithQueuedMessages, sessionsWithPendingSend(s.pendingMessages)).working,
-    [s.sessions, s.sessionsWithQueuedMessages, s.pendingMessages],
+    () => categorizeSessions(filterInboxScope(s.sessions, "mine", meId), s.sessionsWithQueuedMessages, sessionsWithPendingSend(s.pendingMessages), { liveInboxIds: s.liveInboxIds, showOld: s.showOldSessions }).working,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sessionsWakeSig(s.sessions), meId, s.sessionsWithQueuedMessages, pendingSendWakeSig(s.pendingMessages), s.liveInboxIds, s.showOldSessions, coarseNow],
   );
   if (working.length === 0) return null;
   const activeAgentCount = working.length;
@@ -136,6 +167,7 @@ function DashboardSyncEffects() {
   useSyncMentionDocs();
   useSyncMentionPlans();
   useSyncInboxSessions();
+  useSyncTeamInboxSessions();
   useSyncChangeFeed();
   useSyncBuckets();
   return null;
@@ -155,6 +187,17 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     s => s.sidePanelSessionId,
     s => s.currentSessionId,
     s => s.viewingDismissedId,
+    s => s.commentRailOpen,
+    s => s.clientState.ui?.comments_enabled ?? false,
+    // Re-render the header toggle when comments change, so a teammate's comment on
+    // the viewed conversation surfaces the toggle even with the tools off. Subscribe
+    // to the comments map REF (O(1) Object.is compare), not a full scan: comments is
+    // low-churn (heartbeats never touch it, so the ref is stable between comment
+    // syncs), and the actual "does the viewed conversation have comments" boolean is
+    // derived below off the same ref. Scanning all comments here re-ran on every ~1s
+    // store heartbeat notification app-wide. The viewed conversation id is already a
+    // dep (currentSessionId / viewingDismissedId above).
+    s => s.comments,
     s => s.compose.open,
     s => s.compose.nonce,
     s => s.tabs.length,
@@ -240,8 +283,30 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // explicit because it is source-aware, not just path-based.
   const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnRoutinesPage || isOnSchedulesPage || isOnPlansPage || isOnDocsPage || isOnProjectsPage || isOnWindowsPage || isOnCrosstalkPage || isFullWidthRoute(pathname ?? "");
 
+  // The teammate comment rail is a conversation-scoped overlay, so its header
+  // toggle only makes sense when a conversation is actually on screen.
+  const isViewingConversation = isOnConversationPage || (isOnInboxPage && !!(s.currentSessionId || s.viewingDismissedId));
+  const commentRailOpen = s.commentRailOpen === true;
+  // The comment tools are opt-in (off by default), but a conversation that already
+  // has comments still surfaces the toggle so you can open it to read + reply.
+  const commentsEnabled = s.clientState.ui?.comments_enabled ?? false;
+  const viewedConvIds = [s.currentSessionId, s.viewingDismissedId].filter(Boolean) as string[];
+  // Conversation ids that carry at least one comment, indexed once per comments-map
+  // change (not per render) so the toggle check below is an O(1) Set lookup.
+  const commentedConvIds = useMemo(() => {
+    const set = new Set<string>();
+    for (const c of Object.values(s.comments) as { conversation_id?: string }[]) {
+      if (c.conversation_id) set.add(c.conversation_id);
+    }
+    return set;
+  }, [s.comments]);
+  const convHasComments = viewedConvIds.some((id) => commentedConvIds.has(id));
+  const showCommentsToggle = isViewingConversation && (commentsEnabled || convHasComments);
 
-  const showCollapsedRail = !s.sidePanelOpen && !isMobile;
+
+  // Right session list, collapsed: no persistent rail — a right-edge hover-peek
+  // slides the full list out, mirroring the left sidebar's collapsed behavior.
+  const rightPeekEnabled = !s.sidePanelOpen && !isMobile;
   const showSessionList = s.sidePanelOpen && !isMobile;
   const showMobileSessionList = s.sidePanelOpen && isMobile;
   const showConversationColumn = !!s.sidePanelSessionId && !isOnInboxPage && !isOnConversationPage && !isOnSettingsPage && !isMobile;
@@ -587,29 +652,10 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     else ref.resize(`${layout.sidebar}%`);
   }, [sidebarHidden]);
 
-  // Hover-peek: with the sidebar collapsed, touching the left edge slides it
-  // out as an overlay; leaving the overlay slides it back. The Sidebar inside
-  // stays mounted through the exit transition (peekMounted lags peekOpen).
+  // Hover-peek: with a side panel collapsed, touching the screen edge slides the
+  // full panel out as an overlay (state machine + markup in EdgePeek). Left edge
+  // peeks the sidebar; right edge peeks the session list (rightPeekEnabled above).
   const peekEnabled = sidebarCollapsed && !hideSidebar && !isZenMode && !isMobile;
-  const [peekOpen, setPeekOpen] = useState(false);
-  const [peekMounted, setPeekMounted] = useState(false);
-  const peekTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const openPeek = useCallback(() => {
-    if (peekTimer.current) clearTimeout(peekTimer.current);
-    setPeekMounted(true);
-    setPeekOpen(true);
-  }, []);
-  const closePeek = useCallback(() => {
-    setPeekOpen(false);
-    if (peekTimer.current) clearTimeout(peekTimer.current);
-    peekTimer.current = setTimeout(() => setPeekMounted(false), 250);
-  }, []);
-  useWatchEffect(() => {
-    if (!peekEnabled) {
-      setPeekOpen(false);
-      setPeekMounted(false);
-    }
-  }, [peekEnabled]);
 
   useWatchEffect(() => {
     const ref = sessionListPanelRef.current;
@@ -692,7 +738,6 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
           </Panel>
         </Group>
       </div>
-      {showCollapsedRail && <ErrorBoundary name="SessionRail" level="inline"><CollapsedSessionRail onSelect={sessionListOnSelect} /></ErrorBoundary>}
     </div>
   );
 
@@ -780,6 +825,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
 
           {/* Right section: Actions */}
           <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
+            <ErrorBoundary name="AccountUsageChip" level="inline">
+              <AccountUsageChip />
+            </ErrorBoundary>
             <ErrorBoundary name="DaemonStatusChip" level="inline">
               <DaemonStatusChip />
             </ErrorBoundary>
@@ -805,6 +853,16 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
             <ErrorBoundary name="UserMenu" level="inline">
               <UserMenu />
             </ErrorBoundary>
+            {showCommentsToggle && (
+              <ShortcutTooltip label={commentRailOpen ? "Hide comments" : "Show comments"} action="sidebar.toggleComments">
+                <button
+                  onClick={(e) => { s.setCommentRailOpen(!commentRailOpen); tipActions.whisper('sidebar.toggleComments', e); }}
+                  className={`flex items-center p-1.5 rounded-md transition-colors ${commentRailOpen ? "text-sol-cyan" : "text-sol-text-dim/60 hover:text-sol-text-muted"}`}
+                >
+                  <MessageSquare className="w-[18px] h-[18px]" />
+                </button>
+              </ShortcutTooltip>
+            )}
             <ShortcutTooltip label="Toggle sessions panel" action="sidebar.toggleRight">
               <button
                 onClick={(e) => { s.toggleSidePanel(); tipActions.whisper('sidebar.toggleRight', e); }}
@@ -818,6 +876,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       </header>
 
       <ErrorBoundary name="Banners" level="inline">
+        <ConnectionBanner />
         <DesktopAppBanner />
         <SetupPromptBanner />
         <CliOfflineBanner />
@@ -831,29 +890,28 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       {/* Content area with sidebar and main. Group is always mounted; sidebar Panel
           collapses imperatively so toggling zen/sidebar/mobile doesn't remount {rightArea}. */}
       <div className="flex-1 min-h-0 flex relative">
-        {/* Collapsed-sidebar hover peek: edge hotzone + sliding overlay. Scoped to
-            this container so it starts below the header/banners, not the viewport. */}
-        {peekEnabled && (
-          <>
-            <div className="absolute inset-y-0 left-0 w-1.5 z-[80]" onMouseEnter={openPeek} />
-            <div
-              className={`absolute inset-y-0 left-0 z-[85] w-[280px] border-r border-sol-border/50 bg-sol-bg-alt shadow-2xl transition-transform duration-200 ease-out ${peekOpen ? "translate-x-0" : "-translate-x-full pointer-events-none"}`}
-              onMouseLeave={closePeek}
-            >
-              {peekMounted && (
-                <div className="h-full overflow-auto">
-                  <ErrorBoundary name="SidebarPeek" level="panel">
-                    <Sidebar
-                      directoryFilter={directoryFilter}
-                      isMobileOpen={false}
-                      onMobileClose={() => {}}
-                    />
-                  </ErrorBoundary>
-                </div>
-              )}
+        {/* Collapsed-panel hover peeks: edge hotzone + sliding overlay. Scoped to
+            this container so they start below the header/banners, not the viewport. */}
+        <EdgePeek side="left" enabled={peekEnabled} width={280}>
+          <ErrorBoundary name="SidebarPeek" level="panel">
+            <Sidebar
+              directoryFilter={directoryFilter}
+              isMobileOpen={false}
+              onMobileClose={() => {}}
+            />
+          </ErrorBoundary>
+        </EdgePeek>
+        <EdgePeek side="right" enabled={rightPeekEnabled} width={320}>
+          <ErrorBoundary name="SessionListPeek" level="panel">
+            <div className="w-full h-full border-l border-sol-border/30">
+              <SessionListPanel
+                onSessionSelect={sessionListOnSelect}
+                activeSessionId={sessionListActiveId}
+                onCollapse={s.toggleSidePanel}
+              />
             </div>
-          </>
-        )}
+          </ErrorBoundary>
+        </EdgePeek>
         <div className="flex-1 min-w-0">
           <Group
             orientation="horizontal"

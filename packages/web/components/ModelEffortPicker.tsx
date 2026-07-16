@@ -1,8 +1,4 @@
-import { useEffect } from "react";
-import { useQuery } from "convex/react";
 import { useShallow } from "zustand/react/shallow";
-import { api } from "@codecast/convex/convex/_generated/api";
-import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { toast } from "sonner";
 import {
   AGENT_MODEL_CONFIG,
@@ -19,138 +15,44 @@ import {
 } from "./ui/dropdown-menu";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { formatModel } from "../lib/conversationProcessor";
+import {
+  modelOptionKey,
+  effortGlyph,
+  canControlModel,
+  commitModelChange as commitModelChangeCore,
+} from "../lib/modelSwitch";
+import { useModelCommandWatch } from "../hooks/useModelCommandWatch";
 
-// First-class model/effort control. Two rails, picked by session state:
-//  - blank session (message_count === 0): reconfigureSession — idempotent
-//    respawn with --model/--effort launch flags (the NewSessionView rail,
-//    rendered by LaunchModelPill next to the agent pills).
-//  - live session: set_model — the daemon drives the /model picker inside the
-//    session's tmux and commits with `s` (session-only), rendered by
-//    HeaderModelControl on the conversation-header badge.
-//
-// Every initiator (badge, pill, Cmd+K palette) funnels through
-// commitModelChange: optimistic local stamp → dispatch → record the command in
-// store.pendingModelCommand. The mounted conversation header watches that
-// command reactively and reverts + toasts if the daemon refuses ("Session is
-// busy…") or never answers (offline / pre-set_model daemon). The durable
-// confirmation is the transcript echo flowing back through the model/effort
-// rollup — no server-side optimistic state anywhere.
+// First-class model/effort control for the web. The commit rails and the
+// pending-command reconciliation live in lib/modelSwitch.ts +
+// hooks/useModelCommandWatch.ts (shared with the mobile switcher); this module
+// owns the web surfaces: the conversation-header badge (HeaderModelControl,
+// live sessions), the new-session launch pill (LaunchModelPill, blank
+// sessions), and the shared dropdown menu the Cmd+K palette also drives.
 
-/** Stored model id → picker option key ("claude-opus-4-8" → "opus"). */
-export function modelOptionKey(model: string | undefined | null, agentType: string | undefined): string {
-  const cfg = AGENT_MODEL_CONFIG[modelAgentKey(agentType)];
-  if (!model || !cfg) return "default";
-  const bare = model.startsWith("claude-") ? model.slice("claude-".length) : model;
-  const hit = cfg.models.find((m) => m.key !== "default" && (bare === m.key || bare.startsWith(`${m.key}-`)));
-  return hit?.key ?? "default";
-}
+export { modelOptionKey, effortGlyph, canControlModel };
 
-export function effortGlyph(effort: string | undefined | null): string {
-  switch (effort) {
-    case "low": return "○";
-    case "medium": return "◐";
-    case "high": return "●";
-    case "max": case "xhigh": return "◈";
-    default: return "";
-  }
-}
+const notifyToast = (message: string) => toast.error(message);
 
-/** True when this agent/session-state combination has a working rail. */
-export function canControlModel(agentType: string | undefined, blank: boolean): boolean {
-  const cfg = AGENT_MODEL_CONFIG[modelAgentKey(agentType)];
-  return !!cfg && (blank || cfg.midSession);
-}
-
-/**
- * The one commit path for every surface. Optimistically stamps the local
- * store, dispatches the right command for the session state, and (live rail)
- * records the daemon command for the mounted watcher.
- */
-export async function commitModelChange(opts: {
+/** Web commit path: shared rails + sonner toasts for errors. */
+export function commitModelChange(opts: {
   conversationId: string;
   agentType: string | undefined;
   current: { model?: string | null; effort?: string | null };
   sel: { model?: string; effort?: string };
   blank: boolean;
 }): Promise<void> {
-  const { conversationId, agentType, current, sel, blank } = opts;
-  if (!isConvexId(conversationId)) {
-    toast.error("Session is still being created — try again in a moment");
-    return;
-  }
-  const store = useInboxStore.getState();
-  const agentKey = modelAgentKey(agentType);
-  const prev = { model: current.model ?? null, effort: current.effort ?? null };
-  store.setConversationModel(conversationId, {
-    ...(sel.model !== undefined
-      ? { model: sel.model === "default" ? null : (agentKey === "claude" ? `claude-${sel.model}` : sel.model) }
-      : {}),
-    ...(sel.effort !== undefined ? { effort: sel.effort === "default" ? null : sel.effort } : {}),
-  });
-  try {
-    if (blank) {
-      await store.convCommand(conversationId, "reconfigureSession", sel);
-    } else {
-      const commandId = await store.convCommand(conversationId, "setSessionModel", sel);
-      if (commandId) {
-        store.setPendingModelCommand({
-          convId: conversationId,
-          commandId: commandId as string,
-          revert: prev,
-          startedAt: Date.now(),
-        });
-      }
-    }
-  } catch (err) {
-    store.setConversationModel(conversationId, prev);
-    toast.error(err instanceof Error ? err.message : "Failed to switch model");
-  }
+  return commitModelChangeCore({ ...opts, notify: notifyToast });
 }
 
-// Maximum time we let an unanswered set_model keep its optimistic badge. An
-// old daemon reports "Unknown command" as an error; an offline one never
-// answers at all.
-const SET_MODEL_CONFIRM_TIMEOUT_MS = 25000;
-
 /**
- * Mounted by the conversation header: watches store.pendingModelCommand for
- * this conversation and reconciles the optimistic stamp against the daemon's
- * verdict. Rendering it where the badge lives means whichever surface fired
- * the switch (badge, launch pill, Cmd+K), the open conversation supervises it.
+ * Mounted by the conversation header: supervises pending model commands for
+ * this conversation (see useModelCommandWatch). Rendering it where the badge
+ * lives means whichever surface fired the switch (badge, launch pill, Cmd+K),
+ * the open conversation supervises it.
  */
 function ModelCommandWatch({ conversationId }: { conversationId: string }) {
-  const pending = useInboxStore(useShallow((s) =>
-    s.pendingModelCommand?.convId === conversationId ? s.pendingModelCommand : null,
-  ));
-  const result = useQuery(
-    api.conversations.getDaemonCommandResult,
-    pending ? { command_id: pending.commandId as Id<"daemon_commands"> } : "skip",
-  );
-
-  useEffect(() => {
-    if (!pending) return;
-    const store = useInboxStore.getState();
-    if (result?.error) {
-      store.setConversationModel(conversationId, pending.revert);
-      toast.error(result.error);
-      store.setPendingModelCommand(null);
-      return;
-    }
-    if (result?.executed_at) {
-      store.setPendingModelCommand(null);
-      return;
-    }
-    const remaining = pending.startedAt + SET_MODEL_CONFIRM_TIMEOUT_MS - Date.now();
-    const timer = setTimeout(() => {
-      const cur = useInboxStore.getState().pendingModelCommand;
-      if (cur?.commandId !== pending.commandId) return;
-      useInboxStore.getState().setConversationModel(conversationId, pending.revert);
-      toast.error("Model switch not confirmed — the daemon may be offline or outdated");
-      useInboxStore.getState().setPendingModelCommand(null);
-    }, Math.max(0, remaining));
-    return () => clearTimeout(timer);
-  }, [pending, result, conversationId]);
-
+  useModelCommandWatch(conversationId, notifyToast);
   return null;
 }
 

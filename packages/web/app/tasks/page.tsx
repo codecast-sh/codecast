@@ -618,6 +618,7 @@ export function TaskListContent() {
   const tasks = useInboxStore((s) => s.tasks);
   const projects = useInboxStore((s) => s.projects);
   const taskActiveSessions = useInboxStore((s) => s.taskActiveSessions);
+  const taskOriginBadges = useInboxStore((s) => s.taskOriginBadges);
   const showCreate = useInboxStore((s) => s.createModal === 'task');
   const openCreateModal = useInboxStore((s) => s.openCreateModal);
   const saveView = useInboxStore((s) => s.saveView);
@@ -670,10 +671,30 @@ export function TaskListContent() {
   // orphans; in the personal view keep only teamless tasks.
   const tasksList = useMemo(() => {
     const all = Object.values(tasks);
-    return all.filter((t) =>
+    const scoped = all.filter((t) =>
       activeTeamId ? (!t.team_id || t.team_id === activeTeamId) : !t.team_id
     );
-  }, [tasks, activeTeamId]);
+    // Derive the dormant session badge fields here — the single entry point of
+    // the page's task pipeline — so every downstream filter/group/badge keeps
+    // reading t.origin_session / t.source_agent_type unchanged. Server rows no
+    // longer carry them (reading conversations inside webList re-ran the
+    // multi-MB query on every message); taskOriginBadges is the one-shot
+    // fetched map from useSyncTasks. Rows without a badge keep their identity
+    // so memoized descendants stay stable.
+    return scoped.map((t) => {
+      const originId = t.created_from_conversation ?? t.conversation_ids?.[0];
+      const badge = originId ? taskOriginBadges[originId] : undefined;
+      const sourceAgent = t.created_from_conversation
+        ? taskOriginBadges[t.created_from_conversation]?.agent_type ?? null
+        : null;
+      if (!badge && !sourceAgent) return t;
+      return {
+        ...t,
+        origin_session: badge ? { ...badge, conversation_id: originId! } : null,
+        source_agent_type: sourceAgent,
+      };
+    });
+  }, [tasks, activeTeamId, taskOriginBadges]);
 
   const allLabels = useMemo(() => {
     const set = new Set<string>(DEFAULT_LABELS);

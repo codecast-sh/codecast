@@ -1,5 +1,5 @@
-import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, TextInput, KeyboardAvoidingView, Platform, Share, View as RNView, Text as RNText, Linking, Image, ActionSheetIOS, Alert, Pressable, Clipboard, Modal, Animated, Dimensions, useWindowDimensions } from 'react-native';
-import { useLocalSearchParams, Stack, useRouter } from 'expo-router';
+import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, TextInput, Keyboard, KeyboardAvoidingView, Platform, Share, View as RNView, Text as RNText, Linking, Image, ActionSheetIOS, Alert, Pressable, Clipboard, Modal, Animated, Dimensions, useWindowDimensions } from 'react-native';
+import { useLocalSearchParams, Stack, useRouter, useFocusEffect } from 'expo-router';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { Id } from '@codecast/convex/convex/_generated/dataModel';
@@ -11,12 +11,17 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Feather from '@expo/vector-icons/Feather';
 import Svg, { Path } from 'react-native-svg';
 import { useInboxStore, isConvexId } from '@codecast/web/store/inboxStore';
+import { parseInboundSessionMessage, isScheduledTaskMessage } from '@codecast/web/components/sessionMessage';
 import { useConversationMessages } from '@codecast/web/hooks/useConversationMessages';
 import { useEnsureDispatch } from '@codecast/web/hooks/useEnsureDispatch';
 import { PermissionCard } from '@/components/PermissionCard';
 import { DeviceChip, useRunOnDevice } from '@/components/DevicesSection';
+import { ModelSwitcherChip } from '@/components/ModelSwitcherChip';
 import { renderInlineMarkdown, MarkdownContent, MarkdownTextBlock, CodeBlockWithCopy, CodeBlockFullscreen, HighlightedCodeText } from '@/components/MarkdownRenderer';
-import { Theme, Spacing } from '@/constants/Theme';
+import { EntityPill } from '@/components/EntityPill';
+import { CastCanvas, canvasAvailable, looksLikeHtmlMessage } from '@/components/CastCanvas';
+import { useSessionRestart, ghostRestartContextFor } from '@codecast/web/hooks/useSessionRestart';
+import { Theme, Spacing, chipShell, chipText, chipTint, CHROME_FONT_CAP } from '@/constants/Theme';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 // A real gradient WITHOUT a native module: expo-linear-gradient's native side
 // ("ExpoLinearGradient") isn't linked into the dev/standalone binaries, so importing
@@ -230,6 +235,8 @@ type ConversationData = {
   has_more_above?: boolean;
   oldest_timestamp?: number | null;
   model?: string;
+  effort?: string | null;
+  is_own?: boolean;
   agent_type?: string;
   started_at?: number;
   message_count?: number;
@@ -379,7 +386,7 @@ function formatAgentType(agentType?: string): string {
   if (agentType === 'codex') return 'Codex';
   if (agentType === 'cursor') return 'Cursor';
   if (agentType === 'gemini') return 'Gemini';
-  return agentType;
+  return agentType.charAt(0).toUpperCase() + agentType.slice(1);
 }
 
 function agentTypeColor(agentType?: string): string {
@@ -903,7 +910,7 @@ function TaskToolBlock({ tool, result, childConversationId }: { tool: ToolCall; 
 const _askUserSentState = new Map<string, string>();
 
 function AskUserQuestionBlock({ tool, result, conversationId }: { tool: ToolCall; result?: ToolResult; conversationId?: string }) {
-  let parsedInput: { questions?: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string }>; multiSelect?: boolean; isConfirmation?: boolean }>; answers?: Record<string, string> } = {};
+  let parsedInput: { questions?: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string; preview?: string }>; multiSelect?: boolean; isConfirmation?: boolean }>; answers?: Record<string, string> } = {};
   try { parsedInput = JSON.parse(tool.input); } catch {}
 
   const [sentLabel, setSentLabel] = useState<string | undefined>(() => _askUserSentState.get(tool.id));
@@ -948,7 +955,7 @@ function AskUserQuestionBlock({ tool, result, conversationId }: { tool: ToolCall
     <RNView style={styles.askQuestionBlock}>
       {questions.map((q, i) => {
         const answer = answers[q.question];
-        const hasDescriptions = q.options.some(o => o.description);
+        const hasDescriptions = q.options.some(o => o.description) || q.options.some(o => o.preview);
         const isCustom = answer !== undefined && !q.options.some(
           o => o.label === answer || o.label.replace(' (Recommended)', '') === answer
         );
@@ -964,6 +971,24 @@ function AskUserQuestionBlock({ tool, result, conversationId }: { tool: ToolCall
               {q.options.map((opt, j) => {
                 const cleanLabel = opt.label.replace(' (Recommended)', '');
                 const isSelected = (answer !== undefined && (opt.label === answer || cleanLabel === answer)) || sentLabel === cleanLabel;
+                // The option's `preview` is the ASCII/mockup box the terminal
+                // shows — surface it while interactive (read before tapping,
+                // one tap submits) and on the chosen option once answered.
+                const showPreview = !!opt.preview && (isInteractive || isSelected);
+                // Horizontal ScrollView won't hug multiline text height — size
+                // the box from the line count so it fits the mockup exactly.
+                const previewHeight = showPreview
+                  ? Math.min(opt.preview!.split('\n').length * 15 + 18, 240)
+                  : 0;
+                const previewBox = showPreview ? (
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    style={[styles.auqPreviewBox, { height: previewHeight }]}
+                  >
+                    <RNText style={styles.auqPreviewText}>{opt.preview}</RNText>
+                  </ScrollView>
+                ) : null;
                 const pill = (
                   <RNView
                     style={[
@@ -986,19 +1011,21 @@ function AskUserQuestionBlock({ tool, result, conversationId }: { tool: ToolCall
                 );
                 const wrapped = isInteractive ? (
                   <Pressable key={j} onPress={() => handlePick(j, cleanLabel)} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
-                    {opt.description ? (
+                    {opt.description || previewBox ? (
                       <RNView style={styles.optionItem}>
                         {pill}
-                        <RNText style={styles.optionDescription}>{opt.description}</RNText>
+                        {!!opt.description && <RNText style={styles.optionDescription}>{opt.description}</RNText>}
+                        {previewBox}
                       </RNView>
                     ) : pill}
                   </Pressable>
-                ) : !opt.description ? (
+                ) : !opt.description && !previewBox ? (
                   <RNView key={j}>{pill}</RNView>
                 ) : (
                   <RNView key={j} style={styles.optionItem}>
                     {pill}
-                    <RNText style={styles.optionDescription}>{opt.description}</RNText>
+                    {!!opt.description && <RNText style={styles.optionDescription}>{opt.description}</RNText>}
+                    {previewBox}
                   </RNView>
                 );
                 return wrapped;
@@ -1888,6 +1915,55 @@ function TaskNotificationLine({ content, timestamp, childConversationMap }: { co
   );
 }
 
+// Mobile port of web's SessionMessageBlock: a cross-session `cast send` message
+// is machine-delivered, not typed by the human, so it renders as a cyan-accented
+// card naming the sender instead of a user bubble full of raw XML.
+function SessionMessageBlock({ from, name, body, timestamp }: { from: string; name?: string; body: string; timestamp?: number }) {
+  const hasRealSender = !!from && from !== 'unknown';
+  return (
+    <RNView style={styles.sessionMessageBlock}>
+      <RNView style={styles.sessionMessageHeader}>
+        <Feather name="corner-down-right" size={13} color={Theme.cyan + 'b3'} />
+        <RNText style={styles.sessionMessageLabel}>Message from</RNText>
+        {hasRealSender ? (
+          // Resolves the sender's title server-side and taps through to the
+          // session — same as web's EntityIdPill in this header.
+          <EntityPill shortId={from} />
+        ) : (
+          <RNView style={styles.sessionMessageBadge}>
+            <RNText style={styles.sessionMessageBadgeText}>{name || 'another session'}</RNText>
+          </RNView>
+        )}
+        {timestamp != null && timestamp > 0 && (
+          <RNText style={styles.sessionMessageTime}>{formatRelativeTime(timestamp)}</RNText>
+        )}
+      </RNView>
+      <MarkdownContent text={body} baseStyle={styles.sessionMessageBody} isUser={false} />
+    </RNView>
+  );
+}
+
+// Mobile port of web's ScheduledTaskBlock: a `cast schedule` prompt injection.
+function ScheduledTaskBlock({ content: rawContent, timestamp }: { content: string; timestamp?: number }) {
+  const content = rawContent.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
+  const match = content.match(/<scheduled-task\s+title="([^"]*)"(?:\s+task-id="([^"]*)")?[^>]*>([\s\S]*?)<\/scheduled-task>/);
+  const title = match?.[1]?.replace(/&quot;/g, '"') || 'Scheduled Task';
+  const prompt = match?.[3]?.trim() || content.replace(/<[^>]+>/g, '').trim();
+  return (
+    <RNView style={[styles.sessionMessageBlock, { borderLeftColor: Theme.violet + '99', backgroundColor: Theme.violet + '0d' }]}>
+      <RNView style={styles.sessionMessageHeader}>
+        <Feather name="clock" size={13} color={Theme.violet + 'b3'} />
+        <RNText style={[styles.sessionMessageLabel, { color: Theme.violet + 'b3' }]}>Scheduled</RNText>
+        <RNText style={styles.sessionMessageTitle} numberOfLines={1}>{title}</RNText>
+        {timestamp != null && timestamp > 0 && (
+          <RNText style={styles.sessionMessageTime}>{formatRelativeTime(timestamp)}</RNText>
+        )}
+      </RNView>
+      <RNText style={styles.sessionMessageBody} selectable>{prompt}</RNText>
+    </RNView>
+  );
+}
+
 function parseApiErrorContent(content?: string | null): { statusCode: number; message: string; errorType?: string; requestId?: string } | null {
   if (!content) return null;
   const trimmed = content.trim();
@@ -1929,41 +2005,9 @@ function ApiErrorCard({ statusCode, message, errorType, requestId }: { statusCod
   );
 }
 
-type InsightPart = { type: 'text'; content: string } | { type: 'insight'; label: string; content: string };
-
-function parseInsightBlocks(text: string): InsightPart[] {
-  if (!text || typeof text !== 'string') return [{ type: 'text', content: String(text || '') }];
-  const insightRegex = /`([★✦⭐☆\*])\s+([\w\s]+?)\s*─+`([\s\S]*?)`─+`/g;
-  const parts: InsightPart[] = [];
-  let lastIndex = 0;
-  let match;
-  while ((match = insightRegex.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      const before = text.slice(lastIndex, match.index).trim();
-      if (before) parts.push({ type: 'text', content: before });
-    }
-    parts.push({ type: 'insight', label: match[2].trim(), content: match[3].trim() });
-    lastIndex = match.index + match[0].length;
-  }
-  if (lastIndex < text.length) {
-    const remaining = text.slice(lastIndex).trim();
-    if (remaining) parts.push({ type: 'text', content: remaining });
-  }
-  if (parts.length === 0) parts.push({ type: 'text', content: text });
-  return parts;
-}
-
-function InsightCard({ label, content }: { label: string; content: string }) {
-  return (
-    <RNView style={styles.insightCard}>
-      <RNView style={styles.insightHeader}>
-        <RNText style={styles.insightStar}>{'\u2605'}</RNText>
-        <RNText style={styles.insightLabel}>{label}</RNText>
-      </RNView>
-      <MarkdownContent text={content} baseStyle={styles.insightContent} isUser={false} />
-    </RNView>
-  );
-}
+// "★ Insight ─────" parsing + card rendering live inside MarkdownContent
+// (components/MarkdownRenderer.tsx, shared parser from web insightBlocks.ts)
+// so every markdown surface gets them, not just the message-bubble branch.
 
 type ParsedContextBlock = { type: string; title: string; id?: string; status?: string; priority?: string };
 
@@ -2460,6 +2504,128 @@ function CommandStatusLine({ content, timestamp }: { content: string; timestamp:
   );
 }
 
+// --- Workflow events (mobile twin of web's WorkflowEventBlock) ---
+// The server posts workflow lifecycle anchors as JSON message content
+// (convex/workflow_runs.ts). Fork/resume can round-trip them without the
+// workflow_event subtype, so detect by content shape, matching web.
+function parseWorkflowEventContent(content: string | undefined): Record<string, any> | null {
+  if (!content || !content.startsWith('{"__wf"')) return null;
+  try { return JSON.parse(content); } catch { return null; }
+}
+
+const WF_NODE_COLORS: Record<string, string> = {
+  agent: Theme.green,
+  command: Theme.accent,
+  human: Theme.magenta,
+  prompt: Theme.violet,
+};
+
+function WorkflowGateCard({ event }: { event: Record<string, any> }) {
+  const runId = typeof event.run_id === 'string' ? event.run_id : null;
+  const run = useQuery(
+    api.workflow_runs.get,
+    runId && isConvexId(runId) ? { id: runId as Id<'workflow_runs'> } : 'skip'
+  ) as { _id: string; status: string } | null | undefined;
+  const respondToGate = useMutation(api.workflow_runs.respondToGate);
+  const [responding, setResponding] = useState(false);
+
+  const choices = (event.choices ?? []) as Array<{ key: string; label: string }>;
+  const waiting = run?.status === 'paused';
+
+  const choose = async (key: string) => {
+    if (!run || responding) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setResponding(true);
+    try { await respondToGate({ id: run._id as Id<'workflow_runs'>, response: key }); }
+    catch { /* stays waiting; user can retry */ }
+    finally { setResponding(false); }
+  };
+
+  return (
+    <RNView style={styles.wfGateCard}>
+      <RNView style={styles.wfGateHeader}>
+        <FontAwesome name="question-circle" size={12} color={Theme.magenta} />
+        <RNText style={styles.wfGateHeaderText}>HUMAN GATE</RNText>
+        <RNText style={[styles.wfGateStatus, { color: waiting ? Theme.magenta : Theme.green }]}>
+          {waiting ? 'waiting…' : 'responded'}
+        </RNText>
+      </RNView>
+      {!!event.prompt && <RNText style={styles.wfGatePrompt}>{event.prompt}</RNText>}
+      {waiting && choices.length > 0 && (
+        <RNView style={styles.wfGateChoices}>
+          {choices.map((c) => (
+            <TouchableOpacity
+              key={c.key}
+              style={[styles.wfGateChoice, responding && { opacity: 0.4 }]}
+              onPress={() => choose(c.key)}
+              disabled={responding}
+              activeOpacity={0.7}
+            >
+              <RNText style={styles.wfGateChoiceKey}>[{c.key}]</RNText>
+              <RNText style={styles.wfGateChoiceLabel}>{String(c.label ?? '').replace(/^\[.\]\s*/, '')}</RNText>
+            </TouchableOpacity>
+          ))}
+        </RNView>
+      )}
+    </RNView>
+  );
+}
+
+function WorkflowEventBlock({ event }: { event: Record<string, any> }) {
+  const router = useRouter();
+  const wf = event.__wf as string;
+
+  if (wf === 'started') {
+    return (
+      <RNView style={styles.wfStartedRow}>
+        <FontAwesome name="bolt" size={11} color={Theme.violet} />
+        <RNText style={styles.wfStartedText} numberOfLines={2}>
+          Workflow started{event.goal ? ` — ${event.goal}` : ''}
+        </RNText>
+      </RNView>
+    );
+  }
+
+  if (wf === 'node_start' || wf === 'node_done' || wf === 'node_failed') {
+    const color = WF_NODE_COLORS[event.node_type as string] || WF_NODE_COLORS.agent;
+    const label = event.node_label || event.node_id;
+    return (
+      <RNView style={styles.wfNodeRow}>
+        {wf === 'node_done' && <FontAwesome name="check" size={10} color={Theme.greenBright} />}
+        {wf === 'node_failed' && <FontAwesome name="times" size={10} color={Theme.red} />}
+        {wf === 'node_start' && <RNView style={styles.wfNodePulse} />}
+        <RNView style={[styles.wfNodeTypeBadge, { backgroundColor: color + '20', borderColor: color + '50' }]}>
+          <RNText style={[styles.wfNodeTypeText, { color }]}>{event.node_type || 'agent'}</RNText>
+        </RNView>
+        <RNText style={styles.wfNodeLabel} numberOfLines={1}>{label}</RNText>
+        {!!event.session_id && (
+          <TouchableOpacity onPress={() => router.push(`/session/${event.session_id}`)} hitSlop={8}>
+            <RNText style={styles.wfNodeLink}>view</RNText>
+          </TouchableOpacity>
+        )}
+      </RNView>
+    );
+  }
+
+  if (wf === 'workflow_run') {
+    return (
+      <RNView style={styles.wfRunCard}>
+        <FontAwesome name="sitemap" size={12} color={Theme.violet} />
+        <RNView style={{ flex: 1, minWidth: 0 }}>
+          <RNText style={styles.wfRunName} numberOfLines={1}>{event.name || 'Workflow run'}</RNText>
+          {!!event.external_run_id && (
+            <RNText style={styles.wfRunId} numberOfLines={1}>{event.external_run_id}</RNText>
+          )}
+        </RNView>
+      </RNView>
+    );
+  }
+
+  if (wf === 'gate') return <WorkflowGateCard event={event} />;
+
+  return null;
+}
+
 function MessageBubble({ message, agentType, model, showHeader = true, forkChildren, conversationId, onFork, taskSubjectMap, globalToolResultMap, globalImageMap, openGallery, userName, showToast, collapsed: globalCollapsed, showThinkingGlobal, childConversationMap, bookmarkedSet }: {
   message: Message;
   agentType?: string;
@@ -2672,6 +2838,15 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
             if (apiError) {
               return <ApiErrorCard {...apiError} />;
             }
+            const wfEvent = parseWorkflowEventContent(content);
+            if (wfEvent) {
+              return <WorkflowEventBlock event={wfEvent} />;
+            }
+            // Whole-message raw HTML (no cast-canvas fence) — render as a
+            // canvas card instead of escaped tag soup, matching web.
+            if (!isUser && canvasAvailable && looksLikeHtmlMessage(content)) {
+              return <CastCanvas code={content} />;
+            }
             if (isTaskNotification(content)) {
               return <TaskNotificationLine content={content} childConversationMap={childConversationMap} />;
             }
@@ -2687,15 +2862,6 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
                 part.type === 'text'
                   ? <MarkdownContent key={idx} text={part.content} baseStyle={[styles.bubbleText, isUser ? styles.userText : styles.assistantText]} isUser={isUser} />
                   : <TeammateMessageCard key={idx} teammateId={part.teammateId} color={part.color} summary={part.summary} content={part.content} />
-              );
-            }
-            const insightParts = parseInsightBlocks(content);
-            const hasInsights = insightParts.some(p => p.type === 'insight');
-            if (hasInsights) {
-              return insightParts.map((part, idx) =>
-                part.type === 'insight'
-                  ? <InsightCard key={idx} label={part.label} content={part.content} />
-                  : <MarkdownContent key={idx} text={part.content} baseStyle={[styles.bubbleText, isUser ? styles.userText : styles.assistantText]} isUser={isUser} />
               );
             }
             if (isUser && content.includes('<context ')) {
@@ -2881,10 +3047,15 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
   );
   const [error, setError] = useState<string | null>(null);
   const [selectedImages, setSelectedImages] = useState<{ uri: string; storageId?: string; uploading: boolean }[]>([]);
-  const managedSession = useQuery(
+  const managedSessionQ = useQuery(
     api.managedSessions.isSessionManaged,
     isConvexId(conversationId as string) ? { conversation_id: conversationId } : "skip"
   );
+  // The design-mock session fakes a working agent so the footer status chip is
+  // reviewable without server data (see DESIGN_MOCK_CONVO).
+  const managedSession = (conversationId as string) === '__designmock__'
+    ? { managed: true as const, agent_status: 'working' }
+    : managedSessionQ;
 
   const patchConversation = useMutation(api.conversations.patchConversation);
   const generateUploadUrl = useMutation(api.images.generateUploadUrl);
@@ -2997,6 +3168,8 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
       patchConversation({ id: conversationId, fields: { draft_message: null } }).catch(() => {});
     }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    // Sending is a completed gesture — give the conversation the screen back.
+    Keyboard.dismiss();
 
     store.sendMessage(conversationId, content, storageIds.length ? storageIds : undefined, clientId);
   };
@@ -3033,6 +3206,9 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
         </ScrollView>
       )}
       {managedSession?.managed && (managedSession.agent_status === "working" || managedSession.agent_status === "thinking" || managedSession.agent_status === "compacting" || managedSession.agent_status === "permission_blocked" || managedSession.agent_status === "connected") && (
+        // Floats over the bottom of the message list so it costs zero
+        // conversation height; the footer is just the input row.
+        <RNView style={styles.agentStatusFloat} pointerEvents="none">
         <RNView style={[styles.agentStatusBar, {
           backgroundColor: managedSession.agent_status === "thinking" ? 'rgba(108,113,196,0.12)' :
             managedSession.agent_status === "compacting" ? 'rgba(245,158,11,0.12)' :
@@ -3052,7 +3228,7 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
               managedSession.agent_status === "connected" ? Theme.cyan :
               Theme.greenBright,
           }]} />
-          <RNText style={[styles.agentStatusText, {
+          <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.agentStatusText, {
             color: managedSession.agent_status === "thinking" ? Theme.violet :
               managedSession.agent_status === "compacting" ? '#f59e0b' :
               managedSession.agent_status === "permission_blocked" ? Theme.orange :
@@ -3066,6 +3242,7 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
              "Working"}
           </RNText>
         </RNView>
+        </RNView>
       )}
       <RNView style={styles.inputRow}>
         <TouchableOpacity
@@ -3073,7 +3250,7 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
           onPress={pickImage}
           activeOpacity={0.7}
         >
-          <FontAwesome name="plus" size={20} color={Theme.textMuted} />
+          <FontAwesome name="plus" size={18} color={Theme.textMuted} />
         </TouchableOpacity>
         <TextInput
           style={styles.textInput}
@@ -3084,6 +3261,7 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
           multiline
           maxLength={10000}
           blurOnSubmit={false}
+          maxFontSizeMultiplier={CHROME_FONT_CAP}
         />
         <TouchableOpacity
           style={[styles.sendButton, (!message.trim() && selectedImages.length === 0) && styles.sendButtonDisabled]}
@@ -3091,7 +3269,7 @@ function MessageInput({ conversationId, isActive, draft }: { conversationId: Id<
           disabled={!message.trim() && selectedImages.length === 0}
           activeOpacity={0.7}
         >
-          <FontAwesome name="arrow-up" size={16} color="#fff" />
+          <FontAwesome name="arrow-up" size={14} color="#fff" />
         </TouchableOpacity>
       </RNView>
     </RNView>
@@ -3117,25 +3295,54 @@ const DESIGN_MOCK_CONVO: ConversationData = {
   fork_count: 3,
   git_branch: 'ashot/apollo-include-similar-titles-fix',
   git_remote_url: 'https://github.com/ashot/codecast.git',
-  messages: Array.from({ length: 16 }, (_, i) => ({
-    _id: `mock-msg-${i}`,
-    role: i % 2 === 0 ? 'user' : 'assistant',
-    content: i % 2 === 0
-      ? `Mock prompt ${i / 2 + 1}: tighten the counterparty matching heuristic and re-run the similar-titles backfill.`
-      : `Acknowledged. Working on step ${Math.ceil(i / 2)} — scanning the candidate set, scoring by title overlap, and parking the cleanup behind the Phase-0 reworks. This line is padded so the bubble has enough height to make the list scrollable for verifying the header collapse behavior.`,
-    timestamp: DESIGN_MOCK_STARTED + i * 60000,
-    message_uuid: `mock-uuid-${i}`,
-  })) as Message[],
+  messages: [
+    ...Array.from({ length: 16 }, (_, i) => ({
+      _id: `mock-msg-${i}`,
+      role: i % 2 === 0 ? 'user' : 'assistant',
+      content: i % 2 === 0
+        ? `Mock prompt ${i / 2 + 1}: tighten the counterparty matching heuristic and re-run the similar-titles backfill.`
+        : `Acknowledged. Working on step ${Math.ceil(i / 2)} — scanning the candidate set, scoring by title overlap, and parking the cleanup behind the Phase-0 reworks. This line is padded so the bubble has enough height to make the list scrollable for verifying the header collapse behavior.`,
+      timestamp: DESIGN_MOCK_STARTED + i * 60000,
+      message_uuid: `mock-uuid-${i}`,
+    })),
+    // Exercises the CastCanvas renderer: title extraction, sol tokens, table
+    // layout, chart placeholder, and the overflow -> "Show all" path.
+    {
+      _id: 'mock-msg-canvas',
+      role: 'assistant',
+      content: 'Here is the funnel summary:\n\n```cast-canvas\n<div data-canvas-title="Intro volume funnel">\n<div style="font-size:11px;letter-spacing:1px;color:var(--sol-text-dim);text-transform:uppercase">Intro volume funnel</div>\n<h2 style="margin:6px 0;color:var(--sol-text)">Weekly conversion</h2>\n<table style="width:100%;border-collapse:collapse">\n<tr style="border-bottom:1px solid var(--sol-border-light)"><th style="text-align:left;padding:6px;color:var(--sol-text-muted)">Stage</th><th style="text-align:right;padding:6px;color:var(--sol-text-muted)">Count</th></tr>\n<tr><td style="padding:6px">Intros sent</td><td style="text-align:right;padding:6px;color:var(--sol-blue)">412</td></tr>\n<tr style="background:var(--sol-bg-alt)"><td style="padding:6px">Replies</td><td style="text-align:right;padding:6px;color:var(--sol-cyan)">187</td></tr>\n<tr><td style="padding:6px">Meetings</td><td style="text-align:right;padding:6px;color:var(--sol-green)">63</td></tr>\n</table>\n<div class="cast-chart" data-spec=\'{"marks":[{"type":"barY"}]}\'></div>\n<p style="color:var(--sol-text-secondary)">Reply rate is <b style="color:var(--sol-orange)">45%</b>, up 6pts week over week. The drop from replies to meetings is the leak worth chasing.</p>\n<script>alert("must never run")</script>\n</div>\n```\n\nThe sanitizer strips the script above.',
+      timestamp: DESIGN_MOCK_STARTED + 17 * 60000,
+      message_uuid: 'mock-uuid-canvas',
+    },
+    // Exercises AskUserQuestion option previews (the ASCII mockup box the
+    // terminal shows next to each option).
+    {
+      _id: 'mock-msg-auq',
+      role: 'assistant',
+      content: '',
+      tool_calls: [{
+        id: 'mock-tool-auq',
+        name: 'AskUserQuestion',
+        input: JSON.stringify({
+          questions: [{
+            question: 'Which layout for the stats header?',
+            header: 'Layout',
+            options: [
+              { label: 'Stacked (Recommended)', description: 'Title above the chip row', preview: '┌──────────────────┐\n│ Title            │\n│ [chip] [chip]    │\n└──────────────────┘' },
+              { label: 'Inline', description: 'Title and chips share one row', preview: '┌──────────────────┐\n│ Title [chip][chip]│\n└──────────────────┘' },
+            ],
+          }],
+        }),
+      }],
+      timestamp: DESIGN_MOCK_STARTED + 18 * 60000,
+      message_uuid: 'mock-uuid-auq',
+    },
+  ] as Message[],
 };
-
-// One shell for every metadata chip in the session header: identical radius,
-// padding, border weight and text size — only the tint color changes, so the
-// strip reads as one designed unit instead of a row of one-off badges.
-const metaChipTint = (color: string) => ({ borderColor: color + '40', backgroundColor: color + '14' });
 
 // Height of the compact custom title bar (back + title + actions), below the
 // safe-area inset. The collapsing metadata strip is positioned just under it.
-const HEADER_BAR_HEIGHT = 44;
+const HEADER_BAR_HEIGHT = 40;
 
 function TreeNodeView({ node, depth, router, currentId, onClose }: { node: TreeNode; depth: number; router: any; currentId: string; onClose: () => void }) {
   const isCurrent = node.id === currentId || node.is_current;
@@ -3165,6 +3372,22 @@ export default function SessionDetailScreen() {
   // subscriptions/soundIdle that useSyncInboxSessions owns) to avoid duplicate
   // subscriptions and double-firing idle sounds.
   useEnsureDispatch();
+
+  // Claim store.currentSessionId while this screen is focused (re-asserted on
+  // stack pop-back). The liveness reconciler prunes a conversation's optimistic
+  // sends as soon as the daemon looks active (reconcilePendingSendForSession)
+  // — EXCEPT for the focused conversation, where the pending bubble must
+  // survive until the real message row syncs into the local window. Web sets
+  // this on every conversation open; without it the just-sent message rendered,
+  // vanished on the next liveness tick, then reappeared when the row synced.
+  useFocusEffect(
+    useCallback(() => {
+      if (typeof id === "string" && id !== DESIGN_MOCK_ID) {
+        useInboxStore.getState().setCurrentSession(id);
+      }
+    }, [id]),
+  );
+
   const flatListRef = useRef<FlatList>(null);
   const loadCooldownRef = useRef(false);
   const [initialScrollDone, setInitialScrollDone] = useState(false);
@@ -3696,6 +3919,29 @@ export default function SessionDetailScreen() {
     { notify: showToast },
   );
 
+  const lastMessageAt = conversation?.messages?.length
+    ? conversation.messages[conversation.messages.length - 1]?.timestamp
+    : undefined;
+  const activityAt = lastMessageAt ?? conversation?.updated_at ?? conversation?.started_at ?? 0;
+  const isActive = conversation?.status === 'active' && (Date.now() - activityAt) < 5 * 60 * 1000;
+
+  // One reliable "Restart session" from the phone — the same two-stage recovery
+  // web runs (resume ladder, escalate once to a forced rebuild from history).
+  const restartNotify = useCallback(
+    (_kind: 'success' | 'error' | 'info', message: string) => showToast(message),
+    [showToast],
+  );
+  const restartGhostContext = useCallback(
+    () => (conversation?._id ? ghostRestartContextFor(conversation._id) : {}),
+    [conversation?._id],
+  );
+  const { restart: restartSession, isRestarting } = useSessionRestart({
+    conversationId: conversation?._id ?? '',
+    isLive: !!isActive,
+    ghostContext: restartGhostContext,
+    notify: restartNotify,
+  });
+
   const handleMoreActions = useCallback(() => {
     const options: string[] = [];
     options.push(conversation?.is_favorite ? 'Unfavorite' : 'Favorite');
@@ -3703,6 +3949,9 @@ export default function SessionDetailScreen() {
     options.push('Search');
     options.push('Copy');
     if (conversation?.session_id) options.push('Copy Resume Command');
+    if (conversation && isConvexId(conversation._id)) {
+      options.push(isRestarting ? 'Restarting…' : 'Restart Session');
+    }
     options.push('Run on Device…');
     options.push(collapsed ? 'Expand Messages' : 'Collapse Messages');
     // git_diff lives off the conversation doc now and is fetched lazily on
@@ -3731,6 +3980,7 @@ export default function SessionDetailScreen() {
           else if (label === 'Search') setSearchVisible(v => !v);
           else if (label === 'Copy') handleCopyMenu();
           else if (label === 'Copy Resume Command') handleCopyResume();
+          else if (label === 'Restart Session') restartSession();
           else if (label === 'Run on Device…') showRunOnDevice();
           else if (label === 'Expand Messages' || label === 'Collapse Messages') setCollapsed(c => !c);
           else if (label === 'View Diff' || label === 'Hide Diff') setDiffExpanded(d => !d);
@@ -3751,6 +4001,7 @@ export default function SessionDetailScreen() {
           else if (label === 'Search') setSearchVisible(v => !v);
           else if (label === 'Copy') handleCopyMenu();
           else if (label === 'Copy Resume Command') handleCopyResume();
+          else if (label === 'Restart Session') restartSession();
           else if (label === 'Run on Device…') showRunOnDevice();
           else if (label === 'Expand Messages' || label === 'Collapse Messages') setCollapsed(c => !c);
           else if (label === 'View Diff' || label === 'Hide Diff') setDiffExpanded(d => !d);
@@ -3760,7 +4011,7 @@ export default function SessionDetailScreen() {
       })),
       { text: 'Cancel', style: 'cancel' },
     ]);
-  }, [conversation, collapsed, diffExpanded, treeResult, handleToggleFavorite, handleShareConversation, handleCopyMenu, handleCopyResume, handleDismiss, showRunOnDevice]);
+  }, [conversation, collapsed, diffExpanded, treeResult, handleToggleFavorite, handleShareConversation, handleCopyMenu, handleCopyResume, handleDismiss, showRunOnDevice, restartSession, isRestarting]);
 
   const handleConfirmShareSelection = useCallback(async () => {
     if (selectedMessageIds.size === 0) return;
@@ -3977,12 +4228,6 @@ export default function SessionDetailScreen() {
     }
   }, [hasMoreAbove, loadingOlder, handleLoadOlder, initialScrollDone, floatingHeaderHeight, floatingHeaderY, searchVisible, userScrolled]);
 
-  const lastMessageAt = conversation?.messages?.length
-    ? conversation.messages[conversation.messages.length - 1]?.timestamp
-    : undefined;
-  const activityAt = lastMessageAt ?? conversation?.updated_at ?? conversation?.started_at ?? 0;
-  const isActive = conversation?.status === 'active' && (Date.now() - activityAt) < 5 * 60 * 1000;
-
   useEffect(() => {
     if (isActive) {
       const pulse = Animated.loop(
@@ -4002,9 +4247,9 @@ export default function SessionDetailScreen() {
         <Stack.Screen options={{ headerShown: false }} />
         <RNView style={[styles.pinnedHeader, { paddingTop: insets.top, height: insets.top + HEADER_BAR_HEIGHT, position: 'relative' }]}>
           <TouchableOpacity onPress={() => router.back()} style={styles.headerIconBtn} hitSlop={{ top: 12, bottom: 12, left: 12, right: 4 }} activeOpacity={0.6}>
-            <FontAwesome name="chevron-left" size={20} color={Theme.text} />
+            <FontAwesome name="chevron-left" size={18} color={Theme.text} />
           </TouchableOpacity>
-          <RNText style={styles.headerTitleText} numberOfLines={1}>Conversation</RNText>
+          <RNText style={styles.headerTitleText} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>Conversation</RNText>
         </RNView>
         <RNView style={styles.skeletonContainer}>
           <RNView style={styles.skeletonHeader}>
@@ -4049,11 +4294,11 @@ export default function SessionDetailScreen() {
             pinned while the metadata strip below it collapses on scroll. */}
         <RNView style={[styles.pinnedHeader, { paddingTop: insets.top, height: insets.top + HEADER_BAR_HEIGHT }]}>
           <TouchableOpacity onPress={() => router.back()} style={styles.headerIconBtn} hitSlop={{ top: 12, bottom: 12, left: 12, right: 4 }} activeOpacity={0.6}>
-            <FontAwesome name="chevron-left" size={20} color={Theme.text} />
+            <FontAwesome name="chevron-left" size={18} color={Theme.text} />
           </TouchableOpacity>
-          <RNText style={styles.headerTitleText} numberOfLines={1}>{conversation.title || 'Conversation'}</RNText>
+          <RNText style={styles.headerTitleText} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>{conversation.title || 'Conversation'}</RNText>
           <TouchableOpacity onPress={handleMoreActions} style={styles.headerIconBtn} hitSlop={{ top: 12, bottom: 12, left: 4, right: 12 }} activeOpacity={0.6}>
-            <Feather name="more-horizontal" size={20} color={Theme.textMuted} />
+            <Feather name="more-horizontal" size={18} color={Theme.textMuted} />
           </TouchableOpacity>
         </RNView>
         <Animated.View
@@ -4069,22 +4314,31 @@ export default function SessionDetailScreen() {
               >
                 {conversation.agent_type && (
                   <RNView style={styles.metaBadgeIcon}>
-                    <AgentLogoSvg agentType={conversation.agent_type} size={17} />
-                    <RNText style={[styles.metaBadge, { color: agentTypeColor(conversation.agent_type) }]}>
+                    <AgentLogoSvg agentType={conversation.agent_type} size={13} />
+                    <RNText style={[styles.metaBadge, { color: agentTypeColor(conversation.agent_type) }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>
                       {formatAgentType(conversation.agent_type)}
                     </RNText>
                   </RNView>
                 )}
                 {activityAt > 0 && (
-                  <RNText style={styles.messageCountText}>{conversation.agent_type ? '\u00B7 ' : ''}{formatRelativeTime(activityAt)}</RNText>
+                  <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={styles.messageCountText}>{conversation.agent_type ? '\u00B7 ' : ''}{formatRelativeTime(activityAt)}</RNText>
                 )}
                 {isActive && (
                   <Animated.View style={[styles.activeDot, { opacity: activePulse }]} />
                 )}
+                <ModelSwitcherChip
+                  conversationId={conversation._id}
+                  agentType={conversation.agent_type}
+                  model={conversation.model}
+                  effort={conversation.effort}
+                  messageCount={conversation.message_count}
+                  canEdit={!!conversation.is_own}
+                  showToast={showToast}
+                />
                 {(conversation.fork_count ?? 0) > 0 && (
-                  <Pressable onPress={() => setTreeModalVisible(true)} style={[styles.metaChip, metaChipTint(Theme.violet)]}>
+                  <Pressable onPress={() => setTreeModalVisible(true)} style={[styles.metaChip, chipTint(Theme.violet)]}>
                     <FontAwesome name="code-fork" size={10} color={Theme.violet} />
-                    <RNText style={[styles.metaChipText, { color: Theme.violet }]}>{conversation.fork_count}</RNText>
+                    <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.metaChipText, { color: Theme.violet }]}>{conversation.fork_count}</RNText>
                   </Pressable>
                 )}
                 {conversation.git_branch && (
@@ -4097,17 +4351,17 @@ export default function SessionDetailScreen() {
                         }
                       }
                     }}
-                    style={[styles.metaChip, metaChipTint(Theme.green)]}
+                    style={[styles.metaChip, chipTint(Theme.green)]}
                   >
                     <FontAwesome name="code-fork" size={10} color={Theme.green} />
-                    <RNText style={[styles.metaChipText, { color: Theme.green }]} numberOfLines={1}>{conversation.git_branch}</RNText>
+                    <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.metaChipText, { color: Theme.green }]} numberOfLines={1}>{conversation.git_branch}</RNText>
                   </Pressable>
                 )}
                 <DeviceChip ownerDeviceId={(conversation as any).owner_device_id} onPress={showRunOnDevice} />
                 {latestUsage && (
-                  <RNView style={[styles.metaChip, metaChipTint(Theme.textDim)]}>
+                  <RNView style={[styles.metaChip, chipTint(Theme.textDim)]}>
                     <FontAwesome name="bar-chart" size={10} color={Theme.textDim} />
-                    <RNText style={[styles.metaChipText, { color: Theme.textDim }]}>
+                    <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.metaChipText, { color: Theme.textDim }]}>
                       {Math.round((latestUsage.contextSize / 200000) * 100)}%
                     </RNText>
                   </RNView>
@@ -4115,10 +4369,10 @@ export default function SessionDetailScreen() {
                 {conversation.parent_conversation_id && (
                   <Pressable
                     onPress={() => router.push(`/session/${conversation.parent_conversation_id}`)}
-                    style={[styles.metaChip, metaChipTint(Theme.violet)]}
+                    style={[styles.metaChip, chipTint(Theme.violet)]}
                   >
                     <FontAwesome name="level-up" size={10} color={Theme.violet} />
-                    <RNText style={[styles.metaChipText, { color: Theme.violet }]}>Parent</RNText>
+                    <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.metaChipText, { color: Theme.violet }]}>Parent</RNText>
                   </Pressable>
                 )}
                 {conversation.forked_from_details && (
@@ -4131,10 +4385,10 @@ export default function SessionDetailScreen() {
                         router.push(`/session/${details.conversation_id}`);
                       }
                     }}
-                    style={[styles.metaChip, metaChipTint(Theme.cyan)]}
+                    style={[styles.metaChip, chipTint(Theme.cyan)]}
                   >
                     <FontAwesome name="code-fork" size={10} color={Theme.cyan} />
-                    <RNText style={[styles.metaChipText, { color: Theme.cyan }]}>@{conversation.forked_from_details.username}</RNText>
+                    <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.metaChipText, { color: Theme.cyan }]}>@{conversation.forked_from_details.username}</RNText>
                   </Pressable>
                 )}
               </ScrollView>
@@ -4279,6 +4533,19 @@ export default function SessionDetailScreen() {
               }
               if (prevNonToolResult?.role === 'system' && prevNonToolResult?.subtype === 'compact_boundary') {
                 return <CompactionSummaryBlock content={item.content} />;
+              }
+            }
+
+            // Machine-delivered turns (cast send, cast schedule) render as
+            // dedicated cards, not user bubbles of raw XML — mirrors web's
+            // classifyUserMessage → SessionMessageBlock / ScheduledTaskBlock.
+            if (item.role === 'user' && item.content) {
+              const sessionMsg = parseInboundSessionMessage(item.content);
+              if (sessionMsg) {
+                return <SessionMessageBlock from={sessionMsg.from} name={sessionMsg.name} body={sessionMsg.body} timestamp={item.timestamp} />;
+              }
+              if (isScheduledTaskMessage(item.content)) {
+                return <ScheduledTaskBlock content={item.content} timestamp={item.timestamp} />;
               }
             }
 
@@ -4539,14 +4806,14 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   headerIconBtn: {
-    width: 38,
-    height: 38,
+    width: 34,
+    height: 34,
     justifyContent: 'center',
     alignItems: 'center',
   },
   headerTitleText: {
     flex: 1,
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '600',
     color: Theme.text,
   },
@@ -4563,7 +4830,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: Theme.borderLight,
     paddingHorizontal: 12,
-    paddingVertical: 5,
+    paddingVertical: 4,
   },
   sessionMeta: {
     flexDirection: 'row',
@@ -4577,24 +4844,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   // Shared shell for every metadata chip (fork, branch, device, usage, links).
-  metaChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 6,
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    maxWidth: 160,
-  },
-  metaChipText: {
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  metaBadge: {
-    fontSize: 12,
-    fontWeight: '600',
-  },
+  metaChip: chipShell,
+  metaChipText: chipText,
+  metaBadge: chipText,
   messageCountText: {
     fontSize: 11,
     color: Theme.textMuted,
@@ -4914,27 +5166,25 @@ const styles = StyleSheet.create({
     // paddingBottom is set inline from safe-area insets (home indicator clearance
     // varies by device/orientation); see MessageInput.
   },
+  // Status reads as one more chip from the shared shell, floated over the
+  // list bottom (agentStatusFloat) so it takes no conversation height.
+  agentStatusFloat: {
+    position: 'absolute',
+    top: -(22 + 6),
+    left: 12,
+    zIndex: 10,
+  },
   agentStatusBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    ...chipShell,
+    maxWidth: undefined,
     gap: 6,
-    marginHorizontal: 12,
-    marginTop: 8,
-    marginBottom: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 5,
-    borderRadius: 6,
-    borderWidth: 1,
   },
   agentStatusDot: {
     width: 6,
     height: 6,
     borderRadius: 3,
   },
-  agentStatusText: {
-    fontSize: 11,
-    fontWeight: '600',
-  },
+  agentStatusText: chipText,
   errorBanner: {
     backgroundColor: Theme.red,
     flexDirection: 'row',
@@ -4983,8 +5233,8 @@ const styles = StyleSheet.create({
     borderRadius: 10,
   },
   imageButton: {
-    width: 34,
-    height: 34,
+    width: 32,
+    height: 32,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -4992,34 +5242,168 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-end',
     paddingHorizontal: 12,
-    paddingVertical: 7,
+    paddingVertical: 6,
     gap: 8,
   },
   textInput: {
     flex: 1,
     backgroundColor: Theme.bg,
-    borderRadius: 18,
-    paddingHorizontal: 14,
-    paddingTop: 8,
-    paddingBottom: 8,
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingTop: 7,
+    paddingBottom: 7,
     color: Theme.text,
     fontSize: 15,
     maxHeight: 100,
-    minHeight: 36,
+    minHeight: 32,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: Theme.borderLight,
   },
   sendButton: {
     backgroundColor: Theme.blue,
-    minWidth: 36,
-    height: 36,
-    borderRadius: 18,
+    minWidth: 32,
+    height: 32,
+    borderRadius: 16,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 10,
+    paddingHorizontal: 9,
   },
   sendButtonDisabled: {
     backgroundColor: Theme.bgHighlight,
+  },
+  // Workflow event anchors
+  wfStartedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.violet + '40',
+    backgroundColor: Theme.violet + '14',
+    marginVertical: 4,
+  },
+  wfStartedText: {
+    flex: 1,
+    fontSize: 12,
+    color: Theme.textMuted,
+  },
+  wfNodeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 2,
+  },
+  wfNodePulse: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: Theme.accent,
+  },
+  wfNodeTypeBadge: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 4,
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+  },
+  wfNodeTypeText: {
+    fontSize: 9,
+    fontWeight: '600',
+  },
+  wfNodeLabel: {
+    flex: 1,
+    fontSize: 12,
+    color: Theme.textSecondary,
+  },
+  wfNodeLink: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: Theme.cyan,
+    textDecorationLine: 'underline',
+  },
+  wfRunCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.violet + '40',
+    backgroundColor: Theme.violet + '0d',
+    marginVertical: 4,
+  },
+  wfRunName: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Theme.text,
+  },
+  wfRunId: {
+    fontSize: 10,
+    fontFamily: 'SpaceMono',
+    color: Theme.textDim,
+    marginTop: 1,
+  },
+  wfGateCard: {
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.magenta + '55',
+    backgroundColor: Theme.magenta + '0d',
+    marginVertical: 4,
+    overflow: 'hidden',
+  },
+  wfGateHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Theme.magenta + '30',
+  },
+  wfGateHeaderText: {
+    fontSize: 9,
+    fontWeight: '700',
+    letterSpacing: 1,
+    color: Theme.magenta,
+  },
+  wfGateStatus: {
+    marginLeft: 'auto',
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  wfGatePrompt: {
+    fontSize: 13,
+    color: Theme.text,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  wfGateChoices: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingBottom: 10,
+  },
+  wfGateChoice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.border + '60',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
+  wfGateChoiceKey: {
+    fontSize: 11,
+    fontFamily: 'SpaceMono',
+    color: Theme.magenta,
+  },
+  wfGateChoiceLabel: {
+    fontSize: 12,
+    color: Theme.text,
   },
   // Specialized tool blocks
   specialToolBlock: {
@@ -5093,6 +5477,25 @@ const styles = StyleSheet.create({
   },
   questionItem: {
     marginBottom: 10,
+  },
+  auqPreviewBox: {
+    // flexGrow 0 stops the horizontal ScrollView from stretching to fill the
+    // cell (same quirk mdStyles.hScroll works around for tables).
+    flexGrow: 0,
+    marginTop: 5,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight,
+    borderRadius: 6,
+    backgroundColor: Theme.bgAlt,
+    alignSelf: 'flex-start',
+    maxWidth: '100%',
+  },
+  auqPreviewText: {
+    fontFamily: 'SpaceMono',
+    fontSize: 10,
+    lineHeight: 15,
+    color: Theme.textSecondary,
+    padding: 8,
   },
   questionHeaderBadge: {
     alignSelf: 'flex-start',
@@ -6092,6 +6495,58 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     marginVertical: 2,
   },
+  // Session-message / scheduled-task cards (mirrors web's left-accented blocks)
+  sessionMessageBlock: {
+    marginVertical: 4,
+    marginHorizontal: 2,
+    borderRadius: 6,
+    borderLeftWidth: 2,
+    borderLeftColor: Theme.cyan + '99',
+    backgroundColor: Theme.cyan + '0d',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  sessionMessageHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 4,
+  },
+  sessionMessageLabel: {
+    fontSize: 10,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    color: Theme.cyan + 'b3',
+  },
+  sessionMessageBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: Theme.cyan + '60',
+    backgroundColor: Theme.cyan + '20',
+  },
+  sessionMessageBadgeText: {
+    fontSize: 10,
+    fontFamily: 'JetBrainsMono',
+    color: Theme.cyan,
+  },
+  sessionMessageTitle: {
+    fontSize: 12,
+    color: Theme.textMuted,
+    flex: 1,
+  },
+  sessionMessageTime: {
+    fontSize: 10,
+    color: Theme.textDim,
+    marginLeft: 'auto',
+  },
+  sessionMessageBody: {
+    fontSize: 13,
+    color: Theme.textSecondary,
+    lineHeight: 19,
+  },
   taskNotificationIcon: {
     fontSize: 14,
     fontWeight: '700',
@@ -6145,36 +6600,6 @@ const styles = StyleSheet.create({
     fontFamily: 'JetBrainsMono',
     color: Theme.textDim,
     marginTop: 4,
-  },
-  insightCard: {
-    marginVertical: 4,
-    padding: 10,
-    borderRadius: 6,
-    backgroundColor: Theme.violet + '12',
-    borderLeftWidth: 2,
-    borderLeftColor: Theme.violet,
-  },
-  insightHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginBottom: 4,
-  },
-  insightStar: {
-    fontSize: 12,
-    color: Theme.violet,
-  },
-  insightLabel: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: Theme.violet,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  insightContent: {
-    fontSize: 13,
-    color: Theme.textSecondary,
-    lineHeight: 19,
   },
   contextPillRow: {
     flexDirection: 'row',

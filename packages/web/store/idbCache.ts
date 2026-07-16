@@ -7,6 +7,7 @@ import {
   isPersistedClientStoreKey,
 } from "./clientSyncRegistry";
 import { diffCollection } from "./idbCollectionDiff";
+import { isConvexId } from "../lib/entityLinks";
 
 export type OutboxEntry = {
   id: string;
@@ -114,6 +115,22 @@ class CacheDB extends Dexie {
       conversationMessages: "convId",
       dispatchOutbox: "id, ts",
     });
+    // v8: index conversationMessages by latestTimestamp so the on-disk store can
+    // be pruned (LRU + TTL) instead of growing forever — one row per conversation
+    // ever opened, each up to several MB of inline-image message bodies.
+    this.version(8).stores({
+      sessions: "_id",
+      tasks: "_id",
+      docs: "_id",
+      plans: "_id",
+      projects: "_id",
+      buckets: "_id",
+      bucketAssignments: "_id",
+      comments: "_id",
+      meta: "key",
+      conversationMessages: "convId, latestTimestamp",
+      dispatchOutbox: "id, ts",
+    });
   }
 }
 
@@ -206,6 +223,80 @@ export function writePatchesToIDB(patches: Patch[], state: any) {
   }
 }
 
+// Retention for the persisted sessions collection, applied at hydration. The
+// in-memory sessions map is never-prune BY DESIGN (rows the UI holds must not
+// vanish mid-session), which means the on-disk cache is append-only across
+// months: every team-board visit, deep link, and crawl top-up leaves a row
+// forever. A long-lived install was measured hydrating ~7,000 rows (5k+ older
+// than 30 days, 4k belonging to teammates) into a map whose live inbox renders
+// ~134 — and every O(N) pass (syncTable, wake signatures, categorizeSessions,
+// sortSessions) paid the 7k price on each liveness flip, pinning the main
+// thread. Boot is the one safe moment to shed that weight: nothing holds refs
+// yet, and everything the UI can actually reach is kept —
+//   • the server-authoritative live inbox set (liveInboxIdList),
+//   • the restored focus target,
+//   • optimistic stubs (non-Convex ids — local truths the server can't restore),
+//   • pinned rows (an explicit keep),
+//   • stashed/dismissed rows inside the reconcile window (the Stashed/Killed
+//     browse views),
+//   • anything touched inside the TTL, capped at the newest MAX_CACHED_SESSIONS.
+// Anything older is dropped from memory AND disk; it stays reachable via
+// search/deep-link, which re-fetch from the server and re-seed the cache.
+const SESSION_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000; // mirrors DISMISS_RECONCILE_WINDOW_MS / the server crawl window
+const MAX_CACHED_SESSIONS = 1200;
+
+export function partitionSessionRetention(
+  rows: any[],
+  liveInboxIdList: string[] | undefined,
+  lastFocusedId: string | null | undefined,
+  now: number,
+): { keep: any[]; drop: string[] } {
+  const liveIds = new Set(liveInboxIdList ?? []);
+  const pinnedKeep: any[] = [];
+  const windowed: any[] = [];
+  const drop: string[] = [];
+  for (const row of rows) {
+    const stampedAt = Math.max(row.updated_at ?? 0, row._creationTime ?? 0, row.inbox_stashed_at ?? 0, row.inbox_dismissed_at ?? 0);
+    if (liveIds.has(row._id) || row._id === lastFocusedId || !isConvexId(row._id) || row.is_pinned) {
+      pinnedKeep.push(row);
+    } else if (now - stampedAt <= SESSION_CACHE_TTL_MS) {
+      windowed.push(row);
+    } else {
+      drop.push(row._id);
+    }
+  }
+  // Cap the TTL-window survivors (never the always-keep set), newest first.
+  if (windowed.length > MAX_CACHED_SESSIONS) {
+    windowed.sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
+    for (const row of windowed.splice(MAX_CACHED_SESSIONS)) drop.push(row._id);
+  }
+  return { keep: pinnedKeep.concat(windowed), drop };
+}
+
+// Exclude tombstones never clear for delta tables (absence ≠ deletion in
+// applySyncTable), so every kill/dismiss adds a permanent `pending` entry —
+// measured at 1,832 entries after a heavy agent fan-out, and each one rides
+// every sync push and every persisted pending blob. A tombstone only matters
+// while the server could still resend the row, which is bounded by the same
+// 30d window as the cache retention above — age them out at hydration. Legacy
+// entries without a timestamp get stamped `now` and age out one window later.
+// include/field entries are local-first writes awaiting server acknowledgment:
+// never expired.
+export function expireExcludeTombstones(
+  pending: Record<string, any>,
+  now: number,
+): Record<string, any> {
+  const cleaned: Record<string, any> = {};
+  for (const [key, entry] of Object.entries(pending)) {
+    if (entry?.type === "exclude") {
+      if (!entry.ts) { cleaned[key] = { ...entry, ts: now }; continue; }
+      if (now - entry.ts > SESSION_CACHE_TTL_MS) continue;
+    }
+    cleaned[key] = entry;
+  }
+  return cleaned;
+}
+
 export async function loadCache(): Promise<Record<string, any> | null> {
   try {
     const result: Record<string, any> = {};
@@ -217,8 +308,13 @@ export async function loadCache(): Promise<Record<string, any> | null> {
       db.meta.toArray(),
     ]);
 
+    // Meta lookup first — the sessions retention pass below needs
+    // liveInboxIdList and lastFocusedConversationId from the same snapshot.
+    const metaByKey: Record<string, any> = {};
+    for (const row of metaRows) metaByKey[row.key] = row.value;
+
     collectionEntries.forEach(([key, table], i) => {
-      const rows = collectionResults[i];
+      let rows = collectionResults[i];
       // Seed the persistence shadow with what's on disk (even an empty table) so
       // the first write after hydrate diffs against reality and can prune rows
       // the server has since deleted.
@@ -228,6 +324,16 @@ export async function loadCache(): Promise<Record<string, any> | null> {
       // the registry) are excluded from hydration AND removed from disk, so the
       // cache self-heals instead of resurrecting phantoms on every load.
       const invalid: string[] = [];
+      if (key === "sessions" && rows.length > 0) {
+        const { keep, drop } = partitionSessionRetention(
+          rows,
+          metaByKey.liveInboxIdList,
+          metaByKey.lastFocusedConversationId,
+          Date.now(),
+        );
+        rows = keep;
+        if (drop.length) table.bulkDelete(drop).catch(() => {});
+      }
       if (rows.length > 0) {
         const map: Record<string, any> = {};
         for (const row of rows) {
@@ -246,6 +352,27 @@ export async function loadCache(): Promise<Record<string, any> | null> {
     for (const row of metaRows) {
       result[row.key] = row.value;
       hasData = true;
+    }
+
+    // The conversations map is the sessions cache's twin (same ids, richer
+    // metadata) persisted as ONE meta blob — every put structured-clones the
+    // whole thing on the main thread, so an unpruned blob (measured at ~2,700
+    // entries) costs hundreds of ms per write and at boot. Apply the same
+    // retention policy; the pruned blob reaches disk on its next natural put.
+    if (result.conversations && typeof result.conversations === "object") {
+      const { keep } = partitionSessionRetention(
+        Object.values(result.conversations),
+        metaByKey.liveInboxIdList,
+        metaByKey.lastFocusedConversationId,
+        Date.now(),
+      );
+      const pruned: Record<string, any> = {};
+      for (const row of keep) pruned[row._id] = row;
+      result.conversations = pruned;
+    }
+
+    if (result.pending && typeof result.pending === "object") {
+      result.pending = expireExcludeTombstones(result.pending, Date.now());
     }
 
     return hasData ? result : null;
@@ -275,6 +402,22 @@ const _pendingMsgWrites = new Map<string, { messages: any[]; pagination: any }>(
 let _msgWriteTimer: ReturnType<typeof setTimeout> | null = null;
 const MSG_WRITE_DEBOUNCE_MS = 300;
 
+// On-disk prune of the conversationMessages store. Every conversation ever opened
+// leaves a row (up to several MB with inline images) and nothing ever deleted it,
+// so the store climbed unbounded (~445MB in a past incident). We cap it at the N
+// most-recently-active conversations and drop anything past a TTL, ordered by the
+// latestTimestamp index. Runs lazily off the write path — piggybacked on the
+// debounced flush and throttled — never on the hot per-tick path.
+const MAX_CACHED_CONVERSATIONS = 300;
+const CONVERSATION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+const PRUNE_THROTTLE_MS = 5 * 60 * 1000; // at most once per 5 min
+const PROTECT_RECENT_MS = 10 * 60 * 1000; // never prune a conv touched this recently
+// Wall-clock of the last write per conversation — a conversation open/on-screen is
+// written continuously, so a recent touch marks it protected from pruning even if
+// its newest message (its latestTimestamp) is old.
+const _touchedAt = new Map<string, number>();
+let _lastPruneAt = 0;
+
 function _latestTs(messages: any[]): number {
   // Loop, not Math.max(...spread): spreading a long messages array risks a
   // call-stack overflow, and this now runs once per flush instead of per tick.
@@ -299,6 +442,47 @@ function _flushMessageWrites() {
       .put({ convId, messages, pagination, latestTimestamp: _latestTs(messages) })
       .catch(() => {});
   }
+  _maybePruneConversations();
+}
+
+// Drop conversationMessages rows beyond the cap (oldest by latestTimestamp) and
+// past the TTL, skipping any conversation currently buffered or recently touched
+// (open/on-screen). Reads only primary keys off the latestTimestamp index, so the
+// multi-MB message payloads are never loaded; best-effort and never throws.
+async function _pruneConversations() {
+  try {
+    const now = Date.now();
+    const protectedIds = new Set<string>(_pendingMsgWrites.keys());
+    for (const [convId, ts] of _touchedAt) {
+      if (now - ts <= PROTECT_RECENT_MS) protectedIds.add(convId);
+      else _touchedAt.delete(convId); // let the recency map self-bound
+    }
+
+    // Ascending by latestTimestamp (oldest first); everything past the cap is the
+    // least-recently-active tail. primaryKeys() reads the index only, not the rows.
+    const orderedKeys = await db.conversationMessages.orderBy("latestTimestamp").primaryKeys();
+    const overCap =
+      orderedKeys.length > MAX_CACHED_CONVERSATIONS
+        ? orderedKeys.slice(0, orderedKeys.length - MAX_CACHED_CONVERSATIONS)
+        : [];
+    const expired = await db.conversationMessages
+      .where("latestTimestamp")
+      .below(now - CONVERSATION_TTL_MS)
+      .primaryKeys();
+
+    const doomed = new Set<string>([...overCap, ...expired]);
+    for (const id of protectedIds) doomed.delete(id);
+    if (doomed.size > 0) await db.conversationMessages.bulkDelete([...doomed]);
+  } catch {
+    // Maintenance is best-effort — the durable cache tolerates skipped prunes.
+  }
+}
+
+function _maybePruneConversations() {
+  const now = Date.now();
+  if (now - _lastPruneAt < PRUNE_THROTTLE_MS) return;
+  _lastPruneAt = now;
+  void _pruneConversations();
 }
 
 // Flush any buffered conversation writes immediately (e.g. on page hide).
@@ -331,6 +515,7 @@ export async function loadConversationMessages(convId: string): Promise<{ messag
 
 export function writeConversationMessages(convId: string, messages: any[], pagination: any) {
   if (_hydrating) return;
+  _touchedAt.set(convId, Date.now());
   _pendingMsgWrites.set(convId, { messages, pagination });
   if (!_msgWriteTimer) _msgWriteTimer = setTimeout(_flushMessageWrites, MSG_WRITE_DEBOUNCE_MS);
 }

@@ -144,7 +144,7 @@ describe("deliverMessage: mark-injected-before-send invariant", () => {
         // Look backwards ~600 chars for the best-effort mark. It sits on the line(s) just above
         // the inject in each delivery branch.
         const window = deliverBody.slice(Math.max(0, idx - 600), idx);
-        const hasPrecedingMark = /markInjectedBestEffort\(\s*syncService\s*,\s*messageId\s*\)/.test(window);
+        const hasPrecedingMark = /markInjectedBestEffort\(\s*syncService\s*,\s*messageId\b/.test(window);
         if (!hasPrecedingMark) {
           const lineNo = lineNumberOf(deliverBody, idx);
           throw new Error(
@@ -161,6 +161,6 @@ describe("deliverMessage: mark-injected-before-send invariant", () => {
     const resumeIdx = deliverBody.search(/await\s+autoResumeSession\(\s*sessionId\s*,\s*content\s*,/);
     expect(resumeIdx).toBeGreaterThanOrEqual(0);
     const window = deliverBody.slice(Math.max(0, resumeIdx - 700), resumeIdx);
-    expect(window).toMatch(/markInjectedBestEffort\(\s*syncService\s*,\s*messageId\s*\)/);
+    expect(window).toMatch(/markInjectedBestEffort\(\s*syncService\s*,\s*messageId\b/);
   });
 });

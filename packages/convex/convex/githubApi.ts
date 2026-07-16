@@ -171,7 +171,7 @@ export const postCommentToGitHub = internalAction({
 
         const githubComment = await response.json();
 
-        await ctx.runMutation(api.comments.updateGitHubCommentId, {
+        await ctx.runMutation(internal.comments.updateGitHubCommentId, {
           comment_id: args.comment_id,
           github_comment_id: githubComment.id,
         });

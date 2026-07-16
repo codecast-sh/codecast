@@ -36,6 +36,7 @@ const Workflows = lazy(() => import("@/app/workflows/dashboard"));
 const Routines = lazy(() => import("@/app/workflows/page"));
 const Schedules = lazy(() => import("@/app/schedules/page"));
 const Sessions = lazy(() => import("@/app/sessions/page"));
+const Anchor = lazy(() => import("@/app/anchor/page"));
 const Team = lazy(() => import("@/app/team/page"));
 const TeamActivity = lazy(() => import("@/app/team/activity/page"));
 const TeamMember = lazy(() => import("@/app/team/[username]/page"));
@@ -75,6 +76,7 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/routines$/, paramNames: [], component: Routines },
   { pattern: /^\/schedules$/, paramNames: [], component: Schedules },
   { pattern: /^\/sessions$/, paramNames: [], component: Sessions },
+  { pattern: /^\/anchor$/, paramNames: [], component: Anchor },
   { pattern: /^\/team$/, paramNames: [], component: Team },
   { pattern: /^\/search$/, paramNames: [], component: Search },
   { pattern: /^\/windows$/, paramNames: [], component: Windows },

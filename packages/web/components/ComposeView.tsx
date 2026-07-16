@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
@@ -128,6 +129,47 @@ export function ComposeView({ initialQuery, context, onClose }: { initialQuery?:
     };
   });
 
+  // Dropped-image support, mirroring ConversationView's <main> drop zone. The
+  // old "New Session" surface was a full-page blank conversation which had that
+  // zone; without this the browser's default drop handling navigates to the
+  // image file — nuking the popup and the draft. onDropFiles hands the files to
+  // MessageInput's uploadImage, same as the in-conversation path.
+  const dropFilesRef = useRef<((files: File[]) => void) | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const dragCounterRef = useRef(0);
+
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current++;
+    if (e.dataTransfer.types.includes("Files")) setIsDragging(true);
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current--;
+    if (dragCounterRef.current === 0) setIsDragging(false);
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current = 0;
+    setIsDragging(false);
+    const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith("image/"));
+    if (files.length > 0 && dropFilesRef.current) {
+      dropFilesRef.current(files);
+    } else if (files.length === 0 && e.dataTransfer.files.length > 0) {
+      toast.error("Only image files are supported");
+    }
+  }, []);
+
   // Escape only DISMISSES the popup — abandoning the un-sent stub is NOT done here;
   // it falls out of the dismissal (the overlay unmounts → cleanup abandons; the
   // palette window hides → the visibilitychange effect below abandons). Listen in
@@ -221,7 +263,15 @@ export function ComposeView({ initialQuery, context, onClose }: { initialQuery?:
     : null;
 
   return (
-    <div ref={rootRef} className="w-[94vw] h-[88vh] max-w-[960px] max-h-[680px] rounded-xl border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col animate-in fade-in-0 zoom-in-95 slide-in-from-top-2 duration-150">
+    <div ref={rootRef} className="relative w-[94vw] h-[88vh] max-w-[960px] max-h-[680px] rounded-xl border border-sol-border/80 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden flex flex-col animate-in fade-in-0 zoom-in-95 slide-in-from-top-2 duration-150" onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
+      {isDragging && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-sol-bg/80 backdrop-blur-sm" style={{ animation: "fadeIn 150ms ease-out" }}>
+          <div className="border-2 border-dashed border-sol-cyan rounded-xl p-12 text-center">
+            <svg className="w-10 h-10 mx-auto mb-3 text-sol-cyan" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+            <p className="text-sol-cyan text-sm font-medium">Drop images to attach</p>
+          </div>
+        </div>
+      )}
       <div className="flex-1 min-h-0 flex flex-col px-4 pt-6">
         {conversation && <NewSessionView conversation={conversation} />}
       </div>
@@ -233,6 +283,7 @@ export function ComposeView({ initialQuery, context, onClose }: { initialQuery?:
           autoFocusInput
           skills={skills}
           agentType={skillCtx.agentType}
+          onDropFiles={dropFilesRef}
           onSubmitWithIntent={handleSubmit}
           onDidSend={(info) => { if (navIntentRef.current) broadcastComposeOptimistic(info); }}
         />

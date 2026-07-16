@@ -4,6 +4,16 @@ import { internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { isConversationTeamVisible } from "./privacy";
+import { isAgentSpawnedConversation } from "./ccAccountsShared";
+import { listSessionOwnerIds } from "./sessionOwners";
+import {
+  trustedAgentStatus,
+  deriveSessionActivity,
+  classifyWorkState,
+  needsInputKind,
+  subagentKeepsParentWorking,
+  HEARTBEAT_ALIVE_MS,
+} from "./inboxFilters";
 
 export const sendPushNotification = internalAction({
   args: {
@@ -51,10 +61,13 @@ export const notifyTeamSessionStart = internalMutation({
       return;
     }
 
-    if (conversation.is_subagent || conversation.is_workflow_sub || (conversation.parent_conversation_id && !conversation.parent_message_uuid)) {
+    // Never notify about agent-spawned sessions — only human-initiated ones.
+    if (isAgentSpawnedConversation(conversation)) {
       return;
     }
 
+    // Fire time = registration + a 60s grace delay (see createConversation),
+    // so of this budget ~4min covers registration lag.
     const STALE_MS = 5 * 60 * 1000;
     if (conversation.started_at && Date.now() - conversation.started_at > STALE_MS) {
       return;
@@ -144,7 +157,11 @@ export const notifyTeamSessionStart = internalMutation({
   },
 });
 
-export const create = mutation({
+// internal: had zero callers and was a public mutation that let anyone deliver
+// an arbitrary-text notification to any user (spam/phishing). Real notifications
+// are created by the internal mutations and server-side inserts in this file and
+// in agentTasks/notificationRouter.
+export const create = internalMutation({
   args: {
     recipient_user_id: v.id("users"),
     type: v.union(
@@ -155,6 +172,7 @@ export const create = mutation({
       v.literal("session_idle"),
       v.literal("permission_request"),
       v.literal("session_error"),
+      v.literal("session_assigned"),
       v.literal("team_session_start"),
       v.literal("task_completed"),
       v.literal("task_failed"),
@@ -319,6 +337,138 @@ export const markAllAsRead = mutation({
   },
 });
 
+type SessionNotifType =
+  | "session_idle"
+  | "permission_request"
+  | "session_error"
+  | "session_assigned";
+
+function sessionNotifOptedOut(
+  prefs: Record<string, any> | undefined,
+  type: SessionNotifType,
+): boolean {
+  if (type === "session_idle") return prefs?.session_idle === false;
+  if (type === "session_error") return prefs?.session_error === false;
+  // Opt-out, not opt-in: being handed a session is something you need to know
+  // about, so it's on unless explicitly disabled.
+  if (type === "session_assigned") return prefs?.session_assigned === false;
+  return !!prefs && !prefs.permission_request;
+}
+
+// Insert the notification row + push for ONE recipient, honoring their prefs.
+// Shared by the api-token mutation below (daemon-driven permission/error
+// notifications) and the server-side needs-input check.
+async function deliverSessionNotification(
+  ctx: any,
+  recipientId: any,
+  conversationId: any,
+  type: SessionNotifType,
+  title: string,
+  message: string,
+): Promise<boolean> {
+  const user = await ctx.db.get(recipientId);
+  if (!user) return false;
+  if (sessionNotifOptedOut(user.notification_preferences as any, type)) return false;
+
+  await ctx.db.insert("notifications", {
+    recipient_user_id: recipientId,
+    type,
+    conversation_id: conversationId,
+    message,
+    read: false,
+    created_at: Date.now(),
+  });
+
+  if (user.push_token && user.notifications_enabled) {
+    await ctx.scheduler.runAfter(0, internal.notifications.sendPushNotification, {
+      push_token: user.push_token,
+      title,
+      body: message,
+      data: {
+        conversationId,
+        type,
+      },
+    });
+  }
+  return true;
+}
+
+// The runner (user_id) plus every OWNER. An owner is a human actually waiting on
+// this session (a Mr Bot fix session parking with "ready to ship?"), so mirror
+// the notification to them — same prefs gates, their own row+push. Reads the
+// canonical owner SET: a session can have several owners, and they all need to
+// hear about it, not just the one cached in owner_user_id.
+async function deliverSessionNotificationToParties(
+  ctx: any,
+  conversation: { _id: any; user_id: any; owner_user_id?: any },
+  type: SessionNotifType,
+  title: string,
+  message: string,
+): Promise<boolean> {
+  let delivered = await deliverSessionNotification(
+    ctx, conversation.user_id, conversation._id, type, title, message,
+  );
+
+  // Recipients are the UNION of the canonical owner set and the owner_user_id
+  // cache. The cache is a safety net, not a second source of truth: a legacy row
+  // written before the session_owners backfill has a cached owner but no join
+  // row, and it must not silently stop notifying them in the window between
+  // deploy and backfill. Once backfilled the two agree, and the Set de-dupes.
+  const recipients = await listSessionOwnerIds(ctx, conversation._id);
+  if (conversation.owner_user_id) recipients.push(conversation.owner_user_id);
+
+  const seen = new Set<string>([conversation.user_id.toString()]); // runner: done above
+  for (const ownerId of recipients) {
+    const key = ownerId.toString();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (await deliverSessionNotification(ctx, ownerId, conversation._id, type, title, message)) {
+      delivered = true;
+    }
+  }
+  return delivered;
+}
+
+// "X assigned you this session" — fired when users are ADDED to a session's
+// owner set. Their inbox already surfaces the session (the owner scan does that
+// on its own); this is what actually TELLS them it landed there, which is the
+// difference between a handoff and a silent reassignment.
+//
+// Never notifies the actor about their own action: claiming a session for
+// yourself shouldn't ping you.
+export async function notifySessionAssigned(
+  ctx: any,
+  conversationId: any,
+  recipientIds: any[],
+  actorUserId: any,
+): Promise<number> {
+  if (recipientIds.length === 0) return 0;
+  const conversation = await ctx.db.get(conversationId);
+  if (!conversation) return 0;
+
+  const actor = await ctx.db.get(actorUserId);
+  const actorName = actor?.name || actor?.email || "A teammate";
+  const label =
+    (conversation.title || "").trim() ||
+    conversation.short_id ||
+    "a session";
+
+  let delivered = 0;
+  for (const recipientId of recipientIds) {
+    if (recipientId.toString() === actorUserId.toString()) continue;
+    const ok = await deliverSessionNotification(
+      ctx,
+      recipientId,
+      conversationId,
+      "session_assigned",
+      "Session assigned to you",
+      `${actorName} assigned you "${label}"`,
+    );
+    if (ok) delivered++;
+  }
+  return delivered;
+}
+
 export const createSessionNotification = mutation({
   args: {
     api_token: v.string(),
@@ -342,51 +492,269 @@ export const createSessionNotification = mutation({
       return { error: "Not found" };
     }
 
-    const user = await ctx.db.get(auth.userId);
-    if (!user) {
-      return { error: "User not found" };
-    }
+    const delivered = await deliverSessionNotificationToParties(
+      ctx, conversation, args.type, args.title, args.message,
+    );
 
-    const prefs = user.notification_preferences;
-    if (args.type === "session_idle" && prefs?.session_idle === false) {
-      return { skipped: true };
-    }
-    if (args.type === "session_error" && prefs?.session_error === false) {
-      return { skipped: true };
-    }
-    if (args.type === "permission_request" && prefs && !prefs.permission_request) {
-      return { skipped: true };
-    }
-
-    const notificationId = await ctx.db.insert("notifications", {
-      recipient_user_id: auth.userId,
-      type: args.type,
-      conversation_id: args.conversation_id,
-      message: args.message,
-      read: false,
-      created_at: Date.now(),
-    });
-
-    if (user.push_token && user.notifications_enabled) {
-      await ctx.scheduler.runAfter(0, internal.notifications.sendPushNotification, {
-        push_token: user.push_token,
-        title: args.title,
-        body: args.message,
-        data: {
-          conversationId: args.conversation_id,
-          type: args.type,
-        },
+    // Stamp the needs-input dedupe key so the server-side check
+    // (checkNeedsInput) stands down for the episode this push already covered:
+    // "session_idle" here is the legacy no-hook watcher path, and a
+    // "permission_request" push covers the permission_blocked flavor even if
+    // the pending_permissions record is slow to land.
+    const dedupeKind =
+      args.type === "session_idle" ? "idle" :
+      args.type === "permission_request" ? "permission_blocked" : null;
+    if (dedupeKind) {
+      await ctx.db.patch(args.conversation_id, {
+        needs_input_notified_key: `${conversation.message_count || 0}:${dedupeKind}`,
       });
     }
 
-    if (args.type === "session_idle") {
+    if (delivered && args.type === "session_idle") {
       await ctx.scheduler.runAfter(0, internal.idleSummary.generateIdleSummary, {
         conversation_id: args.conversation_id,
       });
     }
 
-    return { notificationId };
+    return delivered ? { notified: true } : { skipped: true };
   },
+});
+
+// ── Needs-input push ─────────────────────────────────────────────────────────
+//
+// Pushes "this session is waiting on you" when a session TRANSITIONS into the
+// inbox's needs-input bucket — the same classification that drives the web
+// inbox grouping and its idle sound (classifyWorkState server-side;
+// isSessionWaitingForInput / waitingSoundKey are the client mirrors). The
+// daemon can't own this: it only reports raw agent_status, and "needs input"
+// is a composite verdict (status + idle grace + queued messages + open polls)
+// that can settle 45s AFTER the last write. So the write sites SCHEDULE a
+// re-check — managedSessions.updateAgentStatus / heartbeat on a status change,
+// messages.addMessages on an AskUserQuestion arrival — and this mutation
+// recomputes the verdict at fire time. Deduped per (message_count, kind), the
+// idle sound's exact key: one waiting episode pushes once, each new turn can
+// push again.
+//
+// Exported as a plain function so the fake-db tests can drive the real logic
+// (same pattern as pendingMessages).
+export async function performNeedsInputCheck(
+  ctx: any,
+  args: { conversation_id: any; status_ts?: number },
+): Promise<{ notified: boolean; reason?: string }> {
+  const conv = await ctx.db.get(args.conversation_id);
+  if (!conv || !conv.message_count) return { notified: false, reason: "no_content" };
+  // Triaged/parked rows don't chime on the web either.
+  if (conv.inbox_dismissed_at || conv.inbox_stashed_at) return { notified: false, reason: "dismissed" };
+  // The sound skips pinned too (isSessionWaitingForInput's !is_pinned arms).
+  if (conv.inbox_pinned_at) return { notified: false, reason: "pinned" };
+  // Mirror of the web's isSub guard (inboxStore) — the idle sound skips these,
+  // so the push does too: subagents and any parent-linked or worktree session
+  // (orchestration workers). Broader than the "hidden subagent" test on
+  // purpose; parity with the sound is the contract here.
+  if (conv.is_subagent || conv.is_workflow_sub || conv.parent_conversation_id || conv.worktree_name) {
+    return { notified: false, reason: "subagent" };
+  }
+  // The bar is "a session the USER was driving is waiting on THEM". Machine-
+  // initiated sessions never clear it: agent fan-out (cast spawn, agent-team
+  // fleets — the same classification that gates the "started coding" team
+  // notification) and schedule runs park idle after every turn by design.
+  if (isAgentSpawnedConversation(conv)) {
+    return { notified: false, reason: "agent_spawned" };
+  }
+  if (conv.agent_task_id) {
+    return { notified: false, reason: "schedule_run" };
+  }
+
+  const session = await ctx.db
+    .query("managed_sessions")
+    .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", args.conversation_id))
+    .first();
+  // Scheduled off a specific status change: if the status has moved since, the
+  // newer write has its own check in flight — this one is stale.
+  if (args.status_ts !== undefined && session?.agent_status_updated_at !== args.status_ts) {
+    return { notified: false, reason: "superseded" };
+  }
+
+  const now = Date.now();
+  // Single-row mirror of enrichInboxSessionRow's derivation.
+  const agentStatus = trustedAgentStatus(session?.agent_status, conv.updated_at, now);
+  const daemonAlive =
+    agentStatus === "stopped"
+      ? false
+      : !!session?.last_heartbeat && now - session.last_heartbeat < HEARTBEAT_ALIVE_MS;
+  const hasPending = !!conv.has_pending_messages;
+
+  const lastMsg = await ctx.db
+    .query("messages")
+    .withIndex("by_conversation_timestamp", (q: any) => q.eq("conversation_id", conv._id))
+    .order("desc")
+    .first();
+
+  const activity = deriveSessionActivity({
+    agentStatus,
+    agentStatusUpdatedAt: session?.agent_status_updated_at,
+    lastMessageRole: lastMsg?.role ?? conv.last_message_role,
+    lastMessagePreview: lastMsg?.content ?? conv.last_message_preview,
+    hasPending,
+    status: conv.status,
+    updatedAt: conv.updated_at,
+    daemonAlive,
+    now,
+  });
+  let isIdle = activity.isIdle;
+
+  // Open AskUserQuestion poll — same derivation as enrichInboxSessionRow: the
+  // chronologically-latest message being the poll's tool_use means it is
+  // unanswered (an answer would be a later tool_result), overriding the raced
+  // agent_status.
+  let awaitingInput = false;
+  if (!isIdle && lastMsg?.role === "assistant" &&
+      lastMsg.tool_calls?.some((tc: any) => tc.name === "AskUserQuestion")) {
+    awaitingInput = true;
+    isIdle = true;
+  }
+
+  // An idle parent whose subagent child is still producing is WORKING on the
+  // web (subagentKeepsParentWorking) — don't push mid-orchestration. Cheap
+  // recent-output arm first; the child's managed session is read only when
+  // that arm fails.
+  if (isIdle && !awaitingInput) {
+    const children = await ctx.db
+      .query("conversations")
+      .withIndex("by_parent_conversation_id", (q: any) => q.eq("parent_conversation_id", conv._id))
+      .take(20);
+    for (const c of children) {
+      if (!c.is_subagent || c.status !== "active") continue;
+      if (subagentKeepsParentWorking({
+        isSubagent: true, convStatus: c.status, updatedAt: c.updated_at,
+        isLive: false, agentStatus: undefined, now,
+      })) {
+        isIdle = false;
+        break;
+      }
+      const childSession = await ctx.db
+        .query("managed_sessions")
+        .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", c._id))
+        .first();
+      const childAlive = !!childSession?.last_heartbeat && now - childSession.last_heartbeat < HEARTBEAT_ALIVE_MS;
+      if (childAlive && subagentKeepsParentWorking({
+        isSubagent: true, convStatus: c.status, updatedAt: c.updated_at,
+        isLive: true, agentStatus: trustedAgentStatus(childSession?.agent_status, c.updated_at, now), now,
+      })) {
+        isIdle = false;
+        break;
+      }
+    }
+  }
+
+  const state = classifyWorkState({
+    agentStatus,
+    isIdle,
+    awaitingInput,
+    hasPending,
+    isUnresponsive: activity.isUnresponsive,
+    messageCount: conv.message_count || 0,
+  });
+  if (state !== "needs_input") return { notified: false, reason: "not_needs_input" };
+
+  const kind = needsInputKind({ awaitingInput, agentStatus, isUnresponsive: activity.isUnresponsive });
+  // Dead/unresponsive sessions land in needs-input on the web too, but a push
+  // for every deliberately closed terminal session is noise — keep the push to
+  // the genuinely-waiting kinds.
+  if (kind === "stopped" || kind === "unresponsive") return { notified: false, reason: "dead" };
+
+  const key = `${conv.message_count}:${kind}`;
+  if (conv.needs_input_notified_key === key) return { notified: false, reason: "dup" };
+
+  // The waiting turn must have been STARTED by the human. A turn kicked off by
+  // another session's cast send (arrives wrapped in <session-message>) or by a
+  // schedule injection into a live conversation (<scheduled-task>, the
+  // taskScheduler --context current path) parks the session idle without the
+  // user having asked anything — that's the machinery talking to itself, not a
+  // session waiting on its human. Runs after the verdict so the extra indexed
+  // read is only paid when we'd otherwise push.
+  const lastUserMsg = await ctx.db
+    .query("messages")
+    .withIndex("by_conversation_timestamp", (q: any) => q.eq("conversation_id", conv._id))
+    .order("desc")
+    .filter((q: any) => q.eq(q.field("role"), "user"))
+    .first();
+  if (isMachineStartedTurn(lastUserMsg?.content)) {
+    return { notified: false, reason: "machine_turn" };
+  }
+
+  // The daemon already pushes "Permission needed" when it creates the pending
+  // permission record — only cover the recordless blocks (AskUserQuestion and
+  // scraped prompts, which the daemon's SKIP_TOOLS deliberately skips).
+  if (kind === "permission_blocked") {
+    const open = await ctx.db
+      .query("pending_permissions")
+      .withIndex("by_conversation_status", (q: any) =>
+        q.eq("conversation_id", conv._id).eq("status", "pending"),
+      )
+      .first();
+    if (open) {
+      await ctx.db.patch(conv._id, { needs_input_notified_key: key });
+      return { notified: false, reason: "daemon_permission_push" };
+    }
+  }
+
+  // Mark BEFORE delivering so a conflicting retry can't double-push.
+  await ctx.db.patch(conv._id, { needs_input_notified_key: key });
+
+  const title = conv.title?.trim() || conv.project_path?.split("/").pop() || "Session";
+  const message =
+    (kind === "awaiting_input" ? auqQuestionPreview(lastMsg) : null) ??
+    (lastMsg?.role === "assistant" ? notifPreview(lastMsg.content) : null) ??
+    conv.idle_summary ??
+    "Waiting for your input";
+
+  const delivered = await deliverSessionNotificationToParties(
+    ctx, conv, "session_idle", title, message,
+  );
+  if (delivered) {
+    await ctx.scheduler.runAfter(0, internal.idleSummary.generateIdleSummary, {
+      conversation_id: conv._id,
+    });
+  }
+  return { notified: delivered };
+}
+
+// Machine-authored user turns: another session's cast send and the schedule
+// injector both wrap their prompts in a sentinel tag the human never types.
+function isMachineStartedTurn(content: string | undefined | null): boolean {
+  const c = (content || "").trimStart();
+  return c.startsWith("<session-message") || c.startsWith("<scheduled-task");
+}
+
+function notifPreview(text: string | undefined | null, max = 200): string | null {
+  const cleaned = (text || "").replace(/\s+/g, " ").trim();
+  if (!cleaned) return null;
+  return cleaned.length > max ? cleaned.slice(0, max - 1) + "…" : cleaned;
+}
+
+// The first question of an open AskUserQuestion poll — the most useful push
+// body for "Claude is asking you something". tool_calls[].input is a JSON
+// string (messages schema).
+function auqQuestionPreview(lastMsg: any): string | null {
+  const tc = lastMsg?.tool_calls?.find((t: any) => t.name === "AskUserQuestion");
+  if (!tc) return null;
+  try {
+    const q = JSON.parse(tc.input)?.questions?.[0]?.question;
+    return notifPreview(typeof q === "string" ? q : null);
+  } catch {
+    return null;
+  }
+}
+
+export const checkNeedsInput = internalMutation({
+  args: {
+    conversation_id: v.id("conversations"),
+    // agent_status_updated_at at scheduling time; the check aborts if the
+    // status moved on since (a newer transition owns its own check).
+    status_ts: v.optional(v.number()),
+  },
+  handler: (ctx, args) => performNeedsInputCheck(ctx, args),
 });
 
 const ENTITY_TYPE_VALIDATOR = v.union(

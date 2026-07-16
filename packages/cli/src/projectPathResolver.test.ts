@@ -1,7 +1,40 @@
 import { describe, test, expect } from "bun:test";
-import { resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath } from "./projectPathResolver.js";
+import {
+  resolveLocalProjectPath,
+  resolveLocalRepoPath,
+  resolveResumeCwd,
+  pickProjectPath,
+  claudeProjectDirName,
+  chooseSessionTranscript,
+  type TranscriptCandidate,
+} from "./projectPathResolver.js";
 
 const remote = "git@github.com:union-mobile/outreach.git";
+
+describe("claudeProjectDirName", () => {
+  // These expectations are NOT arbitrary: each was produced by running Claude
+  // 2.1.196 in the named cwd and reading the dir it created under
+  // ~/.claude/projects. The slug MUST match byte-for-byte or `claude --resume`
+  // can't find the JSONL we write and crashes with "No conversation found".
+  test("replaces dots with dashes (the bug: dotted cwd landed in a dir Claude never reads)", () => {
+    // A dot becomes "-"; combined with the leading slash's "-" it doubles up.
+    expect(claudeProjectDirName("/Users/ashot/.claude")).toBe("-Users-ashot--claude");
+  });
+
+  test("encodes a .claude/worktrees path like Claude does (cast ws / orchestrate)", () => {
+    expect(
+      claudeProjectDirName("/Users/ashot/src/union-mobile/outreach/.claude/worktrees/agent-a5c06b4"),
+    ).toBe("-Users-ashot-src-union-mobile-outreach--claude-worktrees-agent-a5c06b4");
+  });
+
+  test("underscores also become dashes; hyphens are preserved", () => {
+    expect(claudeProjectDirName("probe_x.y-z")).toBe("probe-x-y-z");
+  });
+
+  test("a plain repo path (no dots) is unchanged except slashes", () => {
+    expect(claudeProjectDirName("/Users/ashot/src/codecast")).toBe("-Users-ashot-src-codecast");
+  });
+});
 
 describe("resolveLocalProjectPath", () => {
   test("returns the recorded path unchanged when it exists locally", async () => {
@@ -89,6 +122,45 @@ describe("resolveLocalProjectPath", () => {
 
 describe("resolveLocalRepoPath", () => {
   const HOME = "/Users/ashot";
+
+  // THE WORKTREE BUG: an orchestrate/cast-ws worktree under <repo>/.claude/worktrees/<id>
+  // was destroyed, so its recorded cwd is gone. The old walk hit the ".claude"
+  // segment and resolved it to $HOME/.claude (always exists) → resume ran in the
+  // wrong dir and crashed via the slug mismatch. The session belongs to the
+  // PARENT repo, which is still on disk.
+  test("destroyed .claude/worktrees path resolves to the parent repo, not $HOME/.claude", () => {
+    const local = new Set(["/Users/ashot/src/union-mobile/outreach"]);
+    expect(
+      resolveLocalRepoPath({
+        remotePath: "/Users/ashot/src/union-mobile/outreach/.claude/worktrees/agent-a5c06b4",
+        home: HOME,
+        exists: (p) => local.has(p),
+      }),
+    ).toBe("/Users/ashot/src/union-mobile/outreach");
+  });
+
+  test("destroyed .codecast/worktrees path resolves to the parent repo", () => {
+    const local = new Set(["/Users/ashot/src/codecast"]);
+    expect(
+      resolveLocalRepoPath({
+        remotePath: "/Users/ashot/src/codecast/.codecast/worktrees/fix-auth",
+        home: HOME,
+        exists: (p) => local.has(p),
+      }),
+    ).toBe("/Users/ashot/src/codecast");
+  });
+
+  test("does NOT resolve a bare ~/.claude path to $HOME (home is never a project)", () => {
+    // worktreeParent would be $HOME here; the home guard must reject it so the
+    // walk (and ultimately a refusal) takes over instead.
+    expect(
+      resolveLocalRepoPath({
+        remotePath: "/Users/ashot/.claude/projects/gone",
+        home: HOME,
+        exists: (p) => p === "/Users/ashot",
+      }),
+    ).toBeNull();
+  });
 
   test("recorded path unchanged when it exists locally", () => {
     expect(
@@ -283,5 +355,70 @@ describe("pickProjectPath", () => {
       home: HOME,
       exists: (p) => p === HOME,
     })).toBe(HOME);
+  });
+});
+
+describe("chooseSessionTranscript", () => {
+  // The live duplicate observed in pl-79: one session UUID, two .jsonl copies.
+  const live: TranscriptCandidate = {
+    filePath: "/Users/ashot/.claude/projects/-Users-ashot-src-union-mobile/f0d46305.jsonl",
+    projectPath: "/Users/ashot/src/union-mobile",
+    projectExists: true, // real local checkout
+  };
+  const stale: TranscriptCandidate = {
+    filePath: "/Users/ashot/.claude/projects/-Users-m1/f0d46305.jsonl",
+    projectPath: "/Users/m1",
+    projectExists: false, // resume artifact: /Users/m1 doesn't exist locally
+  };
+
+  test("first transcript for a UUID always syncs", () => {
+    const choice = chooseSessionTranscript(live, undefined);
+    expect(choice.action).toBe("sync");
+  });
+
+  test("the same file re-firing is not treated as a duplicate", () => {
+    const choice = chooseSessionTranscript(live, live);
+    expect(choice.action).toBe("sync");
+  });
+
+  test("skips the stale resume artifact when a real-checkout copy is canonical", () => {
+    // live registered first (newer mtime); stale m1 copy arrives second.
+    const choice = chooseSessionTranscript(stale, live);
+    expect(choice.action).toBe("skip");
+    if (choice.action === "skip") {
+      expect(choice.canonicalFilePath).toBe(live.filePath);
+    }
+  });
+
+  test("promotes the real-checkout copy over an artifact registered first", () => {
+    // Ordering flip: the m1 artifact changed first and registered as canonical;
+    // the live copy then arrives and must win, superseding the artifact's sync.
+    const choice = chooseSessionTranscript(live, stale);
+    expect(choice.action).toBe("sync");
+    if (choice.action === "sync") {
+      expect(choice.supersededFilePath).toBe(stale.filePath);
+    }
+  });
+
+  test("keeps both when both copies live in real checkouts (no clear artifact)", () => {
+    const other: TranscriptCandidate = {
+      filePath: "/Users/ashot/.claude/projects/-Users-ashot-src-other/f0d46305.jsonl",
+      projectPath: "/Users/ashot/src/other",
+      projectExists: true,
+    };
+    const choice = chooseSessionTranscript(other, live);
+    expect(choice.action).toBe("sync");
+    if (choice.action === "sync") {
+      expect(choice.supersededFilePath).toBeUndefined();
+    }
+  });
+
+  test("keeps both when neither copy resolves to a real dir (never drop blindly)", () => {
+    const stale2: TranscriptCandidate = { ...stale, filePath: "/x/-Users-other/f0d46305.jsonl", projectPath: "/Users/other" };
+    const choice = chooseSessionTranscript(stale2, stale);
+    expect(choice.action).toBe("sync");
+    if (choice.action === "sync") {
+      expect(choice.supersededFilePath).toBeUndefined();
+    }
   });
 });

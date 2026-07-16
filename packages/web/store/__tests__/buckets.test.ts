@@ -6,6 +6,7 @@ import {
   computeReorderUpdates,
   convBucketMap,
   groupSessionsForLabelView,
+  groupSessionsByPlan,
   hydrateMergeValue,
   sortLabels,
   useInboxStore,
@@ -264,6 +265,40 @@ describe("groupSessionsForLabelView", () => {
   });
 });
 
+describe("groupSessionsByPlan", () => {
+  const plan = (short_id: string, title: string) => ({ _id: short_id, short_id, title, status: "active" });
+
+  it("groups every plan (even a plan of one), sorts by size then label, items by recency", () => {
+    const items = [
+      session("a1", { updated_at: 10, active_plan: plan("pl-1", "Alpha") }),
+      session("a2", { updated_at: 20, active_plan: plan("pl-1", "Alpha") }),
+      session("b1", { updated_at: 5, active_plan: plan("pl-2", "Beta") }),
+      session("solo", { active_plan: plan("pl-3", "Gamma") }),
+      session("np1", { git_root: "/x/web" }),
+      session("np2", { git_root: "/x/api" }),
+    ];
+    const { planGroups, projectGroups } = groupSessionsByPlan(items);
+
+    // pl-1 has 2 members → leads; the two singletons follow, tie broken by label.
+    expect(planGroups.map((g) => g.key)).toEqual(["pl-1", "pl-2", "pl-3"]);
+    // A plan of one still gets its own group — the opposite of the status view's
+    // ≥2 flood guard.
+    expect(planGroups[2].items.map((s) => s._id)).toEqual(["solo"]);
+    // Heading reuses the orchestration label format.
+    expect(planGroups[0].label).toBe("pl-1 · Alpha");
+    // Recency within a group: a2 (20) before a1 (10).
+    expect(planGroups[0].items.map((s) => s._id)).toEqual(["a2", "a1"]);
+    // Planless sessions fall to project groups.
+    expect(projectGroups.map((g) => g.name)).toEqual(["web", "api"]);
+  });
+
+  it("dedupes repeated sessions across input segments", () => {
+    const dup = session("dup", { active_plan: plan("pl-9", "Dup") });
+    const { planGroups } = groupSessionsByPlan([dup, dup]);
+    expect(planGroups[0].items.length).toBe(1);
+  });
+});
+
 describe("visualOrder follows the active view mode", () => {
   beforeEach(() => {
     useInboxStore.setState({
@@ -372,19 +407,23 @@ describe("visualOrder follows the active view mode", () => {
         [LIVE_ID]: session(LIVE_ID, { message_count: 3, updated_at: 200, git_root: "/x/web" }),
         [OLD_ID]: session(OLD_ID, { message_count: 3, updated_at: 100, git_root: "/x/web" }),
       };
-      // show_old off: the old card is hidden on screen, so nav drops it too.
+      // show_old off (the every-boot default): the old card is hidden on
+      // screen, so nav drops it too.
       useInboxStore.setState({
         sessions,
         liveInboxIds: new Set([LIVE_ID]),
-        clientState: { ui: { inbox_view_mode: mode, show_old_sessions: false } },
+        showOldSessions: false,
+        clientState: { ui: { inbox_view_mode: mode } },
       });
       expect(useInboxStore.getState().visualOrder().map((s) => s._id)).toEqual([LIVE_ID]);
-      // show_old on: both render and nav include the old session (membership is
-      // the contract here; the intra-status tiebreak differs by mode).
+      // show_old on (ephemeral browse gesture): both render and nav include the
+      // old session (membership is the contract here; the intra-status tiebreak
+      // differs by mode).
       useInboxStore.setState({
         sessions,
         liveInboxIds: new Set([LIVE_ID]),
-        clientState: { ui: { inbox_view_mode: mode, show_old_sessions: true } },
+        showOldSessions: true,
+        clientState: { ui: { inbox_view_mode: mode } },
       });
       expect(useInboxStore.getState().visualOrder().map((s) => s._id).sort()).toEqual([LIVE_ID, OLD_ID].sort());
     });

@@ -1,6 +1,6 @@
 {
   "name": "@codecast/electron",
-  "version": "1.1.81",
+  "version": "1.1.84",
   "description": "Codecast Desktop (Electron)",
   "main": "main.js",
   "private": true,
@@ -26,7 +26,10 @@
     "productName": "Codecast",
     "files": [
       "main.js",
-      "preload.js"
+      "preload.js",
+      "assets/icon.png",
+      "assets/trayTemplate.png",
+      "assets/trayTemplate@2x.png"
     ],
     "directories": {
       "buildResources": "assets"

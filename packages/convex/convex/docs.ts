@@ -5,7 +5,12 @@ import { paginationOptsValidator } from "convex/server";
 import { verifyApiToken } from "./apiTokens";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createDataContext, scopedFetch, resolveEffectiveTeam } from "./data";
-import { resolveTeamForPath, isTeamMember, createTeamFeedFilter } from "./privacy";
+import { resolveTeamForPath, isTeamMember, createTeamFeedFilter, teamVisibleConvTeam } from "./privacy";
+import {
+  webDocsNeedsUserDoc,
+  resolveWebDocsTeamId,
+  clampWebDocsPageSize,
+} from "./webDocsPagination";
 // Owner-or-team access check for a doc. Moved to lib/access.ts (Wave-1 auth/access
 // seam). Imported for local use here and re-exported below so the web mutation
 // and the dispatch side-effect still enforce one rule, not two.
@@ -381,9 +386,7 @@ export const create = mutation({
       if (conv) {
         conversation_id = conv._id;
         if (!team_id) {
-          const shared = !conv.is_private || conv.auto_shared
-            || (conv.team_visibility && conv.team_visibility !== "private");
-          team_id = shared ? conv.team_id : undefined;
+          team_id = teamVisibleConvTeam(conv);
         }
       }
     }
@@ -512,6 +515,10 @@ export const list = query({
     if (!auth) throw new Error("Unauthorized");
 
     let docs;
+    // The by_project_id index is global: a client-supplied project_id could
+    // surface another user's/team's docs, so that branch gets an explicit
+    // owner-or-team-member filter below.
+    let needsAccessFilter = false;
     if (args.doc_type) {
       docs = await ctx.db
         .query("docs")
@@ -524,11 +531,24 @@ export const list = query({
         .query("docs")
         .withIndex("by_project_id", (q) => q.eq("project_id", args.project_id as any))
         .collect();
+      needsAccessFilter = true;
     } else {
       docs = await ctx.db
         .query("docs")
         .withIndex("by_user_id", (q) => q.eq("user_id", auth.userId))
         .collect();
+    }
+
+    if (needsAccessFilter) {
+      const memberships = await ctx.db
+        .query("team_memberships")
+        .withIndex("by_user_id", (q: any) => q.eq("user_id", auth.userId))
+        .collect();
+      const memberTeamIds = new Set(memberships.map((m: any) => String(m.team_id)));
+      docs = docs.filter((d: any) =>
+        String(d.user_id) === String(auth.userId) ||
+        (d.team_id && memberTeamIds.has(String(d.team_id)))
+      );
     }
 
     // Exclude archived
@@ -636,6 +656,10 @@ export const resetSync = mutation({
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
+    // Owner-only, matching the sibling `patch` mutation. Without this, any caller
+    // could wipe a doc's deltas and overwrite its snapshot content by id.
+    const target = await ctx.db.get(args.id);
+    if (!target || target.user_id !== auth.userId) throw new Error("Doc not found");
     const docId = args.id as string;
     const snapshots = await ctx.db
       .query("doc_snapshots")
@@ -925,15 +949,14 @@ export const webListPaginated = query({
     // Only read the (hot, heartbeat-churned) user doc when we actually need its
     // active_team_id — i.e. when the caller didn't pin a workspace. Reading it
     // unconditionally made this subscription invalidate on every daemon heartbeat.
-    let resolvedTeamId: typeof args.team_id | undefined;
-    if (args.workspace === "team" && args.team_id) {
-      resolvedTeamId = args.team_id;
-    } else if (!args.workspace) {
-      const user = await ctx.db.get(userId);
-      resolvedTeamId = user?.active_team_id;
-    } else {
-      resolvedTeamId = undefined;
-    }
+    // The branch logic lives in webDocsPagination.ts so the invariant is tested.
+    const userActiveTeamId = webDocsNeedsUserDoc(args)
+      ? (await ctx.db.get(userId))?.active_team_id
+      : undefined;
+    const resolvedTeamId: typeof args.team_id | undefined = resolveWebDocsTeamId(
+      args,
+      userActiveTeamId
+    ) as typeof args.team_id | undefined;
     const effectiveWorkspace = args.scope === "projects"
       ? "personal" as const
       : args.workspace;
@@ -949,9 +972,10 @@ export const webListPaginated = query({
     // stripDoc runs — so per-doc size, not count, is the binding limit. The
     // webListPaginated invalidation storm is addressed client-side instead (cap
     // the auto-load of all pages in useSyncDocs), not by enlarging the page.
+    // Clamp (WEB_DOCS_MAX_PAGE=12) lives in webDocsPagination.ts so it's tested.
     const paginationOpts = {
       ...args.paginationOpts,
-      numItems: Math.min(args.paginationOpts.numItems, 12),
+      numItems: clampWebDocsPageSize(args.paginationOpts.numItems),
     };
     const cursor = parseCursor(paginationOpts.cursor);
 
@@ -1435,9 +1459,13 @@ export const mentionSearch = query({
     const db = await createDataContext(ctx, {
       userId,
       project_path: args.projectPath,
-      active_team_id: user?.active_team_id || (user as any)?.team_id,
     });
-    const teamId = args.teamId || (db.workspace.type === "team" ? db.workspace.teamId : undefined);
+    // Read-path scoping, not creation: falling back to the active team here
+    // only widens what the member themselves can search, so it stays.
+    const teamId = args.teamId
+      || (db.workspace.type === "team" ? db.workspace.teamId : undefined)
+      || user?.active_team_id
+      || (user as any)?.team_id;
     const q = args.query.toLowerCase();
     const limit = args.limit || 10;
     const types = args.types || ["person", "doc", "task", "session", "plan"];
@@ -1971,7 +1999,6 @@ export const webCreate = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
 
-    const user = await ctx.db.get(userId);
     const now = Date.now();
 
     // If adding under a parent, compute sort_order as last child
@@ -1988,7 +2015,10 @@ export const webCreate = mutation({
 
     const id = await ctx.db.insert("docs", {
       user_id: userId,
-      team_id: user?.active_team_id,
+      // Personal by default: web doc creation carries no workspace choice and
+      // no path to resolve a mapping against. Stamping the active team here
+      // auto-shared every web-created doc with the whole team. The creator
+      // still sees personal docs in team view (scopedFetch's untagged rescue).
       title: args.title,
       content: args.content || "",
       doc_type: (args.doc_type || "note") as any,

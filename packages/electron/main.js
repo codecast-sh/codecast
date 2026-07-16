@@ -7,6 +7,13 @@ const { spawn, execFile } = require("child_process");
 
 app.name = "Codecast";
 
+// Isolated profile for dev/test runs so a from-source instance can run beside
+// the installed app: its own singleton lock, service-worker cache, IndexedDB,
+// and localStorage. Must be set before anything reads userData paths.
+if (process.env.CODECAST_USER_DATA) {
+  app.setPath("userData", process.env.CODECAST_USER_DATA);
+}
+
 // Disable Chromium's trackpad/overscroll swipe-to-navigate (back/forward).
 // We push a history entry per viewed conversation, so an accidental two-finger
 // horizontal swipe would walk backward through that stack and "randomly" jump
@@ -41,7 +48,10 @@ const PROD_URL = "https://codecast.sh";
 // so the Convex auth token only lives on https. Loading http here would
 // redirect anyway — point straight at https to skip the round-trip.
 const LOCAL_URL = "https://local.codecast.sh";
-const BASE_URL = process.env.CODECAST_URL || PROD_URL;
+// Env is sticky across restarts: the last toggled choice is persisted in
+// settings.json (see toggleEnvironment). An explicit CODECAST_URL still wins.
+const BASE_URL =
+  process.env.CODECAST_URL || (loadFullSettings().env === "local" ? LOCAL_URL : PROD_URL);
 
 // local.codecast.sh resolves to 127.0.0.1 and is served with a locally
 // generated mkcert dev certificate. mkcert's CA is in the macOS keychain so
@@ -90,11 +100,13 @@ function loadSettings() {
   return merged;
 }
 
-function saveSettings(shortcuts) {
-  const settingsPath = getSettingsPath();
+function updateSettings(patch) {
   const existing = loadFullSettings();
-  existing.shortcuts = shortcuts;
-  fs.writeFileSync(settingsPath, JSON.stringify(existing, null, 2));
+  fs.writeFileSync(getSettingsPath(), JSON.stringify({ ...existing, ...patch }, null, 2));
+}
+
+function saveSettings(shortcuts) {
+  updateSettings({ shortcuts });
 }
 
 
@@ -239,6 +251,13 @@ function createWindow() {
     mainWindow.webContents.executeJavaScript(
       "document.documentElement.classList.add('electron-desktop')"
     );
+    // Sticky env can boot us into local mode — mark the title the same way
+    // toggleEnvironment does so it's never mistaken for prod.
+    if (currentBaseUrl === LOCAL_URL) {
+      mainWindow.webContents.executeJavaScript(
+        "document.title = '[LOCAL] ' + document.title"
+      );
+    }
     // The page is fully loaded, so the preload's deep-link listener and replay
     // buffer are live — deliver any link that arrived during boot or a reload.
     // did-finish-load only fires on a COMPLETE load, so if the first attempt
@@ -457,6 +476,7 @@ function toggleEnvironment() {
   if (!mainWindow) return;
   currentBaseUrl = currentBaseUrl === PROD_URL ? LOCAL_URL : PROD_URL;
   const env = currentBaseUrl === PROD_URL ? "prod" : "local";
+  updateSettings({ env });
   mainWindow.loadURL(currentBaseUrl);
   mainWindow.webContents.once("did-finish-load", () => {
     if (!mainWindow || mainWindow.isDestroyed()) return;

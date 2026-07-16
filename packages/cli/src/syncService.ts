@@ -19,7 +19,17 @@ const IMAGE_UPLOAD_CONCURRENCY = 6;
 
 const MIN_REQUEST_INTERVAL_MS = 100;
 
-const ADD_MESSAGES_BATCH_TIMEOUT_MS = 60_000;
+// A batch is byte-bounded at MAX_BATCH_BYTES (~0.9MB), so a healthy backend
+// commits one in low single-digit seconds — the only reason a ~0.9MB mutation
+// sits past ~25-30s is a SATURATED backend, where waiting the rest of the way to
+// 60s won't help it commit; it just holds the per-conversation write-chain
+// (withConversationLock) hostage for a full minute, freezing that conversation's
+// web view. Fail over at 28s so a saturated mutation releases the chain ~2x
+// faster and the op re-queues for the recovery-drain path. This is comfortably
+// above the healthy commit time, so it never times out a legitimately-large
+// batch that would have landed — those are already split by MAX_BATCH_BYTES.
+// Image uploads keep their own (separate) UPLOAD_IMAGE_TIMEOUT_MS budget.
+const ADD_MESSAGES_BATCH_TIMEOUT_MS = 28_000;
 const ADD_MESSAGES_BATCH_SIZE = 25;
 // uploadImage runs *before* the timed addMessages batch, so an un-timed upload
 // hang (slow network / contended backend) wedges the whole chunk: the file-watcher
@@ -160,11 +170,24 @@ export interface CreateConversationParams {
   gitInfo?: GitInfo;
   cliFlags?: string;
   subagentDescription?: string;
+  // Transcript path says subagents/ — assert it even when the parent
+  // conversation isn't resolvable yet, so the server never treats the row as
+  // a human-started session (teammate start notifications).
+  isSubagent?: boolean;
+  // Agent-team stamps from a teammate's JSONL (see parser.extractTeamInfo).
+  agentTeamName?: string;
+  agentName?: string;
 }
 
 export class SyncService {
   private client: ConvexHttpClient;
-  private subscriptionClient: ConvexClient;
+  // Lazy: ConvexClient opens its websocket at construction and reconnects
+  // forever. Only the daemon's live-subscription path (one call site) needs
+  // it — creating it eagerly meant every SyncService a TEST constructs leaked
+  // an immortal ws://…:0 reconnect loop that outlived the test file and
+  // spammed the suite (and bun's exit code) long after.
+  private subscriptionClient?: ConvexClient;
+  private convexUrl: string;
   private userId?: string;
   private apiToken?: string;
   private lastRequestTime = 0;
@@ -184,9 +207,22 @@ export class SyncService {
 
   constructor(config: SyncConfig) {
     this.client = new ConvexHttpClient(config.convexUrl);
-    this.subscriptionClient = new ConvexClient(config.convexUrl);
+    this.convexUrl = config.convexUrl;
     this.userId = config.userId;
     this.apiToken = config.authToken;
+  }
+
+  // Every daemon mutation must bypass ConvexHttpClient's built-in mutation
+  // queue (mutations are FIFO-serialized per client instance by default).
+  // Ordering is already ours: same-conversation writes chain through
+  // withConversationLock and each flow awaits its own calls, so the client's
+  // global queue adds nothing — and it caps the whole daemon at one mutation
+  // in flight. Under a backlog burst (post-sleep, backend brownout) queue
+  // wait exceeds ADD_MESSAGES_BATCH_TIMEOUT_MS, so callers time out while
+  // their abandoned entries still run, retries re-enqueue duplicates, and
+  // sync clogs against a perfectly healthy backend.
+  private mutate(name: string, args: Record<string, unknown>): Promise<any> {
+    return this.client.mutation(name as any, args, { skipQueue: true });
   }
 
   private async throttle(): Promise<void> {
@@ -206,7 +242,19 @@ export class SyncService {
     return this.client;
   }
 
+  /** Storage URL for an uploaded image, authed via api_token (the daemon's
+   * client has no cookie session — unauthenticated callers get null). */
+  async getImageUrl(storageId: string): Promise<string | null> {
+    return await this.client.query("images:getImageUrl" as any, {
+      storageId,
+      api_token: this.apiToken,
+    });
+  }
+
   getSubscriptionClient(): ConvexClient {
+    if (!this.subscriptionClient) {
+      this.subscriptionClient = new ConvexClient(this.convexUrl);
+    }
     return this.subscriptionClient;
   }
 
@@ -224,12 +272,24 @@ export class SyncService {
   // what triggers the auto-resume that adopts the freshly swapped credential.
   async enqueueUserMessage(conversationId: string, content: string, clientId?: string): Promise<void> {
     await this.throttle();
-    await this.client.mutation("pendingMessages:sendMessageToSession" as any, {
+    await this.mutate("pendingMessages:sendMessageToSession" as any, {
       conversation_id: conversationId,
       content,
       client_id: clientId,
       api_token: this.apiToken,
     });
+  }
+
+  // After this (primary) daemon pushes a CHANGED credential to the remote
+  // Macs, nudge their auth-blocked sessions with "continue" — CC re-reads the
+  // credential store on its next turn, so the nudge is the whole recovery.
+  // Selection (auth-kind, remote owners, recent window) lives server-side.
+  async reviveRemoteAuthBlocked(): Promise<number> {
+    await this.throttle();
+    const res = await this.mutate("accountSwitch:reviveAuthBlockedOnRemotes" as any, {
+      api_token: this.apiToken,
+    });
+    return res?.continued ?? 0;
   }
 
   private async existingMessageUuids(conversationId: string, messageUuids: string[]): Promise<Set<string> | null> {
@@ -325,7 +385,7 @@ export class SyncService {
     }
     try {
       const uploadUrl = await withTimeout(
-        this.client.mutation(
+        this.mutate(
           "images:generateUploadUrl" as any,
           { api_token: this.apiToken }
         ),
@@ -365,7 +425,7 @@ export class SyncService {
       : undefined;
     const gitInfo = params.gitInfo;
     try {
-      const result = await this.client.mutation(
+      const result = await this.mutate(
         "conversations:createConversation" as any,
         {
           user_id: params.userId,
@@ -392,6 +452,14 @@ export class SyncService {
           worktree_path: gitInfo?.worktreePath,
           worktree_status: gitInfo?.worktreeName ? "active" : undefined,
           subagent_description: params.subagentDescription,
+          is_subagent: params.isSubagent || undefined,
+          agent_team_name: params.agentTeamName,
+          agent_name: params.agentName,
+          // The transcript this conversation is created from lives on THIS
+          // machine — stamp ownership up front so message delivery routes here
+          // instead of racing every daemon's first-claim (a remote daemon that
+          // won that race black-holed injects for freshly synced sessions).
+          owner_device_id: deviceId(),
           api_token: this.apiToken,
         }
       );
@@ -407,7 +475,7 @@ export class SyncService {
   async linkSessions(parentConversationId: string, childConversationId: string, subagentDescription?: string): Promise<void> {
     await this.throttle();
     try {
-      await this.client.mutation(
+      await this.mutate(
         "conversations:linkSessions" as any,
         {
           parent_conversation_id: parentConversationId,
@@ -424,10 +492,39 @@ export class SyncService {
     }
   }
 
+  // Visible-child link: teammate/spawned session → the session that spawned it.
+  // Unlike linkSessions this neither hides the child nor marks it a subagent —
+  // it only powers the parent click-through (see conversations.linkSpawnedBy).
+  async linkSpawnedBy(
+    parentConversationId: string,
+    childConversationId: string,
+    agentTeamName?: string,
+    agentName?: string,
+  ): Promise<void> {
+    await this.throttle();
+    try {
+      await this.mutate(
+        "conversations:linkSpawnedBy" as any,
+        {
+          parent_conversation_id: parentConversationId,
+          child_conversation_id: childConversationId,
+          agent_team_name: agentTeamName,
+          agent_name: agentName,
+          api_token: this.apiToken,
+        }
+      );
+    } catch (error) {
+      if (isAuthError(error)) {
+        throw new AuthExpiredError();
+      }
+      throw error;
+    }
+  }
+
   async linkPlanHandoff(parentConversationId: string, childConversationId: string): Promise<void> {
     await this.throttle();
     try {
-      await this.client.mutation(
+      await this.mutate(
         "conversations:linkPlanHandoff" as any,
         {
           parent_conversation_id: parentConversationId,
@@ -450,7 +547,7 @@ export class SyncService {
   }): Promise<string | null> {
     await this.throttle();
     try {
-      const result = await this.client.mutation(
+      const result = await this.mutate(
         "docs:create" as any,
         {
           api_token: this.apiToken,
@@ -478,7 +575,7 @@ export class SyncService {
   }): Promise<string | null> {
     await this.throttle();
     try {
-      const result = await this.client.mutation(
+      const result = await this.mutate(
         "tasks:create" as any,
         {
           api_token: this.apiToken,
@@ -504,7 +601,7 @@ export class SyncService {
   async updateTaskStatus(shortId: string, status: string, sessionId?: string): Promise<void> {
     await this.throttle();
     try {
-      await this.client.mutation(
+      await this.mutate(
         "tasks:update" as any,
         {
           api_token: this.apiToken,
@@ -593,7 +690,7 @@ export class SyncService {
     }
 
     try {
-      const messageId = await this.client.mutation(
+      const messageId = await this.mutate(
         "messages:addMessage" as any,
         {
           conversation_id: params.conversationId,
@@ -736,7 +833,7 @@ export class SyncService {
         await this.throttle();
         try {
           const result = await withTimeout(
-            this.client.mutation(
+            this.mutate(
               "messages:addMessages" as any,
               {
                 conversation_id: params.conversationId,
@@ -789,7 +886,7 @@ export class SyncService {
     }
     const filePathHash = hashPath(params.filePath);
     try {
-      await this.client.mutation("syncCursors:updateSyncCursor" as any, {
+      await this.mutate("syncCursors:updateSyncCursor" as any, {
         user_id: this.userId,
         file_path_hash: filePathHash,
         last_position: params.byteOffset,
@@ -828,7 +925,7 @@ export class SyncService {
 
   async updateTitle(conversationId: string, title: string): Promise<void> {
     try {
-      await this.client.mutation("conversations:updateTitle" as any, {
+      await this.mutate("conversations:updateTitle" as any, {
         conversation_id: conversationId,
         title,
         api_token: this.apiToken,
@@ -843,7 +940,7 @@ export class SyncService {
 
   async setAvailableSkills(conversationId: string | undefined, skills: string, projectPath?: string): Promise<void> {
     try {
-      await this.client.mutation("conversations:setAvailableSkills" as any, {
+      await this.mutate("conversations:setAvailableSkills" as any, {
         ...(conversationId ? { conversation_id: conversationId } : {}),
         ...(projectPath ? { project_path: projectPath } : {}),
         skills,
@@ -854,7 +951,7 @@ export class SyncService {
 
   async updateProjectPath(sessionId: string, projectPath: string, gitRoot?: string): Promise<{ updated: boolean } | null> {
     try {
-      const result = await this.client.mutation("conversations:updateProjectPath" as any, {
+      const result = await this.mutate("conversations:updateProjectPath" as any, {
         session_id: sessionId,
         project_path: projectPath,
         git_root: gitRoot,
@@ -868,7 +965,7 @@ export class SyncService {
 
   async updateSessionId(conversationId: string, sessionId: string, projectPath?: string, gitRoot?: string): Promise<void> {
     try {
-      await this.client.mutation("conversations:updateSessionId" as any, {
+      await this.mutate("conversations:updateSessionId" as any, {
         conversation_id: conversationId,
         session_id: sessionId,
         project_path: projectPath,
@@ -911,7 +1008,7 @@ export class SyncService {
 
   async registerManagedSession(sessionId: string, pid: number, tmuxSession?: string, conversationId?: string): Promise<{ notOwner?: boolean; owner?: string } | void> {
     try {
-      const res = await this.client.mutation("managedSessions:registerManagedSession" as any, {
+      const res = await this.mutate("managedSessions:registerManagedSession" as any, {
         session_id: sessionId,
         pid,
         tmux_session: tmuxSession,
@@ -931,7 +1028,7 @@ export class SyncService {
     agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped" | "starting" | "resuming",
   ): Promise<{ found: boolean; dismissed?: boolean } | undefined> {
     try {
-      return await this.client.mutation("managedSessions:heartbeat" as any, {
+      return await this.mutate("managedSessions:heartbeat" as any, {
         session_id: sessionId,
         api_token: this.apiToken,
         ...(agentStatus ? { agent_status: agentStatus, client_ts: Date.now() } : {}),
@@ -952,7 +1049,7 @@ export class SyncService {
   ): Promise<{ updated: number } | undefined> {
     if (sessions.length === 0) return;
     try {
-      return await this.client.mutation("managedSessions:heartbeatBatch" as any, {
+      return await this.mutate("managedSessions:heartbeatBatch" as any, {
         api_token: this.apiToken,
         sessions,
       });
@@ -961,7 +1058,7 @@ export class SyncService {
 
   async reportSessionMetrics(sessionId: string, cpu: number, memory: number, pidCount: number, agentPid?: number, awakeIdleMs?: number): Promise<void> {
     try {
-      await this.client.mutation("managedSessions:reportMetrics" as any, {
+      await this.mutate("managedSessions:reportMetrics" as any, {
         session_id: sessionId,
         cpu,
         memory,
@@ -1009,7 +1106,7 @@ export class SyncService {
 
   async ackInjectedMessages(conversationId: string): Promise<void> {
     try {
-      await this.client.mutation("pendingMessages:ackInjectedMessages" as any, {
+      await this.mutate("pendingMessages:ackInjectedMessages" as any, {
         conversation_id: conversationId,
         api_token: this.apiToken,
         device_id: deviceId(),
@@ -1024,7 +1121,7 @@ export class SyncService {
 
   async resetInjectedMessages(conversationId: string): Promise<void> {
     try {
-      await this.client.mutation("pendingMessages:resetInjectedMessages" as any, {
+      await this.mutate("pendingMessages:resetInjectedMessages" as any, {
         conversation_id: conversationId,
         api_token: this.apiToken,
         device_id: deviceId(),
@@ -1042,7 +1139,7 @@ export class SyncService {
     deliveredAt?: number;
   }): Promise<void> {
     try {
-      await this.client.mutation("pendingMessages:updateMessageStatus" as any, {
+      await this.mutate("pendingMessages:updateMessageStatus" as any, {
         message_id: params.messageId,
         status: params.status,
         delivered_at: params.deliveredAt,
@@ -1059,7 +1156,7 @@ export class SyncService {
 
   async retryMessage(messageId: string): Promise<void> {
     try {
-      await this.client.mutation("pendingMessages:retryMessage" as any, {
+      await this.mutate("pendingMessages:retryMessage" as any, {
         message_id: messageId,
         api_token: this.apiToken,
         device_id: deviceId(),
@@ -1074,7 +1171,7 @@ export class SyncService {
 
   async claimPendingMessageForDelivery(messageId: string): Promise<PendingMessageForDelivery | null> {
     try {
-      const result = await this.client.mutation("pendingMessages:claimPendingMessageForDelivery" as any, {
+      const result = await this.mutate("pendingMessages:claimPendingMessageForDelivery" as any, {
         message_id: messageId,
         api_token: this.apiToken,
         device_id: deviceId(),
@@ -1088,14 +1185,18 @@ export class SyncService {
     }
   }
 
-  async sendMessageToSession(conversationId: string, content: string): Promise<string | null> {
+  // `origin: "scheduler"` marks a machine-initiated injection (task scheduler):
+  // the server then skips the stash-clear so a stashed looping session keeps
+  // working out of the user's active queue. Human/agent sends omit it.
+  async sendMessageToSession(conversationId: string, content: string, origin?: "scheduler"): Promise<string | null> {
     if (!this.apiToken) return null;
     try {
-      const result = await this.client.mutation(
+      const result = await this.mutate(
         "pendingMessages:sendMessageToSession" as any,
         {
           conversation_id: conversationId,
           content,
+          ...(origin ? { origin } : {}),
           api_token: this.apiToken,
         },
       );
@@ -1112,7 +1213,7 @@ export class SyncService {
   async setSessionError(conversationId: string, error?: string): Promise<void> {
     if (!this.apiToken) return;
     try {
-      await this.client.mutation(
+      await this.mutate(
         "conversations:setSessionError" as any,
         {
           conversation_id: conversationId,
@@ -1131,7 +1232,7 @@ export class SyncService {
   async claimSession(conversationId: string): Promise<void> {
     if (!this.apiToken) return;
     try {
-      await this.client.mutation(
+      await this.mutate(
         "devices:claimConversation" as any,
         {
           conversation_id: conversationId,
@@ -1151,7 +1252,7 @@ export class SyncService {
   async claimConversationForStart(conversationId: string): Promise<{ won: boolean; owner?: string }> {
     if (!this.apiToken) return { won: true };
     try {
-      const res = await this.client.mutation(
+      const res = await this.mutate(
         "devices:claimConversationForStart" as any,
         {
           conversation_id: conversationId,
@@ -1168,7 +1269,7 @@ export class SyncService {
   async markSessionCompleted(conversationId: string): Promise<void> {
     if (!this.apiToken) return;
     try {
-      await this.client.mutation(
+      await this.mutate(
         "conversations:markSessionCompleted" as any,
         {
           conversation_id: conversationId,
@@ -1181,7 +1282,7 @@ export class SyncService {
   async markSessionActive(conversationId: string): Promise<void> {
     if (!this.apiToken) return;
     try {
-      await this.client.mutation(
+      await this.mutate(
         "conversations:markSessionActive" as any,
         {
           conversation_id: conversationId,
@@ -1194,7 +1295,7 @@ export class SyncService {
   async updateSessionAgentStatus(conversationId: string, status: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped" | "starting" | "resuming", clientTs?: number, permissionMode?: string): Promise<void> {
     if (!this.apiToken) return;
     try {
-      await this.client.mutation(
+      await this.mutate(
         "managedSessions:updateAgentStatus" as any,
         {
           conversation_id: conversationId,
@@ -1242,7 +1343,7 @@ export class SyncService {
     arguments_preview: string;
   }): Promise<string> {
     try {
-      const permissionId = await this.client.mutation(
+      const permissionId = await this.mutate(
         "permissions:createPermissionRequest" as any,
         {
           conversation_id: params.conversation_id,
@@ -1263,7 +1364,7 @@ export class SyncService {
 
   async cancelPermissionRequest(permissionId: string): Promise<boolean> {
     try {
-      const ok = await this.client.mutation(
+      const ok = await this.mutate(
         "permissions:cancelPermissionRequest" as any,
         {
           permission_id: permissionId,
@@ -1281,7 +1382,7 @@ export class SyncService {
 
   async cancelPendingPermissions(sessionId: string, createdBefore?: number): Promise<number> {
     try {
-      const cancelled = await this.client.mutation(
+      const cancelled = await this.mutate(
         "permissions:cancelPendingPermissions" as any,
         {
           session_id: sessionId,
@@ -1362,7 +1463,7 @@ export class SyncService {
       return null;
     }
     try {
-      const result = await this.client.mutation(
+      const result = await this.mutate(
         "daemonLogs:insertBatch" as any,
         {
           api_token: this.apiToken,
@@ -1383,7 +1484,7 @@ export class SyncService {
   }): Promise<void> {
     if (!this.apiToken) return;
     try {
-      await this.client.mutation(
+      await this.mutate(
         "notifications:createSessionNotification" as any,
         {
           api_token: this.apiToken,
@@ -1451,7 +1552,7 @@ export class SyncService {
   async claimTask(taskId: string, daemonId: string): Promise<any> {
     if (!this.apiToken) return null;
     try {
-      return await this.client.mutation(
+      return await this.mutate(
         "agentTasks:claimTask" as any,
         { api_token: this.apiToken, task_id: taskId, daemon_id: daemonId }
       );
@@ -1463,7 +1564,7 @@ export class SyncService {
   async renewTaskLease(taskId: string, daemonId: string): Promise<boolean> {
     if (!this.apiToken) return false;
     try {
-      const result = await this.client.mutation(
+      const result = await this.mutate(
         "agentTasks:renewLease" as any,
         { api_token: this.apiToken, task_id: taskId, daemon_id: daemonId }
       );
@@ -1473,10 +1574,10 @@ export class SyncService {
     }
   }
 
-  async completeTaskRun(taskId: string, daemonId: string, summary?: string, conversationId?: string): Promise<boolean> {
+  async completeTaskRun(taskId: string, daemonId: string, summary?: string, conversationId?: string, runSessionUuid?: string): Promise<boolean> {
     if (!this.apiToken) return false;
     try {
-      const result = await this.client.mutation(
+      const result = await this.mutate(
         "agentTasks:completeTaskRun" as any,
         {
           api_token: this.apiToken,
@@ -1484,6 +1585,7 @@ export class SyncService {
           daemon_id: daemonId,
           summary,
           conversation_id: conversationId,
+          run_session_uuid: runSessionUuid,
         }
       );
       return result as boolean;
@@ -1492,16 +1594,34 @@ export class SyncService {
     }
   }
 
-  async failTaskRun(taskId: string, daemonId: string, error?: string): Promise<boolean> {
+  async failTaskRun(taskId: string, daemonId: string, error?: string, runSessionUuid?: string): Promise<boolean> {
     if (!this.apiToken) return false;
     try {
-      const result = await this.client.mutation(
+      const result = await this.mutate(
         "agentTasks:failTaskRun" as any,
-        { api_token: this.apiToken, task_id: taskId, daemon_id: daemonId, error }
+        { api_token: this.apiToken, task_id: taskId, daemon_id: daemonId, error, run_session_uuid: runSessionUuid }
       );
       return result as boolean;
     } catch {
       return false;
+    }
+  }
+
+  // Stamp agent_task_id on a spawned run's conversation (and fold the previous
+  // completed run of a repeating spawn schedule). { retry: true } means the
+  // run's conversation hasn't synced yet — call again shortly.
+  async linkRunConversation(taskId: string, runSessionUuid: string): Promise<{ linked: boolean; retry: boolean }> {
+    if (!this.apiToken) return { linked: false, retry: false };
+    try {
+      const result = await this.mutate(
+        "agentTasks:linkRunConversation" as any,
+        { api_token: this.apiToken, task_id: taskId, run_session_uuid: runSessionUuid }
+      );
+      return result as { linked: boolean; retry: boolean };
+    } catch {
+      // Unknown mutation (older deployed backend) or transient failure — the
+      // completeTaskRun backfill still stamps the link at run end.
+      return { linked: false, retry: false };
     }
   }
 }

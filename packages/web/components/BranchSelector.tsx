@@ -111,14 +111,15 @@ export function BranchSelector({
   const hoveredBranchSize = hoveredFork ? branchSizeOf(hoveredFork) : 0;
 
   // Every continuation of the fork point — the origin line plus each fork — is a
-  // peer branch. They render through one path so none is privileged as "main";
-  // the only distinction is which one is active, and each is labeled by the
-  // prompt that sent it its own way.
+  // peer branch. They render through one path; the only distinction is which one
+  // is active, and each is labeled by the prompt that sent it its own way. The
+  // origin line falls back to "main" when it has no distinguishing prompt after
+  // the fork point (common on orchestration lines that just keep running tools).
   const branches = [
     {
       key: MAIN_BRANCH,
       id: null as string | null,
-      label: mainDivergentPreview || "original",
+      label: mainDivergentPreview || "main",
       size: mainMessageCount ?? 0,
       unread: 0,
       isActive: !activeBranchId,

@@ -74,6 +74,10 @@ interface SearchResult {
   total_matches: number;
   conversations: SearchConversation[];
   search_scope?: string;
+  // Set when the server answered in titles_only mode (content search died on a
+  // read-budget/capacity error and the CLI fell back — see cliSearchRequest).
+  titles_only?: boolean;
+  content_search_error?: string;
 }
 
 interface SearchOptions {
@@ -256,14 +260,21 @@ export function formatSearchResults(result: SearchResult, options: SearchOptions
 
   lines.push("<SEARCHRESULTS>");
 
-  if (result.total_matches === 0) {
+  if (result.titles_only) {
+    lines.push(`${c.yellow}Content search unavailable${c.reset}${c.dim} (${result.content_search_error || "backend overloaded"}) — showing title/summary matches only. Try a more specific word for full-text results.${c.reset}`);
+    lines.push("");
+  }
+
+  if (result.total_matches === 0 && result.conversations.length === 0) {
     lines.push("No matches found.");
     lines.push("Use --mine for only your sessions, -g for all teams.");
     lines.push("</SEARCHRESULTS>");
     return lines.join("\n");
   }
 
-  lines.push(`Found ${result.total_matches} match${result.total_matches === 1 ? "" : "es"} in ${result.conversations.length} conversation${result.conversations.length === 1 ? "" : "s"}\n`);
+  lines.push(result.titles_only
+    ? `Found ${result.conversations.length} session${result.conversations.length === 1 ? "" : "s"} by title/summary\n`
+    : `Found ${result.total_matches} match${result.total_matches === 1 ? "" : "es"} in ${result.conversations.length} conversation${result.conversations.length === 1 ? "" : "s"}\n`);
 
   for (const conv of result.conversations) {
     lines.push(""); // Extra spacing before each conversation
@@ -442,6 +453,9 @@ interface FeedConversation {
   work_state?: string;
   is_pinned?: boolean;
   user?: { name: string | null; email: string | null };
+  /** Second-party owner (steering member), when assigned. */
+  owner?: { name: string | null; email: string | null };
+  owned_by_me?: boolean;
   preview: FeedPreviewMessage[];
 }
 
@@ -764,6 +778,11 @@ export function formatFeedResults(result: FeedResult, options: FeedOptions = {})
     lines.push(header + padding);
 
     const userDisplay = conv.user?.name || conv.user?.email;
+    const ownerDisplay = conv.owned_by_me
+      ? "owned by you"
+      : conv.owner
+        ? `owner: ${conv.owner.name || conv.owner.email}`
+        : "";
     const stateBadge = formatStateBadge(conv);
     const meta = [
       truncateId(conv.id),
@@ -772,6 +791,7 @@ export function formatFeedResults(result: FeedResult, options: FeedOptions = {})
       `${conv.message_count} msgs`,
       truncatePath(conv.project_path),
       userDisplay ? `${c.yellow}${userDisplay}${c.reset}` : "",
+      ownerDisplay ? `${c.magenta}${ownerDisplay}${c.reset}` : "",
     ].filter(Boolean).join(" | ");
     lines.push(`   ${meta}\n`);
 
@@ -820,6 +840,10 @@ interface MonitorSession {
   label?: string | null;
   active_plan: { short_id: string; title: string } | null;
   active_task: { short_id: string; title: string } | null;
+  /** Second-party ownership: who RUNS it (when not the caller) / who OWNS it. */
+  run_by?: string | null;
+  owner?: { name: string | null; email: string | null } | null;
+  owned_by_me?: boolean;
 }
 
 interface MonitorResult {
@@ -853,11 +877,17 @@ function changeLabel(change: string): string {
 
 // One colored, natural-language line for a single work-state change — the unit
 // of the `cast sessions -w` change stream (append-only, never the full set).
+// to === null means the session left the watched set (stopped matching the
+// --state filter, or was dismissed).
 export function formatSessionChangeLine(ch: {
-  id: string; title?: string | null; from?: string | null; to: string;
+  id: string; title?: string | null; from?: string | null; to: string | null;
   is_pinned?: boolean; is_live?: boolean;
 }): string {
   const time = new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit" });
+  if (ch.to == null) {
+    const was = String(ch.from ?? "").replace("_", " ");
+    return `${c.dim}${time}${c.reset}  ${c.gray}○${c.reset} ${c.gray}gone${c.reset}  ${c.magenta}${truncateId(ch.id)}${c.reset}  ${ch.title || "New Session"}  ${c.dim}(left the watched set${was ? ` — was ${was}` : ""})${c.reset}`;
+  }
   const toLabel = WORK_STATE_LABEL[ch.to] ?? ch.to;
   const dot = ch.is_live ? `${c.green}●${c.reset}` : `${c.gray}○${c.reset}`;
   const pin = ch.is_pinned ? ` ${c.magenta}pinned${c.reset}` : "";
@@ -918,7 +948,11 @@ export function formatMonitor(result: MonitorResult, options: MonitorOptions = {
     const badge = formatStateBadge(s);
     const idPart = `${c.magenta}${truncateId(s.id)}${c.reset}`;
     const mark = changes[s.id] ? `  ${changeLabel(changes[s.id])}` : "";
-    lines.push(`${badge}  ${idPart}  ${c.bold}${s.title || "New Session"}${c.reset}${mark}`);
+    // Second-party-owned rows: show who runs it (this inbox shows it because
+    // the caller OWNS it), or who it's assigned to when the caller is the runner.
+    const runBy = s.run_by && s.owned_by_me ? `  ${c.magenta}⇄ run by ${s.run_by}${c.reset}` : "";
+    const ownedBy = !s.owned_by_me && s.owner ? `  ${c.dim}→ owner ${s.owner.name || s.owner.email}${c.reset}` : "";
+    lines.push(`${badge}  ${idPart}  ${c.bold}${s.title || "New Session"}${c.reset}${runBy}${ownedBy}${mark}`);
 
     const metaBits = [
       formatRelativeTime(s.updated_at),

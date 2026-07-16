@@ -15,12 +15,45 @@ const POLL_INTERVAL_MS = 30_000;
 const HEARTBEAT_INTERVAL_MS = 60_000;
 const MAX_CONCURRENCY = 2;
 
+// Schedules run permissive by default (`mode: "apply"`); safe mode
+// (`cast schedule add --safe`, stored as mode: "propose") is the exception, so
+// its fence has to be real rather than advisory. ONE mandate string, used both
+// as the agent's system prompt and as a line in the run prompt.
+const SAFE_MODE_MANDATE =
+  "This is a SAFE-mode scheduled run: strictly read-only. Investigate and report. Never modify files, run state-changing commands, commit, push, or deploy. If the task appears to require changes, describe them in your completion summary instead of making them.";
+
+// Shell commands a safe-mode run may never execute. Deny rules bind
+// MECHANICALLY — Claude Code honors them even under the --dangerously-skip-permissions
+// that headless runs require (verified) — so unlike the mandate above these are a
+// wall, not a request. Scoped to the subcommand, so reads through the same
+// binaries still work (`git log`, `gh pr view`), as does the run's own
+// `cast schedule complete` self-report.
+// Accepted residual gap: a write smuggled through shell redirection
+// (`echo x > f`) or an interpreter (`node -e`) is not prefix-matchable, so the
+// mandate — not this list — is what covers those.
+const SAFE_MODE_DENY_RULES = [
+  // Repository state and history
+  "Bash(git push:*)", "Bash(git commit:*)", "Bash(git merge:*)", "Bash(git rebase:*)",
+  "Bash(git reset:*)", "Bash(git checkout:*)", "Bash(git restore:*)", "Bash(git clean:*)",
+  "Bash(git stash:*)", "Bash(git apply:*)", "Bash(git tag:*)",
+  // Destructive filesystem
+  "Bash(rm:*)", "Bash(mv:*)", "Bash(dd:*)", "Bash(truncate:*)", "Bash(tee:*)",
+  "Bash(chmod:*)", "Bash(chown:*)",
+  // Deploy and publish
+  "Bash(npm publish:*)", "Bash(convex deploy:*)", "Bash(npx convex deploy:*)",
+  // Remote repo writes
+  "Bash(gh pr merge:*)", "Bash(gh pr create:*)", "Bash(gh release:*)",
+];
+
 interface RunningTask {
   taskId: string;
   tmuxSession: string;
   startedAt: number;
   maxRuntimeMs: number;
   heartbeatTimer: ReturnType<typeof setInterval>;
+  // Claude session UUID assigned to this run via `--session-id`, so completion
+  // can link the run's conversation back to the task. Undefined for codex runs.
+  runSessionUuid?: string;
 }
 
 interface TaskSchedulerConfig {
@@ -141,12 +174,20 @@ export class TaskScheduler {
     if (task.originating_conversation_id) {
       try {
         const safeTitle = (task.title || "").replace(/"/g, "&quot;");
+        // The injected prompt carries the task and NOTHING about permissions: an
+        // inject run is just another turn in an already-running session, so the
+        // rules that session was started with are the rules — inherited, not
+        // restated. `mode` therefore governs SPAWNED runs only (the branch
+        // below, where a fresh agent's toolset can actually be narrowed at
+        // birth); on this path it is deliberately ignored.
         const wrappedPrompt = `<scheduled-task title="${safeTitle}" task-id="${task._id}">${task.prompt}</scheduled-task>`;
         // The injected message becomes a user-row in the messages table once
         // the agent's JSONL is parsed. The UI detects the <scheduled-task>
         // wrapper and renders it as a ScheduledTaskBlock, so we must not
         // also write a system-subtype row here -- that would double-render.
-        await this.syncService.sendMessageToSession(task.originating_conversation_id, wrappedPrompt);
+        // origin "scheduler": a machine wake must not clear the user's stash —
+        // a stashed session keeps running out of the active queue.
+        await this.syncService.sendMessageToSession(task.originating_conversation_id, wrappedPrompt, "scheduler");
         this.log(`Injected prompt into conversation ${task.originating_conversation_id.toString().slice(-8)} for task "${task.title}"`);
         await this.syncService.completeTaskRun(
           task._id,
@@ -183,6 +224,11 @@ export class TaskScheduler {
     // Build agent command args (will be passed to the script, which quotes them via "$(cat promptFile)")
     let extraAgentArgs: string[] = [];
     let agentBin: string;
+    // Assigned for claude runs so completion can link the run's conversation back
+    // to the task. `claude --session-id <uuid>` writes <uuid>.jsonl, which the
+    // daemon syncs into a conversation keyed by session_id=<uuid>. Left undefined
+    // for codex (different session scheme).
+    let runSessionUuid: string | undefined;
     if (agentType === "codex") {
       agentBin = "codex";
       const extraArgs = this.config.codex_args;
@@ -195,6 +241,15 @@ export class TaskScheduler {
     } else {
       agentBin = "claude";
       extraAgentArgs.push("--dangerously-skip-permissions");
+      // Safe mode is fenced in three layers, strongest first: the file-mutation
+      // tools are removed outright; SAFE_MODE_DENY_RULES block the
+      // state-changing shell commands (deny rules bind even under
+      // --dangerously-skip-permissions); and the mandate covers what neither can
+      // pattern-match. Anything not "apply" fences — fail closed on a bad value.
+      if (task.mode !== "apply") {
+        extraAgentArgs.push("--disallowedTools", "Edit", "Write", "NotebookEdit", ...SAFE_MODE_DENY_RULES);
+        extraAgentArgs.push("--append-system-prompt", SAFE_MODE_MANDATE);
+      }
       const extraArgs = this.config.claude_args;
       if (extraArgs) {
         const skip = new Set(["--chrome", "--dangerously-skip-permissions"]);
@@ -202,6 +257,11 @@ export class TaskScheduler {
         for (const arg of extra) {
           if (!skip.has(arg) && !extraAgentArgs.includes(arg)) extraAgentArgs.push(arg);
         }
+      }
+      // Only auto-assign if the operator didn't pin one via claude_args.
+      if (!extraAgentArgs.includes("--session-id")) {
+        runSessionUuid = crypto.randomUUID();
+        extraAgentArgs.push("--session-id", runSessionUuid);
       }
     }
 
@@ -217,6 +277,10 @@ export class TaskScheduler {
       "#!/bin/bash",
       "unset CLAUDECODE",
       "unset ANTHROPIC_API_KEY",
+      // Hand the run's session UUID to the agent so a self-report via
+      // `cast schedule complete` can link the run's conversation back to the task
+      // (the agent's own session_id IS this UUID, assigned via --session-id above).
+      ...(runSessionUuid ? [`export CODECAST_RUN_SESSION_UUID='${runSessionUuid}'`] : []),
       agentInvocation,
       `rm -f ${promptFile} ${scriptFile}`,
       "",
@@ -273,7 +337,32 @@ export class TaskScheduler {
       startedAt: Date.now(),
       maxRuntimeMs,
       heartbeatTimer,
+      runSessionUuid,
     });
+
+    // Link the run's conversation to the task as soon as it syncs (bounded
+    // retries — the first JSONL write usually lands within seconds). This makes
+    // the schedule strip/badge work DURING the run and folds the previous
+    // completed run of a repeating schedule out of the inbox. completeTaskRun
+    // backfills the link at run end if every attempt here loses the race.
+    if (runSessionUuid) this.scheduleRunLink(task._id, runSessionUuid);
+  }
+
+  // Bounded retry chain for linkRunConversation; standalone timers (not tied
+  // to the RunningTask entry) so a fast run that completes before the first
+  // attempt doesn't orphan the link — the mutation is idempotent either way.
+  private scheduleRunLink(taskId: string, runSessionUuid: string, attempt = 0): void {
+    const delaysMs = [10_000, 30_000, 90_000];
+    if (attempt >= delaysMs.length) return;
+    setTimeout(async () => {
+      try {
+        const result = await this.syncService.linkRunConversation(taskId, runSessionUuid);
+        if (result.linked || !result.retry) return;
+      } catch {
+        // fall through to retry
+      }
+      this.scheduleRunLink(taskId, runSessionUuid, attempt + 1);
+    }, delaysMs[attempt]);
   }
 
   private async checkTaskCompletion(taskId: string): Promise<void> {
@@ -285,7 +374,7 @@ export class TaskScheduler {
       await execAsync(`tmux has-session -t '${entry.tmuxSession}' 2>/dev/null`);
     } catch {
       this.log(`tmux session ${entry.tmuxSession} ended for task ${taskId}`);
-      await this.syncService.completeTaskRun(taskId, this.daemonId, "Agent session ended");
+      await this.syncService.completeTaskRun(taskId, this.daemonId, "Agent session ended", undefined, entry.runSessionUuid);
       this.cleanupTask(taskId);
       return;
     }
@@ -295,7 +384,7 @@ export class TaskScheduler {
     if (elapsed > entry.maxRuntimeMs) {
       this.log(`Task ${taskId} exceeded max runtime (${entry.maxRuntimeMs}ms), killing`);
       try { await execAsync(`tmux kill-session -t '${entry.tmuxSession}'`); } catch {}
-      await this.syncService.failTaskRun(taskId, this.daemonId, `Exceeded max runtime (${Math.round(entry.maxRuntimeMs / 60000)}min)`);
+      await this.syncService.failTaskRun(taskId, this.daemonId, `Exceeded max runtime (${Math.round(entry.maxRuntimeMs / 60000)}min)`, entry.runSessionUuid);
       this.cleanupTask(taskId);
       return;
     }
@@ -310,7 +399,7 @@ export class TaskScheduler {
       if (lastLine.endsWith("$") || lastLine.endsWith("%") || lastLine.endsWith("#")) {
         this.log(`Task ${taskId} returned to shell prompt, cleaning up`);
         try { await execAsync(`tmux kill-session -t '${entry.tmuxSession}'`); } catch {}
-        await this.syncService.completeTaskRun(taskId, this.daemonId, "Agent exited");
+        await this.syncService.completeTaskRun(taskId, this.daemonId, "Agent exited", undefined, entry.runSessionUuid);
         this.cleanupTask(taskId);
       }
     } catch {
@@ -331,7 +420,10 @@ export class TaskScheduler {
 
     parts.push(`[Codecast Task: ${task.title}]`);
     parts.push(`Task ID: ${task._id}`);
-    parts.push(`Mode: ${task.mode || "propose"}`);
+    // Wire format: sessionMessage.ts parses `Mode: <propose|apply>` into the
+    // run's chip, so the literals stay even though the user-facing name for
+    // propose is now "safe". Absent mode falls back to the permissive default.
+    parts.push(`Mode: ${task.mode || "apply"}`);
     parts.push("");
     parts.push(task.prompt);
 
@@ -358,6 +450,12 @@ export class TaskScheduler {
     parts.push("");
     parts.push("---");
     parts.push("Instructions:");
+    // The Mode: header line above is wire format (the web UI parses it into a
+    // chip) — the mandate that gives safe mode teeth lives here instead, and is
+    // the same string the agent gets as its system prompt.
+    if (task.mode !== "apply") {
+      parts.push(`- ${SAFE_MODE_MANDATE}`);
+    }
     if (task.target_conversation_id) {
       parts.push(`- Your summary will be posted as a message in the originating conversation thread.`);
       parts.push(`- When done, run: cast schedule complete ${task._id} --summary "your full response to post in the thread"`);
@@ -365,6 +463,7 @@ export class TaskScheduler {
     } else {
       parts.push(`- When done, run: cast schedule complete ${task._id} --summary "brief description of what was done"`);
     }
+    parts.push(`- A clean completion folds this run out of the user's inbox (the summary carries the outcome). If you found something the user must read or act on, add --needs-attention to keep this run in their inbox.`);
     parts.push('- To schedule follow-up: cast schedule add "..." --in <time>');
     if (task.originating_conversation_id) {
       parts.push(`- Run \`cast read ${task.originating_conversation_id}\` for full original context`);

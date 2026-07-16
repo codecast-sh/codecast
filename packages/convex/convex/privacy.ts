@@ -1,8 +1,10 @@
 import { Id } from "./_generated/dataModel";
+import { isSessionOwner } from "./sessionOwners";
 
 type DbCtx = { db: any };
 
 type ConversationForAccess = {
+  _id?: Id<"conversations">;
   user_id: Id<"users">;
   team_id?: Id<"teams">;
   is_private: boolean;
@@ -96,6 +98,14 @@ export async function checkConversationAccess(
 ): Promise<AccessLevel> {
   if (viewerId) {
     if (conversation.user_id.toString() === viewerId.toString()) return "owner";
+    // An OWNER (a member of the session's owner set — the humans ASSIGNED to
+    // steer a session run by another account, e.g. a Mr Bot fix session parked
+    // on a founder) steers with full owner rights: assignment is an explicit
+    // grant made by someone who already had runner-or-team access. owner_user_id
+    // is the denormalized primary-owner fast path; the session_owners lookup
+    // covers secondary owners (a session may have several).
+    if ((conversation as any).owner_user_id?.toString() === viewerId.toString()) return "owner";
+    if (conversation._id && (await isSessionOwner(ctx, conversation._id, viewerId))) return "owner";
     if (await canTeamMemberAccess(ctx, viewerId, conversation)) return "team";
   }
   if (conversation.share_token) return "shared";
@@ -249,6 +259,55 @@ export function resolveTeamForPath(
   return { teamId: resolvedTeamId, isPrivate, autoShared };
 }
 
+// Work items (tasks/plans/docs) inherit a linked conversation's team only when
+// the conversation is actually team-visible. On conversations team_id is
+// routing — stamped even on private sessions — but on work items team_id alone
+// grants every team member full read access (canAccessTask has no privacy
+// gate), so propagating it from a private session leaks the item to the team.
+export function teamVisibleConvTeam<T = Id<"teams">>(conv: {
+  team_id?: T;
+  is_private?: boolean;
+  auto_shared?: boolean;
+  team_visibility?: string;
+} | null | undefined): T | undefined {
+  if (!conv?.team_id) return undefined;
+  if (!conv.is_private || conv.auto_shared) return conv.team_id;
+  if (conv.team_visibility && conv.team_visibility !== "private") return conv.team_id;
+  return undefined;
+}
+
+// Creation-time team/privacy resolution. Every conversation insert must derive
+// team_id / is_private / auto_shared from this (or inherit them from an
+// existing conversation, as forks do) — writing literals at an insert site is
+// how "shared with nobody" rows are born (is_private:false with no team_id
+// fails every team-visibility gate, and buildPathRestampUpdate treats that
+// combination as a manual share it must not touch, so the row never heals).
+export async function resolveCreationPrivacy(
+  ctx: DbCtx,
+  ownerId: Id<"users">,
+  conversationPath: string | undefined,
+  fallbackTeamId?: Id<"teams">
+): Promise<{
+  team_id: Id<"teams"> | undefined;
+  is_private: boolean;
+  auto_shared: true | undefined;
+}> {
+  const mappings = await ctx.db
+    .query("directory_team_mappings")
+    .withIndex("by_user_id", (q: any) => q.eq("user_id", ownerId))
+    .collect();
+  const { teamId, isPrivate, autoShared } = resolveTeamForPath(
+    mappings as DirectoryMapping[],
+    conversationPath,
+    fallbackTeamId
+  );
+  return {
+    team_id: teamId,
+    is_private: isPrivate,
+    auto_shared: autoShared || undefined,
+  };
+}
+
 // Sharing a conversation (is_private → false) MUST guarantee a team_id, or the
 // conversation becomes "shared with nobody": every team-visibility check
 // short-circuits on `!team_id` (see isConversationTeamVisible), so no teammate
@@ -300,7 +359,10 @@ export async function buildShareUpdate(
 // Explicit user choices always win, and a restamp only ever applies a positive
 // mapping match — revoking access stays a user action:
 //  - team_visibility "private" (user locked it private) → no change
-//  - is_private false without auto_shared (user shared it manually) → no change
+//  - is_private false without auto_shared (user shared it manually) → no change,
+//    UNLESS the row has no team_id: "shared with nobody" is a contradiction
+//    (invisible to every teammate despite reading as shared), so adopting the
+//    mapping's team only grants the visibility the owner already believes exists
 //  - no mapping match for the path → no change
 export function buildPathRestampUpdate(
   conversation: {
@@ -313,7 +375,8 @@ export function buildPathRestampUpdate(
   conversationPath: string | undefined
 ): { team_id?: Id<"teams">; is_private?: boolean; auto_shared?: boolean } | null {
   if (conversation.team_visibility === "private") return null;
-  if (conversation.is_private === false && !conversation.auto_shared) return null;
+  if (conversation.is_private === false && !conversation.auto_shared && conversation.team_id)
+    return null;
 
   const { teamId, autoShared } = resolveTeamForPath(mappings, conversationPath, undefined);
   if (!teamId) return null;

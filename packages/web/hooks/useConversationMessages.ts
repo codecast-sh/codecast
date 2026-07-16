@@ -4,6 +4,8 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore, useTrackedStore, isConvexId, ensureHydrated } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
+import { prefetchStorageImageUrls } from "./useStorageImageUrl";
+import { rowSigExcluding } from "../store/wakeSig";
 
 const EMPTY_MESSAGES: Message[] = [];
 const EMPTY_PENDING: Message[] = [];
@@ -46,23 +48,11 @@ function conversationRenderEqual(a: Record<string, any>, b: Record<string, any>)
 // fields via a stable per-reference id — a real change to a nested object still
 // flips the signature. Fail-safe denylist: omit a field and you re-render more
 // often, never render stale.
-let __metaRefSeq = 0;
-const __metaRefIds = new WeakMap<object, number>();
-const metaRefId = (o: object): number => {
-  let id = __metaRefIds.get(o);
-  if (id === undefined) { id = ++__metaRefSeq; __metaRefIds.set(o, id); }
-  return id;
-};
-function metaWakeSig(row: Record<string, any> | undefined | null): string {
-  if (!row) return "∅";
-  let sig = "";
-  for (const k in row) {
-    if (LIVENESS_ONLY_CONV_FIELDS.has(k)) continue;
-    const v = row[k];
-    sig += k + ":" + (v !== null && typeof v === "object" ? "#" + metaRefId(v) : String(v)) + ";";
-  }
-  return sig;
-}
+// The single-row signature primitive lives in store/wakeSig.ts (rowSigExcluding);
+// the inbox sidebar uses the collection variant (sessionsWakeSig) for the same
+// reason. Keep the denylist here — it is conversation-specific.
+const metaWakeSig = (row: Record<string, any> | undefined | null): string =>
+  rowSigExcluding(row, LIVENESS_ONLY_CONV_FIELDS);
 
 type Message = {
   _id: string;
@@ -513,6 +503,21 @@ export function useConversationMessages(
     // to the cached store list only while the around-window is still loading.
     ? (targetAroundData?.messages ?? aroundData?.messages ?? mergedMessages)
     : mergedMessages;
+
+  // Resolve image URLs as soon as messages arrive — BEFORE the virtualized
+  // ImageBlocks mount — so an image scrolled into view never waits on the
+  // id→URL round-trip (the bytes themselves are a plain <img> fetch).
+  // eslint-disable-next-line no-restricted-syntax -- prefetch side effect keyed to message arrival
+  useEffect(() => {
+    const ids: string[] = [];
+    for (const m of rawMessages) {
+      if (!m.images) continue;
+      for (const img of m.images) {
+        if (img?.storage_id) ids.push(img.storage_id);
+      }
+    }
+    if (ids.length) prefetchStorageImageUrls(convex, ids);
+  }, [rawMessages, convex]);
 
   // =============================================
   // Child conversation map

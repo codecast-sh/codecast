@@ -551,6 +551,41 @@ html[data-idle] *::after {
   opacity: 0;
 }
 
+/* Schedules roster popover — emerges from the dock button it's anchored to
+   (transform-origin: bottom), crisp strong ease-out. Opening the roster is an
+   occasional action, so the entrance is warranted; reduced-motion drops the
+   movement but keeps the fade for comprehension. */
+@keyframes schedRosterIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-sched-roster-in {
+  animation: schedRosterIn 180ms cubic-bezier(0.23, 1, 0.32, 1);
+  transform-origin: bottom center;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-sched-roster-in {
+    animation: schedRosterFade 140ms ease-out;
+  }
+  @keyframes schedRosterFade { from { opacity: 0; } to { opacity: 1; } }
+}
+
+/* Click feedback on a schedule row (dock roster or bar under a card): a quick
+   schedule-orange wash that fades out. The row's resting selected tint is the
+   cyan shared with subagent rows, so this pulse is the moment of confirmation
+   that the schedule itself took the click. Kept under reduced-motion (shorter)
+   — it's a state-change confirmation, not decoration. */
+.sched-click-flash {
+  animation: schedRowFlash 600ms ease-out forwards;
+}
+@keyframes schedRowFlash {
+  0% { background: color-mix(in srgb, var(--sol-orange) 35%, transparent); }
+  100% { background: transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sched-click-flash { animation-duration: 200ms; }
+}
+
 /* Indeterminate hairline shimmer used by AppLoader. Colored by currentColor;
    mirrored by the pre-React #boot-shell in index.html — keep the two in sync. */
 .app-loader-bar {
@@ -1500,17 +1535,11 @@ pre[class*="language-"] {
 .cc-cmt:hover {
   background: color-mix(in srgb, var(--sol-text) 3.5%, transparent);
 }
-/* User comments get the same quiet blue edge user messages have everywhere else;
-   agent comments stay clean — the agent logo + name carry the identity. */
-.cc-cmt-user {
-  border-left: 2px solid color-mix(in srgb, var(--sol-blue) 45%, transparent);
-  padding-left: 0.55rem;
-}
 .cc-cmt-avatar { margin-top: 0.1rem; }
 .cc-cmt-main { flex: 1; min-width: 0; }
 .cc-cmt-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 0.4rem;
   line-height: 1.2;
   margin-bottom: 0.05rem;
@@ -1743,6 +1772,15 @@ pre[class*="language-"] {
   background: var(--sol-bg-alt);
   border-left: 1px solid color-mix(in srgb, var(--sol-border) 70%, transparent);
   box-shadow: -10px 0 30px -22px rgba(0, 0, 0, 0.55);
+  transition: transform 220ms cubic-bezier(0.32, 0.72, 0, 1);
+  will-change: transform;
+}
+/* Closed = slid fully off the right edge, nothing left behind (mirror of the
+   left sidebar collapsing to zero width). The host clips its x-overflow. */
+.cc-railx--closed {
+  transform: translateX(100%);
+  pointer-events: none;
+  box-shadow: none;
 }
 .cc-railx-resize {
   position: absolute; left: -3px; top: 0; bottom: 0; width: 7px; z-index: 2;
@@ -1791,26 +1829,6 @@ pre[class*="language-"] {
 }
 .cc-railx-global { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .cc-railx-global .cc-thread-global { flex: 1; min-height: 0; }
-
-/* Closed-state badge — the original slim tab, flush against the right edge near
-   the bottom: a chat glyph + a teal count, nothing more. */
-.cc-railx-badge {
-  position: absolute; right: 0; z-index: 24;
-  display: inline-flex; align-items: center; gap: 0.4rem;
-  padding: 0.45rem 0.6rem;
-  border-radius: 10px 0 0 10px;
-  background: var(--sol-bg-alt);
-  border: 1px solid color-mix(in srgb, var(--sol-border) 55%, transparent);
-  border-right: none;
-  color: var(--sol-text-muted);
-  box-shadow: -4px 0 16px -10px rgba(0, 0, 0, 0.45);
-  transition: color 130ms ease, background 130ms ease;
-}
-.cc-railx-badge:hover { color: var(--cc-accent); background: var(--sol-bg-highlight); }
-.cc-railx-badge-count {
-  font-size: 0.62rem; font-weight: 700; color: var(--sol-bg); background: var(--cc-accent);
-  border-radius: 999px; min-width: 1.15rem; height: 1.15rem; display: grid; place-items: center; padding: 0 0.28rem;
-}
 
 /* ── Right comment rail (mirror of the left quote rail) ───────────────────────
    MARGIN mode: float in the empty right margin (text keeps full width).

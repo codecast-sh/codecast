@@ -9,11 +9,12 @@ import { Command as CommandPrimitive } from "cmdk";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { commitModelChange, canControlModel, modelOptionKey } from "./ModelEffortPicker";
 import { AGENT_MODEL_CONFIG, modelAgentKey } from "@codecast/shared/contracts";
-import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, categorizeSessions, sessionsWithPendingSend, convBucketMap, sortLabels, computeChipCounts, getProjectName, RecentVisit } from "../store/inboxStore";
+import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, categorizeSessions, filterInboxScope, sessionsWithPendingSend, convBucketMap, sortLabels, computeChipCounts, getProjectName, RecentVisit } from "../store/inboxStore";
 import { resolveRecentVisits, visitTimeAgo, type ResolvedVisit } from "../lib/recentVisits";
 import { PageIcon } from "./RecentlyViewedMenu";
 import { isNonTabRoute } from "../src/compat/tabRouting";
 import { score } from "../hooks/useMentionQuery";
+import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { isElectron } from "../lib/desktop";
 import { isInboxRoute } from "../lib/inboxRouting";
 import { useCurrentUser } from "../hooks/useCurrentUser";
@@ -258,13 +259,30 @@ function ActionSubmenu({
   const viewChipData = useMemo(() => {
     if (mode !== "view") return null;
     const st = useInboxStore.getState();
-    const { pinned, newSessions, needsInput, working, orchestrationGroups } = categorizeSessions(
+    // Scope the chip counts the same way the inbox panel scopes its list, so the
+    // picker never counts sessions the panel isn't showing (a teammate row cached
+    // from a team-board visit, or the whole team while team mode is on).
+    const scope = st.clientState.ui?.inbox_scope ?? "mine";
+    const scoped = filterInboxScope(
       st.sessions,
+      scope,
+      st.currentUser?._id?.toString?.() ?? null,
+      st.teamInboxIds,
+      st.currentSessionId,
+    );
+    const { pinned, newSessions, needsInput, working } = categorizeSessions(
+      scoped,
       st.sessionsWithQueuedMessages,
       sessionsWithPendingSend(st.pendingMessages),
-      { currentSessionId: st.currentSessionId, pendingCreateIds: new Set(Object.keys(st.pendingSessionCreates)) },
+      // liveInboxIds + showOld: the chip counts must reflect the SAME authoritative
+      // active set the panel renders, not the raw never-prune cache. Mine-scope
+      // only, exactly like the panel: the team board is already a bounded set and
+      // its rows aren't in liveInboxIds, so hide-old there would drop teammates.
+      scope === "team"
+        ? { currentSessionId: st.currentSessionId, pendingCreateIds: new Set(Object.keys(st.pendingSessionCreates)) }
+        : { currentSessionId: st.currentSessionId, pendingCreateIds: new Set(Object.keys(st.pendingSessionCreates)), liveInboxIds: st.liveInboxIds, showOld: st.showOldSessions },
     );
-    const active = [...pinned, ...newSessions, ...needsInput, ...working, ...Array.from(orchestrationGroups.values()).flat()];
+    const active = [...pinned, ...newSessions, ...needsInput, ...working];
     return computeChipCounts(active, convBucketMap(st.bucketAssignments as Record<string, BucketAssignmentItem>));
   }, [mode]);
 
@@ -451,12 +469,12 @@ function ActionSubmenu({
     if (mode === "model") {
       const store = useInboxStore.getState();
       const real = store.getConvexId(target._id) ?? target._id;
-      if (!isConvexId(real)) {
-        toast.error("Session is still being created — try again in a moment");
-        return;
-      }
       const s0 = target as any;
       const [kind, value] = String(item.key).split(":");
+      // commitModelChange owns the not-ready decision: a blank session records
+      // the choice locally on the stub (the create carries it), only the live
+      // rail needs a real id. Passing `real` (possibly still a stub) lets it
+      // stamp + defer instead of erroring here.
       void commitModelChange({
         conversationId: real,
         agentType: s0?.agent_type,
@@ -1076,11 +1094,32 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     return () => clearTimeout(timer);
   }, [query, open]);
 
-  const searchResults = useQuery(
+  // Non-throwing: a broad term can blow the backend's query budget and return a
+  // terminal error — bare useQuery re-throws that in render and unmounts the
+  // whole palette into its ErrorBoundary (ct-37627). The breaker unsubscribes a
+  // never-resolving search so its silent retry loop stops flapping the shared
+  // websocket (1011) for the rest of the app.
+  const { data: searchResults, error: searchError } = useQueryNoThrow(
     api.conversations.searchConversations,
-    open && debouncedQuery.length >= 2 ? { query: debouncedQuery, limit: 10 } : "skip"
+    open && debouncedQuery.length >= 2 ? { query: debouncedQuery, limit: 10 } : "skip",
+    { breakAfterMs: 15_000 }
   );
   const searchData = searchResults && "results" in searchResults ? searchResults : null;
+  // Cheap always-fast companion: title/subtitle/summary matches come from the
+  // small conversations table and land while (or even if never) the message
+  // content search resolves — so the user always gets something (ct-37627).
+  const { data: titleResults } = useQueryNoThrow(
+    api.conversations.searchConversationTitles,
+    open && debouncedQuery.length >= 2 ? { query: debouncedQuery, limit: 10 } : "skip"
+  );
+  const titleData = titleResults && "results" in titleResults ? titleResults : null;
+  const searchRows = useMemo(() => {
+    const msgRows = searchData?.results ?? [];
+    const titleRows = titleData?.results ?? [];
+    if (!titleRows.length) return msgRows;
+    const seen = new Set(msgRows.map((r: any) => r.conversationId));
+    return [...msgRows, ...titleRows.filter((r: any) => !seen.has(r.conversationId))];
+  }, [searchData, titleData]);
 
   const projects = useMemo(() => {
     const dirMap = new Map<string, number>();
@@ -1896,10 +1935,10 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         {/* Async conversation search results */}
         {debouncedQuery.length >= 2 && (
           <CommandPrimitive.Group
-            heading={searchData ? `Search Results (${searchData.results?.length || 0})` : "Searching..."}
+            heading={searchData || titleData ? `Search Results (${searchRows.length})` : searchError ? "Search Results" : "Searching..."}
             className={groupClass}
           >
-            {!searchData && (
+            {!searchData && !searchError && searchRows.length === 0 && (
               <CommandPrimitive.Item
                 value="__search__ loading"
                 disabled
@@ -1908,7 +1947,18 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 Searching conversations...
               </CommandPrimitive.Item>
             )}
-            {searchData?.results?.map((result: any) => (
+            {searchError && (
+              <CommandPrimitive.Item
+                value="__search__ error"
+                disabled
+                className="px-4 py-3 text-center text-xs text-sol-text-dim cursor-default"
+              >
+                {searchRows.length > 0
+                  ? "Content search timed out — showing title matches only."
+                  : "Search timed out — broad terms scan your whole history. Try a more specific word or a quoted phrase."}
+              </CommandPrimitive.Item>
+            )}
+            {searchRows.map((result: any) => (
               <CommandPrimitive.Item
                 key={`search-${result.conversationId}`}
                 value={`__search__ ${result.title} ${result.matches?.[0]?.content?.slice(0, 100) || ""}|||${result.conversationId}`}
@@ -1955,7 +2005,16 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{timeAgo(result.updatedAt)}</span>
               </CommandPrimitive.Item>
             ))}
-            {searchData?.results?.length === 0 && (
+            {!searchData && !searchError && searchRows.length > 0 && (
+              <CommandPrimitive.Item
+                value="__search__ content-loading"
+                disabled
+                className="px-4 py-2 text-center text-[11px] text-sol-text-dim animate-pulse cursor-default"
+              >
+                Searching message content...
+              </CommandPrimitive.Item>
+            )}
+            {searchData && searchRows.length === 0 && (
               <CommandPrimitive.Item
                 value="__search__ empty"
                 disabled

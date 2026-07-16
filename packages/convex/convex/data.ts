@@ -1,5 +1,5 @@
 import { Id } from "./_generated/dataModel";
-import { resolveTeamForPath, DirectoryMapping } from "./privacy";
+import { resolveTeamForPath, DirectoryMapping, isTeamMember, teamVisibleConvTeam } from "./privacy";
 
 type Workspace =
   | { type: "team"; teamId: Id<"teams"> }
@@ -11,7 +11,6 @@ type DataContextOpts = {
   project_path?: string;
   workspace?: "personal" | "team";
   team_id?: Id<"teams">;
-  active_team_id?: Id<"teams">;
 };
 
 const SCOPED_TABLES = new Set([
@@ -44,13 +43,7 @@ function getLinkedConvId(record: any): string | undefined {
 export function resolveEffectiveTeam(record: any, convMap: Map<string, any>): Id<"teams"> | undefined {
   const cid = getLinkedConvId(record);
   const conv = cid ? convMap.get(cid) : undefined;
-  if (conv) {
-    if (!conv.is_private || conv.auto_shared) return conv.team_id;
-    // Match isConversationTeamVisible: team_visibility override makes
-    // private conversations (and their linked records) team-visible.
-    if (conv.team_visibility && conv.team_visibility !== "private") return conv.team_id;
-    return undefined;
-  }
+  if (conv) return teamVisibleConvTeam(conv);
   return record.team_id;
 }
 
@@ -59,7 +52,12 @@ export async function scopedFetch(
   table: string,
   opts: ScopedFetchOpts
 ): Promise<{ records: any[]; convMap: Map<string, any> }> {
-  const { userId, teamId, workspace } = opts;
+  const { userId, workspace } = opts;
+  // teamId is client-supplied. Only honor it if the caller actually belongs to
+  // that team — otherwise a foreign team_id would read that team's records.
+  const teamId = opts.teamId && (await isTeamMember(ctx, userId, opts.teamId))
+    ? opts.teamId
+    : undefined;
   const fetchLimit = opts.limit;
   const strip = opts.stripFields;
   // Hard cap prevents unbounded iteration when callers omit a limit
@@ -276,19 +274,26 @@ async function resolveWorkspace(ctx: { db: any }, opts: DataContextOpts): Promis
     return { type: "personal", userId: opts.userId };
   }
   if (opts.workspace === "team" && opts.team_id) {
-    return { type: "team", teamId: opts.team_id };
+    // team_id is client-supplied; without this gate a caller could pass any
+    // team's id and read that team's docs/plans/tasks/projects. Non-members
+    // fall through to their own (project/active-team/personal) scope.
+    if (await isTeamMember(ctx, opts.userId, opts.team_id)) {
+      return { type: "team", teamId: opts.team_id };
+    }
   }
   if (opts.project_path) {
+    // Directory mappings are the whole rule: a mapped path scopes to its team,
+    // an unmapped path is "Only Me" and scopes to the personal workspace. No
+    // active-team fallback here — that fallback is how work items created from
+    // private directories used to leak into the user's team (ct-38419).
     const mappings: DirectoryMapping[] = await ctx.db
       .query("directory_team_mappings")
       .withIndex("by_user_id", (q: any) => q.eq("user_id", opts.userId))
       .collect();
     const result = resolveTeamForPath(mappings, opts.project_path, undefined);
     if (result.teamId) return { type: "team", teamId: result.teamId };
-    if (opts.active_team_id) return { type: "team", teamId: opts.active_team_id };
     return { type: "personal", userId: opts.userId };
   }
-  if (opts.active_team_id) return { type: "team", teamId: opts.active_team_id };
   return { type: "unscoped" };
 }
 

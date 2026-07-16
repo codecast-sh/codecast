@@ -4,11 +4,12 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
-import { shouldGenerateTitle } from "./titleGeneration";
-import { canTeamMemberAccess } from "./privacy";
+import { maybeScheduleTitleGeneration } from "./titleGeneration";
+import { canTeamMemberAccess, checkConversationAccess, teamVisibleConvTeam } from "./privacy";
 import { redactSecrets } from "./redact";
 import { markPendingDelivered } from "./pendingMessages";
-import { nextAgentStatusOnAddMessages, isApiErrorBanner, classifyApiErrorBanner, apiErrorBatchAction } from "./inboxFilters";
+import { scheduleAutoSwitchCheck } from "./accountSwitch";
+import { nextAgentStatusOnAddMessages, isApiErrorBanner, classifyApiErrorBanner, apiErrorBatchAction, NEEDS_INPUT_AUQ_CHECK_DELAY_MS } from "./inboxFilters";
 import { classifyDocContent, extractTitleFromContent, inlineDocSourceKey } from "./docExtraction";
 import { extractFileChanges, extractCommitHashFromContent, hasFileChangeToolCall, type FileChange } from "./fileChanges/extractor";
 
@@ -180,7 +181,9 @@ async function upsertFileSyncDoc(
   } else {
     await ctx.db.insert("docs", {
       user_id: conversation.user_id,
-      team_id: conversation.team_id,
+      // Docs mirrored out of a private session stay personal — team_id alone
+      // grants teammates access (canAccessDoc has no privacy gate).
+      team_id: teamVisibleConvTeam(conversation),
       title: extractTitleFromContent(content),
       content,
       doc_type: docType,
@@ -262,7 +265,7 @@ async function extractDocsFromMessages(
           convDocs.push({ source_file: syntheticPath, content: msg.content });
           await ctx.db.insert("docs", {
             user_id: conversation.user_id,
-            team_id: conversation.team_id,
+            team_id: teamVisibleConvTeam(conversation),
             title: extractTitleFromContent(msg.content),
             content: msg.content,
             doc_type: classifyDocContent(msg.content),
@@ -467,6 +470,15 @@ async function materializeFileChanges(
 export const getConversationFileChanges = query({
   args: { conversation_id: v.id("conversations") },
   handler: async (ctx, args): Promise<FileChange[]> => {
+    // Access gate: this returns the full before/after source of every file the
+    // session edited — including private (owner-only) conversations. Match the
+    // other message readers: owner, team member, or share-token holder only.
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) return [];
+    const viewerId = await getAuthUserId(ctx);
+    if ((await checkConversationAccess(ctx, viewerId, conversation)) === "denied") {
+      return [];
+    }
     const rows = await ctx.db
       .query("file_changes")
       .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
@@ -731,6 +743,15 @@ export const addMessage = mutation({
     if ((conversation.pending_api_error_kind ?? undefined) !== nextBannerKind) {
       convPatch.pending_api_error_kind = nextBannerKind;
     }
+    // A fresh limit park is the auto-switch trigger event (the debounced check
+    // no-ops unless the user's primary device has auto-switch enabled).
+    if (
+      msgIsBanner &&
+      msgBannerKind === "limit" &&
+      (!wasPendingApiError || conversation.pending_api_error_kind !== "limit")
+    ) {
+      await scheduleAutoSwitchCheck(ctx, conversation.user_id);
+    }
     if (args.role === "user" && contentToStore?.trim()) {
       convPatch.last_message_preview = redactSecrets(contentToStore).replace(/\u001b\[\d+m/g, "").replace(/\[Image[:\s][^\]]*\]/gi, "").trim().slice(0, 200);
       convPatch.last_user_message_at = msgTimestamp;
@@ -756,24 +777,15 @@ export const addMessage = mutation({
       }
     }
 
-    // Only record user-message activity when there's a user timestamp to advance.
-    // We deliberately no longer refresh daemon_last_seen here: the 30s
-    // daemonHeartbeat already keeps it within every reader's online threshold
-    // (tightest is 60s), and a message-triggered refresh raced the heartbeat on
-    // the SAME hot user doc — the scheduled_job_mutation_success ⇄ daemonHeartbeat
-    // OCC conflict. Dropping it removes that contention with no liveness change.
-    if (args.role === "user") {
-      await ctx.scheduler.runAfter(0, internal.users.updateUserActivity, {
-        userId: conversation.user_id,
-        messageTimestamp: msgTimestamp,
-      });
-    }
-
-    if (!conversation.skip_title_generation && shouldGenerateTitle(newMessageCount)) {
-      await ctx.scheduler.runAfter(0, internal.titleGeneration.generateTitle, {
+    // Same open-poll trigger as addMessages (the retry-queue drain delivers
+    // through this singular path).
+    if (args.role === "assistant" && args.tool_calls?.some((tc) => tc.name === "AskUserQuestion")) {
+      await ctx.scheduler.runAfter(NEEDS_INPUT_AUQ_CHECK_DELAY_MS, internal.notifications.checkNeedsInput, {
         conversation_id: args.conversation_id,
       });
     }
+
+    await maybeScheduleTitleGeneration(ctx, conversation, newMessageCount - 1, newMessageCount);
 
     try {
       await extractDocsFromMessages(ctx, [args], conversation, args.conversation_id);
@@ -1160,6 +1172,14 @@ export const addMessages = mutation({
       if ((conversation.pending_api_error_kind ?? undefined) !== nextBannerKind) {
         convPatch.pending_api_error_kind = nextBannerKind;
       }
+      // A fresh limit park is the auto-switch trigger event (see addMessage).
+      if (
+        nextPendingApiError &&
+        nextBannerKind === "limit" &&
+        (!wasPendingApiError || conversation.pending_api_error_kind !== "limit")
+      ) {
+        await scheduleAutoSwitchCheck(ctx, conversation.user_id);
+      }
       const userMsgs = args.messages.filter((m) => m.role === "user");
       if (userMsgs.length > 0) {
         const lastUserMsg = userMsgs[userMsgs.length - 1];
@@ -1197,36 +1217,27 @@ export const addMessages = mutation({
         });
       }
 
-      const lastUserTs = userMsgs.length > 0
-        ? userMsgs.reduce((max, m) => Math.max(max, m.timestamp || 0), 0)
-        : 0;
-      // Only record user activity when there's a user-message timestamp to advance.
-      // daemon_last_seen is already refreshed by the 30s daemonHeartbeat, so we no
-      // longer schedule a write to the shared (per-user) doc on every assistant/tool
-      // batch — that scheduled mutation fired for all of a user's sessions at once and
-      // serialized on one hot doc. Assistant/tool-only batches now schedule nothing.
-      if (lastUserTs > 0) {
-        await ctx.scheduler.runAfter(0, internal.users.updateUserActivity, {
-          userId: conversation.user_id,
-          messageTimestamp: lastUserTs,
-        });
-      }
+      await maybeScheduleTitleGeneration(ctx, conversation, conversation.message_count, newMessageCount);
 
-      if (!conversation.skip_title_generation) {
-        let shouldGen = false;
-        for (let c = conversation.message_count + 1; c <= newMessageCount; c++) {
-          if (shouldGenerateTitle(c)) { shouldGen = true; break; }
-        }
-        if (!shouldGen && conversation.subtitle === undefined && newMessageCount > 2) {
-          shouldGen = true;
-        }
-        if (shouldGen) {
-          await ctx.scheduler.runAfter(0, internal.titleGeneration.generateTitle, {
-            conversation_id: args.conversation_id,
-          });
-        }
-      }
+    }
 
+    // An AskUserQuestion tool_use arriving as the batch's newest message means
+    // the agent just blocked on the user — the needs-input verdict flips NOW,
+    // on this message write, not on any status write (the daemon races back to
+    // "working" while the poll is open, and buffered polls send no status at
+    // all). Deliberately OUTSIDE the insertedCount block: the poll's tool_calls
+    // usually land as a PATCH to the already-synced streaming message
+    // (insertedCount 0), which is exactly the batch that must schedule the
+    // check. The check re-reads the messages table at fire time, so a poll
+    // answered in the meantime is a no-op. (see notifications.checkNeedsInput)
+    const newestBatchMsg = args.messages.reduce((a, b) => ((b.timestamp || 0) >= (a.timestamp || 0) ? b : a));
+    if (
+      newestBatchMsg.role === "assistant" &&
+      newestBatchMsg.tool_calls?.some((tc) => tc.name === "AskUserQuestion")
+    ) {
+      await ctx.scheduler.runAfter(NEEDS_INPUT_AUQ_CHECK_DELAY_MS, internal.notifications.checkNeedsInput, {
+        conversation_id: args.conversation_id,
+      });
     }
 
     // Doc extraction touches the docs table (index reads + inserts/patches) and is

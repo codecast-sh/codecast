@@ -10,7 +10,7 @@ import { nextShortId } from "./counters";
 import { resolveAssigneeStr, resolveAssigneeToUserId, recalcPlanProgress, notifySubscribers, subscribeUser, resolveWorkerParentConversation, resolveTaskGitContext } from "./tasks";
 import { api, internal } from "./_generated/api";
 import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey } from "@codecast/shared/contracts";
-import { conversationHasNoWork, reapEmptyConversation, enqueueKillSessionCommand } from "./cleanup";
+import { applyHideTransition } from "./cleanup";
 import { canAccessDoc } from "./docs";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { findConversationBySessionReference } from "./conversationSessionLookup";
@@ -38,6 +38,12 @@ const TABLE_CONFIG: Record<string, TableConfig> = {
       "_id", "_creationTime", "user_id", "session_id", "team_id",
       "started_at", "message_count", "short_id", "share_token",
       "is_private", "team_visibility", "auto_shared", "status", "agent_type",
+      // Anchor invariants are server-owned (set by provisionAnchor / cleared by
+      // decommissionAnchor) — a client must not flip these via a generic patch.
+      "persistent", "acting_user_id", "anchor_id",
+      // Second-party ownership is server-assigned only: setSessionOwner, plus
+      // performSessionSend's auto-own on cross-user sends into unowned sessions.
+      "owner_user_id",
     ]),
     // No beforePatch hook: dismiss is an absolute flag, so the server has no
     // reason to rewrite the client's `inbox_dismissed_at`. A previous hook
@@ -111,31 +117,10 @@ function deepMergeField(existing: any, incoming: any): any {
   return incoming;
 }
 
-// Pure decision for the conversation hide-transition hook (exported for tests).
-//
-//  "reap" — a never-prompted EMPTY pre-warm got hidden (dismissed OR stashed).
-//           Quick-create eagerly boots a real agent per summon; a 0-message
-//           pre-warm has nothing to preserve — leaving it running leaks a
-//           zombie tmux that keeps the conversation is_connected and
-//           re-surfaces it as a phantom "New session" card.
-//           reapEmptyConversation kills the agent and then deletes the row.
-//  "kill" — dismiss = kill. Stash is the keep-alive set-aside; dismiss retires
-//           the session: tear the agent down and mark it completed (mirrors the
-//           explicit killSession mutation). Gated on the TRANSITION (`doc` is
-//           the pre-patch row) so a re-asserted dismiss can't re-kill, and an
-//           undo (dismissed → null) never reaches here. Stays resumable.
-//  "none" — a stash of a session with real work (the whole point of stash), or
-//           a re-asserted dismiss.
-export function classifyHideTransition(
-  patch: { inbox_dismissed_at?: any; inbox_stashed_at?: any },
-  doc: { inbox_dismissed_at?: number | null },
-  hasNoWork: boolean,
-): "reap" | "kill" | "none" {
-  if (!patch.inbox_dismissed_at && !patch.inbox_stashed_at) return "none";
-  if (hasNoWork) return "reap";
-  if (patch.inbox_dismissed_at && !doc.inbox_dismissed_at) return "kill";
-  return "none";
-}
+// The hide-transition decision + side effects live in cleanup.ts
+// (classifyHideTransition / applyHideTransition), shared with the CLI
+// visibility mutation. Re-exported here for the existing tests.
+export { classifyHideTransition } from "./cleanup";
 
 async function applyPatches(
   ctx: HandlerCtx,
@@ -155,7 +140,15 @@ async function applyPatches(
 
       if (config.kind === "collection") {
         const doc = await ctx.db.get(docKey as Id<any>);
-        if (!doc || (doc as any)[config.ownerField] !== userId) continue;
+        // Conversations: the second-party owner triages (dismiss/pin/stash)
+        // an assigned session from their inbox exactly like the runner would.
+        // owner_user_id itself is immutable here — assignment goes through the
+        // validated setSessionOwner mutation only.
+        const permitted = doc && (
+          (doc as any)[config.ownerField] === userId ||
+          (table === "conversations" && (doc as any).owner_user_id?.toString() === userId.toString())
+        );
+        if (!permitted) continue;
         const finalSafe = config.beforePatch ? config.beforePatch(doc, { ...safe }) : safe;
         await ctx.db.patch(docKey as Id<any>, finalSafe);
         // Lifecycle hooks on the DATA transition (a conversation patch setting
@@ -163,13 +156,7 @@ async function applyPatches(
         // dismiss/stash path funnels through here — the inbox shortcuts, the
         // palette, the /sessions toggle (patchConversation), and any future one.
         if (table === "conversations" && ((finalSafe as any).inbox_dismissed_at || (finalSafe as any).inbox_stashed_at)) {
-          const action = classifyHideTransition(finalSafe, doc as any, await conversationHasNoWork(ctx, doc));
-          if (action === "reap") {
-            await reapEmptyConversation(ctx, doc as any);
-          } else if (action === "kill") {
-            await enqueueKillSessionCommand(ctx, doc as any);
-            await ctx.db.patch(docKey as Id<any>, { inbox_killed_at: Date.now(), status: "completed" });
-          }
+          await applyHideTransition(ctx, doc, finalSafe as any);
         }
       } else {
         const existing = await ctx.db
@@ -368,11 +355,17 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     // ghost (never-prune cache) and needs to surface "restore session", not a
     // baffling auth failure.
     if (!conversation) throw new Error("conversation_deleted");
-    if (conversation.user_id.toString() !== userId.toString()) throw new Error("Unauthorized");
+    // The runner, or the session's second-party owner (a Mr-Bot-run session
+    // assigned to this user steers exactly like their own — that's the point
+    // of ownership). Delivery routing is unaffected: enqueuePendingMessage
+    // stamps the RUNNER's id for the daemon poll either way.
+    if (
+      conversation.user_id.toString() !== userId.toString() &&
+      conversation.owner_user_id?.toString() !== userId.toString()
+    ) throw new Error("Unauthorized");
 
     // Single canonical writer: dedups on client_id, stamps owner_user_id for the daemon's
-    // delivery poll, and wakes the conversation (un-dismiss, completed→active). The web composer
-    // only ever sends into the user's own conversation (enforced above), so owner == sender.
+    // delivery poll, and wakes the conversation (un-dismiss, completed→active).
     return await enqueuePendingMessage(ctx, conversation, userId, {
       content,
       image_storage_ids: imageIds?.length ? (imageIds as any) : undefined,
@@ -382,11 +375,16 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
 
   resumeSession: async (ctx, userId, [convId]: [string]) => {
     const conv = await ctx.db.get(convId as Id<"conversations">);
-    if (!conv || conv.user_id.toString() !== userId.toString()) throw new Error("Unauthorized");
+    const isSecondPartyOwner = conv?.owner_user_id?.toString() === userId.toString();
+    if (!conv || (conv.user_id.toString() !== userId.toString() && !isSecondPartyOwner)) throw new Error("Unauthorized");
     const agentType = conv.agent_type === "codex" ? "codex" : conv.agent_type === "gemini" ? "gemini" : "claude";
+    // Daemon commands are polled by the RUNNER's daemon — for a second-party
+    // owner resuming a session run by another account, address the command to
+    // the runner, not the caller.
+    const daemonUserId = conv.user_id;
     const pendingCommands = await ctx.db
       .query("daemon_commands")
-      .withIndex("by_user_pending", (q: any) => q.eq("user_id", userId).eq("executed_at", undefined))
+      .withIndex("by_user_pending", (q: any) => q.eq("user_id", daemonUserId).eq("executed_at", undefined))
       .collect();
     if (hasRecentPendingDaemonCommand(pendingCommands as any, {
       conversationId: convId,
@@ -395,7 +393,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       return { deduplicated: true };
     }
     const commandId = await ctx.db.insert("daemon_commands", {
-      user_id: userId,
+      user_id: daemonUserId,
       command: "resume_session" as const,
       args: JSON.stringify({
         session_id: conv.session_id,
@@ -654,27 +652,27 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
 
   createTask: async (ctx, userId, [opts]: [any]) => {
     let teamId: Id<"teams"> | undefined;
-    if (opts.team_id) {
+    if (opts.workspace === "personal") {
+      teamId = undefined;
+    } else if (opts.team_id) {
       teamId = opts.team_id as Id<"teams">;
     } else {
+      // Directory mapping is the whole rule: unmapped ("Only Me") paths — and
+      // no path at all — stay personal. The old active-team fallback here is
+      // how tasks from private directories leaked to the team (ct-38419).
       const mappings = await ctx.db
         .query("directory_team_mappings")
         .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
         .collect();
-      // Fall back to user's active team if no directory mapping matches —
-      // mirrors session creation so tasks land on the same team as the
-      // session that spawned them.
-      const user = await ctx.db.get(userId);
-      const fallbackTeam = (user?.active_team_id || (user as any)?.team_id) as Id<"teams"> | undefined;
-      teamId = resolveTeamForPath(mappings, opts.project_path, fallbackTeam).teamId;
+      teamId = resolveTeamForPath(mappings, opts.project_path, undefined).teamId;
     }
 
     const shortId = await nextShortId(ctx.db, "ct");
 
     let projectId;
     if (opts.project_id) {
-      const p = await ctx.db.query("projects").filter((q: any) => q.eq(q.field("_id"), opts.project_id)).first();
-      if (p) projectId = p._id;
+      const pid = ctx.db.normalizeId("projects", opts.project_id);
+      if (pid && (await ctx.db.get(pid))) projectId = pid;
     }
 
     const resolvedAssignee = await resolveAssigneeStr(ctx, opts.assignee, userId);
@@ -896,10 +894,16 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   convCommand: async (ctx, userId, [convId, command, extraArgs]: [string, string, Record<string, any>?]) => {
     const fn = (SESSION_COMMANDS as Record<string, any>)[command];
     if (!fn) throw new Error(`convCommand: unknown command ${command}`);
-    return await (ctx as any).runMutation(fn, {
-      conversation_id: convId,
-      ...(extraArgs || {}),
-    });
+    try {
+      return await (ctx as any).runMutation(fn, {
+        conversation_id: convId,
+        ...(extraArgs || {}),
+      });
+    } catch (e: any) {
+      // Re-throw with routing context: the bare "Not authorized" from the
+      // target mutation is undiagnosable in server logs (no args are logged).
+      throw new Error(`convCommand ${command} conv=${convId} user=${userId}: ${e?.message ?? e}`);
+    }
   },
 };
 

@@ -1,4 +1,4 @@
-import { mutation, query } from "./functions";
+import { mutation, query, internalMutation } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
@@ -77,6 +77,7 @@ export const createPermissionRequest = mutation({
       arguments_preview: args.arguments_preview,
       status: "pending",
       created_at: now,
+      owner_user_id: conversation.user_id,
     });
 
     return permissionId;
@@ -311,34 +312,33 @@ export const getAllRespondedPermissions = query({
       return [];
     }
 
-    // Only return recently resolved permissions (last 5 minutes).
-    // Older ones are stale — the daemon session has already moved on.
+    // Only return recently resolved permissions (last 5 minutes). Older ones are
+    // stale — the daemon session has already moved on.
+    //
+    // Scope the read to the caller's own rows via the by_owner_resolved index.
+    // The previous unindexed filter().collect() made this query's read set the
+    // WHOLE pending_permissions table, so — because every connected daemon holds
+    // this as a live subscription — any permission write by ANY user re-ran it on
+    // EVERY daemon (a cross-tenant reactive storm). Indexing by owner_user_id
+    // shrinks the read set to this user's rows, so other users' writes no longer
+    // wake this subscription, and it replaces the per-row N+1 ownership lookup.
     const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
     const permissions = await ctx.db
       .query("pending_permissions")
-      .filter((q) =>
-        q.and(
-          q.neq(q.field("status"), "pending"),
-          q.gte(q.field("resolved_at"), fiveMinutesAgo)
-        )
+      .withIndex("by_owner_resolved", (q) =>
+        q.eq("owner_user_id", authUserId).gte("resolved_at", fiveMinutesAgo)
       )
       .collect();
 
-    const userPermissions = [];
-    for (const permission of permissions) {
-      const conversation = await ctx.db.get(permission.conversation_id);
-      if (conversation && conversation.user_id.toString() === authUserId.toString()) {
-        userPermissions.push({
-          _id: permission._id,
-          session_id: permission.session_id,
-          status: permission.status,
-          resolved_at: permission.resolved_at,
-          tool_name: permission.tool_name,
-        });
-      }
-    }
-
-    return userPermissions;
+    return permissions
+      .filter((p) => p.status !== "pending")
+      .map((permission) => ({
+        _id: permission._id,
+        session_id: permission.session_id,
+        status: permission.status,
+        resolved_at: permission.resolved_at,
+        tool_name: permission.tool_name,
+      }));
   },
 });
 
@@ -422,3 +422,53 @@ export async function getAccessibleResource(
     ? record
     : null;
 }
+
+// One-shot: stamp owner_user_id onto rows created before the field existed, so
+// the by_owner_resolved query never misses a permission resolved right at deploy.
+// Batched and re-entrant; run until it returns done:true. Safe to delete later.
+export const backfillPermissionOwners = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    let patched = 0;
+    for (let i = 0; i < 20; i++) {
+      const batch = await ctx.db
+        .query("pending_permissions")
+        .withIndex("by_owner_resolved", (q) => q.eq("owner_user_id", undefined))
+        .take(200);
+      if (batch.length === 0) return { patched, done: true };
+      for (const p of batch) {
+        const conv = await ctx.db.get(p.conversation_id);
+        // Set to the conversation owner, or self-reference the resolver as a
+        // fallback so the row leaves the undefined bucket and isn't re-scanned.
+        await ctx.db.patch(p._id, { owner_user_id: conv?.user_id ?? p.resolved_by });
+        patched++;
+      }
+    }
+    return { patched, done: false };
+  },
+});
+
+// Bound the table: drop resolved rows past the 5-minute window the readers use
+// (keep a 1h cushion), and stale "pending" rows the daemon never cancelled (the
+// readers already hide pending rows older than 2h). The table stays small (this
+// cron keeps it so), so one bounded scan per run is correct and cheap; the cap
+// is a backstop, not a paging cursor.
+export const prunePendingPermissions = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    const resolvedCutoff = now - 60 * 60 * 1000;
+    const staleCutoff = now - 3 * 60 * 60 * 1000;
+    const rows = await ctx.db.query("pending_permissions").take(4000);
+    let deleted = 0;
+    for (const p of rows) {
+      const isOldResolved = p.status !== "pending" && (p.resolved_at ?? 0) < resolvedCutoff;
+      const isStalePending = p.status === "pending" && p.created_at < staleCutoff;
+      if (isOldResolved || isStalePending) {
+        await ctx.db.delete(p._id);
+        deleted++;
+      }
+    }
+    return { deleted, scanned: rows.length };
+  },
+});

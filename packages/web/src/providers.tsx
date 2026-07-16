@@ -1,6 +1,8 @@
 import { ConvexReactClient } from "convex/react";
 import { ConvexAuthProvider } from "@convex-dev/auth/react";
-import { ReactNode, useRef } from "react";
+import { ReactNode, useEffect, useRef } from "react";
+import { toast } from "sonner";
+import { useInboxStore } from "../store/inboxStore";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { NavigationProgress } from "@/components/NavigationProgress";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -13,9 +15,46 @@ import { useLocalStorageMigration } from "@/hooks/useLocalStorageMigration";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { identifyUser, resetUser } from "@/lib/analytics";
 import { durableAuthStorage } from "@/lib/durableAuthStorage";
+import { CONVEX_URL } from "@/lib/localAuth";
 
 function PrefsMigration() {
   useLocalStorageMigration();
+  return null;
+}
+
+// "Set session model didn't go through — not authorized". The command name
+// rides convCommand's args; the reason is the last server refusal in the
+// (possibly nested) error message, minus stack-frame and client-suffix noise.
+function describeDispatchFailure(f: { action: string; args: unknown; message: string }): string {
+  const command = f.action === "convCommand" && Array.isArray(f.args) ? String(f.args[1]) : f.action;
+  const label = command
+    .replace(/([A-Z])/g, " $1")
+    .toLowerCase()
+    .trim()
+    .replace(/^./, (c) => c.toUpperCase());
+  const reason =
+    f.message
+      .split(/Uncaught (?:Convex)?Error:/)
+      .pop()
+      ?.split("\n")[0]
+      ?.replace(/\s+at handler.*$/, "")
+      .replace(/\s+Called by client.*$/, "")
+      .trim() || "rejected by the server";
+  const friendly = /not authorized/i.test(reason) ? "you don't have access to that session" : reason;
+  return `${label} didn't go through — ${friendly}`;
+}
+
+// Turns a permanent dispatch rejection (recorded by useEnsureDispatch) into a
+// visible toast. Lives here rather than in the shared hook because sonner is
+// DOM-only and the hook is also bundled by the mobile app.
+function DispatchFailureToast() {
+  const failure = useInboxStore((s) => s.lastDispatchFailure);
+  const lastShownAt = useRef(0);
+  useEffect(() => {
+    if (!failure || failure.at === lastShownAt.current) return;
+    lastShownAt.current = failure.at;
+    toast.error(describeDispatchFailure(failure));
+  }, [failure]);
   return null;
 }
 
@@ -39,7 +78,7 @@ function AnalyticsIdentify() {
 
 const convex: ConvexReactClient =
   import.meta.hot?.data?.convexClient ??
-  new ConvexReactClient(import.meta.env.VITE_CONVEX_URL || "https://convex.codecast.sh", {
+  new ConvexReactClient(CONVEX_URL, {
     unsavedChangesWarning: false,
   });
 
@@ -63,6 +102,7 @@ export function Providers({ children }: { children: ReactNode }) {
         </ErrorBoundary>
         <PrefsMigration />
         <AnalyticsIdentify />
+        <DispatchFailureToast />
         <Toaster position="bottom-right" />
         </TipProvider>
         </ShortcutProvider>

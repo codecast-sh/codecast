@@ -5,15 +5,18 @@ import { useInboxStore, InboxSession } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
 
 // Record the live (recent) id set, change-guarded so an identical payload doesn't
-// allocate a new Set and re-render every subscriber. "Old" = cached top-level
-// sessions absent from this set (filled by the completeness crawl). Exported as a
+// re-render every subscriber (or touch IDB). "Old" = cached top-level sessions
+// absent from this set (filled by the completeness crawl). Writes go through
+// setLiveInboxIds — a sync() action — so the set persists and the next cold boot
+// filters its first frame against the last-known authoritative set. Exported as a
 // plain function (no React deps — it reads/writes the store directly) so the
 // recovery poll in useSyncInboxSessions can reuse it.
 export function applyLiveInboxIds(sessions: any[]) {
-  const next = new Set<string>(sessions.map((x: any) => x._id.toString()));
+  const ids = sessions.map((x: any) => x._id.toString() as string);
+  const next = new Set<string>(ids);
   const prev = useInboxStore.getState().liveInboxIds;
-  if (prev.size === next.size && [...next].every((id) => prev.has(id))) return;
-  useInboxStore.setState({ liveInboxIds: next });
+  if (prev.size === next.size && ids.every((id) => prev.has(id))) return;
+  useInboxStore.getState().setLiveInboxIds(ids);
 }
 
 /**

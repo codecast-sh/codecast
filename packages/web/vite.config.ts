@@ -1,11 +1,50 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { sentryVitePlugin } from "@sentry/vite-plugin";
+import { VitePWA } from "vite-plugin-pwa";
 import path from "path";
 
 export default defineConfig({
   plugins: [
     react(),
+    // Offline app shell: precache the built app so the SPA boots with zero
+    // network — the desktop (Electron) shell loads codecast.sh remotely, so
+    // without this an offline launch never even gets HTML. Data comes from
+    // the IndexedDB-hydrated store; this only makes the shell itself local.
+    VitePWA({
+      registerType: "autoUpdate",
+      injectRegister: null, // registered manually from main.tsx after first paint
+      manifest: false, // offline shell only; not an installable PWA
+      workbox: {
+        globPatterns: ["**/*.{js,css,html,ico,png,svg,woff2}"],
+        // Several chunks (ConversationView, tiptap, highlight) exceed
+        // workbox's 2 MiB default, which would silently drop them from the
+        // precache and break offline boot.
+        maximumFileSizeToCacheInBytes: 15 * 1024 * 1024,
+        navigateFallback: "/index.html",
+        // Real server endpoints (server/index.ts) — never serve the SPA shell
+        // for these.
+        navigateFallbackDenylist: [/^\/api\//, /^\/download\//, /^\/install/],
+        runtimeCaching: [
+          {
+            urlPattern: /^https:\/\/fonts\.googleapis\.com\//,
+            handler: "StaleWhileRevalidate",
+            options: { cacheName: "google-fonts-css" },
+          },
+          {
+            urlPattern: /^https:\/\/fonts\.gstatic\.com\//,
+            handler: "CacheFirst",
+            options: {
+              cacheName: "google-fonts-files",
+              expiration: { maxEntries: 30, maxAgeSeconds: 365 * 24 * 60 * 60 },
+            },
+          },
+        ],
+        cleanupOutdatedCaches: true,
+        clientsClaim: true,
+        skipWaiting: true,
+      },
+    }),
     sentryVitePlugin({
       org: process.env.SENTRY_ORG || "codecast-a2",
       project: process.env.SENTRY_PROJECT || "javascript-react",
@@ -32,7 +71,7 @@ export default defineConfig({
   server: {
     port: 3000,
     host: true,
-    allowedHosts: ["local.codecast.sh", "local.1.codecast.sh", "local.2.codecast.sh"],
+    allowedHosts: ["local.codecast.sh", "local.1.codecast.sh", "local.2.codecast.sh", "local.3.codecast.sh"],
     // NOTE: server.warmup is deliberately omitted. Warming up a 10k-LOC
     // module (ConversationView.tsx) on boot kicks the optimizer into a
     // dep-discovery cycle that races real page requests, producing

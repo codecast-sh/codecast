@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { classifyBypassBlock, classifyTmuxLiveState, extractTmuxLiveRegion, isPhantomBypassPermissionBlock } from "./daemon.js";
+import { classifyBypassBlock, classifyTmuxLiveState, extractTmuxLiveRegion, isPhantomBypassPermissionBlock, paneContentAfterLaunchEcho } from "./daemon.js";
 
 describe("isPhantomBypassPermissionBlock", () => {
   test("suppresses auto-approved tool permission_blocked in bypass mode", () => {
@@ -312,6 +312,75 @@ describe("classifyTmuxLiveState", () => {
   });
 });
 
+// Real capture from cc-claude-gkvbs98a3t3m (2026-07-06): six named teammates
+// split the daemon's default 80x24 window into 55x3 agent panes, squeezing the
+// lead pane to 24 columns. At that width the footer truncates mid-word — the
+// "esc to interrupt" busy marker is gone — and the teammate chip list renders
+// below the footer. Busy/idle can no longer be read from the footer, so the
+// chip list itself must carry the classification.
+const TEAMMATE_SPLIT_PANE = `✢ Crunching… (4m 52s)
+  ⎿  Tip: Use git
+     worktrees to run
+     multiple Claude
+     sessions in
+     parallel.
+
+────────────────────────
+❯
+────────────────────────
+  ⏵⏵ bypass         ·
+  Update available! R…
+
+  ⏺ main
+  ◯ navigator   Run… 15s
+  ◯ reviewer-1  Run… 14s
+  ◯ reviewer-2  Run… 12s
+  ◯ reviewer-3  Run… 11s
+  ◯ reviewer-4  Run…  9s
+                ↓ 1 more
+`;
+
+// The exact live region the daemon logged while conversation jx77h6jcsa0s was
+// frozen (2026-07-07 00:03Z, "Unrecognized live UI in cc-claude-y59tvn8a0bhr:0.0"):
+// the teammate split had shrunk the lead pane until its separators fell under
+// the 20-char detection threshold, so the no-separator 5-line fallback saw
+// nothing but the chip list. Pre-fix this classified "unknown" and every
+// delivery deferred — the thread froze for hours until the user killed it.
+const TEAMMATE_PANEL_ONLY_REGION = ` ◯ nav…
+ ◯ rev…
+ ◯ rev…
+ ◯ rev…
+        ↓ 2 more`;
+
+describe("teammate panel (in-process agents)", () => {
+  test("split-pane capture keeps the input box AND the chip list in the region", () => {
+    const region = extractTmuxLiveRegion(TEAMMATE_SPLIT_PANE);
+    expect(region).toContain("❯");
+    expect(region).toContain("◯ navigator");
+  });
+
+  test("lead pane with teammate chips classifies busy — never idle (truncated footer hides the busy marker, and an idle-paste's leading Escape would interrupt the lead's turn)", () => {
+    const region = extractTmuxLiveRegion(TEAMMATE_SPLIT_PANE);
+    expect(classifyTmuxLiveState(region)).toBe("busy");
+  });
+
+  test("the exact chips-only region that froze jx77h6jcsa0s classifies busy, not unknown", () => {
+    expect(classifyTmuxLiveState(TEAMMATE_PANEL_ONLY_REGION)).toBe("busy");
+  });
+
+  test("a single-teammate panel (⏺ main + one ◯ chip) also classifies busy", () => {
+    expect(classifyTmuxLiveState("  ⏺ main\n  ◯ navigator   Run… 15s")).toBe("busy");
+  });
+
+  test("one stray ◯ line without any panel signature stays unknown", () => {
+    expect(classifyTmuxLiveState("  ◯ some bullet in odd output")).toBe("unknown");
+  });
+
+  test("modal patterns still beat the chip list", () => {
+    expect(classifyTmuxLiveState("  ◯ navigator   Run… 15s\n  ◯ reviewer-1  Run… 14s\nWhat should Claude do instead?")).toBe("interrupted");
+  });
+});
+
 describe("end-to-end: the bug case", () => {
   test("the exact pane that bricked cc-resume-f61304a3 now classifies as idle", () => {
     // From `tmux capture-pane -p -J -t cc-resume-f61304a3:0.0 -S -15` taken
@@ -337,5 +406,48 @@ describe("end-to-end: the bug case", () => {
     const region = extractTmuxLiveRegion(buggedPane);
     const state = classifyTmuxLiveState(region);
     expect(state).toBe("idle");
+  });
+});
+
+describe("paneContentAfterLaunchEcho", () => {
+  // Real pane capture from intern (2026-07-10): its zshrc sourced a bash-only
+  // completions file, so every fresh tmux shell printed "command not found"
+  // BEFORE the daemon's launch command ran. The whole-pane fatal scan matched
+  // that noise on the first 250ms poll and killed every auto-resume of
+  // cc-resume-6760480d in a loop — the web attach button never found the tmux.
+  const RC_NOISE = `R () {
+\tgit commit --all --message="$1" && git push && ssh -t host 'deploy'
+}
+/Users/ec2-user/.claude/hooks/peon-ping/completions.bash:28: command not found: complete
+complete:13: command not found: compdef
+~: env -u CLAUDECODE CLAUDE_CODE_RESUME_THRESHOLD_MINUTES=999999999 claude --resume 6760480d-2736-463c-ba12-e303c3cbf8de --model fable --permission-mode bypassPermissions
+`;
+
+  test("strips shell rc noise above the echoed launch command", () => {
+    const scanned = paneContentAfterLaunchEcho(RC_NOISE);
+    expect(scanned).not.toContain("command not found");
+  });
+
+  test("excludes the echo line itself (binary name, fancy-prompt ❯ glyph)", () => {
+    const fancyPrompt = `❯ env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT gemini --resume latest\n`;
+    const scanned = paneContentAfterLaunchEcho(fancyPrompt);
+    expect(scanned).not.toContain("❯");
+    expect(scanned).not.toContain("gemini");
+  });
+
+  test("keeps agent output below the echo, including real fatal errors", () => {
+    const pane = RC_NOISE + `No conversation found with session ID 6760480d\n~: `;
+    const scanned = paneContentAfterLaunchEcho(pane);
+    expect(scanned).toContain("No conversation found");
+  });
+
+  test("returns the full pane when no echo is visible (TUI scrolled it away)", () => {
+    const pane = "⏺ Bash(ls)\n────\n❯\n────\n";
+    expect(paneContentAfterLaunchEcho(pane)).toBe(pane);
+  });
+
+  test("returns empty when the echo is the last line (command not yet executed)", () => {
+    const pane = `~: env -u CLAUDECODE claude --resume abc`;
+    expect(paneContentAfterLaunchEcho(pane)).toBe("");
   });
 });

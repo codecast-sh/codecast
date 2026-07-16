@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { profileConversationVisible, buildShareUpdate, buildPathRestampUpdate } from "./privacy";
+import { profileConversationVisible, buildShareUpdate, buildPathRestampUpdate, resolveCreationPrivacy } from "./privacy";
 
 // Regression for the profile-feed privacy leak: a teammate's profile page
 // (team/[username]) selected their conversations by (team_id, user_id) and
@@ -126,6 +126,29 @@ describe("buildShareUpdate — sharing always yields a team_id", () => {
   });
 });
 
+// Creation-time chokepoint: every conversation insert derives team/privacy
+// from here. The bug it exists to prevent: an insert site writing an
+// is_private:false literal with no team_id ("shared with nobody" — invisible
+// to every teammate, and unfixable by restamp because it read as a manual
+// share). tasks.assignToAgent and both workflow_runs inserts did exactly that.
+describe("resolveCreationPrivacy — inserts always resolve team/privacy together", () => {
+  const mapping = { team_id: "t_union", path_prefix: "/Users/a/src/union-mobile", auto_share: true };
+
+  test("mapped path → team + shared + auto_shared, exactly like createConversation", async () => {
+    const p = await resolveCreationPrivacy(
+      mockCtx([mapping], {}), "u_owner" as any, "/Users/a/src/union-mobile/outreach"
+    );
+    expect(p).toEqual({ team_id: "t_union", is_private: false, auto_shared: true } as any);
+  });
+
+  test("unmapped path → private, fallback team kept for routing only", async () => {
+    const p = await resolveCreationPrivacy(
+      mockCtx([], {}), "u_owner" as any, "/elsewhere", "t_task" as any
+    );
+    expect(p).toEqual({ team_id: "t_task", is_private: true, auto_shared: undefined } as any);
+  });
+});
+
 // Regression for the born-blank visibility gap: quick-create pre-warm and
 // web-started stubs mint the conversation BEFORE the real path exists, so
 // creation resolved team/privacy against nothing → private, teamless. When the
@@ -168,6 +191,24 @@ describe("buildPathRestampUpdate — late path stamp re-resolves born-blank visi
     expect(buildPathRestampUpdate(manual, mappings, "/Users/a/src/union-mobile")).toBeNull();
   });
 
+  // Regression for "shared with nobody" round 2: task/workflow launch paths
+  // once inserted is_private:false literals with no team_id. Such a row reads
+  // as shared but fails every team gate, and the manual-share guard used to
+  // treat it as an explicit user choice — freezing the contradiction forever.
+  // A shared row with NO team is never a valid manual share; adopting the
+  // mapping's team only grants the visibility the owner already believes exists.
+  test("THE BUG: shared-but-teamless conv under a mapped path gets the team", () => {
+    const poisoned = { is_private: false } as any;
+    expect(buildPathRestampUpdate(poisoned, mappings, "/Users/a/src/union-mobile/outreach")).toEqual({
+      team_id: "t_union",
+    } as any);
+  });
+
+  test("shared-but-teamless conv with no mapping match stays untouched (restamp never invents a team)", () => {
+    const poisoned = { is_private: false } as any;
+    expect(buildPathRestampUpdate(poisoned, mappings, "/Users/a/src/unmapped")).toBeNull();
+  });
+
   test("no mapping match → no change (restamp never revokes)", () => {
     const autoShared = { is_private: false, auto_shared: true, team_id: "t_union" } as any;
     expect(buildPathRestampUpdate(autoShared, mappings, "/Users/a/src/unmapped")).toBeNull();
@@ -202,5 +243,43 @@ describe("buildPathRestampUpdate — late path stamp re-resolves born-blank visi
       is_private: false,
       auto_shared: true,
     } as any);
+  });
+});
+
+// Work items inherit a linked conversation's team only when the conversation
+// is team-visible. The bug this prevents: tasks.create copied conv.team_id
+// unconditionally ("regardless of conversation privacy"), so a task created
+// from a PRIVATE session in a team-routed conversation became readable by the
+// whole team (canAccessTask gates on team_id alone).
+describe("teamVisibleConvTeam — private sessions never hand their team to work items", () => {
+  const { teamVisibleConvTeam } = require("./privacy");
+
+  test("THE BUG: a private conversation contributes no team", () => {
+    expect(teamVisibleConvTeam({ team_id: "t1", is_private: true })).toBeUndefined();
+  });
+
+  test("a shared conversation hands over its team", () => {
+    expect(teamVisibleConvTeam({ team_id: "t1", is_private: false })).toBe("t1");
+  });
+
+  test("auto_shared counts as team-visible", () => {
+    expect(teamVisibleConvTeam({ team_id: "t1", is_private: true, auto_shared: true })).toBe("t1");
+  });
+
+  test("a team_visibility override reveals an otherwise-private conversation", () => {
+    expect(teamVisibleConvTeam({ team_id: "t1", is_private: true, team_visibility: "summary" })).toBe("t1");
+  });
+
+  test("team_visibility:'private' stays private", () => {
+    expect(teamVisibleConvTeam({ team_id: "t1", is_private: true, team_visibility: "private" })).toBeUndefined();
+  });
+
+  test("no team_id → nothing to hand over, shared or not", () => {
+    expect(teamVisibleConvTeam({ is_private: false })).toBeUndefined();
+  });
+
+  test("null/undefined conversation → undefined", () => {
+    expect(teamVisibleConvTeam(undefined)).toBeUndefined();
+    expect(teamVisibleConvTeam(null)).toBeUndefined();
   });
 });

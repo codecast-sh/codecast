@@ -21,10 +21,15 @@ function isInputTarget(e: KeyboardEvent): boolean {
   if (!el) return false;
   if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') return true;
   if (el.isContentEditable) return true;
-  // The inline-review region owns its own single-letter keys (navigate blocks,
-  // comment, quote, remove). Treat it like an input so those don't leak to
-  // global shortcuts; the region's own keydown handler still receives them.
-  if (typeof el.closest === 'function' && el.closest('[data-review-region="active"]')) return true;
+  // Some regions own their own single-letter keys and must not leak them to the
+  // global conversation shortcuts (h/t/d/r, and critically y/n which approve or
+  // deny a live permission prompt). A region opts in either with the inline
+  // review marker (data-review-region="active") or the generic data-owns-keys
+  // (e.g. the branch map). Treating a focus inside such a region like an input
+  // makes the dispatcher skip those shortcuts; the region's own keydown handler
+  // still receives the key.
+  if (typeof el.closest === 'function' &&
+      el.closest('[data-review-region="active"], [data-owns-keys]')) return true;
   return false;
 }
 

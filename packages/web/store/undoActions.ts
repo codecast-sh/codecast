@@ -28,8 +28,14 @@ export function animateSessionEnter(id: string) {
 
 export type HideSessionMode = "stash" | "kill";
 
+// Side effects of the hide that live OUTSIDE the store and must be reversed on
+// undo. Today: re-arming the injecting schedules the server cancels on the kill
+// transition (see agentTasks.cancelTasksBoundToConversation) — without this,
+// undoing a kill restores the session but leaves its standing loop dead.
+export type HideSessionExtras = { onUndo?: () => void };
+
 /** Animate a session card sliding out, then call undoableHideSession. */
-export function animatedHideSession(id: string, mode: HideSessionMode) {
+export function animatedHideSession(id: string, mode: HideSessionMode, extras?: HideSessionExtras) {
   const card = document.querySelector(`[data-session-id="${id}"]`);
   const wrapper = card?.parentElement;
   if (wrapper) {
@@ -41,12 +47,12 @@ export function animatedHideSession(id: string, mode: HideSessionMode) {
     const finish = () => {
       if (done) return;
       done = true;
-      undoableHideSession(id, mode);
+      undoableHideSession(id, mode, extras);
     };
     wrapper.addEventListener('animationend', finish, { once: true });
     setTimeout(finish, 250);
   } else {
-    undoableHideSession(id, mode);
+    undoableHideSession(id, mode, extras);
   }
 }
 
@@ -85,7 +91,7 @@ function snapshotSession(state: StoreState, id: string) {
 // running); "kill" retires it (the server kills the agent on the hide
 // transition). Undo restores the snapshot and clears BOTH hide flags — the
 // kill itself isn't undoable (the session stays resumable), same as before.
-export function undoableHideSession(id: string, mode: HideSessionMode) {
+export function undoableHideSession(id: string, mode: HideSessionMode, extras?: HideSessionExtras) {
   const state = useInboxStore.getState();
   const session = state.sessions[id];
   const label = session?.title || "session";
@@ -136,6 +142,10 @@ export function undoableHideSession(id: string, mode: HideSessionMode) {
         ),
         client_state: { _: { current_conversation_id: snap.currentSessionId } },
       }).catch(() => {});
+      // Reverse out-of-store side effects last (e.g. re-arm the schedules the
+      // kill canceled). Redo re-kills through the same transition, so the
+      // server re-cancels them — no symmetric redo hook needed.
+      extras?.onUndo?.();
     },
     redo: () => {
       if (mode === "kill") useInboxStore.getState().killSession(id);

@@ -4,7 +4,7 @@ import { useMutation, useQuery } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { Theme, Spacing } from '@/constants/Theme';
+import { Theme, Spacing, chipShell, chipText, chipTint, CHROME_FONT_CAP } from '@/constants/Theme';
 
 /**
  * Device awareness for the phone. A session runs on exactly one device; these
@@ -151,9 +151,9 @@ export function DeviceChip({ ownerDeviceId, onPress }: { ownerDeviceId?: string 
   if (!d && !onPress) return null;
   const color = d ? deviceColor(d) : Theme.textMuted0;
   const chip = (
-    <RNView style={[styles.chip, { borderColor: color + '55', backgroundColor: color + '14' }]}>
-      <FontAwesome name={d ? deviceIcon(d) : 'laptop'} size={9} color={color} />
-      <RNText style={[styles.chipText, { color }]} numberOfLines={1}>
+    <RNView style={[styles.chip, chipTint(color)]}>
+      <FontAwesome name={d ? deviceIcon(d) : 'laptop'} size={10} color={color} />
+      <RNText style={[styles.chipText, { color }]} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>
         {d ? deviceDisplayName(d) : 'Unassigned'}
       </RNText>
       <RNView style={[styles.dot, { backgroundColor: d?.online ? Theme.green : Theme.textMuted0 }]} />
@@ -230,17 +230,8 @@ export function DevicesSection() {
 }
 
 const styles = StyleSheet.create({
-  chip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 6,
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    maxWidth: 160,
-  },
-  chipText: { fontSize: 11, fontWeight: '600' },
+  chip: chipShell,
+  chipText: chipText,
   dot: { width: 6, height: 6, borderRadius: 3 },
   section: { marginBottom: Spacing.xl },
   sectionTitle: {

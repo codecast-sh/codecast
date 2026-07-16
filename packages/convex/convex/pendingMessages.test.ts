@@ -289,10 +289,16 @@ describe("isControlMessage", () => {
     expect(isControlMessage('{"__cc_poll":true,"steps":[{"key":"2"}]}')).toBe(true);
   });
 
+  test("recognizes __cc_poll free-text answers (text form — declines the menu and types)", () => {
+    // The web sends a custom/"Other" AUQ answer as prose in `text` with no keys/steps; it
+    // must still route as a fire-and-forget control message so it isn't re-injected.
+    expect(isControlMessage('{"__cc_poll":true,"text":"use the intro response","display":"x"}')).toBe(true);
+  });
+
   test("treats normal user text and malformed JSON as non-control", () => {
     expect(isControlMessage("https://codecast.sh/conversation/x not responding")).toBe(false);
     expect(isControlMessage("go")).toBe(false);
-    expect(isControlMessage('{"__cc_poll":true}')).toBe(false); // missing keys/steps
+    expect(isControlMessage('{"__cc_poll":true}')).toBe(false); // missing keys/steps/text
     expect(isControlMessage("{not json")).toBe(false);
   });
 });

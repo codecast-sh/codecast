@@ -18,6 +18,7 @@ const NOTIFICATION_TYPE = v.union(
   v.literal("session_idle"),
   v.literal("permission_request"),
   v.literal("session_error"),
+  v.literal("session_assigned"),
   v.literal("team_session_start"),
   v.literal("task_completed"),
   v.literal("task_failed"),
@@ -47,6 +48,7 @@ const PREFERENCE_MAP: Record<string, string> = {
   permission_request: "permission_request",
   session_idle: "session_idle",
   session_error: "session_error",
+  session_assigned: "session_assigned",
 };
 
 function isNotificationEnabled(

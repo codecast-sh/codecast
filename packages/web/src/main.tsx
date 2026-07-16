@@ -3,7 +3,8 @@ import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router";
 import { initAnalytics, setupErrorToasts } from "../lib/analytics";
 import { armChunkReloadGuardReset } from "../components/ErrorBoundary";
-import { installIdleAnimationPause } from "../lib/desktop";
+import { installIdleAnimationPause, isDesktop } from "../lib/desktop";
+import { hasStoredAuthToken } from "../lib/localAuth";
 import { App } from "./App";
 import "../store/inboxStore";
 import "../app/globals.css";
@@ -20,12 +21,44 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
   </React.StrictMode>
 );
 
-// Defer non-critical work until after first paint.
+// Defer non-critical work until after first paint. The timeout is load-bearing:
+// Chrome starves idle callbacks entirely in hidden/occluded windows, and the
+// desktop app often boots minimized — without it, everything deferred here
+// (analytics, the offline-shell registration, route warmup) never runs until
+// the window is first focused.
 const idle: (cb: () => void) => void =
-  (typeof window !== "undefined" && (window as any).requestIdleCallback) ||
-  ((cb) => setTimeout(cb, 1));
+  typeof window !== "undefined" && (window as any).requestIdleCallback
+    ? (cb) => (window as any).requestIdleCallback(cb, { timeout: 15_000 })
+    : (cb) => setTimeout(cb, 1);
 
 idle(() => initAnalytics());
+
+// Install the offline app shell (service worker precache) once the app is
+// interactive. First visit installs it in the background; every later boot —
+// including fully offline desktop launches — serves the shell from it.
+// Only for app users (signed in, or the desktop shell): the precache pulls the
+// whole bundle, which anonymous share-link visitors shouldn't pay for.
+// No-op in dev (vite-plugin-pwa only emits the worker on build).
+idle(() => {
+  if (!hasStoredAuthToken() && !isDesktop()) return;
+  import("virtual:pwa-register")
+    .then(({ registerSW }) =>
+      registerSW({
+        immediate: true,
+        // Browsers only look for a new sw.js on navigation (or every 24h),
+        // and the desktop window stays open for days without navigating — a
+        // stale shell would pin users to old bundles across deploys. Poll so
+        // the new worker (skipWaiting+clientsClaim) takes over unprompted;
+        // any stale lazy-chunk fetch after the swap is healed by the chunk
+        // reload guard in ErrorBoundary.
+        onRegisteredSW(_url, reg) {
+          if (!reg) return;
+          setInterval(() => { reg.update().catch(() => {}); }, 60 * 60 * 1000);
+        },
+      })
+    )
+    .catch(() => {});
+});
 
 // If this load stays up (no immediate chunk re-crash), clear the auto-reload
 // guard so a future stale-chunk crash in this tab can recover on its own.

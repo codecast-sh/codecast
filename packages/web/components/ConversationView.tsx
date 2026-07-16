@@ -6,7 +6,7 @@ import { useEffect, useLayoutEffect, useRef, useState, useMemo, useImperativeHan
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useWatchEffect } from "../hooks/useWatchEffect";
-import { useShortcutContext, useShortcutAction, isMac } from "../shortcuts";
+import { useShortcutContext, useShortcutAction, isMac, getShortcutsForAction, formatShortcutParts, type ShortcutAction } from "../shortcuts";
 import { useConvexSync } from "../hooks/useConvexSync";
 import { useShallow } from "zustand/react/shallow";
 import { createPortal } from "react-dom";
@@ -23,6 +23,7 @@ import { getBuiltinCommands } from "../lib/builtinCommands";
 import { resolveSessionSkills } from "../lib/sessionSkills";
 import { entityRoute } from "../lib/entityLinks";
 import { pendingImageUploads, persistDraftImages, restoreDraftImages, settleDraftImageUpload } from "../lib/draftImages";
+import { isResentCopyOfSentMessage } from "../lib/staleDraft";
 import type { SkillItem } from "../lib/conversationProcessor";
 import { createReducer, reducer } from "../lib/messageReducer";
 import { UsageDisplay } from "./UsageDisplay";
@@ -31,10 +32,11 @@ import { KeyCap, MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { toast } from "sonner";
 import { CodeBlock } from "./CodeBlock";
 import { useFullWidthExpand } from "../hooks/useFullWidthExpand";
-import { tryRenderCanvas } from "./HtmlSnippet";
+import { tryRenderCanvas, tryRenderHtmlMessage, looksLikeHtml } from "./HtmlSnippet";
 import { useDiffViewerStore } from "../store/diffViewerStore";
 import { isJumpReadyToScroll, shouldLoadOlder, shouldLoadNewer } from "./conversationScroll";
 import { parseInsightBlocks } from "./insightBlocks";
+import { formatElapsedClock, shouldShowElapsed, deriveRunningTool } from "./workingStatus";
 import { appendToDraft, formatPlanFeedback } from "../lib/quoteFormat";
 import { quoteToComposer, submitReview, attachReviewToMessage, takeReviewBatch } from "../lib/reviewActions";
 import { MessageReview } from "./MessageReview";
@@ -79,8 +81,9 @@ import { DynamicRunView, wfStatusMeta, wfFmtTokens } from "./DynamicRunView";
 const api = _typedApi as any;
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { DeviceBadge, RunOnDeviceItems } from "./DeviceBadge";
+import { OwnersBadge } from "./OwnersBadge";
 import { PermissionStack } from "./PermissionCard";
-import { copyToClipboard, shareOrigin, matchesProjectQuery } from "../lib/utils";
+import { copyToClipboard, shareOrigin, buildProjectPathOptions, inferHomeDir, resolveCustomPath, displayPath, inferProjectBase } from "../lib/utils";
 import { MarkdownRenderer, isMarkdownFile, isPlanFile, CollapsibleImage } from "./tools/MarkdownRenderer";
 import { OptionPreview } from "./tools/AskUserQuestionToolView";
 import { useImageGallery, ImageGalleryProvider } from "./ImageGallery";
@@ -89,27 +92,12 @@ import { PlanBadge, TaskBadge } from "./PlanTaskHoverCard";
 import { EntityIdPill, EntityAwareCode, EntityAwareLink, renderWithMentions } from "./EntityIdPill";
 import { FormattedSummary } from "./FormattedSummary";
 import { entityRemarkPlugins } from "../lib/remarkEntityIds";
-import { parseInboundSessionMessage, isTeammateFramingOnly, isMachineDeliveredMessage } from "./sessionMessage";
+import { parseInboundSessionMessage, isTeammateFramingOnly, isMachineDeliveredMessage, isSpawnedTaskPrompt, parseSpawnedTaskPrompt } from "./sessionMessage";
 import { CollabComposer, CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
 import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, type ParsedCastCommand } from "./castCommand";
 import { ConversationTree } from "./ConversationTree";
 import { useInboxStore, isConvexId, computeNewDividerIndex, convBucketMap, type BucketItem, type ForkChild, type InboxSession, type OptimisticImage } from "../store/inboxStore";
 
-// Context for restoring a server-deleted (ghost) conversation: for a deleted
-// row the server knows nothing, so restartSession/repairSession take the
-// session binding from our cached copy. Shared by every restart call site
-// (composer recovery, auto-restart effect, header dropdown).
-function ghostRestartContextFor(conversationId: string) {
-  const s = useInboxStore.getState();
-  const row: any = s.conversations[conversationId] ?? s.sessions[conversationId];
-  if (!row) return {};
-  return {
-    session_id: row.session_id,
-    project_path: row.project_path ?? row.git_root,
-    agent_type: row.agent_type,
-    title: row.title,
-  };
-}
 
 // restartSession can answer with a DIFFERENT conversation: the ghost's live
 // twin, or a freshly recreated row. Follow it there, and clear the ghost from
@@ -147,6 +135,7 @@ import { pendingBannerState, isActiveAgentStatus, isBootingAgentStatus, type Liv
 import { sessionStartupState } from "../lib/sessionLifecycle";
 import { messageRowKey } from "../lib/messageRowKey";
 import { expandEntityMentions } from "../lib/mentionExpansion";
+import { useSessionRestart, ghostRestartContextFor, deriveRestartStage, type RestartProgressRow, type RestartPhase, type RestartStage } from "../hooks/useSessionRestart";
 
 // An @-mention query may contain spaces so multi-word titles are searchable: a
 // first token (possibly empty, so a bare "@" still opens recents) plus up to 4
@@ -181,36 +170,20 @@ const PENDING_BOOT_GRACE_MS = 60_000;     // starting / connected: session launc
 const PENDING_RESUME_GRACE_MS = 120_000;  // resuming is the slowest path
 
 
-// Live label for a kill+restart in flight, derived from the daemon command
-// rows (conversations.getRestartProgress — the daemon stamps executed_at +
-// result/error on each). Shared by the composer footer ladder and the
-// on-message retry bar so both report the same real progress.
-type RestartProgressRow = { command: string; created_at: number; executed_at: number | null; result: string | null; error: string | null };
-function deriveRestartStage(
-  restartProgress: RestartProgressRow[] | null | undefined,
-  waitingLong: boolean,
-): { label: string; tone: "active" | "warn" | "error" } | null {
-  if (!restartProgress?.length) return null;
-  const last = [...restartProgress].reverse();
-  const resume = last.find((c) => c.command === "resume_session");
-  const kill = last.find((c) => c.command === "kill_session");
-  if (resume?.executed_at) {
-    if (resume.error) return { label: `Restart failed: ${resume.error}`, tone: "error" };
-    try {
-      const r = resume.result ? JSON.parse(resume.result) : null;
-      if (r?.reconstituted) return { label: "Rebuilt session from history — reconnecting…", tone: "active" };
-      if (r?.started_fresh) return { label: "Couldn't resume the old session — started a fresh one", tone: "active" };
-      if (r?.resumed) return { label: "Session resumed — reconnecting…", tone: "active" };
-      if (r?.skipped) return { label: "Session is already starting…", tone: "active" };
-    } catch { /* plain-string results fall through to the generic label */ }
-    return { label: "Restarting session…", tone: "active" };
-  }
-  if (kill?.executed_at) return { label: "Old session stopped — starting replacement…", tone: "active" };
-  if (waitingLong) return { label: "Waiting for the daemon to pick this up — is that device online?", tone: "warn" };
-  return { label: "Restart requested — waiting for daemon…", tone: "active" };
-}
+// deriveRestartStage (the live label for a kill+restart in flight) lives in
+// hooks/useSessionRestart so the composer footer ladder, the on-message retry
+// bar, and the header restart strip all report the same real progress.
 
 const sacredInputs = new Map<string, { text: string; images?: any[] }>();
+
+// True when a persisted draft is just a copy of a message already sent in this
+// conversation (see lib/staleDraft.ts) — refuse it at restore time. Reads the
+// loaded message window; on a cold first visit it may be empty, in which case
+// the draft shows once more and heals on the next mount.
+function isStaleSentDraft(conversationId: string, text: string | null | undefined): boolean {
+  return isResentCopyOfSentMessage(useInboxStore.getState().messages[conversationId], text);
+}
+
 const EMPTY_PENDING: any[] = [];
 const EMPTY_MESSAGES: any[] = [];
 const EMPTY_MATCH_IDS: string[] = [];
@@ -353,6 +326,10 @@ function renderMessageMarkdownCached(content: string): ReactElement {
 // through the context-aware ReactMarkdown wrapper instead.
 const MessageMarkdown = memo(function MessageMarkdown({ content }: { content: string }) {
   const query = useContext(HighlightContext);
+  // An all-HTML body renders as a sanitized canvas — the markdown pipeline
+  // escapes raw tags into garbled source.
+  const html = tryRenderHtmlMessage(content);
+  if (html) return html;
   if (query) {
     return (
       <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={MESSAGE_MD_COMPONENTS}>
@@ -758,6 +735,19 @@ function FolderGlyph({ className = "w-3 h-3" }: { className?: string }) {
   );
 }
 
+// "Open this exact folder" chip glyph — a folder with a plus, distinct from the
+// plain FolderGlyph the recent-project chips use.
+function FolderPlusGlyph({ className = "w-3 h-3" }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 10.5v6m3-3H9m-6.75 2.25V6A2.25 2.25 0 014.5 3.75h4.629a1.5 1.5 0 011.06.44l2.122 2.12a1.5 1.5 0 001.06.44H19.5A2.25 2.25 0 0121.75 9v9.75A2.25 2.25 0 0119.5 21h-15a2.25 2.25 0 01-2.25-2.25z" />
+    </svg>
+  );
+}
+
+// Project-path helpers (inferHomeDir / resolveCustomPath / displayPath /
+// inferProjectBase / buildProjectPathOptions) live in lib/utils so they're unit-tested.
+
 // Picker hint rows render key names as <KeyCap> caps (the keyboard-shortcuts
 // panel component) — never as plain text in the surrounding font.
 function HintKeys({ keys, label }: { keys: string[]; label: string }) {
@@ -836,16 +826,47 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
   const pickerRef = useRef<HTMLInputElement>(null);
   const prevFocusRef = useRef<HTMLElement | null>(null);
 
+  // Home dir inferred from real local roots, so "~/…" resolves to the same place
+  // the daemon would cd to.
+  const homeDir = useMemo(
+    () => inferHomeDir([currentPath, ...recentProjects.map((p: { path: string }) => p.path)]),
+    [currentPath, recentProjects],
+  );
+
+  // The base a bare folder name resolves under — a sibling of the current
+  // project (its parent dir), so typing "weekend-hack" means the folder next to
+  // the one you're in, not a dead end.
+  const projectBase = useMemo(
+    () => inferProjectBase(currentPath, recentProjects.map((p: { path: string }) => p.path), homeDir),
+    [currentPath, recentProjects, homeDir],
+  );
+
   // While navigating with the keyboard: the default visible chips, or — once the
   // user types — a live filter across ALL recent projects, so the "other"
-  // overflow is reachable without the mouse. Reuses the modal's match rule.
-  const pickList = useMemo<{ path: string }[]>(() => {
+  // overflow is reachable without the mouse. Reuses the modal's match rule. When
+  // the text instead NAMES a directory, a synthetic "open this folder" entry
+  // rides at the end so ANY folder is reachable, not just previously-used ones:
+  // an explicit path (absolute or ~/…) always offers it; a bare name resolves
+  // against the project base and offers it only when nothing in recents matches
+  // (so plain filtering — "co" → codecast — stays clean). The daemon's
+  // start_session takes the cwd verbatim, so the fully-resolved path is all it
+  // needs, and the chip shows that path so a wrong base guess is visible first.
+  const pickList = useMemo<{ path: string; custom?: boolean }[]>(() => {
     if (filter.trim()) {
-      return recentProjects.filter((p: { path: string }) => matchesProjectQuery(p.path, filter));
+      return buildProjectPathOptions({
+        query: filter,
+        recentPaths: recentProjects.map((p: { path: string }) => p.path),
+        home: homeDir,
+        base: projectBase,
+        currentPath,
+      });
     }
     const base: { path: string }[] = currentPath ? [{ path: currentPath }] : [];
     return base.concat(visibleProjects);
-  }, [filter, recentProjects, currentPath, visibleProjects]);
+  }, [filter, recentProjects, currentPath, visibleProjects, homeDir, projectBase]);
+
+  // Distinguish "you typed the folder you're already in" from a real miss.
+  const filterIsCurrent = !!currentPath && resolveCustomPath(filter, homeDir, projectBase) === currentPath;
 
   const clampedHi = Math.min(hi, Math.max(0, pickList.length - 1));
 
@@ -958,10 +979,11 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
       >
         {picking ? (
           pickList.length === 0 ? (
-            <span className="text-xs text-sol-text-dim px-2.5 py-1">no match for &ldquo;{filter}&rdquo;</span>
+            <span className="text-xs text-sol-text-dim px-2.5 py-1">
+              {filterIsCurrent ? "already in this folder" : <>no match for &ldquo;{filter}&rdquo;</>}
+            </span>
           ) : (
             pickList.map((p, i) => {
-              const name = p.path.split("/").filter(Boolean).pop();
               const isHi = i === clampedHi;
               const isCurrent = p.path === currentPath;
               return (
@@ -971,17 +993,26 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
                   // input focused so the click isn't lost to an onBlur teardown.
                   onMouseDown={(e) => { e.preventDefault(); handleSwitch(p.path); exitPicker(); }}
                   onMouseEnter={() => setHi(i)}
-                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border transition-all ${
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border transition-all max-w-[min(100%,22rem)] ${
                     isHi
                       ? "border-sol-cyan/70 bg-sol-cyan/15 text-sol-cyan ring-1 ring-sol-cyan/50"
-                      : isCurrent
-                        ? "border-sol-cyan/60 bg-sol-cyan/15 text-sol-cyan font-medium"
-                        : "border-sol-border/40 text-sol-text-dim"
+                      : p.custom
+                        ? "border-dashed border-sol-cyan/40 text-sol-cyan/80"
+                        : isCurrent
+                          ? "border-sol-cyan/60 bg-sol-cyan/15 text-sol-cyan font-medium"
+                          : "border-sol-border/40 text-sol-text-dim"
                   }`}
                   title={p.path}
                 >
-                  <FolderGlyph />
-                  <span>{name}</span>
+                  {p.custom ? <FolderPlusGlyph className="w-3 h-3 shrink-0" /> : <FolderGlyph />}
+                  {p.custom ? (
+                    <span className="truncate">
+                      <span className="opacity-60">open </span>
+                      <span className="font-mono">{displayPath(p.path, homeDir)}</span>
+                    </span>
+                  ) : (
+                    <span>{p.path.split("/").filter(Boolean).pop()}</span>
+                  )}
                 </button>
               );
             })
@@ -1014,7 +1045,7 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
             })}
             <button
               onClick={focusPicker}
-              title="Search all projects"
+              title="Search projects or paste any folder path"
               className="inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-md border border-dashed border-sol-border/50 text-sol-text-dim hover:text-sol-cyan hover:border-sol-cyan/40 hover:bg-sol-cyan/5 transition-all"
             >
               <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -1036,14 +1067,14 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
             onChange={(e) => { setFilter(e.target.value); setHi(0); }}
             onKeyDown={handlePickerKeyDown}
             onBlur={() => exitPicker(false)}
-            placeholder="type to filter…"
+            placeholder="filter or paste a path…"
             spellCheck={false}
             autoComplete="off"
-            className="w-28 bg-transparent text-sol-cyan placeholder:text-sol-text-dim outline-none border-0 p-0"
+            className="w-44 bg-transparent text-sol-cyan placeholder:text-sol-text-dim outline-none border-0 p-0"
           />
           <span className="inline-flex items-center gap-2">
             <HintKeys keys={["←", "→"]} label="move" />
-            <HintKeys keys={["↵"]} label="select" />
+            <HintKeys keys={["↵"]} label={pickList[clampedHi]?.custom ? "open" : "select"} />
             <HintKeys keys={[ALT_CAP, "J"]} label="agent" />
             <HintKeys keys={["Esc"]} label="back" />
           </span>
@@ -1554,6 +1585,14 @@ function cleanStickyContent(content: string): string {
     const prompt = stMatch[2].trim();
     return prompt ? `${title} — ${prompt}` : title;
   }
+  const spawned = parseSpawnedTaskPrompt(content);
+  if (spawned) {
+    // A spawn task's title is usually the prompt's first ~60 chars — showing
+    // "title — prompt" would stutter, so prefer the prompt alone when it
+    // subsumes the title.
+    if (!spawned.prompt) return spawned.title;
+    return spawned.prompt.startsWith(spawned.title) ? spawned.prompt : `${spawned.title} — ${spawned.prompt}`;
+  }
   return stripSystemTags(content)
     .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "")
     .replace(/<teammate-message\s+[^>]*>[\s\S]*?<\/teammate-message>/g, "")
@@ -1577,6 +1616,11 @@ type ParsedApiError = {
   // resets 11:30pm (America/New_York)") — the session is parked until the
   // limit resets. Rendered as a distinct "usage limit" card.
   isLimit?: boolean;
+  // True for statusless connection-drop banners ("API Error: Connection
+  // closed mid-response. The response above may be incomplete.") — the turn
+  // died mid-transmission; a plain "continue" resumes it. Rendered as a
+  // distinct "connection dropped" card.
+  isConnection?: boolean;
 };
 
 function parseApiErrorContent(content?: string | null): ParsedApiError | null {
@@ -1584,16 +1628,17 @@ function parseApiErrorContent(content?: string | null): ParsedApiError | null {
   const trimmed = content.trim();
   if (!trimmed) return null;
 
-  // Banner detection (auth / limit) shares the backend's classifier in
-  // @codecast/shared/contracts: anchored prefixes + a length cap keep a long
-  // prose reply that merely opens like a banner from rendering as a card. The
-  // generic "API Error:"-prefixed form keeps its original anchored match (no
-  // cap) so a long JSON error payload still renders as the error card.
+  // Banner detection (auth / limit / connection) shares the backend's
+  // classifier in @codecast/shared/contracts: anchored prefixes + a length cap
+  // keep a long prose reply that merely opens like a banner from rendering as
+  // a card. The generic "API Error:"-prefixed form keeps its original anchored
+  // match (no cap) so a long JSON error payload still renders as the error card.
   const bannerKind = classifyApiErrorBanner(trimmed);
   const isAuth = bannerKind === "auth";
   const isLimit = bannerKind === "limit";
+  const isConnection = bannerKind === "connection";
   const match = trimmed.match(/^API Error:\s*(\d{3})\s*([\s\S]*)$/i);
-  if (!isAuth && !isLimit && !match) return null;
+  if (!isAuth && !isLimit && !isConnection && !match) return null;
 
   // The status code may be the leading "API Error: NNN" (generic form) or
   // embedded in an auth banner ("Please run /login · API Error: 401 …").
@@ -1631,12 +1676,14 @@ function parseApiErrorContent(content?: string | null): ParsedApiError | null {
   }
   if (!message) {
     if (isAuth) {
-      // The card states the /login remedy itself, so drop the leading
-      // "Please run /login" instruction and the status prefix and keep just the
-      // descriptive detail (e.g. "The socket connection was closed unexpectedly").
+      // The card states the /login remedy itself, so drop the "Please run
+      // /login" instruction (leading or trailing — "Login expired · Please run
+      // /login") and the status prefix and keep just the descriptive detail
+      // (e.g. "Login expired", "The socket connection was closed unexpectedly").
       message =
         trimmed
           .replace(/^please run \/login\s*[·.\-:]*\s*/i, "")
+          .replace(/\s*[·.\-:]*\s*please run \/login\s*$/i, "")
           .replace(/^api error:\s*\d{3}\s*/i, "")
           .trim() || "This session was signed out.";
     } else if (isLimit) {
@@ -1645,12 +1692,16 @@ function parseApiErrorContent(content?: string | null): ParsedApiError | null {
       // ("Session limit · resets 11:30pm (America/New_York)").
       const detail = trimmed.replace(/^you['’]ve hit your\s*/i, "");
       message = detail.charAt(0).toUpperCase() + detail.slice(1);
+    } else if (isConnection) {
+      // The card heading already says the error part, so keep just the detail
+      // ("Connection closed mid-response. The response above may be incomplete.").
+      message = trimmed.replace(/^api error:?\s*/i, "").trim() || "The connection to the provider dropped.";
     } else {
       message = statusCode === 500 ? "Internal server error" : "API request failed";
     }
   }
 
-  return { statusCode, message, errorType, requestId, isAuth, isLimit };
+  return { statusCode, message, errorType, requestId, isAuth, isLimit, isConnection };
 }
 
 function ApiErrorCard({ error, compact = false }: { error: ParsedApiError; compact?: boolean }) {
@@ -1707,6 +1758,34 @@ function ApiErrorCard({ error, compact = false }: { error: ParsedApiError; compa
         {!compact && (
           <p className="mt-1.5 text-xs text-sol-text-dim">
             The session is paused until the limit resets — send a message after that to pick up where it left off.
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  // Connection-drop banner → a "connection dropped" card. The provider never
+  // replied (stream cut mid-response / connection error / timeout), so the
+  // turn died at the prompt — a plain "continue" resumes it.
+  if (error.isConnection) {
+    return (
+      <div className={`rounded-lg border border-amber-500/40 bg-amber-500/10 ${compact ? "px-2.5 py-2" : "px-3 py-2.5"}`}>
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-500/20 text-amber-500">
+            <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+              <path d="M13 2L3 14h7l-1 8 10-12h-7l1-8" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </span>
+          <span className="text-xs font-semibold uppercase tracking-wide text-amber-500">
+            Connection dropped
+          </span>
+        </div>
+        <p className="mt-1 text-sm text-amber-500">{error.message}</p>
+        {!compact && (
+          <p className="mt-1.5 text-xs text-sol-text-dim">
+            The turn was cut off mid-response — send{" "}
+            <code className="px-1 py-0.5 rounded bg-sol-bg-alt/60 text-sol-text-secondary font-mono">continue</code>{" "}
+            (or any message) and the session picks up where it left off.
           </p>
         )}
       </div>
@@ -1882,6 +1961,9 @@ function classifyUserMessage(
   const tNoReminders = t.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').replace(/<task-reminder>[\s\S]*?<\/task-reminder>/g, '').trim();
   const tStripped = stripSystemTags(t).trim();
   if (tNoReminders.startsWith('<scheduled-task')) return { kind: 'scheduled_task' };
+  // A spawned schedule run's opening prompt (plain-text wire format from
+  // taskScheduler.buildPrompt) gets the same rich block as injected schedules.
+  if (isSpawnedTaskPrompt(tNoReminders)) return { kind: 'scheduled_task' };
   const sessionMsg = parseInboundSessionMessage(t);
   if (sessionMsg) return { kind: 'session_message', from: sessionMsg.from, body: sessionMsg.body, name: sessionMsg.name };
   if (t.startsWith('{') && t.includes('__cc_poll')) {
@@ -2188,6 +2270,58 @@ function useConversationTaskStats(conversationId: string | undefined) {
     enabled && conversationId && isConvexId(conversationId) ? { conversation_id: conversationId } : "skip"
   );
   return toolStats?.taskStats ?? null;
+}
+
+// Full-width strip at the header's bottom edge narrating a kill+restart the
+// moment it's requested — before any server ack — through the daemon's
+// kill→resume ladder, to a green "back live" confirmation or a red give-up.
+// Driven entirely by useSessionRestart's phase/stage; mounted only while a
+// restart is in some visible state, so the 1s elapsed tick costs nothing
+// otherwise.
+function RestartStatusStrip({ phase, stage, failure, startedAt, onRetry }: {
+  phase: RestartPhase;
+  stage: RestartStage | null;
+  failure: string | null;
+  startedAt: number | null;
+  onRetry: () => void;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (phase !== "restarting") return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [phase]);
+  if (phase === "idle") return null;
+  const tone = phase === "restored" ? "ok" : phase === "failed" ? "error" : (stage?.tone ?? "active");
+  const label =
+    phase === "restored" ? "Session is back live"
+    : phase === "failed" ? (failure ?? "Restart failed")
+    : (stage?.label ?? "Restarting session — contacting daemon…");
+  const toneClass = {
+    active: { wrap: "bg-sol-orange/10 text-sol-orange", dot: "bg-sol-orange" },
+    warn: { wrap: "bg-sol-yellow/10 text-sol-yellow", dot: "bg-sol-yellow" },
+    error: { wrap: "bg-sol-red/10 text-sol-red", dot: "bg-sol-red" },
+    ok: { wrap: "bg-sol-green/10 text-sol-green", dot: "bg-sol-green" },
+  }[tone];
+  const elapsed = phase === "restarting" && startedAt ? Math.max(0, Math.round((now - startedAt) / 1000)) : null;
+  return (
+    <div className={`flex items-center gap-2 px-4 py-1.5 text-[12px] ${toneClass.wrap}`}>
+      <span className={`w-2 h-2 rounded-full shrink-0 ${toneClass.dot} ${tone === "error" ? "" : "animate-pulse"}`} />
+      <span className="min-w-0 truncate">{label}</span>
+      {elapsed !== null && elapsed >= 3 && (
+        <span className="shrink-0 tabular-nums opacity-60">{elapsed}s</span>
+      )}
+      {phase === "failed" && (
+        <button
+          type="button"
+          onClick={onRetry}
+          className="shrink-0 ml-auto font-medium hover:underline"
+        >
+          Try again
+        </button>
+      )}
+    </div>
+  );
 }
 
 const ConversationTaskProgress = memo(function ConversationTaskProgress({ conversationId }: { conversationId: string }) {
@@ -4222,13 +4356,31 @@ function PlanModeBlock({ tool, result, conversationId, messageId, onSendMessage 
   );
 }
 
-const _askUserSentState = new Map<string, Record<number, { key: string; label: string; text?: string }>>();
+const _askUserSentState = new Map<string, Record<number, Array<{ key: string; label: string; text?: string }>>>();
+
+// Claude Code appends two synthetic affordance rows to every AskUserQuestion menu —
+// "Type something" (free text) and "Chat about this" (escape hatch). On a prompt scraped
+// from the terminal (no JSONL sidecar) they arrive as bare options; the web has its own
+// "Other" free-text affordance, so rendering them too is redundant clutter. Mirrors the
+// daemon's SYNTHETIC_OPTION so scraped polls render as clean as sidecar-sourced ones.
+const SYNTHETIC_POLL_OPTION = /^(?:type something\.?|chat about this)$/i;
+
+// The check glyph shown in a selected poll option's index slot / pill.
+function PollCheckIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+    </svg>
+  );
+}
 
 function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall; result?: ToolResult; onSendMessage?: (content: string) => void }) {
   let parsedInput: { questions?: Array<{ question: string; header?: string; options: Array<{ label: string; description?: string; preview?: string }>; multiSelect?: boolean; isConfirmation?: boolean }>; answers?: Record<string, string> } = {};
   try { parsedInput = JSON.parse(tool.input); } catch {}
   const [sent, setSent] = useState(() => _askUserSentState.has(tool.id));
-  const [selections, setSelections] = useState<Record<number, { key: string; label: string; text?: string }>>(() => _askUserSentState.get(tool.id) ?? {});
+  // Per-question selections. multiSelect questions hold several entries (checkbox
+  // semantics); single-select questions hold at most one.
+  const [selections, setSelections] = useState<Record<number, Array<{ key: string; label: string; text?: string }>>>(() => _askUserSentState.get(tool.id) ?? {});
   const [otherOpen, setOtherOpen] = useState<Record<number, boolean>>({});
   const [otherTexts, setOtherTexts] = useState<Record<number, string>>({});
 
@@ -4237,6 +4389,10 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
 
   const isMultiQuestion = questions.length > 1;
   const isConfirmation = questions[0]?.isConfirmation;
+  const anyMultiSelect = questions.some(q => q.multiSelect);
+  // multiSelect answers can't auto-submit on first click, so they share the
+  // multi-question "pick everything, then submit" flow.
+  const needsSubmit = isMultiQuestion || anyMultiSelect;
 
   let answers: Record<string, string> = {};
   if (parsedInput.answers && typeof parsedInput.answers === "object") {
@@ -4250,20 +4406,50 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
   }
 
   const isInteractive = !result && !!onSendMessage && !sent;
-  const allAnswered = isMultiQuestion && questions.every((_, i) => selections[i] !== undefined);
+  const allAnswered = needsSubmit && questions.every((_, i) => (selections[i]?.length ?? 0) > 0);
 
   const buildPayload = (sels: typeof selections) => {
     const sorted = Object.keys(sels).sort((a, b) => Number(a) - Number(b));
-    const hasText = sorted.some(k => sels[Number(k)].text);
-    const display = sorted.map(k => sels[Number(k)].label).join(", ");
+    const hasText = sorted.some(k => sels[Number(k)].some(s => s.text !== undefined));
+    const display = sorted.map(k => sels[Number(k)].map(s => s.label).join(", ")).join(", ");
     if (hasText) {
-      const steps = sorted.map(k => {
-        const s = sels[Number(k)];
-        return s.text ? { key: s.key, text: s.text } : { key: s.key };
-      });
-      return JSON.stringify({ __cc_poll: true, steps, display });
+      // Claude Code's AskUserQuestion menu only accepts the listed options — there's no
+      // inline free-text slot. So a custom ("Other") answer can't be entered through the
+      // menu, and answering even one question with free text means the menu can't be used
+      // for the others either: the only way to enter free text is to decline the whole
+      // set (Escape) and type at the prompt, which discards every menu pick. Convert all
+      // answers to prose and send it as the daemon's decline-then-type `text` so the agent
+      // still gets every answer. (Driving a digit per question and Escaping for the text
+      // declined the poll mid-loop and spilled the leftover option digits into the
+      // reopened prompt box — the "211" bug, 2026-06-27.)
+      const text = sorted.map(k => {
+        const qSels = sels[Number(k)];
+        const ans = qSels.map(s => s.text ?? s.label).join(", ");
+        if (sorted.length === 1) return ans;
+        const q = questions[Number(k)];
+        const id = (q?.header?.trim()) || q?.question?.replace(/\s+/g, " ").trim().slice(0, 60) || `Q${Number(k) + 1}`;
+        return `${id}: ${ans}`;
+      }).join("\n\n");
+      return JSON.stringify({ __cc_poll: true, text, display });
     }
-    return JSON.stringify({ __cc_poll: true, keys: sorted.map(k => sels[Number(k)].key), display });
+    // Key protocol (verified in tmux against Claude Code 2.1.201): on a multiSelect
+    // question a digit TOGGLES that option's checkbox and the menu stays up; Right
+    // advances to the next tab. Any multi-question or multiSelect form then parks on a
+    // "Review your answers" pane whose cursor sits on "1. Submit answers" — the trailing
+    // Enter confirms it. `multi` tells the daemon these digits are toggles, so its
+    // digit-didn't-advance heuristic must not "confirm" them with Enter (which would
+    // re-toggle the highlighted row).
+    const keys: string[] = [];
+    for (const k of sorted) {
+      const qSels = sels[Number(k)];
+      if (questions[Number(k)]?.multiSelect) {
+        keys.push(...qSels.map(s => s.key).sort((a, b) => Number(a) - Number(b)), "Right");
+      } else {
+        keys.push(qSels[0].key);
+      }
+    }
+    if (needsSubmit) keys.push("Enter");
+    return JSON.stringify({ __cc_poll: true, keys, display, ...(anyMultiSelect ? { multi: true } : {}) });
   };
 
   const handleSubmitAll = () => {
@@ -4276,14 +4462,17 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
   const commitOther = (qIdx: number, text: string, optionsCount: number) => {
     const otherKey = String(optionsCount + 1);
     const sel = { key: otherKey, label: text, text };
-    if (isMultiQuestion) {
-      setSelections(prev => ({ ...prev, [qIdx]: sel }));
+    if (questions[qIdx]?.multiSelect) {
+      // Joins the toggled options (replacing any previous custom entry); sent on Submit.
+      setSelections(prev => ({ ...prev, [qIdx]: [...(prev[qIdx] ?? []).filter(s => s.text === undefined), sel] }));
+    } else if (isMultiQuestion) {
+      setSelections(prev => ({ ...prev, [qIdx]: [sel] }));
     } else {
-      const newSels = { ...selections, [qIdx]: sel };
+      const newSels = { 0: [sel] };
       _askUserSentState.set(tool.id, newSels);
       setSelections(newSels);
       setSent(true);
-      onSendMessage!(buildPayload({ 0: sel }));
+      onSendMessage!(buildPayload(newSels));
     }
   };
 
@@ -4291,117 +4480,187 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
     <div className="my-1.5 ml-1 border-l-2 border-sol-violet/30 pl-3 space-y-2.5">
       {questions.map((q, i) => {
         const answer = answers[q.question];
-        const isCustom = answer !== undefined && !q.options.some(
-          o => o.label === answer || o.label.replace(" (Recommended)", "") === answer
+        // A multiSelect answer arrives as the chosen labels joined with ", " (the CLI's
+        // own join) — split it back so each chosen option lights up individually.
+        const answerParts = answer === undefined ? [] : q.multiSelect ? answer.split(", ") : [answer];
+        const matchesOption = (part: string) => q.options.some(
+          o => o.label === part || o.label.replace(" (Recommended)", "") === part
         );
-        const sel = selections[i];
-        const isOtherSelected = sel?.text !== undefined;
+        const customAnswer = answerParts.filter(p => !matchesOption(p)).join(", ");
+        const isCustom = customAnswer !== "";
+        const sels = selections[i] ?? [];
+        const otherSel = sels.find(s => s.text !== undefined);
+        const isOtherSelected = otherSel !== undefined;
+        // Rich layout (numbered rows with stacked descriptions) when any option carries a
+        // description or preview; otherwise compact borderless pills.
+        const hasRich = q.options.some(o => o.description || o.preview);
         return (
-          <div key={i} className="space-y-1.5">
-            <div className="flex items-center gap-1.5">
-              {q.header && (
-                <span className="text-[9px] uppercase tracking-wider font-semibold px-1 py-px rounded bg-sol-violet/15 text-sol-violet/80 border border-sol-violet/20">
+          <div key={i} className="space-y-2">
+            {q.header && (
+              <div>
+                <span className="inline-block text-[9px] uppercase tracking-[0.09em] font-semibold px-1.5 py-0.5 rounded bg-sol-violet/15 text-sol-violet">
                   {q.header}
                 </span>
+              </div>
+            )}
+            <div className="text-[13px] leading-snug font-medium text-sol-text-secondary">
+              {q.question}
+              {q.multiSelect && isInteractive && (
+                <span className="ml-2 text-[10px] font-normal uppercase tracking-[0.07em] text-sol-text-dim">select all that apply</span>
               )}
             </div>
-            <div className="text-xs text-sol-text-muted">{q.question}</div>
-            <div className={q.options.some(o => o.description || o.preview) ? "flex flex-col gap-1" : "flex flex-wrap gap-1"}>
+            <div className={hasRich ? "flex flex-col gap-0.5" : "flex flex-wrap gap-1.5"}>
               {q.options.map((opt, j) => {
+                // Synthetic CLI menu chrome scraped as bare options — drop it. Keep the
+                // index `j` so the surviving options retain their positional poll keys.
+                if (SYNTHETIC_POLL_OPTION.test(opt.label.trim())) return null;
                 const cleanLabel = opt.label.replace(" (Recommended)", "");
-                const isSelected = answer !== undefined && (opt.label === answer || cleanLabel === answer);
-                const isLocalSelected = !isOtherSelected && sel?.label === cleanLabel;
-                const chip = isInteractive ? (
+                const isSelected = answerParts.some(p => opt.label === p || cleanLabel === p);
+                const isLocalSelected = sels.some(s => s.text === undefined && s.label === cleanLabel);
+                const on = isSelected || isLocalSelected;
+                const choose = () => {
+                  setOtherOpen(prev => ({ ...prev, [i]: false }));
+                  const pollKey = isConfirmation ? (j === 0 ? "Enter" : "Escape") : String(j + 1);
+                  const sel = { key: pollKey, label: cleanLabel };
+                  if (q.multiSelect) {
+                    // Checkbox semantics: clicking toggles; Submit sends.
+                    setSelections(prev => {
+                      const cur = prev[i] ?? [];
+                      const has = cur.some(s => s.text === undefined && s.key === pollKey);
+                      return { ...prev, [i]: has ? cur.filter(s => s.text !== undefined || s.key !== pollKey) : [...cur, sel] };
+                    });
+                  } else if (isMultiQuestion) {
+                    setSelections(prev => ({ ...prev, [i]: [sel] }));
+                  } else {
+                    const newSels = { ...selections, [i]: [sel] };
+                    _askUserSentState.set(tool.id, newSels);
+                    setSelections(newSels);
+                    setSent(true);
+                    onSendMessage!(JSON.stringify({ __cc_poll: true, keys: [pollKey], display: cleanLabel }));
+                  }
+                };
+                // Rich row: a numbered index slot (becomes a check when chosen) plus the
+                // label stacked above its description — no per-option border, just a soft
+                // hover/selected fill.
+                // multiSelect renders the index slot as an empty checkbox outline so the
+                // rows read as toggles, not a pick-one menu.
+                const marker = (
+                  <span className={`mt-px flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-md text-[10px] font-semibold tabular-nums leading-none transition-colors ${
+                    on
+                      ? isInteractive ? "bg-sol-violet text-white" : "bg-sol-green text-white"
+                      : q.multiSelect && isInteractive ? "border border-sol-violet/40 text-sol-violet/80 group-hover/opt:bg-sol-violet/15"
+                      : isInteractive ? "bg-sol-violet/15 text-sol-violet/80 group-hover/opt:bg-sol-violet/25" : "bg-sol-border/15 text-sol-text-dim"
+                  }`}>
+                    {on ? <PollCheckIcon className="w-2.5 h-2.5" /> : j + 1}
+                  </span>
+                );
+                const body = (
+                  <span className="min-w-0 flex-1 leading-snug">
+                    <span className={`text-xs font-medium ${
+                      on ? (isInteractive ? "text-sol-violet" : "text-sol-green") : isInteractive ? "text-sol-violet/90" : "text-sol-text-dim"
+                    }`}>{opt.label}</span>
+                    {opt.description && (
+                      <span className="mt-0.5 block text-xs leading-relaxed text-sol-text-dim">{opt.description}</span>
+                    )}
+                  </span>
+                );
+                const rowCls = `group/opt flex w-full items-start gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors ${
+                  isInteractive ? "cursor-pointer " : ""
+                }${on ? (isInteractive ? "bg-sol-violet/12" : "bg-sol-green/10") : (isInteractive ? "hover:bg-sol-violet/10" : "")}`;
+                const node = hasRich ? (
+                  isInteractive
+                    ? <button type="button" onClick={choose} className={rowCls}>{marker}{body}</button>
+                    : <div className={rowCls}>{marker}{body}</div>
+                ) : isInteractive ? (
                   <button
-                    onClick={() => {
-                      setOtherOpen(prev => ({ ...prev, [i]: false }));
-                      const pollKey = isConfirmation ? (j === 0 ? "Enter" : "Escape") : String(j + 1);
-                      if (isMultiQuestion) {
-                        setSelections(prev => ({ ...prev, [i]: { key: pollKey, label: cleanLabel } }));
-                      } else {
-                        const newSels = { ...selections, [i]: { key: pollKey, label: cleanLabel } };
-                        _askUserSentState.set(tool.id, newSels);
-                        setSelections(newSels);
-                        setSent(true);
-                        onSendMessage!(JSON.stringify({ __cc_poll: true, keys: [pollKey], display: cleanLabel }));
-                      }
-                    }}
-                    className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-lg border transition-colors cursor-pointer text-left ${
-                      isLocalSelected
-                        ? "bg-sol-violet/20 border-sol-violet/50 text-sol-violet"
-                        : "border-sol-violet/30 text-sol-violet/80 hover:bg-sol-violet/15 hover:border-sol-violet/50 hover:text-sol-violet"
+                    type="button"
+                    onClick={choose}
+                    className={`inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-full transition-colors cursor-pointer ${
+                      on ? "bg-sol-violet text-white" : "bg-sol-violet/12 text-sol-violet hover:bg-sol-violet/25"
                     }`}
                   >
-                    {isLocalSelected && (
-                      <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                      </svg>
-                    )}
+                    {on && <PollCheckIcon className="w-3 h-3" />}
                     {opt.label}
-                    {opt.description && <span className="text-sol-text-dim ml-1">{opt.description}</span>}
                   </button>
                 ) : (
-                  <span
-                    className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-lg border ${
-                      isSelected || isLocalSelected
-                        ? "bg-sol-green/15 border-sol-green/40 text-sol-green"
-                        : "border-sol-border/30 text-sol-text-dim"
-                    }`}
-                  >
-                    {(isSelected || isLocalSelected) && (
-                      <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                      </svg>
-                    )}
+                  <span className={`inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-full ${
+                    on ? "bg-sol-green text-white" : "bg-sol-border/12 text-sol-text-dim"
+                  }`}>
+                    {on && <PollCheckIcon className="w-3 h-3" />}
                     {opt.label}
-                    {opt.description && <span className="text-sol-text-dim ml-1">{opt.description}</span>}
                   </span>
                 );
                 // An option's `preview` is the ASCII/mockup the terminal shows in a side
                 // box — surface it so the web user sees the same detail. Show it while
-                // interactive (to read before clicking, since one click submits) and on
-                // the chosen option once answered.
-                const showPreview = !!opt.preview && (isInteractive || isSelected || isLocalSelected);
+                // interactive (read before clicking, since one click submits) and on the
+                // chosen option once answered. In rich mode it sits indented under the label.
+                const showPreview = !!opt.preview && (isInteractive || on);
                 return showPreview ? (
-                  <div key={j} className="flex flex-col items-start gap-0.5">
-                    {chip}
-                    <OptionPreview preview={opt.preview!} />
+                  <div key={j} className={hasRich ? "" : "w-full"}>
+                    {node}
+                    <div className={hasRich ? "pl-9 pr-2 pt-0.5" : "mt-1"}>
+                      <OptionPreview preview={opt.preview!} />
+                    </div>
                   </div>
                 ) : (
-                  <Fragment key={j}>{chip}</Fragment>
+                  <Fragment key={j}>{node}</Fragment>
                 );
               })}
               {isInteractive && !otherOpen[i] && (
-                <button
-                  onClick={() => {
-                    setOtherOpen(prev => ({ ...prev, [i]: true }));
-                    setSelections(prev => { const next = { ...prev }; delete next[i]; return next; });
-                  }}
-                  className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-lg border transition-colors cursor-pointer ${
-                    isOtherSelected
-                      ? "bg-sol-blue/20 border-sol-blue/50 text-sol-blue"
-                      : "border-sol-border/30 text-sol-text-dim hover:border-sol-blue/40 hover:text-sol-blue/80"
-                  }`}
-                >
-                  {isOtherSelected && (
-                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                    </svg>
-                  )}
-                  {isOtherSelected ? sel.label : "Other"}
-                </button>
+                hasRich ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOtherOpen(prev => ({ ...prev, [i]: true }));
+                      setSelections(prev => ({ ...prev, [i]: q.multiSelect ? (prev[i] ?? []).filter(s => s.text === undefined) : [] }));
+                    }}
+                    className={`group/opt flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors cursor-pointer ${
+                      isOtherSelected ? "bg-sol-blue/12" : "hover:bg-sol-blue/10"
+                    }`}
+                  >
+                    <span className={`flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-md text-[12px] leading-none transition-colors ${
+                      isOtherSelected ? "bg-sol-blue text-white" : "bg-sol-border/15 text-sol-text-dim group-hover/opt:bg-sol-blue/25 group-hover/opt:text-sol-blue"
+                    }`}>
+                      {isOtherSelected ? <PollCheckIcon className="w-2.5 h-2.5" /> : "+"}
+                    </span>
+                    <span className={`text-xs ${isOtherSelected ? "font-medium text-sol-blue" : "text-sol-text-dim group-hover/opt:text-sol-blue/90"}`}>
+                      {isOtherSelected ? otherSel!.label : "Other"}
+                    </span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOtherOpen(prev => ({ ...prev, [i]: true }));
+                      setSelections(prev => ({ ...prev, [i]: q.multiSelect ? (prev[i] ?? []).filter(s => s.text === undefined) : [] }));
+                    }}
+                    className={`inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full transition-colors cursor-pointer ${
+                      isOtherSelected ? "bg-sol-blue text-white font-medium" : "bg-sol-border/12 text-sol-text-dim hover:bg-sol-blue/18 hover:text-sol-blue"
+                    }`}
+                  >
+                    {isOtherSelected ? <PollCheckIcon className="w-3 h-3" /> : <span className="text-[13px] leading-none">+</span>}
+                    {isOtherSelected ? otherSel!.label : "Other"}
+                  </button>
+                )
               )}
               {!isInteractive && (isCustom || isOtherSelected) && (
-                <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-lg border bg-sol-blue/15 border-sol-blue/40 text-sol-blue">
-                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                  </svg>
-                  {isOtherSelected ? sel.label : answer}
-                </span>
+                hasRich ? (
+                  <div className="flex w-full items-start gap-2.5 rounded-md px-2 py-1.5 bg-sol-blue/10">
+                    <span className="mt-px flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-md bg-sol-blue text-white">
+                      <PollCheckIcon className="w-2.5 h-2.5" />
+                    </span>
+                    <span className="min-w-0 flex-1 text-xs font-medium text-sol-blue leading-snug">{isOtherSelected ? otherSel!.label : customAnswer}</span>
+                  </div>
+                ) : (
+                  <span className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-full bg-sol-blue text-white">
+                    <PollCheckIcon className="w-3 h-3" />
+                    {isOtherSelected ? otherSel!.label : customAnswer}
+                  </span>
+                )
               )}
             </div>
             {isInteractive && otherOpen[i] && (
-              <div className="flex items-center gap-1.5 mt-1">
+              <div className="flex items-center gap-1.5">
                 <input
                   autoFocus
                   type="text"
@@ -4416,7 +4675,7 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
                     }
                   }}
                   placeholder="Type your answer..."
-                  className="flex-1 text-xs px-2 py-1 rounded border border-sol-blue/30 bg-sol-bg-alt text-sol-text placeholder:text-sol-text-dim/50 focus:outline-none focus:border-sol-blue/60"
+                  className="flex-1 text-xs px-2.5 py-1.5 rounded-md bg-sol-bg-alt text-sol-text placeholder:text-sol-text-dim/60 focus:outline-none focus:ring-1 focus:ring-inset focus:ring-sol-blue/50"
                 />
                 <button
                   onClick={() => {
@@ -4426,13 +4685,13 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
                     }
                   }}
                   disabled={!otherTexts[i]?.trim()}
-                  className="text-[10px] px-2 py-1 rounded border border-sol-blue/40 text-sol-blue hover:bg-sol-blue/15 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                  className="text-[11px] font-medium px-2.5 py-1.5 rounded-md bg-sol-blue text-white hover:bg-sol-blue/90 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   OK
                 </button>
                 <button
                   onClick={() => setOtherOpen(prev => ({ ...prev, [i]: false }))}
-                  className="text-[10px] px-1.5 py-1 text-sol-text-dim hover:text-sol-text transition-colors cursor-pointer"
+                  className="text-[11px] px-1.5 py-1.5 text-sol-text-dim hover:text-sol-text transition-colors cursor-pointer"
                 >
                   Cancel
                 </button>
@@ -4441,18 +4700,20 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
           </div>
         );
       })}
-      {isInteractive && isMultiQuestion && (
-        <div className="pt-1">
+      {isInteractive && needsSubmit && (
+        <div className="pt-0.5">
           <button
             onClick={handleSubmitAll}
             disabled={!allAnswered}
-            className={`text-[11px] px-3 py-1 rounded border transition-colors ${
+            className={`text-[11px] font-medium px-3 py-1.5 rounded-md transition-colors ${
               allAnswered
-                ? "border-sol-green/40 bg-sol-green/10 text-sol-green hover:bg-sol-green/20 cursor-pointer"
-                : "border-sol-border/30 bg-sol-bg-alt text-sol-text-dim cursor-not-allowed opacity-50"
+                ? "bg-sol-green text-white hover:bg-sol-green/90 cursor-pointer"
+                : "bg-sol-border/15 text-sol-text-dim cursor-not-allowed"
             }`}
           >
-            Submit answers ({Object.keys(selections).length}/{questions.length})
+            {isMultiQuestion
+              ? `Submit answers (${questions.filter((_, qi) => (selections[qi]?.length ?? 0) > 0).length}/${questions.length})`
+              : `Submit (${selections[0]?.length ?? 0} selected)`}
           </button>
         </div>
       )}
@@ -4979,27 +5240,75 @@ function TaskNotificationLine({ content, timestamp, agentNameToChildMap }: { con
   );
 }
 
+// Renders BOTH scheduled-run delivery formats: the `<scheduled-task>` wrapper an
+// inject-type schedule drops into an existing conversation, and the plain-text
+// prompt header (taskScheduler.buildPrompt) that opens a spawned run's transcript.
+// Same block so the two paths read identically; the spawned format additionally
+// carries mode, prior-run outcome, and completion-protocol boilerplate (collapsed —
+// it's machine plumbing, not something the user should wade through).
 function ScheduledTaskBlock({ content: rawContent, timestamp }: { content: string; timestamp: number }) {
+  const [showPlumbing, setShowPlumbing] = useState(false);
   const content = rawContent.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
-  const match = content.match(/<scheduled-task\s+title="([^"]*)"(?:\s+task-id="([^"]*)")?[^>]*>([\s\S]*?)<\/scheduled-task>/);
-  const title = match?.[1]?.replace(/&quot;/g, '"') || "Scheduled Task";
-  const taskId = match?.[2]?.slice(-8);
-  const prompt = match?.[3]?.trim() || cleanStickyContent(content);
+  const spawned = parseSpawnedTaskPrompt(content);
+  const match = spawned ? null : content.match(/<scheduled-task\s+title="([^"]*)"(?:\s+task-id="([^"]*)")?[^>]*>([\s\S]*?)<\/scheduled-task>/);
+  const title = spawned?.title || match?.[1]?.replace(/&quot;/g, '"') || "Scheduled Task";
+  const prompt = spawned?.prompt ?? (match?.[3]?.trim() || cleanStickyContent(content));
+  const prevFailed = !!spawned?.previousRun && /^Failed/i.test(spawned.previousRun.summary);
 
   return (
     <div className="mb-2 mx-1 rounded border-l-2 border-sol-violet/60 bg-sol-violet/5">
       <div className="flex items-center gap-2 px-3 pt-2 pb-1">
-        <Clock className="w-3.5 h-3.5 text-sol-violet/70" />
-        <span className="text-[11px] font-medium tracking-wide uppercase text-sol-violet/70">Scheduled</span>
+        <Clock className="w-3.5 h-3.5 text-sol-violet/70 shrink-0" />
+        <span className="text-[11px] font-medium tracking-wide uppercase text-sol-violet/70 shrink-0">{spawned ? "Scheduled run" : "Scheduled"}</span>
+        {/* Apply is the norm and unmarked; read-only runs get the chip. */}
+        {spawned && spawned.mode !== "apply" && (
+          <ShortcutTooltip label="Read-only run — investigates and reports, changes nothing" hint="file-editing tools are disabled">
+            <span className="px-1 py-0 rounded border text-[9px] font-semibold shrink-0 border-sol-cyan/40 text-sol-cyan/90 bg-sol-cyan/10">
+              read-only
+            </span>
+          </ShortcutTooltip>
+        )}
         <span className="text-xs text-sol-text-muted truncate">{title}</span>
         <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
       </div>
-      <div className="px-3 pb-2 text-sm text-sol-text">{prompt}</div>
+      {spawned ? (
+        <div className="px-3 pb-2 text-sm text-sol-text prose prose-invert prose-sm max-w-none">
+          <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={MD_COMPONENTS_NO_IMG}>{prompt}</ReactMarkdown>
+        </div>
+      ) : (
+        <div className="px-3 pb-2 text-sm text-sol-text">{prompt}</div>
+      )}
+      {spawned?.contextSummary && (
+        <div className="mx-3 mb-2 rounded border border-sol-border/30 bg-sol-bg/40 px-2 py-1.5 text-[11px] leading-relaxed text-sol-text-muted">
+          <span className="font-medium text-sol-text-dim">Context from originating session: </span>
+          {spawned.contextSummary}
+        </div>
+      )}
+      {spawned?.previousRun && (
+        <div className={`mx-3 mb-2 rounded border px-2 py-1.5 text-[11px] leading-relaxed ${prevFailed ? "border-sol-red/30 bg-sol-red/5 text-sol-red/90" : "border-sol-border/30 bg-sol-bg/40 text-sol-text-muted"}`}>
+          <span className={`font-medium ${prevFailed ? "text-sol-red" : "text-sol-text-dim"}`}>Previous run ({spawned.previousRun.ago}): </span>
+          {spawned.previousRun.summary}
+        </div>
+      )}
+      {spawned?.instructions && (
+        <div className="px-3 pb-2">
+          <button
+            onClick={() => setShowPlumbing(!showPlumbing)}
+            className="flex items-center gap-1 text-[10px] text-sol-text-dim hover:text-sol-text-muted transition-colors"
+          >
+            {showPlumbing ? <ChevronDown className="w-2.5 h-2.5" /> : <ChevronRight className="w-2.5 h-2.5" />}
+            run instructions
+          </button>
+          {showPlumbing && (
+            <pre className="mt-1 whitespace-pre-wrap break-words rounded border border-sol-border/30 bg-sol-bg/60 p-2 text-[10px] leading-relaxed text-sol-text-dim font-mono">{spawned.instructions}</pre>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
-function SessionMessageBlock({ from, name, body, timestamp, pendingStatus, recipientActive, variant = "session", color, summary }: { from: string; name?: string; body: string; timestamp?: number; pendingStatus?: string; recipientActive?: boolean; variant?: "session" | "teammate"; color?: string; summary?: string }) {
+function SessionMessageBlock({ from, name, body, timestamp, pendingStatus, recipientActive, variant = "session", color, summary, linkToConversationId }: { from: string; name?: string; body: string; timestamp?: number; pendingStatus?: string; recipientActive?: boolean; variant?: "session" | "teammate"; color?: string; summary?: string; linkToConversationId?: string }) {
   // pendingStatus set ⇒ this is a server-side pending_messages row that hasn't reached the
   // recipient's transcript yet (queued — typically because the recipient is mid-turn).
   const isPending = !!pendingStatus;
@@ -5029,7 +5338,20 @@ function SessionMessageBlock({ from, name, body, timestamp, pendingStatus, recip
         <HeaderIcon className={`w-3.5 h-3.5 shrink-0 ${iconText}`} />
         <span className={`text-[11px] font-medium tracking-wide uppercase shrink-0 ${labelText}`}>{isTeammate ? "From teammate" : "Message from"}</span>
         {isTeammate ? (
-          <span className={`px-1.5 py-0.5 rounded border text-[10px] font-mono shrink-0 ${agentColorMap[color || "blue"] || agentColorMap.blue}`}>{from}</span>
+          // A teammate's name isn't a session id, so it can't be an EntityIdPill —
+          // but when the sender is resolvable (team-lead → this conversation's
+          // spawned_by parent) the badge clicks through to that session.
+          linkToConversationId ? (
+            <button
+              onClick={() => useInboxStore.getState().navigateToSession(linkToConversationId)}
+              className={`px-1.5 py-0.5 rounded border text-[10px] font-mono shrink-0 cursor-pointer hover:underline underline-offset-2 ${agentColorMap[color || "blue"] || agentColorMap.blue}`}
+              title="View the sender's session"
+            >
+              {from}
+            </button>
+          ) : (
+            <span className={`px-1.5 py-0.5 rounded border text-[10px] font-mono shrink-0 ${agentColorMap[color || "blue"] || agentColorMap.blue}`}>{from}</span>
+          )
         ) : from && from !== "unknown" ? (
           <EntityIdPill shortId={from} />
         ) : name ? (
@@ -5243,13 +5565,13 @@ const agentBorderMap: Record<string, string> = {
   pink: "border-pink-500/30",
 };
 
-function TeammateEventsBlock({ content, timestamp }: { content: string; timestamp: number }) {
+function TeammateEventsBlock({ content, timestamp, spawnedByConversationId }: { content: string; timestamp: number; spawnedByConversationId?: string }) {
   const parts = parseTeammateMessages(content);
   return (
     <div className="my-1 space-y-1">
       {parts.map((part, i) => {
         if (part.type === 'teammate') {
-          return <TeammateMessageCard key={i} teammateId={part.teammateId} color={part.color} summary={part.summary} content={part.content} timestamp={timestamp} />;
+          return <TeammateMessageCard key={i} teammateId={part.teammateId} color={part.color} summary={part.summary} content={part.content} timestamp={timestamp} spawnedByConversationId={spawnedByConversationId} />;
         }
         // Drop the harness's framing boilerplate ("Another Claude session sent a
         // message:" / the "permission laundering" disclaimer) — it's machine instruction
@@ -5262,7 +5584,7 @@ function TeammateEventsBlock({ content, timestamp }: { content: string; timestam
   );
 }
 
-function TeammateMessageCard({ teammateId, color, summary, content, timestamp }: { teammateId: string; color?: string; summary?: string; content: string; timestamp?: number }) {
+function TeammateMessageCard({ teammateId, color, summary, content, timestamp, spawnedByConversationId }: { teammateId: string; color?: string; summary?: string; content: string; timestamp?: number; spawnedByConversationId?: string }) {
   const safeContent = content || '';
   let parsed: any = null;
   try { if (safeContent) parsed = JSON.parse(safeContent); } catch {}
@@ -5347,7 +5669,7 @@ function TeammateMessageCard({ teammateId, color, summary, content, timestamp }:
   // A substantive teammate broadcast reuses the cast-send card (SessionMessageBlock) via its
   // teammate variant — the same format and code, only slightly distinct.
   return (
-    <SessionMessageBlock variant="teammate" from={teammateId} color={color} summary={summary} body={content} timestamp={timestamp} />
+    <SessionMessageBlock variant="teammate" from={teammateId} color={color} summary={summary} body={content} timestamp={timestamp} linkToConversationId={teammateId === "team-lead" ? spawnedByConversationId : undefined} />
   );
 }
 
@@ -5365,7 +5687,9 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
     .replace(/\[image\]/gi, "")
     .trim();
   const { contexts: contextBlocks, remaining: displayContent } = parseContextBlocks(rawContent);
-  const isMarkdown = hasRichMarkdown(displayContent);
+  // HTML bodies take the markdown branch so MessageMarkdown can dispatch them
+  // to the sanitized canvas renderer.
+  const isMarkdown = hasRichMarkdown(displayContent) || looksLikeHtml(displayContent);
 
   const effectivelyCollapsed = collapsed && !isExpanded;
 
@@ -6664,6 +6988,16 @@ function DynamicRunCard({ runId, name }: { runId?: string; name?: string }) {
   );
 }
 
+// A workflow anchor's content is the exact JSON the server posts
+// (convex/workflow_runs.ts). Fork/resume can round-trip that anchor through a
+// synthetic transcript, producing an assistant copy WITHOUT the
+// "workflow_event" subtype — detect by content so those copies still render
+// as the card instead of raw JSON.
+function parseWorkflowEventContent(content: string | undefined): Record<string, any> | null {
+  if (!content || !content.startsWith('{"__wf"')) return null;
+  try { return JSON.parse(content); } catch { return null; }
+}
+
 function WorkflowEventBlock({ content, workflowRun, onGateChoice, gateResponding }: {
   content: string;
   workflowRun?: { _id: string; status: string; gate_response?: string | null } | null;
@@ -7091,21 +7425,35 @@ function ShortcutHint({ keys, label }: { keys: string[]; label: string }) {
   );
 }
 
-const CYCLING_SHORTCUTS = [
-  { keys: ["Cmd", "K"], label: "command palette" },
-  { keys: ["Ctrl", "I"], label: "jump to needs input" },
-  { keys: ["Ctrl", "J"], label: "next session" },
-  { keys: ["Ctrl", "K"], label: "previous session" },
-  { keys: ["Ctrl", "Tab"], label: "MRU next" },
-  { keys: ["Shift", "←"], label: "defer & next session" },
-  { keys: ["Ctrl", "←"], label: "dismiss session" },
+type CyclingHint =
+  | { action: ShortcutAction; label: string }
+  | { keys: string[]; label: string };
+
+// Registry-bound hints derive their keycaps from the live shortcut definition, so
+// rebinding an action can never leave the footer advertising a key that no longer
+// works. Only the two Escape gestures and the Claude Code mode cycle — which have
+// no entry in the shortcut registry — carry literal caps.
+const CYCLING_SHORTCUTS: CyclingHint[] = [
+  { action: "palette.toggle", label: "command palette" },
+  { action: "session.jumpIdle", label: "jump to needs input" },
+  { action: "session.next", label: "next session" },
+  { action: "session.prev", label: "previous session" },
+  { action: "session.mruSwitch", label: "MRU next" },
+  { action: "session.deferAdvance", label: "defer & next session" },
+  { action: "session.stash", label: "stash session" },
   { keys: ["Esc"], label: "escape to session" },
   { keys: ["Esc", "Esc"], label: "send escape" },
-  { keys: ["Cmd", "⇧", "C"], label: "collapse tool blocks" },
-  { keys: ["Ctrl", "."], label: "zen mode" },
-  { keys: ["⇧", "Tab"], label: "cycle CC mode" },
-  { keys: ["Cmd", "⇧", "L"], label: "copy link" },
+  { action: "conv.cycleDensity", label: "collapse tool blocks" },
+  { action: "ui.zenToggle", label: "zen mode" },
+  { keys: [isMac ? "⇧" : "Shift", "Tab"], label: "cycle CC mode" },
+  { action: "conv.copyLink", label: "copy link" },
 ];
+
+function cyclingHintCaps(entry: CyclingHint): string[] {
+  if ("keys" in entry) return entry.keys;
+  const defs = getShortcutsForAction(entry.action);
+  return defs.length > 0 ? formatShortcutParts(defs[0]) : [];
+}
 
 function CyclingShortcutHint() {
   const [index, setIndex] = useState(0);
@@ -7122,7 +7470,8 @@ function CyclingShortcutHint() {
     return () => clearInterval(interval);
   });
 
-  const { keys, label } = CYCLING_SHORTCUTS[index];
+  const entry = CYCLING_SHORTCUTS[index];
+  const caps = cyclingHintCaps(entry);
   return (
     <p className="text-[11px] opacity-[0.55] hidden sm:flex items-center gap-1 overflow-hidden h-[18px]">
       <span
@@ -7130,10 +7479,10 @@ function CyclingShortcutHint() {
           animating ? "-translate-y-full opacity-0" : "translate-y-0 opacity-100"
         }`}
       >
-        {keys.map((k, i) => (
-          <kbd key={i} className="px-1 py-0.5 rounded border border-current/40 text-[10px] leading-none font-semibold bg-sol-bg/50">{k}</kbd>
+        {caps.map((k, i) => (
+          <KeyCap key={i} size="xs">{k}</KeyCap>
         ))}
-        <span className="ml-1.5 text-[10px] opacity-80">{label}</span>
+        <span className="ml-1.5 text-[10px] opacity-80">{entry.label}</span>
       </span>
     </p>
   );
@@ -7256,7 +7605,33 @@ const ForkReplyInput = memo(function ForkReplyInput({ userName, userAvatar, onFo
   );
 });
 
-export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend, branchMapNode, bareComposer, composerPlaceholder }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "starting" | "resuming"; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void; branchMapNode?: React.ReactNode; bareComposer?: boolean; composerPlaceholder?: string }) {
+// The composer-footer "working" status line. A working turn can go quiet for
+// minutes — one long generation, or a long-running tool whose result hasn't
+// landed yet — and a static "Working" reads as frozen. Past a short grace, surface
+// a live-ticking elapsed clock (and the tool in flight, if any) so a long turn
+// visibly reads as progressing. startedAt = last rendered message timestamp (how
+// long the view has been static); toolLabel = the tool currently in flight, if the
+// tail is an unanswered tool call. Owns its own 1s ticker so only this tiny node
+// re-renders each second, not the whole composer.
+function WorkingStatusLine({ startedAt, toolLabel }: { startedAt?: number; toolLabel?: string }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const elapsedMs = startedAt ? now - startedAt : 0;
+  const showElapsed = shouldShowElapsed(startedAt, now);
+  return (
+    <span className="flex items-center gap-1.5">
+      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+      Working
+      {showElapsed && <span className="text-sol-text-dim/60 tabular-nums">· {formatElapsedClock(elapsedMs)}</span>}
+      {showElapsed && toolLabel && <span className="text-sol-text-dim/60">· {formatToolName(toolLabel)}</span>}
+    </span>
+  );
+}
+
+export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onSendEscape, onOpenNavigator, onPopulateInput, permissionMode, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onGateSend, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend, branchMapNode, bareComposer, composerPlaceholder, workingSinceTs, workingTool }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "starting" | "resuming"; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; permissionMode?: string; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; onGateSend?: (content: string) => Promise<void>; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void; branchMapNode?: React.ReactNode; bareComposer?: boolean; composerPlaceholder?: string; workingSinceTs?: number; workingTool?: string }) {
   const sacredKey = sessionId || conversationId;
   const sacredKeyRef = useRef(sacredKey);
   const convIdRef = useRef(conversationId);
@@ -7264,7 +7639,16 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // Fallback to the conversation-keyed entry: when a new session gets its
   // session_id stamped the key flips (conv id → session id) and this component
   // remounts — the freshest text lives under the conversation id.
-  const [message, _setMessage] = useState(() => sacredInputs.get(sacredKey)?.text ?? sacredInputs.get(conversationId)?.text ?? cached?.draft_message ?? initialDraft ?? "");
+  const [message, _setMessage] = useState(() => {
+    const sacred = sacredInputs.get(sacredKey)?.text ?? sacredInputs.get(conversationId)?.text;
+    if (sacred != null) return sacred;
+    const persisted = cached?.draft_message ?? initialDraft ?? "";
+    // Sacred text is live user input and always restores; the persisted
+    // sources go through the stale-sent-draft check (a draft with images
+    // attached is kept — the images make it more than a resent copy).
+    if (!cached?.draft_image_storage_ids?.length && isStaleSentDraft(conversationId, persisted)) return "";
+    return persisted;
+  });
   const setMessage = useCallback((val: string) => {
     sacredInputs.set(sacredKeyRef.current, { text: val });
     // Mirror under the conversation id so the text survives the key flip above.
@@ -7869,15 +8253,27 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
 
   const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // The text that counts as the user's draft right now. While an UNEDITED
+  // fork-rewrite preview is active (Alt+J/K message selection), the composer
+  // displays an already-sent message — display state, not input. Persisting it
+  // is how old messages used to resurrect as drafts; the real draft is what
+  // the user had typed before selecting. The moment they edit the preview it
+  // becomes typed input and persists like any other draft.
+  const draftTextForPersist = useCallback(() => (
+    prevSelectionRef.current !== null && !isSelectionEditedRef.current
+      ? (savedDraftRef.current ?? "")
+      : messageRef.current
+  ), []);
+
   const saveDraftSnapshot = useCallback((targetId: string) => {
     if (sendingRef.current) return;
-    const msg = messageRef.current;
+    const msg = draftTextForPersist();
     // Uploading rows are kept: their pending upload lives in the module-level
     // registry, so a successor composer instance can restore and re-attach.
     const imgs = pastedImagesRef.current.filter(i => i.storageId || i.uploading);
     if (!msg && imgs.length === 0) return;
     persistDraftImages(targetId, msg, imgs);
-  }, []);
+  }, [draftTextForPersist]);
 
   useWatchEffect(() => {
     const keyChanged = sacredKeyRef.current !== sacredKey;
@@ -7886,7 +8282,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         clearTimeout(draftTimerRef.current);
         draftTimerRef.current = null;
       }
-      sacredInputs.set(sacredKeyRef.current, { text: messageRef.current });
+      sacredInputs.set(sacredKeyRef.current, { text: draftTextForPersist() });
       saveDraftSnapshot(convIdRef.current);
       sacredKeyRef.current = sacredKey;
       convIdRef.current = conversationId;
@@ -7898,11 +8294,20 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     } else if (convIdRef.current !== conversationId) {
       convIdRef.current = conversationId;
     }
-  }, [sacredKey, conversationId, saveDraftSnapshot]);
+  }, [sacredKey, conversationId, saveDraftSnapshot, draftTextForPersist]);
 
-  useMountEffect(() => () => {
-    if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
-    saveDraftSnapshot(convIdRef.current);
+  useMountEffect(() => {
+    // One-shot heal for drafts poisoned before draftTextForPersist existed: a
+    // persisted draft that duplicates a sent message would otherwise resurface
+    // on every surface that reads the draft store.
+    const d = useInboxStore.getState().getDraft(conversationId);
+    if (d?.draft_message && !d.draft_image_storage_ids?.length && isStaleSentDraft(conversationId, d.draft_message)) {
+      useInboxStore.getState().clearDraftFinal(conversationId);
+    }
+    return () => {
+      if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+      saveDraftSnapshot(convIdRef.current);
+    };
   });
 
   const handleMessageChange = useCallback((val: string) => {
@@ -7961,9 +8366,21 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     if (isActive && !wasActive) {
       savedDraftRef.current = message;
       isSelectionEditedRef.current = false;
-      setMessage(selectedMessageContent);
+      // _setMessage, not setMessage: the preview must never enter sacredInputs
+      // — that cache seeds successor composer instances, and a preview that
+      // leaks there comes back as a phantom draft of an already-sent message.
+      _setMessage(selectedMessageContent);
     } else if (isActive && wasActive) {
-      setMessage(selectedMessageContent);
+      // Switching to another message discards edits to the previous preview
+      // (as Escape would) — scrub them from sacredInputs too, so they can't
+      // reseed a successor composer as a phantom draft.
+      if (isSelectionEditedRef.current) {
+        const real = savedDraftRef.current ?? "";
+        sacredInputs.set(sacredKeyRef.current, { text: real });
+        if (convIdRef.current !== sacredKeyRef.current) sacredInputs.set(convIdRef.current, { text: real });
+        isSelectionEditedRef.current = false;
+      }
+      _setMessage(selectedMessageContent);
     } else if (!isActive && wasActive) {
       const restored = savedDraftRef.current ?? "";
       savedDraftRef.current = null;
@@ -8579,6 +8996,15 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     }
   };
 
+  // Form submission — the arrow send button, and the expanded editor's Cmd+Enter —
+  // must honor the compose-popup contract the same way plain Enter does in
+  // handleKeyDown: send, then dismiss the popup with fire-and-forget intent.
+  // Outside the popup (no onSubmitWithIntent) this is exactly handleSubmit.
+  const handleFormSubmit = (e: React.FormEvent) => {
+    void handleSubmit(e);
+    onSubmitWithIntent?.(false);
+  };
+
   const canSubmit = hasContent || reviewCount > 0;
   // When the send is carried entirely by attached quotes, tint the button cyan to
   // match the tray so it reads as "this sends the quotes".
@@ -8696,10 +9122,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     Connected
                   </span>
                 ) : agentStatus === "working" ? (
-                  <span className="flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                    Working
-                  </span>
+                  <WorkingStatusLine startedAt={workingSinceTs} toolLabel={workingTool} />
                 ) : agentStatus === "idle" && queuedMessages.length > 0 ? (
                   <span className="flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-sol-cyan/50 animate-pulse" />
@@ -8718,10 +9141,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     Connecting...
                   </span>
                 ) : isConversationLive ? (
-                  <span className="flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                    Working
-                  </span>
+                  <WorkingStatusLine startedAt={workingSinceTs} toolLabel={workingTool} />
                 ) : isSessionDisconnected ? (
                   isResuming ? (
                     <span className="flex items-center gap-1.5 text-sol-text-dim">
@@ -8814,7 +9234,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                            permissionMode === "dontAsk" ? "don't ask" :
                            permissionMode}
                         </span>
-                        <span className="text-sol-text-dim/50">(Shift+Tab)</span>
+                        <span className="flex items-center gap-1 text-sol-text-dim/50">
+                          <KeyCap size="xs">{isMac ? "⇧" : "Shift"}</KeyCap>
+                          <KeyCap size="xs">Tab</KeyCap>
+                        </span>
                       </div>
                     )}
                   </div>
@@ -8917,7 +9340,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
               </div>
             );
           })()}
-          <form onSubmit={handleSubmit} className={bareComposer ? "w-full" : `mx-auto px-2 sm:px-4 transition-all duration-200 ease-out ${isExpanded ? "conv-col" : "max-w-md"}`}>
+          <form onSubmit={handleFormSubmit} className={bareComposer ? "w-full" : `mx-auto px-2 sm:px-4 transition-all duration-200 ease-out ${isExpanded ? "conv-col" : "max-w-md"}`}>
             <div className={`flex flex-col ${bareComposer ? "" : "border"} transition-colors duration-150 ${bareComposer ? "px-2.5 py-0.5 rounded-lg bg-sol-text/[0.04] focus-within:bg-sol-text/[0.07]" : `border px-4 py-2 shadow-lg bg-sol-bg-alt ${isExpanded ? "rounded-2xl" : "rounded-full"}`} ${composeMode ? "min-h-[40vh]" : ""} ${isSelectionActive ? "border-sol-cyan/40 ring-1 ring-sol-cyan/20" : composeMode ? "border-sol-cyan/20" : bareComposer ? "" : "border-sol-border"}`}>
               {isSelectionActive && (
                 <div className="flex items-center gap-2 pb-1.5 mb-1.5 border-b border-sol-cyan/20 text-[10px] text-sol-cyan">
@@ -8963,10 +9386,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                   ))}
                   {selectedQueueIndex !== null && (
                     <span className="text-[9px] text-sol-text-dim flex items-center gap-2 pl-1">
-                      <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50 text-sol-text-secondary font-mono text-[8px]">&uarr;&darr;</kbd> navigate</span>
-                      <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50 text-sol-text-secondary font-mono text-[8px]">Del</kbd> remove</span>
-                      <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50 text-sol-text-secondary font-mono text-[8px]">Enter</kbd> edit</span>
-                      <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50 text-sol-text-secondary font-mono text-[8px]">Esc</kbd> deselect</span>
+                      <span className="inline-flex items-center gap-1"><KeyCap size="xs">↑</KeyCap><KeyCap size="xs">↓</KeyCap> navigate</span>
+                      <span className="inline-flex items-center gap-1"><KeyCap size="xs">Del</KeyCap> remove</span>
+                      <span className="inline-flex items-center gap-1"><KeyCap size="xs">Enter</KeyCap> edit</span>
+                      <span className="inline-flex items-center gap-1"><KeyCap size="xs">Esc</KeyCap> deselect</span>
                     </span>
                   )}
                 </div>
@@ -9003,10 +9426,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                   ))}
                   {selectedImageIndex !== null && (
                     <span className="text-[10px] text-sol-text-dim ml-1 flex items-center gap-2">
-                      <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50 text-sol-text-secondary font-mono text-[9px]">&larr;&rarr;</kbd> navigate</span>
-                      <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50 text-sol-text-secondary font-mono text-[9px]">Space</kbd> preview</span>
-                      <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50 text-sol-text-secondary font-mono text-[9px]">Del</kbd> remove</span>
-                      <span><kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50 text-sol-text-secondary font-mono text-[9px]">Esc</kbd> exit</span>
+                      <span className="inline-flex items-center gap-1"><KeyCap size="xs">←</KeyCap><KeyCap size="xs">→</KeyCap> navigate</span>
+                      <span className="inline-flex items-center gap-1"><KeyCap size="xs">Space</KeyCap> preview</span>
+                      <span className="inline-flex items-center gap-1"><KeyCap size="xs">Del</KeyCap> remove</span>
+                      <span className="inline-flex items-center gap-1"><KeyCap size="xs">Esc</KeyCap> exit</span>
                     </span>
                   )}
                 </div>
@@ -9019,7 +9442,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                       initialContent={message}
                       onMentionQuery={composeMentionQuery}
                       onImagePaste={uploadImage}
-                      onSubmit={() => handleSubmit({ preventDefault: () => {} } as any)}
+                      onSubmit={() => handleFormSubmit({ preventDefault: () => {} } as any)}
                       onExit={toggleCompose}
                       onContentChange={setComposeHasContent}
                       placeholder="Compose your message... / for commands, @ to mention"
@@ -10099,6 +10522,22 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   timelineRef.current = timeline;
   scrollCtxRef.current = { messageCount: conversation?.message_count || messages.length, messagesLen: messages.length, timelineLen: timeline.length, loadedStartIndex: conversation?.loaded_start_index ?? 0 };
 
+  // One card per workflow run: fork copies and transcript round-trips can leave
+  // several messages carrying the same run anchor (with or without the
+  // workflow_event subtype). The first occurrence owns the card; the rest
+  // render nothing.
+  const wfRunCardOwner = useMemo(() => {
+    const owner = new Map<string, string>();
+    for (const item of timeline) {
+      if (item.type !== 'message') continue;
+      const m = item.data as Message;
+      if (m.role !== 'assistant') continue;
+      const ev = parseWorkflowEventContent(m.content);
+      if (ev?.__wf === 'workflow_run' && ev.run_id && !owner.has(ev.run_id)) owner.set(ev.run_id, m._id);
+    }
+    return owner;
+  }, [timeline]);
+
   // Index of the first timeline item that arrived while you were away — newer
   // than your last leave (`unreadAnchorAt`) but no newer than your last focus
   // (`enteredAt`). The "New" divider renders above this row; -1 = nothing new
@@ -10894,19 +11333,36 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   // future mount (conversation switch, recycled scroll row) gets an accurate
   // estimateSize and skips the reflow cascade. Keyed by collapse mode because a
   // collapsed row renders different content (and height) than an expanded one.
+  //
+  // Attribution guard: the virtualizer files every measurement under
+  // getItemKey(el.dataset.index). The data-index attribute is written at React
+  // COMMIT time while getItemKey reflects the timeline at RENDER time — under a
+  // deferred update (conversation switch via useDeferredValue, a pending-row
+  // prune, an older-page prepend) those can disagree, so a row's height would
+  // be filed under a NEIGHBORING message's key. Such a wrong entry never
+  // self-corrects: the ResizeObserver only reports size CHANGES (a stable row
+  // stays silent) and the no-entry path below prefers the cached belief over
+  // the DOM — which is how the settled overlapping-rows / phantom-void states
+  // happen. Each row stamps its own key as data-vkey; when the stamp disagrees
+  // with what the virtualizer is about to attribute, return the current belief
+  // (a no-op) and record nothing.
   const measureElement = useCallback((element: Element, entry: ResizeObserverEntry | undefined, instance: any) => {
     const horizontal = instance.options.horizontal;
+    const index = instance.indexFromElement(element);
+    const key = instance.options.getItemKey(index);
+    const stampedKey = (element as HTMLElement).dataset?.vkey;
+    if (stampedKey !== undefined && stampedKey !== String(key)) {
+      return instance.itemSizeCache.get(key) ?? instance.options.estimateSize(index);
+    }
     const box = entry?.borderBoxSize?.[0];
     let size: number;
     if (box) {
       size = Math.round(horizontal ? box.inlineSize : box.blockSize);
     } else {
-      const idx = instance.indexFromElement(element);
-      const cached = instance.itemSizeCache.get(instance.options.getItemKey(idx));
+      const cached = instance.itemSizeCache.get(key);
       size = cached !== undefined ? cached : (element as HTMLElement)[horizontal ? "offsetWidth" : "offsetHeight"];
     }
-    const index = instance.indexFromElement(element);
-    if (index >= 0) recordVirtHeight(virtHeightKey(instance.options.getItemKey(index), rowDensityKey(index)), size);
+    if (index >= 0) recordVirtHeight(virtHeightKey(key, rowDensityKey(index)), size);
     return size;
   }, [rowDensityKey]);
 
@@ -10945,14 +11401,64 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     virtualizer.scrollToEnd({ behavior: "auto" });
   };
 
+  // Size-drift self-heal. If a measurement ever landed under the wrong key
+  // (see the attribution guard in measureElement) — or a row changed height
+  // without a ResizeObserver report — the virtualizer's believed size and the
+  // DOM disagree indefinitely: the observer stays silent because the element's
+  // real size isn't changing, and attach-measure echoes the cached belief.
+  // That's the settled overlapping-rows / phantom-void state. Once a second,
+  // outside active scrolling, feed any diverging real height back through
+  // resizeItem — the same entry point an observer report uses — so the list
+  // converges to DOM truth within a tick instead of staying broken until a
+  // remount.
+  useWatchEffect(() => {
+    const tick = () => {
+      // Resolve the container per-tick: at effect time (mount) the ref may not
+      // be attached yet, and the [virtualizer] dep never changes identity, so
+      // an early return here would disable the reconciler for good. Skip while
+      // this pane is hidden (keepalive tab under display:none): every rect
+      // reads 0 there, and feeding those through resizeItem would zero out the
+      // hidden pane's whole layout. Plain setInterval, not rAF: rAF never fires
+      // in a backgrounded tab, and drift must heal there too so the layout is
+      // right the moment the user comes back.
+      const container = containerRef.current;
+      if (!container || container.offsetParent === null) return;
+      if (virtualizer.isScrolling) return;
+      const byIndex = new Map(virtualizer.getVirtualItems().map((v) => [v.index, v]));
+      if (byIndex.size === 0) return;
+      const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
+      let corrected = false;
+      for (const el of container.querySelectorAll<HTMLElement>("[data-index]")) {
+        const v = byIndex.get(Number(el.dataset.index));
+        if (!v || el.dataset.vkey !== String(v.key)) continue; // mid-commit row — skip
+        const real = Math.round(el.getBoundingClientRect().height);
+        if (Math.abs(real - v.size) > 1) {
+          if ((window as any).__RECON_DEBUG) (((window as any).__RECON_LOG) ??= []).push({ i: v.index, from: v.size, to: real });
+          virtualizer.resizeItem(v.index, real);
+          corrected = true;
+        }
+      }
+      // A correction while the reader sits at the tail must keep them there
+      // (same contract as followOnAppend) — without this, healing the sizes
+      // under a bottom-pinned view leaves the last message's tail cut off.
+      if (corrected && nearBottom && !userScrolledRef.current) virtualizer.scrollToEnd({ behavior: "auto" });
+    };
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [virtualizer]);
+
   // Scroll to absolute top or bottom of the loaded list with retries to handle
   // virtualizer height-estimation drift. Reassigned every render so closures
-  // always capture the latest timeline/virtualizer.
-  const scrollToEdgeRef = useRef<(edge: 'top' | 'bottom') => void>(() => {});
-  scrollToEdgeRef.current = (edge) => {
+  // always capture the latest timeline/virtualizer. bailOnUserScroll stops the
+  // retry ladder as soon as the user scrolls somewhere on purpose (wheel latch)
+  // — used by the initial open-at-bottom pin, where later retries must never
+  // fight a reader who already started moving.
+  const scrollToEdgeRef = useRef<(edge: 'top' | 'bottom', opts?: { bailOnUserScroll?: boolean }) => void>(() => {});
+  scrollToEdgeRef.current = (edge, opts) => {
     const sc = containerRef.current;
     if (!sc) return;
     const pull = () => {
+      if (opts?.bailOnUserScroll && userScrolledRef.current) return;
       if (edge === 'top') {
         if (timeline.length > 0) virtualizer.scrollToIndex(0, { align: 'start' });
         sc.scrollTop = 0;
@@ -10983,6 +11489,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     setSelectedMessageContent(null);
     setSelectedMessageUuid(null);
   }, [forkSetSelectedIndex]);
+  // Selection is scoped to its conversation, and ConversationView stays
+  // mounted across session switches — without this, a rewrite preview left
+  // active while switching would inject the old conversation's message into
+  // the next composer.
+  useWatchEffect(() => () => handleClearSelection(), [conversation?._id, handleClearSelection]);
   const forkSelectionIdx = useForkNavigationStore((s) => s.selectedIndex);
   const { selectedIndex: _forkSelIdx } = useMessageSelection({
     timeline: timeline as any,
@@ -11573,8 +12084,26 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     const sc = containerRef.current;
     if (sc) {
       paginationCooldownRef.current = Date.now() + 1000;
-      virtualizer.scrollToIndex(timeline.length - 1, { align: "end" });
+      // One shot is not enough: the target offset is computed from believed
+      // sizes, which on a cold open are still estimates — as rows measure in,
+      // the "end" moves down by whole screens and a single scrollToIndex
+      // strands the view mid-conversation (anchorTo:'end' can't rescue it
+      // because the tracked offset lags the programmatic write). Re-pin on
+      // the settle ladder, then keep pulling while heights keep settling —
+      // stopping the moment the reader scrolls somewhere on purpose.
+      scrollToEdgeRef.current('bottom', { bailOnUserScroll: true });
       lastScrollTopRef.current = sc.scrollTop;
+      // Height settling has a long tail (late images, fonts, the drift
+      // reconciler's 1s ticks), and the virtualizer's own end-anchor misses
+      // growth that lands right after a programmatic pull — so hold the pin
+      // for a while rather than trusting one ladder pass. Bails permanently
+      // the moment the reader scrolls somewhere on purpose.
+      const settleStart = Date.now();
+      const settleId = setInterval(() => {
+        const el = containerRef.current;
+        if (!el || userScrolledRef.current || Date.now() - settleStart > 8000) { clearInterval(settleId); return; }
+        if (el.scrollHeight - el.scrollTop - el.clientHeight > 20) scrollToEdgeRef.current('bottom', { bailOnUserScroll: true });
+      }, 350);
       // Fallback: clear cooldown after virtualizer has had time to measure,
       // then re-run scroll handler so pagination fires if we're already near top.
       setTimeout(() => {
@@ -11835,6 +12364,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
     return undefined;
   }, [timeline]);
+  // The tool currently in flight, surfaced in the "working" status line — e.g. a
+  // multi-minute deploy reads as "Working · 3:14 · Bash". See deriveRunningTool.
+  const workingTool = useMemo(() => deriveRunningTool(timeline), [timeline]);
   const [now, setNow] = useState(Date.now());
   useMountEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 10_000);
@@ -11856,6 +12388,44 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const sessionStartup = sessionStartupState({ isConnected: managedSession?.is_connected, ageMs: sessionAge });
   const isSessionStarting = isFreshSession && sessionStartup === "starting";
   const isSessionReady = isFreshSession && sessionStartup === "ready" && sessionAge < 120_000;
+
+  // The header dropdown's single "Restart session" action. One click drives both
+  // recovery codepaths (resume-first, then a forced rebuild if it doesn't come
+  // live) so a session is never left dead — see useSessionRestart. "Live" is any
+  // authoritative sign the session is up: daemon-connected, the agent active, or
+  // recent assistant activity.
+  const restartLive =
+    !!managedSession?.is_connected ||
+    isConversationLive ||
+    isThinking ||
+    isActiveAgentStatus(managedSession?.agent_status as LiveAgentStatus | undefined);
+  const restartGhostContext = useCallback(
+    () => (conversation?._id ? ghostRestartContextFor(conversation._id) : {}),
+    [conversation?._id],
+  );
+  const onRestartRestored = useCallback(
+    (res: unknown) => (conversation?._id ? followRestoredConversation(res, conversation._id) : false),
+    [conversation?._id],
+  );
+  const restartNotify = useCallback((kind: "success" | "error" | "info", message: string) => {
+    if (kind === "error") toast.error(message);
+    else if (kind === "success") toast.success(message);
+    else toast(message);
+  }, []);
+  const {
+    restart: handleRestartSession,
+    isRestarting: isHeaderRestarting,
+    phase: restartPhase,
+    stage: restartStripStage,
+    failure: restartFailure,
+    startedAt: restartStartedAt,
+  } = useSessionRestart({
+    conversationId: conversation?._id ?? "",
+    isLive: restartLive,
+    ghostContext: restartGhostContext,
+    onRestored: onRestartRestored,
+    notify: restartNotify,
+  });
 
   useWatchEffect(() => {
     if (conversation) {
@@ -12062,7 +12632,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         case 'plan':
           return <PlanBlock key={msg._id} content={kind.planContent} timestamp={msg.timestamp} collapsed={false} messageId={msg._id} conversationId={conversation?._id} onStartShareSelection={handleStartShareSelection} />;
         case 'teammate_events':
-          return <TeammateEventsBlock key={msg._id} content={msg.content || ""} timestamp={msg.timestamp} />;
+          return <TeammateEventsBlock key={msg._id} content={msg.content || ""} timestamp={msg.timestamp} spawnedByConversationId={(conversation as any)?.spawned_by_conversation_id} />;
         case 'normal': {
           if (!msg.content?.trim() && !msg.images?.some(img => !img.tool_use_id)) return null;
           const userName = conversation?.user?.name || conversation?.user?.email?.split("@")[0];
@@ -12072,7 +12642,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
 
     if (msg.role === "assistant") {
-      if (msg.subtype === "workflow_event") {
+      const wfEvent = parseWorkflowEventContent(msg.content);
+      if (msg.subtype === "workflow_event" || wfEvent) {
+        if (wfEvent?.__wf === "workflow_run" && wfEvent.run_id && wfRunCardOwner.get(wfEvent.run_id) !== msg._id) return null;
         return <WorkflowEventBlock key={msg._id} content={msg.content || ""} workflowRun={workflowRun as any} onGateChoice={handleGateChoice} gateResponding={gateResponding} />;
       }
 
@@ -12221,7 +12793,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     <HighlightContext.Provider value={highlightQuery}>
     <ImageGalleryProvider>
     <ReviewComposerContext.Provider value={reviewComposer}>
-    <main className="relative flex flex-col bg-sol-bg h-full" style={{ paddingRight: commentRailW || undefined, transition: "padding-right 160ms ease" }} onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
+    <main className="relative flex flex-col bg-sol-bg h-full overflow-x-clip" onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
       {isDragging && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-sol-bg/80 backdrop-blur-sm" style={{ animation: "fadeIn 150ms ease-out" }}>
           <div className="border-2 border-dashed border-sol-cyan rounded-xl p-12 text-center">
@@ -12343,9 +12915,16 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
               <TooltipProvider delayDuration={300}>
               <div className="flex items-center gap-1 flex-shrink-0 overflow-hidden ml-auto">
 
-                {conversation.parent_conversation_id && (
+                {(() => {
+                  // Subagents carry parent_conversation_id; visible children
+                  // (agent-team teammates, spawns) carry spawned_by_conversation_id.
+                  // Same chip, same click-through.
+                  const parentLinkId = conversation.parent_conversation_id
+                    || (conversation as any).spawned_by_conversation_id;
+                  if (!parentLinkId) return null;
+                  return (
                   <Link
-                    href={convLink(conversation.parent_conversation_id)}
+                    href={convLink(parentLinkId)}
                     onClick={(e) => {
                       // Plain left-click is an instant, store-driven switch (same as the
                       // BranchSelector chips) — bypass the /conversation redirector so the
@@ -12353,7 +12932,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                       // bounce. Modified clicks fall through to the Link for open-in-new-tab.
                       if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
                       e.preventDefault();
-                      navigateToSession(conversation.parent_conversation_id!);
+                      navigateToSession(parentLinkId);
                     }}
                     className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/30 hover:bg-sol-cyan/20 transition-colors"
                     title="View parent conversation"
@@ -12363,7 +12942,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     </svg>
                     Parent
                   </Link>
-                )}
+                  );
+                })()}
 
                 {((conversation.fork_children?.length ?? 0) > 0 || conversation.forked_from) && (() => {
                   // Family size from the details payload alone (no store sub):
@@ -12413,7 +12993,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 )}
 
                 {isOwner && (
-                  <DeviceBadge ownerDeviceId={(conversation as any).owner_device_id} />
+                  <>
+                    <DeviceBadge ownerDeviceId={(conversation as any).owner_device_id} />
+                    <OwnersBadge conversationId={conversation._id} />
+                  </>
                 )}
 
                 {!isOwner && conversation.user && (
@@ -12579,45 +13162,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
                     {effectiveIsOwner && conversation?.session_id && (
-                      <>
-                        <DropdownMenuItem onSelect={() => {
-                          if (!convexConvId) return;
-                          setTimeout(async () => {
-                            try {
-                              const res = await convCommand(convexConvId, "restartSession", ghostRestartContextFor(convexConvId));
-                              if (!followRestoredConversation(res, convexConvId)) {
-                                toast.success("Restarting session, retrying pending messages...");
-                              }
-                            } catch (err) {
-                              toast.error(`Failed to restart session: ${err instanceof Error ? err.message : String(err)}`);
-                            }
-                          });
-                        }}>
-                          <svg className="w-3 h-3 mr-1.5 text-orange-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                          </svg>
-                          Kill & restart
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onSelect={() => {
-                          if (!convexConvId) return;
-                          setTimeout(async () => {
-                            try {
-                              const res = await convCommand(convexConvId, "repairSession", ghostRestartContextFor(convexConvId));
-                              if (!followRestoredConversation(res, convexConvId)) {
-                                toast.success("Repairing session, retrying pending messages...");
-                              }
-                            } catch (err) {
-                              toast.error(`Failed to repair session: ${err instanceof Error ? err.message : String(err)}`);
-                            }
-                          });
-                        }}>
-                          <svg className="w-3 h-3 mr-1.5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                          </svg>
-                          Repair session
-                        </DropdownMenuItem>
-                      </>
+                      <DropdownMenuItem disabled={isHeaderRestarting} onSelect={() => { setTimeout(() => handleRestartSession()); }}>
+                        <svg className={`w-3 h-3 mr-1.5 text-orange-400 ${isHeaderRestarting ? "animate-spin" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                        </svg>
+                        {isHeaderRestarting ? "Restarting…" : "Restart session"}
+                      </DropdownMenuItem>
                     )}
                     {conversation?.short_id && (
                       <DropdownMenuItem onSelect={() => { setTimeout(() => { copyToClipboard(conversation.short_id!).then(() => toast.success("ID copied")).catch(() => toast.error("Failed to copy")); }); }}>
@@ -12843,6 +13393,13 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             {headerEnd && <div className="flex-shrink-0">{headerEnd}</div>}
           </div>
           {conversation?._id && <ConversationTaskProgress conversationId={conversation._id} />}
+          <RestartStatusStrip
+            phase={restartPhase}
+            stage={restartStripStage}
+            failure={restartFailure}
+            startedAt={restartStartedAt}
+            onRetry={handleRestartSession}
+          />
         </div>
         {conversation && (
           <div className="absolute top-full right-3 mt-24 z-30">
@@ -13064,6 +13621,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 <div
                   key={virtualItem.key}
                   data-index={virtualItem.index}
+                  data-vkey={String(virtualItem.key)}
                   ref={virtualizer.measureElement}
                   style={{
                     position: "absolute",
@@ -13127,12 +13685,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                     <Link
                       key={child._id}
                       href={convLink(child._id)}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs bg-sol-cyan/15 text-sol-text-secondary border border-sol-cyan/30 hover:bg-sol-cyan/25 hover:text-sol-text transition-colors truncate max-w-[400px]"
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs bg-sol-cyan/15 text-sol-text-secondary border border-sol-cyan/30 hover:bg-sol-cyan/25 hover:text-sol-text transition-colors max-w-[400px]"
                     >
                       <svg className="w-2.5 h-2.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
                       </svg>
-                      {child.title}
+                      <span className="truncate min-w-0">{child.title}</span>
                     </Link>
                   ))}
                 </div>
@@ -13201,7 +13759,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   ))}
                 </div>
               ) : null}
-              <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected || conversation.status !== "active" ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} onSubmitWithIntent={onSubmitWithIntent} branchMapNode={treePopoverOpen ? (
+              <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} workingSinceTs={lastActivityAt} workingTool={workingTool} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected || conversation.status !== "active" ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} onSubmitWithIntent={onSubmitWithIntent} branchMapNode={treePopoverOpen ? (
                 <ForkMapBox
                   tray
                   open
@@ -13356,10 +13914,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       )}
       <SelectionQuoteToolbar conversationId={conversation?._id ?? ""} />
       {conversation && (
-        <CommentDock
-          conversationId={conversation._id.toString()}
-          bottomOffset={Math.max(messageInputHeight + 16, 115) + 104}
-        />
+        <CommentDock conversationId={conversation._id.toString()} />
       )}
     </main>
     </ReviewComposerContext.Provider>

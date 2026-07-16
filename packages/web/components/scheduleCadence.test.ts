@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { parseScheduleCadence, humanizeDurationToken } from "./scheduleCadence";
+import { parseScheduleCadence, humanizeDurationToken, describeTaskCadence, isTaskOverdue, taskStateLabel } from "./scheduleCadence";
 
 describe("humanizeDurationToken", () => {
   test("expands unit abbreviations to words", () => {
@@ -73,5 +73,55 @@ describe("parseScheduleCadence", () => {
   test("real-world args with a long prompt and trailing flags", () => {
     const args = '"Review open PRs and summarize findings for ct-33494" --every 4h --mode apply --project /Users/ashot/src/codecast';
     expect(parseScheduleCadence(args)).toBe("every 4 hours");
+  });
+});
+
+describe("describeTaskCadence", () => {
+  test("recurring uses the compact interval", () => {
+    expect(describeTaskCadence({ schedule_type: "recurring", interval_ms: 8 * 3600_000 })).toBe("every 8h");
+    expect(describeTaskCadence({ schedule_type: "recurring", interval_ms: 150 * 60_000 })).toBe("every 2h 30m");
+    expect(describeTaskCadence({ schedule_type: "recurring", interval_ms: 90_000 })).toBe("every 2m");
+  });
+
+  test("event uses the friendly trigger label", () => {
+    expect(describeTaskCadence({ schedule_type: "event", event_filter: { event_type: "pr_comment" } })).toBe("on PR comment");
+    expect(describeTaskCadence({ schedule_type: "event", event_filter: { event_type: "issue_opened" } })).toBe("on issue opened");
+    expect(describeTaskCadence({ schedule_type: "event" })).toBe("on event");
+  });
+
+  test("once reads as one-time", () => {
+    expect(describeTaskCadence({ schedule_type: "once" })).toBe("one-time");
+    // recurring without an interval (malformed row) degrades to one-time, not a crash
+    expect(describeTaskCadence({ schedule_type: "recurring" })).toBe("one-time");
+  });
+});
+
+describe("taskStateLabel", () => {
+  const now = 1_000_000_000;
+
+  test("future fire reads as a sentence: in <time>", () => {
+    expect(taskStateLabel({ status: "scheduled", run_at: now + 2 * 3600_000 + 6 * 60_000 }, now)).toBe("in 2h 6m");
+    expect(taskStateLabel({ status: "scheduled", run_at: now + 45_000 }, now)).toBe("in 45s");
+  });
+
+  test("elapsed fire is due", () => {
+    expect(taskStateLabel({ status: "scheduled", run_at: now - 1 }, now)).toBe("due");
+  });
+
+  test("stuck past the overdue threshold says how stuck", () => {
+    expect(taskStateLabel({ status: "scheduled", run_at: now - 2 * 60_000 }, now)).toBe("due 2m");
+    expect(taskStateLabel({ status: "scheduled", run_at: now - 90_000 }, now)).toBe("due");
+    expect(isTaskOverdue({ status: "scheduled", run_at: now - 2 * 60_000 }, now)).toBe(true);
+    expect(isTaskOverdue({ status: "scheduled", run_at: now - 90_000 }, now)).toBe(false);
+    expect(isTaskOverdue({ status: "paused", run_at: now - 10 * 60_000 }, now)).toBe(false);
+  });
+
+  test("state words win over the clock", () => {
+    expect(taskStateLabel({ status: "paused", run_at: now + 60_000 }, now)).toBe("paused");
+    expect(taskStateLabel({ status: "running", run_at: now + 60_000 }, now)).toBe("running");
+  });
+
+  test("no timed fire means event", () => {
+    expect(taskStateLabel({ status: "scheduled" }, now)).toBe("event");
   });
 });

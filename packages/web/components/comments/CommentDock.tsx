@@ -9,10 +9,12 @@ import { isAgentComment } from "../../lib/commentThread";
 import { CommentThread } from "./CommentThread";
 
 // The conversation's GLOBAL comment thread as a right-docked, full-height rail —
-// like the sidebar, on the other side. Closed it's a slim pill at the bottom
-// right; open it fills the height and is width-resizable by dragging its left
-// edge. Anchored threads live inline at their messages; the rail also lists them
-// as jump targets. Reserves its width on the transcript via commentRailWidth.
+// like the sidebar, on the other side. It slides away to nothing when closed (no
+// minimized stub) and is reopened from the header's comments toggle, mirroring
+// the left sidebar exactly. Open it fills the height and is width-resizable by
+// dragging its left edge. Anchored threads live inline at their messages; the
+// rail also lists them as jump targets. Publishes its width via commentRailWidth
+// so the floating scroll arrows slide clear of it.
 
 const MIN_W = 300;
 const MAX_W = 760;
@@ -45,7 +47,7 @@ function jumpToMessage(conversationId: string, messageId: string) {
   }
 }
 
-function CommentRailImpl({ conversationId, bottomOffset }: { conversationId: string; bottomOffset: number }) {
+function CommentRailImpl({ conversationId }: { conversationId: string }) {
   const { user, isAuthenticated } = useCurrentUser();
   const currentUserId = user?._id as string | undefined;
   const comments = useConversationComments(conversationId);
@@ -53,19 +55,35 @@ function CommentRailImpl({ conversationId, bottomOffset }: { conversationId: str
   const open = useInboxStore((s) => s.commentRailOpen) === true;
   const setOpen = useInboxStore((s) => s.setCommentRailOpen);
   const setWidth = useInboxStore((s) => s.setCommentRailWidth);
+  const commentsEnabled = useInboxStore((s) => s.clientState.ui?.comments_enabled ?? false);
+  // The rail is opt-in, but a conversation that already has comments keeps it
+  // available so you can read + reply to what teammates left.
+  const railEnabled = commentsEnabled || comments.totalCount > 0;
   const agentType = useInboxStore((s) => ((s.conversations[conversationId] ?? s.sessions[conversationId]) as { agent_type?: string } | undefined)?.agent_type ?? "claude_code");
   const messages = useInboxStore((s) => s.messages[conversationId]) as Array<{ _id: string; content?: string }> | undefined;
 
   const [width, setW] = useState(loadWidth);
   const dragRef = useRef<{ x: number; w: number } | null>(null);
 
+  // The rail stays positioned and slides off the right edge when closed (mirror
+  // of the left sidebar). Keep the heavy thread in the DOM through the slide-out,
+  // then unmount it a beat later so a closed rail renders nothing off-screen.
+  const [mounted, setMounted] = useState(open);
+  useEffect(() => {
+    if (open) { setMounted(true); return; }
+    const t = setTimeout(() => setMounted(false), 240);
+    return () => clearTimeout(t);
+  }, [open]);
+
   const globalBusy = comments.global.comments.some((c) => isAgentComment(c) && (c.agent_status === "thinking" || c.agent_status === "streaming"));
 
-  // Reserve the rail's width on the transcript while open.
+  // Publish the rail width while open — the transcript does NOT pad for it (the
+  // rail hangs over the right edge as an overlay), but the floating scroll arrows
+  // read it to slide clear of the rail instead of hiding under it.
   useEffect(() => {
-    setWidth(conversationId, open ? width : 0);
+    setWidth(conversationId, open && railEnabled ? width : 0);
     return () => setWidth(conversationId, 0);
-  }, [conversationId, open, width, setWidth]);
+  }, [conversationId, open, width, railEnabled, setWidth]);
 
   const onResizeDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -89,17 +107,14 @@ function CommentRailImpl({ conversationId, bottomOffset }: { conversationId: str
     window.addEventListener("mouseup", up);
   }, [width]);
 
-  if (!open) {
-    return (
-      <button type="button" className="cc-railx-badge" style={{ bottom: bottomOffset }} title="Comments" onClick={() => setOpen(true)}>
-        <MessageSquare className="w-[18px] h-[18px]" />
-        {comments.totalCount > 0 && <span className="cc-railx-badge-count">{comments.totalCount}</span>}
-      </button>
-    );
-  }
+  // Comment tools off and nothing to read → the rail doesn't exist at all (this
+  // also catches the keyboard shortcut, not just the now-hidden header toggle).
+  if (!railEnabled) return null;
 
   return (
-    <aside className="cc-railx" style={{ width }}>
+    <aside className={`cc-railx${open ? "" : " cc-railx--closed"}`} style={{ width }} aria-hidden={!open}>
+      {mounted && (
+      <>
       <div className="cc-railx-resize" onMouseDown={onResizeDown} title="Drag to resize" />
       <header className="cc-railx-head">
         <MessageSquare className="w-3.5 h-3.5 text-sol-cyan" />
@@ -152,17 +167,17 @@ function CommentRailImpl({ conversationId, bottomOffset }: { conversationId: str
           agentType={agentType}
         />
       </div>
+      </>
+      )}
     </aside>
   );
 }
 
 export const CommentDock = memo(function CommentDock({
   conversationId,
-  bottomOffset = 24,
 }: {
   conversationId: string;
-  bottomOffset?: number;
 }) {
   if (!isConvexId(conversationId)) return null;
-  return <CommentRailImpl conversationId={conversationId} bottomOffset={bottomOffset} />;
+  return <CommentRailImpl conversationId={conversationId} />;
 });

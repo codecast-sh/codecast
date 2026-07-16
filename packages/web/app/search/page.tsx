@@ -2,11 +2,13 @@ import { useMemo, useRef, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useDebounce } from "../../hooks/useDebounce";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { useQuery } from "convex/react";
+import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import Link from "next/link";
+import { KeyCap } from "../../components/KeyboardShortcutsHelp";
+import { isMac } from "../../shortcuts";
 import {
   Search,
   Loader2,
@@ -207,9 +209,14 @@ export default function SearchPage() {
   const since = range === "all" ? undefined : sinceBase - RANGE_MS[range];
 
   const searchActive = debouncedQuery.length >= 2;
-  const searchResults = useQuery(
+  // Non-throwing: a broad term can exceed the backend's query budget and return
+  // a terminal error — bare useQuery re-throws it in render (ct-37627). The
+  // breaker unsubscribes a never-resolving search so its silent retry loop
+  // stops flapping the shared websocket (1011) for the rest of the app.
+  const { data: searchResults, error: searchError } = useQueryNoThrow(
     api.conversations.searchConversations,
-    searchActive ? { query: debouncedQuery, limit, userOnly, mineOnly, since, sort } : "skip"
+    searchActive ? { query: debouncedQuery, limit, userOnly, mineOnly, since, sort } : "skip",
+    { breakAfterMs: 15_000 }
   );
 
   const freshData = searchResults && "results" in searchResults ? searchResults : null;
@@ -225,11 +232,30 @@ export default function SearchPage() {
   }, [searchActive]);
 
   const searchData = freshData ?? (searchActive ? lastData : null);
-  const results: any[] = searchData?.results || [];
+
+  // Cheap always-fast companion: title/subtitle/summary matches from the small
+  // conversations table land even when the message content search times out on
+  // a broad term (ct-37627). userOnly filters by message role — skip then.
+  const { data: titleResults } = useQueryNoThrow(
+    api.conversations.searchConversationTitles,
+    searchActive && !userOnly ? { query: debouncedQuery, limit, mineOnly, since } : "skip"
+  );
+  const titleData = titleResults && "results" in titleResults ? titleResults : null;
+
+  const contentRows: any[] = searchData?.results || [];
+  // Content-match rows win; title-only rows fill in after.
+  const results: any[] = useMemo(() => {
+    const titleRows = titleData?.results || [];
+    if (!titleRows.length) return contentRows;
+    const seen = new Set(contentRows.map((r: any) => r.conversationId));
+    return [...contentRows, ...titleRows.filter((r: any) => !seen.has(r.conversationId))];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchData, titleData]);
   const totalMatches = searchData?.totalMatches || 0;
   const totalSessions = (searchData as any)?.totalSessions || 0;
-  const hasMore = results.length < totalSessions;
-  const isLoading = searchActive && (!freshData || query.trim() !== debouncedQuery.trim());
+  // Pagination is a content-search concept — title rows don't count against it.
+  const hasMore = contentRows.length < totalSessions;
+  const isLoading = searchActive && !searchError && (!freshData || query.trim() !== debouncedQuery.trim());
 
   const hrefFor = (result: any, messageId?: string) =>
     `/conversation/${result.conversationId}?highlight=${encodeURIComponent(debouncedQuery)}${
@@ -358,7 +384,8 @@ export default function SearchPage() {
               </span>
               {results.length > 0 && (
                 <span className="hidden sm:flex items-center gap-1 text-[10px] text-sol-text-dim">
-                  <kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50">&#8593;&#8595;</kbd>
+                  <KeyCap size="xs">↑</KeyCap>
+                  <KeyCap size="xs">↓</KeyCap>
                   select
                   <CornerDownLeft className="w-3 h-3 ml-1" />
                   open
@@ -367,7 +394,36 @@ export default function SearchPage() {
             </div>
           )}
 
-          {searchActive && !searchData && <ResultSkeleton />}
+          {searchActive && !searchData && results.length > 0 && (
+            <div className="text-xs text-sol-text-dim">
+              {searchError
+                ? "Content search timed out — showing title matches only. Try a more specific word or a quoted phrase."
+                : "Title matches — still searching message content…"}
+            </div>
+          )}
+
+          {/* The recent tier bounds content matches to a trailing window;
+              titles cover all time. Only worth saying when the selected range
+              exceeds the window. */}
+          {searchActive && searchData?.contentTier === "recent" &&
+            (range === "all" || RANGE_MS[range] > (searchData.contentWindowDays ?? 30) * 86_400_000) && (
+            <div className="text-xs text-sol-text-dim">
+              Content matches cover the last {searchData.contentWindowDays ?? 30} days — older sessions match by title and summary.
+            </div>
+          )}
+
+          {searchActive && !searchData && results.length === 0 && (
+            searchError ? (
+              <div className="px-4 py-10 text-center">
+                <p className="text-sm text-sol-text-secondary mb-2">Search timed out</p>
+                <p className="text-xs text-sol-text-dim">
+                  Broad terms scan your whole history and can time out. Try a more specific word, wrap an exact phrase in quotes, or narrow the time range.
+                </p>
+              </div>
+            ) : (
+              <ResultSkeleton />
+            )
+          )}
 
           {results.length > 0 && (
             <div className="space-y-4">
@@ -477,7 +533,7 @@ export default function SearchPage() {
               onClick={() => setLimit((l) => l + PAGE_SIZE)}
               className="w-full py-3 text-sm text-sol-text-secondary hover:text-sol-text bg-sol-bg-alt border border-sol-border rounded-xl hover:bg-sol-base02/30 transition-colors"
             >
-              Show more ({totalSessions - results.length} remaining)
+              Show more ({totalSessions - contentRows.length} remaining)
             </button>
           )}
 
@@ -499,7 +555,9 @@ export default function SearchPage() {
                 Search titles and full message content across {mineOnly ? "your" : "your team's"} sessions.
               </p>
               <p className="text-[11px] text-sol-text-dim/70">
-                Tip: open this page from anywhere with <kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50">&#8984;K</kbd> then <kbd className="px-1 py-0.5 rounded bg-sol-bg-alt border border-sol-border/50">&#8984;&#9166;</kbd>
+                Tip: open this page from anywhere with{" "}
+                <span className="inline-flex items-center gap-0.5"><KeyCap size="xs">{isMac ? "⌘" : "Ctrl"}</KeyCap><KeyCap size="xs">K</KeyCap></span> then{" "}
+                <span className="inline-flex items-center gap-0.5"><KeyCap size="xs">{isMac ? "⌘" : "Ctrl"}</KeyCap><KeyCap size="xs">↵</KeyCap></span>
               </p>
             </div>
           )}

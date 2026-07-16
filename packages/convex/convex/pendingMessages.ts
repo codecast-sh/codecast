@@ -6,6 +6,7 @@ import { Id } from "./_generated/dataModel";
 import { findConversationByAnyRef, findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { checkConversationAccess } from "./privacy";
 import { hasGrantedSendAccess } from "./collab";
+import { addSessionOwnerRow, listSessionOwnerIds, syncPrimaryOwnerCache } from "./sessionOwners";
 
 export async function getAuthenticatedUserId(
   ctx: { db: any },
@@ -26,15 +27,18 @@ export async function getAuthenticatedUserId(
   return null;
 }
 
-// Interactive-prompt / poll keystroke answers (tagged __cc_poll, mirrors the daemon's
-// parsePollMessage). These are fire-and-forget: they never echo to the agent's JSONL, so the
-// content-matched ack in addMessages can never fire for them. A successful inject IS their
-// delivery — re-injecting them on the stale-injected reset just re-sends menu keystrokes and
-// mis-navigates the agent's prompts.
+// Interactive-prompt / poll answers (tagged __cc_poll, mirrors the daemon's parsePollMessage):
+// keystroke selections (keys/steps) and free-text answers that decline the menu and type at
+// the prompt (text). These are fire-and-forget — a successful inject IS their delivery, so the
+// content-matched ack in addMessages is bypassed and re-injecting them on the stale-injected
+// reset is suppressed. Re-injecting a keystroke poll re-sends menu keys and mis-navigates the
+// agent's prompts; re-injecting a text poll re-declines and re-types a duplicate answer. (A
+// text poll's typed answer DOES echo to the JSONL, unlike a keystroke poll, but the ack still
+// can't match it — the stored content is the JSON envelope, not the typed prose.)
 export function isControlMessage(content: string): boolean {
   try {
     const parsed = JSON.parse(content);
-    return parsed?.__cc_poll === true && (Array.isArray(parsed.keys) || Array.isArray(parsed.steps));
+    return parsed?.__cc_poll === true && (Array.isArray(parsed.keys) || Array.isArray(parsed.steps) || typeof parsed.text === "string");
   } catch {
     return false;
   }
@@ -199,6 +203,10 @@ export async function enqueuePendingMessage(
     // The sender's own conversation, so the cron can notify the sending session if this message
     // can't be delivered. Only meaningful for cross-user (team) sends; omitted for self-sends.
     from_conversation_id?: Id<"conversations">;
+    // "scheduler" = machine-initiated (the daemon's task scheduler firing a
+    // `cast schedule` injection). Every human send — web composer, cast send,
+    // team send — leaves this unset.
+    origin?: "scheduler";
   }
 ): Promise<Id<"pending_messages">> {
   if (fields.client_id) {
@@ -222,17 +230,28 @@ export async function enqueuePendingMessage(
     image_storage_id: fields.image_storage_id,
     image_storage_ids: fields.image_storage_ids,
     client_id: fields.client_id,
+    origin: fields.origin,
     status: "pending" as const,
     created_at: Date.now(),
     retry_count: 0,
   });
 
+  // Wake-up rules. A human send resurfaces the session everywhere: dismissed,
+  // stashed, and killed flags all clear ("I messaged it, show it to me").
+  // A scheduler injection inherits all of that EXCEPT the stash-clear: stash
+  // means "keep working out of my sight", which is exactly the state a user
+  // puts a looping/scheduled session into — the machine waking itself must not
+  // pull it back into the active queue. Dismissed and killed still clear, so a
+  // scheduled follow-up on a session the user closed out does come back (and a
+  // killed one is resurrected for delivery) — that revival is deliberate and is
+  // surfaced by the schedule strip in the conversation header.
+  const machineWake = fields.origin === "scheduler";
   await ctx.db.patch(conversation._id, {
     updated_at: Date.now(),
     has_pending_messages: true,
     ...(conversation.status === "completed" ? { status: "active" } : {}),
     ...(conversation.inbox_dismissed_at ? { inbox_dismissed_at: undefined } : {}),
-    ...(conversation.inbox_stashed_at ? { inbox_stashed_at: undefined } : {}),
+    ...(conversation.inbox_stashed_at && !machineWake ? { inbox_stashed_at: undefined } : {}),
     ...(conversation.inbox_killed_at ? { inbox_killed_at: undefined } : {}),
   });
 
@@ -246,6 +265,10 @@ export const sendMessageToSession = mutation({
     image_storage_id: v.optional(v.id("_storage")),
     image_storage_ids: v.optional(v.array(v.id("_storage"))),
     client_id: v.optional(v.string()),
+    // See enqueuePendingMessage: only the daemon's task scheduler passes
+    // "scheduler". Self-declared, but the only effect is LESS resurfacing
+    // (the stash-clear is skipped), so a spoofed value can't grab attention.
+    origin: v.optional(v.literal("scheduler")),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -268,6 +291,7 @@ export const sendMessageToSession = mutation({
       image_storage_id: args.image_storage_id,
       image_storage_ids: args.image_storage_ids,
       client_id: args.client_id,
+      origin: args.origin,
     });
   },
 });
@@ -317,6 +341,7 @@ export async function performSessionSend(
   from_short_id: string;
   cross_user: boolean;
   target_live: boolean;
+  auto_owned: boolean;
 }> {
   const body = (args.body ?? "").trim();
   if (!body) throw new Error("Message body is empty");
@@ -336,6 +361,29 @@ export async function performSessionSend(
   }
 
   const isCrossUser = target.user_id.toString() !== authUserId.toString();
+  const senderUser = isCrossUser ? await ctx.db.get(authUserId) : null;
+
+  // Sending into an UNOWNED teammate session claims it: the sender joins the
+  // owner set, so the thread follows them (inbox presence, idle/error
+  // notifications) until resolved or dismissed. Engaging with a thread is a
+  // statement of caring about its outcome — but never displace existing owners;
+  // reassignment stays explicit (cast own/disown). Bot accounts never own:
+  // nobody reads their inbox, and a bot claiming a thread would block the first
+  // HUMAN engager from auto-owning it.
+  //
+  // "Unowned" means the canonical owner SET is empty. The owner_user_id cache is
+  // ALSO checked as a safety net: a legacy row written before the session_owners
+  // backfill has a cached owner but no join row, and must never be auto-claimed
+  // out from under them. Claiming writes through both.
+  let autoOwned = false;
+  if (isCrossUser && !senderUser?.is_bot) {
+    const existingOwners = await listSessionOwnerIds(ctx, target._id);
+    if (existingOwners.length === 0 && !target.owner_user_id) {
+      await addSessionOwnerRow(ctx, target._id, authUserId, authUserId);
+      await syncPrimaryOwnerCache(ctx, target._id);
+      autoOwned = true;
+    }
+  }
 
   // Resolve the sender to its short_id for attribution. The CLI passes whatever
   // detectCurrentSessionId found (a Claude session_id) or an explicit --from ref;
@@ -357,7 +405,6 @@ export async function performSessionSend(
   // already attributed by its own session pill.
   let fromName: string | undefined;
   if (isCrossUser) {
-    const senderUser = await ctx.db.get(authUserId);
     fromName = senderUser?.name || senderUser?.github_username || undefined;
   }
 
@@ -379,6 +426,7 @@ export async function performSessionSend(
     from_short_id: fromShortId,
     cross_user: isCrossUser,
     target_live: targetLive,
+    auto_owned: autoOwned,
   };
 }
 

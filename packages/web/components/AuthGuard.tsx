@@ -1,7 +1,7 @@
-import { Authenticated, Unauthenticated, AuthLoading } from "convex/react";
+import { useConvexAuth } from "convex/react";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
+import { useLocalAuth } from "../lib/localAuth";
 import { AppLoader } from "./AppLoader";
 
 function RedirectToHome() {
@@ -10,40 +10,25 @@ function RedirectToHome() {
   return null;
 }
 
-function AuthGuardInner({ children, guestOk }: { children: React.ReactNode; guestOk?: boolean }) {
-  return (
-    <>
-      <AuthLoading>
-        <AppLoader />
-      </AuthLoading>
-      <Unauthenticated>
-        {guestOk ? children : <RedirectToHome />}
-      </Unauthenticated>
-      <Authenticated>
-        {children}
-      </Authenticated>
-    </>
-  );
-}
-
-let hasHydrated = false;
-
 /**
- * guestOk: render children for unauthenticated visitors instead of redirecting
- * home — for routes that do their own access resolution (public share links).
- * The auth-loading holding screen still applies either way.
+ * Local-first auth gate: renders children as soon as a token exists in local
+ * storage, without waiting for the Convex WebSocket to confirm it — so the
+ * dashboard paints instantly from the IndexedDB-hydrated store, online or
+ * offline. The server still validates the token in the background; if it's
+ * expired the auth layer refreshes it, and a definitive sign-out clears the
+ * stored token, which flips this gate to the redirect.
+ *
+ * guestOk: render children for unauthenticated visitors instead of
+ * redirecting home — for routes that do their own access resolution
+ * (public share links).
  */
 export function AuthGuard({ children, guestOk }: { children: React.ReactNode; guestOk?: boolean }) {
-  const [mounted, setMounted] = useState(hasHydrated);
+  const localAuthed = useLocalAuth();
+  const { isAuthenticated, isLoading } = useConvexAuth();
 
-  useMountEffect(() => {
-    hasHydrated = true;
-    setMounted(true);
-  });
-
-  if (!mounted) {
-    return <AppLoader />;
-  }
-
-  return <AuthGuardInner guestOk={guestOk}>{children}</AuthGuardInner>;
+  if (localAuthed || isAuthenticated) return <>{children}</>;
+  // No local token yet, but the provider is still reading storage (its
+  // IndexedDB fallback path) — a local, offline-safe wait of a few frames.
+  if (isLoading) return <AppLoader />;
+  return guestOk ? <>{children}</> : <RedirectToHome />;
 }

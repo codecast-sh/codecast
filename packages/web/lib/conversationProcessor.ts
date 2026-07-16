@@ -13,7 +13,7 @@ export type MessageAlternate = {
 };
 
 import { SYSTEM_MESSAGE_PREFIXES } from "./sessionFilters";
-import { stripTeammateFraming } from "../components/sessionMessage";
+import { stripTeammateFraming, parseSpawnedTaskPrompt } from "../components/sessionMessage";
 
 const COMMAND_PATTERNS = [
   /^<command-name>([^<]*)<\/command-name>/,
@@ -237,6 +237,9 @@ export function classifyFeedMessage(content: string | null | undefined): FeedDis
   if (isNoiseUserMessage(content)) return { kind: "hidden" };
   const raw = (content || "").trim();
   if (isCommandMessage(raw)) return { kind: "text", text: cleanTitle(raw) };
+  // Spawned schedule-run prompt: preview the task text, not the wire header.
+  const spawned = parseSpawnedTaskPrompt(raw);
+  if (spawned) return { kind: "text", text: spawned.prompt || spawned.title };
   const text = stripTeammateFraming(stripSystemTags(raw)
     .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "")
     .replace(/<teammate-message\s+[^>]*>[\s\S]*?<\/teammate-message>/g, "")

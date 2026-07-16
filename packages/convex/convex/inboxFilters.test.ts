@@ -349,6 +349,26 @@ describe("isApiErrorBanner", () => {
     expect(classifyApiErrorBanner("API Error: 529 Overloaded")).toBe("error");
     expect(classifyApiErrorBanner("All good, deploy finished.")).toBe(null);
   });
+
+  test("statusless connection drops classify as connection, statusful failures stay error", () => {
+    // No status code = the provider never replied; the turn died at the
+    // prompt and a plain continue resumes it — the blocked/revive set.
+    expect(classifyApiErrorBanner("API Error: Connection closed mid-response. The response above may be incomplete.")).toBe("connection");
+    expect(classifyApiErrorBanner("API Error: Connection error.")).toBe("connection");
+    expect(classifyApiErrorBanner("API Error: Request timed out.")).toBe("connection");
+    // A status code = an HTTP response came back; the CLI retries these
+    // itself, so they stay out of the blocked set.
+    expect(classifyApiErrorBanner("API Error: 500 Internal server error")).toBe("error");
+    expect(classifyApiErrorBanner('API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}')).toBe("error");
+  });
+
+  test("expired-grant banner forms classify as auth", () => {
+    expect(classifyApiErrorBanner("Login expired · Please run /login")).toBe("auth");
+    expect(classifyApiErrorBanner("Login expired · run /login")).toBe("auth");
+    expect(classifyApiErrorBanner("Login expired")).toBe("auth");
+    // Prose about someone's login is not this session's banner.
+    expect(classifyApiErrorBanner("Logins expired for three users last week, so we rotated keys.")).toBe(null);
+  });
 });
 
 describe("apiErrorBatchAction", () => {

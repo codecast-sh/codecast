@@ -1,9 +1,9 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useMemo } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useEventListener } from "../hooks/useEventListener";
+import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useShortcutAction } from "../shortcuts";
 import { KeyCap, MenuKeyCaps } from "./KeyboardShortcutsHelp";
-import { useQuery } from "convex/react";
 import { AppLoader } from "./AppLoader";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useRouter } from "next/navigation";
@@ -111,19 +111,24 @@ export function GlobalSearch() {
 
   useEventListener("resize", recomputePanelTop);
 
-  const searchResults = useQuery(
+  // Non-throwing: when the budget blowout comes back as a TERMINAL error, bare
+  // useQuery re-throws it in render and crashes the component (ct-37627). The
+  // breaker unsubscribes a never-resolving search so its silent retry loop
+  // stops flapping the shared websocket (1011) for the rest of the app.
+  const { data: searchResults, error: searchError } = useQueryNoThrow(
     api.conversations.searchConversations,
     debouncedQuery.length >= 2
       ? { query: debouncedQuery, limit: 30, userOnly, activeTeamId: selectedTeamId ?? undefined }
-      : "skip"
+      : "skip",
+    { breakAfterMs: 15_000 }
   );
 
   // A broad term scans the whole message history and can exceed Convex's per-query
   // budget; the reactive client treats that system error as retryable and never
   // hands it to useQuery, so searchResults stays undefined and the panel would spin
   // forever. After a grace period, surface a "too broad" hint instead of a bare
-  // spinner. The query stays subscribed — if it does eventually resolve we show
-  // results; this only changes what an unresolved load looks like. (see ct-37627)
+  // spinner. The query stays subscribed until the 15s breaker trips — if it
+  // resolves before then we show results. (see ct-37627)
   useWatchEffect(() => {
     setSearchIsSlow(false);
     if (debouncedQuery.length < 2 || searchResults !== undefined) return;
@@ -133,30 +138,29 @@ export function GlobalSearch() {
 
   const searchData = searchResults && "results" in searchResults ? searchResults : null;
 
-  const flatResults = searchData?.results?.flatMap((r: {
-    conversationId: string;
-    title: string;
-    matches: Array<{ messageId: string; content: string; role: string; timestamp: number }>;
-    updatedAt: number;
-    authorName: string;
-    isOwn: boolean;
-    messageCount: number;
-  }) =>
-    r.matches.map((m: { messageId: string; content: string; role: string; timestamp: number }, i: number) => ({
-      conversationId: r.conversationId,
-      title: r.title,
-      content: m.content,
-      role: m.role,
-      timestamp: m.timestamp,
-      authorName: r.authorName,
-      isOwn: r.isOwn,
-      messageCount: r.messageCount,
-      key: `${r.conversationId}-${i}`,
-    }))
-  ) || [];
+  // Cheap always-fast companion: title/subtitle/summary matches come from the
+  // small conversations table and land while (or even if never) the message
+  // content search resolves — the user always gets something (ct-37627).
+  // userOnly filters by message role, which title rows don't have — skip.
+  const { data: titleResults } = useQueryNoThrow(
+    api.conversations.searchConversationTitles,
+    debouncedQuery.length >= 2 && !userOnly
+      ? { query: debouncedQuery, limit: 30, activeTeamId: selectedTeamId ?? undefined }
+      : "skip"
+  );
+  const titleData = titleResults && "results" in titleResults ? titleResults : null;
+
+  // Merge: content-match rows win, title-only rows fill in after.
+  const groupedResults = useMemo(() => {
+    const msgRows = searchData?.results ?? [];
+    const titleRows = titleData?.results ?? [];
+    if (!titleRows.length) return msgRows;
+    const seen = new Set(msgRows.map((r: any) => r.conversationId));
+    return [...msgRows, ...titleRows.filter((r: any) => !seen.has(r.conversationId))];
+  }, [searchData, titleData]);
 
   const totalMatches = searchData?.totalMatches || 0;
-  const sessionCount = searchData?.results?.length || 0;
+  const sessionCount = groupedResults.length;
 
   const formatTimestamp = (ts: number) => {
     const date = new Date(ts);
@@ -186,11 +190,17 @@ export function GlobalSearch() {
 
   useWatchEffect(() => {
     setSelectedIndex(0);
-  }, [searchResults]);
+  }, [searchResults, titleResults]);
+
+  const goToFullSearch = useCallback(() => {
+    router.push(`/search?q=${encodeURIComponent(query)}${userOnly ? "&user=1" : ""}`);
+    setIsOpen(false);
+    setQuery("");
+  }, [router, query, userOnly]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      const results = searchData?.results || [];
+      const results = groupedResults;
       if (e.key === "ArrowDown") {
         e.preventDefault();
         setSelectedIndex((i) => Math.min(i + 1, results.length - 1));
@@ -199,17 +209,22 @@ export function GlobalSearch() {
         setSelectedIndex((i) => Math.max(i - 1, 0));
       } else if (e.key === "Enter") {
         e.preventDefault();
-        if (e.shiftKey && results.length > 0) {
-          router.push(`/search?q=${encodeURIComponent(query)}${userOnly ? "&userOnly=true" : ""}`);
-        } else if (results[selectedIndex]) {
-          const url = `/conversation/${results[selectedIndex].conversationId}?highlight=${encodeURIComponent(query)}`;
-          router.push(url);
+        if (query.trim().length < 2) return;
+        if (!e.shiftKey && results[selectedIndex]) {
+          router.push(
+            `/conversation/${results[selectedIndex].conversationId}?highlight=${encodeURIComponent(query)}`
+          );
+          setIsOpen(false);
+          setQuery("");
+        } else {
+          // Shift+Enter always jumps to the full search page; plain Enter
+          // lands here too while results are still loading (or empty), so
+          // the user is never stuck waiting behind the spinner.
+          goToFullSearch();
         }
-        setIsOpen(false);
-        setQuery("");
       }
     },
-    [searchData?.results, selectedIndex, router, query, userOnly]
+    [groupedResults, selectedIndex, router, query, goToFullSearch]
   );
 
   const handleResultClick = (conversationId: string) => {
@@ -218,9 +233,6 @@ export function GlobalSearch() {
     setIsOpen(false);
     setQuery("");
   };
-
-  // Group results by session for display
-  const groupedResults = searchData?.results || [];
 
   const isExpanded = isFocused || query.length > 0;
 
@@ -281,13 +293,21 @@ export function GlobalSearch() {
           style={{ top: panelTop }}
           className="fixed left-1/2 -translate-x-1/2 w-[min(1200px,calc(100vw-2rem))] bg-sol-bg border border-sol-border rounded-xl shadow-2xl shadow-black/50 overflow-hidden z-[9999]"
         >
-            {!searchResults ? (
-              searchIsSlow ? (
+            {groupedResults.length === 0 && !searchData ? (
+              searchIsSlow || searchError ? (
                 <div className="px-4 py-8 text-center">
-                  <p className="text-sm text-sol-text-secondary mb-2">This search is taking a while</p>
-                  <p className="text-xs text-sol-text-dim">
+                  <p className="text-sm text-sol-text-secondary mb-2">
+                    {searchError ? "Search timed out" : "This search is taking a while"}
+                  </p>
+                  <p className="text-xs text-sol-text-dim mb-3">
                     Broad terms scan your whole history and can time out. Try a more specific word, or wrap an exact phrase in quotes.
                   </p>
+                  <button
+                    onClick={goToFullSearch}
+                    className="text-xs text-sol-text-secondary hover:text-sol-text px-2.5 py-1 rounded-md border border-sol-border bg-sol-bg-alt hover:bg-sol-bg-highlight transition-colors"
+                  >
+                    Open full search — narrow by time or scope
+                  </button>
                 </div>
               ) : (
                 <AppLoader className="min-h-0 bg-transparent py-8" size={24} />
@@ -300,7 +320,11 @@ export function GlobalSearch() {
             ) : (
               <div className="max-h-[80vh] overflow-y-auto">
                 <div className="px-4 py-2 border-b border-sol-border text-xs text-sol-text-secondary">
-                  {totalMatches} match{totalMatches !== 1 ? "es" : ""} in {sessionCount} session{sessionCount !== 1 ? "s" : ""}
+                  {searchData
+                    ? <>{totalMatches} match{totalMatches !== 1 ? "es" : ""} in {sessionCount} session{sessionCount !== 1 ? "s" : ""}</>
+                    : <>{sessionCount} title match{sessionCount !== 1 ? "es" : ""}</>}
+                  {!searchData && !searchError && <span className="text-sol-text-dim"> · searching message content…</span>}
+                  {searchError && <span className="text-sol-text-dim"> · content search timed out</span>}
                 </div>
                 <div className="space-y-1 py-1">
                 {groupedResults.map((session: any, sessionIndex: number) => (
@@ -390,30 +414,24 @@ export function GlobalSearch() {
                 )}
                 <span className="text-sol-border">|</span>
                 <span className="flex items-center gap-1">
-                  <kbd className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border text-sol-text-secondary">&#8593;</kbd>
-                  <kbd className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border text-sol-text-secondary">&#8595;</kbd>
+                  <KeyCap size="xs">↑</KeyCap>
+                  <KeyCap size="xs">↓</KeyCap>
                   navigate
                 </span>
                 <span className="flex items-center gap-1">
-                  <kbd className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border text-sol-text-secondary">&#9166;</kbd>
+                  <KeyCap size="xs">↵</KeyCap>
                   open
                 </span>
               </div>
               <div className="flex items-center gap-3">
-                {groupedResults.length > 0 && (
-                  <span
-                    onClick={() => {
-                      router.push(`/search?q=${encodeURIComponent(query)}${userOnly ? "&userOnly=true" : ""}`);
-                      setIsOpen(false);
-                      setQuery("");
-                    }}
-                    className="flex items-center gap-1 cursor-pointer text-sol-text-secondary hover:text-sol-text transition-colors"
-                  >
-                    <KeyCap size="xs">⇧</KeyCap>
-                    <KeyCap size="xs">↵</KeyCap>
-                    see all
-                  </span>
-                )}
+                <span
+                  onClick={goToFullSearch}
+                  className="flex items-center gap-1 cursor-pointer text-sol-text-secondary hover:text-sol-text transition-colors"
+                >
+                  <KeyCap size="xs">⇧</KeyCap>
+                  <KeyCap size="xs">↵</KeyCap>
+                  full search
+                </span>
                 <span className="flex items-center gap-1">
                   <KeyCap size="xs">Esc</KeyCap>
                   close

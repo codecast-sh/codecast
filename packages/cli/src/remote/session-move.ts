@@ -23,6 +23,8 @@ import { execFileSync, execSync, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { credentialHealth } from "../ccAccounts.js";
+import { resolveManifest } from "../workspace/resolver.js";
 
 export interface RemoteHost {
   /** SSH host/IP. */
@@ -309,7 +311,9 @@ export function readLocalCredential(): string | null {
       { encoding: "utf-8" },
     ).trim();
   } catch {
-    const f = path.join(os.homedir(), ".claude", ".credentials.json");
+    // $HOME over os.homedir(): bun caches the latter at startup, breaking
+    // $HOME-sandboxed tests; real environments always have HOME set.
+    const f = path.join(process.env.HOME || os.homedir(), ".claude", ".credentials.json");
     if (!fs.existsSync(f)) return null;
     return fs.readFileSync(f, "utf-8");
   }
@@ -320,16 +324,41 @@ function credentialPushArgs(host: RemoteHost): string[] {
   return [...sshBase(host), `${host.user}@${host.address}`, "umask 077; mkdir -p ~/.claude; cat > ~/.claude/.credentials.json"];
 }
 
+export interface CredentialPushOutcome {
+  pushed: boolean;
+  /** Why nothing was pushed (unusable local credential — logged-out stub,
+   * expired access token, no credential at all). */
+  reason?: string;
+  /** The exact blob that went over the wire, so callers can dedupe pushes by
+   * content instead of re-reading (and possibly racing) the store. */
+  cred?: string;
+}
+
+/**
+ * The local credential, gated for remote use. Only a blob with a LIVE access
+ * token ships: the remote must never self-refresh (its rotated refresh token
+ * would invalidate the primary's), so an expired or logged-out blob would just
+ * park every remote session on "Login expired". This gate is what turned a
+ * silent replicate-the-outage into a visible skip when a logged-out stub hit
+ * the active store.
+ */
+export function readPushableCredential(): { cred: string | null; reason?: string } {
+  const cred = readLocalCredential();
+  const health = credentialHealth(cred);
+  if (!health.pushable) return { cred: null, reason: health.reason ?? "no credential" };
+  return { cred: cred! };
+}
+
 /**
  * Copy the current CC credential to the remote (the remote's claude reads the
  * FILE form). Piped via ssh stdin so the secret never lands on disk locally or
- * in argv. Returns true on success, false when no local credential exists.
+ * in argv. Skips (with a reason) when the local credential is unusable.
  */
-export function copyCredentialToRemote(host: RemoteHost): boolean {
-  const cred = readLocalCredential();
-  if (!cred) return false;
-  execFileSync("ssh", credentialPushArgs(host), { input: cred });
-  return true;
+export function copyCredentialToRemote(host: RemoteHost): CredentialPushOutcome {
+  const gate = readPushableCredential();
+  if (!gate.cred) return { pushed: false, reason: gate.reason };
+  execFileSync("ssh", credentialPushArgs(host), { input: gate.cred });
+  return { pushed: true, cred: gate.cred };
 }
 
 /**
@@ -337,9 +366,10 @@ export function copyCredentialToRemote(host: RemoteHost): boolean {
  * event loop (heartbeats, delivery) for the round-trip. Hard 60s kill so a
  * wedged ssh can't leak.
  */
-export async function copyCredentialToRemoteAsync(host: RemoteHost): Promise<boolean> {
-  const cred = readLocalCredential();
-  if (!cred) return false;
+export async function copyCredentialToRemoteAsync(host: RemoteHost): Promise<CredentialPushOutcome> {
+  const gate = readPushableCredential();
+  if (!gate.cred) return { pushed: false, reason: gate.reason };
+  const cred = gate.cred;
   await new Promise<void>((resolve, reject) => {
     const child = spawn("ssh", credentialPushArgs(host), { stdio: ["pipe", "ignore", "pipe"] });
     const timer = setTimeout(() => {
@@ -357,18 +387,56 @@ export async function copyCredentialToRemoteAsync(host: RemoteHost): Promise<boo
     child.stdin.write(cred);
     child.stdin.end();
   });
-  return true;
+  return { pushed: true, cred };
 }
 
 // --------------------------------------------------------------------------
 // Push / Pull
 // --------------------------------------------------------------------------
 
+export interface SyncVerification {
+  branch: string;
+  localHead: string;
+  remoteHead: string | null;
+  headsMatch: boolean;
+  /** Entries in the remote's `git status --porcelain` (0 = clean tree exactly
+   * at the pushed tip); null when the check itself failed. */
+  remoteDirty: number | null;
+}
+
+/**
+ * Prove the transfer landed: the remote checkout must sit at the same commit
+ * as the local worktree with nothing uncommitted. updateInstead + the
+ * checkout/reset in gitPushWorktree should guarantee this — this check is what
+ * turns "should" into a fact the move can report (and the moved agent can be
+ * told) instead of a silent assumption. Best-effort: an unreachable remote
+ * reads as heads-unknown, never as a throw that aborts the move.
+ */
+export function verifyRemoteSync(host: RemoteHost, localCwd: string, remoteCwd: string): SyncVerification {
+  const branch = currentBranch(localCwd);
+  const localHead = git(localCwd, ["rev-parse", "HEAD"]);
+  let remoteHead: string | null = null;
+  let remoteDirty: number | null = null;
+  try {
+    const lines = ssh(
+      host,
+      `cd ${shq(remoteCwd)} && git rev-parse HEAD && git status --porcelain | wc -l`,
+    ).trim().split("\n");
+    remoteHead = lines[0]?.trim() || null;
+    const dirty = parseInt(lines[lines.length - 1]?.trim() ?? "", 10);
+    remoteDirty = Number.isNaN(dirty) ? null : dirty;
+  } catch { /* verification unavailable — report unknown, don't block the move */ }
+  return { branch, localHead, remoteHead, headsMatch: remoteHead === localHead, remoteDirty };
+}
+
 export interface MoveResult {
   sessionId: string;
   localCwd: string;
   remoteCwd: string;
   remoteProjectDir: string;
+  /** Present for git worktrees; rsync'd plain directories have no cheap
+   * content proof. */
+  verification?: SyncVerification;
 }
 
 /** Push a local session to the remote Mac. Returns the remote placement. */
@@ -381,12 +449,19 @@ export function pushSession(sessionId: string, host: RemoteHost): MoveResult {
     cwdToSlug(remoteCwd),
   );
 
-  // 1. credential (fresh — token TTL ~1h)
-  copyCredentialToRemote(host);
+  // 1. credential (fresh — token TTL ~1h). An unusable local credential skips
+  //    (never replicate a logged-out/expired blob); the daemon's push loop
+  //    heals the remote within a minute of the local login recovering.
+  const credPush = copyCredentialToRemote(host);
+  if (!credPush.pushed) {
+    console.error(`WARNING: credential not pushed (${credPush.reason}) — the moved session will hit "Login expired" until the local login is healthy`);
+  }
   // 2. working tree — git-over-SSH for repos (full git on the remote), else rsync
+  let verification: SyncVerification | undefined;
   if (isWorktree(s.cwd)) {
     gitPushWorktree(host, s.cwd, remoteCwd);
     copyGitignoredFiles(host, s.cwd, remoteCwd); // .env etc, not carried by git
+    verification = verifyRemoteSync(host, s.cwd, remoteCwd);
   } else {
     ssh(host, `mkdir -p ${shq(remoteCwd)}`);
     rsyncUp(host, s.cwd, remoteCwd, { delete: true });
@@ -394,7 +469,7 @@ export function pushSession(sessionId: string, host: RemoteHost): MoveResult {
   // 3. transcript
   rsyncFileInto(host, s.jsonlPath, remoteProjectDir);
 
-  return { sessionId, localCwd: s.cwd, remoteCwd, remoteProjectDir };
+  return { sessionId, localCwd: s.cwd, remoteCwd, remoteProjectDir, verification };
 }
 
 /**
@@ -415,15 +490,32 @@ export function pullSession(sessionId: string, host: RemoteHost, move: MoveResul
   return { ff: true };
 }
 
-/** Copy gitignored files git won't carry (.env*, credentials) into the remote worktree. */
+/**
+ * Copy gitignored files git won't carry (.env family, credentials) into the
+ * remote worktree. The file list is the same one `cast ws acquire` uses —
+ * the resolved workspace manifest's setup.copy (detection + workspace.toml +
+ * .wt-setup-files) — so a project that declares extra secrets for local
+ * worktrees automatically gets them on the remote too. Falls back to the .env
+ * family when the manifest resolves to nothing (non-node projects, no config).
+ */
 function copyGitignoredFiles(host: RemoteHost, localCwd: string, remoteCwd: string): void {
-  const candidates = [".env", ".env.local", ".env.development", ".env.production"];
+  let candidates: string[] = [];
+  try {
+    candidates = resolveManifest(localCwd).setup.copy;
+  } catch { /* detection failure — use the fallback list */ }
+  if (candidates.length === 0) {
+    candidates = [".env", ".env.local", ".env.development", ".env.production"];
+  }
   for (const rel of candidates) {
     const local = path.join(localCwd, rel);
-    if (fs.existsSync(local) && fs.statSync(local).isFile()) {
-      const args = ["-az", "-e", `ssh ${sshBase(host).join(" ")}`, local, `${host.user}@${host.address}:${remoteCwd}/`];
-      try { execFileSync("rsync", args, { stdio: "pipe" }); } catch { /* best-effort */ }
-    }
+    if (!fs.existsSync(local)) continue;
+    // Land nested entries in their parent dir; rsync -a recurses into dirs.
+    const destDir = path.posix.join(remoteCwd, path.posix.dirname(rel.split(path.sep).join("/")));
+    const args = ["-az", "-e", `ssh ${sshBase(host).join(" ")}`, local, `${host.user}@${host.address}:${destDir}/`];
+    try {
+      if (destDir !== remoteCwd) ssh(host, `mkdir -p ${shq(destDir)}`);
+      execFileSync("rsync", args, { stdio: "pipe" });
+    } catch { /* best-effort */ }
   }
 }
 
@@ -454,7 +546,7 @@ PY`;
 
 /** Re-copy a fresh credential to the remote (the local keychain stays current;
  * the remote copy expires after ~1h). Call around remote activity. */
-export function refreshRemoteCredential(host: RemoteHost): boolean {
+export function refreshRemoteCredential(host: RemoteHost): CredentialPushOutcome {
   return copyCredentialToRemote(host);
 }
 

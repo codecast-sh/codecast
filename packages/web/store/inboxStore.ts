@@ -6,10 +6,11 @@ import { applySyncTable, applySyncRecord, type PendingEntry } from "./syncProtoc
 import { soundDismiss, soundKill } from "../lib/sounds";
 import { loadCache, writePatchesToIDB, setHydrating, loadConversationMessages, writeConversationMessages, enqueueDispatch, removeDispatch, loadOutbox, PERSISTENCE_AVAILABLE } from "./idbCache";
 import { HYDRATION_CRITICAL_KEYS, HYDRATION_DEFERRED_KEYS, hydrationMergeStrategy } from "./clientSyncRegistry";
+import { makeCollectionSig } from "./wakeSig";
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
-import { type AgentStatus, ACTIVE_AGENT_STATUSES, STATUS_TRUST_TTL_MS } from "@codecast/shared/contracts";
-import { isSubagentConversation } from "@codecast/convex/convex/ccAccountsShared";
+import { type AgentStatus, ACTIVE_AGENT_STATUSES, isStatusTrustStale, modelOptionKey } from "@codecast/shared/contracts";
+import { isSubagentConversation, nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 
 export type { PendingEntry } from "./syncProtocol";
 
@@ -211,6 +212,14 @@ export type InboxSession = {
   implementation_session?: { _id: string; title?: string };
   is_subagent?: boolean;
   parent_conversation_id?: string;
+  // Visible-child pointer: the session that spawned this one (agent-team
+  // teammate → its lead). Unlike parent_conversation_id it does NOT mark the
+  // row a subagent — the card stays top-level; it only powers the parent
+  // click-through. agent_team_name/agent_name identify the teammate so a
+  // name in a transcript can resolve to the sibling session carrying it.
+  spawned_by_conversation_id?: string | null;
+  agent_team_name?: string | null;
+  agent_name?: string | null;
   active_plan?: PlanRef;
   active_task?: TaskRef;
   worktree_name?: string | null;
@@ -218,6 +227,9 @@ export type InboxSession = {
   workflow_run_id?: string | null;
   is_workflow_primary?: boolean;
   workflow_run_status?: string | null;
+  // The schedule (agent_tasks row) that spawned this conversation as a run.
+  // Lets the sidebar badge/strip attribute any historical run to its schedule.
+  agent_task_id?: string | null;
   forked_from?: string | null;
   parent_message_uuid?: string | null;
   // Messages inherited from the parent up to the fork point. Lets the branch
@@ -245,6 +257,19 @@ export type InboxSession = {
   user_id?: string;
   author_name?: string | null;
   author_avatar?: string | null;
+  // Second-party owner (the member routed to steer a session run by another
+  // account) and the caller-relative "this session is mine to triage" verdict,
+  // both stamped by the server (computeInboxSessions). Team mode reads these to
+  // keep a foreign teammate row READ-ONLY — dismiss/stash/pin/kill mutate global
+  // conversation fields, so acting on a teammate's card would hide it from them.
+  owner_user_id?: string | null;
+  owned_by_me?: boolean;
+  // An Anchor's session renders under its bot identity (acting_user_id), shown
+  // even on the host's own row; is_anchor marks it a standing member.
+  acting_user_id?: string | null;
+  is_anchor?: boolean;
+  persistent?: boolean;
+  anchor_id?: string | null;
 };
 
 // An image attached to an outbound (optimistic) message. While its upload is in
@@ -382,6 +407,8 @@ export type TaskItem = {
   source_agent_type?: string | null;
   origin_session?: { conversation_id: string; session_id: string; title?: string; started_by?: string; last_message_at?: number; message_count?: number } | null;
   session_count?: number;
+  created_from_conversation?: string;
+  conversation_ids?: string[];
   steps?: TaskStep[];
   acceptance_criteria?: string[];
   execution_status?: TaskExecutionStatus;
@@ -520,7 +547,7 @@ export type SavedView = {
 // "recent" = flat, newest-first by last activity (updated_at) — reshuffles as
 // sessions work; "time" = flat, newest-first by creation (started_at) — a
 // stable chronology that doesn't move; "bucket" = sections per manual label.
-export type InboxViewMode = "grouped" | "recent" | "time" | "bucket";
+export type InboxViewMode = "grouped" | "recent" | "time" | "bucket" | "plan";
 
 export type ClientUI = {
   theme?: "light" | "dark";
@@ -538,9 +565,21 @@ export type ClientUI = {
   plan_view?: PlanViewPrefs;
   saved_views?: SavedView[];
   show_subagents?: boolean;
-  show_old_sessions?: boolean;
+  // show_old_sessions once lived here (server-synced). It's now the store's
+  // ephemeral showOldSessions: a persisted "show my whole divergent cache" mode
+  // is exactly the cross-client cruft bug. Stale values may linger in server
+  // client_state docs; nothing reads them.
+  // Inbox scope. "mine" (default) is the personal inbox: your own sessions plus
+  // any explicitly routed to you. "team" turns the inbox into a shared board of
+  // every team-visible session across the active team (a superset of "mine").
+  // Persisted (LWW) so the chosen scope survives reloads and follows the user.
+  inbox_scope?: "mine" | "team";
   // Show each session's model as a badge in the inbox list. Off by default.
   show_model_badge?: boolean;
+  // Opt in to the teammate-comment tools (the gutter "comment" handle + the
+  // header toggle when a conversation has none yet). Off by default — you still
+  // SEE and can reply to comments others leave regardless of this.
+  comments_enabled?: boolean;
   // Inbox session panel view mode. When true, the panel drops the
   // Pinned/New/Needs-Input/Working grouping and shows every session as one flat
   // list sorted newest-first by creation time (started_at). Toggled by Ctrl+,.
@@ -554,6 +593,10 @@ export type ClientUI = {
   // brand-new sessions interleave by creation automatically; a drag pins just the
   // moved row with a single midpoint write. See flatViewComparator / computeManualSortKey.
   inbox_manual_order?: Record<string, number>;
+  // Read watermark for the SCHEDULES section: outcomes with last_run_at newer
+  // than this count as "N new" on the collapsed header. Refreshed whenever the
+  // user toggles the section (expanding IS reading the briefing).
+  schedules_seen_at?: number;
 };
 
 export type ClientLayouts = {
@@ -668,18 +711,24 @@ export function isSessionHidden(
 // — no server re-fetch — so it's instant and never spins the sync chip. Never
 // treat as old: optimistic stubs (no Convex id yet), subagents (they ride their
 // parent), pinned/focused rows, or dismissed/stashed rows (their own buckets).
+// An agent-team teammate rides its LEAD's liveness instead: while the lead is
+// in the live window the teammate stays (nested under it), but unlike a Task
+// subagent it isn't exempt outright — a teammate from a dead team ages out
+// like any session rather than haunting the inbox forever.
 export function isOldSession(
   s: InboxSession,
   liveInboxIds: Set<string>,
   focusedId?: string | null,
 ): boolean {
+  const nestParent = !s.parent_conversation_id ? nestParentIdOf(s) : null;
   return (
     isConvexId(s._id) &&
     !s.parent_conversation_id &&
     !s.is_pinned &&
     !isSessionHidden(s) &&
     s._id !== focusedId &&
-    !liveInboxIds.has(s._id)
+    !liveInboxIds.has(s._id) &&
+    !(nestParent && liveInboxIds.has(nestParent))
   );
 }
 
@@ -709,6 +758,63 @@ export function partitionOldSessions(
   return { visibleSessions, oldCount };
 }
 
+// Is this cached row definitively someone ELSE's session — i.e. not the caller's
+// to see in the personal inbox? A row is "mine" if it's my own authored session,
+// one routed to me to steer (owner), an optimistic stub not yet server-keyed, or
+// a thin row with no known author. Everything else is a teammate's row that only
+// entered the shared cache via team mode / a deep-link / search, and must not
+// linger in "mine".
+function isForeignRow(s: InboxSession, meId: string | null | undefined): boolean {
+  if (!meId) return false; // unknown viewer → don't hide anything
+  if (!isConvexId(s._id)) return false; // optimistic stub — always mine
+  const uid = s.user_id;
+  if (!uid) return false; // thin/legacy row with no author → keep
+  if (uid === meId) return false;
+  if (s.owned_by_me) return false;
+  if (s.owner_user_id && s.owner_user_id === meId) return false;
+  return true;
+}
+
+// Scope the never-prune sessions cache to the current inbox scope BEFORE the
+// old-session partition runs. This is what makes "mine" and "team" coherent even
+// though both read the same shared cache:
+//   • "mine": drop rows that are definitively a teammate's, so team-mode rows (or
+//     a teammate session opened via deep-link/search) never leak into the
+//     personal inbox — regardless of the show-old toggle.
+//   • "team": keep exactly the rows the team subscription reported (teamInboxIds),
+//     plus the open session and any optimistic stub. Before the first team payload
+//     lands (empty set) fall back to the mine filter so the board shows your own
+//     work immediately instead of flashing empty.
+// The focused row is always kept so the session you're viewing never vanishes.
+const EMPTY_TEAM_INBOX_IDS: ReadonlySet<string> = new Set<string>();
+
+export function filterInboxScope(
+  sessions: Record<string, InboxSession>,
+  scope: "mine" | "team",
+  meId: string | null | undefined,
+  teamInboxIds: ReadonlySet<string> = EMPTY_TEAM_INBOX_IDS,
+  focusedId?: string | null,
+): Record<string, InboxSession> {
+  if (scope === "team" && teamInboxIds.size > 0) {
+    const out: Record<string, InboxSession> = {};
+    for (const [id, s] of Object.entries(sessions)) {
+      if (teamInboxIds.has(id) || id === focusedId || !isConvexId(id)) out[id] = s;
+    }
+    return out;
+  }
+  // "mine" (and team before its first payload): hide definitively-foreign rows.
+  let anyForeign = false;
+  for (const s of Object.values(sessions)) {
+    if (s._id !== focusedId && isForeignRow(s, meId)) { anyForeign = true; break; }
+  }
+  if (!anyForeign) return sessions; // referentially stable when nothing to drop
+  const out: Record<string, InboxSession> = {};
+  for (const [id, s] of Object.entries(sessions)) {
+    if (id === focusedId || !isForeignRow(s, meId)) out[id] = s;
+  }
+  return out;
+}
+
 // Window the cross-device dismiss reconcile is authoritative over. Mirrors the
 // server's INBOX_DISMISSED_WINDOW_MS (the range listDismissedSessionsLite scans):
 // the server only reports dismisses within this window, so the client can only
@@ -734,6 +840,19 @@ function sessionSortRank(s: InboxSession): [number, number, number, number, numb
   ];
 }
 
+// A session paired with its precomputed sort rank.
+type RankedSession = { s: InboxSession; rank: ReturnType<typeof sessionSortRank> };
+
+// Comparator over precomputed ranks, with _id as the stable tiebreak. Defined
+// once and shared by sortSessions and categorizeSessions so the active-session
+// order lives in exactly one place.
+function compareRankedSessions(a: RankedSession, b: RankedSession): number {
+  for (let i = 0; i < a.rank.length; i++) {
+    if (a.rank[i] !== b.rank[i]) return a.rank[i] - b.rank[i];
+  }
+  return a.s._id < b.s._id ? -1 : a.s._id > b.s._id ? 1 : 0;
+}
+
 export function sortSessions(sessions: Record<string, InboxSession>): InboxSession[] {
   // One O(N) classification pass, then an O(N log N) sort over cheap precomputed
   // keys. The previous version called isSessionWaitingForInput /
@@ -741,15 +860,10 @@ export function sortSessions(sessions: Record<string, InboxSession>): InboxSessi
   // of times per sort — which dominated the constant re-categorize cost the
   // inbox pays on every liveness sync (see Chrome trace: sortSessions hot on
   // every status flip). Output order is byte-identical to the old comparator.
-  const keyed = Object.values(sessions)
+  const keyed: RankedSession[] = Object.values(sessions)
     .filter((s) => !isSessionHidden(s))
     .map((s) => ({ s, rank: sessionSortRank(s) }));
-  keyed.sort((a, b) => {
-    for (let i = 0; i < a.rank.length; i++) {
-      if (a.rank[i] !== b.rank[i]) return a.rank[i] - b.rank[i];
-    }
-    return a.s._id < b.s._id ? -1 : a.s._id > b.s._id ? 1 : 0;
-  });
+  keyed.sort(compareRankedSessions);
   return keyed.map((x) => x.s);
 }
 
@@ -831,11 +945,19 @@ export function pendingSendConsumed(
   return !!session.is_idle && !session.has_pending;
 }
 
+// Grace window before any consumed/absence prune may fire for a send. The
+// dispatch retry ladder needs several seconds to conclude a send permanently
+// failed (and mark it _isFailed, which exempts it below) — pruning inside that
+// window can destroy the ONLY copy of a message whose send is still in flight:
+// a send into a busy foreign session reads "consumed" via the active-status
+// fast path on the very next sync tick, before the server ever rejected it.
+export const PENDING_SEND_PRUNE_GRACE_MS = 15_000;
+
 // Prune consumed/stale optimistic sends for a synced session. The conversation
 // currently being viewed is left to setMessages (echo-based prune) so a just-sent
 // message stays visible in the open thread until its real row syncs in. Failed
 // sends are kept (the user may retry them). Returns true if anything changed.
-function reconcilePendingSendForSession(
+export function reconcilePendingSendForSession(
   pendingMessages: Record<string, Message[]>,
   convId: string,
   session: Pick<InboxSession, "agent_status" | "is_idle" | "has_pending" | "updated_at"> | undefined,
@@ -848,10 +970,13 @@ function reconcilePendingSendForSession(
   // Legacy entries (persisted before _sentBaselineTs existed) fall back to their
   // own client timestamp.
   let baseline = 0;
+  let newestSentAt = 0;
   for (const m of pending) {
     if (m._isFailed) continue;
     baseline = Math.max(baseline, m._sentBaselineTs ?? m.timestamp);
+    newestSentAt = Math.max(newestSentAt, m.timestamp);
   }
+  if (newestSentAt && Date.now() - newestSentAt < PENDING_SEND_PRUNE_GRACE_MS) return false;
   if (!pendingSendConsumed(session, baseline)) return false;
   const kept = pending.filter((m) => m._isFailed);
   if (kept.length === pending.length) return false;
@@ -924,6 +1049,29 @@ export function isSessionWaitingForInput(
     !session.is_pinned;
 }
 
+// A concrete blocker that must escalate even for a STANDING session (one with a
+// recurring schedule injecting into it) or a scheduled run collapsed under its
+// schedule's group row: an open poll, an unresolved auth/API error, a permission
+// prompt, or a dead agent with content. Mirrors isSessionWaitingForInput branch
+// for branch — same fields, same precedence — EXCEPT the fallthrough: a plain
+// finished turn (effectively idle with messages) is the uneventful steady state
+// of standing automation, not a claim on the user's attention, so it does not
+// count as blocked here. No pinned exemption either: placement of pinned rows
+// is the caller's concern (they never leave the Pinned group).
+export function isSessionHardBlocked(
+  session: Pick<InboxSession, "_id" | "agent_status" | "message_count" | "has_pending" | "awaiting_input" | "is_unresponsive" | "pending_api_error">,
+  sessionsWithQueuedMessages?: Set<string>,
+): boolean {
+  if (sessionsWithQueuedMessages?.has(session._id)) return false;
+  if (session.awaiting_input) return true;
+  if (session.pending_api_error && session.message_count > 0) return true;
+  if (session.agent_status === "permission_blocked") return session.message_count > 0;
+  const dead = !!session.agent_status && DEAD_AGENT_STATUSES.has(session.agent_status);
+  if (!session.is_unresponsive && !dead && session.has_pending) return false;
+  if (dead) return session.message_count > 0;
+  return false;
+}
+
 // Per-session-object memo for the two costliest classification predicates.
 // categorizeSessions runs on every REAL session change (a single agent flipping
 // working↔idle re-buckets the whole list), and over a never-pruned store that
@@ -978,11 +1126,11 @@ export function worktreeKeyOf(s: InboxSession): string | null {
   return m ? m[1] : null;
 }
 
-// Display label used to cluster orchestration workers in the inbox, or null if
-// the session isn't a worker. Prefers the PLAN — the reliable, persisted signal
-// a worker carries (active_plan, stamped at creation) — and falls back to the
-// worktree for an isolated session without a plan. The label doubles as the
-// group's identity (plan short_id keeps distinct plans apart).
+// Display label for a session's plan (or worktree) grouping, used by the
+// "By plan" view's section headings, or null if the session carries neither.
+// Prefers the PLAN — the reliable, persisted signal (active_plan) — and falls
+// back to the worktree for an isolated session without a plan. The label
+// doubles as the group's identity (plan short_id keeps distinct plans apart).
 export function orchestrationGroupLabelOf(s: InboxSession): string | null {
   if (s.active_plan) {
     const title = s.active_plan.title?.trim();
@@ -990,6 +1138,55 @@ export function orchestrationGroupLabelOf(s: InboxSession): string | null {
   }
   const wt = worktreeKeyOf(s);
   return wt ? `⑂ ${wt}` : null;
+}
+
+// Structural signature of a session for inbox bucketing + ordering. It MUST fold
+// in every field that decides which section/position a row lands in — so it is
+// built FROM sessionSortRank (the order tuple, which already folds in
+// classifySession's idle/waiting verdict) plus the grouping/visibility flags
+// categorizeSessions splits on. Building it this way means it can't drift from
+// the categorizer. It deliberately OMITS updated_at / last_heartbeat /
+// last_message_at and the raw message_count (only the message_count===0 boundary,
+// carried inside the rank tuple, changes a bucket): a heartbeat or a streamed
+// token must not move anything, so it must not change this signature.
+//
+// Subscribe a list/sidebar to sessionsWakeSig(s.sessions) instead of the raw
+// `s.sessions` map and it wakes only on real structural change, not on every
+// liveness tick. The TIME-driven reclassification categorizeSessions performs
+// (the trust-TTL sweep that retires a stale "working" to needs-input) is NOT a
+// field change — drive that with a coarse re-render ticker (useCoarseNow), never
+// by widening this signature. See store/wakeSig.ts.
+export function sessionStructuralSig(s: InboxSession): string {
+  return [
+    s._id,
+    sessionSortRank(s).join(","),
+    isSessionHidden(s) ? 1 : 0,
+    isSessionDismissed(s) ? 1 : 0,
+    isSessionStashed(s) ? 1 : 0,
+    nestParentIdOf(s) || "",
+    s.forked_from || "",
+    orchestrationGroupLabelOf(s) || "",
+  ].join("\x1f");
+}
+
+// Collection wake signature over the whole session map (memoized by map ref).
+export const sessionsWakeSig = makeCollectionSig<InboxSession>(sessionStructuralSig);
+
+// Membership signature over pending sends, memoized by the pendingMessages ref.
+// pendingMessages mutates on every send-lifecycle tick, but categorizeSessions
+// only cares WHICH conversations have an unconfirmed send — subscribe to this
+// instead of the raw map and a badge/panel wakes only when that set changes.
+let _pendingSendSigRef: unknown;
+let _pendingSendSig = "";
+export function pendingSendWakeSig(pendingMessages: Record<string, Message[]>): string {
+  if (pendingMessages === _pendingSendSigRef) return _pendingSendSig;
+  const ids: string[] = [];
+  for (const id in pendingMessages) {
+    if (convHasPendingSend(pendingMessages[id])) ids.push(id);
+  }
+  _pendingSendSigRef = pendingMessages;
+  _pendingSendSig = ids.sort().join(",");
+  return _pendingSendSig;
 }
 
 export interface CategorizedSessions {
@@ -1002,33 +1199,86 @@ export interface CategorizedSessions {
   dismissed: InboxSession[];
   subsByParent: Map<string, InboxSession[]>;
   forksByParent: Map<string, InboxSession[]>;
-  // Top-level worker sessions clustered by plan (or worktree as a fallback),
-  // keyed by display label, ≥2 per group. Members are pulled OUT of
-  // pinned/new/needsInput/working so the inbox shows one group instead of N
-  // loose cards.
-  orchestrationGroups: Map<string, InboxSession[]>;
+  // Count of cached rows hidden as "old" (absent from the live/authoritative
+  // inbox set) — drives the "show N old sessions" toggle badge. 0 when showOld
+  // is on or no liveInboxIds was supplied.
+  oldCount: number;
 }
 
 export function categorizeSessions(
   sessions: Record<string, InboxSession>,
   sessionsWithQueuedMessages: Set<string>,
   pendingSendIds: ReadonlySet<string> = EMPTY_PENDING_SEND_IDS,
-  opts: { currentSessionId?: string | null; pendingCreateIds?: ReadonlySet<string> } = {},
+  opts: {
+    currentSessionId?: string | null;
+    pendingCreateIds?: ReadonlySet<string>;
+    // The AUTHORITATIVE active-inbox id set (server's listInboxSessions result,
+    // piped into store.liveInboxIds). When supplied, a cached top-level row absent
+    // from it is "old" — backfilled by the completeness crawl for search/open, but
+    // NOT part of the actionable inbox. Folding this in (instead of a separate
+    // partitionOldSessions pre-pass every caller must remember) is what makes EVERY
+    // consumer — panel, sidebar badge, dashboard badge, palette — render the same
+    // server-authoritative set, so the inbox is identical across web/desktop/mobile
+    // and never accumulates aged-out cruft. Omit it (or pass showOld) to keep the
+    // whole cache — the safe fallback used before the first live payload lands.
+    liveInboxIds?: Set<string>;
+    // Default HIDE old. Pass true for the "show old sessions" browse toggle.
+    showOld?: boolean;
+  } = {},
 ): CategorizedSessions {
-  const sorted = sortSessions(sessions);
-  const dismissed = Object.values(sessions)
-    .filter(isSessionDismissed)
-    .sort((a, b) => (b.inbox_dismissed_at || 0) - (a.inbox_dismissed_at || 0));
-  const stashed = Object.values(sessions)
-    .filter(isSessionStashed)
-    .sort((a, b) => (b.inbox_stashed_at || 0) - (a.inbox_stashed_at || 0));
+  // Single walk over the whole input, splitting it into the three top-level
+  // slices below in one pass instead of three separate Object.values scans. This
+  // is the per-status-flip hot path over the entire never-pruned store — and the
+  // input still carries every KILLED/STASHED row (they aren't "old", so the
+  // old-session partition keeps them), so collapsing 3×N scans into 1×N is the
+  // cut that matters. Output is identical: active uses the shared rank
+  // comparator; dismissed/stashed keep their newest-first sorts (stable sort over
+  // the same Object.values order).
+  const activeKeyed: RankedSession[] = [];
+  const dismissed: InboxSession[] = [];
+  const stashed: InboxSession[] = [];
+  // Fold the "old" (absent-from-authoritative-set) hiding into this single walk
+  // instead of a separate partitionOldSessions pass — one scan, and every caller
+  // gets it for free. Only hide when we actually have the live set (size>0) and
+  // showOld is off; an empty set means the first live payload hasn't landed, so
+  // show everything (never blank the inbox on cold open). isOldSession already
+  // exempts pinned / focused / dismissed / stashed / subagents, so hiding here
+  // only ever removes stale top-level active cards — their dismissed/stashed twins
+  // still fall through to those buckets below.
+  const canHideOld = !opts.showOld && !!opts.liveInboxIds && opts.liveInboxIds.size > 0;
+  const focusedId = opts.currentSessionId ?? null;
+  let oldCount = 0;
+  for (const s of Object.values(sessions)) {
+    const isOld = canHideOld && isOldSession(s, opts.liveInboxIds!, focusedId);
+    if (isOld) oldCount++;
+    // An anchor's standing thread lives in its dedicated /anchor space, not the
+    // inbox — surface it here ONLY when it's genuinely blocked on the user (an open
+    // poll, permission prompt, auth error, or a dead session with output), NOT
+    // every time it finishes a turn and goes idle. It drops back to its space once
+    // handled.
+    const hiddenAnchor = !!s.is_anchor && !isSessionHardBlocked(s);
+    if (!isOld && !isSessionHidden(s) && !hiddenAnchor) activeKeyed.push({ s, rank: sessionSortRank(s) });
+    if (isSessionDismissed(s)) dismissed.push(s);
+    if (isSessionStashed(s)) stashed.push(s);
+  }
+  activeKeyed.sort(compareRankedSessions);
+  const sorted = activeKeyed.map((x) => x.s);
+  dismissed.sort((a, b) => (b.inbox_dismissed_at || 0) - (a.inbox_dismissed_at || 0));
+  stashed.sort((a, b) => (b.inbox_stashed_at || 0) - (a.inbox_stashed_at || 0));
   const allIds = new Set(sorted.map((s) => s._id));
 
+  // Nest parent covers BOTH child kinds (see nestParentIdOf): Task-tool
+  // subagents (parent_conversation_id) and agent-team teammates
+  // (spawned_by_conversation_id + agent_team_name). Nesting is positional —
+  // only when the parent is in this set. A parentless teammate stays a normal
+  // flat card below (it's NOT isSubagentConversation, so the orphan hiding
+  // doesn't apply to it); a parentless Task subagent is hidden as before.
   const subsByParent = new Map<string, InboxSession[]>();
   for (const s of sorted) {
-    if (s.parent_conversation_id && allIds.has(s.parent_conversation_id)) {
-      if (!subsByParent.has(s.parent_conversation_id)) subsByParent.set(s.parent_conversation_id, []);
-      subsByParent.get(s.parent_conversation_id)!.push(s);
+    const nestParent = nestParentIdOf(s);
+    if (nestParent && allIds.has(nestParent)) {
+      if (!subsByParent.has(nestParent)) subsByParent.set(nestParent, []);
+      subsByParent.get(nestParent)!.push(s);
     }
   }
   for (const subs of subsByParent.values()) {
@@ -1062,29 +1312,13 @@ export function categorizeSessions(
   // (Pinned is exempt below: an explicit pin is a deliberate "keep visible".)
   const isOrphanSubagent = (s: InboxSession) => isSubagentConversation(s) && !subsWithParent.has(s._id);
 
-  // Cluster top-level orchestration workers by plan (or worktree) so a fan-out
-  // collapses into one labeled group instead of N loose cards. Only sessions
-  // not already nested under a conversation parent and not pinned are eligible;
-  // a lone worker (cluster of 1) stays inline. Members are then held out of the
-  // flat buckets below via isFlat. Orphaned subagents are excluded too — a
-  // parentless worker shouldn't seed or pad a plan cluster.
-  const orchestrationGroups = new Map<string, InboxSession[]>();
-  for (const s of sorted) {
-    if (!isTop(s) || s.is_pinned || isOrphanSubagent(s)) continue;
-    const label = orchestrationGroupLabelOf(s);
-    if (!label) continue;
-    if (!orchestrationGroups.has(label)) orchestrationGroups.set(label, []);
-    orchestrationGroups.get(label)!.push(s);
-  }
-  for (const [label, members] of Array.from(orchestrationGroups)) {
-    if (members.length < 2) orchestrationGroups.delete(label);
-  }
-  const groupedIds = new Set(
-    Array.from(orchestrationGroups.values()).flat().map((s) => s._id),
-  );
-  // Flat = top-level, not folded into an orchestration group, and not an
-  // orphaned subagent (those ride their parent — never a loose card here).
-  const isFlat = (s: InboxSession) => isTop(s) && !groupedIds.has(s._id) && !isOrphanSubagent(s);
+  // Flat = top-level and not an orphaned subagent (those ride their parent —
+  // never a loose card here). Plan/worktree clustering is deliberately NOT done
+  // here: the status view is about status, so a working session must always
+  // surface in Working (and count in the sidebar badges). Grouping by plan is
+  // the "By plan" view's job (groupSessionsByPlan), opted into via the view
+  // switcher.
+  const isFlat = (s: InboxSession) => isTop(s) && !isOrphanSubagent(s);
 
   // A pending send is in-flight work just like a locally-queued message: it
   // pushes the session OUT of needs-input and INTO working. Fold the two sets
@@ -1108,8 +1342,9 @@ export function categorizeSessions(
   // than the TTL, so it's never caught). Date.now() here (not in the pure,
   // memoized classifySession) so the verdict re-evaluates as time passes.
   const now = Date.now();
-  const isTrustStale = (s: InboxSession) =>
-    s.message_count > 0 && !s.is_pinned && (now - (s.updated_at || 0)) >= STATUS_TRUST_TTL_MS;
+  // Shared staleness core (isStatusTrustStale) + the bucket's own pinned policy:
+  // pinned rows live in the Pinned group regardless, so they're never swept here.
+  const isTrustStale = (s: InboxSession) => isStatusTrustStale(s, now) && !s.is_pinned;
   // Classify waiting-for-input ONCE per session (it's the costliest predicate and
   // was evaluated twice below — in the needsInput and working filters). The
   // memoized verdict (classifySession) is the no-in-flight result; an in-flight
@@ -1153,7 +1388,7 @@ export function categorizeSessions(
     });
   const working = sorted.filter((s) => (!waitingForInput.get(s._id) && (s.message_count > 0 || hasPendingSend(s)) && !s.is_pinned) && isFlat(s));
 
-  return { sorted, pinned, newSessions, needsInput, working, stashed, dismissed, subsByParent, forksByParent, orchestrationGroups };
+  return { sorted, pinned, newSessions, needsInput, working, stashed, dismissed, subsByParent, forksByParent, oldCount };
 }
 
 export function visualOrderSessions(
@@ -1169,24 +1404,28 @@ export function visualOrderSessions(
     bucketFilter?: string | null;
     bucketByConv?: Record<string, string | undefined>;
     // Grouped-view collapse: when provided, sessions inside a collapsed status
-    // section or orchestration group are skipped, so Ctrl+J/K only walks cards
-    // the panel is actually rendering. Keys mirror GlobalSessionPanel's
-    // renderSection keys ("pinned"/"new"/"needs_input"/"working", "grp:<label>").
+    // section are skipped, so Ctrl+J/K only walks cards the panel is actually
+    // rendering. Keys mirror GlobalSessionPanel's renderSection keys
+    // ("pinned"/"new"/"needs_input"/"working").
     collapsedSections?: Record<string, boolean>;
+    // Status-view schedule projection (grouped mode only), published by the
+    // panel from the agentTasks.webList join: sessions absorbed behind a
+    // SCHEDULES row — a resting loop's home conversation, or an uneventful
+    // spawned run — leave keyboard nav entirely; they're reachable by clicking
+    // the schedule row, not by Ctrl+J/K. Escalated ones aren't in this set.
+    absorbedIds?: ReadonlySet<string>;
   } = {},
 ): InboxSession[] {
-  const { pinned, newSessions, needsInput, working, orchestrationGroups } =
+  const { pinned, newSessions, needsInput, working } =
     categorizeSessions(sessions, sessionsWithQueuedMessages, pendingSendIds, opts);
   const collapsed = opts.collapsedSections;
+  const stripAbsorbed = (arr: InboxSession[]) =>
+    opts.absorbedIds?.size ? arr.filter((s) => !opts.absorbedIds!.has(s._id)) : arr;
+  const needsInputRest = stripAbsorbed(needsInput);
+  const workingRest = stripAbsorbed(working);
   const result: InboxSession[] = [];
-  // Orchestration-grouped workers are held out of the flat buckets for the
-  // grouped inbox view; append them here so flat-list consumers (keyboard nav,
-  // the /sessions list) still see every session.
   const sections: Array<[InboxSession[], string]> = [
-    [pinned, "pinned"], [newSessions, "new"], [needsInput, "needs_input"], [working, "working"],
-    ...Array.from(orchestrationGroups.entries()).map(
-      ([label, items]) => [items, `grp:${label}`] as [InboxSession[], string],
-    ),
+    [pinned, "pinned"], [newSessions, "new"], [needsInputRest, "needs_input"], [workingRest, "working"],
   ];
   for (const [section, key] of sections) {
     if (collapsed?.[key]) continue;
@@ -1272,6 +1511,50 @@ export function computeReorderUpdates(
   return result.map((b, i) => ({ id: b._id, sort_order: (i + 1) * SORT_GAP }));
 }
 
+// Newest-activity-first, the within-group order shared by every grouping below.
+// NB: keyed on updated_at, which the inbox's wake signature deliberately omits —
+// so a re-sort here rides the panel's coarse clock (useCoarseNow), not a sig flip.
+const byActivity = (a: InboxSession, b: InboxSession) => (b.updated_at ?? 0) - (a.updated_at ?? 0);
+
+// Project-fallback groups, biggest first with "other" last — the auto-derived
+// label tier every view falls back to for items that carry no primary key.
+function buildProjectGroups(byProject: Map<string, InboxSession[]>): Array<{ name: string; items: InboxSession[] }> {
+  return Array.from(byProject.entries())
+    .map(([name, list]) => ({ name, items: list.sort(byActivity) }))
+    .sort((a, b) =>
+      (a.name === "other" ? 1 : 0) - (b.name === "other" ? 1 : 0) || b.items.length - a.items.length);
+}
+
+// The grouping skeleton shared by the label and plan views: dedup the input, bin
+// each session under its primary key (keyOf) or — when it has none (keyOf → null)
+// — under its project, then hand the primary bins to the caller to order/shape as
+// it sees fit. Owns the dedup loop, the project fallback, and the project-group
+// build so the two views don't each re-implement them.
+function groupSessionsBy<G>(
+  items: InboxSession[],
+  keyOf: (s: InboxSession) => string | null,
+  buildPrimary: (byPrimary: Map<string, InboxSession[]>) => G[],
+): { primaryGroups: G[]; projectGroups: Array<{ name: string; items: InboxSession[] }> } {
+  const byPrimary = new Map<string, InboxSession[]>();
+  const byProject = new Map<string, InboxSession[]>();
+  const seen = new Set<string>();
+  for (const sess of items) {
+    if (seen.has(sess._id)) continue;
+    seen.add(sess._id);
+    const k = keyOf(sess);
+    if (k !== null) {
+      if (!byPrimary.has(k)) byPrimary.set(k, []);
+      byPrimary.get(k)!.push(sess);
+    } else {
+      const project = getProjectName(sess.git_root, sess.project_path);
+      const pkey = project === "unknown" ? "other" : project;
+      if (!byProject.has(pkey)) byProject.set(pkey, []);
+      byProject.get(pkey)!.push(sess);
+    }
+  }
+  return { primaryGroups: buildPrimary(byPrimary), projectGroups: buildProjectGroups(byProject) };
+}
+
 // The "by label" grouping, shared by the session panel's render AND keyboard
 // order (visualOrder) so Ctrl+J/K walks exactly what's on screen: manual-label
 // groups first (label sort order), then per-project groups for unlabeled
@@ -1285,33 +1568,44 @@ export function groupSessionsForLabelView(
   labelGroups: Array<{ bucket: BucketItem; items: InboxSession[] }>;
   projectGroups: Array<{ name: string; items: InboxSession[] }>;
 } {
-  const visible = sortLabels(buckets);
-  const byBucket = new Map<string, InboxSession[]>();
-  const byProject = new Map<string, InboxSession[]>();
-  const seen = new Set<string>();
-  for (const sess of items) {
-    if (seen.has(sess._id)) continue;
-    seen.add(sess._id);
-    const b = bucketByConv[sess._id];
-    if (b && buckets[b] && !buckets[b].archived_at) {
-      if (!byBucket.has(b)) byBucket.set(b, []);
-      byBucket.get(b)!.push(sess);
-    } else {
-      const project = getProjectName(sess.git_root, sess.project_path);
-      const key = project === "unknown" ? "other" : project;
-      if (!byProject.has(key)) byProject.set(key, []);
-      byProject.get(key)!.push(sess);
-    }
-  }
-  const byActivity = (a: InboxSession, b: InboxSession) => (b.updated_at ?? 0) - (a.updated_at ?? 0);
-  const labelGroups = visible
-    .map((bucket) => ({ bucket, items: (byBucket.get(bucket._id) ?? []).sort(byActivity) }))
-    .filter((g) => g.items.length > 0);
-  const projectGroups = Array.from(byProject.entries())
-    .map(([name, list]) => ({ name, items: list.sort(byActivity) }))
-    .sort((a, b) =>
-      (a.name === "other" ? 1 : 0) - (b.name === "other" ? 1 : 0) || b.items.length - a.items.length);
-  return { labelGroups, projectGroups };
+  const { primaryGroups, projectGroups } = groupSessionsBy(
+    items,
+    // An assigned, non-archived bucket is the primary key; everything else falls
+    // through to the project tier.
+    (sess) => {
+      const b = bucketByConv[sess._id];
+      return b && buckets[b] && !buckets[b].archived_at ? b : null;
+    },
+    // Label groups follow the explicit label sort order, empties dropped.
+    (byBucket) => sortLabels(buckets)
+      .map((bucket) => ({ bucket, items: (byBucket.get(bucket._id) ?? []).sort(byActivity) }))
+      .filter((g) => g.items.length > 0),
+  );
+  return { labelGroups: primaryGroups, projectGroups };
+}
+
+// "By plan" lens: the sibling of groupSessionsForLabelView, keyed on the
+// session's plan instead of a manual label. EVERY plan gets its own section —
+// even a plan of one — because this view's whole job is to show a plan's
+// sessions together. This lens is the ONLY place the inbox groups by plan; the
+// status view keeps every session in its status bucket. Sessions with no plan
+// fall to project groups, exactly as unlabeled sessions do in the label view.
+// Plans sort by size then label so the busiest run leads.
+export function groupSessionsByPlan(
+  items: InboxSession[],
+): {
+  planGroups: Array<{ key: string; label: string; items: InboxSession[] }>;
+  projectGroups: Array<{ name: string; items: InboxSession[] }>;
+} {
+  const { primaryGroups, projectGroups } = groupSessionsBy(
+    items,
+    (sess) => sess.active_plan?.short_id ?? null,
+    // All members of a plan share its label; derive it once from the first.
+    (byPlan) => Array.from(byPlan.entries())
+      .map(([key, list]) => ({ key, label: orchestrationGroupLabelOf(list[0])!, items: list.sort(byActivity) }))
+      .sort((a, b) => b.items.length - a.items.length || a.label.localeCompare(b.label)),
+  );
+  return { planGroups: primaryGroups, projectGroups };
 }
 
 // Thin InboxSession synthesized from a `favorites` list entry (listFavorites) for
@@ -1427,6 +1721,43 @@ export function chipMatchesSession(
   return true;
 }
 
+// Subagent/teammate rows never float at their own slot in a flat list — they
+// render directly under their parent whenever the parent is in the list. The
+// view comparator places a child wherever ITS OWN activity lands, which strands
+// it between unrelated cards while its (recently-active) parent sorts far away
+// — three ↳-styled rows adrift in the middle of the inbox. Children keep the
+// comparator's relative order among siblings and follow chains (a child's own
+// children ride along). A row whose parent didn't make the list stays where the
+// sort put it — same "parentless renders flat" semantics as categorizeSessions.
+function hoistNestedUnderParent(list: InboxSession[]): InboxSession[] {
+  const present = new Set(list.map((s) => s._id));
+  const nestedHere = (s: InboxSession) => {
+    const p = nestParentIdOf(s);
+    return p && p !== s._id && present.has(p) ? p : null;
+  };
+  const kidsByParent = new Map<string, InboxSession[]>();
+  for (const s of list) {
+    const p = nestedHere(s);
+    if (!p) continue;
+    if (!kidsByParent.has(p)) kidsByParent.set(p, []);
+    kidsByParent.get(p)!.push(s);
+  }
+  if (kidsByParent.size === 0) return list;
+  const out: InboxSession[] = [];
+  const emitted = new Set<string>();
+  const emit = (s: InboxSession) => {
+    if (emitted.has(s._id)) return;
+    emitted.add(s._id);
+    out.push(s);
+    for (const kid of kidsByParent.get(s._id) ?? []) emit(kid);
+  };
+  for (const s of list) if (!nestedHere(s)) emit(s);
+  // A parent-link cycle would leave its members un-emitted above (each waits on
+  // the other) — append them in sort order rather than dropping rows.
+  for (const s of list) emit(s);
+  return out;
+}
+
 // The flat (time / recent) view's session list AS RENDERED — the single builder
 // behind BOTH the panel's render and computeVisualOrder (keyboard nav), so the
 // two can never drift. This is the crux of "Ctrl+J/K skips New Session cards
@@ -1435,7 +1766,8 @@ export function chipMatchesSession(
 // flat views list EVERY non-hidden session (sortedSessions) — so nav has to walk
 // that same full set or it steps over the blanks the panel is showing. Drops
 // nested subagents when the toggle is off (always keeping the focused one),
-// sorts by the view comparator, then applies the chip predicate.
+// sorts by the view comparator, applies the chip predicate, then hoists each
+// remaining subagent/teammate row under its parent (hoistNestedUnderParent).
 export function flatViewSessions(
   sortedSessions: InboxSession[],
   subsByParent: Map<string, InboxSession[]>,
@@ -1467,7 +1799,7 @@ export function flatViewSessions(
     const fresh = list.filter((s) => !rank.has(s._id)); // new since the snapshot, still in live order
     ordered = [...frozen, ...fresh];
   }
-  return opts.chipMatches ? ordered.filter(opts.chipMatches) : ordered;
+  return hoistNestedUnderParent(opts.chipMatches ? ordered.filter(opts.chipMatches) : ordered);
 }
 
 // The manual sort key to give a row dropped at `insertIndex` among `orderedKeys`
@@ -1511,9 +1843,16 @@ export function computeVisualOrder(state: {
   showFavorites?: boolean;
   favorites?: any[];
   liveInboxIds: Set<string>;
+  teamInboxIds?: Set<string>;
+  currentUser?: { _id?: string } | null;
   recentFreezeOrder?: string[] | null;
   collapsedSections?: Record<string, boolean>;
-  clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; inbox_manual_order?: Record<string, number>; show_subagents?: boolean; show_old_sessions?: boolean } };
+  // Ephemeral schedule projection published by GlobalSessionPanel (see
+  // setScheduleNavSets) so grouped-mode nav skips sessions absorbed behind
+  // SCHEDULES rows. Null until the panel has schedule data.
+  scheduleNavSets?: { absorbed: ReadonlySet<string> } | null;
+  showOldSessions: boolean;
+  clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; inbox_manual_order?: Record<string, number>; show_subagents?: boolean; inbox_scope?: "mine" | "team" } };
 }): InboxSession[] {
   // Favorites view walks its own project-grouped order so Ctrl+J/K moves through
   // the shelf, not the active desk underneath it.
@@ -1531,12 +1870,26 @@ export function computeVisualOrder(state: {
   // card. This previously guarded only the flat views; grouped/bucket walked the
   // full session map and so stepped onto hidden old sessions.
   const focusedId = state.currentSessionId ?? null;
-  const { visibleSessions } = partitionOldSessions(
+  // Scope FIRST, exactly as the panel does (filterInboxScope → partitionOldSessions),
+  // so nav walks precisely the rows on screen: in team mode the team board's set,
+  // in mine mode never a teammate row left in the shared cache. Team mode has no
+  // "old" partition (the board is already a bounded set), matching the panel.
+  const scope = state.clientState.ui?.inbox_scope ?? "mine";
+  const scopedSessions = filterInboxScope(
     state.sessions,
-    state.liveInboxIds,
-    state.clientState.ui?.show_old_sessions ?? true,
+    scope,
+    state.currentUser?._id?.toString?.() ?? null,
+    state.teamInboxIds,
     focusedId,
   );
+  const { visibleSessions } = scope === "team"
+    ? { visibleSessions: scopedSessions }
+    : partitionOldSessions(
+        scopedSessions,
+        state.liveInboxIds,
+        state.showOldSessions, // ephemeral browse flag — nav must walk exactly what the panel renders
+        focusedId,
+      );
   if (mode === "time" || mode === "recent") {
     // The flat views render under a single collapsible "All" section; collapsing
     // it hides every card, so nav must walk nothing (else it lands on a hidden
@@ -1562,7 +1915,7 @@ export function computeVisualOrder(state: {
   // Grouped/bucket: the categorized status buckets over the SAME visible set, so
   // old sessions hidden from the render are skipped by nav too. The bucket branch
   // below splits pinned out and regroups the rest by label/project.
-  const base = visualOrderSessions(visibleSessions, state.sessionsWithQueuedMessages, state.activeProjectFilter, sessionsWithPendingSend(state.pendingMessages), { currentSessionId: state.currentSessionId, pendingCreateIds: new Set(Object.keys(state.pendingSessionCreates)), bucketFilter: state.activeBucketFilter, bucketByConv, collapsedSections: mode === "grouped" ? collapsed : undefined });
+  const base = visualOrderSessions(visibleSessions, state.sessionsWithQueuedMessages, state.activeProjectFilter, sessionsWithPendingSend(state.pendingMessages), { currentSessionId: state.currentSessionId, pendingCreateIds: new Set(Object.keys(state.pendingSessionCreates)), bucketFilter: state.activeBucketFilter, bucketByConv, collapsedSections: mode === "grouped" ? collapsed : undefined, absorbedIds: mode === "grouped" || mode === "bucket" || mode === "plan" ? state.scheduleNavSets?.absorbed : undefined });
   if (mode === "bucket") {
     const pinned = collapsed["pinned"] ? [] : base.filter((s) => s.is_pinned);
     const rest = base.filter((s) => !s.is_pinned);
@@ -1571,6 +1924,16 @@ export function computeVisualOrder(state: {
       ...pinned,
       ...labelGroups.flatMap((g) => (collapsed[`bucket_${g.bucket._id}`] ? [] : g.items)),
       ...projectGroups.flatMap((g) => (collapsed[`bucketproj_${g.name}`] ? [] : g.items)),
+    ];
+  }
+  if (mode === "plan") {
+    const pinned = collapsed["pinned"] ? [] : base.filter((s) => s.is_pinned);
+    const rest = base.filter((s) => !s.is_pinned);
+    const { planGroups, projectGroups } = groupSessionsByPlan(rest);
+    return [
+      ...pinned,
+      ...planGroups.flatMap((g) => (collapsed[`plan_${g.key}`] ? [] : g.items)),
+      ...projectGroups.flatMap((g) => (collapsed[`planproj_${g.name}`] ? [] : g.items)),
     ];
   }
   return base;
@@ -1655,6 +2018,15 @@ interface InboxStoreState {
   // list re-sorts under the cursor and j/k steps through a moving target. null =
   // live (re-sorts freely). Ephemeral: never persisted or synced.
   recentFreezeOrder: string[] | null;
+  // Schedule projection for keyboard nav (standing sessions + runs collapsed
+  // under a schedule group row), published by GlobalSessionPanel from its
+  // agentTasks.webList subscription. Ephemeral: never persisted or synced.
+  scheduleNavSets: { absorbed: ReadonlySet<string> } | null;
+  // One-shot request to open the schedule strip above a conversation, published
+  // by schedule-surface clicks (dock rows, bars under cards) so navigating FROM
+  // a schedule lands with the prompt already visible. Nonce-keyed: the strip
+  // consumes each nonce at most once, so a stale request is inert. Ephemeral.
+  scheduleStripExpand: { convId: string; nonce: number } | null;
   viewingDismissedId: string | null;
   pendingNavigateId: string | null;
   renamingSessionId: string | null;
@@ -1680,6 +2052,29 @@ interface InboxStoreState {
   // exactly the cached top-level sessions NOT in this set. The "show old
   // sessions" toggle filters against it client-side (see GlobalSessionPanel).
   liveInboxIds: Set<string>;
+  // Team-mode active set: the ids the team board is currently showing (own +
+  // teammates' team-visible), fed by the listTeamInboxSessions subscription.
+  // The analogue of liveInboxIds for inbox_scope "team" — the panel gates the
+  // visible set on this instead of liveInboxIds while team mode is on. Empty in
+  // "mine" mode. Rows themselves live in the shared (never-prune) sessions cache;
+  // this is only the membership set for the current team view.
+  teamInboxIds: Set<string>;
+  // Persisted twin of liveInboxIds (plain array: the native store JSON-serializes
+  // meta blobs and generic hydration merges don't understand Sets). Written only
+  // by setLiveInboxIds, hydrated manually at boot into liveInboxIds — so the FIRST
+  // painted frame already renders the last-known authoritative set instead of
+  // flashing the whole never-prune cache until the live payload lands.
+  liveInboxIdList: string[];
+  // Replace the authoritative active-inbox set (both twins) from a server
+  // payload. sync(): persists, never dispatches — this is server truth.
+  setLiveInboxIds: (ids: string[]) => void;
+  // "Show old sessions" — a transient browse gesture, deliberately NOT persisted
+  // and NOT server-synced. It was a synced client_state.ui flag once; one browse
+  // click then permanently reverted every client to rendering its whole divergent
+  // cache (the recurring-cruft complaint). Ephemeral means every boot starts from
+  // the authoritative set, on every client.
+  showOldSessions: boolean;
+  setShowOldSessions: (show: boolean) => void;
   // MRU "entered at" per session — bumped only when you switch INTO a session.
   // Drives the Tab switcher order + message eviction. Kept separate from
   // _seenUpToAt so the current session is always strictly the most recent (no
@@ -1782,6 +2177,11 @@ interface InboxStoreState {
   _setDispatchError: (fn: (action: string, error: unknown, args?: unknown) => void) => void;
   _dispatch: (action: string, args: any, patches?: any, result?: any) => Promise<any>;
   dispatchErrors: number;
+  // Last PERMANENT dispatch rejection (server ran the write and refused it) —
+  // ephemeral, raw-set by the dispatch error handler; a platform-specific
+  // surface (web: toast bridge in providers.tsx) turns it into user feedback.
+  // Transient failures never land here: the outbox keeps re-driving those.
+  lastDispatchFailure: { action: string; args: unknown; message: string; at: number } | null;
 
   // -- Wrapped actions (middleware creates aliases from do_* -> *) --
   stashSession: (id: string) => void;
@@ -1807,7 +2207,7 @@ interface InboxStoreState {
   resumeSession: (convId: string) => Promise<any>;
   sendEscape: (convId: string) => void;
   convCommand: (convId: string, command: string, extraArgs?: Record<string, any>, optimistic?: Record<string, any>) => Promise<any>;
-  createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; isolated?: boolean; worktree_name?: string }) => Promise<any>;
+  createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; model?: string; effort?: string; isolated?: boolean; worktree_name?: string }) => Promise<any>;
   // Create the server session for a DEFERRED stub, sourcing project + agent from
   // the LIVE stub row (the new-session pickers write it via updateSessionProject /
   // setConversationAgent) rather than a begin-time closure. This is what makes a
@@ -1879,6 +2279,11 @@ interface InboxStoreState {
   toggleShowDismissed: () => void;
   toggleShowStashed: () => void;
   toggleCollapsedSection: (key: string) => void;
+  // Publish the schedule projection (standing sessions, runs grouped under a
+  // schedule row) for keyboard nav. Ephemeral raw-set state — the schedule data
+  // itself lives in the agentTasks.webList Convex subscription, never the store.
+  setScheduleNavSets: (sets: { absorbed: ReadonlySet<string> } | null) => void;
+  setScheduleStripExpand: (req: { convId: string; nonce: number } | null) => void;
   setViewingDismissedId: (id: string | null) => void;
   getCurrentSession: () => InboxSession | null;
   injectSession: (session: InboxSession) => void;
@@ -2037,6 +2442,10 @@ interface InboxStoreState {
   // -- Task / Doc / Plan / Project state --
   tasks: Record<string, TaskItem>;
   taskActiveSessions: Record<string, any>;
+  // Dormant origin-session badges keyed by conversation id, fetched one-shot by
+  // useSyncTasks (tasks.webTaskOrigins). Task rows no longer carry origin_session
+  // from the server — the tasks page derives it from this map at render.
+  taskOriginBadges: Record<string, NonNullable<TaskItem["origin_session"]> & { agent_type?: string }>;
   // Progress of the full reconcile crawls (useSyncTasks / useSyncDocs), keyed by
   // scope ("tasks" | "docs"). Ephemeral UI state so any list view can show a
   // subtle "syncing N" badge and never imply the list is complete while pages
@@ -2873,10 +3282,13 @@ export const useInboxStore = create<InboxStoreState>(
   sessions: {},
   pending: {},
   dispatchErrors: 0,
+  lastDispatchFailure: null,
   currentSessionId: null,
   lastFocusedConversationId: null,
   showDismissed: false,
   collapsedSections: {},
+  scheduleNavSets: null,
+  scheduleStripExpand: null,
   recentFreezeOrder: null,
   viewingDismissedId: null,
   pendingNavigateId: null,
@@ -2889,6 +3301,17 @@ export const useInboxStore = create<InboxStoreState>(
   showFavorites: false,
   setShowFavorites: (show: boolean) => set({ showFavorites: show, ...(show ? { showMySessions: false } : {}) }),
   liveInboxIds: new Set<string>(),
+  teamInboxIds: new Set<string>(),
+  liveInboxIdList: [],
+  // sync(): the id set is server truth (or its persisted snapshot) — persist to
+  // IDB via patches, never dispatch. Both twins move together so the persisted
+  // array can never drift from what the UI filtered against.
+  setLiveInboxIds: sync(function (this: Draft, ids: string[]) {
+    this.liveInboxIds = new Set(ids);
+    this.liveInboxIdList = ids;
+  }),
+  showOldSessions: false,
+  setShowOldSessions: (show: boolean) => set({ showOldSessions: show }),
   _lastViewedAt: {},
   _seenUpToAt: {},
   _seenMessageCount: {},
@@ -3081,7 +3504,12 @@ export const useInboxStore = create<InboxStoreState>(
     const state = get();
     const current = state.inboxViewMode();
     const hasBuckets = (Object.values(state.buckets) as BucketItem[]).some((b) => !b.archived_at);
-    const cycle: Array<InboxViewMode> = hasBuckets ? ["grouped", "recent", "time", "bucket"] : ["grouped", "recent", "time"];
+    const hasPlans = (Object.values(state.sessions) as InboxSession[]).some((s) => !!s.active_plan);
+    const cycle: Array<InboxViewMode> = [
+      "grouped", "recent", "time",
+      ...(hasBuckets ? ["bucket" as const] : []),
+      ...(hasPlans ? ["plan" as const] : []),
+    ];
     state.setInboxViewMode(cycle[(cycle.indexOf(current) + 1) % cycle.length]);
   },
   setSessionManualOrder: (id: string, key: number) => {
@@ -3495,10 +3923,14 @@ export const useInboxStore = create<InboxStoreState>(
     if (optimistic && this.sessions[convId]) Object.assign(this.sessions[convId], optimistic);
   }),
 
-  createSession: asyncAction(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; isolated?: boolean; worktree_name?: string }) {
+  createSession: asyncAction(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; model?: string; effort?: string; isolated?: boolean; worktree_name?: string }) {
     const sessionId = opts.session_id || (Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
     if (!opts.session_id) opts.session_id = sessionId;
     const now = Date.now();
+    // model/effort ride the dispatched args (the Convex createSession handler
+    // forwards them to the daemon's launch flags) AND get stamped on the local
+    // row so the badge keeps the launch picker's choice through the create —
+    // opts.model is the contract option key ("opus"), the row wants the full id.
     this.sessions[sessionId] = {
       _id: sessionId,
       session_id: sessionId,
@@ -3512,6 +3944,8 @@ export const useInboxStore = create<InboxStoreState>(
       is_idle: true,
       has_pending: false,
       last_user_message: null,
+      ...(opts.model ? { model: opts.agent_type === "claude_code" ? `claude-${opts.model}` : opts.model } : {}),
+      ...(opts.effort ? { effort: opts.effort } : {}),
     } as InboxSession;
   }),
 
@@ -3531,11 +3965,21 @@ export const useInboxStore = create<InboxStoreState>(
     const cur = (s.sessions[stubId] || s.conversations[stubId]) as any;
     const projectPath = cur?.project_path ?? fallback?.projectPath;
     const gitRoot = cur?.git_root ?? fallback?.gitRoot ?? projectPath;
+    const agentType = cur?.agent_type || fallback?.agentType || "claude_code";
+    // Fold in the blank session's chosen model/effort. The launch picker stamps
+    // these on the stub row (setConversationModel) with no server round-trip;
+    // this is where the choice reaches the daemon's launch flags. The row stores
+    // the full model id ("claude-opus-4-8"); the create wants the contract option
+    // key ("opus") — findModelOption matches on key. A model left on a different
+    // agent's id (after an agent switch) resolves to "default" and is dropped.
+    const modelKey = modelOptionKey(cur?.model, agentType);
     return s.createSession({
-      agent_type: cur?.agent_type || fallback?.agentType || "claude_code",
+      agent_type: agentType,
       project_path: projectPath,
       git_root: gitRoot || undefined,
       session_id: stubId,
+      ...(modelKey !== "default" ? { model: modelKey } : {}),
+      ...(cur?.effort ? { effort: cur.effort } : {}),
       ...(s.isolatedWorktreeMode ? { isolated: true } : {}),
     });
   },
@@ -3777,6 +4221,20 @@ export const useInboxStore = create<InboxStoreState>(
     const kind = config.kind ?? "collection";
 
     if (kind === "scalar" || kind === "list") {
+      // No-op re-pushes are common — a list-kind subscription re-emits on any
+      // read-set change (teamMembers was measured re-pushing ~every 2s on
+      // presence heartbeats) — and a wholesale assign registers as a change:
+      // every subscriber wakes and the persistence layer re-puts the whole meta
+      // blob to IDB. Bail when the payload is value-identical. Skipped when a
+      // transform/extra is registered (bookmarks reconciles local pending state
+      // even against an identical payload). These lists are small rosters, so
+      // the JSON compare is far cheaper than the wake + IDB put it avoids.
+      if (!config.transform && !config.extra) {
+        const current = (this as any)[field];
+        if (Object.is(current, incoming)) return;
+        if (kind === "list" && Array.isArray(current) && Array.isArray(incoming) &&
+            JSON.stringify(current) === JSON.stringify(incoming)) return;
+      }
       (this as any)[field] = incoming;
       if (config.transform) config.transform(this, incoming, incoming, false);
       if (config.extra) Object.assign(this, config.extra);
@@ -4025,6 +4483,14 @@ export const useInboxStore = create<InboxStoreState>(
   toggleCollapsedSection: action(function (this: Draft, key: string) {
     this.collapsedSections = { ...this.collapsedSections, [key]: !this.collapsedSections[key] };
   }),
+
+  // Raw set: ephemeral nav bookkeeping — no draft, no persistence, no dispatch.
+  setScheduleNavSets: (sets: { absorbed: ReadonlySet<string> } | null) =>
+    set({ scheduleNavSets: sets }),
+
+  // Raw set: one-shot strip-expand request (see the state field's comment).
+  setScheduleStripExpand: (req: { convId: string; nonce: number } | null) =>
+    set({ scheduleStripExpand: req }),
 
   setViewingDismissedId: action(function (this: Draft, id: string | null) {
     this.viewingDismissedId = id;
@@ -4671,6 +5137,7 @@ export const useInboxStore = create<InboxStoreState>(
   comments: {},
   tasks: {},
   taskActiveSessions: {} as Record<string, any>,
+  taskOriginBadges: {},
   syncProgress: {},
   liveLoading: {},
   mentionIndex: { tasks: {}, docs: {}, plans: {} },
@@ -5269,6 +5736,20 @@ export function feedPagePersistence(page: { rowCount: number; nextCursor: string
 
 // -- IndexedDB cache: wire patch-driven writes + hydrate on load --
 
+// Boot-seed liveInboxIds from its persisted twin. Guarded: only a non-empty
+// cached array lands, and only while the in-memory set is still empty — if a
+// live payload raced hydration and landed first (size > 0), the fresher server
+// truth wins and the stale snapshot is discarded. Raw setState on purpose: the
+// value came FROM disk, so re-persisting it through the sync() action would be
+// a pointless IDB write during hydration.
+export function seedLiveInboxIdsFromCache(cachedList: unknown) {
+  if (!Array.isArray(cachedList) || cachedList.length === 0) return;
+  if (useInboxStore.getState().liveInboxIds.size > 0) return;
+  const ids = cachedList.filter((id): id is string => typeof id === "string");
+  if (ids.length === 0) return;
+  useInboxStore.setState({ liveInboxIds: new Set(ids), liveInboxIdList: ids });
+}
+
 if (PERSISTENCE_AVAILABLE) {
   (useInboxStore.getState() as any)._setIDBWrite(writePatchesToIDB);
   (useInboxStore.getState() as any)._setOutbox(enqueueDispatch, removeDispatch, loadOutbox);
@@ -5387,6 +5868,14 @@ if (PERSISTENCE_AVAILABLE) {
     // ct-34920 / buckets-pop-in bug class).
     apply(HYDRATION_CRITICAL_KEYS);
 
+    // Seed the authoritative active set from its persisted twin (manual
+    // hydration — see clientSyncRegistry). Same synchronous pass as the
+    // sessions apply above, so the first frame that shows cached sessions
+    // already filters them to the last-known server set: no cold-boot flash of
+    // aged-out rows. The live subscription / recovery poll replace it within
+    // ~1s of connecting.
+    seedLiveInboxIdsFromCache(cached.liveInboxIdList);
+
     // Always mark initialized after IDB hydration completes — even if cached
     // clientState was missing — so app gates don't hang on fresh users.
     if (!useInboxStore.getState().clientStateInitialized) {
@@ -5417,10 +5906,16 @@ if (PERSISTENCE_AVAILABLE) {
       }
     }
 
-    // Preload messages for all active inbox sessions so clicks are instant
-    for (const id of Object.keys(cached.sessions || {})) {
-      ensureHydrated(id);
-    }
+    // Preload messages for the active inbox sessions so clicks are instant.
+    // Scope: the authoritative live set + the restored focus target — NOT every
+    // cached session row. Iterating the whole cache here meant thousands of IDB
+    // probes at boot and loaded messages for hundreds of conversations straight
+    // into memory for the eviction cap to fight back out. Anything else
+    // hydrates on demand (ensureHydrated on open / the inbox warm loop).
+    const preloadIds = new Set<string>(cached.liveInboxIdList ?? []);
+    const focusId = useInboxStore.getState().currentSessionId;
+    if (focusId) preloadIds.add(focusId);
+    for (const id of preloadIds) ensureHydrated(id);
 
     // Deferred: list views + secondary data hydrate just after first paint.
     // setTimeout, NOT requestAnimationFrame: rAF is paused in background tabs, so

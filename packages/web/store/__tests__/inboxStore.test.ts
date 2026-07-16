@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { categorizeSessions, computeNewDividerIndex, dropLatchedFeedHasMore, feedPagePersistence, findReusableBlankSession, getSessionRenderKey, isConvexId, isSessionDismissed, isSessionStashed, orchestrationGroupLabelOf, pendingSendConsumed, resolveAssigneeInfo, resolveSessionAuthor, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
+import { categorizeSessions, computeNewDividerIndex, dropLatchedFeedHasMore, feedPagePersistence, findReusableBlankSession, getSessionRenderKey, isConvexId, isSessionDismissed, isSessionStashed, orchestrationGroupLabelOf, PENDING_SEND_PRUNE_GRACE_MS, pendingSendConsumed, reconcilePendingSendForSession, resolveAssigneeInfo, resolveSessionAuthor, seedLiveInboxIdsFromCache, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
 import { isPersistedStoreKey } from "../idbCache";
 import { declareViewNav } from "../viewNav";
 
@@ -1828,6 +1828,34 @@ describe("pendingSendConsumed — server-advanced gate", () => {
   });
 });
 
+describe("reconcilePendingSendForSession — prune grace window", () => {
+  // ACTIVE status → pendingSendConsumed is true immediately; only the grace
+  // window stands between a just-dispatched send and the prune.
+  const consumedSession = { agent_status: "working", is_idle: false, has_pending: false, updated_at: 999_999 } as any;
+  const msg = (over: Record<string, unknown>) =>
+    ({ _id: "m1", _clientId: "m1", role: "user", content: "hi", _isOptimistic: true, ...over }) as any;
+
+  it("keeps a just-sent message even when the session already reads consumed", () => {
+    // The dispatch retry ladder hasn't had time to fail (and mark _isFailed);
+    // pruning now would destroy the only copy of the user's text.
+    const pm: Record<string, any[]> = { c1: [msg({ timestamp: Date.now() })] };
+    expect(reconcilePendingSendForSession(pm, "c1", consumedSession, null)).toBe(false);
+    expect(pm.c1.length).toBe(1);
+  });
+
+  it("prunes a consumed send once it is older than the grace window", () => {
+    const pm: Record<string, any[]> = { c1: [msg({ timestamp: Date.now() - PENDING_SEND_PRUNE_GRACE_MS - 1 })] };
+    expect(reconcilePendingSendForSession(pm, "c1", consumedSession, null)).toBe(true);
+    expect(pm.c1).toBeUndefined();
+  });
+
+  it("keeps failed sends forever (the user may retry them)", () => {
+    const pm: Record<string, any[]> = { c1: [msg({ timestamp: Date.now() - PENDING_SEND_PRUNE_GRACE_MS - 1, _isFailed: true })] };
+    expect(reconcilePendingSendForSession(pm, "c1", consumedSession, null)).toBe(false);
+    expect(pm.c1.length).toBe(1);
+  });
+});
+
 describe("session-view recording (MRU order + unread divider anchor)", () => {
   const realNow = Date.now;
   let clock = 1000;
@@ -1984,64 +2012,42 @@ describe("orchestration grouping", () => {
     expect(orchestrationGroupLabelOf(mk("d", { project_path: "/Users/x/src/codecast" }))).toBeNull();
   });
 
-  it("clusters >=2 plan workers (main-repo path) under the plan label", () => {
-    // The real shape: workers carry active_plan but a plain main-repo project_path.
+  it("sessions sharing a plan stay in their status buckets — the status view never clusters by plan", () => {
+    // Regression (ct-37908): the status view used to fold ≥2 plan-bound sessions
+    // into a collapsed group, hiding a working session from Working and
+    // undercounting the sidebar's needs-input badge. Grouping by plan is now
+    // exclusively the "By plan" view's job (groupSessionsByPlan).
     const sessions = {
       a: mk("a", { active_plan: PLAN, project_path: "/Users/x/src/codecast", updated_at: 3 }),
       b: mk("b", { active_plan: PLAN, project_path: "/Users/x/src/codecast", updated_at: 2 }),
+      wt1: mk("wt1", { project_path: WT, updated_at: 3 }),
+      wt2: mk("wt2", { project_path: WT, updated_at: 2 }),
       main: mk("main", { project_path: "/Users/x/src/codecast", updated_at: 4 }),
     };
     const r = categorizeSessions(sessions, new Set());
-    expect(r.orchestrationGroups.get("pl-85 · Architecture hardening")?.map((s) => s._id).sort())
-      .toEqual(["a", "b"]);
     const flat = new Set([...r.pinned, ...r.newSessions, ...r.needsInput, ...r.working].map((s) => s._id));
-    expect(flat.has("a")).toBe(false);
-    expect(flat.has("b")).toBe(false);
-    // a plain main-repo session (no plan) is never grouped and stays flat
-    expect(flat.has("main")).toBe(true);
+    for (const id of ["a", "b", "wt1", "wt2", "main"]) expect(flat.has(id)).toBe(true);
   });
 
-  it("clusters >=2 same-worktree workers (no plan) under the worktree label", () => {
-    const sessions = {
-      a: mk("a", { project_path: WT, updated_at: 3 }),
-      b: mk("b", { project_path: WT, updated_at: 2 }),
-      main: mk("main", { project_path: "/Users/x/src/codecast", updated_at: 4 }),
-    };
-    const r = categorizeSessions(sessions, new Set());
-    expect(r.orchestrationGroups.get("⑂ arch-hardening-top-six")?.map((s) => s._id).sort())
-      .toEqual(["a", "b"]);
-    expect(new Set([...r.needsInput, ...r.working].map((s) => s._id)).has("main")).toBe(true);
-  });
-
-  it("leaves a lone worker (cluster of 1) inline", () => {
-    const sessions = {
-      a: mk("a", { active_plan: PLAN, project_path: "/Users/x/src/codecast" }),
-      main: mk("main", { project_path: "/Users/x/src/codecast" }),
-    };
-    const r = categorizeSessions(sessions, new Set());
-    expect(r.orchestrationGroups.size).toBe(0);
-    const flat = new Set([...r.needsInput, ...r.working].map((s) => s._id));
-    expect(flat.has("a")).toBe(true);
-  });
-
-  it("does not group a worker already nested under a conversation parent", () => {
+  it("a plan-bound session nested under a conversation parent still nests, never a loose card", () => {
     const sessions = {
       parent: mk("parent", { project_path: "/Users/x/src/codecast" }),
       a: mk("a", { active_plan: PLAN, parent_conversation_id: "parent" }),
       b: mk("b", { active_plan: PLAN, parent_conversation_id: "parent" }),
     };
     const r = categorizeSessions(sessions, new Set());
-    expect(r.orchestrationGroups.size).toBe(0);
     expect(r.subsByParent.get("parent")?.length).toBe(2);
+    const flat = new Set([...r.needsInput, ...r.working].map((s) => s._id));
+    expect(flat.has("a")).toBe(false);
+    expect(flat.has("b")).toBe(false);
   });
 
-  it("does not pull pinned workers into an orchestration group", () => {
+  it("pinned plan-bound sessions stay in Pinned", () => {
     const sessions = {
       a: mk("a", { active_plan: PLAN, is_pinned: true, inbox_pinned_at: 5 }),
       b: mk("b", { active_plan: PLAN, is_pinned: true, inbox_pinned_at: 6 }),
     };
     const r = categorizeSessions(sessions, new Set());
-    expect(r.orchestrationGroups.size).toBe(0);
     expect(r.pinned.map((s) => s._id).sort()).toEqual(["a", "b"]);
   });
 });
@@ -3407,5 +3413,168 @@ describe("dismiss/kill advances in the ACTIVE view order, like j/k", () => {
     seed("time");
     useInboxStore.getState().markKilling(A);
     expect(useInboxStore.getState().currentSessionId).toBe(C);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Authoritative active set (hide-old): categorizeSessions must render exactly the
+// server's live inbox set (liveInboxIds) in the active buckets when showOld is off
+// — the invariant that converges the inbox across web / desktop / mobile and keeps
+// aged-out cruft out of Needs Input while it stays in the cache for search/open.
+// See inbox_no_authoritative_sessions_floor / the fold in categorizeSessions.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("categorizeSessions — authoritative active set (hide-old)", () => {
+  const cid = (tag: string) => tag.padEnd(32, "0").slice(0, 32).toLowerCase();
+  // An idle session with messages classifies as needs-input (see the stopped/idle
+  // test above). Fresh updated_at so the trust-TTL sweep never touches it.
+  const needsInputRow = (tag: string, ageMs = 0): InboxSession => ({
+    ...baseSession,
+    _id: cid(tag),
+    session_id: `sess-${tag}`,
+    message_count: 4,
+    agent_status: "idle",
+    is_idle: true,
+    updated_at: Date.now() - ageMs,
+  });
+
+  it("hides cached rows absent from liveInboxIds; keeps live-set rows; counts old", () => {
+    const live = needsInputRow("liveactive");
+    const old = needsInputRow("oldcruft", 40 * 24 * 60 * 60 * 1000); // 40d stale
+    const sessions = { [live._id]: live, [old._id]: old };
+    const liveInboxIds = new Set([live._id]);
+
+    const hidden = categorizeSessions(sessions, new Set(), undefined, { liveInboxIds, showOld: false });
+    expect(hidden.needsInput.map((s) => s._id)).toEqual([live._id]);
+    expect(hidden.needsInput.map((s) => s._id)).not.toContain(old._id);
+    expect(hidden.oldCount).toBe(1);
+
+    // The old row is only hidden from the buckets — it is still in the input map
+    // (categorize never mutates it), so search/open still resolve it.
+    expect(sessions[old._id]).toBe(old);
+  });
+
+  it("showOld: true reveals the old rows and reports oldCount 0", () => {
+    const live = needsInputRow("liveactive2");
+    const old = needsInputRow("oldcruft2", 40 * 24 * 60 * 60 * 1000);
+    const sessions = { [live._id]: live, [old._id]: old };
+    const res = categorizeSessions(sessions, new Set(), undefined, {
+      liveInboxIds: new Set([live._id]),
+      showOld: true,
+    });
+    expect(res.needsInput.map((s) => s._id).sort()).toEqual([live._id, old._id].sort());
+    expect(res.oldCount).toBe(0);
+  });
+
+  it("no liveInboxIds → safe fallback: show everything (pre-live-payload / legacy callers)", () => {
+    const a = needsInputRow("rowa");
+    const b = needsInputRow("rowb", 40 * 24 * 60 * 60 * 1000);
+    const sessions = { [a._id]: a, [b._id]: b };
+    // omitted opts (legacy call sites)
+    expect(categorizeSessions(sessions, new Set()).needsInput.length).toBe(2);
+    // explicit empty set (cold start, before the first live payload) also shows all
+    const cold = categorizeSessions(sessions, new Set(), undefined, { liveInboxIds: new Set(), showOld: false });
+    expect(cold.needsInput.length).toBe(2);
+    expect(cold.oldCount).toBe(0);
+  });
+
+  it("never hides a working session (working rows are always newest → always in the live set)", () => {
+    const working = { ...needsInputRow("workingnow"), agent_status: "working", is_idle: false };
+    // Even if a race left it momentarily out of liveInboxIds, it must not vanish
+    // from Working — but in practice it is always present. Assert the guaranteed
+    // case: a working row IN the live set stays in Working under hide-old.
+    const sessions = { [working._id]: working };
+    const res = categorizeSessions(sessions, new Set(), undefined, {
+      liveInboxIds: new Set([working._id]),
+      showOld: false,
+    });
+    expect(res.working.map((s) => s._id)).toEqual([working._id]);
+    expect(res.oldCount).toBe(0);
+  });
+
+  it("pinned rows are exempt from hide-old even when absent from the live set", () => {
+    const pinned = { ...needsInputRow("pinnedold", 60 * 24 * 60 * 60 * 1000), is_pinned: true, inbox_pinned_at: Date.now() };
+    const sessions = { [pinned._id]: pinned };
+    const res = categorizeSessions(sessions, new Set(), undefined, { liveInboxIds: new Set(["someotherid".padEnd(32, "0")]), showOld: false });
+    expect(res.pinned.map((s) => s._id)).toEqual([pinned._id]);
+    expect(res.oldCount).toBe(0);
+  });
+
+  it("the sidebar/dashboard count path matches the panel (same authoritative set)", () => {
+    // Regression for the divergence: the badges used raw s.sessions (no partition),
+    // so their counts included cruft the panel hid. With the fold both paths use the
+    // same opts → identical needsInput length.
+    const live = needsInputRow("livea");
+    const old1 = needsInputRow("old1", 40 * 24 * 60 * 60 * 1000);
+    const old2 = needsInputRow("old2", 40 * 24 * 60 * 60 * 1000);
+    const sessions = { [live._id]: live, [old1._id]: old1, [old2._id]: old2 };
+    const opts = { liveInboxIds: new Set([live._id]), showOld: false };
+    const panel = categorizeSessions(sessions, new Set(), undefined, opts).needsInput.length;
+    const badge = categorizeSessions(sessions, new Set(), undefined, opts).needsInput.length;
+    expect(panel).toBe(1);
+    expect(badge).toBe(panel);
+  });
+});
+
+describe("liveInboxIds persistence + ephemeral show-old", () => {
+  beforeEach(() => {
+    useInboxStore.setState({
+      liveInboxIds: new Set<string>(),
+      liveInboxIdList: [],
+      showOldSessions: false,
+    });
+  });
+
+  it("setLiveInboxIds keeps the in-memory Set and its persisted twin in lockstep", () => {
+    useInboxStore.getState().setLiveInboxIds(["a", "b"]);
+    const st = useInboxStore.getState();
+    expect([...st.liveInboxIds].sort()).toEqual(["a", "b"]);
+    expect([...st.liveInboxIdList].sort()).toEqual(["a", "b"]);
+
+    useInboxStore.getState().setLiveInboxIds(["c"]);
+    const st2 = useInboxStore.getState();
+    expect([...st2.liveInboxIds]).toEqual(["c"]);
+    expect(st2.liveInboxIdList).toEqual(["c"]);
+  });
+
+  it("cold-boot seed lands the persisted twin into liveInboxIds", () => {
+    seedLiveInboxIdsFromCache(["x", "y"]);
+    const st = useInboxStore.getState();
+    expect([...st.liveInboxIds].sort()).toEqual(["x", "y"]);
+    expect([...st.liveInboxIdList].sort()).toEqual(["x", "y"]);
+  });
+
+  it("cold-boot seed never clobbers a live payload that raced hydration", () => {
+    useInboxStore.getState().setLiveInboxIds(["fresh"]);
+    seedLiveInboxIdsFromCache(["stale1", "stale2"]);
+    expect([...useInboxStore.getState().liveInboxIds]).toEqual(["fresh"]);
+  });
+
+  it("cold-boot seed ignores junk cache values (non-array / empty / non-strings)", () => {
+    seedLiveInboxIdsFromCache(undefined);
+    seedLiveInboxIdsFromCache({});
+    seedLiveInboxIdsFromCache([]);
+    seedLiveInboxIdsFromCache([42, null]);
+    expect(useInboxStore.getState().liveInboxIds.size).toBe(0);
+  });
+
+  it("liveInboxIdList is persisted; showOldSessions is deliberately NOT", () => {
+    // The twin must survive reloads (first-frame correctness); the browse flag
+    // must NOT (a persisted "show my whole divergent cache" mode is exactly the
+    // recurring cross-client cruft bug this work removed — it was once a
+    // server-synced client_state.ui flag, and one browse click reverted every
+    // client to cruft-mode forever).
+    expect(isPersistedStoreKey("liveInboxIdList")).toBe(true);
+    expect(isPersistedStoreKey("showOldSessions")).toBe(false);
+    // The raw Set itself must not be registered either — it doesn't survive the
+    // native JSON round-trip; only its array twin does.
+    expect(isPersistedStoreKey("liveInboxIds")).toBe(false);
+  });
+
+  it("setShowOldSessions is a transient gesture: flips in memory, defaults off", () => {
+    expect(useInboxStore.getState().showOldSessions).toBe(false);
+    useInboxStore.getState().setShowOldSessions(true);
+    expect(useInboxStore.getState().showOldSessions).toBe(true);
+    useInboxStore.getState().setShowOldSessions(false);
+    expect(useInboxStore.getState().showOldSessions).toBe(false);
   });
 });

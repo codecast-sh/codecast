@@ -1,6 +1,27 @@
 import * as fs from "fs";
 import * as path from "path";
 
+/**
+ * Reproduce Claude Code's cwd → ~/.claude/projects/<dir> slug EXACTLY.
+ *
+ * Claude encodes the working directory by replacing every character that is not
+ * a letter or digit with "-" (so "/", ".", and "_" all become "-"). A session
+ * JSONL written under any other slug is invisible to `claude --resume`, which
+ * scans only the project dir for its own cwd and then crashes with
+ * "No conversation found with session ID". The previous `cwd.replace(/\//g,"-")`
+ * handled "/" but left dots intact, so any cwd containing a dot — notably the
+ * `.claude/worktrees/...` paths used by `cast ws`/orchestrate, or `~/.claude`
+ * itself — landed in a dir Claude never reads.
+ *
+ * Verified against Claude 2.1.196:
+ *   "/Users/a/.claude"  -> "-Users-a--claude"
+ *   ".../outreach/.claude/worktrees/x" -> "...-outreach--claude-worktrees-x"
+ *   "probe_x.y-z"       -> "probe-x-y-z"
+ */
+export function claudeProjectDirName(cwd: string): string {
+  return cwd.replace(/[^a-zA-Z0-9]/g, "-");
+}
+
 export interface ResolveInput {
   // Recorded path from the conversation (often foreign — e.g. /Users/ec2-user/...)
   projectPath?: string | null;
@@ -133,6 +154,19 @@ export function resolveLocalRepoPath(input: LocalRepoInput): string | null {
   if (!remotePath) return null;
   if (exists(remotePath)) return remotePath;
 
+  // A torn-down worktree path. `cast ws`, orchestrate, and conductor place
+  // worktrees under <repo>/.codecast|.claude|.conductor/...; once destroyed the
+  // recorded cwd is gone but the session belongs to the PARENT repo. Resolve to
+  // it directly when it still exists. Without this, the leaf walk below reaches
+  // the ".claude" segment and resolveBase(".claude") matches $HOME/.claude
+  // (which always exists), so every dead worktree resumed in ~/.claude — the
+  // wrong directory, and the project then mislabels as the home dir. Only
+  // reached because remotePath itself is already gone (checked above).
+  const worktreeParent = remotePath.match(/^(.*?)\/\.(?:claude|codecast|conductor)(?:\/|$)/)?.[1];
+  if (worktreeParent && worktreeParent !== input.home && exists(worktreeParent)) {
+    return worktreeParent;
+  }
+
   const maps = [input.userMap, input.learnedMap].filter(Boolean) as Record<string, string>[];
   // A full-path mapping is the most specific signal — honor it before walking.
   for (const map of maps) {
@@ -257,4 +291,63 @@ export function pickProjectPath(input: PickProjectPathInput): string {
   if (decoded && decoded !== home && exists(decoded)) return decoded;
   if (recordedCwd) return recordedCwd;
   return decoded;
+}
+
+export interface TranscriptCandidate {
+  /** The ~/.claude/projects/<slug>/<uuid>.jsonl path. */
+  filePath: string;
+  /** resolveTranscriptProjectPath(filePath, slug) — the project this copy resolves to. */
+  projectPath: string;
+  /** Does projectPath exist as a directory on this machine? */
+  projectExists: boolean;
+}
+
+export type TranscriptChoice =
+  // `supersededFilePath` is set only when the incoming transcript replaces a
+  // different prior copy that resolved to a non-existent dir (a promotion). It is
+  // absent when there was no prior copy or when both copies are legitimately
+  // syncing (ambiguous), so callers don't tear down a still-valid sibling.
+  | { action: "sync"; reason: string; supersededFilePath?: string }
+  | { action: "skip"; reason: string; canonicalFilePath: string };
+
+// `claude --resume` copies the prior transcript into the new cwd's project dir,
+// so a single session UUID can appear as two .jsonl files under two slugs — both
+// watched, both syncing the SAME conversation (keyed by UUID), doubling write
+// load. The stale copy is the remote-resume artifact: it lands under a slug that
+// decodes to a foreign/home dir that does NOT exist locally (e.g. -Users-m1 ->
+// /Users/m1), exactly the home-fallback path pickProjectPath already heals. The
+// live copy lives under the real local checkout, so its projectPath exists.
+//
+// Decide whether an incoming transcript should be synced or skipped as a stale
+// duplicate of an already-watched canonical file for the same UUID. CONSERVATIVE:
+// only skip a copy whose project dir does NOT exist when the canonical one's
+// DOES. If both exist, neither exists, or there is no prior file, sync (the
+// server dedups by message_uuid, so syncing both is correct, just redundant).
+// We never skip a transcript living in a real local checkout — message loss is
+// never traded for reduced write load.
+export function chooseSessionTranscript(
+  incoming: TranscriptCandidate,
+  canonical: TranscriptCandidate | undefined
+): TranscriptChoice {
+  if (!canonical || canonical.filePath === incoming.filePath) {
+    return { action: "sync", reason: "no prior transcript for this session UUID" };
+  }
+  if (incoming.projectExists && !canonical.projectExists) {
+    return {
+      action: "sync",
+      reason: `incoming resolves to real checkout ${incoming.projectPath}; prior ${canonical.filePath} resolves to non-existent ${canonical.projectPath} — incoming becomes canonical`,
+      supersededFilePath: canonical.filePath,
+    };
+  }
+  if (!incoming.projectExists && canonical.projectExists) {
+    return {
+      action: "skip",
+      reason: `duplicate of ${canonical.filePath} (real checkout ${canonical.projectPath}); incoming resolves to non-existent ${incoming.projectPath} — stale resume artifact`,
+      canonicalFilePath: canonical.filePath,
+    };
+  }
+  return {
+    action: "sync",
+    reason: "two transcripts for the same UUID but neither is a clear stale artifact — sync both, server dedups",
+  };
 }

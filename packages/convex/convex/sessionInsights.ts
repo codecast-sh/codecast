@@ -3,7 +3,7 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
-import { isConversationTeamVisible, isTeamMember, createTeamFeedFilter } from "./privacy";
+import { isConversationTeamVisible, isTeamMember, createTeamFeedFilter, teamVisibleConvTeam } from "./privacy";
 
 type OutcomeType = "shipped" | "progress" | "blocked" | "unknown";
 type InsightGenStatus = {
@@ -431,8 +431,9 @@ export const upsertSessionInsight = internalMutation({
         if (args.blockers?.length) contentParts.push(`## Blockers\n${args.blockers.map((b) => `- ${b}`).join("\n")}`);
         if (conv.project_path) contentParts.push(`## Project\n\`${conv.project_path}\``);
 
-        const convTeamId = conv && (!conv.is_private || conv.auto_shared
-          || (conv.team_visibility && conv.team_visibility !== "private")) ? conv.team_id : args.team_id;
+        // Private source session → personal doc; no args.team_id fallback
+        // (that fallback attached private-session docs to the mining team).
+        const convTeamId = teamVisibleConvTeam(conv);
         const existingDoc = await ctx.db
           .query("docs")
           .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))

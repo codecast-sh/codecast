@@ -7,6 +7,43 @@ const http = httpRouter();
 
 auth.addHttpRoutes(http);
 
+// IP-keyed rate limit for an unauthenticated HTTP route. Returns a 429 Response to
+// short-circuit the handler when the caller's IP exceeds the window, else null.
+// Fail-open: a limiter error never blocks the route (availability > strictness).
+async function ipRateLimited(
+  ctx: any,
+  request: Request,
+  name: string,
+  max: number,
+  windowMs: number,
+): Promise<Response | null> {
+  const ip =
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    request.headers.get("cf-connecting-ip") ||
+    request.headers.get("x-real-ip") ||
+    "unknown";
+  try {
+    const res = await ctx.runMutation(internal.ipRateLimit.bump, {
+      key: `${name}:${ip}`,
+      max,
+      window_ms: windowMs,
+    });
+    if (!res.ok) {
+      return new Response(JSON.stringify({ error: "Too many requests" }), {
+        status: 429,
+        headers: {
+          "Content-Type": "application/json",
+          "Retry-After": String(Math.ceil((res.retry_after_ms ?? windowMs) / 1000)),
+          "Access-Control-Allow-Origin": "*",
+        },
+      });
+    }
+  } catch {
+    // Fail open.
+  }
+  return null;
+}
+
 
 http.route({
   path: "/cli/exchange-token",
@@ -19,6 +56,11 @@ http.route({
     };
 
     try {
+      // Brute-force guard: a setup token is one-shot + TTL-bound, so 20 exchange
+      // attempts/min per IP is far above any legitimate use and caps guessing.
+      const limited = await ipRateLimited(ctx, request, "exchange-token", 20, 60_000);
+      if (limited) return limited;
+
       const body = await request.json();
       const setupToken = body.token;
 
@@ -375,7 +417,7 @@ http.route({
       const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
       const expectedSignature = "sha256=" + hashHex;
 
-      if (signature !== expectedSignature) {
+      if (!signature || !timingSafeEqualHex(signature, expectedSignature)) {
         return new Response(JSON.stringify({ error: "Invalid signature" }), {
           status: 401,
           headers: { "Content-Type": "application/json" },
@@ -486,7 +528,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, query, limit, offset, start_time, end_time, context_before, context_after, project_path, user_only, member_name, mine_only, label } = body;
+      const { api_token, query, limit, offset, start_time, end_time, context_before, context_after, project_path, user_only, member_name, mine_only, label, titles_only } = body;
 
       if (!api_token || !query) {
         return new Response(JSON.stringify({ error: "Missing api_token or query" }), {
@@ -518,6 +560,7 @@ http.route({
         member_name,
         mine_only,
         label,
+        titles_only,
       });
 
       if (result.error) {
@@ -2310,19 +2353,31 @@ http.route({
         });
       }
 
-      const result = await ctx.runMutation(api.users.deleteConversationsForPathCLI, {
-        api_token,
-        path_prefix,
-      });
-
-      if ((result as any).error) {
-        return new Response(JSON.stringify({ error: (result as any).error }), {
-          status: (result as any).error === "Unauthorized" ? 401 : 400,
-          headers: { "Content-Type": "application/json", ...corsHeaders },
+      // Each mutation call deletes at most one message batch or one
+      // conversation (bounded transactions); drain here so a single CLI call
+      // deletes everything under the prefix. The iteration cap bounds one HTTP
+      // request — a caller with an enormous project re-invokes on hasMore.
+      let conversationsDeleted = 0;
+      let messagesDeleted = 0;
+      let hasMore = true;
+      for (let i = 0; i < 400 && hasMore; i++) {
+        const result = await ctx.runMutation(api.users.deleteConversationsForPathCLI, {
+          api_token,
+          path_prefix,
         });
+
+        if ((result as any).error) {
+          return new Response(JSON.stringify({ error: (result as any).error }), {
+            status: (result as any).error === "Unauthorized" ? 401 : 400,
+            headers: { "Content-Type": "application/json", ...corsHeaders },
+          });
+        }
+        conversationsDeleted += (result as any).conversationsDeleted ?? 0;
+        messagesDeleted += (result as any).messagesDeleted ?? 0;
+        hasMore = !!(result as any).hasMore;
       }
 
-      return new Response(JSON.stringify(result), {
+      return new Response(JSON.stringify({ conversationsDeleted, messagesDeleted, hasMore }), {
         status: 200,
         headers: { "Content-Type": "application/json", ...corsHeaders },
       });
@@ -2425,7 +2480,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, version, platform, pid, autostart_enabled, has_tmux, local_project_roots, pending_sync_count, oldest_pending_ms, device_id, device_label, is_remote_device, cc_accounts, settings } = body;
+      const { api_token, version, platform, pid, autostart_enabled, has_tmux, local_project_roots, pending_sync_count, oldest_pending_ms, pending_sync_messages, pending_sync_conversations, device_id, device_label, is_remote_device, cc_accounts, settings } = body;
 
       if (!api_token || !version || !platform) {
         return new Response(JSON.stringify({ error: "Missing required fields" }), {
@@ -2444,6 +2499,8 @@ http.route({
         local_project_roots,
         pending_sync_count,
         oldest_pending_ms,
+        pending_sync_messages,
+        pending_sync_conversations,
         device_id,
         device_label,
         is_remote_device,
@@ -2556,7 +2613,11 @@ http.route({
     };
     try {
       const body = await request.json();
-      const { api_token, conversation_id, message_uuid } = body;
+      // session_id is the CLI-supplied idempotency key: forkFromMessage returns
+      // the existing row when it's seen before, so a retried/redelivered fork
+      // can't mint a duplicate "Fork:" conversation. Dropping it here silently
+      // disabled that guard for every CLI fork. direction titles the branch.
+      const { api_token, conversation_id, message_uuid, session_id, direction } = body;
       if (!api_token || !conversation_id) {
         return new Response(JSON.stringify({ error: "Missing api_token or conversation_id" }), {
           status: 400,
@@ -2567,6 +2628,8 @@ http.route({
         conversation_id,
         message_uuid,
         api_token,
+        session_id,
+        direction,
       });
       return new Response(JSON.stringify(result), {
         status: 200,
@@ -2898,6 +2961,8 @@ http.route({
         ...(body.daemon_id ? { daemon_id: body.daemon_id } : {}),
         summary: body.summary,
         conversation_id: body.conversation_id,
+        run_session_uuid: body.run_session_uuid,
+        ...(body.needs_attention !== undefined ? { needs_attention: !!body.needs_attention } : {}),
       });
       return new Response(JSON.stringify({ success: result }), {
         status: 200,
@@ -3108,6 +3173,88 @@ http.route({
 
 // --- Task Layer Routes ---
 
+// ── Slack webhook (Anchor inbound) ───────────────────────────────────────────
+// An @mention or DM in a mapped channel wakes that channel's anchor. Verified by
+// Slack's v0 HMAC signature (SLACK_SIGNING_SECRET) with replay protection, then
+// deduped by event_id so a Slack retry can't double-wake.
+http.route({
+  path: "/api/webhooks/slack",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const signature = request.headers.get("X-Slack-Signature");
+    const timestamp = request.headers.get("X-Slack-Request-Timestamp");
+    const body = await request.text();
+    const secret = process.env.SLACK_SIGNING_SECRET;
+
+    if (!secret) {
+      console.error("[slack webhook] SLACK_SIGNING_SECRET not configured; refusing");
+      return new Response(JSON.stringify({ error: "Webhook not configured" }), { status: 500 });
+    }
+    if (!signature || !timestamp) {
+      return new Response(JSON.stringify({ error: "Missing signature" }), { status: 401 });
+    }
+    // Replay protection: reject stale timestamps (Slack recommends 5 minutes).
+    const ts = parseInt(timestamp, 10);
+    if (!Number.isFinite(ts) || Math.abs(Date.now() / 1000 - ts) > 300) {
+      return new Response(JSON.stringify({ error: "Stale timestamp" }), { status: 401 });
+    }
+    const encoder = new TextEncoder();
+    const key = await crypto.subtle.importKey(
+      "raw",
+      encoder.encode(secret),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"],
+    );
+    const sigBuf = await crypto.subtle.sign("HMAC", key, encoder.encode(`v0:${timestamp}:${body}`));
+    const hex = Array.from(new Uint8Array(sigBuf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+    if (!timingSafeEqualHex(signature, "v0=" + hex)) {
+      return new Response(JSON.stringify({ error: "Invalid signature" }), { status: 401 });
+    }
+
+    const payload = JSON.parse(body);
+    // Slack's one-time endpoint verification handshake.
+    if (payload.type === "url_verification") {
+      return new Response(payload.challenge, { status: 200, headers: { "Content-Type": "text/plain" } });
+    }
+
+    if (payload.type === "event_callback") {
+      const event = payload.event || {};
+      const eventId = payload.event_id as string | undefined;
+      // Ignore the bot's own posts on both paths, so an anchor reply that happens
+      // to @mention the app can't wake it in a loop (each loop has a new event_id,
+      // so dedup wouldn't catch it).
+      const isMention =
+        event.type === "app_mention" && !event.bot_id && !event.subtype;
+      const isDM =
+        event.type === "message" && event.channel_type === "im" && !event.bot_id && !event.subtype;
+      if ((isMention || isDM) && eventId && event.channel) {
+        // One atomic mutation: dedup + resolve channel→anchor + wake. If the wake
+        // throws it returns 500 and Slack retries — the dedup row rolls back with
+        // it, so a transient failure never silently drops the mention.
+        await ctx.runMutation(internal.slack.wakeFromSlackEvent, {
+          event_id: eventId,
+          channel: event.channel,
+          workspace: payload.team_id as string | undefined,
+          user: event.user,
+          text: String(event.text || ""),
+          thread: event.thread_ts || event.ts,
+        });
+      }
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }),
+});
+
+
 function cliRoute(path: string, handler: (ctx: any, body: any) => Promise<any>) {
   const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
@@ -3160,6 +3307,35 @@ cliRoute("/cli/projects/update", async (ctx, body) => {
   return await ctx.runMutation(api.projects.update, body);
 });
 
+// Anchors (standing agent members)
+cliRoute("/cli/anchor/create", async (ctx, body) => {
+  return await ctx.runMutation(api.anchors.provisionAnchor, body);
+});
+cliRoute("/cli/anchor/list", async (ctx, body) => {
+  return await ctx.runQuery(api.anchors.listAnchors, body);
+});
+cliRoute("/cli/anchor/wake", async (ctx, body) => {
+  return await ctx.runMutation(api.anchors.wakeAnchor, body);
+});
+cliRoute("/cli/anchor/resolve", async (ctx, body) => {
+  return await ctx.runQuery(api.anchors.resolveAnchorForScope, body);
+});
+cliRoute("/cli/anchor/decommission", async (ctx, body) => {
+  return await ctx.runMutation(api.anchors.decommissionAnchor, body);
+});
+cliRoute("/cli/anchor/link-channel", async (ctx, body) => {
+  return await ctx.runAction(api.slack.linkChannel, body);
+});
+cliRoute("/cli/anchor/unlink-channel", async (ctx, body) => {
+  return await ctx.runMutation(api.slack.unlinkChannel, body);
+});
+cliRoute("/cli/anchor/channels", async (ctx, body) => {
+  return await ctx.runQuery(api.slack.listChannels, body);
+});
+cliRoute("/cli/anchor/say", async (ctx, body) => {
+  return await ctx.runAction(api.slack.postMessage, body);
+});
+
 // Tasks
 cliRoute("/cli/work/create", async (ctx, body) => {
   return await ctx.runMutation(api.tasks.create, body);
@@ -3187,9 +3363,6 @@ cliRoute("/cli/work/promote", async (ctx, body) => {
 });
 cliRoute("/cli/work/snippet", async (ctx, body) => {
   return await ctx.runQuery(api.tasks.snippet, body);
-});
-cliRoute("/cli/work/backfill", async (ctx, body) => {
-  return await ctx.runMutation(internal.tasks.backfillTeamScope, body);
 });
 cliRoute("/cli/work/heartbeat", async (ctx, body) => {
   return await ctx.runMutation(api.tasks.heartbeat, body);
@@ -3374,10 +3547,35 @@ cliRoute("/cli/labels/remove", async (ctx, body) => ctx.runMutation(api.buckets.
 // until then.
 cliRoute("/cli/spawn", async (ctx, body) => ctx.runMutation((api as any).spawn.createSessionFromCli, body));
 
+// Session OWNERS (cast own / disown / owners, or scripts routing an agent-run
+// session into a human's inbox). A session has a SET of owners — it can sit in
+// several teammates' inboxes at once — so `own` ADDS and `disown` REMOVES one,
+// leaving the others alone. `owners/set` replaces the set wholesale (the web
+// multi-select, and `cast disown --all`).
+// body: { api_token, session_id, owner: "<email|name>" | "me" }.
+// Inbox visibility (cast dismiss / undismiss / kill): hide a session from the
+// user's inbox (agent keeps running), restore it, or retire it (teardown +
+// Killed bucket). One mutation, action pinned per route so the URLs stay
+// self-documenting. body: { api_token, session }.
+cliRoute("/cli/sessions/dismiss", async (ctx, body) => ctx.runMutation(api.conversations.cliSetSessionVisibility, { ...body, action: "dismiss" }));
+cliRoute("/cli/sessions/undismiss", async (ctx, body) => ctx.runMutation(api.conversations.cliSetSessionVisibility, { ...body, action: "undismiss" }));
+cliRoute("/cli/sessions/kill", async (ctx, body) => ctx.runMutation(api.conversations.cliSetSessionVisibility, { ...body, action: "kill" }));
+
+cliRoute("/cli/sessions/own", async (ctx, body) => ctx.runMutation(api.sessionOwnership.addSessionOwner, body));
+cliRoute("/cli/sessions/disown", async (ctx, body) => ctx.runMutation(api.sessionOwnership.removeSessionOwner, body));
+cliRoute("/cli/sessions/owners/set", async (ctx, body) => ctx.runMutation(api.sessionOwnership.setSessionOwners, body));
+cliRoute("/cli/sessions/owners", async (ctx, body) => ctx.runQuery(api.sessionOwnership.listOwners, body));
+
+// Cross-user device reparent (cast pull): pull a session you run or own onto the
+// caller's OWN device. Account follows device — user_id becomes the caller, the
+// author is pinned. body: { api_token, session_id, device_id }.
+cliRoute("/cli/sessions/reparent", async (ctx, body) => ctx.runMutation(api.devices.reparentSessionToDevice, body));
+
 // CC account switching: route the swap + blocked-session revive through the
 // daemon fleet / nudge limit-parked sessions after a window reset.
 cliRoute("/cli/accounts/switch", async (ctx, body) => ctx.runMutation(api.accountSwitch.requestAccountSwitch, body));
 cliRoute("/cli/accounts/continue-blocked", async (ctx, body) => ctx.runMutation(api.accountSwitch.continueAllBlocked, body));
 cliRoute("/cli/accounts/save", async (ctx, body) => ctx.runMutation(api.accountSwitch.saveAccountProfile, body));
+cliRoute("/cli/accounts/publish", async (ctx, body) => ctx.runMutation(api.accountSwitch.publishDeviceAccounts, body));
 
 export default http;

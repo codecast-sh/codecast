@@ -12,7 +12,9 @@ import { compressImage } from "../lib/compressImage";
 import { visitTimeAgo } from "../lib/recentVisits";
 import { getLabelColor } from "../lib/labelColors";
 import { shouldShowSession } from "../lib/sessionFilters";
-import { useInboxStore, categorizeSessions, sessionsWithPendingSend } from "../store/inboxStore";
+import { nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
+import { useInboxStore, useTrackedStore, categorizeSessions, filterInboxScope, sessionsWithPendingSend, sessionsWakeSig, pendingSendWakeSig } from "../store/inboxStore";
+import { useCoarseNow } from "../hooks/useCoarseNow";
 import { useConvexSync } from "../hooks/useConvexSync";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { TeamIcon } from "./TeamIcon";
@@ -114,7 +116,7 @@ function DroppableSessionRow({ conv, onMobileClose }: { conv: any; onMobileClose
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
       className={`flex items-center gap-2 px-3 py-1 rounded text-sm transition-colors group ${
-        conv.is_subagent || conv.parent_conversation_id || conv.worktree_name
+        conv.is_subagent || nestParentIdOf(conv) || conv.worktree_name
           ? "text-sol-text-dim/50 hover:text-sol-text-dim/70 hover:bg-sol-bg-alt/30 opacity-60"
           : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50"
       } ${isDragOver ? "ring-1 ring-sol-cyan bg-sol-cyan/10" : ""}`}
@@ -122,7 +124,7 @@ function DroppableSessionRow({ conv, onMobileClose }: { conv: any; onMobileClose
       {conv.is_active && (
         <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse flex-shrink-0 -ml-1" />
       )}
-      <span className={`truncate flex-1 leading-tight ${conv.is_subagent || conv.parent_conversation_id || conv.worktree_name ? "text-[13px]" : ""}`}>{cleanTitle(conv.title || "Untitled")}</span>
+      <span className={`truncate flex-1 leading-tight ${conv.is_subagent || nestParentIdOf(conv) || conv.worktree_name ? "text-[13px]" : ""}`}>{cleanTitle(conv.title || "Untitled")}</span>
       {conv.worktree_name && (
         <span className="text-[9px] text-sol-cyan font-mono truncate max-w-[80px] flex-shrink-0" title={conv.worktree_branch || conv.worktree_name}>
           {conv.worktree_name}
@@ -311,12 +313,34 @@ function NavSection({
 // the entire Sidebar (favorites, bookmarks, recents). Mirrors ActiveAgentsBadge
 // in DashboardLayout. Only mounted in the non-narrow rail, so no work when narrow.
 const NeedsInputCountBadge = memo(function NeedsInputCountBadge() {
-  const inboxSessions = useInboxStore((s) => s.sessions);
-  const sessionsWithQueuedMessages = useInboxStore((s) => s.sessionsWithQueuedMessages);
-  const pendingMessages = useInboxStore((s) => s.pendingMessages);
+  const s = useTrackedStore([
+    // Wake on STRUCTURAL session change only — the raw s.sessions ref flips on
+    // every ~1s liveness heartbeat, and this badge was measured re-running
+    // categorizeSessions over the whole never-prune cache on each flip (~50ms a
+    // pass). pendingMessages likewise: only the pending-send MEMBERSHIP matters.
+    // The body reads the raw fields for data; these signatures only gate the
+    // re-render. See store/wakeSig.ts and the identical gate on SessionListPanel.
+    s => sessionsWakeSig(s.sessions),
+    s => s.sessionsWithQueuedMessages,
+    s => pendingSendWakeSig(s.pendingMessages),
+    s => s.currentUser?._id,
+    s => s.liveInboxIds,
+    s => s.showOldSessions,
+  ]);
+  // Mine-scoped: the sidebar's "needs input" badge is your personal attention
+  // count, so a teammate row cached from a team-board visit must not inflate it.
+  const meId = s.currentUser?._id;
+  // categorizeSessions' trust-TTL sweep (stale "working" → needs-input) is
+  // time-driven, not field-driven — keep it alive with a coarse clock.
+  const coarseNow = useCoarseNow(15_000);
+  // And count only the AUTHORITATIVE active set, not the raw never-prune cache —
+  // otherwise this badge tallies every aged-out "needs input" card the panel
+  // already hides, and the sidebar number never matches what you see.
+  // liveInboxIds + showOld make categorizeSessions drop "old" rows (see its opts).
   const needsInputCount = useMemo(
-    () => categorizeSessions(inboxSessions, sessionsWithQueuedMessages, sessionsWithPendingSend(pendingMessages)).needsInput.length,
-    [inboxSessions, sessionsWithQueuedMessages, pendingMessages],
+    () => categorizeSessions(filterInboxScope(s.sessions, "mine", meId ? meId.toString() : null), s.sessionsWithQueuedMessages, sessionsWithPendingSend(s.pendingMessages), { liveInboxIds: s.liveInboxIds, showOld: s.showOldSessions }).needsInput.length,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sessionsWakeSig(s.sessions), meId, s.sessionsWithQueuedMessages, pendingSendWakeSig(s.pendingMessages), s.liveInboxIds, s.showOldSessions, coarseNow],
   );
   if (needsInputCount === 0) return null;
   return (
@@ -331,6 +355,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const router = useRouter();
   const isInbox = pathname === "/conversation" || pathname?.startsWith("/conversation/") || pathname === "/inbox" || pathname?.startsWith("/inbox/");
   const isSessions = pathname?.startsWith("/sessions");
+  const isAnchor = pathname?.startsWith("/anchor");
   const isWindows = pathname?.startsWith("/windows");
   const isTeamActivity = pathname === "/team/activity" || pathname?.startsWith("/team/activity");
   const isTasks = pathname === "/tasks" || pathname?.startsWith("/tasks/");
@@ -643,6 +668,21 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
             {!isNarrow && <span>Schedules</span>}
+          </Link>
+          <Link
+            href="/anchor"
+            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none ${
+              isAnchor
+                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
+                : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
+            }`}
+            title="Anchor — your standing agent"
+          >
+            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <circle cx="12" cy="5" r="2.5" strokeWidth={1.5} />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 7.5V21M5 12H3a9 9 0 0018 0h-2" />
+            </svg>
+            {!isNarrow && <span>Anchor</span>}
           </Link>
           <Link
             href="/sessions"

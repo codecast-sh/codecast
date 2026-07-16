@@ -2,6 +2,7 @@ import { mutation, query } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
+import { resolveCreationPrivacy } from "./privacy";
 
 export const create = mutation({
   args: {
@@ -65,6 +66,7 @@ export const create = mutation({
     }
 
     if (!primaryConvId) {
+      const privacy = await resolveCreationPrivacy(ctx, userId, args.project_path);
       primaryConvId = await ctx.db.insert("conversations", {
         user_id: userId,
         agent_type: "claude_code",
@@ -74,7 +76,7 @@ export const create = mutation({
         started_at: now,
         updated_at: now,
         message_count: 0,
-        is_private: false,
+        ...privacy,
         status: "active",
         workflow_run_id: runId,
         is_workflow_primary: true,
@@ -168,6 +170,7 @@ export const createFromCli = mutation({
       await ctx.db.patch(planDocId, { workflow_run_id: runId, updated_at: now });
     }
 
+    const privacy = await resolveCreationPrivacy(ctx, userId, args.project_path);
     const primaryConvId = await ctx.db.insert("conversations", {
       user_id: userId,
       agent_type: "claude_code",
@@ -177,7 +180,7 @@ export const createFromCli = mutation({
       started_at: now,
       updated_at: now,
       message_count: 0,
-      is_private: false,
+      ...privacy,
       status: "active",
       workflow_run_id: runId,
       is_workflow_primary: true,
@@ -199,11 +202,55 @@ export const createFromCli = mutation({
   },
 });
 
+// Attach each agent's synced conversation to its node status so run UIs can render
+// a clickable session list. The daemon uploads per-agent transcripts
+// (<session>/subagents/workflows/<wf_id>/agent-<id>.jsonl) as conversations keyed
+// session_id="agent-<id>", so dynamic-workflow nodes resolve deterministically even on
+// runs ingested before session_id stamping; routine/graph nodes carry a real session_id
+// already. `budget` caps conversation lookups so list queries stay bounded — runs are
+// enriched most-recent-first and older ones degrade to plain (non-clickable) rows.
+async function withAgentSessions(ctx: any, run: any, budget = { reads: 200 }) {
+  if (!run?.node_statuses?.length) return run;
+  const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
+  const node_statuses = await Promise.all(run.node_statuses.map(async (node: any) => {
+    const sessionId = node.session_id
+      || (run.run_kind === "workflow" && node.node_id ? `agent-${node.node_id}` : null);
+    if (!sessionId || budget.reads <= 0) return node;
+    budget.reads--;
+    const conv = await ctx.db
+      .query("conversations")
+      .withIndex("by_session_id", (q: any) => q.eq("session_id", sessionId))
+      .filter((q: any) => q.eq(q.field("user_id"), run.user_id))
+      .first();
+    if (!conv) return node;
+    return {
+      ...node,
+      session: {
+        _id: conv._id,
+        session_id: conv.session_id,
+        title: conv.title || conv.subtitle,
+        project_path: conv.project_path,
+        message_count: conv.message_count || 0,
+        is_active: conv.status === "active" && (conv.updated_at || 0) > fiveMinutesAgo,
+        started_at: conv.started_at || conv._creationTime,
+        updated_at: conv.updated_at,
+        agent_type: conv.agent_type,
+        parent_conversation_id: conv.parent_conversation_id,
+      },
+    };
+  }));
+  return { ...run, node_statuses };
+}
+
 export const listForWorkflow = query({
   args: { workflow_id: v.id("workflows") },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
+    // Gate on the parent workflow's owner — without this, any authenticated
+    // user who guessed a workflow id could read another user's run history.
+    const workflow = await ctx.db.get(args.workflow_id);
+    if (!workflow || workflow.user_id !== userId) return [];
     return await ctx.db
       .query("workflow_runs")
       .withIndex("by_workflow_id", (q) => q.eq("workflow_id", args.workflow_id))
@@ -219,7 +266,7 @@ export const get = query({
     if (!userId) return null;
     const run = await ctx.db.get(args.id);
     if (!run || run.user_id !== userId) return null;
-    return run;
+    return await withAgentSessions(ctx, run);
   },
 });
 
@@ -234,7 +281,11 @@ export const listDynamicRuns = query({
       .withIndex("by_user_id", (q) => q.eq("user_id", userId))
       .order("desc")
       .take(50);
-    return runs.filter((r) => r.run_kind === "workflow");
+    // Shared budget: newest runs claim lookups first (runs are already desc).
+    const budget = { reads: 300 };
+    return await Promise.all(
+      runs.filter((r) => r.run_kind === "workflow").map((r) => withAgentSessions(ctx, r, budget))
+    );
   },
 });
 
@@ -250,7 +301,7 @@ export const getByExternalRun = query({
       .withIndex("by_external_run", (q) => q.eq("external_run_id", args.external_run_id))
       .first();
     if (!run || run.user_id !== auth.userId) return null;
-    return run;
+    return await withAgentSessions(ctx, run);
   },
 });
 
@@ -266,7 +317,7 @@ export const getByExternalRunForUser = query({
       .withIndex("by_external_run", (q) => q.eq("external_run_id", args.external_run_id))
       .first();
     if (!run || run.user_id !== userId) return null;
-    return run;
+    return await withAgentSessions(ctx, run);
   },
 });
 
@@ -503,6 +554,8 @@ export const ingestSnapshot = mutation({
       duration_ms: v.optional(v.number()),
       started_at: v.optional(v.number()),
       result_preview: v.optional(v.string()),
+      last_tool_name: v.optional(v.string()),
+      last_tool_summary: v.optional(v.string()),
     })),
     total_tokens: v.optional(v.number()),
     agent_count: v.optional(v.number()),
@@ -527,10 +580,14 @@ export const ingestSnapshot = mutation({
       return {
         node_id: a.agent_id,
         status: st,
+        // The runtime writes each agent's transcript as agent-<agentId>.jsonl, which the
+        // daemon syncs as a conversation with that filename as its session_id.
+        session_id: `agent-${a.agent_id}`,
         label: a.label,
         phase: a.phase,
         tokens: a.tokens,
         result_preview: a.result_preview,
+        activity: a.last_tool_summary || a.last_tool_name,
         started_at: a.started_at,
         completed_at: st === "completed" || st === "failed"
           ? (a.started_at && a.duration_ms ? a.started_at + a.duration_ms : now)

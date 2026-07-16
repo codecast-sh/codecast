@@ -1,19 +1,22 @@
 import { mutation, query, internalMutation, internalQuery, type QueryCtx, type MutationCtx } from "./functions";
 import { v } from "convex/values";
 import { enqueueStartSession, resolveOwnerDevice } from "./devices";
-import { findConversationBySessionReference } from "./conversationSessionLookup";
+import { findConversationBySessionReference, resolveConversationRefRanked, findConversationByAnyRefWhere } from "./conversationSessionLookup";
+import { applyHideTransition } from "./cleanup";
 import { paginationOptsValidator } from "convex/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { Id } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import { checkRateLimit } from "./rateLimit";
 import { verifyApiToken } from "./apiTokens";
 import { internal } from "./_generated/api";
 import { resetConversationPendingMessages } from "./pendingMessages";
+import { cancelTasksBoundToConversation } from "./agentTasks";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId } from "./daemonCommandUtils";
 import { AGENT_MODEL_CONFIG, modelAgentKey } from "@codecast/shared/contracts";
 import { shouldShowInInbox, isSessionIdle, deriveSessionActivity, classifyWorkState, normalizeWorkStateFilter, trustedAgentStatus, subagentKeepsParentWorking, type WorkState } from "./inboxFilters";
 import { subagentLinkFields } from "./ccAccountsShared";
+import { isSessionOwner } from "./sessionOwners";
 import { filterUserMessages, isImportNotice } from "./userMessagesFilter";
 import {
   isTeamMember,
@@ -22,6 +25,7 @@ import {
   isConversationTeamVisible,
   createTeamFeedFilter,
   resolveTeamForPath,
+  resolveCreationPrivacy,
   resolveVisibilityMode,
   buildShareUpdate,
   buildPathRestampUpdate,
@@ -38,6 +42,7 @@ import {
   rankConversationsByCoverage,
   type ParsedTerms,
 } from "./searchCore";
+import { MIRROR_WINDOW_MS } from "./searchMirror";
 
 // Single relevance-ranked search-index lookup shared by every message-search
 // surface (web searchConversations, searchForCLI, feedForCLI). One combined
@@ -48,18 +53,195 @@ import {
 // knob: message docs can be large (tool results), so a bigger pool costs bytes.
 //
 // NOTE: `.take()` bounds only what's RETURNED, not what the full-text index
-// SCANS. For a token that appears across a large fraction of the ~3.6M-row
-// messages table (any common word), the search scores the whole posting list and
-// exceeds a query's read budget regardless of the take size — surfacing as a
-// retryable InternalServerError/timeout that the reactive client spins on forever.
-// Lowering this number does not fix that; see ct-37627 for the real fix.
-async function fetchMessageSearchPool(ctx: QueryCtx, terms: ParsedTerms) {
-  if (terms.all.length === 0) return [];
+// SCANS. For a token that appears across a large fraction of the multi-million-
+// row messages table (any common word), search_content_v2 scores the whole
+// posting list and exceeds the query budget regardless of take size. That is
+// why content search serves from the message_search_recent mirror (bounded
+// corpus, see searchMirror.ts) whenever its cron is caught up — the deep index
+// below is only the fallback while the mirror is cold or its walker is behind
+// (its staleness then shows as timeouts again, ct-37627).
+// The narrow shape every search consumer actually reads. Both tiers project
+// to it so the mirror and the deep index are interchangeable downstream
+// (_id is the real messages id either way — deep links depend on it).
+type SearchPoolMessage = {
+  _id: Id<"messages">;
+  conversation_id: Id<"conversations">;
+  role: Doc<"messages">["role"];
+  content: string;
+  timestamp: number;
+  tool_calls_count?: number;
+  tool_results_count?: number;
+};
+
+async function fetchMessageSearchPool(
+  ctx: QueryCtx,
+  terms: ParsedTerms,
+): Promise<{ pool: SearchPoolMessage[]; tier: "recent" | "deep" }> {
+  if (terms.all.length === 0) return { pool: [], tier: "deep" };
   const searchQuery = terms.all.join(" ");
-  return await ctx.db
+  // search_mirror_live changes only on liveness transitions, so this read
+  // keeps open search subscriptions stable (the walker's per-tick cursor row
+  // must never be read here — it would re-run every open search each tick).
+  const mirror = await ctx.db.query("search_mirror_live").first();
+  if (mirror?.live) {
+    const rows = await ctx.db
+      .query("message_search_recent")
+      .withSearchIndex("search_content", (q) => q.search("content", searchQuery))
+      .take(512);
+    return {
+      tier: "recent",
+      pool: rows.map((r) => ({
+        _id: r.message_id,
+        conversation_id: r.conversation_id,
+        role: r.role,
+        content: r.content,
+        timestamp: r.timestamp,
+        tool_calls_count: r.tool_calls_count,
+        tool_results_count: r.tool_results_count,
+      })),
+    };
+  }
+  const docs = await ctx.db
     .query("messages")
     .withSearchIndex("search_content_v2", (q) => q.search("content", searchQuery))
     .take(512);
+  return {
+    tier: "deep",
+    pool: docs.map((m) => ({
+      _id: m._id,
+      conversation_id: m.conversation_id,
+      role: m.role,
+      content: m.content ?? "",
+      timestamp: m.timestamp,
+      tool_calls_count: m.tool_calls?.length,
+      tool_results_count: m.tool_results?.length,
+    })),
+  };
+}
+
+// Days of message history the recent tier covers — returned to clients so UI
+// copy about content-search coverage stays truthful if the window changes.
+const CONTENT_WINDOW_DAYS = Math.round(MIRROR_WINDOW_MS / 86_400_000);
+
+// Team-scoped visibility context shared by the conversation-search queries:
+// the rosters of every team the caller can see, the per-team feed filters,
+// and the visibility predicate built from them. mineOnly skips roster loading
+// entirely — the predicate then only passes the caller's own conversations.
+async function loadConversationSearchScope(
+  ctx: QueryCtx,
+  userId: Id<"users">,
+  user: Doc<"users">,
+  args: { mineOnly?: boolean; activeTeamId?: Id<"teams"> },
+) {
+  const userMemberships = await ctx.db
+    .query("team_memberships")
+    .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+    .collect();
+  const userTeamIds = userMemberships.map(m => m.team_id);
+
+  const effectiveTeamIds = args.mineOnly
+    ? []
+    : args.activeTeamId ? [args.activeTeamId] : userTeamIds;
+
+  const allTeamUsers: Doc<"users">[] = [];
+  for (const teamId of effectiveTeamIds) {
+    const teamMemberships = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_team_id", (q) => q.eq("team_id", teamId))
+      .collect();
+    const memberUsers = await Promise.all(
+      teamMemberships.map(m => ctx.db.get(m.user_id))
+    );
+    allTeamUsers.push(...memberUsers.filter((u): u is Doc<"users"> => u !== null));
+  }
+  const teamUsers = [...new Map(allTeamUsers.map(u => [u._id.toString(), u])).values()];
+  const teamUserIds = new Set(teamUsers.map(u => u._id.toString()));
+  const effectiveTeamIdSet = new Set(effectiveTeamIds.map(id => id.toString()));
+
+  const feedFilters = new Map<string, Awaited<ReturnType<typeof createTeamFeedFilter>>>();
+  for (const teamId of effectiveTeamIds) {
+    feedFilters.set(teamId.toString(), await createTeamFeedFilter(ctx, teamId));
+  }
+
+  // Author identities for result rows: every visible conversation is authored
+  // by the caller or a loaded team member, so no per-result ctx.db.get needed.
+  const userById = new Map<string, Doc<"users">>(teamUsers.map(u => [u._id.toString(), u]));
+  userById.set(userId.toString(), user);
+
+  const isVisible = (conv: Doc<"conversations">): boolean => {
+    if (conv.user_id.toString() === userId.toString()) return true;
+    if (!conv.team_id || !effectiveTeamIdSet.has(conv.team_id.toString())) return false;
+    const filter = feedFilters.get(conv.team_id.toString());
+    if (!filter || !filter.isVisible(conv)) return false;
+    if (!teamUserIds.has(conv.user_id.toString())) return false;
+    return true;
+  };
+
+  return { userById, isVisible };
+}
+
+// Titles and summaries aren't covered by the message index — search them
+// directly so a session like "Poll render debug" surfaces even when no
+// message body matches. subtitle (multi-line generated summary) and
+// idle_summary (one-line blurb) catch sessions the user remembers by their
+// summary wording rather than their title. These scans run over the (small)
+// conversations table, so they stay within budget even when the message
+// full-text search can't (see the fetchMessageSearchPool NOTE) — which is why
+// searchConversationTitles exposes them on their own.
+async function fetchTitleFieldHits(ctx: QueryCtx, terms: ParsedTerms) {
+  const searchQuery = terms.all.join(" ");
+  const fieldHits = await Promise.all([
+    ctx.db
+      .query("conversations")
+      .withSearchIndex("search_title_v2", (q) => q.search("title", searchQuery))
+      .take(50),
+    ctx.db
+      .query("conversations")
+      .withSearchIndex("search_subtitle", (q) => q.search("subtitle", searchQuery))
+      .take(50),
+    ctx.db
+      .query("conversations")
+      .withSearchIndex("search_idle_summary", (q) => q.search("idle_summary", searchQuery))
+      .take(50),
+  ]);
+  const hits = new Map<string, Doc<"conversations">>();
+  for (const conv of fieldHits.flat()) {
+    const convId = conv._id.toString();
+    if (hits.has(convId)) continue;
+    const directFields = `${conv.title || ""} ${conv.subtitle || ""} ${conv.idle_summary || ""}`;
+    if (!contentMatchesAnyTerm(directFields, terms)) continue;
+    hits.set(convId, conv);
+  }
+  return hits;
+}
+
+// First-message fetch only feeds a title fallback, so it's only needed for
+// the title-less conversations that actually made the displayed slice.
+async function resolveFirstMessageTitles(ctx: QueryCtx, convs: Doc<"conversations">[]) {
+  const firstMsgByConv = new Map<string, string>();
+  await Promise.all(
+    convs.map(async (conv) => {
+      if (conv.title) return;
+      const firstMessages = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
+        .order("asc")
+        .take(10);
+      for (const msg of firstMessages) {
+        const hasToolResults = msg.tool_results && msg.tool_results.length > 0;
+        if (msg.role === "user" && !hasToolResults) {
+          const text = msg.content?.trim();
+          if (text) {
+            let firstUserMessage = text.slice(0, 120);
+            if (text.length > 120) firstUserMessage += "...";
+            firstMsgByConv.set(conv._id.toString(), firstUserMessage);
+            break;
+          }
+        }
+      }
+    })
+  );
+  return firstMsgByConv;
 }
 
 const NOISE_TITLE_PREFIXES = ["[Using:", "[Request", "[SUGGESTION MODE:"];
@@ -131,12 +313,21 @@ function previewText(content: string | null | undefined): string | undefined {
   return cleaned.length > 100 ? cleaned.slice(0, 100) + "…" : cleaned;
 }
 
-// The first *user* prompt on a branch after `afterTs` — i.e. the message that
-// sent this branch its own way. For a fork that's the prompt typed past the
-// fork cutoff; for the origin line it's the next user turn after the fork
-// point. This is what distinguishes otherwise-identical sibling branches.
-// Bounded read (a fork point is followed by an assistant turn + tool rows
-// before the next user prompt, so 10 rows comfortably reaches it).
+// The first *genuine* user prompt on a branch after `afterTs` — i.e. the message
+// the human typed that sent this branch its own way. For a fork that's the
+// prompt past the fork cutoff; for the origin line it's the next human turn
+// after the fork point. This is what distinguishes otherwise-identical sibling
+// branches.
+//
+// Routes rows through the same `filterUserMessages` gate the message browser /
+// rewind navigator uses, so the chip label matches a prompt you could actually
+// navigate to. That gate strips harness context blocks (`<task-notification>`,
+// `<system-reminder>`, `<task-reminder>`) and drops noise (tool-result echoes,
+// interrupt stubs, compact boundaries, import notices) — without it a
+// background-task notification leaked through as a chip reading like its raw
+// ids ("w68f2jcpo toolu_01…"). Read window is generous because an
+// orchestration origin line can run many tool/notification rows between the
+// fork point and its next human prompt.
 async function firstDivergentPreview(
   ctx: { db: any },
   conversationId: Id<"conversations">,
@@ -148,13 +339,10 @@ async function firstDivergentPreview(
       q.eq("conversation_id", conversationId).gt("timestamp", afterTs)
     )
     .order("asc")
-    .take(10);
-  for (const m of rows) {
-    const hasToolResults = m.tool_results && m.tool_results.length > 0;
-    if (m.role === "user" && !hasToolResults) {
-      const p = previewText(typeof m.content === "string" ? m.content : "");
-      if (p) return p;
-    }
+    .take(40);
+  for (const m of filterUserMessages(rows)) {
+    const p = previewText(m.content);
+    if (p) return p;
   }
   return undefined;
 }
@@ -550,6 +738,22 @@ export const createConversation = mutation({
       v.literal("archived")
     )),
     subagent_description: v.optional(v.string()),
+    // Daemon-asserted subagent flag (transcript lives under a subagents/ dir).
+    // The parent LINK may resolve much later (parent not yet in the daemon's
+    // cache), so without this the row is born looking like a normal session
+    // and teammates get a "started coding" push for it.
+    is_subagent: v.optional(v.boolean()),
+    agent_team_name: v.optional(v.string()),
+    agent_name: v.optional(v.string()),
+    // Device id of the daemon syncing this transcript. The transcript (and any
+    // tmux session) lives on that machine, so it is the only daemon that can
+    // deliver messages here. Without this stamp, ownership was only set lazily
+    // when a daemon claimed the conversation's FIRST pending message — a
+    // broadcast race every one of the user's daemons entered, and a remote
+    // daemon (no transcript, no pane) sometimes won, silently black-holing
+    // delivery. Optional for older CLIs; claim-time stamping remains the
+    // fallback for conversations created without it.
+    owner_device_id: v.optional(v.string()),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -570,8 +774,8 @@ export const createConversation = mutation({
       .first();
 
     if (existing) {
+      const patch: Record<string, any> = {};
       if (args.parent_conversation_id) {
-        const patch: Record<string, any> = {};
         if (!existing.parent_conversation_id) {
           patch.parent_conversation_id = args.parent_conversation_id as Id<"conversations">;
         }
@@ -584,9 +788,27 @@ export const createConversation = mutation({
         if (args.subagent_description && !existing.subagent_description) {
           patch.subagent_description = args.subagent_description;
         }
-        if (Object.keys(patch).length > 0) {
-          await ctx.db.patch(existing._id, patch);
-        }
+      }
+      if (
+        args.is_subagent &&
+        !("is_subagent" in patch) &&
+        !existing.is_subagent &&
+        !existing.parent_message_uuid &&
+        !args.parent_message_uuid
+      ) {
+        patch.is_subagent = true;
+      }
+      if (args.agent_team_name && !existing.agent_team_name) {
+        patch.agent_team_name = args.agent_team_name;
+        if (args.agent_name && !existing.agent_name) patch.agent_name = args.agent_name;
+      }
+      // Adopt an unowned conversation; never steal one another device owns
+      // (explicit ownership transfers go through sessionOwnership).
+      if (args.owner_device_id && !existing.owner_device_id) {
+        patch.owner_device_id = args.owner_device_id;
+      }
+      if (Object.keys(patch).length > 0) {
+        await ctx.db.patch(existing._id, patch);
       }
       return existing._id;
     }
@@ -595,16 +817,8 @@ export const createConversation = mutation({
     const startedAt = args.started_at ?? now;
 
     const conversationPath = args.git_root || args.project_path;
-    const mappings = await ctx.db
-      .query("directory_team_mappings")
-      .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
-      .collect();
-
-    const { teamId: resolvedTeamId, isPrivate, autoShared } = resolveTeamForPath(
-      mappings,
-      conversationPath,
-      args.team_id as Id<"teams"> | undefined
-    );
+    const { team_id: resolvedTeamId, is_private: isPrivate, auto_shared: autoShared } =
+      await resolveCreationPrivacy(ctx, args.user_id, conversationPath, args.team_id as Id<"teams"> | undefined);
 
     let parentConversationId: Id<"conversations"> | undefined;
     if (args.parent_conversation_id) {
@@ -628,6 +842,7 @@ export const createConversation = mutation({
       title: args.title,
       project_hash: args.project_hash,
       project_path: args.project_path,
+      owner_device_id: args.owner_device_id,
       started_at: startedAt,
       updated_at: startedAt,
       message_count: 0,
@@ -636,7 +851,10 @@ export const createConversation = mutation({
       status: "active",
       parent_message_uuid: args.parent_message_uuid,
       parent_conversation_id: parentConversationId,
-      is_subagent: (!!parentConversationId && !args.parent_message_uuid) || undefined,
+      is_subagent: (args.is_subagent === true && !args.parent_message_uuid) ||
+        (!!parentConversationId && !args.parent_message_uuid) || undefined,
+      agent_team_name: args.agent_team_name,
+      agent_name: args.agent_name,
       git_commit_hash: args.git_commit_hash,
       git_branch: args.git_branch,
       git_remote_url: args.git_remote_url,
@@ -695,10 +913,19 @@ export const createConversation = mutation({
     }
 
     if (resolvedTeamId && !existing) {
-      await ctx.scheduler.runAfter(0, internal.notifications.notifyTeamSessionStart, {
-        conversation_id: conversationId,
-        user_id: args.user_id,
-      });
+      const bornSubagent =
+        args.is_subagent === true || (!!parentConversationId && !args.parent_message_uuid);
+      if (!bornSubagent) {
+        // Grace delay: subagent/spawned-by links are often stamped seconds
+        // after registration (linkSessions/linkSpawnedBy). notifyTeamSessionStart
+        // re-reads the conversation at fire time, so the delay lets a late
+        // link suppress the push instead of racing it.
+        const NOTIFY_GRACE_MS = 60 * 1000;
+        await ctx.scheduler.runAfter(NOTIFY_GRACE_MS, internal.notifications.notifyTeamSessionStart, {
+          conversation_id: conversationId,
+          user_id: args.user_id,
+        });
+      }
 
       await ctx.scheduler.runAfter(0, internal.teamActivity.recordTeamActivity, {
         team_id: resolvedTeamId,
@@ -743,21 +970,10 @@ export const createQuickSession = mutation({
     const sessionId = args.session_id || crypto.randomUUID();
     const agentType = args.agent_type || "claude_code";
 
-    const conversationPath = args.git_root || args.project_path;
-    const mappings = await ctx.db
-      .query("directory_team_mappings")
-      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-      .collect();
-
-    const { teamId: resolvedTeamId, isPrivate, autoShared } = resolveTeamForPath(
-      mappings,
-      conversationPath,
-      undefined
-    );
+    const privacy = await resolveCreationPrivacy(ctx, userId, args.git_root || args.project_path);
 
     const conversationId = await ctx.db.insert("conversations", {
       user_id: userId,
-      team_id: resolvedTeamId,
       agent_type: agentType,
       session_id: sessionId,
       project_path: args.project_path,
@@ -765,8 +981,7 @@ export const createQuickSession = mutation({
       started_at: now,
       updated_at: now,
       message_count: 0,
-      is_private: isPrivate,
-      auto_shared: autoShared || undefined,
+      ...privacy,
       status: "active",
     });
 
@@ -847,6 +1062,38 @@ export const getConversations = query({
   },
 });
 
+// An anchor's session renders under its bot identity (acting_user_id), not the
+// human host that runs and bills it. Resolve that identity for the author chip;
+// returns null for ordinary sessions so callers fall back to the owner. Cheap:
+// only anchors set acting_user_id, so the extra read is sparse.
+async function resolveActingAuthor(
+  ctx: any,
+  conv: { acting_user_id?: Id<"users"> | null },
+): Promise<{ name: string; avatar: string | null } | null> {
+  if (!conv.acting_user_id) return null;
+  const bot = await ctx.db.get(conv.acting_user_id);
+  if (!bot) return null;
+  return {
+    name: (bot as any).name || "Anchor",
+    avatar: (bot as any).image || (bot as any).github_avatar_url || null,
+  };
+}
+
+// Resolve a conversation reference (full id or 7-char short id) for a signed-in
+// caller. Short ids collide across users (they're just the id's first 7 chars),
+// so this ranks candidates own > team-accessible > newest via the shared
+// resolver, keeping "found but not accessible" distinguishable from "not
+// found" — callers still run their usual access check on the result.
+export async function resolveConversationRef(
+  ctx: any,
+  ref: string,
+  userId: Id<"users">,
+): Promise<Doc<"conversations"> | null> {
+  return resolveConversationRefRanked(ctx, ref, userId, (conversation) =>
+    canTeamMemberAccess(ctx, userId, conversation)
+  );
+}
+
 export const webGet = query({
   args: {
     short_id: v.optional(v.string()),
@@ -858,10 +1105,7 @@ export const webGet = query({
 
     let conv;
     if (args.short_id) {
-      conv = await ctx.db
-        .query("conversations")
-        .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id!))
-        .first();
+      conv = await resolveConversationRef(ctx, args.short_id, userId);
     } else if (args.id) {
       try {
         conv = await ctx.db.get(args.id as Id<"conversations">);
@@ -875,7 +1119,9 @@ export const webGet = query({
     // Author identity, only for teammates' sessions (own sessions skip the read).
     // The reference pill/hover use this to show the author's avatar when the
     // session isn't yours — same name/avatar convention as the inbox feed rows.
+    // An anchor always shows its bot identity, even on the host's own session.
     const owner = isOwner ? null : await ctx.db.get(conv.user_id);
+    const acting = await resolveActingAuthor(ctx, conv);
 
     return {
       _id: conv._id,
@@ -888,8 +1134,10 @@ export const webGet = query({
       agent_type: conv.agent_type,
       updated_at: conv.updated_at,
       is_own: isOwner,
-      author_name: owner ? (owner.name || owner.email?.split("@")[0] || "Unknown") : null,
-      author_avatar: owner ? (owner.image || owner.github_avatar_url || null) : null,
+      acting_user_id: conv.acting_user_id ?? null,
+      is_anchor: !!conv.anchor_id,
+      author_name: acting ? acting.name : owner ? (owner.name || owner.email?.split("@")[0] || "Unknown") : null,
+      author_avatar: acting ? acting.avatar : owner ? (owner.image || owner.github_avatar_url || null) : null,
       // Summary/context fields (already on the doc — no extra reads). The pill
       // card coalesces these into a one-line summary + last-message preview so
       // an expanded session reference shows what it's about, not just metadata.
@@ -2037,8 +2285,11 @@ export const listConversations = query({
           feedFilter?.getVisibility(c.user_id.toString()),
           args.filter === "team"
         );
-        const authorName = (conversationUser as any)?.name || (conversationUser as any)?.email?.split("@")[0] || "Unknown";
-        const authorAvatar = (conversationUser as any)?.image || (conversationUser as any)?.github_avatar_url || null;
+        let authorName = (conversationUser as any)?.name || (conversationUser as any)?.email?.split("@")[0] || "Unknown";
+        let authorAvatar = (conversationUser as any)?.image || (conversationUser as any)?.github_avatar_url || null;
+        // An anchor renders under its bot identity even on the host's own row.
+        const acting = await resolveActingAuthor(ctx, c);
+        if (acting) { authorName = acting.name; authorAvatar = acting.avatar; }
         const projectName = (c.project_path || c.git_root)?.split("/").pop() || "unknown project";
         const durationMs = c.updated_at - c.started_at;
         const isActive = c.status === "active" && (c.updated_at > fiveMinutesAgo || liveConvIds.has(c._id.toString()));
@@ -2051,6 +2302,8 @@ export const listConversations = query({
             visibility_mode: visibilityMode,
             author_name: authorName,
             author_avatar: authorAvatar,
+            acting_user_id: c.acting_user_id ?? null,
+            is_anchor: !!c.anchor_id,
             is_own: c.user_id.toString() === userId.toString(),
             is_active: isActive,
             updated_at: c.updated_at,
@@ -2075,6 +2328,8 @@ export const listConversations = query({
             subtitle: c.subtitle || null,
             author_name: authorName,
             author_avatar: authorAvatar,
+            acting_user_id: c.acting_user_id ?? null,
+            is_anchor: !!c.anchor_id,
             is_own: c.user_id.toString() === userId.toString(),
             is_active: isActive,
             updated_at: c.updated_at,
@@ -2116,6 +2371,8 @@ export const listConversations = query({
             is_active: isActive,
             author_name: authorName,
             author_avatar: authorAvatar,
+            acting_user_id: c.acting_user_id ?? null,
+            is_anchor: !!c.anchor_id,
             is_own: c.user_id.toString() === userId.toString(),
             parent_conversation_id: c.parent_conversation_id || null,
             parent_message_uuid: c.parent_message_uuid || null,
@@ -2219,7 +2476,10 @@ export const listConversations = query({
 
         const fullTitle = c.title || firstUserMessage || "New Session";
 
-        let parentConversationId: string | null = c.parent_conversation_id || null;
+        // spawned_by (visible child → its lead) joins the same parent
+        // resolution so the "sub of"/"spawned by" row and title come free.
+        let parentConversationId: string | null =
+          c.parent_conversation_id || c.spawned_by_conversation_id || null;
         let parentTitle: string | null = null;
         if (!parentConversationId && c.parent_message_uuid) {
           const parentMsg = await ctx.db
@@ -2262,6 +2522,7 @@ export const listConversations = query({
           author_avatar: authorAvatar,
           is_own: c.user_id.toString() === userId.toString(),
           parent_conversation_id: visibilityMode === "full" ? parentConversationId : null,
+          spawned_by_conversation_id: visibilityMode === "full" ? (c.spawned_by_conversation_id || null) : null,
           parent_message_uuid: c.parent_message_uuid || null,
           is_subagent: !!(c.is_subagent || (c.parent_conversation_id && !c.parent_message_uuid)),
           is_workflow_sub: c.is_workflow_sub || false,
@@ -2689,39 +2950,7 @@ export const searchConversations = query({
       return [];
     }
 
-    const userMemberships = await ctx.db
-      .query("team_memberships")
-      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-      .collect();
-    const userTeamIds = userMemberships.map(m => m.team_id);
-
-    // mineOnly never surfaces teammates' sessions, so skip the team roster +
-    // feed-filter loads entirely — the visibility filter below then only
-    // passes own conversations.
-    const effectiveTeamIds = args.mineOnly
-      ? []
-      : args.activeTeamId ? [args.activeTeamId] : userTeamIds;
-
-    type UserDoc = NonNullable<Awaited<ReturnType<typeof ctx.db.get<"users">>>>;
-    const allTeamUsers: UserDoc[] = [];
-    for (const teamId of effectiveTeamIds) {
-      const teamMemberships = await ctx.db
-        .query("team_memberships")
-        .withIndex("by_team_id", (q) => q.eq("team_id", teamId))
-        .collect();
-      const memberUsers = await Promise.all(
-        teamMemberships.map(m => ctx.db.get(m.user_id))
-      );
-      allTeamUsers.push(...memberUsers.filter((u): u is UserDoc => u !== null));
-    }
-    const teamUsers = [...new Map(allTeamUsers.map(u => [u._id.toString(), u])).values()];
-    const teamUserIds = new Set(teamUsers.map(u => u._id.toString()));
-    const effectiveTeamIdSet = new Set(effectiveTeamIds.map(id => id.toString()));
-
-    const feedFilters = new Map<string, Awaited<ReturnType<typeof createTeamFeedFilter>>>();
-    for (const teamId of effectiveTeamIds) {
-      feedFilters.set(teamId.toString(), await createTeamFeedFilter(ctx, teamId));
-    }
+    const scope = await loadConversationSearchScope(ctx, userId, user, args);
 
     const searchTerm = args.query.trim();
     if (!searchTerm || searchTerm.length < 2) {
@@ -2731,8 +2960,7 @@ export const searchConversations = query({
     const limit = args.limit ?? 20;
     const userOnly = args.userOnly ?? false;
     const terms = parseSearchTerms(searchTerm);
-    const searchQuery = terms.all.join(" ");
-    const searchResults = await fetchMessageSearchPool(ctx, terms);
+    const { pool: searchResults, tier: contentTier } = await fetchMessageSearchPool(ctx, terms);
 
     // Group messages by conversation (keep messages matching ANY term for context)
     const conversationMessages = new Map<string, typeof searchResults>();
@@ -2758,33 +2986,10 @@ export const searchConversations = query({
       }
     }
 
-    // Titles and summaries aren't covered by the message index — search them
-    // directly so a session like "Poll render debug" surfaces even when no
-    // message body matches. subtitle (multi-line generated summary) and
-    // idle_summary (one-line blurb) catch sessions the user remembers by their
-    // summary wording rather than their title.
-    type ConvDoc = NonNullable<Awaited<ReturnType<typeof ctx.db.get<"conversations">>>>;
-    const titleConvs = new Map<string, ConvDoc>();
+    const titleConvs = new Map<string, Doc<"conversations">>();
     if (!userOnly) {
-      const fieldHits = await Promise.all([
-        ctx.db
-          .query("conversations")
-          .withSearchIndex("search_title_v2", (q) => q.search("title", searchQuery))
-          .take(50),
-        ctx.db
-          .query("conversations")
-          .withSearchIndex("search_subtitle", (q) => q.search("subtitle", searchQuery))
-          .take(50),
-        ctx.db
-          .query("conversations")
-          .withSearchIndex("search_idle_summary", (q) => q.search("idle_summary", searchQuery))
-          .take(50),
-      ]);
-      for (const conv of fieldHits.flat()) {
-        const convId = conv._id.toString();
-        if (conversationMatches.has(convId) || titleConvs.has(convId)) continue;
-        const directFields = `${conv.title || ""} ${conv.subtitle || ""} ${conv.idle_summary || ""}`;
-        if (!contentMatchesAnyTerm(directFields, terms)) continue;
+      for (const [convId, conv] of await fetchTitleFieldHits(ctx, terms)) {
+        if (conversationMatches.has(convId)) continue;
         titleConvs.set(convId, conv);
       }
     }
@@ -2816,7 +3021,7 @@ export const searchConversations = query({
     const matchConvs = await Promise.all(
       matchEntries.map((messages) => ctx.db.get(messages[0].conversation_id))
     );
-    const candidates: Array<{ conv: ConvDoc; messages: typeof searchResults }> = [];
+    const candidates: Array<{ conv: Doc<"conversations">; messages: typeof searchResults }> = [];
     matchEntries.forEach((messages, i) => {
       const conv = matchConvs[i];
       if (conv) candidates.push({ conv, messages });
@@ -2825,21 +3030,8 @@ export const searchConversations = query({
       candidates.push({ conv, messages: [] });
     }
 
-    // Author identities are already loaded above (current user + team members),
-    // and every visible candidate is authored by one of them — so resolve names
-    // from this map instead of a per-result ctx.db.get.
-    const userById = new Map<string, UserDoc>(teamUsers.map((u) => [u._id.toString(), u]));
-    userById.set(userId.toString(), user);
-
     // Visibility filter is synchronous (no DB) — drop non-visible candidates first.
-    const visible = candidates.filter(({ conv }) => {
-      if (conv.user_id.toString() === userId.toString()) return true;
-      if (!conv.team_id || !effectiveTeamIdSet.has(conv.team_id.toString())) return false;
-      const filter = feedFilters.get(conv.team_id.toString());
-      if (!filter || !filter.isVisible(conv)) return false;
-      if (!teamUserIds.has(conv.user_id.toString())) return false;
-      return true;
-    });
+    const visible = candidates.filter(({ conv }) => scope.isVisible(conv));
 
     // Time-range filter applies before totals so the counts reflect what's
     // actually browsable under the current filters.
@@ -2864,36 +3056,11 @@ export const searchConversations = query({
     const totalSessions = scored.length;
     const top = scored.slice(0, limit);
 
-    // First-message fetch only feeds a title fallback, so it's only needed for the
-    // title-less conversations that actually made the displayed slice — fetch those
-    // in parallel rather than one-per-candidate.
-    const firstMsgByConv = new Map<string, string>();
-    await Promise.all(
-      top.map(async ({ conv }) => {
-        if (conv.title) return;
-        const firstMessages = await ctx.db
-          .query("messages")
-          .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
-          .order("asc")
-          .take(10);
-        for (const msg of firstMessages) {
-          const hasToolResults = msg.tool_results && msg.tool_results.length > 0;
-          if (msg.role === "user" && !hasToolResults) {
-            const text = msg.content?.trim();
-            if (text) {
-              let firstUserMessage = text.slice(0, 120);
-              if (text.length > 120) firstUserMessage += "...";
-              firstMsgByConv.set(conv._id.toString(), firstUserMessage);
-              break;
-            }
-          }
-        }
-      })
-    );
+    const firstMsgByConv = await resolveFirstMessageTitles(ctx, top.map((c) => c.conv));
 
     for (const { conv, messages, proximityScore } of top) {
       const isOwn = conv.user_id.toString() === userId.toString();
-      const conversationUser = userById.get(conv.user_id.toString());
+      const conversationUser = scope.userById.get(conv.user_id.toString());
       const firstUserMessage = firstMsgByConv.get(conv._id.toString()) || "";
 
       const title = conv.title
@@ -2943,7 +3110,84 @@ export const searchConversations = query({
       results,
       totalMatches,
       totalSessions,
+      // Which pool served content matches ("recent" mirror vs "deep" full
+      // index) and the mirror's coverage, so UI copy about time filters
+      // beyond the window stays truthful (see searchMirror.ts).
+      contentTier,
+      contentWindowDays: CONTENT_WINDOW_DAYS,
     };
+  },
+});
+
+// The cheap, reliable half of global search: only the conversation-level
+// search indexes (title/subtitle/idle_summary), never the messages full-text
+// index. Common tokens can blow the read budget on the message search (see
+// the fetchMessageSearchPool NOTE) and kill searchConversations wholesale —
+// clients call this alongside it, render these rows immediately, and merge in
+// message matches if/when the full search returns (dedup by conversationId,
+// message rows win). Result rows are shaped exactly like searchConversations
+// results so the merge is a plain concat. userOnly callers skip this query:
+// title matches aren't user-authored messages.
+export const searchConversationTitles = query({
+  args: {
+    query: v.string(),
+    limit: v.optional(v.number()),
+    activeTeamId: v.optional(v.id("teams")),
+    mineOnly: v.optional(v.boolean()),
+    since: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const empty = { results: [], totalMatches: 0, totalSessions: 0 };
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return empty;
+    const user = await ctx.db.get(userId);
+    if (!user) return empty;
+
+    const searchTerm = args.query.trim();
+    if (!searchTerm || searchTerm.length < 2) return empty;
+
+    const terms = parseSearchTerms(searchTerm);
+    if (terms.all.length === 0) return empty;
+    const scope = await loadConversationSearchScope(ctx, userId, user, args);
+    const hits = await fetchTitleFieldHits(ctx, terms);
+
+    const visible = [...hits.values()].filter((conv) => scope.isVisible(conv));
+    const scoped = args.since
+      ? visible.filter((conv) => conv.updated_at >= args.since!)
+      : visible;
+    scoped.sort((a, b) => b.updated_at - a.updated_at);
+    const top = scoped.slice(0, args.limit ?? 20);
+    const firstMsgByConv = await resolveFirstMessageTitles(ctx, top);
+
+    const results = top.map((conv) => {
+      const conversationUser = scope.userById.get(conv.user_id.toString());
+      const title = conv.title
+        || firstMsgByConv.get(conv._id.toString())
+        || (conv.slug ? formatSlugAsTitle(conv.slug) : null)
+        || "New Session";
+      return {
+        conversationId: conv._id as string,
+        title,
+        matchCount: 0,
+        matches: [] as Array<{
+          messageId: string;
+          content: string;
+          role: string;
+          timestamp: number;
+        }>,
+        updatedAt: conv.updated_at,
+        authorName: conversationUser?.name || "Unknown",
+        authorAvatar: (conversationUser as any)?.image || (conversationUser as any)?.github_avatar_url || null,
+        isOwn: conv.user_id.toString() === userId.toString(),
+        messageCount: conv.message_count || 0,
+        proximityScore: 0,
+        titleMatch: true,
+        projectPath: conv.project_path || null,
+        agentType: conv.agent_type || null,
+      };
+    });
+
+    return { results, totalMatches: 0, totalSessions: results.length };
   },
 });
 
@@ -3050,9 +3294,14 @@ export const setPrivacyBySessionId = mutation({
       throw new Error(`Conversation not found with session_id: ${args.session_id}`);
     }
 
-    await ctx.db.patch(conversation._id, {
-      is_private: args.is_private,
-    });
+    // Same contract as setPrivacy: sharing must guarantee a team_id
+    // (buildShareUpdate), locking forces the private visibility marker. A raw
+    // is_private flip here was the one share path that skipped buildShareUpdate
+    // and could mint a "shared with nobody" row (non-private, teamless).
+    const updates = args.is_private
+      ? { is_private: true as const, team_visibility: "private" as const }
+      : await buildShareUpdate(ctx, conversation, authUserId);
+    await ctx.db.patch(conversation._id, updates);
 
     if (args.api_token) {
       await ctx.db.patch(authUserId, {
@@ -3400,6 +3649,7 @@ export const searchForCLI = query({
     member_name: v.optional(v.string()),
     mine_only: v.optional(v.boolean()),
     label: v.optional(v.string()),
+    titles_only: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -3497,7 +3747,78 @@ export const searchForCLI = query({
     const userOnly = args.user_only ?? false;
     const terms = parseSearchTerms(searchTerm);
 
-    const searchResults = await fetchMessageSearchPool(ctx, terms);
+    // Shared by the message-match path and the titles_only path: every filter
+    // that decides whether a conversation is in scope for this caller.
+    const isEligibleConv = (conv: any): boolean => {
+      const isOwn = conv.user_id.toString() === authUserId.toString();
+      if (!isOwn) {
+        if (!conv.team_id || !effectiveTeamIdSet.has(conv.team_id.toString())) return false;
+        const cliFilter = cliFeedFilters.get(conv.team_id.toString());
+        if (!cliFilter || !cliFilter.isVisible(conv)) return false;
+        if (!teamUserIds.has(conv.user_id.toString())) return false;
+      } else if (resolvedTeamId) {
+        // Own sessions: filter by team when team is resolved from directory
+        const convTeamId = (conv.team_id ?? conv.active_team_id)?.toString();
+        if (!convTeamId || !effectiveTeamIdSet.has(convTeamId)) return false;
+      }
+
+      // Filter by specific member (or self via --mine)
+      if (filterUserId && conv.user_id.toString() !== filterUserId) return false;
+
+      // Filter to sessions the caller filed under the given label —
+      // project-bounded by default (the CLI passes cwd unless -g).
+      if (labelConvIds) {
+        if (!labelConvIds.has(conv._id.toString())) return false;
+        if (projectPath && !(projectOverlaps(projectPath, conv.project_path) || projectOverlaps(projectPath, conv.git_root))) return false;
+      }
+
+      if (startTime && conv.updated_at < startTime) return false;
+      if (endTime && conv.updated_at > endTime) return false;
+      return true;
+    };
+
+    // titles_only: the reliable half of search — only the conversation-table
+    // indexes (title/subtitle/idle_summary), never the messages full-text
+    // index, which blows the read budget on common tokens (see the
+    // fetchMessageSearchPool NOTE). The CLI retries with this after a content
+    // search dies, so agents get title/summary hits instead of a hard error.
+    if (args.titles_only) {
+      const hits = await fetchTitleFieldHits(ctx, terms);
+      const visibleConvs = [...hits.values()]
+        .filter(isEligibleConv)
+        .sort((a, b) => b.updated_at - a.updated_at);
+      const page = visibleConvs.slice(offset, offset + limit);
+      const firstMsgByConv = await resolveFirstMessageTitles(ctx, page);
+      const conversations = page.map((conv) => {
+        const isOwnConv = conv.user_id.toString() === authUserId.toString();
+        const owner = teamUserMap.get(conv.user_id.toString()) || (isOwnConv ? user : null);
+        const title = conv.title
+          || firstMsgByConv.get(conv._id.toString())
+          || (conv.slug ? formatSlugAsTitle(conv.slug) : null)
+          || "New Session";
+        return {
+          id: conv.short_id || conv._id.toString().slice(0, 7),
+          title,
+          project_path: conv.project_path || null,
+          updated_at: new Date(conv.updated_at).toISOString(),
+          message_count: conv.message_count || 0,
+          proximityScore: 0,
+          coverage: 1,
+          user: !isOwnConv && owner ? { name: owner.name || null, email: owner.email || null } : undefined,
+          matches: [],
+          context: [],
+          title_match: true,
+        };
+      });
+      return {
+        total_matches: 0,
+        conversations,
+        search_scope: projectPath || "global",
+        titles_only: true,
+      };
+    }
+
+    const { pool: searchResults } = await fetchMessageSearchPool(ctx, terms);
 
     // Group messages by conversation (keep messages matching ANY term for context)
     const conversationMessages = new Map<string, typeof searchResults>();
@@ -3560,32 +3881,7 @@ export const searchForCLI = query({
     candidates.forEach(({ messages, coverage }, i) => {
       const conv = hydratedConvs[i] as any;
       if (!conv) return;
-
-      const isOwn = conv.user_id.toString() === authUserId.toString();
-      if (!isOwn) {
-        if (!conv.team_id || !effectiveTeamIdSet.has(conv.team_id.toString())) return;
-        const cliFilter = cliFeedFilters.get(conv.team_id.toString());
-        if (!cliFilter || !cliFilter.isVisible(conv)) return;
-        if (!teamUserIds.has(conv.user_id.toString())) return;
-      } else if (resolvedTeamId) {
-        // Own sessions: filter by team when team is resolved from directory
-        const convTeamId = (conv.team_id ?? conv.active_team_id)?.toString();
-        if (!convTeamId || !effectiveTeamIdSet.has(convTeamId)) return;
-      }
-
-      // Filter by specific member (or self via --mine)
-      if (filterUserId && conv.user_id.toString() !== filterUserId) return;
-
-      // Filter to sessions the caller filed under the given label —
-      // project-bounded by default (the CLI passes cwd unless -g).
-      if (labelConvIds) {
-        if (!labelConvIds.has(conv._id.toString())) return;
-        if (projectPath && !(projectOverlaps(projectPath, conv.project_path) || projectOverlaps(projectPath, conv.git_root))) return;
-      }
-
-      if (startTime && conv.updated_at < startTime) return;
-      if (endTime && conv.updated_at > endTime) return;
-
+      if (!isEligibleConv(conv)) return;
       eligible.push({ conv, messages, coverage });
     });
 
@@ -3662,8 +3958,8 @@ export const searchForCLI = query({
           role: m.role,
           content: snippet,
           timestamp: new Date(m.timestamp).toISOString(),
-          tool_calls_count: m.tool_calls?.length,
-          tool_results_count: m.tool_results?.length,
+          tool_calls_count: m.tool_calls_count,
+          tool_results_count: m.tool_results_count,
         };
       });
 
@@ -3725,14 +4021,7 @@ export const conversationMessagesForCLI = query({
     const authUserId = await getAuthenticatedUserIdReadOnly(ctx, args.api_token);
     if (!authUserId) return { error: "Unauthorized" };
 
-    let conv = null;
-    try { conv = await ctx.db.get(args.conversation_id as Id<"conversations">); } catch {}
-    if (!conv) {
-      conv = await ctx.db
-        .query("conversations")
-        .withIndex("by_short_id", (q) => q.eq("short_id", args.conversation_id))
-        .first();
-    }
+    const conv = await resolveConversationRef(ctx, args.conversation_id, authUserId);
     if (!conv) return { error: "Conversation not found" };
 
     const isOwn = conv.user_id.toString() === authUserId.toString();
@@ -3787,22 +4076,7 @@ export const readConversationMessages = query({
       return { error: "User not found" };
     }
 
-    let conv = null;
-
-    try {
-      conv = await ctx.db.get(args.conversation_id as Id<"conversations">);
-    } catch {
-      // ID format invalid, try prefix search
-    }
-
-    if (!conv) {
-      // Try indexed short_id lookup (O(1) instead of iterating)
-      conv = await ctx.db
-        .query("conversations")
-        .withIndex("by_short_id", (q) => q.eq("short_id", args.conversation_id))
-        .first();
-    }
-
+    const conv = await resolveConversationRef(ctx, args.conversation_id, authUserId);
     if (!conv) {
       return { error: "Conversation not found" };
     }
@@ -3961,18 +4235,7 @@ export const exportConversationMessages = query({
       return { error: "User not found" };
     }
 
-    let conv = null;
-    try {
-      conv = await ctx.db.get(args.conversation_id as Id<"conversations">);
-    } catch {
-      // ID format invalid, try prefix search
-    }
-    if (!conv) {
-      conv = await ctx.db
-        .query("conversations")
-        .withIndex("by_short_id", (q) => q.eq("short_id", args.conversation_id))
-        .first();
-    }
+    const conv = await resolveConversationRef(ctx, args.conversation_id, authUserId);
     if (!conv) {
       return { error: "Conversation not found" };
     }
@@ -4014,6 +4277,7 @@ export const exportConversationMessages = query({
         message_uuid: m.message_uuid || undefined,
         tool_calls: m.tool_calls,
         tool_results: m.tool_results,
+        subtype: m.subtype || undefined,
       })),
     };
   },
@@ -4036,17 +4300,7 @@ export const exportConversationMessagesPage = query({
       return { error: "User not found" };
     }
 
-    let conv = null;
-    try {
-      conv = await ctx.db.get(args.conversation_id as Id<"conversations">);
-    } catch {
-    }
-    if (!conv) {
-      conv = await ctx.db
-        .query("conversations")
-        .withIndex("by_short_id", (q) => q.eq("short_id", args.conversation_id))
-        .first();
-    }
+    const conv = await resolveConversationRef(ctx, args.conversation_id, authUserId);
     if (!conv) {
       return { error: "Conversation not found" };
     }
@@ -4075,6 +4329,7 @@ export const exportConversationMessagesPage = query({
         message_uuid: m.message_uuid || undefined,
         tool_calls: m.tool_calls,
         tool_results: m.tool_results,
+        subtype: m.subtype || undefined,
       }));
 
     return {
@@ -4152,15 +4407,34 @@ export const setAvailableSkills = mutation({
     const user = await ctx.db.get(authUserId);
     if (!user) return;
     const key = args.project_path || "global";
+    // Skills live in user_skills, not on the users doc (see schema note): the
+    // users doc is heartbeat-hot and versioning the whole map per patch was the
+    // single biggest source of DB bloat. Seed from the side table, falling back
+    // to the legacy on-doc field for users who haven't written since the split.
+    const skillsRow = await ctx.db
+      .query("user_skills")
+      .withIndex("by_user", (q) => q.eq("user_id", authUserId))
+      .first();
     let skillsMap: Record<string, any> = {};
-    if (user.available_skills) {
+    const seedJson = skillsRow?.skills_json ?? user.available_skills;
+    if (seedJson) {
       try {
-        const parsed = JSON.parse(user.available_skills);
+        const parsed = JSON.parse(seedJson);
         skillsMap = Array.isArray(parsed) ? { global: parsed } : parsed;
       } catch {}
     }
     skillsMap[key] = JSON.parse(args.skills);
-    await ctx.db.patch(authUserId, { available_skills: JSON.stringify(skillsMap) });
+    const skillsJson = JSON.stringify(skillsMap);
+    if (skillsRow) {
+      await ctx.db.patch(skillsRow._id, { skills_json: skillsJson, updated_at: Date.now() });
+    } else {
+      await ctx.db.insert("user_skills", { user_id: authUserId, skills_json: skillsJson, updated_at: Date.now() });
+    }
+    // One-time diet per user: shed the legacy blob so future heartbeat patches
+    // stop re-versioning it.
+    if (user.available_skills !== undefined) {
+      await ctx.db.patch(authUserId, { available_skills: undefined });
+    }
     if (args.conversation_id) {
       const conversation = await ctx.db.get(args.conversation_id);
       if (conversation && conversation.user_id.toString() === authUserId.toString()) {
@@ -4621,6 +4895,11 @@ export const forkFromMessage = mutation({
     message_uuid: v.optional(v.string()),
     api_token: v.optional(v.string()),
     session_id: v.optional(v.string()),
+    // The branch's seed prompt (cast fork "<direction>"). Used ONLY to title the
+    // new row — sibling branches otherwise all read "Fork: <parent title>" and
+    // are indistinguishable in the inbox (the direction itself arrives later as
+    // a separate seed message).
+    direction: v.optional(v.string()),
     target_agent_type: v.optional(v.union(
       v.literal("claude_code"),
       v.literal("codex"),
@@ -4634,18 +4913,7 @@ export const forkFromMessage = mutation({
       throw new Error("Unauthorized");
     }
 
-    let original = null;
-    try {
-      original = await ctx.db.get(args.conversation_id as Id<"conversations">);
-    } catch {
-      // not a valid Convex ID, try short_id
-    }
-    if (!original) {
-      original = await ctx.db
-        .query("conversations")
-        .withIndex("by_short_id", (q) => q.eq("short_id", args.conversation_id))
-        .first();
-    }
+    const original = await resolveConversationRef(ctx, args.conversation_id, userId);
     if (!original) {
       throw new Error("Conversation not found");
     }
@@ -4777,7 +5045,14 @@ export const forkFromMessage = mutation({
       agent_type: agentType,
       session_id: forkSessionId,
       slug: original.slug,
-      title: original.title ? `${titlePrefix}${original.title}` : undefined,
+      // A direction-seeded branch is titled by what IT will do, not by its
+      // parent — otherwise N sibling branches all render as identical
+      // "Fork: <parent>" cards. previewText compresses the prompt to one line.
+      title: (() => {
+        const directionSnippet = previewText(args.direction);
+        if (directionSnippet) return `${titlePrefix}${directionSnippet}`;
+        return original.title ? `${titlePrefix}${original.title}` : undefined;
+      })(),
       subtitle: original.subtitle,
       project_hash: original.project_hash,
       project_path: original.project_path,
@@ -4886,18 +5161,7 @@ export const getConversationTree = query({
       return { error: "Unauthorized" };
     }
 
-    let conv = null;
-    try {
-      conv = await ctx.db.get(args.conversation_id as Id<"conversations">);
-    } catch {
-      // try short_id
-    }
-    if (!conv) {
-      conv = await ctx.db
-        .query("conversations")
-        .withIndex("by_short_id", (q) => q.eq("short_id", args.conversation_id))
-        .first();
-    }
+    const conv = await resolveConversationRef(ctx, args.conversation_id, userId);
     if (!conv) {
       return { error: "Conversation not found" };
     }
@@ -5049,18 +5313,7 @@ export const getForkBranchMessages = query({
       return { error: "Unauthorized" };
     }
 
-    let conv = null;
-    try {
-      conv = await ctx.db.get(args.conversation_id as Id<"conversations">);
-    } catch {
-      // try short_id
-    }
-    if (!conv) {
-      conv = await ctx.db
-        .query("conversations")
-        .withIndex("by_short_id", (q) => q.eq("short_id", args.conversation_id))
-        .first();
-    }
+    const conv = await resolveConversationRef(ctx, args.conversation_id, userId);
     if (!conv) {
       return { error: "Conversation not found" };
     }
@@ -5489,7 +5742,7 @@ export const feedForCLI = query({
       // Single combined lookup (see fetchMessageSearchPool), then best-coverage
       // selection instead of a strict all-terms AND.
       const terms = parseSearchTerms(query);
-      const searchResults = await fetchMessageSearchPool(ctx, terms);
+      const { pool: searchResults } = await fetchMessageSearchPool(ctx, terms);
 
       // Group messages by conversation, then keep the best-coverage matches
       const conversationMessages = new Map<string, typeof searchResults>();
@@ -5592,9 +5845,41 @@ export const feedForCLI = query({
 
     const isOwnConversation = (c: typeof ownConversations[number]) => c.user_id.toString() === authUserId.toString();
 
-    let filteredConversations = [...ownConversations, ...teamConversations]
+    // Sessions this user OWNS belong in their feed even in --mine scope (they're
+    // run by another account, so the scans above miss them when mine_only skips
+    // team conversations entirely). Explicit assignment outranks default team
+    // visibility — mirror computeInboxSessions. Reads the canonical owner SET
+    // (session_owners), so a SECONDARY owner is included, not just the primary
+    // held in the owner_user_id cache.
+    const myOwnerRows = args.member_name
+      ? []
+      : await ctx.db
+          .query("session_owners")
+          .withIndex("by_user", (q: any) => q.eq("user_id", authUserId))
+          .order("desc")
+          .take(50);
+    const myOwnedIds = new Set<string>(
+      myOwnerRows.map((r: any) => r.conversation_id.toString())
+    );
+    const isOwnedByMe = (c: { _id: { toString(): string } }) =>
+      myOwnedIds.has(c._id.toString());
+
+    const ownedConversations: typeof ownConversations = [];
+    for (const r of myOwnerRows) {
+      let conv: any = null;
+      try { conv = await ctx.db.get((r as any).conversation_id); } catch { conv = null; }
+      if (!conv || isOwnConversation(conv)) continue;
+      ownedConversations.push(conv);
+    }
+
+    const candidateById = new Map<string, typeof ownConversations[number]>();
+    for (const c of [...ownConversations, ...teamConversations, ...ownedConversations]) {
+      candidateById.set(c._id.toString(), c);
+    }
+
+    let filteredConversations = [...candidateById.values()]
       .filter((c): c is typeof ownConversations[number] => {
-        if (filterUserId && c.user_id.toString() !== filterUserId) return false;
+        if (filterUserId && c.user_id.toString() !== filterUserId && !(args.mine_only && isOwnedByMe(c))) return false;
         if (labelConvIds && !labelConvIds.has(c._id.toString())) return false;
 
         // Team filter: when team is resolved from directory, filter own sessions by team
@@ -5729,6 +6014,9 @@ export const feedForCLI = query({
       work_state?: WorkState;
       is_pinned?: boolean;
       user?: { name: string | null; email: string | null };
+      // Second-party owner (the member responsible for steering), when set.
+      owner?: { name: string | null; email: string | null };
+      owned_by_me?: boolean;
       preview: Array<{
         line: number;
         role: string;
@@ -5804,6 +6092,18 @@ export const feedForCLI = query({
       const owner = teamUserMap.get(conv.user_id.toString()) || (conv.user_id.toString() === authUserId.toString() ? user : null);
       const isOwnConv = conv.user_id.toString() === authUserId.toString();
 
+      // Second-party owner display (distinct from `owner` above, which is the
+      // RUNNER — historical local name). Owner docs are usually teammates and
+      // already loaded; fall back to a direct get for cross-team edge cases.
+      const sessionOwnerId = (conv as any).owner_user_id?.toString();
+      let sessionOwner: { name: string | null; email: string | null } | undefined;
+      if (sessionOwnerId) {
+        const ownerDoc =
+          teamUserMap.get(sessionOwnerId) ||
+          (sessionOwnerId === authUserId.toString() ? user : await ctx.db.get((conv as any).owner_user_id as Id<"users">));
+        if (ownerDoc) sessionOwner = { name: ownerDoc.name || null, email: ownerDoc.email || null };
+      }
+
       const convIsLive = liveStatusMap.has(conv._id.toString());
       results.push({
         id: conv._id,
@@ -5818,6 +6118,8 @@ export const feedForCLI = query({
         work_state: workStateMap.get(conv._id.toString()) || "idle",
         is_pinned: !!conv.inbox_pinned_at,
         user: !isOwnConv && owner ? { name: owner.name || null, email: owner.email || null } : undefined,
+        ...(sessionOwner ? { owner: sessionOwner } : {}),
+        ...(sessionOwnerId === authUserId.toString() ? { owned_by_me: true } : {}),
         preview: preview.slice(0, 4),
       });
     }
@@ -6497,6 +6799,15 @@ const INBOX_DISMISSED_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 // keep their own (separate) queries below and are unaffected by this window.
 const INBOX_SESSION_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 
+// Bounds on the team-mode ("team scope") candidate scan. The board pulls each
+// teammate's recent team-visible sessions; caps keep a single recompute within
+// the isolate's read budget even for a large team. Teams are small in practice,
+// so these are generous — a per-member overflow just means the oldest of that
+// member's recent sessions wait for the client's paginated crawl (not built yet
+// for team scope; acceptable for the recency-windowed board).
+const TEAM_INBOX_MEMBER_CAP = 50;
+const TEAM_INBOX_PER_MEMBER_CAP = 60;
+
 type InboxSessionMaps = {
   agentStatusMap: Map<string, "working" | "idle" | "permission_blocked" | "compacting" | "thinking" | "connected" | "stopped" | "starting" | "resuming">;
   agentStatusUpdatedAtMap: Map<string, number>;
@@ -6563,6 +6874,42 @@ const EMPTY_INBOX_MAPS: InboxSessionMaps = {
   liveConvIds: new Set(),
   userDaemonAlive: false,
 };
+
+// Liveness for second-party-owned rows: their managed_sessions belong to the
+// RUNNING account, which buildUserSessionMaps (scoped to the viewer's user_id)
+// never sees. Fetch per conversation — owned foreign rows are sparse — and
+// merge with the exact same status-trust rules. Deliberately leaves
+// userDaemonAlive untouched: that flag describes the viewer's own daemon.
+async function mergeForeignConversationLiveness(
+  ctx: any,
+  maps: InboxSessionMaps,
+  convs: any[],
+  now: number,
+): Promise<void> {
+  for (const conv of convs) {
+    const cid = conv._id.toString();
+    const managed = await ctx.db
+      .query("managed_sessions")
+      .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conv._id))
+      .first();
+    if (!managed) continue;
+    const heartbeatAlive = now - managed.last_heartbeat < INBOX_HEARTBEAT_ALIVE_MS;
+    if (heartbeatAlive) maps.liveConvIds.add(cid);
+    if (managed.tmux_session) maps.tmuxSessionMap.set(cid, managed.tmux_session);
+    if (managed.permission_mode) maps.permissionModeMap.set(cid, managed.permission_mode);
+    if (!managed.agent_status) continue;
+    if (managed.agent_status_updated_at !== undefined) {
+      maps.agentStatusUpdatedAtMap.set(cid, managed.agent_status_updated_at);
+    }
+    if (managed.agent_status === "stopped" || managed.agent_status === "idle") {
+      maps.agentStatusMap.set(cid, managed.agent_status);
+    } else if (heartbeatAlive) {
+      maps.agentStatusMap.set(cid, managed.agent_status);
+    } else {
+      maps.agentStatusMap.set(cid, "stopped");
+    }
+  }
+}
 
 // The heartbeat-derived fields that move to the sessionsLiveness overlay. Stripped from
 // the base rows when liveness is excluded so the client can't read a stale value before
@@ -6740,6 +7087,11 @@ async function enrichInboxSessionRow(
     if (run) workflow_run_status = run.status;
   }
 
+  // Anchor identity: a personal anchor's bot isn't in the team roster, so the
+  // client can't resolve it — stamp the bot's name/avatar here (self-guarded:
+  // returns null for ordinary rows) so the sidebar shows the bot chip.
+  const acting = await resolveActingAuthor(ctx, conv);
+
   const row = {
     _id: conv._id,
     session_id: conv.session_id,
@@ -6787,19 +7139,37 @@ async function enrichInboxSessionRow(
     workflow_run_id: conv.workflow_run_id || null,
     is_workflow_primary: conv.is_workflow_primary || false,
     workflow_run_status,
+    // Schedule that spawned this conversation as a run (see schema) — lets the
+    // sidebar badge and the schedule strip attribute ANY run, not just the
+    // latest one webList can resolve from last_run_session_uuid.
+    agent_task_id: conv.agent_task_id?.toString() || null,
     forked_from: conv.forked_from?.toString() || null,
     // Parent-link fields so a session emitted via THIS top-level scan self-identifies
     // as a subagent and nests under its parent (a subagent active in the last 30d is
     // pulled in here too — recentConversations has no subagent filter). Without them
     // it renders as a loose flat card. See subagentLinkFields (ct-37439).
     ...subagentLinkFields(conv),
+    // Visible-child pointer + agent-team identity (see schema): links a
+    // teammate/spawned session to its parent WITHOUT the subagent
+    // nesting/hiding that parent_conversation_id implies.
+    spawned_by_conversation_id: conv.spawned_by_conversation_id?.toString() || null,
+    agent_team_name: conv.agent_team_name ?? null,
+    agent_name: conv.agent_name ?? null,
     parent_message_uuid: conv.parent_message_uuid || null,
     icon: conv.icon,
     icon_color: conv.icon_color,
     team_id: conv.team_id ?? null,
     is_private: conv.is_private ?? false,
     owner_device_id: (conv as any).owner_device_id ?? null,
+    // Second-party owner (the member responsible for steering; see schema).
+    // author/owner display names are stamped by computeInboxSessions, which
+    // caches the user docs across rows.
+    owner_user_id: (conv as any).owner_user_id?.toString() ?? null,
     user_id: conv.user_id,
+    acting_user_id: (conv as any).acting_user_id ?? null,
+    is_anchor: !!(conv as any).anchor_id,
+    author_name: acting ? acting.name : undefined,
+    author_avatar: acting ? acting.avatar : undefined,
     // Carried through so the client can filter the same session cache into the
     // Favorites view (a kept, long-term set) without a second row shape. The
     // favorites query below force-loads these regardless of the recency window.
@@ -6859,6 +7229,9 @@ function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: number, 
     // path is for confirmed children, so is_subagent is forced true (covers the
     // parent_message_uuid-less child that has no is_subagent flag of its own).
     ...subagentLinkFields({ is_subagent: true, parent_conversation_id: parentId }),
+    spawned_by_conversation_id: child.spawned_by_conversation_id?.toString() || null,
+    agent_team_name: child.agent_team_name ?? null,
+    agent_name: child.agent_name ?? null,
     worktree_name: child.worktree_name,
     worktree_branch: child.worktree_branch,
     workflow_run_id: null,
@@ -6890,25 +7263,25 @@ function sortInboxRows(results: any[]) {
 // The live, windowed inbox computation. Extracted from the query handler so a
 // test harness can drive it with an explicit userId (the query is auth-gated and
 // can't be invoked via `npx convex run`).
-async function computeInboxSessions(
+// Shared inbox-conversation scan: the recent/pinned/dismissed/stashed/owned windows,
+// explicit-extra hydration, per-user liveness maps, foreign-run liveness merge, and the
+// stale-cluster cutoff. Extracted so the full inbox enrichment (computeInboxSessions)
+// and the lightweight liveness overlay (computeSessionsLiveness) scan the SAME candidate
+// set the same way — they only differ in what they enrich per row.
+async function scanInboxConversations(
   ctx: any,
   userId: Id<"users">,
-  opts: {
-    show_all?: boolean;
-    includeLiveness?: boolean;
-    // Explicitly-requested conversations (a label's filed set) hydrated into the
-    // candidate pool regardless of the recency window — labels exist to park old
-    // sessions. Deliberately filed, so also exempt from cluster-hiding.
-    extraConvIds?: string[];
-  },
-): Promise<{ sessions: any[]; hidden_count: number }> {
-  // Liveness (agent_status/is_idle/...) is heartbeat-derived and is the reason this
-  // query re-runs ~every second. The live web subscription opts OUT (includeLiveness:
-  // false) and gets those fields from the lightweight `sessionsLiveness` overlay; all
-  // other callers (inboxForCLI, listInboxSessionsPaginated) default to true and are
-  // unchanged. Default MUST stay true — inboxForCLI classifies work-state from it.
-  const includeLiveness = opts.includeLiveness !== false;
-  const now = Date.now();
+  now: number,
+  opts: { includeLiveness: boolean; extraConvIds?: string[]; teamScope?: Id<"teams"> },
+): Promise<{
+  conversations: any[];
+  maps: InboxSessionMaps;
+  extraIds: Set<string>;
+  clusterCutoff: number;
+  // Conversations in this user's owner set — drives the owned_by_me flag during
+  // enrichment without a per-row session_owners lookup.
+  ownedByMeIds: Set<string>;
+}> {
   const dismissedCutoff = now - INBOX_DISMISSED_WINDOW_MS;
   const sessionWindowCutoff = now - INBOX_SESSION_WINDOW_MS;
 
@@ -6952,14 +7325,85 @@ async function computeInboxSessions(
     .order("desc")
     .take(200);
 
+  // Sessions this user OWNS — run by another member's account (e.g. Mr Bot) but
+  // assigned to them — surface in the OWNER's inbox alongside their own.
+  // Explicit assignment outranks default team visibility: routing a session into
+  // someone's inbox is a deliberate act by someone who already had access.
+  //
+  // Reads the canonical owner SET (session_owners), NOT the denormalized
+  // owner_user_id cache: a session may have several owners and the cache only
+  // holds the primary, so a secondary owner's inbox would otherwise miss it.
+  // Owner rows are keyed by user alone (no denormalized updated_at — that would
+  // make every conversation heartbeat fan out and patch all of its owner rows),
+  // so hydrate here and apply the same recency/status window as the main scan.
+  const ownerRows = await ctx.db
+    .query("session_owners")
+    .withIndex("by_user", (q: any) => q.eq("user_id", userId))
+    .order("desc")
+    .take(200);
+  const ownedByMeIds = new Set<string>(
+    ownerRows.map((r: any) => r.conversation_id.toString())
+  );
+
   const byId = new Map<string, any>();
   for (const c of recentConversations) byId.set(c._id.toString(), c);
   for (const c of pinnedConversations) byId.set(c._id.toString(), c);
   for (const c of dismissedConversations) byId.set(c._id.toString(), c);
   for (const c of stashedConversations) byId.set(c._id.toString(), c);
 
+  // Hydrate only the owned conversations the window scans above didn't already
+  // fetch (an owned session of my OWN is usually in the recent window — the get
+  // would be a wasted read on a query that re-runs every heartbeat).
+  for (const r of ownerRows) {
+    const idStr = r.conversation_id.toString();
+    if (byId.has(idStr)) continue;
+    let conv: any = null;
+    try { conv = await ctx.db.get(r.conversation_id); } catch { conv = null; }
+    if (!conv) continue;
+    if ((conv.updated_at ?? 0) < sessionWindowCutoff) continue;
+    if (conv.status !== "active" && conv.status !== "completed") continue;
+    byId.set(idStr, conv);
+  }
+
+  // TEAM SCOPE (inbox "team mode"): fold every teammate's team-visible session
+  // into the candidate set, on top of the caller's own sessions above — so the
+  // team board is a SUPERSET of the personal inbox. Visibility uses the exact
+  // same rule as the team feed and search (createTeamFeedFilter), so the two can
+  // never disagree about what's shared. Only the recent window is scanned per
+  // member (active/completed, not their personally dismissed/stashed rows — that
+  // is the teammate's own triage, not this board's). The caller's own rows are
+  // skipped here; they were already gathered by the by_user scans above (which
+  // also cover the caller's PRIVATE sessions, correctly visible to themselves).
+  if (opts.teamScope) {
+    const teamFilter = await createTeamFeedFilter(ctx, opts.teamScope);
+    const memberIds = teamFilter.memberships
+      .map((m) => m.user_id)
+      .filter((id) => id.toString() !== userId.toString())
+      .slice(0, TEAM_INBOX_MEMBER_CAP);
+    for (const memberId of memberIds) {
+      const memberRecent = await ctx.db
+        .query("conversations")
+        .withIndex("by_team_user_updated", (q: any) =>
+          q.eq("team_id", opts.teamScope).eq("user_id", memberId).gte("updated_at", sessionWindowCutoff)
+        )
+        .order("desc")
+        .filter((q: any) => q.or(
+          q.eq(q.field("status"), "active"),
+          q.eq(q.field("status"), "completed")
+        ))
+        .take(TEAM_INBOX_PER_MEMBER_CAP);
+      for (const c of memberRecent) {
+        if (byId.has(c._id.toString())) continue;
+        if (c.inbox_dismissed_at || c.inbox_stashed_at) continue; // teammate's own triage
+        if (!teamFilter.isVisible(c)) continue;
+        byId.set(c._id.toString(), c);
+      }
+    }
+  }
+
   // Hydrate explicitly-requested conversations the windows above missed.
-  // Own sessions only (the inbox is "mine"); cap mirrors the window size.
+  // Own or owned-by-me sessions only (the inbox is "mine"); cap mirrors the
+  // window size.
   const extraIds = new Set(opts.extraConvIds ?? []);
   let extraBudget = 200;
   for (const idStr of extraIds) {
@@ -6967,16 +7411,33 @@ async function computeInboxSessions(
     let conv: any = null;
     try { conv = await ctx.db.get(idStr as Id<"conversations">); } catch { conv = null; }
     if (!conv) continue;
-    if (conv.user_id.toString() !== userId.toString()) continue;
+    if (conv.user_id.toString() !== userId.toString()) {
+      // Not the runner — admit only if they're an owner. ownedByMeIds covers the
+      // rows the owner scan already saw; the lookup catches one filed past its
+      // cap. Record it so enrichment stamps owned_by_me.
+      const owned =
+        ownedByMeIds.has(idStr) || (await isSessionOwner(ctx, conv._id, userId));
+      if (!owned) continue;
+      ownedByMeIds.add(idStr);
+    }
     if (conv.status !== "active" && conv.status !== "completed") continue;
     byId.set(idStr, conv);
     extraBudget--;
   }
   const conversations = Array.from(byId.values());
 
-  const maps = includeLiveness
+  const maps = opts.includeLiveness
     ? await buildUserSessionMaps(ctx, userId, now)
     : EMPTY_INBOX_MAPS;
+
+  // buildUserSessionMaps only covers managed_sessions belonging to THIS user;
+  // an owned foreign-run session's daemon rows belong to the running account,
+  // so merge its liveness per-conversation or the row would always classify as
+  // dead/idle even while the runner's agent is actively working.
+  const foreignConvs = conversations.filter((c) => c.user_id.toString() !== userId.toString());
+  if (opts.includeLiveness && foreignConvs.length > 0) {
+    await mergeForeignConversationLiveness(ctx, maps, foreignConvs, now);
+  }
 
   // Cluster cutoff hides stale active sessions when there's a clean time gap.
   // Dismissed/stashed sessions have their own 30d window, and explicitly-requested
@@ -6996,8 +7457,52 @@ async function computeInboxSessions(
     }
   }
 
+  return { conversations, maps, extraIds, clusterCutoff, ownedByMeIds };
+}
+
+async function computeInboxSessions(
+  ctx: any,
+  userId: Id<"users">,
+  opts: {
+    show_all?: boolean;
+    includeLiveness?: boolean;
+    // Explicitly-requested conversations (a label's filed set) hydrated into the
+    // candidate pool regardless of the recency window — labels exist to park old
+    // sessions. Deliberately filed, so also exempt from cluster-hiding.
+    extraConvIds?: string[];
+    // Inbox "team mode": also fold in every teammate's team-visible session from
+    // this team (superset of the personal inbox). See scanInboxConversations.
+    teamScope?: Id<"teams">;
+  },
+): Promise<{ sessions: any[]; hidden_count: number }> {
+  // Liveness (agent_status/is_idle/...) is heartbeat-derived and is the reason this
+  // query re-runs ~every second. The live web subscription opts OUT (includeLiveness:
+  // false) and gets those fields from the lightweight `sessionsLiveness` overlay; all
+  // other callers (inboxForCLI, listInboxSessionsPaginated) default to true and are
+  // unchanged. Default MUST stay true — inboxForCLI classifies work-state from it.
+  const includeLiveness = opts.includeLiveness !== false;
+  const now = Date.now();
+  const { conversations, maps, extraIds, clusterCutoff, ownedByMeIds } =
+    await scanInboxConversations(ctx, userId, now, {
+      includeLiveness,
+      extraConvIds: opts.extraConvIds,
+      teamScope: opts.teamScope,
+    });
+
   let hiddenCount = 0;
   const results: any[] = [];
+  // User docs for run-by / owner display, cached across rows (both are sparse:
+  // only second-party-owned sessions ever hit this).
+  const userDocCache = new Map<string, any>();
+  const getUserDoc = async (id: any) => {
+    const key = id.toString();
+    if (!userDocCache.has(key)) {
+      let doc: any = null;
+      try { doc = await ctx.db.get(id); } catch { doc = null; }
+      userDocCache.set(key, doc);
+    }
+    return userDocCache.get(key);
+  };
   for (const conv of conversations) {
     if (!shouldShowInInbox(conv)) continue;
     // Explicitly-requested rows are deliberately filed — never cluster-hide them.
@@ -7006,6 +7511,21 @@ async function computeInboxSessions(
     if (hidden) {
       hiddenCount++;
       if (!opts.show_all) continue;
+    }
+    if (conv.user_id.toString() !== userId.toString()) {
+      const author = await getUserDoc(conv.user_id);
+      row.author_name = author?.name ?? author?.email ?? null;
+      row.author_email = author?.email ?? null;
+    }
+    // owned_by_me reflects membership in the session's owner SET (any owner, not
+    // just the cached primary) — precomputed by the scan, so no per-row lookup.
+    // owner_name/email stay the PRIMARY owner's: the list row shows a single
+    // chip, and the full owner set is fetched on demand by the session panel.
+    row.owned_by_me = ownedByMeIds.has(conv._id.toString());
+    if (conv.owner_user_id) {
+      const ownerDoc = await getUserDoc(conv.owner_user_id);
+      row.owner_name = ownerDoc?.name ?? null;
+      row.owner_email = ownerDoc?.email ?? null;
     }
     results.push(row);
     // Don't surface subagents under a dismissed/stashed parent — they used to be
@@ -7045,38 +7565,314 @@ export const listInboxSessions = query({
   },
 });
 
+// Resolve which team the inbox "team mode" scopes to, membership-gated. A client
+// may pass any activeTeamId, so this is a real access check, not a hint: the
+// caller must actually belong to the team or nothing is returned. Falls back to
+// the user's active/default team when no explicit team is passed.
+async function resolveInboxTeamScope(
+  ctx: any,
+  userId: Id<"users">,
+  activeTeamId?: Id<"teams">,
+): Promise<Id<"teams"> | null> {
+  const user = await ctx.db.get(userId);
+  const teamId = activeTeamId ?? user?.active_team_id ?? user?.team_id;
+  if (!teamId) return null;
+  if (!(await isTeamMember(ctx, userId, teamId))) return null;
+  return teamId as Id<"teams">;
+}
+
+// Inbox "team mode": the same fully-enriched inbox rows as listInboxSessions, but
+// the candidate set is the whole team's team-visible sessions (superset of the
+// caller's own). Membership-gated via resolveInboxTeamScope. Mirrors the
+// personal query's liveness split — the live subscription passes
+// include_liveness:false and rides teamSessionsLiveness — so team mode is as
+// heartbeat-cheap as the personal inbox.
+export const listTeamInboxSessions = query({
+  args: {
+    activeTeamId: v.optional(v.id("teams")),
+    show_all: v.optional(v.boolean()),
+    include_liveness: v.optional(v.boolean()),
+    _probe: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { sessions: [], hidden_count: 0, team_id: null };
+    const teamScope = await resolveInboxTeamScope(ctx, userId, args.activeTeamId);
+    if (!teamScope) return { sessions: [], hidden_count: 0, team_id: null };
+    const result = await computeInboxSessions(ctx, userId, {
+      show_all: args.show_all,
+      includeLiveness: args.include_liveness,
+      teamScope,
+    });
+    return { ...result, team_id: teamScope.toString() };
+  },
+});
+
+// The 7 heartbeat-derived fields the sessionsLiveness overlay ships — the exact set the
+// full row (enrichInboxSessionRow) exposes and the web client merges via syncOverlay.
+type LivenessFields = {
+  agent_status: any;
+  is_idle: boolean;
+  is_unresponsive: boolean;
+  awaiting_input: boolean;
+  is_connected: boolean;
+  tmux_session: string | null;
+  permission_mode: string | null;
+};
+
+// The parents that a producing subagent child should keep in "working", derived ONCE
+// per recompute instead of a per-parent by_parent_conversation_id scan for every idle
+// row (~one indexed query per row — the op-count blowout behind "too many system
+// operations" timeouts on this heartbeat-hot path). The derivation is sound because
+// subagentKeepsParentWorking accepts only two proofs, and both pools are already in
+// hand: a child that synced output within the last 5 minutes sits at the top of the
+// recent window scan, and a live child with an active agent status is in
+// maps.liveConvIds (its doc hydrated below when the window missed it — bounded by the
+// count of actually-live daemons). Pure over its inputs so it's unit-testable.
+export function deriveProducingParents(
+  pool: any[],
+  maps: Pick<InboxSessionMaps, "liveConvIds" | "agentStatusMap">,
+  now: number,
+): Set<string> {
+  const parents = new Set<string>();
+  for (const c of pool) {
+    if (!c.parent_conversation_id) continue;
+    const cid = c._id.toString();
+    if (subagentKeepsParentWorking({
+      isSubagent: !!c.is_subagent,
+      convStatus: c.status,
+      updatedAt: c.updated_at,
+      isLive: maps.liveConvIds.has(cid),
+      agentStatus: trustedAgentStatus(maps.agentStatusMap.get(cid), c.updated_at, now),
+      now,
+    })) {
+      parents.add(c.parent_conversation_id.toString());
+    }
+  }
+  return parents;
+}
+
+async function buildProducingParents(
+  ctx: any,
+  conversations: any[],
+  maps: InboxSessionMaps,
+  now: number,
+): Promise<Set<string>> {
+  const seen = new Set<string>(conversations.map((c: any) => c._id.toString()));
+  const pool = [...conversations];
+  for (const cid of maps.liveConvIds) {
+    if (seen.has(cid)) continue;
+    let c: any = null;
+    try { c = await ctx.db.get(cid as Id<"conversations">); } catch { c = null; }
+    if (c) pool.push(c);
+  }
+  return deriveProducingParents(pool, maps, now);
+}
+
+// How the liveness path answers "is a subagent child still producing?" without a
+// per-parent scan: the precomputed set covers every child visible to the caller's
+// window/liveness pools. Foreign-RUN parents (a session run by another account but in
+// my inbox) are the blind spot — their children never appear in my scans — so those
+// few rows keep the old per-parent scan, drawing from a shared per-recompute budget
+// that bounds the worst case (a big team board) instead of scaling with it.
+type SubagentLivenessSource = {
+  producingParents: Set<string>;
+  // null for own rows (the set is authoritative); a shared countdown for foreign rows.
+  foreignScanBudget: { remaining: number } | null;
+};
+
+// Lightweight twin of enrichInboxSessionRow that computes ONLY those 7 fields. It reuses
+// the exact same derivations (trustedAgentStatus / deriveSessionActivity / the AUQ probe
+// / subagentKeepsParentWorking) so the overlay never drifts from the bundled row — but it
+// SKIPS everything the overlay throws away: the plan/task/workflow gets, the acting-author
+// resolution, and the subagent-row building. The one heavy read the full enrichment does
+// per row — the by_parent_conversation_id children scan — is replaced here by the
+// precomputed producing-parents set (see deriveProducingParents); only foreign-run
+// parents still scan, under a shared budget. The AUQ probe is gated on the
+// working bucket (!isIdle), matching enrichInboxSessionRow.
+async function enrichLivenessFields(
+  ctx: any,
+  conv: any,
+  maps: InboxSessionMaps,
+  now: number,
+  subagents: SubagentLivenessSource,
+): Promise<LivenessFields> {
+  const cid = conv._id.toString();
+  const hasPending = !!conv.has_pending_messages;
+  let lastMsgRole = conv.last_message_role;
+  let lastUserMessage = conv.last_message_preview || null;
+
+  // Fallback for un-backfilled conversations: one read for the last message so
+  // deriveSessionActivity sees the trailing role + the interrupt-marker preview.
+  if (!lastMsgRole && conv.message_count > 0) {
+    const lastMsg = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_timestamp", (q: any) =>
+        q.eq("conversation_id", conv._id)
+      )
+      .order("desc")
+      .first();
+    if (lastMsg) {
+      lastMsgRole = lastMsg.role;
+      if (lastMsg.role === "user" && lastMsg.content?.trim()) {
+        lastUserMessage = lastMsg.content
+          .replace(/\[Image[:\s][^\]]*\]/gi, "")
+          .replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "")
+          .trim()
+          .slice(0, 200);
+      }
+    }
+  }
+
+  const dismissed = !!conv.inbox_dismissed_at;
+  const stashed = !!conv.inbox_stashed_at;
+
+  const agentStatus = trustedAgentStatus(maps.agentStatusMap.get(cid), conv.updated_at, now);
+  const daemonAlive = agentStatus === "stopped"
+    ? false
+    : maps.liveConvIds.has(cid) ||
+      (maps.userDaemonAlive && (now - conv.updated_at) < 10 * 60 * 1000);
+
+  const activity = deriveSessionActivity({
+    agentStatus,
+    agentStatusUpdatedAt: maps.agentStatusUpdatedAtMap.get(cid),
+    lastMessageRole: lastMsgRole,
+    lastMessagePreview: lastUserMessage,
+    hasPending,
+    status: conv.status,
+    updatedAt: conv.updated_at,
+    daemonAlive,
+    now,
+  });
+  let isIdle = activity.isIdle;
+  const isUnresponsive = activity.isUnresponsive;
+
+  // An open AskUserQuestion poll is the agent blocking on the user — it belongs in
+  // "needs input", never "working". Same authoritative order("desc") probe (and same
+  // !isIdle gate) as enrichInboxSessionRow.
+  let awaitingInput = false;
+  if (!isIdle && conv.message_count > 0) {
+    const lastMsg = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_timestamp", (q: any) =>
+        q.eq("conversation_id", conv._id)
+      )
+      .order("desc")
+      .first();
+    if (lastMsg?.role === "assistant" && lastMsg.tool_calls?.some((tc: any) => tc.name === "AskUserQuestion")) {
+      awaitingInput = true;
+      isIdle = true; // blocked on the user, not actively working
+    }
+  }
+
+  // Keep an idle parent in "working" only while a subagent child is genuinely
+  // PRODUCING (see subagentKeepsParentWorking). Answered from the precomputed
+  // producing-parents set for own rows; foreign-run rows fall back to the old
+  // per-parent scan while the shared budget lasts (their children are invisible
+  // to the derivation's pools). Only when isIdle is still true and never for
+  // dismissed/stashed rows.
+  if (isIdle && !dismissed && !stashed && conv.message_count > 0) {
+    if (subagents.producingParents.has(cid)) {
+      isIdle = false;
+    } else if (subagents.foreignScanBudget && subagents.foreignScanBudget.remaining > 0) {
+      subagents.foreignScanBudget.remaining--;
+      const children = await ctx.db
+        .query("conversations")
+        .withIndex("by_parent_conversation_id", (q: any) =>
+          q.eq("parent_conversation_id", conv._id)
+        )
+        .take(20);
+      if (children.some((c: any) => subagentKeepsParentWorking({
+        isSubagent: !!c.is_subagent,
+        convStatus: c.status,
+        updatedAt: c.updated_at,
+        isLive: maps.liveConvIds.has(c._id.toString()),
+        agentStatus: trustedAgentStatus(maps.agentStatusMap.get(c._id.toString()), c.updated_at, now),
+        now,
+      }))) {
+        isIdle = false;
+      }
+    }
+  }
+
+  return {
+    agent_status: agentStatus,
+    is_idle: isIdle,
+    is_unresponsive: isUnresponsive,
+    awaiting_input: awaitingInput,
+    is_connected: !!daemonAlive,
+    tmux_session: maps.tmuxSessionMap.get(cid) ?? null,
+    permission_mode: maps.permissionModeMap.get(cid) ?? null,
+  };
+}
+
+// Build the {convId: LivenessFields} overlay for the user's inbox window. Reuses the
+// shared scan (so the candidate set matches computeInboxSessions exactly) but enriches
+// each row through the lightweight enrichLivenessFields — NOT the full enrichInboxSessionRow
+// — so a heartbeat recompute no longer runs the plan/task/workflow gets, the acting-author
+// resolution, or a children scan for every row. Covers the whole window (dismissed/stashed
+// included) so the overlay is a superset of any row the client might hold; syncOverlay
+// ignores ids it doesn't have.
+async function computeSessionsLiveness(
+  ctx: any,
+  userId: Id<"users">,
+  teamScope?: Id<"teams">,
+): Promise<Record<string, LivenessFields>> {
+  const now = Date.now();
+  const { conversations, maps } = await scanInboxConversations(ctx, userId, now, {
+    includeLiveness: true,
+    teamScope,
+  });
+  const producingParents = await buildProducingParents(ctx, conversations, maps, now);
+  // Shared per-recompute allowance for foreign-parent fallback scans — keeps the
+  // op count bounded even when the candidate set is mostly teammate rows.
+  const foreignScanBudget = { remaining: 40 };
+  const uid = userId.toString();
+  const liveness: Record<string, LivenessFields> = {};
+  for (const conv of conversations) {
+    if (!shouldShowInInbox(conv)) continue;
+    liveness[conv._id.toString()] = await enrichLivenessFields(ctx, conv, maps, now, {
+      producingParents,
+      foreignScanBudget: conv.user_id.toString() !== uid ? foreignScanBudget : null,
+    });
+  }
+  return liveness;
+}
+
 // Heartbeat-derived liveness for the user's inbox sessions, keyed by conversation id —
 // the small, high-churn overlay that pairs with listInboxSessions({include_liveness:
-// false}). Reuses computeInboxSessions so the values are IDENTICAL to the bundled path
-// by construction, then projects to just the liveness fields. This is the only inbox
-// query that re-runs on every heartbeat, and it ships a tiny map instead of the full
-// session list (the client merges it via syncOverlay).
+// false}). This is the only inbox query that re-runs on every heartbeat, so it computes
+// ONLY the 7 liveness fields (computeSessionsLiveness) instead of the full inbox
+// enrichment — the values are still identical to the bundled path because both derive
+// them the same way. Ships a tiny map the client merges via syncOverlay.
 export const sessionsLiveness = query({
   args: {
     show_all: v.optional(v.boolean()),
     _probe: v.optional(v.number()),
   },
+  handler: async (ctx, _args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { liveness: {} };
+    const liveness = await computeSessionsLiveness(ctx, userId);
+    return { liveness };
+  },
+});
+
+// Team-mode twin of sessionsLiveness: the same tiny heartbeat overlay, but over
+// the team-scoped candidate set (so teammate rows on the board refresh their
+// live status without the full team list re-pushing every heartbeat). Membership
+// gated. Mounted by the client only while team mode is active.
+export const teamSessionsLiveness = query({
+  args: {
+    activeTeamId: v.optional(v.id("teams")),
+    _probe: v.optional(v.number()),
+  },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return { liveness: {} };
-    // show_all:true so the overlay covers every row the client might hold; syncOverlay
-    // ignores ids it doesn't have, so a superset is harmless.
-    const { sessions } = await computeInboxSessions(ctx, userId, {
-      show_all: true,
-      includeLiveness: true,
-    });
-    const liveness: Record<string, any> = {};
-    for (const s of sessions) {
-      liveness[s._id.toString()] = {
-        agent_status: s.agent_status,
-        is_idle: s.is_idle,
-        is_unresponsive: s.is_unresponsive,
-        awaiting_input: s.awaiting_input,
-        is_connected: s.is_connected,
-        tmux_session: s.tmux_session,
-        permission_mode: s.permission_mode,
-      };
-    }
+    const teamScope = await resolveInboxTeamScope(ctx, userId, args.activeTeamId);
+    if (!teamScope) return { liveness: {} };
+    const liveness = await computeSessionsLiveness(ctx, userId, teamScope);
     return { liveness };
   },
 });
@@ -7182,6 +7978,11 @@ export const inboxForCLI = query({
       label: string | null;
       active_plan: { short_id: string; title: string } | null;
       active_task: { short_id: string; title: string } | null;
+      // Second-party ownership: run_by = the member whose account runs the
+      // session when that isn't the caller; owner = the assigned owner if any.
+      run_by: string | null;
+      owner: { name: string | null; email: string | null } | null;
+      owned_by_me: boolean;
     }> = [];
 
     for (const s of sessions) {
@@ -7231,6 +8032,9 @@ export const inboxForCLI = query({
         label: rowLabel,
         active_plan: s.active_plan ? { short_id: s.active_plan.short_id, title: s.active_plan.title } : null,
         active_task: s.active_task ? { short_id: s.active_task.short_id, title: s.active_task.title } : null,
+        run_by: s.author_name ?? null,
+        owner: s.owner_user_id ? { name: s.owner_name ?? null, email: s.owner_email ?? null } : null,
+        owned_by_me: !!s.owned_by_me,
       });
     }
 
@@ -7519,6 +8323,13 @@ export const markSessionCompleted = mutation({
     if (!convId) return;
     const conv = await ctx.db.get(convId);
     if (!conv || conv.user_id !== userId) return;
+    // Anchors never auto-complete. This guard covers every reaping path that
+    // routes through markSessionCompleted (the daemon watchdog, the SessionEnd
+    // hook, daemon kill teardown). The direct-patch kill paths carry their own
+    // matching `persistent` guard (killSession + dispatch dismiss→kill). So a
+    // standing member that goes dormant is never flipped to "completed"; it is
+    // retired only by decommissionAnchor, which clears `persistent` first.
+    if (conv.persistent) return;
     if (conv.status === "active") {
       if (conv.has_pending_messages) {
         return;
@@ -7567,6 +8378,61 @@ export const dismissFromInbox = mutation({
     await ctx.db.patch(args.conversation_id, {
       inbox_dismissed_at: Date.now(),
     });
+  },
+});
+
+// Agent-facing inbox visibility (cast dismiss / undismiss / kill via
+// /cli/sessions/*). Field semantics are IDENTICAL to the web inbox gestures and
+// run the same hide-transition side effects (applyHideTransition):
+//   dismiss   — stash: hide from the active inbox, agent keeps running
+//               (Stashed bucket). An EMPTY pre-warm gets reaped instead.
+//   kill      — retire: sets inbox_dismissed_at, which tears the agent down,
+//               marks the session completed (unless persistent), and cancels
+//               schedules bound to it (Killed bucket).
+//   undismiss — restore: clears both hide flags; a killed session comes back
+//               as a restartable card (mirrors the web restoreSession).
+// Access: the runner or the second-party owner — the same rule as killSession
+// and the dispatch triage path.
+export const cliSetSessionVisibility = mutation({
+  args: {
+    session: v.string(),
+    action: v.union(v.literal("dismiss"), v.literal("kill"), v.literal("undismiss")),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = args.api_token
+      ? await getAuthenticatedUserId(ctx, args.api_token)
+      : await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    const conv = await findConversationByAnyRefWhere(ctx, args.session, (c) =>
+      c.user_id?.toString() === userId.toString() ||
+      c.owner_user_id?.toString() === userId.toString()
+    );
+    if (!conv) {
+      throw new Error(
+        `No session found for "${args.session}" (you can only manage sessions you run or own)`
+      );
+    }
+    const shortId = conv.short_id ?? conv._id.toString().slice(0, 7);
+
+    if (args.action === "undismiss") {
+      const wasHidden = !!(conv.inbox_dismissed_at || conv.inbox_stashed_at);
+      await ctx.db.patch(conv._id, {
+        inbox_dismissed_at: undefined,
+        inbox_stashed_at: undefined,
+      });
+      return { ok: true as const, short_id: shortId, action: args.action, was_hidden: wasHidden };
+    }
+
+    const patch =
+      args.action === "kill"
+        ? { inbox_dismissed_at: Date.now() }
+        : { inbox_stashed_at: Date.now() };
+    await ctx.db.patch(conv._id, patch);
+    // `conv` is the pre-patch row — applyHideTransition gates on the transition.
+    const outcome = await applyHideTransition(ctx, conv, patch);
+    return { ok: true as const, short_id: shortId, action: args.action, outcome };
   },
 });
 
@@ -7886,6 +8752,52 @@ export const linkSessions = mutation({
         ? { subagent_description: args.subagent_description }
         : {}),
     });
+  },
+});
+
+// Link a VISIBLE child to the session that spawned it (agent-team teammate →
+// its lead). Unlike linkSessions this neither marks the child a subagent nor
+// dismisses it — the child stays a first-class inbox card; the pointer only
+// powers the "Parent" click-through and teammate-name resolution. Also stamps
+// both sides with the agent-team identity: the child's teamName/agentName come
+// from its JSONL stamps, and the lead (whose transcript is never stamped) gets
+// agent_name "team-lead" so siblings can resolve it by name.
+export const linkSpawnedBy = mutation({
+  args: {
+    parent_conversation_id: v.id("conversations"),
+    child_conversation_id: v.id("conversations"),
+    agent_team_name: v.optional(v.string()),
+    agent_name: v.optional(v.string()),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = args.api_token
+      ? await getAuthenticatedUserId(ctx, args.api_token)
+      : await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    const parent = await ctx.db.get(args.parent_conversation_id);
+    if (!parent || parent.user_id !== userId) throw new Error("Parent not found");
+
+    const child = await ctx.db.get(args.child_conversation_id);
+    if (!child || child.user_id !== userId) throw new Error("Child not found");
+
+    if (!child.spawned_by_conversation_id) {
+      await ctx.db.patch(args.child_conversation_id, {
+        spawned_by_conversation_id: args.parent_conversation_id,
+        ...(args.agent_team_name && !child.agent_team_name
+          ? { agent_team_name: args.agent_team_name }
+          : {}),
+        ...(args.agent_name && !child.agent_name ? { agent_name: args.agent_name } : {}),
+      });
+    }
+
+    if (args.agent_team_name && !parent.agent_team_name) {
+      await ctx.db.patch(args.parent_conversation_id, {
+        agent_team_name: args.agent_team_name,
+        ...(parent.agent_name ? {} : { agent_name: "team-lead" }),
+      });
+    }
   },
 });
 
@@ -8281,6 +9193,26 @@ export const backfillDenormalizedFields = internalMutation({
   },
 });
 
+// Authorize a session command and return its live target. A session may be
+// commanded by its RUNNER (conv.user_id — the account whose daemon executes
+// commands) or its second-party owner (conv.owner_user_id — e.g. a Mr-Bot-run
+// session assigned to a human). Callers MUST stamp the resulting
+// daemon_commands row with conv.user_id: daemons poll by their own account, so
+// an actor-stamped row lands on the actor's machines and fails "No session
+// found" (the 2026-07-13 setSessionModel loop). killSession/restartSession
+// keep their own variants — they must proceed on ghost rows this rejects.
+export async function requireSessionCommandTarget(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+  conversationId: Id<"conversations">,
+): Promise<Doc<"conversations">> {
+  const conv = await ctx.db.get(conversationId);
+  if (!conv || (conv.user_id !== userId && conv.owner_user_id !== userId)) {
+    throw new Error("Not authorized");
+  }
+  return conv;
+}
+
 export const sendEscapeToSession = mutation({
   args: {
     conversation_id: v.id("conversations"),
@@ -8289,11 +9221,10 @@ export const sendEscapeToSession = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    const conv = await ctx.db.get(args.conversation_id);
-    if (!conv || conv.user_id !== userId) throw new Error("Not authorized");
+    const conv = await requireSessionCommandTarget(ctx, userId, args.conversation_id);
 
     await ctx.db.insert("daemon_commands", {
-      user_id: userId,
+      user_id: conv.user_id,
       command: "escape",
       args: JSON.stringify({ conversation_id: args.conversation_id }),
       created_at: Date.now(),
@@ -8310,11 +9241,10 @@ export const sendKeysToSession = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    const conv = await ctx.db.get(args.conversation_id);
-    if (!conv || conv.user_id !== userId) throw new Error("Not authorized");
+    const conv = await requireSessionCommandTarget(ctx, userId, args.conversation_id);
 
     await ctx.db.insert("daemon_commands", {
-      user_id: userId,
+      user_id: conv.user_id,
       command: "send_keys",
       args: JSON.stringify({ conversation_id: args.conversation_id, keys: args.keys }),
       created_at: Date.now(),
@@ -8341,8 +9271,7 @@ export const setSessionModel = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    const conv = await ctx.db.get(args.conversation_id);
-    if (!conv || conv.user_id !== userId) throw new Error("Not authorized");
+    const conv = await requireSessionCommandTarget(ctx, userId, args.conversation_id);
     const agentKey = modelAgentKey(conv.agent_type);
     const agentCfg = AGENT_MODEL_CONFIG[agentKey];
     if (!agentCfg?.midSession) {
@@ -8366,13 +9295,16 @@ export const setSessionModel = mutation({
     // runs: an out-of-date one treats set_model as an unknown GLOBAL command
     // and stamps "Unknown command: set_model" into the result before the
     // owning daemon even sees it (observed live with a remote box on 1.1.58).
-    const target = await resolveOwnerDevice(ctx, userId, {
+    // Address the command to the RUNNER's daemon (conv.user_id) — same routing
+    // as killSession. An owner's switch must reach the machine actually running
+    // the session, and that daemon polls commands under the runner's account.
+    const target = await resolveOwnerDevice(ctx, conv.user_id, {
       projectPath: conv.project_path ?? null,
       gitRoot: conv.git_root ?? null,
       ownerDeviceId: (conv as any).owner_device_id ?? null,
     });
     return await ctx.db.insert("daemon_commands", {
-      user_id: userId,
+      user_id: conv.user_id,
       command: "set_model",
       args: JSON.stringify({
         conversation_id: args.conversation_id,
@@ -8396,7 +9328,22 @@ export const getDaemonCommandResult = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) return null;
     const cmd = await ctx.db.get(args.command_id);
-    if (!cmd || cmd.user_id !== userId) return null;
+    if (!cmd) return null;
+    if (cmd.user_id !== userId) {
+      // Commands on an owned session are stamped with the RUNNER's user_id so
+      // the runner's daemon executes them (see setSessionModel/killSession).
+      // The second-party owner who issued one may still read its verdict —
+      // authorized through the target conversation, same rule as issuing.
+      let rawConvId: unknown;
+      try {
+        rawConvId = JSON.parse(cmd.args ?? "{}").conversation_id;
+      } catch {
+        return null;
+      }
+      const convId = typeof rawConvId === "string" ? ctx.db.normalizeId("conversations", rawConvId) : null;
+      const conv = convId ? await ctx.db.get(convId) : null;
+      if (!conv || (conv.user_id !== userId && conv.owner_user_id !== userId)) return null;
+    }
     return {
       executed_at: cmd.executed_at ?? null,
       result: cmd.result ?? null,
@@ -8414,11 +9361,10 @@ export const rewindSession = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    const conv = await ctx.db.get(args.conversation_id);
-    if (!conv || conv.user_id !== userId) throw new Error("Not authorized");
+    const conv = await requireSessionCommandTarget(ctx, userId, args.conversation_id);
 
     await ctx.db.insert("daemon_commands", {
-      user_id: userId,
+      user_id: conv.user_id,
       command: "rewind",
       args: JSON.stringify({ conversation_id: args.conversation_id, steps_back: args.steps_back }),
       created_at: Date.now(),
@@ -8463,7 +9409,11 @@ export async function resolveRestartTarget(
 ) {
   const conv = await ctx.db.get(conversationId);
   if (conv) {
-    if (conv.user_id !== userId) throw new Error("Not authorized");
+    // The runner, or the session's second-party owner — same rule as dispatch
+    // sendMessage/resumeSession. An owned session (Mr-Bot-run, assigned to this
+    // user) restarts from the owner's inbox exactly like their own; the daemon
+    // commands are routed to the runner by the callers.
+    if (conv.user_id !== userId && conv.owner_user_id !== userId) throw new Error("Not authorized");
     return { conv, restored: false };
   }
   let sessionId = ghost.session_id;
@@ -8608,13 +9558,18 @@ export const killSession = mutation({
     if (!userId) throw new Error("Not authenticated");
 
     const conv = await ctx.db.get(args.conversation_id);
-    if (conv && conv.user_id !== userId) throw new Error("Not authorized");
+    // The runner, or the session's second-party owner — same rule as
+    // restartSession/dispatch.sendMessage. An owned session kills from the
+    // owner's inbox exactly like their own.
+    if (conv && conv.user_id !== userId && conv.owner_user_id !== userId) throw new Error("Not authorized");
 
     // Enqueue even when the row is gone: the daemon tears backends down from the
     // conversation id alone (derived tmux names, local caches) plus the cached
-    // session_id the client passes along.
+    // session_id the client passes along. Address the command to the RUNNER's
+    // daemon (conv.user_id) — an owner's kill must reach the machine actually
+    // running the session; ghost rows fall back to the caller.
     await ctx.db.insert("daemon_commands", {
-      user_id: userId,
+      user_id: conv?.user_id ?? userId,
       command: "kill_session",
       args: JSON.stringify({
         conversation_id: args.conversation_id,
@@ -8625,10 +9580,22 @@ export const killSession = mutation({
 
     if (conv) {
       const patch: Record<string, any> = { inbox_killed_at: Date.now() };
-      if (args.mark_completed) {
+      // A persistent anchor session never auto-completes — a dismiss/kill gesture
+      // on its pinned card puts it to sleep, it isn't retired. Only an explicit
+      // decommissionAnchor (which clears `persistent` first) may complete it.
+      if (args.mark_completed && !conv.persistent) {
         patch.status = "completed";
       }
       await ctx.db.patch(args.conversation_id, patch);
+      // Kill must stick: cancel any armed schedule that injects into this
+      // conversation, or its next fire would resurrect the session the user
+      // just killed (see cancelTasksBoundToConversation). Scan the RUNNER's
+      // schedules (theirs are the ones bound to their session), plus the
+      // caller's when a second-party owner is killing.
+      await cancelTasksBoundToConversation(ctx, conv.user_id, args.conversation_id);
+      if (conv.user_id !== userId) {
+        await cancelTasksBoundToConversation(ctx, userId, args.conversation_id);
+      }
     }
     return { existed: !!conv };
   },
@@ -8646,7 +9613,10 @@ export const restartSession = mutation({
     const { conv, restored } = await resolveRestartTarget(ctx, userId, args.conversation_id, args);
     if (!conv.session_id) throw new Error("No session to restart");
 
-    await enqueueKillAndResume(ctx, userId, conv);
+    // Daemon commands are polled by the RUNNER's daemon — for a second-party
+    // owner restarting a session run by another account, address the commands
+    // to the runner, not the caller (same routing as dispatch.resumeSession).
+    await enqueueKillAndResume(ctx, conv.user_id, conv);
     return { conversation_id: conv._id, restored };
   },
 });
@@ -8663,7 +9633,8 @@ export const repairSession = mutation({
     const { conv, restored } = await resolveRestartTarget(ctx, userId, args.conversation_id, args);
     if (!conv.session_id) throw new Error("No session to repair");
 
-    await enqueueKillAndResume(ctx, userId, conv, { forceReconstitute: true });
+    // Runner-routed for the same reason as restartSession above.
+    await enqueueKillAndResume(ctx, conv.user_id, conv, { forceReconstitute: true });
     return { conversation_id: conv._id, restored };
   },
 });
@@ -8671,21 +9642,31 @@ export const repairSession = mutation({
 // Live progress of a kill/restart for the footer: the daemon stamps each
 // command row with executed_at + result/error, so the client can show the real
 // ladder ("stopping" → "resuming" → resumed/reconstituted/started fresh/failed)
-// instead of an indefinite spinner. Scoped to the caller's own commands for one
-// conversation, last few only.
+// instead of an indefinite spinner. Scoped to one conversation, last few only.
 export const getRestartProgress = query({
   args: { conversation_id: v.string() },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return null;
 
+    // Restart commands are stamped with the RUNNER's user_id (see
+    // enqueueKillAndResume callers) — a second-party owner watching a restart
+    // must scan the runner's rows. Anyone else keeps scanning their own (and
+    // sees nothing for a conversation they can't command).
+    let scanUserId = userId;
+    const convId = ctx.db.normalizeId("conversations", args.conversation_id);
+    if (convId) {
+      const conv = await ctx.db.get(convId);
+      if (conv && conv.owner_user_id === userId && conv.user_id !== userId) scanUserId = conv.user_id;
+    }
+
     const pending = await ctx.db
       .query("daemon_commands")
-      .withIndex("by_user_pending", (q) => q.eq("user_id", userId).eq("executed_at", undefined))
+      .withIndex("by_user_pending", (q) => q.eq("user_id", scanUserId).eq("executed_at", undefined))
       .collect();
     const executed = await ctx.db
       .query("daemon_commands")
-      .withIndex("by_user_pending", (q) => q.eq("user_id", userId).gt("executed_at", 0))
+      .withIndex("by_user_pending", (q) => q.eq("user_id", scanUserId).gt("executed_at", 0))
       .order("desc")
       .take(50);
 
@@ -8715,13 +9696,15 @@ export const switchSessionProject = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    const conv = await ctx.db.get(args.conversation_id);
-    if (!conv || conv.user_id !== userId) throw new Error("Not authorized");
+    // Both the kill and the relaunch are routed under the runner's account —
+    // the session stays on the machine that runs it, whichever party asked
+    // for the switch (paths are that machine's).
+    const conv = await requireSessionCommandTarget(ctx, userId, args.conversation_id);
 
     const now = Date.now();
 
     await ctx.db.insert("daemon_commands", {
-      user_id: userId,
+      user_id: conv.user_id,
       command: "kill_session",
       args: JSON.stringify({ conversation_id: args.conversation_id }),
       created_at: now,
@@ -8734,7 +9717,7 @@ export const switchSessionProject = mutation({
 
     const agentType = conv.agent_type || "claude_code";
     const daemonAgentType = agentType === "codex" ? "codex" : agentType === "gemini" ? "gemini" : "claude";
-    await enqueueStartSession(ctx, userId, {
+    await enqueueStartSession(ctx, conv.user_id, {
       conversationId: args.conversation_id,
       agentType: daemonAgentType,
       projectPath: args.project_path,
@@ -8753,8 +9736,9 @@ export const switchSessionAgent = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    const conv = await ctx.db.get(args.conversation_id);
-    if (!conv || conv.user_id !== userId) throw new Error("Not authorized");
+    // Kill + relaunch routed under the runner's account so the session stays
+    // on the machine that runs it.
+    const conv = await requireSessionCommandTarget(ctx, userId, args.conversation_id);
 
     await ctx.db.patch(args.conversation_id, { agent_type: args.agent_type });
 
@@ -8766,13 +9750,13 @@ export const switchSessionAgent = mutation({
     const daemonAgentType = args.agent_type === "claude_code" ? "claude" : args.agent_type === "codex" ? "codex" : args.agent_type === "cursor" ? "cursor" : "gemini";
 
     await ctx.db.insert("daemon_commands", {
-      user_id: userId,
+      user_id: conv.user_id,
       command: "kill_session",
       args: JSON.stringify({ conversation_id: args.conversation_id }),
       created_at: now,
     });
 
-    await enqueueStartSession(ctx, userId, {
+    await enqueueStartSession(ctx, conv.user_id, {
       conversationId: args.conversation_id,
       agentType: daemonAgentType,
       projectPath: conv.project_path || conv.git_root,
