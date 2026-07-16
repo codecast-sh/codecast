@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import { partitionSessionRetention } from "../idbCache";
+import { partitionSessionRetention, expireExcludeTombstones } from "../idbCache";
 
 // Hydration-time retention for the persisted sessions collection. The
 // in-memory map is never-prune by design, so boot is the only moment the
@@ -69,5 +69,31 @@ describe("partitionSessionRetention", () => {
     const { keep, drop } = partitionSessionRetention([fresh, stale], [], null, NOW);
     expect(keep.map((r) => r._id)).toEqual([cid(1)]);
     expect(drop).toEqual([cid(2)]);
+  });
+});
+
+describe("expireExcludeTombstones", () => {
+  it("drops excludes past the window, keeps recent ones", () => {
+    const pending = {
+      "sessions:a": { type: "exclude", ts: NOW - 45 * DAY },
+      "sessions:b": { type: "exclude", ts: NOW - 5 * DAY },
+    };
+    const cleaned = expireExcludeTombstones(pending, NOW);
+    expect(Object.keys(cleaned)).toEqual(["sessions:b"]);
+  });
+
+  it("stamps legacy excludes without a timestamp instead of dropping them", () => {
+    const pending = { "tasks:a": { type: "exclude" } };
+    const cleaned = expireExcludeTombstones(pending, NOW);
+    expect(cleaned["tasks:a"]).toEqual({ type: "exclude", ts: NOW });
+  });
+
+  it("never expires include/field entries, however old", () => {
+    const pending = {
+      "sessions:a": { type: "include", ts: NOW - 400 * DAY },
+      "sessions:b:title": { type: "field", value: "x", ts: NOW - 400 * DAY },
+    };
+    const cleaned = expireExcludeTombstones(pending, NOW);
+    expect(Object.keys(cleaned).sort()).toEqual(["sessions:a", "sessions:b:title"]);
   });
 });

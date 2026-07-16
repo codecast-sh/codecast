@@ -71,17 +71,40 @@ export function applySyncTable<T extends { _id: string }>(
   const ignoreFields = opts?.ignoreFields ? new Set(opts.ignoreFields) : undefined;
   const preserveFields = opts?.preserveFields;
   const pruneAbsentScope = opts?.pruneAbsentScope;
+
+  // ONE pass over pending, partitioned into O(1)-consumable shapes. The old
+  // applyFieldOverrides rebuilt Object.entries(newPending) and string-scanned
+  // the WHOLE pending map for EVERY incoming row — O(incoming × pending).
+  // Exclude tombstones never clear for delta tables (absence ≠ deletion), so
+  // pending grows with every kill/dismiss and that product turns quadratic: a
+  // measured 1,832-entry pending map made each ~1s 152-row sessions push do
+  // ~280k startsWith checks (~100ms), which alone pinned the main thread.
+  const excludeIds = new Set<string>();
+  const includeIds: string[] = [];
+  let fieldsByRecord: Map<string, Array<{ key: string; field: string; entry: PendingEntry }>> | null = null;
+  for (const [key, entry] of Object.entries(newPending)) {
+    if (!key.startsWith(prefix)) continue;
+    const rest = key.slice(prefix.length);
+    const colon = rest.indexOf(":");
+    if (colon === -1) {
+      if (entry.type === "exclude") excludeIds.add(rest);
+      else if (entry.type === "include") includeIds.push(rest);
+    } else if (entry.type === "field") {
+      const id = rest.slice(0, colon);
+      if (!fieldsByRecord) fieldsByRecord = new Map();
+      let arr = fieldsByRecord.get(id);
+      if (!arr) fieldsByRecord.set(id, (arr = []));
+      arr.push({ key, field: rest.slice(colon + 1), entry });
+    }
+  }
+
   // Ids with ANY local pending state — never prune these (an optimistic write
   // must not be discarded because a crawl raced it).
   let pendingIds: Set<string> | null = null;
   if (pruneAbsentScope) {
-    pendingIds = new Set();
-    for (const key of Object.keys(newPending)) {
-      if (!key.startsWith(prefix)) continue;
-      const rest = key.slice(prefix.length);
-      const colon = rest.indexOf(":");
-      pendingIds.add(colon === -1 ? rest : rest.slice(0, colon));
-    }
+    pendingIds = new Set(excludeIds);
+    for (const id of includeIds) pendingIds.add(id);
+    if (fieldsByRecord) for (const id of fieldsByRecord.keys()) pendingIds.add(id);
   }
 
   // Confirmed excludes — server no longer sends the record.
@@ -89,23 +112,19 @@ export function applySyncTable<T extends { _id: string }>(
   // record means "unchanged", not "deleted". Skip the exclude-clearing
   // pass; soft-deletes (status="dropped") still arrive as updated rows.
   if (!isDelta) {
-    for (const [key, entry] of Object.entries(newPending)) {
-      if (!key.startsWith(prefix)) continue;
-      if (entry.type === "exclude") {
-        const id = key.slice(prefix.length);
-        if (!incomingIds.has(id)) {
-          delete newPending[key];
-        }
+    for (const id of excludeIds) {
+      if (!incomingIds.has(id)) {
+        delete newPending[prefix + id];
+        excludeIds.delete(id);
       }
     }
   }
 
   const applyFieldOverrides = (record: T): T => {
+    const overrides = fieldsByRecord?.get(record._id);
+    if (!overrides) return record;
     let merged = record;
-    const fieldPrefix = `${tableName}:${record._id}:`;
-    for (const [key, entry] of Object.entries(newPending)) {
-      if (entry.type !== "field" || !key.startsWith(fieldPrefix)) continue;
-      const field = key.slice(fieldPrefix.length);
+    for (const { key, field, entry } of overrides) {
       if ((record as any)[field] === entry.value) {
         delete newPending[key];
       } else {
@@ -123,8 +142,7 @@ export function applySyncTable<T extends { _id: string }>(
   // Delta mode: keep ALL prev rows; overlay incoming. Absence != deletion.
   if (prev) {
     for (const id of Object.keys(prev)) {
-      const excludeKey = `${tableName}:${id}`;
-      if (newPending[excludeKey]?.type === "exclude") continue;
+      if (excludeIds.has(id)) continue;
       const incomingRecord = incomingMap.get(id);
       if (incomingRecord) {
         let merged = applyFieldOverrides(incomingRecord);
@@ -169,7 +187,7 @@ export function applySyncTable<T extends { _id: string }>(
         // there, and hydration would resurrect the row). Out-of-scope records and
         // records with pending local state keep the normal delta behavior.
         if (pruneAbsentScope && pruneAbsentScope(prev[id]) && !pendingIds!.has(id)) {
-          newPending[excludeKey] = { type: "exclude" };
+          newPending[`${tableName}:${id}`] = { type: "exclude", ts: Date.now() };
           continue;
         }
         table[id] = prev[id];
@@ -179,8 +197,7 @@ export function applySyncTable<T extends { _id: string }>(
 
   // Append records new in incoming (not previously seen) at the end
   for (const record of incoming) {
-    const excludeKey = `${tableName}:${record._id}`;
-    if (newPending[excludeKey]?.type === "exclude") continue;
+    if (excludeIds.has(record._id)) continue;
     if (table[record._id]) continue;
     table[record._id] = applyFieldOverrides(record);
   }
@@ -188,11 +205,9 @@ export function applySyncTable<T extends { _id: string }>(
   // Include entries — locally-added records the server hasn't acknowledged.
   // Same delta caveat: don't clear an include just because this partial
   // batch didn't carry the record.
-  for (const [key, entry] of Object.entries(newPending)) {
-    if (!key.startsWith(prefix) || entry.type !== "include") continue;
-    const id = key.slice(prefix.length);
+  for (const id of includeIds) {
     if (!isDelta && incomingIds.has(id)) {
-      delete newPending[key];
+      delete newPending[prefix + id];
     } else if (prev?.[id] && !table[id]) {
       table[id] = prev[id];
     }

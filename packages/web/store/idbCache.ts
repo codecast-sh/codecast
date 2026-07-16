@@ -273,6 +273,30 @@ export function partitionSessionRetention(
   return { keep: pinnedKeep.concat(windowed), drop };
 }
 
+// Exclude tombstones never clear for delta tables (absence ≠ deletion in
+// applySyncTable), so every kill/dismiss adds a permanent `pending` entry —
+// measured at 1,832 entries after a heavy agent fan-out, and each one rides
+// every sync push and every persisted pending blob. A tombstone only matters
+// while the server could still resend the row, which is bounded by the same
+// 30d window as the cache retention above — age them out at hydration. Legacy
+// entries without a timestamp get stamped `now` and age out one window later.
+// include/field entries are local-first writes awaiting server acknowledgment:
+// never expired.
+export function expireExcludeTombstones(
+  pending: Record<string, any>,
+  now: number,
+): Record<string, any> {
+  const cleaned: Record<string, any> = {};
+  for (const [key, entry] of Object.entries(pending)) {
+    if (entry?.type === "exclude") {
+      if (!entry.ts) { cleaned[key] = { ...entry, ts: now }; continue; }
+      if (now - entry.ts > SESSION_CACHE_TTL_MS) continue;
+    }
+    cleaned[key] = entry;
+  }
+  return cleaned;
+}
+
 export async function loadCache(): Promise<Record<string, any> | null> {
   try {
     const result: Record<string, any> = {};
@@ -345,6 +369,10 @@ export async function loadCache(): Promise<Record<string, any> | null> {
       const pruned: Record<string, any> = {};
       for (const row of keep) pruned[row._id] = row;
       result.conversations = pruned;
+    }
+
+    if (result.pending && typeof result.pending === "object") {
+      result.pending = expireExcludeTombstones(result.pending, Date.now());
     }
 
     return hasData ? result : null;
