@@ -1616,6 +1616,11 @@ type ParsedApiError = {
   // resets 11:30pm (America/New_York)") — the session is parked until the
   // limit resets. Rendered as a distinct "usage limit" card.
   isLimit?: boolean;
+  // True for statusless connection-drop banners ("API Error: Connection
+  // closed mid-response. The response above may be incomplete.") — the turn
+  // died mid-transmission; a plain "continue" resumes it. Rendered as a
+  // distinct "connection dropped" card.
+  isConnection?: boolean;
 };
 
 function parseApiErrorContent(content?: string | null): ParsedApiError | null {
@@ -1623,16 +1628,17 @@ function parseApiErrorContent(content?: string | null): ParsedApiError | null {
   const trimmed = content.trim();
   if (!trimmed) return null;
 
-  // Banner detection (auth / limit) shares the backend's classifier in
-  // @codecast/shared/contracts: anchored prefixes + a length cap keep a long
-  // prose reply that merely opens like a banner from rendering as a card. The
-  // generic "API Error:"-prefixed form keeps its original anchored match (no
-  // cap) so a long JSON error payload still renders as the error card.
+  // Banner detection (auth / limit / connection) shares the backend's
+  // classifier in @codecast/shared/contracts: anchored prefixes + a length cap
+  // keep a long prose reply that merely opens like a banner from rendering as
+  // a card. The generic "API Error:"-prefixed form keeps its original anchored
+  // match (no cap) so a long JSON error payload still renders as the error card.
   const bannerKind = classifyApiErrorBanner(trimmed);
   const isAuth = bannerKind === "auth";
   const isLimit = bannerKind === "limit";
+  const isConnection = bannerKind === "connection";
   const match = trimmed.match(/^API Error:\s*(\d{3})\s*([\s\S]*)$/i);
-  if (!isAuth && !isLimit && !match) return null;
+  if (!isAuth && !isLimit && !isConnection && !match) return null;
 
   // The status code may be the leading "API Error: NNN" (generic form) or
   // embedded in an auth banner ("Please run /login · API Error: 401 …").
@@ -1686,12 +1692,16 @@ function parseApiErrorContent(content?: string | null): ParsedApiError | null {
       // ("Session limit · resets 11:30pm (America/New_York)").
       const detail = trimmed.replace(/^you['’]ve hit your\s*/i, "");
       message = detail.charAt(0).toUpperCase() + detail.slice(1);
+    } else if (isConnection) {
+      // The card heading already says the error part, so keep just the detail
+      // ("Connection closed mid-response. The response above may be incomplete.").
+      message = trimmed.replace(/^api error:?\s*/i, "").trim() || "The connection to the provider dropped.";
     } else {
       message = statusCode === 500 ? "Internal server error" : "API request failed";
     }
   }
 
-  return { statusCode, message, errorType, requestId, isAuth, isLimit };
+  return { statusCode, message, errorType, requestId, isAuth, isLimit, isConnection };
 }
 
 function ApiErrorCard({ error, compact = false }: { error: ParsedApiError; compact?: boolean }) {
@@ -1748,6 +1758,34 @@ function ApiErrorCard({ error, compact = false }: { error: ParsedApiError; compa
         {!compact && (
           <p className="mt-1.5 text-xs text-sol-text-dim">
             The session is paused until the limit resets — send a message after that to pick up where it left off.
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  // Connection-drop banner → a "connection dropped" card. The provider never
+  // replied (stream cut mid-response / connection error / timeout), so the
+  // turn died at the prompt — a plain "continue" resumes it.
+  if (error.isConnection) {
+    return (
+      <div className={`rounded-lg border border-amber-500/40 bg-amber-500/10 ${compact ? "px-2.5 py-2" : "px-3 py-2.5"}`}>
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-500/20 text-amber-500">
+            <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+              <path d="M13 2L3 14h7l-1 8 10-12h-7l1-8" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </span>
+          <span className="text-xs font-semibold uppercase tracking-wide text-amber-500">
+            Connection dropped
+          </span>
+        </div>
+        <p className="mt-1 text-sm text-amber-500">{error.message}</p>
+        {!compact && (
+          <p className="mt-1.5 text-xs text-sol-text-dim">
+            The turn was cut off mid-response — send{" "}
+            <code className="px-1 py-0.5 rounded bg-sol-bg-alt/60 text-sol-text-secondary font-mono">continue</code>{" "}
+            (or any message) and the session picks up where it left off.
           </p>
         )}
       </div>
@@ -11295,19 +11333,36 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   // future mount (conversation switch, recycled scroll row) gets an accurate
   // estimateSize and skips the reflow cascade. Keyed by collapse mode because a
   // collapsed row renders different content (and height) than an expanded one.
+  //
+  // Attribution guard: the virtualizer files every measurement under
+  // getItemKey(el.dataset.index). The data-index attribute is written at React
+  // COMMIT time while getItemKey reflects the timeline at RENDER time — under a
+  // deferred update (conversation switch via useDeferredValue, a pending-row
+  // prune, an older-page prepend) those can disagree, so a row's height would
+  // be filed under a NEIGHBORING message's key. Such a wrong entry never
+  // self-corrects: the ResizeObserver only reports size CHANGES (a stable row
+  // stays silent) and the no-entry path below prefers the cached belief over
+  // the DOM — which is how the settled overlapping-rows / phantom-void states
+  // happen. Each row stamps its own key as data-vkey; when the stamp disagrees
+  // with what the virtualizer is about to attribute, return the current belief
+  // (a no-op) and record nothing.
   const measureElement = useCallback((element: Element, entry: ResizeObserverEntry | undefined, instance: any) => {
     const horizontal = instance.options.horizontal;
+    const index = instance.indexFromElement(element);
+    const key = instance.options.getItemKey(index);
+    const stampedKey = (element as HTMLElement).dataset?.vkey;
+    if (stampedKey !== undefined && stampedKey !== String(key)) {
+      return instance.itemSizeCache.get(key) ?? instance.options.estimateSize(index);
+    }
     const box = entry?.borderBoxSize?.[0];
     let size: number;
     if (box) {
       size = Math.round(horizontal ? box.inlineSize : box.blockSize);
     } else {
-      const idx = instance.indexFromElement(element);
-      const cached = instance.itemSizeCache.get(instance.options.getItemKey(idx));
+      const cached = instance.itemSizeCache.get(key);
       size = cached !== undefined ? cached : (element as HTMLElement)[horizontal ? "offsetWidth" : "offsetHeight"];
     }
-    const index = instance.indexFromElement(element);
-    if (index >= 0) recordVirtHeight(virtHeightKey(instance.options.getItemKey(index), rowDensityKey(index)), size);
+    if (index >= 0) recordVirtHeight(virtHeightKey(key, rowDensityKey(index)), size);
     return size;
   }, [rowDensityKey]);
 
@@ -11346,14 +11401,64 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     virtualizer.scrollToEnd({ behavior: "auto" });
   };
 
+  // Size-drift self-heal. If a measurement ever landed under the wrong key
+  // (see the attribution guard in measureElement) — or a row changed height
+  // without a ResizeObserver report — the virtualizer's believed size and the
+  // DOM disagree indefinitely: the observer stays silent because the element's
+  // real size isn't changing, and attach-measure echoes the cached belief.
+  // That's the settled overlapping-rows / phantom-void state. Once a second,
+  // outside active scrolling, feed any diverging real height back through
+  // resizeItem — the same entry point an observer report uses — so the list
+  // converges to DOM truth within a tick instead of staying broken until a
+  // remount.
+  useWatchEffect(() => {
+    const tick = () => {
+      // Resolve the container per-tick: at effect time (mount) the ref may not
+      // be attached yet, and the [virtualizer] dep never changes identity, so
+      // an early return here would disable the reconciler for good. Skip while
+      // this pane is hidden (keepalive tab under display:none): every rect
+      // reads 0 there, and feeding those through resizeItem would zero out the
+      // hidden pane's whole layout. Plain setInterval, not rAF: rAF never fires
+      // in a backgrounded tab, and drift must heal there too so the layout is
+      // right the moment the user comes back.
+      const container = containerRef.current;
+      if (!container || container.offsetParent === null) return;
+      if (virtualizer.isScrolling) return;
+      const byIndex = new Map(virtualizer.getVirtualItems().map((v) => [v.index, v]));
+      if (byIndex.size === 0) return;
+      const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
+      let corrected = false;
+      for (const el of container.querySelectorAll<HTMLElement>("[data-index]")) {
+        const v = byIndex.get(Number(el.dataset.index));
+        if (!v || el.dataset.vkey !== String(v.key)) continue; // mid-commit row — skip
+        const real = Math.round(el.getBoundingClientRect().height);
+        if (Math.abs(real - v.size) > 1) {
+          if ((window as any).__RECON_DEBUG) (((window as any).__RECON_LOG) ??= []).push({ i: v.index, from: v.size, to: real });
+          virtualizer.resizeItem(v.index, real);
+          corrected = true;
+        }
+      }
+      // A correction while the reader sits at the tail must keep them there
+      // (same contract as followOnAppend) — without this, healing the sizes
+      // under a bottom-pinned view leaves the last message's tail cut off.
+      if (corrected && nearBottom && !userScrolledRef.current) virtualizer.scrollToEnd({ behavior: "auto" });
+    };
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [virtualizer]);
+
   // Scroll to absolute top or bottom of the loaded list with retries to handle
   // virtualizer height-estimation drift. Reassigned every render so closures
-  // always capture the latest timeline/virtualizer.
-  const scrollToEdgeRef = useRef<(edge: 'top' | 'bottom') => void>(() => {});
-  scrollToEdgeRef.current = (edge) => {
+  // always capture the latest timeline/virtualizer. bailOnUserScroll stops the
+  // retry ladder as soon as the user scrolls somewhere on purpose (wheel latch)
+  // — used by the initial open-at-bottom pin, where later retries must never
+  // fight a reader who already started moving.
+  const scrollToEdgeRef = useRef<(edge: 'top' | 'bottom', opts?: { bailOnUserScroll?: boolean }) => void>(() => {});
+  scrollToEdgeRef.current = (edge, opts) => {
     const sc = containerRef.current;
     if (!sc) return;
     const pull = () => {
+      if (opts?.bailOnUserScroll && userScrolledRef.current) return;
       if (edge === 'top') {
         if (timeline.length > 0) virtualizer.scrollToIndex(0, { align: 'start' });
         sc.scrollTop = 0;
@@ -11979,8 +12084,26 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     const sc = containerRef.current;
     if (sc) {
       paginationCooldownRef.current = Date.now() + 1000;
-      virtualizer.scrollToIndex(timeline.length - 1, { align: "end" });
+      // One shot is not enough: the target offset is computed from believed
+      // sizes, which on a cold open are still estimates — as rows measure in,
+      // the "end" moves down by whole screens and a single scrollToIndex
+      // strands the view mid-conversation (anchorTo:'end' can't rescue it
+      // because the tracked offset lags the programmatic write). Re-pin on
+      // the settle ladder, then keep pulling while heights keep settling —
+      // stopping the moment the reader scrolls somewhere on purpose.
+      scrollToEdgeRef.current('bottom', { bailOnUserScroll: true });
       lastScrollTopRef.current = sc.scrollTop;
+      // Height settling has a long tail (late images, fonts, the drift
+      // reconciler's 1s ticks), and the virtualizer's own end-anchor misses
+      // growth that lands right after a programmatic pull — so hold the pin
+      // for a while rather than trusting one ladder pass. Bails permanently
+      // the moment the reader scrolls somewhere on purpose.
+      const settleStart = Date.now();
+      const settleId = setInterval(() => {
+        const el = containerRef.current;
+        if (!el || userScrolledRef.current || Date.now() - settleStart > 8000) { clearInterval(settleId); return; }
+        if (el.scrollHeight - el.scrollTop - el.clientHeight > 20) scrollToEdgeRef.current('bottom', { bailOnUserScroll: true });
+      }, 350);
       // Fallback: clear cooldown after virtualizer has had time to measure,
       // then re-run scroll handler so pagination fires if we're already near top.
       setTimeout(() => {
@@ -13498,6 +13621,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 <div
                   key={virtualItem.key}
                   data-index={virtualItem.index}
+                  data-vkey={String(virtualItem.key)}
                   ref={virtualizer.measureElement}
                   style={{
                     position: "absolute",

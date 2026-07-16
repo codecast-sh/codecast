@@ -19,9 +19,12 @@ import {
 describe("isBlockedConversation", () => {
   const base = { pending_api_error: true, pending_api_error_kind: "limit", agent_type: "claude_code" };
 
-  test("selects claude conversations parked on a limit or auth banner", () => {
+  test("selects claude conversations parked on a limit, auth, or connection banner", () => {
     expect(isBlockedConversation(base)).toBe(true);
     expect(isBlockedConversation({ ...base, pending_api_error_kind: "auth" })).toBe(true);
+    // A dropped connection ("Connection closed mid-response") parks the turn
+    // at the prompt — a plain continue resumes it, same as limit.
+    expect(isBlockedConversation({ ...base, pending_api_error_kind: "connection" })).toBe(true);
   });
 
   test("never revives what the user dismissed", () => {
@@ -29,8 +32,8 @@ describe("isBlockedConversation", () => {
   });
 
   test("transient provider errors are not blocked sessions", () => {
-    // A 529/500 banner (kind "error") self-heals on the next message — counting
-    // it threw a mid-conversation 500 into the "blocked on usage limits" banner.
+    // A statusful 529/500 banner (kind "error") self-retries — counting it
+    // threw a mid-conversation 500 into the "blocked on usage limits" banner.
     expect(isBlockedConversation({ ...base, pending_api_error_kind: "error" })).toBe(false);
     // Pre-kind rows (flag without a kind) are also out: unknown ≠ revivable.
     expect(isBlockedConversation({ ...base, pending_api_error_kind: undefined })).toBe(false);
