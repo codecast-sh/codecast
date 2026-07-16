@@ -67,27 +67,27 @@ function makeTeam() {
 describe("resolveAssigneeToUserId", () => {
   test("does not throw on a raw name; resolves Jason by exact name", async () => {
     const { db, teamId, jason } = makeTeam();
-    expect(await resolveAssigneeToUserId({ db }, "Jason Benn", teamId as any)).toBe(jason);
+    expect(await resolveAssigneeToUserId({ db }, "Jason Benn", teamId as any)).toBe(jason as any);
   });
 
   test("resolves a partial first name via unique substring", async () => {
     const { db, teamId, jason } = makeTeam();
-    expect(await resolveAssigneeToUserId({ db }, "jason", teamId as any)).toBe(jason);
+    expect(await resolveAssigneeToUserId({ db }, "jason", teamId as any)).toBe(jason as any);
   });
 
   test("resolves by email", async () => {
     const { db, teamId, jason } = makeTeam();
-    expect(await resolveAssigneeToUserId({ db }, "jason@union.app", teamId as any)).toBe(jason);
+    expect(await resolveAssigneeToUserId({ db }, "jason@union.app", teamId as any)).toBe(jason as any);
   });
 
   test("still resolves github-handle members (Ashot)", async () => {
     const { db, teamId, ashot } = makeTeam();
-    expect(await resolveAssigneeToUserId({ db }, "ashot", teamId as any)).toBe(ashot);
+    expect(await resolveAssigneeToUserId({ db }, "ashot", teamId as any)).toBe(ashot as any);
   });
 
   test("resolves a real user id directly", async () => {
     const { db, teamId, jason } = makeTeam();
-    expect(await resolveAssigneeToUserId({ db }, jason, teamId as any)).toBe(jason);
+    expect(await resolveAssigneeToUserId({ db }, jason, teamId as any)).toBe(jason as any);
   });
 
   test("returns null for an unknown name instead of throwing", async () => {
