@@ -21,6 +21,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
 import { Users, X } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
+import { isConvexId } from "../lib/entityLinks";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import {
   DropdownMenu,
@@ -48,11 +49,13 @@ export function OwnersBadge({ conversationId }: { conversationId: string }) {
   const teamMembers = useInboxStore((s) => s.teamMembers) as any[];
   const currentUser = useInboxStore((s) => s.currentUser) as any;
 
-  // Live owner set for THIS open session. Gated by the caller to the user's own
-  // sessions, where listOwners always resolves (owner access) and never throws.
+  // Live owner set for THIS open session. Skipped while the row is an
+  // optimistic stub (client UUID, no server row yet) — the query resolves null
+  // for a ref the server doesn't know, so there's nothing to fetch until the
+  // real id syncs back and re-keys the row.
   const data = useQuery(
     api.sessionOwnership.listOwners,
-    conversationId ? { session_id: conversationId } : "skip",
+    conversationId && isConvexId(conversationId) ? { session_id: conversationId } : "skip",
   );
   const addOwner = useMutation(api.sessionOwnership.addSessionOwner);
   const removeOwner = useMutation(api.sessionOwnership.removeSessionOwner);

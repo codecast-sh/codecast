@@ -49,16 +49,27 @@ export type OwnerMutationResult = {
 
 // Runner-or-team, exactly cast send's access rule: the running account may
 // (re)assign its own sessions, and any teammate may claim/reassign a session
-// they can already see. A merely share-linked viewer may not.
+// they can already see. A merely share-linked viewer may not. Returns null when
+// nothing accessible matches — reads treat that as "no data" (the web mounts
+// listOwners with refs that may not have synced yet, e.g. an optimistic stub
+// session's client UUID), while mutations escalate it to an error.
+async function findOwnableConversation(
+  ctx: { db: any },
+  authUserId: Id<"users">,
+  sessionId: string,
+): Promise<any> {
+  return findConversationByAnyRefWhere(ctx, sessionId, async (candidate) => {
+    const access = await checkConversationAccess(ctx, authUserId, candidate);
+    return access === "owner" || access === "team";
+  });
+}
+
 async function resolveOwnableConversation(
   ctx: { db: any },
   authUserId: Id<"users">,
   sessionId: string,
 ): Promise<any> {
-  const conversation = await findConversationByAnyRefWhere(ctx, sessionId, async (candidate) => {
-    const access = await checkConversationAccess(ctx, authUserId, candidate);
-    return access === "owner" || access === "team";
-  });
+  const conversation = await findOwnableConversation(ctx, authUserId, sessionId);
   if (!conversation) {
     throw new Error(
       `No session found for "${sessionId}" (you can only set an owner on your own sessions or sessions shared with your team)`
@@ -399,16 +410,29 @@ export const removeSessionOwner = mutation({
 
 // The full owner SET for one session — the session panel's owner chips. Fetched
 // on demand for a single session, so the inbox list never pays a per-row lookup.
+// Returns null (never throws) when the ref doesn't resolve to an accessible
+// session: this is a reactive read the web subscribes to while a session is
+// open, and it legitimately races creation — an optimistic stub's client UUID
+// only resolves once the server row syncs back.
+export async function performListOwners(
+  ctx: { db: any },
+  authUserId: Id<"users">,
+  sessionId: string,
+): Promise<{ short_id: string; conversation_id: Id<"conversations">; owners: OwnerInfo[] } | null> {
+  const conversation = await findOwnableConversation(ctx, authUserId, sessionId);
+  if (!conversation) return null;
+  return {
+    short_id: conversation.short_id ?? conversation._id.toString().slice(0, 7),
+    conversation_id: conversation._id,
+    owners: await listOwnerInfos(ctx, conversation._id),
+  };
+}
+
 export const listOwners = query({
   args: { session_id: SESSION_REF, api_token: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const authUserId = await requireAuth(ctx, args.api_token);
-    const conversation = await resolveOwnableConversation(ctx, authUserId, args.session_id);
-    return {
-      short_id: conversation.short_id ?? conversation._id.toString().slice(0, 7),
-      conversation_id: conversation._id,
-      owners: await listOwnerInfos(ctx, conversation._id),
-    };
+    return performListOwners(ctx, authUserId, args.session_id);
   },
 });
 
