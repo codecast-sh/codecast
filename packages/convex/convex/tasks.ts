@@ -1211,17 +1211,22 @@ export const webList = query({
         if (!seen.has(id)) { seen.add(id); allTasks.push(t); }
       };
 
+      // Scope scans run in parallel: this query dies with "timed out performing
+      // too many system operations" when serial index reads stack up under a
+      // slow-backend window, so never await these one at a time.
       if (args.workspace === "team" && args.team_id) {
         // TEAM VIEW: fetch ALL tasks for this team — no per-status limits.
         // Client does all filtering (status, source, assignee, priority).
-        const teamTasks = await collectByTeam(args.team_id);
+        const [teamTasks, assignedTasks] = await Promise.all([
+          collectByTeam(args.team_id),
+          collectByAssignee(String(userId)),
+        ]);
         for (const t of teamTasks) pushUnique(t);
 
         // Also rescue orphan tasks (no team_id) assigned to me — CLI-created
         // tasks that never got a team would otherwise be invisible in every
         // view. Do NOT pull in tasks belonging to *other* teams: a task whose
         // team_id is set to another team must not leak into this team's list.
-        const assignedTasks = await collectByAssignee(String(userId));
         for (const t of assignedTasks) {
           if (!t.team_id || String(t.team_id) === String(args.team_id)) pushUnique(t);
         }
@@ -1233,32 +1238,38 @@ export const webList = query({
           .query("team_memberships")
           .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
           .collect();
-        for (const m of memberships) {
-          const teamTasks = await collectByTeam(m.team_id);
+        const [teamLists, userTasks, assignedTasks] = await Promise.all([
+          Promise.all(memberships.map((m) => collectByTeam(m.team_id))),
+          collectByUser(userId),
+          collectByAssignee(String(userId)),
+        ]);
+        for (const teamTasks of teamLists) {
           for (const t of teamTasks) pushUnique(t);
         }
-        const userTasks = await collectByUser(userId);
         for (const t of userTasks) pushUnique(t);
-        const assignedTasks = await collectByAssignee(String(userId));
         for (const t of assignedTasks) pushUnique(t);
       } else if (args.workspace === "personal") {
         // PERSONAL VIEW: tasks with no team_id that are mine — either as
         // creator OR assignee. Without the assignee union, a task assigned
         // to me by someone else (e.g. an ops bot) with no team_id is
         // invisible in every view.
-        const userTasks = await collectByUser(userId);
+        const [userTasks, assignedTasks] = await Promise.all([
+          collectByUser(userId),
+          collectByAssignee(String(userId)),
+        ]);
         for (const t of userTasks) {
           if (!t.team_id) pushUnique(t);
         }
-        const assignedTasks = await collectByAssignee(String(userId));
         for (const t of assignedTasks) {
           if (!t.team_id) pushUnique(t);
         }
       } else {
         // UNSCOPED: all user's tasks (creator or assignee).
-        const userTasks = await collectByUser(userId);
+        const [userTasks, assignedTasks] = await Promise.all([
+          collectByUser(userId),
+          collectByAssignee(String(userId)),
+        ]);
         for (const t of userTasks) pushUnique(t);
-        const assignedTasks = await collectByAssignee(String(userId));
         for (const t of assignedTasks) pushUnique(t);
       }
       tasks = allTasks;
