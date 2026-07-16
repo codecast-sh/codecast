@@ -541,6 +541,30 @@ export async function performReparentSessionToDevice(
 
   const crossUser = !isRunner; // account actually changes hands
 
+  // Facts for the destination's reorientation notice (sessionMoveNotice.ts).
+  // The destination composes that notice from what it can verify locally — its
+  // own cwd, branch, clone freshness — but it cannot see the machine the
+  // session left, and across an account boundary it has no access to it at all.
+  // Only the server knows the account changed hands and what to call the user
+  // and device it came from, so those facts ride the command. All optional: an
+  // older daemon ignores them and simply sends a thinner notice.
+  //
+  // Read BEFORE the patch below, which overwrites user_id and owner_device_id —
+  // these describe where the session came FROM.
+  const priorDeviceId: string | undefined = conv.owner_device_id;
+  const deviceChanged = !priorDeviceId || priorDeviceId !== args.device_id;
+  const priorDevice = priorDeviceId && deviceChanged
+    ? await ctx.db
+        .query("devices")
+        .withIndex("by_user_device", (q: any) =>
+          q.eq("user_id", conv.user_id).eq("device_id", priorDeviceId),
+        )
+        .first()
+    : null;
+  const nameOf = (u: any): string | undefined => u?.name || u?.email || undefined;
+  const fromUser = crossUser ? nameOf(await ctx.db.get(conv.user_id)) : undefined;
+  const toUser = crossUser ? nameOf(await ctx.db.get(userId)) : undefined;
+
   const patch: any = {
     owner_device_id: args.device_id,
     session_error: undefined,
@@ -578,6 +602,11 @@ export async function performReparentSessionToDevice(
       ...(conv.project_path ? { project_path: conv.project_path } : {}),
       ...(remoteUrl ? { git_remote_url: remoteUrl } : {}),
       reparented: true,
+      device_changed: deviceChanged,
+      ...(priorDevice?.label ? { from_device: priorDevice.label } : {}),
+      ...(crossUser ? { cross_user: true } : {}),
+      ...(fromUser ? { from_user: fromUser } : {}),
+      ...(toUser ? { to_user: toUser } : {}),
     }),
     created_at: Date.now(),
     target_device_id: args.device_id,

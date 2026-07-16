@@ -3572,7 +3572,7 @@ accountsCmd
 
 accountsCmd
   .command("continue")
-  .description("Send 'continue' to every session parked on a usage-limit banner (last 48h; no account switch — use after the limit window resets)")
+  .description("Send 'continue' to every session parked on a usage-limit or dropped-connection banner (last 48h; no account switch — use after the limit window resets)")
   .option("--yes", "skip the confirmation when many sessions would be continued")
   .option("--include-subagents", "also continue blocked subagent workers (skipped by default — their parent has usually moved on)")
   .action(async (options: any) => {
@@ -3583,7 +3583,7 @@ accountsCmd
       ? ` (${probe.subagents} blocked subagent(s) skipped — add --include-subagents to include them)`
       : "";
     if (count === 0) {
-      console.log(`${c.dim}No sessions are blocked on a usage limit.${subNote}${c.reset}`);
+      console.log(`${c.dim}No sessions are blocked on a usage limit or dropped connection.${subNote}${c.reset}`);
       return;
     }
     if (count > REVIVE_CONFIRM_THRESHOLD && !options.yes) {

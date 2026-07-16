@@ -101,4 +101,57 @@ describe("performReparentSessionToDevice", () => {
     expect(conv(db).user_id).toBe(JASON);
     expect(conv(db).owner_device_id).toBe("jasondev");
   });
+
+  // The destination composes the agent's reorientation notice from what it can
+  // verify locally, but it cannot see the machine the session left — and across
+  // an account boundary it has no access to it at all. These facts are the ones
+  // only the server knows, so they ride the resume command.
+  describe("reorientation facts on the resume command", () => {
+    const argsOf = (db: any) => JSON.parse(commands(db)[0].args);
+
+    test("a cross-account pull names both users and the machine it came from", async () => {
+      const db = fixtures();
+      await performReparentSessionToDevice({ db }, ME as any, { session_id: "sess1", device_id: "mydev" });
+      const a = argsOf(db);
+      expect(a.cross_user).toBe(true);
+      expect(a.from_user).toBe("Jason");
+      expect(a.to_user).toBe("Me");
+      expect(a.from_device).toBe("Jason-MacBook");
+      expect(a.device_changed).toBe(true);
+    });
+
+    test("a same-user pull carries no account facts — nothing changed hands", async () => {
+      const db = fixtures({ user_id: ME });
+      await performReparentSessionToDevice({ db }, ME as any, { session_id: "sess1", device_id: "mydev" });
+      const a = argsOf(db);
+      expect(a.cross_user).toBeUndefined();
+      expect(a.from_user).toBeUndefined();
+      expect(a.to_user).toBeUndefined();
+      // The machine still changed, so the move itself is still reported.
+      expect(a.device_changed).toBe(true);
+    });
+
+    test("pulling onto the device it already runs on reports no machine change", async () => {
+      const db = fixtures({ user_id: ME, owner_device_id: "mydev" });
+      await performReparentSessionToDevice({ db }, ME as any, { session_id: "sess1", device_id: "mydev" });
+      const a = argsOf(db);
+      expect(a.device_changed).toBe(false);
+      expect(a.from_device).toBeUndefined();
+    });
+
+    test("falls back to email when a user has no display name", async () => {
+      const db = fixtures();
+      db._tables.users.find((u: any) => u._id === JASON).name = undefined;
+      await performReparentSessionToDevice({ db }, ME as any, { session_id: "sess1", device_id: "mydev" });
+      expect(argsOf(db).from_user).toBe("jason@x.ai");
+    });
+
+    test("an unknown source device omits the label rather than inventing one", async () => {
+      const db = fixtures({ owner_device_id: "vanished" });
+      await performReparentSessionToDevice({ db }, ME as any, { session_id: "sess1", device_id: "mydev" });
+      const a = argsOf(db);
+      expect(a.device_changed).toBe(true);
+      expect(a.from_device).toBeUndefined();
+    });
+  });
 });
