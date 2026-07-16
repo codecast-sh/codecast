@@ -89,10 +89,10 @@ describe("describeTaskCadence", () => {
     expect(describeTaskCadence({ schedule_type: "event" })).toBe("on event");
   });
 
-  test("once is once", () => {
-    expect(describeTaskCadence({ schedule_type: "once" })).toBe("once");
-    // recurring without an interval (malformed row) degrades to once, not a crash
-    expect(describeTaskCadence({ schedule_type: "recurring" })).toBe("once");
+  test("once reads as one-time", () => {
+    expect(describeTaskCadence({ schedule_type: "once" })).toBe("one-time");
+    // recurring without an interval (malformed row) degrades to one-time, not a crash
+    expect(describeTaskCadence({ schedule_type: "recurring" })).toBe("one-time");
   });
 });
 

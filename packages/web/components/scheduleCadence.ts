@@ -47,7 +47,7 @@ export function humanizeDurationToken(token: string): string {
 }
 
 // Cadence label straight from an agent_tasks record (the authoritative fields,
-// not command-line args): "every 8h", "on PR comment", "once". Used by the
+// not command-line args): "every 8h", "on PR comment", "one-time". Used by the
 // schedule strip above the conversation; parseScheduleCadence below stays for
 // rendering `cast schedule add` command cards, where only args are available.
 export function describeTaskCadence(task: {
@@ -62,7 +62,7 @@ export function describeTaskCadence(task: {
     const ev = task.event_filter?.event_type;
     return ev ? `on ${SCHEDULE_EVENT_LABELS[ev] ?? ev.replace(/_/g, " ")}` : "on event";
   }
-  return "once";
+  return "one-time";
 }
 
 // A schedule due for more than this without being claimed is stuck — the

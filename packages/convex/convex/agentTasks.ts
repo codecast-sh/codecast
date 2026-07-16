@@ -775,10 +775,23 @@ export const webList = query({
   },
 });
 
-// Every conversation spawned as a run of one schedule, newest first — the
-// browseable run history on the schedule strip. agent_task_id is stamped by
-// linkRunConversation shortly after spawn and backfilled on completion, so this
-// is the complete linkable set, unaffected by inbox windows or run auto-fold.
+// Every past run of one schedule, newest first — the browseable run history on
+// every schedule surface (strip, dock, /schedules). Each entry names the
+// conversation to open AND the message that triggered the run, so the UI can
+// land the user on the exact trigger:
+//   • Spawn schedules: one conversation per run (agent_task_id is stamped by
+//     linkRunConversation shortly after spawn and backfilled on completion, so
+//     this is the complete linkable set, unaffected by inbox windows or run
+//     auto-fold). The trigger is the run's first user message (the prompt).
+//   • Inject schedules (--context current): every run is a
+//     `<scheduled-task task-id="...">` user message inside the home
+//     conversation. Found by scanning the conversation's user turns newest
+//     first (the search index can't match 32-char Convex id tokens) with an
+//     exact substring check on the task id. The scan is bounded: sessions so
+//     long their old runs fall outside it lose only the oldest entries.
+//     Encrypted conversations degrade to no history.
+// `_id` stays the conversation id for older clients; `run_key` is the unique
+// per-run key (inject runs share one conversation).
 export const webListRuns = query({
   args: { task_id: v.id("agent_tasks") },
   handler: async (ctx, args) => {
@@ -786,21 +799,64 @@ export const webListRuns = query({
     if (!userId) return [];
     const task = await ctx.db.get(args.task_id);
     if (!task || task.user_id.toString() !== userId.toString()) return [];
+
+    if (task.originating_conversation_id) {
+      const convId = task.originating_conversation_id;
+      const conv = await ctx.db.get(convId);
+      if (!conv) return [];
+      const marker = `task-id="${args.task_id}"`;
+      const userTurns = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_role_timestamp", (q) =>
+          q.eq("conversation_id", convId).eq("role", "user")
+        )
+        .order("desc")
+        .take(1000);
+      return userTurns
+        .filter((m) => m.content?.includes(marker))
+        .slice(0, 100)
+        .map((m) => ({
+          _id: convId,
+          run_key: m._id as string,
+          kind: "inject" as const,
+          short_id: conv.short_id,
+          title: conv.title || "Untitled",
+          created_at: m.timestamp,
+          status: conv.status,
+          idle_summary: undefined as string | undefined,
+          trigger_message_id: m._id,
+          trigger_message_timestamp: m.timestamp,
+        }));
+    }
+
     const runs = await ctx.db
       .query("conversations")
       .withIndex("by_agent_task", (q) => q.eq("agent_task_id", args.task_id))
       .collect();
-    return runs
-      .sort((a, b) => b._creationTime - a._creationTime)
-      .slice(0, 100)
-      .map((c) => ({
-        _id: c._id,
-        short_id: c.short_id,
-        title: c.title || "Untitled",
-        created_at: c._creationTime,
-        status: c.status,
-        idle_summary: c.idle_summary,
-      }));
+    const newest = runs.sort((a, b) => b._creationTime - a._creationTime).slice(0, 100);
+    return await Promise.all(
+      newest.map(async (c) => {
+        const trigger = await ctx.db
+          .query("messages")
+          .withIndex("by_conversation_role_timestamp", (q) =>
+            q.eq("conversation_id", c._id).eq("role", "user")
+          )
+          .order("asc")
+          .first();
+        return {
+          _id: c._id,
+          run_key: c._id as string,
+          kind: "spawn" as const,
+          short_id: c.short_id,
+          title: c.title || "Untitled",
+          created_at: c._creationTime,
+          status: c.status,
+          idle_summary: c.idle_summary,
+          trigger_message_id: trigger?._id,
+          trigger_message_timestamp: trigger?.timestamp,
+        };
+      })
+    );
   },
 });
 

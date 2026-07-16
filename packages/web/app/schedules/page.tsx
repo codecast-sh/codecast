@@ -11,6 +11,7 @@ import { DashboardLayout } from "../../components/DashboardLayout";
 import { fmtDuration, fmtClock } from "../../components/scheduleCadence";
 import { ShortcutTooltip } from "../../components/KeyboardShortcutsHelp";
 import { patchTaskInWebList, taskDisplayTitle } from "../../components/scheduleTasks";
+import { ScheduleRunList, useScheduleRuns } from "../../components/ScheduleRunHistory";
 import { useInboxStore } from "../../store/inboxStore";
 import {
   Clock,
@@ -140,9 +141,9 @@ function HorizonRail({ tasks, now }: { tasks: any[]; now: number }) {
       <div className="flex items-center justify-between mb-3">
         <span className="text-[10px] font-medium uppercase tracking-widest text-sol-text-dim">Next 24 hours</span>
         <span className="text-[10px] text-sol-text-dim flex items-center gap-3">
-          <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-sol-cyan inline-block" /> read-only</span>
-          <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-sol-orange inline-block" /> makes changes</span>
-          <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-sol-cyan/30 inline-block" /> recurring</span>
+          <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-sol-violet inline-block" /> recurring</span>
+          <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-sol-cyan inline-block" /> one-time</span>
+          <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-sol-violet/30 inline-block" /> later runs</span>
         </span>
       </div>
       <div className="relative h-10">
@@ -157,8 +158,7 @@ function HorizonRail({ tasks, now }: { tasks: any[]; now: number }) {
         <div className="absolute left-0 top-0 w-1 h-1 -translate-x-1/2 rounded-full bg-sol-cyan" />
         {/* dots */}
         {points.map((pt, i) => {
-          const isApply = pt.task.mode === "apply";
-          const base = isApply ? "bg-sol-orange" : "bg-sol-cyan";
+          const base = pt.task.schedule_type === "recurring" ? "bg-sol-violet" : "bg-sol-cyan";
           const cls =
             pt.kind === "ghost"
               ? `${base} opacity-25 w-1.5 h-1.5`
@@ -193,11 +193,14 @@ function HorizonRail({ tasks, now }: { tasks: any[]; now: number }) {
 
 const chipCls = "inline-flex items-center gap-1 text-[11px] whitespace-nowrap flex-shrink-0";
 
+// The chip leads with the schedule's TYPE — recurring vs one-time is the
+// distinction users sort by — then the timing detail.
 function ScheduleChip({ task, now }: { task: any; now: number }) {
   if (task.schedule_type === "recurring" && task.interval_ms) {
     return (
       <span className={`${chipCls} text-sol-violet`}>
-        <Repeat className="w-3 h-3" />every {fmtDuration(task.interval_ms)}
+        <Repeat className="w-3 h-3" />recurring
+        <span className="text-sol-violet/70">· every {fmtDuration(task.interval_ms)}</span>
       </span>
     );
   }
@@ -211,13 +214,14 @@ function ScheduleChip({ task, now }: { task: any; now: number }) {
   if (task.status === "scheduled" && task.run_at) {
     return (
       <span className={`${chipCls} text-sol-cyan`}>
-        <Clock className="w-3 h-3" />{fmtCountdown(task.run_at - now)}
+        <Clock className="w-3 h-3" />one-time
+        <span className="text-sol-cyan/70">· {fmtCountdown(task.run_at - now)}</span>
       </span>
     );
   }
   return (
     <span className={`${chipCls} text-sol-text-dim`}>
-      <Clock className="w-3 h-3" />once
+      <Clock className="w-3 h-3" />one-time
     </span>
   );
 }
@@ -283,6 +287,10 @@ function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boole
   const isEditable = task.status === "scheduled" || task.status === "paused";
   const failedSummary = task.status === "failed" || task.last_run_summary?.startsWith("Failed");
 
+  // Run history loads only while the detail is open — collapsed rows cost no
+  // query. Each entry deep-links to the message that triggered that run.
+  const runs = useScheduleRuns(expanded && !formMode ? task._id : null);
+
   // The session to open from this row: the run's own conversation when the daemon
   // recorded it, otherwise the session this schedule was created from. Every row
   // that has run or came from a session becomes one click from a real conversation.
@@ -342,13 +350,6 @@ function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boole
               </span>
             </ShortcutTooltip>
             <ScheduleChip task={task} now={now} />
-            {task.mode !== "apply" && (
-              <ShortcutTooltip label="Read-only run — investigates and reports, changes nothing" hint="file-editing tools are disabled">
-                <span className="text-[10px] font-semibold uppercase tracking-wide text-sol-cyan border border-sol-cyan/40 rounded px-1 py-px flex-shrink-0">
-                  read-only
-                </span>
-              </ShortcutTooltip>
-            )}
             {isNext && (
               <span className="text-[10px] font-medium uppercase tracking-wide text-sol-cyan flex-shrink-0">
                 next up
@@ -499,7 +500,10 @@ function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boole
 
       {expanded && !formMode && (
         <div className="px-4 pb-3 pt-1 border-t border-sol-border cursor-auto animate-fadeSlideIn" onClick={(e) => e.stopPropagation()}>
-          {task.last_run_conversation_id && (
+          {/* The run list below is the richer path (every run, trigger-linked);
+              this button only covers a schedule whose runs can't be enumerated
+              (e.g. an encrypted home conversation) but whose last run is known. */}
+          {task.last_run_conversation_id && (runs?.length ?? 0) === 0 && (
             <Link
               href={`/conversation/${task.last_run_conversation_id}`}
               onClick={(e) => e.stopPropagation()}
@@ -552,9 +556,28 @@ function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boole
             </>
           )}
 
+          {/* Every past run, newest first — each links to the message that
+              triggered it (the injected turn or the spawned run's prompt). */}
+          {runs && runs.length > 0 && (
+            <>
+              <div className="text-[10px] uppercase tracking-widest text-sol-text-dim mt-3 mb-1">
+                Past runs <span className="font-mono normal-case text-sol-text-dim/70">{runs.length}</span>
+              </div>
+              <ScheduleRunList runs={runs} now={now} mode="link" className="-ml-1.5" />
+            </>
+          )}
+
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-3 text-[11px] text-sol-text-dim">
             {task.run_at && task.status === "scheduled" && <span>next run {fmtClock(task.run_at)}</span>}
-            <span>mode {task.mode}</span>
+            <ShortcutTooltip
+              label={
+                task.mode === "apply"
+                  ? "Runs with full tools — it can edit files and make changes"
+                  : "Read-only run — investigates and reports, changes nothing"
+              }
+            >
+              <span>{task.mode === "apply" ? "makes changes" : "read-only"}</span>
+            </ShortcutTooltip>
             <span>agent {task.agent_type || "claude"}</span>
             {task.run_count > 0 && <span>{task.run_count} total run{task.run_count === 1 ? "" : "s"}</span>}
             {task.retry_count > 0 && <span className="text-sol-orange">{task.retry_count} retries</span>}
@@ -882,9 +905,10 @@ function Section({ title, count, subtitle, children, defaultOpen = true }: {
 
 interface SchedStats {
   active: number;
-  // Apply is the norm; read-only (propose) is the marked exception worth counting.
-  readOnly: number;
+  // The primary split: standing loops vs one-shot runs. Event schedules join
+  // neither count (they have their own filter) but are part of `active`.
   recurring: number;
+  oneTime: number;
   totalRuns: number;
   failing: number; // active tasks mid-retry or failed-but-rescheduled
   nextRunAt: number | null; // soonest upcoming scheduled run
@@ -892,15 +916,15 @@ interface SchedStats {
 }
 
 function computeStats(all: any[], now: number): SchedStats {
-  let active = 0, readOnly = 0, recurring = 0, totalRuns = 0, failing = 0, running = 0;
+  let active = 0, recurring = 0, oneTime = 0, totalRuns = 0, failing = 0, running = 0;
   let nextRunAt: number | null = null;
   for (const t of all) {
     totalRuns += t.run_count ?? 0;
     const isActive = t.status === "scheduled" || t.status === "running";
     if (isActive) {
       active++;
-      if (t.mode !== "apply") readOnly++;
-      if (t.schedule_type === "recurring") recurring++;
+      if (t.schedule_type === "once") oneTime++;
+      else if (t.schedule_type === "recurring") recurring++;
       if (t.status === "running") running++;
       if (t.retry_count > 0) failing++;
       if (t.status === "scheduled" && t.run_at && t.run_at > now) {
@@ -908,7 +932,7 @@ function computeStats(all: any[], now: number): SchedStats {
       }
     }
   }
-  return { active, readOnly, recurring, totalRuns, failing, nextRunAt, running };
+  return { active, recurring, oneTime, totalRuns, failing, nextRunAt, running };
 }
 
 function StatCell({ value, label, accent = "text-sol-text", title, onClick, active }: {
@@ -941,11 +965,11 @@ function StatCell({ value, label, accent = "text-sol-text", title, onClick, acti
   return <ShortcutTooltip label={title}>{cell}</ShortcutTooltip>;
 }
 
-function StatStrip({ stats, now, readOnlyActive, onToggleReadOnly }: {
+function StatStrip({ stats, now, typeFilter, onToggleType }: {
   stats: SchedStats;
   now: number;
-  readOnlyActive?: boolean;
-  onToggleReadOnly?: () => void;
+  typeFilter?: string;
+  onToggleType?: (type: "recurring" | "once") => void;
 }) {
   const nextLabel =
     stats.running > 0
@@ -958,12 +982,20 @@ function StatStrip({ stats, now, readOnlyActive, onToggleReadOnly }: {
     <div className="reveal flex flex-wrap items-center gap-x-7 gap-y-3 mb-5 px-1">
       <StatCell value={stats.active} label="active" />
       <StatCell
-        value={stats.readOnly}
-        label="read-only"
-        accent={stats.readOnly > 0 ? "text-sol-cyan" : "text-sol-text-dim"}
-        title="Runs that only investigate and report — click to filter"
-        onClick={onToggleReadOnly}
-        active={readOnlyActive}
+        value={stats.recurring}
+        label="recurring"
+        accent={stats.recurring > 0 ? "text-sol-violet" : "text-sol-text-dim"}
+        title="Standing schedules that fire on an interval or event — click to filter"
+        onClick={() => onToggleType?.("recurring")}
+        active={typeFilter === "recurring"}
+      />
+      <StatCell
+        value={stats.oneTime}
+        label="one-time"
+        accent={stats.oneTime > 0 ? "text-sol-cyan" : "text-sol-text-dim"}
+        title="Schedules that fire once and finish — click to filter"
+        onClick={() => onToggleType?.("once")}
+        active={typeFilter === "once"}
       />
       <StatCell value={nextLabel} label={stats.running > 0 ? "running" : "next run"} accent={nextAccent} />
       <StatCell value={stats.totalRuns} label="total runs" title="Agent runs fired across all schedules" />
@@ -1080,16 +1112,16 @@ function FilterBar({ filters, update, projects, hasCodex, shown, total, grouped,
             </ShortcutTooltip>
           )}
         </div>
+        <select className={filterSelectCls} value={filters.type} onChange={(e) => update({ type: e.target.value })}>
+          <option value="all">all types</option>
+          <option value="recurring">recurring</option>
+          <option value="once">one-time</option>
+          <option value="event">event</option>
+        </select>
         <select className={filterSelectCls} value={filters.mode} onChange={(e) => update({ mode: e.target.value })}>
           <option value="all">all modes</option>
           <option value="apply">makes changes</option>
           <option value="propose">read-only</option>
-        </select>
-        <select className={filterSelectCls} value={filters.type} onChange={(e) => update({ type: e.target.value })}>
-          <option value="all">all types</option>
-          <option value="recurring">recurring</option>
-          <option value="once">one-off</option>
-          <option value="event">event</option>
         </select>
         {projects.length > 1 && (
           <select className={filterSelectCls} value={filters.project} onChange={(e) => update({ project: e.target.value })}>
@@ -1329,11 +1361,13 @@ function SchedulesContent() {
   const hasCodex = useMemo(() => (tasks ?? []).some((t: any) => t.agent_type === "codex"), [tasks]);
 
   const activeSubtitle = useMemo(() => {
-    const readOnly = active.filter((t: any) => t.mode !== "apply").length;
     const recurring = active.filter((t: any) => t.schedule_type === "recurring").length;
+    const oneTime = active.filter((t: any) => t.schedule_type === "once").length;
+    const events = active.filter((t: any) => t.schedule_type === "event").length;
     const parts: string[] = [];
-    if (readOnly > 0) parts.push(`${readOnly} read-only`);
     if (recurring > 0) parts.push(`${recurring} recurring`);
+    if (oneTime > 0) parts.push(`${oneTime} one-time`);
+    if (events > 0) parts.push(`${events} on event`);
     return parts.join(" · ") || undefined;
   }, [active]);
   const historyFailed = useMemo(() => history.filter((t: any) => t.status === "failed").length, [history]);
@@ -1367,8 +1401,8 @@ function SchedulesContent() {
           <StatStrip
             stats={stats}
             now={now}
-            readOnlyActive={filters.mode === "propose"}
-            onToggleReadOnly={() => update({ mode: filters.mode === "propose" ? "all" : "propose" })}
+            typeFilter={filters.type}
+            onToggleType={(type) => update({ type: filters.type === type ? "all" : type })}
           />
         )}
         {hasTasks && <AttentionBanner tasks={failingActive} />}

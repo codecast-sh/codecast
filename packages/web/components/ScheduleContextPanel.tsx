@@ -21,6 +21,7 @@ import {
 import { describeTaskCadence, fmtClock, fmtDuration, taskStateLabel } from "./scheduleCadence";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { ARMED_STATUSES, taskDisplayTitle, type TaskRow } from "./scheduleTasks";
+import { openRunInStore, useScheduleRuns } from "./ScheduleRunHistory";
 import { useInboxStore } from "../store/inboxStore";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 
@@ -153,13 +154,12 @@ export function ScheduleContextPanel({
   // separate (Convex subscription).
   const now = useCoarseNow(30_000);
 
-  // Every spawned run of this schedule, newest first — server-joined on the
-  // sparse by_agent_task index, so folded/aged-out runs the inbox no longer
-  // syncs are still browseable here.
-  const runs = useQuery(
-    api.agentTasks.webListRuns,
-    primary ? { task_id: primary._id } : "skip"
-  ) as { _id: string; short_id?: string; title: string; created_at: number; idle_summary?: string }[] | undefined;
+  // Every run of this schedule, newest first — spawned runs (server-joined on
+  // the sparse by_agent_task index, so folded/aged-out runs the inbox no longer
+  // syncs stay browseable) AND injected runs (the <scheduled-task> turns in the
+  // home conversation). Each carries the message that triggered it, so a chip
+  // click lands the user on the exact trigger.
+  const runs = useScheduleRuns(primary?._id ?? null);
 
   if (!primary) return null;
 
@@ -267,34 +267,40 @@ export function ScheduleContextPanel({
         </div>
       </button>
 
-      {/* Run history: every spawned run as a browseable chip, newest first.
-          Rendered outside the expander — browsing runs is the point of the
-          strip on a run's page and shouldn't cost a click. Hidden when the
-          only run is the one being viewed (a one-chip strip says nothing). */}
+      {/* Run history: every run as a browseable chip, newest first — spawned
+          runs and injected turns alike. Rendered outside the expander —
+          browsing runs is the point of the strip on a run's page and shouldn't
+          cost a click. Every chip navigates to the MESSAGE that triggered that
+          run (for a run in the current conversation it scrolls there). Hidden
+          when the only run is the one being viewed (a one-chip strip says
+          nothing the inline turn doesn't). */}
       {runs && (runs.length > 1 || (runs.length === 1 && runs[0]._id !== conversationId)) && (
         <div className="flex items-center gap-1.5 px-4 pb-2 overflow-x-auto">
           <span className="text-[9px] font-semibold uppercase tracking-wider text-sol-text-dim/70 shrink-0">
             {runs.length} run{runs.length === 1 ? "" : "s"}
           </span>
           {runs.map((r, i) => {
-            const isCurrent = r._id === conversationId;
+            const isCurrent = r.kind === "spawn" && r._id === conversationId;
             const label = `#${runs.length - i} · ${fmtDuration(Math.max(0, now - r.created_at))} ago`;
             const tooltip = r.idle_summary ? `${r.title} — ${r.idle_summary}` : r.title;
-            return isCurrent ? (
-              <ShortcutTooltip key={r._id} label={tooltip} hint="this session">
-                <span className="px-1.5 py-0.5 rounded border border-sol-orange/50 bg-sol-orange/10 text-sol-orange text-[10px] font-mono shrink-0">
-                  {label}
-                </span>
-              </ShortcutTooltip>
-            ) : (
-              <ShortcutTooltip key={r._id} label={tooltip}>
+            const hint = isCurrent
+              ? "this session — jump to the trigger"
+              : r.trigger_message_id
+                ? "open the trigger message"
+                : undefined;
+            return (
+              <ShortcutTooltip key={r.run_key} label={tooltip} hint={hint}>
                 <button
-                  // navigateToSession, not requestNavigate: it resolves folded
-                  // (dismissed) runs through the view-only path instead of
-                  // parking on pendingNavigateId, and commits the switch so the
-                  // tab shell doesn't re-assert the old ?s= session.
-                  onClick={() => useInboxStore.getState().navigateToSession(r._id)}
-                  className="px-1.5 py-0.5 rounded border border-sol-border/50 text-sol-text-dim text-[10px] font-mono shrink-0 hover:text-sol-cyan hover:border-sol-cyan/40 transition-colors"
+                  // requestNavigate pairs the conversation switch with the
+                  // scroll-to-trigger target atomically; the inbox shell
+                  // resolves cached, dismissed/folded, and unsynced runs alike
+                  // (same path as bookmarks and search hits).
+                  onClick={() => openRunInStore(r)}
+                  className={`px-1.5 py-0.5 rounded border text-[10px] font-mono shrink-0 transition-colors ${
+                    isCurrent
+                      ? "border-sol-orange/50 bg-sol-orange/10 text-sol-orange hover:bg-sol-orange/20"
+                      : "border-sol-border/50 text-sol-text-dim hover:text-sol-cyan hover:border-sol-cyan/40"
+                  }`}
                 >
                   {label}
                 </button>
