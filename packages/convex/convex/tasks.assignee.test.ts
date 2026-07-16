@@ -56,7 +56,7 @@ function makeTeam() {
   let jason = "", ashot = "";
   const { db } = makeFakeDb((insert) => {
     teamId = insert("teams", { name: "Union" });
-    jason = insert("users", { name: "Jason Benn", email: "jason@union.app", active_team_id: teamId });
+    jason = insert("users", { name: "Jason Benn", email: "jasoncbenn@gmail.com", alternate_emails: ["jason@union.app"], active_team_id: teamId });
     ashot = insert("users", { name: "Ashot", email: "ashot@union.app", github_username: "ashot", active_team_id: teamId });
     insert("team_memberships", { team_id: teamId, user_id: jason });
     insert("team_memberships", { team_id: teamId, user_id: ashot });
@@ -75,7 +75,12 @@ describe("resolveAssigneeToUserId", () => {
     expect(await resolveAssigneeToUserId({ db }, "jason", teamId as any)).toBe(jason as any);
   });
 
-  test("resolves by email", async () => {
+  test("resolves by primary email", async () => {
+    const { db, teamId, jason } = makeTeam();
+    expect(await resolveAssigneeToUserId({ db }, "jasoncbenn@gmail.com", teamId as any)).toBe(jason as any);
+  });
+
+  test("resolves by alternate email", async () => {
     const { db, teamId, jason } = makeTeam();
     expect(await resolveAssigneeToUserId({ db }, "jason@union.app", teamId as any)).toBe(jason as any);
   });
