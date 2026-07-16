@@ -19,6 +19,9 @@ export default defineSchema({
   ...authTables,
   users: defineTable({
     email: v.optional(v.string()),
+    // Extra known addresses for assignee/name resolution only — never auth.
+    // Auth identity and cross-provider dedupe key on `email` alone (auth.ts).
+    alternate_emails: v.optional(v.array(v.string())),
     emailVerificationTime: v.optional(v.number()),
     name: v.optional(v.string()),
     image: v.optional(v.string()),
