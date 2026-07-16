@@ -5,6 +5,7 @@ import {
   performSetSessionOwners,
   performAddSessionOwner,
   performRemoveSessionOwner,
+  performListOwners,
 } from "./sessionOwnership";
 
 // Fixtures: Mr Bot runs a team-visible session; Jason and Ashot are teammates.
@@ -352,5 +353,37 @@ describe("owner ref resolution by user id", () => {
       performAddSessionOwner({ db }, RUNNER as any, { session_id: "team1", owner: OUTSIDER }),
     ).rejects.toThrow(/isn't a member/);
     expect(owners(db)).toEqual([]);
+  });
+});
+
+describe("performListOwners", () => {
+  // The web subscribes to listOwners while a session is open, and the open row
+  // can be an optimistic stub whose client UUID hasn't synced yet — a read that
+  // races creation must yield "no data", never a thrown server error.
+  test("unresolvable ref returns null instead of throwing", async () => {
+    const db = fixtures();
+    const result = await performListOwners(
+      { db },
+      ASHOT as any,
+      "7146e056-4612-44e3-8ca6-961979d312eb",
+    );
+    expect(result).toBeNull();
+  });
+
+  test("inaccessible session returns null for a non-teammate", async () => {
+    const db = fixtures();
+    const result = await performListOwners({ db }, OUTSIDER as any, "jx1abcd");
+    expect(result).toBeNull();
+  });
+
+  test("accessible session returns the owner set", async () => {
+    const db = fixtures();
+    await performAddSessionOwner({ db }, BOT as any, {
+      session_id: "jx1abcd",
+      owner: "jason@union.ai",
+    });
+    const result = await performListOwners({ db }, ASHOT as any, "jx1abcd");
+    expect(result?.short_id).toBe("jx1abcd");
+    expect(result?.owners.map((o) => o.user_id)).toEqual([JASON]);
   });
 });

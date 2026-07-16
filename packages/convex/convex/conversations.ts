@@ -7344,22 +7344,26 @@ async function scanInboxConversations(
   const ownedByMeIds = new Set<string>(
     ownerRows.map((r: any) => r.conversation_id.toString())
   );
-  const ownedConversations: any[] = [];
-  for (const r of ownerRows) {
-    let conv: any = null;
-    try { conv = await ctx.db.get(r.conversation_id); } catch { conv = null; }
-    if (!conv) continue;
-    if ((conv.updated_at ?? 0) < sessionWindowCutoff) continue;
-    if (conv.status !== "active" && conv.status !== "completed") continue;
-    ownedConversations.push(conv);
-  }
 
   const byId = new Map<string, any>();
   for (const c of recentConversations) byId.set(c._id.toString(), c);
   for (const c of pinnedConversations) byId.set(c._id.toString(), c);
   for (const c of dismissedConversations) byId.set(c._id.toString(), c);
   for (const c of stashedConversations) byId.set(c._id.toString(), c);
-  for (const c of ownedConversations) byId.set(c._id.toString(), c);
+
+  // Hydrate only the owned conversations the window scans above didn't already
+  // fetch (an owned session of my OWN is usually in the recent window — the get
+  // would be a wasted read on a query that re-runs every heartbeat).
+  for (const r of ownerRows) {
+    const idStr = r.conversation_id.toString();
+    if (byId.has(idStr)) continue;
+    let conv: any = null;
+    try { conv = await ctx.db.get(r.conversation_id); } catch { conv = null; }
+    if (!conv) continue;
+    if ((conv.updated_at ?? 0) < sessionWindowCutoff) continue;
+    if (conv.status !== "active" && conv.status !== "completed") continue;
+    byId.set(idStr, conv);
+  }
 
   // TEAM SCOPE (inbox "team mode"): fold every teammate's team-visible session
   // into the candidate set, on top of the caller's own sessions above — so the
@@ -7616,22 +7620,82 @@ type LivenessFields = {
   permission_mode: string | null;
 };
 
+// The parents that a producing subagent child should keep in "working", derived ONCE
+// per recompute instead of a per-parent by_parent_conversation_id scan for every idle
+// row (~one indexed query per row — the op-count blowout behind "too many system
+// operations" timeouts on this heartbeat-hot path). The derivation is sound because
+// subagentKeepsParentWorking accepts only two proofs, and both pools are already in
+// hand: a child that synced output within the last 5 minutes sits at the top of the
+// recent window scan, and a live child with an active agent status is in
+// maps.liveConvIds (its doc hydrated below when the window missed it — bounded by the
+// count of actually-live daemons). Pure over its inputs so it's unit-testable.
+export function deriveProducingParents(
+  pool: any[],
+  maps: Pick<InboxSessionMaps, "liveConvIds" | "agentStatusMap">,
+  now: number,
+): Set<string> {
+  const parents = new Set<string>();
+  for (const c of pool) {
+    if (!c.parent_conversation_id) continue;
+    const cid = c._id.toString();
+    if (subagentKeepsParentWorking({
+      isSubagent: !!c.is_subagent,
+      convStatus: c.status,
+      updatedAt: c.updated_at,
+      isLive: maps.liveConvIds.has(cid),
+      agentStatus: trustedAgentStatus(maps.agentStatusMap.get(cid), c.updated_at, now),
+      now,
+    })) {
+      parents.add(c.parent_conversation_id.toString());
+    }
+  }
+  return parents;
+}
+
+async function buildProducingParents(
+  ctx: any,
+  conversations: any[],
+  maps: InboxSessionMaps,
+  now: number,
+): Promise<Set<string>> {
+  const seen = new Set<string>(conversations.map((c: any) => c._id.toString()));
+  const pool = [...conversations];
+  for (const cid of maps.liveConvIds) {
+    if (seen.has(cid)) continue;
+    let c: any = null;
+    try { c = await ctx.db.get(cid as Id<"conversations">); } catch { c = null; }
+    if (c) pool.push(c);
+  }
+  return deriveProducingParents(pool, maps, now);
+}
+
+// How the liveness path answers "is a subagent child still producing?" without a
+// per-parent scan: the precomputed set covers every child visible to the caller's
+// window/liveness pools. Foreign-RUN parents (a session run by another account but in
+// my inbox) are the blind spot — their children never appear in my scans — so those
+// few rows keep the old per-parent scan, drawing from a shared per-recompute budget
+// that bounds the worst case (a big team board) instead of scaling with it.
+type SubagentLivenessSource = {
+  producingParents: Set<string>;
+  // null for own rows (the set is authoritative); a shared countdown for foreign rows.
+  foreignScanBudget: { remaining: number } | null;
+};
+
 // Lightweight twin of enrichInboxSessionRow that computes ONLY those 7 fields. It reuses
 // the exact same derivations (trustedAgentStatus / deriveSessionActivity / the AUQ probe
 // / subagentKeepsParentWorking) so the overlay never drifts from the bundled row — but it
 // SKIPS everything the overlay throws away: the plan/task/workflow gets, the acting-author
 // resolution, and the subagent-row building. The one heavy read the full enrichment does
-// per row — the by_parent_conversation_id children scan (up to ~620/recompute, the cost
-// this task exists to cut) — runs here only in the single case that can change an output:
-// flipping an otherwise-idle parent back to "working" because a child is still producing.
-// So it's gated on isIdle (nothing to flip otherwise) and skipped for dismissed/stashed
-// rows (their children don't need live liveness). The AUQ probe is likewise gated on the
+// per row — the by_parent_conversation_id children scan — is replaced here by the
+// precomputed producing-parents set (see deriveProducingParents); only foreign-run
+// parents still scan, under a shared budget. The AUQ probe is gated on the
 // working bucket (!isIdle), matching enrichInboxSessionRow.
 async function enrichLivenessFields(
   ctx: any,
   conv: any,
   maps: InboxSessionMaps,
   now: number,
+  subagents: SubagentLivenessSource,
 ): Promise<LivenessFields> {
   const cid = conv._id.toString();
   const hasPending = !!conv.has_pending_messages;
@@ -7702,25 +7766,32 @@ async function enrichLivenessFields(
   }
 
   // Keep an idle parent in "working" only while a subagent child is genuinely
-  // PRODUCING (see subagentKeepsParentWorking). This is the ONLY liveness effect of
-  // the children scan, so it runs only when isIdle is still true and never for
+  // PRODUCING (see subagentKeepsParentWorking). Answered from the precomputed
+  // producing-parents set for own rows; foreign-run rows fall back to the old
+  // per-parent scan while the shared budget lasts (their children are invisible
+  // to the derivation's pools). Only when isIdle is still true and never for
   // dismissed/stashed rows.
   if (isIdle && !dismissed && !stashed && conv.message_count > 0) {
-    const children = await ctx.db
-      .query("conversations")
-      .withIndex("by_parent_conversation_id", (q: any) =>
-        q.eq("parent_conversation_id", conv._id)
-      )
-      .take(20);
-    if (children.some((c: any) => subagentKeepsParentWorking({
-      isSubagent: !!c.is_subagent,
-      convStatus: c.status,
-      updatedAt: c.updated_at,
-      isLive: maps.liveConvIds.has(c._id.toString()),
-      agentStatus: trustedAgentStatus(maps.agentStatusMap.get(c._id.toString()), c.updated_at, now),
-      now,
-    }))) {
+    if (subagents.producingParents.has(cid)) {
       isIdle = false;
+    } else if (subagents.foreignScanBudget && subagents.foreignScanBudget.remaining > 0) {
+      subagents.foreignScanBudget.remaining--;
+      const children = await ctx.db
+        .query("conversations")
+        .withIndex("by_parent_conversation_id", (q: any) =>
+          q.eq("parent_conversation_id", conv._id)
+        )
+        .take(20);
+      if (children.some((c: any) => subagentKeepsParentWorking({
+        isSubagent: !!c.is_subagent,
+        convStatus: c.status,
+        updatedAt: c.updated_at,
+        isLive: maps.liveConvIds.has(c._id.toString()),
+        agentStatus: trustedAgentStatus(maps.agentStatusMap.get(c._id.toString()), c.updated_at, now),
+        now,
+      }))) {
+        isIdle = false;
+      }
     }
   }
 
@@ -7752,10 +7823,18 @@ async function computeSessionsLiveness(
     includeLiveness: true,
     teamScope,
   });
+  const producingParents = await buildProducingParents(ctx, conversations, maps, now);
+  // Shared per-recompute allowance for foreign-parent fallback scans — keeps the
+  // op count bounded even when the candidate set is mostly teammate rows.
+  const foreignScanBudget = { remaining: 40 };
+  const uid = userId.toString();
   const liveness: Record<string, LivenessFields> = {};
   for (const conv of conversations) {
     if (!shouldShowInInbox(conv)) continue;
-    liveness[conv._id.toString()] = await enrichLivenessFields(ctx, conv, maps, now);
+    liveness[conv._id.toString()] = await enrichLivenessFields(ctx, conv, maps, now, {
+      producingParents,
+      foreignScanBudget: conv.user_id.toString() !== uid ? foreignScanBudget : null,
+    });
   }
   return liveness;
 }
