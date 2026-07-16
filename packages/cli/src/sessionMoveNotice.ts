@@ -37,6 +37,16 @@ export interface CheckoutFacts {
   cloned: boolean;
   remote?: string;
   branch?: string;
+  /** Set when the source's published working-tree snapshot was replayed into this
+   * checkout (wipSnapshot.ts). Changes what is TRUE of the tree, so it changes
+   * what the notice may claim: with a snapshot the agent's uncommitted work is
+   * actually here, and "only pushed work is present" would be a lie. */
+  restored?: {
+    /** True when uncommitted work was reproduced here. */
+    appliedWork: boolean;
+    /** Set when the snapshot was found but its tree couldn't be materialized. */
+    applyError?: string;
+  };
 }
 
 /** Set only when the session changed hands between accounts. */
@@ -83,7 +93,23 @@ export function reorientationNotice(f: ReorientationFacts): string | null {
     );
   }
 
-  if (f.checkout?.cloned) {
+  if (f.checkout?.restored) {
+    // The source published its working tree, so this checkout reproduces it.
+    const onBranch = f.checkout.branch ? ` on branch ${f.checkout.branch}` : "";
+    if (f.checkout.restored.applyError) {
+      lines.push(
+        `The working tree here is a fresh clone${onBranch}, at the same commit the previous machine was on. Its uncommitted changes were carried across but could NOT be reapplied here (${f.checkout.restored.applyError}), so committed work is present and uncommitted work is not. Check what is missing before continuing.`,
+      );
+    } else if (f.checkout.restored.appliedWork) {
+      lines.push(
+        `The working tree here was rebuilt from the previous machine${onBranch}: the same commit, and its uncommitted changes and untracked files restored as uncommitted, so \`git status\` should look like it did there. Gitignored files (.env and the like) never travel — those are absent.`,
+      );
+    } else {
+      lines.push(
+        `The working tree here was rebuilt from the previous machine${onBranch}: the same commit, and nothing was uncommitted there, so the tree is clean. Gitignored files (.env and the like) never travel — those are absent.`,
+      );
+    }
+  } else if (f.checkout?.cloned) {
     const onBranch = f.checkout.branch ? ` and is on branch ${f.checkout.branch}` : "";
     const ofRemote = f.checkout.remote ? ` of ${f.checkout.remote}` : "";
     lines.push(

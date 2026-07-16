@@ -45,7 +45,7 @@ import { ReviewBar } from "./ReviewBar";
 import { ReviewComposerContext } from "./reviewContext";
 import { CommentDock } from "./comments/CommentDock";
 import { useConversationCommentsSync } from "../hooks/useConversationComments";
-import { parseScheduleCadence } from "./scheduleCadence";
+import { parseTriggerCadence } from "./triggerCadence";
 
 function copyMessageLink(conversationId: string | undefined, messageId: string) {
   const url = `${shareOrigin()}/conversation/${conversationId}#msg-${messageId}`;
@@ -80,8 +80,8 @@ import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
 import { DynamicRunView, wfStatusMeta, wfFmtTokens } from "./DynamicRunView";
 const api = _typedApi as any;
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { DeviceBadge, RunOnDeviceItems } from "./DeviceBadge";
-import { OwnersBadge } from "./OwnersBadge";
+import { AssignmentBadge } from "./AssignmentBadge";
+import { TmuxAttachPill } from "./TmuxAttachPill";
 import { PermissionStack } from "./PermissionCard";
 import { copyToClipboard, shareOrigin, buildProjectPathOptions, inferHomeDir, resolveCustomPath, displayPath, inferProjectBase } from "../lib/utils";
 import { MarkdownRenderer, isMarkdownFile, isPlanFile, CollapsibleImage } from "./tools/MarkdownRenderer";
@@ -128,7 +128,7 @@ import { parseFileChangeSummary, parseUnifiedDiffSections } from "../lib/unified
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
-import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench } from "lucide-react";
+import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench, Zap } from "lucide-react";
 import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES, labelMentionItems, matchScore } from "../hooks/useMentionQuery";
 import { pendingBannerState, isActiveAgentStatus, isBootingAgentStatus, type LiveAgentStatus } from "../lib/pendingBanner";
@@ -3963,7 +3963,9 @@ function CastCommandBlock({ tool, result }: { tool: ToolCall; result?: ToolResul
   const output = result?.content || "";
   const isError = result?.is_error;
 
-  const cat = category === "t" ? "task" : category === "p" ? "plan" : category === "d" ? "doc" : category === "sched" ? "schedule" : category;
+  // "schedule"/"sched" are the pre-rename spellings of `cast trigger` — old
+  // transcripts replay them forever, so they normalize into the same card.
+  const cat = category === "t" ? "task" : category === "p" ? "plan" : category === "d" ? "doc" : category === "sched" || category === "schedule" ? "trigger" : category;
   const isCreate = subcommand === "create" || subcommand === "add";
 
   const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
@@ -3983,7 +3985,7 @@ function CastCommandBlock({ tool, result }: { tool: ToolCall; result?: ToolResul
   }, [args, output]);
 
   const scheduleCadence = useMemo(
-    () => (cat === "schedule" && isCreate ? parseScheduleCadence(args) : null),
+    () => (cat === "trigger" && isCreate ? parseTriggerCadence(args) : null),
     [cat, isCreate, args]
   );
 
@@ -4024,9 +4026,9 @@ function CastCommandBlock({ tool, result }: { tool: ToolCall; result?: ToolResul
         color: "text-sol-green/80",
         icon: <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" /></svg>
       };
-      case "schedule": return {
+      case "trigger": return {
         color: "text-sol-orange/80",
-        icon: <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="10" /><path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6l4 2" /></svg>
+        icon: <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
       };
       case "diff": case "summary": case "handoff": case "context": case "ask": return {
         color: "text-sol-magenta/80",
@@ -5251,15 +5253,15 @@ function ScheduledTaskBlock({ content: rawContent, timestamp }: { content: strin
   const content = rawContent.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
   const spawned = parseSpawnedTaskPrompt(content);
   const match = spawned ? null : content.match(/<scheduled-task\s+title="([^"]*)"(?:\s+task-id="([^"]*)")?[^>]*>([\s\S]*?)<\/scheduled-task>/);
-  const title = spawned?.title || match?.[1]?.replace(/&quot;/g, '"') || "Scheduled Task";
+  const title = spawned?.title || match?.[1]?.replace(/&quot;/g, '"') || "Trigger Run";
   const prompt = spawned?.prompt ?? (match?.[3]?.trim() || cleanStickyContent(content));
   const prevFailed = !!spawned?.previousRun && /^Failed/i.test(spawned.previousRun.summary);
 
   return (
     <div className="mb-2 mx-1 rounded border-l-2 border-sol-violet/60 bg-sol-violet/5">
       <div className="flex items-center gap-2 px-3 pt-2 pb-1">
-        <Clock className="w-3.5 h-3.5 text-sol-violet/70 shrink-0" />
-        <span className="text-[11px] font-medium tracking-wide uppercase text-sol-violet/70 shrink-0">{spawned ? "Scheduled run" : "Scheduled"}</span>
+        <Zap className="w-3.5 h-3.5 text-sol-violet/70 shrink-0" />
+        <span className="text-[11px] font-medium tracking-wide uppercase text-sol-violet/70 shrink-0">{spawned ? "Trigger run" : "Trigger"}</span>
         {/* Apply is the norm and unmarked; read-only runs get the chip. */}
         {spawned && spawned.mode !== "apply" && (
           <ShortcutTooltip label="Read-only run — investigates and reports, changes nothing" hint="file-editing tools are disabled">
@@ -12993,10 +12995,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 )}
 
                 {isOwner && (
-                  <>
-                    <DeviceBadge ownerDeviceId={(conversation as any).owner_device_id} />
-                    <OwnersBadge conversationId={conversation._id} />
-                  </>
+                  <AssignmentBadge
+                    conversationId={conversation._id}
+                    ownerDeviceId={(conversation as any).owner_device_id}
+                  />
                 )}
 
                 {!isOwner && conversation.user && (
@@ -13139,18 +13141,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   </button>
                 </ShortcutTooltip>
 
-                {managedSession?.tmux_session && (
-                  <ShortcutTooltip label="Copy tmux attach" side="bottom">
-                    <button
-                      onClick={() => { copyToClipboard(`tmux attach -t '${managedSession.tmux_session}'`).then(() => toast.success("tmux attach copied")).catch(() => toast.error("Failed to copy")); }}
-                      className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors"
-                    >
-                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                      </svg>
-                    </button>
-                  </ShortcutTooltip>
-                )}
+                <TmuxAttachPill tmuxSession={managedSession?.tmux_session} isLive={isSessionLive} />
 
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
@@ -13187,16 +13178,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                       </svg>
                       Copy all messages
                     </DropdownMenuItem>
-                    {isOwner && (
-                      <>
-                        <DropdownMenuSeparator />
-                        <RunOnDeviceItems
-                          conversationId={conversation._id}
-                          ownerDeviceId={(conversation as any).owner_device_id}
-                        />
-                        <DropdownMenuSeparator />
-                      </>
-                    )}
                     {isOwner && (
                       <DropdownMenuItem onSelect={() => setTimeout(() => useInboxStore.setState({ renamingSessionId: conversation._id }))}>
                         <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">

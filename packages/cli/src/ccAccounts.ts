@@ -364,6 +364,47 @@ export function listProfiles(): CcProfileMeta[] {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+/** Forget a saved profile: delete its secret snapshot (keychain item / file)
+ * and drop it from the index. The account itself is untouched — re-enrolling
+ * it later takes one /login. Refuses to remove the profile covering the
+ * ACTIVE login: the daemon auto-enrolls any unsaved active login on its next
+ * heartbeat, so that removal would silently undo itself within ~30s. */
+export function deleteProfile(name: string): CcProfileMeta {
+  assertValidProfileName(name);
+  const index = readProfileIndex();
+  const meta = index.profiles[name];
+  if (!meta) {
+    throw new CcAccountError(`No saved profile "${name}" on this machine`);
+  }
+  const active = activeAccountSummary();
+  if (
+    active &&
+    ((active.uuid && meta.uuid === active.uuid) || (active.email && meta.email === active.email))
+  ) {
+    throw new CcAccountError(
+      `Profile "${name}" covers this machine's active login — switch to another account first ` +
+        `(the daemon re-saves the active login automatically, so removing it wouldn't stick)`,
+    );
+  }
+  if (useFileStore()) {
+    fs.rmSync(path.join(profileFileDir(), `${name}.json`), { force: true });
+  } else {
+    try {
+      execFileSync(
+        "security",
+        ["delete-generic-password", "-s", `${PROFILE_KEYCHAIN_PREFIX}${name}`],
+        { stdio: "ignore" },
+      );
+    } catch {
+      // Keychain item already gone (index-only entry) — still drop the index row.
+    }
+  }
+  delete index.profiles[name];
+  writeProfileIndex(index);
+  invalidateAccountsCache();
+  return { name, ...meta, active: false };
+}
+
 /** Re-snapshot the ACTIVE account into whichever saved profile matches its
  * uuid. Called before every switch-away so the stored copy carries the freshest
  * (rotated) tokens. Best-effort: an active account with no saved profile is

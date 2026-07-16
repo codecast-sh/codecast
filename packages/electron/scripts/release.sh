@@ -85,6 +85,17 @@ if [[ "$REMOTE" != "version: $NEW_VERSION" ]]; then
 fi
 echo "  Verified: $REMOTE"
 
+# Prewarm the CDN so the fleet's forced update doesn't hit a cold cache: the
+# first fetch after upload streams from the R2 origin (measured minutes for
+# 94MB from a distant edge during the v1.1.84 rollout); one GET through the
+# public domain caches it at this edge and, with Tiered Cache enabled on the
+# zone, at the upper tier every other edge fills from. Best-effort — a warm
+# failure must never fail the release.
+echo "  Prewarming CDN..."
+for f in "Codecast-${NEW_VERSION}-arm64-mac.zip" "Codecast-${NEW_VERSION}-arm64.dmg"; do
+  curl -so /dev/null --max-time 300 -w "    $f: %{speed_download} B/s\n" "https://dl.codecast.sh/desktop/$f" || echo "    $f: prewarm failed (non-fatal)"
+done
+
 # NOTE: releases do NOT force the fleet to update — clients are prompted in-app
 # (Update now / Later) and otherwise update on next quit. To push a specific
 # version to everyone (quit+relaunch even while open), run it deliberately:

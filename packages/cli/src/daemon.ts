@@ -10,6 +10,7 @@ import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
 import { deviceId, deviceLabel, isRemoteDevice } from "./remote/device.js";
 import { copyCredentialToRemoteAsync, currentBranch, loadRemoteHost, readPushableCredential, remoteHostsRegistered } from "./remote/session-move.js";
 import { reparentNotice, type ReparentCommandFacts } from "./sessionMoveNotice.js";
+import { createWipSnapshot, defaultRemote, pushWipSnapshot, restoreWipSnapshot } from "./wipSnapshot.js";
 import {
   useProfile,
   saveProfile,
@@ -19,6 +20,7 @@ import {
   refreshActiveCredential,
   resnapshotIfActiveFresher,
   refreshUsageSnapshots,
+  deleteProfile,
 } from "./ccAccounts.js";
 import { CursorWatcher, type CursorSessionEvent } from "./cursorWatcher.js";
 import { CursorTranscriptWatcher, type CursorTranscriptEvent } from "./cursorTranscriptWatcher.js";
@@ -99,7 +101,7 @@ import {
 } from "./resumeCommand.js";
 import { resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
 import type { AgentStatus, DeviceSnippetSettings } from "@codecast/shared/contracts";
-import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG } from "@codecast/shared/contracts";
+import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug } from "@codecast/shared/contracts";
 import { parseModelPicker, planModelNavigation, SESSION_ONLY_COMMIT_RE, isSwitchConfirmDialog } from "./modelPicker";
 import type { Config } from "./config/types.js";
 
@@ -285,6 +287,15 @@ async function refuseResumeNoLocalCheckout(
 
 // Deterministic per-remote checkout dir for a reparented session. Keyed by a
 // hash of the remote so two repos with the same basename never collide.
+/** A source-published working tree replayed into a reparent checkout. */
+interface RestoredWork {
+  /** The session's real branch, from the snapshot — not the remote's default. */
+  branch: string;
+  /** True when uncommitted work was reproduced here. */
+  appliedWork: boolean;
+  applyError?: string;
+}
+
 /** What ensureReparentedCheckout prepared for a reparented session to resume in. */
 interface ReparentedCheckout {
   path: string;
@@ -292,6 +303,8 @@ interface ReparentedCheckout {
   cloned: boolean;
   remote?: string;
   branch?: string;
+  /** Set when the source's working-tree snapshot was found and replayed. */
+  restored?: RestoredWork;
 }
 
 function reparentCheckoutDir(remote: string): string {
@@ -369,7 +382,27 @@ async function ensureReparentedCheckout(
     }
     // Learn the mapping so subsequent resolves (and re-resumes) find it directly.
     recordProjectMapping(path.basename(dest), dest);
-    return { path: dest, cloned, remote, branch: readBranch(dest) };
+
+    // The clone above is only what was PUSHED, on the remote's default branch.
+    // If the source published a working-tree snapshot (sweepWipSnapshots), replay
+    // it: land on the session's real branch and restore its uncommitted work.
+    // Best-effort — a source on an older CLI simply has no snapshot, and the
+    // clone stands on its own (the notice then says only pushed work is here).
+    let restored: RestoredWork | undefined;
+    if (conversationId) {
+      try {
+        const r = await restoreWipSnapshot(dest, { remote: "origin", conversationId });
+        if (r) {
+          restored = { branch: r.branch, appliedWork: r.appliedWork, applyError: r.applyError };
+          log(
+            `[REPARENT] restored snapshot for ${conversationId.slice(0, 12)}: branch=${r.branch} work=${r.appliedWork ? "reapplied" : "none"}${r.applyError ? ` applyError=${r.applyError}` : ""}`,
+          );
+        }
+      } catch (e) {
+        log(`[REPARENT] snapshot restore failed: ${(e as Error)?.message ?? e}`);
+      }
+    }
+    return { path: dest, cloned, remote, branch: readBranch(dest), restored };
   } catch (e) {
     log(`[REPARENT] checkout prep error: ${e instanceof Error ? e.message : String(e)}`);
     return undefined;
@@ -419,7 +452,15 @@ async function sendReparentNotice(opts: {
           cwd: opts.checkout.path,
           cloned: opts.checkout.cloned,
           remote: opts.checkout.remote,
-          branch: opts.checkout.branch,
+          // With a restored snapshot the branch IS the session's own, so prefer
+          // the snapshot's over whatever the clone happened to check out.
+          branch: opts.checkout.restored?.branch ?? opts.checkout.branch,
+          restored: opts.checkout.restored
+            ? {
+                appliedWork: opts.checkout.restored.appliedWork,
+                applyError: opts.checkout.restored.applyError,
+              }
+            : undefined,
         }
       : undefined,
     command: opts.command,
@@ -1731,7 +1772,11 @@ function buildDeviceSettingsPayload(config: Config | null): DeviceSnippetSetting
   const snippets: Record<string, boolean> = {};
   for (const s of SNIPPET_CATALOG) {
     const v = (config as any)[s.enabledKey];
-    if (typeof v === "boolean") snippets[s.slug] = v;
+    if (typeof v === "boolean") {
+      snippets[s.slug] = v;
+      // Mirror under the pre-rename key so stale clients still see the flag.
+      if (s.wireSlug) snippets[s.wireSlug] = v;
+    }
   }
   return {
     snippets,
@@ -3006,6 +3051,23 @@ async function executeRemoteCommand(
           break;
         }
 
+        // remove mode: forget a saved profile (the web Settings remove
+        // button). Pure deletion — no swap, no kills. deleteProfile guards the
+        // active login (auto-enroll would resurrect it a heartbeat later).
+        if (typeof parsed.remove === "string" && parsed.remove) {
+          try {
+            const meta = deleteProfile(parsed.remove);
+            result = JSON.stringify({ removed: parsed.remove, email: meta.email ?? null });
+            log(`[ACCOUNTS] Removed profile "${parsed.remove}"${meta.email ? ` (${meta.email})` : ""}`);
+            // Confirm the shrunken inventory upstream now — the web already
+            // hid the row optimistically and is waiting on this echo.
+            sendHeartbeat().catch(() => {});
+          } catch (err) {
+            error = `Profile remove failed: ${err instanceof Error ? err.message : String(err)}`;
+          }
+          break;
+        }
+
         let switched: string | null = null;
         if (profile) {
           try {
@@ -3576,7 +3638,9 @@ async function executeRemoteCommand(
         // `--disable`) or the tri-state stable hook (`cast stable <mode>`).
         const parsed = commandArgs ? JSON.parse(commandArgs) : {};
         const snippet = parsed.snippet;
-        const known = snippet === "stable" || SNIPPET_CATALOG.some((s) => s.slug === snippet);
+        // Match aliases too: the web sends pre-rename slugs (e.g. "scheduling"
+        // for triggers) so its toggles also work on daemons that predate a rename.
+        const known = snippet === "stable" || !!snippetBySlug(snippet);
         if (typeof snippet !== "string" || !known) {
           error = `apply_snippet: unknown snippet ${JSON.stringify(snippet)}`;
           break;
@@ -6589,10 +6653,19 @@ function normalizeTty(tty: string): string {
   return `/dev/${tty}`;
 }
 
+// A remapped conversation keeps its old session id as an alias
+// (remapConversationSession), so one conversation can have several cached ids.
+// Reverse resolution must return the live resumable binding: a UUID beats a
+// dead agent-*/forked-* alias; among same-shape ids the later (newer) wins.
+export function preferLiveSessionId(prev: string | undefined, next: string): string {
+  if (prev !== undefined && CLAUDE_UUID_RE.test(prev) && !CLAUDE_UUID_RE.test(next)) return prev;
+  return next;
+}
+
 function buildReverseConversationCache(cache: ConversationCache): Record<string, string> {
   const reverse: Record<string, string> = {};
   for (const [sessionId, convId] of Object.entries(cache)) {
-    reverse[convId] = sessionId;
+    reverse[convId] = preferLiveSessionId(reverse[convId], sessionId);
   }
   return reverse;
 }
@@ -6601,10 +6674,11 @@ export function findCachedSessionIdForConversation(
   cache: Record<string, string>,
   conversationId: string,
 ): string | undefined {
+  let found: string | undefined;
   for (const [sessionId, convId] of Object.entries(cache)) {
-    if (convId === conversationId) return sessionId;
+    if (convId === conversationId) found = preferLiveSessionId(found, sessionId);
   }
-  return undefined;
+  return found;
 }
 
 function detectSessionAgentType(sessionId: string): "claude" | "codex" | "cursor" | "gemini" {
@@ -8831,7 +8905,7 @@ function findSessionJsonlPath(sessionId: string): string | null {
   return findSessionFile(sessionId)?.path ?? null;
 }
 
-function findSessionFile(sessionId: string): SessionFileInfo | null {
+export function findSessionFile(sessionId: string): SessionFileInfo | null {
   // Claude sessions: ~/.claude/projects/<hash>/<sessionId>.jsonl
   const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
   if (fs.existsSync(claudeProjectsDir)) {
@@ -8840,14 +8914,28 @@ function findSessionFile(sessionId: string): SessionFileInfo | null {
     for (const dir of projectDirs) {
       const jsonlPath = path.join(claudeProjectsDir, dir, `${sessionId}.jsonl`);
       if (fs.existsSync(jsonlPath)) return { path: jsonlPath, agentType: "claude" };
-      // Check subagent directories: <parent-session-id>/subagents/<sessionId>.jsonl
+      // Check subagent layouts under each parent session dir:
+      //   <parent-session-id>/subagents/<sessionId>.jsonl            (Agent tool)
+      //   <parent-session-id>/subagents/workflows/<run>/<id>.jsonl   (Workflow tool)
       const dirPath = path.join(claudeProjectsDir, dir);
       try {
         const subEntries = fs.readdirSync(dirPath, { withFileTypes: true })
           .filter(d => d.isDirectory());
         for (const subDir of subEntries) {
-          const subPath = path.join(dirPath, subDir.name, `${sessionId}.jsonl`);
+          const parentDir = path.join(dirPath, subDir.name);
+          const subPath = path.join(parentDir, `${sessionId}.jsonl`);
           if (fs.existsSync(subPath)) return { path: subPath, agentType: "claude" };
+          const subagentsDir = path.join(parentDir, "subagents");
+          const agentPath = path.join(subagentsDir, `${sessionId}.jsonl`);
+          if (fs.existsSync(agentPath)) return { path: agentPath, agentType: "claude" };
+          const workflowsDir = path.join(subagentsDir, "workflows");
+          if (fs.existsSync(workflowsDir)) {
+            for (const wfRun of fs.readdirSync(workflowsDir, { withFileTypes: true })) {
+              if (!wfRun.isDirectory()) continue;
+              const wfPath = path.join(workflowsDir, wfRun.name, `${sessionId}.jsonl`);
+              if (fs.existsSync(wfPath)) return { path: wfPath, agentType: "claude" };
+            }
+          }
         }
       } catch {}
     }
@@ -9803,6 +9891,100 @@ async function runHeartbeatFlush(): Promise<void> {
   if (flushTick % REAP_EVERY_N_FLUSHES === 0) {
     await reapIdleOrphanTerminals().catch((e) => log(`[REAPER] pass error: ${(e as Error)?.message ?? e}`));
   }
+
+  // Keep each session's working tree recoverable from another machine. See
+  // sweepWipSnapshots.
+  if (flushTick % WIP_SNAPSHOT_EVERY_N_FLUSHES === 0) {
+    await sweepWipSnapshots(ids).catch((e) => log(`[WIP] pass error: ${(e as Error)?.message ?? e}`));
+  }
+}
+
+// ─── Working-tree snapshots ────────────────────────────────────────────────
+// A session reparented onto another machine gets a plain `git clone` of its
+// remote, so it lands on the DEFAULT branch holding only PUSHED work — the
+// agent's uncommitted edits, untracked files and unpushed commits stay behind
+// (ct-38955, ct-38956). The destination cannot fetch what was never published,
+// and it cannot ask this machine for it: a reparent is driven entirely from the
+// destination, and the source may be a closed laptop by then.
+//
+// So the source publishes continuously instead. Each pass captures the tree as a
+// dangling commit and force-pushes it to a hidden ref (see wipSnapshot.ts —
+// non-destructive, secrets excluded by .gitignore, never touches a real branch).
+// The work is then already on the remote when a pull happens, which is what lets
+// the whole flow work with the source offline.
+//
+// Gentle by construction, because this runs for every managed session forever:
+//   - the tree hash gates the push, so an unchanged tree costs one local
+//     commit-tree and NO network. A session between turns is the common case.
+//   - passes are ~5min apart and bounded to a few concurrent snapshots.
+//   - every git call is async; a sync exec here would block the daemon's loop
+//     past the watchdog's stale-heartbeat threshold on a large repo.
+const WIP_SNAPSHOT_EVERY_N_FLUSHES = 10; // ~5 min (flush = 30s), same cadence as the reaper
+const WIP_SNAPSHOT_CONCURRENCY = 3;
+// Sessions per pass. Without a cap the first pass after a restart snapshots the
+// WHOLE fleet at once (observed: 43 pushes in one tick) — a thundering herd of
+// network calls against the user's git host. Sharding by pass drains the backlog
+// over a few minutes instead; steady state is far below this anyway because the
+// tree hash gates almost every session out.
+const WIP_SNAPSHOT_MAX_PER_PASS = 8;
+/** conversation_id -> last tree hash we pushed. Skips the network when nothing changed. */
+const lastPushedWipTree = new Map<string, string>();
+/** conversation_id -> why we stopped trying. A repo the user can read but not push
+ * (a cloned public repo, revoked access) never becomes pushable by waiting, so one
+ * permanent failure retires it rather than failing every pass forever. */
+const wipSnapshotGivenUp = new Map<string, string>();
+/** Round-robin cursor so every session gets a turn under MAX_PER_PASS. */
+let wipSweepCursor = 0;
+
+async function sweepWipSnapshots(sessionIds: string[]): Promise<void> {
+  if (!sessionIds.length) return;
+  const cache = readConversationCache();
+  // Only sessions with a conversation (the id the destination will look up) and a
+  // real local cwd can be snapshotted.
+  const targets: Array<{ sessionId: string; conversationId: string; cwd: string }> = [];
+  for (const sessionId of sessionIds) {
+    const conversationId = cache[sessionId];
+    if (!conversationId) continue;
+    const file = findSessionFile(sessionId);
+    if (!file) continue;
+    let cwd: string | undefined;
+    try {
+      const head = readFileHead(file.path, 65536);
+      cwd = file.agentType === "codex" ? extractCodexCwd(head) : extractCwd(head);
+    } catch {}
+    if (!cwd || !fs.existsSync(cwd)) continue;
+    targets.push({ sessionId, conversationId, cwd });
+  }
+  if (!targets.length) return;
+
+  let pushed = 0;
+  let skipped = 0;
+  await runBounded(targets, WIP_SNAPSHOT_CONCURRENCY, async (t) => {
+    try {
+      const remote = await defaultRemote(t.cwd);
+      if (!remote) return; // no remote = nowhere to publish; the notice covers it
+      const snap = await createWipSnapshot(t.cwd, { conversationId: t.conversationId });
+      if (!snap) return;
+      if (lastPushedWipTree.get(t.conversationId) === snap.tree) {
+        skipped++;
+        return; // tree unchanged since the last push — no network
+      }
+      const res = await pushWipSnapshot(t.cwd, {
+        remote,
+        conversationId: t.conversationId,
+        sha: snap.sha,
+      });
+      if (res.ok) {
+        lastPushedWipTree.set(t.conversationId, snap.tree);
+        pushed++;
+      } else {
+        log(`[WIP] push failed for ${t.sessionId.slice(0, 8)}: ${res.error}`);
+      }
+    } catch (e) {
+      log(`[WIP] snapshot error for ${t.sessionId.slice(0, 8)}: ${(e as Error)?.message ?? e}`);
+    }
+  });
+  if (pushed) log(`[WIP] snapshots pushed=${pushed} unchanged=${skipped} of ${targets.length}`);
 }
 
 // ─── Orphan terminal reaper ────────────────────────────────────────────────
@@ -10230,6 +10412,17 @@ async function discoverAndLinkSession(
   log(`[DISCOVER] Timed out discovering session for conversation ${conversationId.slice(0, 12)}`);
 }
 
+// Short id used in resume tmux names (`cc-resume-<shortId>`) and log lines.
+// UUIDs keep the conventional 8-char prefix. Prefixed ids (agent-*, forked-*,
+// session-*) need more: their first 8 chars are almost all prefix, so distinct
+// sessions collapse onto one tmux name and each resume kills the other's pane
+// (two workflow agents both mapped to "agent-a9" on 2026-07-16). The reaper's
+// name fallback matches transcripts by startsWith, so a longer prefix stays
+// compatible.
+export function resumeShortId(sessionId: string): string {
+  return CLAUDE_UUID_RE.test(sessionId) ? sessionId.slice(0, 8) : sessionId.slice(0, 16);
+}
+
 function remapConversationSession(
   oldSessionId: string,
   newSessionId: string,
@@ -10237,11 +10430,17 @@ function remapConversationSession(
   conversationCache?: ConversationCache,
 ): void {
   const cache = conversationCache || readConversationCache();
-  delete cache[oldSessionId];
+  // Keep the old id as an alias to the same conversation. Transcript copies
+  // under the old id survive the remap (a reconstituted agent-* JSONL, the
+  // workflow's own subagents/workflows file) and the watcher rediscovers them;
+  // an unmapped id gets minted as a fresh conversation with no parent link.
+  // Aliased, they re-bind here and the server dedups messages by uuid. Reverse
+  // lookups still route to newSessionId — see preferLiveSessionId.
+  cache[oldSessionId] = conversationId;
   cache[newSessionId] = conversationId;
   saveConversationCache(cache);
   if (conversationCacheRef) {
-    delete conversationCacheRef[oldSessionId];
+    conversationCacheRef[oldSessionId] = conversationId;
     conversationCacheRef[newSessionId] = conversationId;
   }
   resumeSessionCache.delete(oldSessionId);
@@ -10332,7 +10531,15 @@ function cacheSessionProcess(sessionId: string, info: ClaudeSessionInfo, tmuxTar
   const tmuxName = tmuxTarget?.split(":")[0];
   if (tmuxName && syncServiceRef && registeredTmuxBySession.get(sessionId) !== tmuxName) {
     registeredTmuxBySession.set(sessionId, tmuxName);
-    syncServiceRef.registerManagedSession(sessionId, info.pid, tmuxName).catch(() => {});
+    // A notOwner refusal is a lease conflict (e.g. the source machine of a
+    // reparent still heartbeats its row). Forget the name so a later scan
+    // retries — once the conflict clears, the backfill lands without waiting
+    // for a daemon restart.
+    syncServiceRef.registerManagedSession(sessionId, info.pid, tmuxName).then((res) => {
+      if (res && (res as any).notOwner && registeredTmuxBySession.get(sessionId) === tmuxName) {
+        registeredTmuxBySession.delete(sessionId);
+      }
+    }).catch(() => {});
   }
 }
 
@@ -10835,7 +11042,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
 
   let cwd: string;
   let resumeCmd: string;
-  const shortId = sessionId.slice(0, 8);
+  const shortId = resumeShortId(sessionId);
   const title = titleCache[sessionId] || extractSummaryTitle(jsonlContent);
   const slug = title ? slugify(title) : "";
 

@@ -17,7 +17,7 @@ import { AppLoader } from "../../../components/AppLoader";
 import { Button } from "../../../components/ui/button";
 import { Switch } from "../../../components/ui/switch";
 import { toast } from "sonner";
-import { Check, Copy, KeyRound, Zap } from "lucide-react";
+import { Check, Copy, KeyRound, Trash2, Zap } from "lucide-react";
 import { AccountUsageBars, formatAgo } from "../../../components/AccountUsageMeter";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
 
@@ -163,8 +163,10 @@ function AutoSwitchToggle({ device }: { device: DeviceAccounts }) {
 
 function DeviceAccountsCard({ device }: { device: DeviceAccounts }) {
   const requestSwitch = useMutation(api.accountSwitch.requestAccountSwitch);
+  const removeProfile = useMutation(api.accountSwitch.removeAccountProfile);
   const now = useCoarseNow(30_000);
   const [busy, setBusy] = useState<string | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
 
   const activeProfile = device.profiles.find((p) => p.email && p.email === device.active_email);
   // Suggest the email's org part as the profile name (ashot@footage.com -> footage).
@@ -181,6 +183,23 @@ function DeviceAccountsCard({ device }: { device: DeviceAccounts }) {
       toast.error(err instanceof Error ? err.message : "Switch failed");
     } finally {
       setBusy(null);
+    }
+  };
+
+  const handleRemove = async (profile: string) => {
+    setBusy(profile);
+    try {
+      // The mutation eagerly drops the row from the device's reported
+      // inventory (instant here); the daemon deletes the keychain snapshot
+      // behind it, and its next heartbeat confirms — or resurrects the row
+      // if the deletion failed.
+      await removeProfile({ name: profile, device_id: device.device_id });
+      toast.success(`Removed "${profile}" — log into that account again anytime to re-add it`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Remove failed");
+    } finally {
+      setBusy(null);
+      setConfirmRemove(null);
     }
   };
 
@@ -221,16 +240,48 @@ function DeviceAccountsCard({ device }: { device: DeviceAccounts }) {
                 )}
                 {isActive ? (
                   <span className="shrink-0 text-[11px] font-medium text-sol-green">active</span>
+                ) : confirmRemove === p.name ? (
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <span className="text-[11px] text-sol-text-dim">Forget this saved login?</span>
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      disabled={busy !== null}
+                      onClick={() => handleRemove(p.name)}
+                      className="h-6 px-2 text-[11px]"
+                    >
+                      {busy === p.name ? "Removing…" : "Remove"}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={busy !== null}
+                      onClick={() => setConfirmRemove(null)}
+                      className="h-6 px-2 text-[11px]"
+                    >
+                      Cancel
+                    </Button>
+                  </div>
                 ) : (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={busy !== null || device.is_remote}
-                    onClick={() => handleSwitch(p.name)}
-                    className="h-6 px-2 text-[11px]"
-                  >
-                    {busy === p.name ? "Switching…" : "Switch"}
-                  </Button>
+                  <>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={busy !== null || device.is_remote}
+                      onClick={() => handleSwitch(p.name)}
+                      className="h-6 px-2 text-[11px]"
+                    >
+                      {busy === p.name ? "Switching…" : "Switch"}
+                    </Button>
+                    <button
+                      onClick={() => setConfirmRemove(p.name)}
+                      disabled={busy !== null}
+                      title="Remove this profile from the machine"
+                      className="shrink-0 rounded p-1 text-sol-text-dim transition-colors hover:bg-sol-red/10 hover:text-sol-red"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </>
                 )}
               </div>
               <div className="mt-2 pl-[18px]">

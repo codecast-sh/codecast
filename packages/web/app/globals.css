@@ -951,6 +951,30 @@ pre[class*="language-"] {
   animation: highlightPulse 1.5s ease-out;
 }
 
+/* Header tmux pill: gentle entrance when the pane comes up, one-shot glow
+   when a restart moves the session to a new pane (TmuxAttachPill). */
+@keyframes tmuxPillIn {
+  from { opacity: 0; transform: scale(0.9); }
+  to { opacity: 1; transform: scale(1); }
+}
+.tmux-pill-in {
+  animation: tmuxPillIn 0.45s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes tmuxPillChange {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--sol-green, #859900) 55%, transparent); }
+  70% { box-shadow: 0 0 0 6px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+.tmux-pill-change {
+  animation: tmuxPillChange 0.9s ease-out 2;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tmux-pill-in,
+  .tmux-pill-change {
+    animation: none;
+  }
+}
+
 /* Pending message diagonal stripes */
 .pending-stripes {
   background-image: repeating-linear-gradient(

@@ -147,9 +147,11 @@ export function useSyncTasksWithArgs(wsArgs: WorkspaceArgs) {
   // hook is page-scoped, so clear on unmount — else navigating away mid-load
   // would strand the chip lit on every other page.
   useWatchEffect(() => {
-    useInboxStore.getState().setLiveLoading("tasks", tasksResult === undefined);
+    // A skipped instance (usePrefetch parked while the tasks page owns the
+    // channel) never resolves its query — it must not claim "loading" forever.
+    useInboxStore.getState().setLiveLoading("tasks", wsArgs !== "skip" && tasksResult === undefined);
     return () => useInboxStore.getState().setLiveLoading("tasks", false);
-  }, [tasksResult]);
+  }, [tasksResult, wsArgs === "skip"]);
 
   // Periodically promote the latest seen cursor WITHIN this session only. Each
   // promotion trims the reactive payload (discards already-shipped rows), but it
@@ -179,7 +181,7 @@ export function useSyncTasksWithArgs(wsArgs: WorkspaceArgs) {
     return () => clearInterval(id);
   }, []);
   useEffect(() => {
-    if (!hydrated) return; // resume from the restored watermark, not an empty one
+    if (!hydrated || wsArgs === "skip") return; // resume from the restored watermark, not an empty one
     // Incremental top-up only AFTER a full backfill exists for this workspace.
     // Before that, `since` stays undefined so the first pass loads everything.
     const meta = useInboxStore.getState().syncMeta[metaKey];

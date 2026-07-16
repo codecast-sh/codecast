@@ -16,6 +16,7 @@ const FULL_WIDTH_PATTERNS: RegExp[] = [
   /^\/tasks(\/|$)/,
   /^\/workflows(\/|$)/,
   /^\/routines(\/|$)/,
+  /^\/triggers(\/|$)/,
   /^\/schedules(\/|$)/,
   /^\/plans(\/|$)/,
   /^\/docs(\/|$)/,

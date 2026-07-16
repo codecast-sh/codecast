@@ -116,12 +116,14 @@ export default function AgentFeaturesPage() {
                     desc={s.desc}
                     detail={s.detail}
                     writesTo={s.writesTo}
-                    on={selected.settings?.snippets?.[s.slug] === true}
+                    on={(selected.settings?.snippets?.[s.slug] ?? (s.wireSlug ? selected.settings?.snippets?.[s.wireSlug] : undefined)) === true}
                     disabled={!selected.online}
                     busy={pending.has(s.slug)}
                     onToggle={(next) =>
                       run(s.slug, () =>
-                        setSnippet({ device_id: selected.device_id, snippet: s.slug, enabled: next }),
+                        // Send the pre-rename slug when one exists: old daemons only
+                        // match their exact slug, new daemons resolve it as an alias.
+                        setSnippet({ device_id: selected.device_id, snippet: s.wireSlug ?? s.slug, enabled: next }),
                       )
                     }
                   />

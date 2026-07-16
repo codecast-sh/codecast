@@ -21,7 +21,7 @@ import { SharePopover } from "../../components/SharePopover";
 import { ActivityFeed } from "../../components/ActivityFeed";
 import { PlanContextPanel } from "../../components/PlanContextPanel";
 import { WorkflowContextPanel } from "../../components/WorkflowContextPanel";
-import { ScheduleContextPanel } from "../../components/ScheduleContextPanel";
+import { TriggerContextPanel } from "../../components/TriggerContextPanel";
 import { toast } from "sonner";
 import { animatedHideSession } from "../../store/undoActions";
 import { cleanUserMessage } from "../../components/GlobalSessionPanel";
@@ -194,7 +194,7 @@ const InboxConversation = memo(function InboxConversation({ sessionId: liveSessi
           fallbackStickyContent={isOwnSession ? cleanUserMessage(lastUserMessage) : undefined}
           subHeaderContent={<>
             {isOwnSession && (
-              <ScheduleContextPanel
+              <TriggerContextPanel
                 conversationId={convId}
                 sessionId={(conversation as any).session_id}
                 agentTaskId={(conversation as any).agent_task_id}

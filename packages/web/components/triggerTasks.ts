@@ -1,6 +1,6 @@
 // Schedules (agent_tasks) projected onto the inbox — the synthesis model:
 //
-//   Schedules live in ONE collapsible SCHEDULES section; everything a schedule
+//   Schedules live in ONE collapsible TRIGGERS section; everything a schedule
 //   does stays behind its row until it needs you — then it's a normal card.
 //
 // Every ARMED schedule (recurring, once, event; inject or spawn — no user-facing
@@ -51,7 +51,28 @@ export type TaskRow = {
   // explicit human title is left alone, so preferring display_title is safe.
   display_title?: string;
   display_summary?: string;
+  // Set when the schedule was canceled as a side effect of killing its home
+  // conversation (vs. completing naturally). The server re-arms stamped tasks
+  // when the session is restored; the client reads it to SAY so.
+  canceled_on_kill_at?: number;
 };
+
+// Armed inject schedules bound to one conversation — exactly the set the
+// server cancels when that conversation is killed. Every kill surface
+// (sidebar button, palette, keyboard chord) consults this for its notice.
+export function armedInjectTasksFor(tasks: TaskRow[] | undefined, convId: string): TaskRow[] {
+  return (tasks ?? []).filter(
+    (t) => ARMED_STATUSES.has(t.status) && t.originating_conversation_id === convId,
+  );
+}
+
+// Schedules a kill of this conversation took down (stamped canceled_on_kill_at)
+// — the set the server re-arms when the session is restored.
+export function killCanceledTasksFor(tasks: TaskRow[] | undefined, convId: string): TaskRow[] {
+  return (tasks ?? []).filter(
+    (t) => t.status === "completed" && !!t.canceled_on_kill_at && t.originating_conversation_id === convId,
+  );
+}
 
 // A prompt-slice title is cut at 60 chars mid-word or mid-parenthesis
 // ("Check the deploy (sha 9ee76"). Trim the dangling fragment so the fallback
@@ -91,7 +112,7 @@ export function patchTaskInWebList(
   );
 }
 
-export interface ScheduleRow {
+export interface TriggerRow {
   task: TaskRow;
   // Conversation this row opens: the home conversation (inject) or the newest
   // visible run, falling back to the last recorded run even when folded (the
@@ -102,9 +123,9 @@ export interface ScheduleRow {
   unread: boolean;
 }
 
-export interface ScheduleInboxPartition {
+export interface TriggerInboxPartition {
   // One row per armed schedule, soonest fire first (event/paused sink last).
-  rows: ScheduleRow[];
+  rows: TriggerRow[];
   // Sessions absorbed behind a row: resting loop homes + uneventful runs.
   absorbedIds: Set<string>;
   // conv id → ALL armed inject schedules. Exactly the set the kill transition
@@ -115,7 +136,7 @@ export interface ScheduleInboxPartition {
   nextRunAt?: number;
 }
 
-const EMPTY: ScheduleInboxPartition = {
+const EMPTY: TriggerInboxPartition = {
   rows: [],
   absorbedIds: new Set(),
   armedInjectByConv: new Map(),
@@ -123,7 +144,7 @@ const EMPTY: ScheduleInboxPartition = {
   nextRunAt: undefined,
 };
 
-export function partitionScheduleInbox(
+export function partitionTriggerInbox(
   tasks: TaskRow[] | undefined,
   sessions: Record<string, InboxSession>,
   opts: {
@@ -135,7 +156,7 @@ export function partitionScheduleInbox(
     // a card, so selection highlight and auto-scroll can land on it.
     focusedId?: string | null;
   } = {},
-): ScheduleInboxPartition {
+): TriggerInboxPartition {
   if (!tasks?.length) return EMPTY;
   const seenAt = opts.seenAt ?? 0;
 
@@ -151,7 +172,7 @@ export function partitionScheduleInbox(
     runs.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
   }
 
-  const rows: ScheduleRow[] = [];
+  const rows: TriggerRow[] = [];
   const absorbedIds = new Set<string>();
   const armedInjectByConv = new Map<string, TaskRow[]>();
   let unreadCount = 0;
@@ -223,7 +244,7 @@ export function partitionScheduleInbox(
   // paused / event / no-run_at at the bottom (newest-created first among those).
   // (Running previously sank to the bottom because its status isn't
   // "scheduled" — the opposite of what a roster wants to surface.)
-  const tier = (t: ScheduleRow["task"]) =>
+  const tier = (t: TriggerRow["task"]) =>
     t.status === "running" ? 0 : t.status === "scheduled" ? 1 : 2;
   rows.sort((a, b) => {
     const ta = tier(a.task), tb = tier(b.task);

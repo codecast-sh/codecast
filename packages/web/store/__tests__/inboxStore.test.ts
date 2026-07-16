@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { categorizeSessions, computeNewDividerIndex, dropLatchedFeedHasMore, feedPagePersistence, findReusableBlankSession, getSessionRenderKey, isConvexId, isSessionDismissed, isSessionStashed, orchestrationGroupLabelOf, PENDING_SEND_PRUNE_GRACE_MS, pendingSendConsumed, reconcilePendingSendForSession, resolveAssigneeInfo, resolveSessionAuthor, seedLiveInboxIdsFromCache, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
+import { categorizeSessions, computeNewDividerIndex, dropLatchedFeedHasMore, feedPagePersistence, findReusableBlankSession, getSessionRenderKey, isConvexId, isSessionDismissed, isSessionStashed, orchestrationGroupLabelOf, PENDING_SEND_PRUNE_GRACE_MS, pendingSendConsumed, reconcilePendingSendForSession, resolveAssigneeInfo, resolveSessionAuthor, resolveShowOld, seedLiveInboxIdsFromCache, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
 import { isPersistedStoreKey } from "../idbCache";
 import { declareViewNav } from "../viewNav";
 
@@ -3515,12 +3515,14 @@ describe("categorizeSessions — authoritative active set (hide-old)", () => {
   });
 });
 
-describe("liveInboxIds persistence + ephemeral show-old", () => {
+describe("liveInboxIds persistence + synced show-old", () => {
   beforeEach(() => {
     useInboxStore.setState({
       liveInboxIds: new Set<string>(),
       liveInboxIdList: [],
-      showOldSessions: false,
+      clientState: {},
+      clientStateInitialized: true,
+      pending: {},
     });
   });
 
@@ -3557,24 +3559,50 @@ describe("liveInboxIds persistence + ephemeral show-old", () => {
     expect(useInboxStore.getState().liveInboxIds.size).toBe(0);
   });
 
-  it("liveInboxIdList is persisted; showOldSessions is deliberately NOT", () => {
-    // The twin must survive reloads (first-frame correctness); the browse flag
-    // must NOT (a persisted "show my whole divergent cache" mode is exactly the
-    // recurring cross-client cruft bug this work removed — it was once a
-    // server-synced client_state.ui flag, and one browse click reverted every
-    // client to cruft-mode forever).
+  it("liveInboxIdList is persisted; no transient show-old store key exists", () => {
+    // The twin must survive reloads (first-frame correctness). Show-old lives
+    // in clientState.ui.inbox_show_old (stamped LWW) — never as a bare store
+    // field, which could drift from what actually syncs.
     expect(isPersistedStoreKey("liveInboxIdList")).toBe(true);
     expect(isPersistedStoreKey("showOldSessions")).toBe(false);
+    expect("showOldSessions" in useInboxStore.getState()).toBe(false);
     // The raw Set itself must not be registered either — it doesn't survive the
     // native JSON round-trip; only its array twin does.
     expect(isPersistedStoreKey("liveInboxIds")).toBe(false);
   });
 
-  it("setShowOldSessions is a transient gesture: flips in memory, defaults off", () => {
-    expect(useInboxStore.getState().showOldSessions).toBe(false);
+  it("setShowOldSessions writes the synced ui key with a ts stamp (sticky per-user view)", () => {
+    const before = Date.now();
+    expect(resolveShowOld(useInboxStore.getState().clientState.ui)).toBe(false);
     useInboxStore.getState().setShowOldSessions(true);
-    expect(useInboxStore.getState().showOldSessions).toBe(true);
-    useInboxStore.getState().setShowOldSessions(false);
-    expect(useInboxStore.getState().showOldSessions).toBe(false);
+    const ui = useInboxStore.getState().clientState.ui as Record<string, any>;
+    expect(ui.inbox_show_old).toBe(true);
+    expect(ui["inbox_show_old:ts"]).toBeGreaterThanOrEqual(before);
+    expect(resolveShowOld(ui)).toBe(true);
+  });
+
+  it("an OFF toggled on another device (newer stamp) wins on sync — sticky can't become stuck", () => {
+    useInboxStore.getState().setShowOldSessions(true);
+    const newer = Date.now() + 5_000;
+    useInboxStore.getState().syncTable("clientState", {
+      ui: { inbox_show_old: false, "inbox_show_old:ts": newer },
+    });
+    expect(resolveShowOld(useInboxStore.getState().clientState.ui)).toBe(false);
+  });
+
+  it("a local toggle survives a stale server echo (no flicker)", () => {
+    useInboxStore.getState().setShowOldSessions(true);
+    useInboxStore.getState().syncTable("clientState", {
+      ui: { inbox_show_old: false, "inbox_show_old:ts": Date.now() - 60_000 },
+    });
+    expect(resolveShowOld(useInboxStore.getState().clientState.ui)).toBe(true);
+  });
+
+  it("the legacy show_old_sessions key is never read — a stale server `true` cannot resurrect cruft mode", () => {
+    // The pre-LWW synced flag once turned one browse click into a permanent
+    // all-clients cruft mode; stale `true` values still linger in server
+    // client_state docs. resolveShowOld must ignore them forever.
+    useInboxStore.getState().syncTable("clientState", { ui: { show_old_sessions: true } });
+    expect(resolveShowOld(useInboxStore.getState().clientState.ui)).toBe(false);
   });
 });

@@ -375,6 +375,56 @@ export const saveAccountProfile = mutation({
   },
 });
 
+// Forget a saved profile on a device — the web Settings remove button. The
+// snapshot lives in that machine's keychain, so the actual deletion executes
+// daemon-side; this eagerly drops the profile from the device's reported
+// inventory so every client updates instantly. The heartbeat republishes the
+// machine's real inventory each beat, so a failed daemon-side delete
+// resurrects the row on its own. Removing the profile that covers the ACTIVE
+// login is rejected here too (the daemon would refuse anyway — its auto-enroll
+// re-saves the active login — but command errors never reach the web).
+export const removeAccountProfile = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    name: v.string(),
+    device_id: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication failed: invalid token or session");
+    if (!isValidProfileName(args.name)) {
+      throw new Error("Profile names: letters/digits/dot/dash/underscore, max 41 chars");
+    }
+
+    const { online } = await listOnlineDevices(ctx, userId, Date.now());
+    const target = online.find((d) => d.device_id === args.device_id);
+    if (!target) throw new Error("That device's daemon is offline");
+    const accounts = target.cc_accounts;
+    const profile = accounts?.profiles.find((p) => p.name === args.name);
+    if (!accounts || !profile) throw new Error(`No saved profile "${args.name}" on that device`);
+    if (profile.email && profile.email === accounts.active_email) {
+      throw new Error(
+        `"${args.name}" is that machine's active login — switch to another account first`,
+      );
+    }
+
+    const commandId = await ctx.db.insert("daemon_commands", {
+      user_id: userId,
+      command: "switch_account" as const,
+      args: JSON.stringify({ remove: args.name }),
+      created_at: Date.now(),
+      target_device_id: target.device_id,
+    });
+    await ctx.db.patch(target._id, {
+      cc_accounts: {
+        ...accounts,
+        profiles: accounts.profiles.filter((p) => p.name !== args.name),
+      },
+    });
+    return { command_id: commandId, device_id: target.device_id };
+  },
+});
+
 // Direct push of a device's account inventory, bypassing the heartbeat cycle:
 // the CLI calls this right after `cast accounts save`/`use` so the Settings
 // page reflects the change the moment the command returns instead of on the

@@ -407,23 +407,21 @@ describe("visualOrder follows the active view mode", () => {
         [LIVE_ID]: session(LIVE_ID, { message_count: 3, updated_at: 200, git_root: "/x/web" }),
         [OLD_ID]: session(OLD_ID, { message_count: 3, updated_at: 100, git_root: "/x/web" }),
       };
-      // show_old off (the every-boot default): the old card is hidden on
-      // screen, so nav drops it too.
+      // show_old off (the default): the old card is hidden on screen, so nav
+      // drops it too.
       useInboxStore.setState({
         sessions,
         liveInboxIds: new Set([LIVE_ID]),
-        showOldSessions: false,
-        clientState: { ui: { inbox_view_mode: mode } },
+        clientState: { ui: { inbox_view_mode: mode, inbox_show_old: false } },
       });
       expect(useInboxStore.getState().visualOrder().map((s) => s._id)).toEqual([LIVE_ID]);
-      // show_old on (ephemeral browse gesture): both render and nav include the
-      // old session (membership is the contract here; the intra-status tiebreak
-      // differs by mode).
+      // show_old on (synced per-user view pref): both render and nav include
+      // the old session (membership is the contract here; the intra-status
+      // tiebreak differs by mode).
       useInboxStore.setState({
         sessions,
         liveInboxIds: new Set([LIVE_ID]),
-        showOldSessions: true,
-        clientState: { ui: { inbox_view_mode: mode } },
+        clientState: { ui: { inbox_view_mode: mode, inbox_show_old: true } },
       });
       expect(useInboxStore.getState().visualOrder().map((s) => s._id).sort()).toEqual([LIVE_ID, OLD_ID].sort());
     });

@@ -11,6 +11,7 @@ import { resolveAssigneeStr, resolveAssigneeToUserId, recalcPlanProgress, notify
 import { api, internal } from "./_generated/api";
 import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey } from "@codecast/shared/contracts";
 import { applyHideTransition } from "./cleanup";
+import { reactivateTasksCanceledOnKill } from "./agentTasks";
 import { canAccessDoc } from "./docs";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { findConversationBySessionReference } from "./conversationSessionLookup";
@@ -157,6 +158,24 @@ async function applyPatches(
         // palette, the /sessions toggle (patchConversation), and any future one.
         if (table === "conversations" && ((finalSafe as any).inbox_dismissed_at || (finalSafe as any).inbox_stashed_at)) {
           await applyHideTransition(ctx, doc, finalSafe as any);
+        }
+        // The un-kill mirror: a patch CLEARING inbox_dismissed_at on a row that
+        // had it is the restore/undo gesture (web restoreSession, undo of a
+        // kill) — re-arm the schedules the kill canceled, or the user gets
+        // their session back with its standing loop silently dead. Only tasks
+        // stamped canceled_on_kill_at re-arm; natural completions stay done.
+        // Same two scans as the kill: the runner's schedules, plus the caller's
+        // when a second-party owner is restoring.
+        if (
+          table === "conversations" &&
+          "inbox_dismissed_at" in (finalSafe as any) &&
+          !(finalSafe as any).inbox_dismissed_at &&
+          (doc as any).inbox_dismissed_at
+        ) {
+          await reactivateTasksCanceledOnKill(ctx, (doc as any).user_id, doc._id as Id<"conversations">);
+          if ((doc as any).user_id?.toString() !== userId.toString()) {
+            await reactivateTasksCanceledOnKill(ctx, userId, doc._id as Id<"conversations">);
+          }
         }
       } else {
         const existing = await ctx.db
