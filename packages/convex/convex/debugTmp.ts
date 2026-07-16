@@ -27,6 +27,20 @@ export const insertSwitchAccountForOne = internalMutation({
   },
 });
 
+// Set a user's alternate_emails (assignee-resolution aliases) by primary email.
+export const setAlternateEmails = internalMutation({
+  args: { email: v.string(), alternate_emails: v.array(v.string()) },
+  handler: async (ctx, args) => {
+    const user = await ctx.db
+      .query("users")
+      .withIndex("email", (q: any) => q.eq("email", args.email))
+      .first();
+    if (!user) return { error: "no user" };
+    await ctx.db.patch(user._id, { alternate_emails: args.alternate_emails });
+    return { user_id: user._id, name: user.name, alternate_emails: args.alternate_emails };
+  },
+});
+
 export const inspectConversation = internalQuery({
   args: { id: v.string() },
   handler: async (ctx, args) => {
