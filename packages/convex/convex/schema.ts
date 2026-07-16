@@ -946,7 +946,7 @@ export default defineSchema({
     client_id: v.optional(v.string()),
     // Who initiated the send. Absent = a person (web composer, cast send, team
     // send) — those clear dismissed/stashed/killed so the session resurfaces.
-    // "scheduler" = the daemon's task scheduler firing a `cast schedule`
+    // "scheduler" = the daemon's task scheduler firing a `cast trigger`
     // injection: a machine wake must not override the user's stash (stash =
     // "keep working out of my sight"), so enqueue skips the stash-clear.
     origin: v.optional(v.literal("scheduler")),
@@ -1464,7 +1464,7 @@ export default defineSchema({
     target_conversation_id: v.optional(v.id("conversations")),
     project_path: v.optional(v.string()),
     agent_type: v.optional(v.string()),
-    // Device that created the task (CLI `cast schedule add`). When set, only
+    // Device that created the task (CLI `cast trigger add`). When set, only
     // that device's scheduler may claim it. Absent on web-created/legacy tasks,
     // which fall back to checkout-existence eligibility.
     created_device_id: v.optional(v.string()),
@@ -1503,7 +1503,7 @@ export default defineSchema({
     // color and gates run auto-fold: a failed previous run must stay visible in
     // the inbox (escalation), only a clean run folds when the next one starts.
     last_run_failed: v.optional(v.boolean()),
-    // Agent's explicit escalation from `cast schedule complete --needs-attention`:
+    // Agent's explicit escalation from `cast trigger complete --needs-attention`:
     // the run neither auto-folds nor collapses under the schedule's standing row —
     // it stays a real inbox card until the user triages it.
     last_run_needs_attention: v.optional(v.boolean()),
@@ -1523,6 +1523,11 @@ export default defineSchema({
     // explicit human title.
     display_title: v.optional(v.string()),
     display_summary: v.optional(v.string()),
+    // Set when this schedule was canceled as a side effect of killing the
+    // session it injects into (cancelTasksBoundToConversation) — distinguishes
+    // that from a natural completion, so restoring the session can re-arm
+    // exactly the schedules its kill took down. Cleared on reactivation.
+    canceled_on_kill_at: v.optional(v.number()),
   })
     .index("by_user_status", ["user_id", "status"])
     .index("by_user_run_at", ["user_id", "run_at"])
