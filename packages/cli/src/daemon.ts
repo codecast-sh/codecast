@@ -8,7 +8,8 @@ import { execSync, execFileSync, exec, execFile, spawn, spawnSync } from "child_
 import { watch as chokidarWatch } from "chokidar";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
 import { deviceId, deviceLabel, isRemoteDevice } from "./remote/device.js";
-import { copyCredentialToRemoteAsync, loadRemoteHost, readPushableCredential, remoteHostsRegistered } from "./remote/session-move.js";
+import { copyCredentialToRemoteAsync, currentBranch, loadRemoteHost, readPushableCredential, remoteHostsRegistered } from "./remote/session-move.js";
+import { reparentNotice, type ReparentCommandFacts } from "./sessionMoveNotice.js";
 import {
   useProfile,
   saveProfile,
@@ -284,6 +285,15 @@ async function refuseResumeNoLocalCheckout(
 
 // Deterministic per-remote checkout dir for a reparented session. Keyed by a
 // hash of the remote so two repos with the same basename never collide.
+/** What ensureReparentedCheckout prepared for a reparented session to resume in. */
+interface ReparentedCheckout {
+  path: string;
+  /** True when this machine cloned the repo just now; false when a checkout was already here. */
+  cloned: boolean;
+  remote?: string;
+  branch?: string;
+}
+
 function reparentCheckoutDir(remote: string): string {
   const home = process.env.HOME || "/tmp";
   const name = (remote.split("/").pop() || "repo").replace(/\.git$/, "").replace(/[^A-Za-z0-9._-]/g, "-");
@@ -300,11 +310,16 @@ function reparentCheckoutDir(remote: string): string {
 // then falls through to the normal refuse-with-banner path). Idempotent: never
 // re-clones an existing checkout. The clone is ASYNC (execFileAsync) so a large
 // repo never blocks the daemon's event loop and stalls other live sessions.
+//
+// Reports WHAT it prepared, not just where: a fresh clone and a reused local
+// checkout are different worlds for the resuming agent (a clone holds only
+// pushed work and sits on the remote's default branch), and the reorientation
+// notice has to tell them apart to stay honest. See sessionMoveNotice.ts.
 async function ensureReparentedCheckout(
   conversationId: string | undefined,
   recordedPath: string | undefined,
   remoteHint?: string,
-): Promise<string | undefined> {
+): Promise<ReparentedCheckout | undefined> {
   // Already resolvable locally (a prior reparent clone, or the repo happens to
   // be here)? Reuse it — don't clone twice.
   const existing = await resolveResumeCwdOrRefuse({
@@ -314,7 +329,7 @@ async function ensureReparentedCheckout(
   }).catch(() => null);
   if (existing) {
     log(`[REPARENT] checkout already resolvable locally: ${existing}`);
-    return existing;
+    return { path: existing, cloned: false, branch: readBranch(existing) };
   }
   if (!conversationId || !syncServiceRef) return undefined;
 
@@ -332,6 +347,7 @@ async function ensureReparentedCheckout(
   }
 
   const dest = reparentCheckoutDir(remote);
+  let cloned = false;
   try {
     if (!fs.existsSync(path.join(dest, ".git"))) {
       fs.mkdirSync(path.dirname(dest), { recursive: true });
@@ -343,6 +359,7 @@ async function ensureReparentedCheckout(
           timeout: 10 * 60_000,
           maxBuffer: 64 * 1024 * 1024,
         });
+        cloned = true;
       } catch (cloneErr: any) {
         log(`[REPARENT] clone failed: ${(cloneErr?.stderr || cloneErr?.message || String(cloneErr)).slice(0, 200)}`);
         // Remove a partial clone so a retry starts clean.
@@ -352,10 +369,73 @@ async function ensureReparentedCheckout(
     }
     // Learn the mapping so subsequent resolves (and re-resumes) find it directly.
     recordProjectMapping(path.basename(dest), dest);
-    return dest;
+    return { path: dest, cloned, remote, branch: readBranch(dest) };
   } catch (e) {
     log(`[REPARENT] checkout prep error: ${e instanceof Error ? e.message : String(e)}`);
     return undefined;
+  }
+}
+
+/** Best-effort branch name for a checkout — never throws; the notice simply
+ * omits the branch when it can't be read rather than blocking a resume. */
+function readBranch(cwd: string): string | undefined {
+  try {
+    return currentBranch(cwd) || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Tell a reparented agent what changed underneath it.
+ *
+ * `cast pull` hands a session to a machine that clones the repo itself, so the
+ * agent can wake in a cwd it has never seen, on the remote's default branch
+ * rather than its own, without any work that was never pushed — and, when the
+ * session crossed accounts, under a different user's agent config entirely.
+ * Nothing else told it: the SSH move path has sent a notice since it shipped,
+ * the reparent path never has.
+ *
+ * Composed here, on the destination, because this is the machine that can
+ * actually check these things (see sessionMoveNotice.ts). Rides the normal
+ * pending-message rail, which waits for a live session, so it lands as the
+ * agent's first turn after the resume. Best-effort throughout: a resume that
+ * worked must never fail because its notice didn't send.
+ */
+async function sendReparentNotice(opts: {
+  conversationId: string;
+  sessionId: string;
+  priorCwd?: string;
+  checkout?: ReparentedCheckout;
+  /** Raw parsed resume_session args — coerced by reparentNotice. */
+  command: ReparentCommandFacts;
+}): Promise<void> {
+  if (!syncServiceRef) return;
+  const notice = reparentNotice({
+    destinationLabel: deviceLabel(),
+    priorCwd: opts.priorCwd,
+    checkout: opts.checkout
+      ? {
+          cwd: opts.checkout.path,
+          cloned: opts.checkout.cloned,
+          remote: opts.checkout.remote,
+          branch: opts.checkout.branch,
+        }
+      : undefined,
+    command: opts.command,
+  });
+  if (!notice) return;
+  try {
+    await syncServiceRef.enqueueUserMessage(
+      opts.conversationId,
+      notice,
+      `reparent-notice-${opts.conversationId}`,
+    );
+    log(`[REPARENT] reorientation notice queued for ${opts.sessionId.slice(0, 8)}`);
+  } catch (e) {
+    log(
+      `[REPARENT] reorientation notice not sent for ${opts.sessionId.slice(0, 8)}: ${e instanceof Error ? e.message : String(e)}`,
+    );
   }
 }
 
@@ -3076,11 +3156,15 @@ async function executeRemoteCommand(
         // its reconstruct-from-Convex JSONL write have a real directory. If no
         // checkout can be prepared, fall through — the normal resolution then
         // surfaces the "clone it first" banner as usual.
+        // Where the session ran before this machine — captured before the
+        // reparent checkout repoints projectPath, so the notice can name it.
+        const priorCwd = projectPath;
+        let reparentCheckout: ReparentedCheckout | undefined;
         if (reparented) {
-          const cloned = await ensureReparentedCheckout(conversationId, projectPath, parsed.git_remote_url);
-          if (cloned) {
-            projectPath = cloned;
-            log(`[REPARENT] ${sessionId.slice(0, 8)} resuming in local checkout ${cloned}`);
+          reparentCheckout = await ensureReparentedCheckout(conversationId, projectPath, parsed.git_remote_url);
+          if (reparentCheckout) {
+            projectPath = reparentCheckout.path;
+            log(`[REPARENT] ${sessionId.slice(0, 8)} resuming in ${reparentCheckout.cloned ? "fresh clone" : "existing checkout"} ${reparentCheckout.path}${reparentCheckout.branch ? ` on branch ${reparentCheckout.branch}` : ""}`);
           }
         }
         let resumed = false;
@@ -3117,6 +3201,11 @@ async function executeRemoteCommand(
           await clearConversationDeliveryAndResumeState(conversationId, sessionId, "resume_session");
           result = JSON.stringify({ resumed: true, session_id: sessionId });
           log(`[REMOTE] Force-resume succeeded for ${sessionId.slice(0, 8)}`);
+          if (reparented && conversationId) {
+            await sendReparentNotice({
+              conversationId, sessionId, priorCwd, checkout: reparentCheckout, command: parsed,
+            });
+          }
         } else if (conversationId && projectPath) {
           // Reconstitution AND the blank-session fallback below both run in `cwd`.
           // Resolve it to a real local checkout or refuse — never $HOME, which
@@ -3168,6 +3257,17 @@ async function executeRemoteCommand(
                   result = JSON.stringify({ reconstituted: true, session_id: newSessionId });
                   log(`[REMOTE] Reconstituted + resumed session ${sessionId.slice(0, 8)}`);
                   reconstituted = true;
+                  if (reparented) {
+                    // cwd (not projectPath): the refuse-or-resolve step above is
+                    // what actually decided where this session lives now.
+                    await sendReparentNotice({
+                      conversationId, sessionId: newSessionId, priorCwd,
+                      checkout: reparentCheckout?.path === cwd
+                        ? reparentCheckout
+                        : { path: cwd, cloned: false, branch: readBranch(cwd) },
+                      command: parsed,
+                    });
+                  }
                 }
               }
             } catch (reconErr) {

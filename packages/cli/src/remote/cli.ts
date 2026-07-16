@@ -28,6 +28,7 @@ import {
   type RemoteHost,
   type SyncVerification,
 } from "./session-move.js";
+import { reorientationNotice } from "../sessionMoveNotice.js";
 import { deviceInfo, deviceId } from "./device.js";
 import { decryptToken } from "../tokenEncryption.js";
 
@@ -86,27 +87,36 @@ function describeVerification(v: SyncVerification | undefined): string {
  * the session (same transcript, same conversation), but the machine under it
  * is different — this lands as the first turn after the resume so the agent
  * re-grounds instead of acting on stale machine-local assumptions.
+ *
+ * The facts are built here rather than in the composer because only this side
+ * knows what the transfer proved; see sessionMoveNotice.ts for why a notice
+ * only ever states what the composing machine checked itself.
  */
 function moveNotice(opts: {
   destination: string;   // "m1@51.159.120.28" or the local hostname
   newCwd: string;
   oldCwd: string;
   verification: SyncVerification | undefined;
-}): string {
-  return [
-    `[codecast] This session was just moved to a different machine. It now runs on ${opts.destination} in ${opts.newCwd} (previously ${opts.oldCwd}).`,
-    `Code transfer: any uncommitted changes were committed as a wip snapshot on the branch, then pushed. Verification: ${describeVerification(opts.verification)}.`,
-    `Environment differences: different home directory, hostname, and credentials; processes, ports, and files outside the worktree from the previous machine are NOT here.`,
-    `Before continuing your task, run git status and git log --oneline -3 and confirm the code state matches what you expect. If anything looks wrong or missing, say so instead of proceeding.`,
-  ].join("\n");
+}): string | null {
+  return reorientationNotice({
+    destination: opts.destination,
+    newCwd: opts.newCwd,
+    oldCwd: opts.oldCwd,
+    machineChanged: true,
+    // The SSH move pushes the tree itself (wip snapshot + push, then verified),
+    // so the destination is a faithful copy — no checkout/transcript surprises
+    // to report, unlike the reparent path which clones from the remote.
+    verification: describeVerification(opts.verification),
+  });
 }
 
 /** Queue the notice onto the conversation's normal delivery rail (it arrives
  * after the resume lands, since delivery waits for a live session). */
 async function sendMoveNotice(
   client: any, api: any, token: string,
-  conversationId: string, notice: string,
+  conversationId: string, notice: string | null,
 ): Promise<void> {
+  if (!notice) return;
   try {
     await client.mutation(api.pendingMessages.sendMessageToSession, {
       api_token: token,

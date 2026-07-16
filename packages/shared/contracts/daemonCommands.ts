@@ -34,8 +34,9 @@ export const DAEMON_COMMANDS = [
   // would reconstitute from a mid-copy export and truncate the fork's history.
   "fork_session",
   // Swap the machine's active Claude Code account to a saved profile, tear down
-  // the listed limit/auth-blocked sessions, and enqueue "continue" to each so
-  // the delivery rail resumes them on the new account.
+  // the listed blocked sessions (parked on a limit, auth, or dropped-connection
+  // banner), and enqueue "continue" to each so the delivery rail resumes them
+  // on the new account.
   "switch_account",
   // In-place model/effort switch for a RUNNING claude session: the daemon
   // drives the /model picker (arrows + `s`) so the change stays session-scoped
