@@ -23,6 +23,7 @@ import { getLabelColor } from "../lib/labelColors";
 import Link from "next/link";
 import { fmtClock, fmtDuration, describeTaskCadence, isTaskOverdue, taskStateLabel } from "./scheduleCadence";
 import { partitionScheduleInbox, patchTaskInWebList, taskDisplayTitle, type ScheduleRow, type TaskRow } from "./scheduleTasks";
+import { ScheduleRunList, useScheduleRuns } from "./ScheduleRunHistory";
 import { cleanUserMessage } from "./sessionMessage";
 import { SharePopover } from "./SharePopover";
 import { shareOrigin } from "../lib/utils";
@@ -288,15 +289,29 @@ function ForkCorner({ colorKey }: { colorKey: string }) {
 }
 
 // Badge for a session parked on an unresolved Claude Code auth/API-error banner
-// (signed out / rate-limited mid-turn). A distinct amber pill — "login" with a
-// key glyph for auth banners, "limit" with an hourglass for usage-limit banners
-// — set apart from the plain status dots so a stuck session reads at a glance.
+// (signed out / rate-limited / connection dropped mid-turn). A distinct amber
+// pill — "login" with a key glyph for auth banners, "limit" with an hourglass
+// for usage-limit banners, "dropped" with a bolt for connection drops — set
+// apart from the plain status dots so a stuck session reads at a glance.
 // Shared by both SessionCard variants.
 function AuthErrorBadge({ kind }: { kind?: string | null }) {
-  // Only the account-is-the-problem kinds get a badge. kind "error" (transient
-  // 529/500 provider failures) self-heals on the next message — badging it
-  // paints a healthy session as blocked.
-  if (kind !== "limit" && kind !== "auth") return null;
+  // Only the parked-and-won't-heal kinds get a badge. kind "error" (statusful
+  // 529/500 provider failures) self-retries — badging it paints a healthy
+  // session as blocked.
+  if (kind !== "limit" && kind !== "auth" && kind !== "connection") return null;
+  if (kind === "connection") {
+    return (
+      <span
+        className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-semibold bg-amber-500/10 text-amber-500 border border-amber-500/30"
+        title="Connection dropped mid-response — send continue (or any message) to resume"
+      >
+        <svg className="w-2 h-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+          <path d="M13 2L3 14h7l-1 8 10-12h-7l1-8" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+        dropped
+      </span>
+    );
+  }
   if (kind === "limit") {
     return (
       <span
@@ -376,7 +391,8 @@ function BlockedSessionsBanner({
   const subagents = blocked.filter(isSubagentConversation);
   const acted = includeSubs ? blocked : blocked.filter((sess) => !isSubagentConversation(sess));
   const authCount = acted.filter((sess) => sess.pending_api_error_kind === "auth").length;
-  const limitCount = acted.length - authCount;
+  const connCount = acted.filter((sess) => sess.pending_api_error_kind === "connection").length;
+  const limitCount = acted.length - authCount - connCount;
   // Newest-flagged first — the same order the revive acts on (and the order
   // that answers "which sessions?" most usefully: fresh casualties on top).
   const blockedSorted = [...blocked].sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
@@ -451,17 +467,24 @@ function BlockedSessionsBanner({
             title={expanded ? "Hide the affected sessions" : "Show which sessions are blocked"}
           >
             <ChevronRight className={`h-3 w-3 shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`} />
-            {blocked.length} session{blocked.length === 1 ? "" : "s"} blocked on {authCount > 0 && limitCount === 0 ? "login" : "usage limits"}
+            {blocked.length} session{blocked.length === 1 ? "" : "s"} blocked on{" "}
+            {limitCount > 0 ? "usage limits" : connCount > 0 ? "dropped connections" : "login"}
             {subagents.length > 0 && (
               <span className="font-normal text-sol-text-dim">({subagents.length} subagents)</span>
             )}
           </button>
           <div className="mt-0.5 text-[11px] leading-snug text-sol-text-muted">
-            {limitCount > 0 && <span>{limitCount} hit a usage limit</span>}
-            {limitCount > 0 && authCount > 0 && <span> · </span>}
-            {authCount > 0 && <span>{authCount} signed out</span>}
             <span>
-              {" "}— continue them all once the limit resets
+              {[
+                limitCount > 0 ? `${limitCount} hit a usage limit` : null,
+                connCount > 0 ? `${connCount} dropped mid-response` : null,
+                authCount > 0 ? `${authCount} signed out` : null,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+            </span>
+            <span>
+              {" "}— continue them all{limitCount > 0 ? " once the limit resets" : ""}
               {switchTargets.length > 0 ? ", or switch accounts and resume now" : ""}.
               {acted.length > 30 ? " Revives run on the 30 most recent per pass." : ""}
             </span>
@@ -630,7 +653,7 @@ function schedBadgeTone(task: { status: string; run_at?: number }, now: number):
 // the surfaces can't drift: readable name, one-sentence gist of what each run
 // does (Haiku-distilled display fields), cadence + live countdown, last
 // outcome, and hover verbs (run now / pause / cancel) on every surface.
-function ScheduleRowItem({ row, activeSessionId, onOpen, attached, highlighted, projectChip }: {
+function ScheduleRowItem({ row, activeSessionId, onOpen, attached, highlighted, projectChip, onNavigated }: {
   row: ScheduleRow;
   activeSessionId?: string | null;
   onOpen: (row: ScheduleRow) => void;
@@ -642,6 +665,9 @@ function ScheduleRowItem({ row, activeSessionId, onOpen, attached, highlighted, 
   // Short project name, shown when the roster spans several projects so
   // cross-project schedules stop being indistinguishable.
   projectChip?: string;
+  // Called after a run-history click navigated away — the dock roster passes
+  // its close() so the overlay doesn't linger over the new conversation.
+  onNavigated?: () => void;
 }) {
   const { task, unread } = row;
   const now = useCoarseNow(30_000);
@@ -677,6 +703,11 @@ function ScheduleRowItem({ row, activeSessionId, onOpen, attached, highlighted, 
   // already active, and the resting selected tint is the shared cyan — so the
   // schedule-orange pulse is what says "this schedule heard you".
   const [clickFlash, setClickFlash] = useState(0);
+  // Inline run history (the hover rail's History verb). Query only while
+  // open, so a resting roster costs nothing; each entry navigates to the
+  // message that triggered that run.
+  const [runsOpen, setRunsOpen] = useState(false);
+  const runs = useScheduleRuns(runsOpen ? task._id : null);
   return (
     <div
       data-schedrow={task._id}
@@ -698,6 +729,10 @@ function ScheduleRowItem({ row, activeSessionId, onOpen, attached, highlighted, 
         highlighted ? "bg-[color-mix(in_srgb,var(--sol-bg-alt)_70%,transparent)] ring-1 ring-inset ring-sol-orange/40" : ""
       }`}
     >
+      {/* Inner relative wrapper: the click-flash and the hover verb rail size
+          to the ROW line only, so an expanded run history below never sits
+          under the rail's gradient or its hover targets. */}
+      <div className="relative">
       <button
         className={`w-full text-left cursor-pointer pr-3 ${attached ? "pl-2 py-1" : "pl-2.5 py-1.5"} hover:bg-sol-orange/[0.05] transition-[background-color,opacity] ${paused ? "opacity-55 hover:opacity-90" : ""}`}
         onClick={() => {
@@ -745,12 +780,6 @@ function ScheduleRowItem({ row, activeSessionId, onOpen, attached, highlighted, 
               <span className={`shrink-0 px-1 rounded text-[9px] font-medium border ${getLabelColor(projectChip).bg} ${getLabelColor(projectChip).text} ${getLabelColor(projectChip).border}`}>
                 {projectChip}
               </span>
-            </ShortcutTooltip>
-          )}
-          {/* Apply is the norm and unmarked; read-only is the exception worth a chip. */}
-          {task.mode !== "apply" && (
-            <ShortcutTooltip label="Read-only run — investigates and reports, changes nothing" hint="file-editing tools are disabled">
-              <span className="shrink-0 px-1 rounded bg-sol-cyan/10 text-sol-cyan/80 text-[9px] font-medium">read-only</span>
             </ShortcutTooltip>
           )}
           {/* Same pill as the dock bar's "N new" count, so opening the roster
@@ -877,6 +906,18 @@ function ScheduleRowItem({ row, activeSessionId, onOpen, attached, highlighted, 
           box dropped on top), holding compact icon verbs. Absolute + full-height
           so revealing it never changes the row's height. */}
       <div className="absolute top-0 bottom-0 right-0 flex items-center gap-0.5 pl-12 pr-2 opacity-0 group-hover/schedrow:opacity-100 transition-opacity duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] bg-gradient-to-r from-transparent via-sol-bg-alt/80 to-sol-bg-alt">
+        <ShortcutTooltip label={runsOpen ? "Hide run history" : "Run history"} hint="every run links to its trigger message" side="top">
+          <button
+            aria-label={runsOpen ? "Hide run history" : "Show run history"}
+            aria-expanded={runsOpen}
+            onClick={(e) => { e.stopPropagation(); setRunsOpen((v) => !v); }}
+            className={`p-1 rounded transition-[color,background-color,transform] duration-100 active:scale-90 ${
+              runsOpen ? "text-sol-orange bg-sol-orange/10" : "text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt"
+            }`}
+          >
+            <History className="w-3.5 h-3.5" />
+          </button>
+        </ShortcutTooltip>
         <ShortcutTooltip label="Open in Schedules" hint="edit, history, full detail" side="top">
           <Link
             href={`/schedules?task=${task._id}`}
@@ -924,6 +965,26 @@ function ScheduleRowItem({ row, activeSessionId, onOpen, attached, highlighted, 
           </button>
         </ShortcutTooltip>
       </div>
+      </div>
+      {/* Past runs, inline: every run of this schedule, newest first, each
+          entry landing on the message that triggered it. */}
+      {runsOpen && (
+        <div className={`${attached ? "pl-6" : "pl-2.5"} pr-2 pb-1.5`} onClick={(e) => e.stopPropagation()}>
+          {runs === undefined ? (
+            <div className="text-[10px] text-sol-text-dim py-1 pl-1.5">Loading runs…</div>
+          ) : runs.length === 0 ? (
+            <div className="text-[10px] text-sol-text-dim py-1 pl-1.5">No runs recorded yet</div>
+          ) : (
+            <ScheduleRunList
+              runs={runs}
+              now={now}
+              mode="store"
+              currentConversationId={activeSessionId}
+              onOpened={onNavigated}
+            />
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -999,7 +1060,8 @@ function ScheduleDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen }:
     if (!open) setCursor(-1);
   }, [open]);
   if (rows.length === 0) return null;
-  const readOnlyCount = rows.filter((r) => r.task.mode !== "apply").length;
+  const recurringCount = rows.filter((r) => r.task.schedule_type !== "once").length;
+  const oneTimeCount = rows.length - recurringCount;
   const overdueCount = rows.filter((r) => isTaskOverdue(r.task, now)).length;
   const runningCount = rows.filter((r) => r.task.status === "running").length;
   // Project chips only when the roster actually mixes projects — a
@@ -1025,7 +1087,9 @@ function ScheduleDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen }:
                 reads against the session list it floats over. */}
             <div className="sticky top-0 z-10 flex items-center gap-2 px-3 py-1.5 bg-sol-bg-alt/95 backdrop-blur-sm border-b border-sol-border/60 text-[10px]">
               <span className="font-medium text-sol-text-muted">
-                {rows.length} armed{readOnlyCount > 0 ? ` · ${readOnlyCount} read-only` : ""}
+                {rows.length} armed
+                {recurringCount > 0 ? ` · ${recurringCount} recurring` : ""}
+                {oneTimeCount > 0 ? ` · ${oneTimeCount} one-time` : ""}
               </span>
               <span className="ml-auto flex items-center gap-2.5">
                 <Link href="/schedules?new=1" onClick={close} className="text-sol-cyan hover:underline">+ New</Link>
@@ -1038,6 +1102,7 @@ function ScheduleDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen }:
                 row={r}
                 activeSessionId={activeSessionId}
                 onOpen={(r) => { close(); onOpen(r); }}
+                onNavigated={close}
                 highlighted={i === cursor}
                 projectChip={chipFor(r.task.project_path)}
               />
@@ -2244,11 +2309,11 @@ export function SessionListPanel({
   const dismissStaleMutation = useMutation(api.conversations.dismissStaleInboxSessions);
   const showStalePrompt = staleSessions.length > STALE_PROMPT_THRESHOLD && !stalePromptSnoozed;
 
-  // Sessions parked on a limit/auth banner — the fleet-level revive banner's
-  // input. isBlockedConversation is the SAME predicate the server selection
-  // uses (limit/auth kinds only — transient 500s never count — claude only,
-  // dismissed excluded), plus the same 48h window, so the count shown always
-  // matches what a revive would act on.
+  // Sessions parked on a limit/auth/connection banner — the fleet-level revive
+  // banner's input. isBlockedConversation is the SAME predicate the server
+  // selection uses (limit/auth/connection kinds — statusful self-retrying 500s
+  // never count — claude only, dismissed excluded), plus the same 48h window,
+  // so the count shown always matches what a revive would act on.
   const blockedSessions = useMemo(() => {
     const since = Date.now() - 48 * 60 * 60 * 1000;
     return (Object.values(s.sessions) as InboxSession[]).filter(
