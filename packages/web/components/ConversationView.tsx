@@ -1116,6 +1116,7 @@ const AGENT_OPTIONS = [
   { type: "codex", label: "Codex" },
   { type: "cursor", label: "Cursor" },
   { type: "gemini", label: "Gemini" },
+  { type: "opencode", label: "OpenCode" },
   { type: "pi", label: "pi" },
 ] as const;
 
