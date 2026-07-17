@@ -25,6 +25,12 @@ export function AgentTypeIcon({ agentType, className = "w-3 h-3" }: { agentType:
         <path d="M12 0C12 0 12 6.268 8.134 10.134C4.268 14 0 14 0 14C0 14 6.268 14 10.134 17.866C14 21.732 14 28 14 28C14 28 14 21.732 17.866 17.866C21.732 14 28 14 28 14C28 14 21.732 14 17.866 10.134C14 6.268 14 0 14 0" />
       </svg>
     );
+  } else if (agentType === "pi") {
+    return (
+      <span className={`${className} inline-flex items-center justify-center shrink-0 font-semibold text-teal-400 leading-none`}>
+        π
+      </span>
+    );
   }
   return null;
 }
@@ -35,6 +41,7 @@ export function formatAgentType(agentType?: string): string {
   if (agentType === "codex") return "Codex";
   if (agentType === "cursor") return "Cursor";
   if (agentType === "gemini") return "Gemini";
+  if (agentType === "pi") return "pi";
 
   return agentType;
 }

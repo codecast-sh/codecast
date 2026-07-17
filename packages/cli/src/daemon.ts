@@ -25,7 +25,7 @@ import {
 import { CursorWatcher, type CursorSessionEvent } from "./cursorWatcher.js";
 import { CursorTranscriptWatcher, type CursorTranscriptEvent } from "./cursorTranscriptWatcher.js";
 import { isAppServerManagedCodexSessionHead } from "./codexWatcher.js";
-import { TranscriptDirWatcher, transcriptDirWatcherConfig, type TranscriptDirEvent } from "./transcriptDirWatcher.js";
+import { TranscriptDirWatcher, transcriptDirWatcherConfig, decodePiCwdSlug, type TranscriptDirEvent } from "./transcriptDirWatcher.js";
 import {
   buildDaemonLauncherScript,
   buildDaemonPlistXml,
@@ -55,7 +55,7 @@ import {
   parsePidPpidMap,
   resolveSpawnerSessionId,
 } from "./sessionProcessMatcher.js";
-import { parseSessionFile, parseTranscriptFor, extractSlug, extractParentUuid, extractSummaryTitle, extractCwd, extractCodexCwd, extractCodexForkRoot, extractGeminiProjectHash, extractTeamInfo, detectCliFlags, type ParsedMessage } from "./parser.js";
+import { parseSessionFile, parseTranscriptFor, extractSlug, extractParentUuid, extractSummaryTitle, extractCwd, extractCodexCwd, extractCodexForkRoot, extractGeminiProjectHash, extractPiCwd, extractTeamInfo, detectCliFlags, type ParsedMessage } from "./parser.js";
 import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { encryptToken, decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
@@ -104,7 +104,7 @@ import {
 import { resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
 import { buildLaunchArgs, getConfiguredAgentArgs, launchBinary } from "./launchCommand.js";
 import type { AgentStatus, DeviceSnippetSettings, AgentClientId } from "@codecast/shared/contracts";
-import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS } from "@codecast/shared/contracts";
+import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType } from "@codecast/shared/contracts";
 import { parseModelPicker, planModelNavigation, SESSION_ONLY_COMMIT_RE, isSwitchConfirmDialog } from "./modelPicker";
 import { type Config, getAgentArgs } from "./config/types.js";
 
@@ -645,7 +645,7 @@ export function buildBlankLaunchArgs(
     const flags = [getAgentArgs(config, "codex") || "", permFlags || ""].filter(Boolean).join(" ");
     return flags ? flags.split(/\s+/).filter(Boolean) : [];
   }
-  // cursor/gemini: no configured args or permission flags yet.
+  // cursor/gemini/pi: no configured args or permission flags yet.
   return [];
 }
 
@@ -2318,9 +2318,13 @@ async function executeRemoteCommand(
       }
       case "start_session": {
         const parsed = commandArgs ? JSON.parse(commandArgs) : {};
-        const rawAgentType = parsed.agent_type;
-        const agentType: AgentClientId =
-          rawAgentType === "codex" || rawAgentType === "cursor" || rawAgentType === "gemini" ? rawAgentType : "claude";
+        // parsed.agent_type comes off JSON.parse (untyped), and the queue may carry
+        // either the daemon spelling (AgentClientId) or the convex spelling
+        // ("claude_code"). fromConvexAgentType is the ONE normalization for both —
+        // it maps every known client (incl. pi) to its AgentClientId and everything
+        // else to "claude", reproducing the old codex/cursor/gemini-else-claude
+        // ternary without another hand-rolled branch that silently drops pi.
+        const agentType: AgentClientId = fromConvexAgentType(parsed.agent_type);
         const rawPath: string = parsed.project_path || process.env.HOME || "/tmp";
         const conversationId: string | undefined = parsed.conversation_id;
         const expectedSessionId: string | undefined = parsed.session_id;
@@ -3123,9 +3127,13 @@ async function executeRemoteCommand(
         // Set by reparentSessionToDevice (cast pull): this session may be running
         // on this machine for the first time, so its repo isn't checked out here.
         const reparented = parsed.reparented === true;
+        // undefined here means "claude/unknown — use the default claude resume path";
+        // a defined AgentClientId routes to that client's own resume. Normalize via the
+        // single fromConvexAgentType (handles pi + the convex spelling), then collapse
+        // claude back to undefined to preserve the original semantics.
+        const normalizedResumeAgent = fromConvexAgentType(parsed.agent_type);
         const resumeAgentType: AgentClientId | undefined =
-          parsed.agent_type === "codex" || parsed.agent_type === "cursor" || parsed.agent_type === "gemini"
-            ? parsed.agent_type : undefined;
+          normalizedResumeAgent === "claude" ? undefined : normalizedResumeAgent;
         // Skip if a resume is already in flight for this session
         if (resumeInFlight.has(sessionId)) {
           log(`[REMOTE] Resume already in flight for ${sessionId.slice(0, 8)}, skipping`);
@@ -3253,10 +3261,11 @@ async function executeRemoteCommand(
           log(`[REMOTE] Resume failed for ${sessionId.slice(0, 8)}, reconstituting session from DB in ${cwd}...`);
           let reconstituted = false;
 
-          // cursor-agent owns its own session store — there is no local JSONL to
-          // reconstitute. Skip DB reconstitution (never write a Claude JSONL for a
-          // cursor session) and fall through to the fresh cursor-agent spawn below.
-          if (config?.convex_url && config?.auth_token && resumeAgentType !== "cursor") {
+          // cursor-agent owns its own session store, and pi owns its own JSONL tree
+          // (which lives under ~/.pi and is never a Claude transcript) — for neither
+          // may we fabricate a Claude JSONL. Skip DB reconstitution for both and fall
+          // through to the fresh cursor/pi spawn below.
+          if (config?.convex_url && config?.auth_token && resumeAgentType !== "cursor" && resumeAgentType !== "pi") {
             try {
               const siteUrl = config.convex_url.replace(".cloud", ".site");
               const exportData = await fetchExport(siteUrl, config.auth_token!, conversationId);
@@ -3331,11 +3340,10 @@ async function executeRemoteCommand(
             log(`[REMOTE] Starting blank ${blankAgentType} session in ${cwd}`);
             const shortId = Math.random().toString(36).slice(2, 8);
             const tmuxSession = `cc-${blankAgentType}-${shortId}`;
-            const blankBinary =
-              blankAgentType === "codex" ? "codex"
-              : blankAgentType === "cursor" ? "cursor-agent"
-              : blankAgentType === "gemini" ? "gemini"
-              : "claude";
+            // Registry-sourced binary (adds pi; cursor -> cursor-agent) — the same
+            // launchBinary the fresh-start path uses, so no client is silently dropped
+            // to claude here.
+            const blankBinary = launchBinary(blankAgentType);
             // Inject the default permission flags exactly like start_session and
             // auto-resume. Building from config args alone here launched a bare
             // `claude` that fell into the project's dontAsk default — the agent
@@ -6594,6 +6602,201 @@ async function processGeminiSession(
   }
 }
 
+// pi sessions, like gemini, re-parse the whole JSONL each pass (the parser resolves
+// the active branch) and sync the delta by message count. Keyed by file path.
+const piSyncedCounts = new Map<string, number>();
+
+async function processPiSession(
+  filePath: string,
+  sessionId: string,
+  syncService: SyncService,
+  userId: string,
+  teamId: string | undefined,
+  conversationCache: ConversationCache,
+  retryQueue: RetryQueue,
+  pendingMessages: PendingMessages,
+  titleCache: TitleCache,
+  updateStateCallback: () => void
+): Promise<void> {
+  try {
+    let content: string;
+    try {
+      content = fs.readFileSync(filePath, "utf-8");
+    } catch (err: any) {
+      if (err.code === "EACCES" || err.code === "EPERM") {
+        log(`Warning: Permission denied reading ${filePath}. Will retry later.`);
+        return;
+      }
+      if (err.code === "ENOENT") {
+        log(`pi transcript ${filePath} no longer exists; nothing to sync.`);
+        return;
+      }
+      throw err;
+    }
+
+    const allMessages = parseTranscriptFor("pi", content);
+    const previousCount = piSyncedCounts.get(filePath) || 0;
+    if (allMessages.length <= previousCount) return;
+    const newMessages = allMessages.slice(previousCount);
+
+    let conversationId = conversationCache[sessionId];
+
+    if (!conversationId) {
+      try {
+        // Authoritative project path is the session header's cwd; the containing
+        // slug dir decodes back to it only lossily (see decodePiCwdSlug).
+        const projectPath = extractPiCwd(content)
+          ?? decodePiCwdSlug(path.basename(path.dirname(filePath)));
+
+        // Bind a daemon-launched pi to its start_session stub (codex pattern): find
+        // the live process's tmux pane and match it against the pending started
+        // conversations; fall back to a unique cwd match when the process isn't found.
+        let matchedStartedConversation: string | null = null;
+        if (startedSessionTmux.size > 0) {
+          const startedPiEntries = Array.from(startedSessionTmux.entries())
+            .filter(([, entry]) => entry.agentType === "pi");
+          const proc = await findSessionProcess(sessionId, "pi").catch(() => null);
+          let tmuxSessionName: string | null = null;
+          if (proc) {
+            tmuxSessionName = sessionProcessCache.get(sessionId)?.tmuxTarget?.split(":")[0] ?? null;
+            if (!tmuxSessionName) {
+              const tmuxPane = await findTmuxPaneForTty(proc.tty);
+              if (tmuxPane) {
+                tmuxSessionName = tmuxPane.split(":")[0];
+                cacheSessionProcess(sessionId, proc, tmuxPane);
+              }
+            }
+          }
+          matchedStartedConversation = matchStartedConversation(startedPiEntries, {
+            tmuxSessionName,
+            projectPath: proc ? null : projectPath,
+          });
+        }
+
+        if (matchedStartedConversation) {
+          conversationId = matchedStartedConversation;
+          const tmuxEntry = startedSessionTmux.get(matchedStartedConversation);
+          conversationCache[sessionId] = conversationId;
+          saveConversationCache(conversationCache);
+          const piGitInfo = projectPath ? getGitInfo(projectPath) : undefined;
+          syncService.updateSessionId(conversationId, sessionId, projectPath || undefined, piGitInfo?.repoRoot || piGitInfo?.root).catch(logConvexFailure);
+          if (tmuxEntry) {
+            registerManagedStartedSession(conversationId, sessionId, tmuxEntry.tmuxSession);
+            if (tmuxEntry.sessionId && tmuxEntry.sessionId !== sessionId) {
+              stopManagedSessionHeartbeat(tmuxEntry.sessionId);
+            }
+          }
+          deleteStartedSession(matchedStartedConversation);
+          log(`Linked pi session ${sessionId.slice(0, 8)} to started conversation ${conversationId.slice(0, 12)}`);
+        } else {
+          const firstUserMessage = allMessages.find((msg) => msg.role === "user");
+          const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+          conversationId = await syncService.createConversation({
+            userId,
+            teamId,
+            sessionId,
+            agentType: "pi",
+            projectPath,
+            slug: undefined,
+            title,
+            startedAt: allMessages[0]?.timestamp,
+            parentMessageUuid: undefined,
+            gitInfo: undefined,
+          });
+          conversationCache[sessionId] = conversationId;
+          saveConversationCache(conversationCache);
+          log(`Created conversation ${conversationId} for pi session ${sessionId}`);
+
+          if ((global as any).activeSessions) {
+            (global as any).activeSessions.set(conversationId, { sessionId, conversationId, projectPath: "" });
+          }
+
+          if (pendingMessages[sessionId]) {
+            await flushPendingMessagesBatch(pendingMessages[sessionId], conversationId, syncService, retryQueue);
+            delete pendingMessages[sessionId];
+          }
+        }
+      } catch (err) {
+        if (err instanceof AuthExpiredError) {
+          if (handleAuthFailure()) {
+            log("⚠️  Authentication expired - sync paused");
+            piSyncedCounts.set(filePath, allMessages.length);
+            return;
+          }
+        }
+        const errMsg = err instanceof Error ? err.message : String(err);
+        log(`Failed to create pi conversation, queueing for retry: ${errMsg}`);
+
+        if (!pendingMessages[sessionId]) pendingMessages[sessionId] = [];
+        for (const msg of newMessages) {
+          pendingMessages[sessionId].push({
+            uuid: msg.uuid,
+            role: msg.role === "user" ? "human" : msg.role === "system" ? "system" : "assistant",
+            content: redactSecrets(msg.content),
+            timestamp: msg.timestamp,
+            filePath,
+            fileSize: content.length,
+            thinking: msg.thinking,
+            toolCalls: msg.toolCalls,
+            toolResults: msg.toolResults,
+            images: msg.images,
+            subtype: msg.subtype,
+            model: msg.model,
+          });
+        }
+        const firstUserMessage = allMessages.find((msg) => msg.role === "user");
+        const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+        retryQueue.add("createConversation", {
+          userId, teamId, sessionId, agentType: "pi", title, startedAt: allMessages[0]?.timestamp,
+        }, errMsg);
+        piSyncedCounts.set(filePath, allMessages.length);
+        return;
+      }
+    }
+
+    const batchResult = await syncMessagesBatch(newMessages, conversationId, syncService, retryQueue);
+    if (batchResult.authExpired) {
+      log("⚠️  Authentication expired - sync paused");
+      return;
+    }
+    if (batchResult.conversationNotFound) {
+      log(`Conversation ${conversationId} not found, invalidating cache and recreating...`);
+      delete conversationCache[sessionId];
+      saveConversationCache(conversationCache);
+
+      const firstUserMessage = allMessages.find((msg) => msg.role === "user");
+      const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+      try {
+        conversationId = await syncService.createConversation({
+          userId, teamId, sessionId, agentType: "pi", title, startedAt: allMessages[0]?.timestamp,
+        });
+        conversationCache[sessionId] = conversationId;
+        saveConversationCache(conversationCache);
+        log(`Recreated conversation ${conversationId} for pi session ${sessionId}`);
+        await syncService.addMessages({ conversationId, messages: newMessages.map(prepMessageForSync) });
+      } catch (retryErr) {
+        const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+        log(`Failed to recreate pi conversation and add messages: ${retryErrMsg}`);
+      }
+    }
+
+    piSyncedCounts.set(filePath, allMessages.length);
+    log(`Synced ${newMessages.length} pi messages for session ${sessionId}`);
+    syncStats.messagesSynced += newMessages.length;
+    syncStats.sessionsActive.add(sessionId);
+    tryRegisterSessionProcess(sessionId, "pi");
+
+    if (conversationId) {
+      sendAgentStatus(syncService, conversationId, sessionId, "working");
+    }
+
+    updateStateCallback();
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    log(`Error processing pi session file ${filePath}: ${errMsg}`);
+  }
+}
+
 interface ActiveSession {
   sessionId: string;
   conversationId: string;
@@ -6720,7 +6923,12 @@ const findSessionProcessInflight = new Map<string, Promise<ClaudeSessionInfo | n
  * claude pattern stays a parameter rather than a descriptor field.
  */
 export function sessionProcessGrepToken(agentType: AgentClientId, claudePattern: string): string {
-  return agentType === "codex" || agentType === "gemini" ? AGENT_CLIENTS[agentType].binary : claudePattern;
+  if (agentType === "codex" || agentType === "gemini") return AGENT_CLIENTS[agentType].binary;
+  // pi runs as `node …/@mariozechner/pi-coding-agent/dist/cli.js`, so its registry
+  // binary "pi" is far too generic for `ps … | grep` (would match python/pip/…). Match
+  // the distinctive package path that always appears in the process command line.
+  if (agentType === "pi") return "pi-coding-agent";
+  return claudePattern;
 }
 
 async function findSessionProcess(sessionId: string, agentType: AgentClientId = "claude"): Promise<ClaudeSessionInfo | null> {
@@ -7876,9 +8084,46 @@ export function classifyCodexTranscriptTail(tailContent: string): TranscriptTurn
   return "unknown";
 }
 
-// The single client -> transcript-tail classifier mapping. Only claude and codex
-// have a tail classifier today; cursor/gemini return undefined, which every caller
-// treats as "this client's transcript format isn't classified — defer" (the old
+// pi writes a JSONL tree; each line is a {type,id,parentId,...} entry. Turn state is
+// carried on the assistant message's `stopReason`, mirroring claude's stop_reason:
+//   - toolUse                       -> mid-turn (a tool call is pending) -> active
+//   - stop/length/error/aborted     -> the turn ended                    -> idle
+//   - a user or toolResult entry    -> the agent's move is next          -> active
+//   - a streaming/unrecognized state -> defer                            -> unknown
+// We read the tail back-to-front and decide on the first `message` entry, scanning
+// past non-message entries (model_change / thinking_level_change / branch_summary /
+// session header). NOTE: pi only flushes a turn's entries to disk once its assistant
+// message completes (session-manager `_persist` buffers until the first assistant
+// arrives), so an in-flight no-tool turn shows the PRIOR turn's end here — the pane
+// readiness / status hooks cover that gap, exactly as for the other clients.
+export function classifyPiTranscriptTail(tailContent: string): TranscriptTurnState {
+  const lines = tailContent.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    let d: { type?: string; message?: { role?: string; stopReason?: string } };
+    try {
+      d = JSON.parse(line);
+    } catch {
+      continue; // partial/corrupt line (mid-write tail) -> skip
+    }
+    if (d.type !== "message") continue; // model_change / header / etc. -> keep scanning
+    const role = d.message?.role;
+    if (role === "assistant") {
+      const sr = d.message?.stopReason;
+      if (sr === "toolUse") return "active";
+      if (sr === "stop" || sr === "length" || sr === "error" || sr === "aborted") return "idle";
+      return "unknown"; // streaming / unrecognized stopReason -> defer
+    }
+    if (role === "user" || role === "toolResult") return "active";
+    // any other role (extended message types) -> keep scanning for a real turn
+  }
+  return "unknown";
+}
+
+// The single client -> transcript-tail classifier mapping. claude, codex and pi have
+// a tail classifier; cursor/gemini return undefined, which every caller treats as
+// "this client's transcript format isn't classified — defer" (the old
 // `agentType !== "claude" && agentType !== "codex"` gate). A new jsonl client wires
 // its classifier in here rather than adding another branch at each reconcile site.
 // Kept daemon-side (not on the shared descriptor) so shared stays free of daemon
@@ -7888,6 +8133,7 @@ const CLASSIFY_TRANSCRIPT_TAIL_BY_CLIENT: Partial<
 > = {
   claude: classifyTranscriptTail,
   codex: classifyCodexTranscriptTail,
+  pi: classifyPiTranscriptTail,
 };
 
 export function classifyTranscriptTailFor(
@@ -8983,6 +9229,25 @@ export function findSessionFile(sessionId: string): SessionFileInfo | null {
         if (!fs.existsSync(chatsDir)) continue;
         const jsonPath = path.join(chatsDir, `${sessionId}.json`);
         if (fs.existsSync(jsonPath)) return { path: jsonPath, agentType: "gemini" };
+      }
+    } catch {}
+  }
+
+  // pi sessions: ~/.pi/agent/sessions/<cwd-slug>/<ISO-ts>_<sessionId>.jsonl. The
+  // session id is the filename's trailing uuid, so match a *.jsonl whose name
+  // contains it across the one-level slug dirs (mirrors the codex name-contains scan).
+  const piSessionsDir = path.join(process.env.HOME || "", ".pi", "agent", "sessions");
+  if (fs.existsSync(piSessionsDir)) {
+    try {
+      const slugDirs = fs.readdirSync(piSessionsDir, { withFileTypes: true })
+        .filter(d => d.isDirectory());
+      for (const slugDir of slugDirs) {
+        const dirPath = path.join(piSessionsDir, slugDir.name);
+        for (const entry of fs.readdirSync(dirPath, { withFileTypes: true })) {
+          if (entry.isFile() && entry.name.endsWith(".jsonl") && entry.name.includes(sessionId)) {
+            return { path: path.join(dirPath, entry.name), agentType: "pi" };
+          }
+        }
       }
     } catch {}
   }
@@ -11041,7 +11306,11 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
   // bogus Claude JSONL for it. This is what makes the cursor resume-command
   // branch reachable at all.
   const isCursorResume = agentTypeHint === "cursor";
-  if (!isCursorResume && !sessionFile && conversationId && config?.auth_token && config?.convex_url) {
+  // pi owns its JSONL tree under ~/.pi; a missing file must NOT be reconstituted as a
+  // fake Claude transcript (mirrors cursor). With the file absent, pi falls through to
+  // the refuse branch below — an honest failure, not a fabricated claude session.
+  const isPiResume = agentTypeHint === "pi";
+  if (!isCursorResume && !isPiResume && !sessionFile && conversationId && config?.auth_token && config?.convex_url) {
     logDelivery(`Session ${sessionId.slice(0, 8)} not found locally, reconstituting from codecast...`);
     try {
       const siteUrl = config.convex_url.replace(".cloud", ".site");
@@ -11281,7 +11550,10 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       "is not an object",
       "ENOENT",
     ];
-    const promptPattern = /[❯›]/;
+    // The four glyph-prompt clients settle on ❯/›; pi has no prompt glyph (its
+    // composer is a box + status bar), so a pi resume watches for its registry
+    // readiness pattern (the status-bar context-budget segment) instead.
+    const promptPattern = agentType === "pi" ? AGENT_CLIENTS.pi.promptReadyPattern : /[❯›]/;
     // Scale readiness poll based on JSONL file size — large sessions take much longer to resume
     let jsonlSize = 0;
     try { jsonlSize = fs.statSync(jsonlPath).size; } catch {}
@@ -15562,6 +15834,23 @@ async function main(): Promise<void> {
       event.filePath,
       event.sessionId,
       event.projectHash ?? "",
+      syncService,
+      config.user_id!,
+      config.team_id,
+      conversationCache,
+      retryQueue,
+      pendingMessages,
+      titleCache,
+      updateState
+    ),
+  );
+
+  registerJsonlDirWatcher(
+    new TranscriptDirWatcher(transcriptDirWatcherConfig("pi")),
+    "pi",
+    (event) => processPiSession(
+      event.filePath,
+      event.sessionId,
       syncService,
       config.user_id!,
       config.team_id,
