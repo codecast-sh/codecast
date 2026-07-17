@@ -24,7 +24,8 @@ import {
 } from "./ccAccounts.js";
 import { CursorWatcher, type CursorSessionEvent } from "./cursorWatcher.js";
 import { CursorTranscriptWatcher, type CursorTranscriptEvent } from "./cursorTranscriptWatcher.js";
-import { CodexWatcher, isAppServerManagedCodexSessionHead, type CodexSessionEvent } from "./codexWatcher.js";
+import { isAppServerManagedCodexSessionHead } from "./codexWatcher.js";
+import { TranscriptDirWatcher, transcriptDirWatcherConfig, type TranscriptDirEvent } from "./transcriptDirWatcher.js";
 import {
   buildDaemonLauncherScript,
   buildDaemonPlistXml,
@@ -54,7 +55,6 @@ import {
   parsePidPpidMap,
   resolveSpawnerSessionId,
 } from "./sessionProcessMatcher.js";
-import { GeminiWatcher, type GeminiSessionEvent } from "./geminiWatcher.js";
 import { parseSessionFile, parseTranscriptFor, extractSlug, extractParentUuid, extractSummaryTitle, extractCwd, extractCodexCwd, extractCodexForkRoot, extractGeminiProjectHash, extractTeamInfo, detectCliFlags, type ParsedMessage } from "./parser.js";
 import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
 import { getPosition, setPosition } from "./positionTracker.js";
@@ -15494,102 +15494,84 @@ async function main(): Promise<void> {
     log(`[codex-app-server] failed to start: ${err?.message ?? err} -- codex features disabled`);
   }
 
-  const codexWatcher = new CodexWatcher();
-  const codexSyncs = new Map<string, InvalidateSync>();
+  // One registration path for the JSONL-dir CLI watchers (codex, gemini), which now
+  // share the generic TranscriptDirWatcher. Claude's sessionWatcher and cursor's
+  // SQLite watcher are different kinds and register on their own paths. Each watcher
+  // debounces per-file syncs through InvalidateSync; the first event for a file fixes
+  // the sync closure (sessionId/projectHash are derived from the path, so later events
+  // for the same file carry identical values — same as before the collapse).
+  const registerJsonlDirWatcher = (
+    watcher: TranscriptDirWatcher,
+    label: string,
+    process: (event: TranscriptDirEvent) => Promise<unknown>,
+  ): void => {
+    const syncs = new Map<string, InvalidateSync>();
+    watcher.on("ready", () => {
+      log(`${label} watcher ready`);
+    });
+    watcher.on("session", (event) => {
+      const filePath = event.filePath;
 
-  codexWatcher.on("ready", () => {
-    log("Codex watcher ready");
-  });
+      const state = readDaemonState();
+      if (state?.authExpired) {
+        return;
+      }
 
-  codexWatcher.on("session", (event: CodexSessionEvent) => {
-    const filePath = event.filePath;
+      if (isSyncPaused()) {
+        log(`Sync paused, skipping ${label} session: ${event.sessionId}`);
+        return;
+      }
 
-    const state = readDaemonState();
-    if (state?.authExpired) {
-      return;
-    }
+      let sync = syncs.get(filePath);
+      if (!sync) {
+        sync = new InvalidateSync(async () => {
+          await process(event);
+        }, MESSAGE_SYNC_DEBOUNCE);
+        syncs.set(filePath, sync);
+      }
 
-    if (isSyncPaused()) {
-      log(`Sync paused, skipping Codex session: ${event.sessionId}`);
-      return;
-    }
+      sync.invalidate();
+    });
+    watcher.on("error", (error: Error) => {
+      logError(`${label} watcher error`, error);
+    });
+    watcher.start();
+  };
 
-    let sync = codexSyncs.get(filePath);
-    if (!sync) {
-      sync = new InvalidateSync(async () => {
-        await processCodexSession(
-          filePath,
-          event.sessionId,
-          syncService,
-          config.user_id!,
-          config.team_id,
-          conversationCache,
-          retryQueue,
-          pendingMessages,
-          titleCache,
-          updateState
-        );
-      }, MESSAGE_SYNC_DEBOUNCE);
-      codexSyncs.set(filePath, sync);
-    }
+  registerJsonlDirWatcher(
+    new TranscriptDirWatcher(transcriptDirWatcherConfig("codex")),
+    "Codex",
+    (event) => processCodexSession(
+      event.filePath,
+      event.sessionId,
+      syncService,
+      config.user_id!,
+      config.team_id,
+      conversationCache,
+      retryQueue,
+      pendingMessages,
+      titleCache,
+      updateState
+    ),
+  );
 
-    sync.invalidate();
-  });
-
-  codexWatcher.on("error", (error: Error) => {
-    logError("Codex watcher error", error);
-  });
-
-  codexWatcher.start();
-
-  const geminiWatcher = new GeminiWatcher();
-  const geminiSyncs = new Map<string, InvalidateSync>();
-
-  geminiWatcher.on("ready", () => {
-    log("Gemini watcher ready");
-  });
-
-  geminiWatcher.on("session", (event: GeminiSessionEvent) => {
-    const filePath = event.filePath;
-
-    const state = readDaemonState();
-    if (state?.authExpired) {
-      return;
-    }
-
-    if (isSyncPaused()) {
-      log(`Sync paused, skipping Gemini session: ${event.sessionId}`);
-      return;
-    }
-
-    let sync = geminiSyncs.get(filePath);
-    if (!sync) {
-      sync = new InvalidateSync(async () => {
-        await processGeminiSession(
-          filePath,
-          event.sessionId,
-          event.projectHash,
-          syncService,
-          config.user_id!,
-          config.team_id,
-          conversationCache,
-          retryQueue,
-          pendingMessages,
-          titleCache,
-          updateState
-        );
-      }, MESSAGE_SYNC_DEBOUNCE);
-      geminiSyncs.set(filePath, sync);
-    }
-
-    sync.invalidate();
-  });
-
-  geminiWatcher.on("error", (error: Error) => {
-    logError("Gemini watcher error", error);
-  });
-
-  geminiWatcher.start();
+  registerJsonlDirWatcher(
+    new TranscriptDirWatcher(transcriptDirWatcherConfig("gemini")),
+    "Gemini",
+    (event) => processGeminiSession(
+      event.filePath,
+      event.sessionId,
+      event.projectHash ?? "",
+      syncService,
+      config.user_id!,
+      config.team_id,
+      conversationCache,
+      retryQueue,
+      pendingMessages,
+      titleCache,
+      updateState
+    ),
+  );
 
   const subscriptionClient = syncService.getSubscriptionClient();
   let unsubscribe: (() => void) | null = null;
