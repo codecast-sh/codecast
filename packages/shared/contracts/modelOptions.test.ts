@@ -39,7 +39,9 @@ describe("modelOptionKey", () => {
   });
 
   it("maps codex model ids under the codex agent", () => {
-    expect(modelOptionKey("gpt-5.5", "codex")).toBe("gpt-5.5");
-    expect(modelOptionKey("gpt-5.4-mini", "codex")).toBe("gpt-5.4-mini");
+    for (const model of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4-mini"]) {
+      expect(modelOptionKey(model, "codex")).toBe(model);
+      expect(findModelOption("codex", model)?.cliAlias).toBe(model);
+    }
   });
 });
