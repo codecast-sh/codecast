@@ -130,9 +130,12 @@ describe("deliverMessage: mark-injected-before-send invariant", () => {
     // The mark MUST come BEFORE the inject: that is the whole anti-redelivery guarantee. We look
     // back a small window for a markInjectedBestEffort(syncService, messageId) call. A site with
     // no preceding mark means the mark is after the paste (or missing) -- the doubled-message race.
+    // The trailing `(?:,\s*[^)]*)?` tolerates the optional agentType argument
+    // injectViaTmux now takes (ct-39174 threads the client id through for glyph-less
+    // readiness) without weakening the "first arg + content" delivery-site match.
     const directPasteCallSites = [
-      /await\s+injectViaTmux\(\s*startedTmuxTarget\s*,\s*content\s*\)/g,
-      /await\s+injectViaTmux\(\s*injectTarget\s*,\s*content\s*\)/g,
+      /await\s+injectViaTmux\(\s*startedTmuxTarget\s*,\s*content\s*(?:,\s*[^)]*)?\)/g,
+      /await\s+injectViaTmux\(\s*injectTarget\s*,\s*content\s*(?:,\s*[^)]*)?\)/g,
       /await\s+injectViaTerminal\(\s*live\.proc\.tty\s*,\s*content\s*,\s*live\.proc\.termProgram\s*\)/g,
     ];
 
