@@ -1,0 +1,49 @@
+{
+  "id": "demo5",
+  "voice": "cjVigY5qzO86Huf0OWal",
+  "total": 39.559,
+  "beats": [
+    {
+      "i": 0,
+      "text": "The most powerful agents are the ones still running while you sleep.",
+      "start": 0,
+      "dur": 3.344
+    },
+    {
+      "i": 1,
+      "text": "Triggers are scheduled agent runs. Recurring, one-time, or fired by an event like a new pull request comment.",
+      "start": 3.794,
+      "dur": 6.504
+    },
+    {
+      "i": 2,
+      "text": "Here's the next twenty-four hours of your fleet, laid out on a single timeline.",
+      "start": 10.748,
+      "dur": 4.493
+    },
+    {
+      "i": 3,
+      "text": "Each one wakes on schedule, does its job, and reports back. A daily health check. A churn monitor. An experiment that reads its own results.",
+      "start": 15.691,
+      "dur": 10.945
+    },
+    {
+      "i": 4,
+      "text": "And when one job needs an army, workflows fan out.",
+      "start": 27.087,
+      "dur": 2.821
+    },
+    {
+      "i": 5,
+      "text": "This research run spun up over a hundred agents. Searching, fetching, verifying, all in parallel.",
+      "start": 30.358,
+      "dur": 5.747
+    },
+    {
+      "i": 6,
+      "text": "Codecast. Command your agents. Even when you're not there.",
+      "start": 36.555,
+      "dur": 2.821
+    }
+  ]
+}
