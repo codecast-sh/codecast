@@ -323,6 +323,21 @@ describe("OpencodeServer HTTP helpers", () => {
     server.stop();
   });
 
+  test("fork WITHOUT a messageID sends an empty body (at-tip = full fork)", async () => {
+    const { fetchImpl, calls } = makeFetch({ forkId: "ses_tip" });
+    const server = await readyServer(fetchImpl);
+
+    const forked = await server.fork("ses_parent");
+    expect(forked.id).toBe("ses_tip");
+
+    const forkCall = calls.find((c) => c.url.includes("/fork"));
+    expect(forkCall?.url).toContain("/session/ses_parent/fork");
+    // No messageID → empty JSON body, so opencode forks the full session (the tip).
+    expect(JSON.parse(String(forkCall?.init?.body))).toEqual({});
+
+    server.stop();
+  });
+
   test("fork passes a directory override as a query param", async () => {
     const { fetchImpl, calls } = makeFetch({ forkId: "ses_new" });
     const server = await readyServer(fetchImpl);

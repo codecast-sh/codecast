@@ -3198,7 +3198,10 @@ async function executeRemoteCommand(
               log(`[REMOTE] opencode fork for conv ${conversationId.slice(0, 12)}: serve sidecar unavailable — falling back to blank spawn`);
             } else {
               try {
-                const forked = await sidecar.fork(parsed.parent_session_id);
+                // fork_message_id (partial forks) truncates to match the convex copy;
+                // omitted at tip = a full fork. See forkFromMessage.
+                const forkMessageId = typeof parsed.fork_message_id === "string" ? parsed.fork_message_id : undefined;
+                const forked = await sidecar.fork(parsed.parent_session_id, forkMessageId ? { messageID: forkMessageId } : {});
                 realForkId = forked.id;
                 // Map real id → conversation BEFORE the watcher sees it (else it
                 // mints a doppelgänger), point convex at the real id, and baseline

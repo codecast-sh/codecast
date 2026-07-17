@@ -4906,20 +4906,29 @@ export const forkConversation = mutation({
 // forkFromMessage passes it down only when this is a same-agent opencode fork whose
 // parent already has a resolved ses_ id (not itself an unresolved synthetic fork) and
 // the client advertises the forkApi capability. Extracted for unit testing.
+//
+// The atTip / forkMessageId gate is what keeps a PARTIAL fork honest: opencode's serve
+// fork always cuts at a messageID (the message after the fork point) — at tip a full
+// fork (no messageID) matches the copy, but a mid-history fork that couldn't resolve
+// that messageID must NOT go through the API (it would fork the parent's FULL history
+// while the copy shows a truncated one); it falls through to the honest blank spawn.
 export function opencodeApiForkEligible(opts: {
   isPlainFork: boolean;
   daemonAgentType: string;
   sourceAgentType?: string;
   sourceSessionId?: string;
+  atTip: boolean;
+  forkMessageId?: string;
 }): boolean {
-  return (
+  const base =
     opts.isPlainFork &&
     opts.daemonAgentType === "opencode" &&
     opts.sourceAgentType === "opencode" &&
     typeof opts.sourceSessionId === "string" &&
     opts.sourceSessionId.startsWith("ses_") &&
-    AGENT_CLIENTS.opencode.capabilities.forkApi === true
-  );
+    AGENT_CLIENTS.opencode.capabilities.forkApi === true;
+  if (!base) return false;
+  return opts.atTip || !!opts.forkMessageId;
 }
 
 export const forkFromMessage = mutation({
@@ -4998,6 +5007,13 @@ export const forkFromMessage = mutation({
     let cutoffTimestamp: number;
     let isPartial = false;
     let atTip = true; // no fork point = snapshot at "now" = the tip
+    // opencode's serve fork truncates to the state STRICTLY BEFORE a messageID
+    // (verified live), while our copy is INCLUSIVE of the fork point
+    // (timestamp <= cutoff). So to make the live opencode session hold exactly the
+    // copied messages, it must fork at the message immediately AFTER the fork point.
+    // Resolved only for opencode partial forks; undefined at tip (a full fork, no
+    // messageID, already matches).
+    let opencodeForkMessageId: string | undefined;
     if (args.message_uuid) {
       // Scope the lookup to THIS conversation. Forks copy messages verbatim,
       // preserving message_uuid (forkCopy.ts), so a given uuid exists in the
@@ -5026,6 +5042,18 @@ export const forkFromMessage = mutation({
         .order("desc")
         .first();
       atTip = !!newestMsg && (newestMsg._id === forkPointMsg._id || forkPointMsg.timestamp >= newestMsg.timestamp);
+      // The messageID opencode forks at = the first message strictly after the fork
+      // point (same timestamp boundary the copy uses, so ties are handled the same
+      // way on both sides). For an opencode source only; other agents don't use it.
+      if (!atTip && original.agent_type === "opencode") {
+        const nextMsg = await ctx.db
+          .query("messages")
+          .withIndex("by_conversation_timestamp", (q) =>
+            q.eq("conversation_id", original._id).gt("timestamp", forkPointMsg.timestamp))
+          .order("asc")
+          .first();
+        opencodeForkMessageId = nextMsg?.message_uuid;
+      }
     } else {
       cutoffTimestamp = now;
     }
@@ -5082,6 +5110,8 @@ export const forkFromMessage = mutation({
       daemonAgentType,
       sourceAgentType: original.agent_type,
       sourceSessionId: original.session_id,
+      atTip,
+      forkMessageId: opencodeForkMessageId,
     });
 
     const newConversationId = await ctx.db.insert("conversations", {
@@ -5140,7 +5170,14 @@ export const forkFromMessage = mutation({
       ...(fastPathEligible ? { fork_fast_path: true, parent_session_id: original.session_id } : {}),
       // opencode API fork: carry the parent's real ses_ id so the daemon can call
       // OpencodeServer.fork(parent) and resume the minted id (see daemon resume_session).
-      ...(isOpencodeApiFork ? { fork_api: true, parent_session_id: original.session_id } : {}),
+      // fork_message_id (partial forks only) truncates the fork to match the copy.
+      ...(isOpencodeApiFork
+        ? {
+            fork_api: true,
+            parent_session_id: original.session_id,
+            ...(opencodeForkMessageId ? { fork_message_id: opencodeForkMessageId } : {}),
+          }
+        : {}),
       _target_device_id: ownerTarget ?? undefined,
     };
     await ctx.db.patch(newConversationId, {
