@@ -62,6 +62,7 @@ async function applyReactivate(ctx: TaskCtx, task: Doc<"agent_tasks">) {
   if (task.status !== "completed" && task.status !== "failed") return false;
   await ctx.db.patch(task._id, {
     status: "scheduled",
+    canceled_on_kill_at: undefined,
     run_at:
       task.schedule_type === "event"
         ? undefined
@@ -119,11 +120,37 @@ export async function cancelTasksBoundToConversation(
       .collect();
     for (const task of tasks) {
       if (task.originating_conversation_id?.toString() !== conversationId.toString()) continue;
-      await ctx.db.patch(task._id, { status: "completed" });
+      // Stamp WHY it completed: a restore of the killed session re-arms exactly
+      // the schedules this kill took down (reactivateTasksCanceledOnKill),
+      // without touching schedules that ran to natural completion.
+      await ctx.db.patch(task._id, { status: "completed", canceled_on_kill_at: Date.now() });
       cancelled++;
     }
   }
   return cancelled;
+}
+
+// The mirror of cancelTasksBoundToConversation: re-arm the schedules a kill
+// canceled, called on the un-kill transition (web restore / undo, cast
+// undismiss). Only tasks stamped canceled_on_kill_at qualify — a schedule that
+// completed naturally stays completed. Reuses applyReactivate, which also
+// clears the stamp so a second restore is a no-op.
+export async function reactivateTasksCanceledOnKill(
+  ctx: TaskCtx,
+  userId: Id<"users">,
+  conversationId: Id<"conversations">
+): Promise<number> {
+  const tasks = await ctx.db
+    .query("agent_tasks")
+    .withIndex("by_user_status", (q: any) => q.eq("user_id", userId).eq("status", "completed"))
+    .collect();
+  let rearmed = 0;
+  for (const task of tasks) {
+    if (!task.canceled_on_kill_at) continue;
+    if (task.originating_conversation_id?.toString() !== conversationId.toString()) continue;
+    if (await applyReactivate(ctx, task)) rearmed++;
+  }
+  return rearmed;
 }
 
 interface NewTaskArgs {
@@ -238,7 +265,7 @@ export const createTask = mutation({
     max_runtime_ms: v.optional(v.number()),
     max_retries: v.optional(v.number()),
     // Any session ref (short id, conversation _id, or Claude session uuid) the
-    // schedule should inject into — `cast schedule add --for <session>`.
+    // schedule should inject into — `cast trigger add --for <session>`.
     // Resolved own-only: you can bind a schedule only to your own session.
     originating_session_ref: v.optional(v.string()),
   },
@@ -374,7 +401,7 @@ export const completeTaskRun = mutation({
     // conversation may not have synced yet at this instant.
     run_session_uuid: v.optional(v.string()),
     // Agent's explicit "the user should read this run" declaration
-    // (`cast schedule complete --needs-attention`). Skips the clean-run fold
+    // (`cast trigger complete --needs-attention`). Skips the clean-run fold
     // below and keeps the run card escalated in the inbox.
     needs_attention: v.optional(v.boolean()),
   },
@@ -420,7 +447,7 @@ export const completeTaskRun = mutation({
     // Keep the run conversation attributable to its schedule even after a
     // later run overwrites last_run_*. This is the backfill for the daemon's
     // post-spawn linkRunConversation — it rides whichever completion is
-    // accepted (the agent's own `cast schedule complete` lands first and wins;
+    // accepted (the agent's own `cast trigger complete` lands first and wins;
     // the daemon's tmux-exit completion is rejected by the status guard above).
     // Spawn tasks only: for an inject task the agent self-completes from INSIDE
     // the originating session, so its uuid resolves to the originating
@@ -699,7 +726,7 @@ export const runTaskNow = cliTaskAction(applyRunNow);
 // may not have synced yet at that instant), so UUID → conversation resolution
 // happens here at read time. Shared by webList (the /schedules page) and
 // listTasks (the CLI's /cli/tasks/list) so both surfaces agree on
-// last_run_conversation_id — `cast schedule log` reads it from listTasks.
+// last_run_conversation_id — `cast trigger log` reads it from listTasks.
 async function withResolvedRunConversations(
   ctx: TaskCtx,
   userId: Id<"users">,

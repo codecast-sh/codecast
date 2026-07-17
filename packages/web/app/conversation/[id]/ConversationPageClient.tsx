@@ -35,13 +35,22 @@ function RedirectToInbox({
   const router = useRouter();
   useMountEffect(() => {
     const store = useInboxStore.getState();
-    const updates: Record<string, any> = {};
-    if (targetMessageId) updates.pendingScrollToMessageId = targetMessageId;
-    if (highlightQuery) updates.pendingHighlightQuery = highlightQuery;
-    if (Object.keys(updates).length > 0) useInboxStore.setState(updates);
     // Seed is_own so the inbox picks the right UI before getConversationWithMeta resolves.
     store.syncRecord("conversations", id, { _id: id, is_own: isOwn });
-    store.navigateToSession(id);
+    // Deep-link state travels through requestNavigate — target session, scroll
+    // target, and highlight in ONE action. Setting pendingScrollToMessageId as
+    // a bare field first (the old shape) raced: with another inbox pane
+    // mounted in the tab shell, its cache-hit watcher paired the scroll target
+    // with whatever session IT was showing and consumed it, so #msg- deep
+    // links landed at the conversation tail instead of the target message.
+    if (targetMessageId || highlightQuery) {
+      store.requestNavigate(id, {
+        scrollToMessageId: targetMessageId ?? null,
+        highlightQuery: highlightQuery ?? null,
+      });
+    } else {
+      store.navigateToSession(id);
+    }
     // Hand the target id to the inbox via its durable `?s=` deep-link param rather
     // than relying solely on the transient `pendingNavigateId` store flag. When this
     // redirect lands inside the dashboard tab shell, the tab swaps its mounted route

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { cleanPromptSliceTitle, partitionScheduleInbox, taskDisplayTitle, type TaskRow } from "./scheduleTasks";
+import { cleanPromptSliceTitle, partitionTriggerInbox, taskDisplayTitle, type TaskRow } from "./triggerTasks";
 import { isSessionHardBlocked, visualOrderSessions, type InboxSession } from "../store/inboxStore";
 
 describe("taskDisplayTitle / cleanPromptSliceTitle", () => {
@@ -58,9 +58,9 @@ const task = (id: string, extra: Partial<TaskRow> = {}): TaskRow => ({
   ...extra,
 });
 
-describe("partitionScheduleInbox rows", () => {
+describe("partitionTriggerInbox rows", () => {
   it("gives every armed schedule exactly one row — inject, spawn, once, event alike", () => {
-    const p = partitionScheduleInbox(
+    const p = partitionTriggerInbox(
       [
         task("loop", { originating_conversation_id: "home" }),
         task("once", { originating_conversation_id: "conv", schedule_type: "once" }),
@@ -74,7 +74,7 @@ describe("partitionScheduleInbox rows", () => {
 
   it("sorts soonest fire first; paused sinks to the bottom", () => {
     const now = Date.now();
-    const p = partitionScheduleInbox(
+    const p = partitionTriggerInbox(
       [
         task("late", { run_at: now + 9_000_000 }),
         task("soon", { run_at: now + 60_000 }),
@@ -88,7 +88,7 @@ describe("partitionScheduleInbox rows", () => {
 
   it("puts a live (running) schedule at the very top, above sooner-scheduled ones", () => {
     const now = Date.now();
-    const p = partitionScheduleInbox(
+    const p = partitionTriggerInbox(
       [
         task("soon", { run_at: now + 60_000 }),
         task("live", { status: "running", run_at: now + 5_000_000 }),
@@ -101,7 +101,7 @@ describe("partitionScheduleInbox rows", () => {
 
   it("counts unread outcomes against the watermark", () => {
     const now = Date.now();
-    const p = partitionScheduleInbox(
+    const p = partitionTriggerInbox(
       [
         task("new", { last_run_at: now - 1000 }),
         task("old", { last_run_at: now - 100_000 }),
@@ -122,7 +122,7 @@ describe("absorption (behind-the-row) rules", () => {
       home: session("home", { last_user_message: MACHINE_TURN }),
       conv: session("conv", { last_user_message: MACHINE_TURN }),
     };
-    const p = partitionScheduleInbox(
+    const p = partitionTriggerInbox(
       [
         task("loop", { originating_conversation_id: "home" }),
         task("once", { originating_conversation_id: "conv", schedule_type: "once" }),
@@ -139,7 +139,7 @@ describe("absorption (behind-the-row) rules", () => {
       pinned: session("pinned", { is_pinned: true, last_user_message: MACHINE_TURN }),
       blocked: session("blocked", { agent_status: "permission_blocked", last_user_message: MACHINE_TURN }),
     };
-    const p = partitionScheduleInbox(
+    const p = partitionTriggerInbox(
       [
         task("t1", { originating_conversation_id: "human" }),
         task("t2", { originating_conversation_id: "pinned" }),
@@ -158,7 +158,7 @@ describe("absorption (behind-the-row) rules", () => {
       home: session("home", { last_user_message: MACHINE_TURN }),
       run: session("run", { agent_task_id: "sp" }),
     };
-    const focusedHome = partitionScheduleInbox(
+    const focusedHome = partitionTriggerInbox(
       [task("loop", { originating_conversation_id: "home" }), task("sp", {})],
       sessions,
       { focusedId: "home" },
@@ -166,7 +166,7 @@ describe("absorption (behind-the-row) rules", () => {
     expect(focusedHome.absorbedIds.has("home")).toBe(false);
     expect(focusedHome.absorbedIds.has("run")).toBe(true);
 
-    const focusedRun = partitionScheduleInbox(
+    const focusedRun = partitionTriggerInbox(
       [task("loop", { originating_conversation_id: "home" }), task("sp", {})],
       sessions,
       { focusedId: "run" },
@@ -181,7 +181,7 @@ describe("absorption (behind-the-row) rules", () => {
       blocked: session("blocked", { agent_task_id: "sp", agent_status: "permission_blocked" }),
       latest: session("latest", { agent_task_id: "sp", updated_at: 5000 }),
     };
-    const p = partitionScheduleInbox(
+    const p = partitionTriggerInbox(
       [task("sp", { last_run_conversation_id: "latest", last_run_needs_attention: true })],
       sessions,
     );
@@ -196,7 +196,7 @@ describe("absorption (behind-the-row) rules", () => {
       failed: session("failed", { last_user_message: MACHINE_TURN }),
       resting: session("resting", { last_user_message: MACHINE_TURN }),
     };
-    const p = partitionScheduleInbox(
+    const p = partitionTriggerInbox(
       [
         task("t1", { originating_conversation_id: "flagged", last_run_needs_attention: true }),
         task("t2", { originating_conversation_id: "failed", last_run_failed: true }),
@@ -215,7 +215,7 @@ describe("absorption (behind-the-row) rules", () => {
       r1: session("r1", { agent_task_id: "sp", updated_at: 1000 }),
       r2: session("r2", { agent_task_id: "sp", updated_at: 2000 }),
     };
-    const p = partitionScheduleInbox(
+    const p = partitionTriggerInbox(
       [
         task("loop", { originating_conversation_id: "home" }),
         task("sp", {}),
@@ -230,7 +230,7 @@ describe("absorption (behind-the-row) rules", () => {
   });
 
   it("armedInjectByConv maps every armed inject schedule (once included) for the kill toast", () => {
-    const p = partitionScheduleInbox(
+    const p = partitionTriggerInbox(
       [
         task("loop", { originating_conversation_id: "home" }),
         task("once", { originating_conversation_id: "home", schedule_type: "once" }),

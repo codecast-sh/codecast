@@ -11,7 +11,7 @@ import {
 } from '@/components/SessionItem';
 import {
   useInboxStore, type InboxSession, type InboxViewMode, type BucketItem, categorizeSessions, partitionOldSessions, sessionsWithPendingSend,
-  chipMatchesSession, getProjectName, resolveInboxViewMode, flatViewSessions, convBucketMap,
+  chipMatchesSession, getProjectName, resolveInboxViewMode, resolveShowOld, flatViewSessions, convBucketMap,
   groupSessionsForLabelView, groupSessionsByPlan, sortLabels, computeChipCounts,
 } from '@codecast/web/store/inboxStore';
 import { useSyncBuckets } from '@codecast/web/hooks/useSyncBuckets';
@@ -436,9 +436,9 @@ export default function InboxScreen() {
   // Hide "old" rows exactly like web (GlobalSessionPanel): the never-prune cache
   // holds every session ever synced (including teammates' threads opened from the
   // feed), but only rows the live inbox subscription still returns are actionable.
-  // Same EPHEMERAL flag web reads (store.showOldSessions, off every boot) so the
-  // phone and desktop render one identical authoritative set by default.
-  const showOld = useInboxStore((s) => s.showOldSessions);
+  // Same synced per-user flag web reads (clientState.ui.inbox_show_old, stamped
+  // LWW, default hide) so the phone and desktop render one identical set.
+  const showOld = useInboxStore((s) => resolveShowOld(s.clientState.ui));
   const { visibleSessions } = useMemo(
     () => partitionOldSessions(sessions, liveInboxIds, showOld, currentSessionId),
     [sessions, liveInboxIds, showOld, currentSessionId],

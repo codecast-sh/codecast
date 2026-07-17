@@ -433,7 +433,57 @@ export const reclaimAutoClaimedRemoteSessions = internalMutation({
  * stale session_error, and enqueues a resume_session targeted at that device so
  * only it acts. Use moveToRemote for a remote box (it also transfers the worktree);
  * this is for re-homing ownership to a device that already has the checkout.
+ * When the caller owns the session but a teammate runs it, the move takes the
+ * cross-user reparent path (performReparentSessionToDevice) instead: account
+ * follows device, and the destination clones the repo if it isn't local.
  */
+export async function performReassignToDevice(
+  ctx: { db: any },
+  userId: Id<"users">,
+  args: { conversation_id: Id<"conversations">; device_id: string },
+): Promise<{ ok: true; command_id: any; device_id: string; label: string; cross_user?: boolean }> {
+  const conv = await ctx.db.get(args.conversation_id);
+  if (!conv) throw new Error("not your conversation");
+  // A session the caller OWNS but a teammate RUNS can't be re-homed by a plain
+  // device restamp — the destination daemon runs under the caller's account, so
+  // the account must follow the device. Route it through the cross-user
+  // reparent, which authorizes runner-or-owner and rejects non-owners itself.
+  if (conv.user_id.toString() !== userId.toString()) {
+    return performReparentSessionToDevice(ctx, userId, {
+      session_id: args.conversation_id,
+      device_id: args.device_id,
+    });
+  }
+  const device = await ctx.db
+    .query("devices")
+    .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", args.device_id))
+    .first();
+  if (!device) throw new Error("Unknown device");
+
+  await ctx.db.patch(args.conversation_id, {
+    owner_device_id: args.device_id,
+    session_error: undefined,
+    status: "active" as const,
+    updated_at: Date.now(),
+  });
+
+  const agentType =
+    conv.agent_type === "codex" ? "codex" : conv.agent_type === "gemini" ? "gemini" : "claude";
+  const commandId = await ctx.db.insert("daemon_commands", {
+    user_id: userId,
+    command: "resume_session" as const,
+    args: JSON.stringify({
+      session_id: conv.session_id,
+      agent_type: agentType,
+      conversation_id: args.conversation_id,
+      ...(conv.project_path ? { project_path: conv.project_path } : {}),
+    }),
+    created_at: Date.now(),
+    target_device_id: args.device_id,
+  });
+  return { ok: true, command_id: commandId, device_id: args.device_id, label: device.label };
+}
+
 export const reassignToDevice = mutation({
   args: {
     api_token: v.optional(v.string()),
@@ -443,36 +493,10 @@ export const reassignToDevice = mutation({
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) throw new Error("Authentication required");
-    const conv = await ctx.db.get(args.conversation_id);
-    if (!conv || conv.user_id.toString() !== userId.toString()) throw new Error("not your conversation");
-    const device = await ctx.db
-      .query("devices")
-      .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", args.device_id))
-      .first();
-    if (!device) throw new Error("Unknown device");
-
-    await ctx.db.patch(args.conversation_id, {
-      owner_device_id: args.device_id,
-      session_error: undefined,
-      status: "active" as const,
-      updated_at: Date.now(),
+    return performReassignToDevice(ctx, userId, {
+      conversation_id: args.conversation_id,
+      device_id: args.device_id,
     });
-
-    const agentType =
-      conv.agent_type === "codex" ? "codex" : conv.agent_type === "gemini" ? "gemini" : "claude";
-    const commandId = await ctx.db.insert("daemon_commands", {
-      user_id: userId,
-      command: "resume_session" as const,
-      args: JSON.stringify({
-        session_id: conv.session_id,
-        agent_type: agentType,
-        conversation_id: args.conversation_id,
-        ...(conv.project_path ? { project_path: conv.project_path } : {}),
-      }),
-      created_at: Date.now(),
-      target_device_id: args.device_id,
-    });
-    return { ok: true, command_id: commandId, device_id: args.device_id, label: device.label };
   },
 });
 
@@ -578,6 +602,27 @@ export async function performReparentSessionToDevice(
     patch.user_id = userId;
   }
   await ctx.db.patch(conv._id, patch);
+
+  // Hand over the managed-session row with the conversation. The source
+  // machine's daemon keeps heartbeating its row after the move (its tmux pane
+  // is still alive), and a fresh cross-account row both hides the session's
+  // tmux/liveness from the new runner (the web joins managed rows by the
+  // viewer's user_id) and blocks the destination daemon's register behind the
+  // cross-user reclaim guard. The reparent is the authoritative handover
+  // moment, so drop the stale rows here — the destination daemon inserts its
+  // own on resume.
+  const staleManaged = new Map<string, any>();
+  if (conv.session_id) {
+    for (const row of await ctx.db
+      .query("managed_sessions")
+      .withIndex("by_session_id", (q: any) => q.eq("session_id", conv.session_id))
+      .collect()) staleManaged.set(row._id.toString(), row);
+  }
+  for (const row of await ctx.db
+    .query("managed_sessions")
+    .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conv._id))
+    .collect()) staleManaged.set(row._id.toString(), row);
+  for (const row of staleManaged.values()) await ctx.db.delete(row._id);
 
   // Resume on the caller's daemon: the command goes in the CALLER's queue
   // (user_id: userId), targeted at their device. A teammate's daemon polls its

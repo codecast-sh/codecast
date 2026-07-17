@@ -17,6 +17,7 @@ import {
   credentialHealth,
   saveProfile,
   useProfile,
+  deleteProfile,
   listProfiles,
   parseUsageResponse,
   refreshUsageSnapshots,
@@ -236,6 +237,63 @@ describe("autoSaveActiveProfile + heartbeat payload (sandboxed $HOME)", () => {
   it("returns null with no login at all", () => {
     fs.writeFileSync(path.join(home, ".claude.json"), JSON.stringify({}));
     expect(autoSaveActiveProfile()).toBeNull();
+  });
+});
+
+describe("deleteProfile (sandboxed $HOME)", () => {
+  let home: string;
+  const savedEnv: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), "cc-accounts-test-"));
+    for (const k of ["HOME", "PATH", "CC_ACCOUNTS_FORCE_FILE"]) savedEnv[k] = process.env[k];
+    process.env.HOME = home;
+    process.env.PATH = path.join(home, "empty-path");
+    process.env.CC_ACCOUNTS_FORCE_FILE = "1";
+    fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+    fs.mkdirSync(path.join(home, ".codecast"), { recursive: true });
+    fs.writeFileSync(path.join(home, ".claude", ".credentials.json"), CRED);
+    fs.writeFileSync(path.join(home, ".claude.json"), JSON.stringify({ oauthAccount: OAUTH_ACCOUNT }));
+    invalidateAccountsCache();
+  });
+
+  afterEach(() => {
+    for (const [k, v] of Object.entries(savedEnv)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    fs.rmSync(home, { recursive: true, force: true });
+    invalidateAccountsCache();
+  });
+
+  it("removes a dormant profile's secret + index entry and reports it gone", () => {
+    saveProfile("footage");
+    // Log the machine into a DIFFERENT account so "footage" goes dormant.
+    const other = { accountUuid: "other-uuid", emailAddress: "ashot@union.app" };
+    fs.writeFileSync(path.join(home, ".claude.json"), JSON.stringify({ oauthAccount: other }));
+    saveProfile("union");
+
+    const meta = deleteProfile("footage");
+    expect(meta.email).toBe("ashot@footage.com");
+    expect(fs.existsSync(path.join(home, ".codecast", "cc-accounts", "footage.json"))).toBe(false);
+    expect(listProfiles().map((p) => p.name)).toEqual(["union"]);
+    expect(getAccountsHeartbeatPayload()?.profiles.map((p) => p.name)).toEqual(["union"]);
+  });
+
+  it("refuses to remove the profile covering the active login", () => {
+    saveProfile("footage");
+    expect(() => deleteProfile("footage")).toThrow(/active login/);
+    // Email match guards too, even when the uuid rotated.
+    const rotated = { ...OAUTH_ACCOUNT, accountUuid: "rotated-uuid" };
+    fs.writeFileSync(path.join(home, ".claude.json"), JSON.stringify({ oauthAccount: rotated }));
+    invalidateAccountsCache();
+    expect(() => deleteProfile("footage")).toThrow(/active login/);
+    expect(listProfiles().map((p) => p.name)).toEqual(["footage"]);
+  });
+
+  it("throws on unknown or invalid names", () => {
+    expect(() => deleteProfile("nope")).toThrow(/No saved profile/);
+    expect(() => deleteProfile("a/b")).toThrow(CcAccountError);
   });
 });
 

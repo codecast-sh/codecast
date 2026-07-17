@@ -9,7 +9,7 @@ import { Command as CommandPrimitive } from "cmdk";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { commitModelChange, canControlModel, modelOptionKey } from "./ModelEffortPicker";
 import { AGENT_MODEL_CONFIG, modelAgentKey } from "@codecast/shared/contracts";
-import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, categorizeSessions, filterInboxScope, sessionsWithPendingSend, convBucketMap, sortLabels, computeChipCounts, getProjectName, RecentVisit } from "../store/inboxStore";
+import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, categorizeSessions, filterInboxScope, sessionsWithPendingSend, convBucketMap, sortLabels, computeChipCounts, getProjectName, RecentVisit, resolveShowOld } from "../store/inboxStore";
 import { resolveRecentVisits, visitTimeAgo, type ResolvedVisit } from "../lib/recentVisits";
 import { PageIcon } from "./RecentlyViewedMenu";
 import { isNonTabRoute } from "../src/compat/tabRouting";
@@ -21,6 +21,7 @@ import { useCurrentUser } from "../hooks/useCurrentUser";
 import { getLabelColor, DEFAULT_LABELS } from "../lib/labelColors";
 import { toast } from "sonner";
 import { undoableArchiveDoc, undoableHideSession, undoableDeferSession } from "../store/undoActions";
+import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
 import { copyToClipboard, shareOrigin } from "../lib/utils";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import {
@@ -280,7 +281,7 @@ function ActionSubmenu({
       // its rows aren't in liveInboxIds, so hide-old there would drop teammates.
       scope === "team"
         ? { currentSessionId: st.currentSessionId, pendingCreateIds: new Set(Object.keys(st.pendingSessionCreates)) }
-        : { currentSessionId: st.currentSessionId, pendingCreateIds: new Set(Object.keys(st.pendingSessionCreates)), liveInboxIds: st.liveInboxIds, showOld: st.showOldSessions },
+        : { currentSessionId: st.currentSessionId, pendingCreateIds: new Set(Object.keys(st.pendingSessionCreates)), liveInboxIds: st.liveInboxIds, showOld: resolveShowOld(st.clientState.ui) },
     );
     const active = [...pinned, ...newSessions, ...needsInput, ...working];
     return computeChipCounts(active, convBucketMap(st.bucketAssignments as Record<string, BucketAssignmentItem>));
@@ -969,6 +970,9 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
 
   const updateTask = useInboxStore((s) => s.updateTask);
   const pinDoc = useInboxStore((s) => s.pinDoc);
+  // Kill from the palette says what schedules died with the session, same as
+  // the sidebar kill button (the webList subscription inside is deduped).
+  const { killWithNotice } = useTriggerKillNotice();
   const { user: currentUser } = useCurrentUser();
   const teamMembers = useInboxStore((s) => s.teamMembers.length > 0 ? s.teamMembers : undefined);
 
@@ -1398,8 +1402,9 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         toast.success(session.is_favorite ? "Removed from favorites" : "Added to favorites");
         closePalette();
       } else if (actionKey === "session_kill") {
-        // The teardown rides the hide transition server-side (dispatch.applyPatches).
-        undoableHideSession(session._id, "kill");
+        // The teardown rides the hide transition server-side (dispatch.applyPatches);
+        // the notice hook names any schedules the kill cancels.
+        killWithNotice(session._id);
         closePalette();
       } else if (actionKey === "session_stash") {
         undoableHideSession(session._id, "stash");
@@ -1423,7 +1428,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       }
       return;
     }
-  }, [targets, targetType, closePalette, updateTask, pinDoc, router, navigate]);
+  }, [targets, targetType, closePalette, updateTask, pinDoc, router, navigate, killWithNotice]);
 
   const hasTargets = targets.length > 0 && targetType;
   const target = targets[0] as any;

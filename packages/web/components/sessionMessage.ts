@@ -83,9 +83,10 @@ export function isTeammateFramingOnly(leftover: string): boolean {
   return stripTeammateFraming(leftover).length === 0;
 }
 
-// A `cast schedule` injection (the taskScheduler wraps the prompt; the
+// A `cast trigger` injection (the taskScheduler wraps the prompt; the
 // transcript renders it as a ScheduledTaskBlock — same detection pattern as
-// conversationProcessor).
+// conversationProcessor). The <scheduled-task> tag is the frozen wire format
+// from before the triggers rename; old transcripts carry it forever.
 export function isScheduledTaskMessage(rawContent: string | null | undefined): boolean {
   return !!rawContent && /^<scheduled-task[\s>]/.test(rawContent.trim());
 }
@@ -111,7 +112,7 @@ export function parseMachineDeliveredMessage(
   if (isScheduledTaskMessage(rawContent)) {
     const m = rawContent.match(/<scheduled-task\s+title="([^"]*)"[^>]*>([\s\S]*?)(?:<\/scheduled-task>|$)/);
     const title = (m?.[1] ?? "").replace(/&quot;/g, '"');
-    return { kind: "schedule", source: title || "scheduled run", body: (m?.[2] ?? "").trim() };
+    return { kind: "schedule", source: title || "trigger run", body: (m?.[2] ?? "").trim() };
   }
   if (isSessionMessage(rawContent)) {
     const parsed = parseInboundSessionMessage(rawContent);

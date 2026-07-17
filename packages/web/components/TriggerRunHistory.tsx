@@ -6,13 +6,20 @@
 // one data hook shared by every surface that shows a schedule (the /schedules
 // page rows, the conversation strip, the inbox schedule dock) so the payload
 // shape and the "click a run → land on its trigger" behavior can't drift.
+//
+// Navigation is store-driven everywhere (requestNavigate): the conversation
+// switch and the scroll-to-trigger target are paired atomically, and the inbox
+// shell resolves cached, dismissed/folded, and unsynced runs alike — the same
+// path bookmarks and search hits ride. A plain /conversation/#msg- href is
+// NOT used here: that full-page redirect re-enters the tab shell, whose ?s=
+// re-assert can eat the scroll target (verified racing during this build).
 
 import { useState } from "react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { ArrowUpRight } from "lucide-react";
-import { fmtDuration } from "./scheduleCadence";
+import { fmtClock, fmtDuration } from "./triggerCadence";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { useInboxStore } from "../store/inboxStore";
 
@@ -21,7 +28,7 @@ const api = _api as any;
 // agentTasks.webListRuns payload. `_id` is the conversation a run lives in
 // (inject runs share their schedule's home conversation); `run_key` is unique
 // per run; `trigger_message_id` is the message that fired it.
-export type ScheduleRun = {
+export type TriggerRun = {
   _id: string;
   run_key: string;
   kind: "spawn" | "inject";
@@ -36,23 +43,15 @@ export type ScheduleRun = {
 
 // Subscribe to a schedule's run history. Pass null/undefined to skip (e.g.
 // while the surface is collapsed) so closed rows cost no query.
-export function useScheduleRuns(taskId: string | null | undefined): ScheduleRun[] | undefined {
+export function useTriggerRuns(taskId: string | null | undefined): TriggerRun[] | undefined {
   return useQuery(api.agentTasks.webListRuns, taskId ? { task_id: taskId } : "skip") as
-    | ScheduleRun[]
+    | TriggerRun[]
     | undefined;
 }
 
-// Full-page href for a run — used where in-app store navigation isn't mounted
-// (the /schedules route). The #msg- hash pages the conversation in around the
-// trigger and scrolls to it.
-export function runHref(run: ScheduleRun): string {
-  return `/conversation/${run._id}${run.trigger_message_id ? `#msg-${run.trigger_message_id}` : ""}`;
-}
-
-// In-app navigation to a run's trigger message — used inside the inbox shell
-// (strip, dock). requestNavigate handles cached, dismissed/folded, and
-// not-yet-synced conversations uniformly (same path as bookmarks/search).
-export function openRunInStore(run: ScheduleRun) {
+// Navigate to a run's trigger message through the store's atomic deep-link
+// channel. Shared by the run list below and the strip's run chips.
+export function openRunInStore(run: TriggerRun) {
   useInboxStore.getState().requestNavigate(
     run._id,
     run.trigger_message_id
@@ -66,26 +65,28 @@ export function openRunInStore(run: ScheduleRun) {
 
 const PAGE = 8;
 
-export function ScheduleRunList({
+export function TriggerRunList({
   runs,
   now,
-  mode,
   currentConversationId,
   onOpened,
+  ensureInboxRoute,
   className,
 }: {
-  runs: ScheduleRun[];
+  runs: TriggerRun[];
   now: number;
-  // "link" renders full-page <Link>s (the /schedules route); "store" navigates
-  // through the inbox store (strip, dock).
-  mode: "link" | "store";
   // Marks runs living in the conversation the user is already viewing — they
   // still click (scroll to the trigger), the chip just says where they are.
   currentConversationId?: string | null;
-  // Called after a store-mode navigation, so overlays (the dock roster) close.
+  // Called after navigation, so overlays (the dock roster) close.
   onOpened?: () => void;
+  // Set on surfaces OUTSIDE the inbox route (the /schedules page): nothing
+  // there consumes requestNavigate, so after priming the store we route to
+  // the inbox — its watchers pick up the parked target + scroll pair intact.
+  ensureInboxRoute?: boolean;
   className?: string;
 }) {
+  const router = useRouter();
   const [limit, setLimit] = useState(PAGE);
   if (runs.length === 0) return null;
   const visible = runs.slice(0, limit);
@@ -99,48 +100,41 @@ export function ScheduleRunList({
         {visible.map((run, i) => {
           const num = runs.length - i;
           const here = run._id === currentConversationId;
-          const label = run.idle_summary || run.title;
-          const inner = (
-            <>
-              <span className="shrink-0 font-mono text-[10px] text-sol-text-dim tabular-nums w-7 text-right">
-                #{num}
-              </span>
-              <ShortcutTooltip label={new Date(run.created_at).toLocaleString()}>
-                <span className="shrink-0 text-sol-text-dim tabular-nums">
-                  {fmtDuration(Math.max(0, now - run.created_at))} ago
-                </span>
-              </ShortcutTooltip>
-              <span className="truncate min-w-0 text-sol-text-muted group-hover/run:text-sol-text transition-colors">
-                {label}
-              </span>
-              {here && (
-                <span className="shrink-0 px-1 rounded border border-sol-border/60 text-[9px] text-sol-text-dim">
-                  this session
-                </span>
-              )}
-              <ArrowUpRight className="w-3 h-3 shrink-0 ml-auto text-sol-cyan opacity-0 group-hover/run:opacity-100 transition-opacity" />
-            </>
-          );
+          // Inject runs all live in one conversation, so its title would just
+          // repeat down the list — the fire time is the informative label.
+          // Spawned runs are distinct sessions worth naming.
+          const label = run.kind === "inject" ? fmtClock(run.created_at) : run.idle_summary || run.title;
           const tip = run.trigger_message_id
             ? "Open the message that triggered this run"
             : "Open this run's session";
-          return mode === "link" ? (
-            <ShortcutTooltip key={run.run_key} label={tip}>
-              <Link href={runHref(run)} onClick={(e) => e.stopPropagation()} className={rowCls}>
-                {inner}
-              </Link>
-            </ShortcutTooltip>
-          ) : (
+          return (
             <ShortcutTooltip key={run.run_key} label={tip}>
               <button
                 onClick={(e) => {
                   e.stopPropagation();
                   openRunInStore(run);
+                  if (ensureInboxRoute) router.push(`/inbox?s=${run._id}`);
                   onOpened?.();
                 }}
                 className={rowCls}
               >
-                {inner}
+                <span className="shrink-0 font-mono text-[10px] text-sol-text-dim tabular-nums w-7 text-right">
+                  #{num}
+                </span>
+                <ShortcutTooltip label={new Date(run.created_at).toLocaleString()}>
+                  <span className="shrink-0 text-sol-text-dim tabular-nums">
+                    {fmtDuration(Math.max(0, now - run.created_at))} ago
+                  </span>
+                </ShortcutTooltip>
+                <span className="truncate min-w-0 text-sol-text-muted group-hover/run:text-sol-text transition-colors">
+                  {label}
+                </span>
+                {here && (
+                  <span className="shrink-0 px-1 rounded border border-sol-border/60 text-[9px] text-sol-text-dim">
+                    this session
+                  </span>
+                )}
+                <ArrowUpRight className="w-3 h-3 shrink-0 ml-auto text-sol-cyan opacity-0 group-hover/run:opacity-100 transition-opacity" />
               </button>
             </ShortcutTooltip>
           );

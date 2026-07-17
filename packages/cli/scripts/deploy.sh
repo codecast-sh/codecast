@@ -147,6 +147,16 @@ echo ""
 echo "Deployed v$VERSION"
 echo "  https://dl.codecast.sh/latest.json"
 
+# Prewarm the CDN BEFORE force-update flips the fleet: the first fetch of each
+# binary after upload streams from the R2 origin (slow from distant edges),
+# and force-update makes every daemon download within ~5 minutes. One GET
+# through the public domain caches at this edge and, with Tiered Cache enabled
+# on the zone, at the upper tier all other edges fill from. Best-effort.
+echo "Prewarming CDN..."
+for b in codecast-darwin-arm64 codecast-darwin-x64 codecast-linux-arm64 codecast-linux-x64 codecast-windows-x64.exe; do
+  curl -so /dev/null --max-time 300 -w "  $b: %{speed_download} B/s\n" "https://dl.codecast.sh/$b" || echo "  $b: prewarm failed (non-fatal)"
+done
+
 # Commit version bump
 if [[ "$NO_BUMP" == "false" ]]; then
   git add package.json

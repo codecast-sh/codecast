@@ -6,7 +6,7 @@ import pkg from "../package.json";
 
 const VERSION = pkg.version;
 const MEMORY_VERSION = "11"; // bumped: cast label set/clear/ls/rename/rm (manage session labels)
-const TASK_VERSION = "1";
+const TASK_VERSION = "2"; // bumped: schedule → trigger rename (## Triggers heading, cast trigger commands)
 const WORK_VERSION = "6"; // bumped: messaging docs split out into MESSAGING_SNIPPET
 const PLAN_VERSION = "2";
 const WORKFLOW_VERSION = "1";
