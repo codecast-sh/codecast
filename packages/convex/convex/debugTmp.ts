@@ -53,7 +53,18 @@ export const inspectConversation = internalQuery({
         .withIndex("by_session_id", (q) => q.eq("session_id", args.id))
         .first();
     }
+    if (!conversation) {
+      conversation = await ctx.db
+        .query("conversations")
+        .withIndex("by_short_id", (q) => q.eq("short_id", args.id))
+        .first();
+    }
     if (!conversation) return { error: "not found" };
+
+    const ownerRows = await ctx.db
+      .query("session_owners")
+      .withIndex("by_conversation", (q) => q.eq("conversation_id", conversation._id))
+      .collect();
 
     const recentMessages = await ctx.db
       .query("messages")
@@ -82,7 +93,9 @@ export const inspectConversation = internalQuery({
         user_id: conversation.user_id,
         status: conversation.status,
         inbox_dismissed_at: conversation.inbox_dismissed_at,
+        inbox_stashed_at: (conversation as any).inbox_stashed_at,
         inbox_pinned_at: (conversation as any).inbox_pinned_at,
+        owner_user_id: (conversation as any).owner_user_id,
         updated_at: conversation.updated_at,
         started_at: conversation.started_at,
         parent_conversation_id: (conversation as any).parent_conversation_id,
@@ -92,6 +105,11 @@ export const inspectConversation = internalQuery({
         project_path: conversation.project_path,
       },
       now: Date.now(),
+      sessionOwners: ownerRows.map((r) => ({
+        user_id: r.user_id,
+        added_by: r.added_by,
+        added_at: r.added_at,
+      })),
       recentMessages: recentMessages.map((m) => ({
         _id: m._id,
         role: m.role,
@@ -245,5 +263,64 @@ export const timeManagedScan = internalQuery({
       live_90s: rows.filter((s) => now - s.last_heartbeat < 90 * 1000).length,
       heartbeat_ages_s: ages.slice(0, 5).concat(ages.length > 10 ? [-1] : [], ages.slice(-5)),
     };
+  },
+});
+
+// TEMPORARY: list users that have a role set (find the admin account). Safe to delete.
+export const listRoleUsers = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const users = await ctx.db.query("users").collect();
+    return users
+      .filter((u) => u.role)
+      .map((u) => ({ id: u._id, email: u.email, role: u.role }));
+  },
+});
+
+// TEMPORARY: verify the session-state notification replacement (one row per
+// conversation). Lists a conversation's notification rows per recipient.
+// Safe to delete.
+export const listConvNotifRows = internalQuery({
+  args: { id: v.string() },
+  handler: async (ctx, args) => {
+    let conv = null;
+    const convId = ctx.db.normalizeId("conversations", args.id);
+    if (convId) conv = await ctx.db.get(convId);
+    if (!conv) {
+      conv = await ctx.db
+        .query("conversations")
+        .withIndex("by_short_id", (q) => q.eq("short_id", args.id))
+        .first();
+    }
+    if (!conv) return { error: "not found" };
+    const rows = await ctx.db
+      .query("notifications")
+      .withIndex("by_recipient_conversation", (q) =>
+        q.eq("recipient_user_id", conv!.user_id).eq("conversation_id", conv!._id),
+      )
+      .collect();
+    return {
+      conversation_id: conv._id,
+      title: conv.title,
+      needs_input_notified_key: (conv as any).needs_input_notified_key,
+      message_count: conv.message_count,
+      rows: rows.map((n) => ({
+        _id: n._id,
+        type: n.type,
+        read: n.read,
+        created_at: n.created_at,
+        message: (n.message ?? "").slice(0, 60),
+      })),
+    };
+  },
+});
+
+// TEMPORARY: clear the needs-input dedupe key so checkNeedsInput can re-fire
+// for the current waiting episode (what a new turn does naturally). Safe to delete.
+export const clearNeedsInputKey = internalMutation({
+  args: { conversation_id: v.id("conversations") },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.conversation_id, { needs_input_notified_key: undefined });
+    return { cleared: true };
   },
 });
