@@ -24,7 +24,8 @@ import {
 } from "./ccAccounts.js";
 import { CursorWatcher, type CursorSessionEvent } from "./cursorWatcher.js";
 import { CursorTranscriptWatcher, type CursorTranscriptEvent } from "./cursorTranscriptWatcher.js";
-import { CodexWatcher, isAppServerManagedCodexSessionHead, type CodexSessionEvent } from "./codexWatcher.js";
+import { isAppServerManagedCodexSessionHead } from "./codexWatcher.js";
+import { TranscriptDirWatcher, transcriptDirWatcherConfig, type TranscriptDirEvent } from "./transcriptDirWatcher.js";
 import {
   buildDaemonLauncherScript,
   buildDaemonPlistXml,
@@ -54,8 +55,7 @@ import {
   parsePidPpidMap,
   resolveSpawnerSessionId,
 } from "./sessionProcessMatcher.js";
-import { GeminiWatcher, type GeminiSessionEvent } from "./geminiWatcher.js";
-import { parseSessionFile, parseCodexSessionFile, parseGeminiSessionFile, parseCursorTranscriptFile, extractSlug, extractParentUuid, extractSummaryTitle, extractCwd, extractCodexCwd, extractCodexForkRoot, extractGeminiProjectHash, extractTeamInfo, detectCliFlags, type ParsedMessage } from "./parser.js";
+import { parseSessionFile, parseTranscriptFor, extractSlug, extractParentUuid, extractSummaryTitle, extractCwd, extractCodexCwd, extractCodexForkRoot, extractGeminiProjectHash, extractTeamInfo, detectCliFlags, type ParsedMessage } from "./parser.js";
 import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { encryptToken, decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
@@ -102,8 +102,9 @@ import {
   rewriteSubagentJsonlToUuid,
 } from "./resumeCommand.js";
 import { resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
+import { buildLaunchArgs, getConfiguredAgentArgs, launchBinary } from "./launchCommand.js";
 import type { AgentStatus, DeviceSnippetSettings, AgentClientId } from "@codecast/shared/contracts";
-import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug } from "@codecast/shared/contracts";
+import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS } from "@codecast/shared/contracts";
 import { parseModelPicker, planModelNavigation, SESSION_ONLY_COMMIT_RE, isSwitchConfirmDialog } from "./modelPicker";
 import type { Config } from "./config/types.js";
 
@@ -2482,68 +2483,37 @@ async function executeRemoteCommand(
           break;
         }
 
-        let binary: string;
-        let binaryArgs: string[] = [];
-        if (agentType === "codex") {
-          binary = "codex";
-          const extraArgs = config.codex_args || "";
-          if (extraArgs) binaryArgs.push(...extraArgs.split(/\s+/).filter(Boolean));
-          const permFlags = getPermissionFlags(agentType, config);
-          if (permFlags) {
-            binaryArgs.push(...permFlags.split(/\s+/).filter(Boolean));
-            if (!config.codex_args && !config.agent_permission_modes?.codex) {
-              const flagFile = path.join(CONFIG_DIR, ".codex-bypass-notified");
-              if (!fs.existsSync(flagFile)) {
-                fs.writeFileSync(flagFile, new Date().toISOString());
-                if (conversationId) {
-                  syncServiceRef?.createSessionNotification({
-                    conversation_id: conversationId,
-                    type: "info" as any,
-                    title: "Codex running in full-access mode",
-                    message: "Codex is running without permission prompts by default. Configure with: cast config codex_args",
-                  }).catch(() => {});
-                }
-              }
+        // Binary is a registry lookup; the per-client arg construction lives in
+        // launchCommand.ts (buildLaunchArgs, unit-tested per client). The daemon
+        // keeps the impure pieces: reading the config accessor + flag helpers, the
+        // one-time codex-bypass notification, and the arg sanitizer.
+        const binary = launchBinary(agentType);
+        const requestedModelOpt = requestedModelKey ? findModelOption(agentType, requestedModelKey) : undefined;
+        const { binaryArgs: rawLaunchArgs, notifyCodexBypass } = buildLaunchArgs({
+          agentType,
+          configuredArgs: getConfiguredAgentArgs(agentType, config),
+          permFlags: getPermissionFlags(agentType, config),
+          defaultFlags: getDefaultParamFlags(agentType as AgentClientId, config),
+          modelAlias: requestedModelOpt?.cliAlias,
+          requestedEffort,
+          assignedClaudeSessionId,
+          hasCodexPermissionMode: !!config.agent_permission_modes?.codex,
+        });
+        if (notifyCodexBypass) {
+          const flagFile = path.join(CONFIG_DIR, ".codex-bypass-notified");
+          if (!fs.existsSync(flagFile)) {
+            fs.writeFileSync(flagFile, new Date().toISOString());
+            if (conversationId) {
+              syncServiceRef?.createSessionNotification({
+                conversation_id: conversationId,
+                type: "info" as any,
+                title: "Codex running in full-access mode",
+                message: "Codex is running without permission prompts by default. Configure with: cast config codex_args",
+              }).catch(() => {});
             }
           }
-        } else if (agentType === "cursor") {
-          binary = "cursor-agent";
-        } else if (agentType === "gemini") {
-          binary = "gemini";
-        } else {
-          binary = "claude";
-          const extraArgs = config.claude_args || "";
-          if (extraArgs) binaryArgs.push(...extraArgs.split(/\s+/).filter(Boolean));
-          const permFlags = getPermissionFlags(agentType, config);
-          if (permFlags && !extraArgs.includes("--dangerously-skip-permissions") && !extraArgs.includes("--permission-mode") && !extraArgs.includes("--allow-dangerously-skip-permissions")) {
-            binaryArgs.push(...permFlags.split(/\s+/).filter(Boolean));
-          }
-          if (assignedClaudeSessionId && !extraArgs.includes("--session-id")) {
-            binaryArgs.push("--session-id", assignedClaudeSessionId);
-          }
         }
-
-        const defaultFlags = getDefaultParamFlags(agentType as AgentClientId, config);
-        if (defaultFlags) {
-          binaryArgs.push(...defaultFlags.split(/\s+/).filter(Boolean));
-        }
-
-        // Per-session model/effort, appended AFTER config/default flags so the
-        // per-session choice wins (both CLIs take the last occurrence).
-        const requestedModelOpt = requestedModelKey ? findModelOption(agentType, requestedModelKey) : undefined;
-        if (agentType === "claude") {
-          if (requestedModelOpt?.cliAlias) binaryArgs.push("--model", requestedModelOpt.cliAlias);
-          if (requestedEffort && (CLAUDE_EFFORT_LEVELS as readonly string[]).includes(requestedEffort)) {
-            binaryArgs.push("--effort", requestedEffort);
-          }
-        } else if (agentType === "codex") {
-          if (requestedModelOpt?.cliAlias) binaryArgs.push("-m", requestedModelOpt.cliAlias);
-          if (requestedEffort && (CODEX_EFFORT_LEVELS as readonly string[]).includes(requestedEffort)) {
-            binaryArgs.push("-c", `model_reasoning_effort=${requestedEffort}`);
-          }
-        }
-
-        binaryArgs = sanitizeBinaryArgs(binaryArgs);
+        let binaryArgs = sanitizeBinaryArgs(rawLaunchArgs);
         const envPrefix = worktreeResult
           ? `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT AGENT_RESOURCE_INDEX=${worktreeResult.portIndex}`
           : `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT`;
@@ -4910,7 +4880,7 @@ async function processSessionFile(
     if (bytesConsumed >= LARGE_BATCH_BYTES) {
       log(`Processing ${bytesConsumed} bytes for session ${sessionId.slice(0, 8)} (from position ${lastPosition})`);
     }
-    let messages = parseSessionFile(newContent);
+    let messages = parseTranscriptFor("claude", newContent);
 
     const bakPath = filePath + ".bak";
     if (!bakImageRecoveryDone.has(filePath) && fs.existsSync(bakPath)) {
@@ -5950,7 +5920,7 @@ async function processCursorTranscriptFile(
     const newContent = lastNewline >= 0 ? rawContent.slice(0, lastNewline + 1) : "";
     const bytesConsumed = lastNewline >= 0 ? Buffer.byteLength(rawContent.slice(0, lastNewline + 1), "utf-8") : 0;
     if (!newContent) return;
-    const messages = parseCursorTranscriptFile(newContent);
+    const messages = parseTranscriptFor("cursor", newContent);
 
     let conversationId = conversationCache[sessionId];
 
@@ -6169,7 +6139,7 @@ async function processCodexSession(
       log(`Skipping app-server-managed Codex transcript ${sessionId}`);
       return;
     }
-    const messages = parseCodexSessionFile(newContent);
+    const messages = parseTranscriptFor("codex", newContent);
 
     // Collapse Codex's per-resume fork chain into one conversation: every fork of a logical
     // session embeds its lineage back to a common root, so we key the conversation off that
@@ -6482,7 +6452,7 @@ async function processGeminiSession(
       throw err;
     }
 
-    const allMessages = parseGeminiSessionFile(content);
+    const allMessages = parseTranscriptFor("gemini", content);
     const previousCount = geminiSyncedCounts.get(filePath) || 0;
 
     if (allMessages.length <= previousCount) {
@@ -6739,6 +6709,20 @@ function tryRegisterSessionProcess(sessionId: string, agentType: AgentClientId):
 
 const findSessionProcessInflight = new Map<string, Promise<ClaudeSessionInfo | null>>();
 
+/**
+ * The token to grep the process table with (`ps aux | grep -E '<token>'`) when
+ * locating a live session's process, per client. codex and gemini match by their
+ * registry binary name (so a new jsonl-dir client plugs in via its descriptor).
+ * claude and cursor share the caller-supplied claude-process pattern: cursor owns
+ * a SQLite store and has no local process to resume, so a cursor lookup falls
+ * through to claude's pattern exactly as before the registry. The two call sites
+ * pass different claude patterns (a bare "claude" vs a hardened regex), so the
+ * claude pattern stays a parameter rather than a descriptor field.
+ */
+export function sessionProcessGrepToken(agentType: AgentClientId, claudePattern: string): string {
+  return agentType === "codex" || agentType === "gemini" ? AGENT_CLIENTS[agentType].binary : claudePattern;
+}
+
 async function findSessionProcess(sessionId: string, agentType: AgentClientId = "claude"): Promise<ClaudeSessionInfo | null> {
   const key = `${sessionId}:${agentType}`;
   const inflight = findSessionProcessInflight.get(key);
@@ -6757,7 +6741,7 @@ async function findSessionProcessImpl(sessionId: string, agentType: AgentClientI
     return cached;
   }
 
-  const binaryPattern = agentType === "gemini" ? "gemini" : agentType === "codex" ? "codex" : "claude";
+  const binaryPattern = sessionProcessGrepToken(agentType, "claude");
 
   try {
     const codexResumeCandidates: Array<{ pid: number; tty: string }> = [];
@@ -6952,7 +6936,7 @@ async function findSessionProcessImpl(sessionId: string, agentType: AgentClientI
 
         if (projectCwd) {
           try {
-            const psPattern = agentType === "gemini" ? "gemini" : agentType === "codex" ? "codex" : "/claude\\b|claude-code";
+            const psPattern = sessionProcessGrepToken(agentType, "/claude\\b|claude-code");
             const { stdout: psOut } = await execAsync(`ps aux | grep -E '${psPattern}' | grep -v grep | grep -v 'codecast'`);
             const candidates: Array<{ pid: number; tty: string }> = [];
 
@@ -7890,6 +7874,26 @@ export function classifyCodexTranscriptTail(tailContent: string): TranscriptTurn
     // token_count / agent_message / reasoning etc. -> intra-turn, keep scanning
   }
   return "unknown";
+}
+
+// The single client -> transcript-tail classifier mapping. Only claude and codex
+// have a tail classifier today; cursor/gemini return undefined, which every caller
+// treats as "this client's transcript format isn't classified — defer" (the old
+// `agentType !== "claude" && agentType !== "codex"` gate). A new jsonl client wires
+// its classifier in here rather than adding another branch at each reconcile site.
+// Kept daemon-side (not on the shared descriptor) so shared stays free of daemon
+// types. Mirrors the parser.ts parseTranscriptFor dispatch.
+const CLASSIFY_TRANSCRIPT_TAIL_BY_CLIENT: Partial<
+  Record<AgentClientId, (tailContent: string) => TranscriptTurnState>
+> = {
+  claude: classifyTranscriptTail,
+  codex: classifyCodexTranscriptTail,
+};
+
+export function classifyTranscriptTailFor(
+  agentType: AgentClientId,
+): ((tailContent: string) => TranscriptTurnState) | undefined {
+  return CLASSIFY_TRANSCRIPT_TAIL_BY_CLIENT[agentType];
 }
 
 // Decides whether the hook-driven status (lastSentAgentStatus) should be corrected
@@ -10094,7 +10098,8 @@ async function reapBlockReason(
 ): Promise<{ reason: string } | { reason: null; idleHours: number }> {
   const file = findSessionFile(sessionId);
   if (!file) return { reason: "no-transcript" };
-  if (file.agentType !== "claude" && file.agentType !== "codex") return { reason: `agent=${file.agentType}` };
+  const classifyTail = classifyTranscriptTailFor(file.agentType);
+  if (!classifyTail) return { reason: `agent=${file.agentType}` };
   let idleMs: number;
   try { idleMs = now - fs.statSync(file.path).mtimeMs; } catch { return { reason: "stat-failed" }; }
   if (idleMs < REAP_IDLE_MS) return { reason: `active-${Math.round(idleMs / 60000)}min` };
@@ -10105,7 +10110,7 @@ async function reapBlockReason(
   if (live !== "idle") return { reason: `pane=${live}` };
   let tail: string;
   try { tail = readFileTailSync(file.path); } catch { return { reason: "tail-read-failed" }; }
-  const turn = file.agentType === "codex" ? classifyCodexTranscriptTail(tail) : classifyTranscriptTail(tail);
+  const turn = classifyTail(tail);
   if (turn !== "idle") return { reason: `transcript=${turn}` };
   return { reason: null, idleHours: Math.round(idleMs / 3600000) };
 }
@@ -10231,9 +10236,9 @@ function reconcileStatusFromTranscript(sessionId: string, syncService: SyncServi
   let turn: TranscriptTurnState;
   try {
     const tail = readFileTailSync(file.path);
-    if (file.agentType === "claude") turn = classifyTranscriptTail(tail);
-    else if (file.agentType === "codex") turn = classifyCodexTranscriptTail(tail);
-    else return; // gemini/cursor formats not classified yet -> defer
+    const classifyTail = classifyTranscriptTailFor(file.agentType);
+    if (!classifyTail) return; // gemini/cursor formats not classified yet -> defer
+    turn = classifyTail(tail);
   } catch {
     return; // can't read the transcript -> defer, never guess
   }
@@ -12020,9 +12025,13 @@ async function deliverMessage(
     const tryStartedTmux = async (entry: StartedSessionInfo): Promise<boolean> => {
       try {
         await tmuxExec(["has-session", "-t", entry.tmuxSession]);
-        // Agent-specific prompt patterns:
-        // Claude: ❯ or ⏵   Codex: >   Gemini: various
-        const promptPattern = entry.agentType === "codex" ? />\s*$/ : entry.agentType === "gemini" ? />\s*$|gemini/i : /❯|⏵/;
+        // Fresh-launch readiness pattern, per client, from the registry:
+        // Claude/cursor: ❯ or ⏵   Codex: > at line end   Gemini: > at line end or "gemini".
+        // NOTE: this per-client pattern intentionally DISAGREES with the shared
+        // /[❯›]/ used by the resume-readiness / picker paths (e.g. daemon resume at
+        // ~11279); the registry's promptReadyPattern encodes THIS fresh-launch site,
+        // and both behaviors are preserved as-is. Do not collapse the two.
+        const promptPattern = AGENT_CLIENTS[entry.agentType].promptReadyPattern;
         const fatalErrors = [
           "cannot be launched inside another",
           "command not found",
@@ -15485,102 +15494,84 @@ async function main(): Promise<void> {
     log(`[codex-app-server] failed to start: ${err?.message ?? err} -- codex features disabled`);
   }
 
-  const codexWatcher = new CodexWatcher();
-  const codexSyncs = new Map<string, InvalidateSync>();
+  // One registration path for the JSONL-dir CLI watchers (codex, gemini), which now
+  // share the generic TranscriptDirWatcher. Claude's sessionWatcher and cursor's
+  // SQLite watcher are different kinds and register on their own paths. Each watcher
+  // debounces per-file syncs through InvalidateSync; the first event for a file fixes
+  // the sync closure (sessionId/projectHash are derived from the path, so later events
+  // for the same file carry identical values — same as before the collapse).
+  const registerJsonlDirWatcher = (
+    watcher: TranscriptDirWatcher,
+    label: string,
+    process: (event: TranscriptDirEvent) => Promise<unknown>,
+  ): void => {
+    const syncs = new Map<string, InvalidateSync>();
+    watcher.on("ready", () => {
+      log(`${label} watcher ready`);
+    });
+    watcher.on("session", (event) => {
+      const filePath = event.filePath;
 
-  codexWatcher.on("ready", () => {
-    log("Codex watcher ready");
-  });
+      const state = readDaemonState();
+      if (state?.authExpired) {
+        return;
+      }
 
-  codexWatcher.on("session", (event: CodexSessionEvent) => {
-    const filePath = event.filePath;
+      if (isSyncPaused()) {
+        log(`Sync paused, skipping ${label} session: ${event.sessionId}`);
+        return;
+      }
 
-    const state = readDaemonState();
-    if (state?.authExpired) {
-      return;
-    }
+      let sync = syncs.get(filePath);
+      if (!sync) {
+        sync = new InvalidateSync(async () => {
+          await process(event);
+        }, MESSAGE_SYNC_DEBOUNCE);
+        syncs.set(filePath, sync);
+      }
 
-    if (isSyncPaused()) {
-      log(`Sync paused, skipping Codex session: ${event.sessionId}`);
-      return;
-    }
+      sync.invalidate();
+    });
+    watcher.on("error", (error: Error) => {
+      logError(`${label} watcher error`, error);
+    });
+    watcher.start();
+  };
 
-    let sync = codexSyncs.get(filePath);
-    if (!sync) {
-      sync = new InvalidateSync(async () => {
-        await processCodexSession(
-          filePath,
-          event.sessionId,
-          syncService,
-          config.user_id!,
-          config.team_id,
-          conversationCache,
-          retryQueue,
-          pendingMessages,
-          titleCache,
-          updateState
-        );
-      }, MESSAGE_SYNC_DEBOUNCE);
-      codexSyncs.set(filePath, sync);
-    }
+  registerJsonlDirWatcher(
+    new TranscriptDirWatcher(transcriptDirWatcherConfig("codex")),
+    "Codex",
+    (event) => processCodexSession(
+      event.filePath,
+      event.sessionId,
+      syncService,
+      config.user_id!,
+      config.team_id,
+      conversationCache,
+      retryQueue,
+      pendingMessages,
+      titleCache,
+      updateState
+    ),
+  );
 
-    sync.invalidate();
-  });
-
-  codexWatcher.on("error", (error: Error) => {
-    logError("Codex watcher error", error);
-  });
-
-  codexWatcher.start();
-
-  const geminiWatcher = new GeminiWatcher();
-  const geminiSyncs = new Map<string, InvalidateSync>();
-
-  geminiWatcher.on("ready", () => {
-    log("Gemini watcher ready");
-  });
-
-  geminiWatcher.on("session", (event: GeminiSessionEvent) => {
-    const filePath = event.filePath;
-
-    const state = readDaemonState();
-    if (state?.authExpired) {
-      return;
-    }
-
-    if (isSyncPaused()) {
-      log(`Sync paused, skipping Gemini session: ${event.sessionId}`);
-      return;
-    }
-
-    let sync = geminiSyncs.get(filePath);
-    if (!sync) {
-      sync = new InvalidateSync(async () => {
-        await processGeminiSession(
-          filePath,
-          event.sessionId,
-          event.projectHash,
-          syncService,
-          config.user_id!,
-          config.team_id,
-          conversationCache,
-          retryQueue,
-          pendingMessages,
-          titleCache,
-          updateState
-        );
-      }, MESSAGE_SYNC_DEBOUNCE);
-      geminiSyncs.set(filePath, sync);
-    }
-
-    sync.invalidate();
-  });
-
-  geminiWatcher.on("error", (error: Error) => {
-    logError("Gemini watcher error", error);
-  });
-
-  geminiWatcher.start();
+  registerJsonlDirWatcher(
+    new TranscriptDirWatcher(transcriptDirWatcherConfig("gemini")),
+    "Gemini",
+    (event) => processGeminiSession(
+      event.filePath,
+      event.sessionId,
+      event.projectHash ?? "",
+      syncService,
+      config.user_id!,
+      config.team_id,
+      conversationCache,
+      retryQueue,
+      pendingMessages,
+      titleCache,
+      updateState
+    ),
+  );
 
   const subscriptionClient = syncService.getSubscriptionClient();
   let unsubscribe: (() => void) | null = null;

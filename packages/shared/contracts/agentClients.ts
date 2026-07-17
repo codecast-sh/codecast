@@ -188,12 +188,15 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     convexId: "cursor",
     binary: "cursor-agent",
     launchArgs: [],
-    // Provisional: cursor's real resume syntax and the fall-through fix are owned
-    // by the cursor-parity work (ct-39074). Unconsumed in Phase 0.
-    resumeCmd: (sessionId) => `cursor-agent resume ${sessionId}`,
-    // The daemon actually reads cursor transcripts from a platform-specific SQLite
-    // store (the Cursor app-support workspaceStorage), not a home dir; this root
-    // is provisional pending the sqlite-watcher wire-up (ct-39077).
+    // cursor-agent resumes a chat by id with its own binary (the ct-39074 fix): a
+    // cursor session must never fall through to `claude --resume` + Claude's repair
+    // machinery. Consumed by buildNonClaudeResumeCommand (resumeCommand.ts).
+    resumeCmd: (sessionId) => `cursor-agent --resume ${sessionId}`,
+    // The daemon reads cursor transcripts from a platform-specific SQLite store
+    // (the Cursor app-support workspaceStorage), not a home dir, via its own
+    // CursorWatcher/CursorTranscriptWatcher (watcherKind "sqlite"). Those stay their
+    // own kind — only the jsonl-dir watchers (codex/gemini) share the generic
+    // TranscriptDirWatcher — so this home-relative root is not consumed today.
     transcriptRoots: ["~/.cursor/chats"],
     watcherKind: "sqlite",
     // Provisional: cursor has NO dedicated readiness pattern in the daemon. At the
@@ -202,7 +205,9 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     // as the fresh-launch else value — ct-39077 should confirm cursor's real glyph
     // when it wires readiness.
     promptReadyPattern: /❯|⏵/,
-    tmuxPrefix: "cc",
+    // cursor resume panes get their own `cu-` prefix (the ct-39074 fix) so they
+    // never collide with claude's `cc-`. Consumed by resumeTmuxPrefix.
+    tmuxPrefix: "cu",
     capabilities: { panePromptMonitoring: false },
   },
   gemini: {
