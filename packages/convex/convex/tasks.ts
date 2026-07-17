@@ -1903,8 +1903,9 @@ export const assignToAgent = mutation({
     const taskConversation = await ctx.db.get(conversationId);
     await enqueuePendingMessage(ctx, taskConversation, userId, { content });
 
-    // fromConvexAgentType maps opencode/pi -> claude (temporary, until descriptors
-    // land) and is identical to the old ternary for claude_code/codex/cursor/gemini.
+    // fromConvexAgentType maps each convex spelling to its daemon client id —
+    // opencode/pi are first-class and map to themselves; only unrecognized types
+    // fall back to "claude" (identical to the old ternary for claude_code/codex/cursor/gemini).
     const daemonAgentType = fromConvexAgentType(agent_type);
     await enqueueStartSession(ctx, userId, {
       conversationId,

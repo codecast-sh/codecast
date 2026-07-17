@@ -36,6 +36,9 @@ function oracle(input: LaunchArgsInput): { binaryArgs: string[]; notifyCodexBypa
     const extraArgs = configuredArgs;
     if (extraArgs) args.push(...extraArgs.split(/\s+/).filter(Boolean));
     if (!extraArgs.includes("--auto")) args.push("--auto");
+  } else if (agentType === "pi") {
+    const extraArgs = configuredArgs;
+    if (extraArgs) args.push(...extraArgs.split(/\s+/).filter(Boolean));
   } else {
     const extraArgs = configuredArgs;
     if (extraArgs) args.push(...extraArgs.split(/\s+/).filter(Boolean));
@@ -80,7 +83,7 @@ describe("getConfiguredAgentArgs reads the legacy per-client named fields", () =
 });
 
 describe("buildLaunchArgs matches the oracle across a matrix", () => {
-  const agentTypes: AgentClientId[] = ["claude", "codex", "cursor", "gemini", "opencode"];
+  const agentTypes: AgentClientId[] = ["claude", "codex", "cursor", "gemini", "opencode", "pi"];
   const configuredArgsCases = ["", "--chrome", "--permission-mode acceptEdits", "--dangerously-skip-permissions", "--session-id fixed"];
   const permFlagsCases = [null, "--permission-mode bypassPermissions", "--dangerously-bypass-approvals-and-sandbox"];
   const defaultFlagsCases = [null, "--verbose", "--foo bar"];
@@ -163,5 +166,14 @@ describe("buildLaunchArgs — targeted per-client behavior", () => {
     expect(buildLaunchArgs({ agentType: "opencode", configuredArgs: "", permFlags: null, defaultFlags: null }).binaryArgs).toEqual(["--auto"]);
     // user already pinned --auto -> not doubled
     expect(buildLaunchArgs({ agentType: "opencode", configuredArgs: "--auto --pure", permFlags: null, defaultFlags: null }).binaryArgs).toEqual(["--auto", "--pure"]);
+  });
+
+  test("pi: passes configured args, ignores perm flags and model/effort", () => {
+    // configured agent_args.pi flow through (the bug: without a pi branch they were dropped)...
+    expect(buildLaunchArgs({ agentType: "pi", configuredArgs: "--yolo --model foo", permFlags: "--ignored", defaultFlags: null, modelAlias: "opus", requestedEffort: "high" }).binaryArgs)
+      .toEqual(["--yolo", "--model", "foo"]);
+    // ...but default-param flags still apply to every client, and no perm/model/effort is injected.
+    expect(buildLaunchArgs({ agentType: "pi", configuredArgs: "", permFlags: "--ignored", defaultFlags: "--verbose", modelAlias: "opus" }).binaryArgs)
+      .toEqual(["--verbose"]);
   });
 });

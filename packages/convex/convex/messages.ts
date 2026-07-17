@@ -1342,6 +1342,61 @@ export const existingMessageUuids = query({
   },
 });
 
+// Delete specific messages by uuid within a conversation. The daemon's pi
+// branch-switch cleanup calls this to drop the abandoned branch's already-synced
+// turns so the synced conversation equals the active branch exactly (never a splice).
+// Owner-scoped (mirrors addMessages/existingMessageUuids auth) and message_count is
+// reconciled on delete, the same discipline supersedeApiErrorBanners uses when it
+// retracts banner rows. The daemon chunks larger orphan sets to MAX_BATCH_SIZE.
+export const deleteMessagesByUuid = mutation({
+  args: {
+    conversation_id: v.id("conversations"),
+    message_uuids: v.array(v.string()),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    if (args.message_uuids.length === 0) return { deleted: 0 };
+    if (args.message_uuids.length > MAX_BATCH_SIZE) {
+      throw new Error(`Batch size ${args.message_uuids.length} exceeds maximum of ${MAX_BATCH_SIZE}`);
+    }
+
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) {
+      throw new Error("Conversation not found");
+    }
+
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) {
+      throw new Error("Authentication failed: invalid token or session");
+    }
+    if (conversation.user_id.toString() !== authUserId.toString()) {
+      throw new Error("Unauthorized: can only delete messages from your own conversations");
+    }
+
+    let deleted = 0;
+    for (const uuid of new Set(args.message_uuids)) {
+      const existing = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_uuid", (q) =>
+          q.eq("conversation_id", args.conversation_id).eq("message_uuid", uuid)
+        )
+        .first();
+      if (existing) {
+        await ctx.db.delete(existing._id);
+        deleted++;
+      }
+    }
+
+    if (deleted > 0) {
+      await ctx.db.patch(args.conversation_id, {
+        message_count: Math.max(0, conversation.message_count - deleted),
+      });
+    }
+
+    return { deleted };
+  },
+});
+
 function generateShareToken(): string {
   return crypto.randomUUID();
 }

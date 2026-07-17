@@ -95,6 +95,11 @@ export function buildLaunchArgs(input: LaunchArgsInput): LaunchArgsResult {
     // (--full-auto) and claude (--dangerously-skip-permissions) launch here. Skip if
     // the user already pinned --auto in their configured args.
     if (!configuredArgs.includes("--auto")) args.push("--auto");
+  } else if (agentType === "pi") {
+    // pi passes through the user's configured args (agent_args.pi) but takes no
+    // permission or model/effort launch flags — the same simplicity as cursor/gemini,
+    // which contribute nothing. Without this branch the configured args are dropped.
+    if (configuredArgs) args.push(...configuredArgs.split(/\s+/).filter(Boolean));
   }
   // cursor / gemini: no configured args or permission flags today.
 

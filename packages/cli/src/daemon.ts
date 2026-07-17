@@ -6889,9 +6889,44 @@ async function processOpencodeSession(
   }
 }
 
-// pi sessions, like gemini, re-parse the whole JSONL each pass (the parser resolves
-// the active branch) and sync the delta by message count. Keyed by file path.
-const piSyncedCounts = new Map<string, number>();
+// pi sessions re-parse the whole JSONL each pass, but unlike gemini the parser
+// resolves the ACTIVE BRANCH of an id/parentId tree — a /tree branch switch makes
+// the active branch shrink or diverge while the file grows. A count-based delta
+// guard (allMessages.length <= previousCount) therefore either silently drops the
+// new branch's turns or splices branch A's prefix onto branch B's tail. Instead we
+// track the exact set of synced message uuids per file: new turns are the active
+// messages not yet synced (a divergent branch's turns always fall here, never
+// skipped), and orphans are synced uuids that dropped off the active branch (the
+// abandoned branch). Keyed by file path; in-memory only (a daemon restart resets to
+// empty, which re-syncs the full active branch idempotently via uuid upsert).
+const piSyncedUuids = new Map<string, Set<string>>();
+
+// Pure delta between the parser's current active branch and the uuids already
+// synced. `newMessages` are active messages not yet synced (sent via addMessages,
+// which upserts by uuid so a re-sent shared prefix patches in place). `orphanUuids`
+// are synced uuids no longer on the active branch — the abandoned branch's turns,
+// deleted so the synced conversation equals the active branch exactly (never a
+// splice). `nextSynced` is the active branch's uuid set, stored after a clean sync.
+// Because pi's active branch is the unique parentId chain to the leaf, two branches
+// that share a uuid at any index share the whole prefix below it — so a set diff
+// catches every divergence (same-length, shrink, or mid-prefix), not just growth.
+export function computePiSyncDelta<T extends { uuid?: string }>(
+  activeMessages: T[],
+  syncedUuids: ReadonlySet<string>,
+): { newMessages: T[]; orphanUuids: string[]; nextSynced: Set<string> } {
+  const activeUuids = new Set<string>();
+  for (const m of activeMessages) {
+    if (m.uuid) activeUuids.add(m.uuid);
+  }
+  // A message with no uuid can't be deduped or tracked; the pi parser always sets one
+  // from entry.id, so this branch only satisfies the optional type — treat it as new.
+  const newMessages = activeMessages.filter((m) => !m.uuid || !syncedUuids.has(m.uuid));
+  const orphanUuids: string[] = [];
+  for (const uuid of syncedUuids) {
+    if (!activeUuids.has(uuid)) orphanUuids.push(uuid);
+  }
+  return { newMessages, orphanUuids, nextSynced: activeUuids };
+}
 
 async function processPiSession(
   filePath: string,
@@ -6922,9 +6957,13 @@ async function processPiSession(
     }
 
     const allMessages = parseTranscriptFor("pi", content);
-    const previousCount = piSyncedCounts.get(filePath) || 0;
-    if (allMessages.length <= previousCount) return;
-    const newMessages = allMessages.slice(previousCount);
+    // A transient empty/corrupt parse must be a no-op, never a signal to delete the
+    // synced conversation (orphan detection below would treat every synced uuid as
+    // abandoned).
+    if (allMessages.length === 0) return;
+    const syncedUuids = piSyncedUuids.get(filePath) ?? new Set<string>();
+    const { newMessages, orphanUuids, nextSynced } = computePiSyncDelta(allMessages, syncedUuids);
+    if (newMessages.length === 0 && orphanUuids.length === 0) return;
 
     let conversationId = conversationCache[sessionId];
 
@@ -7007,7 +7046,7 @@ async function processPiSession(
         if (err instanceof AuthExpiredError) {
           if (handleAuthFailure()) {
             log("⚠️  Authentication expired - sync paused");
-            piSyncedCounts.set(filePath, allMessages.length);
+            piSyncedUuids.set(filePath, nextSynced);
             return;
           }
         }
@@ -7036,38 +7075,61 @@ async function processPiSession(
         retryQueue.add("createConversation", {
           userId, teamId, sessionId, agentType: "pi", title, startedAt: allMessages[0]?.timestamp,
         }, errMsg);
-        piSyncedCounts.set(filePath, allMessages.length);
+        piSyncedUuids.set(filePath, nextSynced);
         return;
       }
     }
 
-    const batchResult = await syncMessagesBatch(newMessages, conversationId, syncService, retryQueue);
-    if (batchResult.authExpired) {
-      log("⚠️  Authentication expired - sync paused");
-      return;
-    }
-    if (batchResult.conversationNotFound) {
-      log(`Conversation ${conversationId} not found, invalidating cache and recreating...`);
-      delete conversationCache[sessionId];
-      saveConversationCache(conversationCache);
-
-      const firstUserMessage = allMessages.find((msg) => msg.role === "user");
-      const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
-      try {
-        conversationId = await syncService.createConversation({
-          userId, teamId, sessionId, agentType: "pi", title, startedAt: allMessages[0]?.timestamp,
-        });
-        conversationCache[sessionId] = conversationId;
+    // A pure branch switch back onto a shorter branch produces no new turns, only
+    // orphans — skip the empty batch and go straight to cleanup.
+    let conversationRecreated = false;
+    if (newMessages.length > 0) {
+      const batchResult = await syncMessagesBatch(newMessages, conversationId, syncService, retryQueue);
+      if (batchResult.authExpired) {
+        log("⚠️  Authentication expired - sync paused");
+        return; // leave the synced set unadvanced so the next pass retries
+      }
+      if (batchResult.conversationNotFound) {
+        conversationRecreated = true;
+        log(`Conversation ${conversationId} not found, invalidating cache and recreating...`);
+        delete conversationCache[sessionId];
         saveConversationCache(conversationCache);
-        log(`Recreated conversation ${conversationId} for pi session ${sessionId}`);
-        await syncService.addMessages({ conversationId, messages: newMessages.map(prepMessageForSync) });
-      } catch (retryErr) {
-        const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
-        log(`Failed to recreate pi conversation and add messages: ${retryErrMsg}`);
+
+        const firstUserMessage = allMessages.find((msg) => msg.role === "user");
+        const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+        try {
+          conversationId = await syncService.createConversation({
+            userId, teamId, sessionId, agentType: "pi", title, startedAt: allMessages[0]?.timestamp,
+          });
+          conversationCache[sessionId] = conversationId;
+          saveConversationCache(conversationCache);
+          log(`Recreated conversation ${conversationId} for pi session ${sessionId}`);
+          // Fresh conversation: rebuild it from the FULL active branch, not just the
+          // delta (the shared prefix isn't there anymore). No orphans to clean.
+          await syncService.addMessages({ conversationId, messages: allMessages.map(prepMessageForSync) });
+        } catch (retryErr) {
+          const retryErrMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+          log(`Failed to recreate pi conversation and add messages: ${retryErrMsg}`);
+        }
       }
     }
 
-    piSyncedCounts.set(filePath, allMessages.length);
+    // Branch-switch cleanup: delete the abandoned branch's already-synced turns so
+    // the conversation equals the active branch exactly (never a splice). On a delete
+    // failure keep the orphans in the synced set so the next pass retries rather than
+    // stranding them permanently.
+    let finalSynced = nextSynced;
+    if (orphanUuids.length > 0 && !conversationRecreated) {
+      try {
+        await syncService.deleteMessagesByUuid(conversationId, orphanUuids);
+        log(`Deleted ${orphanUuids.length} orphaned pi message(s) after branch switch for session ${sessionId}`);
+      } catch (err) {
+        logConvexFailure(err);
+        finalSynced = new Set([...nextSynced, ...orphanUuids]);
+      }
+    }
+
+    piSyncedUuids.set(filePath, finalSynced);
     log(`Synced ${newMessages.length} pi messages for session ${sessionId}`);
     syncStats.messagesSynced += newMessages.length;
     syncStats.sessionsActive.add(sessionId);
