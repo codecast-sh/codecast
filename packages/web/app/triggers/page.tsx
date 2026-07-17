@@ -8,7 +8,14 @@ import { toast } from "sonner";
 import { AuthGuard } from "../../components/AuthGuard";
 import { AppLoader } from "../../components/AppLoader";
 import { DashboardLayout } from "../../components/DashboardLayout";
-import { fmtDuration, fmtClock } from "../../components/triggerCadence";
+import {
+  fmtDuration,
+  fmtClock,
+  describeTaskCadence,
+  taskStateLabel,
+  isTaskOverdue,
+  TRIGGER_EVENT_LABELS,
+} from "../../components/triggerCadence";
 import { ShortcutTooltip } from "../../components/KeyboardShortcutsHelp";
 import { patchTaskInWebList, taskDisplayTitle } from "../../components/triggerTasks";
 import { TriggerRunList, useTriggerRuns } from "../../components/TriggerRunHistory";
@@ -54,11 +61,6 @@ function parseDuration(input: string): number | undefined {
   if (unit === "h") return num * 60 * 60 * 1000;
   if (unit === "d") return num * 24 * 60 * 60 * 1000;
   return undefined;
-}
-
-function fmtCountdown(msUntil: number): string {
-  if (msUntil <= 0) return "due now";
-  return `in ${fmtDuration(msUntil)}`;
 }
 
 function timeAgo(ts?: number): string {
@@ -189,38 +191,32 @@ function HorizonRail({ tasks, now }: { tasks: any[]; now: number }) {
   );
 }
 
-// ── Schedule descriptor chip: "every 4h" / "in 23m" / "on pr_comment" / "once" ──
+// ── Schedule descriptor chip: "every 4h" / "on PR comment" / "one-time" ──
 
-const chipCls = "inline-flex items-center gap-1 text-[11px] whitespace-nowrap flex-shrink-0";
+const chipCls =
+  "inline-flex items-center gap-1 text-[11px] leading-none font-medium whitespace-nowrap flex-shrink-0 rounded-full px-2 py-[3px]";
 
-// The chip leads with the schedule's TYPE — recurring vs one-time is the
-// distinction users sort by — then the timing detail.
-function TriggerChip({ task, now }: { task: any; now: number }) {
+// The chip names the cadence as a tinted pill — "every 1d" IS recurring — so
+// type reads by color before words: violet loops, cyan one-shots, yellow event
+// hooks. Live timing (countdown, running) lives on the meta line, not here.
+function TriggerChip({ task }: { task: any }) {
   if (task.schedule_type === "recurring" && task.interval_ms) {
     return (
-      <span className={`${chipCls} text-sol-violet`}>
-        <Repeat className="w-3 h-3" />recurring
-        <span className="text-sol-violet/70">· every {fmtDuration(task.interval_ms)}</span>
+      <span className={`${chipCls} bg-sol-violet/10 text-sol-violet`}>
+        <Repeat className="w-3 h-3" />{describeTaskCadence(task)}
       </span>
     );
   }
   if (task.schedule_type === "event") {
+    const ev = eventLabel(task.event_filter);
     return (
-      <span className={`${chipCls} text-sol-yellow`}>
-        <Zap className="w-3 h-3" />on {eventLabel(task.event_filter)}
-      </span>
-    );
-  }
-  if (task.status === "scheduled" && task.run_at) {
-    return (
-      <span className={`${chipCls} text-sol-cyan`}>
-        <Clock className="w-3 h-3" />one-time
-        <span className="text-sol-cyan/70">· {fmtCountdown(task.run_at - now)}</span>
+      <span className={`${chipCls} bg-sol-yellow/10 text-sol-yellow`}>
+        <Zap className="w-3 h-3" />on {TRIGGER_EVENT_LABELS[ev] ?? ev}
       </span>
     );
   }
   return (
-    <span className={`${chipCls} text-sol-text-dim`}>
+    <span className={`${chipCls} bg-sol-cyan/10 text-sol-cyan`}>
       <Clock className="w-3 h-3" />one-time
     </span>
   );
@@ -340,16 +336,19 @@ function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boole
       }`}
       onClick={() => setExpanded((v) => !v)}
     >
-      <div className="flex items-center gap-3 px-4 py-2.5">
-        <RowIndicator task={task} />
+      <div className="relative flex items-start gap-3 px-4 py-3">
+        {/* fixed 20px-tall slot so dot and icon indicators both center on the title's first line */}
+        <div className="flex-shrink-0 w-4 h-5 flex items-center justify-center">
+          <RowIndicator task={task} />
+        </div>
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <ShortcutTooltip label={taskDisplayTitle(task)}>
-              <span className={`text-sm font-medium truncate ${isHistory ? "text-sol-text-muted" : "text-sol-text"}`}>
-                {taskDisplayTitle(task)}
-              </span>
-            </ShortcutTooltip>
-            <TriggerChip task={task} now={now} />
+          {/* Title wraps in full — a trigger you can't read is a trigger you
+              can't trust. The cadence pill lives on the meta line below, so
+              nothing competes with the title for width. */}
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+            <span className={`text-sm font-medium leading-5 ${isHistory ? "text-sol-text-muted" : "text-sol-text"}`}>
+              {taskDisplayTitle(task)}
+            </span>
             {isNext && (
               <span className="text-[10px] font-medium uppercase tracking-wide text-sol-cyan flex-shrink-0">
                 next up
@@ -357,15 +356,28 @@ function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boole
             )}
           </div>
           {task.display_summary && (
-            <ShortcutTooltip label={task.display_summary}>
-              <div className="text-[11px] text-sol-text-dim truncate mt-0.5">
-                {task.display_summary}
-              </div>
-            </ShortcutTooltip>
+            <div className="text-xs text-sol-text-muted leading-relaxed line-clamp-2 mt-0.5">
+              {task.display_summary}
+            </div>
           )}
-          <div className="flex items-center gap-2 mt-1 text-[11px] text-sol-text-dim min-w-0">
-            {/* quiet meta */}
-            {task.status === "running" && <span className="text-emerald-400 flex-shrink-0">running now</span>}
+          {/* cadence + live state + health, wrapping instead of truncating */}
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 mt-2 text-[11px] text-sol-text-dim">
+            <TriggerChip task={task} />
+            {task.status === "running" ? (
+              <span className="text-emerald-400 font-medium flex-shrink-0">running now</span>
+            ) : task.status === "scheduled" && task.run_at ? (
+              // Every armed row answers "when does it fire" — countdown plus
+              // wall clock. Recurring rows used to show neither.
+              <span
+                className={`inline-flex items-center gap-1 flex-shrink-0 ${
+                  isTaskOverdue(task, now) ? "text-sol-orange" : "text-sol-cyan"
+                }`}
+              >
+                <Clock className="w-3 h-3" />
+                {taskStateLabel(task, now)}
+                <span className="text-sol-text-dim">· {fmtClock(task.run_at)}</span>
+              </span>
+            ) : null}
             {task.run_count > 0 && (
               <span className="flex-shrink-0">
                 {task.run_count} run{task.run_count === 1 ? "" : "s"}
@@ -379,22 +391,27 @@ function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boole
             )}
             {task.project_path && (
               <ShortcutTooltip label={task.project_path}>
-                <span className="hidden sm:inline-flex items-center gap-1 flex-shrink-0">
+                <span className="inline-flex items-center gap-1 flex-shrink-0">
                   <Folder className="w-3 h-3" />{projectName(task.project_path)}
                 </span>
               </ShortcutTooltip>
             )}
+            {!sessionId && !task.last_run_summary && task.last_run_at && (
+              <span className="flex-shrink-0">last run {timeAgo(task.last_run_at)}</span>
+            )}
+          </div>
 
-            {/* The run, surfaced as a clear clickable session — the thing you
-                actually want to open. Links to the run's own conversation when the
-                daemon recorded it, else the originating session. Truncates last
-                (min-w-0) so it's never pushed off the row like the old buried link. */}
-            {sessionId ? (
+          {/* The last run gets its own full-width line — it's the row's main
+              jump target and the old inline placement truncated it to nothing.
+              Links to the run's own conversation when the daemon recorded it,
+              else the originating session. */}
+          {sessionId ? (
+            <div className="mt-1.5">
               <ShortcutTooltip label={sessionVerb} hint={sessionTitle || undefined}>
                 <Link
                   href={`/conversation/${sessionId}`}
                   onClick={(e) => e.stopPropagation()}
-                  className={`group/sess inline-flex items-center gap-1 min-w-0 rounded px-1.5 py-0.5 -my-0.5 transition-colors hover:bg-sol-cyan/10 ${
+                  className={`group/sess inline-flex items-center gap-1.5 max-w-full min-w-0 rounded px-1.5 py-0.5 -mx-1.5 text-[11px] transition-colors hover:bg-sol-cyan/10 ${
                     failedSummary ? "text-sol-red hover:bg-sol-red/10" : "text-sol-cyan"
                   }`}
                 >
@@ -406,18 +423,18 @@ function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boole
                   <ArrowUpRight className="w-3 h-3 flex-shrink-0 opacity-50 group-hover/sess:opacity-100 transition-opacity" />
                 </Link>
               </ShortcutTooltip>
-            ) : task.last_run_summary ? (
-              <span className={`inline-flex items-center gap-1.5 min-w-0`}>
-                <span className={`truncate ${failedSummary ? "text-sol-red" : ""}`}>{task.last_run_summary}</span>
-                {task.last_run_at && <span className="flex-shrink-0">· {timeAgo(task.last_run_at)}</span>}
-              </span>
-            ) : (
-              task.last_run_at && <span className="flex-shrink-0">last {timeAgo(task.last_run_at)}</span>
-            )}
-          </div>
+            </div>
+          ) : task.last_run_summary ? (
+            <div className="flex items-center gap-1.5 mt-1.5 min-w-0 text-[11px] text-sol-text-dim">
+              <span className={`truncate ${failedSummary ? "text-sol-red" : ""}`}>{task.last_run_summary}</span>
+              {task.last_run_at && <span className="flex-shrink-0">· {timeAgo(task.last_run_at)}</span>}
+            </div>
+          ) : null}
         </div>
 
-        <div className="flex items-center gap-0.5 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+        {/* Hover toolbar floats over the top-right corner instead of living
+            in-flow — invisible buttons were reserving ~130px of every row. */}
+        <div className="absolute right-2 top-2 z-10 flex items-center gap-0.5 rounded-lg border border-sol-border bg-sol-card-hover px-1 py-0.5 shadow-md shadow-black/20 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-opacity">
           {isEditable && (
             <ShortcutTooltip label="Edit">
               <button className={iconBtn} aria-label="Edit" onClick={openForm("edit")}>
