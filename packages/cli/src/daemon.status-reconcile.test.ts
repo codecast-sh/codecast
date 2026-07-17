@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
-import { classifyCodexTranscriptTail, classifyTranscriptTail, findCachedSessionIdForConversation, isInterruptControlMessage, paneReconcileTarget, reconciledStatus, transcriptTailLastRealRole, permissionBlockedRecoveryTarget, registerManagedStartedSession, isSessionPaneTracked } from "./daemon.js";
+import * as os from "node:os";
+import * as path from "node:path";
+import { classifyCodexTranscriptTail, classifyTranscriptTail, findCachedSessionIdForConversation, findSessionFile, isInterruptControlMessage, paneReconcileTarget, preferLiveSessionId, reconciledStatus, resumeShortId, transcriptTailLastRealRole, permissionBlockedRecoveryTarget, registerManagedStartedSession, isSessionPaneTracked } from "./daemon.js";
 import type { TranscriptTurnState } from "./daemon.js";
 
 // Regression test for the "session stuck in 'working' (or 'stopped') forever" bug,
@@ -274,6 +276,82 @@ describe("warm-restart session id recovery", () => {
       "5e9f3b9b-a08c-4b97-980c-7e5c1e5e3039",
     );
     expect(findCachedSessionIdForConversation(cache, "missing")).toBeUndefined();
+  });
+
+  // A resume of a workflow subagent copies its JSONL to a UUID and remaps the
+  // conversation, keeping the agent-* id as an alias so leftover transcript
+  // copies re-bind instead of minting an unparented duplicate (the 2026-07-16
+  // "Atomic tools" inbox flood). Reverse resolution must return the live UUID,
+  // never the dead alias, or delivery re-resumes the stale file forever.
+  test("prefers the live UUID binding over a non-UUID alias of the same conversation", () => {
+    const conv = "jx75k736p0wjt2zws52xe3km2x8anne3";
+    const cache = {
+      "agent-a920233e1ad3a0d16": conv,
+      "7a6530fe-dce6-4274-bf99-8a8250b919ec": conv,
+    };
+    expect(findCachedSessionIdForConversation(cache, conv)).toBe(
+      "7a6530fe-dce6-4274-bf99-8a8250b919ec",
+    );
+    // Order-independent: the alias may sit after the UUID in insertion order.
+    const reversed = {
+      "7a6530fe-dce6-4274-bf99-8a8250b919ec": conv,
+      "agent-a920233e1ad3a0d16": conv,
+    };
+    expect(findCachedSessionIdForConversation(reversed, conv)).toBe(
+      "7a6530fe-dce6-4274-bf99-8a8250b919ec",
+    );
+  });
+
+  test("preferLiveSessionId: UUID beats alias, later wins among same shape", () => {
+    const uuid1 = "7a6530fe-dce6-4274-bf99-8a8250b919ec";
+    const uuid2 = "66054120-7d6d-4cf9-ae93-755b549625bf";
+    expect(preferLiveSessionId(undefined, "agent-a920233e1ad3a0d16")).toBe("agent-a920233e1ad3a0d16");
+    expect(preferLiveSessionId(uuid1, "agent-a920233e1ad3a0d16")).toBe(uuid1);
+    expect(preferLiveSessionId("agent-a920233e1ad3a0d16", uuid1)).toBe(uuid1);
+    // Repeated remaps (repair materialization) bind newer UUIDs later.
+    expect(preferLiveSessionId(uuid1, uuid2)).toBe(uuid2);
+  });
+});
+
+// Distinct workflow agents share their first 8 chars ("agent-a9..."), so the old
+// 8-char resume tmux naming collapsed them onto one cc-resume-* session and each
+// resume killed the other's pane. UUIDs keep the conventional 8-char prefix.
+describe("resumeShortId", () => {
+  test("does not collide prefixed session ids", () => {
+    expect(resumeShortId("agent-a920233e1ad3a0d16")).not.toBe(resumeShortId("agent-a9b62ebc367b5ffa6"));
+    expect(resumeShortId("66054120-7d6d-4cf9-ae93-755b549625bf")).toBe("66054120");
+  });
+});
+
+// The auto-resume path used findSessionFile to locate a transcript before falling
+// back to Convex reconstitution; it never probed the subagents/ layouts, so every
+// workflow-agent resume reconstituted a synthetic top-level JSONL (the raw
+// material of the duplicate-conversation bug above).
+describe("findSessionFile subagent layouts", () => {
+  test("finds Agent-tool and Workflow-tool transcripts under a parent session dir", () => {
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "cc-find-session-"));
+    const prevHome = process.env.HOME;
+    process.env.HOME = tmpHome;
+    try {
+      const parentDir = path.join(
+        tmpHome, ".claude", "projects", "-Users-x-proj",
+        "0c25e223-db89-44dd-b7c2-a14b21298e4d",
+      );
+      const subagentsDir = path.join(parentDir, "subagents");
+      const wfDir = path.join(subagentsDir, "workflows", "wf_adebb5af-f7d");
+      fs.mkdirSync(wfDir, { recursive: true });
+      fs.writeFileSync(path.join(subagentsDir, "agent-abc123.jsonl"), "{}\n");
+      fs.writeFileSync(path.join(wfDir, "agent-a920233e1ad3a0d16.jsonl"), "{}\n");
+
+      expect(findSessionFile("agent-abc123")?.path).toBe(path.join(subagentsDir, "agent-abc123.jsonl"));
+      expect(findSessionFile("agent-a920233e1ad3a0d16")?.path).toBe(
+        path.join(wfDir, "agent-a920233e1ad3a0d16.jsonl"),
+      );
+      expect(findSessionFile("agent-missing")).toBeNull();
+    } finally {
+      process.env.HOME = prevHome;
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    }
   });
 });
 
