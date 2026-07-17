@@ -9845,6 +9845,27 @@ export const switchSessionAgent = mutation({
   },
 });
 
+// Scan cap for the user-prompt navigation list. The user-role index range is
+// dominated by tool results (they sync as user-role rows), so a monster agent
+// session holds thousands of docs here — an unbounded collect blew Convex's
+// system-operation budget ("too many system operations") on every reactive
+// re-run, and this query is live-subscribed by every open conversation view.
+// Newest-first take keeps the recent prompts (the ones rewind/fork navigation
+// actually targets); prompts older than the scanned window drop off on
+// outlier sessions. Removing this cap re-introduces the timeout.
+export const NAV_USER_MESSAGES_SCAN_LIMIT = 2000;
+
+export async function collectNavigableUserMessages(
+  db: { query: (table: "messages") => any },
+  conversationId: Id<"conversations">,
+) {
+  const userMsgs = await db.query("messages")
+    .withIndex("by_conversation_role_timestamp", (q: any) =>
+      q.eq("conversation_id", conversationId).eq("role", "user"))
+    .order("desc").take(NAV_USER_MESSAGES_SCAN_LIMIT);
+  return filterUserMessages(userMsgs);
+}
+
 export const getUserMessages = query({
   args: { conversation_id: v.id("conversations") },
   handler: async (ctx, args) => {
@@ -9859,11 +9880,7 @@ export const getUserMessages = query({
         .first();
       if (!membership) return [];
     }
-    const userMsgs = await ctx.db.query("messages")
-      .withIndex("by_conversation_role_timestamp", (q) =>
-        q.eq("conversation_id", args.conversation_id).eq("role", "user"))
-      .order("desc").collect();
-    return filterUserMessages(userMsgs);
+    return collectNavigableUserMessages(ctx.db, args.conversation_id);
   },
 });
 
