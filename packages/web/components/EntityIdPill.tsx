@@ -27,7 +27,10 @@ import { sessionCardSummary } from "../lib/sessionSummary";
 
 const api = _api as any;
 
-const ENTITY_ID_RE = /^(?:(?:ct|pl)-[a-z0-9]+|jx[a-z0-9]{5,})$/i;
+// Short ids (ct-/pl-/jx prefixes) plus a bare 32-char Convex id — the latter
+// has no type prefix (docs have no short id at all), so EntityIdPill resolves
+// its table server-side before rendering.
+const ENTITY_ID_RE = /^(?:(?:ct|pl)-[a-z0-9]+|jx[a-z0-9]{5,}|[a-z0-9]{32})$/i;
 
 const STATUS_ICON: Record<string, any> = {
   draft: CircleDotDashed,
@@ -390,7 +393,7 @@ function SessionHoverContent({ session }: { session: any }) {
   );
 }
 
-const MENTION_RE = /@\[([^\]]*?)(?:\s+(ct-\w+|pl-\w+|jx\w+|doc:\w+|label:\w+))?\](?:\s*\([^)]*\))?/g;
+const MENTION_RE = /@\[([^\]]*?)(?:\s+(ct-\w+|pl-\w+|jx\w+|doc:\w+|label:\w+|[a-z0-9]{32}))?\](?:\s*\([^)]*\))?/g;
 
 function MentionPill({ name, entityId }: { name: string; entityId?: string }) {
   if (entityId?.startsWith("doc:") && entityId.length > 4) {
@@ -403,14 +406,15 @@ function MentionPill({ name, entityId }: { name: string; entityId?: string }) {
       </span>
     );
   }
-  if (entityId && isEntityId(entityId)) {
-    return <EntityIdPill shortId={entityId} />;
-  }
-  return (
+  const namePill = (
     <span className="inline-flex items-center gap-0.5 px-1.5 py-0 rounded text-[11px] font-medium leading-[1.4] bg-sol-blue/10 text-sol-blue border border-sol-blue/20 align-baseline">
       @{name}
     </span>
   );
+  if (entityId && isEntityId(entityId)) {
+    return <EntityIdPill shortId={entityId} fallback={namePill} />;
+  }
+  return namePill;
 }
 
 export function renderWithMentions(text: string): React.ReactNode[] {
@@ -435,8 +439,10 @@ export function renderWithMentions(text: string): React.ReactNode[] {
 
 export function EntityAwareCode({ children, className, ...props }: any) {
   const text = String(children);
+  // The fallback keeps a non-entity Convex-shaped string (message id, hash)
+  // rendered as the inline code it was written as.
   if (!className && isEntityId(text)) {
-    return <EntityIdPill shortId={text} />;
+    return <EntityIdPill shortId={text} fallback={<code className={className} {...props}>{children}</code>} />;
   }
   return <code className={className} {...props}>{children}</code>;
 }
@@ -463,7 +469,15 @@ export function EntityAwareLink({ href, children, ...props }: any) {
     return <EntityIdPill type="doc" id={text.slice(4)} />;
   }
   if (isEntityId(text)) {
-    return <EntityIdPill shortId={text} />;
+    // Fallback preserves the original link for a Convex-shaped id that turns
+    // out not to be one of our entities (entity:// hrefs arrive stripped, so
+    // this degrades to plain text for those).
+    return (
+      <EntityIdPill
+        shortId={text}
+        fallback={<a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>}
+      />
+    );
   }
   // A pasted/linked codecast object URL (e.g. https://codecast.sh/tasks/<id>)
   // becomes a rich, in-app pill instead of an external link.
@@ -545,12 +559,16 @@ function GenericHoverContent({ entity, type }: { entity: any; type: EntityType }
   );
 }
 
-export function EntityIdPill({ shortId, type: typeProp, id: idProp }: { shortId?: string; type?: EntityType; id?: string }) {
+export function EntityIdPill({ shortId, type: typeProp, id: idProp, fallback }: { shortId?: string; type?: EntityType; id?: string; fallback?: React.ReactNode }) {
   // `id` keeps its original case (Convex ids are case-sensitive); short-id and
   // prefix matching lowercase internally.
   const rawId = (idProp ?? shortId ?? "").trim();
-  const type: EntityType | null = typeProp ?? detectEntityType(rawId);
   const looksConvex = isConvexId(rawId);
+  // A full Convex id carries no type prefix (and can even start with "jx", so
+  // prefix sniffing misclassifies it) — resolve its table server-side instead.
+  // Prefix detection is for short ids only.
+  const resolvedType = useQuery(api.entities.resolveIdType, !typeProp && looksConvex ? { id: rawId } : "skip");
+  const type: EntityType | null = typeProp ?? (looksConvex ? resolvedType ?? null : detectEntityType(rawId));
   const isTask = type === "task";
   const isPlan = type === "plan";
   const isSession = type === "session";
@@ -637,8 +655,10 @@ export function EntityIdPill({ shortId, type: typeProp, id: idProp }: { shortId?
   // Clear any in-flight timer if the pill unmounts (e.g. on navigation).
   useEffect(() => cancelHover, [cancelHover]);
 
-  // Unknown id shape (no detectable type) — render the raw text, not a pill.
-  if (!type) return <span>{rawId}</span>;
+  // Unknown id shape, or a Convex id that resolved to no entity table (message
+  // id, random hash) — render the caller's original element, or the raw text.
+  // Also the transient state while resolveIdType is in flight.
+  if (!type) return fallback !== undefined ? <>{fallback}</> : <span>{rawId}</span>;
 
   return (
     <Popover open={hoverOpen} onOpenChange={setHoverOpen}>
