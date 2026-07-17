@@ -11,6 +11,8 @@ import {
   toolSummary,
   toolVisual,
   toolIcon,
+  structuredPayloadSummary,
+  structuredPayloadKeysFromRaw,
 } from "./index";
 
 const tc = (name: string, input: unknown) => ({
@@ -146,6 +148,7 @@ describe("toolSummary", () => {
     ["SendMessage", { recipient: "bob" }, "to bob"],
     ["Skill", { skill: "commit" }, "/commit"],
     ["TeamDelete", {}, "Cleanup"],
+    ["StructuredOutput", { verdict: "SAFE", findings: [1, 2] }, "verdict: SAFE, findings[2]"],
   ];
   it.each(cases)("%s summarizes correctly", (name, input, expected) => {
     expect(toolSummary(tc(name, input))).toBe(expected);
@@ -162,6 +165,47 @@ describe("toolSummary", () => {
   });
 });
 
+describe("structuredPayloadSummary", () => {
+  it("shows short scalars inline, array lengths, bare keys for the rest", () => {
+    expect(
+      structuredPayloadSummary({
+        dimension: "completeness",
+        verdict: "SAFE",
+        findings: [{}, {}],
+        reasoning: "a long explanation that easily exceeds the inline value limit",
+        meta: { nested: true },
+      }),
+    ).toBe("dimension: completeness, verdict: SAFE, findings[2], reasoning, meta");
+  });
+  it("returns '' for an empty payload", () => {
+    expect(structuredPayloadSummary({})).toBe("");
+  });
+  it("truncates the joined summary at 80 chars", () => {
+    const wide = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`key_number_${i}`, []]));
+    const s = structuredPayloadSummary(wide);
+    expect(s.length).toBeLessThanOrEqual(83); // 80 + "..."
+  });
+});
+
+describe("structuredPayloadKeysFromRaw", () => {
+  const payload = JSON.stringify({
+    isReal: true,
+    reason: "x".repeat(600),
+    "quoted \\\" key": 1,
+    extra: [1, 2, 3],
+  });
+  it("salvages top-level keys from a truncated JSON prefix", () => {
+    expect(structuredPayloadKeysFromRaw(payload.slice(0, 500))).toBe("isReal, reason");
+  });
+  it("ignores nested keys and string values", () => {
+    const raw = JSON.stringify({ dimension: "completeness", findings: [{ severity: "info" }], verdict: "SAFE" });
+    expect(structuredPayloadKeysFromRaw(raw)).toBe("dimension, findings, verdict");
+  });
+  it("returns '' for garbage", () => {
+    expect(structuredPayloadKeysFromRaw("not json at all")).toBe("");
+  });
+});
+
 describe("toolVisual / toolIcon", () => {
   const cases: Array<[string, { icon: string; color: string }]> = [
     ["Bash", { icon: "terminal", color: "green" }],
@@ -175,6 +219,7 @@ describe("toolVisual / toolIcon", () => {
     ["mcp__claude-in-chrome__navigate", { icon: "chrome", color: "blue" }],
     ["mcp__claude-in-chrome__find", { icon: "search", color: "violet" }],
     ["mcp__some-other__thing", { icon: "plug", color: "cyan" }],
+    ["StructuredOutput", { icon: "check-square-o", color: "cyan" }],
     ["TotallyUnknownTool", { icon: "cog", color: "textDim" }],
   ];
   it.each(cases)("%s -> visual", (name, expected) => {

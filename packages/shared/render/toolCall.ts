@@ -25,6 +25,55 @@ export function isPlanWriteToolCall(tc: ToolCallLike): boolean {
   }
 }
 
+// StructuredOutput (a workflow subagent's typed return): the INPUT is the whole
+// payload — arbitrary JSON matching the workflow's schema — and the result is
+// boilerplate. Summarize the payload's top-level shape: short scalar values
+// inline, array lengths in brackets, bare key names for anything bigger
+// (e.g. `verdict: SAFE, findings[4], reasoning`).
+export function structuredPayloadSummary(parsed: Record<string, unknown>): string {
+  const parts = Object.entries(parsed).map(([key, value]) => {
+    if (Array.isArray(value)) return `${key}[${value.length}]`;
+    if (value !== null && typeof value === "object") return key;
+    const s = String(value);
+    return s.length <= 24 ? `${key}: ${s}` : key;
+  });
+  return truncateStr(parts.join(", "), 80);
+}
+
+// Fallback for a TRUNCATED payload (server reads cap tool input at a few
+// hundred chars, chopping the JSON mid-string so JSON.parse fails): scan the
+// raw prefix for top-level key names with a depth counter.
+export function structuredPayloadKeysFromRaw(raw: string): string {
+  const keys: string[] = [];
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  let strStart = -1;
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') {
+        inString = false;
+        if (strStart >= 0) {
+          let j = i + 1;
+          while (j < raw.length && /\s/.test(raw[j])) j++;
+          if (raw[j] === ":") keys.push(raw.slice(strStart, i));
+        }
+        strStart = -1;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      strStart = depth === 1 ? i + 1 : -1;
+    } else if (ch === "{" || ch === "[") depth++;
+    else if (ch === "}" || ch === "]") depth--;
+  }
+  return truncateStr(keys.join(", "), 80);
+}
+
 // One-line summary of a tool call from its raw JSON args alone — the compact
 // trailing text on a collapsed tool row (e.g. the file path for a Read, the
 // command for a Bash, the query for a search). Genuinely pure: depends only on
@@ -124,6 +173,8 @@ export function toolSummary(tc: ToolCallLike): string {
   if (tc.name === "mcp__claude-in-chrome__resize_window") return parsedInput.width && parsedInput.height ? `${parsedInput.width}x${parsedInput.height}` : "Resize";
   if (tc.name === "mcp__claude-in-chrome__shortcuts_list") return "List shortcuts";
   if (tc.name === "mcp__claude-in-chrome__shortcuts_execute") return parsedInput.command ? `/${String(parsedInput.command)}` : "Shortcut";
+
+  if (tc.name === "StructuredOutput") return structuredPayloadSummary(parsedInput);
 
   // Task tools
   if (tc.name === "Task") return parsedInput.description ? truncateStr(String(parsedInput.description), 40) : "";
