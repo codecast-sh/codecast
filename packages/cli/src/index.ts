@@ -20,7 +20,7 @@ import {
 } from "@codecast/shared/entities";
 import { SNIPPET_CATALOG, snippetBySlug, allSnippetSlugs } from "@codecast/shared/contracts";
 import { cliFetch, cliFetchRead, cliSearchRequest } from "./cliHttp.js";
-import { listProfiles, saveProfile, useProfile, getAccountsHeartbeatPayload, CcAccountError } from "./ccAccounts.js";
+import { listProfiles, saveProfile, useProfile, deleteProfile, getAccountsHeartbeatPayload, CcAccountError } from "./ccAccounts.js";
 import { CODECAST_STATUS_HOOK } from "./statusHook.js";
 import { AuthServer } from "./authServer.js";
 import { startRelayPoller } from "./authRelay.js";
@@ -2101,40 +2101,45 @@ ${MEMORY_SNIPPET_END}
 `;
 
 const TASK_SNIPPET_END = "<!-- /codecast-tasks -->";
+// Headings the installer recognizes: the current one plus the pre-rename one
+// ("Async Tasks", when triggers were `cast schedule`) so updating an old
+// install replaces the old block instead of appending a duplicate.
+const TRIGGER_SNIPPET_HEADING = "## Triggers";
+const LEGACY_TASK_SNIPPET_HEADING = "## Async Tasks";
 const TASK_SNIPPET = `
-## Async Tasks
+${TRIGGER_SNIPPET_HEADING}
 
-You can schedule follow-up work that runs autonomously after this session ends. Use this for anything that should happen later: checking CI, reviewing PRs, continuing long-running refactors, or responding to events.
+You can set triggers — follow-up work that runs autonomously after this session ends. Use them for anything that should happen later: checking CI, reviewing PRs, continuing long-running refactors, or responding to events.
 
 \`\`\`bash
-# Schedule tasks
-cast schedule add "Check if CI is green on main" --in 30m
-cast schedule add "Review open PRs and summarize findings" --every 4h
-cast schedule add "Respond to new PR review comments" --on pr_comment
-cast schedule add "Watch the funnel and report anything off" --every 4h --safe
+# Set triggers
+cast trigger add "Check if CI is green on main" --in 30m
+cast trigger add "Review open PRs and summarize findings" --every 4h
+cast trigger add "Respond to new PR review comments" --on pr_comment
+cast trigger add "Watch the funnel and report anything off" --every 4h --safe
 
-# Report completion (when running inside a task)
-cast schedule complete <task_id> --summary "what was done"
+# Report completion (when running inside a triggered run)
+cast trigger complete <trigger_id> --summary "what was done"
 
-# Manage tasks
-cast schedule ls                       # list active tasks
-cast schedule ls --all                 # include completed/failed
-cast schedule pause <id>               # pause a task
-cast schedule run <id>                 # run immediately
-cast schedule cancel <id>              # cancel a task
-cast schedule log <id>                 # show last run conversation
+# Manage triggers
+cast trigger ls                       # list active triggers
+cast trigger ls --all                 # include completed/failed
+cast trigger pause <id>               # pause a trigger
+cast trigger run <id>                 # fire immediately
+cast trigger cancel <id>              # cancel a trigger
+cast trigger log <id>                 # show last run conversation
 \`\`\`
 
 Options:
 - \`--in <duration>\`: delay before run (30m, 2h, 1d)
 - \`--every <duration>\`: recurring interval
-- \`--on <event>\`: trigger on webhook (pr_comment, pr_opened, pr_merged, push)
+- \`--on <event>\`: fire on webhook (pr_comment, pr_opened, pr_merged, push)
 - \`--context current\`: capture current session context for the follow-up
 - \`--safe\`: read-only spawned run — write tools removed, state-changing commands blocked. Default is permissive: the run can act. A run that continues an existing session inherits that session's rules.
 - \`--project <path>\`: set working directory (defaults to current)
 - \`--max-runtime <duration>\`: override max runtime (default: 10m)
 
-When a task fires, a new agent session spawns with your prompt and the task ID. The agent should call \`cast schedule complete <task_id> --summary "..."\` when done to report results back.
+When a trigger fires, a new agent session spawns with your prompt and the trigger ID. The agent should call \`cast trigger complete <trigger_id> --summary "..."\` when done to report results back.
 ${TASK_SNIPPET_END}
 `;
 
@@ -2409,29 +2414,34 @@ function installTaskSnippetToFile(filePath: string, dirPath: string, update: boo
     existing = fs.readFileSync(filePath, "utf-8");
   }
 
-  const hasTask = existing.includes("## Async Tasks") && (existing.includes("codecast task") || existing.includes("cast task"));
+  const headings = [TRIGGER_SNIPPET_HEADING, LEGACY_TASK_SNIPPET_HEADING].filter((h) => existing.includes(h));
+  const hasTask = headings.length > 0 &&
+    ["cast trigger", "cast schedule", "codecast task", "cast task"].some((s) => existing.includes(s));
   if (hasTask && !update) {
     return { installed: false, updated: false };
   }
 
   if (hasTask && update) {
-    const taskStart = existing.indexOf("## Async Tasks");
-    let taskEnd = existing.length;
+    // Remove every recognized block (current or pre-rename heading), then
+    // append the fresh snippet once.
+    for (const heading of headings) {
+      const taskStart = existing.indexOf(heading);
+      if (taskStart === -1) continue;
+      let taskEnd = existing.length;
 
-    const endMarkerIdx = existing.indexOf(TASK_SNIPPET_END, taskStart);
-    if (endMarkerIdx !== -1) {
-      taskEnd = endMarkerIdx + TASK_SNIPPET_END.length;
-      if (existing[taskEnd] === "\n") taskEnd++;
-    } else {
-      const nextSection = existing.slice(taskStart + 10).match(/\n## [A-Z]/);
-      if (nextSection && nextSection.index !== undefined) {
-        taskEnd = taskStart + 10 + nextSection.index;
+      const endMarkerIdx = existing.indexOf(TASK_SNIPPET_END, taskStart);
+      if (endMarkerIdx !== -1) {
+        taskEnd = endMarkerIdx + TASK_SNIPPET_END.length;
+        if (existing[taskEnd] === "\n") taskEnd++;
+      } else {
+        const nextSection = existing.slice(taskStart + heading.length).match(/\n## [A-Z]/);
+        if (nextSection && nextSection.index !== undefined) {
+          taskEnd = taskStart + heading.length + nextSection.index;
+        }
       }
-    }
 
-    const before = existing.slice(0, taskStart);
-    const after = existing.slice(taskEnd);
-    existing = before + after;
+      existing = existing.slice(0, taskStart) + existing.slice(taskEnd);
+    }
     fs.writeFileSync(filePath, existing.trimEnd() + "\n" + TASK_SNIPPET, { mode: 0o600 });
     return { installed: true, updated: true };
   }
@@ -2769,7 +2779,7 @@ async function promptMemoryEnablement(): Promise<void> {
     writeConfig(config);
     if (result.updated) {
       const targets = getSnippetTargets();
-      console.log(`Schedule snippet updated to latest version in ${targets.map(t => t.label).join(", ")}.`);
+      console.log(`Trigger snippet updated to latest version in ${targets.map(t => t.label).join(", ")}.`);
     }
   }
   if (config.workflow_enabled && config.workflow_version !== getWorkflowVersion()) {
@@ -3215,7 +3225,10 @@ program
     }
     const result = await cliPost("/cli/sessions/undismiss", { session: target });
     if (result.was_hidden) {
-      console.log(`${c.green}ok${c.reset} restored ${c.cyan}${result.short_id}${c.reset} ${c.dim}— back in the inbox${c.reset}`);
+      const rearmed = result.rearmed_schedules
+        ? `, re-armed ${result.rearmed_schedules} trigger${result.rearmed_schedules === 1 ? "" : "s"} its kill canceled`
+        : "";
+      console.log(`${c.green}ok${c.reset} restored ${c.cyan}${result.short_id}${c.reset} ${c.dim}— back in the inbox${rearmed}${c.reset}`);
     } else {
       console.log(`${c.dim}${result.short_id} was already visible in the inbox${c.reset}`);
     }
@@ -3225,7 +3238,7 @@ program
   .command("kill")
   .description(
     "Kill a session's agent and retire it from the inbox\n\n" +
-    "Tears the agent down, marks the session completed, cancels schedules bound\n" +
+    "Tears the agent down, marks the session completed, cancels triggers bound\n" +
     "to it, and files it under the Killed bucket. The transcript stays readable\n" +
     "and the session stays restartable. Deliberate action — the session ID is\n" +
     "required (killing your OWN session cuts you off mid-turn).\n\n" +
@@ -3239,9 +3252,12 @@ program
       console.log(`${c.dim}${result.short_id} was already dismissed — nothing to tear down${c.reset}`);
       return;
     }
+    const canceled = result.canceled_schedules
+      ? `, canceled ${result.canceled_schedules} trigger${result.canceled_schedules === 1 ? "" : "s"}`
+      : "";
     const note = result.outcome === "reap"
       ? ` ${c.dim}(empty session — cleaned up entirely)${c.reset}`
-      : ` ${c.dim}— agent torn down, schedules canceled (cast undismiss ${result.short_id} to resurface)${c.reset}`;
+      : ` ${c.dim}— agent torn down${canceled} (cast undismiss ${result.short_id} to resurface)${c.reset}`;
     console.log(`${c.green}ok${c.reset} killed ${c.cyan}${result.short_id}${c.reset}${note}`);
   });
 
@@ -3512,6 +3528,22 @@ accountsCmd
     try {
       const meta = saveProfile(name);
       console.log(`${c.green}✓${c.reset} saved ${c.cyan}${name}${c.reset} (${meta.email ?? "unknown email"})`);
+    } catch (err) {
+      console.error(err instanceof CcAccountError ? err.message : String(err));
+      process.exit(1);
+    }
+    await publishAccountsInventory();
+  });
+
+accountsCmd
+  .command("rm <name>")
+  .alias("remove")
+  .description("Delete a saved account profile from this machine (the account itself is untouched; re-adding it takes one /login)")
+  .action(async (name: string) => {
+    try {
+      const meta = deleteProfile(name);
+      console.log(`${c.green}✓${c.reset} removed ${c.cyan}${name}${c.reset}${meta.email ? ` (${meta.email})` : ""}`);
+      console.log(`${c.dim}  log into that account again anytime to re-enroll it${c.reset}`);
     } catch (err) {
       console.error(err instanceof CcAccountError ? err.message : String(err));
       process.exit(1);
@@ -7592,9 +7624,11 @@ program
         changed = true;
       }
 
-      // Remove task snippet
-      const taskStart = content.indexOf("## Async Tasks");
-      if (taskStart !== -1 && (content.includes("codecast task") || content.includes("codecast schedule") || content.includes("cast task") || content.includes("cast schedule"))) {
+      // Remove trigger snippet (current or pre-rename heading)
+      const taskStart = [TRIGGER_SNIPPET_HEADING, LEGACY_TASK_SNIPPET_HEADING]
+        .map((h) => content.indexOf(h))
+        .find((i) => i !== -1) ?? -1;
+      if (taskStart !== -1 && (content.includes("cast trigger") || content.includes("codecast task") || content.includes("codecast schedule") || content.includes("cast task") || content.includes("cast schedule"))) {
         const taskEndMarker = content.indexOf(TASK_SNIPPET_END, taskStart);
         let taskEnd = taskEndMarker !== -1 ? taskEndMarker + TASK_SNIPPET_END.length : content.length;
         if (content[taskEnd] === "\n") taskEnd++;
@@ -8210,7 +8244,7 @@ program
       messaging: { getVersion: getMessagingVersion, install: installMessagingSnippet, reEnable: "cast messaging install" },
       forks: { getVersion: getForksVersion, install: installForksSnippet, reEnable: "cast install" },
       tasks: { getVersion: getWorkVersion, install: installWorkSnippet, reEnable: "cast task install" },
-      scheduling: { getVersion: getTaskVersion, install: installTaskSnippet, reEnable: "cast schedule install" },
+      triggers: { getVersion: getTaskVersion, install: installTaskSnippet, reEnable: "cast trigger install" },
       workflows: { getVersion: getWorkflowVersion, install: installWorkflowSnippet, reEnable: "cast workflow install" },
       visual: { getVersion: getVisualVersion, install: installVisualSnippet, reEnable: "cast install" },
       orchestration: { getVersion: getWorkVersion, install: installOrchestration, reEnable: "cast install" },
@@ -10479,16 +10513,18 @@ anchor
     console.log(`${c.green}✓${c.reset} posted to Slack`);
   });
 
-const schedule = program
-  .command("schedule")
-  .alias("sched")
-  .description("Manage scheduled agent tasks")
+// "schedule"/"sched" are the pre-rename names — old snippets in the wild and
+// old session contexts still invoke them, so they stay as aliases.
+const trigger = program
+  .command("trigger")
+  .aliases(["schedule", "sched"])
+  .description("Delayed, recurring, and event-driven agent runs (triggers)")
   .showHelpAfterError(true);
 
-schedule
+trigger
   .command("add")
-  .description("Schedule a new agent task")
-  .argument("<prompt>", "Task instruction for the agent")
+  .description("Set a new trigger")
+  .argument("<prompt>", "Instruction for the agent when the trigger fires")
   .option("--in <duration>", "Run after delay (e.g., 30m, 2h, 1d)")
   .option("--every <duration>", "Run on interval (e.g., 4h, 1d)")
   .option("--on <event>", "Run on event (pr_comment, pr_opened, pr_merged, push)")
@@ -10499,7 +10535,7 @@ schedule
   .option("--project <path>", "Project path for agent cwd")
   .option("--agent <type>", "Agent type: claude (default) or codex", "claude")
   .option("--max-runtime <duration>", "Max runtime (default: 10m)")
-  .option("--for <session>", "Bind the schedule to a session (short id, conversation id, or Claude session uuid): runs inject into it instead of spawning fresh agents. Defaults to the calling session when run from inside one.")
+  .option("--for <session>", "Bind the trigger to a session (short id, conversation id, or Claude session uuid): runs inject into it instead of spawning fresh agents. Defaults to the calling session when run from inside one.")
   .option("--thread", "Post results back to the current conversation thread")
   .action(async (prompt, options) => {
     const config = readConfig();
@@ -10548,10 +10584,10 @@ schedule
     let originating_conversation_id: string | undefined;
     let target_conversation_id: string | undefined;
 
-    // Always try to capture the originating session so scheduled tasks inject
+    // Always try to capture the originating session so triggered runs inject
     // back into the live conversation instead of spawning fresh agents.
     // --for overrides detection: the ref is resolved server-side (own sessions
-    // only), so a schedule can be bound to a session from any shell.
+    // only), so a trigger can be bound to a session from any shell.
     const sessionId = options.for ? null : findCurrentSessionFromProcess(getRealCwd());
     if (sessionId) {
       try {
@@ -10575,13 +10611,13 @@ schedule
       console.error("Could not resolve current conversation for --thread");
       process.exit(1);
     }
-    // A schedule without an originating conversation is a SPAWN schedule: each
+    // A trigger without an originating conversation is a SPAWN trigger: each
     // run launches a fresh headless agent instead of injecting into a live
     // session. That's a silent behavior fork, so say it out loud — an agent
     // creating a loop for its own session must see when the link didn't take.
     if (!originating_conversation_id && !options.for) {
       console.error(
-        "note: could not link this schedule to a session — runs will spawn fresh agents in " +
+        "note: could not link this trigger to a session — runs will spawn fresh agents in " +
           (options.project || getRealCwd()) +
           " (use --for <session> to bind one)"
       );
@@ -10623,23 +10659,23 @@ schedule
       const shortId = taskId.slice(-8);
 
       if (schedule_type === "recurring") {
-        console.log(`${c.green}+${c.reset} Task ${c.cyan}${shortId}${c.reset} scheduled every ${options.every}: ${c.bold}${title}${c.reset}`);
+        console.log(`${c.green}+${c.reset} Trigger ${c.cyan}${shortId}${c.reset} every ${options.every}: ${c.bold}${title}${c.reset}`);
       } else if (schedule_type === "event") {
-        console.log(`${c.green}+${c.reset} Task ${c.cyan}${shortId}${c.reset} on ${c.yellow}${options.on}${c.reset}: ${c.bold}${title}${c.reset}`);
+        console.log(`${c.green}+${c.reset} Trigger ${c.cyan}${shortId}${c.reset} on ${c.yellow}${options.on}${c.reset}: ${c.bold}${title}${c.reset}`);
       } else if (options.in) {
-        console.log(`${c.green}+${c.reset} Task ${c.cyan}${shortId}${c.reset} in ${options.in}: ${c.bold}${title}${c.reset}`);
+        console.log(`${c.green}+${c.reset} Trigger ${c.cyan}${shortId}${c.reset} in ${options.in}: ${c.bold}${title}${c.reset}`);
       } else {
-        console.log(`${c.green}+${c.reset} Task ${c.cyan}${shortId}${c.reset} queued now: ${c.bold}${title}${c.reset}`);
+        console.log(`${c.green}+${c.reset} Trigger ${c.cyan}${shortId}${c.reset} queued now: ${c.bold}${title}${c.reset}`);
       }
     } catch (error) {
-      console.error("Failed to create task:", error instanceof Error ? error.message : error);
+      console.error("Failed to create trigger:", error instanceof Error ? error.message : error);
       process.exit(1);
     }
   });
 
-schedule
+trigger
   .command("ls")
-  .description("List agent tasks")
+  .description("List triggers")
   .option("-s, --status <status>", "Filter by status (scheduled, running, completed, failed, paused)")
   .option("-a, --all", "Show all statuses including completed")
   .action(async (options) => {
@@ -10667,7 +10703,7 @@ schedule
       }
 
       if (!Array.isArray(tasks) || tasks.length === 0) {
-        console.log(fmt.muted("No tasks found."));
+        console.log(fmt.muted("No triggers found."));
         return;
       }
 
@@ -10677,7 +10713,7 @@ schedule
         : tasks.filter((t: any) => !["completed", "failed"].includes(t.status));
 
       if (filtered.length === 0) {
-        console.log(fmt.muted("No active tasks. Use --all to see completed tasks."));
+        console.log(fmt.muted("No active triggers. Use --all to see completed ones."));
         return;
       }
 
@@ -10712,19 +10748,19 @@ schedule
         }
       }
 
-      console.log(fmt.muted(`\n${filtered.length} task(s)`));
+      console.log(fmt.muted(`\n${filtered.length} trigger(s)`));
     } catch (error) {
-      console.error("Failed to list tasks:", error instanceof Error ? error.message : error);
+      console.error("Failed to list triggers:", error instanceof Error ? error.message : error);
       process.exit(1);
     }
   });
 
-schedule
+trigger
   .command("complete")
-  .description("Mark a running task as completed (called by the agent)")
-  .argument("<id>", "Task ID (full or last 8 chars)")
+  .description("Mark a running trigger as completed (called by the agent)")
+  .argument("<id>", "Trigger ID (full or last 8 chars)")
   .option("--summary <text>", "Summary of what was done")
-  .option("--needs-attention", "Flag the run for the user: it stays in the inbox instead of folding into the schedule's history, and a stashed/killed session is pulled back into the queue")
+  .option("--needs-attention", "Flag the run for the user: it stays in the inbox instead of folding into the trigger's history, and a stashed/killed session is pulled back into the queue")
   .action(async (id, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -10735,9 +10771,9 @@ schedule
     const taskId = await resolveTaskId(config, siteUrl, id);
     if (!taskId) return;
 
-    // Link this run's conversation back to the task. The daemon exports the run's
-    // session UUID when it spawns the agent; fall back to detecting our own
-    // session from the process tree (covers manual `cast schedule complete`).
+    // Link this run's conversation back to the trigger. The daemon exports the
+    // run's session UUID when it spawns the agent; fall back to detecting our own
+    // session from the process tree (covers manual `cast trigger complete`).
     const runSessionUuid =
       process.env.CODECAST_RUN_SESSION_UUID ||
       findCurrentSessionFromProcess(getRealCwd()) ||
@@ -10761,9 +10797,9 @@ schedule
         process.exit(1);
       }
       if (result.success) {
-        console.log(`${c.green}ok${c.reset} Task completed: ${c.cyan}${id}${c.reset}`);
+        console.log(`${c.green}ok${c.reset} Trigger completed: ${c.cyan}${id}${c.reset}`);
       } else {
-        console.error("Failed to complete task (may not be in running state)");
+        console.error("Failed to complete trigger (may not be in running state)");
         process.exit(1);
       }
     } catch (error) {
@@ -10772,34 +10808,34 @@ schedule
     }
   });
 
-schedule
+trigger
   .command("cancel")
-  .description("Cancel a task")
-  .argument("<id>", "Task ID (full or last 8 chars)")
+  .description("Cancel a trigger")
+  .argument("<id>", "Trigger ID (full or last 8 chars)")
   .action(async (id) => {
     await taskAction("cancel", id, "Cancelled");
   });
 
-schedule
+trigger
   .command("pause")
-  .description("Pause a scheduled task")
-  .argument("<id>", "Task ID (full or last 8 chars)")
+  .description("Pause a trigger")
+  .argument("<id>", "Trigger ID (full or last 8 chars)")
   .action(async (id) => {
     await taskAction("pause", id, "Paused");
   });
 
-schedule
+trigger
   .command("run")
-  .description("Run a task immediately")
-  .argument("<id>", "Task ID (full or last 8 chars)")
+  .description("Fire a trigger immediately")
+  .argument("<id>", "Trigger ID (full or last 8 chars)")
   .action(async (id) => {
     await taskAction("run", id, "Queued for immediate run");
   });
 
-schedule
+trigger
   .command("log")
-  .description("Show last run conversation for a task")
-  .argument("<id>", "Task ID (full or last 8 chars)")
+  .description("Show last run conversation for a trigger")
+  .argument("<id>", "Trigger ID (full or last 8 chars)")
   .action(async (id) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -10821,7 +10857,7 @@ schedule
     const t = Array.isArray(tasks) ? tasks.find((x: any) => x._id === taskId) : null;
 
     if (!t) {
-      console.error("Task not found");
+      console.error("Trigger not found");
       process.exit(1);
     }
 
@@ -10844,17 +10880,17 @@ schedule
     console.log(fmt.muted(`Use: cast read ${t.last_run_conversation_id}`));
   });
 
-schedule
+trigger
   .command("install")
-  .description("Install task snippet into agent config (CLAUDE.md, AGENTS.md)")
-  .option("--disable", "Remove task snippet and disable")
+  .description("Install trigger snippet into agent config (CLAUDE.md, AGENTS.md)")
+  .option("--disable", "Remove trigger snippet and disable")
   .action(async (options) => {
     const config = readConfig() || {};
 
     if (options.disable) {
       config.task_enabled = false;
       writeConfig(config);
-      console.log("Schedule snippet disabled. Run 'cast schedule install' to re-enable.");
+      console.log("Trigger snippet disabled. Run 'cast trigger install' to re-enable.");
       return;
     }
 
@@ -10866,12 +10902,12 @@ schedule
     const targets = getSnippetTargets();
     const targetList = targets.map(t => t.label).join(", ");
     if (result.updated) {
-      console.log(`Schedule snippet updated in ${targetList}`);
+      console.log(`Trigger snippet updated in ${targetList}`);
     } else if (result.installed) {
-      console.log(`Schedule snippet installed in ${targetList}`);
-      console.log("Your agents can now schedule follow-up work autonomously.");
+      console.log(`Trigger snippet installed in ${targetList}`);
+      console.log("Your agents can now set triggers for follow-up work.");
     } else {
-      console.log("Schedule snippet is up to date.");
+      console.log("Trigger snippet is up to date.");
     }
   });
 
@@ -12919,7 +12955,7 @@ plan
       if (!reschedule) return;
       const resumePrompt = `Run this command to continue autopilot orchestration: cast plan autopilot ${planId} --max-runtime 2h`;
       const args = [
-        "schedule", "add",
+        "trigger", "add",
         resumePrompt,
         "--in", "5m",
         "--mode", "apply",

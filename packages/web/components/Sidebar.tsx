@@ -13,7 +13,7 @@ import { visitTimeAgo } from "../lib/recentVisits";
 import { getLabelColor } from "../lib/labelColors";
 import { shouldShowSession } from "../lib/sessionFilters";
 import { nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
-import { useInboxStore, useTrackedStore, categorizeSessions, filterInboxScope, sessionsWithPendingSend, sessionsWakeSig, pendingSendWakeSig } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, categorizeSessions, filterInboxScope, sessionsWithPendingSend, sessionsWakeSig, pendingSendWakeSig, resolveShowOld } from "../store/inboxStore";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { useConvexSync } from "../hooks/useConvexSync";
 import { useCurrentUser } from "../hooks/useCurrentUser";
@@ -21,7 +21,7 @@ import { TeamIcon } from "./TeamIcon";
 import { isDesktop } from "../lib/desktop";
 import { CreateTaskModal } from "./CreateTaskModal";
 import { CreateDocModal } from "./CreateDocModal";
-import { Workflow } from "lucide-react";
+import { Workflow, Zap } from "lucide-react";
 
 const api = _api as any;
 
@@ -325,7 +325,7 @@ const NeedsInputCountBadge = memo(function NeedsInputCountBadge() {
     s => pendingSendWakeSig(s.pendingMessages),
     s => s.currentUser?._id,
     s => s.liveInboxIds,
-    s => s.showOldSessions,
+    s => resolveShowOld(s.clientState.ui),
   ]);
   // Mine-scoped: the sidebar's "needs input" badge is your personal attention
   // count, so a teammate row cached from a team-board visit must not inflate it.
@@ -338,9 +338,9 @@ const NeedsInputCountBadge = memo(function NeedsInputCountBadge() {
   // already hides, and the sidebar number never matches what you see.
   // liveInboxIds + showOld make categorizeSessions drop "old" rows (see its opts).
   const needsInputCount = useMemo(
-    () => categorizeSessions(filterInboxScope(s.sessions, "mine", meId ? meId.toString() : null), s.sessionsWithQueuedMessages, sessionsWithPendingSend(s.pendingMessages), { liveInboxIds: s.liveInboxIds, showOld: s.showOldSessions }).needsInput.length,
+    () => categorizeSessions(filterInboxScope(s.sessions, "mine", meId ? meId.toString() : null), s.sessionsWithQueuedMessages, sessionsWithPendingSend(s.pendingMessages), { liveInboxIds: s.liveInboxIds, showOld: resolveShowOld(s.clientState.ui) }).needsInput.length,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sessionsWakeSig(s.sessions), meId, s.sessionsWithQueuedMessages, pendingSendWakeSig(s.pendingMessages), s.liveInboxIds, s.showOldSessions, coarseNow],
+    [sessionsWakeSig(s.sessions), meId, s.sessionsWithQueuedMessages, pendingSendWakeSig(s.pendingMessages), s.liveInboxIds, resolveShowOld(s.clientState.ui), coarseNow],
   );
   if (needsInputCount === 0) return null;
   return (
@@ -362,7 +362,8 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const isPlans = pathname === "/plans" || pathname?.startsWith("/plans/");
   const isDocs = pathname === "/docs" || pathname?.startsWith("/docs/");
   const isWorkflows = pathname === "/workflows" || pathname?.startsWith("/workflows/");
-  const isSchedules = pathname === "/schedules" || pathname?.startsWith("/schedules/");
+  const isTriggers = pathname === "/triggers" || pathname?.startsWith("/triggers/") ||
+    pathname === "/schedules" || pathname?.startsWith("/schedules/"); // /schedules = pre-rename alias
   const { user: currentUser } = useCurrentUser();
   const teamMembers = useInboxStore((s) => s.teamMembers);
   const [currentTime, setCurrentTime] = useState(Date.now());
@@ -656,18 +657,16 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             {!isNarrow && <span>Workflows</span>}
           </Link>
           <Link
-            href="/schedules"
+            href="/triggers"
             className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none ${
-              isSchedules
+              isTriggers
                 ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
                 : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/60"
             }`}
-            title="Schedules"
+            title="Triggers"
           >
-            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            {!isNarrow && <span>Schedules</span>}
+            <Zap className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />
+            {!isNarrow && <span>Triggers</span>}
           </Link>
           <Link
             href="/anchor"

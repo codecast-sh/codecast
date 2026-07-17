@@ -18,10 +18,10 @@ import {
   X,
   XCircle,
 } from "lucide-react";
-import { describeTaskCadence, fmtClock, fmtDuration, taskStateLabel } from "./scheduleCadence";
+import { describeTaskCadence, fmtClock, fmtDuration, taskStateLabel } from "./triggerCadence";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
-import { ARMED_STATUSES, taskDisplayTitle, type TaskRow } from "./scheduleTasks";
-import { openRunInStore, useScheduleRuns } from "./ScheduleRunHistory";
+import { ARMED_STATUSES, taskDisplayTitle, type TaskRow } from "./triggerTasks";
+import { openRunInStore, useTriggerRuns } from "./TriggerRunHistory";
 import { useInboxStore } from "../store/inboxStore";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 
@@ -52,7 +52,7 @@ function cleanTitle(title: string): string {
 // /schedules page use — Convex dedupes it, so this strip adds no query load.
 
 
-export function ScheduleContextPanel({
+export function TriggerContextPanel({
   conversationId,
   sessionId,
   agentTaskId,
@@ -63,7 +63,7 @@ export function ScheduleContextPanel({
 }) {
   const tasks = useQuery(api.agentTasks.webList, {}) as TaskRow[] | undefined;
   // Arrive expanded when the navigation came FROM a schedule surface (dock row,
-  // row under a card): the click meant "show me this schedule", so the strip
+  // row under a card): the click meant "show me this trigger", so the strip
   // opens without a second click. Subscribed (not a one-shot mount read) so the
   // click also works when the conversation is ALREADY active — no remount
   // happens then, and this used to make the click a silent no-op. The nonce
@@ -159,7 +159,7 @@ export function ScheduleContextPanel({
   // syncs stay browseable) AND injected runs (the <scheduled-task> turns in the
   // home conversation). Each carries the message that triggered it, so a chip
   // click lands the user on the exact trigger.
-  const runs = useScheduleRuns(primary?._id ?? null);
+  const runs = useTriggerRuns(primary?._id ?? null);
 
   if (!primary) return null;
 
@@ -491,7 +491,7 @@ export function ScheduleContextPanel({
                   </button>
                 </ShortcutTooltip>
                 {primary.status === "paused" ? (
-                  <ShortcutTooltip label="Re-arm the schedule — fires resume from now">
+                  <ShortcutTooltip label="Re-arm the trigger — fires resume from now">
                     <button
                       disabled={busy}
                       onClick={() => act(resume)}
@@ -516,7 +516,7 @@ export function ScheduleContextPanel({
                   </ShortcutTooltip>
                 )}
                 {confirmingCancel ? (
-                  <ShortcutTooltip label="Really cancel — this schedule won't fire again">
+                  <ShortcutTooltip label="Really cancel — this trigger won't fire again">
                     <button
                       disabled={busy}
                       onClick={() => act(cancel)}
@@ -526,7 +526,7 @@ export function ScheduleContextPanel({
                     </button>
                   </ShortcutTooltip>
                 ) : (
-                  <ShortcutTooltip label="Cancel this schedule permanently" hint="asks to confirm">
+                  <ShortcutTooltip label="Cancel this trigger permanently" hint="asks to confirm">
                     <button
                       disabled={busy}
                       onClick={() => setConfirmingCancel(true)}
@@ -552,8 +552,8 @@ export function ScheduleContextPanel({
                   />
                 </button>
               )}
-              <Link href="/schedules" className="text-[10px] text-sol-cyan hover:underline">
-                Manage schedules
+              <Link href="/triggers" className="text-[10px] text-sol-cyan hover:underline">
+                Manage triggers
               </Link>
             </span>
           </div>
@@ -594,7 +594,7 @@ export function ScheduleContextPanel({
             <p className="text-[10px] leading-relaxed text-sol-text-dim/80 border-t border-sol-border/20 pt-1.5">
               {primary.originating_conversation_id === conversationId ? (
                 <>
-                  <span className="text-sol-text-dim font-medium">Stash</span> keeps this session running quietly — the schedule still fires here, out of your queue.{" "}
+                  <span className="text-sol-text-dim font-medium">Stash</span> keeps this session running quietly — the trigger still fires here, out of your queue.{" "}
                   <span className="text-sol-text-dim font-medium">Dismiss/kill</span> retires the session and cancels this schedule.
                 </>
               ) : isRun ? (
