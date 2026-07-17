@@ -13,7 +13,7 @@ import { resetConversationPendingMessages } from "./pendingMessages";
 import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill } from "./agentTasks";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId } from "./daemonCommandUtils";
-import { AGENT_MODEL_CONFIG, modelAgentKey } from "@codecast/shared/contracts";
+import { AGENT_MODEL_CONFIG, modelAgentKey, fromConvexAgentType } from "@codecast/shared/contracts";
 import { shouldShowInInbox, isSessionIdle, deriveSessionActivity, classifyWorkState, normalizeWorkStateFilter, trustedAgentStatus, subagentKeepsParentWorking, type WorkState } from "./inboxFilters";
 import { subagentLinkFields } from "./ccAccountsShared";
 import { isSessionOwner } from "./sessionOwners";
@@ -5015,7 +5015,7 @@ export const forkFromMessage = mutation({
     const forkSessionId = args.session_id || `forked-${original.session_id}-${crypto.randomUUID()}`;
     // The daemon_command is deferred so it can't race a half-copied fork. It
     // gets inserted by advanceForkCopy when fork_status flips to "complete".
-    const daemonAgentType = agentType === "codex" ? "codex" : agentType === "gemini" ? "gemini" : "claude";
+    const daemonAgentType = fromConvexAgentType(agentType);
 
     // A fork defaults to the same visibility a fresh session in this directory
     // would get: re-resolve from the forker's directory mappings rather than
