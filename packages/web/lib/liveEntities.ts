@@ -58,15 +58,23 @@ type SessionAuthor = { name: string; avatar?: string | null } | null;
  * ownership (author chip, stash/kill semantics) MUST resolve through here;
  * checking session.user_id alone misses exactly those thin rows.
  *
- * Precedence: conv.is_own (definitive) → user_id vs me → source-provided
+ * Precedence: conv.is_own true / session owned_by_me / owner match (any positive
+ * ownership signal wins — a session ASSIGNED to me is mine to triage even though
+ * another account runs it) → conv.is_own false → user_id vs me → source-provided
  * author_name (team sources null it for own sessions) → assume mine.
+ *
+ * owned_by_me outranks a NEGATIVE is_own verdict deliberately: is_own is stamped
+ * on view, owned_by_me on every inbox delivery — after "assign to me" the meta
+ * from a pre-assignment view is stale exactly when the flag is fresh.
  */
 export function isForeignSession(
-  session: { user_id?: string; author_name?: string | null },
+  session: { user_id?: string; author_name?: string | null; owned_by_me?: boolean; owner_user_id?: string | null },
   conv: { user_id?: string; is_own?: boolean } | null | undefined,
   myId: string | null | undefined,
 ): boolean {
   if (conv?.is_own === true) return false;
+  if (session.owned_by_me) return false;
+  if (myId && session.owner_user_id && session.owner_user_id === myId) return false;
   if (conv?.is_own === false) return true;
   const uid = session.user_id ?? conv?.user_id;
   if (uid && myId) return uid !== myId;

@@ -1,4 +1,5 @@
 import { c, fmt } from "./colors.js";
+import { structuredPayloadSummary, structuredPayloadKeysFromRaw } from "@codecast/shared/render";
 
 function shortenToolPath(path: string): string {
   const match = path.match(/(?:packages|src|lib|app)\/.*$/);
@@ -36,9 +37,18 @@ function summarizeToolCall(tc: { name?: string; input?: unknown }): string {
         case "Agent":
           if (obj.description) param = String(obj.description).slice(0, 40);
           break;
+        case "StructuredOutput":
+          param = structuredPayloadSummary(obj);
+          break;
       }
     }
   } catch {}
+  // Non-full reads cap tool input server-side (~500 chars), which chops a
+  // StructuredOutput payload mid-string and fails the JSON.parse above —
+  // salvage the top-level key names from the truncated prefix.
+  if (!param && name === "StructuredOutput" && typeof tc.input === "string") {
+    param = structuredPayloadKeysFromRaw(tc.input);
+  }
   return param ? `${name} ${param}` : name;
 }
 
