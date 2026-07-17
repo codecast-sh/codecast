@@ -87,6 +87,14 @@ export function buildLaunchArgs(input: LaunchArgsInput): LaunchArgsResult {
     if (input.assignedClaudeSessionId && !configuredArgs.includes("--session-id")) {
       args.push("--session-id", input.assignedClaudeSessionId);
     }
+  } else if (agentType === "opencode") {
+    if (configuredArgs) args.push(...configuredArgs.split(/\s+/).filter(Boolean));
+    // A managed opencode session is driven from the web and can't answer the TUI's
+    // permission prompts (the daemon does no pane prompt monitoring for opencode),
+    // so it launches auto-approved — its full-access default, matching how codex
+    // (--full-auto) and claude (--dangerously-skip-permissions) launch here. Skip if
+    // the user already pinned --auto in their configured args.
+    if (!configuredArgs.includes("--auto")) args.push("--auto");
   }
   // cursor / gemini: no configured args or permission flags today.
 
@@ -104,6 +112,10 @@ export function buildLaunchArgs(input: LaunchArgsInput): LaunchArgsResult {
     if (input.requestedEffort && (CODEX_EFFORT_LEVELS as readonly string[]).includes(input.requestedEffort)) {
       args.push("-c", `model_reasoning_effort=${input.requestedEffort}`);
     }
+  } else if (agentType === "opencode") {
+    // opencode selects a model with `-m provider/model` (the picker's cliAlias);
+    // it has no reasoning-effort launch flag.
+    if (input.modelAlias) args.push("-m", input.modelAlias);
   }
 
   return { binaryArgs: args, notifyCodexBypass };

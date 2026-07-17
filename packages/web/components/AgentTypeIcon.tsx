@@ -25,6 +25,13 @@ export function AgentTypeIcon({ agentType, className = "w-3 h-3" }: { agentType:
         <path d="M12 0C12 0 12 6.268 8.134 10.134C4.268 14 0 14 0 14C0 14 6.268 14 10.134 17.866C14 21.732 14 28 14 28C14 28 14 21.732 17.866 17.866C21.732 14 28 14 28 14C28 14 21.732 14 17.866 10.134C14 6.268 14 0 14 0" />
       </svg>
     );
+  } else if (agentType === "opencode") {
+    return (
+      <svg className={`${className} text-orange-400`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <polyline points="8 6 3 12 8 18" />
+        <polyline points="16 6 21 12 16 18" />
+      </svg>
+    );
   }
   return null;
 }
@@ -35,6 +42,7 @@ export function formatAgentType(agentType?: string): string {
   if (agentType === "codex") return "Codex";
   if (agentType === "cursor") return "Cursor";
   if (agentType === "gemini") return "Gemini";
+  if (agentType === "opencode") return "OpenCode";
 
   return agentType;
 }

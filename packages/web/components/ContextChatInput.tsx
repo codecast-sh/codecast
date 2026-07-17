@@ -13,6 +13,7 @@ const AGENT_TYPES: { key: AgentKey; convex: string; label: string; active: strin
   { key: "codex", convex: "codex", label: "Codex", active: "bg-emerald-500/20 text-emerald-400 border-emerald-500/50" },
   { key: "cursor", convex: "cursor", label: "Cursor", active: "bg-purple-500/20 text-purple-400 border-purple-500/50" },
   { key: "gemini", convex: "gemini", label: "Gemini", active: "bg-blue-500/20 text-blue-400 border-blue-500/50" },
+  { key: "opencode", convex: "opencode", label: "OpenCode", active: "bg-orange-500/20 text-orange-400 border-orange-500/50" },
 ];
 
 interface ContextChatInputProps {
@@ -38,7 +39,7 @@ export function ContextChatInput({
   const currentAgent = useInboxStore((s) => s.currentConversation.agentType || "claude_code");
   const [selectedAgent, setSelectedAgent] = useState<AgentKey | null>(null);
 
-  const agentKey = selectedAgent || (currentAgent === "claude_code" ? "claude" : currentAgent === "codex" ? "codex" : currentAgent === "cursor" ? "cursor" : "gemini") as AgentKey;
+  const agentKey = selectedAgent || (currentAgent === "claude_code" ? "claude" : currentAgent === "codex" ? "codex" : currentAgent === "cursor" ? "cursor" : currentAgent === "opencode" ? "opencode" : "gemini") as AgentKey;
   const isExpanded = isFocused || message.length > 0;
 
   const resetHeight = useCallback(() => {

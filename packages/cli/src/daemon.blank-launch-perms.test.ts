@@ -53,4 +53,10 @@ describe("buildBlankLaunchArgs", () => {
     expect(buildBlankLaunchArgs("cursor", null)).toEqual([]);
     expect(buildBlankLaunchArgs("gemini", null)).toEqual([]);
   });
+
+  test("opencode defaults to --auto (managed, no TUI permission prompts)", () => {
+    expect(buildBlankLaunchArgs("opencode", null)).toEqual(["--auto"]);
+    // user-pinned --auto is not doubled
+    expect(buildBlankLaunchArgs("opencode", { agent_args: { opencode: "--auto --pure" } } as unknown as Config)).toEqual(["--auto", "--pure"]);
+  });
 });

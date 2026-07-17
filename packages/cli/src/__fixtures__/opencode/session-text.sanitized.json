@@ -1,0 +1,164 @@
+{
+  "info": {
+    "id": "ses_09088dd8bffegl9rhWDQ7skrki",
+    "slug": "tidy-engine",
+    "projectID": "global",
+    "directory": "[redacted:session-directory:ses_09088dd8bffegl9rhWDQ7skrki]",
+    "path": "",
+    "title": "[redacted:session-title:ses_09088dd8bffegl9rhWDQ7skrki]",
+    "agent": "build",
+    "model": {
+      "id": "big-pickle",
+      "providerID": "opencode",
+      "variant": "default"
+    },
+    "version": "1.18.3",
+    "summary": {
+      "additions": 0,
+      "deletions": 0,
+      "files": 0
+    },
+    "cost": 0,
+    "tokens": {
+      "input": 15355,
+      "output": 5,
+      "reasoning": 14,
+      "cache": {
+        "read": 1792,
+        "write": 0
+      }
+    },
+    "permission": [
+      {
+        "permission": "question",
+        "pattern": "*",
+        "action": "deny"
+      },
+      {
+        "permission": "plan_enter",
+        "pattern": "*",
+        "action": "deny"
+      },
+      {
+        "permission": "plan_exit",
+        "pattern": "*",
+        "action": "deny"
+      }
+    ],
+    "time": {
+      "created": 1784281506420,
+      "updated": 1784281509781
+    }
+  },
+  "messages": [
+    {
+      "info": {
+        "role": "user",
+        "time": {
+          "created": 1784281506456
+        },
+        "agent": "build",
+        "model": {
+          "providerID": "opencode",
+          "modelID": "big-pickle"
+        },
+        "summary": {
+          "diffs": []
+        },
+        "id": "msg_f6f772298001k9REssLVYBP0Lw",
+        "sessionID": "ses_09088dd8bffegl9rhWDQ7skrki"
+      },
+      "parts": [
+        {
+          "type": "text",
+          "text": "[redacted:text:prt_f6f77229b001kBCINscYsxi4X2]",
+          "id": "prt_f6f77229b001kBCINscYsxi4X2",
+          "sessionID": "ses_09088dd8bffegl9rhWDQ7skrki",
+          "messageID": "msg_f6f772298001k9REssLVYBP0Lw"
+        }
+      ]
+    },
+    {
+      "info": {
+        "parentID": "msg_f6f772298001k9REssLVYBP0Lw",
+        "role": "assistant",
+        "mode": "build",
+        "agent": "build",
+        "path": {
+          "cwd": "[redacted:cwd:msg_f6f77231c001on5YGYOkcFrgsC]",
+          "root": "[redacted:root:msg_f6f77231c001on5YGYOkcFrgsC]"
+        },
+        "cost": 0,
+        "tokens": {
+          "total": 17166,
+          "input": 15355,
+          "output": 5,
+          "reasoning": 14,
+          "cache": {
+            "write": 0,
+            "read": 1792
+          }
+        },
+        "modelID": "big-pickle",
+        "providerID": "opencode",
+        "time": {
+          "created": 1784281506588,
+          "completed": 1784281509779
+        },
+        "finish": "stop",
+        "id": "msg_f6f77231c001on5YGYOkcFrgsC",
+        "sessionID": "ses_09088dd8bffegl9rhWDQ7skrki"
+      },
+      "parts": [
+        {
+          "snapshot": "[redacted:snapshot:prt_f6f772ea60018JXZdBM4XDo4bv]",
+          "type": "step-start",
+          "id": "prt_f6f772ea60018JXZdBM4XDo4bv",
+          "sessionID": "ses_09088dd8bffegl9rhWDQ7skrki",
+          "messageID": "msg_f6f77231c001on5YGYOkcFrgsC"
+        },
+        {
+          "type": "reasoning",
+          "text": "[redacted:reasoning:prt_f6f772ea7001R1ecsXeGzN5rzZ]",
+          "time": {
+            "start": 1784281509543,
+            "end": 1784281509676
+          },
+          "id": "prt_f6f772ea7001R1ecsXeGzN5rzZ",
+          "sessionID": "ses_09088dd8bffegl9rhWDQ7skrki",
+          "messageID": "msg_f6f77231c001on5YGYOkcFrgsC"
+        },
+        {
+          "type": "text",
+          "text": "[redacted:text:prt_f6f772f2d001cwYlbYVIapylie]",
+          "time": {
+            "start": 1784281509677,
+            "end": 1784281509701
+          },
+          "id": "prt_f6f772f2d001cwYlbYVIapylie",
+          "sessionID": "ses_09088dd8bffegl9rhWDQ7skrki",
+          "messageID": "msg_f6f77231c001on5YGYOkcFrgsC"
+        },
+        {
+          "reason": "stop",
+          "snapshot": "[redacted:snapshot:prt_f6f772f6c0011xETuUiW5yi5p6]",
+          "type": "step-finish",
+          "tokens": {
+            "total": 17166,
+            "input": 15355,
+            "output": 5,
+            "reasoning": 14,
+            "cache": {
+              "write": 0,
+              "read": 1792
+            }
+          },
+          "cost": 0,
+          "id": "prt_f6f772f6c0011xETuUiW5yi5p6",
+          "sessionID": "ses_09088dd8bffegl9rhWDQ7skrki",
+          "messageID": "msg_f6f77231c001on5YGYOkcFrgsC"
+        }
+      ]
+    }
+  ]
+}

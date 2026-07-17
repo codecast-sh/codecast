@@ -25,7 +25,14 @@ import {
 import { CursorWatcher, type CursorSessionEvent } from "./cursorWatcher.js";
 import { CursorTranscriptWatcher, type CursorTranscriptEvent } from "./cursorTranscriptWatcher.js";
 import { isAppServerManagedCodexSessionHead } from "./codexWatcher.js";
-import { TranscriptDirWatcher, transcriptDirWatcherConfig, type TranscriptDirEvent } from "./transcriptDirWatcher.js";
+import { TranscriptDirWatcher, transcriptDirWatcherConfig, type TranscriptDirEvent, type DirEventWatcher } from "./transcriptDirWatcher.js";
+import {
+  OpencodeStorageWatcher,
+  opencodeDbPath,
+  assembleOpencodeSession,
+  sessionExistsInOpencodeDb,
+  resolveOpencodeSessionCwd,
+} from "./opencodeStorage.js";
 import {
   buildDaemonLauncherScript,
   buildDaemonPlistXml,
@@ -104,7 +111,7 @@ import {
 import { resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
 import { buildLaunchArgs, getConfiguredAgentArgs, launchBinary } from "./launchCommand.js";
 import type { AgentStatus, DeviceSnippetSettings, AgentClientId } from "@codecast/shared/contracts";
-import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS } from "@codecast/shared/contracts";
+import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType } from "@codecast/shared/contracts";
 import { parseModelPicker, planModelNavigation, SESSION_ONLY_COMMIT_RE, isSwitchConfirmDialog } from "./modelPicker";
 import { type Config, getAgentArgs } from "./config/types.js";
 
@@ -644,6 +651,14 @@ export function buildBlankLaunchArgs(
     // flag, so concatenating can't double up.
     const flags = [getAgentArgs(config, "codex") || "", permFlags || ""].filter(Boolean).join(" ");
     return flags ? flags.split(/\s+/).filter(Boolean) : [];
+  }
+  if (agentType === "opencode") {
+    // Managed opencode runs auto-approved (the daemon can't answer TUI permission
+    // prompts), matching buildLaunchArgs. Honor a user-pinned --auto in configured args.
+    const configured = getAgentArgs(config, "opencode") || "";
+    const args = configured ? configured.split(/\s+/).filter(Boolean) : [];
+    if (!args.includes("--auto")) args.push("--auto");
+    return args;
   }
   // cursor/gemini: no configured args or permission flags yet.
   return [];
@@ -2319,8 +2334,10 @@ async function executeRemoteCommand(
       case "start_session": {
         const parsed = commandArgs ? JSON.parse(commandArgs) : {};
         const rawAgentType = parsed.agent_type;
-        const agentType: AgentClientId =
-          rawAgentType === "codex" || rawAgentType === "cursor" || rawAgentType === "gemini" ? rawAgentType : "claude";
+        // Registry-driven normalization (accepts either the convex spelling or the
+        // client id; unknown/claude → "claude"). Replaces a hand-rolled ternary that
+        // silently downgraded any client it didn't enumerate (e.g. opencode) to claude.
+        const agentType: AgentClientId = fromConvexAgentType(rawAgentType);
         const rawPath: string = parsed.project_path || process.env.HOME || "/tmp";
         const conversationId: string | undefined = parsed.conversation_id;
         const expectedSessionId: string | undefined = parsed.session_id;
@@ -3123,9 +3140,13 @@ async function executeRemoteCommand(
         // Set by reparentSessionToDevice (cast pull): this session may be running
         // on this machine for the first time, so its repo isn't checked out here.
         const reparented = parsed.reparented === true;
+        // Registry-driven normalization; `undefined` means "claude / unspecified"
+        // (the downstream `|| "claude"` fallbacks and the findSessionFile detection
+        // path own that case). Same shape the start_session handler uses, so it now
+        // carries opencode instead of collapsing it to claude.
+        const normalizedResumeAgent = fromConvexAgentType(parsed.agent_type);
         const resumeAgentType: AgentClientId | undefined =
-          parsed.agent_type === "codex" || parsed.agent_type === "cursor" || parsed.agent_type === "gemini"
-            ? parsed.agent_type : undefined;
+          normalizedResumeAgent === "claude" ? undefined : normalizedResumeAgent;
         // Skip if a resume is already in flight for this session
         if (resumeInFlight.has(sessionId)) {
           log(`[REMOTE] Resume already in flight for ${sessionId.slice(0, 8)}, skipping`);
@@ -3253,10 +3274,10 @@ async function executeRemoteCommand(
           log(`[REMOTE] Resume failed for ${sessionId.slice(0, 8)}, reconstituting session from DB in ${cwd}...`);
           let reconstituted = false;
 
-          // cursor-agent owns its own session store — there is no local JSONL to
-          // reconstitute. Skip DB reconstitution (never write a Claude JSONL for a
-          // cursor session) and fall through to the fresh cursor-agent spawn below.
-          if (config?.convex_url && config?.auth_token && resumeAgentType !== "cursor") {
+          // cursor-agent and opencode each own their session store (SQLite) — there
+          // is no local JSONL to reconstitute. Skip DB reconstitution (never write a
+          // Claude JSONL for them) and fall through to the fresh spawn below.
+          if (config?.convex_url && config?.auth_token && resumeAgentType !== "cursor" && resumeAgentType !== "opencode") {
             try {
               const siteUrl = config.convex_url.replace(".cloud", ".site");
               const exportData = await fetchExport(siteUrl, config.auth_token!, conversationId);
@@ -3331,11 +3352,9 @@ async function executeRemoteCommand(
             log(`[REMOTE] Starting blank ${blankAgentType} session in ${cwd}`);
             const shortId = Math.random().toString(36).slice(2, 8);
             const tmuxSession = `cc-${blankAgentType}-${shortId}`;
-            const blankBinary =
-              blankAgentType === "codex" ? "codex"
-              : blankAgentType === "cursor" ? "cursor-agent"
-              : blankAgentType === "gemini" ? "gemini"
-              : "claude";
+            // Registry lookup, so a new client's binary (e.g. opencode) is launched
+            // instead of silently falling through to claude.
+            const blankBinary = launchBinary(blankAgentType);
             // Inject the default permission flags exactly like start_session and
             // auto-resume. Building from config args alone here launched a bare
             // `claude` that fell into the project's dontAsk default — the agent
@@ -6594,6 +6613,146 @@ async function processGeminiSession(
   }
 }
 
+// Count of ParsedMessages last synced per opencode session. Unlike the gemini
+// counter this is keyed by session id (opencode has no single file) and is used to
+// bound the batch, not to skip: opencode messages stream their content into parts,
+// so we re-send the last already-synced message too (addMessages upserts by uuid,
+// patching it in place) to pick up a message whose body grew after its first sync.
+const opencodeSyncedCounts = new Map<string, number>();
+
+async function processOpencodeSession(
+  sessionId: string,
+  syncService: SyncService,
+  userId: string,
+  teamId: string | undefined,
+  conversationCache: ConversationCache,
+  retryQueue: RetryQueue,
+  pendingMessages: PendingMessages,
+  titleCache: TitleCache,
+  updateStateCallback: () => void
+): Promise<void> {
+  try {
+    const assembled = assembleOpencodeSession(sessionId);
+    if (!assembled) return;
+    const allMessages = parseTranscriptFor("opencode", assembled);
+    if (allMessages.length === 0) return;
+
+    const cwd = resolveOpencodeSessionCwd(sessionId);
+    let conversationId = conversationCache[sessionId];
+
+    if (!conversationId) {
+      // Bind a freshly launched opencode session to its pending started-tmux
+      // conversation. opencode's session id never appears in the launched process
+      // args (it starts as a bare `opencode` TUI and mints its own id), so — unlike
+      // codex — the tmux-name match can't resolve; we bind by cwd via the project
+      // map (resolveOpencodeSessionCwd), which is matchStartedConversation's cwd
+      // fallback. If nothing matches, this is a fresh first-class session.
+      let matchedStartedConversation: string | null = null;
+      if (startedSessionTmux.size > 0 && cwd) {
+        const startedOpencodeEntries = Array.from(startedSessionTmux.entries())
+          .filter(([, entry]) => entry.agentType === "opencode");
+        matchedStartedConversation = matchStartedConversation(startedOpencodeEntries, {
+          tmuxSessionName: null,
+          projectPath: cwd,
+        });
+      }
+
+      if (matchedStartedConversation) {
+        conversationId = matchedStartedConversation;
+        const tmuxEntry = startedSessionTmux.get(matchedStartedConversation);
+        conversationCache[sessionId] = conversationId;
+        saveConversationCache(conversationCache);
+        const gitInfo = cwd ? getGitInfo(cwd) : undefined;
+        syncService.updateSessionId(conversationId, sessionId, cwd || undefined, gitInfo?.repoRoot || gitInfo?.root).catch(logConvexFailure);
+        if (tmuxEntry) {
+          registerManagedStartedSession(conversationId, sessionId, tmuxEntry.tmuxSession);
+          if (tmuxEntry.sessionId && tmuxEntry.sessionId !== sessionId) {
+            stopManagedSessionHeartbeat(tmuxEntry.sessionId);
+          }
+        }
+        deleteStartedSession(matchedStartedConversation);
+        log(`Linked opencode session ${sessionId} to started conversation ${conversationId.slice(0, 12)} via cwd ${cwd}`);
+      } else {
+        const firstUserMessage = allMessages.find((m) => m.role === "user");
+        const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+        try {
+          conversationId = await syncService.createConversation({
+            userId,
+            teamId,
+            sessionId,
+            agentType: "opencode",
+            projectPath: cwd,
+            slug: undefined,
+            title,
+            startedAt: allMessages[0]?.timestamp,
+            parentMessageUuid: undefined,
+            gitInfo: cwd ? getGitInfo(cwd) : undefined,
+          });
+        } catch (err) {
+          if (err instanceof AuthExpiredError && handleAuthFailure()) {
+            log("⚠️  Authentication expired - sync paused");
+            return;
+          }
+          throw err;
+        }
+        conversationCache[sessionId] = conversationId;
+        saveConversationCache(conversationCache);
+        log(`Created conversation ${conversationId} for opencode session ${sessionId}`);
+        if (pendingMessages[sessionId]) {
+          await flushPendingMessagesBatch(pendingMessages[sessionId], conversationId, syncService, retryQueue);
+          delete pendingMessages[sessionId];
+        }
+      }
+    }
+
+    // Upsert-based delta: re-send the last already-synced message (its body may have
+    // grown as parts streamed in) plus everything new. addMessages patches by uuid.
+    const prevCount = opencodeSyncedCounts.get(sessionId) ?? 0;
+    const toSync = allMessages.slice(Math.max(0, prevCount - 1));
+    if (toSync.length > 0) {
+      const batchResult = await syncMessagesBatch(toSync, conversationId, syncService, retryQueue);
+      if (batchResult.authExpired) {
+        log("⚠️  Authentication expired - sync paused");
+        return;
+      }
+      if (batchResult.conversationNotFound) {
+        log(`Conversation ${conversationId} not found, invalidating opencode cache`);
+        delete conversationCache[sessionId];
+        saveConversationCache(conversationCache);
+        opencodeSyncedCounts.delete(sessionId);
+        return;
+      }
+    }
+    opencodeSyncedCounts.set(sessionId, allMessages.length);
+
+    // Title: opencode names the session in its meta (info.title); mirror it.
+    try {
+      const metaTitle = (JSON.parse(assembled).info as { title?: string } | undefined)?.title;
+      if (metaTitle && titleCache[sessionId] !== metaTitle) {
+        await syncService.updateTitle(conversationId, metaTitle);
+        titleCache[sessionId] = metaTitle;
+        saveTitleCache(titleCache);
+      }
+    } catch {}
+
+    // Status is transcript-driven (opencode panes aren't classifiable and reconcile
+    // defers on them): the newest message tells us working vs turn-complete, so this
+    // fires the idle flip that routes the session into needs-input when its turn ends.
+    if (conversationId && !appServerConversations.has(conversationId)) {
+      const turn = classifyOpencodeTranscriptTail(assembled);
+      sendAgentStatus(syncService, conversationId, sessionId, turn === "idle" ? "idle" : "working");
+    }
+
+    syncStats.messagesSynced += toSync.length;
+    syncStats.sessionsActive.add(sessionId);
+    tryRegisterSessionProcess(sessionId, "opencode");
+    updateStateCallback();
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    log(`Error processing opencode session ${sessionId}: ${errMsg}`);
+  }
+}
+
 interface ActiveSession {
   sessionId: string;
   conversationId: string;
@@ -7876,10 +8035,38 @@ export function classifyCodexTranscriptTail(tailContent: string): TranscriptTurn
   return "unknown";
 }
 
-// The single client -> transcript-tail classifier mapping. Only claude and codex
-// have a tail classifier today; cursor/gemini return undefined, which every caller
-// treats as "this client's transcript format isn't classified — defer" (the old
-// `agentType !== "claude" && agentType !== "codex"` gate). A new jsonl client wires
+// OpenCode's json-store has no per-line stop_reason; a turn's state lives in the
+// message file itself. findSessionFile points at a session's NEWEST message file
+// (its tail), so the classifier reads that single message's JSON: an assistant
+// message with `time.completed` set has finished its turn (idle); one without is
+// still streaming (active); a user message is the agent's move (active). Also
+// accepts the assembled export shape ({ messages: [...] }) so the same function
+// works whether fed a lone message file or a whole-session snapshot — it decides
+// off the newest message either way. Mirrors classifyTranscriptTail's
+// active/idle/unknown contract so reconciledStatus treats opencode like the rest.
+export function classifyOpencodeTranscriptTail(tailContent: string): TranscriptTurnState {
+  let parsed: any;
+  try {
+    parsed = JSON.parse(tailContent);
+  } catch {
+    return "unknown"; // partial/mid-write file -> defer
+  }
+  // Assembled snapshot: reduce to the newest message's info.
+  const info = Array.isArray(parsed?.messages)
+    ? parsed.messages[parsed.messages.length - 1]?.info
+    : parsed;
+  const role = info?.role;
+  if (role === "assistant") {
+    return info?.time?.completed ? "idle" : "active";
+  }
+  if (role === "user") return "active";
+  return "unknown";
+}
+
+// The single client -> transcript-tail classifier mapping. Claude, codex and
+// opencode have a tail classifier; cursor/gemini return undefined, which every
+// caller treats as "this client's transcript format isn't classified — defer" (the
+// old `agentType !== "claude" && agentType !== "codex"` gate). A new client wires
 // its classifier in here rather than adding another branch at each reconcile site.
 // Kept daemon-side (not on the shared descriptor) so shared stays free of daemon
 // types. Mirrors the parser.ts parseTranscriptFor dispatch.
@@ -7888,6 +8075,7 @@ const CLASSIFY_TRANSCRIPT_TAIL_BY_CLIENT: Partial<
 > = {
   claude: classifyTranscriptTail,
   codex: classifyCodexTranscriptTail,
+  opencode: classifyOpencodeTranscriptTail,
 };
 
 export function classifyTranscriptTailFor(
@@ -8985,6 +9173,16 @@ export function findSessionFile(sessionId: string): SessionFileInfo | null {
         if (fs.existsSync(jsonPath)) return { path: jsonPath, agentType: "gemini" };
       }
     } catch {}
+  }
+
+  // OpenCode sessions live in the SQLite store (~/.local/share/opencode/opencode.db),
+  // not a per-session file, so the "path" is the DB itself. This lets callers that
+  // only need the agent type / a stat resolve opencode; the transcript-tail path
+  // reads binary DB bytes and safely defers (classifyOpencodeTranscriptTail returns
+  // "unknown" on unparseable input) — opencode status is authoritatively driven from
+  // processOpencodeSession, which reads the DB directly.
+  if (sessionId.startsWith("ses_") && sessionExistsInOpencodeDb(sessionId)) {
+    return { path: opencodeDbPath(), agentType: "opencode" };
   }
 
   return null;
@@ -11034,14 +11232,16 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
   }
   let sessionFile = findSessionFile(sessionId);
   const config = readConfig();
-  // cursor-agent owns its own session store (SQLite under ~/.cursor); resume
-  // needs no local JSONL transcript. Trust an explicit cursor hint HERE — before
-  // findSessionFile (which has no cursor lookup) or the reconstitution below
-  // (claude/codex only) can mislabel a cursor session as claude and materialize a
-  // bogus Claude JSONL for it. This is what makes the cursor resume-command
-  // branch reachable at all.
-  const isCursorResume = agentTypeHint === "cursor";
-  if (!isCursorResume && !sessionFile && conversationId && config?.auth_token && config?.convex_url) {
+  // cursor-agent and opencode each own their session store (SQLite: ~/.cursor,
+  // ~/.local/share/opencode/opencode.db); resume needs no local JSONL transcript.
+  // Trust the store-owned agent type HERE — via the hint, else what findSessionFile
+  // detected — before the reconstitution below (claude/codex only) can mislabel the
+  // session as claude and materialize a bogus Claude JSONL for it, and before the
+  // transcript-cwd read (which would parse binary DB bytes). This is what makes the
+  // descriptor resume-command branch reachable for these clients.
+  const storeOwnedResumeType = agentTypeHint ?? sessionFile?.agentType;
+  const isStoreOwnedResume = storeOwnedResumeType === "cursor" || storeOwnedResumeType === "opencode";
+  if (!isStoreOwnedResume && !sessionFile && conversationId && config?.auth_token && config?.convex_url) {
     logDelivery(`Session ${sessionId.slice(0, 8)} not found locally, reconstituting from codecast...`);
     try {
       const siteUrl = config.convex_url.replace(".cloud", ".site");
@@ -11090,14 +11290,14 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       logDelivery(`Reconstitution failed for ${sessionId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
       return false;
     }
-  } else if (!sessionFile && !isCursorResume) {
+  } else if (!sessionFile && !isStoreOwnedResume) {
     logDelivery(`Cannot auto-resume ${sessionId.slice(0, 8)}: session JSONL file not found${!conversationId ? " (no conversation ID for reconstitution)" : ""}`);
     return false;
   }
 
   const agentType: AgentClientId = resolveResumeAgentType(agentTypeHint, sessionFile?.agentType);
-  const jsonlPath = isCursorResume ? "" : sessionFile!.path;
-  const jsonlContent = isCursorResume ? "" : readFileHead(jsonlPath, 5000);
+  const jsonlPath = isStoreOwnedResume ? "" : sessionFile!.path;
+  const jsonlContent = isStoreOwnedResume ? "" : readFileHead(jsonlPath, 5000);
 
   let cwd: string;
   let resumeCmd: string;
@@ -11105,9 +11305,10 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
   const title = titleCache[sessionId] || (jsonlContent ? extractSummaryTitle(jsonlContent) : "");
   const slug = title ? slugify(title) : "";
 
-  if (isCursorResume) {
-    // No transcript cwd to recover for cursor; prefer an explicit override, else
-    // the conversation's recorded project path, else $HOME.
+  if (isStoreOwnedResume) {
+    // No local transcript to recover a cwd from (cursor/opencode keep it in their
+    // own store); prefer an explicit override, else the conversation's recorded
+    // project path, else $HOME.
     const projectPath = conversationId && syncServiceRef
       ? (await syncServiceRef.getProjectInfo(conversationId).catch(() => null))?.project_path ?? undefined
       : undefined;
@@ -11281,7 +11482,12 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       "is not an object",
       "ENOENT",
     ];
-    const promptPattern = /[❯›]/;
+    // The shared /[❯›]/ glyph is what claude/codex/cursor/gemini resume panes show;
+    // opencode's TUI renders a different prompt (no ❯/›), so it uses its descriptor
+    // pattern. Only opencode diverges here — the other clients are unchanged.
+    const promptPattern = agentType === "opencode"
+      ? AGENT_CLIENTS.opencode.promptReadyPattern
+      : /[❯›]/;
     // Scale readiness poll based on JSONL file size — large sessions take much longer to resume
     let jsonlSize = 0;
     try { jsonlSize = fs.statSync(jsonlPath).size; } catch {}
@@ -11418,12 +11624,12 @@ async function repairAndResumeSession(
     return false;
   }
 
-  if (agentTypeHint === "cursor") {
-    // cursor-agent owns its own session store — there is no local JSONL to repair
-    // or reconstitute. A plain resume is the only recovery; never materialize a
-    // Claude JSONL for a cursor session.
-    log(`Repairing cursor session ${sessionId.slice(0, 8)} = re-resume (cursor-agent owns its store)`);
-    return autoResumeSession(sessionId, content, titleCache, cwdOverride, conversationId, "cursor");
+  if (agentTypeHint === "cursor" || agentTypeHint === "opencode") {
+    // cursor-agent and opencode own their own session store (SQLite) — there is no
+    // local JSONL to repair or reconstitute. A plain resume is the only recovery;
+    // never materialize a Claude JSONL for them.
+    log(`Repairing ${agentTypeHint} session ${sessionId.slice(0, 8)} = re-resume (client owns its store)`);
+    return autoResumeSession(sessionId, content, titleCache, cwdOverride, conversationId, agentTypeHint);
   }
 
   const promise = (async (): Promise<boolean> => {
@@ -15501,7 +15707,7 @@ async function main(): Promise<void> {
   // the sync closure (sessionId/projectHash are derived from the path, so later events
   // for the same file carry identical values — same as before the collapse).
   const registerJsonlDirWatcher = (
-    watcher: TranscriptDirWatcher,
+    watcher: DirEventWatcher,
     label: string,
     process: (event: TranscriptDirEvent) => Promise<unknown>,
   ): void => {
@@ -15562,6 +15768,26 @@ async function main(): Promise<void> {
       event.filePath,
       event.sessionId,
       event.projectHash ?? "",
+      syncService,
+      config.user_id!,
+      config.team_id,
+      conversationCache,
+      retryQueue,
+      pendingMessages,
+      titleCache,
+      updateState
+    ),
+  );
+
+  // OpenCode's SQLite-store watcher rides the same registration seam: it emits
+  // per-session `session` events (filePath = the session id, which the seam uses
+  // only as an opaque per-session debounce key), and processOpencodeSession
+  // assembles+syncs the whole session from the DB each pass.
+  registerJsonlDirWatcher(
+    new OpencodeStorageWatcher(),
+    "OpenCode",
+    (event) => processOpencodeSession(
+      event.sessionId,
       syncService,
       config.user_id!,
       config.team_id,

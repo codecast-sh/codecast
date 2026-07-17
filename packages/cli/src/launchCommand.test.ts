@@ -32,6 +32,10 @@ function oracle(input: LaunchArgsInput): { binaryArgs: string[]; notifyCodexBypa
     // binary only
   } else if (agentType === "gemini") {
     // binary only
+  } else if (agentType === "opencode") {
+    const extraArgs = configuredArgs;
+    if (extraArgs) args.push(...extraArgs.split(/\s+/).filter(Boolean));
+    if (!extraArgs.includes("--auto")) args.push("--auto");
   } else {
     const extraArgs = configuredArgs;
     if (extraArgs) args.push(...extraArgs.split(/\s+/).filter(Boolean));
@@ -49,6 +53,8 @@ function oracle(input: LaunchArgsInput): { binaryArgs: string[]; notifyCodexBypa
   } else if (agentType === "codex") {
     if (input.modelAlias) args.push("-m", input.modelAlias);
     if (input.requestedEffort && (CODEX_EFFORTS as readonly string[]).includes(input.requestedEffort)) args.push("-c", `model_reasoning_effort=${input.requestedEffort}`);
+  } else if (agentType === "opencode") {
+    if (input.modelAlias) args.push("-m", input.modelAlias);
   }
   return { binaryArgs: args, notifyCodexBypass };
 }
@@ -74,7 +80,7 @@ describe("getConfiguredAgentArgs reads the legacy per-client named fields", () =
 });
 
 describe("buildLaunchArgs matches the oracle across a matrix", () => {
-  const agentTypes: AgentClientId[] = ["claude", "codex", "cursor", "gemini"];
+  const agentTypes: AgentClientId[] = ["claude", "codex", "cursor", "gemini", "opencode"];
   const configuredArgsCases = ["", "--chrome", "--permission-mode acceptEdits", "--dangerously-skip-permissions", "--session-id fixed"];
   const permFlagsCases = [null, "--permission-mode bypassPermissions", "--dangerously-bypass-approvals-and-sandbox"];
   const defaultFlagsCases = [null, "--verbose", "--foo bar"];
@@ -146,5 +152,16 @@ describe("buildLaunchArgs — targeted per-client behavior", () => {
     for (const agentType of ["cursor", "gemini"] as AgentClientId[]) {
       expect(buildLaunchArgs({ agentType, configuredArgs: "", permFlags: "--ignored", defaultFlags: "--verbose", modelAlias: "opus", requestedEffort: "high" }).binaryArgs).toEqual(["--verbose"]);
     }
+  });
+
+  test("opencode: launches auto-approved with the picker's -m model (no effort flag)", () => {
+    // managed opencode is driven from the web -> auto-approve, since the daemon can't
+    // answer TUI permission prompts. modelAlias is opencode's provider/model.
+    expect(buildLaunchArgs({ agentType: "opencode", configuredArgs: "", permFlags: null, defaultFlags: null, modelAlias: "anthropic/claude-opus-4-5", requestedEffort: "high" }).binaryArgs)
+      .toEqual(["--auto", "-m", "anthropic/claude-opus-4-5"]);
+    // no model -> just --auto
+    expect(buildLaunchArgs({ agentType: "opencode", configuredArgs: "", permFlags: null, defaultFlags: null }).binaryArgs).toEqual(["--auto"]);
+    // user already pinned --auto -> not doubled
+    expect(buildLaunchArgs({ agentType: "opencode", configuredArgs: "--auto --pure", permFlags: null, defaultFlags: null }).binaryArgs).toEqual(["--auto", "--pure"]);
   });
 });

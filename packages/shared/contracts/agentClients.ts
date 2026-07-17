@@ -21,20 +21,22 @@ import type { ModelOption } from "./modelOptions";
 import {
   CLAUDE_MODEL_OPTIONS,
   CODEX_MODEL_OPTIONS,
+  OPENCODE_MODEL_OPTIONS,
   CLAUDE_EFFORT_LEVELS,
   CODEX_EFFORT_LEVELS,
+  OPENCODE_EFFORT_LEVELS,
 } from "./modelOptions";
 
 /** The single named union for a supported agent CLI client — the daemon's
  *  agent-type spelling and the registry key. */
-export type AgentClientId = "claude" | "codex" | "cursor" | "gemini";
+export type AgentClientId = "claude" | "codex" | "cursor" | "gemini" | "opencode";
 
 /** The spelling the Convex schema / wire protocol stores (`conversations.agent_type`).
  *  Differs from `AgentClientId` only in `claude_code`, and carries the extra
- *  `cowork` value that has no distinct client of its own. `opencode` and `pi` are
- *  widened in ahead of their clients (plan phases 1-2) so the schema and public
- *  validators accept them before any client sends them; until their descriptors
- *  exist, `fromConvexAgentType` maps them to `claude` (see its note). */
+ *  `cowork` value that has no distinct client of its own. `opencode` is now a
+ *  first-class client (phase 1) with its own descriptor; `pi` is still widened in
+ *  ahead of its client (phase 2), so `fromConvexAgentType` maps `pi` to `claude`
+ *  until its descriptor lands (see its note). */
 export type ConvexAgentType =
   | "claude_code"
   | "codex"
@@ -49,6 +51,7 @@ const CONVEX_BY_ID: Record<AgentClientId, ConvexAgentType> = {
   codex: "codex",
   cursor: "cursor",
   gemini: "gemini",
+  opencode: "opencode",
 };
 
 /** Client id → Convex spelling (`claude` → `claude_code`). */
@@ -62,10 +65,10 @@ export function toConvexAgentType(id: AgentClientId): ConvexAgentType {
  * normalize to `claude` — matching the historic `modelAgentKey` fallback so the
  * model helpers can route through this one function without a behavior change.
  *
- * TEMPORARY: `opencode` and `pi` are valid `ConvexAgentType` values but have no
- * `AGENT_CLIENTS` descriptor yet (plan phases 1-2), so they fall through the
- * `default` case to `claude` for now. When their descriptors land, add explicit
- * cases returning their own ids.
+ * TEMPORARY: `pi` is a valid `ConvexAgentType` value but has no `AGENT_CLIENTS`
+ * descriptor yet (plan phase 2), so it falls through the `default` case to
+ * `claude` for now. When its descriptor lands, add an explicit case returning its
+ * own id. `opencode` is first-class (phase 1) and maps to itself.
  */
 export function fromConvexAgentType(agentType: string | null | undefined): AgentClientId {
   switch (agentType) {
@@ -75,6 +78,8 @@ export function fromConvexAgentType(agentType: string | null | undefined): Agent
       return "cursor";
     case "gemini":
       return "gemini";
+    case "opencode":
+      return "opencode";
     default:
       return "claude";
   }
@@ -155,6 +160,14 @@ const CLAUDE_MODEL: AgentModelConfig = {
 const CODEX_MODEL: AgentModelConfig = {
   models: CODEX_MODEL_OPTIONS,
   efforts: CODEX_EFFORT_LEVELS,
+  midSession: false,
+};
+const OPENCODE_MODEL: AgentModelConfig = {
+  models: OPENCODE_MODEL_OPTIONS,
+  efforts: OPENCODE_EFFORT_LEVELS,
+  // The TUI's /models picker is interactive-only (no scriptable menu like
+  // Claude's), so opencode's model is a launch-time choice, tracked from the
+  // transcript thereafter.
   midSession: false,
 };
 
@@ -241,6 +254,37 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     // per-client code actually uses at launch.
     promptReadyPattern: />\s*$|gemini/i,
     tmuxPrefix: "gm",
+    capabilities: { panePromptMonitoring: false },
+  },
+  opencode: {
+    id: "opencode",
+    convexId: "opencode",
+    binary: "opencode",
+    launchArgs: [],
+    // opencode resumes a session by id with `opencode -s <id>` (verified against
+    // `opencode run --help`: `-s, --session  session id to continue`). Consumed by
+    // buildNonClaudeResumeCommand (resumeCommand.ts).
+    resumeCmd: (sessionId) => `opencode -s ${sessionId}`,
+    // Current opencode (v1.2.0+; verified on v1.18.3) stores every session in one
+    // SQLite database — ~/.local/share/opencode/opencode.db (session/message/part
+    // tables) — NOT the legacy storage/ JSON tree older builds used. A dedicated
+    // OpencodeStorageWatcher polls the DB read-only (bun:sqlite, like the cursor
+    // watcher) and assembles sessions from it — see opencodeStorage.ts.
+    transcriptRoots: ["~/.local/share/opencode/opencode.db"],
+    watcherKind: "sqlite",
+    // Fresh-launch readiness for the opencode TUI, captured from a real settled
+    // pane (opencode 1.0.167): the footer hint `ctrl+p commands` and the empty
+    // input placeholder `Ask anything…` are BOTH present once the prompt accepts
+    // input and BOTH absent during boot (verified by diffing the loading pane
+    // against the settled one). Consumed by the fresh-launch injection-readiness
+    // poll (daemon.ts, tryStartedTmux) and the opencode resume-readiness poll.
+    promptReadyPattern: /ctrl\+p commands|Ask anything/i,
+    // `oc-` tmux prefix — distinct from claude `cc`, codex `cx`, cursor `cu`,
+    // gemini `gm`. (`ct-` is a task-id prefix, not a tmux prefix; no collision.)
+    tmuxPrefix: "oc",
+    modelConfig: OPENCODE_MODEL,
+    // opencode has no tmux-pane structured-prompt monitoring and no hook system —
+    // its readiness/turn state is read from the SQLite store, not the pane.
     capabilities: { panePromptMonitoring: false },
   },
 };

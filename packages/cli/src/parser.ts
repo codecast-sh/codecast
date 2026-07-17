@@ -1057,6 +1057,136 @@ export function extractGeminiStartTime(content: string): number | undefined {
   return undefined;
 }
 
+// ── OpenCode json-store parser ────────────────────────────────────────────────
+// OpenCode stores a session across many small JSON files: session meta, one file
+// per message, and one file per content "part" (keyed by MESSAGE id). The daemon's
+// OpencodeStorageWatcher assembles that tree into a single JSON blob shaped exactly
+// like `opencode export <id>` — { info, messages: [{ info, parts }] } — and feeds
+// it here, so this parser reads a whole-session snapshot the same way the gemini
+// parser reads a whole-session file. One ParsedMessage is emitted per opencode
+// message: text parts become `content`, reasoning parts become `thinking`, and each
+// tool part contributes both a toolCall (its input) and, once it has run, a
+// toolResult (its output) — the shared renderer pairs the two by tool id across
+// messages, so co-locating them on one message is fine.
+
+interface OpencodePart {
+  id?: string;
+  type?: string;
+  text?: string;
+  // tool parts
+  callID?: string;
+  tool?: string;
+  state?: {
+    status?: string;
+    input?: unknown;
+    output?: string;
+    error?: string;
+  };
+}
+
+interface OpencodeMessageInfo {
+  id?: string;
+  role?: "user" | "assistant";
+  time?: { created?: number; completed?: number };
+  modelID?: string;
+  providerID?: string;
+}
+
+interface OpencodeAssembledSession {
+  info?: { id?: string };
+  messages?: { info?: OpencodeMessageInfo; parts?: OpencodePart[] }[];
+}
+
+/** Ordered content of one opencode message, folded from its parts. */
+function foldOpencodeParts(parts: OpencodePart[]): {
+  content: string;
+  thinking: string;
+  toolCalls: ToolCall[];
+  toolResults: ToolResult[];
+} {
+  // Part ids are monotonic within a message; sort by id so streaming/interleaved
+  // writes read back in author order regardless of directory listing order.
+  const ordered = [...parts].sort((a, b) => (a.id ?? "").localeCompare(b.id ?? ""));
+  const textChunks: string[] = [];
+  const thinkingChunks: string[] = [];
+  const toolCalls: ToolCall[] = [];
+  const toolResults: ToolResult[] = [];
+
+  for (const part of ordered) {
+    if (part.type === "text") {
+      if (part.text) textChunks.push(part.text);
+    } else if (part.type === "reasoning") {
+      if (part.text) thinkingChunks.push(part.text);
+    } else if (part.type === "tool") {
+      const id = part.callID || part.id || "";
+      const input =
+        part.state?.input && typeof part.state.input === "object"
+          ? (part.state.input as Record<string, unknown>)
+          : {};
+      toolCalls.push({ id, name: part.tool || "", input });
+      const status = part.state?.status;
+      // A tool that has finished (or errored) carries its output; a still-running
+      // tool has none yet — emit the call now, the result lands on a later sync.
+      if (status === "completed" || status === "error") {
+        toolResults.push({
+          toolUseId: id,
+          content: part.state?.output ?? part.state?.error ?? "",
+          isError: status === "error" ? true : undefined,
+        });
+      }
+    }
+    // step-start / step-finish carry no user-visible content — skip.
+  }
+
+  return {
+    content: textChunks.join("\n\n"),
+    thinking: thinkingChunks.join("\n\n"),
+    toolCalls,
+    toolResults,
+  };
+}
+
+/**
+ * Parse an assembled opencode session snapshot (the `opencode export` shape) into
+ * ParsedMessage[] — one message per opencode message, stable uuid = message id so
+ * the daemon's upsert-by-uuid sync patches a message in place as its parts stream
+ * in. System/tool-role and empty messages are dropped, matching the other parsers.
+ */
+export function parseOpencodeSessionFile(content: string): ParsedMessage[] {
+  let session: OpencodeAssembledSession;
+  try {
+    session = JSON.parse(content);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(session.messages)) return [];
+
+  const messages: ParsedMessage[] = [];
+  for (const entry of session.messages) {
+    const info = entry.info ?? {};
+    const role = info.role;
+    if (role !== "user" && role !== "assistant") continue;
+
+    const { content: text, thinking, toolCalls, toolResults } = foldOpencodeParts(entry.parts ?? []);
+    const hasBody =
+      text.trim().length > 0 || thinking.length > 0 || toolCalls.length > 0 || toolResults.length > 0;
+    if (!hasBody) continue;
+
+    messages.push({
+      uuid: info.id,
+      role,
+      content: text,
+      timestamp: info.time?.created ?? Date.now(),
+      thinking: thinking || undefined,
+      toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+      toolResults: toolResults.length > 0 ? toolResults : undefined,
+      model: role === "assistant" ? info.modelID : undefined,
+    });
+  }
+
+  return messages;
+}
+
 /**
  * Parse a transcript blob into the daemon's ParsedMessage[] using the parser for
  * `clientId`. The per-client parsers above stay the transcript-format authorities;
@@ -1064,7 +1194,8 @@ export function extractGeminiStartTime(content: string): number | undefined {
  * dispatch through, so a new client wires up by adding one case here (and its
  * descriptor) rather than a fresh branch at each call site. Cursor maps to the
  * text-transcript parser (the sync path that reads a transcript FILE); the SQLite
- * blob path uses parseCursorPrompts directly.
+ * blob path uses parseCursorPrompts directly. OpenCode reads an assembled
+ * multi-file snapshot (see parseOpencodeSessionFile).
  */
 export function parseTranscriptFor(clientId: AgentClientId, content: string): ParsedMessage[] {
   switch (clientId) {
@@ -1074,6 +1205,8 @@ export function parseTranscriptFor(clientId: AgentClientId, content: string): Pa
       return parseGeminiSessionFile(content);
     case "cursor":
       return parseCursorTranscriptFile(content);
+    case "opencode":
+      return parseOpencodeSessionFile(content);
     default:
       return parseSessionFile(content);
   }

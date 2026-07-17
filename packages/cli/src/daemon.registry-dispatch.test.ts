@@ -11,6 +11,7 @@ import {
   parseCodexSessionFile,
   parseGeminiSessionFile,
   parseCursorTranscriptFile,
+  parseOpencodeSessionFile,
 } from "./parser.js";
 import { classifyTranscriptTailFor, sessionProcessGrepToken } from "./daemon.js";
 
@@ -47,6 +48,16 @@ describe("promptReadyPattern reproduces the fresh-launch ternary", () => {
       expect(AGENT_CLIENTS[id].promptReadyPattern.test("⏵ ")).toBe(true);
     }
   });
+
+  // opencode is a NEW client (no old-ternary equivalent): its TUI shows no ❯/›, so
+  // readiness keys off the settled-pane footer/placeholder captured from a real run.
+  test("opencode matches the settled TUI footer/placeholder, not a loading pane", () => {
+    const p = AGENT_CLIENTS.opencode.promptReadyPattern;
+    expect(p.test("┃  Ask anything...\ntab agents  ctrl+p commands")).toBe(true);
+    expect(p.test("Ask anything... \"Fix a TODO\"")).toBe(true);
+    // A booting pane (bottom status bar only) must NOT read as ready.
+    expect(p.test("/private/tmp/scratch:main                     1.0.167")).toBe(false);
+  });
 });
 
 // ── Cluster 6: status-reconcile classifier gate ─────────────────────────────
@@ -55,11 +66,25 @@ describe("promptReadyPattern reproduces the fresh-launch ternary", () => {
 // classifyTranscriptTailFor must resolve claude/codex to a classifier and
 // cursor/gemini to undefined (the "defer" signal) — byte-for-byte the same gate.
 describe("classifyTranscriptTailFor reproduces the reconcile gate", () => {
-  test("claude and codex resolve to a classifier; cursor and gemini do not", () => {
+  test("claude, codex and opencode resolve to a classifier; cursor and gemini do not", () => {
     expect(typeof classifyTranscriptTailFor("claude")).toBe("function");
     expect(typeof classifyTranscriptTailFor("codex")).toBe("function");
+    expect(typeof classifyTranscriptTailFor("opencode")).toBe("function");
     expect(classifyTranscriptTailFor("cursor")).toBeUndefined();
     expect(classifyTranscriptTailFor("gemini")).toBeUndefined();
+  });
+
+  test("opencode classifier reads the newest message (completed -> idle, streaming -> active, user -> active)", () => {
+    const classify = classifyTranscriptTailFor("opencode")!;
+    expect(classify('{"role":"assistant","time":{"created":1,"completed":2}}')).toBe("idle");
+    expect(classify('{"role":"assistant","time":{"created":1}}')).toBe("active");
+    expect(classify('{"role":"user","time":{"created":1}}')).toBe("active");
+    // Also accepts the assembled export snapshot — decides off the last message.
+    expect(classify(JSON.stringify({ messages: [
+      { info: { role: "user", time: { created: 1 } } },
+      { info: { role: "assistant", time: { created: 2, completed: 3 } } },
+    ] }))).toBe("idle");
+    expect(classify("half-written{")).toBe("unknown");
   });
 
   test("claude classifier reads a claude JSONL tail (end_turn -> idle, tool_use -> active)", () => {
@@ -98,6 +123,13 @@ describe("parseTranscriptFor dispatches to the per-client parser", () => {
   });
   test("cursor -> parseCursorTranscriptFile", () => {
     expect(parseTranscriptFor("cursor", cursorTranscript)).toEqual(parseCursorTranscriptFile(cursorTranscript));
+  });
+  const opencodeSnapshot = JSON.stringify({
+    info: { id: "ses_x" },
+    messages: [{ info: { id: "msg_1", role: "user", time: { created: 1 } }, parts: [{ id: "prt_1", type: "text", text: "yo" }] }],
+  });
+  test("opencode -> parseOpencodeSessionFile", () => {
+    expect(parseTranscriptFor("opencode", opencodeSnapshot)).toEqual(parseOpencodeSessionFile(opencodeSnapshot));
   });
 });
 
