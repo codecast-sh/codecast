@@ -1,0 +1,49 @@
+{
+  "id": "demo1",
+  "voice": "cjVigY5qzO86Huf0OWal",
+  "total": 37.608,
+  "beats": [
+    {
+      "i": 0,
+      "text": "You're not running one AI agent anymore. You're running a fleet.",
+      "start": 0,
+      "dur": 3.344
+    },
+    {
+      "i": 1,
+      "text": "Codecast is the command center for all of them. Every session, every project, in one place.",
+      "start": 3.794,
+      "dur": 5.198
+    },
+    {
+      "i": 2,
+      "text": "This is your inbox. Pinned work sits up top, then the list that actually matters. The sessions waiting on you.",
+      "start": 9.442,
+      "dur": 7.523
+    },
+    {
+      "i": 3,
+      "text": "Codecast reads each agent's state, and surfaces only the ones where the ball is in your court.",
+      "start": 17.415,
+      "dur": 5.46
+    },
+    {
+      "i": 4,
+      "text": "Every card tells the story at a glance. What it's working on, which model it's running, how deep the conversation goes.",
+      "start": 23.325,
+      "dur": 7.001
+    },
+    {
+      "i": 5,
+      "text": "Switch between projects without ever losing the thread.",
+      "start": 30.776,
+      "dur": 2.926
+    },
+    {
+      "i": 6,
+      "text": "One screen. Your entire agent fleet. Nothing slips through.",
+      "start": 34.151,
+      "dur": 3.291
+    }
+  ]
+}
