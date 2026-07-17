@@ -33,8 +33,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { tmuxExecSync as defaultTmuxExecSync } from "../tmux.js";
 import type { Config } from "../config/types.js";
-
-export type SpawnAgentType = "claude" | "codex" | "cursor" | "gemini";
+import type { AgentClientId } from "@codecast/shared/contracts";
 
 /** Arg-array tmux runner. Mirrors tmux.ts `tmuxExecSync` — execFile, never a shell. */
 export type TmuxRunner = (args: string[], opts?: { timeout?: number }) => string;
@@ -78,7 +77,7 @@ export interface SpawnAgentTmuxRequest {
   /** Working directory the agent runs in. MUST exist and be a directory. */
   cwd: string;
   /** Which agent — drives the `@codecast_agent_type` tag. */
-  agentType: SpawnAgentType;
+  agentType: AgentClientId;
   /**
    * The exact command line to run in the pane. Sent literally via `send-keys -l`,
    * so it is never expanded by the daemon's own shell — quoting/escaping inside it

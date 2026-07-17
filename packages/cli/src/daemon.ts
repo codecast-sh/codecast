@@ -53,7 +53,6 @@ import {
   matchStartedConversation,
   parsePidPpidMap,
   resolveSpawnerSessionId,
-  type SessionAgentType,
 } from "./sessionProcessMatcher.js";
 import { GeminiWatcher, type GeminiSessionEvent } from "./geminiWatcher.js";
 import { parseSessionFile, parseCodexSessionFile, parseGeminiSessionFile, parseCursorTranscriptFile, extractSlug, extractParentUuid, extractSummaryTitle, extractCwd, extractCodexCwd, extractCodexForkRoot, extractGeminiProjectHash, extractTeamInfo, detectCliFlags, type ParsedMessage } from "./parser.js";
@@ -103,7 +102,7 @@ import {
   rewriteSubagentJsonlToUuid,
 } from "./resumeCommand.js";
 import { resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
-import type { AgentStatus, DeviceSnippetSettings } from "@codecast/shared/contracts";
+import type { AgentStatus, DeviceSnippetSettings, AgentClientId } from "@codecast/shared/contracts";
 import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug } from "@codecast/shared/contracts";
 import { parseModelPicker, planModelNavigation, SESSION_ONLY_COMMIT_RE, isSwitchConfirmDialog } from "./modelPicker";
 import type { Config } from "./config/types.js";
@@ -594,7 +593,7 @@ const PID_FILE_STALE_GRACE_MS = 2_000;
 // the faithful union of every field the daemon, the CLI (index.ts), and the claude
 // wrapper read/write into the same file. Imported above.
 
-function getPermissionFlags(agentType: "claude" | "codex" | "cursor" | "gemini", config?: Config | null): string | null {
+function getPermissionFlags(agentType: AgentClientId, config?: Config | null): string | null {
   const modes = config?.agent_permission_modes;
 
   if (agentType === "claude") {
@@ -631,7 +630,7 @@ function getPermissionFlags(agentType: "claude" | "codex" | "cursor" | "gemini",
  * start/resume). jsonlBypass is always false here: there is no transcript.
  */
 export function buildBlankLaunchArgs(
-  agentType: "claude" | "codex" | "cursor" | "gemini",
+  agentType: AgentClientId,
   config: Config | null | undefined,
 ): string[] {
   const permFlags = getPermissionFlags(agentType, config);
@@ -658,7 +657,7 @@ function resolveCodexApprovalPolicy(config?: Config | null): ApprovalPolicy {
   return "on-request";
 }
 
-function getDefaultParamFlags(agentType: "claude" | "codex" | "cursor" | "gemini", config?: Config | null): string | null {
+function getDefaultParamFlags(agentType: AgentClientId, config?: Config | null): string | null {
   const params = config?.agent_default_params?.[agentType];
   if (!params || Object.keys(params).length === 0) return null;
   return Object.entries(params).map(([k, v]) => `--${k} ${v}`).join(" ");
@@ -2319,7 +2318,7 @@ async function executeRemoteCommand(
       case "start_session": {
         const parsed = commandArgs ? JSON.parse(commandArgs) : {};
         const rawAgentType = parsed.agent_type;
-        const agentType: "claude" | "codex" | "cursor" | "gemini" =
+        const agentType: AgentClientId =
           rawAgentType === "codex" || rawAgentType === "cursor" || rawAgentType === "gemini" ? rawAgentType : "claude";
         const rawPath: string = parsed.project_path || process.env.HOME || "/tmp";
         const conversationId: string | undefined = parsed.conversation_id;
@@ -2524,7 +2523,7 @@ async function executeRemoteCommand(
           }
         }
 
-        const defaultFlags = getDefaultParamFlags(agentType as "claude" | "codex" | "cursor" | "gemini", config);
+        const defaultFlags = getDefaultParamFlags(agentType as AgentClientId, config);
         if (defaultFlags) {
           binaryArgs.push(...defaultFlags.split(/\s+/).filter(Boolean));
         }
@@ -3154,7 +3153,7 @@ async function executeRemoteCommand(
         // Set by reparentSessionToDevice (cast pull): this session may be running
         // on this machine for the first time, so its repo isn't checked out here.
         const reparented = parsed.reparented === true;
-        const resumeAgentType: "claude" | "codex" | "cursor" | "gemini" | undefined =
+        const resumeAgentType: AgentClientId | undefined =
           parsed.agent_type === "codex" || parsed.agent_type === "cursor" || parsed.agent_type === "gemini"
             ? parsed.agent_type : undefined;
         // Skip if a resume is already in flight for this session
@@ -4653,7 +4652,7 @@ async function pidsWithFileOpen(filePath: string): Promise<number[]> {
 async function resolveSpawnerConversation(
   filePath: string,
   sessionId: string,
-  agentType: SessionAgentType,
+  agentType: AgentClientId,
   conversationCache: ConversationCache,
 ): Promise<string | null> {
   let pids = await pidsWithFileOpen(filePath);
@@ -4682,7 +4681,7 @@ async function resolveSpawnerConversation(
 async function maybeRetrySpawnLink(
   filePath: string,
   sessionId: string,
-  agentType: SessionAgentType,
+  agentType: AgentClientId,
   conversationId: string,
   syncService: SyncService,
   conversationCache: ConversationCache,
@@ -6687,13 +6686,13 @@ export function findCachedSessionIdForConversation(
   return found;
 }
 
-function detectSessionAgentType(sessionId: string): "claude" | "codex" | "cursor" | "gemini" {
+function detectSessionAgentType(sessionId: string): AgentClientId {
   if (sessionId.startsWith("session-")) return "gemini";
   const sessionFile = findSessionFile(sessionId);
   return sessionFile?.agentType ?? "claude";
 }
 
-function tryRegisterSessionProcess(sessionId: string, agentType: "claude" | "codex" | "cursor" | "gemini"): void {
+function tryRegisterSessionProcess(sessionId: string, agentType: AgentClientId): void {
   try {
     // Heartbeat membership is in-memory and lost on daemon restart, while registry
     // files persist on disk. Always ensure heartbeat is running for known sessions,
@@ -6740,7 +6739,7 @@ function tryRegisterSessionProcess(sessionId: string, agentType: "claude" | "cod
 
 const findSessionProcessInflight = new Map<string, Promise<ClaudeSessionInfo | null>>();
 
-async function findSessionProcess(sessionId: string, agentType: "claude" | "codex" | "cursor" | "gemini" = "claude"): Promise<ClaudeSessionInfo | null> {
+async function findSessionProcess(sessionId: string, agentType: AgentClientId = "claude"): Promise<ClaudeSessionInfo | null> {
   const key = `${sessionId}:${agentType}`;
   const inflight = findSessionProcessInflight.get(key);
   if (inflight) return inflight;
@@ -6750,7 +6749,7 @@ async function findSessionProcess(sessionId: string, agentType: "claude" | "code
   return promise.finally(() => findSessionProcessInflight.delete(key));
 }
 
-async function findSessionProcessImpl(sessionId: string, agentType: "claude" | "codex" | "cursor" | "gemini" = "claude"): Promise<ClaudeSessionInfo | null> {
+async function findSessionProcessImpl(sessionId: string, agentType: AgentClientId = "claude"): Promise<ClaudeSessionInfo | null> {
   // Check process cache first
   const cached = await getCachedSessionProcess(sessionId);
   if (cached) {
@@ -8905,7 +8904,7 @@ async function injectViaTerminal(tty: string, content: string, termProgram?: str
 }
 
 
-type SessionFileInfo = { path: string; agentType: "claude" | "codex" | "cursor" | "gemini" };
+type SessionFileInfo = { path: string; agentType: AgentClientId };
 
 function findSessionJsonlPath(sessionId: string): string | null {
   return findSessionFile(sessionId)?.path ?? null;
@@ -9628,7 +9627,7 @@ type StartedSessionInfo = {
   tmuxSession: string;
   projectPath: string;
   startedAt: number;
-  agentType: "claude" | "codex" | "cursor" | "gemini";
+  agentType: AgentClientId;
   sessionId?: string;
   worktreeName?: string;
   worktreeBranch?: string;
@@ -10358,7 +10357,7 @@ function deleteStartedSession(conversationId: string): void {
 }
 
 export function getInitialManagedSessionId(
-  agentType: "claude" | "codex" | "cursor" | "gemini",
+  agentType: AgentClientId,
   expectedSessionId?: string,
   appServerThreadId?: string,
 ): string | undefined {
@@ -10875,7 +10874,7 @@ interface ResolvedLiveSession {
 async function resolveLiveTmuxTarget(
   conversationId: string | undefined,
   sessionId: string,
-  agentType: "claude" | "codex" | "cursor" | "gemini",
+  agentType: AgentClientId,
   resumeTmuxName?: string,
 ): Promise<ResolvedLiveSession> {
   const cachedTmux = resumeSessionCache.get(sessionId);
@@ -10955,7 +10954,7 @@ async function resolveLiveTmuxTarget(
   return { tmuxTarget: null, source: null, proc: null, cachedStillValid };
 }
 
-async function autoResumeSession(sessionId: string, content: string, titleCache: TitleCache, cwdOverride?: string, conversationId?: string, agentTypeHint?: "claude" | "codex" | "cursor" | "gemini"): Promise<boolean> {
+async function autoResumeSession(sessionId: string, content: string, titleCache: TitleCache, cwdOverride?: string, conversationId?: string, agentTypeHint?: AgentClientId): Promise<boolean> {
   // Remote-device safety gate: a remote daemon (the cloud Mac) ONLY manages
   // sessions explicitly OWNED by it. Unlike the primary local daemon, it must
   // NOT adopt/reconstitute/resume unowned sessions — doing so reconstitutes the
@@ -11018,7 +11017,7 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
   }
 }
 
-async function autoResumeSessionInner(sessionId: string, content: string, titleCache: TitleCache, cwdOverride?: string, conversationId?: string, agentTypeHint?: "claude" | "codex" | "cursor" | "gemini"): Promise<boolean> {
+async function autoResumeSessionInner(sessionId: string, content: string, titleCache: TitleCache, cwdOverride?: string, conversationId?: string, agentTypeHint?: AgentClientId): Promise<boolean> {
   if (!hasTmux()) {
     logDelivery(`Cannot auto-resume ${sessionId.slice(0, 8)}: tmux not installed`);
     return false;
@@ -11402,7 +11401,7 @@ async function repairAndResumeSession(
   titleCache: TitleCache,
   cwdOverride?: string,
   conversationId?: string,
-  agentTypeHint?: "claude" | "codex" | "cursor" | "gemini"
+  agentTypeHint?: AgentClientId
 ): Promise<boolean> {
   const existing = repairInFlight.get(sessionId);
   if (existing) return existing;
@@ -12171,7 +12170,7 @@ async function deliverMessage(
   }
 
   // Detect codex sessions by checking if the JSONL exists in codex paths
-  let detectedType: "claude" | "codex" | "cursor" | "gemini" = isGeminiSession ? "gemini" : "claude";
+  let detectedType: AgentClientId = isGeminiSession ? "gemini" : "claude";
   if (!isGeminiSession) {
     const sessionFile = findSessionFile(sessionId);
     if (sessionFile) detectedType = sessionFile.agentType;
