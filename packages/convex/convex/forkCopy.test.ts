@@ -372,6 +372,33 @@ describe("advanceForkCopy", () => {
     expect(args.session_id).toBe("sess11");
   });
 
+  // Forking a cursor conversation: forkFromMessage derives daemonAgentType via
+  // fromConvexAgentType (conversations.ts) and stashes it in fork_daemon_args;
+  // the emit must carry that agent_type through verbatim so the deferred resume
+  // launches cursor-agent, not claude. (The derivation itself lives in the
+  // forkFromMessage mutation, which has no makeFakeDb seam — the
+  // fromConvexAgentType unit test covers cursor -> cursor there; this covers the
+  // args -> daemon-command passthrough.)
+  test("the fork resume command preserves a cursor agent_type end to end", async () => {
+    const source = { _id: "src_cursor", messages: makeMessages(10) };
+    const h = makeHarness(source, {
+      _id: "fork_cursor",
+      user_id: "u1",
+      forked_from: "src_cursor",
+      fork_cutoff_timestamp: 9_999_999,
+      fork_daemon_args: JSON.stringify({
+        fork: true,
+        session_id: "sess_cursor",
+        agent_type: "cursor",
+      }),
+    });
+
+    await advanceForkCopy(h.ctx, "fork_cursor");
+    expect(h.daemonCommands.length).toBe(1);
+    expect(h.daemonCommands[0].command).toBe("resume_session");
+    expect(JSON.parse(h.daemonCommands[0].args as string).agent_type).toBe("cursor");
+  });
+
   test("messages added to source after cutoff are not picked up by later batches", async () => {
     // Simulates the "fork is a snapshot" guarantee: even if the chain runs
     // long enough that the source grows, batches with cutoff_lte=now don't
