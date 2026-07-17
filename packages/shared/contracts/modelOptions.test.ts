@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { modelOptionKey, findModelOption } from "./modelOptions";
+import { modelOptionKey, findModelOption } from "./agentClients";
 
 // modelOptionKey is the inverse of the launch flag: the conversation row stores
 // the full model id, but the pickers, the Cmd+K menu, and — critically — the

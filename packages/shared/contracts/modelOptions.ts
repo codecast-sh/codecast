@@ -55,47 +55,9 @@ export const CODEX_MODEL_OPTIONS: ModelOption[] = [
 export const CODEX_EFFORT_LEVELS = ["low", "medium", "high", "xhigh"] as const;
 export type CodexEffortLevel = (typeof CODEX_EFFORT_LEVELS)[number];
 
-// Per-agent capability map, keyed by the daemon agent type. Web agent_type
-// ("claude_code") maps via modelAgentKey below. Agents without an entry
-// (cursor, gemini) get no model/effort UI.
-export const AGENT_MODEL_CONFIG: Record<
-  string,
-  { models: ModelOption[]; efforts: readonly string[]; midSession: boolean }
-> = {
-  // midSession: the daemon can switch a RUNNING session (claude: drive the
-  // /model picker session-only). Codex's /model is interactive-only, so codex
-  // model/effort apply at launch (start/restart) but not in place.
-  claude: { models: CLAUDE_MODEL_OPTIONS, efforts: CLAUDE_EFFORT_LEVELS, midSession: true },
-  codex: { models: CODEX_MODEL_OPTIONS, efforts: CODEX_EFFORT_LEVELS, midSession: false },
-};
-
-/** Web/conversation agent_type → AGENT_MODEL_CONFIG key (claude_code → claude). */
-export function modelAgentKey(agentType: string | undefined): string {
-  return agentType === "codex" || agentType === "cursor" || agentType === "gemini"
-    ? agentType
-    : "claude";
-}
-
-export function findModelOption(agentType: string | undefined, key: string): ModelOption | undefined {
-  return AGENT_MODEL_CONFIG[modelAgentKey(agentType)]?.models.find((m) => m.key === key);
-}
-
-/**
- * Stored model id → picker option key ("claude-opus-4-8" → "opus"). The inverse
- * direction of cliAlias: the conversation row stores the full model id, but the
- * pickers, the Cmd+K menu, and the launch-flag path all key off the option key.
- * Falls back to "default" when nothing matches (e.g. a claude model id read back
- * under the codex agent after an agent switch).
- */
-export function modelOptionKey(model: string | undefined | null, agentType: string | undefined): string {
-  const cfg = AGENT_MODEL_CONFIG[modelAgentKey(agentType)];
-  if (!model || !cfg) return "default";
-  const bare = model.startsWith("claude-") ? model.slice("claude-".length) : model;
-  // Exact match wins over a versioned-prefix match so a longer key ("gpt-5.4-mini")
-  // isn't swallowed by a shorter one that prefixes it ("gpt-5.4"); the prefix pass
-  // then resolves "opus-4-8" → "opus".
-  const hit =
-    cfg.models.find((m) => m.key !== "default" && bare === m.key) ??
-    cfg.models.find((m) => m.key !== "default" && bare.startsWith(`${m.key}-`));
-  return hit?.key ?? "default";
-}
+// The per-client model config (AGENT_MODEL_CONFIG) and the model helpers
+// (modelAgentKey / findModelOption / modelOptionKey) now live in ./agentClients
+// alongside the client registry they read from. This file holds only the raw
+// option arrays so the module graph stays acyclic (agentClients imports these;
+// this file imports nothing back). They remain re-exported from
+// @codecast/shared/contracts, so consumers are unaffected.

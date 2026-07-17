@@ -6,6 +6,7 @@ export * from "./agentStatus";
 export * from "./pendingStatus";
 export * from "./daemonCommands";
 export * from "./modelOptions";
+export * from "./agentClients";
 export * from "./workState";
 export * from "./apiErrorBanner";
 export * from "./snippets";
