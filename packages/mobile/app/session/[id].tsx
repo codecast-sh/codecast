@@ -23,6 +23,7 @@ import { EntityPill } from '@/components/EntityPill';
 import { CastCanvas, canvasAvailable, looksLikeHtmlMessage } from '@/components/CastCanvas';
 import { useSessionRestart, ghostRestartContextFor } from '@codecast/web/hooks/useSessionRestart';
 import { Theme, Spacing, chipShell, chipText, chipTint, CHROME_FONT_CAP } from '@/constants/Theme';
+import { structuredPayloadSummary } from '@codecast/shared/render';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 // A real gradient WITHOUT a native module: expo-linear-gradient's native side
 // ("ExpoLinearGradient") isn't linked into the dev/standalone binaries, so importing
@@ -460,9 +461,12 @@ function AgentLogoSvg({ agentType, size = 16 }: { agentType?: string; size?: num
       </RNView>
     );
   }
+  // Anthropic wordmark glyph — same path as web's AgentTypeIcon (claude_code).
   return (
     <RNView style={{ width: size, height: size, borderRadius: size * 0.2, backgroundColor: bg, alignItems: 'center', justifyContent: 'center' }}>
-      <RNText style={{ color: 'white', fontSize: size * 0.6, fontWeight: '700', lineHeight: size * 0.85, textAlign: 'center' }}>A</RNText>
+      <Svg width={size * 0.7} height={size * 0.7} viewBox="0 0 24 24" fill="none">
+        <Path d="M17.3041 3.541h-3.6718l6.696 16.918H24L17.3041 3.541Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.5409H6.696Zm-.3712 10.2232 2.2914-5.9456 2.2914 5.9456H6.3247Z" fill="white" />
+      </Svg>
     </RNView>
   );
 }
@@ -651,6 +655,7 @@ function toolIcon(name: string): { icon: React.ComponentProps<typeof FontAwesome
   if (name === 'Task') return { icon: 'code-fork', color: Theme.cyan };
   if (name === 'TaskCreate' || name === 'TaskUpdate' || name === 'TaskList' || name === 'TaskGet') return { icon: 'tasks', color: '#10b981' };
   if (name === 'SendMessage') return { icon: 'comment', color: '#f59e0b' };
+  if (name === 'StructuredOutput') return { icon: 'check-square-o', color: Theme.cyan };
   if (name === 'TodoWrite') return { icon: 'check-square-o', color: Theme.magenta };
   if (name === 'Skill') return { icon: 'bolt', color: Theme.cyan };
   if (name === 'EnterPlanMode' || name === 'ExitPlanMode') return { icon: 'map-o', color: Theme.violet };
@@ -796,6 +801,8 @@ function toolSummary(tc: ToolCall): string {
   if (tc.name === 'mcp__claude-in-chrome__resize_window') return parsedInput.width && parsedInput.height ? `${parsedInput.width}x${parsedInput.height}` : 'Resize';
   if (tc.name === 'mcp__claude-in-chrome__shortcuts_list') return 'List shortcuts';
   if (tc.name === 'mcp__claude-in-chrome__shortcuts_execute') return parsedInput.command ? `/${String(parsedInput.command)}` : 'Shortcut';
+
+  if (tc.name === 'StructuredOutput') return structuredPayloadSummary(parsedInput);
 
   // Task tools
   if (tc.name === 'Task') return parsedInput.description ? truncateStr(String(parsedInput.description), 40) : '';
@@ -2088,6 +2095,10 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
     if (toolCall.name === 'Bash' && parsed.command) {
       // For Bash, just show the command
       inputDisplay = parsed.command;
+    } else if (toolCall.name === 'StructuredOutput') {
+      // The input IS the payload (a workflow subagent's typed return) — the
+      // key/value flattening below drops nested objects, which is all of it.
+      inputDisplay = JSON.stringify(parsed, null, 2);
     } else {
       // For other tools, format as key: value pairs
       // Filter out verbose/internal fields
@@ -2117,9 +2128,14 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
 
   const isRead = toolCall.name === 'Read' || toolCall.name === 'file_read';
   const processedResult = result?.content ? (isRead ? stripLineNumbers(result.content) : result.content) : '';
-  const resultDisplay = result && expanded && processedResult.length > 2000
-    ? processedResult.slice(0, 2000) + '\n... (truncated)'
-    : (processedResult || undefined);
+  // StructuredOutput's success result is boilerplate ("Structured output
+  // provided successfully") — the payload shown above it is the content.
+  const hideResult = toolCall.name === 'StructuredOutput' && !result?.is_error;
+  const resultDisplay = hideResult
+    ? undefined
+    : result && expanded && processedResult.length > 2000
+      ? processedResult.slice(0, 2000) + '\n... (truncated)'
+      : (processedResult || undefined);
 
   // Compute result summary like web does
   const getResultSummary = () => {
@@ -4489,7 +4505,7 @@ export default function SessionDetailScreen() {
           ListFooterComponent={
             <>
               <RNView style={{ height: insets.top + HEADER_BAR_HEIGHT + floatingHeaderHeight }} />
-              {hasMoreAbove && (
+              {hasMoreAbove && allMessages.length > 0 && (
                 <RNView style={styles.loadMoreIndicator}>
                   {loadingOlder ? (
                     <RNView style={styles.loadMorePill}>
@@ -4655,11 +4671,21 @@ export default function SessionDetailScreen() {
             allMessages.length === 0 && { flex: 1 },
           ]}
           ListEmptyComponent={
-            <RNView style={styles.emptyState}>
-              <FontAwesome name="comments-o" size={32} color={Theme.textDim} />
-              <RNText style={styles.emptyStateText}>No messages yet</RNText>
-              <RNText style={styles.emptyStateSubtext}>Messages will appear here as the session progresses</RNText>
-            </RNView>
+            (conversation.message_count ?? 0) > 0 ? (
+              // Server metadata says messages exist — the window just hasn't
+              // hydrated yet (IDB/live sync in flight). Show a loader, not the
+              // "No messages yet" empty state.
+              <RNView style={styles.emptyState}>
+                <ActivityIndicator size="large" color={Theme.textMuted} />
+                <RNText style={styles.emptyStateSubtext}>Loading messages…</RNText>
+              </RNView>
+            ) : (
+              <RNView style={styles.emptyState}>
+                <FontAwesome name="comments-o" size={32} color={Theme.textDim} />
+                <RNText style={styles.emptyStateText}>No messages yet</RNText>
+                <RNText style={styles.emptyStateSubtext}>Messages will appear here as the session progresses</RNText>
+              </RNView>
+            )
           }
           showsVerticalScrollIndicator={false}
           onScrollToIndexFailed={(info) => {
