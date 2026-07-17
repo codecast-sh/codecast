@@ -3049,8 +3049,9 @@ export const startSession = mutation({
 
     const commandId = await enqueueStartSession(ctx, userId, {
       conversationId,
-      // opencode/pi have no daemon descriptor yet (plan phases 1-2); fromConvexAgentType
-      // maps them to "claude" and is a no-op for the existing daemon spellings.
+      // opencode/pi are first-class daemon clients; fromConvexAgentType maps each
+      // convex spelling to its daemon client id (opencode/pi to themselves) and falls
+      // back to "claude" only for unrecognized spellings.
       agentType: fromConvexAgentType(args.agent_type),
       projectPath: args.project_path,
       sessionId,
