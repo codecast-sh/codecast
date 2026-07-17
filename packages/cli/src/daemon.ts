@@ -102,6 +102,7 @@ import {
   rewriteSubagentJsonlToUuid,
 } from "./resumeCommand.js";
 import { resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
+import { buildLaunchArgs, getConfiguredAgentArgs, launchBinary } from "./launchCommand.js";
 import type { AgentStatus, DeviceSnippetSettings, AgentClientId } from "@codecast/shared/contracts";
 import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS } from "@codecast/shared/contracts";
 import { parseModelPicker, planModelNavigation, SESSION_ONLY_COMMIT_RE, isSwitchConfirmDialog } from "./modelPicker";
@@ -2482,68 +2483,37 @@ async function executeRemoteCommand(
           break;
         }
 
-        let binary: string;
-        let binaryArgs: string[] = [];
-        if (agentType === "codex") {
-          binary = "codex";
-          const extraArgs = config.codex_args || "";
-          if (extraArgs) binaryArgs.push(...extraArgs.split(/\s+/).filter(Boolean));
-          const permFlags = getPermissionFlags(agentType, config);
-          if (permFlags) {
-            binaryArgs.push(...permFlags.split(/\s+/).filter(Boolean));
-            if (!config.codex_args && !config.agent_permission_modes?.codex) {
-              const flagFile = path.join(CONFIG_DIR, ".codex-bypass-notified");
-              if (!fs.existsSync(flagFile)) {
-                fs.writeFileSync(flagFile, new Date().toISOString());
-                if (conversationId) {
-                  syncServiceRef?.createSessionNotification({
-                    conversation_id: conversationId,
-                    type: "info" as any,
-                    title: "Codex running in full-access mode",
-                    message: "Codex is running without permission prompts by default. Configure with: cast config codex_args",
-                  }).catch(() => {});
-                }
-              }
+        // Binary is a registry lookup; the per-client arg construction lives in
+        // launchCommand.ts (buildLaunchArgs, unit-tested per client). The daemon
+        // keeps the impure pieces: reading the config accessor + flag helpers, the
+        // one-time codex-bypass notification, and the arg sanitizer.
+        const binary = launchBinary(agentType);
+        const requestedModelOpt = requestedModelKey ? findModelOption(agentType, requestedModelKey) : undefined;
+        const { binaryArgs: rawLaunchArgs, notifyCodexBypass } = buildLaunchArgs({
+          agentType,
+          configuredArgs: getConfiguredAgentArgs(agentType, config),
+          permFlags: getPermissionFlags(agentType, config),
+          defaultFlags: getDefaultParamFlags(agentType as AgentClientId, config),
+          modelAlias: requestedModelOpt?.cliAlias,
+          requestedEffort,
+          assignedClaudeSessionId,
+          hasCodexPermissionMode: !!config.agent_permission_modes?.codex,
+        });
+        if (notifyCodexBypass) {
+          const flagFile = path.join(CONFIG_DIR, ".codex-bypass-notified");
+          if (!fs.existsSync(flagFile)) {
+            fs.writeFileSync(flagFile, new Date().toISOString());
+            if (conversationId) {
+              syncServiceRef?.createSessionNotification({
+                conversation_id: conversationId,
+                type: "info" as any,
+                title: "Codex running in full-access mode",
+                message: "Codex is running without permission prompts by default. Configure with: cast config codex_args",
+              }).catch(() => {});
             }
           }
-        } else if (agentType === "cursor") {
-          binary = "cursor-agent";
-        } else if (agentType === "gemini") {
-          binary = "gemini";
-        } else {
-          binary = "claude";
-          const extraArgs = config.claude_args || "";
-          if (extraArgs) binaryArgs.push(...extraArgs.split(/\s+/).filter(Boolean));
-          const permFlags = getPermissionFlags(agentType, config);
-          if (permFlags && !extraArgs.includes("--dangerously-skip-permissions") && !extraArgs.includes("--permission-mode") && !extraArgs.includes("--allow-dangerously-skip-permissions")) {
-            binaryArgs.push(...permFlags.split(/\s+/).filter(Boolean));
-          }
-          if (assignedClaudeSessionId && !extraArgs.includes("--session-id")) {
-            binaryArgs.push("--session-id", assignedClaudeSessionId);
-          }
         }
-
-        const defaultFlags = getDefaultParamFlags(agentType as AgentClientId, config);
-        if (defaultFlags) {
-          binaryArgs.push(...defaultFlags.split(/\s+/).filter(Boolean));
-        }
-
-        // Per-session model/effort, appended AFTER config/default flags so the
-        // per-session choice wins (both CLIs take the last occurrence).
-        const requestedModelOpt = requestedModelKey ? findModelOption(agentType, requestedModelKey) : undefined;
-        if (agentType === "claude") {
-          if (requestedModelOpt?.cliAlias) binaryArgs.push("--model", requestedModelOpt.cliAlias);
-          if (requestedEffort && (CLAUDE_EFFORT_LEVELS as readonly string[]).includes(requestedEffort)) {
-            binaryArgs.push("--effort", requestedEffort);
-          }
-        } else if (agentType === "codex") {
-          if (requestedModelOpt?.cliAlias) binaryArgs.push("-m", requestedModelOpt.cliAlias);
-          if (requestedEffort && (CODEX_EFFORT_LEVELS as readonly string[]).includes(requestedEffort)) {
-            binaryArgs.push("-c", `model_reasoning_effort=${requestedEffort}`);
-          }
-        }
-
-        binaryArgs = sanitizeBinaryArgs(binaryArgs);
+        let binaryArgs = sanitizeBinaryArgs(rawLaunchArgs);
         const envPrefix = worktreeResult
           ? `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT AGENT_RESOURCE_INDEX=${worktreeResult.portIndex}`
           : `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT`;
