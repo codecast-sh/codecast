@@ -9,7 +9,7 @@ import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
 import { nextShortId } from "./counters";
 import { resolveAssigneeStr, resolveAssigneeToUserId, recalcPlanProgress, notifySubscribers, subscribeUser, resolveWorkerParentConversation, resolveTaskGitContext } from "./tasks";
 import { api, internal } from "./_generated/api";
-import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey } from "@codecast/shared/contracts";
+import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey, fromConvexAgentType } from "@codecast/shared/contracts";
 import { applyHideTransition } from "./cleanup";
 import { reactivateTasksCanceledOnKill } from "./agentTasks";
 import { canAccessDoc } from "./docs";
@@ -404,7 +404,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     const conv = await ctx.db.get(convId as Id<"conversations">);
     const isSecondPartyOwner = conv?.owner_user_id?.toString() === userId.toString();
     if (!conv || (conv.user_id.toString() !== userId.toString() && !isSecondPartyOwner)) throw new Error("Unauthorized");
-    const agentType = conv.agent_type === "codex" ? "codex" : conv.agent_type === "gemini" ? "gemini" : "claude";
+    const agentType = fromConvexAgentType(conv.agent_type);
     // Daemon commands are polled by the RUNNER's daemon — for a second-party
     // owner resuming a session run by another account, address the command to
     // the runner, not the caller.

@@ -5021,7 +5021,7 @@ export const forkFromMessage = mutation({
     const forkSessionId = args.session_id || `forked-${original.session_id}-${crypto.randomUUID()}`;
     // The daemon_command is deferred so it can't race a half-copied fork. It
     // gets inserted by advanceForkCopy when fork_status flips to "complete".
-    const daemonAgentType = agentType === "codex" ? "codex" : agentType === "gemini" ? "gemini" : "claude";
+    const daemonAgentType = fromConvexAgentType(agentType);
 
     // A fork defaults to the same visibility a fresh session in this directory
     // would get: re-resolve from the forker's directory mappings rather than

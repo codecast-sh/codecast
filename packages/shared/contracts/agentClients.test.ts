@@ -5,9 +5,11 @@ import { fromConvexAgentType, toConvexAgentType } from "./agentClients";
 // The daemon launch/resume mutations (users.startSession, conversations.switchSessionAgent,
 // tasks.assignToAgent) delegate their daemon-agent decision to it — those sites are
 // mutation-wrapped and have no plain-function seam, so this unit test is the guard.
-// The load-bearing case: opencode/pi are valid ConvexAgentType values with no
-// descriptor yet (plan phases 1-2), so they must resolve to "claude", NOT fall
-// through to some other client. tsc can't catch a wrong-but-valid AgentClientId.
+// Two load-bearing cases: (1) "cursor" must pass through — a 2-branch ternary
+// (codex/gemini else claude) used to collapse it to "claude", so cursor sessions
+// resumed as `claude --resume`; (2) opencode/pi are valid ConvexAgentType values
+// with no descriptor yet (plan phases 1-2), so they must resolve to "claude", NOT
+// fall through to some other client. tsc can't catch a wrong-but-valid AgentClientId.
 describe("fromConvexAgentType", () => {
   it("maps every current convex spelling to its daemon id", () => {
     expect(fromConvexAgentType("claude_code")).toBe("claude");
