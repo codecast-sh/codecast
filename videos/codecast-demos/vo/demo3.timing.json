@@ -1,0 +1,43 @@
+{
+  "id": "demo3",
+  "voice": "cjVigY5qzO86Huf0OWal",
+  "total": 29.31,
+  "beats": [
+    {
+      "i": 0,
+      "text": "The best idea isn't always the obvious one. So don't pick just one. Run them all.",
+      "start": 0,
+      "dur": 4.624
+    },
+    {
+      "i": 1,
+      "text": "Fork a conversation, and it branches. Each copy keeps the full history, then chases its own direction.",
+      "start": 5.074,
+      "dur": 6.713
+    },
+    {
+      "i": 2,
+      "text": "Or spawn fresh sessions. Parallel work, no shared history, each on its own task.",
+      "start": 12.237,
+      "dur": 4.598
+    },
+    {
+      "i": 3,
+      "text": "They start immediately, and land right in your inbox, side by side.",
+      "start": 17.285,
+      "dur": 3.657
+    },
+    {
+      "i": 4,
+      "text": "This is a real fleet. Sixty-four sessions running at once, every one live.",
+      "start": 21.392,
+      "dur": 3.788
+    },
+    {
+      "i": 5,
+      "text": "Explore three directions in the time it used to take to try one.",
+      "start": 25.63,
+      "dur": 3.422
+    }
+  ]
+}
