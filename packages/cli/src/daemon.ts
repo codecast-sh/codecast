@@ -6701,10 +6701,14 @@ const opencodeSyncedCounts = new Map<string, number>();
 // The opencode `serve` sidecar (opencodeServer.ts) is a daemon-wide, LAZY singleton:
 // its only job today is the fork-by-id API, which is rare, so — unlike the codex
 // app-server (a per-turn transport spun up at boot) — we don't keep a serve process
-// running on every machine. It starts on the first fork that needs it and is torn
-// down on daemon shutdown. Fork works cross-project-scope (verified: a sidecar in any
-// cwd forks any session by id, and the fork inherits the PARENT's directory), so one
-// instance suffices regardless of which project the fork lives in.
+// running on every machine. It starts on the first fork that needs it, tears itself
+// down after an idle timeout (the serve HTTP surface is unauthenticated, so we don't
+// leave it up forever after a single fork), and is also stopped on daemon shutdown
+// AND on the crash/exit paths (see the uncaughtException + process "exit" handlers)
+// so a daemon that dies hard can't orphan a live unauthenticated serve. Fork works
+// cross-project-scope (verified: a sidecar in any cwd forks any session by id, and
+// the fork inherits the PARENT's directory), so one instance suffices regardless of
+// which project the fork lives in.
 let opencodeServerInstance: OpencodeServer | null = null;
 
 /** Start (once) and await readiness of the fork sidecar. Returns the running server,
@@ -6723,6 +6727,13 @@ export async function ensureOpencodeServer(config: Config | null | undefined): P
       log(`[opencode-server] ${err.message}`));
     opencodeServerInstance.on("binaryNotFound", (bin: string) =>
       log(`[opencode-server] "${bin}" not installed — opencode fork unavailable`));
+    // Idle self-teardown: drop the singleton so the NEXT fork lazily builds a fresh
+    // one. ensureOpencodeServer already re-`start()`s a stopped-but-present instance,
+    // but nulling keeps the lifecycle unambiguous (no stale state to reason about).
+    opencodeServerInstance.on("idleStopped", () => {
+      log(`[opencode-server] stopped after idle timeout — will respawn on next fork`);
+      opencodeServerInstance = null;
+    });
   }
   if (opencodeServerInstance.running) return opencodeServerInstance;
   const srv = opencodeServerInstance;
@@ -14583,6 +14594,11 @@ async function main(): Promise<void> {
   // Skip self-respawn when running under launchd (KeepAlive handles restarts).
   const underLaunchd = isManagedByLaunchd();
   process.on("exit", (code) => {
+    // Reap the opencode serve sidecar on EVERY exit path (crash, self-update respawn,
+    // fatal, hard-exit timer) — it isn't spawned detached, but process.exit doesn't
+    // kill it either, so without this a dying daemon orphans a live unauthenticated
+    // serve. stop() sends SIGTERM synchronously here and is idempotent.
+    try { opencodeServerInstance?.stop(); } catch {}
     persistLogQueue();
     if (skipRespawn || underLaunchd) return;
     if (code !== 0) {
@@ -14611,6 +14627,10 @@ async function main(): Promise<void> {
   });
 
   process.on("uncaughtException", async (err) => {
+    // Kill the unauthenticated serve sidecar immediately — don't leave it live during
+    // the async log-flush below or after the exit. (The "exit" handler is the
+    // catch-all; this shrinks the crash-time exposure window.)
+    try { opencodeServerInstance?.stop(); } catch {}
     logError("Uncaught exception", err);
     persistLogQueue();
     sendLogImmediate("error", `UNCAUGHT EXCEPTION: ${err.message}`, {

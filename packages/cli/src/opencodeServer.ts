@@ -89,6 +89,12 @@ export interface OpencodeServerOptions {
   /** How long to wait for the server to answer /global/health before giving up on
    *  a spawn attempt. */
   healthTimeoutMs?: number;
+  /** Stop the sidecar after this many ms with no fork activity. The serve process
+   *  binds 127.0.0.1 but has NO auth (opencode serve offers none), so a live
+   *  instance is an unauthenticated local HTTP surface; bounding its lifetime to
+   *  "shortly after the last fork" instead of "forever after the first fork" keeps
+   *  the exposure window to a single fork burst. 0 disables the timeout. */
+  idleTimeoutMs?: number;
 }
 
 // ── Pure helpers (unit-tested with fixtures) ──────────────────────────────────
@@ -195,6 +201,10 @@ const DEFAULT_HEALTH_TIMEOUT_MS = 20_000;
 const MAX_RESTART_DELAY_MS = 30_000;
 const QUICK_EXIT_THRESHOLD_MS = 3_000;
 const MAX_CONSECUTIVE_QUICK_EXITS = 5;
+// Forks cluster within seconds (a user branching a session a few ways), so a short
+// idle window keeps the sidecar warm across a burst while bounding the
+// unauthenticated-serve exposure to ~a minute past the last fork instead of forever.
+const DEFAULT_IDLE_TIMEOUT_MS = 60_000;
 
 /**
  * Manages one `opencode serve` subprocess and its HTTP + SSE channel. Lifecycle
@@ -205,7 +215,9 @@ const MAX_CONSECUTIVE_QUICK_EXITS = 5;
  *
  * Events: `ready` (healthy, port resolved), `event` (OpencodeServerEvent),
  * `workState` (sessionId, OpencodeWorkState) — the deduped state seam the daemon
- * feeds into sendAgentStatus — `error`, `exited`, `closed`, `binaryNotFound`.
+ * feeds into sendAgentStatus — `error`, `exited`, `closed`, `binaryNotFound`,
+ * `idleStopped` (self-torn-down after the idle timeout; the daemon drops its
+ * singleton so the next fork lazily respawns a fresh one).
  */
 export class OpencodeServer extends EventEmitter {
   private process: ChildProcess | null = null;
@@ -219,6 +231,8 @@ export class OpencodeServer extends EventEmitter {
   private spawnFn: typeof spawn;
   private fetchImpl: typeof fetch;
   private healthTimeoutMs: number;
+  private idleTimeoutMs: number;
+  private idleTimer: ReturnType<typeof setTimeout> | null = null;
 
   private stopped = false;
   private healthy = false;
@@ -240,6 +254,7 @@ export class OpencodeServer extends EventEmitter {
     this.spawnFn = opts.spawnFn || spawn;
     this.fetchImpl = opts.fetchImpl || fetch;
     this.healthTimeoutMs = opts.healthTimeoutMs ?? DEFAULT_HEALTH_TIMEOUT_MS;
+    this.idleTimeoutMs = opts.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
   }
 
   start(): void {
@@ -254,6 +269,7 @@ export class OpencodeServer extends EventEmitter {
       clearTimeout(this.restartTimer);
       this.restartTimer = null;
     }
+    this.clearIdleTimer();
     this.stopSse();
     this.killProcess();
   }
@@ -279,6 +295,11 @@ export class OpencodeServer extends EventEmitter {
     this.log(`[opencode-server] spawning: ${this.opencodeBinary} ${args.join(" ")}`);
     this.lastSpawnTime = Date.now();
     this.healthy = false;
+    // Clear the previous life's port so THIS spawn's announce line re-triggers the
+    // health confirm — without this the `!this.resolvedPort` guard below would swallow
+    // a restarted process's announce, leaving the respawned sidecar never marked ready
+    // (matters for the idle-stop → next-fork restart path).
+    this.resolvedPort = 0;
 
     let child: ChildProcess;
     try {
@@ -392,6 +413,9 @@ export class OpencodeServer extends EventEmitter {
             this.log(`[opencode-server] ready on ${this.baseUrl}`);
             this.emit("ready", this.resolvedPort);
             this.subscribeEvents();
+            // A sidecar that becomes ready but is never forked through must still
+            // tear itself down — arm the idle countdown now, fork() re-arms it.
+            this.armIdleTimer();
             return;
           }
         }
@@ -506,6 +530,29 @@ export class OpencodeServer extends EventEmitter {
     this.restartDelay = Math.min(this.restartDelay * 2, MAX_RESTART_DELAY_MS);
   }
 
+  private clearIdleTimer(): void {
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+    }
+  }
+
+  /** (Re)start the idle countdown. When it fires the sidecar stops itself and emits
+   *  `idleStopped` so the daemon can drop its singleton and lazily respawn on the
+   *  next fork. `unref` so this timer never keeps the daemon alive on its own. */
+  private armIdleTimer(): void {
+    this.clearIdleTimer();
+    if (this.idleTimeoutMs <= 0 || this.stopped) return;
+    this.idleTimer = setTimeout(() => {
+      this.idleTimer = null;
+      if (this.stopped || !this.process) return;
+      this.log(`[opencode-server] idle ${this.idleTimeoutMs}ms — stopping sidecar`);
+      this.emit("idleStopped");
+      this.stop();
+    }, this.idleTimeoutMs);
+    this.idleTimer.unref?.();
+  }
+
   // ── HTTP API ────────────────────────────────────────────────────────────────
 
   private async apiRequest<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -533,7 +580,17 @@ export class OpencodeServer extends EventEmitter {
   async fork(sessionId: string, opts: OpencodeForkOptions = {}): Promise<OpencodeApiSession> {
     const query = opts.directory ? `?directory=${encodeURIComponent(opts.directory)}` : "";
     const body = opts.messageID ? { messageID: opts.messageID } : {};
-    return this.apiRequest<OpencodeApiSession>("POST", `/session/${sessionId}/fork${query}`, body);
+    // Re-arm at the START too so the idle timer can't fire mid-fork (a fork is
+    // bounded well under the idle window); the finally re-arms from completion.
+    this.armIdleTimer();
+    try {
+      return await this.apiRequest<OpencodeApiSession>("POST", `/session/${sessionId}/fork${query}`, body);
+    } finally {
+      // Fork is the only activity that keeps the sidecar alive — restart the idle
+      // countdown from the end of each fork so a burst holds the server open but a
+      // quiet period after it lets the server shut itself down.
+      this.armIdleTimer();
+    }
   }
 
   /** Sessions in this sidecar's project scope. */
