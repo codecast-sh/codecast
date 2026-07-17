@@ -105,6 +105,7 @@ import {
   extractJsonlPermissionMode,
   isForkArtifactSessionId,
   isManagedTmuxName,
+  isValidResumeSessionId,
   removeForkArtifactJsonl,
   resolveResumeAgentType,
   resumeTmuxPrefix,
@@ -10337,7 +10338,7 @@ export function selectSessionsToWarm(
     .map(c => c.sessionId);
 }
 
-type ResumeFatalReason = "missing_conversation" | "session_not_found";
+type ResumeFatalReason = "missing_conversation" | "session_not_found" | "invalid_session_id";
 const resumeFatalReasons = new Map<string, ResumeFatalReason>();
 const conversationResumeFailures = new Map<string, { count: number; lastFailure: number }>();
 const CONVERSATION_RESUME_MAX_FAILURES = 3;
@@ -11695,6 +11696,18 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
   }
 
   const agentType: AgentClientId = resolveResumeAgentType(agentTypeHint, sessionFile?.agentType);
+  // Backstop against a poisoned session id (RCE): the resume line below is built by
+  // interpolating this id and then TYPED INTO A LIVE SHELL via `tmux send-keys -l`.
+  // The watchers now refuse to ingest a malformed id, but a row poisoned before that
+  // fix can still arrive from convex as the authoritative session_id — refuse it here
+  // (both the claude and non-claude branches converge on this id) rather than build a
+  // command around shell metacharacters. Honest failure, no execution; the fatal
+  // reason stops the resume-retry loop from re-attempting it forever.
+  if (!isValidResumeSessionId(agentType, sessionId)) {
+    log(`[SECURITY] Refusing resume of ${agentType} session with malformed id: ${JSON.stringify(sessionId.slice(0, 80))}`);
+    resumeFatalReasons.set(sessionId, "invalid_session_id");
+    return false;
+  }
   const jsonlPath = isStoreOwnedResume ? "" : sessionFile!.path;
   const jsonlContent = isStoreOwnedResume ? "" : readFileHead(jsonlPath, 5000);
 
