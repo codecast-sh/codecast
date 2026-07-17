@@ -8282,6 +8282,37 @@ export function classifyTmuxLiveState(region: string): TmuxLiveState {
   return "unknown";
 }
 
+// Clients whose settled TUI carries NO ❯/› input glyph — the marker
+// classifyTmuxLiveState whitelists "idle" on. opencode (footer `ctrl+p commands`,
+// placeholder `Ask anything…`) and pi (status-bar context-budget segment, e.g.
+// `0.0%/200k`) advertise readiness through their registry promptReadyPattern
+// instead. Without this the injection pre-flight read their idle prompt as
+// "unknown" and refused to paste — a fresh opencode/pi launch's FIRST message
+// never delivered (ct-39174): tryStartedTmux reached the pane and logged "ready
+// (prompt visible)", then ensureTmuxReady threw AGENT_UNKNOWN_STATE and delivery
+// fell through to materialize/fresh-start, which both fail for a store-owned
+// client that has no session row until it has processed a turn.
+const GLYPHLESS_PROMPT_CLIENTS: ReadonlySet<AgentClientId> = new Set(["opencode", "pi"]);
+
+// Injection-readiness for a glyph-less client, tested against the WHOLE pane (not
+// extractTmuxLiveRegion's tight live-region tail — opencode has no ─/━ separator,
+// so that tail drops to the status bar and misses the footer marker). These
+// clients have no pane-driven modals (panePromptMonitoring:false; the store
+// watcher is the authoritative turn-state source), so readiness is the narrow
+// question "is the TUI up and accepting input": a visible readyPattern with no
+// active spinner means ready-to-paste. `busy` is best-effort — the store, not the
+// pane, owns turn state — but a visible spinner still says to skip the
+// interrupting Escape and paste into the type-ahead box instead.
+export function classifyGlyphlessClientPaneState(
+  paneContent: string,
+  readyPattern: RegExp,
+): TmuxLiveState {
+  if (/-(?:ba)?sh:.*(?:No such file|command not found)/.test(paneContent)) return "exited";
+  if (/⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|esc to interrupt/i.test(paneContent)) return "busy";
+  if (readyPattern.test(paneContent)) return "idle";
+  return "unknown";
+}
+
 // Pane-state status reconcile — the tmux-session counterpart to
 // reconcileStatusFromTranscript. For a tmux-managed session the live pane is the
 // authoritative "is the agent busy right now" signal: the transcript can't tell
@@ -8719,22 +8750,32 @@ async function ensureTmuxPaneWide(target: string): Promise<void> {
   } catch {}
 }
 
-export async function ensureTmuxReady(target: string): Promise<{ busy: boolean }> {
+export async function ensureTmuxReady(target: string, agentType?: AgentClientId): Promise<{ busy: boolean }> {
   const STUCK_BUDGET_MS = 8_000;
   await ensureTmuxPaneWide(target);
   const startedAt = Date.now();
   let lastCorrectiveState: TmuxLiveState | null = null;
   let sameStateAttempts = 0;
 
+  // Glyph-less clients (opencode/pi) are classified from the WHOLE pane via their
+  // registry readiness pattern, not the ❯/›-glyph whitelist (see
+  // classifyGlyphlessClientPaneState / ct-39174).
+  const glyphlessPattern =
+    agentType && GLYPHLESS_PROMPT_CLIENTS.has(agentType)
+      ? AGENT_CLIENTS[agentType].promptReadyPattern
+      : undefined;
+
   while (true) {
-    let region: string;
+    let stdout: string;
     try {
-      const { stdout } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", "-25"]);
-      region = extractTmuxLiveRegion(stdout);
+      ({ stdout } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", "-25"]));
     } catch (err) {
       throw new Error(`AGENT_CAPTURE_FAILED: ${err instanceof Error ? err.message : String(err)}`);
     }
-    const state = classifyTmuxLiveState(region);
+    const region = glyphlessPattern ? stdout : extractTmuxLiveRegion(stdout);
+    const state = glyphlessPattern
+      ? classifyGlyphlessClientPaneState(stdout, glyphlessPattern)
+      : classifyTmuxLiveState(region);
 
     if (state === "idle") return { busy: false };
     if (state === "exited") {
@@ -8751,6 +8792,16 @@ export async function ensureTmuxReady(target: string): Promise<{ busy: boolean }
     if (Date.now() - startedAt >= STUCK_BUDGET_MS) {
       throw new Error(`AGENT_NOT_READY: live state '${state}' did not settle within ${STUCK_BUDGET_MS}ms`);
     }
+
+    // Glyph-less clients have no pane-driven corrective modals — an "unknown"
+    // here just means the readiness marker hasn't rendered yet (TUI still
+    // booting/redrawing), so poll again until it does or the budget above trips.
+    // There are no keys to send.
+    if (glyphlessPattern) {
+      await new Promise(resolve => setTimeout(resolve, 300));
+      continue;
+    }
+
     if (state === lastCorrectiveState) {
       if (++sameStateAttempts >= 3) {
         throw new Error(`AGENT_STUCK_${state.toUpperCase()}: corrective input did not change live state`);
@@ -9052,11 +9103,11 @@ export async function verifyTmuxSubmitAfterPaste(
   return { outcome: "timeout", rePasted };
 }
 
-export async function injectViaTmux(target: string, content: string): Promise<void> {
-  return withTmuxLock(target, () => injectViaTmuxInner(target, content));
+export async function injectViaTmux(target: string, content: string, agentType?: AgentClientId): Promise<void> {
+  return withTmuxLock(target, () => injectViaTmuxInner(target, content, agentType));
 }
 
-async function injectViaTmuxInner(target: string, content: string): Promise<void> {
+async function injectViaTmuxInner(target: string, content: string, agentType?: AgentClientId): Promise<void> {
   const poll = parsePollMessage(content);
   if (poll) {
     // A free-text answer can't be entered into Claude Code's AUQ menu — decline the whole
@@ -9122,7 +9173,7 @@ async function injectViaTmuxInner(target: string, content: string): Promise<void
   // the invariant that prevents Escape-at-idle from spuriously opening the Rewind
   // dialog. `busy` = agent mid-turn with a live type-ahead box; we paste into its
   // native queue rather than waiting for the turn to finish.
-  const { busy } = await ensureTmuxReady(target);
+  const { busy } = await ensureTmuxReady(target, agentType);
 
   const contentLines = content.split(/\r?\n/).length;
   const captureLines = Math.max(30, contentLines + Math.ceil(sanitized.length / 60) + 10);
@@ -11664,7 +11715,7 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
         if (result && content) {
           const tmuxSession = resumeSessionCache.get(sessionId);
           if (tmuxSession) {
-            await injectViaTmux(tmuxSession + ":0.0", content);
+            await injectViaTmux(tmuxSession + ":0.0", content, agentTypeHint);
             log(`Injected message to already-resumed session ${sessionId.slice(0, 8)}`);
           }
         }
@@ -11917,7 +11968,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     logDelivery(`Session ${shortId} already alive in tmux=${live.tmuxTarget} (${live.source}), reusing`);
     resumeSessionCache.set(sessionId, bareName);
     if (content) {
-      await injectViaTmux(live.tmuxTarget.includes(":") ? live.tmuxTarget : live.tmuxTarget + ":0.0", content);
+      await injectViaTmux(live.tmuxTarget.includes(":") ? live.tmuxTarget : live.tmuxTarget + ":0.0", content, agentType);
     }
     // Ensure heartbeat + sync registration exist (may be missing after daemon restart)
     if (syncServiceRef && conversationId && !managedHeartbeatSessions.has(sessionId)) {
@@ -12077,7 +12128,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
 
     // Inject the message (skip if empty — resume-only mode)
     if (content) {
-      await injectViaTmux(tmuxSession + ":0.0", content);
+      await injectViaTmux(tmuxSession + ":0.0", content, agentType);
       log(`Injected message to auto-resumed ${agentType} session ${shortId}`);
     } else {
       log(`Auto-resumed ${agentType} session ${shortId} (no message to inject)`);
@@ -12093,6 +12144,19 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
 const repairAttempts = new Map<string, number>();
 const REPAIR_COOLDOWN_MS = 60 * 1000;
 const repairInFlight = new Map<string, Promise<boolean>>();
+
+// codecast owns a transcript GENERATOR for exactly two clients — claude and codex
+// (generateClaudeCodeJsonl / generateCodexJsonl). Every other client keeps its
+// session in a store we do NOT produce: cursor/opencode in SQLite, pi/gemini in
+// their own JSONL dialects. So repairing/materializing/reconstituting a Claude-or-
+// Codex JSONL for them is invalid, and when the write targets the client's own
+// file it is DESTRUCTIVE — the opencode repair path copied opencode.db → .bak then
+// wrote a Claude JSONL over the shared ~/.local/share/opencode/opencode.db,
+// clobbering every session in it (ct-39174 / ct-39178). These clients recover by a
+// plain re-resume; never regenerate a transcript for them.
+export function clientOwnsSessionStore(agentType: AgentClientId | undefined | null): boolean {
+  return agentType != null && agentType !== "claude" && agentType !== "codex";
+}
 
 async function repairAndResumeSession(
   sessionId: string,
@@ -12112,12 +12176,17 @@ async function repairAndResumeSession(
     return false;
   }
 
-  if (agentTypeHint === "cursor" || agentTypeHint === "opencode") {
-    // cursor-agent and opencode own their own session store (SQLite) — there is no
-    // local JSONL to repair or reconstitute. A plain resume is the only recovery;
-    // never materialize a Claude JSONL for them.
-    log(`Repairing ${agentTypeHint} session ${sessionId.slice(0, 8)} = re-resume (client owns its store)`);
-    return autoResumeSession(sessionId, content, titleCache, cwdOverride, conversationId, agentTypeHint);
+  // A store-owned client (cursor/opencode/pi) has no local Claude/Codex JSONL to
+  // repair — regenerating one and writing it over the client's own store corrupts
+  // it (opencode's shared SQLite db, ct-39174/ct-39178). The prior guard checked
+  // only agentTypeHint, so a caller that passed no hint (e.g. the retry/heal paths)
+  // sent an opencode session straight into Claude regeneration and clobbered the db.
+  // Resolve the type from the hint OR the on-disk session file (findSessionFile has
+  // no cursor lookup, hence the hint) and re-resume instead of touching a transcript.
+  const repairType = agentTypeHint ?? findSessionFile(sessionId)?.agentType ?? "claude";
+  if (clientOwnsSessionStore(repairType)) {
+    log(`Repairing ${repairType} session ${sessionId.slice(0, 8)} = re-resume (${repairType} owns its session store; no Claude/Codex JSONL to regenerate)`);
+    return autoResumeSession(sessionId, content, titleCache, cwdOverride, conversationId, repairType);
   }
 
   const promise = (async (): Promise<boolean> => {
@@ -12518,6 +12587,15 @@ async function materializeSession(
         logDelivery(`Materialization skipped for ${conversationId.slice(0, 12)}: 0 messages (session_id=${exportData.conversation?.session_id?.slice(0, 8) || "none"})`);
         return null;
       }
+      // A store-owned client (opencode/pi/cursor) has no Claude-JSONL transcript to
+      // materialize — fabricating one is invalid and, for opencode, the write path
+      // corrupts the shared opencode.db (ct-39174/ct-39178). Delivery falls back to
+      // the started-pane injection / re-resume instead of a materialized session.
+      const matAgentType = fromConvexAgentType(exportData.conversation.agent_type);
+      if (clientOwnsSessionStore(matAgentType)) {
+        logDelivery(`Materialization skipped for ${conversationId.slice(0, 12)}: ${matAgentType} owns its session store (no Claude JSONL to materialize)`);
+        return null;
+      }
 
       const TOKEN_BUDGET = CLAUDE_AUTO_TRIM_TARGET_TOKENS;
       const tailMessages = chooseClaudeTailMessagesForTokenBudget(exportData, TOKEN_BUDGET);
@@ -12785,7 +12863,7 @@ async function deliverMessage(
         // daemon's later mark would strand the row "injected", which the 120s retry cron re-pends
         // → duplicate reply. Marking first guarantees the ack always has a row to promote.
         markInjectedBestEffort(syncService, messageId, undefined, { conversationId });
-        await injectViaTmux(startedTmuxTarget, content);
+        await injectViaTmux(startedTmuxTarget, content, entry.agentType);
         syncService.updateSessionAgentStatus(conversationId, "connected").catch(logConvexFailure);
         log(`Injected message to started session tmux ${entry.tmuxSession} for conversation ${conversationId.slice(0, 12)}`);
         const isPollResponse = !!parsePollMessage(content);
@@ -12900,7 +12978,7 @@ async function deliverMessage(
       // find no row, the daemon's later mark would strand the row "injected", and the 120s retry
       // cron would re-pend it → duplicate reply. Marking first guarantees the ack has a row.
       markInjectedBestEffort(syncService, messageId, undefined, { conversationId });
-      await injectViaTmux(injectTarget, content);
+      await injectViaTmux(injectTarget, content, detectedType);
       // A process-discovered pane can go stale between scan and inject — verify the agent
       // survived and fall through to auto-resume if it crashed (the original optimistic path).
       if (live.source === "process" && !(await isTmuxAgentAlive(tmuxSessionName))) {
