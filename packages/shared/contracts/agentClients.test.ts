@@ -7,20 +7,21 @@ import { fromConvexAgentType, toConvexAgentType } from "./agentClients";
 // mutation-wrapped and have no plain-function seam, so this unit test is the guard.
 // Two load-bearing cases: (1) "cursor" must pass through — a 2-branch ternary
 // (codex/gemini else claude) used to collapse it to "claude", so cursor sessions
-// resumed as `claude --resume`; (2) opencode/pi are valid ConvexAgentType values
-// with no descriptor yet (plan phases 1-2), so they must resolve to "claude", NOT
-// fall through to some other client. tsc can't catch a wrong-but-valid AgentClientId.
+// resumed as `claude --resume`; (2) opencode is a valid ConvexAgentType value with
+// no descriptor yet (plan phase 1), so it must resolve to "claude", NOT fall through
+// to some other client. tsc can't catch a wrong-but-valid AgentClientId. `pi` is now
+// a real client (phase 2) and must resolve to its own id.
 describe("fromConvexAgentType", () => {
   it("maps every current convex spelling to its daemon id", () => {
     expect(fromConvexAgentType("claude_code")).toBe("claude");
     expect(fromConvexAgentType("codex")).toBe("codex");
     expect(fromConvexAgentType("cursor")).toBe("cursor");
     expect(fromConvexAgentType("gemini")).toBe("gemini");
+    expect(fromConvexAgentType("pi")).toBe("pi");
   });
 
-  it("maps the not-yet-supported opencode/pi to claude (temporary phase-0 fallback)", () => {
+  it("maps the not-yet-supported opencode to claude (temporary phase-0 fallback)", () => {
     expect(fromConvexAgentType("opencode")).toBe("claude");
-    expect(fromConvexAgentType("pi")).toBe("claude");
   });
 
   it("normalizes cowork, unknown, null and undefined to claude", () => {
@@ -37,5 +38,6 @@ describe("toConvexAgentType", () => {
     expect(toConvexAgentType("codex")).toBe("codex");
     expect(toConvexAgentType("cursor")).toBe("cursor");
     expect(toConvexAgentType("gemini")).toBe("gemini");
+    expect(toConvexAgentType("pi")).toBe("pi");
   });
 });

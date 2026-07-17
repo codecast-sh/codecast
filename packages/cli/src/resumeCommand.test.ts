@@ -265,12 +265,19 @@ describe("resumeTmuxPrefix", () => {
 // bug was that this value could never be "cursor" — findSessionFile has no cursor
 // lookup and the reconstitution path only knows claude/codex, so a cursor session
 // arrived here labeled "claude" and built `claude --resume`.
-describe("resolveResumeAgentType (dispatch trusts the cursor hint over the file)", () => {
+describe("resolveResumeAgentType (dispatch trusts the cursor/pi hint over the file)", () => {
   test("an explicit cursor hint wins even when the local file was mislabeled claude", () => {
     // The exact regression: a cursor session with no cursor entry in
     // findSessionFile (so its file is absent, or reconstituted as claude).
     expect(resolveResumeAgentType("cursor", "claude")).toBe("cursor");
     expect(resolveResumeAgentType("cursor", undefined)).toBe("cursor");
+  });
+
+  test("an explicit pi hint wins even when the local file is missing (cross-device)", () => {
+    // A pi session whose ~/.pi transcript isn't on this machine must not fall to
+    // claude reconstitution — trust the hint so it routes to pi's own resume.
+    expect(resolveResumeAgentType("pi", "claude")).toBe("pi");
+    expect(resolveResumeAgentType("pi", undefined)).toBe("pi");
   });
 
   test("without a cursor hint the local file (or the claude default) decides", () => {
