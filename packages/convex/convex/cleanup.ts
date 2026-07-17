@@ -2,6 +2,7 @@ import { internalMutation, mutation } from "./functions";
 import { v } from "convex/values";
 import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
 import { cancelTasksBoundToConversation } from "./agentTasks";
+import { nestParentIdOf } from "./ccAccountsShared";
 
 // ---------------------------------------------------------------------------
 // Abandoned empty-conversation GC.
@@ -313,6 +314,57 @@ export async function applyHideTransition(
     }
   }
   return { action, canceledSchedules };
+}
+
+// A hide gesture on a session takes its NESTED group with it — the same set
+// the inbox renders beneath the card (nestParentIdOf): Task subagents
+// (parent_conversation_id) and agent-team teammates (spawned_by +
+// agent_team_name). A teammate whose lead disappears deliberately floats as a
+// first-class card — the categorizer can't hide it — so the cascade is the
+// only place the group can come down together. The web store sweeps its own
+// gesture optimistically (hideSessionInDraft); this server twin is what makes
+// cast kill/dismiss and every non-web caller behave the same. Single level,
+// matching the web sweep: a hidden child's own Task subagents become orphans,
+// which the inbox already hides.
+//
+// Idempotent against the web race: a child already carrying the hide flag is
+// skipped, so whichever of the client's per-child patch or this cascade lands
+// second sees no transition and never re-kills. cast-spawn lineage
+// (spawned_by WITHOUT a team name) and forks stay first-class — the per-child
+// nestParentIdOf gate is the same one the renderer uses.
+export async function cascadeHideToNestedChildren(
+  ctx: { db: any },
+  lead: any,
+  patch: { inbox_dismissed_at?: number; inbox_stashed_at?: number },
+): Promise<number> {
+  const field = patch.inbox_dismissed_at ? ("inbox_dismissed_at" as const) : ("inbox_stashed_at" as const);
+  const stamp = patch[field];
+  if (!stamp) return 0;
+  const leadId = lead._id.toString();
+  const [taskSubs, spawned] = await Promise.all([
+    ctx.db
+      .query("conversations")
+      .withIndex("by_parent_conversation_id", (q: any) => q.eq("parent_conversation_id", lead._id))
+      .take(200),
+    ctx.db
+      .query("conversations")
+      .withIndex("by_spawned_by", (q: any) => q.eq("spawned_by_conversation_id", lead._id))
+      .take(200),
+  ]);
+  const seen = new Set<string>();
+  let cascaded = 0;
+  for (const child of [...taskSubs, ...spawned]) {
+    const idStr = child._id.toString();
+    if (idStr === leadId || seen.has(idStr)) continue;
+    seen.add(idStr);
+    if (nestParentIdOf(child) !== leadId) continue;
+    if (child[field]) continue; // already hidden — never re-kill
+    const childPatch = { [field]: stamp };
+    await ctx.db.patch(child._id, childPatch);
+    await applyHideTransition(ctx, child, childPatch);
+    cascaded++;
+  }
+  return cascaded;
 }
 
 export const gcEmptyConversations = internalMutation({

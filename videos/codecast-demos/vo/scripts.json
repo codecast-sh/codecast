@@ -1,0 +1,60 @@
+{
+  "demo1": {
+    "title": "Mission Control",
+    "beats": [
+      "You're not running one AI agent anymore. You're running a fleet.",
+      "Codecast is the command center for all of them. Every session, every project, in one place.",
+      "This is your inbox. Pinned work sits up top, then the list that actually matters. The sessions waiting on you.",
+      "Codecast reads each agent's state, and surfaces only the ones where the ball is in your court.",
+      "Every card tells the story at a glance. What it's working on, which model it's running, how deep the conversation goes.",
+      "Switch between projects without ever losing the thread.",
+      "One screen. Your entire agent fleet. Nothing slips through."
+    ]
+  },
+  "demo2": {
+    "title": "Talk to Your Fleet",
+    "beats": [
+      "Every agent session in Codecast is a teammate you can talk to.",
+      "From your terminal, message any session by its short ID. Old or active, running or asleep.",
+      "It lands as a new turn. The agent wakes up with full context, and gets to work.",
+      "Be the boss. Hand a dormant session a task, and it resumes and runs it.",
+      "Or be a peer. Trade updates on a shared problem, and ask one to ping you when it's done.",
+      "The message feed gathers every message across every session into one timeline.",
+      "Your whole fleet. One conversation."
+    ]
+  },
+  "demo3": {
+    "title": "Branch and Parallelize",
+    "beats": [
+      "The best idea isn't always the obvious one. So don't pick just one. Run them all.",
+      "Fork a conversation, and it branches. Each copy keeps the full history, then chases its own direction.",
+      "Or spawn fresh sessions. Parallel work, no shared history, each on its own task.",
+      "They start immediately, and land right in your inbox, side by side.",
+      "This is a real fleet. Sixty-four sessions running at once, every one live.",
+      "Explore three directions in the time it used to take to try one."
+    ]
+  },
+  "demo4": {
+    "title": "Structured Work",
+    "beats": [
+      "Agents do the work. But who is keeping track of all of it?",
+      "Codecast turns loose sessions into structured work. Tasks and plans a human can actually follow.",
+      "Every task has an owner, a priority, and a status you can see at a glance.",
+      "Bundle a big effort into a plan. Agents claim tasks, log their progress, and mark them done.",
+      "Grouped by who's carrying it, so you see your whole team's load in one view.",
+      "From a thousand scattered messages, to one clear board."
+    ]
+  },
+  "demo5": {
+    "title": "Agents That Never Sleep",
+    "beats": [
+      "The most powerful agents are the ones still running while you sleep.",
+      "Triggers are scheduled agent runs. Recurring, one-time, or fired by an event like a new pull request comment.",
+      "Here's the next twenty-four hours of your fleet, laid out on a single timeline.",
+      "Each one wakes on schedule, does its job, and reports back. A daily health check. A churn monitor. An experiment that reads its own results.",
+      "And when one job needs an army, workflows fan out.",
+      "This research run spun up over a hundred agents. Searching, fetching, verifying, all in parallel.",
+      "Codecast. Command your agents. Even when you're not there."
+    ]
+  }
+}
