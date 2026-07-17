@@ -112,6 +112,28 @@ export function patchTaskInWebList(
   );
 }
 
+// The most recent firing of a schedule that's already in the local message
+// cache — the synchronous fast path for "click the trigger row → land on its
+// last run". Matches exactly what the server's webListRuns matches (the
+// task-id marker substring on user turns), scanned newest-first over the
+// loaded window. Returns undefined when the window holds none (messages not
+// loaded, or the runs fell outside it) — callers fall back to the run-list
+// query rather than guessing.
+export function latestLoadedTriggerMessage(
+  messages: readonly { _id: string; role: string; content?: string; timestamp: number }[] | undefined,
+  taskId: string,
+): { messageId: string; timestamp: number } | undefined {
+  if (!messages?.length) return undefined;
+  const marker = `task-id="${taskId}"`;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role === "user" && m.content?.includes(marker)) {
+      return { messageId: m._id, timestamp: m.timestamp };
+    }
+  }
+  return undefined;
+}
+
 export interface TriggerRow {
   task: TaskRow;
   // Conversation this row opens: the home conversation (inject) or the newest
