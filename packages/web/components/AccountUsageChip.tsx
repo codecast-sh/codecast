@@ -45,12 +45,14 @@ function MiniMeter({ percent }: { percent: number }) {
 export function AccountUsageChip() {
   const data = useQuery(api.accountSwitch.listAccountProfiles, {});
   const setAutoSwitch = useMutation(api.accountSwitch.setAutoSwitchAccounts);
+  const requestSwitch = useMutation(api.accountSwitch.requestAccountSwitch);
   const router = useRouter();
   const now = useCoarseNow(30_000);
   const [open, setOpen] = useState(false);
   // Local echo while the toggle round-trips (the flag lives on the device row,
   // so the query refresh is the source of truth once it lands).
   const [pendingToggle, setPendingToggle] = useState<boolean | null>(null);
+  const [switching, setSwitching] = useState<string | null>(null);
 
   // The primary (non-remote) machine is the one whose login rotates through
   // profiles; remotes mirror it, so their meters would be duplicates.
@@ -65,6 +67,21 @@ export function AccountUsageChip() {
   const autoOn = pendingToggle ?? device.auto_switch;
   const state = device.auto_switch_state;
   const exhausted = !!state?.exhausted_at;
+
+  const handleSwitch = async (profile: string) => {
+    setSwitching(profile);
+    try {
+      // Pure swap, same as the settings page: running sessions are untouched;
+      // new/resumed ones adopt the account. The query refresh flips which card
+      // shows "active" once the daemon confirms.
+      await requestSwitch({ profile, device_id: device.device_id, continue_blocked: false });
+      toast.success(`Switching to "${profile}" — new and resumed sessions will use it`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Switch failed");
+    } finally {
+      setSwitching(null);
+    }
+  };
 
   const handleToggle = async (enabled: boolean) => {
     setPendingToggle(enabled);
@@ -135,14 +152,28 @@ export function AccountUsageChip() {
           </div>
 
           {others.map((p) => (
-            <div key={p.name} className="rounded-md border border-sol-border/50 p-2.5">
+            <button
+              key={p.name}
+              type="button"
+              disabled={switching !== null}
+              onClick={() => handleSwitch(p.name)}
+              title={`Switch this machine to "${p.name}"`}
+              className="group block w-full rounded-md border border-sol-border/50 p-2.5 text-left transition-colors hover:border-sol-cyan/40 hover:bg-sol-cyan/[0.04] disabled:opacity-60"
+            >
               <div className="mb-1.5 flex items-center gap-2">
                 <span className="h-1.5 w-1.5 rounded-full bg-sol-border" />
                 <span className="text-xs font-medium text-sol-text">{p.name}</span>
                 <span className="min-w-0 flex-1 truncate text-[10px] text-sol-text-dim">{p.email}</span>
+                <span
+                  className={`text-[10px] font-medium text-sol-cyan transition-opacity ${
+                    switching === p.name ? "" : "opacity-0 group-hover:opacity-100"
+                  }`}
+                >
+                  {switching === p.name ? "switching…" : "switch →"}
+                </span>
               </div>
               <AccountUsageBars usage={p.usage} now={now} />
-            </div>
+            </button>
           ))}
         </div>
 
