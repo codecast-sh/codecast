@@ -15,6 +15,7 @@ import { ccAccountsValidator } from "./ccAccountsShared";
 import { deviceSettingsValidator } from "./deviceSettingsShared";
 import { normalizeProjectPath } from "./projectPaths";
 import { backlogFieldsPatch } from "./heartbeatBacklog";
+import { fromConvexAgentType } from "@codecast/shared/contracts";
 
 // Skills moved off the heartbeat-hot users doc into user_skills (see schema
 // note); overlay them back so clients keep reading currentUser.available_skills
@@ -559,7 +560,7 @@ export const resumeSession = mutation({
       return { skipped: true, reason: "fresh_session_no_messages" } as const;
     }
 
-    const agentType = conversation.agent_type === "codex" ? "codex" : conversation.agent_type === "gemini" ? "gemini" : "claude";
+    const agentType = fromConvexAgentType(conversation.agent_type);
     const pendingCommands = await ctx.db
       .query("daemon_commands")
       .withIndex("by_user_pending", (q) => q.eq("user_id", authUserId).eq("executed_at", undefined))
