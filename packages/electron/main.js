@@ -1,7 +1,6 @@
 const { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, nativeImage, shell, screen, Notification, session } = require("electron");
 const path = require("path");
 const fs = require("fs");
-const https = require("https");
 const crypto = require("crypto");
 const { spawn, execFile } = require("child_process");
 
@@ -655,7 +654,12 @@ const EXPECTED_TEAM_ID = "WRG9THCK9Q";
 let lastUpdateStatus = null;
 // { version, incomingPath, bundlePath } once a verified bundle is staged.
 let stagedUpdate = null;
-let updateInFlight = false;
+// The in-flight update run and its abort handle. A promise (not a boolean
+// flag) so a user-initiated retry can abort a wedged download, WAIT for it to
+// settle, and start fresh — the old boolean made "Try again" a silent no-op
+// while a stalled stream held it forever (v1.1.84 rollout).
+let updateRun = null;
+let updateAbort = null;
 
 function emitUpdateStatus(status) {
   lastUpdateStatus = status;
@@ -699,58 +703,10 @@ function parseFeed(text) {
   return { version, zip, sha512 };
 }
 
-// GET that follows redirects and resolves with the final 200 response stream.
-function httpsGetFollow(url, redirects = 3) {
-  return new Promise((resolve, reject) => {
-    https.get(url, (res) => {
-      const sc = res.statusCode;
-      if (sc >= 300 && sc < 400 && res.headers.location && redirects > 0) {
-        res.resume();
-        resolve(httpsGetFollow(new URL(res.headers.location, url).toString(), redirects - 1));
-      } else if (sc !== 200) {
-        res.resume();
-        reject(new Error(`HTTP ${sc}`));
-      } else {
-        resolve(res);
-      }
-    }).on("error", reject);
-  });
-}
-
-async function fetchText(url) {
-  const res = await httpsGetFollow(url);
-  let body = "";
-  res.setEncoding("utf8");
-  return new Promise((resolve, reject) => {
-    res.on("data", (c) => (body += c));
-    res.on("end", () => resolve(body));
-    res.on("error", reject);
-  });
-}
-
-// Stream a URL to disk, reporting integer percent, and resolve with the file's
-// sha512 (base64) so the caller can verify it against the feed.
-async function downloadWithProgress(url, dest, onProgress) {
-  const res = await httpsGetFollow(url);
-  const total = parseInt(res.headers["content-length"] || "0", 10);
-  let received = 0, lastPct = -1;
-  const hash = crypto.createHash("sha512");
-  const file = fs.createWriteStream(dest);
-  return new Promise((resolve, reject) => {
-    res.on("data", (chunk) => {
-      received += chunk.length;
-      hash.update(chunk);
-      if (total) {
-        const pct = Math.min(99, Math.round((received / total) * 100));
-        if (pct !== lastPct) { lastPct = pct; onProgress(pct); }
-      }
-    });
-    res.on("error", reject);
-    file.on("error", reject);
-    file.on("finish", () => file.close(() => resolve(hash.digest("base64"))));
-    res.pipe(file);
-  });
-}
+// Network layer (redirect-following GET, feed fetch, resumable download with
+// inactivity timeouts and abort support) lives in updaterNet.js — pure Node,
+// so its stall/resume/abort behavior is testable outside a packaged app.
+const { fetchText, downloadResumable } = require("./updaterNet");
 
 function execFileP(cmd, args) {
   return new Promise((resolve) => {
@@ -774,22 +730,41 @@ function rmrf(p) {
 
 // Check the feed and, if newer (or forced), download → verify → stage a bundle
 // ready to swap in on the next "Restart now". Fire-and-forget; never throws.
+// opts.userInitiated (any renderer "Try again" / menu check): a check that
+// arrives while a run is already in flight ABORTS that run and starts fresh —
+// the in-flight one may be a download wedged on a dead socket, and returning
+// silently here is what made the retry button do nothing.
 async function checkForDesktopUpdate(opts = {}) {
   if (process.platform !== "darwin" || !app.isPackaged) {
     if (opts.manual) showNativeNotification("Updates unavailable", "Auto-update only runs in the installed desktop app.");
     return;
   }
-  if (updateInFlight) return;
+  if (updateRun) {
+    if (!opts.userInitiated && !opts.manual) return; // background tick — one run at a time
+    updateAbort?.abort();
+    await updateRun.catch(() => {});
+  }
   // Already downloaded and waiting — just re-surface it for a manual check.
   if (stagedUpdate) {
     emitUpdateStatus({ status: "ready", version: stagedUpdate.version });
     if (opts.manual) showNativeNotification(`Codecast ${stagedUpdate.version} is ready`, "Click to restart and install.", () => installUpdateAndRestart());
     return;
   }
+  const run = runDesktopUpdateCheck(opts);
+  updateRun = run;
+  try {
+    await run;
+  } finally {
+    if (updateRun === run) { updateRun = null; updateAbort = null; }
+  }
+}
+
+async function runDesktopUpdateCheck(opts) {
   const bundle = installedBundlePath();
   if (!bundle) return;
 
-  updateInFlight = true;
+  const abort = new AbortController();
+  updateAbort = abort;
   const work = path.join(app.getPath("userData"), "update-stage");
   try {
     const { version, zip, sha512 } = parseFeed(await fetchText(DESKTOP_FEED));
@@ -805,8 +780,10 @@ async function checkForDesktopUpdate(opts = {}) {
     const zipPath = path.join(work, zip);
 
     emitUpdateStatus({ status: "downloading", version, percent: 0 });
-    const got = await downloadWithProgress(`${DESKTOP_BASE}/${zip}`, zipPath, (percent) =>
-      emitUpdateStatus({ status: "downloading", version, percent }));
+    const got = await downloadResumable(`${DESKTOP_BASE}/${zip}`, zipPath, {
+      signal: abort.signal,
+      onProgress: (percent) => emitUpdateStatus({ status: "downloading", version, percent }),
+    });
     if (got !== sha512) throw new Error("sha512 mismatch");
 
     const extractDir = path.join(work, "extract");
@@ -835,10 +812,12 @@ async function checkForDesktopUpdate(opts = {}) {
   } catch (e) {
     console.error("desktop update:", e?.message || e);
     rmrf(work);
-    emitUpdateStatus({ status: "error", version: lastUpdateStatus?.version });
-    if (opts.manual) showNativeNotification("Update check failed", "Couldn't reach the update server. Try again later.");
-  } finally {
-    updateInFlight = false;
+    // An aborted run was superseded by a user retry — the fresh run emits its
+    // own statuses immediately, so don't flash a spurious error over them.
+    if (!e?.aborted) {
+      emitUpdateStatus({ status: "error", version: lastUpdateStatus?.version });
+      if (opts.manual) showNativeNotification("Update check failed", "Couldn't reach the update server. Try again later.");
+    }
   }
 }
 
@@ -874,7 +853,9 @@ ipcMain.handle("get-app-version", () => app.getVersion());
 ipcMain.handle("set-badge-count", (_e, count) => app.setBadgeCount(count));
 ipcMain.handle("get-env", () => (currentBaseUrl === PROD_URL ? "prod" : "local"));
 ipcMain.handle("restart-for-update", () => installUpdateAndRestart());
-ipcMain.handle("check-for-update", (_e, opts) => checkForDesktopUpdate({ manual: opts?.manual === true }));
+// Any renderer-invoked check is user-initiated ("Try again" / "Update now"),
+// which lets it supersede a wedged in-flight download (see checkForDesktopUpdate).
+ipcMain.handle("check-for-update", (_e, opts) => checkForDesktopUpdate({ manual: opts?.manual === true, userInitiated: true }));
 ipcMain.handle("show-notification", (_e, { title, body, data }) => {
   showNativeNotification(title, body, () => {
     if (mainWindow) {

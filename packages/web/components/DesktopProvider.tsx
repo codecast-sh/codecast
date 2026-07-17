@@ -188,27 +188,37 @@ export function DesktopProvider() {
     };
   }, []);
 
-  // The daemon downloads ~95MB silently then force-restarts the app, so there's
-  // no percentage to show on that path. If the window is still alive well past
-  // when that should have finished, the update likely failed (daemon down,
-  // download/verify error) — surface that instead of a frozen banner.
+  const ready = ipc?.status === "ready";
+  const downloading = ipc?.status === "downloading";
+  const errored = ipc?.status === "error";
+  const latest = ipc?.version ?? update?.latest;
+  const inProgress = updating || downloading;
+
+  // "Stalled" means NO SIGN OF PROGRESS for 90s — not merely "slow". The timer
+  // re-arms on every reported percent, so a big download over a cold CDN edge
+  // that's genuinely moving (23%… 24%…) keeps its progress bar instead of being
+  // branded "taking longer than usual" (which hid the bar and scared users
+  // during the v1.1.84 rollout). The daemon fallback path reports no percent,
+  // so for it this stays a plain 90s ceiling — past that, the update likely
+  // failed (daemon down, download/verify error); surface that instead of a
+  // frozen banner.
   useEffect(() => {
-    if (!updating) {
+    if (!inProgress) {
       setStalled(false);
       return;
     }
     const id = window.setTimeout(() => setStalled(true), 90_000);
     return () => window.clearTimeout(id);
-  }, [updating, attempt]);
+  }, [inProgress, ipc?.percent, attempt]);
 
-  const ready = ipc?.status === "ready";
-  const downloading = ipc?.status === "downloading";
-  const latest = ipc?.version ?? update?.latest;
-  const inProgress = updating || downloading;
+  // A failed run (dead socket, sha mismatch, unreachable server) surfaces the
+  // retry UI immediately — main.js aborts any wedged attempt on retry, so the
+  // button always does real work now.
+  const showStalled = stalled || (errored && (updating || update != null));
 
-  // Nothing to surface: no known update (and not mid-update), or this version
-  // was dismissed while idle.
-  if (!ready && !inProgress && (!update || update.latest === dismissedVersion)) return null;
+  // Nothing to surface: no known update (and not mid-update or failed), or
+  // this version was dismissed while idle.
+  if (!ready && !inProgress && !showStalled && (!update || update.latest === dismissedVersion)) return null;
   if (!latest) return null;
 
   return (
@@ -222,23 +232,27 @@ export function DesktopProvider() {
             style={{ width: `${ipc?.percent ?? 0}%` }}
           />
         )}
-        {updating && !stalled && (
+        {updating && !showStalled && (
           <div className="absolute bottom-0 left-0 h-[2px] w-1/4 bg-sol-cyan animate-[indeterminateBar_1.3s_ease-in-out_infinite]" />
         )}
         <div className="flex items-start gap-3 px-4 py-3">
           <div
             className={`mt-1 w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-              stalled ? "bg-sol-orange" : "animate-pulse bg-sol-cyan"
+              showStalled ? "bg-sol-orange" : "animate-pulse bg-sol-cyan"
             }`}
           />
           <div className="flex-1 min-w-0">
             {ready ? (
               <p className="text-xs text-sol-text">Codecast v{latest} is ready to install</p>
-            ) : stalled ? (
+            ) : showStalled ? (
               <>
-                <p className="text-xs text-sol-text">Update is taking longer than usual</p>
+                <p className="text-xs text-sol-text">
+                  {errored ? "Update failed" : "Update is taking longer than usual"}
+                </p>
                 <p className="mt-0.5 text-[11px] text-sol-text-dim">
-                  If Codecast doesn&rsquo;t restart shortly, quit and reopen it.
+                  {errored
+                    ? "The download didn't complete — check your connection and try again."
+                    : "If Codecast doesn’t restart shortly, quit and reopen it."}
                 </p>
               </>
             ) : inProgress ? (
@@ -271,7 +285,7 @@ export function DesktopProvider() {
                 Restart now
               </button>
             )}
-            {stalled && (
+            {showStalled && (
               <button
                 onClick={startUpdate}
                 className="rounded-md bg-sol-cyan px-3 py-1 text-[11px] font-medium text-sol-bg transition-opacity hover:opacity-90"
