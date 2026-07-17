@@ -7,6 +7,7 @@ import { isInboxSessionView } from "../lib/inboxRouting";
 import { useShortcutAction } from "./ShortcutProvider";
 import { performUndo, performRedo } from "../store/undoStack";
 import { animatedHideSession, undoableDeferSession, undoablePinSession } from "../store/undoActions";
+import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
 import { checkMilestone } from "../tips/useTips";
 
 // The session a per-session chord (stash/kill/defer/pin/rename/label) acts on:
@@ -89,7 +90,10 @@ export function useGlobalShortcutActions() {
 
   // Shared body of the stash/kill chords; the only difference is the mode.
   // The kill itself happens SERVER-side on the hide data transition
-  // (dispatch.applyPatches), so neither handler asks for it.
+  // (dispatch.applyPatches), so neither handler asks for it. The kill chord
+  // routes through the notice hook so it names any schedules the kill cancels,
+  // same as the sidebar button and the palette.
+  const { killWithNotice } = useTriggerKillNotice();
   const hideCurrent = useCallback((mode: "stash" | "kill") => {
     const store = useInboxStore.getState();
     const currentId = focusedActionSessionId(store, isOnInboxPage);
@@ -102,8 +106,9 @@ export function useGlobalShortcutActions() {
         ?? ordered.find(s => s._id !== currentId);
       if (next) store.selectPanelSession(next._id);
     }
-    animatedHideSession(currentId, mode);
-  }, [isOnInboxPage]);
+    if (mode === "kill") killWithNotice(currentId);
+    else animatedHideSession(currentId, mode);
+  }, [isOnInboxPage, killWithNotice]);
 
   useShortcutAction('session.stash', useCallback(() => hideCurrent("stash"), [hideCurrent]));
 
