@@ -33,10 +33,8 @@ export type AgentClientId = "claude" | "codex" | "cursor" | "gemini" | "opencode
 
 /** The spelling the Convex schema / wire protocol stores (`conversations.agent_type`).
  *  Differs from `AgentClientId` only in `claude_code`, and carries the extra
- *  `cowork` value that has no distinct client of its own. `opencode` is now a
- *  first-class clients (phases 1-2) with their own descriptors.
- *  ahead of its client (phase 2), so `fromConvexAgentType` maps `pi` to `claude`
- *  until its descriptor lands (see its note). */
+ *  `cowork` value that has no distinct client of its own. `opencode` (phase 1)
+ *  and `pi` (phase 2) are first-class clients with their own descriptors. */
 export type ConvexAgentType =
   | "claude_code"
   | "codex"
