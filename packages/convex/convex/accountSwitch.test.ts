@@ -9,6 +9,7 @@ import {
   decideAutoSwitch,
   isUsageExhausted,
   worstUsagePercent,
+  AUTO_SWITCH_ATTEMPT_EVIDENCE_MS,
   AUTO_SWITCH_CONTINUE_KEY,
   AUTO_SWITCH_SESSION_WINDOW_MS,
   DEVICE_ONLINE_MS,
@@ -231,6 +232,86 @@ describe("decideAutoSwitch", () => {
       attempts: [{ profile: "b", at: parkedAt - 30 * 60_000 }],
     });
     expect(rolled).toEqual({ action: "switch", profile: "b" });
+  });
+
+  test("a usage snapshot fetched after the attempt settled overrules the blackout", () => {
+    // 2026-07-17 incident, exact production state. Auto-switch tried union at
+    // 01:50Z; sessions still recovering from the switch stamped fresh park
+    // banners within minutes, which burned union's attempt even though union
+    // was never spent (its own 5h window ended at 11%). Hours later, with
+    // personal genuinely pegged and fresh's scoped window at 100%, the
+    // attempt blackout hid union's headroom and the verdict came back
+    // "every account is spent".
+    const d = decideAutoSwitch({
+      now: Date.parse("2026-07-17T06:35:00Z"),
+      parkedAt: Date.parse("2026-07-17T06:20:00Z"),
+      activeEmail: "fresh@x.com",
+      profiles: [
+        {
+          name: "fresh",
+          email: "fresh@x.com",
+          usage: {
+            fetched_at: 1784269994894, // 06:33Z
+            session: { percent: 19, resets_at: 1784278799916 },
+            weekly: { percent: 55, resets_at: 1784703599916 },
+            weekly_scoped: { percent: 100, resets_at: 1784703599917, label: "Fable" },
+          },
+        },
+        {
+          name: "personal",
+          email: "personal@x.com",
+          usage: {
+            fetched_at: 1784269994894,
+            session: { percent: 100, resets_at: 1784271000112 },
+            weekly: { percent: 46, resets_at: 1784671200113 },
+            weekly_scoped: { percent: 81, resets_at: 1784671200113, label: "Fable" },
+            extra: { percent: 100, enabled: false },
+          },
+        },
+        {
+          name: "union",
+          email: "union@x.com",
+          usage: {
+            fetched_at: 1784269994894,
+            session: { percent: 11, resets_at: 1784270999787 },
+            weekly: { percent: 4, resets_at: 1784782799787 },
+            weekly_scoped: { percent: 8, resets_at: 1784782799787, label: "Fable" },
+            extra: { percent: 100, enabled: false },
+          },
+        },
+      ],
+      attempts: [
+        { profile: "union", at: 1784253048509 }, // 01:50:48Z
+        { profile: "personal", at: 1784253233513 }, // 01:53:53Z
+        { profile: "fresh", at: 1784260922168 }, // 04:02:02Z
+      ],
+    });
+    expect(d).toEqual({ action: "switch", profile: "union" });
+  });
+
+  test("only a snapshot newer than the attempt plus the settle margin counts as evidence", () => {
+    const att = parkedAt - 30 * 60_000;
+    const attempts = [{ profile: "b", at: att }];
+    const withSnapshotAt = (fetchedAt: number) =>
+      decideAutoSwitch({
+        now,
+        parkedAt,
+        activeEmail: "a@x.com",
+        profiles: [
+          { name: "a", email: "a@x.com", usage: mkUsage(100) },
+          { name: "b", email: "b@x.com", usage: { ...mkUsage(10), fetched_at: fetchedAt } },
+        ],
+        attempts,
+      });
+    // Fetched before the attempt — says nothing about what the attempt hit.
+    expect(withSnapshotAt(att - 60_000).action).toBe("exhausted");
+    // Fetched inside the settle margin — could have been probed mid-burn.
+    expect(withSnapshotAt(att + AUTO_SWITCH_ATTEMPT_EVIDENCE_MS - 1_000).action).toBe("exhausted");
+    // Fetched after the attempt settled, showing headroom — eligible again.
+    expect(withSnapshotAt(att + AUTO_SWITCH_ATTEMPT_EVIDENCE_MS + 1_000)).toEqual({
+      action: "switch",
+      profile: "b",
+    });
   });
 
   test("waits on a switch that is still in flight (attempt newer than the park)", () => {
