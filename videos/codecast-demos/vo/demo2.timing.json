@@ -1,0 +1,49 @@
+{
+  "id": "demo2",
+  "voice": "cjVigY5qzO86Huf0OWal",
+  "total": 31.107,
+  "beats": [
+    {
+      "i": 0,
+      "text": "Every agent session in Codecast is a teammate you can talk to.",
+      "start": 0,
+      "dur": 3.422
+    },
+    {
+      "i": 1,
+      "text": "From your terminal, message any session by its short ID. Old or active, running or asleep.",
+      "start": 3.872,
+      "dur": 4.833
+    },
+    {
+      "i": 2,
+      "text": "It lands as a new turn. The agent wakes up with full context, and gets to work.",
+      "start": 9.155,
+      "dur": 4.441
+    },
+    {
+      "i": 3,
+      "text": "Be the boss. Hand a dormant session a task, and it resumes and runs it.",
+      "start": 14.046,
+      "dur": 3.944
+    },
+    {
+      "i": 4,
+      "text": "Or be a peer. Trade updates on a shared problem, and ask one to ping you when it's done.",
+      "start": 18.44,
+      "dur": 5.381
+    },
+    {
+      "i": 5,
+      "text": "The message feed gathers every message across every session into one timeline.",
+      "start": 24.271,
+      "dur": 3.997
+    },
+    {
+      "i": 6,
+      "text": "Your whole fleet. One conversation.",
+      "start": 28.718,
+      "dur": 2.22
+    }
+  ]
+}
