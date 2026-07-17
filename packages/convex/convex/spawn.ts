@@ -6,6 +6,7 @@ import { verifyApiToken } from "./apiTokens";
 import { resolveCreationPrivacy } from "./privacy";
 import { enqueueStartSession } from "./devices";
 import { enqueuePendingMessage } from "./pendingMessages";
+import { fromConvexAgentType } from "@codecast/shared/contracts";
 
 async function getAuthenticatedUserId(
   ctx: { db: any },
@@ -78,8 +79,7 @@ export const createSessionFromCli = mutation({
       short_id: conversationId.toString().slice(0, 7),
     });
 
-    const daemonAgentType =
-      agentType === "codex" ? "codex" : agentType === "gemini" ? "gemini" : "claude";
+    const daemonAgentType = fromConvexAgentType(agentType);
     await enqueueStartSession(ctx, userId, {
       conversationId,
       agentType: daemonAgentType,

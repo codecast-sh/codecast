@@ -225,8 +225,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       args: JSON.stringify({ conversation_id: convId }),
       created_at: now,
     });
-    const agentType = conv.agent_type || "claude_code";
-    const daemonType = agentType === "codex" ? "codex" : agentType === "gemini" ? "gemini" : "claude";
+    const daemonType = fromConvexAgentType(conv.agent_type);
     await enqueueStartSession(ctx, userId, {
       conversationId: convId as Id<"conversations">,
       agentType: daemonType,
@@ -344,7 +343,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       }
     }
 
-    const daemonType = agentType === "codex" ? "codex" : agentType === "gemini" ? "gemini" : "claude";
+    const daemonType = fromConvexAgentType(agentType);
     // Per-session model/effort (validated against the shared contract; "default"
     // = omit). Stamped on the conversation so the badge is right from t=0 — the
     // rollup confirms/corrects from the first turn's switch echo or model field.
