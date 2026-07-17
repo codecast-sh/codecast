@@ -233,7 +233,11 @@ export default defineSchema({
       v.literal("codex"),
       v.literal("cursor"),
       v.literal("gemini"),
-      v.literal("cowork")
+      v.literal("cowork"),
+      // Widened ahead of their clients (plan phases 1-2) so rows can store them
+      // before descriptors exist; see shared ConvexAgentType.
+      v.literal("opencode"),
+      v.literal("pi")
     ),
     session_id: v.string(),
     slug: v.optional(v.string()),

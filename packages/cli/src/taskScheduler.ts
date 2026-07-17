@@ -6,6 +6,7 @@ import { SyncService } from "./syncService.js";
 import { hasTmux } from "./tmux.js";
 import { deviceId, isRemoteDevice } from "./remote/device.js";
 import { spawnAgentTmux } from "./delivery/spawnAgentTmux.js";
+import { type Config, getAgentArgs } from "./config/types.js";
 
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 const _execAsync = promisify(exec);
@@ -58,7 +59,7 @@ interface RunningTask {
 
 interface TaskSchedulerConfig {
   syncService: SyncService;
-  config: { auth_token?: string; claude_args?: string; codex_args?: string };
+  config: Config;
   log: (msg: string, level?: "debug" | "info" | "warn" | "error") => void;
 }
 
@@ -231,7 +232,7 @@ export class TaskScheduler {
     let runSessionUuid: string | undefined;
     if (agentType === "codex") {
       agentBin = "codex";
-      const extraArgs = this.config.codex_args;
+      const extraArgs = getAgentArgs(this.config, "codex");
       if (extraArgs) {
         extraAgentArgs.push(...extraArgs.split(/\s+/).filter(Boolean));
       }
@@ -250,7 +251,7 @@ export class TaskScheduler {
         extraAgentArgs.push("--disallowedTools", "Edit", "Write", "NotebookEdit", ...SAFE_MODE_DENY_RULES);
         extraAgentArgs.push("--append-system-prompt", SAFE_MODE_MANDATE);
       }
-      const extraArgs = this.config.claude_args;
+      const extraArgs = getAgentArgs(this.config, "claude");
       if (extraArgs) {
         const skip = new Set(["--chrome", "--dangerously-skip-permissions"]);
         const extra = extraArgs.split(/\s+/).filter(Boolean);
@@ -258,7 +259,7 @@ export class TaskScheduler {
           if (!skip.has(arg) && !extraAgentArgs.includes(arg)) extraAgentArgs.push(arg);
         }
       }
-      // Only auto-assign if the operator didn't pin one via claude_args.
+      // Only auto-assign if the operator didn't pin one via agent_args.claude.
       if (!extraAgentArgs.includes("--session-id")) {
         runSessionUuid = crypto.randomUUID();
         extraAgentArgs.push("--session-id", runSessionUuid);
