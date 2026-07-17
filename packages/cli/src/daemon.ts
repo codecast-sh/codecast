@@ -11090,7 +11090,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     return false;
   }
 
-  const agentType: SessionAgentType = resolveResumeAgentType(agentTypeHint, sessionFile?.agentType);
+  const agentType: AgentClientId = resolveResumeAgentType(agentTypeHint, sessionFile?.agentType);
   const jsonlPath = isCursorResume ? "" : sessionFile!.path;
   const jsonlContent = isCursorResume ? "" : readFileHead(jsonlPath, 5000);
 
