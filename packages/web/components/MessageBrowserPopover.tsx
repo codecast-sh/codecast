@@ -25,7 +25,7 @@ function processUserMessage(content: string): { display: string; isCmd: boolean 
 }
 
 const MACHINE_KIND_LABEL: Record<MachineDeliveredKind, string> = {
-  schedule: "schedule",
+  schedule: "trigger", // user-facing vocabulary is "trigger" (ct-38953); the kind key mirrors the wire tag
   session: "session",
   teammate: "teammate",
 };
@@ -299,7 +299,7 @@ function NavDropdown({
               <button
                 onClick={(e) => { e.stopPropagation(); setShowMachine(v => !v); }}
                 title={showMachine
-                  ? `Hide ${machineCount} automated message${machineCount !== 1 ? "s" : ""} (schedules, sessions, teammates)`
+                  ? `Hide ${machineCount} automated message${machineCount !== 1 ? "s" : ""} (triggers, sessions, teammates)`
                   : `Show ${machineCount} automated message${machineCount !== 1 ? "s" : ""}`}
                 className={`flex items-center gap-1 px-2 py-1.5 rounded-lg border text-[10px] tabular-nums transition-colors flex-shrink-0 ${
                   showMachine

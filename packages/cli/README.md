@@ -36,7 +36,7 @@ cast resume auth bug              # search history and resume the match
 cast attach                       # tmux session picker TUI
 cast fork --from 15               # branch a conversation from a message
 cast tree <id>                    # show a conversation's fork tree
-cast accounts                     # save/switch Claude Code account profiles
+cast accounts                     # save/switch/remove Claude Code account profiles
 ```
 
 ### Analysis
@@ -50,13 +50,13 @@ cast blame src/auth.ts            # which session wrote each line
 cast similar --file src/auth.ts   # sessions that touched a file
 ```
 
-### Tasks, Plans & Scheduling
+### Tasks, Plans & Triggers
 ```bash
 cast task create "Fix bug" -p high
 cast plan create "Overhaul" -g "goal"
 cast plan orchestrate <id>        # run plan tasks in waves across agents
 cast overview                     # top-down view of plans and tasks
-cast schedule add "Check CI" --in 30m
+cast trigger add "Check CI" --in 30m
 ```
 
 ### Handoff & Tracking

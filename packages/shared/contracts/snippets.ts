@@ -9,7 +9,7 @@
 //   - the web Settings "Agent Features" page renders a per-device card for each,
 //     reusing the SAME `detail`/`writesTo` text the terminal shows.
 //
-// The slug → config-key mapping is deliberately NOT guessable (the `scheduling`
+// The slug → config-key mapping is deliberately NOT guessable (the `triggers`
 // snippet writes `task_enabled`; the `tasks` snippet writes `work_enabled`) —
 // it grew that way historically. Centralizing it here is the whole point: every
 // layer looks the mapping up instead of re-deriving it (and getting it wrong).
@@ -34,6 +34,14 @@ export interface SnippetDescriptor {
   enabledKey: string;
   /** Config field holding the installed snippet version (e.g. "workflow_version"). */
   versionKey: string;
+  /**
+   * Former slug this snippet was reported/toggled under, kept while old CLIs
+   * and old clients are in the wild. The daemon heartbeat mirrors the enabled
+   * flag under BOTH keys, the web reads either, and the web SENDS this one on
+   * toggles (an old daemon only matches its exact slug; a new daemon resolves
+   * it as an alias). Drop once the fleet is past the rename.
+   */
+  wireSlug?: string;
 }
 
 export const SNIPPET_CATALOG: SnippetDescriptor[] = [
@@ -90,17 +98,18 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     versionKey: "work_version",
   },
   {
-    slug: "scheduling",
-    aliases: ["schedule", "async"],
-    name: "Scheduling",
-    desc: "Delayed and recurring agent sessions (cast schedule)",
+    slug: "triggers",
+    aliases: ["trigger", "scheduling", "schedule", "async"],
+    name: "Triggers",
+    desc: "Delayed, recurring, and event-driven agent runs (cast trigger)",
     detail:
-      "Adds `cast schedule` so agents can queue follow-up work. For example, an agent " +
-      "finishes a PR and schedules \"check CI in 30m\" — a new session spawns later to " +
-      "verify. Agents only schedule when they have a reason to.",
-    writesTo: "CLAUDE.md — an ## Async Tasks section with schedule commands",
+      "Adds `cast trigger` so agents can queue follow-up work. For example, an agent " +
+      "finishes a PR and sets a trigger to \"check CI in 30m\" — a new session spawns " +
+      "later to verify. Agents only set triggers when they have a reason to.",
+    writesTo: "CLAUDE.md — a ## Triggers section with trigger commands",
     enabledKey: "task_enabled",
     versionKey: "task_version",
+    wireSlug: "scheduling",
   },
   {
     slug: "workflows",

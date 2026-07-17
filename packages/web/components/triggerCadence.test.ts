@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { parseScheduleCadence, humanizeDurationToken, describeTaskCadence, isTaskOverdue, taskStateLabel } from "./scheduleCadence";
+import { parseTriggerCadence, humanizeDurationToken, describeTaskCadence, isTaskOverdue, taskStateLabel } from "./triggerCadence";
 
 describe("humanizeDurationToken", () => {
   test("expands unit abbreviations to words", () => {
@@ -28,51 +28,51 @@ describe("humanizeDurationToken", () => {
   });
 });
 
-describe("parseScheduleCadence", () => {
+describe("parseTriggerCadence", () => {
   test("--every renders a recurring cadence", () => {
-    expect(parseScheduleCadence('"do the thing" --every 8h')).toBe("every 8 hours");
-    expect(parseScheduleCadence('"x" --every 4h')).toBe("every 4 hours");
-    expect(parseScheduleCadence('"x" --every 1d')).toBe("every 1 day");
+    expect(parseTriggerCadence('"do the thing" --every 8h')).toBe("every 8 hours");
+    expect(parseTriggerCadence('"x" --every 4h')).toBe("every 4 hours");
+    expect(parseTriggerCadence('"x" --every 1d')).toBe("every 1 day");
   });
 
   test("--in renders a one-shot delay", () => {
-    expect(parseScheduleCadence('"x" --in 30m')).toBe("in 30 minutes");
-    expect(parseScheduleCadence('"x" --in 2h')).toBe("in 2 hours");
+    expect(parseTriggerCadence('"x" --in 30m')).toBe("in 30 minutes");
+    expect(parseTriggerCadence('"x" --in 2h')).toBe("in 2 hours");
   });
 
   test("--on renders an event trigger with a friendly label", () => {
-    expect(parseScheduleCadence('"x" --on pr_comment')).toBe("on PR comment");
-    expect(parseScheduleCadence('"x" --on pr_opened')).toBe("on PR opened");
-    expect(parseScheduleCadence('"x" --on pr_merged')).toBe("on PR merged");
-    expect(parseScheduleCadence('"x" --on push')).toBe("on push");
+    expect(parseTriggerCadence('"x" --on pr_comment')).toBe("on PR comment");
+    expect(parseTriggerCadence('"x" --on pr_opened')).toBe("on PR opened");
+    expect(parseTriggerCadence('"x" --on pr_merged')).toBe("on PR merged");
+    expect(parseTriggerCadence('"x" --on push')).toBe("on push");
   });
 
   test("unknown event falls back to a de-underscored label", () => {
-    expect(parseScheduleCadence('"x" --on issue_opened')).toBe("on issue opened");
+    expect(parseTriggerCadence('"x" --on issue_opened')).toBe("on issue opened");
   });
 
   test("no timing flag means it runs now", () => {
-    expect(parseScheduleCadence('"just do it"')).toBe("now");
-    expect(parseScheduleCadence('"just do it" --mode apply --context current')).toBe("now");
+    expect(parseTriggerCadence('"just do it"')).toBe("now");
+    expect(parseTriggerCadence('"just do it" --mode apply --context current')).toBe("now");
   });
 
   test("--every wins when multiple timing flags are present", () => {
-    expect(parseScheduleCadence('"x" --every 8h --in 30m')).toBe("every 8 hours");
+    expect(parseTriggerCadence('"x" --every 8h --in 30m')).toBe("every 8 hours");
   });
 
   test("accepts the --flag=value form", () => {
-    expect(parseScheduleCadence('"x" --every=12h')).toBe("every 12 hours");
+    expect(parseTriggerCadence('"x" --every=12h')).toBe("every 12 hours");
   });
 
   test("ignores flag-like text inside the quoted prompt", () => {
     // The prompt mentions a non-duration value after --in, so it is not treated as a cadence.
-    expect(parseScheduleCadence('"summarize the PR in detail"')).toBe("now");
-    expect(parseScheduleCadence('"review --in depth please"')).toBe("now");
+    expect(parseTriggerCadence('"summarize the PR in detail"')).toBe("now");
+    expect(parseTriggerCadence('"review --in depth please"')).toBe("now");
   });
 
   test("real-world args with a long prompt and trailing flags", () => {
     const args = '"Review open PRs and summarize findings for ct-33494" --every 4h --mode apply --project /Users/ashot/src/codecast';
-    expect(parseScheduleCadence(args)).toBe("every 4 hours");
+    expect(parseTriggerCadence(args)).toBe("every 4 hours");
   });
 });
 

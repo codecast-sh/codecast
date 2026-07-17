@@ -34,7 +34,8 @@ const Feed = lazy(() => import("@/app/feed/page"));
 const Crosstalk = lazy(() => import("@/app/crosstalk/page"));
 const Workflows = lazy(() => import("@/app/workflows/dashboard"));
 const Routines = lazy(() => import("@/app/workflows/page"));
-const Schedules = lazy(() => import("@/app/schedules/page"));
+// Triggers (renamed from "Schedules"; /schedules stays routable as an alias).
+const Triggers = lazy(() => import("@/app/triggers/page"));
 const Sessions = lazy(() => import("@/app/sessions/page"));
 const Anchor = lazy(() => import("@/app/anchor/page"));
 const Team = lazy(() => import("@/app/team/page"));
@@ -74,7 +75,8 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/crosstalk$/, paramNames: [], component: Crosstalk },
   { pattern: /^\/workflows$/, paramNames: [], component: Workflows },
   { pattern: /^\/routines$/, paramNames: [], component: Routines },
-  { pattern: /^\/schedules$/, paramNames: [], component: Schedules },
+  { pattern: /^\/triggers$/, paramNames: [], component: Triggers },
+  { pattern: /^\/schedules$/, paramNames: [], component: Triggers },
   { pattern: /^\/sessions$/, paramNames: [], component: Sessions },
   { pattern: /^\/anchor$/, paramNames: [], component: Anchor },
   { pattern: /^\/team$/, paramNames: [], component: Team },

@@ -188,10 +188,10 @@ const TOC = [
     { id: "workflow-nodes", label: "Node Types" },
     { id: "workflow-execution", label: "Execution" },
   ]},
-  { id: "agent-scheduling", label: "Agent Scheduling", children: [
-    { id: "schedule-overview", label: "Overview" },
-    { id: "schedule-commands", label: "Commands" },
-    { id: "schedule-events", label: "Event Triggers" },
+  { id: "triggers", label: "Triggers", children: [
+    { id: "trigger-overview", label: "Overview" },
+    { id: "trigger-commands", label: "Commands" },
+    { id: "trigger-events", label: "Event Triggers" },
   ]},
   { id: "teams", label: "Teams", children: [
     { id: "team-setup", label: "Setup" },
@@ -804,54 +804,54 @@ $ cast workflow run ct-a1b2
             passed to the next node.
           </p>
 
-          {/* Agent Scheduling */}
-          <Heading id="agent-scheduling" level={2}>Agent Scheduling</Heading>
+          {/* Triggers */}
+          <Heading id="triggers" level={2}>Triggers</Heading>
 
-          <Heading id="schedule-overview" level={3}>Overview</Heading>
+          <Heading id="trigger-overview" level={3}>Overview</Heading>
           <p className="mb-4" style={{ color: SOL.base00 }}>
-            Schedule autonomous agent tasks that run without your involvement. One-shot tasks
-            fire after a delay, recurring tasks run on an interval, and event-triggered tasks
-            fire in response to GitHub webhooks.
+            Set triggers — autonomous agent runs that fire without your involvement. One-shot
+            triggers fire after a delay, recurring triggers fire on an interval, and event
+            triggers fire in response to GitHub webhooks.
           </p>
 
-          <Heading id="schedule-commands" level={3}>Commands</Heading>
+          <Heading id="trigger-commands" level={3}>Commands</Heading>
           <Code>{`# One-shot: check CI in 30 minutes
-$ cast schedule add "Check if CI is green on main" --in 30m
+$ cast trigger add "Check if CI is green on main" --in 30m
 
 # Recurring: review PRs every 4 hours
-$ cast schedule add "Review open PRs and summarize" --every 4h
+$ cast trigger add "Review open PRs and summarize" --every 4h
 
 # With context from current session
-$ cast schedule add "Continue auth refactor" --in 2h --context current --mode apply
+$ cast trigger add "Continue auth refactor" --in 2h --context current --mode apply
 
-# Manage scheduled tasks
-$ cast schedule ls                 # list active
-$ cast schedule ls --all           # include completed/failed
-$ cast schedule run ct-s1          # run immediately
-$ cast schedule pause ct-s1        # pause
-$ cast schedule cancel ct-s1       # cancel
-$ cast schedule log ct-s1          # view last run output`}</Code>
+# Manage triggers
+$ cast trigger ls                 # list active
+$ cast trigger ls --all           # include completed/failed
+$ cast trigger run ct-s1          # fire immediately
+$ cast trigger pause ct-s1        # pause
+$ cast trigger cancel ct-s1       # cancel
+$ cast trigger log ct-s1          # view last run output`}</Code>
 
-          <Heading id="schedule-events" level={3}>Event Triggers</Heading>
+          <Heading id="trigger-events" level={3}>Event Triggers</Heading>
           <p className="mb-2" style={{ color: SOL.base00 }}>
-            With the GitHub integration installed, you can trigger agent tasks on repository events.
+            With the GitHub integration installed, triggers can fire on repository events.
           </p>
           <Code>{`# Respond to new PR comments
-$ cast schedule add "Respond to PR review comments" --on pr_comment
+$ cast trigger add "Respond to PR review comments" --on pr_comment
 
 # Run on new PRs
-$ cast schedule add "Review PR for security issues" --on pr_opened
+$ cast trigger add "Review PR for security issues" --on pr_opened
 
 # Run after merge
-$ cast schedule add "Verify deployment after merge" --on pr_merged
+$ cast trigger add "Verify deployment after merge" --on pr_merged
 
 # Run on push to main
-$ cast schedule add "Check for broken tests" --on push`}</Code>
+$ cast trigger add "Check for broken tests" --on push`}</Code>
           <CmdTable>
             <Param name="--in <duration>" desc="Delay before run: 30m, 2h, 1d" />
             <Param name="--every <duration>" desc="Recurring interval" />
             <Param name="--on <event>" desc="GitHub event: pr_comment, pr_opened, pr_merged, push" />
-            <Param name="--context current" desc="Capture current session context for the task" />
+            <Param name="--context current" desc="Capture current session context for the run" />
             <Param name="--safe" desc="Read-only run: investigate and report, never modify (default: the run can act)" />
             <Param name="--max-runtime <dur>" desc="Override max runtime (default: 10m)" />
           </CmdTable>
@@ -1183,12 +1183,12 @@ $ cast bookmark --delete auth-pattern`}</Code>
           <Heading id="github-integration" level={3}>GitHub</Heading>
           <p className="mb-2" style={{ color: SOL.base00 }}>
             Install the GitHub app to link PRs with sessions, process webhook events,
-            and trigger scheduled agent tasks on repository activity.
+            and fire agent triggers on repository activity.
           </p>
           <p style={{ color: SOL.base00 }}>
             Configure at <InlineCode>Settings &gt; Integrations &gt; GitHub App</InlineCode> on the web dashboard.
             Once installed, PRs are automatically linked to the sessions that created them,
-            and you can set up event-triggered agent tasks.
+            and you can set up triggers that fire on repository events.
           </p>
 
           {/* CLI Reference */}
@@ -1270,14 +1270,14 @@ $ cast bookmark --delete auth-pattern`}</Code>
               ],
             },
             {
-              title: "Scheduling",
+              title: "Triggers",
               color: SOL.orange,
               cmds: [
-                ['schedule add "<prompt>"', "Schedule task: --in, --every, --on, --context, --mode"],
-                ["schedule ls", "List scheduled tasks: -s status, -a all"],
-                ["schedule run / pause / cancel <id>", "Manage scheduled task"],
-                ["schedule log <id>", "View last run conversation"],
-                ["schedule complete <id>", "Report completion with --summary"],
+                ['trigger add "<prompt>"', "Set trigger: --in, --every, --on, --context, --mode"],
+                ["trigger ls", "List triggers: -s status, -a all"],
+                ["trigger run / pause / cancel <id>", "Manage a trigger"],
+                ["trigger log <id>", "View last run conversation"],
+                ["trigger complete <id>", "Report completion with --summary"],
               ],
             },
             {

@@ -204,7 +204,7 @@ export async function enqueuePendingMessage(
     // can't be delivered. Only meaningful for cross-user (team) sends; omitted for self-sends.
     from_conversation_id?: Id<"conversations">;
     // "scheduler" = machine-initiated (the daemon's task scheduler firing a
-    // `cast schedule` injection). Every human send — web composer, cast send,
+    // `cast trigger` injection). Every human send — web composer, cast send,
     // team send — leaves this unset.
     origin?: "scheduler";
   }

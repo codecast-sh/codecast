@@ -42,6 +42,15 @@ describe("snippet catalog", () => {
     expect(snippetBySlug("orch")?.slug).toBe("orchestration");
   });
 
+  it("keeps the pre-rename trigger names resolving (old snippets in the wild)", () => {
+    // "scheduling" was the slug before the triggers rename; old web clients
+    // still send it on toggles and old CLAUDE.md files still say cast schedule.
+    for (const legacy of ["scheduling", "schedule", "async", "trigger"]) {
+      expect(snippetBySlug(legacy)?.slug).toBe("triggers");
+    }
+    expect(snippetBySlug("triggers")?.wireSlug).toBe("scheduling");
+  });
+
   it("returns undefined for unknown names", () => {
     expect(snippetBySlug("nope")).toBeUndefined();
     expect(snippetBySlug("stable")).toBeUndefined(); // handled specially, not a snippet

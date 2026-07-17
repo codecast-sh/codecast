@@ -8,10 +8,10 @@ import { toast } from "sonner";
 import { AuthGuard } from "../../components/AuthGuard";
 import { AppLoader } from "../../components/AppLoader";
 import { DashboardLayout } from "../../components/DashboardLayout";
-import { fmtDuration, fmtClock } from "../../components/scheduleCadence";
+import { fmtDuration, fmtClock } from "../../components/triggerCadence";
 import { ShortcutTooltip } from "../../components/KeyboardShortcutsHelp";
-import { patchTaskInWebList, taskDisplayTitle } from "../../components/scheduleTasks";
-import { ScheduleRunList, useScheduleRuns } from "../../components/ScheduleRunHistory";
+import { patchTaskInWebList, taskDisplayTitle } from "../../components/triggerTasks";
+import { TriggerRunList, useTriggerRuns } from "../../components/TriggerRunHistory";
 import { useInboxStore } from "../../store/inboxStore";
 import {
   Clock,
@@ -42,7 +42,7 @@ import {
 
 const api = _api as any;
 
-// ── Time helpers (parseDuration is a parity port of `cast schedule add --in/--every`) ──
+// ── Time helpers (parseDuration is a parity port of `cast trigger add --in/--every`) ──
 
 function parseDuration(input: string): number | undefined {
   const match = input.toLowerCase().trim().match(/^(\d+)\s*(s|sec|m|min|h|hr|hour|d|day)s?$/);
@@ -195,7 +195,7 @@ const chipCls = "inline-flex items-center gap-1 text-[11px] whitespace-nowrap fl
 
 // The chip leads with the schedule's TYPE — recurring vs one-time is the
 // distinction users sort by — then the timing detail.
-function ScheduleChip({ task, now }: { task: any; now: number }) {
+function TriggerChip({ task, now }: { task: any; now: number }) {
   if (task.schedule_type === "recurring" && task.interval_ms) {
     return (
       <span className={`${chipCls} text-sol-violet`}>
@@ -289,7 +289,7 @@ function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boole
 
   // Run history loads only while the detail is open — collapsed rows cost no
   // query. Each entry deep-links to the message that triggered that run.
-  const runs = useScheduleRuns(expanded && !formMode ? task._id : null);
+  const runs = useTriggerRuns(expanded && !formMode ? task._id : null);
 
   // The session to open from this row: the run's own conversation when the daemon
   // recorded it, otherwise the session this schedule was created from. Every row
@@ -349,7 +349,7 @@ function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boole
                 {taskDisplayTitle(task)}
               </span>
             </ShortcutTooltip>
-            <ScheduleChip task={task} now={now} />
+            <TriggerChip task={task} now={now} />
             {isNext && (
               <span className="text-[10px] font-medium uppercase tracking-wide text-sol-cyan flex-shrink-0">
                 next up
@@ -489,7 +489,7 @@ function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boole
 
       {expanded && formMode && (
         <div className="px-4 pb-3 border-t border-sol-border cursor-auto animate-fadeSlideIn" onClick={(e) => e.stopPropagation()}>
-          <ScheduleForm
+          <TriggerForm
             embedded
             editTask={formMode === "edit" ? task : undefined}
             seedTask={formMode === "duplicate" ? task : undefined}
@@ -563,7 +563,7 @@ function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boole
               <div className="text-[10px] uppercase tracking-widest text-sol-text-dim mt-3 mb-1">
                 Past runs <span className="font-mono normal-case text-sol-text-dim/70">{runs.length}</span>
               </div>
-              <ScheduleRunList runs={runs} now={now} mode="link" className="-ml-1.5" />
+              <TriggerRunList runs={runs} now={now} ensureInboxRoute className="-ml-1.5" />
             </>
           )}
 
@@ -643,7 +643,7 @@ function deriveInitial(t: any | undefined) {
   if (!t) {
     // Human-created schedules default to apply: you wrote the prompt, it just
     // does the task. Read-only is the marked exception (the checkbox below).
-    // Agent-created schedules (cast schedule add) still default to propose —
+    // Agent-created schedules (cast trigger add) still default to propose —
     // their prompts were never reviewed by a person.
     return { prompt: "", title: "", kind: "in" as SchedKind, duration: "30m", eventKey: "pr_comment", mode: "apply" as const, agent: "claude" as const, project: "" };
   }
@@ -677,7 +677,7 @@ function deriveInitial(t: any | undefined) {
   };
 }
 
-function ScheduleForm({ onClose, editTask, seedTask, embedded }: {
+function TriggerForm({ onClose, editTask, seedTask, embedded }: {
   onClose: () => void;
   editTask?: any;
   seedTask?: any;
@@ -751,11 +751,11 @@ function ScheduleForm({ onClose, editTask, seedTask, embedded }: {
         toast.success("Saved");
       } else {
         await create(args);
-        toast.success(kind === "now" ? "Queued — runs within ~30s" : "Scheduled");
+        toast.success(kind === "now" ? "Queued — runs within ~30s" : "Trigger set");
       }
       onClose();
     } catch {
-      toast.error(isEdit ? "Failed to save" : "Failed to schedule");
+      toast.error(isEdit ? "Failed to save" : "Failed to set trigger");
     } finally {
       setSubmitting(false);
     }
@@ -770,7 +770,7 @@ function ScheduleForm({ onClose, editTask, seedTask, embedded }: {
     <div className={embedded ? "pt-1" : "rounded-xl border border-sol-cyan/30 bg-sol-card p-4 mb-6"}>
       {isEdit && (
         <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-sol-cyan mb-2">
-          <Pencil className="w-3 h-3" /> Editing schedule
+          <Pencil className="w-3 h-3" /> Editing trigger
         </div>
       )}
       <textarea
@@ -841,11 +841,11 @@ function ScheduleForm({ onClose, editTask, seedTask, embedded }: {
         <input
           value={project}
           onChange={(e) => setProject(e.target.value)}
-          list="schedule-project-roots"
+          list="trigger-project-roots"
           placeholder="Project path (optional)"
           className="flex-1 min-w-[180px] bg-sol-bg-alt border border-sol-border rounded-lg px-2 py-1 text-xs font-mono text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-cyan/60"
         />
-        <datalist id="schedule-project-roots">
+        <datalist id="trigger-project-roots">
           {projectOptions.map((p) => <option key={p} value={p} />)}
         </datalist>
       </div>
@@ -864,7 +864,7 @@ function ScheduleForm({ onClose, editTask, seedTask, embedded }: {
           >
             {isEdit
               ? submitting ? "Saving…" : "Save changes"
-              : submitting ? "Scheduling…" : "Schedule"}
+              : submitting ? "Setting…" : "Set trigger"}
           </button>
         </div>
       </div>
@@ -985,7 +985,7 @@ function StatStrip({ stats, now, typeFilter, onToggleType }: {
         value={stats.recurring}
         label="recurring"
         accent={stats.recurring > 0 ? "text-sol-violet" : "text-sol-text-dim"}
-        title="Standing schedules that fire on an interval or event — click to filter"
+        title="Standing triggers that fire on an interval — click to filter"
         onClick={() => onToggleType?.("recurring")}
         active={typeFilter === "recurring"}
       />
@@ -993,12 +993,12 @@ function StatStrip({ stats, now, typeFilter, onToggleType }: {
         value={stats.oneTime}
         label="one-time"
         accent={stats.oneTime > 0 ? "text-sol-cyan" : "text-sol-text-dim"}
-        title="Schedules that fire once and finish — click to filter"
+        title="Triggers that fire once and finish — click to filter"
         onClick={() => onToggleType?.("once")}
         active={typeFilter === "once"}
       />
       <StatCell value={nextLabel} label={stats.running > 0 ? "running" : "next run"} accent={nextAccent} />
-      <StatCell value={stats.totalRuns} label="total runs" title="Agent runs fired across all schedules" />
+      <StatCell value={stats.totalRuns} label="total runs" title="Agent runs fired across all triggers" />
       <StatCell
         value={
           stats.failing > 0 ? (
@@ -1021,7 +1021,7 @@ function AttentionBanner({ tasks }: { tasks: any[] }) {
       <AlertTriangle className="w-4 h-4 text-sol-red flex-shrink-0 mt-0.5" />
       <div className="min-w-0 text-xs">
         <span className="text-sol-red font-medium">
-          {tasks.length} schedule{tasks.length === 1 ? "" : "s"} hit an error and {tasks.length === 1 ? "is" : "are"} retrying
+          {tasks.length} trigger{tasks.length === 1 ? "" : "s"} hit an error and {tasks.length === 1 ? "is" : "are"} retrying
         </span>
         <div className="mt-1 flex flex-col gap-0.5 text-sol-text-dim">
           {tasks.slice(0, 3).map((t) => (
@@ -1088,7 +1088,7 @@ function FilterBar({ filters, update, projects, hasCodex, shown, total, grouped,
         <div className="relative flex-1 min-w-[180px]">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-sol-text-dim pointer-events-none" />
           <input
-            id="schedule-search"
+            id="trigger-search"
             value={filters.search}
             onChange={(e) => update({ search: e.target.value })}
             onKeyDown={(e) => {
@@ -1300,7 +1300,7 @@ function FilteredEmpty({ onClear }: { onClear: () => void }) {
   return (
     <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
       <ListFilter className="w-7 h-7 text-sol-text-dim" />
-      <p className="text-sm text-sol-text-muted">No schedules match these filters</p>
+      <p className="text-sm text-sol-text-muted">No triggers match these filters</p>
       <button
         onClick={onClear}
         className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg border border-sol-border text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-highlight transition-colors"
@@ -1311,7 +1311,7 @@ function FilteredEmpty({ onClear }: { onClear: () => void }) {
   );
 }
 
-function SchedulesContent() {
+function TriggersContent() {
   const tasks = useQuery(api.agentTasks.webList, {});
   // ?new=1 arrives from the inbox dock's "+ New" — land with the create form
   // already open instead of making the user find the button again.
@@ -1386,14 +1386,14 @@ function SchedulesContent() {
     <div className="h-full overflow-y-auto bg-sol-bg">
       <div className="max-w-3xl mx-auto px-6 py-8">
         <div className="flex items-center gap-2 mb-5">
-          <Clock className="w-4 h-4 text-sol-cyan" />
-          <h1 className="text-lg font-semibold text-sol-text">Schedules</h1>
+          <Zap className="w-4 h-4 text-sol-cyan" />
+          <h1 className="text-lg font-semibold text-sol-text">Triggers</h1>
           <span className="text-xs text-sol-text-dim">async agent runs</span>
           <button
             onClick={() => setShowForm((v) => !v)}
             className="ml-auto inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg bg-sol-cyan text-sol-bg hover:bg-sol-cyan/90 active:scale-[0.97] transition-all"
           >
-            <Plus className="w-3.5 h-3.5" /> New schedule
+            <Plus className="w-3.5 h-3.5" /> New trigger
           </button>
         </div>
 
@@ -1407,25 +1407,25 @@ function SchedulesContent() {
         )}
         {hasTasks && <AttentionBanner tasks={failingActive} />}
 
-        {showForm && <ScheduleForm onClose={() => setShowForm(false)} />}
+        {showForm && <TriggerForm onClose={() => setShowForm(false)} />}
 
         {tasks === undefined ? (
           <AppLoader className="min-h-[16rem] h-full" />
         ) : tasks.length === 0 && !showForm ? (
           <div className="flex flex-col items-center justify-center gap-3 py-24 text-center">
-            <Clock className="w-8 h-8 text-sol-text-dim" />
-            <p className="text-sm text-sol-text-muted">Nothing scheduled yet</p>
+            <Zap className="w-8 h-8 text-sol-text-dim" />
+            <p className="text-sm text-sol-text-muted">No triggers yet</p>
             <p className="text-xs text-sol-text-dim max-w-sm">
-              Schedule agents to run later — check CI, review PRs, continue work — from here or any session:
+              Set triggers to run agents later — check CI, review PRs, continue work — from here or any session:
             </p>
             <code className="font-mono text-xs text-sol-text-muted bg-sol-bg-alt border border-sol-border rounded-md px-3 py-1.5">
-              cast schedule add "Check CI on main" --in 30m
+              cast trigger add "Check CI on main" --in 30m
             </code>
             <button
               onClick={() => setShowForm(true)}
               className="mt-2 inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg bg-sol-cyan text-sol-bg hover:bg-sol-cyan/90 transition-colors"
             >
-              <Plus className="w-3.5 h-3.5" /> New schedule
+              <Plus className="w-3.5 h-3.5" /> New trigger
             </button>
           </div>
         ) : (
@@ -1468,11 +1468,11 @@ function SchedulesContent() {
   );
 }
 
-export default function SchedulesPage() {
+export default function TriggersPage() {
   return (
     <AuthGuard>
       <DashboardLayout>
-        <SchedulesContent />
+        <TriggersContent />
       </DashboardLayout>
     </AuthGuard>
   );

@@ -1,9 +1,9 @@
-// Human-readable cadence for `cast schedule add` commands, rendered inline in the
+// Human-readable cadence for `cast trigger add` commands, rendered inline in the
 // conversation view. Parses the three mutually-exclusive timing flags the CLI accepts
 // (`--every`, `--on`, `--in`) directly from the command args.
 
 // Display labels for `--on <event>` triggers (mirrors EVENT_SHORTHANDS in the CLI).
-export const SCHEDULE_EVENT_LABELS: Record<string, string> = {
+export const TRIGGER_EVENT_LABELS: Record<string, string> = {
   pr_comment: "PR comment",
   pr_opened: "PR opened",
   pr_merged: "PR merged",
@@ -48,8 +48,8 @@ export function humanizeDurationToken(token: string): string {
 
 // Cadence label straight from an agent_tasks record (the authoritative fields,
 // not command-line args): "every 8h", "on PR comment", "one-time". Used by the
-// schedule strip above the conversation; parseScheduleCadence below stays for
-// rendering `cast schedule add` command cards, where only args are available.
+// schedule strip above the conversation; parseTriggerCadence below stays for
+// rendering `cast trigger add` command cards, where only args are available.
 export function describeTaskCadence(task: {
   schedule_type: "once" | "recurring" | "event";
   interval_ms?: number;
@@ -60,7 +60,7 @@ export function describeTaskCadence(task: {
   }
   if (task.schedule_type === "event") {
     const ev = task.event_filter?.event_type;
-    return ev ? `on ${SCHEDULE_EVENT_LABELS[ev] ?? ev.replace(/_/g, " ")}` : "on event";
+    return ev ? `on ${TRIGGER_EVENT_LABELS[ev] ?? ev.replace(/_/g, " ")}` : "on event";
   }
   return "one-time";
 }
@@ -96,9 +96,9 @@ export function isTaskOverdue(
   return task.status === "scheduled" && task.run_at !== undefined && now - task.run_at >= TASK_OVERDUE_MS;
 }
 
-// Extract the human-readable cadence from `cast schedule add` args. The three timing flags are
+// Extract the human-readable cadence from `cast trigger add` args. The three timing flags are
 // mutually exclusive; absent all of them the task runs immediately ("now").
-export function parseScheduleCadence(args: string): string | null {
+export function parseTriggerCadence(args: string): string | null {
   // The first positional is the prompt (usually quoted). Strip it so flag-like words inside the
   // prompt (e.g. "review --in depth") can't be mistaken for real timing flags.
   const flags = args.replace(/^\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')/, "");
@@ -111,7 +111,7 @@ export function parseScheduleCadence(args: string): string | null {
   const every = grab("every");
   if (every && isDuration(every)) return `every ${humanizeDurationToken(every)}`;
   const on = grab("on");
-  if (on) return `on ${SCHEDULE_EVENT_LABELS[on] ?? on.replace(/_/g, " ")}`;
+  if (on) return `on ${TRIGGER_EVENT_LABELS[on] ?? on.replace(/_/g, " ")}`;
   const delay = grab("in");
   if (delay && isDuration(delay)) return `in ${humanizeDurationToken(delay)}`;
   return "now";

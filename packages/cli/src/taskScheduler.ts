@@ -16,7 +16,7 @@ const HEARTBEAT_INTERVAL_MS = 60_000;
 const MAX_CONCURRENCY = 2;
 
 // Schedules run permissive by default (`mode: "apply"`); safe mode
-// (`cast schedule add --safe`, stored as mode: "propose") is the exception, so
+// (`cast trigger add --safe`, stored as mode: "propose") is the exception, so
 // its fence has to be real rather than advisory. ONE mandate string, used both
 // as the agent's system prompt and as a line in the run prompt.
 const SAFE_MODE_MANDATE =
@@ -27,7 +27,7 @@ const SAFE_MODE_MANDATE =
 // that headless runs require (verified) — so unlike the mandate above these are a
 // wall, not a request. Scoped to the subcommand, so reads through the same
 // binaries still work (`git log`, `gh pr view`), as does the run's own
-// `cast schedule complete` self-report.
+// `cast trigger complete` self-report.
 // Accepted residual gap: a write smuggled through shell redirection
 // (`echo x > f`) or an interpreter (`node -e`) is not prefix-matchable, so the
 // mandate — not this list — is what covers those.
@@ -127,7 +127,7 @@ export class TaskScheduler {
    * always-awake remote (same bug class as ct-32728/ct-36594).
    *
    * Primary rule: a task runs ONLY on the device that created it
-   * (created_device_id, stamped by `cast schedule add`). Web-created and
+   * (created_device_id, stamped by `cast trigger add`). Web-created and
    * legacy tasks carry no device id and fall back to checkout existence.
    */
   private canServeTask(task: any): boolean {
@@ -278,7 +278,7 @@ export class TaskScheduler {
       "unset CLAUDECODE",
       "unset ANTHROPIC_API_KEY",
       // Hand the run's session UUID to the agent so a self-report via
-      // `cast schedule complete` can link the run's conversation back to the task
+      // `cast trigger complete` can link the run's conversation back to the task
       // (the agent's own session_id IS this UUID, assigned via --session-id above).
       ...(runSessionUuid ? [`export CODECAST_RUN_SESSION_UUID='${runSessionUuid}'`] : []),
       agentInvocation,
@@ -458,13 +458,13 @@ export class TaskScheduler {
     }
     if (task.target_conversation_id) {
       parts.push(`- Your summary will be posted as a message in the originating conversation thread.`);
-      parts.push(`- When done, run: cast schedule complete ${task._id} --summary "your full response to post in the thread"`);
+      parts.push(`- When done, run: cast trigger complete ${task._id} --summary "your full response to post in the thread"`);
       parts.push(`- Write the summary as if you are replying directly to the user in their conversation.`);
     } else {
-      parts.push(`- When done, run: cast schedule complete ${task._id} --summary "brief description of what was done"`);
+      parts.push(`- When done, run: cast trigger complete ${task._id} --summary "brief description of what was done"`);
     }
     parts.push(`- A clean completion folds this run out of the user's inbox (the summary carries the outcome). If you found something the user must read or act on, add --needs-attention to keep this run in their inbox.`);
-    parts.push('- To schedule follow-up: cast schedule add "..." --in <time>');
+    parts.push('- To set a follow-up trigger: cast trigger add "..." --in <time>');
     if (task.originating_conversation_id) {
       parts.push(`- Run \`cast read ${task.originating_conversation_id}\` for full original context`);
     }
