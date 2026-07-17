@@ -6,6 +6,7 @@ import type { PaginationOptions, PaginationResult, RegisteredQuery } from "conve
 import type { Id } from "./_generated/dataModel";
 import type { QueryCtx } from "./_generated/server";
 import { enqueueStartSession, getOnlineLocalRoots } from "./devices";
+import { fromConvexAgentType } from "@codecast/shared/contracts";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
@@ -3014,7 +3015,9 @@ export const startSession = mutation({
       v.literal("claude"),
       v.literal("codex"),
       v.literal("cursor"),
-      v.literal("gemini")
+      v.literal("gemini"),
+      v.literal("opencode"),
+      v.literal("pi")
     ),
     project_path: v.optional(v.string()),
     prompt: v.optional(v.string()),
@@ -3046,7 +3049,9 @@ export const startSession = mutation({
 
     const commandId = await enqueueStartSession(ctx, userId, {
       conversationId,
-      agentType: args.agent_type,
+      // opencode/pi have no daemon descriptor yet (plan phases 1-2); fromConvexAgentType
+      // maps them to "claude" and is a no-op for the existing daemon spellings.
+      agentType: fromConvexAgentType(args.agent_type),
       projectPath: args.project_path,
       sessionId,
       prompt: args.prompt,

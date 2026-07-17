@@ -15,20 +15,19 @@
  * present on disk at a given moment.
  */
 
-/** Per-agent permission mode overrides (how aggressively to skip approval prompts). */
-export interface AgentPermissionModes {
-  claude?: "default" | "bypass";
-  codex?: "default" | "full_auto" | "bypass";
-  gemini?: "default" | "bypass";
-}
+import type { AgentClientId } from "@codecast/shared/contracts";
 
-/** Per-agent extra default CLI params, keyed by flag name. */
-export interface AgentDefaultParams {
-  claude?: Record<string, string>;
-  codex?: Record<string, string>;
-  gemini?: Record<string, string>;
-  cursor?: Record<string, string>;
-}
+/** How aggressively a client skips approval prompts. Codex is the only client
+ *  with a distinct `full_auto`; the others use `default`/`bypass`, but the union
+ *  is shared so the map can be keyed openly by client id. */
+export type AgentPermissionMode = "default" | "full_auto" | "bypass";
+
+/** Per-client permission mode overrides, keyed by client id so an Nth client is a
+ *  map entry rather than a new named field. */
+export type AgentPermissionModes = Partial<Record<AgentClientId, AgentPermissionMode>>;
+
+/** Per-client extra default CLI params (flag name → value), keyed by client id. */
+export type AgentDefaultParams = Partial<Record<AgentClientId, Record<string, string>>>;
 
 export interface Config {
   // --- Identity / auth (all three writers) ---
@@ -64,7 +63,15 @@ export interface Config {
   team_share_mode?: "full" | "summary";
 
   // --- Agent invocation ---
+  // Per-client launch args. `agent_args` is the open map keyed by client id, so a
+  // fifth client can pass launch args without a schema change. The named
+  // `claude_args`/`codex_args` below are the pre-map fields, kept only so configs
+  // written before the map still parse and launch. ALWAYS read through
+  // `getAgentArgs()`, which prefers the map and falls back to the named fields.
+  agent_args?: Partial<Record<AgentClientId, string>>;
+  /** @deprecated pre-map field; read via `getAgentArgs(config, "claude")`. */
   claude_args?: string;
+  /** @deprecated pre-map field; read via `getAgentArgs(config, "codex")`. */
   codex_args?: string;
   agent_permission_modes?: AgentPermissionModes;
   agent_default_params?: AgentDefaultParams;
@@ -110,4 +117,25 @@ export interface Config {
   // --- Server-stamped bookkeeping (index.ts) ---
   created_at?: string;
   updated_at?: string;
+}
+
+/**
+ * The launch args a user configured for one client, honoring back-compat. Reads
+ * the open `agent_args` map first, then falls back to the deprecated named fields
+ * (`claude_args`/`codex_args`) so configs predating the map keep launching. An
+ * explicit map entry wins even when empty ("" means "no extra args", NOT "fall back
+ * to the legacy field"). Returns undefined when nothing is configured.
+ *
+ * This is the ONE place the legacy fields are read; every launch/resume path routes
+ * through here, so onboarding an Nth client is a map entry, not another named field.
+ */
+export function getAgentArgs(
+  config: Config | null | undefined,
+  clientId: AgentClientId,
+): string | undefined {
+  const fromMap = config?.agent_args?.[clientId];
+  if (fromMap !== undefined) return fromMap;
+  if (clientId === "claude") return config?.claude_args;
+  if (clientId === "codex") return config?.codex_args;
+  return undefined;
 }

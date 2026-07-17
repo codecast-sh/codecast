@@ -13,7 +13,7 @@ import { resetConversationPendingMessages } from "./pendingMessages";
 import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill } from "./agentTasks";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId } from "./daemonCommandUtils";
-import { AGENT_MODEL_CONFIG, modelAgentKey } from "@codecast/shared/contracts";
+import { AGENT_MODEL_CONFIG, modelAgentKey, fromConvexAgentType } from "@codecast/shared/contracts";
 import { shouldShowInInbox, isSessionIdle, deriveSessionActivity, classifyWorkState, normalizeWorkStateFilter, trustedAgentStatus, subagentKeepsParentWorking, type WorkState } from "./inboxFilters";
 import { subagentLinkFields } from "./ccAccountsShared";
 import { isSessionOwner } from "./sessionOwners";
@@ -720,7 +720,9 @@ export const createConversation = mutation({
       v.literal("claude_code"),
       v.literal("codex"),
       v.literal("cursor"),
-      v.literal("gemini")
+      v.literal("gemini"),
+      v.literal("opencode"),
+      v.literal("pi")
     ),
     session_id: v.string(),
     project_hash: v.optional(v.string()),
@@ -959,7 +961,9 @@ export const createQuickSession = mutation({
       v.literal("claude_code"),
       v.literal("codex"),
       v.literal("cursor"),
-      v.literal("gemini")
+      v.literal("gemini"),
+      v.literal("opencode"),
+      v.literal("pi")
     )),
     project_path: v.optional(v.string()),
     git_root: v.optional(v.string()),
@@ -4912,7 +4916,9 @@ export const forkFromMessage = mutation({
       v.literal("claude_code"),
       v.literal("codex"),
       v.literal("cursor"),
-      v.literal("gemini")
+      v.literal("gemini"),
+      v.literal("opencode"),
+      v.literal("pi")
     )),
   },
   handler: async (ctx, args) => {
@@ -8649,7 +8655,9 @@ export const reconfigureSession = mutation({
       v.literal("claude_code"),
       v.literal("codex"),
       v.literal("cursor"),
-      v.literal("gemini")
+      v.literal("gemini"),
+      v.literal("opencode"),
+      v.literal("pi")
     )),
     project_path: v.optional(v.string()),
     git_root: v.optional(v.string()),
@@ -9749,7 +9757,7 @@ export const switchSessionProject = mutation({
 export const switchSessionAgent = mutation({
   args: {
     conversation_id: v.id("conversations"),
-    agent_type: v.union(v.literal("claude_code"), v.literal("codex"), v.literal("cursor"), v.literal("gemini")),
+    agent_type: v.union(v.literal("claude_code"), v.literal("codex"), v.literal("cursor"), v.literal("gemini"), v.literal("opencode"), v.literal("pi")),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -9766,7 +9774,9 @@ export const switchSessionAgent = mutation({
     }
 
     const now = Date.now();
-    const daemonAgentType = args.agent_type === "claude_code" ? "claude" : args.agent_type === "codex" ? "codex" : args.agent_type === "cursor" ? "cursor" : "gemini";
+    // fromConvexAgentType maps opencode/pi -> claude (temporary, until descriptors
+    // land) and is identical to the old ternary for claude_code/codex/cursor/gemini.
+    const daemonAgentType = fromConvexAgentType(args.agent_type);
 
     await ctx.db.insert("daemon_commands", {
       user_id: conv.user_id,
