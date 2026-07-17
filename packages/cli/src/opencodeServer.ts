@@ -401,8 +401,13 @@ export class OpencodeServer extends EventEmitter {
       await new Promise((r) => setTimeout(r, 250));
     }
     if (!this.healthy && !this.stopped) {
-      this.log("[opencode-server] health check timed out");
+      this.log("[opencode-server] health check timed out — killing unhealthy process");
       this.emit("error", new Error("opencode serve health check timed out"));
+      // Don't leak a spawned-but-never-healthy child: kill it. Its `close`
+      // handler then schedules a backoff restart (self-recovery), the same
+      // shape every other failure path here uses. (The prior code emitted
+      // 'error' but left the process running forever — see ct-39150.)
+      this.killProcess();
     }
   }
 

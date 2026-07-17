@@ -290,6 +290,9 @@ describe("OpencodeServer lifecycle", () => {
     const [e] = await errored;
     expect((e as Error).message).toContain("health check timed out");
     expect(server.running).toBe(false);
+    // The never-healthy child must be KILLED, not left running (ct-39150 leak fix):
+    // fake child.kill() sets exitCode, so a leaked process would still read null.
+    expect(child.exitCode).not.toBeNull();
     server.stop();
   });
 });
