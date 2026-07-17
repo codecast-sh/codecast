@@ -74,6 +74,21 @@ export function killCanceledTasksFor(tasks: TaskRow[] | undefined, convId: strin
   );
 }
 
+// Is this trigger in trouble RIGHT NOW? The one definition of "failing", shared
+// by every surface that shows health — the rail's red dot, the row's status dot,
+// the stat cell, and the attention banner — so a trigger never reads as broken in
+// one place and fine in another.
+//
+// Keyed on last_run_failed (the outcome of the latest run), never on retry_count.
+// retry_count is the current failure STREAK: failRun counts it up toward
+// max_retries and a successful run resets it. Reading it as health was the bug —
+// before completeTaskRun reset it, one old blip left a fully recovered trigger
+// screaming "retrying" forever while the rail (already on last_run_failed) showed
+// it green.
+export function isTriggerFailing(t: Pick<TaskRow, "last_run_failed">): boolean {
+  return !!t.last_run_failed;
+}
+
 // A prompt-slice title is cut at 60 chars mid-word or mid-parenthesis
 // ("Check the deploy (sha 9ee76"). Trim the dangling fragment so the fallback
 // reads like a name, not a cut. Only slice-width titles get the word trim —
@@ -110,6 +125,28 @@ export function patchTaskInWebList(
     {},
     rows.map((t) => (t._id === taskId ? { ...t, ...patch } : t)),
   );
+}
+
+// The most recent firing of a schedule that's already in the local message
+// cache — the synchronous fast path for "click the trigger row → land on its
+// last run". Matches exactly what the server's webListRuns matches (the
+// task-id marker substring on user turns), scanned newest-first over the
+// loaded window. Returns undefined when the window holds none (messages not
+// loaded, or the runs fell outside it) — callers fall back to the run-list
+// query rather than guessing.
+export function latestLoadedTriggerMessage(
+  messages: readonly { _id: string; role: string; content?: string; timestamp: number }[] | undefined,
+  taskId: string,
+): { messageId: string; timestamp: number } | undefined {
+  if (!messages?.length) return undefined;
+  const marker = `task-id="${taskId}"`;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role === "user" && m.content?.includes(marker)) {
+      return { messageId: m._id, timestamp: m.timestamp };
+    }
+  }
+  return undefined;
 }
 
 export interface TriggerRow {
