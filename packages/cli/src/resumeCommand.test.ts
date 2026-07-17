@@ -10,6 +10,7 @@ import {
   copyJsonlAsSession,
   extractJsonlPermissionMode,
   isManagedTmuxName,
+  isReconstitutionTarget,
   resolveResumeAgentType,
   resumeTmuxPrefix,
   rewriteSubagentJsonlToUuid,
@@ -249,6 +250,31 @@ describe("buildNonClaudeResumeCommand", () => {
     expect(
       buildNonClaudeResumeCommand("codex", "sess1", { codexPermFlags: "--full-auto" }),
     ).toBe("codex resume sess1 --full-auto");
+  });
+});
+
+// Both `cast resume --as` and `cast fork --resume --as` reconstitute into a fresh
+// local session, which only claude/codex have generators for. Anything else must be
+// rejected upfront — otherwise the fork path (index.ts) silently hands the user a
+// fabricated Claude JSONL + `claude --resume` for a gemini/cursor/opencode/pi target.
+describe("isReconstitutionTarget", () => {
+  test("accepts claude and codex, case-insensitively", () => {
+    expect(isReconstitutionTarget("claude")).toBe(true);
+    expect(isReconstitutionTarget("codex")).toBe(true);
+    expect(isReconstitutionTarget("CLAUDE")).toBe(true);
+    expect(isReconstitutionTarget("Codex")).toBe(true);
+  });
+
+  test("rejects clients with no local reconstitution generator", () => {
+    for (const a of ["gemini", "cursor", "opencode", "pi", "claude_code", "bogus"]) {
+      expect(isReconstitutionTarget(a)).toBe(false);
+    }
+  });
+
+  test("rejects empty/undefined", () => {
+    expect(isReconstitutionTarget(undefined)).toBe(false);
+    expect(isReconstitutionTarget(null)).toBe(false);
+    expect(isReconstitutionTarget("")).toBe(false);
   });
 });
 
