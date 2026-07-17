@@ -87,25 +87,27 @@ export function toolSummary(tc: ToolCallLike): string {
     return "";
   }
 
-  // File-based tools
-  if (tc.name === "Read" || tc.name === "Edit" || tc.name === "Write") {
-    return getRelativePath(String(parsedInput.file_path || ""));
+  // File-based tools. opencode/pi lower-case their names (`read`/`edit`/`write`)
+  // and key the path off `filePath` (camelCase); codex uses `path`; claude file_path.
+  if (tc.name === "Read" || tc.name === "Edit" || tc.name === "Write"
+      || tc.name === "read" || tc.name === "edit" || tc.name === "write") {
+    return getRelativePath(String(parsedInput.file_path || parsedInput.filePath || parsedInput.path || ""));
   }
   if (tc.name === "file_read" || tc.name === "file_write" || tc.name === "file_edit") {
     return getRelativePath(String(parsedInput.file_path || parsedInput.path || ""));
   }
 
   // Shell/Terminal tools
-  if (tc.name === "Bash" || tc.name === "shell_command" || tc.name === "shell" || tc.name === "exec_command" || tc.name === "container.exec") {
+  if (tc.name === "Bash" || tc.name === "bash" || tc.name === "shell_command" || tc.name === "shell" || tc.name === "exec_command" || tc.name === "container.exec") {
     const cmd = String(parsedInput.command || parsedInput.cmd || "");
     return cmd ? truncateStr(cmd, 100) : "";
   }
 
   // Search tools
-  if (tc.name === "Glob" && parsedInput.pattern) return String(parsedInput.pattern);
-  if (tc.name === "Grep" && parsedInput.pattern) return String(parsedInput.pattern);
+  if ((tc.name === "Glob" || tc.name === "glob") && parsedInput.pattern) return String(parsedInput.pattern);
+  if ((tc.name === "Grep" || tc.name === "grep") && parsedInput.pattern) return String(parsedInput.pattern);
   if (tc.name === "WebSearch" || tc.name === "web_search" || tc.name === "code_search") return parsedInput.query ? truncateStr(String(parsedInput.query), 40) : "";
-  if (tc.name === "WebFetch" || tc.name === "web_fetch") return parsedInput.url ? shortenUrl(String(parsedInput.url)) : "";
+  if (tc.name === "WebFetch" || tc.name === "web_fetch" || tc.name === "webfetch") return parsedInput.url ? shortenUrl(String(parsedInput.url)) : "";
 
   // Patch tool
   if (tc.name === "apply_patch") {

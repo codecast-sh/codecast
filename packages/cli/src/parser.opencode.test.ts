@@ -14,6 +14,10 @@ import { parseOpencodeSessionFile, parseTranscriptFor } from "./parser";
 const FIX = path.join(__dirname, "__fixtures__", "opencode");
 const toolsExport = fs.readFileSync(path.join(FIX, "session-tools.sanitized.json"), "utf-8");
 const textExport = fs.readFileSync(path.join(FIX, "session-text.sanitized.json"), "utf-8");
+// Fully SYNTHETIC session (hand-written to opencode's export shape, /tmp path,
+// fabricated base64 that decodes to "SYNTHETIC-FAKE-IMAGE-DATA") — pins that a
+// `file` part carrying a base64 data URL maps to ParsedMessage.images.
+const imageExport = fs.readFileSync(path.join(FIX, "session-image.sanitized.json"), "utf-8");
 
 describe("parseOpencodeSessionFile", () => {
   it("maps a real tool-using session (user + tool turn + text turn) to ParsedMessages", () => {
@@ -48,6 +52,18 @@ describe("parseOpencodeSessionFile", () => {
     expect(assistant.toolCalls).toBeUndefined();
     expect(assistant.content.length).toBeGreaterThan(0);
     expect(assistant.model).toBe("big-pickle");
+  });
+
+  it("maps a `file` part (base64 data URL) to ParsedMessage.images", () => {
+    const msgs = parseOpencodeSessionFile(imageExport);
+    expect(msgs.length).toBe(1);
+    const [user] = msgs;
+    expect(user.role).toBe("user");
+    expect(user.content).toBe("look at this screenshot");
+    expect(user.images?.length).toBe(1);
+    expect(user.images?.[0].mediaType).toBe("image/png");
+    // the base64 payload rides through verbatim (data URL prefix stripped).
+    expect(user.images?.[0].data).toBe("U1lOVEhFVElDLUZBS0UtSU1BR0UtREFUQQ==");
   });
 
   it("routes through parseTranscriptFor('opencode')", () => {

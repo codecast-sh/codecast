@@ -1073,6 +1073,11 @@ interface OpencodePart {
   id?: string;
   type?: string;
   text?: string;
+  // file parts (opencode's attachment/image mechanism): `url` is a data URL for
+  // pasted/attached images, `mime` its media type. Remote/path urls carry no bytes.
+  mime?: string;
+  filename?: string;
+  url?: string;
   // tool parts
   callID?: string;
   tool?: string;
@@ -1097,12 +1102,26 @@ interface OpencodeAssembledSession {
   messages?: { info?: OpencodeMessageInfo; parts?: OpencodePart[] }[];
 }
 
+/** Extract an ImageBlock from a base64 data URL (`data:<mime>;base64,<data>`).
+ *  Returns null for non-data urls (a remote http/file path carries no inline
+ *  bytes) or a non-image mime — matching the image-only `images` field every
+ *  other client populates. */
+function parseDataUrlImage(url: string | undefined, mime: string | undefined): ImageBlock | null {
+  if (typeof url !== "string") return null;
+  const match = url.match(/^data:([^;,]+);base64,([\s\S]+)$/i);
+  if (!match) return null;
+  const mediaType = mime || match[1];
+  if (!mediaType.startsWith("image/")) return null;
+  return { mediaType, data: match[2] };
+}
+
 /** Ordered content of one opencode message, folded from its parts. */
 function foldOpencodeParts(parts: OpencodePart[]): {
   content: string;
   thinking: string;
   toolCalls: ToolCall[];
   toolResults: ToolResult[];
+  images: ImageBlock[];
 } {
   // Part ids are monotonic within a message; sort by id so streaming/interleaved
   // writes read back in author order regardless of directory listing order.
@@ -1111,12 +1130,19 @@ function foldOpencodeParts(parts: OpencodePart[]): {
   const thinkingChunks: string[] = [];
   const toolCalls: ToolCall[] = [];
   const toolResults: ToolResult[] = [];
+  const images: ImageBlock[] = [];
 
   for (const part of ordered) {
     if (part.type === "text") {
       if (part.text) textChunks.push(part.text);
     } else if (part.type === "reasoning") {
       if (part.text) thinkingChunks.push(part.text);
+    } else if (part.type === "file") {
+      // An attached image rides in `url` as a base64 data URL; map it to the same
+      // ImageBlock shape every other client emits. Non-image files and remote/path
+      // urls (no inline bytes) have nothing renderable, so they're skipped.
+      const img = parseDataUrlImage(part.url, part.mime);
+      if (img) images.push(img);
     } else if (part.type === "tool") {
       const id = part.callID || part.id || "";
       const input =
@@ -1143,6 +1169,7 @@ function foldOpencodeParts(parts: OpencodePart[]): {
     thinking: thinkingChunks.join("\n\n"),
     toolCalls,
     toolResults,
+    images,
   };
 }
 
@@ -1167,9 +1194,9 @@ export function parseOpencodeSessionFile(content: string): ParsedMessage[] {
     const role = info.role;
     if (role !== "user" && role !== "assistant") continue;
 
-    const { content: text, thinking, toolCalls, toolResults } = foldOpencodeParts(entry.parts ?? []);
+    const { content: text, thinking, toolCalls, toolResults, images } = foldOpencodeParts(entry.parts ?? []);
     const hasBody =
-      text.trim().length > 0 || thinking.length > 0 || toolCalls.length > 0 || toolResults.length > 0;
+      text.trim().length > 0 || thinking.length > 0 || toolCalls.length > 0 || toolResults.length > 0 || images.length > 0;
     if (!hasBody) continue;
 
     messages.push({
@@ -1180,6 +1207,7 @@ export function parseOpencodeSessionFile(content: string): ParsedMessage[] {
       thinking: thinking || undefined,
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
       toolResults: toolResults.length > 0 ? toolResults : undefined,
+      images: images.length > 0 ? images : undefined,
       model: role === "assistant" ? info.modelID : undefined,
     });
   }
