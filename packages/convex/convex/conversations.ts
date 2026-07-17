@@ -13,7 +13,7 @@ import { resetConversationPendingMessages } from "./pendingMessages";
 import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill } from "./agentTasks";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId } from "./daemonCommandUtils";
-import { AGENT_MODEL_CONFIG, modelAgentKey, fromConvexAgentType, toConvexAgentType } from "@codecast/shared/contracts";
+import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, fromConvexAgentType, toConvexAgentType } from "@codecast/shared/contracts";
 import { shouldShowInInbox, isSessionIdle, deriveSessionActivity, classifyWorkState, normalizeWorkStateFilter, trustedAgentStatus, subagentKeepsParentWorking, type WorkState } from "./inboxFilters";
 import { subagentLinkFields } from "./ccAccountsShared";
 import { isSessionOwner } from "./sessionOwners";
@@ -4901,6 +4901,27 @@ export const forkConversation = mutation({
   },
 });
 
+// opencode forks resolve to a REAL session id via the daemon's serve sidecar
+// (POST /session/:id/fork). That needs the parent's real ses_ id to fork from, so
+// forkFromMessage passes it down only when this is a same-agent opencode fork whose
+// parent already has a resolved ses_ id (not itself an unresolved synthetic fork) and
+// the client advertises the forkApi capability. Extracted for unit testing.
+export function opencodeApiForkEligible(opts: {
+  isPlainFork: boolean;
+  daemonAgentType: string;
+  sourceAgentType?: string;
+  sourceSessionId?: string;
+}): boolean {
+  return (
+    opts.isPlainFork &&
+    opts.daemonAgentType === "opencode" &&
+    opts.sourceAgentType === "opencode" &&
+    typeof opts.sourceSessionId === "string" &&
+    opts.sourceSessionId.startsWith("ses_") &&
+    AGENT_CLIENTS.opencode.capabilities.forkApi === true
+  );
+}
+
 export const forkFromMessage = mutation({
   args: {
     conversation_id: v.string(),
@@ -5052,6 +5073,16 @@ export const forkFromMessage = mutation({
     const isPlainFork = !args.target_agent_type || args.target_agent_type === original.agent_type;
     const fastPathEligible = atTip && isPlainFork && daemonAgentType === "claude" &&
       (original.agent_type === "claude_code" || !original.agent_type);
+    // opencode forks through its serve sidecar: POST /session/:id/fork mints a
+    // REAL, resumable ses_ id from the parent session (a synthetic forked-<id>
+    // never resolves in opencode.db — that's the bug this fixes). The daemon needs
+    // the parent's real opencode session id to call fork(), so pass it through.
+    const isOpencodeApiFork = opencodeApiForkEligible({
+      isPlainFork,
+      daemonAgentType,
+      sourceAgentType: original.agent_type,
+      sourceSessionId: original.session_id,
+    });
 
     const newConversationId = await ctx.db.insert("conversations", {
       user_id: userId,
@@ -5107,6 +5138,9 @@ export const forkFromMessage = mutation({
       // Copy-the-JSONL hints. The deferred (post-copy) command may also use
       // them: copy-first is cache-stable even when the rebuild would be safe.
       ...(fastPathEligible ? { fork_fast_path: true, parent_session_id: original.session_id } : {}),
+      // opencode API fork: carry the parent's real ses_ id so the daemon can call
+      // OpencodeServer.fork(parent) and resume the minted id (see daemon resume_session).
+      ...(isOpencodeApiFork ? { fork_api: true, parent_session_id: original.session_id } : {}),
       _target_device_id: ownerTarget ?? undefined,
     };
     await ctx.db.patch(newConversationId, {

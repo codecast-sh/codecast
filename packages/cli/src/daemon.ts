@@ -33,6 +33,7 @@ import {
   sessionExistsInOpencodeDb,
   resolveOpencodeSessionCwd,
 } from "./opencodeStorage.js";
+import { OpencodeServer } from "./opencodeServer.js";
 import {
   buildDaemonLauncherScript,
   buildDaemonPlistXml,
@@ -114,7 +115,7 @@ import { buildLaunchArgs, getConfiguredAgentArgs, launchBinary } from "./launchC
 import type { AgentStatus, DeviceSnippetSettings, AgentClientId } from "@codecast/shared/contracts";
 import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType } from "@codecast/shared/contracts";
 import { parseModelPicker, planModelNavigation, SESSION_ONLY_COMMIT_RE, isSwitchConfirmDialog } from "./modelPicker";
-import { type Config, getAgentArgs } from "./config/types.js";
+import { type Config, getAgentArgs, isOpencodeServerEnabled, opencodeServerPort } from "./config/types.js";
 
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 const EXEC_TIMEOUT_MS = 10_000;
@@ -3165,6 +3166,75 @@ async function executeRemoteCommand(
             }
             conversationResumeFailures.delete(conversationId);
           }
+        }
+        // opencode API fork. The parent's real ses_ id rode down in
+        // parsed.parent_session_id (forkFromMessage). The session_id here is the
+        // synthetic forked-<id> placeholder — it can't resolve in opencode.db, so
+        // we mint a REAL forked ses_ via the serve sidecar, rebind this conversation
+        // onto it, and resume THAT. The convex copy (advanceForkCopy) already gave
+        // the fork its history; the sidecar fork just makes it a live, resumable
+        // opencode session. On any failure we log the reason and fall through to the
+        // generic path (blank spawn) — never a silent claim that a fork happened.
+        if (
+          resumeAgentType === "opencode" &&
+          parsed.fork_api === true &&
+          conversationId &&
+          typeof parsed.parent_session_id === "string" &&
+          parsed.parent_session_id !== sessionId &&
+          AGENT_CLIENTS.opencode.capabilities.forkApi === true
+        ) {
+          // Idempotency: the dispatch outbox is at-least-once, so a redelivered fork
+          // command must not mint a SECOND fork. If this conversation is already
+          // bound to a real ses_ id, the fork already happened — re-resume that id
+          // (autoResumeSession no-ops on a live pane) instead of forking again.
+          const reverseCache = buildReverseConversationCache(readConversationCache());
+          const boundReal = reverseCache[conversationId];
+          let realForkId: string | null =
+            typeof boundReal === "string" && boundReal.startsWith("ses_") ? boundReal : null;
+
+          if (!realForkId) {
+            const sidecar = await ensureOpencodeServer(config);
+            if (!sidecar) {
+              log(`[REMOTE] opencode fork for conv ${conversationId.slice(0, 12)}: serve sidecar unavailable — falling back to blank spawn`);
+            } else {
+              try {
+                const forked = await sidecar.fork(parsed.parent_session_id);
+                realForkId = forked.id;
+                // Map real id → conversation BEFORE the watcher sees it (else it
+                // mints a doppelgänger), point convex at the real id, and baseline
+                // the watcher past the copied history (opencode re-mints message
+                // ids on fork, so re-syncing would duplicate).
+                const cache = readConversationCache();
+                cache[realForkId] = conversationId;
+                saveConversationCache(cache);
+                if (conversationCacheRef) conversationCacheRef[realForkId] = conversationId;
+                seedOpencodeForkSyncBaseline(realForkId);
+                const forkGitInfo = projectPath ? getGitInfo(projectPath) : undefined;
+                syncServiceRef?.updateSessionId(conversationId, realForkId, projectPath || undefined, forkGitInfo?.repoRoot || forkGitInfo?.root).catch(logConvexFailure);
+                log(`[REMOTE] opencode fork: ${parsed.parent_session_id.slice(0, 12)} → ${realForkId.slice(0, 12)} for conv ${conversationId.slice(0, 12)}`);
+              } catch (forkErr) {
+                log(`[REMOTE] opencode fork failed for conv ${conversationId.slice(0, 12)}: ${forkErr instanceof Error ? forkErr.message : String(forkErr)} — falling back to blank spawn`);
+              }
+            }
+          }
+
+          if (realForkId) {
+            restartingSessionIds.set(realForkId, Date.now());
+            const resumed = await autoResumeSession(realForkId, "", readTitleCache(), projectPath, conversationId, "opencode");
+            restartingSessionIds.delete(realForkId);
+            if (resumed) {
+              syncServiceRef?.markSessionActive(conversationId).catch(logConvexFailure);
+              conversationResumeFailures.delete(conversationId);
+              await clearConversationDeliveryAndResumeState(conversationId, realForkId, "opencode_fork");
+              result = JSON.stringify({ forked: true, session_id: realForkId });
+              log(`[REMOTE] opencode fork ${realForkId.slice(0, 12)} resumed for conv ${conversationId.slice(0, 12)}`);
+            } else {
+              error = `opencode fork ${realForkId.slice(0, 12)} resume failed`;
+            }
+            break; // fork committed — do NOT also blank-spawn a second session
+          }
+          // No real fork id (sidecar unavailable or fork threw): fall through to the
+          // generic path below, which blank-spawns opencode with the copied history.
         }
         // Fork fast path: materialize the new session's JSONL by copying the
         // parent's local transcript (byte-stable message content → Claude's
@@ -6623,6 +6693,64 @@ async function processGeminiSession(
 // so we re-send the last already-synced message too (addMessages upserts by uuid,
 // patching it in place) to pick up a message whose body grew after its first sync.
 const opencodeSyncedCounts = new Map<string, number>();
+
+// The opencode `serve` sidecar (opencodeServer.ts) is a daemon-wide, LAZY singleton:
+// its only job today is the fork-by-id API, which is rare, so — unlike the codex
+// app-server (a per-turn transport spun up at boot) — we don't keep a serve process
+// running on every machine. It starts on the first fork that needs it and is torn
+// down on daemon shutdown. Fork works cross-project-scope (verified: a sidecar in any
+// cwd forks any session by id, and the fork inherits the PARENT's directory), so one
+// instance suffices regardless of which project the fork lives in.
+let opencodeServerInstance: OpencodeServer | null = null;
+
+/** Start (once) and await readiness of the fork sidecar. Returns the running server,
+ *  or null when it can't be used (disabled by config, binary missing, or never became
+ *  healthy) — callers then fall back honestly rather than claiming a fork happened. */
+export async function ensureOpencodeServer(config: Config | null | undefined): Promise<OpencodeServer | null> {
+  if (!isOpencodeServerEnabled(config)) return null;
+  if (opencodeServerInstance?.running) return opencodeServerInstance;
+  if (opencodeServerInstance?.binaryMissing) return null;
+  if (!opencodeServerInstance) {
+    opencodeServerInstance = new OpencodeServer({
+      log,
+      port: opencodeServerPort(config),
+    });
+    opencodeServerInstance.on("error", (err: Error) =>
+      log(`[opencode-server] ${err.message}`));
+    opencodeServerInstance.on("binaryNotFound", (bin: string) =>
+      log(`[opencode-server] "${bin}" not installed — opencode fork unavailable`));
+  }
+  if (opencodeServerInstance.running) return opencodeServerInstance;
+  const srv = opencodeServerInstance;
+  const ready = await new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => resolve(false), 25_000);
+    const done = (ok: boolean) => { clearTimeout(timer); resolve(ok); };
+    srv.once("ready", () => done(true));
+    srv.once("binaryNotFound", () => done(false));
+    srv.once("closed", () => done(false));
+    srv.start();
+  });
+  return ready && srv.running ? srv : null;
+}
+
+/** After forking an opencode session, its copied history is ALREADY in convex
+ *  (advanceForkCopy copied it from the parent, keeping the parent's uuids). opencode's
+ *  fork re-mints NEW message ids for that same content, so if the DB watcher re-synced
+ *  them they'd land as DUPLICATE rows. Seed the synced-count past the copied history
+ *  (+1 so even the boundary re-send of the last, already-finalized message is skipped);
+ *  only genuinely new branch turns sync from here. */
+export function seedOpencodeForkSyncBaseline(forkSessionId: string): number {
+  try {
+    const assembled = assembleOpencodeSession(forkSessionId);
+    const count = assembled ? parseTranscriptFor("opencode", assembled).length : 0;
+    const baseline = count + 1;
+    opencodeSyncedCounts.set(forkSessionId, baseline);
+    return baseline;
+  } catch {
+    /* leave unseeded — worst case the watcher re-forwards copies, never data loss */
+    return 0;
+  }
+}
 
 async function processOpencodeSession(
   sessionId: string,
@@ -16549,6 +16677,7 @@ async function main(): Promise<void> {
     cursorWatcher.stop();
     cursorTranscriptWatcher.stop();
     codexAppServerInstance?.stop();
+    opencodeServerInstance?.stop();
 
     retryQueue.stop();
 
