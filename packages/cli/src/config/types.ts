@@ -38,6 +38,13 @@ export interface Config {
   convex_url?: string;
   web_url?: string;
 
+  // --- Device identity ---
+  // Explicit name for THIS machine, replacing the derived "macOS - <hostname>".
+  // Set it on a provisioned box whose hostname is a UUID (a Scaleway Mac reads as
+  // "macOS - 36563bd2-..." otherwise). Read by deviceLabel() in remote/device.ts;
+  // CODECAST_DEVICE_LABEL overrides it for one-off runs.
+  device_label?: string;
+
   // --- Sync scope ---
   excluded_paths?: string;
   sync_mode?: "all" | "selected";

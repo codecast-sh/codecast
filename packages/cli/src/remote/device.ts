@@ -29,9 +29,11 @@ import * as path from "node:path";
 import { getMachineKey, hardwareId } from "../machineKey.js";
 
 const DEVICE_BINDING_FILE = path.join(os.homedir(), ".codecast", ".device_binding.json");
+const CONFIG_FILE = path.join(os.homedir(), ".codecast", "config.json");
 
 let cachedDeviceId: string | null = null;
 let cachedHostname: string | null = null;
+let cachedLabel: string | null = null;
 
 /** Which hardware a device identity belongs to. Persisted as .device_binding.json. */
 export interface DeviceBinding {
@@ -192,12 +194,72 @@ function scutilGet(key: "HostName" | "LocalHostName"): string {
   }
 }
 
-/** Human-readable label, e.g. "macOS - Ashots-MacBook". */
+/**
+ * Human-readable label, e.g. "macOS - Ashots-MacBook", or an explicit name when
+ * one is set.
+ *
+ * The derived form is right for a personal machine whose hostname is already a
+ * name a human chose. It is wrong for a provisioned box: a Scaleway Mac's
+ * hostname is its UUID, so it shows up everywhere as
+ * "macOS - 36563bd2-ab96-4045-8aec-894b84a2f66c" — in the device chip, in
+ * `cast remote hosts`, and in the reorientation notice a moved agent reads.
+ * An explicit label replaces the whole string (not just the hostname half), so
+ * a named machine reads as "Cloud Mac" rather than "macOS - Cloud Mac".
+ *
+ * Precedence: CODECAST_DEVICE_LABEL (one-off runs, launchd plists) then
+ * config.json `device_label` (durable, survives restarts and reboots).
+ * Cached like the hostname, so a change applies on the next daemon start.
+ */
 export function deviceLabel(): string {
-  const platform = process.platform;
+  if (cachedLabel) return cachedLabel;
+  cachedLabel = resolveDeviceLabel({
+    platform: process.platform,
+    override: process.env.CODECAST_DEVICE_LABEL ?? readConfiguredLabel(),
+    hostname: stableHostname,
+  });
+  return cachedLabel;
+}
+
+/** Longest label we'll accept. Long enough for "MacBook Pro (work, Berlin)", short
+ * enough that a device chip and a notice sentence stay readable. */
+const MAX_LABEL_LENGTH = 64;
+
+/**
+ * Pure label policy (no I/O), mirroring resolveStableHostname so every branch is
+ * testable.
+ *
+ * The override is sanitized rather than trusted: this label is interpolated into
+ * the prose a moved agent reads ("This session now runs on <label>"), so a
+ * newline in it could forge an extra line of that notice. Collapsing whitespace
+ * and capping the length keeps a hand-edited config from becoming a way to write
+ * arbitrary lines into an agent's context. A blank/whitespace-only override
+ * falls through to the derived name rather than yielding an empty label.
+ */
+export function resolveDeviceLabel(deps: {
+  platform: NodeJS.Platform;
+  override?: string;
+  hostname: () => string;
+}): string {
+  const override = sanitizeLabel(deps.override);
+  if (override) return override;
   const name =
-    platform === "darwin" ? "macOS" : platform === "win32" ? "Windows" : "Linux";
-  return `${name} - ${stableHostname()}`;
+    deps.platform === "darwin" ? "macOS" : deps.platform === "win32" ? "Windows" : "Linux";
+  return `${name} - ${deps.hostname()}`;
+}
+
+/** Collapse all whitespace (incl. newlines) to single spaces, trim, cap length. */
+export function sanitizeLabel(raw: string | undefined): string {
+  return (raw ?? "").replace(/\s+/g, " ").trim().slice(0, MAX_LABEL_LENGTH);
+}
+
+/** `device_label` from ~/.codecast/config.json, or "" when unset/unreadable. */
+function readConfiguredLabel(): string {
+  try {
+    const cfg = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf-8"));
+    return typeof cfg?.device_label === "string" ? cfg.device_label : "";
+  } catch {
+    return "";
+  }
 }
 
 /** Platform tag for the devices table. */
