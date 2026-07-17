@@ -18,7 +18,13 @@ import {
   normalizeEntityType,
   type EntityType,
 } from "@codecast/shared/entities";
-import { SNIPPET_CATALOG, snippetBySlug, allSnippetSlugs } from "@codecast/shared/contracts";
+import {
+  SNIPPET_CATALOG,
+  snippetBySlug,
+  allSnippetSlugs,
+  fromConvexAgentType,
+  toConvexAgentType,
+} from "@codecast/shared/contracts";
 import { cliFetch, cliFetchRead, cliSearchRequest } from "./cliHttp.js";
 import { listProfiles, saveProfile, useProfile, deleteProfile, getAccountsHeartbeatPayload, CcAccountError } from "./ccAccounts.js";
 import { CODECAST_STATUS_HOOK } from "./statusHook.js";
@@ -71,6 +77,7 @@ import {
   CLAUDE_AUTO_TRIM_TARGET_TOKENS,
   CLAUDE_CONTEXT_LIMIT_TOKENS,
   combineClaudeResumeFlags,
+  isReconstitutionTarget,
   removeForkArtifactJsonl,
   rewriteSubagentJsonlToUuid,
 } from "./resumeCommand.js";
@@ -6079,7 +6086,7 @@ program
       process.exit(1);
     }
 
-    if (options.as && !["claude", "codex"].includes(options.as.toLowerCase())) {
+    if (options.as && !isReconstitutionTarget(options.as)) {
       console.error(`Invalid --as value: "${options.as}". Use "claude" or "codex".`);
       process.exit(1);
     }
@@ -6131,7 +6138,7 @@ program
               if (targetAgent && targetAgent !== normalizedSource) {
                 console.log(`Would convert ${normalizedSource} session ${exactSessionId} to ${targetAgent}`);
               } else {
-                const effectiveAgent = targetAgent === "claude" ? "claude_code" : targetAgent === "codex" ? "codex" : sourceAgent;
+                const effectiveAgent = resumeConvexAgentType(targetAgent, sourceAgent);
                 const cmd = effectiveAgent === "codex"
                   ? `codex resume ${exactSessionId}`
                   : `cast resume ${exactSessionId}`;
@@ -6154,7 +6161,7 @@ program
                 options.here ? undefined : matched.project_path,
               );
             } else {
-              const effectiveAgent = targetAgent === "claude" ? "claude_code" : targetAgent === "codex" ? "codex" : sourceAgent;
+              const effectiveAgent = resumeConvexAgentType(targetAgent, sourceAgent);
               const extraArgs = resolveAgentArgs(effectiveAgent, options.claudeArgs, config);
               await launchSession(exactSessionId, effectiveAgent, extraArgs, !extraArgs, options.here ? undefined : matched.project_path, { conversationId: matched.conversation_id, config });
             }
@@ -6200,7 +6207,7 @@ program
               if (targetAgent && targetAgent !== normalizedSource) {
                 console.log(`Would convert ${normalizedSource} session ${conv.session_id} to ${targetAgent}`);
               } else {
-                const effectiveAgent = targetAgent === "claude" ? "claude_code" : targetAgent === "codex" ? "codex" : sourceAgent;
+                const effectiveAgent = resumeConvexAgentType(targetAgent, sourceAgent);
                 const cmd = effectiveAgent === "codex"
                   ? `codex resume ${conv.session_id}`
                   : `cast resume ${conv.session_id}`;
@@ -6223,7 +6230,7 @@ program
                 options.here ? undefined : conv.project_path,
               );
             } else {
-              const effectiveAgent = targetAgent === "claude" ? "claude_code" : targetAgent === "codex" ? "codex" : sourceAgent;
+              const effectiveAgent = resumeConvexAgentType(targetAgent, sourceAgent);
               const extraArgs = resolveAgentArgs(effectiveAgent, options.claudeArgs, config);
               await launchSession(conv.session_id, effectiveAgent, extraArgs, !extraArgs, options.here ? undefined : conv.project_path, { conversationId: conv.id, config });
             }
@@ -6326,7 +6333,7 @@ program
         if (targetAgent && targetAgent !== normalizedSource) {
           await convertAndLaunch(conv.id, normalizedSource, targetAgent, config, options.claudeArgs, options.claudeTail, options.claudeFull, false, options.here ? undefined : conv.project_path);
         } else {
-          const effectiveAgent = targetAgent === "claude" ? "claude_code" : targetAgent === "codex" ? "codex" : conv.agent_type;
+          const effectiveAgent = resumeConvexAgentType(targetAgent, conv.agent_type);
           const extraArgs = resolveAgentArgs(effectiveAgent, options.claudeArgs, config);
           await launchSession(sessionId, effectiveAgent, extraArgs, !extraArgs, options.here ? undefined : conv.project_path, { conversationId: conv.id, config });
         }
@@ -6510,7 +6517,7 @@ program
         if (targetAgent && targetAgent !== normalizedSource) {
           await convertAndLaunch(conv.id, normalizedSource, targetAgent, config, options.claudeArgs, options.claudeTail, options.claudeFull, false, options.here ? undefined : conv.project_path);
         } else {
-          const effectiveAgent = targetAgent === "claude" ? "claude_code" : targetAgent === "codex" ? "codex" : conv.agent_type;
+          const effectiveAgent = resumeConvexAgentType(targetAgent, conv.agent_type);
           const extraArgs = resolveAgentArgs(effectiveAgent, options.claudeArgs, config);
           await launchSession(sessionId, effectiveAgent, extraArgs, !extraArgs, options.here ? undefined : conv.project_path, { conversationId: conv.id, config });
         }
@@ -6524,6 +6531,19 @@ program
 function resolveAgentArgs(agentType: string | undefined, cliOverride: string | undefined, config: Config): string | undefined {
   if (cliOverride) return cliOverride;
   return getAgentArgs(config, agentType === "codex" ? "codex" : "claude");
+}
+
+/**
+ * The convex agent_type a resume should launch under when it is NOT converting
+ * agents: an explicit `--as` target mapped to its convex spelling through the
+ * registry, else the session's own recorded type. The conversion case (`--as`
+ * set AND different from the source) is routed to convertAndLaunch before this is
+ * reached, so here the target is either absent or already equal to the source —
+ * replacing the hand-rolled `target === "claude" ? "claude_code" : ... : source`
+ * ternary that only knew claude/codex.
+ */
+function resumeConvexAgentType(targetAgent: string | undefined, sourceConvexAgent: string): string {
+  return targetAgent ? toConvexAgentType(fromConvexAgentType(targetAgent)) : sourceConvexAgent;
 }
 
 async function convertAndLaunch(
@@ -6661,16 +6681,27 @@ async function ensureLocalSession(
 }
 
 async function launchSession(sessionId: string, agentType?: string, extraArgs?: string, showArgsHint?: boolean, projectPath?: string | null, reconCtx?: ReconstitutionContext): Promise<void> {
-  if (agentType === "codex") {
+  const client = fromConvexAgentType(agentType);
+  if (client === "codex") {
     launchCodex(sessionId, extraArgs, showArgsHint, projectPath);
-  } else if (agentType === "cursor") {
-    console.error("Cursor sessions cannot be resumed from the command line.");
-    console.log("Open Cursor IDE to continue this session.");
-    process.exit(1);
-  } else {
+    return;
+  }
+  if (client === "claude") {
     const resolvedId = await ensureLocalSession(sessionId, projectPath, reconCtx);
     launchClaude(resolvedId, extraArgs, showArgsHint, projectPath);
+    return;
   }
+  // cursor/gemini/opencode/pi have no local foreground launcher: cursor is an IDE,
+  // and the rest resume through the daemon (the web "Resume" button drives each
+  // client's own binary). Building a `claude --resume` against a transcript claude
+  // can't read is the mislaunch this guard replaces with an honest message.
+  console.error(`${client} sessions cannot be resumed from the command line.`);
+  console.log(
+    client === "cursor"
+      ? "Open Cursor IDE to continue this session."
+      : "Resume it from the codecast web app instead.",
+  );
+  process.exit(1);
 }
 
 function launchCodex(sessionId: string, extraArgs?: string, showArgsHint?: boolean, projectPath?: string | null): void {
@@ -9131,6 +9162,15 @@ program
       process.exit(1);
     }
 
+    // Fork --resume reconstitutes the conversation into a fresh LOCAL session, which
+    // only Claude and Codex have generators for; --as anything else would silently
+    // fall through to a fabricated Claude JSONL + `claude --resume`. Reject upfront,
+    // mirroring `cast resume --as`.
+    if (options.as && !isReconstitutionTarget(options.as)) {
+      console.error(`Invalid --as value: "${options.as}". cast fork --resume supports "claude" or "codex".`);
+      process.exit(1);
+    }
+
     const siteUrl = config.convex_url.replace(".cloud", ".site");
 
     const directions: string[] = (rawDirections ?? []).map((d) => d.trim()).filter(Boolean);
@@ -9438,10 +9478,11 @@ program
       }).trim();
     } catch {}
 
-    const agentMap: Record<string, string> = {
-      claude: "claude_code", claude_code: "claude_code", codex: "codex", cursor: "cursor", gemini: "gemini", opencode: "opencode", pi: "pi",
-    };
-    const agentType = agentMap[String(options.agent).toLowerCase()] ?? "claude_code";
+    // Normalize the user's --agent value to its convex spelling through the
+    // registry: fromConvexAgentType accepts any client id (and unknown → claude),
+    // toConvexAgentType maps it to the wire spelling. A 7th client is covered
+    // automatically — no literal map to keep in sync.
+    const agentType = toConvexAgentType(fromConvexAgentType(String(options.agent).toLowerCase()));
 
     const roster: { short_id: string; conversation_id: string; prompt: string }[] = [];
     for (const prompt of prompts) {

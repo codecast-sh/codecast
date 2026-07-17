@@ -4,10 +4,13 @@ import * as os from "os";
 import * as path from "path";
 import {
   CLAUDE_UUID_RE,
+  MANAGED_TMUX_PREFIXES,
   buildNonClaudeResumeCommand,
   combineClaudeResumeFlags,
   copyJsonlAsSession,
   extractJsonlPermissionMode,
+  isManagedTmuxName,
+  isReconstitutionTarget,
   resolveResumeAgentType,
   resumeTmuxPrefix,
   rewriteSubagentJsonlToUuid,
@@ -250,12 +253,64 @@ describe("buildNonClaudeResumeCommand", () => {
   });
 });
 
+// Both `cast resume --as` and `cast fork --resume --as` reconstitute into a fresh
+// local session, which only claude/codex have generators for. Anything else must be
+// rejected upfront — otherwise the fork path (index.ts) silently hands the user a
+// fabricated Claude JSONL + `claude --resume` for a gemini/cursor/opencode/pi target.
+describe("isReconstitutionTarget", () => {
+  test("accepts claude and codex, case-insensitively", () => {
+    expect(isReconstitutionTarget("claude")).toBe(true);
+    expect(isReconstitutionTarget("codex")).toBe(true);
+    expect(isReconstitutionTarget("CLAUDE")).toBe(true);
+    expect(isReconstitutionTarget("Codex")).toBe(true);
+  });
+
+  test("rejects clients with no local reconstitution generator", () => {
+    for (const a of ["gemini", "cursor", "opencode", "pi", "claude_code", "bogus"]) {
+      expect(isReconstitutionTarget(a)).toBe(false);
+    }
+  });
+
+  test("rejects empty/undefined", () => {
+    expect(isReconstitutionTarget(undefined)).toBe(false);
+    expect(isReconstitutionTarget(null)).toBe(false);
+    expect(isReconstitutionTarget("")).toBe(false);
+  });
+});
+
 describe("resumeTmuxPrefix", () => {
   test("each agent gets its own prefix; cursor is cu, not claude's cc", () => {
     expect(resumeTmuxPrefix("codex")).toBe("cx");
     expect(resumeTmuxPrefix("gemini")).toBe("gm");
     expect(resumeTmuxPrefix("cursor")).toBe("cu");
     expect(resumeTmuxPrefix("claude")).toBe("cc");
+  });
+});
+
+// The daemon's tmux-name filters (warm-restart recovery, live-session reuse) used
+// to hardcode cc-/cx-/gm-/ct-, silently dropping cursor (cu-), opencode (oc-), and
+// pi (pi-) resume panes. Deriving the list from the registry closes that gap and
+// keeps a 7th client covered automatically.
+describe("MANAGED_TMUX_PREFIXES / isManagedTmuxName", () => {
+  test("covers every client prefix plus the non-client task prefix ct-", () => {
+    for (const p of ["cc-", "cx-", "cu-", "gm-", "oc-", "pi-", "ct-"]) {
+      expect(MANAGED_TMUX_PREFIXES).toContain(p);
+    }
+  });
+
+  test("matches the previously-dropped cursor/opencode/pi resume panes", () => {
+    expect(isManagedTmuxName("cu-resume-abc123")).toBe(true);
+    expect(isManagedTmuxName("oc-resume-abc123")).toBe(true);
+    expect(isManagedTmuxName("pi-resume-abc123")).toBe(true);
+  });
+
+  test("still matches the original four and rejects unrelated names", () => {
+    expect(isManagedTmuxName("cc-claude-abc123")).toBe(true);
+    expect(isManagedTmuxName("cx-resume-abc123")).toBe(true);
+    expect(isManagedTmuxName("gm-resume-abc123")).toBe(true);
+    expect(isManagedTmuxName("ct-codex-abc123")).toBe(true);
+    expect(isManagedTmuxName("some-other-tmux")).toBe(false);
+    expect(isManagedTmuxName("codecast-legacy")).toBe(false);
   });
 });
 
