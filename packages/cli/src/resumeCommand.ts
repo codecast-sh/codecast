@@ -10,6 +10,44 @@ import { AGENT_CLIENTS, type AgentClientId } from "@codecast/shared/contracts";
 
 export const CLAUDE_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// opencode session ids are `ses_` followed by base62 — the ONLY shape a real id
+// takes (verified against a live ~/.local/share/opencode/opencode.db: all 37 rows
+// match, every one length 30). The `id` column is externally writable (any process
+// can insert a row), so the DB watcher enforces this exact shape at ingest and the
+// resume path enforces it again before building a command around the id.
+export const OPENCODE_SESSION_ID_RE = /^ses_[a-zA-Z0-9]+$/;
+
+// A session id with no shell metacharacters and no whitespace — the shape every
+// real client id already has (UUIDs, claude `agent-`/`forked-` ids, codex/cursor
+// ids). A resume command interpolates the id verbatim into a line the daemon TYPES
+// INTO A LIVE SHELL, so an id outside this set could inject arbitrary shell syntax
+// (`;`, `|`, backticks, `$(…)`, spaces). Deliberately tight: a session id never
+// legitimately carries any of those.
+const SHELL_SAFE_SESSION_ID_RE = /^[A-Za-z0-9._-]+$/;
+
+/**
+ * True when `sessionId` is a shape safe to build `agentType`'s resume command
+ * around. The resume path types `<binary> … <id>` into a shell, so a poisoned id
+ * (from a crafted transcript filename or a spoofed store row that reached convex
+ * as the authoritative session_id) must be refused BEFORE construction — this is
+ * the backstop that covers rows already poisoned before the ingest-boundary
+ * validation existed. Valid ids pass byte-identically, so nothing real changes.
+ *
+ *  - opencode: exact `ses_<base62>` — its DB row is externally writable, so
+ *    shell-safety alone is too loose; require the one real shape.
+ *  - gemini: always true — its resume ignores the id (`gemini --resume latest`),
+ *    so the id is never interpolated and there is nothing to inject through.
+ *  - claude / codex / cursor / pi: the id IS interpolated, so require the
+ *    shell-safe shape (covers UUIDs and claude's `agent-`/`forked-` ids, refuses
+ *    every injection payload).
+ */
+export function isValidResumeSessionId(agentType: AgentClientId, sessionId: string): boolean {
+  if (typeof sessionId !== "string" || sessionId.length === 0) return false;
+  if (agentType === "opencode") return OPENCODE_SESSION_ID_RE.test(sessionId);
+  if (agentType === "gemini") return true;
+  return SHELL_SAFE_SESSION_ID_RE.test(sessionId);
+}
+
 // Single knob for how much of a long conversation survives reconstitution into a
 // local Claude session. THRESHOLD = "trim if the import is estimated above this";
 // TARGET = "trim down to roughly this". Sized to leave ~40k of headroom under a

