@@ -68,25 +68,19 @@ export function canReclaimCrossUser(existingLastHeartbeat: number, now: number):
   return now - existingLastHeartbeat >= CROSS_USER_RECLAIM_STALE_MS;
 }
 
-export const registerManagedSession = mutation({
+// Factored out of the mutation so tests can drive it with an explicit userId
+// (same pattern as performReparentSessionToDevice).
+export async function performRegisterManagedSession(
+  ctx: { db: any },
+  authUserId: Id<"users">,
   args: {
-    session_id: v.string(),
-    pid: v.number(),
-    tmux_session: v.optional(v.string()),
-    conversation_id: v.optional(v.id("conversations")),
-    api_token: v.optional(v.string()),
-    // Device claiming this session. When set, we stamp the conversation's
-    // owner_device_id (single-owner invariant). If the conversation is already
-    // owned by a DIFFERENT device that is still online, we refuse the claim
-    // and return { notOwner: true } so the calling daemon backs off.
-    device_id: v.optional(v.string()),
+    session_id: string;
+    pid: number;
+    tmux_session?: string;
+    conversation_id?: Id<"conversations">;
+    device_id?: string;
   },
-  handler: async (ctx, args) => {
-    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
-    if (!authUserId) {
-      throw new Error("Authentication required");
-    }
-
+): Promise<any> {
     // Single-owner guard: refuse to manage a session owned by another live
     // device. "Live" = that device heartbeated within the online window.
     //
@@ -100,12 +94,25 @@ export const registerManagedSession = mutation({
       const conv = await ctx.db.get(args.conversation_id);
       const owner = (conv as any)?.owner_device_id as string | undefined;
       if (owner && owner !== args.device_id) {
-        const ownerDevice = await ctx.db
+        // The owner device may belong to the conversation's runner rather than
+        // the caller (a cross-user reparent moved the session away). Resolve it
+        // under the caller first, then under the runner — otherwise the source
+        // machine's daemon can never see the new owner as online and re-stamps
+        // the conversation back to itself.
+        let ownerDevice = await ctx.db
           .query("devices")
           .withIndex("by_user_device", (q: any) =>
             q.eq("user_id", authUserId).eq("device_id", owner),
           )
           .first();
+        if (!ownerDevice && conv && (conv as any).user_id.toString() !== authUserId.toString()) {
+          ownerDevice = await ctx.db
+            .query("devices")
+            .withIndex("by_user_device", (q: any) =>
+              q.eq("user_id", (conv as any).user_id).eq("device_id", owner),
+            )
+            .first();
+        }
         const ownerOnline =
           ownerDevice &&
           !ownerDevice.is_remote &&
@@ -123,6 +130,10 @@ export const registerManagedSession = mutation({
       .first();
 
     const now = Date.now();
+    // Callers without a conversation handle (e.g. the tmux backfill) must not
+    // sever an existing row's conversation link when the insert path replaces
+    // it — carry it forward like tmux_session below.
+    const effectiveConversationId = args.conversation_id ?? existing?.conversation_id;
 
     if (existing) {
       // Reclaim ownership if the existing row belongs to a different user.
@@ -133,7 +144,19 @@ export const registerManagedSession = mutation({
       // Guarded by canReclaimCrossUser: a live owner (fresh heartbeat) is
       // never robbed — see the helper's comment for the freeze this prevents.
       if (existing.user_id.toString() !== authUserId.toString()) {
-        if (!canReclaimCrossUser(existing.last_heartbeat, now)) {
+        // Conversation authority: a cross-user reparent rewrites the
+        // conversation's user_id to the new runner, but the source machine's
+        // daemon keeps heartbeating the old row (its tmux pane is still
+        // alive), so the freshness guard alone reads the stale row as a live
+        // rightful owner and locks the destination out forever. When the
+        // conversation itself names the caller as its runner, the reclaim
+        // proceeds regardless of heartbeat. This cannot re-enable the
+        // 2026-07-06 hijack: a foreign daemon's conversations never name the
+        // hijacker, and user_id is only rewritten by authorized flows.
+        const convId = args.conversation_id ?? existing.conversation_id;
+        const conv = convId ? await ctx.db.get(convId) : null;
+        const convNamesCaller = !!conv && (conv as any).user_id.toString() === authUserId.toString();
+        if (!convNamesCaller && !canReclaimCrossUser(existing.last_heartbeat, now)) {
           console.warn(
             `[registerManagedSession] refusing cross-user reclaim of ${args.session_id}: owner ${existing.user_id} heartbeat is fresh`,
           );
@@ -168,10 +191,10 @@ export const registerManagedSession = mutation({
     // findTmuxPaneForTty failure); we must not silently erase the live attach
     // target the UI shows.
     let inheritedTmuxSession: string | undefined;
-    if (args.conversation_id) {
+    if (effectiveConversationId) {
       const old = await ctx.db
         .query("managed_sessions")
-        .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", args.conversation_id))
+        .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", effectiveConversationId))
         .collect();
       for (const o of old) {
         if (args.tmux_session === undefined && o.tmux_session && !inheritedTmuxSession) {
@@ -186,7 +209,7 @@ export const registerManagedSession = mutation({
       user_id: authUserId,
       pid: args.pid,
       tmux_session: args.tmux_session ?? inheritedTmuxSession,
-      conversation_id: args.conversation_id,
+      conversation_id: effectiveConversationId,
       started_at: now,
       last_heartbeat: now,
     });
@@ -199,6 +222,33 @@ export const registerManagedSession = mutation({
     }
 
     return id;
+}
+
+export const registerManagedSession = mutation({
+  args: {
+    session_id: v.string(),
+    pid: v.number(),
+    tmux_session: v.optional(v.string()),
+    conversation_id: v.optional(v.id("conversations")),
+    api_token: v.optional(v.string()),
+    // Device claiming this session. When set, we stamp the conversation's
+    // owner_device_id (single-owner invariant). If the conversation is already
+    // owned by a DIFFERENT device that is still online, we refuse the claim
+    // and return { notOwner: true } so the calling daemon backs off.
+    device_id: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) {
+      throw new Error("Authentication required");
+    }
+    return performRegisterManagedSession(ctx, authUserId, {
+      session_id: args.session_id,
+      pid: args.pid,
+      tmux_session: args.tmux_session,
+      conversation_id: args.conversation_id,
+      device_id: args.device_id,
+    });
   },
 });
 
