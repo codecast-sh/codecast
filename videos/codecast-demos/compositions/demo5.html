@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&display=swap" rel="stylesheet" />
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      :root { --mono: "JetBrains Mono", monospace; --display: "Fraunces", "JetBrains Mono", serif; }
+      html, body { width: 1920px; height: 1080px; overflow: hidden; background: #00212b; }
+      body { font-family: var(--mono); }
+      .card, .cap, .spot { opacity: 0; }
+      img { image-rendering: -webkit-optimize-contrast; }
+    </style>
+  </head>
+  <body>
+    <div id="root" data-composition-id="demo5" data-start="0" data-duration="46.63" data-width="1920" data-height="1080">
+      <div id="bg" class="clip" data-start="0" data-duration="46.63" data-track-index="0" style="position:absolute;inset:0;background:radial-gradient(120% 120% at 50% 0%, #073642 0%, #00212b 55%, #001820 100%);"></div>
+      <div id="card0" data-start="0" data-duration="3.5" data-track-index="60" class="clip card" style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:26px;text-align:center;padding:0 12%;"><div class="c-badge" style="font-family:var(--mono);font-size:20px;letter-spacing:6px;text-transform:uppercase;color:#00212b;background:#2aa198;padding:8px 20px;border-radius:6px;font-weight:700;">05 · Triggers &amp; Workflows</div><div class="c-title" style="font-family:var(--display);font-weight:600;font-size:118px;line-height:1.0;letter-spacing:-2px;color:#fdf6e3;">Agents That Never Sleep</div><div class="c-accent" style="width:0;height:5px;border-radius:3px;background:#2aa198;box-shadow:0 0 24px #2aa198;"></div><div class="c-sub" style="font-family:var(--mono);font-weight:400;font-size:34px;color:#93a1a1;max-width:1180px;line-height:1.45;">Triggers and workflows — running on their own, at scale</div></div>
+      <div id="world1" class="clip" data-start="2.15" data-duration="27.486" data-track-index="10" style="position:absolute;inset:0;overflow:hidden;opacity:0;"><div class="world" style="position:absolute;inset:0;transform-origin:50% 50%;will-change:transform;"><img src="../assets/triggers.png" width="1920" height="1080" style="display:block;width:1920px;height:1080px;" /></div><div style="position:absolute;inset:0;box-shadow:inset 0 0 200px 40px rgba(0,10,14,0.55);pointer-events:none;"></div></div>
+      <div id="spot2" data-start="6.544" data-duration="6.904" data-track-index="20" class="clip spot" style="position:absolute;left:23.04px;top:124.2px;width:806.4px;height:59.4px;border:3px solid #2aa198;border-radius:14px;box-shadow:0 0 0 2px rgba(42,161,152,0.25),0 0 40px 6px rgba(42,161,152,0.45);pointer-events:none;"><div style="position:absolute;top:-42px;left:-3px;font-family:var(--mono);font-size:19px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:#00212b;background:#2aa198;padding:5px 12px;border-radius:6px;white-space:nowrap;">10 active</div></div>
+      <div id="spot3" data-start="13.498" data-duration="4.893" data-track-index="20" class="clip spot" style="position:absolute;left:30.72px;top:289.44px;width:787.2px;height:95.04px;border:3px solid #2aa198;border-radius:14px;box-shadow:0 0 0 2px rgba(42,161,152,0.25),0 0 40px 6px rgba(42,161,152,0.45);pointer-events:none;"><div style="position:absolute;top:-42px;left:-3px;font-family:var(--mono);font-size:19px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:#00212b;background:#2aa198;padding:5px 12px;border-radius:6px;white-space:nowrap;">Next 24 hours</div></div>
+      <div id="world4" class="clip" data-start="29.337" data-duration="13.889" data-track-index="10" style="position:absolute;inset:0;overflow:hidden;opacity:0;"><div class="world" style="position:absolute;inset:0;transform-origin:50% 50%;will-change:transform;"><img src="../assets/workflows.png" width="1920" height="1080" style="display:block;width:1920px;height:1080px;" /></div><div style="position:absolute;inset:0;box-shadow:inset 0 0 200px 40px rgba(0,10,14,0.55);pointer-events:none;"></div></div>
+      <div id="spot5" data-start="33.108" data-duration="6.147" data-track-index="20" class="clip spot" style="position:absolute;left:34.56px;top:124.2px;width:1382.4px;height:64.8px;border:3px solid #2aa198;border-radius:14px;box-shadow:0 0 0 2px rgba(42,161,152,0.25),0 0 40px 6px rgba(42,161,152,0.45);pointer-events:none;"><div style="position:absolute;top:-42px;left:-3px;font-family:var(--mono);font-size:19px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:#00212b;background:#2aa198;padding:5px 12px;border-radius:6px;white-space:nowrap;">104 agents</div></div>
+      <div id="cap6" data-start="2.63" data-duration="3.794" data-track-index="40" class="clip cap" style="position:absolute;left:0;right:0;bottom:70px;display:flex;justify-content:center;pointer-events:none;"><div class="cap-inner" style="display:flex;align-items:stretch;gap:0;max-width:1440px;"><div style="width:6px;border-radius:3px 0 0 3px;background:#2aa198;box-shadow:0 0 18px #2aa198;"></div><div style="font-family:var(--mono);font-weight:500;font-size:33px;line-height:1.4;color:#fdf6e3;background:rgba(3,26,33,0.86);backdrop-filter:blur(8px);padding:20px 30px;border-radius:0 10px 10px 0;border:1px solid rgba(88,110,117,0.4);border-left:none;">The most powerful agents are the ones still running while you sleep.</div></div></div>
+      <div id="cap7" data-start="6.424" data-duration="6.954" data-track-index="40" class="clip cap" style="position:absolute;left:0;right:0;bottom:70px;display:flex;justify-content:center;pointer-events:none;"><div class="cap-inner" style="display:flex;align-items:stretch;gap:0;max-width:1440px;"><div style="width:6px;border-radius:3px 0 0 3px;background:#2aa198;box-shadow:0 0 18px #2aa198;"></div><div style="font-family:var(--mono);font-weight:500;font-size:33px;line-height:1.4;color:#fdf6e3;background:rgba(3,26,33,0.86);backdrop-filter:blur(8px);padding:20px 30px;border-radius:0 10px 10px 0;border:1px solid rgba(88,110,117,0.4);border-left:none;">Triggers are scheduled agent runs. Recurring, one-time, or fired by an event like a new pull request comment.</div></div></div>
+      <div id="cap8" data-start="13.378" data-duration="4.943" data-track-index="40" class="clip cap" style="position:absolute;left:0;right:0;bottom:70px;display:flex;justify-content:center;pointer-events:none;"><div class="cap-inner" style="display:flex;align-items:stretch;gap:0;max-width:1440px;"><div style="width:6px;border-radius:3px 0 0 3px;background:#2aa198;box-shadow:0 0 18px #2aa198;"></div><div style="font-family:var(--mono);font-weight:500;font-size:33px;line-height:1.4;color:#fdf6e3;background:rgba(3,26,33,0.86);backdrop-filter:blur(8px);padding:20px 30px;border-radius:0 10px 10px 0;border:1px solid rgba(88,110,117,0.4);border-left:none;">Here's the next twenty-four hours of your fleet, laid out on a single timeline.</div></div></div>
+      <div id="cap9" data-start="18.321" data-duration="11.396" data-track-index="40" class="clip cap" style="position:absolute;left:0;right:0;bottom:70px;display:flex;justify-content:center;pointer-events:none;"><div class="cap-inner" style="display:flex;align-items:stretch;gap:0;max-width:1440px;"><div style="width:6px;border-radius:3px 0 0 3px;background:#2aa198;box-shadow:0 0 18px #2aa198;"></div><div style="font-family:var(--mono);font-weight:500;font-size:33px;line-height:1.4;color:#fdf6e3;background:rgba(3,26,33,0.86);backdrop-filter:blur(8px);padding:20px 30px;border-radius:0 10px 10px 0;border:1px solid rgba(88,110,117,0.4);border-left:none;">Each one wakes on schedule, does its job, and reports back. A daily health check. A churn monitor. An experiment that reads its own results.</div></div></div>
+      <div id="cap10" data-start="29.717" data-duration="3.271" data-track-index="40" class="clip cap" style="position:absolute;left:0;right:0;bottom:70px;display:flex;justify-content:center;pointer-events:none;"><div class="cap-inner" style="display:flex;align-items:stretch;gap:0;max-width:1440px;"><div style="width:6px;border-radius:3px 0 0 3px;background:#2aa198;box-shadow:0 0 18px #2aa198;"></div><div style="font-family:var(--mono);font-weight:500;font-size:33px;line-height:1.4;color:#fdf6e3;background:rgba(3,26,33,0.86);backdrop-filter:blur(8px);padding:20px 30px;border-radius:0 10px 10px 0;border:1px solid rgba(88,110,117,0.4);border-left:none;">And when one job needs an army, workflows fan out.</div></div></div>
+      <div id="cap11" data-start="32.988" data-duration="6.197" data-track-index="40" class="clip cap" style="position:absolute;left:0;right:0;bottom:70px;display:flex;justify-content:center;pointer-events:none;"><div class="cap-inner" style="display:flex;align-items:stretch;gap:0;max-width:1440px;"><div style="width:6px;border-radius:3px 0 0 3px;background:#2aa198;box-shadow:0 0 18px #2aa198;"></div><div style="font-family:var(--mono);font-weight:500;font-size:33px;line-height:1.4;color:#fdf6e3;background:rgba(3,26,33,0.86);backdrop-filter:blur(8px);padding:20px 30px;border-radius:0 10px 10px 0;border:1px solid rgba(88,110,117,0.4);border-left:none;">This research run spun up over a hundred agents. Searching, fetching, verifying, all in parallel.</div></div></div>
+      <div id="cap12" data-start="39.185" data-duration="3.921" data-track-index="40" class="clip cap" style="position:absolute;left:0;right:0;bottom:70px;display:flex;justify-content:center;pointer-events:none;"><div class="cap-inner" style="display:flex;align-items:stretch;gap:0;max-width:1440px;"><div style="width:6px;border-radius:3px 0 0 3px;background:#2aa198;box-shadow:0 0 18px #2aa198;"></div><div style="font-family:var(--mono);font-weight:500;font-size:33px;line-height:1.4;color:#fdf6e3;background:rgba(3,26,33,0.86);backdrop-filter:blur(8px);padding:20px 30px;border-radius:0 10px 10px 0;border:1px solid rgba(88,110,117,0.4);border-left:none;">Codecast. Command your agents. Even when you're not there.</div></div></div>
+      <div id="card13" data-start="43.026" data-duration="3.8" data-track-index="60" class="clip card" style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:26px;text-align:center;padding:0 12%;"><div class="c-title" style="font-family:var(--display);font-weight:600;font-size:118px;line-height:1.0;letter-spacing:-2px;color:#fdf6e3;">Codecast</div><div class="c-accent" style="width:0;height:5px;border-radius:3px;background:#859900;box-shadow:0 0 24px #859900;"></div><div class="c-sub" style="font-family:var(--mono);font-weight:400;font-size:34px;color:#93a1a1;max-width:1180px;line-height:1.45;">Command your agents — even when you're not there.</div></div>
+      <audio data-start="2.75" data-track-index="90" data-volume="1" src="../vo/demo5.wav"></audio>
+    </div>
+    <script>
+      window.__timelines = window.__timelines || {};
+      const tl = gsap.timeline({ paused: true });
+      const PLAN = {"duration":46.63,"cards":[{"sel":"#card0","start":0,"dur":3.35,"kind":"title"},{"sel":"#card13","start":43.025999999999996,"dur":3.8,"kind":"outro"}],"worlds":[{"sel":"#world1","start":2.15,"dur":27.486000000000004,"fadeIn":0.8,"fadeOut":0.5,"moves":[{"at":0.6,"dur":1.4,"S":1.05,"x":564.48,"y":0,"ease":"power2.out"},{"at":4.394,"dur":1.5,"S":1.45,"x":835.1999999999999,"y":524.6099999999999,"ease":"power2.inOut"},{"at":11.348,"dur":1.5,"S":1.7,"x":946.56,"y":339.66,"ease":"power2.inOut"},{"at":16.291,"dur":1.5,"S":1.55,"x":863.04,"y":-200.88000000000005,"ease":"power2.inOut"}]},{"sel":"#world4","start":29.337,"dur":13.889,"fadeIn":0.5,"fadeOut":0.6,"moves":[{"at":0.5,"dur":0.9,"S":1.1,"x":316.8,"y":95.04000000000005,"ease":"power2.out"},{"at":3.771,"dur":1.5,"S":1.55,"x":595.2,"y":544.0500000000001,"ease":"power2.inOut"},{"at":9.968,"dur":1.5,"S":1.05,"x":302.40000000000003,"y":56.7,"ease":"power2.inOut"}]}],"caps":[{"sel":"#cap6","start":2.63,"dur":3.7940000000000005},{"sel":"#cap7","start":6.424,"dur":6.953999999999999},{"sel":"#cap8","start":13.378,"dur":4.943000000000003},{"sel":"#cap9","start":18.321,"dur":11.395999999999997},{"sel":"#cap10","start":29.717,"dur":3.2710000000000043},{"sel":"#cap11","start":32.98800000000001,"dur":6.196999999999996},{"sel":"#cap12","start":39.185,"dur":3.9210000000000003}],"spots":[{"sel":"#spot2","start":6.5440000000000005,"dur":6.904},{"sel":"#spot3","start":13.498,"dur":4.893000000000001},{"sel":"#spot5","start":33.108000000000004,"dur":6.147}]};
+
+      // ---- title / outro cards ----
+      for (const c of PLAN.cards) {
+        const el = document.querySelector(c.sel);
+        const title = el.querySelector(".c-title");
+        const accent = el.querySelector(".c-accent");
+        const sub = el.querySelector(".c-sub");
+        const badge = el.querySelector(".c-badge");
+        const inD = 0.7, outD = 0.55, hold = c.dur - inD - outD;
+        tl.fromTo(el, { opacity: 0 }, { opacity: 1, duration: inD, ease: "power2.out" }, c.start);
+        if (badge) tl.from(badge, { opacity: 0, y: -14, duration: 0.5, ease: "power3.out" }, c.start + 0.1);
+        tl.from(title, { opacity: 0, y: 34, filter: "blur(6px)", duration: 0.85, ease: "power3.out" }, c.start + 0.12);
+        tl.fromTo(accent, { width: 0 }, { width: 240, duration: 0.7, ease: "power2.out" }, c.start + 0.5);
+        tl.from(sub, { opacity: 0, y: 16, duration: 0.7, ease: "power3.out" }, c.start + 0.55);
+        tl.to(el, { opacity: 0, duration: outD, ease: "power2.in" }, c.start + inD + Math.max(hold, 0.4));
+      }
+
+      // ---- image worlds + virtual camera ----
+      for (const w of PLAN.worlds) {
+        const wrap = document.querySelector(w.sel);
+        const world = wrap.querySelector(".world");
+        const cam = { S: w.moves[0].S, x: w.moves[0].x, y: w.moves[0].y };
+        const apply = () => { world.style.transform = "translate(" + cam.x + "px," + cam.y + "px) scale(" + cam.S + ")"; };
+        apply();
+        tl.fromTo(wrap, { opacity: 0 }, { opacity: 1, duration: w.fadeIn, ease: "power1.out" }, w.start);
+        tl.to(wrap, { opacity: 0, duration: w.fadeOut, ease: "power1.in" }, w.start + w.dur - w.fadeOut);
+        // camera keyframes (relative → absolute time)
+        w.moves.forEach((m, i) => {
+          if (i === 0) { // ensure correct pose at clip start under seek
+            tl.set(cam, { S: m.S, x: m.x, y: m.y, onUpdate: apply }, w.start + Math.max(m.at - 0.001, 0));
+            return;
+          }
+          tl.to(cam, { S: m.S, x: m.x, y: m.y, duration: m.dur, ease: m.ease, onUpdate: apply }, w.start + m.at);
+        });
+        // continuous micro-drift so the frame never freezes
+        const drift = { p: 0 };
+        tl.to(drift, { p: Math.PI * 2 * 1.5, duration: w.dur, ease: "none",
+          onUpdate: () => {
+            const dx = Math.sin(drift.p) * 5, dy = Math.sin(drift.p * 1.3) * 3;
+            world.style.transform = "translate(" + (cam.x + dx) + "px," + (cam.y + dy) + "px) scale(" + cam.S + ")";
+          } }, w.start);
+      }
+
+      // ---- spotlights ----
+      for (const s of PLAN.spots) {
+        tl.fromTo(s.sel, { opacity: 0, scale: 1.06 }, { opacity: 1, scale: 1, duration: 0.4, ease: "back.out(1.8)", transformOrigin: "50% 50%" }, s.start);
+        tl.to(s.sel, { opacity: 0, duration: 0.35, ease: "power2.in" }, s.start + s.dur - 0.35);
+      }
+
+      // ---- captions ----
+      for (const c of PLAN.caps) {
+        tl.fromTo(c.sel, { opacity: 0, y: 22 }, { opacity: 1, y: 0, duration: 0.4, ease: "power3.out" }, c.start);
+        tl.to(c.sel, { opacity: 0, y: -8, duration: 0.3, ease: "power2.in" }, c.start + c.dur - 0.3);
+      }
+
+      tl.set({}, {}, PLAN.duration); // extend to full duration
+      window.__timelines["demo5"] = tl;
+    </script>
+  </body>
+</html>
