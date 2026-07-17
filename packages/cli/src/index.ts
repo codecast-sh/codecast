@@ -77,6 +77,7 @@ import {
   CLAUDE_AUTO_TRIM_TARGET_TOKENS,
   CLAUDE_CONTEXT_LIMIT_TOKENS,
   combineClaudeResumeFlags,
+  isReconstitutionTarget,
   removeForkArtifactJsonl,
   rewriteSubagentJsonlToUuid,
 } from "./resumeCommand.js";
@@ -6085,7 +6086,7 @@ program
       process.exit(1);
     }
 
-    if (options.as && !["claude", "codex"].includes(options.as.toLowerCase())) {
+    if (options.as && !isReconstitutionTarget(options.as)) {
       console.error(`Invalid --as value: "${options.as}". Use "claude" or "codex".`);
       process.exit(1);
     }
@@ -9158,6 +9159,15 @@ program
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
       console.error("Not authenticated. Run: cast auth");
+      process.exit(1);
+    }
+
+    // Fork --resume reconstitutes the conversation into a fresh LOCAL session, which
+    // only Claude and Codex have generators for; --as anything else would silently
+    // fall through to a fabricated Claude JSONL + `claude --resume`. Reject upfront,
+    // mirroring `cast resume --as`.
+    if (options.as && !isReconstitutionTarget(options.as)) {
+      console.error(`Invalid --as value: "${options.as}". cast fork --resume supports "claude" or "codex".`);
       process.exit(1);
     }
 
