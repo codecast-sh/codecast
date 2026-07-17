@@ -16,7 +16,6 @@ import { ccAccountsValidator } from "./ccAccountsShared";
 import { deviceSettingsValidator } from "./deviceSettingsShared";
 import { normalizeProjectPath } from "./projectPaths";
 import { backlogFieldsPatch } from "./heartbeatBacklog";
-import { fromConvexAgentType } from "@codecast/shared/contracts";
 
 // Skills moved off the heartbeat-hot users doc into user_skills (see schema
 // note); overlay them back so clients keep reading currentUser.available_skills
