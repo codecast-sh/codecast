@@ -1,6 +1,7 @@
 import { mutation, query, internalMutation } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import type { AgentClientId } from "@codecast/shared/contracts";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { isSessionOwner } from "./sessionOwners";
@@ -113,7 +114,7 @@ export async function enqueueStartSession(
   userId: Id<"users">,
   opts: {
     conversationId: Id<"conversations">;
-    agentType: "claude" | "codex" | "cursor" | "gemini";
+    agentType: AgentClientId;
     projectPath?: string | null;
     gitRoot?: string | null;
     sessionId?: string;

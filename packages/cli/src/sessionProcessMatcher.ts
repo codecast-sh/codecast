@@ -1,4 +1,5 @@
-export type SessionAgentType = "claude" | "codex" | "cursor" | "gemini";
+import type { AgentClientId } from "@codecast/shared/contracts";
+
 export interface CodexProcessCandidate {
   pid: number;
   tty: string;
@@ -11,7 +12,7 @@ export interface StartedSessionEntry {
   startedAt: number;
 }
 
-export function isResumeInvocation(agentType: SessionAgentType, commandLine: string): boolean {
+export function isResumeInvocation(agentType: AgentClientId, commandLine: string): boolean {
   if (agentType === "codex" || agentType === "gemini") {
     return /\s--resume(\s|$)/.test(commandLine) || /\sresume(\s|$)/.test(commandLine);
   }

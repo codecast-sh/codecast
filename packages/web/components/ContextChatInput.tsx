@@ -5,8 +5,9 @@ import { nanoid } from "nanoid";
 import { useInboxStore } from "../store/inboxStore";
 import { soundNewSession } from "../lib/sounds";
 import { AgentTypeIcon } from "./AgentTypeIcon";
+import type { AgentClientId } from "@codecast/shared/contracts";
 
-type AgentKey = "claude" | "codex" | "cursor" | "gemini";
+type AgentKey = AgentClientId;
 const AGENT_TYPES: { key: AgentKey; convex: string; label: string; active: string }[] = [
   { key: "claude", convex: "claude_code", label: "Claude", active: "bg-sol-yellow/20 text-sol-yellow border-sol-yellow/50" },
   { key: "codex", convex: "codex", label: "Codex", active: "bg-emerald-500/20 text-emerald-400 border-emerald-500/50" },
