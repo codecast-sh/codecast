@@ -182,12 +182,6 @@ function cleanCommandContent(content: string): string {
     .trim();
 }
 
-function truncateLines(text: string, maxLines: number): { text: string; truncated: boolean; totalLines: number } {
-  const lines = text.split('\n');
-  if (lines.length <= maxLines) return { text, truncated: false, totalLines: lines.length };
-  return { text: lines.slice(0, maxLines).join('\n'), truncated: true, totalLines: lines.length };
-}
-
 function stripSystemTags(content: string): string {
   return content
     .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '')
@@ -2352,29 +2346,6 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
   );
 }
 
-function ThinkingBlock({ content }: { content: string }) {
-  const [expanded, setExpanded] = useState(false);
-  const truncated = truncateLines(content, expanded ? 50 : 2);
-  const isLong = truncated.truncated || content.length > 200;
-
-  return (
-    <TouchableOpacity
-      onPress={() => isLong && setExpanded(!expanded)}
-      style={styles.thinkingBlock}
-      activeOpacity={isLong ? 0.7 : 1}
-    >
-      <RNView style={styles.thinkingHeader}>
-        {isLong && (
-          <FontAwesome name={expanded ? "chevron-down" : "chevron-right"} size={8} color={Theme.textDim} style={{ marginRight: 4, marginTop: 3 }} />
-        )}
-        <RNText style={styles.thinkingText} numberOfLines={expanded ? 50 : 2}>
-          {expanded ? content : truncated.text}{!expanded && truncated.truncated ? '...' : ''}
-        </RNText>
-      </RNView>
-    </TouchableOpacity>
-  );
-}
-
 function SystemMessage({ message }: { message: Message }) {
   if (message.subtype === 'compact_boundary') {
     return (
@@ -2627,7 +2598,7 @@ function WorkflowEventBlock({ event }: { event: Record<string, any> }) {
   return null;
 }
 
-function MessageBubble({ message, agentType, model, showHeader = true, forkChildren, conversationId, onFork, taskSubjectMap, globalToolResultMap, globalImageMap, openGallery, userName, showToast, collapsed: globalCollapsed, showThinkingGlobal, childConversationMap, bookmarkedSet }: {
+function MessageBubble({ message, agentType, model, showHeader = true, forkChildren, conversationId, onFork, taskSubjectMap, globalToolResultMap, globalImageMap, openGallery, userName, showToast, collapsed: globalCollapsed, childConversationMap, bookmarkedSet }: {
   message: Message;
   agentType?: string;
   model?: string;
@@ -2642,7 +2613,6 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   userName?: string;
   showToast?: (msg: string) => void;
   collapsed?: boolean;
-  showThinkingGlobal?: boolean;
   childConversationMap?: Record<string, string>;
   bookmarkedSet?: Set<string>;
 }) {
@@ -2736,11 +2706,8 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   const rawContent = stripSystemTags(rawContentRaw);
   const hasToolCalls = message.tool_calls && message.tool_calls.length > 0;
   const hasImages = message.images && message.images.length > 0;
-  const hasThinkingContent = !!message.thinking?.trim();
-  const visibleThinking = hasThinkingContent && (showThinkingGlobal ?? false);
-
-  // Skip truly empty messages (no content, no tool calls, no images, no thinking)
-  if (!rawContent.trim() && !hasToolCalls && !hasImages && !hasThinkingContent) {
+  // Skip truly empty messages (no content, no tool calls, no images)
+  if (!rawContent.trim() && !hasToolCalls && !hasImages) {
     return null;
   }
   const effectiveCollapsed = globalCollapsed && !localExpanded;
@@ -2815,10 +2782,6 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
             <ImageBlock key={i} image={img} onPress={() => openGallery?.(img)} />
           ))}
         </RNView>
-      )}
-
-      {visibleThinking && (
-        <ThinkingBlock content={message.thinking!} />
       )}
 
       {content ? (
@@ -4944,22 +4907,6 @@ const styles = StyleSheet.create({
   },
   assistantText: {
     color: Theme.text,
-  },
-  thinkingBlock: {
-    marginHorizontal: 14,
-    marginVertical: 1,
-    opacity: 0.5,
-  },
-  thinkingHeader: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-  },
-  thinkingText: {
-    fontSize: 11,
-    lineHeight: 15,
-    color: Theme.textDim,
-    fontFamily: 'SpaceMono',
-    flex: 1,
   },
   compactBoundary: {
     flexDirection: 'row',
