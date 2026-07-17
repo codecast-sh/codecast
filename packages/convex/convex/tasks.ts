@@ -3,6 +3,7 @@ import { paginationOptsValidator } from "convex/server";
 import { internalMutation, mutation, query } from "./functions";
 import { verifyApiToken } from "./apiTokens";
 import { enqueueStartSession } from "./devices";
+import { fromConvexAgentType } from "@codecast/shared/contracts";
 import { Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createDataContext, scopeByProject } from "./data";
@@ -1793,7 +1794,7 @@ export const webAddComment = mutation({
 export const assignToAgent = mutation({
   args: {
     short_id: v.string(),
-    agent_type: v.union(v.literal("claude_code"), v.literal("codex"), v.literal("cursor"), v.literal("gemini")),
+    agent_type: v.union(v.literal("claude_code"), v.literal("codex"), v.literal("cursor"), v.literal("gemini"), v.literal("opencode"), v.literal("pi")),
     // Optional lead-in the user types before launch (defaults to "lets do this
     // task" in the palette). Prepended to the structured task prompt below.
     initial_message: v.optional(v.string()),
@@ -1902,7 +1903,9 @@ export const assignToAgent = mutation({
     const taskConversation = await ctx.db.get(conversationId);
     await enqueuePendingMessage(ctx, taskConversation, userId, { content });
 
-    const daemonAgentType = agent_type === "claude_code" ? "claude" : agent_type === "codex" ? "codex" : agent_type === "cursor" ? "cursor" : "gemini";
+    // fromConvexAgentType maps opencode/pi -> claude (temporary, until descriptors
+    // land) and is identical to the old ternary for claude_code/codex/cursor/gemini.
+    const daemonAgentType = fromConvexAgentType(agent_type);
     await enqueueStartSession(ctx, userId, {
       conversationId,
       agentType: daemonAgentType,

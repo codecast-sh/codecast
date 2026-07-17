@@ -31,8 +31,18 @@ export type AgentClientId = "claude" | "codex" | "cursor" | "gemini";
 
 /** The spelling the Convex schema / wire protocol stores (`conversations.agent_type`).
  *  Differs from `AgentClientId` only in `claude_code`, and carries the extra
- *  `cowork` value that has no distinct client of its own. */
-export type ConvexAgentType = "claude_code" | "codex" | "cursor" | "gemini" | "cowork";
+ *  `cowork` value that has no distinct client of its own. `opencode` and `pi` are
+ *  widened in ahead of their clients (plan phases 1-2) so the schema and public
+ *  validators accept them before any client sends them; until their descriptors
+ *  exist, `fromConvexAgentType` maps them to `claude` (see its note). */
+export type ConvexAgentType =
+  | "claude_code"
+  | "codex"
+  | "cursor"
+  | "gemini"
+  | "cowork"
+  | "opencode"
+  | "pi";
 
 const CONVEX_BY_ID: Record<AgentClientId, ConvexAgentType> = {
   claude: "claude_code",
@@ -51,6 +61,11 @@ export function toConvexAgentType(id: AgentClientId): ConvexAgentType {
  * daemon spelling, `cowork`, `undefined`, and any unknown value, all of which
  * normalize to `claude` — matching the historic `modelAgentKey` fallback so the
  * model helpers can route through this one function without a behavior change.
+ *
+ * TEMPORARY: `opencode` and `pi` are valid `ConvexAgentType` values but have no
+ * `AGENT_CLIENTS` descriptor yet (plan phases 1-2), so they fall through the
+ * `default` case to `claude` for now. When their descriptors land, add explicit
+ * cases returning their own ids.
  */
 export function fromConvexAgentType(agentType: string | null | undefined): AgentClientId {
   switch (agentType) {

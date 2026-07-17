@@ -14,18 +14,18 @@ import {
   CODEX_EFFORT_LEVELS,
   type AgentClientId,
 } from "@codecast/shared/contracts";
-import type { Config } from "./config/types.js";
+import { getAgentArgs, type Config } from "./config/types.js";
 
 /**
- * The single seam for reading a client's user-configured base launch args. Today
- * this reads the legacy per-client named fields (claude_args / codex_args);
- * ct-39076 swaps the body to the agent_args map without any call site changing.
- * cursor/gemini have no configured args today and get "".
+ * The single seam for reading a client's user-configured base launch args.
+ * Delegates to the agent_args map accessor (ct-39076), which falls back to the
+ * legacy claude_args/codex_args fields; an explicit "" in the map wins. Clients
+ * with no configured args get "".
+ * NOTE: parameter order is (agentType, config) here but (config, clientId) on
+ * getAgentArgs — keep the delegation as the only crossing point.
  */
 export function getConfiguredAgentArgs(agentType: AgentClientId, config: Config | null | undefined): string {
-  if (agentType === "codex") return config?.codex_args || "";
-  if (agentType === "claude") return config?.claude_args || "";
-  return "";
+  return getAgentArgs(config, agentType) ?? "";
 }
 
 /** The claude permission flags that must not be doubled up when the user already

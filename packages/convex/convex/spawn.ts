@@ -39,6 +39,8 @@ export const createSessionFromCli = mutation({
         v.literal("codex"),
         v.literal("cursor"),
         v.literal("gemini"),
+        v.literal("opencode"),
+        v.literal("pi"),
       ),
     ),
     project_path: v.optional(v.string()),
