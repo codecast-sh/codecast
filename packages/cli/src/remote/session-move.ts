@@ -25,6 +25,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { credentialHealth } from "../ccAccounts.js";
 import { resolveManifest } from "../workspace/resolver.js";
+import { createWipSnapshot } from "../wipSnapshot.js";
 
 export interface RemoteHost {
   /** SSH host/IP. */
@@ -203,21 +204,6 @@ export function isWorktree(cwd: string): boolean {
   return gitSafe(cwd, ["rev-parse", "--is-inside-work-tree"]).out === "true";
 }
 
-/**
- * Commit all changes (tracked + untracked, minus gitignored) as a WIP
- * snapshot so the branch tip captures the exact working state. Returns the
- * commit sha, or null if nothing to commit. Idempotent-ish: re-running with
- * no changes is a no-op.
- */
-export function wipSnapshot(cwd: string, label = "codecast-remote: wip snapshot"): string | null {
-  const status = git(cwd, ["status", "--porcelain"]);
-  if (!status.trim()) return null;
-  git(cwd, ["add", "-A"]);
-  // --no-verify: never run hooks for an automated snapshot.
-  gitSafe(cwd, ["commit", "--no-verify", "-m", label]);
-  return git(cwd, ["rev-parse", "HEAD"]);
-}
-
 /** SSH url for git push to a path on the remote. */
 function gitSshUrl(host: RemoteHost, remotePath: string): string {
   // GIT_SSH_COMMAND carries the key/options; the url is plain user@host:path.
@@ -266,18 +252,37 @@ function ensureRemoteRepo(host: RemoteHost, localCwd: string, remotePath: string
 
 /**
  * Push a worktree's branch to the remote over SSH. The remote working tree
- * (updateInstead) lands on the pushed tip. Returns the branch + remote path.
+ * (updateInstead) lands on the pushed tip. Returns the branch and the sha the
+ * remote should now be at (the snapshot, NOT local HEAD — see below).
+ *
+ * The uncommitted work is captured with createWipSnapshot: a dangling commit
+ * built through a temp index, so the SOURCE keeps its branch, index and working
+ * tree exactly as they were. This used to call session-move's own wipSnapshot(),
+ * which ran `git add -A && git commit` on your real branch and left that junk
+ * commit behind forever — moving a session to the Mac silently rewrote the
+ * history you were working on. The remote is unaffected by the switch: its
+ * branch tip is the snapshot either way, with the same ancestry and tree.
  */
-export function gitPushWorktree(host: RemoteHost, localCwd: string, remotePath: string): { branch: string } {
+export async function gitPushWorktree(
+  host: RemoteHost,
+  localCwd: string,
+  remotePath: string,
+): Promise<{ branch: string; head: string }> {
   const branch = currentBranch(localCwd);
-  wipSnapshot(localCwd);
+  const snap = await createWipSnapshot(localCwd);
+  // No snapshot (not a repo / no commits) — fall back to the real tip so a
+  // history-only push still works.
+  const head = snap?.sha ?? git(localCwd, ["rev-parse", "HEAD"]);
   ensureRemoteRepo(host, localCwd, remotePath);
-  execFileSync("git", ["-C", localCwd, "push", "--force", gitSshUrl(host, remotePath), `${branch}:${branch}`],
-    { env: gitEnv(host), stdio: "pipe", encoding: "utf-8" });
+  execFileSync(
+    "git",
+    ["-C", localCwd, "push", "--force", gitSshUrl(host, remotePath), `${head}:refs/heads/${branch}`],
+    { env: gitEnv(host), stdio: "pipe", encoding: "utf-8" },
+  );
   // Make sure the remote has the branch checked out (first push to a fresh
   // clone may be on a different default branch).
   ssh(host, `cd ${shq(remotePath)} && git checkout -q ${shq(branch)} 2>/dev/null || true; git reset -q --hard ${shq(branch)}`);
-  return { branch };
+  return { branch, head };
 }
 
 /** Pull the remote branch back (fast-forward only; never clobbers). */
@@ -396,6 +401,9 @@ export async function copyCredentialToRemoteAsync(host: RemoteHost): Promise<Cre
 
 export interface SyncVerification {
   branch: string;
+  /** The sha the remote is expected to be at: the pushed snapshot when there was
+   * uncommitted work, else the local tip. NOT necessarily local HEAD — the
+   * snapshot is deliberately not committed locally (see gitPushWorktree). */
   localHead: string;
   remoteHead: string | null;
   headsMatch: boolean;
@@ -411,10 +419,20 @@ export interface SyncVerification {
  * turns "should" into a fact the move can report (and the moved agent can be
  * told) instead of a silent assumption. Best-effort: an unreachable remote
  * reads as heads-unknown, never as a throw that aborts the move.
+ *
+ * `expectedHead` is what the push actually sent. Pass it whenever a snapshot was
+ * pushed: the snapshot is deliberately NOT committed locally, so comparing the
+ * remote against local HEAD would report a phantom mismatch on every dirty move.
+ * Omitted (e.g. `cast remote back`), it falls back to the local tip.
  */
-export function verifyRemoteSync(host: RemoteHost, localCwd: string, remoteCwd: string): SyncVerification {
+export function verifyRemoteSync(
+  host: RemoteHost,
+  localCwd: string,
+  remoteCwd: string,
+  expectedHead?: string,
+): SyncVerification {
   const branch = currentBranch(localCwd);
-  const localHead = git(localCwd, ["rev-parse", "HEAD"]);
+  const localHead = expectedHead ?? git(localCwd, ["rev-parse", "HEAD"]);
   let remoteHead: string | null = null;
   let remoteDirty: number | null = null;
   try {
@@ -440,7 +458,7 @@ export interface MoveResult {
 }
 
 /** Push a local session to the remote Mac. Returns the remote placement. */
-export function pushSession(sessionId: string, host: RemoteHost): MoveResult {
+export async function pushSession(sessionId: string, host: RemoteHost): Promise<MoveResult> {
   const s = resolveLocalSession(sessionId);
   const name = path.basename(s.cwd);
   const remoteCwd = path.posix.join(host.remoteBaseDir, name);
@@ -459,9 +477,11 @@ export function pushSession(sessionId: string, host: RemoteHost): MoveResult {
   // 2. working tree — git-over-SSH for repos (full git on the remote), else rsync
   let verification: SyncVerification | undefined;
   if (isWorktree(s.cwd)) {
-    gitPushWorktree(host, s.cwd, remoteCwd);
+    const { head } = await gitPushWorktree(host, s.cwd, remoteCwd);
     copyGitignoredFiles(host, s.cwd, remoteCwd); // .env etc, not carried by git
-    verification = verifyRemoteSync(host, s.cwd, remoteCwd);
+    // Verify against what we PUSHED (the snapshot), not local HEAD — the
+    // snapshot is intentionally never committed locally.
+    verification = verifyRemoteSync(host, s.cwd, remoteCwd, head);
   } else {
     ssh(host, `mkdir -p ${shq(remoteCwd)}`);
     rsyncUp(host, s.cwd, remoteCwd, { delete: true });
@@ -585,8 +605,8 @@ export function loadRemoteHost(hostId?: string): RemoteHost {
  * remote claude (onboarding + folder trust). Returns the remote placement.
  * The OWNERSHIP flip + resume is a separate Convex mutation the caller runs.
  */
-export function performMoveToRemote(host: RemoteHost, sessionId: string): MoveResult {
-  const move = pushSession(sessionId, host);
+export async function performMoveToRemote(host: RemoteHost, sessionId: string): Promise<MoveResult> {
+  const move = await pushSession(sessionId, host);
   ensureRemoteClaudeReady(host, move.remoteCwd);
   refreshRemoteCredential(host);
   return move;

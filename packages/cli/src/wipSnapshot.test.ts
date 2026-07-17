@@ -340,3 +340,37 @@ describe("isPermanentPushFailure", () => {
     expect(res.permanent).toBe(true);
   });
 });
+
+// ct-39054: `cast remote move` used to call session-move's own wipSnapshot(),
+// which ran `git add -A && git commit` on your REAL branch and left the junk
+// commit behind forever — moving a session silently rewrote the history you were
+// working on. gitPushWorktree now pushes createWipSnapshot's dangling commit
+// instead. This pins the property that made the swap worth doing.
+describe("the SSH move no longer pollutes the source branch (ct-39054)", () => {
+  test("taking the snapshot leaves the branch, its history and its dirt untouched", async () => {
+    const { cwd } = repo();
+    git(cwd, ["checkout", "-q", "-b", "feature/move"]);
+    fs.writeFileSync(path.join(cwd, "tracked.txt"), "uncommitted\n");
+    fs.writeFileSync(path.join(cwd, "untracked.txt"), "new\n");
+
+    const before = {
+      head: git(cwd, ["rev-parse", "HEAD"]),
+      log: git(cwd, ["log", "--oneline"]),
+      status: git(cwd, ["status", "--porcelain"]),
+    };
+
+    const snap = (await createWipSnapshot(cwd))!;
+
+    // The old behavior: HEAD advances onto a "wip snapshot" commit, permanently.
+    expect(git(cwd, ["rev-parse", "HEAD"])).toBe(before.head);
+    expect(git(cwd, ["log", "--oneline"])).toBe(before.log);
+    expect(git(cwd, ["log", "--oneline"])).not.toContain("wip snapshot");
+    expect(git(cwd, ["status", "--porcelain"])).toBe(before.status);
+
+    // ...while the remote still receives the exact same tree it did before:
+    // the uncommitted edit and the untracked file, parented on the branch tip.
+    expect(git(cwd, ["show", `${snap.sha}:tracked.txt`])).toBe("uncommitted");
+    expect(git(cwd, ["ls-tree", "-r", "--name-only", snap.sha])).toContain("untracked.txt");
+    expect(git(cwd, ["rev-parse", `${snap.sha}^`])).toBe(before.head);
+  });
+});

@@ -3498,6 +3498,17 @@ export default function SessionDetailScreen() {
   ) as { tree: TreeNode } | { error: string } | null | undefined;
 
   const hasMoreAbove = hookHasMoreAbove;
+
+  // TEMP PERF INSTRUMENTATION — remove before commit
+  const renderCountRef = useRef(0);
+  renderCountRef.current++;
+  useEffect(() => { console.log(`[perf] render #${renderCountRef.current}`); });
+  useEffect(() => { console.log('[perf] storeConversation changed'); }, [storeConversation]);
+  useEffect(() => { console.log('[perf] pendingPermissions changed'); }, [pendingPermissions]);
+  useEffect(() => { console.log('[perf] bookmarks changed'); }, [bookmarkedMessageIds]);
+  useEffect(() => { console.log('[perf] commits changed'); }, [commits]);
+  useEffect(() => { console.log('[perf] pullRequests changed'); }, [pullRequests]);
+  useEffect(() => { console.log('[perf] treeResult changed'); }, [treeResult]);
   const loadingOlder = hookIsLoadingOlder;
   const loadOlderMessages = hookLoadOlder;
 

@@ -151,11 +151,11 @@ export function registerRemoteCommand(program: Command): void {
     .command("push <sessionId>")
     .description("Push a session (worktree + transcript + credential) to the remote Mac")
     .option("--host <id>", "Target a specific host id")
-    .action((sessionId: string, opts: { host?: string }) => {
+    .action(async (sessionId: string, opts: { host?: string }) => {
       const host = loadRemoteHost(opts.host);
       const s = resolveLocalSession(sessionId);
       console.log(`pushing ${sessionId}\n  ${s.cwd}\n  -> ${host.user}@${host.address}`);
-      const move = pushSession(sessionId, host);
+      const move = await pushSession(sessionId, host);
       const moves = readMoves();
       moves[sessionId] = move;
       writeMoves(moves);
@@ -245,7 +245,7 @@ export function registerRemoteCommand(program: Command): void {
 
       console.log(`moving ${sessionId} -> ${host.user}@${host.address} (device ${macDevice.device_id.slice(0, 8)})`);
       console.log("  [1/4] transfer worktree + transcript + credential");
-      const move = pushSession(sessionId, host);
+      const move = await pushSession(sessionId, host);
       console.log(`        ${describeVerification(move.verification)}`);
       console.log("  [2/4] prepare remote claude (onboarding + folder trust)");
       ensureRemoteClaudeReady(host, move.remoteCwd);
