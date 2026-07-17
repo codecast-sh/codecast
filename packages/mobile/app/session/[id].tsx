@@ -22,6 +22,7 @@ import { EntityPill } from '@/components/EntityPill';
 import { CastCanvas, canvasAvailable, looksLikeHtmlMessage } from '@/components/CastCanvas';
 import { useSessionRestart, ghostRestartContextFor } from '@codecast/web/hooks/useSessionRestart';
 import { Theme, Spacing, chipShell, chipText, chipTint, CHROME_FONT_CAP } from '@/constants/Theme';
+import { structuredPayloadSummary } from '@codecast/shared/render';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 // A real gradient WITHOUT a native module: expo-linear-gradient's native side
 // ("ExpoLinearGradient") isn't linked into the dev/standalone binaries, so importing
@@ -625,6 +626,7 @@ function toolIcon(name: string): { icon: React.ComponentProps<typeof FontAwesome
   if (name === 'Task') return { icon: 'code-fork', color: Theme.cyan };
   if (name === 'TaskCreate' || name === 'TaskUpdate' || name === 'TaskList' || name === 'TaskGet') return { icon: 'tasks', color: '#10b981' };
   if (name === 'SendMessage') return { icon: 'comment', color: '#f59e0b' };
+  if (name === 'StructuredOutput') return { icon: 'check-square-o', color: Theme.cyan };
   if (name === 'TodoWrite') return { icon: 'check-square-o', color: Theme.magenta };
   if (name === 'Skill') return { icon: 'bolt', color: Theme.cyan };
   if (name === 'EnterPlanMode' || name === 'ExitPlanMode') return { icon: 'map-o', color: Theme.violet };
@@ -770,6 +772,8 @@ function toolSummary(tc: ToolCall): string {
   if (tc.name === 'mcp__claude-in-chrome__resize_window') return parsedInput.width && parsedInput.height ? `${parsedInput.width}x${parsedInput.height}` : 'Resize';
   if (tc.name === 'mcp__claude-in-chrome__shortcuts_list') return 'List shortcuts';
   if (tc.name === 'mcp__claude-in-chrome__shortcuts_execute') return parsedInput.command ? `/${String(parsedInput.command)}` : 'Shortcut';
+
+  if (tc.name === 'StructuredOutput') return structuredPayloadSummary(parsedInput);
 
   // Task tools
   if (tc.name === 'Task') return parsedInput.description ? truncateStr(String(parsedInput.description), 40) : '';
@@ -2062,6 +2066,10 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
     if (toolCall.name === 'Bash' && parsed.command) {
       // For Bash, just show the command
       inputDisplay = parsed.command;
+    } else if (toolCall.name === 'StructuredOutput') {
+      // The input IS the payload (a workflow subagent's typed return) — the
+      // key/value flattening below drops nested objects, which is all of it.
+      inputDisplay = JSON.stringify(parsed, null, 2);
     } else {
       // For other tools, format as key: value pairs
       // Filter out verbose/internal fields
@@ -2091,9 +2099,14 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
 
   const isRead = toolCall.name === 'Read' || toolCall.name === 'file_read';
   const processedResult = result?.content ? (isRead ? stripLineNumbers(result.content) : result.content) : '';
-  const resultDisplay = result && expanded && processedResult.length > 2000
-    ? processedResult.slice(0, 2000) + '\n... (truncated)'
-    : (processedResult || undefined);
+  // StructuredOutput's success result is boilerplate ("Structured output
+  // provided successfully") — the payload shown above it is the content.
+  const hideResult = toolCall.name === 'StructuredOutput' && !result?.is_error;
+  const resultDisplay = hideResult
+    ? undefined
+    : result && expanded && processedResult.length > 2000
+      ? processedResult.slice(0, 2000) + '\n... (truncated)'
+      : (processedResult || undefined);
 
   // Compute result summary like web does
   const getResultSummary = () => {
