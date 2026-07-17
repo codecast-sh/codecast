@@ -13,7 +13,7 @@ import { resetConversationPendingMessages } from "./pendingMessages";
 import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill } from "./agentTasks";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId } from "./daemonCommandUtils";
-import { AGENT_MODEL_CONFIG, modelAgentKey, fromConvexAgentType } from "@codecast/shared/contracts";
+import { AGENT_MODEL_CONFIG, modelAgentKey, fromConvexAgentType, toConvexAgentType } from "@codecast/shared/contracts";
 import { shouldShowInInbox, isSessionIdle, deriveSessionActivity, classifyWorkState, normalizeWorkStateFilter, trustedAgentStatus, subagentKeepsParentWorking, type WorkState } from "./inboxFilters";
 import { subagentLinkFields } from "./ccAccountsShared";
 import { isSessionOwner } from "./sessionOwners";
@@ -9546,10 +9546,7 @@ export async function resolveRestartTarget(
     .withIndex("by_user_id", (q) => q.eq("user_id", userId))
     .collect();
   const { teamId, isPrivate, autoShared } = resolveTeamForPath(mappings, ghost.project_path, undefined);
-  const agentType =
-    ghost.agent_type === "codex" || ghost.agent_type === "cursor" || ghost.agent_type === "gemini" || ghost.agent_type === "pi"
-      ? ghost.agent_type
-      : "claude_code";
+  const agentType = toConvexAgentType(fromConvexAgentType(ghost.agent_type));
   const newId = await ctx.db.insert("conversations", {
     user_id: userId,
     team_id: teamId,
@@ -9607,7 +9604,7 @@ export async function enqueueKillAndResume(
       session_id: conv.session_id,
       conversation_id: conv._id,
       project_path: conv.project_path ?? conv.git_root,
-      agent_type: conv.agent_type === "codex" ? "codex" : conv.agent_type === "gemini" ? "gemini" : conv.agent_type === "cursor" ? "cursor" : "claude",
+      agent_type: fromConvexAgentType(conv.agent_type),
       ...(opts.forceReconstitute ? { force_reconstitute: true } : {}),
     }),
     created_at: now + 1,
@@ -9822,8 +9819,8 @@ export const switchSessionAgent = mutation({
     }
 
     const now = Date.now();
-    // fromConvexAgentType maps opencode/pi -> claude (temporary, until descriptors
-    // land) and is identical to the old ternary for claude_code/codex/cursor/gemini.
+    // fromConvexAgentType maps each client to its daemon spelling (claude_code ->
+    // claude; codex/cursor/gemini/opencode/pi pass through) and cowork -> claude.
     const daemonAgentType = fromConvexAgentType(args.agent_type);
 
     await ctx.db.insert("daemon_commands", {

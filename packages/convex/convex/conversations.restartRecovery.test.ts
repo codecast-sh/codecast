@@ -146,6 +146,26 @@ describe("resolveRestartTarget", () => {
     });
     expect(conv.agent_type).toBe("claude_code");
   });
+
+  test("recreated row preserves every first-class client (opencode no longer restamped claude_code)", async () => {
+    for (const agent of ["opencode", "pi", "cursor", "gemini", "codex"] as const) {
+      const ctx = ctxWith({ conversations: [], directory_team_mappings: [] });
+      const { conv } = await resolveRestartTarget(ctx, USER, "conversations_gone" as any, {
+        session_id: "s1",
+        agent_type: agent,
+      });
+      expect(conv.agent_type).toBe(agent);
+    }
+    // claude_code and cowork normalize to claude_code
+    for (const agent of ["claude_code", "cowork"]) {
+      const ctx = ctxWith({ conversations: [], directory_team_mappings: [] });
+      const { conv } = await resolveRestartTarget(ctx, USER, "conversations_gone" as any, {
+        session_id: "s1",
+        agent_type: agent,
+      });
+      expect(conv.agent_type).toBe("claude_code");
+    }
+  });
 });
 
 describe("enqueueKillAndResume", () => {
@@ -171,6 +191,22 @@ describe("enqueueKillAndResume", () => {
     expect(resume.project_path).toBe("/Users/me/src/proj");
     expect(resume.agent_type).toBe("codex");
     expect(resume.force_reconstitute).toBeUndefined();
+  });
+
+  test("resume carries the real client — opencode/pi/cursor no longer collapse to claude", async () => {
+    for (const agent of ["opencode", "pi", "cursor", "gemini", "codex"] as const) {
+      const ctx = ctxWith({ daemon_commands: [], pending_messages: [] });
+      await enqueueKillAndResume(ctx, USER, { ...conv, agent_type: agent });
+      const cmds = ctx.db._inserted.filter((i: any) => i.table === "daemon_commands").map((i: any) => i.doc);
+      expect(JSON.parse(cmds[1].args).agent_type).toBe(agent);
+    }
+    // claude_code / cowork / unknown resume as claude
+    for (const agent of ["claude_code", "cowork", undefined]) {
+      const ctx = ctxWith({ daemon_commands: [], pending_messages: [] });
+      await enqueueKillAndResume(ctx, USER, { ...conv, agent_type: agent as any });
+      const cmds = ctx.db._inserted.filter((i: any) => i.table === "daemon_commands").map((i: any) => i.doc);
+      expect(JSON.parse(cmds[1].args).agent_type).toBe("claude");
+    }
   });
 
   test("repair variant stamps force_reconstitute", async () => {
