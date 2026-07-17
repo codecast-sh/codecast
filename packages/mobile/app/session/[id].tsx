@@ -22,6 +22,7 @@ import { EntityPill } from '@/components/EntityPill';
 import { CastCanvas, canvasAvailable, looksLikeHtmlMessage } from '@/components/CastCanvas';
 import { useSessionRestart, ghostRestartContextFor } from '@codecast/web/hooks/useSessionRestart';
 import { Theme, Spacing, chipShell, chipText, chipTint, CHROME_FONT_CAP } from '@/constants/Theme';
+import { structuredPayloadSummary } from '@codecast/shared/render';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 // A real gradient WITHOUT a native module: expo-linear-gradient's native side
 // ("ExpoLinearGradient") isn't linked into the dev/standalone binaries, so importing
@@ -180,12 +181,6 @@ function cleanCommandContent(content: string): string {
     .replace(/<[^>]+>/g, '')
     .replace(/^\s*Caveat:.*$/gm, '')
     .trim();
-}
-
-function truncateLines(text: string, maxLines: number): { text: string; truncated: boolean; totalLines: number } {
-  const lines = text.split('\n');
-  if (lines.length <= maxLines) return { text, truncated: false, totalLines: lines.length };
-  return { text: lines.slice(0, maxLines).join('\n'), truncated: true, totalLines: lines.length };
 }
 
 function stripSystemTags(content: string): string {
@@ -631,6 +626,7 @@ function toolIcon(name: string): { icon: React.ComponentProps<typeof FontAwesome
   if (name === 'Task') return { icon: 'code-fork', color: Theme.cyan };
   if (name === 'TaskCreate' || name === 'TaskUpdate' || name === 'TaskList' || name === 'TaskGet') return { icon: 'tasks', color: '#10b981' };
   if (name === 'SendMessage') return { icon: 'comment', color: '#f59e0b' };
+  if (name === 'StructuredOutput') return { icon: 'check-square-o', color: Theme.cyan };
   if (name === 'TodoWrite') return { icon: 'check-square-o', color: Theme.magenta };
   if (name === 'Skill') return { icon: 'bolt', color: Theme.cyan };
   if (name === 'EnterPlanMode' || name === 'ExitPlanMode') return { icon: 'map-o', color: Theme.violet };
@@ -776,6 +772,8 @@ function toolSummary(tc: ToolCall): string {
   if (tc.name === 'mcp__claude-in-chrome__resize_window') return parsedInput.width && parsedInput.height ? `${parsedInput.width}x${parsedInput.height}` : 'Resize';
   if (tc.name === 'mcp__claude-in-chrome__shortcuts_list') return 'List shortcuts';
   if (tc.name === 'mcp__claude-in-chrome__shortcuts_execute') return parsedInput.command ? `/${String(parsedInput.command)}` : 'Shortcut';
+
+  if (tc.name === 'StructuredOutput') return structuredPayloadSummary(parsedInput);
 
   // Task tools
   if (tc.name === 'Task') return parsedInput.description ? truncateStr(String(parsedInput.description), 40) : '';
@@ -2068,6 +2066,10 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
     if (toolCall.name === 'Bash' && parsed.command) {
       // For Bash, just show the command
       inputDisplay = parsed.command;
+    } else if (toolCall.name === 'StructuredOutput') {
+      // The input IS the payload (a workflow subagent's typed return) — the
+      // key/value flattening below drops nested objects, which is all of it.
+      inputDisplay = JSON.stringify(parsed, null, 2);
     } else {
       // For other tools, format as key: value pairs
       // Filter out verbose/internal fields
@@ -2097,9 +2099,14 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
 
   const isRead = toolCall.name === 'Read' || toolCall.name === 'file_read';
   const processedResult = result?.content ? (isRead ? stripLineNumbers(result.content) : result.content) : '';
-  const resultDisplay = result && expanded && processedResult.length > 2000
-    ? processedResult.slice(0, 2000) + '\n... (truncated)'
-    : (processedResult || undefined);
+  // StructuredOutput's success result is boilerplate ("Structured output
+  // provided successfully") — the payload shown above it is the content.
+  const hideResult = toolCall.name === 'StructuredOutput' && !result?.is_error;
+  const resultDisplay = hideResult
+    ? undefined
+    : result && expanded && processedResult.length > 2000
+      ? processedResult.slice(0, 2000) + '\n... (truncated)'
+      : (processedResult || undefined);
 
   // Compute result summary like web does
   const getResultSummary = () => {
@@ -2349,29 +2356,6 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
         </Modal>
       )}
     </Pressable>
-  );
-}
-
-function ThinkingBlock({ content }: { content: string }) {
-  const [expanded, setExpanded] = useState(false);
-  const truncated = truncateLines(content, expanded ? 50 : 2);
-  const isLong = truncated.truncated || content.length > 200;
-
-  return (
-    <TouchableOpacity
-      onPress={() => isLong && setExpanded(!expanded)}
-      style={styles.thinkingBlock}
-      activeOpacity={isLong ? 0.7 : 1}
-    >
-      <RNView style={styles.thinkingHeader}>
-        {isLong && (
-          <FontAwesome name={expanded ? "chevron-down" : "chevron-right"} size={8} color={Theme.textDim} style={{ marginRight: 4, marginTop: 3 }} />
-        )}
-        <RNText style={styles.thinkingText} numberOfLines={expanded ? 50 : 2}>
-          {expanded ? content : truncated.text}{!expanded && truncated.truncated ? '...' : ''}
-        </RNText>
-      </RNView>
-    </TouchableOpacity>
   );
 }
 
@@ -2627,7 +2611,7 @@ function WorkflowEventBlock({ event }: { event: Record<string, any> }) {
   return null;
 }
 
-function MessageBubble({ message, agentType, model, showHeader = true, forkChildren, conversationId, onFork, taskSubjectMap, globalToolResultMap, globalImageMap, openGallery, userName, showToast, collapsed: globalCollapsed, showThinkingGlobal, childConversationMap, bookmarkedSet }: {
+function MessageBubble({ message, agentType, model, showHeader = true, forkChildren, conversationId, onFork, taskSubjectMap, globalToolResultMap, globalImageMap, openGallery, userName, showToast, collapsed: globalCollapsed, childConversationMap, bookmarkedSet }: {
   message: Message;
   agentType?: string;
   model?: string;
@@ -2642,7 +2626,6 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   userName?: string;
   showToast?: (msg: string) => void;
   collapsed?: boolean;
-  showThinkingGlobal?: boolean;
   childConversationMap?: Record<string, string>;
   bookmarkedSet?: Set<string>;
 }) {
@@ -2736,11 +2719,8 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   const rawContent = stripSystemTags(rawContentRaw);
   const hasToolCalls = message.tool_calls && message.tool_calls.length > 0;
   const hasImages = message.images && message.images.length > 0;
-  const hasThinkingContent = !!message.thinking?.trim();
-  const visibleThinking = hasThinkingContent && (showThinkingGlobal ?? false);
-
-  // Skip truly empty messages (no content, no tool calls, no images, no thinking)
-  if (!rawContent.trim() && !hasToolCalls && !hasImages && !hasThinkingContent) {
+  // Skip truly empty messages (no content, no tool calls, no images)
+  if (!rawContent.trim() && !hasToolCalls && !hasImages) {
     return null;
   }
   const effectiveCollapsed = globalCollapsed && !localExpanded;
@@ -2815,10 +2795,6 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
             <ImageBlock key={i} image={img} onPress={() => openGallery?.(img)} />
           ))}
         </RNView>
-      )}
-
-      {visibleThinking && (
-        <ThinkingBlock content={message.thinking!} />
       )}
 
       {content ? (
@@ -4944,22 +4920,6 @@ const styles = StyleSheet.create({
   },
   assistantText: {
     color: Theme.text,
-  },
-  thinkingBlock: {
-    marginHorizontal: 14,
-    marginVertical: 1,
-    opacity: 0.5,
-  },
-  thinkingHeader: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-  },
-  thinkingText: {
-    fontSize: 11,
-    lineHeight: 15,
-    color: Theme.textDim,
-    fontFamily: 'SpaceMono',
-    flex: 1,
   },
   compactBoundary: {
     flexDirection: 'row',
