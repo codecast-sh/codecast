@@ -12,7 +12,7 @@ import {
   parseGeminiSessionFile,
   parseCursorTranscriptFile,
 } from "./parser.js";
-import { classifyTranscriptTailFor } from "./daemon.js";
+import { classifyTranscriptTailFor, sessionProcessGrepToken } from "./daemon.js";
 
 // ── Cluster 3: fresh-launch prompt-readiness pattern ────────────────────────
 // The old ternary (daemon.ts fresh-launch site) was:
@@ -98,5 +98,25 @@ describe("parseTranscriptFor dispatches to the per-client parser", () => {
   });
   test("cursor -> parseCursorTranscriptFile", () => {
     expect(parseTranscriptFor("cursor", cursorTranscript)).toEqual(parseCursorTranscriptFile(cursorTranscript));
+  });
+});
+
+// ── Cluster 5: process-table grep token ─────────────────────────────────────
+// Old ternary #1: gemini -> "gemini", codex -> "codex", else -> "claude".
+// Old ternary #2: gemini -> "gemini", codex -> "codex", else -> "/claude\b|claude-code".
+// codex/gemini must now come from the registry binary; claude/cursor keep the
+// caller's claude pattern (cursor falls through to it exactly as before).
+describe("sessionProcessGrepToken reproduces both per-client grep ternaries", () => {
+  const oldTernary1 = (a: AgentClientId) => (a === "gemini" ? "gemini" : a === "codex" ? "codex" : "claude");
+  const oldTernary2 = (a: AgentClientId) => (a === "gemini" ? "gemini" : a === "codex" ? "codex" : "/claude\\b|claude-code");
+  for (const id of ["claude", "codex", "cursor", "gemini"] as AgentClientId[]) {
+    test(`${id}: matches both old ternaries`, () => {
+      expect(sessionProcessGrepToken(id, "claude")).toBe(oldTernary1(id));
+      expect(sessionProcessGrepToken(id, "/claude\\b|claude-code")).toBe(oldTernary2(id));
+    });
+  }
+  test("codex and gemini tokens are sourced from the registry binary", () => {
+    expect(sessionProcessGrepToken("codex", "claude")).toBe(AGENT_CLIENTS.codex.binary);
+    expect(sessionProcessGrepToken("gemini", "claude")).toBe(AGENT_CLIENTS.gemini.binary);
   });
 });

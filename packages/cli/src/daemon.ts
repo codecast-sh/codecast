@@ -6709,6 +6709,20 @@ function tryRegisterSessionProcess(sessionId: string, agentType: AgentClientId):
 
 const findSessionProcessInflight = new Map<string, Promise<ClaudeSessionInfo | null>>();
 
+/**
+ * The token to grep the process table with (`ps aux | grep -E '<token>'`) when
+ * locating a live session's process, per client. codex and gemini match by their
+ * registry binary name (so a new jsonl-dir client plugs in via its descriptor).
+ * claude and cursor share the caller-supplied claude-process pattern: cursor owns
+ * a SQLite store and has no local process to resume, so a cursor lookup falls
+ * through to claude's pattern exactly as before the registry. The two call sites
+ * pass different claude patterns (a bare "claude" vs a hardened regex), so the
+ * claude pattern stays a parameter rather than a descriptor field.
+ */
+export function sessionProcessGrepToken(agentType: AgentClientId, claudePattern: string): string {
+  return agentType === "codex" || agentType === "gemini" ? AGENT_CLIENTS[agentType].binary : claudePattern;
+}
+
 async function findSessionProcess(sessionId: string, agentType: AgentClientId = "claude"): Promise<ClaudeSessionInfo | null> {
   const key = `${sessionId}:${agentType}`;
   const inflight = findSessionProcessInflight.get(key);
@@ -6727,7 +6741,7 @@ async function findSessionProcessImpl(sessionId: string, agentType: AgentClientI
     return cached;
   }
 
-  const binaryPattern = agentType === "gemini" ? "gemini" : agentType === "codex" ? "codex" : "claude";
+  const binaryPattern = sessionProcessGrepToken(agentType, "claude");
 
   try {
     const codexResumeCandidates: Array<{ pid: number; tty: string }> = [];
@@ -6922,7 +6936,7 @@ async function findSessionProcessImpl(sessionId: string, agentType: AgentClientI
 
         if (projectCwd) {
           try {
-            const psPattern = agentType === "gemini" ? "gemini" : agentType === "codex" ? "codex" : "/claude\\b|claude-code";
+            const psPattern = sessionProcessGrepToken(agentType, "/claude\\b|claude-code");
             const { stdout: psOut } = await execAsync(`ps aux | grep -E '${psPattern}' | grep -v grep | grep -v 'codecast'`);
             const candidates: Array<{ pid: number; tty: string }> = [];
 
