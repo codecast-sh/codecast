@@ -3,12 +3,56 @@ import {
   choosePreferredCodexCandidate,
   collectAncestorPids,
   hasCodexSessionFileOpen,
+  isRecognizedAgentComm,
   isResumeInvocation,
   matchSingleFreshStartedConversation,
   matchStartedConversation,
   parsePidPpidMap,
   resolveSpawnerSessionId,
 } from "./sessionProcessMatcher.js";
+
+describe("isRecognizedAgentComm", () => {
+  // Fixtures are the exact `ps -o comm=` values observed from real tmux sessions
+  // on 2026-07-17 (opencode 1.18.3, pi @mariozechner/pi-coding-agent, codex, claude).
+
+  test("recognizes opencode (compiled binary, comm 'opencode')", () => {
+    // opencode is a Mach-O binary; comm is its own name, matched via the registry
+    // binary. The old allowlist (claude/codex/gemini/node/bun/deno) missed it —
+    // "opencode" contains "code" but not "node"/"codex".
+    expect(isRecognizedAgentComm("opencode")).toBe(true);
+  });
+
+  test("recognizes pi (node script that sets process.title='pi', comm 'pi')", () => {
+    // pi's dist/cli.js runs `process.title = "pi"` as its first line, so comm is
+    // "pi", NOT "node" — the old allowlist missed it.
+    expect(isRecognizedAgentComm("pi")).toBe(true);
+  });
+
+  test("still recognizes codex via its node interpreter (comm 'node')", () => {
+    // codex is a node script that does NOT rename itself: comm 'node',
+    // args 'node /Users/ashot/.bun/bin/codex'.
+    expect(isRecognizedAgentComm("node")).toBe(true);
+    expect(isRecognizedAgentComm("/opt/homebrew/bin/node")).toBe(true);
+  });
+
+  test("still recognizes claude (bun-compiled binary, comm 'claude')", () => {
+    expect(isRecognizedAgentComm("claude")).toBe(true);
+    expect(isRecognizedAgentComm("/Users/ashot/.local/bin/claude")).toBe(true);
+  });
+
+  test("recognizes bun and deno interpreters", () => {
+    expect(isRecognizedAgentComm("bun")).toBe(true);
+    expect(isRecognizedAgentComm("deno")).toBe(true);
+  });
+
+  test("rejects unrelated processes, incl. names that merely contain 'pi'", () => {
+    // Basename-exact for binary names keeps the short "pi" id from substring-hitting
+    // unrelated tools.
+    for (const comm of ["", "bash", "pip", "pipenv", "python3", "vim", "/usr/bin/ssh"]) {
+      expect(isRecognizedAgentComm(comm)).toBe(false);
+    }
+  });
+});
 
 describe("isResumeInvocation", () => {
   test("matches codex resume subcommand", () => {
