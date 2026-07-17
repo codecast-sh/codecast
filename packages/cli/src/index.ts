@@ -3198,9 +3198,12 @@ program
       process.exit(1);
     }
     const result = await cliPost("/cli/sessions/dismiss", { session: target });
+    const grouped = result.cascaded_children
+      ? ` with ${result.cascaded_children} nested worker${result.cascaded_children === 1 ? "" : "s"}`
+      : "";
     const note = result.outcome === "reap"
       ? ` ${c.dim}(empty session — cleaned up entirely)${c.reset}`
-      : ` ${c.dim}— hidden from inbox, agent still alive (cast undismiss ${result.short_id} to bring back)${c.reset}`;
+      : ` ${c.dim}— hidden from inbox${grouped}, agent still alive (cast undismiss ${result.short_id} to bring back)${c.reset}`;
     console.log(`${c.green}ok${c.reset} dismissed ${c.cyan}${result.short_id}${c.reset}${note}`);
   });
 
@@ -3255,9 +3258,12 @@ program
     const canceled = result.canceled_schedules
       ? `, canceled ${result.canceled_schedules} trigger${result.canceled_schedules === 1 ? "" : "s"}`
       : "";
+    const grouped = result.cascaded_children
+      ? ` with ${result.cascaded_children} nested worker${result.cascaded_children === 1 ? "" : "s"}`
+      : "";
     const note = result.outcome === "reap"
       ? ` ${c.dim}(empty session — cleaned up entirely)${c.reset}`
-      : ` ${c.dim}— agent torn down${canceled} (cast undismiss ${result.short_id} to resurface)${c.reset}`;
+      : ` ${c.dim}— agent torn down${grouped}${canceled} (cast undismiss ${result.short_id} to resurface)${c.reset}`;
     console.log(`${c.green}ok${c.reset} killed ${c.cyan}${result.short_id}${c.reset}${note}`);
   });
 

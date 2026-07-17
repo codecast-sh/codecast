@@ -2,7 +2,7 @@ import { mutation, query, internalMutation, internalQuery, type QueryCtx, type M
 import { v } from "convex/values";
 import { enqueueStartSession, resolveOwnerDevice } from "./devices";
 import { findConversationBySessionReference, resolveConversationRefRanked, findConversationByAnyRefWhere } from "./conversationSessionLookup";
-import { applyHideTransition } from "./cleanup";
+import { applyHideTransition, cascadeHideToNestedChildren } from "./cleanup";
 import { paginationOptsValidator } from "convex/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Doc, Id } from "./_generated/dataModel";
@@ -8450,7 +8450,10 @@ export const cliSetSessionVisibility = mutation({
     await ctx.db.patch(conv._id, patch);
     // `conv` is the pre-patch row — applyHideTransition gates on the transition.
     const { action: outcome, canceledSchedules } = await applyHideTransition(ctx, conv, patch);
-    return { ok: true as const, short_id: shortId, action: args.action, outcome, canceled_schedules: canceledSchedules };
+    // The nested group (Task subagents + agent-team teammates) comes down with
+    // the card, same as the web gesture — see cascadeHideToNestedChildren.
+    const cascaded = await cascadeHideToNestedChildren(ctx, conv, patch);
+    return { ok: true as const, short_id: shortId, action: args.action, outcome, canceled_schedules: canceledSchedules, cascaded_children: cascaded };
   },
 });
 
@@ -9615,6 +9618,11 @@ export const killSession = mutation({
       if (conv.user_id !== userId) {
         canceledSchedules += await cancelTasksBoundToConversation(ctx, userId, args.conversation_id);
       }
+      // Take the nested group (Task subagents + agent-team teammates) down
+      // with the card. The web store also sweeps optimistically for its own
+      // gesture; this server twin covers every other caller, and the
+      // already-hidden skip inside makes the two paths race-safe.
+      await cascadeHideToNestedChildren(ctx, conv, { inbox_dismissed_at: Date.now() });
     }
     return { existed: !!conv, canceled_schedules: canceledSchedules };
   },

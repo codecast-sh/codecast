@@ -1532,6 +1532,93 @@ describe("dismiss is absolute — navigation/injection must not resurrect", () =
   });
 });
 
+describe("kill/stash cascade takes the whole nested group", () => {
+  // Bug history: killing an agent-team LEAD swept only its Task subagents
+  // (parent_conversation_id), not its teammates (spawned_by + agent_team_name).
+  // A teammate with an absent lead deliberately floats as a first-class card —
+  // the categorizer can't hide it — so the leftover teammates resurfaced as
+  // loose ↳ needs-input rows the user had to dismiss one by one. The cascade
+  // must use the SAME nesting definition the renderer does (nestParentIdOf).
+  const LEAD = "a".repeat(32);
+  const TASK_SUB = "b".repeat(32);
+  const TEAMMATE = "c".repeat(32);
+  const SPAWN_NO_TEAM = "d".repeat(32);
+  const FORK = "e".repeat(32);
+
+  const mk = (id: string, extra: Partial<InboxSession>): InboxSession => ({
+    ...baseSession,
+    _id: id,
+    session_id: `session-${id.slice(0, 4)}`,
+    message_count: 5,
+    ...extra,
+  });
+
+  beforeEach(() => {
+    const rows = {
+      [LEAD]: mk(LEAD, { agent_team_name: "session-team", agent_name: "team-lead" }),
+      [TASK_SUB]: mk(TASK_SUB, { is_subagent: true, parent_conversation_id: LEAD }),
+      [TEAMMATE]: mk(TEAMMATE, { spawned_by_conversation_id: LEAD, agent_team_name: "session-team", agent_name: "review-worker" }),
+      // cast-spawn lineage: spawned_by WITHOUT a team name stays first-class
+      // (nestParentIdOf's agent_team_name gate) — the cascade must not take it.
+      [SPAWN_NO_TEAM]: mk(SPAWN_NO_TEAM, { spawned_by_conversation_id: LEAD }),
+      [FORK]: mk(FORK, { forked_from: LEAD }),
+    };
+    useInboxStore.setState({
+      sessions: rows,
+      conversations: Object.fromEntries(Object.keys(rows).map((id) => [id, { _id: id } as any])),
+      currentSessionId: null,
+      viewingDismissedId: null,
+      clientState: {},
+      pending: {},
+    });
+  });
+
+  it("killing a lead dismisses its Task subagents AND its teammates", () => {
+    useInboxStore.getState().killSession(LEAD);
+
+    const s = useInboxStore.getState();
+    expect(isSessionDismissed(s.sessions[LEAD])).toBe(true);
+    expect(isSessionDismissed(s.sessions[TASK_SUB])).toBe(true);
+    expect(isSessionDismissed(s.sessions[TEAMMATE])).toBe(true);
+    // First-class lineages are untouched: spawn-without-team and forks.
+    expect(isSessionDismissed(s.sessions[SPAWN_NO_TEAM])).toBe(false);
+    expect(isSessionDismissed(s.sessions[FORK])).toBe(false);
+
+    // The point of the sweep: nothing from the group floats back into the
+    // active buckets as a loose top-level card.
+    const buckets = categorizeSessions(s.sessions, new Set());
+    const activeIds = buckets.sorted.map((x) => x._id);
+    expect(activeIds).not.toContain(LEAD);
+    expect(activeIds).not.toContain(TASK_SUB);
+    expect(activeIds).not.toContain(TEAMMATE);
+  });
+
+  it("stashing a lead stashes the same nested group", () => {
+    useInboxStore.getState().stashSession(LEAD);
+
+    const s = useInboxStore.getState();
+    expect(isSessionStashed(s.sessions[LEAD])).toBe(true);
+    expect(isSessionStashed(s.sessions[TASK_SUB])).toBe(true);
+    expect(isSessionStashed(s.sessions[TEAMMATE])).toBe(true);
+    expect(isSessionStashed(s.sessions[SPAWN_NO_TEAM])).toBe(false);
+    expect(isSessionStashed(s.sessions[FORK])).toBe(false);
+  });
+
+  it("killing a teammate that points at itself never recurses onto the lead", () => {
+    // Defensive guard in the sweep (s._id !== id): a row whose pointer equals
+    // its own id must not re-select itself or confuse the removed set.
+    const SELF = "f".repeat(32);
+    useInboxStore.setState({
+      sessions: {
+        [SELF]: mk(SELF, { spawned_by_conversation_id: SELF, agent_team_name: "session-team" }),
+      },
+      conversations: { [SELF]: { _id: SELF } as any },
+    });
+    useInboxStore.getState().killSession(SELF);
+    expect(isSessionDismissed(useInboxStore.getState().sessions[SELF])).toBe(true);
+  });
+});
+
 describe("pending user messages must never be lost on reload", () => {
   // Bug history: a sent-but-unconfirmed message vanished on cmd-r. Root cause:
   // `pendingMessages` was absent from the IDB persistence allowlist, so the

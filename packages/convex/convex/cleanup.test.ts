@@ -5,6 +5,7 @@ import {
   shouldReapEmpty,
   conversationHasNoWork,
   reapEmptyConversation,
+  cascadeHideToNestedChildren,
 } from "./cleanup";
 
 // Minimal in-memory ctx.db honoring the .withIndex(name, q => q.eq(field,val))
@@ -18,7 +19,10 @@ function makeFakeDb(tables: Record<string, any[]>) {
     _deleted: deleted,
     query(table: string) {
       const filters: Array<[string, any]> = [];
-      const apply = () => (tables[table] ?? []).filter((r) => filters.every(([f, v]) => r[f] === v));
+      // Copies, matching Convex semantics: a fetched row is a snapshot that a
+      // later patch never mutates (applyHideTransition's transition gate needs
+      // the PRE-patch flags on the row it was handed).
+      const apply = () => (tables[table] ?? []).filter((r) => filters.every(([f, v]) => r[f] === v)).map((r) => ({ ...r }));
       const builder: any = {
         withIndex(_name: string, fn?: (q: any) => any) {
           if (fn) {
@@ -51,7 +55,11 @@ function makeFakeDb(tables: Record<string, any[]>) {
       deleted.push(id);
       for (const rows of Object.values(tables)) { const i = rows.findIndex((x: any) => x._id === id); if (i >= 0) rows.splice(i, 1); }
     },
-    async patch() { /* no-op */ },
+    // Applied, not a no-op: the hide cascade reads back the flags it writes
+    // (the already-hidden skip), so patches must land on the row objects.
+    async patch(id: any, fields: any) {
+      for (const rows of Object.values(tables)) { const r = rows.find((x: any) => x._id === id); if (r) Object.assign(r, fields); }
+    },
   };
   return db;
 }
@@ -212,5 +220,77 @@ describe("hasLiveDraft", () => {
     expect(hasLiveDraft({ draft_message: "" })).toBe(false);
     expect(hasLiveDraft({ draft_message: "   " })).toBe(false);
     expect(hasLiveDraft({})).toBe(false);
+  });
+});
+
+// Server-side hide cascade: killing/stashing a session takes the whole nested
+// group (Task subagents + agent-team teammates) — the same set the inbox
+// renders beneath the card. Bug history: cast kill on a team lead stranded its
+// teammates as loose top-level needs-input cards (only the web store's
+// optimistic sweep cascaded, and only over parent_conversation_id).
+describe("cascadeHideToNestedChildren", () => {
+  const LEAD = "conv_lead";
+  const mkTables = (): Record<string, any[]> => ({
+    conversations: [
+      { _id: LEAD, user_id: "u1", agent_team_name: "session-team", agent_name: "team-lead", message_count: 10 },
+      { _id: "conv_sub", user_id: "u1", session_id: "s-sub", parent_conversation_id: LEAD, is_subagent: true, message_count: 5 },
+      { _id: "conv_mate", user_id: "u1", session_id: "s-mate", spawned_by_conversation_id: LEAD, agent_team_name: "session-team", agent_name: "review-worker", message_count: 5 },
+      // cast-spawn lineage: spawned_by WITHOUT a team name stays first-class.
+      { _id: "conv_spawn", user_id: "u1", session_id: "s-spawn", spawned_by_conversation_id: LEAD, message_count: 5 },
+      { _id: "conv_fork", user_id: "u1", session_id: "s-fork", forked_from: LEAD, message_count: 5 },
+    ],
+    daemon_commands: [],
+    messages: [],
+    pending_messages: [],
+    managed_sessions: [],
+    client_state: [],
+    agent_tasks: [],
+  });
+
+  test("kill cascade dismisses Task subagents AND teammates, with full kill side effects", async () => {
+    const tables = mkTables();
+    const db = makeFakeDb(tables);
+    const lead = tables.conversations[0];
+
+    const cascaded = await cascadeHideToNestedChildren({ db }, lead, { inbox_dismissed_at: 111 });
+    expect(cascaded).toBe(2);
+
+    const row = (id: string) => tables.conversations.find((r: any) => r._id === id)!;
+    expect(row("conv_sub").inbox_dismissed_at).toBe(111);
+    expect(row("conv_mate").inbox_dismissed_at).toBe(111);
+    // applyHideTransition ran per child: retired + teardown enqueued.
+    expect(row("conv_sub").status).toBe("completed");
+    expect(row("conv_mate").inbox_killed_at).toBeGreaterThan(0);
+    const kills = db._inserted.filter((i: any) => i.table === "daemon_commands");
+    expect(kills).toHaveLength(2);
+    // First-class lineages untouched.
+    expect(row("conv_spawn").inbox_dismissed_at).toBeUndefined();
+    expect(row("conv_fork").inbox_dismissed_at).toBeUndefined();
+  });
+
+  test("already-hidden children are skipped — a re-asserted hide never re-kills", async () => {
+    const tables = mkTables();
+    const db = makeFakeDb(tables);
+    const lead = tables.conversations[0];
+
+    await cascadeHideToNestedChildren({ db }, lead, { inbox_dismissed_at: 111 });
+    const again = await cascadeHideToNestedChildren({ db }, lead, { inbox_dismissed_at: 222 });
+    expect(again).toBe(0);
+    expect(tables.conversations.find((r: any) => r._id === "conv_sub")!.inbox_dismissed_at).toBe(111);
+    expect(db._inserted.filter((i: any) => i.table === "daemon_commands")).toHaveLength(2);
+  });
+
+  test("stash cascade sets inbox_stashed_at only — agents stay alive", async () => {
+    const tables = mkTables();
+    const db = makeFakeDb(tables);
+    const lead = tables.conversations[0];
+
+    const cascaded = await cascadeHideToNestedChildren({ db }, lead, { inbox_stashed_at: 333 });
+    expect(cascaded).toBe(2);
+    const row = (id: string) => tables.conversations.find((r: any) => r._id === id)!;
+    expect(row("conv_mate").inbox_stashed_at).toBe(333);
+    expect(row("conv_mate").inbox_killed_at).toBeUndefined();
+    expect(row("conv_sub").status).toBeUndefined();
+    expect(db._inserted.filter((i: any) => i.table === "daemon_commands")).toHaveLength(0);
   });
 });

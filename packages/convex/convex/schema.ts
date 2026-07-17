@@ -463,6 +463,12 @@ export default defineSchema({
     .index("by_forked_from", ["forked_from"])
     .index("by_git_branch", ["git_branch"])
     .index("by_parent_conversation_id", ["parent_conversation_id"])
+    // Sparse and STATIC key (spawned_by never changes after creation, so no
+    // write amplification — the cost that killed by_user_updated_at above).
+    // Powers the hide cascade: killing/stashing a team lead must find its
+    // teammates (spawned_by + agent_team_name), which by_parent_conversation_id
+    // can't see. See cascadeHideToNestedChildren (cleanup.ts).
+    .index("by_spawned_by", ["spawned_by_conversation_id"])
     .index("by_user_pinned", ["user_id", "inbox_pinned_at"])
     .index("by_user_stashed", ["user_id", "inbox_stashed_at"])
     .index("by_user_profile_pinned", ["user_id", "profile_pinned_at"])
