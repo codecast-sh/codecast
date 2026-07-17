@@ -43,6 +43,9 @@ export type ClaudeEffortLevel = (typeof CLAUDE_EFFORT_LEVELS)[number];
 
 export const CODEX_MODEL_OPTIONS: ModelOption[] = [
   { key: "default", label: "Default", hint: "Your config.toml model" },
+  { key: "gpt-5.6-sol", label: "GPT-5.6 Sol", hint: "Latest frontier coding model", cliAlias: "gpt-5.6-sol" },
+  { key: "gpt-5.6-terra", label: "GPT-5.6 Terra", hint: "Balanced model for everyday work", cliAlias: "gpt-5.6-terra" },
+  { key: "gpt-5.6-luna", label: "GPT-5.6 Luna", hint: "Fast, affordable coding model", cliAlias: "gpt-5.6-luna" },
   { key: "gpt-5.5", label: "GPT-5.5", hint: "Frontier model for complex work", cliAlias: "gpt-5.5" },
   { key: "gpt-5.4", label: "GPT-5.4", hint: "Strong model for everyday coding", cliAlias: "gpt-5.4" },
   { key: "gpt-5.4-mini", label: "GPT-5.4 Mini", hint: "Small, fast, cost-efficient", cliAlias: "gpt-5.4-mini" },
