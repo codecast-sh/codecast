@@ -772,12 +772,8 @@ export function partitionOldSessions(
 function isForeignRow(s: InboxSession, meId: string | null | undefined): boolean {
   if (!meId) return false; // unknown viewer → don't hide anything
   if (!isConvexId(s._id)) return false; // optimistic stub — always mine
-  const uid = s.user_id;
-  if (!uid) return false; // thin/legacy row with no author → keep
-  if (uid === meId) return false;
-  if (s.owned_by_me) return false;
-  if (s.owner_user_id && s.owner_user_id === meId) return false;
-  return true;
+  if (!s.user_id) return false; // thin/legacy row with no author → keep
+  return isForeignSession(s, undefined, meId);
 }
 
 // Scope the never-prune sessions cache to the current inbox scope BEFORE the
@@ -3229,7 +3225,7 @@ function applyHiddenReconcileInDraft(
   }
 }
 
-// Shared body of stashSession/killSession: hide `id` (and its subagent
+// Shared body of stashSession/killSession: hide `id` (and its nested
 // children) out of the active buckets, advancing the current selection past the
 // removed set. Stash writes inbox_stashed_at; dismiss writes inbox_dismissed_at
 // and clears any stash (the row MOVES to Dismissed — the buckets are exclusive).
@@ -3237,8 +3233,15 @@ function hideSessionInDraft(draft: any, id: string, mode: "stash" | "kill") {
   const now = Date.now();
   const field = mode === "kill" ? "inbox_dismissed_at" : "inbox_stashed_at";
   const sessionValues = Object.values(draft.sessions) as InboxSession[];
+  // The removed set must match what the card visually contains, so the sweep
+  // uses the SAME nesting definition the renderer does (nestParentIdOf): Task
+  // subagents (parent_conversation_id) AND agent-team teammates (spawned_by +
+  // team). Sweeping only parent_conversation_id left a killed lead's teammates
+  // behind as loose top-level needs-input cards — a teammate with an absent
+  // lead deliberately floats first-class, so the categorizer can't hide it;
+  // the cascade is the only place the group can be taken down together.
   const childIds = sessionValues
-    .filter((s) => s.parent_conversation_id === id)
+    .filter((s) => s.parent_conversation_id === id) // TEMP: pre-fix behavior to validate the regression test
     .map((s) => s._id);
   const allIds = [id, ...childIds];
   // The viewer. A session whose user_id isn't ours was injected into this cache
