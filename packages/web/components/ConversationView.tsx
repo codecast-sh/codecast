@@ -45,7 +45,8 @@ import { ReviewBar } from "./ReviewBar";
 import { ReviewComposerContext } from "./reviewContext";
 import { CommentDock } from "./comments/CommentDock";
 import { useConversationCommentsSync } from "../hooks/useConversationComments";
-import { parseTriggerCadence } from "./triggerCadence";
+import { parseTriggerCadence, fmtDuration } from "./triggerCadence";
+import { monitorRowsFor, effectiveMonitorStatus, parseTaskNotificationBlock, isMonitorEventNotification, isMonitorEndedNotification, monitorNotificationDescription, decodeEntities, type MonitorStatus } from "./monitorRows";
 
 function copyMessageLink(conversationId: string | undefined, messageId: string) {
   const url = `${shareOrigin()}/conversation/${conversationId}#msg-${messageId}`;
@@ -128,7 +129,7 @@ import { parseFileChangeSummary, parseUnifiedDiffSections } from "../lib/unified
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
-import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench, Zap } from "lucide-react";
+import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench, Zap, Radar } from "lucide-react";
 import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES, labelMentionItems, matchScore } from "../hooks/useMentionQuery";
 import { pendingBannerState, isActiveAgentStatus, isBootingAgentStatus, type LiveAgentStatus } from "../lib/pendingBanner";
@@ -2756,7 +2757,9 @@ function getFileExtension(filePath: string): string | undefined {
 }
 
 function isAlwaysVisibleToolCall(tc: ToolCall): boolean {
-  return isPlanWriteToolCall(tc) || tc.name === "AskUserQuestion";
+  // Monitor stays visible in condensed feeds: it's standing state the reader
+  // needs to know is armed, not a transient tool step.
+  return isPlanWriteToolCall(tc) || tc.name === "AskUserQuestion" || tc.name === "Monitor";
 }
 
 interface ToolChangeRange {
@@ -4270,6 +4273,82 @@ function SkillBlock({ tool }: { tool: ToolCall }) {
   );
 }
 
+// Live status badge + latest event for a Monitor block, derived from the
+// conversation's message window (monitorRowsFor — one memoized scan shared by
+// all blocks). Same anatomy as the trigger block above: identity accent +
+// uppercase eyebrow + one-line gist, so standing machinery reads as one family.
+const MONITOR_BADGE: Record<MonitorStatus, { label: string; cls: string }> = {
+  watching: { label: "watching", cls: "bg-sol-green/10 text-sol-green border-sol-green/30" },
+  ended: { label: "ended", cls: "bg-sol-bg-alt text-sol-text-dim border-sol-border/50" },
+  timed_out: { label: "timed out", cls: "bg-sol-orange/10 text-sol-orange border-sol-orange/30" },
+  stopped: { label: "stopped", cls: "bg-sol-bg-alt text-sol-text-dim border-sol-border/50" },
+};
+
+function MonitorBlock({ tool, conversationId }: { tool: ToolCall; conversationId?: string }) {
+  let input: { command?: string; description?: string; timeout_ms?: number; persistent?: boolean } = {};
+  try { input = JSON.parse(tool.input); } catch {}
+  const [showCommand, setShowCommand] = useState(false);
+  const messages = useInboxStore((s) => (conversationId ? s.messages[conversationId] : undefined));
+  const row = useMemo(() => monitorRowsFor(messages).find((r) => r.toolUseId === tool.id), [messages, tool.id]);
+  const status: MonitorStatus = row ? effectiveMonitorStatus(row, Date.now()) : "watching";
+  const badge = MONITOR_BADGE[status];
+  const watching = status === "watching";
+  const commandFirstLine = (input.command || "").split("\n").find((l) => l.trim()) || "";
+
+  return (
+    <div className={`my-1 rounded border-l-2 ${watching ? "border-sol-blue/60 bg-sol-blue/5" : "border-sol-border/60 bg-sol-bg-alt/30"}`}>
+      <div className="flex items-center gap-2 px-3 pt-2 pb-1 min-w-0">
+        <Radar className={`w-3.5 h-3.5 shrink-0 ${watching ? "text-sol-blue/70" : "text-sol-text-dim"}`} />
+        <span className={`text-[11px] font-medium tracking-wide uppercase shrink-0 ${watching ? "text-sol-blue/70" : "text-sol-text-dim"}`}>Monitor</span>
+        {input.persistent && (
+          <ShortcutTooltip label="Runs until TaskStop or session end — not a one-shot watch">
+            <span className="px-1 py-0 rounded border text-[9px] font-semibold shrink-0 border-sol-blue/40 text-sol-blue/90 bg-sol-blue/10">persistent</span>
+          </ShortcutTooltip>
+        )}
+        <span className="text-xs text-sol-text truncate min-w-0">{input.description || "background watch"}</span>
+        {(row?.eventCount ?? 0) > 0 && (
+          <span className="ml-auto shrink-0 text-[10px] text-sol-text-dim tabular-nums">
+            {row!.eventCount} event{row!.eventCount === 1 ? "" : "s"}
+          </span>
+        )}
+        <span
+          className={`${(row?.eventCount ?? 0) > 0 ? "" : "ml-auto "}shrink-0 inline-flex items-center gap-1 px-1.5 py-0 rounded text-[9px] font-semibold border ${badge.cls}`}
+          title={input.timeout_ms !== undefined ? `Timeout: ${fmtDuration(input.timeout_ms)}` : undefined}
+        >
+          {watching && <span className="w-1 h-1 rounded-full bg-sol-green animate-pulse motion-reduce:animate-none" />}
+          {badge.label}
+        </span>
+      </div>
+      {input.command && (
+        <button
+          onClick={() => setShowCommand((v) => !v)}
+          className="w-full text-left px-3 pb-1.5 font-mono text-[11px] text-sol-text-dim hover:text-sol-text-muted transition-colors"
+          title={showCommand ? "Collapse the watch command" : "Show the full watch command"}
+        >
+          {showCommand ? (
+            <pre className="whitespace-pre-wrap break-words">{input.command}</pre>
+          ) : (
+            <span className="block truncate">{commandFirstLine}</span>
+          )}
+        </button>
+      )}
+      {row?.lastEvent && (
+        <div className="mx-3 mb-2 flex items-baseline gap-1.5 min-w-0 text-[11px] leading-snug">
+          <span className={`truncate min-w-0 font-medium ${watching ? "text-sol-text-muted" : "text-sol-text-dim"}`}>
+            <span className="mr-0.5 text-sol-blue/50">&gt;</span>
+            {row.lastEvent}
+          </span>
+          {row.lastEventAt !== undefined && (
+            <span className="ml-auto shrink-0 text-[10px] text-sol-text-dim whitespace-nowrap" title={formatFullTimestamp(row.lastEventAt)}>
+              {formatRelativeTime(row.lastEventAt)}
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PlanModeBlock({ tool, result, conversationId, messageId, onSendMessage }: { tool: ToolCall; result?: ToolResult; conversationId?: string; messageId?: string; onSendMessage?: (content: string) => void }) {
   const isEnter = tool.name === "EnterPlanMode";
   const isExit = tool.name === "ExitPlanMode";
@@ -5175,15 +5254,9 @@ function isTaskNotification(content: string): boolean {
   return content.trim().startsWith('<task-notification>');
 }
 
-function parseTaskNotification(content: string): { taskId: string; status: string; summary: string; outputFile?: string } | null {
-  const match = content.match(/<task-notification>([\s\S]*?)<\/task-notification>/);
-  if (!match) return null;
-  const inner = match[1];
-  const taskId = inner.match(/<task-id>(.*?)<\/task-id>/)?.[1] || '';
-  const status = inner.match(/<status>(.*?)<\/status>/)?.[1] || '';
-  const summary = inner.match(/<summary>(.*?)<\/summary>/)?.[1] || '';
-  const outputFile = inner.match(/<output-file>(.*?)<\/output-file>/)?.[1];
-  return { taskId, status, summary, outputFile };
+function parseTaskNotification(content: string) {
+  const match = content.match(/<task-notification>[\s\S]*?<\/task-notification>/);
+  return match ? parseTaskNotificationBlock(match[0]) : null;
 }
 
 function isCompactionPromptMessage(content: string): boolean {
@@ -5215,6 +5288,35 @@ function TaskNotificationLine({ content, timestamp, agentNameToChildMap }: { con
   const parsed = parseTaskNotification(content);
   const router = useRouter();
   if (!parsed) return null;
+
+  // Monitor traffic wears the monitor identity (radar, blue), not the generic
+  // task line: an event shows WHAT the watch saw, the stream end reads as the
+  // watch quietly folding — both tie back to their MonitorBlock by description.
+  if (isMonitorEventNotification(parsed) && parsed.event) {
+    const desc = monitorNotificationDescription(parsed);
+    return (
+      <div className="mb-2 px-3 py-1.5 flex items-center gap-2 text-xs border rounded border-sol-blue/20 bg-sol-blue/5">
+        <Radar className="w-3.5 h-3.5 shrink-0 text-sol-blue/70" />
+        <span className="text-[10px] font-medium tracking-wide uppercase text-sol-blue/70 shrink-0">monitor</span>
+        <span className="text-sol-text-muted min-w-0 truncate" title={desc ? `Monitor: ${desc}` : undefined}>
+          {decodeEntities(parsed.event)}
+        </span>
+        <span className="text-sol-text-dim shrink-0 whitespace-nowrap ml-auto" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+      </div>
+    );
+  }
+  if (isMonitorEndedNotification(parsed)) {
+    const desc = monitorNotificationDescription(parsed);
+    return (
+      <div className="mb-2 px-3 py-1.5 flex items-center gap-2 text-xs border rounded border-sol-border/40 bg-sol-bg-alt/30">
+        <Radar className="w-3.5 h-3.5 shrink-0 text-sol-text-dim" />
+        <span className="text-[10px] font-medium tracking-wide uppercase text-sol-text-dim shrink-0">monitor ended</span>
+        {desc && <span className="text-sol-text-dim min-w-0 truncate">{desc}</span>}
+        <span className="text-sol-text-dim shrink-0 whitespace-nowrap ml-auto" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+      </div>
+    );
+  }
+
   const cfg = taskStatusConfig[parsed.status] || taskStatusConfig.killed;
 
   let childId: string | undefined;
@@ -6686,6 +6788,8 @@ function AssistantBlockImpl({
             <WorkflowToolBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} />
           ) : tc.name === "Skill" ? (
             <SkillBlock key={tc.id} tool={tc} />
+          ) : tc.name === "Monitor" ? (
+            <MonitorBlock key={tc.id} tool={tc} conversationId={conversationId} />
           ) : tc.name === "EnterPlanMode" || tc.name === "ExitPlanMode" ? (
             <PlanModeBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} conversationId={conversationId} messageId={messageId} onSendMessage={onSendInlineMessage} />
           ) : parseCastCommand(tc) ? (
