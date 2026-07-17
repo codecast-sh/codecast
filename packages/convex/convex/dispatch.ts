@@ -16,6 +16,7 @@ import { canAccessDoc } from "./docs";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { findConversationBySessionReference } from "./conversationSessionLookup";
 import { createBucketForUser, assignConversationToBucketForUser } from "./buckets";
+import { isSessionOwner } from "./sessionOwners";
 
 type TableConfig =
   | {
@@ -123,7 +124,8 @@ function deepMergeField(existing: any, incoming: any): any {
 // visibility mutation. Re-exported here for the existing tests.
 export { classifyHideTransition } from "./cleanup";
 
-async function applyPatches(
+// Exported for tests (the dispatch mutation is the only runtime caller).
+export async function applyPatches(
   ctx: HandlerCtx,
   userId: Id<"users">,
   patches: Record<string, Record<string, Record<string, any>>>
@@ -145,10 +147,16 @@ async function applyPatches(
         // an assigned session from their inbox exactly like the runner would.
         // owner_user_id itself is immutable here — assignment goes through the
         // validated setSessionOwner mutation only.
-        const permitted = doc && (
+        let permitted = !!doc && (
           (doc as any)[config.ownerField] === userId ||
           (table === "conversations" && (doc as any).owner_user_id?.toString() === userId.toString())
         );
+        // owner_user_id caches only the PRIMARY (first-added) owner; a SECONDARY
+        // owner's triage patch must resolve through the canonical owner set or
+        // it silently drops and the reconcile resurrects their dismiss forever.
+        if (!permitted && doc && table === "conversations") {
+          permitted = await isSessionOwner(ctx, doc._id as Id<"conversations">, userId);
+        }
         if (!permitted) continue;
         const finalSafe = config.beforePatch ? config.beforePatch(doc, { ...safe }) : safe;
         await ctx.db.patch(docKey as Id<any>, finalSafe);
