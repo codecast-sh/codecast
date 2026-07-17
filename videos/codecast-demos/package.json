@@ -1,0 +1,11 @@
+{
+  "name": "codecast-demos",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "npx --yes hyperframes@0.7.60 preview",
+    "check": "npx --yes hyperframes@0.7.60 check",
+    "render": "npx --yes hyperframes@0.7.60 render",
+    "publish": "npx --yes hyperframes@0.7.60 publish"
+  }
+}
