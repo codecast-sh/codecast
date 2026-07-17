@@ -105,7 +105,7 @@ import { resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickPr
 import type { AgentStatus, DeviceSnippetSettings, AgentClientId } from "@codecast/shared/contracts";
 import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug } from "@codecast/shared/contracts";
 import { parseModelPicker, planModelNavigation, SESSION_ONLY_COMMIT_RE, isSwitchConfirmDialog } from "./modelPicker";
-import type { Config } from "./config/types.js";
+import { type Config, getAgentArgs } from "./config/types.js";
 
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 const EXEC_TIMEOUT_MS = 10_000;
@@ -603,7 +603,7 @@ function getPermissionFlags(agentType: AgentClientId, config?: Config | null): s
     // from the web (or any non-CLI surface) inherit the user's expected dev defaults.
     return "--permission-mode bypassPermissions";
   } else if (agentType === "codex") {
-    const existing = config?.codex_args || "";
+    const existing = getAgentArgs(config, "codex") || "";
     if (existing.includes("--full-auto") || existing.includes("--ask-for-approval") || existing.includes("--dangerously-bypass")) return null;
     if (modes?.codex === "full_auto") return "--full-auto";
     if (modes?.codex === "default") return null;
@@ -635,13 +635,13 @@ export function buildBlankLaunchArgs(
 ): string[] {
   const permFlags = getPermissionFlags(agentType, config);
   if (agentType === "claude") {
-    const flags = combineClaudeResumeFlags(config?.claude_args, permFlags, false);
+    const flags = combineClaudeResumeFlags(getAgentArgs(config, "claude"), permFlags, false);
     return flags ? flags.split(/\s+/).filter(Boolean) : [];
   }
   if (agentType === "codex") {
     // getPermissionFlags already returns null when codex_args pins an approval
     // flag, so concatenating can't double up.
-    const flags = [config?.codex_args || "", permFlags || ""].filter(Boolean).join(" ");
+    const flags = [getAgentArgs(config, "codex") || "", permFlags || ""].filter(Boolean).join(" ");
     return flags ? flags.split(/\s+/).filter(Boolean) : [];
   }
   // cursor/gemini: no configured args or permission flags yet.
@@ -650,7 +650,7 @@ export function buildBlankLaunchArgs(
 
 function resolveCodexApprovalPolicy(config?: Config | null): ApprovalPolicy {
   const flags = getPermissionFlags("codex", config);
-  const codexArgs = config?.codex_args || "";
+  const codexArgs = getAgentArgs(config, "codex") || "";
   if (flags?.includes("--dangerously-bypass") || codexArgs.includes("--dangerously-bypass") || flags?.includes("--full-auto") || codexArgs.includes("--full-auto")) {
     return "never";
   }
@@ -2486,12 +2486,12 @@ async function executeRemoteCommand(
         let binaryArgs: string[] = [];
         if (agentType === "codex") {
           binary = "codex";
-          const extraArgs = config.codex_args || "";
+          const extraArgs = getAgentArgs(config, "codex") || "";
           if (extraArgs) binaryArgs.push(...extraArgs.split(/\s+/).filter(Boolean));
           const permFlags = getPermissionFlags(agentType, config);
           if (permFlags) {
             binaryArgs.push(...permFlags.split(/\s+/).filter(Boolean));
-            if (!config.codex_args && !config.agent_permission_modes?.codex) {
+            if (!getAgentArgs(config, "codex") && !config.agent_permission_modes?.codex) {
               const flagFile = path.join(CONFIG_DIR, ".codex-bypass-notified");
               if (!fs.existsSync(flagFile)) {
                 fs.writeFileSync(flagFile, new Date().toISOString());
@@ -2512,7 +2512,7 @@ async function executeRemoteCommand(
           binary = "gemini";
         } else {
           binary = "claude";
-          const extraArgs = config.claude_args || "";
+          const extraArgs = getAgentArgs(config, "claude") || "";
           if (extraArgs) binaryArgs.push(...extraArgs.split(/\s+/).filter(Boolean));
           const permFlags = getPermissionFlags(agentType, config);
           if (permFlags && !extraArgs.includes("--dangerously-skip-permissions") && !extraArgs.includes("--permission-mode") && !extraArgs.includes("--allow-dangerously-skip-permissions")) {
@@ -11130,7 +11130,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
   }
 
   const nonClaudeResumeCmd = buildNonClaudeResumeCommand(agentType, sessionId, {
-    codexArgs: config?.codex_args,
+    codexArgs: getAgentArgs(config, "codex"),
     codexPermFlags: agentType === "codex" ? getPermissionFlags("codex", config) : null,
   });
   if (nonClaudeResumeCmd !== null) {
@@ -11142,7 +11142,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
   } else {
     const jsonlBypass = extractJsonlPermissionMode(jsonlContent) === "bypassPermissions";
     const extraFlags = combineClaudeResumeFlags(
-      config?.claude_args,
+      getAgentArgs(config, "claude"),
       getPermissionFlags("claude", config),
       jsonlBypass,
     );

@@ -78,7 +78,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { detectRuntime, parseAgentMarkers as _parseAgentMarkers, type AgentRuntime, type AgentHandle } from "./agents/index.js";
 import { buildImplementerPrompt as _buildImplementerPrompt, buildReviewerPrompt, buildCriticPrompt, resolveTaskModel, resolveTaskModelFull, resolveFidelity, buildRetroPrompt, type FidelityLevel, type TypedRetro } from "./agents/index.js";
 import { checkbox, confirm, input, select } from "@inquirer/prompts";
-import type { Config } from "./config/types.js";
+import { type Config, getAgentArgs } from "./config/types.js";
 
 const program = new Command();
 
@@ -4261,6 +4261,11 @@ program
         if (config.excluded_paths) console.log(`  excluded_paths: ${config.excluded_paths}`);
         if (config.claude_args) console.log(`  claude_args: ${config.claude_args}`);
         if (config.codex_args) console.log(`  codex_args: ${config.codex_args}`);
+        if (config.agent_args) {
+          for (const [agent, a] of Object.entries(config.agent_args)) {
+            if (a) console.log(`  agent_args.${agent}: ${a}`);
+          }
+        }
         if (config.created_at) console.log(`  created_at: ${config.created_at}`);
         if (config.updated_at) console.log(`  updated_at: ${config.updated_at}`);
         const adp = config.agent_default_params;
@@ -6512,8 +6517,7 @@ program
 
 function resolveAgentArgs(agentType: string | undefined, cliOverride: string | undefined, config: Config): string | undefined {
   if (cliOverride) return cliOverride;
-  if (agentType === "codex") return config.codex_args;
-  return config.claude_args;
+  return getAgentArgs(config, agentType === "codex" ? "codex" : "claude");
 }
 
 async function convertAndLaunch(
@@ -6536,7 +6540,7 @@ async function convertAndLaunch(
     const { jsonl, sessionId } = generateCodexJsonl(data);
     writeCodexSession(jsonl, sessionId, "cc-import");
     console.log(`  Written Codex session: ${sessionId}`);
-    const resolvedArgs = extraArgs ?? config.codex_args;
+    const resolvedArgs = extraArgs ?? getAgentArgs(config, "codex");
     launchCodex(sessionId, resolvedArgs, showArgsHint, projectPath);
   } else {
     const estimatedTokens = estimateClaudeImportTokens(data);
@@ -6564,7 +6568,7 @@ async function convertAndLaunch(
     const { jsonl, sessionId } = generateClaudeCodeJsonl(data, { tailMessages });
     writeClaudeCodeSession(jsonl, sessionId, projectPath || undefined);
     console.log(`  Written Claude Code session: ${sessionId}`);
-    const resolvedArgs = extraArgs ?? config.claude_args;
+    const resolvedArgs = extraArgs ?? getAgentArgs(config, "claude");
     launchClaude(sessionId, resolvedArgs, showArgsHint, projectPath);
   }
 }
@@ -9345,7 +9349,7 @@ program
         if (targetAgent === "codex") {
           const { jsonl, sessionId } = generateCodexJsonl(data);
           writeCodexSession(jsonl, sessionId, "cc-import");
-          const resolvedArgs = options.claudeArgs ?? config.codex_args ?? "";
+          const resolvedArgs = options.claudeArgs ?? getAgentArgs(config, "codex") ?? "";
           const cmd = `codex resume ${sessionId}${resolvedArgs ? " " + resolvedArgs : ""}`;
           console.log(`\nResume command:\n  ${cmd}`);
           openInNewTab(cmd, launchCwd.path);
@@ -9374,7 +9378,7 @@ program
 
           const { jsonl, sessionId } = generateClaudeCodeJsonl(data, { tailMessages });
           writeClaudeCodeSession(jsonl, sessionId, launchCwd.path);
-          const resolvedArgs = options.claudeArgs ?? config.claude_args ?? "";
+          const resolvedArgs = options.claudeArgs ?? getAgentArgs(config, "claude") ?? "";
           const launchCmd = `claude --resume ${sessionId}${resumeModelFlag(jsonl, resolvedArgs)}${resumeEffortFlag(jsonl, resolvedArgs)}${resolvedArgs ? " " + resolvedArgs : ""}`;
           console.log(`\nResume command:\n  cast resume ${sessionId}`);
           openInNewTab(launchCmd, launchCwd.path);
@@ -14499,7 +14503,8 @@ program
   .action(async (_options, command) => {
     const { runClaudeWrapper } = await import("./claudeWrapper.js");
     const config = readConfig();
-    const defaultArgs = config?.claude_args ? config.claude_args.split(/\s+/).filter(Boolean) : [];
+    const claudeArgs = getAgentArgs(config, "claude");
+    const defaultArgs = claudeArgs ? claudeArgs.split(/\s+/).filter(Boolean) : [];
     const args = [...defaultArgs, ...command.args];
     await runClaudeWrapper(args);
   });
