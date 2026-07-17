@@ -18,7 +18,7 @@ import { useStorageImageUrl, hasDecodedSrc, markSrcDecoded } from "../hooks/useS
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName } from "../lib/conversationProcessor";
 import { classifyApiErrorBanner } from "@codecast/shared/contracts";
-import { formatToolName, isPlanWriteToolCall, truncateStr, shortenUrl, getRelativePath, stripLineNumbers } from "@codecast/shared/render";
+import { formatToolName, isPlanWriteToolCall, truncateStr, shortenUrl, getRelativePath, stripLineNumbers, structuredPayloadSummary } from "@codecast/shared/render";
 import { getBuiltinCommands } from "../lib/builtinCommands";
 import { resolveSessionSkills } from "../lib/sessionSkills";
 import { entityRoute } from "../lib/entityLinks";
@@ -45,7 +45,8 @@ import { ReviewBar } from "./ReviewBar";
 import { ReviewComposerContext } from "./reviewContext";
 import { CommentDock } from "./comments/CommentDock";
 import { useConversationCommentsSync } from "../hooks/useConversationComments";
-import { parseTriggerCadence } from "./triggerCadence";
+import { parseTriggerCadence, fmtDuration } from "./triggerCadence";
+import { monitorRowsFor, effectiveMonitorStatus, parseTaskNotificationBlock, isMonitorEventNotification, isMonitorEndedNotification, monitorNotificationDescription, decodeEntities, type MonitorStatus } from "./monitorRows";
 
 function copyMessageLink(conversationId: string | undefined, messageId: string) {
   const url = `${shareOrigin()}/conversation/${conversationId}#msg-${messageId}`;
@@ -128,7 +129,7 @@ import { parseFileChangeSummary, parseUnifiedDiffSections } from "../lib/unified
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
-import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench, Zap } from "lucide-react";
+import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench, Zap, Radar } from "lucide-react";
 import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES, labelMentionItems, matchScore } from "../hooks/useMentionQuery";
 import { pendingBannerState, isActiveAgentStatus, isBootingAgentStatus, type LiveAgentStatus } from "../lib/pendingBanner";
@@ -2340,19 +2341,6 @@ const ConversationTaskStatsMenuItem = memo(function ConversationTaskStatsMenuIte
   );
 });
 
-function truncateLines(text: string, maxLines: number): { text: string; truncated: boolean; totalLines: number } {
-  const lines = text.split("\n");
-  if (lines.length <= maxLines) {
-    return { text, truncated: false, totalLines: lines.length };
-  }
-  return {
-    text: lines.slice(0, maxLines).join("\n"),
-    truncated: true,
-    totalLines: lines.length,
-  };
-}
-
-
 function findMatchingChild(
   prompt: string,
   childConversations?: Array<{ _id: string; title: string; is_subagent?: boolean; first_message_preview?: string }>,
@@ -2756,7 +2744,9 @@ function getFileExtension(filePath: string): string | undefined {
 }
 
 function isAlwaysVisibleToolCall(tc: ToolCall): boolean {
-  return isPlanWriteToolCall(tc) || tc.name === "AskUserQuestion";
+  // Monitor stays visible in condensed feeds: it's standing state the reader
+  // needs to know is armed, not a transient tool step.
+  return isPlanWriteToolCall(tc) || tc.name === "AskUserQuestion" || tc.name === "Monitor";
 }
 
 interface ToolChangeRange {
@@ -2804,6 +2794,10 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
   const isGlob = tool.name === "Glob";
   const isGrep = tool.name === "Grep";
   const isCodeSearch = tool.name === "code_search" || tool.name === "code_analysis";
+  // Workflow subagents return their typed result by CALLING StructuredOutput:
+  // the input is the whole payload and the result is boilerplate, so rendering
+  // inverts — show the input, hide the result unless it's a validation error.
+  const isStructuredOutput = tool.name === "StructuredOutput";
 
   const { selectedChangeIndex, rangeStart, rangeEnd, selectChange, selectRange } = useDiffViewerStore();
 
@@ -2834,6 +2828,12 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
   const fileChangeDiffs = useMemo(
     () => (tool.name === "fileChange" ? parseUnifiedDiffSections(result?.content || "", fileChangePaths) : []),
     [tool.name, result?.content, fileChangePaths],
+  );
+  // Empty while the call is still streaming in (partial JSON fails to parse).
+  const structuredJson = useMemo(
+    () => (isStructuredOutput && Object.keys(parsedInput).length > 0 ? JSON.stringify(parsedInput, null, 2) : ""),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [isStructuredOutput, rawToolInput],
   );
 
   // Markdown file detection
@@ -2889,6 +2889,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
     if (isGlob && parsedInput.pattern) return String(parsedInput.pattern);
     if (isGrep && parsedInput.pattern) return String(parsedInput.pattern);
     if (isCodeSearch && parsedInput.query) return truncateStr(String(parsedInput.query), 40);
+    if (isStructuredOutput) return structuredPayloadSummary(parsedInput) || null;
 
     if (tool.name === "apply_patch") {
       if (applyPatchDiffs.length > 0) {
@@ -3110,6 +3111,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
     TeamCreate: "text-sol-cyan/80",
     TeamDelete: "text-sol-cyan/80",
     SendMessage: "text-amber-500/80",
+    StructuredOutput: "text-sol-cyan/80",
     TodoWrite: "text-sol-magenta/80",
     WebSearch: "text-sol-violet/80",
     WebFetch: "text-sol-cyan/80",
@@ -3489,6 +3491,21 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
                 document.body
               )}
             </>
+          ) : isStructuredOutput ? (
+            <div className="max-h-80 overflow-auto">
+              {structuredJson ? (
+                <DiffView oldStr={structuredJson} newStr={structuredJson} language="json" />
+              ) : rawToolInput ? (
+                <pre className="p-2 text-xs font-mono overflow-x-auto whitespace-pre-wrap text-sol-text-secondary">{rawToolInput}</pre>
+              ) : (
+                <div className="p-2 text-xs text-sol-text-dim">No output</div>
+              )}
+              {result?.is_error && processedContent && (
+                <pre className="p-2 text-xs font-mono overflow-x-auto whitespace-pre-wrap text-sol-red border-t border-sol-border/20">
+                  {renderAnsi(processedContent)}
+                </pre>
+              )}
+            </div>
           ) : processedContent && processedContent.trim() ? (
             <div className="max-h-80 overflow-auto">
               {isMarkdown && viewMode === 'rendered' ? (
@@ -4270,6 +4287,82 @@ function SkillBlock({ tool }: { tool: ToolCall }) {
   );
 }
 
+// Live status badge + latest event for a Monitor block, derived from the
+// conversation's message window (monitorRowsFor — one memoized scan shared by
+// all blocks). Same anatomy as the trigger block above: identity accent +
+// uppercase eyebrow + one-line gist, so standing machinery reads as one family.
+const MONITOR_BADGE: Record<MonitorStatus, { label: string; cls: string }> = {
+  watching: { label: "watching", cls: "bg-sol-green/10 text-sol-green border-sol-green/30" },
+  ended: { label: "ended", cls: "bg-sol-bg-alt text-sol-text-dim border-sol-border/50" },
+  timed_out: { label: "timed out", cls: "bg-sol-orange/10 text-sol-orange border-sol-orange/30" },
+  stopped: { label: "stopped", cls: "bg-sol-bg-alt text-sol-text-dim border-sol-border/50" },
+};
+
+function MonitorBlock({ tool, conversationId }: { tool: ToolCall; conversationId?: string }) {
+  let input: { command?: string; description?: string; timeout_ms?: number; persistent?: boolean } = {};
+  try { input = JSON.parse(tool.input); } catch {}
+  const [showCommand, setShowCommand] = useState(false);
+  const messages = useInboxStore((s) => (conversationId ? s.messages[conversationId] : undefined));
+  const row = useMemo(() => monitorRowsFor(messages).find((r) => r.toolUseId === tool.id), [messages, tool.id]);
+  const status: MonitorStatus = row ? effectiveMonitorStatus(row, Date.now()) : "watching";
+  const badge = MONITOR_BADGE[status];
+  const watching = status === "watching";
+  const commandFirstLine = (input.command || "").split("\n").find((l) => l.trim()) || "";
+
+  return (
+    <div className={`my-1 rounded border-l-2 ${watching ? "border-sol-blue/60 bg-sol-blue/5" : "border-sol-border/60 bg-sol-bg-alt/30"}`}>
+      <div className="flex items-center gap-2 px-3 pt-2 pb-1 min-w-0">
+        <Radar className={`w-3.5 h-3.5 shrink-0 ${watching ? "text-sol-blue/70" : "text-sol-text-dim"}`} />
+        <span className={`text-[11px] font-medium tracking-wide uppercase shrink-0 ${watching ? "text-sol-blue/70" : "text-sol-text-dim"}`}>Monitor</span>
+        {input.persistent && (
+          <ShortcutTooltip label="Runs until TaskStop or session end — not a one-shot watch">
+            <span className="px-1 py-0 rounded border text-[9px] font-semibold shrink-0 border-sol-blue/40 text-sol-blue/90 bg-sol-blue/10">persistent</span>
+          </ShortcutTooltip>
+        )}
+        <span className="text-xs text-sol-text truncate min-w-0">{input.description || "background watch"}</span>
+        {(row?.eventCount ?? 0) > 0 && (
+          <span className="ml-auto shrink-0 text-[10px] text-sol-text-dim tabular-nums">
+            {row!.eventCount} event{row!.eventCount === 1 ? "" : "s"}
+          </span>
+        )}
+        <span
+          className={`${(row?.eventCount ?? 0) > 0 ? "" : "ml-auto "}shrink-0 inline-flex items-center gap-1 px-1.5 py-0 rounded text-[9px] font-semibold border ${badge.cls}`}
+          title={input.timeout_ms !== undefined ? `Timeout: ${fmtDuration(input.timeout_ms)}` : undefined}
+        >
+          {watching && <span className="w-1 h-1 rounded-full bg-sol-green animate-pulse motion-reduce:animate-none" />}
+          {badge.label}
+        </span>
+      </div>
+      {input.command && (
+        <button
+          onClick={() => setShowCommand((v) => !v)}
+          className="w-full text-left px-3 pb-1.5 font-mono text-[11px] text-sol-text-dim hover:text-sol-text-muted transition-colors"
+          title={showCommand ? "Collapse the watch command" : "Show the full watch command"}
+        >
+          {showCommand ? (
+            <pre className="whitespace-pre-wrap break-words">{input.command}</pre>
+          ) : (
+            <span className="block truncate">{commandFirstLine}</span>
+          )}
+        </button>
+      )}
+      {row?.lastEvent && (
+        <div className="mx-3 mb-2 flex items-baseline gap-1.5 min-w-0 text-[11px] leading-snug">
+          <span className={`truncate min-w-0 font-medium ${watching ? "text-sol-text-muted" : "text-sol-text-dim"}`}>
+            <span className="mr-0.5 text-sol-blue/50">&gt;</span>
+            {row.lastEvent}
+          </span>
+          {row.lastEventAt !== undefined && (
+            <span className="ml-auto shrink-0 text-[10px] text-sol-text-dim whitespace-nowrap" title={formatFullTimestamp(row.lastEventAt)}>
+              {formatRelativeTime(row.lastEventAt)}
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PlanModeBlock({ tool, result, conversationId, messageId, onSendMessage }: { tool: ToolCall; result?: ToolResult; conversationId?: string; messageId?: string; onSendMessage?: (content: string) => void }) {
   const isEnter = tool.name === "EnterPlanMode";
   const isExit = tool.name === "ExitPlanMode";
@@ -4723,44 +4816,6 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
   );
 }
 
-function ThinkingBlock({ content, showContent = true }: { content: string; showContent?: boolean }) {
-  const [expanded, setExpanded] = useState(false);
-  const truncated = truncateLines(content, expanded ? 50 : 2);
-  const isLong = truncated.truncated || content.length > 200;
-
-  if (!showContent) {
-    return (
-      <div className="my-0.5 opacity-30 text-xs text-sol-text-muted italic">
-        thinking...
-      </div>
-    );
-  }
-
-  return (
-    <div className="my-0.5 opacity-50">
-      <div
-        className={`flex items-start gap-1 ${isLong || expanded ? 'cursor-pointer' : ''}`}
-        onClick={() => (isLong || expanded) && setExpanded(!expanded)}
-      >
-        {(isLong || expanded) && (
-          <svg
-            className={`w-3 h-3 mt-0.5 shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`}
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-          </svg>
-        )}
-        <div className="flex-1 text-sol-text-muted font-mono whitespace-pre-wrap break-words text-xs">
-          {truncated.text}
-          {truncated.truncated && !expanded && "..."}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 const IMAGE_COLLAPSED_HEIGHT = 100;
 
 function useSwipeToDismiss(onDismiss: () => void) {
@@ -5175,15 +5230,9 @@ function isTaskNotification(content: string): boolean {
   return content.trim().startsWith('<task-notification>');
 }
 
-function parseTaskNotification(content: string): { taskId: string; status: string; summary: string; outputFile?: string } | null {
-  const match = content.match(/<task-notification>([\s\S]*?)<\/task-notification>/);
-  if (!match) return null;
-  const inner = match[1];
-  const taskId = inner.match(/<task-id>(.*?)<\/task-id>/)?.[1] || '';
-  const status = inner.match(/<status>(.*?)<\/status>/)?.[1] || '';
-  const summary = inner.match(/<summary>(.*?)<\/summary>/)?.[1] || '';
-  const outputFile = inner.match(/<output-file>(.*?)<\/output-file>/)?.[1];
-  return { taskId, status, summary, outputFile };
+function parseTaskNotification(content: string) {
+  const match = content.match(/<task-notification>[\s\S]*?<\/task-notification>/);
+  return match ? parseTaskNotificationBlock(match[0]) : null;
 }
 
 function isCompactionPromptMessage(content: string): boolean {
@@ -5215,6 +5264,35 @@ function TaskNotificationLine({ content, timestamp, agentNameToChildMap }: { con
   const parsed = parseTaskNotification(content);
   const router = useRouter();
   if (!parsed) return null;
+
+  // Monitor traffic wears the monitor identity (radar, blue), not the generic
+  // task line: an event shows WHAT the watch saw, the stream end reads as the
+  // watch quietly folding — both tie back to their MonitorBlock by description.
+  if (isMonitorEventNotification(parsed) && parsed.event) {
+    const desc = monitorNotificationDescription(parsed);
+    return (
+      <div className="mb-2 px-3 py-1.5 flex items-center gap-2 text-xs border rounded border-sol-blue/20 bg-sol-blue/5">
+        <Radar className="w-3.5 h-3.5 shrink-0 text-sol-blue/70" />
+        <span className="text-[10px] font-medium tracking-wide uppercase text-sol-blue/70 shrink-0">monitor</span>
+        <span className="text-sol-text-muted min-w-0 truncate" title={desc ? `Monitor: ${desc}` : undefined}>
+          {decodeEntities(parsed.event)}
+        </span>
+        <span className="text-sol-text-dim shrink-0 whitespace-nowrap ml-auto" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+      </div>
+    );
+  }
+  if (isMonitorEndedNotification(parsed)) {
+    const desc = monitorNotificationDescription(parsed);
+    return (
+      <div className="mb-2 px-3 py-1.5 flex items-center gap-2 text-xs border rounded border-sol-border/40 bg-sol-bg-alt/30">
+        <Radar className="w-3.5 h-3.5 shrink-0 text-sol-text-dim" />
+        <span className="text-[10px] font-medium tracking-wide uppercase text-sol-text-dim shrink-0">monitor ended</span>
+        {desc && <span className="text-sol-text-dim min-w-0 truncate">{desc}</span>}
+        <span className="text-sol-text-dim shrink-0 whitespace-nowrap ml-auto" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+      </div>
+    );
+  }
+
   const cfg = taskStatusConfig[parsed.status] || taskStatusConfig.killed;
 
   let childId: string | undefined;
@@ -6403,8 +6481,6 @@ const CompactCollapsedTurn = memo(function CompactCollapsedTurn({ content, onExp
 function AssistantBlockImpl({
   content,
   timestamp,
-  thinking,
-  showThinking,
   toolCalls,
   toolResults,
   images,
@@ -6444,8 +6520,6 @@ function AssistantBlockImpl({
 }: {
   content?: string;
   timestamp: number;
-  thinking?: string;
-  showThinking?: boolean;
   toolCalls?: ToolCall[];
   toolResults?: ToolResult[];
   images?: ImageData[];
@@ -6504,7 +6578,6 @@ function AssistantBlockImpl({
   const parsedApiError = useMemo(() => parseApiErrorContent(displayContent), [displayContent]);
   const onlyAskUser = toolCalls && toolCalls.length > 0 && toolCalls.every(tc => tc.name === "AskUserQuestion");
   const hasContent = displayContent && displayContent.trim().length > 0 && !onlyAskUser;
-  const hasThinking = thinking && thinking.trim().length > 0;
   const hasToolCalls = toolCalls && toolCalls.length > 0;
   const hasImages = images?.some(img => !img.tool_use_id) ?? false;
 
@@ -6545,7 +6618,7 @@ function AssistantBlockImpl({
     return () => { document.removeEventListener('keydown', handleKey); document.body.style.overflow = ''; };
   }, [fullscreen]);
 
-  if (!hasContent && !hasThinking && !hasToolCalls && !hasImages) {
+  if (!hasContent && !hasToolCalls && !hasImages) {
     return null;
   }
 
@@ -6558,10 +6631,9 @@ function AssistantBlockImpl({
   const handleCopyLink = () => copyMessageLink(conversationId, messageId);
 
   // Show Claude header for first message in sequence (regardless of content type)
-  const visibleThinking = hasThinking && showThinking;
   const shouldShowHeader = showHeader;
-  const onlyToolCalls = hasToolCalls && !hasContent && !visibleThinking;
-  const hasVisibleContent = hasContent || visibleThinking || hasToolCalls || hasImages;
+  const onlyToolCalls = hasToolCalls && !hasContent;
+  const hasVisibleContent = hasContent || hasToolCalls || hasImages;
 
   // When nothing visible, hide completely
   if (!hasVisibleContent) {
@@ -6658,8 +6730,6 @@ function AssistantBlockImpl({
       <div className={shouldShowHeader || !showHeader ? "pl-8" : "pl-0"}>
         {hasImages && images?.filter(img => !img.tool_use_id).map((img, i) => <ImageBlock key={i} image={img} />)}
 
-        {!effectiveCondensed && hasThinking && showThinking && <ThinkingBlock content={thinking!} showContent={showThinking} />}
-
         {hasToolCalls && toolCalls?.map((tc) => {
           if (effectiveCondensed && !isAlwaysVisibleToolCall(tc)) return null;
           return (tc.name === "Task" || tc.name === "Agent") ? (
@@ -6686,6 +6756,8 @@ function AssistantBlockImpl({
             <WorkflowToolBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} />
           ) : tc.name === "Skill" ? (
             <SkillBlock key={tc.id} tool={tc} />
+          ) : tc.name === "Monitor" ? (
+            <MonitorBlock key={tc.id} tool={tc} conversationId={conversationId} />
           ) : tc.name === "EnterPlanMode" || tc.name === "ExitPlanMode" ? (
             <PlanModeBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} conversationId={conversationId} messageId={messageId} onSendMessage={onSendInlineMessage} />
           ) : parseCastCommand(tc) ? (
@@ -9702,7 +9774,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     prevFeedDensityRef.current = feedDensity;
     if (expandedTurns.size) setExpandedTurns(new Set());
   }
-  const [showThinking, setShowThinking] = useState(false);
   const [diffExpanded, setDiffExpanded] = useState(false);
   const convex = useConvex();
   const convexConvId = conversation?._id && isConvexId(conversation._id) ? conversation._id as Id<"conversations"> : undefined;
@@ -9833,7 +9904,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     setIsNearBottom(true);
     setDensityState((conversation?._id && DENSITY_BY_CONVERSATION.get(conversation._id)) || "full");
     setExpandedTurns(new Set());
-    setShowThinking(false);
     setDiffExpanded(false);
     setHighlightedMessageId(null);
     setAllMatchingMessageIds([]);
@@ -11629,10 +11699,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     copyToClipboard(url).then(() => toast.success("Link copied!"));
   }, [conversation?._id]));
 
-  useShortcutAction('conv.toggleThinking', useCallback(() => {
-    setShowThinking((s) => !s);
-  }, []));
-
   useShortcutAction('conv.favorite', useCallback(() => {
     if (!conversation || !isOwner) return;
     toggleFavoriteMutation(conversation._id);
@@ -12661,7 +12727,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       if (isHiddenStubMessage(msg)) return null;
 
       // Find previous VISIBLE non-commit assistant item to determine if this is first in assistant sequence
-      // Skip invisible assistant messages (those whose content is only system tags with no tool calls/thinking/images)
+      // Skip invisible assistant messages (those whose content is only system tags with no tool calls/images)
       let prevIdx = index - 1;
       while (prevIdx >= 0) {
         const checkItem = timeline[prevIdx];
@@ -12671,7 +12737,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         if (checkMsg.role !== 'assistant') break;
         const hasVisibleContent = (checkMsg.content && stripSystemTags(checkMsg.content).trim().length > 0)
           || (checkMsg.tool_calls && checkMsg.tool_calls.length > 0)
-          || (showThinking && checkMsg.thinking && checkMsg.thinking.trim().length > 0)
           || (checkMsg.images && checkMsg.images.length > 0);
         if (hasVisibleContent) break;
         prevIdx--;
@@ -12747,8 +12812,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           key={msg._id}
           content={msg.content}
           timestamp={msg.timestamp}
-          thinking={msg.thinking}
-          showThinking={showThinking}
           toolCalls={msg.tool_calls}
           toolResults={relevantToolResults}
           images={msg.images}
@@ -13239,10 +13302,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                       </DropdownMenuItem>
                     )}
                     <DropdownMenuSeparator />
-                    <DropdownMenuItem onClick={() => setShowThinking((s) => !s)}>
-                      {showThinking ? "Hide thinking" : "Show thinking"}
-                      <MenuKeyCaps action="conv.toggleThinking" />
-                    </DropdownMenuItem>
                     <DropdownMenuItem onClick={() => {
                       const next = !stickyDisabled;
                       updateUI({ sticky_headers_disabled: next });
