@@ -2,7 +2,7 @@ import { mutation, query, internalMutation, internalQuery, type QueryCtx, type M
 import { v } from "convex/values";
 import { enqueueStartSession, resolveOwnerDevice } from "./devices";
 import { findConversationBySessionReference, resolveConversationRefRanked, findConversationByAnyRefWhere } from "./conversationSessionLookup";
-import { applyHideTransition } from "./cleanup";
+import { applyHideTransition, cascadeHideToNestedChildren } from "./cleanup";
 import { paginationOptsValidator } from "convex/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Doc, Id } from "./_generated/dataModel";
@@ -8203,6 +8203,17 @@ async function listHiddenSessionsLite(
 ) {
   const userId = await getAuthUserId(ctx);
   if (!userId) return { page: [], isDone: true, continueCursor: "" };
+  return collectHiddenSessionsLite(ctx, userId, args, index, field);
+}
+
+// Auth-free body, exported for tests (perform* convention).
+export async function collectHiddenSessionsLite(
+  ctx: any,
+  userId: any,
+  args: { paginationOpts: any; since?: number },
+  index: "by_user_dismissed" | "by_user_stashed",
+  field: "inbox_dismissed_at" | "inbox_stashed_at",
+) {
   const cutoff = args.since ?? Date.now() - INBOX_DISMISSED_WINDOW_MS;
   const result = await ctx.db
     .query("conversations")
@@ -8213,6 +8224,30 @@ async function listHiddenSessionsLite(
     _id: c._id,
     [field]: c[field] ?? null,
   }));
+  // Sessions ASSIGNED to this user (session_owners) but run by another account
+  // live outside the by_user index above, yet the client's reconcile CLEAR pass
+  // arbitrates them like any cached row — if their hide is missing from this
+  // set, every complete crawl un-hides them ("dismiss doesn't stick"). Append
+  // the owner-set's hidden rows on the final page: outside the paginated index
+  // scan, so cursors stay untouched, and present in the whole-set the CLEAR
+  // gate checks. Bounded by the same 200-owner cap as the inbox scan.
+  if (result.isDone) {
+    const ownerRows = await ctx.db
+      .query("session_owners")
+      .withIndex("by_user", (q: any) => q.eq("user_id", userId))
+      .take(200);
+    const seen = new Set(page.map((r: any) => r._id.toString()));
+    for (const r of ownerRows) {
+      const idStr = r.conversation_id.toString();
+      if (seen.has(idStr)) continue;
+      let conv: any = null;
+      try { conv = await ctx.db.get(r.conversation_id); } catch { conv = null; }
+      if (!conv || conv.user_id.toString() === userId.toString()) continue;
+      const at = conv[field];
+      if (!at || at < cutoff) continue;
+      page.push({ _id: conv._id, [field]: at });
+    }
+  }
   return { page, isDone: result.isDone, continueCursor: result.continueCursor };
 }
 
@@ -8252,7 +8287,14 @@ export const existingConversationIds = query({
       const id = ctx.db.normalizeId("conversations", raw);
       if (!id) continue;
       const conv = await ctx.db.get(id);
-      if (conv && conv.user_id.toString() === userId.toString()) out.push(raw);
+      if (!conv) continue;
+      // Vouch for rows the caller runs OR owns (assigned sessions) — reading a
+      // live assigned session as "gone" would ghost-prune it with a sticky
+      // exclude, permanently blinding this client to it.
+      if (
+        conv.user_id.toString() === userId.toString() ||
+        (await isSessionOwner(ctx, id, userId))
+      ) out.push(raw);
     }
     return out;
   },
@@ -8450,7 +8492,10 @@ export const cliSetSessionVisibility = mutation({
     await ctx.db.patch(conv._id, patch);
     // `conv` is the pre-patch row — applyHideTransition gates on the transition.
     const { action: outcome, canceledSchedules } = await applyHideTransition(ctx, conv, patch);
-    return { ok: true as const, short_id: shortId, action: args.action, outcome, canceled_schedules: canceledSchedules };
+    // The nested group (Task subagents + agent-team teammates) comes down with
+    // the card, same as the web gesture — see cascadeHideToNestedChildren.
+    const cascaded = await cascadeHideToNestedChildren(ctx, conv, patch);
+    return { ok: true as const, short_id: shortId, action: args.action, outcome, canceled_schedules: canceledSchedules, cascaded_children: cascaded };
   },
 });
 
@@ -9615,6 +9660,11 @@ export const killSession = mutation({
       if (conv.user_id !== userId) {
         canceledSchedules += await cancelTasksBoundToConversation(ctx, userId, args.conversation_id);
       }
+      // Take the nested group (Task subagents + agent-team teammates) down
+      // with the card. The web store also sweeps optimistically for its own
+      // gesture; this server twin covers every other caller, and the
+      // already-hidden skip inside makes the two paths race-safe.
+      await cascadeHideToNestedChildren(ctx, conv, { inbox_dismissed_at: Date.now() });
     }
     return { existed: !!conv, canceled_schedules: canceledSchedules };
   },
