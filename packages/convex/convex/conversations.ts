@@ -1002,7 +1002,7 @@ export const createQuickSession = mutation({
       short_id: conversationId.toString().slice(0, 7),
     });
 
-    const daemonAgentType = agentType === "codex" ? "codex" : agentType === "gemini" ? "gemini" : "claude";
+    const daemonAgentType = fromConvexAgentType(agentType);
     await enqueueStartSession(ctx, userId, {
       conversationId,
       agentType: daemonAgentType,
@@ -8770,8 +8770,7 @@ export const reconfigureSession = mutation({
     // deterministic name `cc-<agent>-<convId-suffix>` and respawns it. One
     // command, last-write-wins, no two-step kill+start race.
     const updated = { ...conv, ...patch };
-    const agentType = updated.agent_type || "claude_code";
-    const daemonAgentType = agentType === "codex" ? "codex" : agentType === "gemini" ? "gemini" : "claude";
+    const daemonAgentType = fromConvexAgentType(updated.agent_type);
     // Re-derive the launch payload from the (possibly just-patched) stamps so
     // an agent flip alone re-launches with the conversation's chosen model.
     const stampedModelKey = (() => {
@@ -9792,8 +9791,7 @@ export const switchSessionProject = mutation({
       git_root: args.project_path,
     });
 
-    const agentType = conv.agent_type || "claude_code";
-    const daemonAgentType = agentType === "codex" ? "codex" : agentType === "gemini" ? "gemini" : "claude";
+    const daemonAgentType = fromConvexAgentType(conv.agent_type);
     await enqueueStartSession(ctx, conv.user_id, {
       conversationId: args.conversation_id,
       agentType: daemonAgentType,
