@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef, memo, useMemo } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
-import { useMutation, useQuery } from "convex/react";
+import { useConvex, useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useRouter } from "next/navigation";
@@ -24,8 +24,9 @@ import { cleanTitle, msgCountColor, formatModel } from "../lib/conversationProce
 import { getLabelColor } from "../lib/labelColors";
 import Link from "next/link";
 import { fmtClock, fmtDuration, describeTaskCadence, isTaskOverdue, taskStateLabel } from "./triggerCadence";
-import { partitionTriggerInbox, patchTaskInWebList, taskDisplayTitle, type TriggerRow, type TaskRow } from "./triggerTasks";
-import { TriggerRunList, useTriggerRuns } from "./TriggerRunHistory";
+import { monitorRowsFor, effectiveMonitorStatus } from "./monitorRows";
+import { partitionTriggerInbox, patchTaskInWebList, taskDisplayTitle, latestLoadedTriggerMessage, type TriggerRow, type TaskRow } from "./triggerTasks";
+import { TriggerRunList, useTriggerRuns, openRunInStore, type TriggerRun } from "./TriggerRunHistory";
 import { cleanUserMessage } from "./sessionMessage";
 import { SharePopover } from "./SharePopover";
 import { shareOrigin } from "../lib/utils";
@@ -987,6 +988,91 @@ function TriggerRowItem({ row, activeSessionId, onOpen, attached, highlighted, p
         </div>
       )}
     </div>
+  );
+}
+
+// -- Monitor bars (live background watches) --
+// A live Monitor (the harness background-watch tool) stacks under its session
+// card exactly like the schedule bars above: same ↳ child idiom and two-line
+// header + subrow anatomy, in monitor blue so it can't blur into schedule
+// orange or subagent violet. Rows derive client-side from the conversation's
+// loaded message window (monitorRowsFor) — no server row exists for monitors,
+// so a conversation whose messages aren't in the store shows no bars rather
+// than guessed state. "Watching" is only claimed while the session itself is
+// believable: not stopped, and inside the shared status-trust TTL — the same
+// predicate the card's own "working" claims use, so the two can't disagree.
+function MonitorBars({ session, isActive, onOpen }: {
+  session: InboxSession;
+  isActive: boolean;
+  onOpen: (session: InboxSession) => void;
+}) {
+  const messages = useInboxStore((st) => st.messages[session._id]);
+  const now = useCoarseNow(30_000);
+  const rows = useMemo(() => monitorRowsFor(messages), [messages]);
+  if (session.agent_status === "stopped" || isStatusTrustStale(session, now)) return null;
+  const watching = rows.filter((r) => effectiveMonitorStatus(r, now) === "watching");
+  if (watching.length === 0) return null;
+  return (
+    <>
+      {watching.map((row) => (
+        <div key={row.toolUseId} className={`group/monrow relative transition-colors ${isActive ? "bg-sol-cyan/[0.10]" : ""}`}>
+          <button
+            className="w-full text-left cursor-pointer pr-3 pl-2 py-1 hover:bg-sol-blue/[0.05] transition-colors"
+            onClick={() => onOpen(session)}
+          >
+            <div className="flex gap-1.5 min-w-0">
+              {/* Same corner arrow the schedule/subagent child rows carry, in
+                  monitor blue: this watch runs inside the card above. */}
+              <span className="flex items-center mt-[2px] shrink-0 text-sol-blue/70" role="img" aria-label="Monitor — watching inside this session">
+                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <title>Monitor — watching inside this session</title>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M14 12l4 4-4 4" />
+                </svg>
+              </span>
+              <div className="min-w-0 flex-1">
+                {/* Header line: identity eyebrow, what's being watched, and the
+                    live badge with how long the watch has been standing. */}
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span className="text-[9px] font-semibold uppercase tracking-wider text-sol-blue/70 shrink-0">Monitor</span>
+                  <span className="text-xs truncate min-w-0 text-gray-400 font-normal">{row.description}</span>
+                  {/* Header carries ONLY identity + badge — the bar is
+                      space-starved (esp. with the panel narrow), so event/time
+                      meta lives on the subrow and the persistent chip rides
+                      the badge tooltip; the conversation block keeps the chip. */}
+                  <ShortcutTooltip label={row.persistent ? "Persistent watch — runs until TaskStop or session end" : `One-shot watch${row.timeoutMs !== undefined ? ` — times out after ${fmtDuration(row.timeoutMs)}` : ""}`}>
+                    <span className="ml-auto shrink-0 inline-flex items-center gap-1 justify-center min-w-[46px] px-1 py-0 rounded text-[9px] font-semibold border bg-sol-green/10 text-sol-green border-sol-green/30">
+                      <span className="w-1 h-1 rounded-full bg-sol-green animate-pulse motion-reduce:animate-none" />
+                      watching
+                    </span>
+                  </ShortcutTooltip>
+                </div>
+                {/* Subrow: the last thing the watch saw (machine voice), or the
+                    command it's running while nothing has fired yet — plus the
+                    watch's clock (event count / age) on the right. */}
+                <div className="flex items-baseline gap-1.5 mt-0.5 min-w-0">
+                  {row.lastEvent ? (
+                    <span className="flex-1 min-w-0 truncate text-[11px] leading-snug font-medium text-sol-text-muted">
+                      <span className="mr-0.5 text-sol-blue/50">&gt;</span>
+                      {row.lastEvent}
+                    </span>
+                  ) : (
+                    <span className="flex-1 min-w-0 truncate text-[11px] leading-snug font-mono text-sol-text-dim">
+                      {row.command.split("\n").find((l) => l.trim()) || "background watch"}
+                    </span>
+                  )}
+                  <span className="shrink-0 text-[10px] tabular-nums text-sol-text-dim">
+                    {row.eventCount > 0
+                      ? `${row.eventCount} event${row.eventCount === 1 ? "" : "s"}${row.lastEventAt !== undefined ? ` · ${fmtDuration(Math.max(0, now - row.lastEventAt))} ago` : ""}`
+                      : `for ${fmtDuration(Math.max(0, now - row.startedAt))}`}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </button>
+        </div>
+      ))}
+    </>
   );
 }
 
@@ -2077,6 +2163,10 @@ export function SessionListPanel({
     }
   }, [onSessionSelect]);
 
+  // One-shot queries (the schedule-row click's run-list lookup) — not a
+  // subscription, so a resting panel costs nothing.
+  const convex = useConvex();
+
   const pendingSendIds = useMemo(() => sessionsWithPendingSend(s.pendingMessages), [s.pendingMessages]);
   // The blank you're viewing (or one mid-create) stays visible in NEW; all
   // other never-engaged pre-warm blanks are hidden by categorizeSessions.
@@ -2258,15 +2348,49 @@ export function SessionListPanel({
   // whose conversation isn't in the local cache) falls back to the schedule's
   // own row on /schedules — ?task= arrives expanded and scrolled into view —
   // so a row click is never a silent no-op.
+  // A trigger that has FIRED before also lands on its most recent firing (the
+  // same target the newest run-history entry opens) instead of the tail. The
+  // trigger message resolves synchronously from the loaded window when it's
+  // there; otherwise the conversation opens immediately and the run-list query
+  // supplies the scroll target when it answers (local-first: the click never
+  // waits on the server). A late answer only scrolls if the user is still on
+  // the conversation this click opened — never a second jump elsewhere.
   const openScheduleTarget = useCallback((row: TriggerRow) => {
-    const sess = row.openId ? useInboxStore.getState().sessions[row.openId] : undefined;
+    const st = useInboxStore.getState();
+    const sess = row.openId ? st.sessions[row.openId] : undefined;
     if (!sess) {
       router.push(`/triggers?task=${row.task._id}`);
       return;
     }
-    useInboxStore.getState().setScheduleStripExpand({ convId: sess._id, nonce: Date.now() });
+    st.setScheduleStripExpand({ convId: sess._id, nonce: Date.now() });
+    const hasRun = row.task.run_count > 0 || row.task.last_run_at !== undefined;
+    const local = hasRun ? latestLoadedTriggerMessage(st.messages[sess._id], row.task._id) : undefined;
+    if (local) {
+      st.requestNavigate(sess._id, {
+        scrollToMessageId: local.messageId,
+        scrollToMessageTimestamp: local.timestamp,
+      });
+      return;
+    }
+    // Captured BEFORE the select: the query below often answers before the
+    // router commits the navigation, so "user is still here" must accept a
+    // view that hasn't moved yet — only a view pointing somewhere genuinely
+    // NEW (neither the destination nor where we stood) means the user left.
+    const beforeIds = new Set([st.currentSessionId, st.viewingDismissedId].filter(Boolean));
     handleSelect(sess);
-  }, [handleSelect, router]);
+    if (!hasRun) return;
+    convex
+      .query(api.agentTasks.webListRuns, { task_id: row.task._id as Id<"agent_tasks"> })
+      .then((runs: TriggerRun[]) => {
+        const run = runs?.[0];
+        if (!run?.trigger_message_id || run._id !== sess._id) return;
+        const now = useInboxStore.getState();
+        const visible = [now.currentSessionId, now.pendingNavigateId, now.viewingDismissedId].filter(Boolean) as string[];
+        const stillHere = visible.some((id) => id === sess._id) || visible.every((id) => beforeIds.has(id));
+        if (stillHere) openRunInStore(run);
+      })
+      .catch(() => {});
+  }, [handleSelect, router, convex]);
   // Schedule bars under cards: the schedules bound to a VISIBLE session — the
   // ones it originates (inject, any type) plus, for a run card, the schedule
   // that spawned it. Keyed off partition.rows so bars share the unread state.
@@ -2786,6 +2910,7 @@ export function SessionListPanel({
                     attached
                   />
                 ))}
+                <MonitorBars session={session} isActive={session._id === activeSessionId} onOpen={handleSelect} />
                 {(subMap.get(session._id) ?? []).filter((sub) => showSubagents || sub._id === activeSessionId).map((sub) => (
                   <SessionCard
                     key={sub._id}
@@ -2988,6 +3113,7 @@ export function SessionListPanel({
                     attached
                   />
                 ))}
+                <MonitorBars session={session} isActive={session._id === activeSessionId} onOpen={handleSelect} />
                 {visibleSubs.map((sub) => (
                   <SessionCard
                     key={sub._id}
