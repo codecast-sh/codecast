@@ -85,6 +85,12 @@ export function isUsageExhausted(usage: CcUsage | undefined | null, now: number)
 // An account that parked sessions is spent for its rolling 5h window; after
 // that it becomes a candidate again even without fresh usage data.
 export const AUTO_SWITCH_SESSION_WINDOW_MS = 5 * 60 * 60 * 1000;
+// A usage snapshot can overrule an attempt's blackout only if it was fetched
+// this long after the attempt: by then the switch has settled (kill + resume
+// + continue takes a couple of minutes) and a limit the fleet hit right away
+// would already show in the probe. In practice the override waits for the
+// ~5-min usage refresh cadence on top of this.
+export const AUTO_SWITCH_ATTEMPT_EVIDENCE_MS = 5 * 60 * 1000;
 // The attempt-history key for a same-account "continue" (no profile involved).
 export const AUTO_SWITCH_CONTINUE_KEY = "__continue__";
 
@@ -108,8 +114,12 @@ export type AutoSwitchDecision =
  *     active account, accounts with a pegged un-reset window, and accounts
  *     already tried this window (an attempt OLDER than the newest park means
  *     sessions parked again after we switched to it — it's spent until its
- *     window rolls). Unknown usage ranks after known headroom: eligible, just
- *     unproven.
+ *     window rolls). A usage snapshot fetched after the attempt settled and
+ *     showing headroom overrules that blackout: attempts are inferred from
+ *     park timestamps, and parks stamped by sessions still mid-recovery from
+ *     the switch are indistinguishable from a real limit on the new account,
+ *     so the account's own probe is the stronger signal. Unknown usage ranks
+ *     after known headroom: eligible, just unproven.
  *  3. exhausted — retry at the earliest known window reset (hourly fallback).
  */
 export function decideAutoSwitch(input: {
@@ -144,7 +154,14 @@ export function decideAutoSwitch(input: {
     if (isUsageExhausted(p.usage, now)) return false;
     const att = lastAttemptAt(p.name);
     if (att && att >= parkedAt) return false; // switch in flight — wait
-    if (att && now - att < AUTO_SWITCH_SESSION_WINDOW_MS) return false; // spent this window
+    if (att && now - att < AUTO_SWITCH_SESSION_WINDOW_MS) {
+      // Spent this window — unless a usage snapshot fetched after the attempt
+      // settled proves otherwise (isUsageExhausted already cleared it above).
+      // Each failed retry records a fresh attempt, pushing the required
+      // evidence forward, so this can't flap faster than the probe cadence.
+      const evidenceAt = p.usage?.fetched_at ?? 0;
+      if (evidenceAt < att + AUTO_SWITCH_ATTEMPT_EVIDENCE_MS) return false;
+    }
     return true;
   });
   const score = (p: AutoSwitchProfile): number =>
