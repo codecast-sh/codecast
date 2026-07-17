@@ -4,9 +4,11 @@ import * as os from "os";
 import * as path from "path";
 import {
   CLAUDE_UUID_RE,
+  buildNonClaudeResumeCommand,
   combineClaudeResumeFlags,
   copyJsonlAsSession,
   extractJsonlPermissionMode,
+  resumeTmuxPrefix,
   rewriteSubagentJsonlToUuid,
 } from "./resumeCommand.js";
 
@@ -210,5 +212,48 @@ describe("copyJsonlAsSession", () => {
     fs.mkdirSync(dir, { recursive: true });
     trash.push(dir);
     expect(copyJsonlAsSession(path.join(dir, "missing.jsonl"), PARENT, FORK)).toBeNull();
+  });
+});
+
+// Regression: a cursor session used to fall through the resume builder's
+// codex/gemini branches into the else, which builds `claude --resume` and runs
+// Claude's repair machinery (UUID rewrite, JSONL relocation, model/effort
+// recovery) against a cursor transcript — wrong binary entirely. cursor-agent
+// resumes a chat by id via `--resume`, so cursor must get its own branch.
+describe("buildNonClaudeResumeCommand", () => {
+  test("cursor resumes with cursor-agent --resume <id> (not claude --resume)", () => {
+    const cmd = buildNonClaudeResumeCommand("cursor", "chat-abc123");
+    expect(cmd).toBe("cursor-agent --resume chat-abc123");
+    expect(cmd).not.toContain("claude");
+  });
+
+  test("claude returns null so the caller runs the repair machinery inline", () => {
+    expect(buildNonClaudeResumeCommand("claude", "550e8400-e29b-41d4-a716-446655440000")).toBeNull();
+  });
+
+  test("gemini resumes the latest chat", () => {
+    expect(buildNonClaudeResumeCommand("gemini", "ignored")).toBe("gemini --resume latest");
+  });
+
+  test("codex resume is unchanged, appending combined args + permission flags", () => {
+    expect(buildNonClaudeResumeCommand("codex", "sess1")).toBe("codex resume sess1");
+    expect(
+      buildNonClaudeResumeCommand("codex", "sess1", {
+        codexArgs: "--full-auto",
+        codexPermFlags: "--dangerously-bypass-approvals-and-sandbox",
+      }),
+    ).toBe("codex resume sess1 --full-auto --dangerously-bypass-approvals-and-sandbox");
+    expect(
+      buildNonClaudeResumeCommand("codex", "sess1", { codexPermFlags: "--full-auto" }),
+    ).toBe("codex resume sess1 --full-auto");
+  });
+});
+
+describe("resumeTmuxPrefix", () => {
+  test("each agent gets its own prefix; cursor is cu, not claude's cc", () => {
+    expect(resumeTmuxPrefix("codex")).toBe("cx");
+    expect(resumeTmuxPrefix("gemini")).toBe("gm");
+    expect(resumeTmuxPrefix("cursor")).toBe("cu");
+    expect(resumeTmuxPrefix("claude")).toBe("cc");
   });
 });

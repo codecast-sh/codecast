@@ -91,12 +91,14 @@ import {
 import {
   CLAUDE_UUID_RE,
   CLAUDE_AUTO_TRIM_TARGET_TOKENS,
+  buildNonClaudeResumeCommand,
   chooseClaudeAutoTrim,
   combineClaudeResumeFlags,
   copyJsonlAsSession,
   extractJsonlPermissionMode,
   isForkArtifactSessionId,
   removeForkArtifactJsonl,
+  resumeTmuxPrefix,
   rewriteSubagentJsonlToUuid,
 } from "./resumeCommand.js";
 import { resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
@@ -11105,13 +11107,16 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     return false;
   }
 
-  if (agentType === "codex") {
-    let extraFlags = config?.codex_args || "";
-    const permFlags = getPermissionFlags("codex", config);
-    if (permFlags) extraFlags = extraFlags ? extraFlags + " " + permFlags : permFlags;
-    resumeCmd = `codex resume ${sessionId}${extraFlags ? " " + extraFlags : ""}`;
-  } else if (agentType === "gemini") {
-    resumeCmd = `gemini --resume latest`;
+  const nonClaudeResumeCmd = buildNonClaudeResumeCommand(agentType, sessionId, {
+    codexArgs: config?.codex_args,
+    codexPermFlags: agentType === "codex" ? getPermissionFlags("codex", config) : null,
+  });
+  if (nonClaudeResumeCmd !== null) {
+    // codex / gemini / cursor: a single self-contained resume invocation. The
+    // Claude-only repair machinery below (UUID rewrite, JSONL relocation,
+    // model/effort recovery) does NOT run for these — their transcripts and
+    // session ids are their own.
+    resumeCmd = nonClaudeResumeCmd;
   } else {
     const jsonlBypass = extractJsonlPermissionMode(jsonlContent) === "bypassPermissions";
     const extraFlags = combineClaudeResumeFlags(
@@ -11183,7 +11188,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     resumeCmd = `claude --resume ${resumeId}${modelFlag}${effortFlag}${extraFlags ? " " + extraFlags : ""}`;
   }
 
-  const prefix = agentType === "codex" ? "cx" : agentType === "gemini" ? "gm" : "cc";
+  const prefix = resumeTmuxPrefix(agentType);
   const tmuxSession = slug ? `${prefix}-resume-${slug}-${shortId}` : `${prefix}-resume-${shortId}`;
 
   // Check if this session already has a healthy agent running (avoid killing + recreating).
