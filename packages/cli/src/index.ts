@@ -4322,7 +4322,7 @@ program
         return;
       }
 
-      const validAgents = ["claude", "codex", "gemini", "cursor", "opencode"];
+  const validAgents = ["claude", "codex", "gemini", "cursor", "opencode", "pi"];
       if (!validAgents.includes(agentArg)) {
         console.error(`Unknown agent: ${agentArg}`);
         console.log(`Valid agents: ${validAgents.join(", ")}`);
@@ -9410,7 +9410,7 @@ program
   )
   .argument("<prompts...>", "One task per session; each starts working on it immediately")
   .option("-C, --dir <path>", "Working directory (default: current project)")
-  .option("--agent <type>", "Agent: claude (default), codex, cursor, gemini, opencode", "claude")
+    .option("--agent <type>", "Agent: claude (default), codex, cursor, gemini, opencode, pi", "claude")
   .option("--model <model>", "Model override (e.g. opus, sonnet)")
   .option("--isolated", "Give each session its own git worktree")
   .option("--label <name>", "File each spawned session under a label (created if new)")
@@ -9439,7 +9439,7 @@ program
     } catch {}
 
     const agentMap: Record<string, string> = {
-      claude: "claude_code", claude_code: "claude_code", codex: "codex", cursor: "cursor", gemini: "gemini", opencode: "opencode",
+      claude: "claude_code", claude_code: "claude_code", codex: "codex", cursor: "cursor", gemini: "gemini", opencode: "opencode", pi: "pi",
     };
     const agentType = agentMap[String(options.agent).toLowerCase()] ?? "claude_code";
 

@@ -32,6 +32,12 @@ export function AgentTypeIcon({ agentType, className = "w-3 h-3" }: { agentType:
         <polyline points="16 6 21 12 16 18" />
       </svg>
     );
+  } else if (agentType === "pi") {
+    return (
+      <span className={`${className} inline-flex items-center justify-center shrink-0 font-semibold text-teal-400 leading-none`}>
+        π
+      </span>
+    );
   }
   return null;
 }
@@ -43,6 +49,7 @@ export function formatAgentType(agentType?: string): string {
   if (agentType === "cursor") return "Cursor";
   if (agentType === "gemini") return "Gemini";
   if (agentType === "opencode") return "OpenCode";
+  if (agentType === "pi") return "pi";
 
   return agentType;
 }

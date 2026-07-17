@@ -176,19 +176,20 @@ export function buildNonClaudeResumeCommand(
 
 /**
  * Which agent a resume dispatches on, from the explicit hint plus whatever
- * findSessionFile returned for the local transcript. An explicit cursor OR opencode
- * hint is trusted OVER the local file: both own their own session store (SQLite),
- * so there is no local JSONL to detect — findSessionFile either misses (returns null
- * → "claude") or, after a bogus reconstitution, hands back a claude-labeled file.
- * Without trusting the hint the resume falls through to `claude --resume` and runs
- * Claude's repair machinery against a session that never had a Claude transcript.
- * (codex/gemini hints and the file agree, so they resolve the same either way.)
+ * findSessionFile returned for the local transcript. An explicit cursor, opencode,
+ * or pi hint is trusted OVER the local file: cursor and opencode own their session
+ * stores (SQLite) so there is no local JSONL to detect, and a pi transcript may be
+ * absent on a fresh device (cross-device resume) — in all cases the file is either
+ * missing or, after a bogus reconstitution, claude-labeled, and without trusting
+ * the hint the resume falls through to `claude --resume` and runs Claude's repair
+ * machinery against a session that never had a Claude transcript. (codex/gemini
+ * hints and everything else keep the old behavior.)
  */
 export function resolveResumeAgentType(
   agentTypeHint: AgentClientId | undefined,
   sessionFileAgentType: AgentClientId | undefined,
 ): AgentClientId {
-  if (agentTypeHint === "cursor" || agentTypeHint === "opencode") return agentTypeHint;
+  if (agentTypeHint === "cursor" || agentTypeHint === "opencode" || agentTypeHint === "pi") return agentTypeHint;
   return sessionFileAgentType ?? "claude";
 }
 
