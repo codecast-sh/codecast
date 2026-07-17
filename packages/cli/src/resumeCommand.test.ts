@@ -4,9 +4,12 @@ import * as os from "os";
 import * as path from "path";
 import {
   CLAUDE_UUID_RE,
+  buildNonClaudeResumeCommand,
   combineClaudeResumeFlags,
   copyJsonlAsSession,
   extractJsonlPermissionMode,
+  resolveResumeAgentType,
+  resumeTmuxPrefix,
   rewriteSubagentJsonlToUuid,
 } from "./resumeCommand.js";
 
@@ -210,5 +213,94 @@ describe("copyJsonlAsSession", () => {
     fs.mkdirSync(dir, { recursive: true });
     trash.push(dir);
     expect(copyJsonlAsSession(path.join(dir, "missing.jsonl"), PARENT, FORK)).toBeNull();
+  });
+});
+
+// Regression: a cursor session used to fall through the resume builder's
+// codex/gemini branches into the else, which builds `claude --resume` and runs
+// Claude's repair machinery (UUID rewrite, JSONL relocation, model/effort
+// recovery) against a cursor transcript — wrong binary entirely. cursor-agent
+// resumes a chat by id via `--resume`, so cursor must get its own branch.
+describe("buildNonClaudeResumeCommand", () => {
+  test("cursor resumes with cursor-agent --resume <id> (not claude --resume)", () => {
+    const cmd = buildNonClaudeResumeCommand("cursor", "chat-abc123");
+    expect(cmd).toBe("cursor-agent --resume chat-abc123");
+    expect(cmd).not.toContain("claude");
+  });
+
+  test("claude returns null so the caller runs the repair machinery inline", () => {
+    expect(buildNonClaudeResumeCommand("claude", "550e8400-e29b-41d4-a716-446655440000")).toBeNull();
+  });
+
+  test("gemini resumes the latest chat", () => {
+    expect(buildNonClaudeResumeCommand("gemini", "ignored")).toBe("gemini --resume latest");
+  });
+
+  test("codex resume is unchanged, appending combined args + permission flags", () => {
+    expect(buildNonClaudeResumeCommand("codex", "sess1")).toBe("codex resume sess1");
+    expect(
+      buildNonClaudeResumeCommand("codex", "sess1", {
+        codexArgs: "--full-auto",
+        codexPermFlags: "--dangerously-bypass-approvals-and-sandbox",
+      }),
+    ).toBe("codex resume sess1 --full-auto --dangerously-bypass-approvals-and-sandbox");
+    expect(
+      buildNonClaudeResumeCommand("codex", "sess1", { codexPermFlags: "--full-auto" }),
+    ).toBe("codex resume sess1 --full-auto");
+  });
+});
+
+describe("resumeTmuxPrefix", () => {
+  test("each agent gets its own prefix; cursor is cu, not claude's cc", () => {
+    expect(resumeTmuxPrefix("codex")).toBe("cx");
+    expect(resumeTmuxPrefix("gemini")).toBe("gm");
+    expect(resumeTmuxPrefix("cursor")).toBe("cu");
+    expect(resumeTmuxPrefix("claude")).toBe("cc");
+  });
+});
+
+// This is the seam the daemon's autoResumeSessionInner uses to pick the resume
+// agent (daemon.ts). It is what makes the cursor command branch reachable: the
+// value it returns is what buildNonClaudeResumeCommand dispatches on. The earlier
+// bug was that this value could never be "cursor" — findSessionFile has no cursor
+// lookup and the reconstitution path only knows claude/codex, so a cursor session
+// arrived here labeled "claude" and built `claude --resume`.
+describe("resolveResumeAgentType (dispatch trusts the cursor hint over the file)", () => {
+  test("an explicit cursor hint wins even when the local file was mislabeled claude", () => {
+    // The exact regression: a cursor session with no cursor entry in
+    // findSessionFile (so its file is absent, or reconstituted as claude).
+    expect(resolveResumeAgentType("cursor", "claude")).toBe("cursor");
+    expect(resolveResumeAgentType("cursor", undefined)).toBe("cursor");
+  });
+
+  test("without a cursor hint the local file (or the claude default) decides", () => {
+    expect(resolveResumeAgentType(undefined, "claude")).toBe("claude");
+    expect(resolveResumeAgentType("codex", "codex")).toBe("codex");
+    expect(resolveResumeAgentType("gemini", "gemini")).toBe("gemini");
+    expect(resolveResumeAgentType(undefined, undefined)).toBe("claude");
+  });
+});
+
+// End-to-end at the resume dispatch point: from the raw inputs the daemon holds
+// (an explicit cursor hint + a file that findSessionFile mislabeled claude), the
+// emitted resume command is `cursor-agent --resume`, never `claude --resume`.
+// Resolving the agent type through resolveResumeAgentType (not a hardcoded
+// literal) is what proves the whole path — a "claude" agentType here would take
+// the reconstitution / repair branches that write a Claude JSONL, so a cursor
+// result means those branches are never entered for a cursor resume.
+describe("cursor resume dispatch end to end", () => {
+  test("cursor hint + claude-mislabeled file => cursor-agent --resume, not claude", () => {
+    const sessionId = "b1946ac9-2d0e-4f3a-9c11-000000000001";
+    const agentType = resolveResumeAgentType("cursor", "claude");
+    expect(agentType).toBe("cursor");
+    const cmd = buildNonClaudeResumeCommand(agentType, sessionId, {
+      // config that WOULD apply to a claude/codex resume — must be ignored for cursor.
+      codexArgs: "--full-auto",
+      codexPermFlags: "--dangerously-bypass-approvals-and-sandbox",
+    });
+    expect(cmd).toBe(`cursor-agent --resume ${sessionId}`);
+    expect(cmd).not.toContain("claude");
+    expect(cmd).not.toContain("--full-auto");
+    expect(resumeTmuxPrefix(agentType)).toBe("cu");
   });
 });

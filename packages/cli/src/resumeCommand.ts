@@ -6,6 +6,7 @@ import {
   chooseClaudeTailMessagesForTokenBudget,
   type ExportResult,
 } from "./jsonlGenerator.js";
+import type { SessionAgentType } from "./sessionProcessMatcher.js";
 
 export const CLAUDE_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -140,6 +141,69 @@ export function combineClaudeResumeFlags(
     flags = flags ? flags + " " + permFlags : permFlags;
   }
   return flags;
+}
+
+/**
+ * Resume command for the agents whose resume is a single self-contained CLI
+ * invocation with no transcript surgery: codex, gemini, cursor. Returns null for
+ * claude, whose resume needs the UUID-rewrite / JSONL-relocation / model+effort
+ * recovery machinery the daemon runs inline. Cursor lives here (not the claude
+ * fall-through) so a cursor session resumes with its own binary — cursor-agent
+ * resumes a chat by id — instead of building a `claude --resume` and running
+ * Claude's repair machinery against a cursor transcript.
+ *
+ * codexArgs/codexPermFlags are the raw config values; the codex resume appends
+ * both. gemini and cursor take no configured flags today.
+ */
+export function buildNonClaudeResumeCommand(
+  agentType: SessionAgentType,
+  sessionId: string,
+  opts: { codexArgs?: string | null; codexPermFlags?: string | null } = {},
+): string | null {
+  switch (agentType) {
+    case "codex": {
+      let extra = opts.codexArgs || "";
+      if (opts.codexPermFlags) extra = extra ? extra + " " + opts.codexPermFlags : opts.codexPermFlags;
+      return `codex resume ${sessionId}${extra ? " " + extra : ""}`;
+    }
+    case "gemini":
+      return `gemini --resume latest`;
+    case "cursor":
+      return `cursor-agent --resume ${sessionId}`;
+    default:
+      return null;
+  }
+}
+
+/**
+ * Which agent a resume dispatches on, from the explicit hint plus whatever
+ * findSessionFile returned for the local transcript. An explicit cursor hint is
+ * trusted OVER the local file: findSessionFile has no cursor lookup, so a cursor
+ * session's transcript is either absent or — after a bogus reconstitution —
+ * claude-labeled. Without trusting the hint the resume falls through to
+ * `claude --resume` and runs Claude's repair machinery against a cursor session.
+ * (codex/gemini hints and the file agree, so they resolve the same either way.)
+ */
+export function resolveResumeAgentType(
+  agentTypeHint: SessionAgentType | undefined,
+  sessionFileAgentType: SessionAgentType | undefined,
+): SessionAgentType {
+  if (agentTypeHint === "cursor") return "cursor";
+  return sessionFileAgentType ?? "claude";
+}
+
+/**
+ * tmux session-name prefix per agent for resume-named sessions. Each client gets
+ * its own so panes stay greppable by client and never collide with claude's cc-.
+ * Cursor gets cu- rather than defaulting into claude's cc-.
+ */
+export function resumeTmuxPrefix(agentType: SessionAgentType): string {
+  switch (agentType) {
+    case "codex": return "cx";
+    case "gemini": return "gm";
+    case "cursor": return "cu";
+    default: return "cc";
+  }
 }
 
 /**
