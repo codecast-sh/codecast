@@ -60,8 +60,13 @@ export interface ToolVisual {
 // Exact-id → visual for the curated tools. The `mcp__*` browser tools and the
 // final fallback are handled by `toolVisual()` below (they need prefix/substring
 // matching, not an exact key).
+// opencode + pi (and gemini's `glob`) name their built-in tools in lowercase —
+// the same canonical set, just lower-cased — so each lowercase id maps to the same
+// visual as its capitalized twin. Kept here (not a normalizer) so the exact-id
+// lookup stays a single flat table across every client.
 export const TOOL_VISUALS: Record<string, ToolVisual> = {
   Bash: { icon: "terminal", color: "green" },
+  bash: { icon: "terminal", color: "green" },
   shell_command: { icon: "terminal", color: "green" },
   shell: { icon: "terminal", color: "green" },
   exec_command: { icon: "terminal", color: "green" },
@@ -69,14 +74,21 @@ export const TOOL_VISUALS: Record<string, ToolVisual> = {
 
   Read: { icon: "file-code-o", color: "blue" },
   file_read: { icon: "file-code-o", color: "blue" },
+  read: { icon: "file-code-o", color: "blue" },
+  list: { icon: "file-code-o", color: "blue" },
 
   Glob: { icon: "search", color: "violet" },
   Grep: { icon: "search", color: "violet" },
+  glob: { icon: "search", color: "violet" },
+  grep: { icon: "search", color: "violet" },
 
   Edit: { icon: "pencil", color: "orange" },
   Write: { icon: "pencil", color: "orange" },
   file_write: { icon: "pencil", color: "orange" },
   file_edit: { icon: "pencil", color: "orange" },
+  edit: { icon: "pencil", color: "orange" },
+  write: { icon: "pencil", color: "orange" },
+  patch: { icon: "pencil", color: "orange" },
   apply_patch: { icon: "pencil", color: "orange" },
 
   WebSearch: { icon: "globe", color: "violet" },
@@ -86,8 +98,11 @@ export const TOOL_VISUALS: Record<string, ToolVisual> = {
 
   WebFetch: { icon: "globe", color: "cyan" },
   web_fetch: { icon: "globe", color: "cyan" },
+  webfetch: { icon: "globe", color: "cyan" },
 
   Task: { icon: "code-fork", color: "cyan" },
+  task: { icon: "code-fork", color: "cyan" },
+  todowrite: { icon: "check-square-o", color: "magenta" },
 
   TaskCreate: { icon: "tasks", color: "emerald" },
   TaskUpdate: { icon: "tasks", color: "emerald" },

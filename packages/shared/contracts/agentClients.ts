@@ -105,6 +105,14 @@ export interface AgentClientCapabilities {
   /** The daemon watches the tmux pane for structured prompts (permission /
    *  AskUserQuestion) for this client. */
   panePromptMonitoring: boolean;
+  /** codecast can branch a conversation from a message into a LIVE session that
+   *  actually carries the copied history: claude/codex via a local JSONL copy,
+   *  opencode via its serve sidecar (`forkApi`). Absent for clients with no fork
+   *  mechanism (cursor, gemini, pi) — there the server-side message copy would
+   *  render a full transcript the live agent has no context for, so the fork UI
+   *  must be HIDDEN (honest absence), never shown as a false success. Broader than
+   *  `forkApi`, which is specifically opencode's HTTP fork endpoint. */
+  fork?: boolean;
   /** The client exposes a fork-by-session-id API the daemon can call to branch a
    *  session (opencode's `POST /session/:id/fork` via an `opencode serve` sidecar —
    *  see opencodeServer.ts). Gates the daemon's API-fork branch; without a reachable
@@ -205,7 +213,7 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     promptReadyPattern: /❯|⏵/,
     tmuxPrefix: "cc",
     modelConfig: CLAUDE_MODEL,
-    capabilities: { panePromptMonitoring: true },
+    capabilities: { panePromptMonitoring: true, fork: true },
   },
   codex: {
     id: "codex",
@@ -222,7 +230,7 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     promptReadyPattern: />\s*$/,
     tmuxPrefix: "cx",
     modelConfig: CODEX_MODEL,
-    capabilities: { panePromptMonitoring: true },
+    capabilities: { panePromptMonitoring: true, fork: true },
   },
   cursor: {
     id: "cursor",
@@ -310,7 +318,7 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     //    NOT accelerate the tmux-TUI launch path; the SQLite watcher stays the
     //    authoritative state source for those. Additive, opt-in, degrades to the DB
     //    path cleanly.
-    capabilities: { panePromptMonitoring: false, forkApi: true, liveEvents: true },
+    capabilities: { panePromptMonitoring: false, fork: true, forkApi: true, liveEvents: true },
   },
   pi: {
     id: "pi",
@@ -365,6 +373,15 @@ export const AGENT_MODEL_CONFIG: Record<string, AgentModelConfig> = Object.fromE
 /** Web/conversation agent_type → registry client id (claude_code → claude). */
 export function modelAgentKey(agentType: string | undefined): AgentClientId {
   return fromConvexAgentType(agentType);
+}
+
+/** Whether codecast can fork a conversation for this client into a live session
+ *  that carries the copied history (claude/codex/opencode). Gates the fork UI so a
+ *  client with no fork mechanism (cursor/gemini/pi) never shows a control that
+ *  fabricates a context-less session. Accepts a convex agent_type (claude_code)
+ *  or a registry id. */
+export function agentSupportsFork(agentType: string | undefined): boolean {
+  return AGENT_CLIENTS[fromConvexAgentType(agentType)].capabilities.fork === true;
 }
 
 export function findModelOption(agentType: string | undefined, key: string): ModelOption | undefined {
