@@ -2,16 +2,25 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useQuery, useMutation } from "convex/react";
+import { useRouter } from "next/navigation";
+import { useQuery, useMutation, useConvex } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
 import { AuthGuard } from "../../components/AuthGuard";
 import { AppLoader } from "../../components/AppLoader";
 import { DashboardLayout } from "../../components/DashboardLayout";
-import { fmtDuration, fmtClock } from "../../components/triggerCadence";
+import {
+  fmtDuration,
+  fmtClock,
+  describeTaskCadence,
+  taskStateLabel,
+  isTaskOverdue,
+  TRIGGER_EVENT_LABELS,
+} from "../../components/triggerCadence";
 import { ShortcutTooltip } from "../../components/KeyboardShortcutsHelp";
 import { patchTaskInWebList, taskDisplayTitle } from "../../components/triggerTasks";
-import { TriggerRunList, useTriggerRuns } from "../../components/TriggerRunHistory";
+import { TriggerRunList, useTriggerRuns, openRunInStore } from "../../components/TriggerRunHistory";
+import { SelectBox } from "../../components/ui/select-box";
 import { useInboxStore } from "../../store/inboxStore";
 import {
   Clock,
@@ -56,11 +65,6 @@ function parseDuration(input: string): number | undefined {
   return undefined;
 }
 
-function fmtCountdown(msUntil: number): string {
-  if (msUntil <= 0) return "due now";
-  return `in ${fmtDuration(msUntil)}`;
-}
-
 function timeAgo(ts?: number): string {
   if (!ts) return "";
   const mins = Math.floor((Date.now() - ts) / 60000);
@@ -95,132 +99,196 @@ function projectName(path?: string): string {
   return path.split("/").filter(Boolean).pop() || path;
 }
 
-// ── Horizon rail: the next 24h of runs laid out on a time axis ──
+// ── Horizon rail: past 24h of runs and next 24h of fires on one time axis ──
 
-const HORIZON_MS = 24 * 3600_000;
+const HORIZON_MS = 24 * 3600_000; // each direction from "now"
 
 interface RailPoint {
-  pct: number; // 0..1 position along the rail
+  pct: number; // 0..1 along the rail; 0 = -24h, 0.5 = now, 1 = +24h
   task: any;
   at: number;
-  kind: "running" | "due" | "next" | "ghost";
+  kind: "running" | "due" | "next" | "ghost" | "past";
+  lane: number; // 0 center, 1 above, 2 below — declusters near-coincident dots
 }
+
+const railPct = (at: number, now: number) => 0.5 + (at - now) / (2 * HORIZON_MS);
 
 function collectRailPoints(tasks: any[], now: number): RailPoint[] {
   const points: RailPoint[] = [];
   for (const t of tasks) {
+    // Past half: each task's latest run — complete coverage for daily cadences;
+    // a faster loop shows its newest run. Includes finished one-times.
+    if (t.last_run_at && t.last_run_at > now - HORIZON_MS && t.last_run_at <= now) {
+      points.push({ pct: railPct(t.last_run_at, now), task: t, at: t.last_run_at, kind: "past", lane: 0 });
+    }
     if (t.status === "running") {
-      points.push({ pct: 0, task: t, at: now, kind: "running" });
+      points.push({ pct: 0.5, task: t, at: now, kind: "running", lane: 0 });
       continue;
     }
     if (t.status !== "scheduled" || !t.run_at) continue;
     const dt = t.run_at - now;
     if (dt <= 0) {
-      points.push({ pct: 0, task: t, at: now, kind: "due" });
+      points.push({ pct: 0.5, task: t, at: now, kind: "due", lane: 0 });
     } else if (dt <= HORIZON_MS) {
-      points.push({ pct: dt / HORIZON_MS, task: t, at: t.run_at, kind: "next" });
+      points.push({ pct: railPct(t.run_at, now), task: t, at: t.run_at, kind: "next", lane: 0 });
     }
     // Project recurring tasks forward so the rail shows the day's cadence.
     if (t.schedule_type === "recurring" && t.interval_ms) {
       const first = Math.max(dt, 0);
       for (let at = first + t.interval_ms; at <= HORIZON_MS; at += t.interval_ms) {
-        points.push({ pct: at / HORIZON_MS, task: t, at: now + at, kind: "ghost" });
+        points.push({ pct: railPct(now + at, now), task: t, at: now + at, kind: "ghost", lane: 0 });
         if (points.length > 200) break; // sanity cap for tiny intervals
       }
     }
+  }
+  // Daily tasks created minutes apart land on the same pixel and would hide
+  // each other from hover/click — fan near-coincident real dots across lanes.
+  const real = points.filter((p) => p.kind !== "ghost").sort((a, b) => a.pct - b.pct);
+  for (let i = 1; i < real.length; i++) {
+    if (real[i].pct - real[i - 1].pct < 0.012) real[i].lane = (real[i - 1].lane + 1) % 3;
   }
   return points;
 }
 
 function HorizonRail({ tasks, now }: { tasks: any[]; now: number }) {
+  const router = useRouter();
+  const convex = useConvex();
   const points = useMemo(() => collectRailPoints(tasks, now), [tasks, now]);
+
+  // A past dot opens its run at the message that triggered it. The precise
+  // target comes from a one-shot webListRuns fetch on click (the always-visible
+  // rail can't afford a standing subscription per task), then it rides the same
+  // store deep-link channel as the run-history list. Falls back to just opening
+  // the run's conversation when the history can't be enumerated.
+  const openPastRun = async (task: any) => {
+    try {
+      const runs = (await convex.query(api.agentTasks.webListRuns, { task_id: task._id })) as any[];
+      const run = runs?.[0]; // newest first — the dot is the latest run
+      if (run) {
+        openRunInStore(run);
+        router.push(`/inbox?s=${run._id}`);
+        return;
+      }
+    } catch {
+      // fall through to the coarse target
+    }
+    if (task.last_run_conversation_id) {
+      useInboxStore.getState().requestNavigate(task.last_run_conversation_id);
+      router.push(`/inbox?s=${task.last_run_conversation_id}`);
+    }
+  };
+
   if (points.length === 0) return null;
 
   return (
     <div className="reveal reveal-1 rounded-xl border border-sol-border bg-sol-card px-5 pt-4 pb-2 mb-6 select-none">
       <div className="flex items-center justify-between mb-3">
-        <span className="text-[10px] font-medium uppercase tracking-widest text-sol-text-dim">Next 24 hours</span>
+        <span className="text-[10px] font-medium uppercase tracking-widest text-sol-text-dim">±24 hours</span>
         <span className="text-[10px] text-sol-text-dim flex items-center gap-3">
+          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-sol-violet/60 inline-block" /> past runs</span>
           <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-sol-violet inline-block" /> recurring</span>
           <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-sol-cyan inline-block" /> one-time</span>
           <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-sol-violet/30 inline-block" /> later runs</span>
         </span>
       </div>
-      <div className="relative h-10">
-        {/* baseline */}
-        <div className="absolute left-0 right-0 top-1/2 h-px bg-sol-border" />
-        {/* hour ticks */}
-        {[0.25, 0.5, 0.75, 1].map((p) => (
+      <div className="relative h-12">
+        {/* baseline — the past half sits dimmer */}
+        <div className="absolute left-0 right-1/2 top-1/2 h-px bg-sol-border/60" />
+        <div className="absolute left-1/2 right-0 top-1/2 h-px bg-sol-border" />
+        {/* 12h ticks */}
+        {[0.25, 0.75].map((p) => (
           <div key={p} className="absolute top-1/2 -translate-y-1/2 h-2.5 w-px bg-sol-border" style={{ left: `${p * 100}%` }} />
         ))}
         {/* now marker — a full-height cyan line so "the present" reads instantly */}
-        <div className="absolute left-0 top-0 bottom-0 w-px bg-sol-cyan/50" />
-        <div className="absolute left-0 top-0 w-1 h-1 -translate-x-1/2 rounded-full bg-sol-cyan" />
+        <div className="absolute left-1/2 top-0 bottom-0 w-px bg-sol-cyan/50" />
+        <div className="absolute left-1/2 top-0 w-1 h-1 -translate-x-1/2 rounded-full bg-sol-cyan" />
         {/* dots */}
         {points.map((pt, i) => {
           const base = pt.task.schedule_type === "recurring" ? "bg-sol-violet" : "bg-sol-cyan";
+          const failed = pt.kind === "past" && (pt.task.last_run_failed || pt.task.status === "failed");
           const cls =
             pt.kind === "ghost"
               ? `${base} opacity-25 w-1.5 h-1.5`
-              : pt.kind === "running"
-                ? "bg-emerald-400 animate-pulse w-2.5 h-2.5"
-                : pt.kind === "due"
-                  ? `${base} animate-pulse w-2.5 h-2.5`
-                  : `${base} w-2 h-2`;
-          return (
-            <div
-              key={`${pt.task._id}-${i}`}
-              className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 group"
-              style={{ left: `${Math.min(pt.pct, 1) * 100}%` }}
-            >
+              : pt.kind === "past"
+                ? `${failed ? "bg-sol-red" : base} opacity-60 group-hover:opacity-100 w-2 h-2`
+                : pt.kind === "running"
+                  ? "bg-emerald-400 animate-pulse w-2.5 h-2.5"
+                  : pt.kind === "due"
+                    ? `${base} animate-pulse w-2.5 h-2.5`
+                    : `${base} w-2 h-2`;
+          const label =
+            pt.kind === "running"
+              ? "running now"
+              : pt.kind === "due"
+                ? "due now"
+                : pt.kind === "past"
+                  ? `${failed ? "failed" : "ran"} ${timeAgo(pt.at)} — open run`
+                  : fmtClock(pt.at);
+          const dy = pt.lane === 1 ? -6 : pt.lane === 2 ? 6 : 0;
+          const style = { left: `${Math.min(Math.max(pt.pct, 0), 1) * 100}%`, marginTop: dy };
+          const inner = (
+            <>
               <div className={`rounded-full ${cls} group-hover:scale-150 transition-transform`} />
               <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block z-10 whitespace-nowrap rounded-md border border-sol-border bg-sol-bg-highlight px-2 py-1 text-[11px] text-sol-text shadow-lg pointer-events-none">
                 <span className="font-medium">{taskDisplayTitle(pt.task)}</span>
-                <span className="text-sol-text-dim"> · {pt.kind === "running" ? "running now" : pt.kind === "due" ? "due now" : fmtClock(pt.at)}</span>
+                <span className="text-sol-text-dim"> · {label}</span>
               </div>
+            </>
+          );
+          return pt.kind === "past" ? (
+            <button
+              key={`${pt.task._id}-${i}`}
+              onClick={() => openPastRun(pt.task)}
+              aria-label={`Open run: ${taskDisplayTitle(pt.task)}`}
+              className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 group cursor-pointer p-1.5 -m-1.5"
+              style={style}
+            >
+              {inner}
+            </button>
+          ) : (
+            <div
+              key={`${pt.task._id}-${i}`}
+              className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 group"
+              style={style}
+            >
+              {inner}
             </div>
           );
         })}
       </div>
       <div className="flex justify-between text-[10px] text-sol-text-dim font-mono mt-1">
-        <span>now</span><span>+6h</span><span>+12h</span><span>+18h</span><span>+24h</span>
+        <span>-24h</span><span>-12h</span><span>now</span><span>+12h</span><span>+24h</span>
       </div>
     </div>
   );
 }
 
-// ── Schedule descriptor chip: "every 4h" / "in 23m" / "on pr_comment" / "once" ──
+// ── Schedule descriptor chip: "every 4h" / "on PR comment" / "one-time" ──
 
-const chipCls = "inline-flex items-center gap-1 text-[11px] whitespace-nowrap flex-shrink-0";
+const chipCls =
+  "inline-flex items-center gap-1 text-[11px] leading-none font-medium whitespace-nowrap flex-shrink-0 rounded-full px-2 py-[3px]";
 
-// The chip leads with the schedule's TYPE — recurring vs one-time is the
-// distinction users sort by — then the timing detail.
-function TriggerChip({ task, now }: { task: any; now: number }) {
+// The chip names the cadence as a tinted pill — "every 1d" IS recurring — so
+// type reads by color before words: violet loops, cyan one-shots, yellow event
+// hooks. Live timing (countdown, running) lives on the meta line, not here.
+function TriggerChip({ task }: { task: any }) {
   if (task.schedule_type === "recurring" && task.interval_ms) {
     return (
-      <span className={`${chipCls} text-sol-violet`}>
-        <Repeat className="w-3 h-3" />recurring
-        <span className="text-sol-violet/70">· every {fmtDuration(task.interval_ms)}</span>
+      <span className={`${chipCls} bg-sol-violet/10 text-sol-violet`}>
+        <Repeat className="w-3 h-3" />{describeTaskCadence(task)}
       </span>
     );
   }
   if (task.schedule_type === "event") {
+    const ev = eventLabel(task.event_filter);
     return (
-      <span className={`${chipCls} text-sol-yellow`}>
-        <Zap className="w-3 h-3" />on {eventLabel(task.event_filter)}
-      </span>
-    );
-  }
-  if (task.status === "scheduled" && task.run_at) {
-    return (
-      <span className={`${chipCls} text-sol-cyan`}>
-        <Clock className="w-3 h-3" />one-time
-        <span className="text-sol-cyan/70">· {fmtCountdown(task.run_at - now)}</span>
+      <span className={`${chipCls} bg-sol-yellow/10 text-sol-yellow`}>
+        <Zap className="w-3 h-3" />on {TRIGGER_EVENT_LABELS[ev] ?? ev}
       </span>
     );
   }
   return (
-    <span className={`${chipCls} text-sol-text-dim`}>
+    <span className={`${chipCls} bg-sol-cyan/10 text-sol-cyan`}>
       <Clock className="w-3 h-3" />one-time
     </span>
   );
@@ -340,16 +408,19 @@ function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boole
       }`}
       onClick={() => setExpanded((v) => !v)}
     >
-      <div className="flex items-center gap-3 px-4 py-2.5">
-        <RowIndicator task={task} />
+      <div className="relative flex items-start gap-3 px-4 py-3">
+        {/* fixed 20px-tall slot so dot and icon indicators both center on the title's first line */}
+        <div className="flex-shrink-0 w-4 h-5 flex items-center justify-center">
+          <RowIndicator task={task} />
+        </div>
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <ShortcutTooltip label={taskDisplayTitle(task)}>
-              <span className={`text-sm font-medium truncate ${isHistory ? "text-sol-text-muted" : "text-sol-text"}`}>
-                {taskDisplayTitle(task)}
-              </span>
-            </ShortcutTooltip>
-            <TriggerChip task={task} now={now} />
+          {/* Title wraps in full — a trigger you can't read is a trigger you
+              can't trust. The cadence pill lives on the meta line below, so
+              nothing competes with the title for width. */}
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+            <span className={`text-sm font-medium leading-5 ${isHistory ? "text-sol-text-muted" : "text-sol-text"}`}>
+              {taskDisplayTitle(task)}
+            </span>
             {isNext && (
               <span className="text-[10px] font-medium uppercase tracking-wide text-sol-cyan flex-shrink-0">
                 next up
@@ -357,21 +428,38 @@ function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boole
             )}
           </div>
           {task.display_summary && (
-            <ShortcutTooltip label={task.display_summary}>
-              <div className="text-[11px] text-sol-text-dim truncate mt-0.5">
-                {task.display_summary}
-              </div>
-            </ShortcutTooltip>
+            <div className="text-xs text-sol-text-muted leading-relaxed line-clamp-2 mt-0.5">
+              {task.display_summary}
+            </div>
           )}
-          <div className="flex items-center gap-2 mt-1 text-[11px] text-sol-text-dim min-w-0">
-            {/* quiet meta */}
-            {task.status === "running" && <span className="text-emerald-400 flex-shrink-0">running now</span>}
+          {/* cadence + live state + health, wrapping instead of truncating */}
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 mt-2 text-[11px] text-sol-text-dim">
+            <TriggerChip task={task} />
+            {task.status === "running" ? (
+              <span className="text-emerald-400 font-medium flex-shrink-0">running now</span>
+            ) : task.status === "scheduled" && task.run_at ? (
+              // Every armed row answers "when does it fire" — countdown plus
+              // wall clock. Recurring rows used to show neither.
+              <span
+                className={`inline-flex items-center gap-1 flex-shrink-0 ${
+                  isTaskOverdue(task, now) ? "text-sol-orange" : "text-sol-cyan"
+                }`}
+              >
+                <Clock className="w-3 h-3" />
+                {taskStateLabel(task, now)}
+                <span className="text-sol-text-dim">· {fmtClock(task.run_at)}</span>
+              </span>
+            ) : null}
             {task.run_count > 0 && (
               <span className="flex-shrink-0">
                 {task.run_count} run{task.run_count === 1 ? "" : "s"}
               </span>
             )}
-            {task.retry_count > 0 && <span className="text-sol-orange flex-shrink-0">{task.retry_count} retries</span>}
+            {task.retry_count > 0 && (
+              <span className="text-sol-orange flex-shrink-0">
+                {task.retry_count} {task.retry_count === 1 ? "retry" : "retries"}
+              </span>
+            )}
             {task.agent_type === "codex" && (
               <span className="inline-flex items-center gap-1 flex-shrink-0">
                 <Bot className="w-3 h-3" />codex
@@ -379,22 +467,27 @@ function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boole
             )}
             {task.project_path && (
               <ShortcutTooltip label={task.project_path}>
-                <span className="hidden sm:inline-flex items-center gap-1 flex-shrink-0">
+                <span className="inline-flex items-center gap-1 flex-shrink-0">
                   <Folder className="w-3 h-3" />{projectName(task.project_path)}
                 </span>
               </ShortcutTooltip>
             )}
+            {!sessionId && !task.last_run_summary && task.last_run_at && (
+              <span className="flex-shrink-0">last run {timeAgo(task.last_run_at)}</span>
+            )}
+          </div>
 
-            {/* The run, surfaced as a clear clickable session — the thing you
-                actually want to open. Links to the run's own conversation when the
-                daemon recorded it, else the originating session. Truncates last
-                (min-w-0) so it's never pushed off the row like the old buried link. */}
-            {sessionId ? (
+          {/* The last run gets its own full-width line — it's the row's main
+              jump target and the old inline placement truncated it to nothing.
+              Links to the run's own conversation when the daemon recorded it,
+              else the originating session. */}
+          {sessionId ? (
+            <div className="mt-1.5">
               <ShortcutTooltip label={sessionVerb} hint={sessionTitle || undefined}>
                 <Link
                   href={`/conversation/${sessionId}`}
                   onClick={(e) => e.stopPropagation()}
-                  className={`group/sess inline-flex items-center gap-1 min-w-0 rounded px-1.5 py-0.5 -my-0.5 transition-colors hover:bg-sol-cyan/10 ${
+                  className={`group/sess inline-flex items-center gap-1.5 max-w-full min-w-0 rounded px-1.5 py-0.5 -mx-1.5 text-[11px] transition-colors hover:bg-sol-cyan/10 ${
                     failedSummary ? "text-sol-red hover:bg-sol-red/10" : "text-sol-cyan"
                   }`}
                 >
@@ -406,18 +499,18 @@ function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boole
                   <ArrowUpRight className="w-3 h-3 flex-shrink-0 opacity-50 group-hover/sess:opacity-100 transition-opacity" />
                 </Link>
               </ShortcutTooltip>
-            ) : task.last_run_summary ? (
-              <span className={`inline-flex items-center gap-1.5 min-w-0`}>
-                <span className={`truncate ${failedSummary ? "text-sol-red" : ""}`}>{task.last_run_summary}</span>
-                {task.last_run_at && <span className="flex-shrink-0">· {timeAgo(task.last_run_at)}</span>}
-              </span>
-            ) : (
-              task.last_run_at && <span className="flex-shrink-0">last {timeAgo(task.last_run_at)}</span>
-            )}
-          </div>
+            </div>
+          ) : task.last_run_summary ? (
+            <div className="flex items-center gap-1.5 mt-1.5 min-w-0 text-[11px] text-sol-text-dim">
+              <span className={`truncate ${failedSummary ? "text-sol-red" : ""}`}>{task.last_run_summary}</span>
+              {task.last_run_at && <span className="flex-shrink-0">· {timeAgo(task.last_run_at)}</span>}
+            </div>
+          ) : null}
         </div>
 
-        <div className="flex items-center gap-0.5 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+        {/* Hover toolbar floats over the top-right corner instead of living
+            in-flow — invisible buttons were reserving ~130px of every row. */}
+        <div className="absolute right-2 top-2 z-10 flex items-center gap-0.5 rounded-lg border border-sol-border bg-sol-card-hover px-1 py-0.5 shadow-md shadow-black/20 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-opacity">
           {isEditable && (
             <ShortcutTooltip label="Edit">
               <button className={iconBtn} aria-label="Edit" onClick={openForm("edit")}>
@@ -580,7 +673,11 @@ function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boole
             </ShortcutTooltip>
             <span>agent {task.agent_type || "claude"}</span>
             {task.run_count > 0 && <span>{task.run_count} total run{task.run_count === 1 ? "" : "s"}</span>}
-            {task.retry_count > 0 && <span className="text-sol-orange">{task.retry_count} retries</span>}
+            {task.retry_count > 0 && (
+              <span className="text-sol-orange">
+                {task.retry_count} {task.retry_count === 1 ? "retry" : "retries"}
+              </span>
+            )}
             {task.max_runtime_ms && <span>max runtime {fmtDuration(task.max_runtime_ms)}</span>}
             <span>created {timeAgo(task.created_at)}</span>
             {task.project_path && <span className="font-mono">{task.project_path}</span>}
@@ -812,15 +909,11 @@ function TriggerForm({ onClose, editTask, seedTask, embedded }: {
           </div>
         )}
         {kind === "on" && (
-          <select
-            value={eventKey}
-            onChange={(e) => setEventKey(e.target.value)}
-            className="bg-sol-bg-alt border border-sol-border rounded-lg px-2 py-1 text-xs text-sol-text focus:outline-none focus:border-sol-cyan/60"
-          >
+          <SelectBox className="py-1" value={eventKey} onChange={(e) => setEventKey(e.target.value)}>
             {Object.keys(EVENT_SHORTHANDS).map((k) => (
               <option key={k} value={k}>{k}</option>
             ))}
-          </select>
+          </SelectBox>
         )}
       </div>
 
@@ -910,7 +1003,12 @@ interface SchedStats {
   recurring: number;
   oneTime: number;
   totalRuns: number;
-  failing: number; // active tasks mid-retry or failed-but-rescheduled
+  // Active triggers whose LAST run failed — i.e. actually in trouble right now.
+  // Keyed on last_run_failed, never on retry_count: that counter is the current
+  // streak and a recovered trigger keeps its history, so counting it here made
+  // one old blip read as "retrying" forever (the rail, which already keys on
+  // last_run_failed, disagreed with the banner and the rail was right).
+  failing: number;
   nextRunAt: number | null; // soonest upcoming scheduled run
   running: number;
 }
@@ -926,7 +1024,7 @@ function computeStats(all: any[], now: number): SchedStats {
       if (t.schedule_type === "once") oneTime++;
       else if (t.schedule_type === "recurring") recurring++;
       if (t.status === "running") running++;
-      if (t.retry_count > 0) failing++;
+      if (t.last_run_failed) failing++;
       if (t.status === "scheduled" && t.run_at && t.run_at > now) {
         if (nextRunAt === null || t.run_at < nextRunAt) nextRunAt = t.run_at;
       }
@@ -1068,14 +1166,21 @@ function matchesFilters(t: any, f: Filters): boolean {
   return true;
 }
 
-const filterSelectCls =
-  "bg-sol-bg-alt border border-sol-border rounded-lg px-2 py-1.5 text-xs text-sol-text focus:outline-none focus:border-sol-cyan/60 cursor-pointer";
+// The type filter renders as pills matching the rows' cadence chips (violet
+// loops, cyan one-shots, yellow event hooks) — click filters, click again
+// clears. Same toggle the stat strip's recurring/one-time cells drive.
+const TYPE_PILLS: { key: string; label: string; Icon: any; on: string }[] = [
+  { key: "recurring", label: "recurring", Icon: Repeat, on: "bg-sol-violet/15 text-sol-violet border-sol-violet/40" },
+  { key: "once", label: "one-time", Icon: Clock, on: "bg-sol-cyan/15 text-sol-cyan border-sol-cyan/40" },
+  { key: "event", label: "event", Icon: Zap, on: "bg-sol-yellow/15 text-sol-yellow border-sol-yellow/40" },
+];
 
-function FilterBar({ filters, update, projects, hasCodex, shown, total, grouped, setGrouped }: {
+function FilterBar({ filters, update, projects, hasCodex, hasEvent, shown, total, grouped, setGrouped }: {
   filters: Filters;
   update: (patch: Partial<Filters>) => void;
   projects: string[];
   hasCodex: boolean;
+  hasEvent: boolean;
   shown: number;
   total: number;
   grouped: boolean;
@@ -1112,29 +1217,39 @@ function FilterBar({ filters, update, projects, hasCodex, shown, total, grouped,
             </ShortcutTooltip>
           )}
         </div>
-        <select className={filterSelectCls} value={filters.type} onChange={(e) => update({ type: e.target.value })}>
-          <option value="all">all types</option>
-          <option value="recurring">recurring</option>
-          <option value="once">one-time</option>
-          <option value="event">event</option>
-        </select>
-        <select className={filterSelectCls} value={filters.mode} onChange={(e) => update({ mode: e.target.value })}>
+        <div className="flex items-center gap-1">
+          {TYPE_PILLS.filter((p) => p.key !== "event" || hasEvent).map(({ key, label, Icon, on }) => (
+            <button
+              key={key}
+              onClick={() => update({ type: filters.type === key ? "all" : key })}
+              className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                filters.type === key
+                  ? on
+                  : "border-sol-border text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-highlight"
+              }`}
+            >
+              <Icon className="w-3 h-3" />
+              {label}
+            </button>
+          ))}
+        </div>
+        <SelectBox value={filters.mode} onChange={(e) => update({ mode: e.target.value })}>
           <option value="all">all modes</option>
           <option value="apply">makes changes</option>
           <option value="propose">read-only</option>
-        </select>
+        </SelectBox>
         {projects.length > 1 && (
-          <select className={filterSelectCls} value={filters.project} onChange={(e) => update({ project: e.target.value })}>
+          <SelectBox value={filters.project} onChange={(e) => update({ project: e.target.value })}>
             <option value="all">all projects</option>
             {projects.map((p) => <option key={p} value={p}>{projectName(p)}</option>)}
-          </select>
+          </SelectBox>
         )}
         {hasCodex && (
-          <select className={filterSelectCls} value={filters.agent} onChange={(e) => update({ agent: e.target.value })}>
+          <SelectBox value={filters.agent} onChange={(e) => update({ agent: e.target.value })}>
             <option value="all">all agents</option>
             <option value="claude">claude</option>
             <option value="codex">codex</option>
-          </select>
+          </SelectBox>
         )}
         <ShortcutTooltip label="Group by project">
           <button
@@ -1351,7 +1466,7 @@ function TriggersContent() {
 
   const stats = useMemo(() => computeStats(tasks ?? [], now), [tasks, now]);
   const failingActive = useMemo(
-    () => (tasks ?? []).filter((t: any) => (t.status === "scheduled" || t.status === "running") && t.retry_count > 0),
+    () => (tasks ?? []).filter((t: any) => (t.status === "scheduled" || t.status === "running") && t.last_run_failed),
     [tasks]
   );
   const projects = useMemo(
@@ -1359,6 +1474,7 @@ function TriggersContent() {
     [tasks]
   );
   const hasCodex = useMemo(() => (tasks ?? []).some((t: any) => t.agent_type === "codex"), [tasks]);
+  const hasEvent = useMemo(() => (tasks ?? []).some((t: any) => t.schedule_type === "event"), [tasks]);
 
   const activeSubtitle = useMemo(() => {
     const recurring = active.filter((t: any) => t.schedule_type === "recurring").length;
@@ -1430,12 +1546,15 @@ function TriggersContent() {
           </div>
         ) : (
           <>
-            <HorizonRail tasks={active} now={now} />
+            {/* All filtered tasks, not just active: finished one-times and
+                paused loops still own dots on the past half of the rail. */}
+            <HorizonRail tasks={filtered} now={now} />
             <FilterBar
               filters={filters}
               update={update}
               projects={projects}
               hasCodex={hasCodex}
+              hasEvent={hasEvent}
               shown={filtered.length}
               total={tasks.length}
               grouped={grouped}

@@ -42,7 +42,24 @@ echo ""
 
 # Build (includes code signing + notarization via afterSign hook)
 echo "[1/4] Building and notarizing..."
-npm run build 2>&1
+source "$REPO_ROOT/scripts/dmg-build-env.sh"
+PATH="$DMG_BUILD_PATH" npm run build 2>&1
+
+# A local require missing from build.files ships an app that dies at boot
+# (v1.1.85: main.js required ./updaterNet but the asar didn't contain it).
+echo ""
+echo "[1.5/4] Verifying asar contains every local require..."
+ASAR="dist/mac-arm64/Codecast.app/Contents/Resources/app.asar"
+ASAR_LIST=$(npx asar list "$ASAR")
+for src in main.js preload.js; do
+  for mod in $(grep -oE 'require\("\./[^"]+"\)' "$src" | sed -E 's|require\("\./([^"]+)"\)|\1|'); do
+    if ! echo "$ASAR_LIST" | grep -qx "/${mod}.js"; then
+      echo "  ERROR: $src requires ./$mod but /${mod}.js is not in the asar — add it to build.files"
+      exit 1
+    fi
+    echo "  $src -> ./$mod.js ok"
+  done
+done
 
 echo ""
 echo "[2/4] Uploading to R2..."

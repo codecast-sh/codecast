@@ -463,6 +463,12 @@ export default defineSchema({
     .index("by_forked_from", ["forked_from"])
     .index("by_git_branch", ["git_branch"])
     .index("by_parent_conversation_id", ["parent_conversation_id"])
+    // Sparse and STATIC key (spawned_by never changes after creation, so no
+    // write amplification — the cost that killed by_user_updated_at above).
+    // Powers the hide cascade: killing/stashing a team lead must find its
+    // teammates (spawned_by + agent_team_name), which by_parent_conversation_id
+    // can't see. See cascadeHideToNestedChildren (cleanup.ts).
+    .index("by_spawned_by", ["spawned_by_conversation_id"])
     .index("by_user_pinned", ["user_id", "inbox_pinned_at"])
     .index("by_user_stashed", ["user_id", "inbox_stashed_at"])
     .index("by_user_profile_pinned", ["user_id", "profile_pinned_at"])
@@ -1337,7 +1343,11 @@ export default defineSchema({
   })
     .index("by_recipient", ["recipient_user_id"])
     .index("by_recipient_read", ["recipient_user_id", "read"])
-    .index("by_recipient_created", ["recipient_user_id", "created_at"]),
+    .index("by_recipient_created", ["recipient_user_id", "created_at"])
+    // Session-state notifications (ready / needs permission / error) replace
+    // per (recipient, conversation) instead of stacking — this is the lookup
+    // for the row(s) being superseded.
+    .index("by_recipient_conversation", ["recipient_user_id", "conversation_id"]),
 
   // Fixed-window counters for the IP-keyed rate limiter (ipRateLimit.ts) used on
   // UNAUTHENTICATED endpoints (the auth relay, webhooks) — the existing per-user
