@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { cleanPromptSliceTitle, partitionTriggerInbox, taskDisplayTitle, type TaskRow } from "./triggerTasks";
+import { cleanPromptSliceTitle, latestLoadedTriggerMessage, partitionTriggerInbox, taskDisplayTitle, type TaskRow } from "./triggerTasks";
 import { isSessionHardBlocked, visualOrderSessions, type InboxSession } from "../store/inboxStore";
 
 describe("taskDisplayTitle / cleanPromptSliceTitle", () => {
@@ -56,6 +56,32 @@ const task = (id: string, extra: Partial<TaskRow> = {}): TaskRow => ({
   run_count: 1,
   created_at: Date.now() - 86_400_000,
   ...extra,
+});
+
+describe("latestLoadedTriggerMessage", () => {
+  const msg = (id: string, role: string, content: string | undefined, timestamp: number) =>
+    ({ _id: id, role, content, timestamp });
+
+  it("finds the NEWEST firing of the given task, skipping other tasks and non-user rows", () => {
+    const messages = [
+      msg("m1", "user", '<scheduled-task title="CI watch" task-id="task_a">check ci</scheduled-task>', 100),
+      msg("m2", "assistant", 'echoing task-id="task_a" in prose', 200),
+      msg("m3", "user", '<scheduled-task title="Other" task-id="task_b">other</scheduled-task>', 300),
+      msg("m4", "user", '<scheduled-task title="CI watch" task-id="task_a">check ci</scheduled-task>', 400),
+      msg("m5", "user", "a human turn", 500),
+    ];
+    expect(latestLoadedTriggerMessage(messages, "task_a")).toEqual({ messageId: "m4", timestamp: 400 });
+    expect(latestLoadedTriggerMessage(messages, "task_b")).toEqual({ messageId: "m3", timestamp: 300 });
+  });
+
+  it("returns undefined when the window holds no firing (unloaded, contentless, or wrong task)", () => {
+    expect(latestLoadedTriggerMessage(undefined, "task_a")).toBeUndefined();
+    expect(latestLoadedTriggerMessage([], "task_a")).toBeUndefined();
+    expect(latestLoadedTriggerMessage([msg("m1", "user", undefined, 100)], "task_a")).toBeUndefined();
+    expect(
+      latestLoadedTriggerMessage([msg("m1", "user", '<scheduled-task task-id="task_b">x</scheduled-task>', 100)], "task_a"),
+    ).toBeUndefined();
+  });
 });
 
 describe("partitionTriggerInbox rows", () => {
