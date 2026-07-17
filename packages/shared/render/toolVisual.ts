@@ -97,6 +97,7 @@ export const TOOL_VISUALS: Record<string, ToolVisual> = {
   TaskStop: { icon: "tasks", color: "emerald" },
 
   SendMessage: { icon: "comment", color: "amber" },
+  StructuredOutput: { icon: "check-square-o", color: "cyan" },
   TodoWrite: { icon: "check-square-o", color: "magenta" },
   Skill: { icon: "bolt", color: "cyan" },
   EnterPlanMode: { icon: "map-o", color: "violet" },
