@@ -6,7 +6,7 @@ import {
   chooseClaudeTailMessagesForTokenBudget,
   type ExportResult,
 } from "./jsonlGenerator.js";
-import type { AgentClientId } from "@codecast/shared/contracts";
+import { AGENT_CLIENTS, type AgentClientId } from "@codecast/shared/contracts";
 
 export const CLAUDE_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -154,25 +154,24 @@ export function combineClaudeResumeFlags(
  *
  * codexArgs/codexPermFlags are the raw config values; the codex resume appends
  * both. gemini and cursor take no configured flags today.
+ *
+ * The base command per client is the single source of truth in the registry
+ * (AGENT_CLIENTS[agentType].resumeCmd); this function only layers the codex
+ * config flags on top and gates claude out.
  */
 export function buildNonClaudeResumeCommand(
   agentType: AgentClientId,
   sessionId: string,
   opts: { codexArgs?: string | null; codexPermFlags?: string | null } = {},
 ): string | null {
-  switch (agentType) {
-    case "codex": {
-      let extra = opts.codexArgs || "";
-      if (opts.codexPermFlags) extra = extra ? extra + " " + opts.codexPermFlags : opts.codexPermFlags;
-      return `codex resume ${sessionId}${extra ? " " + extra : ""}`;
-    }
-    case "gemini":
-      return `gemini --resume latest`;
-    case "cursor":
-      return `cursor-agent --resume ${sessionId}`;
-    default:
-      return null;
+  if (agentType === "claude") return null;
+  const base = AGENT_CLIENTS[agentType].resumeCmd(sessionId);
+  if (agentType === "codex") {
+    let extra = opts.codexArgs || "";
+    if (opts.codexPermFlags) extra = extra ? extra + " " + opts.codexPermFlags : opts.codexPermFlags;
+    return `${base}${extra ? " " + extra : ""}`;
   }
+  return base;
 }
 
 /**
@@ -195,15 +194,11 @@ export function resolveResumeAgentType(
 /**
  * tmux session-name prefix per agent for resume-named sessions. Each client gets
  * its own so panes stay greppable by client and never collide with claude's cc-.
- * Cursor gets cu- rather than defaulting into claude's cc-.
+ * Cursor gets cu- rather than defaulting into claude's cc-. Sourced from the
+ * registry (AGENT_CLIENTS[agentType].tmuxPrefix) so the prefixes live in one place.
  */
 export function resumeTmuxPrefix(agentType: AgentClientId): string {
-  switch (agentType) {
-    case "codex": return "cx";
-    case "gemini": return "gm";
-    case "cursor": return "cu";
-    default: return "cc";
-  }
+  return AGENT_CLIENTS[agentType].tmuxPrefix;
 }
 
 /**
