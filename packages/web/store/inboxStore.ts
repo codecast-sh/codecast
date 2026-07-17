@@ -565,14 +565,19 @@ export type ClientUI = {
   plan_view?: PlanViewPrefs;
   saved_views?: SavedView[];
   show_subagents?: boolean;
-  // show_old_sessions once lived here (server-synced). It's now the store's
-  // ephemeral showOldSessions: a persisted "show my whole divergent cache" mode
-  // is exactly the cross-client cruft bug. Stale values may linger in server
-  // client_state docs; nothing reads them.
+  // "Show old sessions" — reveal cached rows the live (authoritative) inbox
+  // subscription no longer returns. Default hide. Successor to the removed
+  // show_old_sessions key, whose blanket-local_wins sync made one browse click
+  // a permanent all-clients cruft mode (the OFF could never propagate, and a
+  // stale server `true` was unkillable). This key is stamped LWW (see
+  // STAMPED_UI_KEYS): the newest toggle on ANY device wins everywhere —
+  // including off — so sticky can't decay into stuck. The legacy key still
+  // lingers in server docs; nothing may ever read it (resolveShowOld).
+  inbox_show_old?: boolean;
   // Inbox scope. "mine" (default) is the personal inbox: your own sessions plus
   // any explicitly routed to you. "team" turns the inbox into a shared board of
   // every team-visible session across the active team (a superset of "mine").
-  // Persisted (LWW) so the chosen scope survives reloads and follows the user.
+  // Stamped LWW so the chosen scope survives reloads and follows the user.
   inbox_scope?: "mine" | "team";
   // Show each session's model as a badge in the inbox list. Off by default.
   show_model_badge?: boolean;
@@ -593,7 +598,7 @@ export type ClientUI = {
   // brand-new sessions interleave by creation automatically; a drag pins just the
   // moved row with a single midpoint write. See flatViewComparator / computeManualSortKey.
   inbox_manual_order?: Record<string, number>;
-  // Read watermark for the SCHEDULES section: outcomes with last_run_at newer
+  // Read watermark for the TRIGGERS section: outcomes with last_run_at newer
   // than this count as "N new" on the collapsed header. Refreshed whenever the
   // user toggles the section (expanding IS reading the briefing).
   schedules_seen_at?: number;
@@ -1410,7 +1415,7 @@ export function visualOrderSessions(
     collapsedSections?: Record<string, boolean>;
     // Status-view schedule projection (grouped mode only), published by the
     // panel from the agentTasks.webList join: sessions absorbed behind a
-    // SCHEDULES row — a resting loop's home conversation, or an uneventful
+    // TRIGGERS row — a resting loop's home conversation, or an uneventful
     // spawned run — leave keyboard nav entirely; they're reachable by clicking
     // the schedule row, not by Ctrl+J/K. Escalated ones aren't in this set.
     absorbedIds?: ReadonlySet<string>;
@@ -1683,6 +1688,16 @@ export function resolveInboxViewMode(ui: { inbox_view_mode?: InboxViewMode; inbo
   return ui?.inbox_view_mode ?? (ui?.inbox_flat_view ? "time" : "grouped");
 }
 
+// Resolve the "show old sessions" toggle from client UI state. Shared by the
+// panel, the sidebar/dashboard badges, keyboard nav and mobile so every
+// consumer hides exactly the same rows. Reads ONLY inbox_show_old — the legacy
+// show_old_sessions key (stale `true` values still linger in server client_state
+// docs from its pre-LWW era) must stay unread forever, or the permanent
+// cruft-mode bug resurrects.
+export function resolveShowOld(ui: { inbox_show_old?: boolean } | undefined): boolean {
+  return ui?.inbox_show_old ?? false;
+}
+
 // A session's creation-time sort key for the "time" view: started_at, falling
 // back to updated_at only when a session has no creation stamp.
 const creationKey = (s: InboxSession) => s.started_at ?? s.updated_at ?? 0;
@@ -1849,10 +1864,9 @@ export function computeVisualOrder(state: {
   collapsedSections?: Record<string, boolean>;
   // Ephemeral schedule projection published by GlobalSessionPanel (see
   // setScheduleNavSets) so grouped-mode nav skips sessions absorbed behind
-  // SCHEDULES rows. Null until the panel has schedule data.
+  // TRIGGERS rows. Null until the panel has schedule data.
   scheduleNavSets?: { absorbed: ReadonlySet<string> } | null;
-  showOldSessions: boolean;
-  clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; inbox_manual_order?: Record<string, number>; show_subagents?: boolean; inbox_scope?: "mine" | "team" } };
+  clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; inbox_manual_order?: Record<string, number>; show_subagents?: boolean; inbox_scope?: "mine" | "team"; inbox_show_old?: boolean } };
 }): InboxSession[] {
   // Favorites view walks its own project-grouped order so Ctrl+J/K moves through
   // the shelf, not the active desk underneath it.
@@ -1887,7 +1901,7 @@ export function computeVisualOrder(state: {
     : partitionOldSessions(
         scopedSessions,
         state.liveInboxIds,
-        state.showOldSessions, // ephemeral browse flag — nav must walk exactly what the panel renders
+        resolveShowOld(state.clientState.ui), // same flag the panel renders with — nav must walk exactly what's on screen
         focusedId,
       );
   if (mode === "time" || mode === "recent") {
@@ -2068,12 +2082,13 @@ interface InboxStoreState {
   // Replace the authoritative active-inbox set (both twins) from a server
   // payload. sync(): persists, never dispatches — this is server truth.
   setLiveInboxIds: (ids: string[]) => void;
-  // "Show old sessions" — a transient browse gesture, deliberately NOT persisted
-  // and NOT server-synced. It was a synced client_state.ui flag once; one browse
-  // click then permanently reverted every client to rendering its whole divergent
-  // cache (the recurring-cruft complaint). Ephemeral means every boot starts from
-  // the authoritative set, on every client.
-  showOldSessions: boolean;
+  // "Show old sessions" — a sticky per-user view preference. Lives in
+  // clientState.ui.inbox_show_old (read via resolveShowOld) so it survives
+  // reloads and follows the user across devices. It was ephemeral for a while:
+  // the ORIGINAL synced flag merged local_wins, so one browse click became a
+  // permanent all-clients cruft mode (the OFF could never propagate). The key
+  // is now stamped per-key LWW (STAMPED_UI_KEYS + mergeStampedBagLww), so
+  // turning it off anywhere turns it off everywhere — sticky without stuck.
   setShowOldSessions: (show: boolean) => void;
   // MRU "entered at" per session — bumped only when you switch INTO a session.
   // Drives the Tab switcher order + message eviction. Kept separate from
@@ -2784,6 +2799,17 @@ export function mergeStampedBagLww(local: any, server: any, initialized: boolean
   return out;
 }
 
+// The ui keys whose writes carry a ":ts" stamp (updateClientUI), making them
+// per-key LWW across devices: the inbox VIEW configuration — scope, view mode,
+// the subagents / old-sessions toggles — is a per-USER preference ("the view
+// follows me"), not a per-device one. Everything else in the ui bag stays
+// unstamped and keeps exact legacy local_wins semantics: layout-ish prefs
+// (sidebar, zen mode, theme, active team) are naturally per-device, and
+// silently globalizing them would yank screens out from under people.
+export const STAMPED_UI_KEYS = new Set([
+  "inbox_scope", "inbox_view_mode", "inbox_flat_view", "show_subagents", "inbox_show_old",
+]);
+
 function applyMerge(local: any, server: any, spec: MergeSpec, initialized: boolean): any {
   if (typeof spec === "function") return spec(local, server, initialized);
   if (typeof spec === "string") {
@@ -2895,7 +2921,11 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   clientState: {
     kind: "singleton",
     merge: {
-      ui: "local_wins",
+      // Per-key LWW for the stamped inbox-view prefs (STAMPED_UI_KEYS); every
+      // unstamped key keeps exact local_wins per-key semantics. Blanket
+      // local_wins forked the bag per device forever — a pref changed on any
+      // other device never reached a client that already held the key.
+      ui: mergeStampedBagLww,
       layouts: "local_wins",
       dismissed: mergeStampedBagLww,
       show_dismissed: "local_wins",
@@ -3310,8 +3340,7 @@ export const useInboxStore = create<InboxStoreState>(
     this.liveInboxIds = new Set(ids);
     this.liveInboxIdList = ids;
   }),
-  showOldSessions: false,
-  setShowOldSessions: (show: boolean) => set({ showOldSessions: show }),
+  setShowOldSessions: (show: boolean) => get().updateClientUI({ inbox_show_old: show }),
   _lastViewedAt: {},
   _seenUpToAt: {},
   _seenMessageCount: {},
@@ -4079,10 +4108,21 @@ export const useInboxStore = create<InboxStoreState>(
   }),
 
   updateClientUI: (partial: Partial<ClientUI>) => {
-    (get() as any)._applyClientUI(partial);
-    writeCriticalUiPrefs(partial as Record<string, any>);
-    if (Object.keys(partial).length > 0) {
-      const dispatch = () => get()._dispatch("patch", [], { client_state: { _: { ui: partial } } });
+    // Whitelisted per-USER keys get a flat "<key>:ts" sibling stamp so the ui
+    // bag can merge them per-key LWW (mergeStampedBagLww) — the inbox view
+    // follows the user across devices, and the newest toggle anywhere wins
+    // everywhere. A caller-supplied stamp is honored (the hydration gap-fill
+    // restores legacy values with their ORIGINAL write time, so a stale boot
+    // can't outrank a genuinely newer cross-device write).
+    const stamped: Record<string, any> = { ...partial };
+    const now = Date.now();
+    for (const k of Object.keys(partial)) {
+      if (STAMPED_UI_KEYS.has(k) && stamped[`${k}:ts`] === undefined) stamped[`${k}:ts`] = now;
+    }
+    (get() as any)._applyClientUI(stamped);
+    writeCriticalUiPrefs(stamped);
+    if (Object.keys(stamped).length > 0) {
+      const dispatch = () => get()._dispatch("patch", [], { client_state: { _: { ui: stamped } } });
       dispatch().catch(() => setTimeout(() => dispatch().catch(() => {}), 3000));
     }
   },
@@ -5788,7 +5828,17 @@ if (PERSISTENCE_AVAILABLE) {
             const curUI = state.clientState.ui ?? {};
             const uiPatch: Record<string, any> = {};
             for (const [uk, uv] of Object.entries(cachedUI)) {
-              if (uv != null && (curUI as any)[uk] == null) uiPatch[uk] = uv;
+              // Stamps ride along with their base key below, never alone — a
+              // bare stale ":ts" would misdate whatever value is already live.
+              if (uk.endsWith(":ts")) continue;
+              if (uv != null && (curUI as any)[uk] == null) {
+                uiPatch[uk] = uv;
+                const ts = (cachedUI as any)[`${uk}:ts`];
+                // Keep the ORIGINAL write time (updateClientUI honors a passed
+                // stamp) so this boot-time restore can't outrank a genuinely
+                // newer write from another device.
+                if (typeof ts === "number") uiPatch[`${uk}:ts`] = ts;
+              }
             }
             if (Object.keys(uiPatch).length > 0) state.updateClientUI(uiPatch);
           }

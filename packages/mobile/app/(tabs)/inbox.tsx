@@ -11,12 +11,12 @@ import {
 } from '@/components/SessionItem';
 import {
   useInboxStore, type InboxSession, type InboxViewMode, type BucketItem, categorizeSessions, partitionOldSessions, sessionsWithPendingSend,
-  chipMatchesSession, getProjectName, resolveInboxViewMode, flatViewSessions, convBucketMap,
+  chipMatchesSession, getProjectName, resolveInboxViewMode, resolveShowOld, flatViewSessions, convBucketMap,
   groupSessionsForLabelView, groupSessionsByPlan, sortLabels, computeChipCounts,
+  sessionsWakeSig, pendingSendWakeSig,
 } from '@codecast/web/store/inboxStore';
-import { useSyncBuckets } from '@codecast/web/hooks/useSyncBuckets';
+import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import { labelHexColor } from '@/lib/labelColors';
-import { useSyncInboxSessions } from '@/hooks/useSyncInboxSessions';
 import { SessionListSkeleton } from '@/components/SkeletonLoader';
 import { useQuery } from 'convex/react';
 
@@ -395,10 +395,22 @@ export default function InboxScreen() {
   const router = useRouter();
   const isSearching = debouncedQuery.length >= 2;
 
-  useSyncInboxSessions();
-  useSyncBuckets();
-
-  const sessions = useInboxStore((s) => s.sessions);
+  // Wake-signature gates (see web store/wakeSig.ts). The raw s.sessions and
+  // s.pendingMessages refs flip on every liveness tick and send-lifecycle
+  // write — subscribing to them kept this always-mounted screen re-rendering
+  // (and re-laying-out the whole list) about once a second, pegging a core on
+  // an idle phone. Subscribe to the structural signatures instead; the body
+  // reads the raw maps off the store at render, same as web's Sidebar. The
+  // sync hooks themselves live in StoreSyncBridge (tabs layout) so server
+  // pushes don't re-render this screen at all.
+  const sessionsSig = useInboxStore((s) => sessionsWakeSig(s.sessions));
+  const pendingSendSig = useInboxStore((s) => pendingSendWakeSig(s.pendingMessages));
+  const sessions = useInboxStore.getState().sessions;
+  const pendingMessages = useInboxStore.getState().pendingMessages;
+  // categorizeSessions' trust-TTL sweep (stale "working" → needs-input) and
+  // the rows' relative times are time-driven, not field-driven — a signature
+  // never wakes them, so a coarse clock does.
+  const coarseNow = useCoarseNow(15_000);
   // First-payload state of the live sessions subscription (set by
   // useSyncInboxSessions). Distinguishes "still loading" from "account has no
   // sessions" — a brand-new account (e.g. App Review's demo login) otherwise
@@ -413,7 +425,6 @@ export default function InboxScreen() {
   const killSession = useInboxStore((s) => s.killSession);
   const killSessions = useInboxStore((s) => s.killSessions);
   const currentSessionId = useInboxStore((s) => s.currentSessionId);
-  const pendingMessages = useInboxStore((s) => s.pendingMessages);
   const pendingSessionCreates = useInboxStore((s) => s.pendingSessionCreates);
   const collapsedSections = useInboxStore((s) => s.collapsedSections);
   const toggleCollapsedSection = useInboxStore((s) => s.toggleCollapsedSection);
@@ -426,8 +437,12 @@ export default function InboxScreen() {
   const activeBucketFilter = useInboxStore((s) => s.activeBucketFilter);
   const setActiveBucketFilter = useInboxStore((s) => s.setActiveBucketFilter);
   const setInboxViewMode = useInboxStore((s) => s.setInboxViewMode);
-  const clientState = useInboxStore((s) => s.clientState);
-  const viewMode = resolveInboxViewMode(clientState?.ui);
+  // Scalars off clientState, never the whole singleton — it churns on every
+  // draft keystroke synced from any device. inbox_manual_order is an array, so
+  // its wake rides a stringified key (ref may flip without content change).
+  const viewMode = useInboxStore((s) => resolveInboxViewMode(s.clientState?.ui));
+  const showSubagents = useInboxStore((s) => s.clientState?.ui?.show_subagents ?? true);
+  const manualOrderKey = useInboxStore((s) => JSON.stringify(s.clientState?.ui?.inbox_manual_order ?? null));
   const bucketByConv = useMemo(() => convBucketMap(bucketAssignments), [bucketAssignments]);
   const visibleBuckets = useMemo(() => sortLabels(buckets), [buckets]);
 
@@ -436,12 +451,13 @@ export default function InboxScreen() {
   // Hide "old" rows exactly like web (GlobalSessionPanel): the never-prune cache
   // holds every session ever synced (including teammates' threads opened from the
   // feed), but only rows the live inbox subscription still returns are actionable.
-  // Same EPHEMERAL flag web reads (store.showOldSessions, off every boot) so the
-  // phone and desktop render one identical authoritative set by default.
-  const showOld = useInboxStore((s) => s.showOldSessions);
+  // Same synced per-user flag web reads (clientState.ui.inbox_show_old, stamped
+  // LWW, default hide) so the phone and desktop render one identical set.
+  const showOld = useInboxStore((s) => resolveShowOld(s.clientState.ui));
   const { visibleSessions } = useMemo(
     () => partitionOldSessions(sessions, liveInboxIds, showOld, currentSessionId),
-    [sessions, liveInboxIds, showOld, currentSessionId],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- sessionsSig stands in for the churny sessions ref
+    [sessionsSig, liveInboxIds, showOld, currentSessionId],
   );
   // Full-args categorize (matches web): pendingSendIds keeps optimistic sends
   // in Working, and opts make isEngagedBlank work so the New section actually
@@ -451,7 +467,8 @@ export default function InboxScreen() {
       currentSessionId,
       pendingCreateIds: new Set(Object.keys(pendingSessionCreates)),
     }),
-    [visibleSessions, sessionsWithQueuedMessages, pendingMessages, currentSessionId, pendingSessionCreates],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- pendingSendSig gates pendingMessages; coarseNow drives the time-based trust-TTL sweep
+    [visibleSessions, sessionsWithQueuedMessages, pendingSendSig, currentSessionId, pendingSessionCreates, coarseNow],
   );
   const activeSessions = useMemo(() => sortedAll.filter((s) => !s.is_deferred), [sortedAll]);
 
@@ -665,9 +682,9 @@ export default function InboxScreen() {
     if (viewMode === "recent" || viewMode === "time") {
       const flat = flatViewSessions(sortedAll, subsByParent, {
         mode: viewMode,
-        showSubagents: clientState?.ui?.show_subagents ?? true,
+        showSubagents,
         focusedId: currentSessionId,
-        manualOrder: clientState?.ui?.inbox_manual_order,
+        manualOrder: useInboxStore.getState().clientState?.ui?.inbox_manual_order,
         chipMatches,
       });
       return [renderSection("All", flat, Theme.cyan, "all")].filter(Boolean);
@@ -698,7 +715,8 @@ export default function InboxScreen() {
     sections.push(renderSection("Needs Input", filteredNeedsInput, Theme.accent));
     sections.push(renderSection("Working", filteredWorking, Theme.greenBright));
     return sections.filter(Boolean);
-  }, [activeSessions, sessions, sessionsFirstLoad, filteredPinned, filteredWorking, filteredNeedsInput, filteredNew, renderSection, viewMode, sortedAll, subsByParent, clientState, currentSessionId, chipMatches, buckets, bucketByConv]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- sessionsSig gates the sessions map; manualOrderKey gates the getState() manual-order read
+  }, [activeSessions, sessionsSig, sessionsFirstLoad, filteredPinned, filteredWorking, filteredNeedsInput, filteredNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv]);
 
   // Stashed (agent alive, kill-all) and Killed buckets — the web panel's two
   // hidden sections, collapsed by default behind count toggles.
