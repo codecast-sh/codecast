@@ -216,3 +216,43 @@ describe("performReassignToDevice", () => {
     ).rejects.toThrow(/run or own/);
   });
 });
+
+// The resume command must carry the conversation's real agent client so the
+// daemon resumes with the right binary. Before the fromConvexAgentType fix, a
+// cursor conversation's agent_type collapsed to "claude" here and the daemon
+// built `claude --resume` instead of `cursor-agent --resume`.
+describe("resume command carries the agent client", () => {
+  const agentTypeOf = (db: any) => JSON.parse(commands(db)[0].args).agent_type;
+
+  test("a cursor conversation resumes as cursor, not claude", async () => {
+    const db = fixtures({ user_id: ME, agent_type: "cursor" });
+    await performReassignToDevice({ db }, ME as any, { conversation_id: "conv1" as any, device_id: "mydev" });
+    expect(agentTypeOf(db)).toBe("cursor");
+  });
+
+  test("codex and gemini pass through unchanged", async () => {
+    const codexDb = fixtures({ user_id: ME, agent_type: "codex" });
+    await performReassignToDevice({ db: codexDb }, ME as any, { conversation_id: "conv1" as any, device_id: "mydev" });
+    expect(agentTypeOf(codexDb)).toBe("codex");
+
+    const geminiDb = fixtures({ user_id: ME, agent_type: "gemini" });
+    await performReassignToDevice({ db: geminiDb }, ME as any, { conversation_id: "conv1" as any, device_id: "mydev" });
+    expect(agentTypeOf(geminiDb)).toBe("gemini");
+  });
+
+  test("claude_code and cowork resume as claude", async () => {
+    const claudeDb = fixtures({ user_id: ME, agent_type: "claude_code" });
+    await performReassignToDevice({ db: claudeDb }, ME as any, { conversation_id: "conv1" as any, device_id: "mydev" });
+    expect(agentTypeOf(claudeDb)).toBe("claude");
+
+    const coworkDb = fixtures({ user_id: ME, agent_type: "cowork" });
+    await performReassignToDevice({ db: coworkDb }, ME as any, { conversation_id: "conv1" as any, device_id: "mydev" });
+    expect(agentTypeOf(coworkDb)).toBe("claude");
+  });
+
+  test("the cross-user reparent path carries cursor through too", async () => {
+    const db = fixtures({ agent_type: "cursor" });
+    await performReparentSessionToDevice({ db }, ME as any, { session_id: "sess1", device_id: "mydev" });
+    expect(agentTypeOf(db)).toBe("cursor");
+  });
+});
