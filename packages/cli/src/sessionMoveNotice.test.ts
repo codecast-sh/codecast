@@ -198,3 +198,66 @@ describe("reparentNotice (daemon mapping)", () => {
     expect(reparentNotice({ destinationLabel: "macOS - m1", command: {} })).toBeNull();
   });
 });
+
+// When the source published a working-tree snapshot (wipSnapshot.ts), the tree
+// the agent wakes in is a reproduction of the one it left — so the notice must
+// NOT claim only pushed work is here. Different facts, different sentence.
+describe("reorientationNotice with a restored snapshot", () => {
+  const cwd = "/Users/samvit/.codecast/reparented/app-1a2b";
+
+  test("work restored: says the tree was rebuilt, never 'only pushed work'", () => {
+    const n = reorientationNotice({
+      destination: "Cloud Mac",
+      newCwd: cwd,
+      machineChanged: true,
+      checkout: { cwd, cloned: true, branch: "feature/x", restored: { appliedWork: true } },
+    })!;
+    expect(n).toContain("rebuilt from the previous machine");
+    expect(n).toContain("on branch feature/x");
+    expect(n).toContain("restored as uncommitted");
+    // The plain-clone warnings would now be FALSE.
+    expect(n).not.toContain("Only work that was pushed");
+    expect(n).not.toContain("stayed behind");
+    expect(n).not.toContain("you are not on it now");
+    // Secrets genuinely didn't travel — that stays said.
+    expect(n).toContain("Gitignored files");
+  });
+
+  test("clean source: reports a clean tree, not missing work", () => {
+    const n = reorientationNotice({
+      destination: "Cloud Mac",
+      newCwd: cwd,
+      machineChanged: true,
+      checkout: { cwd, cloned: true, branch: "main", restored: { appliedWork: false } },
+    })!;
+    expect(n).toContain("nothing was uncommitted there, so the tree is clean");
+    expect(n).not.toContain("Only work that was pushed");
+  });
+
+  test("restore failed: says so plainly rather than implying the work is here", () => {
+    const n = reorientationNotice({
+      destination: "Cloud Mac",
+      newCwd: cwd,
+      machineChanged: true,
+      checkout: {
+        cwd, cloned: true, branch: "feature/x",
+        restored: { appliedWork: false, applyError: "error: patch does not apply" },
+      },
+    })!;
+    expect(n).toContain("could NOT be reapplied");
+    expect(n).toContain("error: patch does not apply");
+    expect(n).toContain("Check what is missing before continuing");
+    expect(n).not.toContain("restored as uncommitted");
+  });
+
+  test("no snapshot: the plain-clone warning still applies", () => {
+    const n = reorientationNotice({
+      destination: "Cloud Mac",
+      newCwd: cwd,
+      machineChanged: true,
+      checkout: { cwd, cloned: true, branch: "main" },
+    })!;
+    expect(n).toContain("Only work that was pushed");
+    expect(n).not.toContain("rebuilt from the previous machine");
+  });
+});
