@@ -3283,7 +3283,10 @@ async function executeRemoteCommand(
           log(`[REMOTE] Resume failed for ${sessionId.slice(0, 8)}, reconstituting session from DB in ${cwd}...`);
           let reconstituted = false;
 
-          if (config?.convex_url && config?.auth_token) {
+          // cursor-agent owns its own session store — there is no local JSONL to
+          // reconstitute. Skip DB reconstitution (never write a Claude JSONL for a
+          // cursor session) and fall through to the fresh cursor-agent spawn below.
+          if (config?.convex_url && config?.auth_token && resumeAgentType !== "cursor") {
             try {
               const siteUrl = config.convex_url.replace(".cloud", ".site");
               const exportData = await fetchExport(siteUrl, config.auth_token!, conversationId);
@@ -11026,7 +11029,14 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
   }
   let sessionFile = findSessionFile(sessionId);
   const config = readConfig();
-  if (!sessionFile && conversationId && config?.auth_token && config?.convex_url) {
+  // cursor-agent owns its own session store (SQLite under ~/.cursor); resume
+  // needs no local JSONL transcript. Trust an explicit cursor hint HERE — before
+  // findSessionFile (which has no cursor lookup) or the reconstitution below
+  // (claude/codex only) can mislabel a cursor session as claude and materialize a
+  // bogus Claude JSONL for it. This is what makes the cursor resume-command
+  // branch reachable at all.
+  const isCursorResume = agentTypeHint === "cursor";
+  if (!isCursorResume && !sessionFile && conversationId && config?.auth_token && config?.convex_url) {
     logDelivery(`Session ${sessionId.slice(0, 8)} not found locally, reconstituting from codecast...`);
     try {
       const siteUrl = config.convex_url.replace(".cloud", ".site");
@@ -11075,36 +11085,48 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       logDelivery(`Reconstitution failed for ${sessionId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
       return false;
     }
-  } else if (!sessionFile) {
+  } else if (!sessionFile && !isCursorResume) {
     logDelivery(`Cannot auto-resume ${sessionId.slice(0, 8)}: session JSONL file not found${!conversationId ? " (no conversation ID for reconstitution)" : ""}`);
     return false;
   }
 
-  const { path: jsonlPath, agentType } = sessionFile;
-  const jsonlContent = readFileHead(jsonlPath, 5000);
+  const agentType: SessionAgentType = isCursorResume ? "cursor" : sessionFile!.agentType;
+  const jsonlPath = isCursorResume ? "" : sessionFile!.path;
+  const jsonlContent = isCursorResume ? "" : readFileHead(jsonlPath, 5000);
 
   let cwd: string;
   let resumeCmd: string;
   const shortId = resumeShortId(sessionId);
-  const title = titleCache[sessionId] || extractSummaryTitle(jsonlContent);
+  const title = titleCache[sessionId] || (jsonlContent ? extractSummaryTitle(jsonlContent) : "");
   const slug = title ? slugify(title) : "";
 
-  // Resolve where to resume. A recorded transcript cwd we can't map to a local
-  // checkout means refusing (mirrors start_session) — NOT $HOME, which would run
-  // the agent in the wrong dir and mislabel the project as the home dir. Gemini
-  // transcripts carry no cwd, so they have nothing to refuse on and keep $HOME.
-  const recordedCwd =
-    agentType === "codex" ? (extractCodexCwd(jsonlContent) || undefined)
-    : agentType === "gemini" ? undefined
-    : (extractCwd(jsonlContent) || undefined);
-  const resolvedCwd = await resolveResumeCwdOrRefuse({ recordedCwd, cwdOverride, conversationId });
-  if (resolvedCwd) {
-    cwd = resolvedCwd;
-  } else if (agentType === "gemini" && !recordedCwd) {
-    cwd = process.env.HOME || "/tmp";
+  if (isCursorResume) {
+    // No transcript cwd to recover for cursor; prefer an explicit override, else
+    // the conversation's recorded project path, else $HOME.
+    const projectPath = conversationId && syncServiceRef
+      ? (await syncServiceRef.getProjectInfo(conversationId).catch(() => null))?.project_path ?? undefined
+      : undefined;
+    cwd = (cwdOverride && fs.existsSync(cwdOverride)) ? cwdOverride
+      : (projectPath && fs.existsSync(projectPath)) ? projectPath
+      : (process.env.HOME || "/tmp");
   } else {
-    await refuseResumeNoLocalCheckout(sessionId, conversationId, recordedCwd);
-    return false;
+    // Resolve where to resume. A recorded transcript cwd we can't map to a local
+    // checkout means refusing (mirrors start_session) — NOT $HOME, which would run
+    // the agent in the wrong dir and mislabel the project as the home dir. Gemini
+    // transcripts carry no cwd, so they have nothing to refuse on and keep $HOME.
+    const recordedCwd =
+      agentType === "codex" ? (extractCodexCwd(jsonlContent) || undefined)
+      : agentType === "gemini" ? undefined
+      : (extractCwd(jsonlContent) || undefined);
+    const resolvedCwd = await resolveResumeCwdOrRefuse({ recordedCwd, cwdOverride, conversationId });
+    if (resolvedCwd) {
+      cwd = resolvedCwd;
+    } else if (agentType === "gemini" && !recordedCwd) {
+      cwd = process.env.HOME || "/tmp";
+    } else {
+      await refuseResumeNoLocalCheckout(sessionId, conversationId, recordedCwd);
+      return false;
+    }
   }
 
   const nonClaudeResumeCmd = buildNonClaudeResumeCommand(agentType, sessionId, {
@@ -11391,6 +11413,14 @@ async function repairAndResumeSession(
     return false;
   }
 
+  if (agentTypeHint === "cursor") {
+    // cursor-agent owns its own session store — there is no local JSONL to repair
+    // or reconstitute. A plain resume is the only recovery; never materialize a
+    // Claude JSONL for a cursor session.
+    log(`Repairing cursor session ${sessionId.slice(0, 8)} = re-resume (cursor-agent owns its store)`);
+    return autoResumeSession(sessionId, content, titleCache, cwdOverride, conversationId, "cursor");
+  }
+
   const promise = (async (): Promise<boolean> => {
     let success = false;
 
@@ -11457,7 +11487,7 @@ async function repairAndResumeSession(
           }
           log(`Materialized fresh Claude session ${targetSessionId.slice(0, 8)} from stale ${sessionId.slice(0, 8)} (${exportData.messages.length} messages, tail=${tailMessages})`);
 
-          const resumed = await autoResumeSession(targetSessionId, content, titleCache, cwdOverride || projectPath, convId);
+          const resumed = await autoResumeSession(targetSessionId, content, titleCache, cwdOverride || projectPath, convId, agentTypeHint);
           if (resumed) {
             log(`Repair + resume succeeded for ${sessionId.slice(0, 8)} via fresh session ${targetSessionId.slice(0, 8)}`);
             success = true;
@@ -11483,7 +11513,7 @@ async function repairAndResumeSession(
           log(`Wrote new session file for ${sessionId.slice(0, 8)}`);
         }
 
-        const resumed = await autoResumeSession(sessionId, content, titleCache, cwdOverride || projectPath, convId);
+        const resumed = await autoResumeSession(sessionId, content, titleCache, cwdOverride || projectPath, convId, agentTypeHint);
         if (resumed) {
           log(`Repair + resume succeeded for ${sessionId.slice(0, 8)}`);
           success = true;
@@ -11530,7 +11560,7 @@ async function repairAndResumeSession(
           fs.writeFileSync(sessionFile.path, cleanLines.join("\n") + "\n");
           log(`Surgical cleanup: removed ${removed} corrupt entries from ${sessionId.slice(0, 8)}`);
 
-          const resumed = await autoResumeSession(sessionId, content, titleCache, cwdOverride, convId);
+          const resumed = await autoResumeSession(sessionId, content, titleCache, cwdOverride, convId, agentTypeHint);
           if (resumed) {
             log(`Surgical repair + resume succeeded for ${sessionId.slice(0, 8)}`);
             success = true;
