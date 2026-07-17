@@ -247,3 +247,14 @@ export const timeManagedScan = internalQuery({
     };
   },
 });
+
+// TEMPORARY: list users that have a role set (find the admin account). Safe to delete.
+export const listRoleUsers = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const users = await ctx.db.query("users").collect();
+    return users
+      .filter((u) => u.role)
+      .map((u) => ({ id: u._id, email: u.email, role: u.role }));
+  },
+});
