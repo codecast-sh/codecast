@@ -143,6 +143,34 @@ export function expandTranscriptRoot(root: string): string {
 
 const CODEX_UUID_SUFFIX_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 
+// pi stores sessions at ~/.pi/agent/sessions/<cwd-slug>/<ISO-ts>_<uuid>.jsonl. The
+// filename's trailing uuid is the session id (== the header's `id`), and the ISO
+// timestamp before it also carries hyphens, so we anchor the uuid at the end.
+const PI_UUID_SUFFIX_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+
+/**
+ * Encode a working directory into pi's session-directory name, verbatim to pi's
+ * own rule (session-manager.ts): drop a leading slash, replace every `/`, `\`, `:`
+ * with `-`, and wrap in `--…--`. e.g. `/Users/ashot/src/codecast` ->
+ * `--Users-ashot-src-codecast--`, `/private/tmp` -> `--private-tmp--`.
+ */
+export function encodePiCwdSlug(cwd: string): string {
+  return `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
+}
+
+/**
+ * Best-effort inverse of encodePiCwdSlug: strip the `--…--` wrapper and turn `-` back
+ * into `/`, re-adding the leading slash. LOSSY on purpose — pi's encoder collapses
+ * `/`, `\`, `:` AND any real `-` in the path all to `-`, so a directory named
+ * `footage-app` decodes to `.../footage/app`. The session file's header `cwd`
+ * (parser.extractPiCwd) is the authoritative source for project mapping; this decoder
+ * is only the fallback for when the header is unavailable.
+ */
+export function decodePiCwdSlug(slug: string): string {
+  const inner = slug.replace(/^--/, "").replace(/--$/, "");
+  return inner ? `/${inner.replace(/-/g, "/")}` : "/";
+}
+
 /**
  * The per-client config for a jsonl-dir transcript watcher, sourced from the
  * client's registry descriptor (base path) plus its transcript-format specifics.
@@ -150,10 +178,28 @@ const CODEX_UUID_SUFFIX_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[
  * sessionWatcher and cursor a SQLite watcher (different watcherKinds).
  */
 export function transcriptDirWatcherConfig(
-  clientId: Extract<AgentClientId, "codex" | "gemini">,
+  clientId: Extract<AgentClientId, "codex" | "gemini" | "pi">,
   basePathOverride?: string,
 ): TranscriptDirWatcherConfig {
   const basePath = basePathOverride ?? expandTranscriptRoot(AGENT_CLIENTS[clientId].transcriptRoots[0]);
+
+  if (clientId === "pi") {
+    // pi transcripts sit exactly one directory deep: sessions/<cwd-slug>/<file>.jsonl.
+    // The session id is the filename's trailing uuid; the containing slug dir decodes
+    // (lossily) back to the cwd, but processPiSession prefers the header cwd.
+    return {
+      basePath,
+      watchFilter: (rel) => rel.endsWith(".jsonl"),
+      scanMatch: (_dir, name) => name.endsWith(".jsonl"),
+      extractSessionId: (filePath) => {
+        const filename = path.basename(filePath, ".jsonl");
+        const match = filename.match(PI_UUID_SUFFIX_RE);
+        return match ? match[1] : filename;
+      },
+      maxDepth: 2,
+      debounceMs: 100,
+    };
+  }
 
   if (clientId === "codex") {
     return {

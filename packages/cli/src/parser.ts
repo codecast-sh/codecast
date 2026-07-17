@@ -1187,6 +1187,211 @@ export function parseOpencodeSessionFile(content: string): ParsedMessage[] {
   return messages;
 }
 
+// ── pi (@mariozechner/pi-coding-agent) ──────────────────────────────────────
+// pi stores each session as a JSONL TREE: the first line is a header
+// ({type:"session",version,id,cwd}) and every line after it is an entry with an
+// 8-char `id` and a `parentId`, so in-file branching (pi's /tree) can fork the
+// conversation without opening a new file. The header is metadata, not part of the
+// tree. On load, pi sets its leaf to the LAST non-session entry in file order
+// (session-manager `_buildIndex`) and builds LLM context by walking parentId from
+// that leaf back to the root — so the "active branch" is exactly the parentId chain
+// ending at the final line. We reproduce that: resolve the active branch, then emit
+// its entries as ParsedMessage[] in root->leaf order.
+//
+// FORK LINEAGE (deferred): codecast's transcript model is linear-per-conversation, so
+// we render the ACTIVE branch only. Alternate in-file branches (other /tree paths)
+// and cross-file forks (a header's `parentSession` pointer, written by /fork) are NOT
+// yet mapped onto codecast fork lineage — that mapping is a later phase. This matches
+// how the daemon already renders one linear path per conversation.
+interface PiContentBlock {
+  type: string;
+  text?: string;
+  thinking?: string;
+  // toolCall
+  id?: string;
+  name?: string;
+  arguments?: Record<string, unknown>;
+  // image
+  data?: string;
+  mimeType?: string;
+}
+
+interface PiMessage {
+  role: string; // "user" | "assistant" | "toolResult" (+ extended roles we skip)
+  content?: string | PiContentBlock[];
+  model?: string;
+  stopReason?: string;
+  // toolResult
+  toolCallId?: string;
+  toolName?: string;
+  isError?: boolean;
+}
+
+interface PiEntry {
+  type: string; // "session" | "message" | "model_change" | "thinking_level_change" | ...
+  id?: string;
+  parentId?: string | null;
+  timestamp?: string;
+  message?: PiMessage;
+  // model_change
+  modelId?: string;
+  // session header
+  cwd?: string;
+}
+
+// One pass over a pi message's content blocks — works for every role (user carries
+// text+images, assistant adds thinking+toolCalls, toolResult carries text+images).
+function extractPiBlocks(content: string | PiContentBlock[] | undefined): {
+  text: string;
+  thinking: string;
+  toolCalls: ToolCall[];
+  images: ImageBlock[];
+} {
+  const out = { text: "", thinking: "", toolCalls: [] as ToolCall[], images: [] as ImageBlock[] };
+  if (typeof content === "string") {
+    out.text = content;
+    return out;
+  }
+  if (!Array.isArray(content)) return out;
+  for (const b of content) {
+    if (b.type === "text" && typeof b.text === "string") {
+      out.text += b.text;
+    } else if (b.type === "thinking" && typeof b.thinking === "string") {
+      out.thinking += b.thinking;
+    } else if (b.type === "toolCall") {
+      out.toolCalls.push({ id: b.id ?? "", name: b.name ?? "", input: b.arguments ?? {} });
+    } else if (b.type === "image" && typeof b.data === "string") {
+      out.images.push({ mediaType: b.mimeType ?? "image/png", data: b.data });
+    }
+  }
+  return out;
+}
+
+export function parsePiSessionFile(content: string): ParsedMessage[] {
+  const entries: PiEntry[] = [];
+  for (const line of content.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      entries.push(JSON.parse(line) as PiEntry);
+    } catch {
+      // partial/corrupt line (e.g. a mid-write tail) -> skip
+    }
+  }
+  if (entries.length === 0) return [];
+
+  // Index the tree (every non-session entry carries id/parentId). pi's leaf is the
+  // last non-session entry in file order, so the active branch is the parentId chain
+  // ending there.
+  const byId = new Map<string, PiEntry>();
+  let leafId: string | undefined;
+  for (const e of entries) {
+    if (e.type === "session" || !e.id) continue;
+    byId.set(e.id, e);
+    leafId = e.id;
+  }
+  if (!leafId) return [];
+
+  // Walk leaf -> root, then reverse to root -> leaf (chronological).
+  const branch: PiEntry[] = [];
+  const seen = new Set<string>();
+  let cursor: string | null | undefined = leafId;
+  while (cursor && !seen.has(cursor)) {
+    seen.add(cursor);
+    const e = byId.get(cursor);
+    if (!e) break;
+    branch.push(e);
+    cursor = e.parentId;
+  }
+  branch.reverse();
+
+  const messages: ParsedMessage[] = [];
+  // pi records the model both as a per-turn `model_change` entry and on each
+  // assistant message; the message's own model wins, model_change is the fallback.
+  let currentModel: string | undefined;
+  for (const entry of branch) {
+    const timestamp = entry.timestamp ? new Date(entry.timestamp).getTime() : Date.now();
+
+    if (entry.type === "model_change") {
+      if (entry.modelId) currentModel = entry.modelId;
+      continue;
+    }
+    // thinking_level_change / compaction / branch_summary / custom / label /
+    // session_info / bashExecution carry no user-visible conversation turn we map yet
+    // (compaction only trims pi's LLM view — the full history stays in the tree and is
+    // rendered above), so only `message` entries produce ParsedMessages.
+    if (entry.type !== "message" || !entry.message) continue;
+
+    const m = entry.message;
+    const { text, thinking, toolCalls, images } = extractPiBlocks(m.content);
+
+    if (m.role === "user") {
+      if (text.trim() || images.length > 0) {
+        messages.push({
+          uuid: entry.id,
+          role: "user",
+          content: text,
+          timestamp,
+          images: images.length > 0 ? images : undefined,
+        });
+      }
+    } else if (m.role === "assistant") {
+      if (text || thinking || toolCalls.length > 0 || images.length > 0) {
+        const model = m.model && !m.model.startsWith("<") ? m.model : currentModel;
+        messages.push({
+          uuid: entry.id,
+          role: "assistant",
+          content: text,
+          timestamp,
+          thinking: thinking || undefined,
+          toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+          images: images.length > 0 ? images : undefined,
+          stopReason: m.stopReason,
+          model,
+        });
+      }
+    } else if (m.role === "toolResult") {
+      messages.push({
+        uuid: entry.id,
+        role: "assistant",
+        content: "",
+        timestamp,
+        toolResults: [{
+          toolUseId: m.toolCallId ?? "",
+          content: text,
+          isError: m.isError,
+        }],
+        images: images.length > 0
+          ? images.map((img) => ({ ...img, toolUseId: m.toolCallId }))
+          : undefined,
+      });
+    }
+  }
+
+  return messages;
+}
+
+export function extractPiCwd(content: string): string | undefined {
+  for (const line of content.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line);
+      if (entry.type === "session" && entry.cwd) return entry.cwd;
+    } catch {}
+  }
+  return undefined;
+}
+
+export function extractPiSessionId(content: string): string | undefined {
+  for (const line of content.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line);
+      if (entry.type === "session" && entry.id) return entry.id;
+    } catch {}
+  }
+  return undefined;
+}
+
 /**
  * Parse a transcript blob into the daemon's ParsedMessage[] using the parser for
  * `clientId`. The per-client parsers above stay the transcript-format authorities;
@@ -1207,6 +1412,8 @@ export function parseTranscriptFor(clientId: AgentClientId, content: string): Pa
       return parseCursorTranscriptFile(content);
     case "opencode":
       return parseOpencodeSessionFile(content);
+    case "pi":
+      return parsePiSessionFile(content);
     default:
       return parseSessionFile(content);
   }

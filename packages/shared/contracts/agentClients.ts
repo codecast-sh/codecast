@@ -29,12 +29,12 @@ import {
 
 /** The single named union for a supported agent CLI client — the daemon's
  *  agent-type spelling and the registry key. */
-export type AgentClientId = "claude" | "codex" | "cursor" | "gemini" | "opencode";
+export type AgentClientId = "claude" | "codex" | "cursor" | "gemini" | "opencode" | "pi";
 
 /** The spelling the Convex schema / wire protocol stores (`conversations.agent_type`).
  *  Differs from `AgentClientId` only in `claude_code`, and carries the extra
  *  `cowork` value that has no distinct client of its own. `opencode` is now a
- *  first-class client (phase 1) with its own descriptor; `pi` is still widened in
+ *  first-class clients (phases 1-2) with their own descriptors.
  *  ahead of its client (phase 2), so `fromConvexAgentType` maps `pi` to `claude`
  *  until its descriptor lands (see its note). */
 export type ConvexAgentType =
@@ -52,6 +52,7 @@ const CONVEX_BY_ID: Record<AgentClientId, ConvexAgentType> = {
   cursor: "cursor",
   gemini: "gemini",
   opencode: "opencode",
+  pi: "pi",
 };
 
 /** Client id → Convex spelling (`claude` → `claude_code`). */
@@ -65,10 +66,9 @@ export function toConvexAgentType(id: AgentClientId): ConvexAgentType {
  * normalize to `claude` — matching the historic `modelAgentKey` fallback so the
  * model helpers can route through this one function without a behavior change.
  *
- * TEMPORARY: `pi` is a valid `ConvexAgentType` value but has no `AGENT_CLIENTS`
- * descriptor yet (plan phase 2), so it falls through the `default` case to
- * `claude` for now. When its descriptor lands, add an explicit case returning its
- * own id. `opencode` is first-class (phase 1) and maps to itself.
+ * `opencode` (phase 1) and `pi` (phase 2) are first-class clients with their own
+ * descriptors and map to themselves; everything unrecognized falls through the
+ * `default` case to `claude`.
  */
 export function fromConvexAgentType(agentType: string | null | undefined): AgentClientId {
   switch (agentType) {
@@ -80,6 +80,8 @@ export function fromConvexAgentType(agentType: string | null | undefined): Agent
       return "gemini";
     case "opencode":
       return "opencode";
+    case "pi":
+      return "pi";
     default:
       return "claude";
   }
@@ -285,6 +287,37 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     modelConfig: OPENCODE_MODEL,
     // opencode has no tmux-pane structured-prompt monitoring and no hook system —
     // its readiness/turn state is read from the SQLite store, not the pane.
+    capabilities: { panePromptMonitoring: false },
+  },
+  pi: {
+    id: "pi",
+    convexId: "pi",
+    binary: "pi",
+    launchArgs: [],
+    // pi resumes a session by file path OR partial UUID via `--session` (README:
+    // `pi --session <path>`; args.js also accepts a partial UUID). We pass the
+    // session UUID, so pi reattaches to the SAME .jsonl and appends to it — unlike
+    // codex, pi writes no new rollout file on resume, so there is no per-resume fork
+    // chain to collapse. (`--continue`/`-c` resumes the most-recent session and is
+    // deliberately unused; we always target a specific id.)
+    resumeCmd: (sessionId) => `pi --session ${sessionId}`,
+    transcriptRoots: ["~/.pi/agent/sessions"],
+    watcherKind: "jsonl-dir",
+    // pi has NO prompt glyph. Its composer is a box drawn with ─ rules and the input
+    // line carries only a reverse-video cursor (verified by capturing a live pane;
+    // typed text appears with no ❯/› prefix). The reliable "TUI is settled at the
+    // prompt" marker is the status bar's context-budget segment, e.g. `0.0%/200k`,
+    // which renders only once the main view is up. The shared /[❯›]/ readiness regex
+    // never matches pi, so the resume-readiness site consults this pattern for pi
+    // (daemon ~11284); the fresh-launch readiness site already reads it from here.
+    promptReadyPattern: /\d+(?:\.\d+)?%\//,
+    tmuxPrefix: "pi",
+    // No codecast-managed model picker (hence no modelConfig, like cursor/gemini). pi
+    // is multi-provider and its primary model UX is mid-session switching via its own
+    // Ctrl+P / `/model` UI, which codecast cannot drive without pi's RPC channel
+    // (phase-2 stretch, not wired). pi DOES accept `--model <pattern>` at launch, but
+    // codecast defers the model choice to pi and instead TRACKS the active model from
+    // the transcript (model_change entries + each assistant message's own `model`).
     capabilities: { panePromptMonitoring: false },
   },
 };

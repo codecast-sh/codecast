@@ -9548,7 +9548,7 @@ export async function resolveRestartTarget(
     .collect();
   const { teamId, isPrivate, autoShared } = resolveTeamForPath(mappings, ghost.project_path, undefined);
   const agentType =
-    ghost.agent_type === "codex" || ghost.agent_type === "cursor" || ghost.agent_type === "gemini"
+    ghost.agent_type === "codex" || ghost.agent_type === "cursor" || ghost.agent_type === "gemini" || ghost.agent_type === "pi"
       ? ghost.agent_type
       : "claude_code";
   const newId = await ctx.db.insert("conversations", {

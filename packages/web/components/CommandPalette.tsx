@@ -117,6 +117,7 @@ const AGENT_OPTIONS = [
   { key: "agent:cursor", label: "Cursor" },
   { key: "agent:gemini", label: "Gemini" },
   { key: "agent:opencode", label: "OpenCode" },
+  { key: "agent:pi", label: "pi" },
 ];
 
 const AGENT_COLORS: Record<string, string> = {
@@ -124,6 +125,7 @@ const AGENT_COLORS: Record<string, string> = {
   "agent:cursor": "text-purple-400",
   "agent:gemini": "text-amber-400",
   "agent:opencode": "text-orange-400",
+  "agent:pi": "text-teal-400",
 };
 
 const NAV_PAGES = [
