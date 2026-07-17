@@ -23,7 +23,7 @@
 
 ---
 
-Codecast integrates your coding agents (Claude Code, Codex CLI, Cursor, Gemini) into a shared system with global session memory, tasks, plans, documents, and team collaboration. The CLI installs into each agent's config, giving every agent access to the full history of what your team has built — and the ability to create tasks, schedule follow-up work, and orchestrate multi-agent plans.
+Codecast integrates your coding agents (Claude Code, Codex CLI, OpenCode, pi, Cursor, Gemini) into a shared system with global session memory, tasks, plans, documents, and team collaboration. The CLI installs into each agent's config, giving every agent access to the full history of what your team has built — and the ability to create tasks, schedule follow-up work, and orchestrate multi-agent plans.
 
 A background daemon syncs every conversation in real time. You get a web dashboard, a native desktop app, a mobile app, and a CLI that works both from your terminal and from inside agent sessions.
 
@@ -55,7 +55,7 @@ Codecast watches your local agent history files and syncs conversations to the s
 
 ![Inbox triage queue: session feed grouped by label with live status, model badges, and summaries alongside the open conversation](docs/screenshots/inbox.png)
 
-- **Multi-agent support** — Claude Code, Codex CLI, Cursor, Gemini
+- **Multi-agent support** — Claude Code, Codex CLI, OpenCode, pi, Cursor, Gemini
 - **Live status tracking** — see which agents are working, idle, waiting for input, or errored, with model badges and scheduled-run indicators
 - **Session categories** — Pinned > Working > Needs Input > Idle > Deferred, with parent/child grouping for sub-sessions
 - **Labels** — file sessions under your own labels (`Ctrl+L`), then switch between label and project views (`Ctrl+Shift+L`)
@@ -197,7 +197,7 @@ An iOS app for monitoring agent sessions on the go.
 
 ## CLI
 
-The `cast` CLI is an agentic interface that integrates your coding agents — Claude Code, Codex, Cursor, Gemini — into a shared system with global session memory, tasks, plans, docs, and team collaboration. It installs lightweight snippets into each agent's config, giving them access to the full Codecast system from within any conversation.
+The `cast` CLI is an agentic interface that integrates your coding agents — Claude Code, Codex, OpenCode, pi, Cursor, Gemini — into a shared system with global session memory, tasks, plans, docs, and team collaboration. It installs lightweight snippets into each agent's config, giving them access to the full Codecast system from within any conversation.
 
 ### Agent Integration
 
@@ -325,12 +325,12 @@ per-client reality as merged; ✓ = supported, — = not available.
 |-------|------------------|:---------------:|:---------------:|:-----------:|:---------------:|:------:|:----:|:-------------:|:-----------:|
 | Claude Code | `~/.claude/projects/**/*.jsonl` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (mid-session) | ✓ |
 | Codex CLI | `~/.codex/sessions/**/*.jsonl` | ✓ | ✓ | ✓ | ✓ | ✓ (+ app-server) | ✓ | ✓ (at launch) | ✓ |
-| OpenCode | `~/.local/share/opencode/opencode.db` (SQLite) | ✓ | ✓ | ✓ | ✓ | ✓ | pending¹ | ✓ (at launch) | auto² |
+| OpenCode | `~/.local/share/opencode/opencode.db` (SQLite) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓¹ | ✓ (at launch) | auto² |
 | pi | `~/.pi/agent/sessions/**/*.jsonl` | ✓ | ✓ | ✓ | ✓ | ✓ | —³ | tracked⁴ | — |
 | Cursor | Cursor app SQLite (workspace storage) | —⁵ | ✓ | —⁵ | —⁶ | ✓ | — | — | — |
 | Gemini CLI | `~/.gemini/tmp/**/*.jsonl` | ✓ | ✓ | ✓ | —⁶ | ✓⁷ | — | — | — |
 
-1. OpenCode fork is pending the SSE transport work (ct-39079); every other cell is live today.
+1. OpenCode forks through an `opencode serve` sidecar (`POST /session/:id/fork`, ct-39079/ct-39150): a fork at the conversation tip copies the full session, a mid-history fork truncates to the fork point to match the copied transcript. If the sidecar is unreachable the fork degrades to a fresh session rather than fabricated context.
 2. OpenCode launches auto-approved (`--auto`): the daemon reads its turn state from the SQLite store and can't answer the TUI's permission prompts, so there is no per-session permission control.
 3. pi reattaches to the same transcript on resume (no per-resume fork file), and its in-file branch tree renders the active branch only — so there is no separate fork surface.
 4. pi is multi-provider and switches models in its own UI; codecast tracks the active model from the transcript rather than driving a picker.
