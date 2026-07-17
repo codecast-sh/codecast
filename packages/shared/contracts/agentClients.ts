@@ -107,6 +107,19 @@ export interface AgentClientCapabilities {
   /** The daemon watches the tmux pane for structured prompts (permission /
    *  AskUserQuestion) for this client. */
   panePromptMonitoring: boolean;
+  /** The client exposes a fork-by-session-id API the daemon can call to branch a
+   *  session (opencode's `POST /session/:id/fork` via an `opencode serve` sidecar —
+   *  see opencodeServer.ts). Gates the daemon's API-fork branch; without a reachable
+   *  server the client simply can't fork here (honest degradation), NOT a fallback
+   *  to claude-style transcript-file copying. */
+  forkApi?: boolean;
+  /** The client can stream live structured events (state / permissions) over a
+   *  richer transport the daemon attaches to, accelerating work-state past DB/tail
+   *  polling. Opt-in and additive: the plain transcript path stays authoritative for
+   *  content and keeps working when the transport is absent. For opencode this is
+   *  bounded — the serve /event bus is per-process, so it accelerates only sessions
+   *  DRIVEN THROUGH the sidecar, not tmux-TUI sessions (see opencodeServer.ts). */
+  liveEvents?: boolean;
 }
 
 /** Everything the daemon, convex, and web need to know about one client. */
@@ -286,8 +299,20 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     tmuxPrefix: "oc",
     modelConfig: OPENCODE_MODEL,
     // opencode has no tmux-pane structured-prompt monitoring and no hook system —
-    // its readiness/turn state is read from the SQLite store, not the pane.
-    capabilities: { panePromptMonitoring: false },
+    // its readiness/turn state is read from the SQLite store, not the pane. It does,
+    // however, ship an `opencode serve` HTTP+SSE server the daemon can attach to as
+    // an OPTIONAL richer transport (opencodeServer.ts):
+    //  - forkApi: `POST /session/:id/fork` mints a real forkable `ses_*` id from the
+    //    shared SQLite DB — works for any session regardless of which process created
+    //    it (verified live). This is the branch codecast uses for opencode forks; a
+    //    synthetic copy id would not resume, so without a reachable server opencode
+    //    fork is simply unavailable rather than falling back to file copying.
+    //  - liveEvents: `GET /event` streams live state/permission events, but the bus
+    //    is PER-PROCESS — it only sees sessions driven through the sidecar, so it does
+    //    NOT accelerate the tmux-TUI launch path; the SQLite watcher stays the
+    //    authoritative state source for those. Additive, opt-in, degrades to the DB
+    //    path cleanly.
+    capabilities: { panePromptMonitoring: false, forkApi: true, liveEvents: true },
   },
   pi: {
     id: "pi",
