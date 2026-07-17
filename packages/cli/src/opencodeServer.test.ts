@@ -355,3 +355,82 @@ describe("OpencodeServer HTTP helpers", () => {
     server.stop();
   });
 });
+
+// Sidecar lifetime hardening (security critic): `opencode serve` binds 127.0.0.1 with
+// NO auth, so a live instance is an unauthenticated local HTTP surface. It must NOT
+// live "forever after the first fork" (idle self-teardown) and must NOT survive a hard
+// daemon exit (stop on the crash/exit path). A fresh fake child per spawn lets restart
+// be observed cleanly.
+describe("OpencodeServer sidecar lifetime hardening", () => {
+  function multiSpawn() {
+    const children: any[] = [];
+    const spawnFn = (() => {
+      const c = makeFakeChild();
+      children.push(c);
+      return c;
+    }) as any;
+    return { children, spawnFn };
+  }
+
+  test("stops itself after the idle timeout and emits idleStopped — no lingering serve", async () => {
+    const { children, spawnFn } = multiSpawn();
+    const { fetchImpl } = makeFetch();
+    const server = new OpencodeServer({ log: () => {}, spawnFn, fetchImpl, healthTimeoutMs: 1000, idleTimeoutMs: 120 });
+
+    const ready = once(server, "ready");
+    const idleStopped = once(server, "idleStopped");
+    server.start();
+    children[0].stdout.write(announce + "\n");
+    await ready;
+    expect(server.running).toBe(true);
+
+    await idleStopped; // fires ~120ms after ready with no fork activity
+    expect(server.running).toBe(false);
+    // The serve child was actually reaped, not left running unauthenticated.
+    expect(children[0].exitCode).not.toBeNull();
+  });
+
+  test("start() after a stop respawns a fresh serve child (lazy restart on the next fork)", async () => {
+    const { children, spawnFn } = multiSpawn();
+    const { fetchImpl } = makeFetch({ forkId: "ses_reborn" });
+    // idleTimeoutMs 0 disables the idle timer so this test is purely about restart.
+    const server = new OpencodeServer({ log: () => {}, spawnFn, fetchImpl, healthTimeoutMs: 1000, idleTimeoutMs: 0 });
+
+    const firstReady = once(server, "ready");
+    server.start();
+    children[0].stdout.write(announce + "\n");
+    await firstReady;
+    server.stop(); // as the idle timeout / crash path would leave it
+    expect(server.running).toBe(false);
+
+    // ensureOpencodeServer re-start()s a stopped instance (or builds a fresh one after
+    // idleStopped) — either way start() must respawn and forks must work again.
+    const secondReady = once(server, "ready");
+    server.start();
+    children[children.length - 1].stdout.write(announce + "\n");
+    await secondReady;
+    expect(server.running).toBe(true);
+    expect(children.length).toBe(2); // a genuinely fresh child was spawned
+    const forked = await server.fork("ses_parent");
+    expect(forked.id).toBe("ses_reborn");
+    server.stop();
+  });
+
+  test("stop() on the crash/exit path synchronously reaps the child (no orphaned serve)", async () => {
+    const child = makeFakeChild();
+    const { fetchImpl } = makeFetch();
+    const server = new OpencodeServer({ log: () => {}, spawnFn: (() => child) as any, fetchImpl, healthTimeoutMs: 1000, idleTimeoutMs: 0 });
+    const ready = once(server, "ready");
+    server.start();
+    child.stdout.write(announce + "\n");
+    await ready;
+    expect(server.running).toBe(true);
+
+    // The daemon's uncaughtException handler and its process "exit" handler both call
+    // opencodeServerInstance?.stop(); assert stop() reaps the child so a hard daemon
+    // exit can't orphan a live unauthenticated serve.
+    server.stop();
+    expect(server.running).toBe(false);
+    expect(child.exitCode).not.toBeNull();
+  });
+});
