@@ -30,8 +30,11 @@ export interface TranscriptDirWatcherConfig {
    *  differed from watchFilter (codex matched by extension anywhere; gemini also
    *  required the parent dir to be a `chats` dir), so this stays separate. */
   scanMatch: (dir: string, name: string) => boolean;
-  /** Derive the session id from a file path. */
-  extractSessionId: (filePath: string) => string;
+  /** Derive the session id from a file path. Return null to REFUSE the file: a
+   *  filename that doesn't carry the client's real id shape would otherwise be
+   *  tracked under attacker-controlled text (the raw filename), which flows to
+   *  convex as the session_id and later into a resume shell command. */
+  extractSessionId: (filePath: string) => string | null;
   /** Optional extra field derivation (gemini's projectHash). */
   extractProjectHash?: (filePath: string) => string;
   /** Recursive-watch depth cap (codex used 4; gemini unbounded). */
@@ -125,11 +128,14 @@ export class TranscriptDirWatcher extends EventEmitter {
   }
 
   private handleFileEvent(filePath: string, eventType: "add" | "change"): void {
-    const event: TranscriptDirEvent = {
-      sessionId: this.cfg.extractSessionId(filePath),
-      filePath,
-      eventType,
-    };
+    const sessionId = this.cfg.extractSessionId(filePath);
+    if (sessionId == null) {
+      // Malformed filename → the "id" would be the raw filename (attacker text).
+      // Skip it: don't track it, don't push it to convex. Never crash the watcher.
+      console.warn(`[SECURITY] skipping transcript with a malformed session id: ${path.basename(filePath)}`);
+      return;
+    }
+    const event: TranscriptDirEvent = { sessionId, filePath, eventType };
     if (this.cfg.extractProjectHash) event.projectHash = this.cfg.extractProjectHash(filePath);
     this.emit("session", event);
   }
@@ -194,7 +200,11 @@ export function transcriptDirWatcherConfig(
       extractSessionId: (filePath) => {
         const filename = path.basename(filePath, ".jsonl");
         const match = filename.match(PI_UUID_SUFFIX_RE);
-        return match ? match[1] : filename;
+        // A real pi transcript ALWAYS ends in its session UUID (<ISO-ts>_<uuid>.jsonl).
+        // No trailing UUID → a crafted/foreign filename, not a pi session: refuse it
+        // rather than track it under the raw filename (which would become the
+        // session_id and, unescaped, a resume-command injection vector).
+        return match ? match[1] : null;
       },
       maxDepth: 2,
       debounceMs: 100,

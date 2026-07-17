@@ -191,6 +191,17 @@ describe("transcriptDirWatcherConfig — pi config", () => {
     const file = "/root/--Users-dev--/2026-03-03T14-40-34-973Z_a7c9c0e2-1d82-4d42-b342-f59fefc7b9f5.jsonl";
     expect(cfg.extractSessionId(file)).toBe("a7c9c0e2-1d82-4d42-b342-f59fefc7b9f5");
   });
+
+  // Ingest-boundary RCE guard (security critic): a real pi transcript ALWAYS ends in
+  // its session UUID. A filename that doesn't is a crafted/foreign file, so returning
+  // the raw filename (the old behavior) would make attacker text the session_id — and
+  // later an unescaped resume command. extractSessionId now REFUSES it (null). Payload
+  // is SYNTHETIC and slash-free (a real filename can't contain `/`).
+  test("REFUSES a filename with no trailing uuid so a poisoned id is never tracked (null)", () => {
+    const cfg = transcriptDirWatcherConfig("pi");
+    expect(cfg.extractSessionId("/root/--Users-dev--/x; touch pwned #.jsonl")).toBeNull();
+    expect(cfg.extractSessionId("/root/--Users-dev--/not-a-uuid.jsonl")).toBeNull();
+  });
 });
 
 describe("pi cwd-slug encode/decode", () => {
@@ -237,6 +248,35 @@ describe("TranscriptDirWatcher — live behavior via the pi config", () => {
     fs.writeFileSync(filePath, '{"type":"session","version":3,"id":"' + sessionId + '","cwd":"/Users/dev/src/demo"}\n');
     const addEvent = await addPromise;
     expect(addEvent.sessionId).toBe(sessionId);
+
+    watcher.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  // Ingest-boundary RCE guard: a malformed pi filename (no trailing uuid) sitting in
+  // the tree next to a real session is SKIPPED — never emitted, watcher stays alive —
+  // so its attacker-controlled "id" never reaches convex. SYNTHETIC fixture.
+  test("skips a malformed pi filename while still emitting a valid sibling session", async () => {
+    const root = path.join(os.tmpdir(), `.pi-watcher-skip-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+    const slug = "--Users-dev-src-demo--";
+    const goodId = "b1946ac9-2d0e-4f3a-9c11-000000000001";
+    const goodPath = path.join(root, slug, `2026-03-03T14-40-34-973Z_${goodId}.jsonl`);
+    const poisonPath = path.join(root, slug, "x; touch pwned #.jsonl");
+    fs.mkdirSync(path.dirname(goodPath), { recursive: true });
+    // Both files present BEFORE start, so the initial scan sees both.
+    fs.writeFileSync(poisonPath, '{"type":"session","version":3,"id":"x; touch pwned #"}\n');
+    fs.writeFileSync(goodPath, '{"type":"session","version":3,"id":"' + goodId + '","cwd":"/x"}\n');
+
+    const emitted: string[] = [];
+    const watcher = new TranscriptDirWatcher(transcriptDirWatcherConfig("pi", root));
+    watcher.on("session", (e: TranscriptDirEvent) => emitted.push(e.sessionId));
+    const sawGood = waitForSessionEvent(watcher, (e) => e.sessionId === goodId);
+    watcher.start();
+    await sawGood;
+    await new Promise((r) => setTimeout(r, 150)); // give a stray poison emit a chance
+
+    expect(emitted).toContain(goodId);
+    expect(emitted.some((id) => id.includes("touch") || id.includes(";"))).toBe(false);
 
     watcher.stop();
     fs.rmSync(root, { recursive: true, force: true });

