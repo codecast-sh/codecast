@@ -4,10 +4,12 @@ import * as os from "os";
 import * as path from "path";
 import {
   CLAUDE_UUID_RE,
+  MANAGED_TMUX_PREFIXES,
   buildNonClaudeResumeCommand,
   combineClaudeResumeFlags,
   copyJsonlAsSession,
   extractJsonlPermissionMode,
+  isManagedTmuxName,
   resolveResumeAgentType,
   resumeTmuxPrefix,
   rewriteSubagentJsonlToUuid,
@@ -256,6 +258,33 @@ describe("resumeTmuxPrefix", () => {
     expect(resumeTmuxPrefix("gemini")).toBe("gm");
     expect(resumeTmuxPrefix("cursor")).toBe("cu");
     expect(resumeTmuxPrefix("claude")).toBe("cc");
+  });
+});
+
+// The daemon's tmux-name filters (warm-restart recovery, live-session reuse) used
+// to hardcode cc-/cx-/gm-/ct-, silently dropping cursor (cu-), opencode (oc-), and
+// pi (pi-) resume panes. Deriving the list from the registry closes that gap and
+// keeps a 7th client covered automatically.
+describe("MANAGED_TMUX_PREFIXES / isManagedTmuxName", () => {
+  test("covers every client prefix plus the non-client task prefix ct-", () => {
+    for (const p of ["cc-", "cx-", "cu-", "gm-", "oc-", "pi-", "ct-"]) {
+      expect(MANAGED_TMUX_PREFIXES).toContain(p);
+    }
+  });
+
+  test("matches the previously-dropped cursor/opencode/pi resume panes", () => {
+    expect(isManagedTmuxName("cu-resume-abc123")).toBe(true);
+    expect(isManagedTmuxName("oc-resume-abc123")).toBe(true);
+    expect(isManagedTmuxName("pi-resume-abc123")).toBe(true);
+  });
+
+  test("still matches the original four and rejects unrelated names", () => {
+    expect(isManagedTmuxName("cc-claude-abc123")).toBe(true);
+    expect(isManagedTmuxName("cx-resume-abc123")).toBe(true);
+    expect(isManagedTmuxName("gm-resume-abc123")).toBe(true);
+    expect(isManagedTmuxName("ct-codex-abc123")).toBe(true);
+    expect(isManagedTmuxName("some-other-tmux")).toBe(false);
+    expect(isManagedTmuxName("codecast-legacy")).toBe(false);
   });
 });
 

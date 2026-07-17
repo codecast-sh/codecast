@@ -204,6 +204,27 @@ export function resumeTmuxPrefix(agentType: AgentClientId): string {
 }
 
 /**
+ * Every tmux-name prefix a codecast-managed pane can carry, as `startsWith`
+ * fragments: one per client from the registry (`cc-`, `cx-`, `cu-`, `gm-`,
+ * `oc-`, `pi-`) plus `ct-`, the task-scheduler's pane prefix (taskScheduler.ts),
+ * which belongs to no client. The daemon's tmux-name filters — warm-restart
+ * recovery and live-session reuse — select codecast panes with these. Deriving
+ * the list from the registry (instead of a literal `cc-/cx-/gm-/ct-`) is what
+ * keeps a newly added client's resume panes from being silently dropped: before
+ * this, cursor/opencode/pi panes fell outside the hardcoded list and were never
+ * recovered or reused.
+ */
+export const MANAGED_TMUX_PREFIXES: string[] = [
+  ...Object.values(AGENT_CLIENTS).map((d) => `${d.tmuxPrefix}-`),
+  "ct-",
+];
+
+/** True when a tmux session name is a codecast-managed pane (any known prefix). */
+export function isManagedTmuxName(name: string): boolean {
+  return MANAGED_TMUX_PREFIXES.some((p) => name.startsWith(p));
+}
+
+/**
  * Pick the auto-trim message count for reconstituting a Claude session from an
  * export. Returns undefined when the export already fits comfortably in
  * Claude's context window.

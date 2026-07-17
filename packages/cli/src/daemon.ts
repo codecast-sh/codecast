@@ -103,6 +103,7 @@ import {
   copyJsonlAsSession,
   extractJsonlPermissionMode,
   isForkArtifactSessionId,
+  isManagedTmuxName,
   removeForkArtifactJsonl,
   resolveResumeAgentType,
   resumeTmuxPrefix,
@@ -12160,7 +12161,7 @@ async function findLiveTmuxForConversation(
     const names = stdout
       .trim()
       .split("\n")
-      .filter(n => n.startsWith("cc-") || n.startsWith("cx-") || n.startsWith("gm-") || n.startsWith("ct-"));
+      .filter(isManagedTmuxName);
     const candidates: Array<{ tmuxSession: string; conversationId: string | null; alive: boolean }> = [];
     for (const name of names) {
       const convId = await getTmuxSessionOption(name, "@codecast_conversation_id");
@@ -14691,7 +14692,7 @@ async function main(): Promise<void> {
   if (hasTmux()) {
     try {
       const sessions = tmuxExecSync(["list-sessions", "-F", "#{session_name}"], { timeout: 5000 }).trim().split("\n").filter(Boolean);
-      const ccSessions = sessions.filter(s => s.startsWith("cc-") || s.startsWith("cx-") || s.startsWith("gm-") || s.startsWith("ct-"));
+      const ccSessions = sessions.filter(isManagedTmuxName);
       let recovered = 0;
       for (const tmuxSession of ccSessions) {
         try {
