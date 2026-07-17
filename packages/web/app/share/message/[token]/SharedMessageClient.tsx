@@ -5,7 +5,7 @@ import Link from "next/link";
 import { CodeBlock } from "@/components/CodeBlock";
 import { MarkdownRenderer, isMarkdownFile, isPlanFile } from "@/components/tools/MarkdownRenderer";
 import { tryRenderHtmlMessage } from "@/components/HtmlSnippet";
-import { formatToolName } from "@codecast/shared/render";
+import { formatToolName, structuredPayloadSummary } from "@codecast/shared/render";
 import { AppLoader } from "@/components/AppLoader";
 
 function formatRelativeTime(ts: number): string {
@@ -66,6 +66,7 @@ function getToolSummary(tool: any): string | null {
   if (tool.name === "Glob" && parsedInput.pattern) return String(parsedInput.pattern);
   if (tool.name === "Grep" && parsedInput.pattern) return String(parsedInput.pattern);
   if (tool.name === "Task" && parsedInput.description) return truncateStr(String(parsedInput.description), 40);
+  if (tool.name === "StructuredOutput") return structuredPayloadSummary(parsedInput) || null;
   return null;
 }
 
@@ -77,6 +78,7 @@ const toolColors: Record<string, string> = {
   Glob: "text-sol-violet/80",
   Grep: "text-sol-violet/80",
   Task: "text-sol-cyan/80",
+  StructuredOutput: "text-sol-cyan/80",
   TodoWrite: "text-sol-magenta/80",
 };
 
