@@ -6,7 +6,7 @@ import {
   chooseClaudeTailMessagesForTokenBudget,
   type ExportResult,
 } from "./jsonlGenerator.js";
-import type { SessionAgentType } from "./sessionProcessMatcher.js";
+import type { AgentClientId } from "@codecast/shared/contracts";
 
 export const CLAUDE_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -156,7 +156,7 @@ export function combineClaudeResumeFlags(
  * both. gemini and cursor take no configured flags today.
  */
 export function buildNonClaudeResumeCommand(
-  agentType: SessionAgentType,
+  agentType: AgentClientId,
   sessionId: string,
   opts: { codexArgs?: string | null; codexPermFlags?: string | null } = {},
 ): string | null {
@@ -185,9 +185,9 @@ export function buildNonClaudeResumeCommand(
  * (codex/gemini hints and the file agree, so they resolve the same either way.)
  */
 export function resolveResumeAgentType(
-  agentTypeHint: SessionAgentType | undefined,
-  sessionFileAgentType: SessionAgentType | undefined,
-): SessionAgentType {
+  agentTypeHint: AgentClientId | undefined,
+  sessionFileAgentType: AgentClientId | undefined,
+): AgentClientId {
   if (agentTypeHint === "cursor") return "cursor";
   return sessionFileAgentType ?? "claude";
 }
@@ -197,7 +197,7 @@ export function resolveResumeAgentType(
  * its own so panes stay greppable by client and never collide with claude's cc-.
  * Cursor gets cu- rather than defaulting into claude's cc-.
  */
-export function resumeTmuxPrefix(agentType: SessionAgentType): string {
+export function resumeTmuxPrefix(agentType: AgentClientId): string {
   switch (agentType) {
     case "codex": return "cx";
     case "gemini": return "gm";
