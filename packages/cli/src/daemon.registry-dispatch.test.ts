@@ -5,6 +5,14 @@
 // they pin the byte-identical mandate without needing a live daemon.
 import { test, expect, describe } from "bun:test";
 import { AGENT_CLIENTS, type AgentClientId } from "@codecast/shared/contracts";
+import {
+  parseTranscriptFor,
+  parseSessionFile,
+  parseCodexSessionFile,
+  parseGeminiSessionFile,
+  parseCursorTranscriptFile,
+} from "./parser.js";
+import { classifyTranscriptTailFor } from "./daemon.js";
 
 // ── Cluster 3: fresh-launch prompt-readiness pattern ────────────────────────
 // The old ternary (daemon.ts fresh-launch site) was:
@@ -38,5 +46,57 @@ describe("promptReadyPattern reproduces the fresh-launch ternary", () => {
       expect(AGENT_CLIENTS[id].promptReadyPattern.test("❯ ")).toBe(true);
       expect(AGENT_CLIENTS[id].promptReadyPattern.test("⏵ ")).toBe(true);
     }
+  });
+});
+
+// ── Cluster 6: status-reconcile classifier gate ─────────────────────────────
+// The old gate was `agentType !== "claude" && agentType !== "codex"` -> skip, with
+// `agentType === "codex" ? classifyCodexTranscriptTail : classifyTranscriptTail`.
+// classifyTranscriptTailFor must resolve claude/codex to a classifier and
+// cursor/gemini to undefined (the "defer" signal) — byte-for-byte the same gate.
+describe("classifyTranscriptTailFor reproduces the reconcile gate", () => {
+  test("claude and codex resolve to a classifier; cursor and gemini do not", () => {
+    expect(typeof classifyTranscriptTailFor("claude")).toBe("function");
+    expect(typeof classifyTranscriptTailFor("codex")).toBe("function");
+    expect(classifyTranscriptTailFor("cursor")).toBeUndefined();
+    expect(classifyTranscriptTailFor("gemini")).toBeUndefined();
+  });
+
+  test("claude classifier reads a claude JSONL tail (end_turn -> idle, tool_use -> active)", () => {
+    const classify = classifyTranscriptTailFor("claude")!;
+    expect(classify('{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn","content":[]}}')).toBe("idle");
+    expect(classify('{"type":"assistant","message":{"role":"assistant","stop_reason":"tool_use","content":[]}}')).toBe("active");
+  });
+
+  test("codex classifier reads a codex event_msg tail (task_complete -> idle, task_started -> active)", () => {
+    const classify = classifyTranscriptTailFor("codex")!;
+    expect(classify('{"type":"event_msg","payload":{"type":"task_complete"}}')).toBe("idle");
+    expect(classify('{"type":"event_msg","payload":{"type":"task_started"}}')).toBe("active");
+  });
+});
+
+// ── Cluster 8: parseTranscriptFor dispatch ──────────────────────────────────
+// parseTranscriptFor must route to exactly the per-client parser the old fixed
+// call sites used, byte-for-byte identical output.
+describe("parseTranscriptFor dispatches to the per-client parser", () => {
+  const claudeJsonl = '{"type":"assistant","uuid":"u1","timestamp":"2026-01-01T00:00:00Z","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"hello"}]}}';
+  const codexJsonl = '{"type":"response_item","timestamp":"2026-01-01T00:00:00Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi"}]}}';
+  const geminiJson = JSON.stringify({
+    sessionId: "abc", projectHash: "ph", startTime: "2026-01-01T00:00:00Z", lastUpdated: "2026-01-01T00:00:00Z",
+    messages: [{ id: "m1", timestamp: "2026-01-01T00:00:00Z", type: "user", content: [{ text: "yo" }] }],
+  });
+  const cursorTranscript = "user:\nhello there\nassistant:\nhi back";
+
+  test("claude -> parseSessionFile", () => {
+    expect(parseTranscriptFor("claude", claudeJsonl)).toEqual(parseSessionFile(claudeJsonl));
+  });
+  test("codex -> parseCodexSessionFile", () => {
+    expect(parseTranscriptFor("codex", codexJsonl)).toEqual(parseCodexSessionFile(codexJsonl));
+  });
+  test("gemini -> parseGeminiSessionFile", () => {
+    expect(parseTranscriptFor("gemini", geminiJson)).toEqual(parseGeminiSessionFile(geminiJson));
+  });
+  test("cursor -> parseCursorTranscriptFile", () => {
+    expect(parseTranscriptFor("cursor", cursorTranscript)).toEqual(parseCursorTranscriptFile(cursorTranscript));
   });
 });
