@@ -8,6 +8,8 @@ import {
   createWipSnapshot,
   defaultRemote,
   parseSnapshotTrailer,
+  remoteSnapshotScript,
+  applySnapshotFastForward,
   isPermanentPushFailure,
   pushWipSnapshot,
   restoreWipSnapshot,
@@ -338,5 +340,161 @@ describe("isPermanentPushFailure", () => {
     const res = await pushWipSnapshot(cwd, { remote: "origin", conversationId: "c", sha: snap.sha });
     expect(res.ok).toBe(false);
     expect(res.permanent).toBe(true);
+  });
+});
+
+// ct-39054: `cast remote move` used to call session-move's own wipSnapshot(),
+// which ran `git add -A && git commit` on your REAL branch and left the junk
+// commit behind forever — moving a session silently rewrote the history you were
+// working on. gitPushWorktree now pushes createWipSnapshot's dangling commit
+// instead. This pins the property that made the swap worth doing.
+describe("the SSH move no longer pollutes the source branch (ct-39054)", () => {
+  test("taking the snapshot leaves the branch, its history and its dirt untouched", async () => {
+    const { cwd } = repo();
+    git(cwd, ["checkout", "-q", "-b", "feature/move"]);
+    fs.writeFileSync(path.join(cwd, "tracked.txt"), "uncommitted\n");
+    fs.writeFileSync(path.join(cwd, "untracked.txt"), "new\n");
+
+    const before = {
+      head: git(cwd, ["rev-parse", "HEAD"]),
+      log: git(cwd, ["log", "--oneline"]),
+      status: git(cwd, ["status", "--porcelain"]),
+    };
+
+    const snap = (await createWipSnapshot(cwd))!;
+
+    // The old behavior: HEAD advances onto a "wip snapshot" commit, permanently.
+    expect(git(cwd, ["rev-parse", "HEAD"])).toBe(before.head);
+    expect(git(cwd, ["log", "--oneline"])).toBe(before.log);
+    expect(git(cwd, ["log", "--oneline"])).not.toContain("wip snapshot");
+    expect(git(cwd, ["status", "--porcelain"])).toBe(before.status);
+
+    // ...while the remote still receives the exact same tree it did before:
+    // the uncommitted edit and the untracked file, parented on the branch tip.
+    expect(git(cwd, ["show", `${snap.sha}:tracked.txt`])).toBe("uncommitted");
+    expect(git(cwd, ["ls-tree", "-r", "--name-only", snap.sha])).toContain("untracked.txt");
+    expect(git(cwd, ["rev-parse", `${snap.sha}^`])).toBe(before.head);
+  });
+});
+
+// ct-39063: `cast remote back` used to have the Mac `git add -A && git commit` its
+// work, then fast-forward that commit onto YOUR branch — so bringing a session
+// home left a junk commit behind and turned the agent's uncommitted work into a
+// commit you never made. The Mac now builds a dangling snapshot (remoteSnapshotScript,
+// the same recipe in shell) and we replay it here as uncommitted work.
+describe("applySnapshotFastForward (cast remote back)", () => {
+  /** Stand in for the Mac: a clone with its own commits + uncommitted work. */
+  async function remoteWithWork(): Promise<{ local: string; remoteRepo: string; ref: string }> {
+    const { cwd: local } = repo();
+    const remoteRepo = tmpdir("mac") + "/checkout";
+    execFileSync("git", ["clone", "-q", local, remoteRepo]);
+    git(remoteRepo, ["config", "user.email", "m@m.m"]);
+    git(remoteRepo, ["config", "user.name", "mac"]);
+    return { local, remoteRepo, ref: "refs/codecast/back/main" };
+  }
+
+  /** Run the real shell recipe, as gitPullWorktree does over ssh. */
+  const runRemoteScript = (cwd: string, ref: string) =>
+    execFileSync("sh", ["-c", remoteSnapshotScript({ cwd, ref })], { encoding: "utf-8" }).trim();
+
+  test("the remote's shell recipe produces the same shape as createWipSnapshot", async () => {
+    const { remoteRepo, ref } = await remoteWithWork();
+    fs.writeFileSync(path.join(remoteRepo, "tracked.txt"), "mac edit\n");
+    fs.writeFileSync(path.join(remoteRepo, "mac-new.txt"), "made on the mac\n");
+    const sha = runRemoteScript(remoteRepo, ref);
+
+    expect(git(remoteRepo, ["rev-parse", ref])).toBe(sha);
+    // Non-destructive there too: the Mac's own branch is untouched.
+    expect(git(remoteRepo, ["log", "--oneline"])).not.toContain("wip snapshot");
+    expect(git(remoteRepo, ["status", "--porcelain"])).toContain("mac-new.txt");
+    // Same message contract the TS twin writes, so parsing works either way.
+    const msg = git(remoteRepo, ["show", "-s", "--format=%B", sha]);
+    expect(parseSnapshotTrailer(msg, "codecast-branch")).toBe("main");
+    // ...and .gitignore is still respected by the shell path.
+    expect(git(remoteRepo, ["ls-tree", "-r", "--name-only", sha])).not.toContain(".env");
+  });
+
+  test("the Mac's uncommitted work lands here as UNCOMMITTED, with no junk commit", async () => {
+    const { local, remoteRepo, ref } = await remoteWithWork();
+    // The Mac commits something AND leaves work uncommitted.
+    fs.writeFileSync(path.join(remoteRepo, "tracked.txt"), "committed on mac\n");
+    git(remoteRepo, ["add", "-A"]);
+    git(remoteRepo, ["commit", "-qm", "real work on the mac"]);
+    fs.writeFileSync(path.join(remoteRepo, "tracked.txt"), "still editing\n");
+    fs.writeFileSync(path.join(remoteRepo, "mac-new.txt"), "untracked on mac\n");
+    runRemoteScript(remoteRepo, ref);
+
+    // Fetch it home exactly as gitPullWorktree does.
+    git(local, ["fetch", "--force", remoteRepo, `${ref}:${ref}`]);
+    const res = await applySnapshotFastForward(local, ref);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+
+    // The Mac's real commit fast-forwarded in...
+    expect(git(local, ["log", "--oneline"])).toContain("real work on the mac");
+    // ...with NO junk commit (the old bug).
+    expect(git(local, ["log", "--oneline"])).not.toContain("wip snapshot");
+    // ...and its uncommitted work is uncommitted here.
+    expect(fs.readFileSync(path.join(local, "tracked.txt"), "utf-8")).toBe("still editing\n");
+    expect(fs.readFileSync(path.join(local, "mac-new.txt"), "utf-8")).toBe("untracked on mac\n");
+    expect(git(local, ["status", "--porcelain"])).toContain("tracked.txt");
+    expect(res.appliedWork).toBe(true);
+  });
+
+  test("local commits the Mac never saw: refuses and changes nothing", async () => {
+    const { local, remoteRepo, ref } = await remoteWithWork();
+    fs.writeFileSync(path.join(remoteRepo, "tracked.txt"), "mac\n");
+    runRemoteScript(remoteRepo, ref);
+    git(local, ["fetch", "--force", remoteRepo, `${ref}:${ref}`]);
+    // Diverge: a local commit that isn't in the Mac's history.
+    fs.writeFileSync(path.join(local, "local-only.txt"), "mine\n");
+    git(local, ["add", "-A"]);
+    git(local, ["commit", "-qm", "local only commit"]);
+    const before = { head: git(local, ["rev-parse", "HEAD"]), log: git(local, ["log", "--oneline"]) };
+
+    const res = await applySnapshotFastForward(local, ref);
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.reason).toContain("diverged");
+    // Nothing touched — the local commit is safe.
+    expect(git(local, ["rev-parse", "HEAD"])).toBe(before.head);
+    expect(git(local, ["log", "--oneline"])).toBe(before.log);
+    expect(fs.existsSync(path.join(local, "local-only.txt"))).toBe(true);
+  });
+
+  test("a dirty local tree is backed up to a ref before being overwritten", async () => {
+    const { local, remoteRepo, ref } = await remoteWithWork();
+    fs.writeFileSync(path.join(remoteRepo, "tracked.txt"), "from the mac\n");
+    runRemoteScript(remoteRepo, ref);
+    git(local, ["fetch", "--force", remoteRepo, `${ref}:${ref}`]);
+    // Local has its own uncommitted edit — after a move this is the NORMAL state,
+    // since the move no longer commits the source's work away.
+    fs.writeFileSync(path.join(local, "tracked.txt"), "precious local edit\n");
+
+    const res = await applySnapshotFastForward(local, ref, { now: 12345 });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.backupRef).toBe("refs/codecast/backup/12345");
+    // The Mac's version won...
+    expect(fs.readFileSync(path.join(local, "tracked.txt"), "utf-8")).toBe("from the mac\n");
+    // ...but nothing was lost: the clobbered edit is recoverable from the ref.
+    expect(git(local, ["show", `${res.backupRef}:tracked.txt`])).toBe("precious local edit");
+  });
+
+  test("a clean local tree needs no backup", async () => {
+    const { local, remoteRepo, ref } = await remoteWithWork();
+    fs.writeFileSync(path.join(remoteRepo, "tracked.txt"), "mac\n");
+    runRemoteScript(remoteRepo, ref);
+    git(local, ["fetch", "--force", remoteRepo, `${ref}:${ref}`]);
+    const res = await applySnapshotFastForward(local, ref);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.backupRef).toBeUndefined();
+  });
+
+  test("a missing/garbage ref reports rather than throws", async () => {
+    const { cwd } = repo();
+    const res = await applySnapshotFastForward(cwd, "refs/codecast/back/nope");
+    expect(res.ok).toBe(false);
   });
 });

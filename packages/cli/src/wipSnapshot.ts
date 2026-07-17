@@ -284,3 +284,106 @@ export async function defaultRemote(cwd: string): Promise<string | null> {
   return out?.split("\n")[0]?.trim() || null;
 }
 
+/** Where a clobbered local tree is parked so nothing is ever unrecoverable. */
+export const BACKUP_REF_PREFIX = "refs/codecast/backup";
+
+/**
+ * createWipSnapshot as a POSIX shell one-liner, for a machine reachable only over
+ * SSH — it runs whatever codecast version it happens to have (often older, or a
+ * compiled binary), so we cannot call our own code there. Writes the snapshot to
+ * `ref` and echoes its sha.
+ *
+ * This duplicates createWipSnapshot's recipe in another language, which is worth
+ * naming: keep the two in step. The `-m` pair reproduces buildSnapshotMessage
+ * exactly (commit-tree joins paragraphs with a blank line). The identity is passed
+ * inline because a bundle-cloned remote may have no user.* config.
+ */
+export function remoteSnapshotScript(opts: { cwd: string; ref: string }): string {
+  const q = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
+  return [
+    `cd ${q(opts.cwd)}`,
+    `IDX=$(mktemp)`,
+    `GIT_INDEX_FILE="$IDX" git read-tree HEAD`,
+    `GIT_INDEX_FILE="$IDX" git add -A`, // respects .gitignore, same as here
+    `TREE=$(GIT_INDEX_FILE="$IDX" git write-tree)`,
+    `BR=$(git rev-parse --abbrev-ref HEAD)`,
+    `SNAP=$(git -c user.email=codecast@local -c user.name=codecast commit-tree "$TREE" -p HEAD ` +
+      `-m ${q("codecast wip snapshot")} -m "${BRANCH_TRAILER}: $BR")`,
+    `rm -f "$IDX"`,
+    `git update-ref ${q(opts.ref)} "$SNAP"`,
+    `echo "$SNAP"`,
+  ].join(" && ");
+}
+
+export type ApplyResult =
+  | { ok: true; base: string; branch?: string; appliedWork: boolean; backupRef?: string }
+  | { ok: false; reason: string };
+
+/**
+ * Land an already-fetched snapshot onto the CURRENT branch, fast-forward only.
+ *
+ * This is the `cast remote back` half: the same tree materialization as
+ * restoreWipSnapshot, but with two different rules, because here we're writing
+ * into a worktree the user owns rather than a throwaway reparent clone:
+ *
+ *  - FAST-FORWARD ONLY. If the local branch has commits the remote doesn't, we
+ *    refuse and change nothing — the caller reports a conflict. restoreWipSnapshot
+ *    force-moves the branch; doing that here could silently drop local commits.
+ *  - BACKS UP FIRST. Reproducing the remote's tree necessarily overwrites the
+ *    local one, and since a move now leaves the source dirty (its work is no
+ *    longer committed away), local IS expected to be dirty here. So any local
+ *    tree state is first captured as its own snapshot under refs/codecast/backup/
+ *    — recoverable with `git diff <ref>` / `git checkout <ref> -- .` — before the
+ *    clobber. Nothing the user had is ever unrecoverable.
+ */
+export async function applySnapshotFastForward(
+  cwd: string,
+  snapRef: string,
+  opts: { now?: number } = {},
+): Promise<ApplyResult> {
+  const snap = await gitTry(cwd, ["rev-parse", snapRef]);
+  const base = await gitTry(cwd, ["rev-parse", `${snapRef}^`]);
+  if (!snap || !base) return { ok: false, reason: `no usable snapshot at ${snapRef}` };
+
+  const head = await gitTry(cwd, ["rev-parse", "HEAD"]);
+  if (!head) return { ok: false, reason: "local worktree has no HEAD" };
+
+  // Refuse rather than clobber: local commits the remote never saw mean the two
+  // genuinely diverged, which is a human decision.
+  if ((await gitTry(cwd, ["merge-base", "--is-ancestor", head, base])) === null) {
+    return {
+      ok: false,
+      reason: "local and remote diverged; not fast-forwardable. Resolve manually.",
+    };
+  }
+
+  const message = (await gitTry(cwd, ["show", "-s", "--format=%B", snap])) ?? "";
+  const branch = parseSnapshotTrailer(message, BRANCH_TRAILER);
+
+  // Park whatever is here before overwriting it.
+  let backupRef: string | undefined;
+  if (await gitTry(cwd, ["status", "--porcelain"])) {
+    const local = await createWipSnapshot(cwd);
+    if (local) {
+      backupRef = `${BACKUP_REF_PREFIX}/${opts.now ?? Date.now()}`;
+      await gitTry(cwd, ["update-ref", backupRef, local.sha]);
+    }
+  }
+
+  try {
+    await git(cwd, ["reset", "-q", "--hard", base]); // ff verified + backed up above
+    const snapTree = await gitTry(cwd, ["rev-parse", `${snap}^{tree}`]);
+    const baseTree = await gitTry(cwd, ["rev-parse", `${base}^{tree}`]);
+    if (!snapTree || snapTree === baseTree) return { ok: true, base, branch, appliedWork: false, backupRef };
+    await git(cwd, ["read-tree", "-u", "--reset", snap]);
+    await git(cwd, ["reset", "-q", "--mixed", base]);
+    return { ok: true, base, branch, appliedWork: true, backupRef };
+  } catch (e) {
+    const err = e as { stderr?: string | Buffer; message?: string };
+    return {
+      ok: false,
+      reason: `could not apply the remote's tree${backupRef ? ` (local state saved at ${backupRef})` : ""}: ${(err.stderr?.toString() || err.message || String(e)).slice(0, 200)}`,
+    };
+  }
+}
+

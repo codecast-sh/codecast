@@ -96,7 +96,8 @@ function moveNotice(opts: {
   destination: string;   // "m1@51.159.120.28" or the local hostname
   newCwd: string;
   oldCwd: string;
-  verification: SyncVerification | undefined;
+  /** Pre-rendered: each direction proves a different thing (see describeBackSync). */
+  verification: string | undefined;
 }): string | null {
   return reorientationNotice({
     destination: opts.destination,
@@ -106,8 +107,25 @@ function moveNotice(opts: {
     // The SSH move pushes the tree itself (wip snapshot + push, then verified),
     // so the destination is a faithful copy — no checkout/transcript surprises
     // to report, unlike the reparent path which clones from the remote.
-    verification: describeVerification(opts.verification),
+    verification: opts.verification,
   });
+}
+
+/**
+ * The `back` direction's verification line.
+ *
+ * describeVerification is written for the OUTBOUND move, where a dirty
+ * destination means the push didn't land cleanly. Coming back, the Mac keeps its
+ * uncommitted work — we copy it home rather than committing it there (ct-39063) —
+ * so a dirty remote is the expected outcome, not a warning about the machine we
+ * just left. What matters here is only that the commits match.
+ */
+function describeBackSync(v: SyncVerification, backupRef?: string): string {
+  const saved = backupRef ? `; local tree before the pull saved at ${backupRef}` : "";
+  if (!v.headsMatch) {
+    return `WARNING: this machine is at ${v.localHead.slice(0, 8)} but the Mac is at ${v.remoteHead ? v.remoteHead.slice(0, 8) : "unknown"} on branch ${v.branch} — the pull may be incomplete${saved}`;
+  }
+  return `branch ${v.branch} at ${v.localHead.slice(0, 8)}, matching the Mac, with its uncommitted work restored here as uncommitted${saved}`;
 }
 
 /** Queue the notice onto the conversation's normal delivery rail (it arrives
@@ -151,11 +169,11 @@ export function registerRemoteCommand(program: Command): void {
     .command("push <sessionId>")
     .description("Push a session (worktree + transcript + credential) to the remote Mac")
     .option("--host <id>", "Target a specific host id")
-    .action((sessionId: string, opts: { host?: string }) => {
+    .action(async (sessionId: string, opts: { host?: string }) => {
       const host = loadRemoteHost(opts.host);
       const s = resolveLocalSession(sessionId);
       console.log(`pushing ${sessionId}\n  ${s.cwd}\n  -> ${host.user}@${host.address}`);
-      const move = pushSession(sessionId, host);
+      const move = await pushSession(sessionId, host);
       const moves = readMoves();
       moves[sessionId] = move;
       writeMoves(moves);
@@ -169,7 +187,7 @@ export function registerRemoteCommand(program: Command): void {
     .command("pull <sessionId>")
     .description("Pull the latest remote state (transcript + working tree) back to local")
     .option("--host <id>", "Target a specific host id")
-    .action((sessionId: string, opts: { host?: string }) => {
+    .action(async (sessionId: string, opts: { host?: string }) => {
       const host = loadRemoteHost(opts.host);
       const moves = readMoves();
       const move = moves[sessionId];
@@ -178,12 +196,13 @@ export function registerRemoteCommand(program: Command): void {
         process.exit(1);
       }
       console.log(`pulling ${sessionId} back from ${host.user}@${host.address}`);
-      const r = pullSession(sessionId, host, move);
+      const r = await pullSession(sessionId, host, move);
       if (!r.ff) {
         console.error(`CONFLICT: ${r.reason}`);
         process.exit(2);
       }
       console.log(`pulled to ${move.localCwd}`);
+      if (r.backupRef) console.log(`  (local tree before this pull saved at ${r.backupRef})`);
     });
 
   remote
@@ -245,7 +264,7 @@ export function registerRemoteCommand(program: Command): void {
 
       console.log(`moving ${sessionId} -> ${host.user}@${host.address} (device ${macDevice.device_id.slice(0, 8)})`);
       console.log("  [1/4] transfer worktree + transcript + credential");
-      const move = pushSession(sessionId, host);
+      const move = await pushSession(sessionId, host);
       console.log(`        ${describeVerification(move.verification)}`);
       console.log("  [2/4] prepare remote claude (onboarding + folder trust)");
       ensureRemoteClaudeReady(host, move.remoteCwd);
@@ -262,7 +281,7 @@ export function registerRemoteCommand(program: Command): void {
         destination: `${host.user}@${host.address}`,
         newCwd: move.remoteCwd,
         oldCwd: `${move.localCwd} on ${os.hostname()}`,
-        verification: move.verification,
+        verification: describeVerification(move.verification),
       }));
       console.log("  [4/4] done — session now runs on the Mac");
       console.log(`  watch: ssh ${host.user}@${host.address} 'tmux attach -t cc-resume-${sessionId.slice(0, 8)}'`);
@@ -285,12 +304,13 @@ export function registerRemoteCommand(program: Command): void {
 
       console.log(`bringing ${sessionId} back to local (${move.localCwd})`);
       console.log("  [1/2] pull transcript + working tree (git ff)");
-      const pr = pullSession(sessionId, host, move);
+      const pr = await pullSession(sessionId, host, move);
       if (!pr.ff) { console.error(`CONFLICT: ${pr.reason}`); process.exit(2); }
-      // After a clean fast-forward local and remote sit on the same tip —
-      // verify it (same check as the outbound move, roles reversed).
+      // After a clean fast-forward local and the Mac sit on the same commit —
+      // verify it. Roles reversed from the outbound move, so the line is too.
       const verification = verifyRemoteSync(host, move.localCwd, move.remoteCwd);
-      console.log(`        ${describeVerification(verification)}`);
+      const backLine = describeBackSync(verification, pr.backupRef);
+      console.log(`        ${backLine}`);
       console.log("  [2/2] flip ownership back to this device + resume locally");
       await client.mutation(api.devices.moveSessionToDevice, {
         api_token: token, conversation_id: conv._id, owner_device_id: deviceId(),
@@ -300,7 +320,7 @@ export function registerRemoteCommand(program: Command): void {
         destination: `${os.hostname()} (back on the original machine)`,
         newCwd: move.localCwd,
         oldCwd: `${move.remoteCwd} on ${host.user}@${host.address}`,
-        verification,
+        verification: backLine,
       }));
       console.log("  done — session is local again");
     });
