@@ -33,6 +33,7 @@ import { c, fmt } from "./colors.js";
 import type { Config } from "./config/types.js";
 import { getMachineKey, hardwareId } from "./machineKey.js";
 import { deviceId } from "./remote/device.js";
+import { probeAllClients, hasBin } from "./doctorClients.js";
 
 // ── deps handed in by index.ts ───────────────────────────────────────────────
 // The CLI entrypoint owns config decryption and the daemon state-file helpers;
@@ -159,11 +160,6 @@ process.on("SIGHUP", () => process.exit(0));
 `;
 
 // ── small helpers ─────────────────────────────────────────────────────────────
-
-function hasBin(name: string): boolean {
-  const r = spawnSync("which", [name], { encoding: "utf-8" });
-  return r.status === 0 && !!r.stdout.trim();
-}
 
 /** node preferred (matches how the npm-installed CLI runs); bun as fallback. */
 export function resolveStubRuntime(): string | null {
@@ -368,6 +364,12 @@ export async function runDoctor(deps: DoctorDeps, opts: DoctorOptions): Promise<
     e2eConversationId = await runE2E(deps, opts, runId, record, cleanup, say, evidence);
   }
 
+  // ── per-client offline self-test ──
+  // Cheap, model-free, daemon-free probe of each installed client's descriptor,
+  // parser, watcher, readiness pattern, and resume command. Runs regardless of
+  // daemon/e2e health — it needs only the binaries on PATH and the filesystem.
+  await runClientSelftest(record, say);
+
   const ok = !checks.some((ch) => ch.status === "fail");
   say("");
   say(ok
@@ -376,6 +378,35 @@ export async function runDoctor(deps: DoctorDeps, opts: DoctorOptions): Promise<
   say("");
 
   return { ok, runId, checks, conversationId: e2eConversationId, cleanup, evidence: evidence.length > 0 ? evidence : undefined };
+}
+
+/** Probe every installed client's offline machinery and record one line per client:
+ *  installed clients pass/fail on their sub-checks, uninstalled ones skip. A failed
+ *  sub-check names itself so the line points straight at the drift. */
+async function runClientSelftest(
+  record: (check: DoctorCheck) => void,
+  say: (line: string) => void,
+): Promise<void> {
+  say("");
+  say(fmt.muted("  Per-client self-test"));
+  const results = await probeAllClients();
+  for (const cr of results) {
+    if (!cr.installed) {
+      record({ name: `client ${cr.id}`, status: "skip", detail: `${cr.binary} not on PATH` });
+      continue;
+    }
+    const summary = cr.subChecks
+      .map((c) => `${c.label} ${c.ok ? fmt.success("✓") : fmt.error("✗")}`)
+      .join(fmt.muted(" · "));
+    const failed = cr.subChecks.filter((c) => !c.ok);
+    record({
+      name: `client ${cr.id}`,
+      status: cr.ok ? "pass" : "fail",
+      detail: cr.ok
+        ? summary
+        : `${summary}  — ${failed.map((f) => `${f.label}: ${f.detail ?? "failed"}`).join("; ")}`,
+    });
+  }
 }
 
 /** Returns the test conversation's id once one was created (even on failure). */
