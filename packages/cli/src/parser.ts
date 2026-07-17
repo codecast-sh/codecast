@@ -1,3 +1,5 @@
+import type { AgentClientId } from "@codecast/shared/contracts";
+
 type ContentBlock =
   | { type: "text"; text: string }
   | { type: "thinking"; thinking: string }
@@ -1053,4 +1055,26 @@ export function extractGeminiStartTime(content: string): number | undefined {
     }
   } catch {}
   return undefined;
+}
+
+/**
+ * Parse a transcript blob into the daemon's ParsedMessage[] using the parser for
+ * `clientId`. The per-client parsers above stay the transcript-format authorities;
+ * this is the single client → parser mapping the daemon's per-client processors
+ * dispatch through, so a new client wires up by adding one case here (and its
+ * descriptor) rather than a fresh branch at each call site. Cursor maps to the
+ * text-transcript parser (the sync path that reads a transcript FILE); the SQLite
+ * blob path uses parseCursorPrompts directly.
+ */
+export function parseTranscriptFor(clientId: AgentClientId, content: string): ParsedMessage[] {
+  switch (clientId) {
+    case "codex":
+      return parseCodexSessionFile(content);
+    case "gemini":
+      return parseGeminiSessionFile(content);
+    case "cursor":
+      return parseCursorTranscriptFile(content);
+    default:
+      return parseSessionFile(content);
+  }
 }

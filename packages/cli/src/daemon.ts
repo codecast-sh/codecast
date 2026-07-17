@@ -55,7 +55,7 @@ import {
   resolveSpawnerSessionId,
 } from "./sessionProcessMatcher.js";
 import { GeminiWatcher, type GeminiSessionEvent } from "./geminiWatcher.js";
-import { parseSessionFile, parseCodexSessionFile, parseGeminiSessionFile, parseCursorTranscriptFile, extractSlug, extractParentUuid, extractSummaryTitle, extractCwd, extractCodexCwd, extractCodexForkRoot, extractGeminiProjectHash, extractTeamInfo, detectCliFlags, type ParsedMessage } from "./parser.js";
+import { parseSessionFile, parseTranscriptFor, extractSlug, extractParentUuid, extractSummaryTitle, extractCwd, extractCodexCwd, extractCodexForkRoot, extractGeminiProjectHash, extractTeamInfo, detectCliFlags, type ParsedMessage } from "./parser.js";
 import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { encryptToken, decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
@@ -4910,7 +4910,7 @@ async function processSessionFile(
     if (bytesConsumed >= LARGE_BATCH_BYTES) {
       log(`Processing ${bytesConsumed} bytes for session ${sessionId.slice(0, 8)} (from position ${lastPosition})`);
     }
-    let messages = parseSessionFile(newContent);
+    let messages = parseTranscriptFor("claude", newContent);
 
     const bakPath = filePath + ".bak";
     if (!bakImageRecoveryDone.has(filePath) && fs.existsSync(bakPath)) {
@@ -5950,7 +5950,7 @@ async function processCursorTranscriptFile(
     const newContent = lastNewline >= 0 ? rawContent.slice(0, lastNewline + 1) : "";
     const bytesConsumed = lastNewline >= 0 ? Buffer.byteLength(rawContent.slice(0, lastNewline + 1), "utf-8") : 0;
     if (!newContent) return;
-    const messages = parseCursorTranscriptFile(newContent);
+    const messages = parseTranscriptFor("cursor", newContent);
 
     let conversationId = conversationCache[sessionId];
 
@@ -6169,7 +6169,7 @@ async function processCodexSession(
       log(`Skipping app-server-managed Codex transcript ${sessionId}`);
       return;
     }
-    const messages = parseCodexSessionFile(newContent);
+    const messages = parseTranscriptFor("codex", newContent);
 
     // Collapse Codex's per-resume fork chain into one conversation: every fork of a logical
     // session embeds its lineage back to a common root, so we key the conversation off that
@@ -6482,7 +6482,7 @@ async function processGeminiSession(
       throw err;
     }
 
-    const allMessages = parseGeminiSessionFile(content);
+    const allMessages = parseTranscriptFor("gemini", content);
     const previousCount = geminiSyncedCounts.get(filePath) || 0;
 
     if (allMessages.length <= previousCount) {
@@ -7890,6 +7890,26 @@ export function classifyCodexTranscriptTail(tailContent: string): TranscriptTurn
     // token_count / agent_message / reasoning etc. -> intra-turn, keep scanning
   }
   return "unknown";
+}
+
+// The single client -> transcript-tail classifier mapping. Only claude and codex
+// have a tail classifier today; cursor/gemini return undefined, which every caller
+// treats as "this client's transcript format isn't classified — defer" (the old
+// `agentType !== "claude" && agentType !== "codex"` gate). A new jsonl client wires
+// its classifier in here rather than adding another branch at each reconcile site.
+// Kept daemon-side (not on the shared descriptor) so shared stays free of daemon
+// types. Mirrors the parser.ts parseTranscriptFor dispatch.
+const CLASSIFY_TRANSCRIPT_TAIL_BY_CLIENT: Partial<
+  Record<AgentClientId, (tailContent: string) => TranscriptTurnState>
+> = {
+  claude: classifyTranscriptTail,
+  codex: classifyCodexTranscriptTail,
+};
+
+export function classifyTranscriptTailFor(
+  agentType: AgentClientId,
+): ((tailContent: string) => TranscriptTurnState) | undefined {
+  return CLASSIFY_TRANSCRIPT_TAIL_BY_CLIENT[agentType];
 }
 
 // Decides whether the hook-driven status (lastSentAgentStatus) should be corrected
@@ -10094,7 +10114,8 @@ async function reapBlockReason(
 ): Promise<{ reason: string } | { reason: null; idleHours: number }> {
   const file = findSessionFile(sessionId);
   if (!file) return { reason: "no-transcript" };
-  if (file.agentType !== "claude" && file.agentType !== "codex") return { reason: `agent=${file.agentType}` };
+  const classifyTail = classifyTranscriptTailFor(file.agentType);
+  if (!classifyTail) return { reason: `agent=${file.agentType}` };
   let idleMs: number;
   try { idleMs = now - fs.statSync(file.path).mtimeMs; } catch { return { reason: "stat-failed" }; }
   if (idleMs < REAP_IDLE_MS) return { reason: `active-${Math.round(idleMs / 60000)}min` };
@@ -10105,7 +10126,7 @@ async function reapBlockReason(
   if (live !== "idle") return { reason: `pane=${live}` };
   let tail: string;
   try { tail = readFileTailSync(file.path); } catch { return { reason: "tail-read-failed" }; }
-  const turn = file.agentType === "codex" ? classifyCodexTranscriptTail(tail) : classifyTranscriptTail(tail);
+  const turn = classifyTail(tail);
   if (turn !== "idle") return { reason: `transcript=${turn}` };
   return { reason: null, idleHours: Math.round(idleMs / 3600000) };
 }
@@ -10231,9 +10252,9 @@ function reconcileStatusFromTranscript(sessionId: string, syncService: SyncServi
   let turn: TranscriptTurnState;
   try {
     const tail = readFileTailSync(file.path);
-    if (file.agentType === "claude") turn = classifyTranscriptTail(tail);
-    else if (file.agentType === "codex") turn = classifyCodexTranscriptTail(tail);
-    else return; // gemini/cursor formats not classified yet -> defer
+    const classifyTail = classifyTranscriptTailFor(file.agentType);
+    if (!classifyTail) return; // gemini/cursor formats not classified yet -> defer
+    turn = classifyTail(tail);
   } catch {
     return; // can't read the transcript -> defer, never guess
   }
