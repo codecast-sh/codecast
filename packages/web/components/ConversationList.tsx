@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { AgentTypeIcon } from "./AgentTypeIcon";
 import { LoadingSkeleton } from "./LoadingSkeleton";
 import { EmptyState } from "./EmptyState";
 import { Spinner } from "./ui/spinner";
@@ -379,6 +380,15 @@ export function AgentIcon({ agentType, className = "w-4 h-4" }: { agentType: str
         <GeminiIcon className="w-2.5 h-2.5 text-white" />
       </span>
     );
+  } else if (agentType === "opencode" || agentType === "pi") {
+    // opencode/pi have no dedicated badge glyph here — reuse the canonical
+    // AgentTypeIcon (its own accent color) inside the badge chrome so they never
+    // fall through to the Claude icon.
+    return (
+      <span className={`${className} rounded bg-sol-bg-alt flex items-center justify-center shrink-0`}>
+        <AgentTypeIcon agentType={agentType} className="w-2.5 h-2.5" />
+      </span>
+    );
   }
   return (
     <span className={`${className} rounded bg-sol-orange flex items-center justify-center shrink-0`}>
@@ -730,6 +740,8 @@ function getAgentTypeLabel(agentType: string): string {
   if (agentType === "codex" || agentType === "codex_cli") return "Codex";
   if (agentType === "cursor") return "Cursor";
   if (agentType === "gemini") return "Gemini";
+  if (agentType === "opencode") return "OpenCode";
+  if (agentType === "pi") return "pi";
   return agentType;
 }
 
