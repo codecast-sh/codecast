@@ -68,11 +68,11 @@ export function HighlightedCodeText({ content, style }: { content: string; style
 
 // Trailing "<name> <entity-id>" inside an @[…] mention — same shape web's
 // MENTION_RE extracts (the id renders as a pill; the name is its fallback).
-const MENTION_ENTITY_RE = /^(.*?)\s*\b(ct-\w+|pl-\w+|jx[a-z0-9]{5,}|doc:\w+)$/i;
+const MENTION_ENTITY_RE = /^(.*?)\s*\b(ct-\w+|pl-\w+|jx[a-z0-9]{5,}|doc:\w+|[a-z0-9]{32})$/i;
 
 export function renderInlineMarkdown(text: string, baseStyle: any, keyPrefix = '', isUser = false): React.ReactNode[] {
   const result: React.ReactNode[] = [];
-  const pattern = /(`[^`]+`|\*\*(.+?)\*\*|\*(.+?)\*|~~(.+?)~~|\[([^\]]+)\]\(([^)]+)\)|(https?:\/\/[^\s<>\])"',]+)|@\[([^\]]+)\]|@(\w+)|\b((?:ct|pl)-[a-z0-9]{4,}|jx[a-z0-9]{5,}|doc:[a-z0-9]{20,}|doc-[a-z0-9]{4,})\b)/g;
+  const pattern = /(`[^`]+`|\*\*(.+?)\*\*|\*(.+?)\*|~~(.+?)~~|\[([^\]]+)\]\(([^)]+)\)|(https?:\/\/[^\s<>\])"',]+)|@\[([^\]]+)\]|@(\w+)|\b((?:ct|pl)-[a-z0-9]{4,}|jx[a-z0-9]{5,}|doc:[a-z0-9]{20,}|doc-[a-z0-9]{4,}|[a-z0-9]{32})\b)/g;
   let lastIndex = 0;
   let match;
   let key = 0;
@@ -85,9 +85,16 @@ export function renderInlineMarkdown(text: string, baseStyle: any, keyPrefix = '
     if (match[0].startsWith('`')) {
       const code = match[0].slice(1, -1);
       // `jx…`/`ct-…` in backticks is an object reference, not code — pill it
-      // (web's EntityAwareCode does the same).
+      // (web's EntityAwareCode does the same). The fallback keeps a non-entity
+      // Convex-shaped string (message id, hash) rendered as inline code.
       if (isEntityId(code)) {
-        result.push(<EntityPill key={`${keyPrefix}c${key++}`} shortId={code} />);
+        result.push(
+          <EntityPill
+            key={`${keyPrefix}c${key++}`}
+            shortId={code}
+            fallback={<RNText style={isUser ? mdStyles.inlineCodeUser : mdStyles.inlineCode}>{code}</RNText>}
+          />
+        );
       } else {
         result.push(
           <RNText key={`${keyPrefix}c${key++}`} style={isUser ? mdStyles.inlineCodeUser : mdStyles.inlineCode}>{code}</RNText>
@@ -146,10 +153,13 @@ export function renderInlineMarkdown(text: string, baseStyle: any, keyPrefix = '
       const em = name.match(MENTION_ENTITY_RE);
       if (em && em[2]) {
         const entityId = em[2];
+        // If the id resolves to nothing, fall back to the mention chip so
+        // "@[Title <staleId>]" still reads as a mention, not a bare id.
+        const chip = <RNText style={mdStyles.mentionPill}>@{em[1] || name}</RNText>;
         result.push(
           entityId.toLowerCase().startsWith('doc:')
             ? <EntityPill key={`${keyPrefix}m${key++}`} type="doc" id={entityId.slice(4)} />
-            : <EntityPill key={`${keyPrefix}m${key++}`} shortId={entityId} />
+            : <EntityPill key={`${keyPrefix}m${key++}`} shortId={entityId} fallback={chip} />
         );
       } else {
         result.push(
