@@ -34,7 +34,6 @@ export type ShortcutAction =
   | 'conv.toggleTree'
   | 'conv.copyLink'
   | 'conv.cycleDensity'
-  | 'conv.toggleThinking'
   | 'conv.favorite'
   | 'conv.review'
   | 'msg.next'
@@ -167,7 +166,6 @@ export const SHORTCUTS: ShortcutDef[] = [
   // mid-typing. ('B' for branches.) Ctrl (not Cmd) for consistency with the
   // app's other Ctrl chords.
   { key: 'ctrl+b', action: 'conv.toggleTree', when: 'conversation', skipInputCheck: true, description: 'Toggle branch map' },
-  { key: 'h', action: 'conv.toggleThinking', when: 'conversation', description: 'Toggle thinking blocks' },
   { key: 'ctrl+shift+f', mac: 'meta+shift+f', action: 'conv.favorite', when: 'conversation', skipInputCheck: true, description: 'Toggle favorite' },
   { key: 'r', action: 'conv.review', when: 'conversation', description: 'Review / comment on a reply' },
   { key: 'meta+shift+l', action: 'conv.copyLink', when: 'conversation', skipInputCheck: true, description: 'Copy conversation link' },

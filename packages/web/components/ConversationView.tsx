@@ -2340,19 +2340,6 @@ const ConversationTaskStatsMenuItem = memo(function ConversationTaskStatsMenuIte
   );
 });
 
-function truncateLines(text: string, maxLines: number): { text: string; truncated: boolean; totalLines: number } {
-  const lines = text.split("\n");
-  if (lines.length <= maxLines) {
-    return { text, truncated: false, totalLines: lines.length };
-  }
-  return {
-    text: lines.slice(0, maxLines).join("\n"),
-    truncated: true,
-    totalLines: lines.length,
-  };
-}
-
-
 function findMatchingChild(
   prompt: string,
   childConversations?: Array<{ _id: string; title: string; is_subagent?: boolean; first_message_preview?: string }>,
@@ -4723,44 +4710,6 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
   );
 }
 
-function ThinkingBlock({ content, showContent = true }: { content: string; showContent?: boolean }) {
-  const [expanded, setExpanded] = useState(false);
-  const truncated = truncateLines(content, expanded ? 50 : 2);
-  const isLong = truncated.truncated || content.length > 200;
-
-  if (!showContent) {
-    return (
-      <div className="my-0.5 opacity-30 text-xs text-sol-text-muted italic">
-        thinking...
-      </div>
-    );
-  }
-
-  return (
-    <div className="my-0.5 opacity-50">
-      <div
-        className={`flex items-start gap-1 ${isLong || expanded ? 'cursor-pointer' : ''}`}
-        onClick={() => (isLong || expanded) && setExpanded(!expanded)}
-      >
-        {(isLong || expanded) && (
-          <svg
-            className={`w-3 h-3 mt-0.5 shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`}
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-          </svg>
-        )}
-        <div className="flex-1 text-sol-text-muted font-mono whitespace-pre-wrap break-words text-xs">
-          {truncated.text}
-          {truncated.truncated && !expanded && "..."}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 const IMAGE_COLLAPSED_HEIGHT = 100;
 
 function useSwipeToDismiss(onDismiss: () => void) {
@@ -6403,8 +6352,6 @@ const CompactCollapsedTurn = memo(function CompactCollapsedTurn({ content, onExp
 function AssistantBlockImpl({
   content,
   timestamp,
-  thinking,
-  showThinking,
   toolCalls,
   toolResults,
   images,
@@ -6444,8 +6391,6 @@ function AssistantBlockImpl({
 }: {
   content?: string;
   timestamp: number;
-  thinking?: string;
-  showThinking?: boolean;
   toolCalls?: ToolCall[];
   toolResults?: ToolResult[];
   images?: ImageData[];
@@ -6504,7 +6449,6 @@ function AssistantBlockImpl({
   const parsedApiError = useMemo(() => parseApiErrorContent(displayContent), [displayContent]);
   const onlyAskUser = toolCalls && toolCalls.length > 0 && toolCalls.every(tc => tc.name === "AskUserQuestion");
   const hasContent = displayContent && displayContent.trim().length > 0 && !onlyAskUser;
-  const hasThinking = thinking && thinking.trim().length > 0;
   const hasToolCalls = toolCalls && toolCalls.length > 0;
   const hasImages = images?.some(img => !img.tool_use_id) ?? false;
 
@@ -6545,7 +6489,7 @@ function AssistantBlockImpl({
     return () => { document.removeEventListener('keydown', handleKey); document.body.style.overflow = ''; };
   }, [fullscreen]);
 
-  if (!hasContent && !hasThinking && !hasToolCalls && !hasImages) {
+  if (!hasContent && !hasToolCalls && !hasImages) {
     return null;
   }
 
@@ -6558,10 +6502,9 @@ function AssistantBlockImpl({
   const handleCopyLink = () => copyMessageLink(conversationId, messageId);
 
   // Show Claude header for first message in sequence (regardless of content type)
-  const visibleThinking = hasThinking && showThinking;
   const shouldShowHeader = showHeader;
-  const onlyToolCalls = hasToolCalls && !hasContent && !visibleThinking;
-  const hasVisibleContent = hasContent || visibleThinking || hasToolCalls || hasImages;
+  const onlyToolCalls = hasToolCalls && !hasContent;
+  const hasVisibleContent = hasContent || hasToolCalls || hasImages;
 
   // When nothing visible, hide completely
   if (!hasVisibleContent) {
@@ -6657,8 +6600,6 @@ function AssistantBlockImpl({
 
       <div className={shouldShowHeader || !showHeader ? "pl-8" : "pl-0"}>
         {hasImages && images?.filter(img => !img.tool_use_id).map((img, i) => <ImageBlock key={i} image={img} />)}
-
-        {!effectiveCondensed && hasThinking && showThinking && <ThinkingBlock content={thinking!} showContent={showThinking} />}
 
         {hasToolCalls && toolCalls?.map((tc) => {
           if (effectiveCondensed && !isAlwaysVisibleToolCall(tc)) return null;
@@ -9702,7 +9643,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     prevFeedDensityRef.current = feedDensity;
     if (expandedTurns.size) setExpandedTurns(new Set());
   }
-  const [showThinking, setShowThinking] = useState(false);
   const [diffExpanded, setDiffExpanded] = useState(false);
   const convex = useConvex();
   const convexConvId = conversation?._id && isConvexId(conversation._id) ? conversation._id as Id<"conversations"> : undefined;
@@ -9833,7 +9773,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     setIsNearBottom(true);
     setDensityState((conversation?._id && DENSITY_BY_CONVERSATION.get(conversation._id)) || "full");
     setExpandedTurns(new Set());
-    setShowThinking(false);
     setDiffExpanded(false);
     setHighlightedMessageId(null);
     setAllMatchingMessageIds([]);
@@ -11629,10 +11568,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     copyToClipboard(url).then(() => toast.success("Link copied!"));
   }, [conversation?._id]));
 
-  useShortcutAction('conv.toggleThinking', useCallback(() => {
-    setShowThinking((s) => !s);
-  }, []));
-
   useShortcutAction('conv.favorite', useCallback(() => {
     if (!conversation || !isOwner) return;
     toggleFavoriteMutation(conversation._id);
@@ -12661,7 +12596,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       if (isHiddenStubMessage(msg)) return null;
 
       // Find previous VISIBLE non-commit assistant item to determine if this is first in assistant sequence
-      // Skip invisible assistant messages (those whose content is only system tags with no tool calls/thinking/images)
+      // Skip invisible assistant messages (those whose content is only system tags with no tool calls/images)
       let prevIdx = index - 1;
       while (prevIdx >= 0) {
         const checkItem = timeline[prevIdx];
@@ -12671,7 +12606,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         if (checkMsg.role !== 'assistant') break;
         const hasVisibleContent = (checkMsg.content && stripSystemTags(checkMsg.content).trim().length > 0)
           || (checkMsg.tool_calls && checkMsg.tool_calls.length > 0)
-          || (showThinking && checkMsg.thinking && checkMsg.thinking.trim().length > 0)
           || (checkMsg.images && checkMsg.images.length > 0);
         if (hasVisibleContent) break;
         prevIdx--;
@@ -12747,8 +12681,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           key={msg._id}
           content={msg.content}
           timestamp={msg.timestamp}
-          thinking={msg.thinking}
-          showThinking={showThinking}
           toolCalls={msg.tool_calls}
           toolResults={relevantToolResults}
           images={msg.images}
@@ -13239,10 +13171,6 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                       </DropdownMenuItem>
                     )}
                     <DropdownMenuSeparator />
-                    <DropdownMenuItem onClick={() => setShowThinking((s) => !s)}>
-                      {showThinking ? "Hide thinking" : "Show thinking"}
-                      <MenuKeyCaps action="conv.toggleThinking" />
-                    </DropdownMenuItem>
                     <DropdownMenuItem onClick={() => {
                       const next = !stickyDisabled;
                       updateUI({ sticky_headers_disabled: next });
