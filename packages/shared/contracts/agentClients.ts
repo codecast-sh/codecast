@@ -192,9 +192,11 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     // cursor session must never fall through to `claude --resume` + Claude's repair
     // machinery. Consumed by buildNonClaudeResumeCommand (resumeCommand.ts).
     resumeCmd: (sessionId) => `cursor-agent --resume ${sessionId}`,
-    // The daemon actually reads cursor transcripts from a platform-specific SQLite
-    // store (the Cursor app-support workspaceStorage), not a home dir; this root
-    // is provisional pending the sqlite-watcher wire-up (ct-39077).
+    // The daemon reads cursor transcripts from a platform-specific SQLite store
+    // (the Cursor app-support workspaceStorage), not a home dir, via its own
+    // CursorWatcher/CursorTranscriptWatcher (watcherKind "sqlite"). Those stay their
+    // own kind — only the jsonl-dir watchers (codex/gemini) share the generic
+    // TranscriptDirWatcher — so this home-relative root is not consumed today.
     transcriptRoots: ["~/.cursor/chats"],
     watcherKind: "sqlite",
     // Provisional: cursor has NO dedicated readiness pattern in the daemon. At the
