@@ -859,6 +859,34 @@ export class SyncService {
     });
   }
 
+  // Delete specific messages by uuid — the daemon's pi branch-switch cleanup removes
+  // the abandoned branch's already-synced turns so the conversation equals the active
+  // branch exactly. Chunked to the server's per-call cap and serialized behind the
+  // conversation's write lock (same discipline as addMessages) so it can't race a
+  // concurrent add. Returns how many rows were actually removed.
+  async deleteMessagesByUuid(conversationId: string, messageUuids: string[]): Promise<number> {
+    if (messageUuids.length === 0) return 0;
+    return this.withConversationLock(conversationId, async () => {
+      let deleted = 0;
+      for (let i = 0; i < messageUuids.length; i += ADD_MESSAGES_BATCH_SIZE) {
+        const chunk = messageUuids.slice(i, i + ADD_MESSAGES_BATCH_SIZE);
+        await this.throttle();
+        try {
+          const result = await this.mutate("messages:deleteMessagesByUuid" as any, {
+            conversation_id: conversationId,
+            message_uuids: chunk,
+            api_token: this.apiToken,
+          });
+          deleted += (result as { deleted: number }).deleted;
+        } catch (error) {
+          if (isAuthError(error)) throw new AuthExpiredError();
+          throw error;
+        }
+      }
+      return deleted;
+    });
+  }
+
   // Runs `fn` after any in-flight addMessages for the same conversation settles,
   // so writes to one conversation doc never overlap (the OCC-stampede fix above).
   // Each call chains onto the previous one's settled tail; errors are isolated so
