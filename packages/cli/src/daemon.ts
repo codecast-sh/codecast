@@ -9947,6 +9947,12 @@ let wipSweepCursor = 0;
 
 async function sweepWipSnapshots(sessionIds: string[]): Promise<void> {
   if (!sessionIds.length) return;
+  // Off switch, read fresh each pass so it takes effect without a restart. This
+  // loop writes to the user's real git remotes, and this daemon runs from source
+  // on dev machines where the watchdog reloads whatever is on disk within ~1min —
+  // a side-effecting path like this needs a way to be inert that doesn't require
+  // stopping the daemon (which would take every session's sync down with it).
+  if (readConfig()?.wip_snapshots_enabled === false) return;
   const cache = readConversationCache();
   // Only sessions with a conversation (the id the destination will look up) and a
   // real local cwd can be snapshotted.

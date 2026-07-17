@@ -38,6 +38,14 @@ export interface Config {
   convex_url?: string;
   web_url?: string;
 
+  // --- Working-tree snapshots (daemon.ts sweepWipSnapshots) ---
+  // Publish each session's working tree to a hidden ref on its own git remote so
+  // a session reparented onto another machine arrives with its uncommitted work
+  // (see wipSnapshot.ts). Default ON. Set false to stop this machine pushing
+  // snapshots entirely — for a machine whose repos shouldn't receive them, or to
+  // silence the loop without unwinding the code.
+  wip_snapshots_enabled?: boolean;
+
   // --- Device identity ---
   // Explicit name for THIS machine, replacing the derived "macOS - <hostname>".
   // Set it on a provisioned box whose hostname is a UUID (a Scaleway Mac reads as
