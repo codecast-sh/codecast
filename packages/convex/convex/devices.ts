@@ -12,6 +12,7 @@ import {
   type RoutableDevice,
 } from "./deviceRouting";
 import { normalizeProjectPath } from "./projectPaths";
+import { fromConvexAgentType } from "@codecast/shared/contracts";
 
 async function getAuthenticatedUserId(
   ctx: { db: any },
@@ -296,8 +297,7 @@ export const moveSessionToDevice = mutation({
 
     let commandId: string | undefined;
     if (args.resume !== false) {
-      const agentType =
-        conv.agent_type === "codex" ? "codex" : conv.agent_type === "gemini" ? "gemini" : "claude";
+      const agentType = fromConvexAgentType(conv.agent_type);
       const id = await ctx.db.insert("daemon_commands", {
         user_id: userId,
         command: "resume_session" as const,
@@ -467,8 +467,7 @@ export async function performReassignToDevice(
     updated_at: Date.now(),
   });
 
-  const agentType =
-    conv.agent_type === "codex" ? "codex" : conv.agent_type === "gemini" ? "gemini" : "claude";
+  const agentType = fromConvexAgentType(conv.agent_type);
   const commandId = await ctx.db.insert("daemon_commands", {
     user_id: userId,
     command: "resume_session" as const,
@@ -631,8 +630,7 @@ export async function performReparentSessionToDevice(
   // project_path is only a hint. `reparented` marks it so the daemon takes the
   // fresh-machine resume path (clone + transcript from Convex) rather than
   // assuming the local worktree + JSONL already exist.
-  const agentType =
-    conv.agent_type === "codex" ? "codex" : conv.agent_type === "gemini" ? "gemini" : "claude";
+  const agentType = fromConvexAgentType(conv.agent_type);
   // Resolve the git remote NOW and embed it in the command, so the destination
   // daemon can clone without depending on the conversation's own (often
   // missing) git_remote_url — see resolveRemoteForReparent.
