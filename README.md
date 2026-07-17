@@ -324,7 +324,7 @@ per-client reality as merged; ✓ = supported, — = not available.
 | Agent | History location | Launch from web | Transcript sync | `cast send` | State detection | Resume | Fork | Model control | Permissions |
 |-------|------------------|:---------------:|:---------------:|:-----------:|:---------------:|:------:|:----:|:-------------:|:-----------:|
 | Claude Code | `~/.claude/projects/**/*.jsonl` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (mid-session) | ✓ |
-| Codex CLI | `~/.codex/sessions/**/*.jsonl` | ✓ | ✓ | ✓ | ✓ | ✓ (+ app-server) | ✓ | ✓ (at launch) | ✓ |
+| Codex CLI | `~/.codex/sessions/**/*.jsonl` | ✓ | ✓ | ✓ | ✓ | ✓ (+ app-server) | ✓⁸ | ✓ (at launch) | ✓ |
 | OpenCode | `~/.local/share/opencode/opencode.db` (SQLite) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓¹ | ✓ (at launch) | auto² |
 | pi | `~/.pi/agent/sessions/**/*.jsonl` | ✓ | ✓ | ✓ | ✓ | ✓ | —³ | tracked⁴ | — |
 | Cursor | Cursor app SQLite (workspace storage) | —⁵ | ✓ | —⁵ | —⁶ | ✓ | — | — | — |
@@ -337,6 +337,7 @@ per-client reality as merged; ✓ = supported, — = not available.
 5. Cursor is an IDE: its sessions are ingested from Cursor's store and can be resumed, but codecast cannot launch one or inject a message into it.
 6. Cursor and Gemini have no transcript-tail classifier, so their working/idle state is not read from the transcript. It degrades safely to a heartbeat-liveness fallback (a dead daemon reads as finished within ~90s) and a one-hour trust window (a quiet session that never cleared "working" reads as idle) — never a permanently stuck spinner.
 7. Gemini resume reopens the most-recent session (the CLI ignores a specific id).
+8. Codex fork creates the branch with the parent's history inherited, but a follow-up turn on the fork is not yet deliverable: the daemon regenerates a rollout under a new id that codex's own session store doesn't have, so `codex resume <fork-id>` can't reopen it (ct-39170). The branch is a readable dead end until that fork resumes through the app-server the way the parent does.
 
 ### Tech Stack
 
