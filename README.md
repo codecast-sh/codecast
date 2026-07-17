@@ -315,12 +315,28 @@ codecast/
 
 ### Supported Agents
 
-| Agent | History Location | Status |
-|-------|-----------------|--------|
-| Claude Code | `~/.claude/projects/**/*.jsonl` | Supported |
-| Codex CLI | `~/.codex/sessions/**/*.jsonl` | Supported |
-| Cursor | `~/.cursor/` + workspace storage | Supported |
-| Gemini CLI | `~/.gemini/tmp/` | Supported |
+codecast integrates six agent CLIs. Support is not all-or-nothing: each client
+is a registry descriptor (`packages/shared/contracts/agentClients.ts`) that
+declares only the capabilities it actually has. A capability a client lacks is
+simply absent — the session never breaks. The matrix below states the real
+per-client reality as merged; ✓ = supported, — = not available.
+
+| Agent | History location | Launch from web | Transcript sync | `cast send` | State detection | Resume | Fork | Model control | Permissions |
+|-------|------------------|:---------------:|:---------------:|:-----------:|:---------------:|:------:|:----:|:-------------:|:-----------:|
+| Claude Code | `~/.claude/projects/**/*.jsonl` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (mid-session) | ✓ |
+| Codex CLI | `~/.codex/sessions/**/*.jsonl` | ✓ | ✓ | ✓ | ✓ | ✓ (+ app-server) | ✓ | ✓ (at launch) | ✓ |
+| OpenCode | `~/.local/share/opencode/opencode.db` (SQLite) | ✓ | ✓ | ✓ | ✓ | ✓ | pending¹ | ✓ (at launch) | auto² |
+| pi | `~/.pi/agent/sessions/**/*.jsonl` | ✓ | ✓ | ✓ | ✓ | ✓ | —³ | tracked⁴ | — |
+| Cursor | Cursor app SQLite (workspace storage) | —⁵ | ✓ | —⁵ | —⁶ | ✓ | — | — | — |
+| Gemini CLI | `~/.gemini/tmp/**/*.jsonl` | ✓ | ✓ | ✓ | —⁶ | ✓⁷ | — | — | — |
+
+1. OpenCode fork is pending the SSE transport work (ct-39079); every other cell is live today.
+2. OpenCode launches auto-approved (`--auto`): the daemon reads its turn state from the SQLite store and can't answer the TUI's permission prompts, so there is no per-session permission control.
+3. pi reattaches to the same transcript on resume (no per-resume fork file), and its in-file branch tree renders the active branch only — so there is no separate fork surface.
+4. pi is multi-provider and switches models in its own UI; codecast tracks the active model from the transcript rather than driving a picker.
+5. Cursor is an IDE: its sessions are ingested from Cursor's store and can be resumed, but codecast cannot launch one or inject a message into it.
+6. Cursor and Gemini have no transcript-tail classifier, so their working/idle state is not read from the transcript. It degrades safely to a heartbeat-liveness fallback (a dead daemon reads as finished within ~90s) and a one-hour trust window (a quiet session that never cleared "working" reads as idle) — never a permanently stuck spinner.
+7. Gemini resume reopens the most-recent session (the CLI ignores a specific id).
 
 ### Tech Stack
 

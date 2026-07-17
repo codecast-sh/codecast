@@ -194,6 +194,20 @@ export function resolveResumeAgentType(
 }
 
 /**
+ * The agents `cast resume --as` and `cast fork --resume --as` can target. Both
+ * reconstitute a conversation into a fresh LOCAL session, and only Claude and Codex
+ * have transcript generators (generateClaudeCodeJsonl / generateCodexJsonl) for
+ * that. Any other value would silently fall through to a fabricated Claude JSONL +
+ * `claude --resume` — so both commands validate `--as` against this list upfront.
+ */
+export const RECONSTITUTION_TARGET_AGENTS = ["claude", "codex"] as const;
+
+/** True when an `--as <agent>` value names an agent local reconstitution supports. */
+export function isReconstitutionTarget(agent: string | undefined | null): boolean {
+  return !!agent && (RECONSTITUTION_TARGET_AGENTS as readonly string[]).includes(agent.toLowerCase());
+}
+
+/**
  * tmux session-name prefix per agent for resume-named sessions. Each client gets
  * its own so panes stay greppable by client and never collide with claude's cc-.
  * Cursor gets cu- rather than defaulting into claude's cc-. Sourced from the
@@ -201,6 +215,27 @@ export function resolveResumeAgentType(
  */
 export function resumeTmuxPrefix(agentType: AgentClientId): string {
   return AGENT_CLIENTS[agentType].tmuxPrefix;
+}
+
+/**
+ * Every tmux-name prefix a codecast-managed pane can carry, as `startsWith`
+ * fragments: one per client from the registry (`cc-`, `cx-`, `cu-`, `gm-`,
+ * `oc-`, `pi-`) plus `ct-`, the task-scheduler's pane prefix (taskScheduler.ts),
+ * which belongs to no client. The daemon's tmux-name filters — warm-restart
+ * recovery and live-session reuse — select codecast panes with these. Deriving
+ * the list from the registry (instead of a literal `cc-/cx-/gm-/ct-`) is what
+ * keeps a newly added client's resume panes from being silently dropped: before
+ * this, cursor/opencode/pi panes fell outside the hardcoded list and were never
+ * recovered or reused.
+ */
+export const MANAGED_TMUX_PREFIXES: string[] = [
+  ...Object.values(AGENT_CLIENTS).map((d) => `${d.tmuxPrefix}-`),
+  "ct-",
+];
+
+/** True when a tmux session name is a codecast-managed pane (any known prefix). */
+export function isManagedTmuxName(name: string): boolean {
+  return MANAGED_TMUX_PREFIXES.some((p) => name.startsWith(p));
 }
 
 /**
