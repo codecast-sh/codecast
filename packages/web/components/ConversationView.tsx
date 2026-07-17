@@ -1140,7 +1140,7 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
   }));
   const currentAgent = storeSession?.agent_type || conversation.agent_type || "claude_code";
 
-  const handleAgentSwitch = useCallback(async (agentType: "claude_code" | "codex" | "cursor" | "gemini" | "pi") => {
+  const handleAgentSwitch = useCallback(async (agentType: "claude_code" | "codex" | "cursor" | "gemini" | "opencode" | "pi") => {
     if (agentType === currentAgent) return;
     try {
       const id = storeSession?._id || conversation._id;
