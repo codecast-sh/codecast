@@ -58,6 +58,7 @@ import {
   choosePreferredCodexCandidate,
   collectAncestorPids,
   hasCodexSessionFileOpen,
+  isRecognizedAgentComm,
   isResumeInvocation,
   matchStartedConversation,
   parsePidPpidMap,
@@ -13160,10 +13161,7 @@ async function hasAgentProcessInTree(rootPid: number, maxDepth = 4): Promise<boo
 function isAgentProcess(pid: number): boolean {
   try {
     const comm = execSync(`ps -o comm= -p ${pid} 2>/dev/null`, { encoding: "utf-8" }).trim();
-    if (!comm) return false;
-    const agentPatterns = ["claude", "codex", "gemini", "node", "bun", "deno"];
-    const lower = comm.toLowerCase();
-    return agentPatterns.some(p => lower.includes(p));
+    return isRecognizedAgentComm(comm);
   } catch {
     return false;
   }

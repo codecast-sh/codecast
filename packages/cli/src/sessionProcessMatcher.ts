@@ -1,4 +1,41 @@
 import type { AgentClientId } from "@codecast/shared/contracts";
+import { AGENT_CLIENTS } from "@codecast/shared/contracts";
+
+// ── Recognizing a live agent process by its `ps` comm ───────────────────────
+// The daemon's "is this pane's process still an agent" check (isAgentProcess,
+// backing resolveLiveTmuxTarget) reads `ps -o comm=` for a pid and asks whether
+// it looks like one of our clients. Two shapes appear in the wild, both observed
+// live:
+//   • the client's own binary name — compiled clients (opencode -> "opencode",
+//     claude -> "claude") and script clients that rename their process via
+//     process.title (pi's cli.js sets `process.title = "pi"`, so comm is "pi",
+//     NOT "node").
+//   • a generic script interpreter — script clients that DON'T rename run under
+//     it (codex -> comm "node", args "node .../codex"); gemini likewise.
+// The recognized binary names come straight from the registry, so adding client
+// #7's descriptor teaches this check for free. Binary names match by basename
+// (exact) so a short id like "pi" can't substring-hit "pip"/"pipenv"; the
+// interpreters keep the historic path-tolerant substring match (comm is often a
+// full path like "/opt/homebrew/bin/node").
+const AGENT_BINARY_BASENAMES = new Set(
+  Object.values(AGENT_CLIENTS).map((d) => basename(d.binary).toLowerCase())
+);
+const AGENT_INTERPRETERS = ["node", "bun", "deno"];
+
+function basename(path: string): string {
+  const parts = path.split("/");
+  return parts[parts.length - 1] || path;
+}
+
+/** Does a process's `ps -o comm=` value belong to one of our agent clients?
+ *  Pure and testable — the daemon's isAgentProcess is just this plus the `ps`
+ *  read. */
+export function isRecognizedAgentComm(comm: string): boolean {
+  const lower = comm.trim().toLowerCase();
+  if (!lower) return false;
+  if (AGENT_BINARY_BASENAMES.has(basename(lower))) return true;
+  return AGENT_INTERPRETERS.some((i) => lower.includes(i));
+}
 
 export interface CodexProcessCandidate {
   pid: number;
