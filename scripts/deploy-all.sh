@@ -2,6 +2,7 @@
 set -e
 
 cd "$(dirname "$0")/.."
+REPO_ROOT="$(pwd)"
 
 PREVIEW_ONLY=false
 FORCE_CLI=false
@@ -178,34 +179,12 @@ else
   git push origin main 2>/dev/null || true
 
   echo "   Building signed desktop app..."
-  # The DMG step has two failure modes that both surface as a misleading
-  # "Command failed: which python" (dmg-builder runs vendored dmgbuild/core.py,
-  # and when that throws it falls back to `which python`, which macOS no longer
-  # ships, masking the real error):
-  #   1) `which python3` resolves to /usr/bin/python3 (the Xcode stub) or
-  #      Homebrew's default python3 (3.14 here has a broken libexpat link) --
-  #      neither can run dmgbuild. Fix: shim a python3 that CAN import dmgbuild's
-  #      deps first on PATH so `which python3` finds it.
-  #   2) a stale /Volumes/Codecast mount left by a previous failed build makes
-  #      core.py's mount step fail. Fix: detach any leftover Codecast volume.
-  for _v in /Volumes/Codecast*; do [ -d "$_v" ] && hdiutil detach "$_v" -force 2>/dev/null; done
-  PY_SHIM=""
-  for _py in python3.12 python3.13 python3.11; do
-    _p=$(command -v "$_py" 2>/dev/null) || continue
-    "$_p" -c "import xml.parsers.expat, plistlib" 2>/dev/null || continue
-    PY_SHIM=$(mktemp -d)
-    ln -sf "$_p" "$PY_SHIM/python3"
-    ln -sf "$_p" "$PY_SHIM/python"
-    echo "   dmg-builder python: $_p (via shim $PY_SHIM)"
-    break
-  done
-  [ -n "$PY_SHIM" ] || echo "   WARNING: no working python3 found for dmg-builder; DMG step may fail"
-  # /bin must be first in PATH -- /usr/local/bin/ln doesn't support -s on this system,
-  # which breaks DMG creation (electron-builder uses `ln -s /Applications`).
-  # The python shim goes before /usr/bin so it wins over the Xcode stub. Invoke
-  # electron-builder directly (same `electron-builder -m` the build script runs)
-  # to keep this PATH exactly as set.
-  PATH="/bin:${PY_SHIM:+$PY_SHIM:}/usr/bin:$PATH" NOTARIZE_KEYCHAIN_PROFILE=codecast ./node_modules/.bin/electron-builder -m
+  # DMG-step environment hardening (python shim, stale mounts, PATH order)
+  # lives in the shared helper — release.sh sources the same one.
+  source "$REPO_ROOT/scripts/dmg-build-env.sh"
+  # Invoke electron-builder directly (same `electron-builder -m` the build
+  # script runs) to keep this PATH exactly as set.
+  PATH="$DMG_BUILD_PATH" NOTARIZE_KEYCHAIN_PROFILE=codecast ./node_modules/.bin/electron-builder -m
 
   ELECTRON_VERSION=$(node -p "require('./package.json').version")
   DMG_FILE=$(find dist -name "*.dmg" -maxdepth 1 -newer dist/mac-arm64 | head -1)
