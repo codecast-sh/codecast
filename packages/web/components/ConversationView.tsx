@@ -17,7 +17,7 @@ import { compressImage } from "../lib/compressImage";
 import { useStorageImageUrl, hasDecodedSrc, markSrcDecoded } from "../hooks/useStorageImageUrl";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName } from "../lib/conversationProcessor";
-import { classifyApiErrorBanner } from "@codecast/shared/contracts";
+import { classifyApiErrorBanner, agentSupportsFork } from "@codecast/shared/contracts";
 import { formatToolName, isPlanWriteToolCall, truncateStr, shortenUrl, getRelativePath, stripLineNumbers, structuredPayloadSummary } from "@codecast/shared/render";
 import { getBuiltinCommands } from "../lib/builtinCommands";
 import { resolveSessionSkills } from "../lib/sessionSkills";
@@ -2119,10 +2119,31 @@ function GeminiIcon() {
   );
 }
 
+function OpencodeIcon() {
+  return (
+    <div className="w-6 h-6 rounded bg-orange-500 flex items-center justify-center shrink-0">
+      <svg className="w-3.5 h-3.5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        <polyline points="8 6 3 12 8 18" />
+        <polyline points="16 6 21 12 16 18" />
+      </svg>
+    </div>
+  );
+}
+
+function PiIcon() {
+  return (
+    <div className="w-6 h-6 rounded bg-teal-500 flex items-center justify-center shrink-0">
+      <span className="text-white text-sm font-semibold leading-none">π</span>
+    </div>
+  );
+}
+
 function AssistantIcon({ agentType }: { agentType?: string }) {
   if (agentType === "codex") return <CodexIcon />;
   if (agentType === "cursor") return <CursorIcon />;
   if (agentType === "gemini") return <GeminiIcon />;
+  if (agentType === "opencode") return <OpencodeIcon />;
+  if (agentType === "pi") return <PiIcon />;
   return <ClaudeIcon />;
 }
 
@@ -2130,6 +2151,8 @@ function assistantLabel(agentType?: string): string {
   if (agentType === "codex") return "Codex";
   if (agentType === "cursor") return "Cursor";
   if (agentType === "gemini") return "Gemini";
+  if (agentType === "opencode") return "OpenCode";
+  if (agentType === "pi") return "pi";
   return "Claude";
 }
 
@@ -2785,16 +2808,21 @@ function FullscreenIcon() {
 }
 
 function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode, messageId, conversationId, onStartShareSelection, onOpenComments, collapsed, timestamp, images, globalImageMap }: { tool: ToolCall; result?: ToolResult; changeIndex?: number; changeRange?: ToolChangeRange; shareSelectionMode?: boolean; messageId?: string; conversationId?: Id<"conversations">; onStartShareSelection?: (messageId: string) => void; onOpenComments?: () => void; collapsed?: boolean; timestamp?: number; images?: ImageData[]; globalImageMap?: Record<string, ImageData> }) {
+  // opencode + pi name their built-in tools in lowercase (`edit`/`read`/`bash`/…);
+  // gemini's glob matches too. Included alongside Claude's capitalized names and
+  // codex's synonyms so every client's file/shell/search tools hit the same
+  // specialized cards (DiffView, syntax read, bash styling) instead of the generic
+  // fallback. Lowercase ids don't collide with claude/codex spellings.
   const isApplyPatch = tool.name === "apply_patch";
-  const isStandardEdit = tool.name === "Edit" || tool.name === "Write" || tool.name === "file_edit" || tool.name === "file_write";
+  const isStandardEdit = tool.name === "Edit" || tool.name === "Write" || tool.name === "file_edit" || tool.name === "file_write" || tool.name === "edit" || tool.name === "write";
   const isFileChange = tool.name === "fileChange";
   const isEdit = isStandardEdit || isApplyPatch || isFileChange;
   const [expanded, setExpanded] = useState(isEdit);
-  const isRead = tool.name === "Read" || tool.name === "file_read";
+  const isRead = tool.name === "Read" || tool.name === "file_read" || tool.name === "read";
   const isCodexShell = tool.name === "shell_command" || tool.name === "shell" || tool.name === "exec_command" || tool.name === "container.exec" || tool.name === "commandExecution";
-  const isBash = tool.name === "Bash" || isCodexShell;
-  const isGlob = tool.name === "Glob";
-  const isGrep = tool.name === "Grep";
+  const isBash = tool.name === "Bash" || tool.name === "bash" || isCodexShell;
+  const isGlob = tool.name === "Glob" || tool.name === "glob";
+  const isGrep = tool.name === "Grep" || tool.name === "grep";
   const isCodeSearch = tool.name === "code_search" || tool.name === "code_analysis";
   // Workflow subagents return their typed result by CALLING StructuredOutput:
   // the input is the whole payload and the result is boilerplate, so rendering
@@ -2809,7 +2837,8 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
   } catch {}
   const rawToolInput = tool.input || "";
 
-  const filePath = String(parsedInput.file_path || "");
+  // claude uses file_path, codex uses path, opencode/pi use filePath (camelCase).
+  const filePath = String(parsedInput.file_path || parsedInput.filePath || parsedInput.path || "");
   const relativePath = getRelativePath(filePath);
   // Enables inline line comments on the agent's edits (see DiffView). Scoped to a
   // live conversation; comments land in the shared review batch keyed by the
@@ -4818,6 +4847,41 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
   );
 }
 
+// Reasoning text, rendered whenever a message carries non-empty `thinking`.
+// claude/codex redact thinking server-side (empty → nothing renders, unchanged),
+// but opencode/pi carry real reasoning that would otherwise vanish — and a
+// reasoning-ONLY turn would disappear from the timeline entirely. Faded, collapsed
+// to a 2-line preview by default, click to expand.
+function ThinkingBlock({ content }: { content: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const lines = content.split("\n");
+  const isLong = lines.length > 2 || content.length > 200;
+  const preview = isLong && !expanded ? lines.slice(0, 2).join("\n") : content;
+  return (
+    <div className="my-0.5 opacity-50">
+      <div
+        className={`flex items-start gap-1 ${isLong ? "cursor-pointer" : ""}`}
+        onClick={() => isLong && setExpanded(!expanded)}
+      >
+        {isLong && (
+          <svg
+            className={`w-3 h-3 mt-0.5 shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`}
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+          </svg>
+        )}
+        <div className="flex-1 text-sol-text-muted font-mono whitespace-pre-wrap break-words text-xs">
+          {preview}
+          {isLong && !expanded && "…"}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const IMAGE_COLLAPSED_HEIGHT = 100;
 
 function useSwipeToDismiss(onDismiss: () => void) {
@@ -6483,6 +6547,7 @@ const CompactCollapsedTurn = memo(function CompactCollapsedTurn({ content, onExp
 function AssistantBlockImpl({
   content,
   timestamp,
+  thinking,
   toolCalls,
   toolResults,
   images,
@@ -6522,6 +6587,7 @@ function AssistantBlockImpl({
 }: {
   content?: string;
   timestamp: number;
+  thinking?: string;
   toolCalls?: ToolCall[];
   toolResults?: ToolResult[];
   images?: ImageData[];
@@ -6580,6 +6646,7 @@ function AssistantBlockImpl({
   const parsedApiError = useMemo(() => parseApiErrorContent(displayContent), [displayContent]);
   const onlyAskUser = toolCalls && toolCalls.length > 0 && toolCalls.every(tc => tc.name === "AskUserQuestion");
   const hasContent = displayContent && displayContent.trim().length > 0 && !onlyAskUser;
+  const hasThinking = !!thinking && thinking.trim().length > 0;
   const hasToolCalls = toolCalls && toolCalls.length > 0;
   const hasImages = images?.some(img => !img.tool_use_id) ?? false;
 
@@ -6620,7 +6687,7 @@ function AssistantBlockImpl({
     return () => { document.removeEventListener('keydown', handleKey); document.body.style.overflow = ''; };
   }, [fullscreen]);
 
-  if (!hasContent && !hasToolCalls && !hasImages) {
+  if (!hasContent && !hasThinking && !hasToolCalls && !hasImages) {
     return null;
   }
 
@@ -6634,8 +6701,8 @@ function AssistantBlockImpl({
 
   // Show Claude header for first message in sequence (regardless of content type)
   const shouldShowHeader = showHeader;
-  const onlyToolCalls = hasToolCalls && !hasContent;
-  const hasVisibleContent = hasContent || hasToolCalls || hasImages;
+  const onlyToolCalls = hasToolCalls && !hasContent && !hasThinking;
+  const hasVisibleContent = hasContent || hasThinking || hasToolCalls || hasImages;
 
   // When nothing visible, hide completely
   if (!hasVisibleContent) {
@@ -6655,7 +6722,7 @@ function AssistantBlockImpl({
           <ChevronUp className="w-3 h-3" /> Collapse turn
         </button>
       )}
-      {(hasContent || hasToolCalls) && (
+      {(hasContent || hasThinking || hasToolCalls) && (
         <div className={`absolute ${hasPlanWrite && onlyToolCalls ? "-top-6" : onlyToolCalls ? "top-1" : "-top-2"} right-0 transition-opacity duration-150 flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 group-hover:opacity-100"}`}>
           {/* Respond actions (quote into your reply) live on each block's left
               gutter — see MessageReview. This corner is META only: a plain row
@@ -6731,6 +6798,10 @@ function AssistantBlockImpl({
 
       <div className={shouldShowHeader || !showHeader ? "pl-8" : "pl-0"}>
         {hasImages && images?.filter(img => !img.tool_use_id).map((img, i) => <ImageBlock key={i} image={img} />)}
+
+        {/* Condensed feed hides thinking to cut noise — EXCEPT a pure-reasoning turn,
+            where thinking is the only content and hiding it leaves an empty bubble. */}
+        {hasThinking && (!effectiveCondensed || (!hasContent && !hasToolCalls && !hasImages)) && <ThinkingBlock content={thinking!} />}
 
         {hasToolCalls && toolCalls?.map((tc) => {
           if (effectiveCondensed && !isAlwaysVisibleToolCall(tc)) return null;
@@ -10332,6 +10403,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   // window can never clobber the seeded one.
   const doFork = useCallback(async (messageUuid: string): Promise<{ forkSessionId: string; conversationId: string; ready: Promise<string> } | null> => {
     if (!conversation?._id) return null;
+    // Honest degradation: a client with no fork mechanism (cursor/gemini/pi) would
+    // copy the transcript server-side but leave the live agent context-less. The UI
+    // hides the fork controls for these; this guards any programmatic path too.
+    if (!agentSupportsFork(conversation.agent_type)) return null;
     const parentId = conversation._id.toString();
     // Must be a valid UUID so the daemon can resume without ID remapping
     const forkSessionId = (typeof crypto !== 'undefined' && crypto.randomUUID)
@@ -10437,6 +10512,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     }
     await doFork(messageUuid);
   }, [doFork]);
+
+  // Gate every fork affordance on the client's fork capability: claude/codex/opencode
+  // can branch into a live session carrying the copied history; cursor/gemini/pi can't,
+  // so the control is HIDDEN (undefined handler) rather than shown as a false success.
+  const forkHandler = agentSupportsFork(conversation?.agent_type) ? handleForkFromMessage : undefined;
 
   // Fork from an ARBITRARY branch — the branch map's "fork higher" drill lets you
   // pick a message in the current branch OR any ancestor/sibling. For the current
@@ -11572,7 +11652,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   const { selectedIndex: _forkSelIdx } = useMessageSelection({
     timeline: timeline as any,
     virtualizer,
-    onForkFromMessage: handleForkFromMessage,
+    onForkFromMessage: forkHandler,
     onSelectMessage: handleSelectMessage,
     enabled: isOwner,
   });
@@ -12706,7 +12786,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         case 'normal': {
           if (!msg.content?.trim() && !msg.images?.some(img => !img.tool_use_id)) return null;
           const userName = conversation?.user?.name || conversation?.user?.email?.split("@")[0];
-          return <UserPrompt key={msg._id} content={msg.content || ""} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={false} userName={userName} avatarUrl={conversation?.user?.avatar_url} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={handleToggleMessageSelection} onStartShareSelection={handleStartShareSelection} onForkFromMessage={handleForkFromMessage} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={handleBranchSwitch} activeBranchId={activeBranchId} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} agentStatus={isSessionDisconnected || conversation?.status !== "active" ? undefined : (managedSession?.agent_status as LiveAgentStatus | undefined)} mainMessageCount={msg.message_uuid ? conversation?.main_message_counts_by_fork?.[msg.message_uuid] : undefined} mainDivergentPreview={msg.message_uuid ? conversation?.main_divergent_previews_by_fork?.[msg.message_uuid] : undefined} />;
+          return <UserPrompt key={msg._id} content={msg.content || ""} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={false} userName={userName} avatarUrl={conversation?.user?.avatar_url} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={handleToggleMessageSelection} onStartShareSelection={handleStartShareSelection} onForkFromMessage={forkHandler} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={handleBranchSwitch} activeBranchId={activeBranchId} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} agentStatus={isSessionDisconnected || conversation?.status !== "active" ? undefined : (managedSession?.agent_status as LiveAgentStatus | undefined)} mainMessageCount={msg.message_uuid ? conversation?.main_message_counts_by_fork?.[msg.message_uuid] : undefined} mainDivergentPreview={msg.message_uuid ? conversation?.main_divergent_previews_by_fork?.[msg.message_uuid] : undefined} />;
         }
       }
     }
@@ -12729,7 +12809,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       if (isHiddenStubMessage(msg)) return null;
 
       // Find previous VISIBLE non-commit assistant item to determine if this is first in assistant sequence
-      // Skip invisible assistant messages (those whose content is only system tags with no tool calls/images)
+      // Skip invisible assistant messages (those whose content is only system tags with no tool calls/thinking/images)
       let prevIdx = index - 1;
       while (prevIdx >= 0) {
         const checkItem = timeline[prevIdx];
@@ -12739,6 +12819,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         if (checkMsg.role !== 'assistant') break;
         const hasVisibleContent = (checkMsg.content && stripSystemTags(checkMsg.content).trim().length > 0)
           || (checkMsg.tool_calls && checkMsg.tool_calls.length > 0)
+          || (checkMsg.thinking && checkMsg.thinking.trim().length > 0)
           || (checkMsg.images && checkMsg.images.length > 0);
         if (hasVisibleContent) break;
         prevIdx--;
@@ -12814,6 +12895,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           key={msg._id}
           content={msg.content}
           timestamp={msg.timestamp}
+          thinking={msg.thinking}
           toolCalls={msg.tool_calls}
           toolResults={relevantToolResults}
           images={msg.images}
@@ -12838,7 +12920,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           agentType={conversation?.agent_type}
           taskSubjectMap={taskSubjectMap}
           taskRecordMap={taskRecordMap}
-          onForkFromMessage={handleForkFromMessage}
+          onForkFromMessage={forkHandler}
           forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined}
           onBranchSwitch={handleBranchSwitch}
           activeBranchId={activeBranchId}
@@ -13801,7 +13883,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                   ))}
                 </div>
               ) : null}
-              <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} workingSinceTs={lastActivityAt} workingTool={workingTool} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected || conversation.status !== "active" ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={handleForkFromMessage} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} onSubmitWithIntent={onSubmitWithIntent} branchMapNode={treePopoverOpen ? (
+              <MessageInput key={conversation.session_id || conversation._id} conversationId={conversation._id} status={conversation.status} embedded={embedded} onSendAndAdvance={onSendAndAdvance} onSendAndDismiss={onSendAndDismiss} autoFocusInput={autoFocusInput} initialDraft={conversation.draft_message} isWaitingForResponse={isWaitingForResponse} isThinking={isThinking} isConversationLive={isConversationLive} workingSinceTs={lastActivityAt} workingTool={workingTool} isSessionDisconnected={conversation.is_workflow_primary ? false : isSessionDisconnected} isSessionStarting={isSessionStarting} isSessionReady={isSessionReady} sessionId={conversation.session_id} agentType={conversation.agent_type} agentStatus={isSessionDisconnected || conversation.status !== "active" ? undefined : managedSession?.agent_status as any} deliveryStatus={managedSession?.agent_status as any} pendingPermissionsCount={pendingPermissions?.length ?? 0} hasAskUserQuestion={hasAskUserQuestion} selectedMessageContent={selectedMessageContent} selectedMessageUuid={selectedMessageUuid} onClearSelection={handleClearSelection} onForkFromMessage={forkHandler} onSendEscape={handleSendEscape} onOpenNavigator={handleOpenNavigator} onPopulateInput={populateInputRef} permissionMode={effectiveMode} onCycleMode={handleCycleMode} onMessageSent={handleMessageSent} onLightboxChange={setIsImageLightboxActive} onDropFiles={dropFilesRef} onWorkflowLaunch={showWorkflow && selectedWorkflowId ? handleWorkflowLaunch : undefined} onGateSend={workflowRun?.status === "paused" ? handleGateRespond : undefined} skills={sessionSkills} filePaths={sessionFilePaths} mentionItemsRef={mentionItemsRef} onMentionQuery={handleMentionQuery} onSubmitWithIntent={onSubmitWithIntent} branchMapNode={treePopoverOpen ? (
                 <ForkMapBox
                   tray
                   open

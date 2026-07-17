@@ -1,0 +1,42 @@
+{
+  "info": {
+    "id": "ses_synthetic0image0fixture000000000",
+    "slug": "synthetic-image",
+    "projectID": "global",
+    "directory": "/tmp/opencode-image-fixture",
+    "title": "synthetic image attachment",
+    "version": "1.18.3",
+    "time": {
+      "created": 1784281600000,
+      "updated": 1784281601000
+    }
+  },
+  "messages": [
+    {
+      "info": {
+        "role": "user",
+        "time": { "created": 1784281600100 },
+        "id": "msg_synthetic0image0user00000000000",
+        "sessionID": "ses_synthetic0image0fixture000000000"
+      },
+      "parts": [
+        {
+          "type": "text",
+          "text": "look at this screenshot",
+          "id": "prt_synthetic0image0text00000000000",
+          "sessionID": "ses_synthetic0image0fixture000000000",
+          "messageID": "msg_synthetic0image0user00000000000"
+        },
+        {
+          "type": "file",
+          "mime": "image/png",
+          "filename": "screenshot.png",
+          "url": "data:image/png;base64,U1lOVEhFVElDLUZBS0UtSU1BR0UtREFUQQ==",
+          "id": "prt_synthetic0image0file00000000000",
+          "sessionID": "ses_synthetic0image0fixture000000000",
+          "messageID": "msg_synthetic0image0user00000000000"
+        }
+      ]
+    }
+  ]
+}
