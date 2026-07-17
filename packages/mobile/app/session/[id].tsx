@@ -17,6 +17,7 @@ import { useEnsureDispatch } from '@codecast/web/hooks/useEnsureDispatch';
 import { PermissionCard } from '@/components/PermissionCard';
 import { AssignmentChip } from '@/components/AssignmentChip';
 import { ModelSwitcherChip } from '@/components/ModelSwitcherChip';
+import { agentSupportsFork } from '@codecast/shared/contracts';
 import { renderInlineMarkdown, MarkdownContent, MarkdownTextBlock, CodeBlockWithCopy, CodeBlockFullscreen, HighlightedCodeText } from '@/components/MarkdownRenderer';
 import { EntityPill } from '@/components/EntityPill';
 import { CastCanvas, canvasAvailable, looksLikeHtmlMessage } from '@/components/CastCanvas';
@@ -380,6 +381,8 @@ function formatAgentType(agentType?: string): string {
   if (agentType === 'codex') return 'Codex';
   if (agentType === 'cursor') return 'Cursor';
   if (agentType === 'gemini') return 'Gemini';
+  if (agentType === 'opencode') return 'OpenCode';
+  if (agentType === 'pi') return 'pi';
   return agentType.charAt(0).toUpperCase() + agentType.slice(1);
 }
 
@@ -387,6 +390,8 @@ function agentTypeColor(agentType?: string): string {
   if (agentType === 'codex') return '#10b981';
   if (agentType === 'cursor') return '#60a5fa';
   if (agentType === 'gemini') return '#1a73e8';
+  if (agentType === 'opencode') return '#f97316';
+  if (agentType === 'pi') return '#14b8a6';
   return Theme.accent;
 }
 
@@ -394,6 +399,8 @@ function agentTypeIcon(agentType?: string): string {
   if (agentType === 'codex') return 'terminal';
   if (agentType === 'cursor') return 'mouse-pointer';
   if (agentType === 'gemini') return 'star';
+  if (agentType === 'opencode') return 'code';
+  if (agentType === 'pi') return 'bolt';
   return 'bolt';
 }
 
@@ -401,12 +408,31 @@ function agentLogoBg(agentType?: string): string {
   if (agentType === 'codex') return '#0f0f0f';
   if (agentType === 'cursor') return '#1a1a2e';
   if (agentType === 'gemini') return '#1a73e8';
+  if (agentType === 'opencode') return '#f97316';
+  if (agentType === 'pi') return '#14b8a6';
   return '#cb4b16';
 }
 
 function AgentLogoSvg({ agentType, size = 16 }: { agentType?: string; size?: number }) {
   const bg = agentLogoBg(agentType);
   const iconSize = size * 0.6;
+  if (agentType === 'opencode') {
+    return (
+      <RNView style={{ width: size, height: size, borderRadius: 3, backgroundColor: bg, alignItems: 'center', justifyContent: 'center' }}>
+        <Svg width={iconSize} height={iconSize} viewBox="0 0 24 24" fill="none">
+          <Path d="M8 6l-5 6 5 6" stroke="white" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" />
+          <Path d="M16 6l5 6-5 6" stroke="white" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" />
+        </Svg>
+      </RNView>
+    );
+  }
+  if (agentType === 'pi') {
+    return (
+      <RNView style={{ width: size, height: size, borderRadius: size * 0.2, backgroundColor: bg, alignItems: 'center', justifyContent: 'center' }}>
+        <RNText style={{ color: 'white', fontSize: size * 0.6, fontWeight: '700', lineHeight: size * 0.85, textAlign: 'center' }}>π</RNText>
+      </RNView>
+    );
+  }
   if (agentType === 'codex') {
     return (
       <RNView style={{ width: size, height: size, borderRadius: 3, backgroundColor: bg, alignItems: 'center', justifyContent: 'center' }}>
@@ -2346,6 +2372,32 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
   );
 }
 
+// Reasoning text, rendered whenever a message carries non-empty `thinking`.
+// claude/codex redact thinking (empty → nothing renders, unchanged), but
+// opencode/pi carry real reasoning that would otherwise vanish — and a
+// reasoning-only turn would disappear from the transcript entirely. Faded,
+// collapsed to 2 lines by default, tap to expand.
+function ThinkingBlock({ content }: { content: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const isLong = content.split('\n').length > 2 || content.length > 200;
+  return (
+    <TouchableOpacity
+      onPress={() => isLong && setExpanded(!expanded)}
+      style={styles.thinkingBlock}
+      activeOpacity={isLong ? 0.7 : 1}
+    >
+      <RNView style={styles.thinkingHeader}>
+        {isLong && (
+          <FontAwesome name={expanded ? 'chevron-down' : 'chevron-right'} size={8} color={Theme.textDim} style={{ marginRight: 4, marginTop: 3 }} />
+        )}
+        <RNText style={styles.thinkingText} numberOfLines={expanded ? undefined : 2}>
+          {content}
+        </RNText>
+      </RNView>
+    </TouchableOpacity>
+  );
+}
+
 function SystemMessage({ message }: { message: Message }) {
   if (message.subtype === 'compact_boundary') {
     return (
@@ -2426,6 +2478,8 @@ function assistantLabel(agentType?: string): string {
   if (agentType === 'codex') return 'Codex';
   if (agentType === 'cursor') return 'Cursor';
   if (agentType === 'gemini') return 'Gemini';
+  if (agentType === 'opencode') return 'OpenCode';
+  if (agentType === 'pi') return 'pi';
   return 'Claude';
 }
 
@@ -2706,8 +2760,9 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   const rawContent = stripSystemTags(rawContentRaw);
   const hasToolCalls = message.tool_calls && message.tool_calls.length > 0;
   const hasImages = message.images && message.images.length > 0;
-  // Skip truly empty messages (no content, no tool calls, no images)
-  if (!rawContent.trim() && !hasToolCalls && !hasImages) {
+  const hasThinking = !isUser && !!message.thinking?.trim();
+  // Skip truly empty messages (no content, no tool calls, no images, no thinking)
+  if (!rawContent.trim() && !hasToolCalls && !hasImages && !hasThinking) {
     return null;
   }
   const effectiveCollapsed = globalCollapsed && !localExpanded;
@@ -2732,7 +2787,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   };
 
   // Compact rendering for tool-call-only messages (no text, no thinking, no images)
-  const isToolCallOnly = !isUser && hasToolCalls && !content.trim() && !hasImages;
+  const isToolCallOnly = !isUser && hasToolCalls && !content.trim() && !hasImages && !hasThinking;
   const hasPlanWrite = hasToolCalls && message.tool_calls?.some(isPlanWriteToolCall);
 
   // When effectively collapsed, hide tool-only messages (unless they have plan writes)
@@ -2758,7 +2813,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
               <RNText style={styles.userAvatarText}>{(userName || 'Y')[0].toUpperCase()}</RNText>
             </RNView>
           ) : agentType ? (
-            <RNView style={[styles.agentDot, { backgroundColor: agentType === 'codex' ? '#10b981' : agentType === 'cursor' ? '#60a5fa' : agentType === 'gemini' ? '#1a73e8' : Theme.accent }]} />
+            <RNView style={[styles.agentDot, { backgroundColor: agentTypeColor(agentType) }]} />
           ) : null}
           <RNText style={[styles.bubbleRole, isUser ? styles.userRole : styles.assistantRole]}>
             {isUser ? (userName || 'You') : assistantLabel(agentType)}
@@ -2775,6 +2830,11 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
         </RNView>
       )}
 
+      {/* Collapsed feed hides thinking to cut noise — EXCEPT a pure-reasoning turn,
+          where thinking is the only content and hiding it leaves an empty bubble. */}
+      {hasThinking && (!effectiveCollapsed || (!content.trim() && !hasToolCalls && !hasImages)) && (
+        <ThinkingBlock content={message.thinking!.trim()} />
+      )}
 
       {hasImages && (
         <RNView style={styles.imagesContainer}>
@@ -4558,7 +4618,7 @@ export default function SessionDetailScreen() {
                   showHeader={showHeader}
                   forkChildren={item.message_uuid ? forkPointMap[item.message_uuid] : undefined}
                   conversationId={conversation._id}
-                  onFork={handleForkFromMessage}
+                  onFork={agentSupportsFork(conversation.agent_type) ? handleForkFromMessage : undefined}
                   taskSubjectMap={taskSubjectMap}
                   globalToolResultMap={globalToolResultMap}
                   globalImageMap={globalImageMap}
@@ -4907,6 +4967,22 @@ const styles = StyleSheet.create({
   },
   assistantText: {
     color: Theme.text,
+  },
+  thinkingBlock: {
+    marginHorizontal: 14,
+    marginVertical: 1,
+    opacity: 0.5,
+  },
+  thinkingHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  thinkingText: {
+    fontSize: 11,
+    lineHeight: 15,
+    color: Theme.textDim,
+    fontFamily: 'SpaceMono',
+    flex: 1,
   },
   compactBoundary: {
     flexDirection: 'row',
