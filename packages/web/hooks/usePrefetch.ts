@@ -1,29 +1,22 @@
-import { useCallback } from "react";
-import { useQuery } from "convex/react";
 import { usePathname } from "next/navigation";
-import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { useInboxStore } from "../store/inboxStore";
+import { useSyncTasksWithArgs } from "./useSyncTasks";
 import { useWorkspaceArgs } from "./useWorkspaceArgs";
-import { useConvexSync } from "./useConvexSync";
 
-const api = _api as any;
-
+// Keeps the task store warm while the user is anywhere BUT the tasks/projects
+// pages (which mount their own useSyncTasks and own the channel — hence the
+// skip, so we never run two cursor state machines for the same args).
+//
+// This reuses the full sync hook rather than holding a bare webList
+// subscription: a subscription without the delta cursor re-executes the whole
+// 300-row-per-scope scan server-side and re-ships the multi-MB payload on
+// EVERY task write anywhere in the workspace. That standing re-run load is
+// what pushed tasks:webList over the "too many system operations" budget
+// whenever the backend hit a slow window.
 export function usePrefetch() {
   const pathname = usePathname();
   const workspaceArgs = useWorkspaceArgs();
   const isOnTasksPage = pathname === "/tasks" || pathname?.startsWith("/tasks/");
   const isOnProjectsPage = pathname === "/projects" || pathname?.startsWith("/projects/");
 
-  const skipTasks = isOnTasksPage || isOnProjectsPage || workspaceArgs === "skip";
-  const tasks = useQuery(api.tasks.webList, skipTasks ? "skip" : { ...workspaceArgs });
-  const syncTable = useInboxStore((s) => s.syncTable);
-
-  // Overlay-only (isDelta): this warms the cache with the most-recent page from
-  // the live channel, which is hard-capped server-side (webList MAX_INITIAL=300).
-  // A snapshot sync here would treat that capped page as authoritative and PRUNE
-  // every other task the reconcile crawl loaded — flushing the store down to 300
-  // on every non-tasks page. The full reconcile in useSyncTasks owns pruning.
-  useConvexSync(tasks, useCallback((data: any) => {
-    syncTable("tasks", (data?.items ?? data) as any, { isDelta: true });
-  }, [syncTable]));
+  useSyncTasksWithArgs(isOnTasksPage || isOnProjectsPage ? "skip" : workspaceArgs);
 }
