@@ -55,6 +55,25 @@ export const CODEX_MODEL_OPTIONS: ModelOption[] = [
 export const CODEX_EFFORT_LEVELS = ["low", "medium", "high", "xhigh"] as const;
 export type CodexEffortLevel = (typeof CODEX_EFFORT_LEVELS)[number];
 
+// OpenCode addresses models as `provider/model` (its `-m` launch flag and the
+// `providerID`/`modelID` pair every message stores). The picker offers "Default"
+// (omit the flag; opencode uses its configured default) plus a small honest set
+// of common frontier models across the providers opencode ships with. cliAlias is
+// the full `provider/model` value passed to `opencode -m`. There is no scriptable
+// mid-session model picker (the TUI's /models is interactive-only), so midSession
+// is false — the model is chosen at launch and tracked from the transcript after.
+export const OPENCODE_MODEL_OPTIONS: ModelOption[] = [
+  { key: "default", label: "Default", hint: "Your opencode configured model" },
+  { key: "opus", label: "Claude Opus", hint: "Anthropic's most capable model", cliAlias: "anthropic/claude-opus-4-5" },
+  { key: "sonnet", label: "Claude Sonnet", hint: "Efficient for routine tasks", cliAlias: "anthropic/claude-sonnet-4-5" },
+  { key: "gpt-5", label: "GPT-5", hint: "OpenAI frontier model", cliAlias: "openai/gpt-5" },
+  { key: "gemini", label: "Gemini 2.5 Pro", hint: "Google frontier model", cliAlias: "google/gemini-2.5-pro" },
+];
+
+// OpenCode has no codex-style reasoning-effort launch flag, so the effort list is
+// empty and the picker shows no effort control.
+export const OPENCODE_EFFORT_LEVELS = [] as const;
+
 // The per-client model config (AGENT_MODEL_CONFIG) and the model helpers
 // (modelAgentKey / findModelOption / modelOptionKey) now live in ./agentClients
 // alongside the client registry they read from. This file holds only the raw

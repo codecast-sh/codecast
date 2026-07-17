@@ -176,18 +176,19 @@ export function buildNonClaudeResumeCommand(
 
 /**
  * Which agent a resume dispatches on, from the explicit hint plus whatever
- * findSessionFile returned for the local transcript. An explicit cursor hint is
- * trusted OVER the local file: findSessionFile has no cursor lookup, so a cursor
- * session's transcript is either absent or — after a bogus reconstitution —
- * claude-labeled. Without trusting the hint the resume falls through to
- * `claude --resume` and runs Claude's repair machinery against a cursor session.
+ * findSessionFile returned for the local transcript. An explicit cursor OR opencode
+ * hint is trusted OVER the local file: both own their own session store (SQLite),
+ * so there is no local JSONL to detect — findSessionFile either misses (returns null
+ * → "claude") or, after a bogus reconstitution, hands back a claude-labeled file.
+ * Without trusting the hint the resume falls through to `claude --resume` and runs
+ * Claude's repair machinery against a session that never had a Claude transcript.
  * (codex/gemini hints and the file agree, so they resolve the same either way.)
  */
 export function resolveResumeAgentType(
   agentTypeHint: AgentClientId | undefined,
   sessionFileAgentType: AgentClientId | undefined,
 ): AgentClientId {
-  if (agentTypeHint === "cursor") return "cursor";
+  if (agentTypeHint === "cursor" || agentTypeHint === "opencode") return agentTypeHint;
   return sessionFileAgentType ?? "claude";
 }
 

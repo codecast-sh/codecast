@@ -45,6 +45,14 @@ export interface TranscriptDirWatcherEvents {
   ready: () => void;
 }
 
+/** The minimal surface the daemon's watcher-registration seam needs. Both the
+ *  generic jsonl-dir TranscriptDirWatcher and the opencode json-store watcher
+ *  satisfy it, so `registerJsonlDirWatcher` can drive either. */
+export interface DirEventWatcher {
+  on<K extends keyof TranscriptDirWatcherEvents>(event: K, listener: TranscriptDirWatcherEvents[K]): this;
+  start(): void;
+}
+
 export declare interface TranscriptDirWatcher {
   on<K extends keyof TranscriptDirWatcherEvents>(event: K, listener: TranscriptDirWatcherEvents[K]): this;
   emit<K extends keyof TranscriptDirWatcherEvents>(event: K, ...args: Parameters<TranscriptDirWatcherEvents[K]>): boolean;

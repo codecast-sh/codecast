@@ -273,11 +273,19 @@ describe("resolveResumeAgentType (dispatch trusts the cursor hint over the file)
     expect(resolveResumeAgentType("cursor", undefined)).toBe("cursor");
   });
 
-  test("without a cursor hint the local file (or the claude default) decides", () => {
+  test("an explicit opencode hint wins too (SQLite store, no local JSONL to detect)", () => {
+    expect(resolveResumeAgentType("opencode", "claude")).toBe("opencode");
+    expect(resolveResumeAgentType("opencode", undefined)).toBe("opencode");
+    expect(resolveResumeAgentType("opencode", "opencode")).toBe("opencode");
+  });
+
+  test("without a store-owned hint the local file (or the claude default) decides", () => {
     expect(resolveResumeAgentType(undefined, "claude")).toBe("claude");
     expect(resolveResumeAgentType("codex", "codex")).toBe("codex");
     expect(resolveResumeAgentType("gemini", "gemini")).toBe("gemini");
     expect(resolveResumeAgentType(undefined, undefined)).toBe("claude");
+    // findSessionFile detecting opencode also resolves it, even with no hint.
+    expect(resolveResumeAgentType(undefined, "opencode")).toBe("opencode");
   });
 });
 
