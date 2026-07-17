@@ -1343,7 +1343,11 @@ export default defineSchema({
   })
     .index("by_recipient", ["recipient_user_id"])
     .index("by_recipient_read", ["recipient_user_id", "read"])
-    .index("by_recipient_created", ["recipient_user_id", "created_at"]),
+    .index("by_recipient_created", ["recipient_user_id", "created_at"])
+    // Session-state notifications (ready / needs permission / error) replace
+    // per (recipient, conversation) instead of stacking — this is the lookup
+    // for the row(s) being superseded.
+    .index("by_recipient_conversation", ["recipient_user_id", "conversation_id"]),
 
   // Fixed-window counters for the IP-keyed rate limiter (ipRateLimit.ts) used on
   // UNAUTHENTICATED endpoints (the auth relay, webhooks) — the existing per-user
