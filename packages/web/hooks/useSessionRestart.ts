@@ -11,8 +11,11 @@ import { useWatchEffect } from "./useWatchEffect";
 const RESTART_ESCALATE_AFTER_MS = 45_000;
 // Backstop for the whole two-stage recovery (resume window + rebuild window +
 // slack). Past this we stop tracking so nothing spins forever when an offline
-// daemon or a dead machine means no one is ever going to answer.
-const RESTART_GIVE_UP_AFTER_MS = RESTART_ESCALATE_AFTER_MS * 2 + 30_000;
+// daemon or a dead machine means no one is ever going to answer. Exported for
+// readers of the store's restartingSessions map, whose entries must be treated
+// as expired past this age (a restart navigated away from has no owner left to
+// clear its entry).
+export const RESTART_GIVE_UP_AFTER_MS = RESTART_ESCALATE_AFTER_MS * 2 + 30_000;
 // A restart request no daemon has stamped after this long usually means the
 // owning device is offline — the one failure the command rows can't report.
 const RESTART_UNCLAIMED_WARN_MS = 20_000;
@@ -179,6 +182,22 @@ export function useSessionRestart(opts: {
         }
       });
   }, [conversationId, convCommand, ghostContext, onRestored, notify, phase]);
+
+  // Mirror the in-flight window into the store so surfaces beyond this
+  // conversation (the inbox row) can show the recovery. Deliberately NOT
+  // cleared on unmount: the daemon-side restart survives navigating away, so
+  // readers expire entries by age (RESTART_GIVE_UP_AFTER_MS) instead.
+  useWatchEffect(() => {
+    if (!isConvexId(conversationId)) return;
+    // ?? {}: under HMR the live store state can predate this field's initializer.
+    const cur = useInboxStore.getState().restartingSessions ?? {};
+    if (isRestarting) {
+      useInboxStore.setState({ restartingSessions: { ...cur, [conversationId]: startedAt ?? Date.now() } });
+    } else if (conversationId in cur) {
+      const { [conversationId]: _gone, ...rest } = cur;
+      useInboxStore.setState({ restartingSessions: rest });
+    }
+  }, [isRestarting, conversationId, startedAt]);
 
   // Session came live → the recovery is done. Confirm it, then clear. A late
   // revival also clears a stuck "failed" — the error is no longer true.
