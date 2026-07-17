@@ -103,7 +103,7 @@ import {
 } from "./resumeCommand.js";
 import { resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
 import type { AgentStatus, DeviceSnippetSettings, AgentClientId } from "@codecast/shared/contracts";
-import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug } from "@codecast/shared/contracts";
+import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS } from "@codecast/shared/contracts";
 import { parseModelPicker, planModelNavigation, SESSION_ONLY_COMMIT_RE, isSwitchConfirmDialog } from "./modelPicker";
 import type { Config } from "./config/types.js";
 
@@ -12020,9 +12020,13 @@ async function deliverMessage(
     const tryStartedTmux = async (entry: StartedSessionInfo): Promise<boolean> => {
       try {
         await tmuxExec(["has-session", "-t", entry.tmuxSession]);
-        // Agent-specific prompt patterns:
-        // Claude: ❯ or ⏵   Codex: >   Gemini: various
-        const promptPattern = entry.agentType === "codex" ? />\s*$/ : entry.agentType === "gemini" ? />\s*$|gemini/i : /❯|⏵/;
+        // Fresh-launch readiness pattern, per client, from the registry:
+        // Claude/cursor: ❯ or ⏵   Codex: > at line end   Gemini: > at line end or "gemini".
+        // NOTE: this per-client pattern intentionally DISAGREES with the shared
+        // /[❯›]/ used by the resume-readiness / picker paths (e.g. daemon resume at
+        // ~11279); the registry's promptReadyPattern encodes THIS fresh-launch site,
+        // and both behaviors are preserved as-is. Do not collapse the two.
+        const promptPattern = AGENT_CLIENTS[entry.agentType].promptReadyPattern;
         const fatalErrors = [
           "cannot be launched inside another",
           "command not found",
