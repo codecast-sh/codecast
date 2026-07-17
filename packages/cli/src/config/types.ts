@@ -114,6 +114,15 @@ export interface Config {
   // disables it — re-warming is speculative, so it's opt-in.
   warm_pool_size?: number;
 
+  // --- OpenCode rich transport (daemon.ts, opencodeServer.ts) ---
+  // The optional `opencode serve` sidecar the daemon attaches to for opencode's
+  // fork-by-id API and live SSE state (opencodeServer.ts). Absent → default ON
+  // wherever the opencode binary is present (the transport self-disables when the
+  // binary is missing, mirroring codex's app-server). Set `enabled: false` to force
+  // the plain DB-polling path; set `port` to pin the sidecar (0/omitted =
+  // OS-chosen, self-discovered from the server's announce line).
+  opencode_server?: { enabled?: boolean; port?: number };
+
   // --- Server-stamped bookkeeping (index.ts) ---
   created_at?: string;
   updated_at?: string;
@@ -138,4 +147,20 @@ export function getAgentArgs(
   if (clientId === "claude") return config?.claude_args;
   if (clientId === "codex") return config?.codex_args;
   return undefined;
+}
+
+/**
+ * Whether the daemon should stand up the opencode rich-transport sidecar. Default
+ * ON (mirrors the codex app-server, which is unconditionally instantiated) — the
+ * transport disables itself at runtime when the opencode binary is missing, so the
+ * only reason to set `enabled: false` is to force the plain DB-polling path.
+ */
+export function isOpencodeServerEnabled(config: Config | null | undefined): boolean {
+  return config?.opencode_server?.enabled !== false;
+}
+
+/** The pinned sidecar port, or 0 to let the OS choose (self-discovered at boot). */
+export function opencodeServerPort(config: Config | null | undefined): number {
+  const p = config?.opencode_server?.port;
+  return typeof p === "number" && Number.isInteger(p) && p > 0 ? p : 0;
 }
