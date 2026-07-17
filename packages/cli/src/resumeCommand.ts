@@ -176,6 +176,23 @@ export function buildNonClaudeResumeCommand(
 }
 
 /**
+ * Which agent a resume dispatches on, from the explicit hint plus whatever
+ * findSessionFile returned for the local transcript. An explicit cursor hint is
+ * trusted OVER the local file: findSessionFile has no cursor lookup, so a cursor
+ * session's transcript is either absent or — after a bogus reconstitution —
+ * claude-labeled. Without trusting the hint the resume falls through to
+ * `claude --resume` and runs Claude's repair machinery against a cursor session.
+ * (codex/gemini hints and the file agree, so they resolve the same either way.)
+ */
+export function resolveResumeAgentType(
+  agentTypeHint: SessionAgentType | undefined,
+  sessionFileAgentType: SessionAgentType | undefined,
+): SessionAgentType {
+  if (agentTypeHint === "cursor") return "cursor";
+  return sessionFileAgentType ?? "claude";
+}
+
+/**
  * tmux session-name prefix per agent for resume-named sessions. Each client gets
  * its own so panes stay greppable by client and never collide with claude's cc-.
  * Cursor gets cu- rather than defaulting into claude's cc-.
