@@ -23,11 +23,10 @@ import {
 import { toast } from "sonner";
 import { cleanNotificationBody } from "../lib/notificationText";
 import { useInboxStore } from "../store/inboxStore";
+import { useNeedsInputCount } from "../hooks/useNeedsInputCount";
 
 export function DesktopProvider() {
   const router = useRouter();
-  const sessions = useInboxStore((s) => s.sessions);
-  const prevCountRef = useRef<number | null>(null);
   const initRef = useRef(false);
   const [update, setUpdate] = useState<{ current: string; latest: string } | null>(null);
   const [updating, setUpdating] = useState(false);
@@ -57,12 +56,16 @@ export function DesktopProvider() {
     }
   };
 
+  // Dock badge = the sidebar's NEEDS INPUT count (same hook, so they can't
+  // drift): sessions where the ball is in the user's court, mine-scoped, over
+  // the authoritative inbox set. It used to count `has_pending || is_idle` over
+  // the raw never-prune cache — i.e. every finished session ever synced — which
+  // pinned the badge at 99+ forever.
+  const needsInputCount = useNeedsInputCount(isDesktop());
   useWatchEffect(() => {
     if (!isDesktop()) return;
-    const pending = Object.values(sessions).filter((s) => s.has_pending || s.is_idle).length;
-    updateBadge(pending);
-    prevCountRef.current = pending;
-  }, [sessions]);
+    updateBadge(needsInputCount);
+  }, [needsInputCount]);
 
   const notifications = useQuery(api.notifications.list);
   const mountedAtRef = useRef<number>(Date.now());
