@@ -5,6 +5,7 @@ import { useQuery } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { View as RNView, Text as RNText, StyleSheet } from 'react-native';
 import { Theme } from '@/constants/Theme';
+import { StoreSyncBridge } from '@/components/StoreSyncBridge';
 
 function TabBarIcon(props: {
   name: React.ComponentProps<typeof FontAwesome>['name'];
@@ -51,6 +52,8 @@ export default function TabLayout() {
   const unreadCount = useQuery(api.notifications.getUnreadCount);
 
   return (
+    <>
+    <StoreSyncBridge />
     <Tabs
       screenOptions={{
         tabBarActiveTintColor: Theme.text,
@@ -128,5 +131,6 @@ export default function TabLayout() {
         }}
       />
     </Tabs>
+    </>
   );
 }
