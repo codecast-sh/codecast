@@ -289,8 +289,9 @@ export async function applyHideTransition(
   ctx: { db: any },
   doc: any,
   patch: { inbox_dismissed_at?: any; inbox_stashed_at?: any },
-): Promise<"reap" | "kill" | "none"> {
+): Promise<{ action: "reap" | "kill" | "none"; canceledSchedules: number }> {
   const action = classifyHideTransition(patch, doc, await conversationHasNoWork(ctx, doc));
+  let canceledSchedules = 0;
   if (action === "reap") {
     await reapEmptyConversation(ctx, doc);
   } else if (action === "kill") {
@@ -308,10 +309,10 @@ export async function applyHideTransition(
     // anchor going dormant keeps its schedules too. Task owner = the
     // conversation's runner (a second-party owner may be triaging).
     if (!doc?.persistent) {
-      await cancelTasksBoundToConversation(ctx, doc.user_id, doc._id);
+      canceledSchedules = await cancelTasksBoundToConversation(ctx, doc.user_id, doc._id);
     }
   }
-  return action;
+  return { action, canceledSchedules };
 }
 
 export const gcEmptyConversations = internalMutation({

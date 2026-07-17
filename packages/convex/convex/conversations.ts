@@ -10,7 +10,7 @@ import { checkRateLimit } from "./rateLimit";
 import { verifyApiToken } from "./apiTokens";
 import { internal } from "./_generated/api";
 import { resetConversationPendingMessages } from "./pendingMessages";
-import { cancelTasksBoundToConversation } from "./agentTasks";
+import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill } from "./agentTasks";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId } from "./daemonCommandUtils";
 import { AGENT_MODEL_CONFIG, modelAgentKey } from "@codecast/shared/contracts";
@@ -558,8 +558,13 @@ async function findChildConversations(
     .take(CHILDREN_LIMIT);
 
   const subagentChildren = allChildren.filter((c: any) => c.is_subagent || !c.parent_message_uuid);
+  // Each preview costs a separate messages query. Convex budgets ~4k system
+  // operations per function; a session with thousands of spawned children blew
+  // straight through it ("too many system operations" timeouts). Cap the N+1 —
+  // allChildren is newest-first, so the newest children keep their previews.
+  const PREVIEW_LIMIT = 300;
   const firstMessagePreviews = new Map<string, string>();
-  for (const child of subagentChildren) {
+  for (const child of subagentChildren.slice(0, PREVIEW_LIMIT)) {
     const firstMsg = await ctx.db
       .query("messages")
       .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", child._id))
@@ -630,10 +635,14 @@ async function findChildConversations(
 
     const matchedChildIds = new Set([...Object.values(map), ...Object.values(agentNameMap)]);
     if (matchedChildIds.size < subagentChildren.length) {
+      // Bounded newest-first scan, NOT .collect(): collecting a 7k-message
+      // transcript here was the other half of the operation-budget timeout.
+      // Recent messages hold the spawns most likely to still need matching.
       const allParentMessages = await ctx.db
         .query("messages")
-        .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conversationId))
-        .collect();
+        .withIndex("by_conversation_timestamp", (q: any) => q.eq("conversation_id", conversationId))
+        .order("desc")
+        .take(2000);
       for (const msg of allParentMessages) {
         if (msg.tool_calls) {
           for (const tc of msg.tool_calls) {
@@ -1574,14 +1583,13 @@ export const getNewMessages = query({
     const hasMore = messages.length > PAGE_LIMIT;
     if (hasMore) messages.length = PAGE_LIMIT;
 
-    const { children: childConversations, map: childConversationMap, agentNameEntries } =
-      await findChildConversations(ctx, args.conversation_id, messages);
-
+    // Deliberately NO findChildConversations here: this is the 1s recovery-poll /
+    // background delta-sync query, and its consumers read only messages +
+    // has_more + last_timestamp. Child data comes from the full-load queries;
+    // computing it here cost O(children) queries per poll and timed out on
+    // sessions with many subagent children.
     return sanitizeConvexObjectKeys({
       messages,
-      child_conversations: childConversations,
-      child_conversation_map: childConversationMap,
-      agent_name_entries: agentNameEntries,
       last_timestamp: messages.length > 0 ? messages[messages.length - 1].timestamp : null,
       has_more: hasMore,
       updated_at: conversation.updated_at,
@@ -8422,7 +8430,17 @@ export const cliSetSessionVisibility = mutation({
         inbox_dismissed_at: undefined,
         inbox_stashed_at: undefined,
       });
-      return { ok: true as const, short_id: shortId, action: args.action, was_hidden: wasHidden };
+      // The un-kill mirror (same as the web restore path in dispatch): bring
+      // back the schedules the kill canceled, stamped tasks only. Scan the
+      // runner's, plus the caller's when a second-party owner is restoring.
+      let rearmed = 0;
+      if (conv.inbox_dismissed_at) {
+        rearmed = await reactivateTasksCanceledOnKill(ctx, conv.user_id, conv._id);
+        if (conv.user_id.toString() !== userId.toString()) {
+          rearmed += await reactivateTasksCanceledOnKill(ctx, userId, conv._id);
+        }
+      }
+      return { ok: true as const, short_id: shortId, action: args.action, was_hidden: wasHidden, rearmed_schedules: rearmed };
     }
 
     const patch =
@@ -8431,8 +8449,8 @@ export const cliSetSessionVisibility = mutation({
         : { inbox_stashed_at: Date.now() };
     await ctx.db.patch(conv._id, patch);
     // `conv` is the pre-patch row — applyHideTransition gates on the transition.
-    const outcome = await applyHideTransition(ctx, conv, patch);
-    return { ok: true as const, short_id: shortId, action: args.action, outcome };
+    const { action: outcome, canceledSchedules } = await applyHideTransition(ctx, conv, patch);
+    return { ok: true as const, short_id: shortId, action: args.action, outcome, canceled_schedules: canceledSchedules };
   },
 });
 
@@ -9578,6 +9596,7 @@ export const killSession = mutation({
       created_at: Date.now(),
     });
 
+    let canceledSchedules = 0;
     if (conv) {
       const patch: Record<string, any> = { inbox_killed_at: Date.now() };
       // A persistent anchor session never auto-completes — a dismiss/kill gesture
@@ -9592,12 +9611,12 @@ export const killSession = mutation({
       // just killed (see cancelTasksBoundToConversation). Scan the RUNNER's
       // schedules (theirs are the ones bound to their session), plus the
       // caller's when a second-party owner is killing.
-      await cancelTasksBoundToConversation(ctx, conv.user_id, args.conversation_id);
+      canceledSchedules = await cancelTasksBoundToConversation(ctx, conv.user_id, args.conversation_id);
       if (conv.user_id !== userId) {
-        await cancelTasksBoundToConversation(ctx, userId, args.conversation_id);
+        canceledSchedules += await cancelTasksBoundToConversation(ctx, userId, args.conversation_id);
       }
     }
-    return { existed: !!conv };
+    return { existed: !!conv, canceled_schedules: canceledSchedules };
   },
 });
 
