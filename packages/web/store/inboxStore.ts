@@ -772,12 +772,8 @@ export function partitionOldSessions(
 function isForeignRow(s: InboxSession, meId: string | null | undefined): boolean {
   if (!meId) return false; // unknown viewer → don't hide anything
   if (!isConvexId(s._id)) return false; // optimistic stub — always mine
-  const uid = s.user_id;
-  if (!uid) return false; // thin/legacy row with no author → keep
-  if (uid === meId) return false;
-  if (s.owned_by_me) return false;
-  if (s.owner_user_id && s.owner_user_id === meId) return false;
-  return true;
+  if (!s.user_id) return false; // thin/legacy row with no author → keep
+  return isForeignSession(s, undefined, meId);
 }
 
 // Scope the never-prune sessions cache to the current inbox scope BEFORE the
