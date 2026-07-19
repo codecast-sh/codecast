@@ -11028,7 +11028,7 @@ async function cliPost(urlPath: string, body: Record<string, any>): Promise<any>
     console.error(`API error (${response.status}): ${text.slice(0, 200)}`);
     process.exit(1);
   }
-  if (result.error) {
+  if (result?.error) {
     console.error(`Error: ${result.error}`);
     process.exit(1);
   }
@@ -12104,6 +12104,21 @@ doc
   .action(async (id: string) => {
     await cliPost("/cli/docs/unshare", { id });
     console.log(`${c.green}ok${c.reset} Share link removed`);
+  });
+
+doc
+  .command("delete")
+  .description("Permanently delete a document you created")
+  .argument("<id>", "Document ID")
+  .option("--yes", "Confirm deletion (required)")
+  .action(async (id: string, options: any) => {
+    if (!options.yes) {
+      console.error(`This permanently deletes the document. Re-run with --yes to confirm:`);
+      console.error(`  cast doc delete ${id} --yes`);
+      process.exit(1);
+    }
+    await cliPost("/cli/docs/delete", { id });
+    console.log(`${c.green}ok${c.reset} Deleted ${c.cyan}${id}${c.reset}`);
   });
 
 // ── Plans ─────────────────────────────────────────────────
