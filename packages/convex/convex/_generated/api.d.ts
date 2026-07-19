@@ -43,6 +43,7 @@ import type * as dispatch from "../dispatch.js";
 import type * as docExtraction from "../docExtraction.js";
 import type * as docSync from "../docSync.js";
 import type * as docs from "../docs.js";
+import type * as entities from "../entities.js";
 import type * as feedPagination from "../feedPagination.js";
 import type * as fileChanges_applyPatchParser from "../fileChanges/applyPatchParser.js";
 import type * as fileChanges_extractor from "../fileChanges/extractor.js";
@@ -151,6 +152,7 @@ declare const fullApi: ApiFromModules<{
   docExtraction: typeof docExtraction;
   docSync: typeof docSync;
   docs: typeof docs;
+  entities: typeof entities;
   feedPagination: typeof feedPagination;
   "fileChanges/applyPatchParser": typeof fileChanges_applyPatchParser;
   "fileChanges/extractor": typeof fileChanges_extractor;
