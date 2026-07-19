@@ -2265,9 +2265,11 @@ export const webPromoteToPlan = mutation({
 // ── Public Sharing ─────────────────────────────────────────
 
 export const generateShareLink = mutation({
-  args: { id: v.id("docs") },
+  args: { id: v.id("docs"), api_token: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
+    const userId = args.api_token
+      ? (await verifyApiToken(ctx, args.api_token))?.userId
+      : await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
     const doc = await ctx.db.get(args.id);
     if (!doc || doc.user_id !== userId) throw new Error("Doc not found");
@@ -2279,13 +2281,49 @@ export const generateShareLink = mutation({
 });
 
 export const unshare = mutation({
-  args: { id: v.id("docs") },
+  args: { id: v.id("docs"), api_token: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
+    const userId = args.api_token
+      ? (await verifyApiToken(ctx, args.api_token))?.userId
+      : await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
     const doc = await ctx.db.get(args.id);
     if (!doc || doc.user_id !== userId) throw new Error("Doc not found");
     await ctx.db.patch(args.id, { share_token: undefined });
+    return { success: true };
+  },
+});
+
+export const remove = mutation({
+  args: {
+    api_token: v.string(),
+    id: v.id("docs"),
+  },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Unauthorized");
+
+    const doc = await ctx.db.get(args.id);
+    if (!doc || doc.user_id !== auth.userId) throw new Error("Doc not found");
+
+    const docId = args.id as string;
+    const snapshots = await ctx.db
+      .query("doc_snapshots")
+      .withIndex("id_version", (q: any) => q.eq("id", docId))
+      .collect();
+    for (const s of snapshots) await ctx.db.delete(s._id);
+    const deltas = await ctx.db
+      .query("doc_deltas")
+      .withIndex("id_version", (q: any) => q.eq("id", docId))
+      .collect();
+    for (const d of deltas) await ctx.db.delete(d._id);
+    const presence = await ctx.db
+      .query("doc_presence")
+      .withIndex("by_doc", (q: any) => q.eq("doc_id", docId))
+      .collect();
+    for (const p of presence) await ctx.db.delete(p._id);
+
+    await ctx.db.delete(args.id);
     return { success: true };
   },
 });
