@@ -4,10 +4,58 @@ import type { Options as ReactMarkdownOptions } from "react-markdown";
 
 const ENTITY_ID_RE = /\b(?:(?:ct|pl)-[a-z0-9]+|jx[a-z0-9]{5,}|doc:[a-z0-9]{20,})\b/gi;
 const MENTION_RE = /@\[([^\]]*?)(?:\s+(ct-\w+|pl-\w+|jx\w+|doc:\w+))?\](?:\s*\([^)]*\))?/g;
+// Obsidian-style transclusion: ![[doc:<convex id>]]. Only docs are embeddable —
+// they're the entity whose body IS markdown meant to be read in place.
+const EMBED_RE = /!\[\[(doc:[a-z0-9]{32})\]\]/g;
+
+function isEmbedLink(node: any): boolean {
+  return node?.type === "link" && typeof node.url === "string" && node.url.startsWith("embed://");
+}
+
+/**
+ * Post-pass over the tree after findAndReplace: a paragraph consisting solely
+ * of one embed link gets REPLACED by that link, so the embed renders at block
+ * level (a full doc card inside a <p> is invalid HTML and reads wrong). An
+ * embed mixed into surrounding prose is demoted to an ordinary doc pill —
+ * transclusion is a block-level act, same semantics as Obsidian.
+ */
+function hoistEmbeds(node: any) {
+  if (!Array.isArray(node.children)) return;
+  node.children = node.children.map((child: any) => {
+    if (child.type === "paragraph" && Array.isArray(child.children)) {
+      const meaningful = child.children.filter(
+        (c: any) => !(c.type === "text" && !c.value?.trim()),
+      );
+      if (meaningful.length === 1 && isEmbedLink(meaningful[0])) return meaningful[0];
+      child.children = child.children.map((c: any) =>
+        isEmbedLink(c)
+          ? {
+              ...c,
+              url: c.url.replace("embed://", "entity://"),
+              children: [{ type: "text", value: c.url.slice("embed://".length) }],
+            }
+          : c,
+      );
+      return child;
+    }
+    hoistEmbeds(child);
+    return child;
+  });
+}
 
 export function remarkEntityIds() {
   return (tree: any) => {
     findAndReplace(tree, [
+      [
+        EMBED_RE,
+        (_match: string, docRef: string) => ({
+          type: "link",
+          url: `embed://${docRef}`,
+          // react-markdown's url sanitizer drops the embed:// href, so — as
+          // with entity:// below — the text node is the real payload carrier.
+          children: [{ type: "text", value: `embed:${docRef}` }],
+        }),
+      ],
       [
         MENTION_RE,
         (_match: string, name: string, entityId?: string) => {
@@ -45,6 +93,7 @@ export function remarkEntityIds() {
         }),
       ],
     ], { ignore: ['link'] });
+    hoistEmbeds(tree);
   };
 }
 

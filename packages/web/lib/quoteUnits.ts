@@ -11,11 +11,19 @@
 // indices would disagree and a comment would anchor to the wrong line.
 
 // Ordered quote units for a content column. A top-level <ul>/<ol> contributes its
-// direct <li> children; every other top-level block contributes itself.
+// direct <li> children; every other top-level block contributes itself. A doc
+// transclusion ([data-doc-embed], see DocEmbed) contributes the blocks of its
+// body under the same rules, so each line of an embedded doc is quotable on its
+// own — the card's header stays un-quotable chrome.
 export function getQuoteUnits(content: HTMLElement | null): HTMLElement[] {
   if (!content) return [];
   const units: HTMLElement[] = [];
-  for (const child of Array.from(content.children) as HTMLElement[]) {
+  collectUnits(content, units);
+  return units;
+}
+
+function collectUnits(container: HTMLElement, units: HTMLElement[]) {
+  for (const child of Array.from(container.children) as HTMLElement[]) {
     if (child.tagName === "OL" || child.tagName === "UL") {
       const items = (Array.from(child.children) as HTMLElement[]).filter((li) => li.tagName === "LI");
       if (items.length) {
@@ -23,9 +31,17 @@ export function getQuoteUnits(content: HTMLElement | null): HTMLElement[] {
         continue;
       }
     }
+    if (child.hasAttribute("data-doc-embed")) {
+      // First match in document order is this embed's own body (a nested
+      // embed's body comes later), so recursion sees each level exactly once.
+      const body = child.querySelector("[data-doc-embed-body]") as HTMLElement | null;
+      if (body) {
+        collectUnits(body, units);
+        continue;
+      }
+    }
     units.push(child);
   }
-  return units;
 }
 
 // The quote unit containing `target` (a hovered node or a selection anchor), and
