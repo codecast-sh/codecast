@@ -223,23 +223,26 @@ export const adminGetUsers = query({
       return [];
     }
 
-    const logs = await ctx.db.query("daemon_logs").take(5000);
+    // desc = tail-first. A bare ascending take() starts at the index head,
+    // which is the retention pruner's tombstone graveyard (see advanceLogPrune)
+    // — walking it blows the syscall budget ("too many system operations").
+    // Sized to the syscall TIME budget: under backend load a doc read costs
+    // ~1ms, so a few thousand is the ceiling for a query that must stay
+    // responsive (5000 took ~7s during the 2026-07-17 saturation).
+    const logs = await ctx.db.query("daemon_logs").order("desc").take(3000);
     const logUserIds = new Set(logs.map((l) => l.user_id));
 
-    const allUsers = await ctx.db.query("users").collect();
-    const heartbeatUserIds = new Set(
-      allUsers
-        .filter((u) => u.last_heartbeat)
-        .map((u) => u._id)
-    );
+    const heartbeatUsers = await ctx.db
+      .query("users")
+      .withIndex("by_last_heartbeat", (q) => q.gte("last_heartbeat", 1))
+      .collect();
+    const usersById = new Map(heartbeatUsers.map((u) => [u._id, u]));
 
-    const userIds = [...new Set([...logUserIds, ...heartbeatUserIds])];
+    const userIds = [...new Set([...logUserIds, ...usersById.keys()])];
 
     const users = await Promise.all(
       userIds.map(async (id) => {
-        const user = logUserIds.has(id)
-          ? allUsers.find((u) => u._id === id)
-          : await ctx.db.get(id);
+        const user = usersById.get(id) ?? (await ctx.db.get(id));
         if (!user) return null;
         const userLogs = logs.filter((l) => l.user_id === id);
         const errorCount = userLogs.filter((l) => l.level === "error").length;
@@ -288,7 +291,9 @@ export const adminGetStats = query({
     const oneDayAgo = now - 24 * 60 * 60 * 1000;
     const oneWeekAgo = now - 7 * 24 * 60 * 60 * 1000;
 
-    const logs = await ctx.db.query("daemon_logs").order("desc").take(10000);
+    // Counts are capped by this take either way; 10000 blew the syscall time
+    // budget under load (~1ms/doc when saturated). Keep it inside the budget.
+    const logs = await ctx.db.query("daemon_logs").order("desc").take(4000);
 
     const logsLastHour = logs.filter((l) => l.timestamp >= oneHourAgo);
     const logsLastDay = logs.filter((l) => l.timestamp >= oneDayAgo);
