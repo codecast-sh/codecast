@@ -64,3 +64,34 @@ describe("entityRemarkPlugins doc references", () => {
     expect(render("see @[Sess jx7abc12] now")).toContain(">jx7abc12</a>");
   });
 });
+
+describe("entityRemarkPlugins bare convex ids", () => {
+  // Docs have no short id, so agents reference them by the raw 32-char Convex
+  // id. That must linkify like ct-/jx short ids do; EntityIdPill resolves the
+  // table server-side and falls back to plain text for non-entity ids.
+  const CONVEX_ID = "s97f0jvy02p54v6as7gnfkegrs8aps7a";
+
+  test("a bare 32-char convex id in prose is linkified", () => {
+    const html = render(`market analysis doc ${CONVEX_ID}, plan pl-170`);
+    expect(html).toContain(`>${CONVEX_ID}</a>`);
+    expect(html).toContain(">pl-170</a>");
+  });
+
+  test("@[Title <convexId>] mentions carry the id as the link", () => {
+    const html = render(`see @[Market Analysis ${CONVEX_ID}] for details`);
+    expect(html).toContain(`>${CONVEX_ID}</a>`);
+    expect(html).not.toContain("@Market Analysis");
+  });
+
+  test("an uppercase 32-char hash lookalike stays plain text", () => {
+    const upper = "D41D8CD98F00B204E9800998ECF8427E";
+    const html = render(`md5 is ${upper} here`);
+    expect(html).not.toContain("<a");
+    expect(html).toContain(upper);
+  });
+
+  test("31- and 33-char tokens are not treated as convex ids", () => {
+    expect(render(`x ${CONVEX_ID.slice(0, 31)} y`)).not.toContain("<a");
+    expect(render(`x ${CONVEX_ID}0 y`)).not.toContain("<a");
+  });
+});
