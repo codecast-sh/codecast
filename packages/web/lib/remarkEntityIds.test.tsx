@@ -12,8 +12,20 @@ const FAKE_DOC = {
   updated_at: Date.now(),
 };
 
+// Keep every other export real: replacing the whole module drops names the
+// component graph imports statically (EntityIdPill → useQueryNoThrow →
+// useQueries), and a missing named export is a link-time SyntaxError, not a
+// call-time one. Only the hooks that need a live client are overridden — and
+// the override leaks to any file sharing this test process, so a module-shaped
+// mock keeps those files working too.
+const convexReact = await import("convex/react");
 mock.module("convex/react", () => ({
+  ...convexReact,
   useQuery: (_fn: unknown, args: unknown) => (args === "skip" ? undefined : FAKE_DOC),
+  // useQueryNoThrow's transport. No subscription resolves here, which is the
+  // honest answer for resolveIdType without a backend: the pill falls back to
+  // its plain-text rendering, exactly as it does when the query is in flight.
+  useQueries: () => ({}),
 }));
 
 // The real next/link compat shim calls react-router's useNavigate, which
