@@ -24,6 +24,11 @@ export type ClientSyncRegistryEntry = {
   dispatchTable?: {
     table: string;
     kind: DispatchTableKind;
+    // When set, ONLY these fields dispatch — for a store key that is a
+    // client-side projection of another table (sessions → conversations),
+    // where most fields are server-derived enrichment that must never be
+    // patched back, but a few user-gesture fields are real server state.
+    fields?: readonly string[];
   };
   dispatchFieldTable?: string;
   // Per-row validity for a persisted collection. Rows failing this are dropped
@@ -39,6 +44,31 @@ export const CLIENT_SYNC_REGISTRY = {
   sessions: {
     persistence: { kind: "collection", key: "sessions" },
     localFirst: true,
+    // Inbox triage gestures (dismiss/stash/pin) write the session row itself,
+    // but the server-side row is the conversation. Without this mapping the
+    // gesture only reached the server through the parallel write to
+    // `conversations[id]` — a meta row that exists ONLY once the session has
+    // been OPENED on this client. Triaging an unopened session was therefore a
+    // silent local-only write; after the 5-min pending settle the dismiss
+    // reconcile's CLEAR pass read the server's silence as "restored elsewhere"
+    // and un-hid it ("I keep dismissing these and they keep coming back").
+    // The whitelist keeps every other sessions field (server-derived
+    // enrichment: agent_status, is_idle, author_name, …) undispatchable. It
+    // carries exactly the real conversations fields that list-row gestures
+    // write on the session row (dismiss/stash/pin/defer/rename/favorite);
+    // enriched twins (is_pinned, is_deferred, display_title) stay local.
+    dispatchTable: {
+      table: "conversations",
+      kind: "collection",
+      fields: [
+        "inbox_dismissed_at",
+        "inbox_stashed_at",
+        "inbox_pinned_at",
+        "inbox_deferred_at",
+        "title",
+        "is_favorite",
+      ],
+    },
   },
   conversations: {
     persistence: { kind: "meta", key: "conversations" },
@@ -265,7 +295,7 @@ export function hydrationMergeStrategy(key: string): HydrationMerge {
   return "shape";
 }
 
-export const DISPATCH_TABLE_MAP: Record<string, { table: string; kind: DispatchTableKind }> = Object.fromEntries(
+export const DISPATCH_TABLE_MAP: Record<string, { table: string; kind: DispatchTableKind; fields?: readonly string[] }> = Object.fromEntries(
   registryEntries.flatMap(([key, entry]) =>
     entry.dispatchTable ? [[key, entry.dispatchTable]] : []
   )

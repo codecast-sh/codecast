@@ -170,6 +170,12 @@ export default function SecurityPage() {
             <Link href="/features" className="text-stone-600 hover:text-stone-900 font-medium text-sm px-3 py-1.5 hidden sm:block">
               CLI
             </Link>
+            <Link href="/pricing" className="text-stone-600 hover:text-stone-900 font-medium text-sm px-3 py-1.5 hidden sm:block">
+              Pricing
+            </Link>
+            <Link href="/blog" className="text-stone-600 hover:text-stone-900 font-medium text-sm px-3 py-1.5 hidden sm:block">
+              Blog
+            </Link>
             <Link href="/security" className="text-stone-600 hover:text-stone-900 font-medium text-sm px-3 py-1.5">
               Security
             </Link>
@@ -513,13 +519,14 @@ const encrypted = await encryptAESGCM(message, sessionKey);
                 <li><Link href="/features" className="hover:text-stone-900">CLI</Link></li>
                 <li><Link href="/security" className="hover:text-stone-900">Security</Link></li>
                 <li><Link href="/pricing" className="hover:text-stone-900">Pricing</Link></li>
-                <li><Link href="/docs" className="hover:text-stone-900">Documentation</Link></li>
+                <li><Link href="/documentation" className="hover:text-stone-900">Documentation</Link></li>
               </ul>
             </div>
             <div>
               <h4 className="font-semibold text-stone-900 mb-3 text-sm">Company</h4>
               <ul className="space-y-2 text-sm text-stone-500">
                 <li><Link href="/about" className="hover:text-stone-900">About</Link></li>
+                <li><Link href="/blog" className="hover:text-stone-900">Blog</Link></li>
                 <li><Link href="/privacy" className="hover:text-stone-900">Privacy</Link></li>
               </ul>
             </div>
@@ -533,7 +540,7 @@ const encrypted = await encryptAESGCM(message, sessionKey);
             </div>
           </div>
           <div className="border-t border-stone-200 mt-8 pt-8 text-center text-sm text-stone-400">
-            &copy; 2025 Codecast
+            &copy; 2026 Codecast
           </div>
         </div>
       </footer>
