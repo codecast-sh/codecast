@@ -16,6 +16,7 @@ import {
   SUBAGENT_PRODUCING_GRACE_MS,
   STATUS_TRUST_TTL_MS,
   AGENT_IDLE_GRACE_MS,
+  HEARTBEAT_ALIVE_MS,
   type ConversationDoc,
   type SessionIdleInput,
   type WorkStateInput,
@@ -575,6 +576,77 @@ describe("trustedAgentStatus (stale 'working' trust TTL)", () => {
     });
     expect(rawWorkState).toBe("working"); // the symptom
     expect(workStateFor("working", 12 * 60 * 60 * 1000)).toBe("needs_input"); // the coerced fix
+  });
+});
+
+describe("trustedAgentStatus (lapsed heartbeat)", () => {
+  const NOW = 10_000_000;
+
+  test("stale heartbeat + quiet conversation coerces an active status to stopped", () => {
+    expect(trustedAgentStatus("working", NOW - HEARTBEAT_ALIVE_MS, NOW, false)).toBe("stopped");
+    expect(trustedAgentStatus("thinking", NOW - 10 * 60 * 1000, NOW, false)).toBe("stopped");
+    // no activity timestamp at all: nothing vouches for the process — stopped
+    expect(trustedAgentStatus("working", undefined, NOW, false)).toBe("stopped");
+  });
+
+  test("stale heartbeat + quiet past the TTL still reads stopped, not idle", () => {
+    // A dead daemon stays dead however long ago it died; the TTL's "idle"
+    // (alive-but-finished) must not win over the missing heartbeat.
+    expect(trustedAgentStatus("working", NOW - STATUS_TRUST_TTL_MS, NOW, false)).toBe("stopped");
+  });
+
+  test("REGRESSION 2026-07-20: fresh message traffic vetoes the stopped coercion", () => {
+    // The daemon's heartbeat sender shared a guard with multi-minute maintenance
+    // passes, so the whole fleet's last_heartbeat aged past the liveness window
+    // while agents were syncing messages every few seconds. Activity on the
+    // conversation is proof of life: the active status must survive.
+    expect(trustedAgentStatus("working", NOW - 15_000, NOW, false)).toBe("working");
+    expect(trustedAgentStatus("thinking", NOW - (HEARTBEAT_ALIVE_MS - 1), NOW, false)).toBe("thinking");
+  });
+
+  test("fresh heartbeat keeps the pre-existing behavior (default arg true)", () => {
+    expect(trustedAgentStatus("working", NOW - 10 * 60 * 1000, NOW, true)).toBe("working");
+    expect(trustedAgentStatus("working", NOW - STATUS_TRUST_TTL_MS, NOW, true)).toBe("idle");
+  });
+
+  test("non-active statuses pass through untouched regardless of heartbeat", () => {
+    for (const s of ["idle", "stopped", "permission_blocked"]) {
+      expect(trustedAgentStatus(s, NOW - 24 * 60 * 60 * 1000, NOW, false)).toBe(s);
+    }
+    expect(trustedAgentStatus(undefined, NOW - 1000, NOW, false)).toBeUndefined();
+  });
+
+  // The full inbox composition for the observed incident: a busy session
+  // (messages < grace window old) whose heartbeat lapsed must classify as
+  // WORKING, and a genuinely dead daemon (conversation quiet too) as
+  // needs_input via "stopped".
+  function workStateWithHeartbeat(rawStatus: string, convAgeMs: number, heartbeatAlive: boolean): string {
+    const now = NOW;
+    const updatedAt = now - convAgeMs;
+    const agentStatus = trustedAgentStatus(rawStatus, updatedAt, now, heartbeatAlive);
+    const isIdle = isSessionIdle({
+      agentStatus,
+      agentStatusUpdatedAt: updatedAt,
+      hasPending: false,
+      lastRoleIsUser: false,
+      recentlyUpdated: now - updatedAt < AGENT_IDLE_GRACE_MS,
+      daemonAlive: heartbeatAlive,
+      now,
+    });
+    return classifyWorkState({
+      agentStatus,
+      isIdle,
+      awaitingInput: false,
+      hasPending: false,
+      isUnresponsive: false,
+      messageCount: 5,
+    });
+  }
+
+  test("busy session with lapsed heartbeat files under WORKING, dead one under needs_input", () => {
+    expect(workStateWithHeartbeat("working", 15_000, false)).toBe("working"); // the incident
+    expect(workStateWithHeartbeat("working", HEARTBEAT_ALIVE_MS + 1000, false)).toBe("needs_input"); // truly dead
+    expect(workStateWithHeartbeat("working", 15_000, true)).toBe("working"); // healthy baseline
   });
 });
 
