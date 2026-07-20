@@ -9719,7 +9719,9 @@ const resumeSessionCache = new Map<string, string>();
 const managedHeartbeatSessions = new Set<string>();
 let heartbeatFlushTimer: NodeJS.Timeout | null = null;
 let heartbeatFlushInProgress = false;
-let heartbeatFlushCount = 0;
+let heartbeatMaintenanceInProgress = false;
+let heartbeatMaintenanceCount = 0;
+let lastHeartbeatSendAt = 0;
 const HEARTBEAT_FLUSH_INTERVAL_MS = 30_000;
 // Cap the per-transaction slice so a write conflict retries a bounded number of
 // rows, not the whole fleet.
@@ -10562,16 +10564,31 @@ export function heartbeatHealthCheckBucket(sessionId: string, mod: number): numb
 // subscription recomputes ~once per flush instead of ~once per session.
 async function flushManagedHeartbeats(): Promise<void> {
   if (!syncServiceRef || managedHeartbeatSessions.size === 0) return;
-  // Re-entrancy guard: the flush does the batched sends AND a bounded tmux
-  // health-check pass, which under load can run past one interval. Skipping a
-  // tick while the prior flush is still in flight keeps flushes from piling up
-  // (registration stamps last_heartbeat fresh, so a skipped tick is harmless).
-  if (heartbeatFlushInProgress) return;
-  heartbeatFlushInProgress = true;
-  try {
-    await runHeartbeatFlush();
-  } finally {
-    heartbeatFlushInProgress = false;
+  // The liveness send and the maintenance pass are guarded SEPARATELY. The send
+  // is a couple of batched mutations and must land every tick: the server
+  // coerces a session's active status to "stopped" once last_heartbeat ages
+  // past the 90s liveness window, so a starved send re-files the entire working
+  // fleet under needs-input. Maintenance (tmux health checks, the orphan
+  // reaper, the WIP snapshot sweep) legitimately runs for minutes under load —
+  // one shared guard let a single long pass swallow every send in between
+  // (observed: 11-minute heartbeat gaps while a 92-session WIP sweep ran,
+  // 2026-07-20).
+  if (!heartbeatFlushInProgress) {
+    heartbeatFlushInProgress = true;
+    try {
+      await runHeartbeatFlush();
+    } finally {
+      heartbeatFlushInProgress = false;
+    }
+  }
+  // Fire-and-forget: a maintenance pass must never delay the next send. Its own
+  // guard skips ticks while the prior pass is still in flight so passes don't
+  // pile up; the next tick resumes the cadence.
+  if (!heartbeatMaintenanceInProgress) {
+    heartbeatMaintenanceInProgress = true;
+    void runHeartbeatMaintenance()
+      .catch(() => {})
+      .finally(() => { heartbeatMaintenanceInProgress = false; });
   }
 }
 
@@ -10581,8 +10598,15 @@ async function runHeartbeatFlush(): Promise<void> {
   const sync = syncServiceRef;
   if (!sync) return;
   const ids = [...managedHeartbeatSessions];
-  const flushTick = heartbeatFlushCount++;
   const now = Date.now();
+
+  // Cadence sentinel: sends past 2x the interval mean something starved the
+  // send path (an event-loop block, a guard regression) and the server is about
+  // to distrust the fleet's active statuses — make it loud in the log.
+  if (lastHeartbeatSendAt && now - lastHeartbeatSendAt > HEARTBEAT_FLUSH_INTERVAL_MS * 2) {
+    log(`[HEARTBEAT-FLUSH] WARNING: ${Math.round((now - lastHeartbeatSendAt) / 1000)}s since last send (interval ${HEARTBEAT_FLUSH_INTERVAL_MS / 1000}s) — liveness sends are being starved`);
+  }
+  lastHeartbeatSendAt = now;
 
   // Batched liveness write. logHeartbeatStatus stays per-session (throttled,
   // local-only). Resource metrics are pushed separately by collectResourceSnapshot.
@@ -10602,13 +10626,22 @@ async function runHeartbeatFlush(): Promise<void> {
   // One line/tick to confirm the fleet flushes in a handful of transactions
   // (each = one inbox invalidation) rather than ~N. Pre-batch this was N/30s.
   log(`[HEARTBEAT-FLUSH] sessions=${ids.length} batches=${batchCount}`);
+}
+
+// The slow fleet-hygiene half of the heartbeat tick — everything that may block
+// for minutes and therefore must never share a guard with the liveness send.
+async function runHeartbeatMaintenance(): Promise<void> {
+  const sync = syncServiceRef;
+  if (!sync) return;
+  const ids = [...managedHeartbeatSessions];
+  const tick = heartbeatMaintenanceCount++;
 
   // Self-heal pass (local): reconcile a status latched on a lost hook transition
   // against the transcript/pane. Sharded by session so only ~1/N of the fleet
   // runs each tick (every session every N ticks ≈ 90s), and bounded so the tmux
   // captures stay gentle. heartbeatHealthCheck also reconstitutes a session whose
   // tmux has vanished.
-  const phase = flushTick % HEALTH_CHECK_EVERY_N_HEARTBEATS;
+  const phase = tick % HEALTH_CHECK_EVERY_N_HEARTBEATS;
   const due = ids.filter((id) => heartbeatHealthCheckBucket(id, HEALTH_CHECK_EVERY_N_HEARTBEATS) === phase);
   for (const sessionId of due) {
     try { reconcileStatusFromTranscript(sessionId, sync); } catch {}
@@ -10617,13 +10650,13 @@ async function runHeartbeatFlush(): Promise<void> {
 
   // Conservative reap of long-idle orphan terminals — gentle (capped per pass)
   // and logged to a dedicated reaper.log. See reapIdleOrphanTerminals.
-  if (flushTick % REAP_EVERY_N_FLUSHES === 0) {
+  if (tick % REAP_EVERY_N_FLUSHES === 0) {
     await reapIdleOrphanTerminals().catch((e) => log(`[REAPER] pass error: ${(e as Error)?.message ?? e}`));
   }
 
   // Keep each session's working tree recoverable from another machine. See
   // sweepWipSnapshots.
-  if (flushTick % WIP_SNAPSHOT_EVERY_N_FLUSHES === 0) {
+  if (tick % WIP_SNAPSHOT_EVERY_N_FLUSHES === 0) {
     await sweepWipSnapshots(ids).catch((e) => log(`[WIP] pass error: ${(e as Error)?.message ?? e}`));
   }
 }

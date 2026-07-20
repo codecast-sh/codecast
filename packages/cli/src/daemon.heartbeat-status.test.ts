@@ -53,8 +53,13 @@ describe("heartbeat carries agent_status", () => {
   test("the batched flush carries agent_status sourced from lastSentAgentStatus", () => {
     // The 'stuck working' guard holds only if the batch payload carries each
     // session's agent_status, read from the local lastSentAgentStatus map (not a
-    // stale or fabricated value). Pin that the flush builds its payload that way.
-    const idx = daemonSource.indexOf("async function flushManagedHeartbeats");
+    // stale or fabricated value). Pin that the send path builds its payload that
+    // way, and that the tick handler actually invokes it (the send lives in
+    // runHeartbeatFlush; flushManagedHeartbeats is the guard shell).
+    const tickIdx = daemonSource.indexOf("async function flushManagedHeartbeats");
+    expect(tickIdx).toBeGreaterThanOrEqual(0);
+    expect(daemonSource.slice(tickIdx, tickIdx + 2000)).toContain("runHeartbeatFlush()");
+    const idx = daemonSource.indexOf("async function runHeartbeatFlush");
     expect(idx).toBeGreaterThanOrEqual(0);
     const body = daemonSource.slice(idx, idx + 2000);
     expect(body).toContain("lastSentAgentStatus.get(sessionId)");
