@@ -387,7 +387,12 @@ export function LabelChipsRow({
   };
 
   return (
-    <div className="relative flex-1 min-w-0 flex items-center gap-1">
+    <div className="relative flex-1 min-w-0 flex items-center">
+      {/* Clip shell: everything in-flow (row, pinned active chip, +N pill) is
+          hard-clipped at the component's edge so nothing can bleed under the
+          panel's icon cluster at narrow widths. The popover lives outside the
+          shell — clipping it would cut the dropdown off. */}
+      <div className="flex-1 min-w-0 flex items-center gap-1 overflow-hidden">
       <div
         ref={rowRef}
         className="flex gap-1 overflow-hidden min-w-0 items-center"
@@ -478,11 +483,11 @@ export function LabelChipsRow({
             <button
               onClick={() => useInboxStore.getState().setActiveBucketFilter(null)}
               title={`Filtering by "${activeBucket.name}" — click to clear`}
-              className={`group flex-shrink-0 px-2 py-0.5 rounded-full text-[10px] flex items-center gap-1 font-medium ${bc.bg} ${bc.text}`}
+              className={`group min-w-0 px-2 py-0.5 rounded-full text-[10px] flex items-center gap-1 font-medium ${bc.bg} ${bc.text}`}
             >
-              <span className={`w-1.5 h-1.5 rounded-[2px] ${bc.dot}`} />
-              {activeBucket.name}
-              <span className="ml-0.5 relative inline-flex items-center justify-center min-w-[10px]">
+              <span className={`w-1.5 h-1.5 rounded-[2px] flex-shrink-0 ${bc.dot}`} />
+              <span className="truncate">{activeBucket.name}</span>
+              <span className="ml-0.5 relative inline-flex flex-shrink-0 items-center justify-center min-w-[10px]">
                 <span className="opacity-50 group-hover:opacity-0 tabular-nums">{bucketCounts[activeBucket._id] || 0}</span>
                 <span className="absolute inset-0 hidden group-hover:flex items-center justify-center opacity-70">
                   <X className="w-2.5 h-2.5" />
@@ -498,11 +503,11 @@ export function LabelChipsRow({
           <button
             onClick={() => useInboxStore.getState().setActiveProjectFilter(null, null)}
             title={`Filtering by "${activeProject[0]}" — click to clear`}
-            className={`flex-shrink-0 px-2 py-0.5 rounded-full text-[10px] flex items-center gap-1 font-medium ${pc.bg} ${pc.text}`}
+            className={`min-w-0 px-2 py-0.5 rounded-full text-[10px] flex items-center gap-1 font-medium ${pc.bg} ${pc.text}`}
           >
-            <span className={`w-1.5 h-1.5 rounded-full ${pc.dot}`} />
-            {activeProject[0]}
-            <span className="ml-0.5 opacity-50 tabular-nums">{activeProject[1]}</span>
+            <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${pc.dot}`} />
+            <span className="truncate">{activeProject[0]}</span>
+            <span className="ml-0.5 opacity-50 tabular-nums flex-shrink-0">{activeProject[1]}</span>
           </button>
         );
       })()}
@@ -532,6 +537,7 @@ export function LabelChipsRow({
           +{hiddenCount + zeroHiddenCount}
         </button>
       )}
+      </div>
 
       {popoverOpen && (
         <div
