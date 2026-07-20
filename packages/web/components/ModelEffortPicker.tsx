@@ -74,7 +74,7 @@ export function ModelEffortMenu({
   if (!cfg) return null;
   const models = cfg.models.filter((m: ModelOption) => (midSession ? true : !m.midSessionOnly));
   return (
-    <DropdownMenuContent align="end" className="w-64">
+    <DropdownMenuContent align="end" className="w-72 max-w-[calc(100vw-1rem)]">
       <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-sol-text-dim">Model</DropdownMenuLabel>
       {models.map((m: ModelOption) => (
         <DropdownMenuItem
@@ -91,7 +91,7 @@ export function ModelEffortMenu({
       ))}
       <DropdownMenuSeparator />
       <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-sol-text-dim">Effort</DropdownMenuLabel>
-      <div className="flex items-center gap-1 px-2 pb-1.5">
+      <div className="grid grid-flow-col auto-cols-fr gap-1 px-2 pb-1.5">
         {/* "default" = no pin, the agent's saved default wins. Launch rail
             only: the live picker has no session-scoped default stop (the
             /effort auto one-shot rewrites the user's GLOBAL config). */}
@@ -101,7 +101,7 @@ export function ModelEffortMenu({
             <button
               key={level}
               onClick={() => { if (!active) onSelect({ effort: level }); }}
-              className={`flex-1 px-1.5 py-1 rounded text-[11px] border transition-colors ${
+              className={`min-w-0 px-0.5 py-1 rounded text-[10px] border transition-colors ${
                 active
                   ? "border-sol-cyan/60 bg-sol-cyan/10 text-sol-cyan"
                   : "border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border"
