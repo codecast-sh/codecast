@@ -92,3 +92,6 @@ TESTING_PERMISSIONS.md
 
 # Local demo/marketing video renders (large media, never committed)
 videos/
+
+# Scratch UI harnesses (throwaway, per-session)
+packages/web/_chiptest.*
