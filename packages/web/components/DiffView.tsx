@@ -218,7 +218,12 @@ function diffToDisplayItems(
   changes: Array<{ type: 'added' | 'removed' | 'context'; content: string }>,
   startLine: number,
   contextLines: number,
-  language?: string
+  language?: string,
+  // Also emit a separator for hidden context at the very top/bottom of the file
+  // (not just between visible regions), so an expandable diff offers a handle
+  // even when the only change sits at one end. Off for inert diffs, whose
+  // appearance shouldn't change.
+  edgeSeparators = false
 ): { items: DisplayItem[]; maxLineNum: number; totalCodeLines: number } {
   const allLines: FlatDiffLine[] = [];
   let oldLineNum = startLine;
@@ -248,6 +253,11 @@ function diffToDisplayItems(
     }
   }
 
+  // lineKey = index into the FULL line list, assigned before context collapsing,
+  // so a comment's anchor survives a contextLines change (expanding hidden
+  // context must not shift the keys of lines already on screen).
+  for (let i = 0; i < allLines.length; i++) allLines[i].lineKey = i;
+
   const items: DisplayItem[] = [];
   let lastShown = -1;
 
@@ -257,12 +267,17 @@ function diffToDisplayItems(
     if (showLine.has(i)) {
       if (lastShown >= 0 && i > lastShown + 1) {
         items.push({ type: 'separator' });
+      } else if (lastShown < 0 && edgeSeparators && i > 0) {
+        items.push({ type: 'separator' });
       }
       visibleLines.push(allLines[i]);
       visibleIndices.push(items.length);
       items.push(allLines[i]);
       lastShown = i;
     }
+  }
+  if (edgeSeparators && lastShown >= 0 && lastShown < allLines.length - 1) {
+    items.push({ type: 'separator' });
   }
 
   const withWordDiff = applyWordDiffToBlock(visibleLines, language);
@@ -332,6 +347,10 @@ interface DiffViewProps {
   // (under this `anchorKey`), so they auto-attach to the user's next reply just
   // like message/plan annotations. Omit it (the default) and the diff is inert.
   commentContext?: { conversationId: string; anchorKey: string; filePath: string };
+  // When provided, the ⋯ hidden-context separators become clickable and invoke
+  // this (the owner responds by raising contextLines). Only meaningful in
+  // oldStr/newStr mode, where the full text is present to expand into.
+  onExpandContext?: () => void;
 }
 
 export const DiffView = memo(function DiffView({
@@ -344,6 +363,7 @@ export const DiffView = memo(function DiffView({
   language,
   showLineNumbers = false,
   commentContext,
+  onExpandContext,
 }: DiffViewProps) {
   const [fullyExpanded, setFullyExpanded] = useState(false);
 
@@ -356,21 +376,23 @@ export const DiffView = memo(function DiffView({
       const oldLines = (oldStr || "").split('\n');
       const newLines = (newStr || "").split('\n');
       const changes = computeDiff(oldLines, newLines);
-      ({ items, maxLineNum } = diffToDisplayItems(changes, startLine, contextLines, language));
+      ({ items, maxLineNum } = diffToDisplayItems(changes, startLine, contextLines, language, !!onExpandContext));
     }
     // Highlight once here, not in render — this component sits inside the
     // frequently re-rendering conversation tree, and Prism per line per render
     // froze the page whenever a large block was open. Assign a stable lineKey to
     // each code line in the same pass so comment anchors survive truncation.
+    // Lines from the oldStr/newStr path already carry a collapse-stable key
+    // (see diffToDisplayItems); the positional fallback covers the hunks path.
     let lineKey = 0;
     items = items.map(item =>
       item.type === 'separator'
         ? item
-        : { ...item, lineKey: lineKey++, html: item.wordDiffHtml ?? highlightCode(item.content, language) },
+        : { ...item, lineKey: item.lineKey ?? lineKey++, html: item.wordDiffHtml ?? highlightCode(item.content, language) },
     );
     const totalCodeLines = items.filter(i => i.type !== 'separator').length;
     return { items, totalCodeLines, gutterCh: String(Math.max(maxLineNum, 1)).length };
-  }, [hunks, oldStr, newStr, startLine, contextLines, language]);
+  }, [hunks, oldStr, newStr, startLine, contextLines, language, onExpandContext]);
 
   const needsTruncation = totalCodeLines > maxLines && !fullyExpanded;
 
@@ -444,6 +466,19 @@ export const DiffView = memo(function DiffView({
         <div className="min-w-fit">
         {displayItems.map((item, i) => {
           if (item.type === 'separator') {
+            if (onExpandContext) {
+              return (
+                <button
+                  key={`sep-${i}`}
+                  type="button"
+                  onClick={onExpandContext}
+                  className="block w-full text-center text-[11px] text-sol-blue/60 hover:text-sol-cyan hover:bg-sol-bg-highlight/40 select-none transition-colors"
+                  title="Show hidden context"
+                >
+                  &#8943;
+                </button>
+              );
+            }
             return (
               <div key={`sep-${i}`} className="text-center text-[11px] text-sol-text-dim/40 select-none">
                 &#8943;
