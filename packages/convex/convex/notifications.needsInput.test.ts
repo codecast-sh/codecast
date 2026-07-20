@@ -33,6 +33,16 @@ function createCtx(seed: Record<string, Rec[]>) {
       if (!row) throw new Error(`patch: no row ${id}`);
       Object.assign(row, patch);
     },
+    async delete(id: string) {
+      for (const rows of Object.values(tables)) {
+        const i = rows.findIndex((r) => r._id === id);
+        if (i !== -1) {
+          rows.splice(i, 1);
+          return;
+        }
+      }
+      throw new Error(`delete: no row ${id}`);
+    },
     query(table: string) {
       const constraints: Array<{ field: string; val: any }> = [];
       const q: any = {
@@ -176,18 +186,70 @@ describe("needs-input push — settled idle", () => {
   });
 
   test("same waiting episode never pushes twice; a new turn pushes again", async () => {
-    const { ctx, tables } = settledIdleWorld();
+    const { ctx, tables, scheduled } = settledIdleWorld();
     await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
     const dup = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
     expect(dup.notified).toBe(false);
     expect(dup.reason).toBe("dup");
     expect(tables.notifications.length).toBe(1);
 
-    // Next turn ends: message_count grew — the key changes, so it may push again.
+    // Next turn ends: message_count grew — the key changes, so it may push
+    // again. The push fires, but the row REPLACES the conversation's previous
+    // state row instead of stacking a second entry in the notification list.
     tables.conversations[0].message_count = 6;
+    const firstRowId = tables.notifications[0]._id;
     const next = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
     expect(next.notified).toBe(true);
-    expect(tables.notifications.length).toBe(2);
+    expect(tables.notifications.length).toBe(1);
+    expect(tables.notifications[0]._id).not.toBe(firstRowId); // fresh _id = new banner
+    expect(scheduled.filter((s) => s.args.push_token).length).toBe(2);
+  });
+
+  test("state rows replace per conversation; event rows and other convos survive", async () => {
+    const { ctx, tables } = settledIdleWorld();
+    // Pre-existing rows for the same recipient: an EVENT row on the same
+    // conversation, a state row on a DIFFERENT conversation.
+    tables.notifications.push(
+      {
+        _id: "n_assigned",
+        recipient_user_id: "u1",
+        conversation_id: "conv1",
+        type: "session_assigned",
+        message: "Sam assigned you this session",
+        read: false,
+        created_at: Date.now() - 60_000,
+      },
+      {
+        _id: "n_other_conv",
+        recipient_user_id: "u1",
+        conversation_id: "convOther",
+        type: "session_idle",
+        message: "Other session ready",
+        read: false,
+        created_at: Date.now() - 60_000,
+      },
+      {
+        _id: "n_old_state",
+        recipient_user_id: "u1",
+        conversation_id: "conv1",
+        type: "permission_request",
+        message: "Permission needed",
+        read: true,
+        created_at: Date.now() - 120_000,
+      },
+    );
+    const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    expect(res.notified).toBe(true);
+
+    const ids = tables.notifications.map((n) => n._id);
+    expect(ids).toContain("n_assigned"); // event row untouched
+    expect(ids).toContain("n_other_conv"); // other conversation untouched
+    expect(ids).not.toContain("n_old_state"); // superseded state row gone
+    const conv1States = tables.notifications.filter(
+      (n) => n.conversation_id === "conv1" && n.type !== "session_assigned",
+    );
+    expect(conv1States.length).toBe(1);
+    expect(conv1States[0].type).toBe("session_idle");
   });
 
   test("aborts when the status moved on since scheduling (superseded)", async () => {
