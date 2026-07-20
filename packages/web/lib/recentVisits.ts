@@ -4,7 +4,7 @@
 // left the store — so renames never leave the rail stale (lib/liveEntities
 // philosophy). Shared by the header RecentlyViewedMenu and the command
 // palette's "Recently Visited" group.
-import { pathLabel } from "../components/TabBar";
+import { pathLabel } from "./pathLabel";
 import { cleanTitle } from "./conversationProcessor";
 import type { RecentVisit } from "../store/inboxStore";
 
