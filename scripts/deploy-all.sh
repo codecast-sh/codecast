@@ -199,7 +199,12 @@ else
   # Versioned filenames never change content, so cache them hard at the Cloudflare edge.
   IMMUTABLE_CC="public, max-age=31536000, immutable"
 
-  npx wrangler r2 object put "codecast/$DMG_NAME" --file "$DMG_FILE" --remote \
+  # desktop/ prefix, matching where the zip + blockmap + latest-mac.yml go below.
+  # This used to write to the bucket ROOT while latest-mac.yml (which resolves
+  # its file list relative to the manifest) expected desktop/ -- so the DMG the
+  # site linked to at root never existed and /download/mac 404'd for every
+  # release, invisibly, because auto-update reads the manifest instead.
+  npx wrangler r2 object put "codecast/desktop/$DMG_NAME" --file "$DMG_FILE" --remote \
     --content-type "application/x-apple-diskimage" --cache-control "$IMMUTABLE_CC"
 
   ZIP_FILE=$(find dist -name "*-mac.zip" -maxdepth 1 -newer dist/mac-arm64 | head -1)
@@ -236,7 +241,7 @@ else
   SERVER_FILE="packages/web/server/index.ts"
   if [ -f "$SERVER_FILE" ]; then
     sed -i '' "s/const LATEST_DESKTOP_VERSION = \".*\"/const LATEST_DESKTOP_VERSION = \"$ELECTRON_VERSION\"/" "$SERVER_FILE"
-    sed -i '' "s|const MAC_DMG_URL = \"https://dl.codecast.sh/Codecast-.*-arm64.dmg\"|const MAC_DMG_URL = \"https://dl.codecast.sh/Codecast-${ELECTRON_VERSION}-arm64.dmg\"|" "$SERVER_FILE"
+    sed -i '' "s|const MAC_DMG_URL = \"https://dl.codecast.sh/\(desktop/\)\{0,1\}Codecast-.*-arm64.dmg\"|const MAC_DMG_URL = \"https://dl.codecast.sh/desktop/Codecast-${ELECTRON_VERSION}-arm64.dmg\"|" "$SERVER_FILE"
     sed -i '' "s/const MAC_DMG_VERSION = \".*\"/const MAC_DMG_VERSION = \"$ELECTRON_VERSION\"/" "$SERVER_FILE"
   fi
   echo "   ✓ Desktop app v$ELECTRON_VERSION deployed to dl.codecast.sh/$DMG_NAME"
