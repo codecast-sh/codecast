@@ -7,6 +7,7 @@ import { useImageGallery } from "../ImageGallery";
 import { CodeBlock } from "../CodeBlock";
 import { MermaidDiagram } from "../MermaidDiagram";
 import { tryRenderCanvas, tryRenderHtmlMessage } from "../HtmlSnippet";
+import { tryRenderCastDiff } from "../InlineDiff";
 import { entityRemarkPlugins } from "../../lib/remarkEntityIds";
 import { EntityAwareCode, EntityAwareLink } from "../EntityIdPill";
 
@@ -234,6 +235,8 @@ const MD_COMPONENTS: Components = {
                 if (language === 'mermaid') return <MermaidDiagram code={code} />;
                 const canvas = tryRenderCanvas(language, code);
                 if (canvas) return canvas;
+                const castDiff = tryRenderCastDiff(language, code);
+                if (castDiff) return castDiff;
                 return <CodeBlock code={code} language={language} />;
               }
             }
