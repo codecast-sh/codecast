@@ -19,6 +19,9 @@ const Security = lazy(() => import("@/app/(marketing)/security/page"));
 const Support = lazy(() => import("@/app/(marketing)/support/page"));
 const Terms = lazy(() => import("@/app/(marketing)/terms/page"));
 const Changelog = lazy(() => import("@/app/(marketing)/changelog/page"));
+const Pricing = lazy(() => import("@/app/(marketing)/pricing/page"));
+const BlogIndex = lazy(() => import("@/app/(marketing)/blog/page"));
+const BlogGitBlame = lazy(() => import("@/app/(marketing)/blog/git-blame-for-ai-agents/page"));
 
 const Login = lazy(() => import("@/app/login/page"));
 const Signup = lazy(() => import("@/app/signup/page"));
@@ -123,6 +126,9 @@ export function App() {
               <Route path="support" element={<E name="Support"><Support /></E>} />
               <Route path="terms" element={<E name="Terms"><Terms /></E>} />
               <Route path="changelog" element={<E name="Changelog"><Changelog /></E>} />
+              <Route path="pricing" element={<E name="Pricing"><Pricing /></E>} />
+              <Route path="blog" element={<E name="BlogIndex"><BlogIndex /></E>} />
+              <Route path="blog/git-blame-for-ai-agents" element={<E name="BlogGitBlame"><BlogGitBlame /></E>} />
             </Route>
 
             {/* Auth */}
