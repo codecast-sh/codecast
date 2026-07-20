@@ -23,6 +23,7 @@ import {
 import { Popover, PopoverContent, PopoverAnchor } from "./ui/popover";
 import { stripMarkdown, docContentPreview } from "../lib/notificationText";
 import { parseEntityUrl, ENTITY_ROUTE, isConvexId, type EntityType } from "../lib/entityLinks";
+import { DocEmbed } from "./DocEmbed";
 import { FormattedSummary } from "./FormattedSummary";
 import { sessionCardSummary } from "../lib/sessionSummary";
 
@@ -449,6 +450,15 @@ export function EntityAwareCode({ children, className, ...props }: any) {
 }
 
 export function EntityAwareLink({ href, children, ...props }: any) {
+  {
+    // Transclusion: ![[doc:<id>]] arrives as a link whose TEXT is
+    // "embed:doc:<id>" (the embed:// href is dropped by react-markdown's url
+    // sanitizer, same as entity:// below). Renders the doc body in full.
+    const embedText = typeof children === "string" ? children : Array.isArray(children) ? children.map(String).join("") : String(children ?? "");
+    if (embedText.startsWith("embed:doc:") && embedText.length > 10) {
+      return <DocEmbed id={embedText.slice(10)} />;
+    }
+  }
   if (href?.startsWith("entity://")) {
     const ref = href.slice(9);
     if (ref.startsWith("doc:")) return <EntityIdPill type="doc" id={ref.slice(4)} />;
