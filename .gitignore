@@ -89,3 +89,6 @@ TESTING_PERMISSIONS.md
 # Watchman transient cookies
 .watchman-cookie-*
 .env.local.deployhold*
+
+# Local demo/marketing video renders (large media, never committed)
+videos/
