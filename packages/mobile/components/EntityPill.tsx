@@ -10,7 +10,9 @@ import { isConvexId, type EntityType } from '@codecast/shared/entities';
 const api = _api as any;
 
 // Same detection as web's EntityIdPill (packages/web/components/EntityIdPill.tsx).
-const ENTITY_ID_RE = /^(?:(?:ct|pl)-[a-z0-9]+|jx[a-z0-9]{5,})$/i;
+// The bare 32-char alternative catches full Convex ids (docs have no short id);
+// EntityPill resolves their table server-side.
+const ENTITY_ID_RE = /^(?:(?:ct|pl)-[a-z0-9]+|jx[a-z0-9]{5,}|[a-z0-9]{32})$/i;
 
 export function isEntityId(text: string): boolean {
   return ENTITY_ID_RE.test(text.trim());
@@ -68,11 +70,14 @@ function entityQueryArgs(type: EntityType, id: string): { short_id?: string; id?
  * not a bare id. Text-based so it sits inline in markdown prose as well as in
  * header rows. Tap navigates to the object's screen.
  */
-export function EntityPill({ shortId, type: typeProp, id: idProp }: { shortId?: string; type?: EntityType; id?: string }) {
+export function EntityPill({ shortId, type: typeProp, id: idProp, fallback }: { shortId?: string; type?: EntityType; id?: string; fallback?: React.ReactNode }) {
   const router = useRouter();
   const rawId = (idProp ?? shortId ?? '').trim();
-  const type: EntityType | null = typeProp ?? detectEntityType(rawId);
   const looksConvex = isConvexId(rawId);
+  // A full Convex id carries no type prefix (docs have no short id at all), so
+  // resolve its table server-side; prefix detection is for short ids only.
+  const resolvedType = useQuery(api.entities.resolveIdType, !typeProp && looksConvex ? { id: rawId } : 'skip');
+  const type: EntityType | null = typeProp ?? (looksConvex ? resolvedType ?? null : detectEntityType(rawId));
   const isSession = type === 'session';
 
   // Sessions and docs need the resolved row for their title (and the session's
@@ -88,7 +93,9 @@ export function EntityPill({ shortId, type: typeProp, id: idProp }: { shortId?: 
 
   const entity: any = type === 'task' ? task : type === 'plan' ? plan : isSession ? session : type === 'doc' ? doc : undefined;
 
-  if (!type) return <RNText>{rawId}</RNText>;
+  // Unknown id shape, a Convex id resolving to no entity table, or the
+  // transient state while resolveIdType is in flight.
+  if (!type) return fallback !== undefined ? <>{fallback}</> : <RNText>{rawId}</RNText>;
 
   const color = TYPE_COLOR[type];
 
