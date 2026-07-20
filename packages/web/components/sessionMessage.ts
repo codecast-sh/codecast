@@ -231,6 +231,11 @@ export function cleanUserMessage(raw: string | null | undefined): string | null 
   if (spawned) return spawned.prompt || spawned.title;
   const cleaned = raw
     .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "")
+    // The server truncates this preview slice, so a notification's closing tag
+    // often doesn't survive — strip an unterminated trailing block too, or the
+    // generic tag-strip below leaks its inner text ("bnvc12ng6 Monitor event…")
+    // into the card as if the human said it.
+    .replace(/<task-notification>[\s\S]*$/, "")
     .replace(/\[Image[:\s][^\]]*\]/gi, "")
     .replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "")
     .replace(/<[^>]+>/g, "")
