@@ -3807,8 +3807,15 @@ export const useInboxStore = create<InboxStoreState>(
   }),
 
   deferSession: action(function (this: Draft, id: string) {
-    if (this.sessions[id]) this.sessions[id].is_deferred = true;
-    if (this.conversations[id]) (this.conversations[id] as any).inbox_deferred_at = Date.now();
+    const now = Date.now();
+    if (this.sessions[id]) {
+      this.sessions[id].is_deferred = true;
+      // The server field, on the session row: the sessions→conversations
+      // field-whitelist dispatch carries it even when the conversations meta
+      // row doesn't exist yet (session never opened on this client).
+      (this.sessions[id] as any).inbox_deferred_at = now;
+    }
+    if (this.conversations[id]) (this.conversations[id] as any).inbox_deferred_at = now;
   }),
 
   pinSession: action(function (this: Draft, id: string) {
