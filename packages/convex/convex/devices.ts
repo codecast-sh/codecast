@@ -701,6 +701,7 @@ export const listDevices = query({
         is_remote: d.is_remote ?? false,
         local_project_roots: d.local_project_roots ?? [],
         settings: d.settings ?? undefined,
+        model_inventory: d.model_inventory ?? undefined,
         online: now - d.last_seen < ONLINE_MS,
       }))
       .sort((a: any, b: any) => b.last_seen - a.last_seen);
