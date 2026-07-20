@@ -333,6 +333,8 @@ describe("isApiErrorBanner", () => {
     expect(isApiErrorBanner("You've hit your monthly spend limit · raise it at claude.ai/settings/usage")).toBe(true);
     expect(isApiErrorBanner("You’ve hit your weekly limit · resets 3am (America/New_York)")).toBe(true); // curly apostrophe
     expect(isApiErrorBanner("Claude usage limit reached. Your limit will reset at 3am (America/New_York).")).toBe(true);
+    // Sentence-shaped spend-limit variant, admitted by its /usage-credits tail.
+    expect(isApiErrorBanner("You've hit your monthly spend limit. Run /usage-credits to manage your limit and keep using Fable 5 or switch models to continue this chat.")).toBe(true);
   });
 
   test("does not flag prose that merely opens like a limit banner", () => {
@@ -342,11 +344,14 @@ describe("isApiErrorBanner", () => {
     expect(isApiErrorBanner("You've hit your trial usage limit. I can activate your full Pro subscription right now.")).toBe(false);
     expect(isApiErrorBanner("You've hit your usage limit — the ad is fully planned, cast, and ready to generate.")).toBe(false);
     expect(isApiErrorBanner("You've hit your session limit · resets 11:30pm\nWait, actually let me reconsider the approach here.")).toBe(false);
+    // Sentence continuation without the /usage-credits tail stays prose.
+    expect(isApiErrorBanner("You've hit your monthly spend limit. You could raise it in settings or wait for the reset.")).toBe(false);
   });
 
   test("classifies banner kinds for the badge label", () => {
     expect(classifyApiErrorBanner("Please run /login · API Error: 401 Invalid authentication credentials")).toBe("auth");
     expect(classifyApiErrorBanner("You've hit your session limit · resets 11:30pm (America/New_York)")).toBe("limit");
+    expect(classifyApiErrorBanner("You've hit your monthly spend limit. Run /usage-credits to manage your limit and keep using Fable 5 or switch models to continue this chat.")).toBe("limit");
     expect(classifyApiErrorBanner("API Error: 529 Overloaded")).toBe("error");
     expect(classifyApiErrorBanner("All good, deploy finished.")).toBe(null);
   });
