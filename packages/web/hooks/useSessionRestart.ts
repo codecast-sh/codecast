@@ -81,6 +81,25 @@ export function deriveRestartStage(
 // or the request itself errored; sticks until retried or the session revives).
 export type RestartPhase = "idle" | "restarting" | "restored" | "failed";
 
+// Whether the caller's isLive signal counts as proof the restart worked.
+// isLive is usually still true at click time — restarts are fired at connected
+// sessions too, and liveness signals (is_connected, recent activity) lag the
+// kill — so a bare isLive check declares "back live" instantly off the pre-kill
+// snapshot. Liveness must be re-earned after the click: either we watched the
+// session go down since then, or the daemon stamped the resume command as
+// executed cleanly.
+export function restartConfirmedLive(
+  isLive: boolean,
+  sawDown: boolean,
+  restartProgress: RestartProgressRow[] | null | undefined,
+): boolean {
+  if (!isLive) return false;
+  if (sawDown) return true;
+  return !!restartProgress?.some(
+    (c) => c.command === "resume_session" && c.executed_at && !c.error,
+  );
+}
+
 /**
  * One reliable "Restart session" action that drives BOTH recovery codepaths so a
  * session is never left dead:
@@ -125,6 +144,9 @@ export function useSessionRestart(opts: {
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const isRestarting = phase === "restarting";
   const escalatedRef = useRef(false);
+  // Set once the session is observed down after the click — the evidence that a
+  // later isLive=true is the restart's doing, not the pre-kill snapshot.
+  const sawDownRef = useRef(false);
 
   // Live kill→resume ladder from the daemon (getRestartProgress stamps each
   // command with executed_at + result/error). Skip-gated so it costs nothing
@@ -164,6 +186,7 @@ export function useSessionRestart(opts: {
     // only race the resume it's waiting on.
     if (phase === "restarting") return;
     escalatedRef.current = false;
+    sawDownRef.current = false;
     setFailure(null);
     setStartedAt(Date.now());
     setPhase("restarting");
@@ -199,16 +222,24 @@ export function useSessionRestart(opts: {
     }
   }, [isRestarting, conversationId, startedAt]);
 
-  // Session came live → the recovery is done. Confirm it, then clear. A late
-  // revival also clears a stuck "failed" — the error is no longer true.
+  // Record the session going down after the click. Declared before the restored
+  // check below so the same render's confirmation sees it.
   useWatchEffect(() => {
-    if (isRestarting && isLive) {
+    if ((isRestarting || phase === "failed") && !isLive) sawDownRef.current = true;
+  }, [isRestarting, phase, isLive]);
+
+  // Session came live → the recovery is done. Confirm it, then clear — but only
+  // once liveness is re-earned (see restartConfirmedLive); at click time isLive
+  // is still the pre-kill snapshot. A late revival also clears a stuck "failed"
+  // — the error is no longer true.
+  useWatchEffect(() => {
+    if (isRestarting && restartConfirmedLive(isLive, sawDownRef.current, restartProgress)) {
       setPhase("restored");
       notify("success", "Session is back live");
-    } else if (phase === "failed" && isLive) {
+    } else if (phase === "failed" && isLive && sawDownRef.current) {
       setPhase("idle");
     }
-  }, [isRestarting, phase, isLive]);
+  }, [isRestarting, phase, isLive, restartProgress]);
   useWatchEffect(() => {
     if (phase !== "restored") return;
     const t = setTimeout(() => setPhase((p) => (p === "restored" ? "idle" : p)), RESTART_RESTORED_LINGER_MS);
