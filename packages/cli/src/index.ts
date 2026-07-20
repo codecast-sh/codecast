@@ -2212,6 +2212,7 @@ cast doc show <id>                          # paginates long docs (200 lines) + 
 cast doc show <id> -p 2 | 800:1000 | --full # page · line range · whole doc (-n = line gutter)
 cast doc grep <id> '<text>'                 # search inside one doc (grep '^#' = outline)
 cast doc search "<title>"                    # search doc TITLES across the corpus
+cast doc delete <id> --yes                  # permanently delete a doc you created
 \`\`\`
 ${WORK_SNIPPET_END}
 `;
