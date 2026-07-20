@@ -355,6 +355,17 @@ function sessionNotifOptedOut(
   return !!prefs && !prefs.permission_request;
 }
 
+// Session-STATE types describe what the session is currently doing (waiting,
+// blocked on a permission, errored) — as opposed to discrete events like
+// "assigned to you" or a comment. A state supersedes the previous one, so the
+// notification list keeps at most ONE of these per (recipient, conversation):
+// stacking a "ready" row for every turn of an active back-and-forth is noise.
+const SESSION_STATE_TYPES = new Set<string>([
+  "session_idle",
+  "permission_request",
+  "session_error",
+]);
+
 // Insert the notification row + push for ONE recipient, honoring their prefs.
 // Shared by the api-token mutation below (daemon-driven permission/error
 // notifications) and the server-side needs-input check.
@@ -369,6 +380,22 @@ async function deliverSessionNotification(
   const user = await ctx.db.get(recipientId);
   if (!user) return false;
   if (sessionNotifOptedOut(user.notification_preferences as any, type)) return false;
+
+  // Replace, don't stack: a new state row supersedes the conversation's old
+  // one. Delete + insert (rather than patch) so the row gets a fresh _id —
+  // the desktop's native-banner watcher treats an unseen _id as "new", which
+  // keeps one banner per episode while the in-app list stays at one row.
+  if (SESSION_STATE_TYPES.has(type)) {
+    const prior = await ctx.db
+      .query("notifications")
+      .withIndex("by_recipient_conversation", (q: any) =>
+        q.eq("recipient_user_id", recipientId).eq("conversation_id", conversationId),
+      )
+      .collect();
+    for (const n of prior) {
+      if (SESSION_STATE_TYPES.has(n.type)) await ctx.db.delete(n._id);
+    }
+  }
 
   await ctx.db.insert("notifications", {
     recipient_user_id: recipientId,
