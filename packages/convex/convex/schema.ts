@@ -3,7 +3,7 @@ import { authTables } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { AGENT_STATUSES, DAEMON_COMMANDS } from "@codecast/shared/contracts";
 import { ccAccountsValidator, ccAutoSwitchStateValidator } from "./ccAccountsShared";
-import { deviceSettingsValidator } from "./deviceSettingsShared";
+import { deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
 
 // Derived from the single source of truth in @codecast/shared/contracts so the
 // schema, validators, the CLI daemon, and the browser store can never drift.
@@ -1015,6 +1015,9 @@ export default defineSchema({
     // Installed agent-feature snippets (by slug) + stable mode on this machine
     // — heartbeat-reported, drives the web Settings page (per-device toggles).
     settings: v.optional(deviceSettingsValidator),
+    // Launchable `provider/model` ids per dynamic client (opencode/pi) on this
+    // machine — heartbeat-reported (hash-gated), drives the web model pickers.
+    model_inventory: v.optional(modelInventoryValidator),
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_device", ["user_id", "device_id"]),
