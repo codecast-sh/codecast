@@ -1,5 +1,5 @@
 import { useInboxStore } from "@/store/inboxStore";
-import { pathLabel } from "@/components/TabBar";
+import { pathLabel } from "@/lib/pathLabel";
 import { settingsSectionForPath } from "@/lib/settingsSections";
 
 // Routes that live OUTSIDE the dashboard tab shell. The tab system (DashboardLayout
