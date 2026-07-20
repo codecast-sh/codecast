@@ -33,6 +33,7 @@ import { SyncStatusChip } from "./SyncStatusChip";
 import { TmuxMissingBanner } from "./TmuxMissingBanner";
 import { FindBar } from "./FindBar";
 import { KeyboardShortcutsPanel, ShortcutTooltip } from "./KeyboardShortcutsHelp";
+import { AppLoader } from "./AppLoader";
 import { SettingsModal } from "./settings/SettingsModal";
 import { useInboxStore, useTrackedStore, categorizeSessions, filterInboxScope, sessionsWithPendingSend, sessionsWakeSig, pendingSendWakeSig, isSessionHidden, getProjectName, resolveShowOld } from "../store/inboxStore";
 import { useCoarseNow } from "../hooks/useCoarseNow";
@@ -148,7 +149,15 @@ const ActiveAgentsBadge = memo(function ActiveAgentsBadge({ isOnInboxPage }: { i
 
 export function DashboardLayout(props: DashboardLayoutProps) {
   const isNested = useContext(DashboardNestCtx);
+  // Hold the boot loader until the IDB hydration pass lands (clientStateInitialized
+  // flips true even when the cache is empty or unreadable, so this can't hang).
+  // Without it, React's first frame races loadCache(): the shell mounts on an
+  // empty store and paints zero-session null states ("No sessions") for a beat
+  // before cached content pops in. AppLoader is pixel-identical to the static
+  // #boot-shell in index.html, so the user sees one continuous loader → content.
+  const hydrated = useInboxStore((s) => s.clientStateInitialized);
   if (isNested) return <>{props.children}</>;
+  if (!hydrated) return <AppLoader />;
   return (
     <DashboardNestCtx.Provider value={true}>
       <DashboardLayoutInner {...props} />
