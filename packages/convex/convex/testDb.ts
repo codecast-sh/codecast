@@ -31,6 +31,11 @@ export function makeFakeDb(tables: Record<string, any[]>) {
         async first() { return apply()[0] ?? null; },
         async collect() { return apply(); },
         async take(n: number) { return apply().slice(0, n); },
+        // Single-page paginate: all matches, always done. Enough to test logic
+        // layered around a paginated scan; cursor mechanics stay untested here.
+        async paginate(_opts: any) {
+          return { page: apply(), isDone: true, continueCursor: "" };
+        },
       };
       return builder;
     },
