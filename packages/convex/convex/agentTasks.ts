@@ -435,6 +435,11 @@ export const completeTaskRun = mutation({
       last_run_at: now,
       last_run_summary: args.summary,
       last_run_failed: false,
+      // A good run ends the retry streak. retry_count is the CURRENT streak, not
+      // a lifetime tally: failRun counts up to max_retries, so leaving it set
+      // after a recovery both shortens the next streak's budget and leaves the
+      // trigger reading as "retrying" forever.
+      retry_count: 0,
       last_run_conversation_id: args.conversation_id
         ? args.conversation_id as Id<"conversations">
         : undefined,
