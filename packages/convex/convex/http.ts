@@ -3503,6 +3503,9 @@ cliRoute("/cli/docs/share", async (ctx, body) => {
 cliRoute("/cli/docs/unshare", async (ctx, body) => {
   return await ctx.runMutation(api.docs.unshare, body);
 });
+cliRoute("/cli/docs/delete", async (ctx, body) => {
+  return await ctx.runMutation(api.docs.remove, body);
+});
 cliRoute("/cli/docs/patch", async (ctx, body) => {
   const result = await ctx.runMutation(api.docs.patch, body);
   if (result.content) {
