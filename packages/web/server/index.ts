@@ -73,7 +73,14 @@ const BINARIES: Record<string, string> = {
   "codecast-windows-x64.exe": "https://dl.codecast.sh/codecast-windows-x64.exe",
 };
 
-const MAC_DMG_URL = "https://dl.codecast.sh/Codecast-1.1.86-arm64.dmg";
+// Under the desktop/ prefix, NOT the bucket root: that is where the release
+// actually uploads the DMG, alongside the zip + blockmap + latest-mac.yml that
+// electron-updater resolves relative to the manifest. The root-level URL this
+// pointed at 404'd for every published version (1.1.83, 1.1.85, 1.1.86), so the
+// site's Mac download button was dead while in-app auto-update kept working —
+// which is why it went unnoticed. Keep this prefix in sync with the upload
+// destination in scripts/deploy-all.sh.
+const MAC_DMG_URL = "https://dl.codecast.sh/desktop/Codecast-1.1.86-arm64.dmg";
 const MAC_DMG_VERSION = "1.1.86";
 
 app.get("/api/health", (c) =>
