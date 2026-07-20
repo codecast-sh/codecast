@@ -13,8 +13,8 @@ import { visitTimeAgo } from "../lib/recentVisits";
 import { getLabelColor } from "../lib/labelColors";
 import { shouldShowSession } from "../lib/sessionFilters";
 import { nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
-import { useInboxStore, useTrackedStore, categorizeSessions, filterInboxScope, sessionsWithPendingSend, sessionsWakeSig, pendingSendWakeSig, resolveShowOld } from "../store/inboxStore";
-import { useCoarseNow } from "../hooks/useCoarseNow";
+import { useInboxStore } from "../store/inboxStore";
+import { useNeedsInputCount } from "../hooks/useNeedsInputCount";
 import { useConvexSync } from "../hooks/useConvexSync";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { TeamIcon } from "./TeamIcon";
@@ -313,35 +313,7 @@ function NavSection({
 // the entire Sidebar (favorites, bookmarks, recents). Mirrors ActiveAgentsBadge
 // in DashboardLayout. Only mounted in the non-narrow rail, so no work when narrow.
 const NeedsInputCountBadge = memo(function NeedsInputCountBadge() {
-  const s = useTrackedStore([
-    // Wake on STRUCTURAL session change only — the raw s.sessions ref flips on
-    // every ~1s liveness heartbeat, and this badge was measured re-running
-    // categorizeSessions over the whole never-prune cache on each flip (~50ms a
-    // pass). pendingMessages likewise: only the pending-send MEMBERSHIP matters.
-    // The body reads the raw fields for data; these signatures only gate the
-    // re-render. See store/wakeSig.ts and the identical gate on SessionListPanel.
-    s => sessionsWakeSig(s.sessions),
-    s => s.sessionsWithQueuedMessages,
-    s => pendingSendWakeSig(s.pendingMessages),
-    s => s.currentUser?._id,
-    s => s.liveInboxIds,
-    s => resolveShowOld(s.clientState.ui),
-  ]);
-  // Mine-scoped: the sidebar's "needs input" badge is your personal attention
-  // count, so a teammate row cached from a team-board visit must not inflate it.
-  const meId = s.currentUser?._id;
-  // categorizeSessions' trust-TTL sweep (stale "working" → needs-input) is
-  // time-driven, not field-driven — keep it alive with a coarse clock.
-  const coarseNow = useCoarseNow(15_000);
-  // And count only the AUTHORITATIVE active set, not the raw never-prune cache —
-  // otherwise this badge tallies every aged-out "needs input" card the panel
-  // already hides, and the sidebar number never matches what you see.
-  // liveInboxIds + showOld make categorizeSessions drop "old" rows (see its opts).
-  const needsInputCount = useMemo(
-    () => categorizeSessions(filterInboxScope(s.sessions, "mine", meId ? meId.toString() : null), s.sessionsWithQueuedMessages, sessionsWithPendingSend(s.pendingMessages), { liveInboxIds: s.liveInboxIds, showOld: resolveShowOld(s.clientState.ui) }).needsInput.length,
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sessionsWakeSig(s.sessions), meId, s.sessionsWithQueuedMessages, pendingSendWakeSig(s.pendingMessages), s.liveInboxIds, resolveShowOld(s.clientState.ui), coarseNow],
-  );
+  const needsInputCount = useNeedsInputCount();
   if (needsInputCount === 0) return null;
   return (
     <span className="-ml-0.5 min-w-[20px] h-[20px] px-1.5 flex items-center justify-center text-[11px] font-bold bg-teal-600 text-white rounded-full">
