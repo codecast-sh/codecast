@@ -395,7 +395,11 @@ export function LabelChipsRow({
       <div className="flex-1 min-w-0 flex items-center gap-1 overflow-hidden">
       <div
         ref={rowRef}
-        className="flex gap-1 overflow-hidden min-w-0 items-center"
+        // flex-1 (basis 0): the row claims only the space LEFT OVER after the
+        // pinned active chip and the +N pill take their natural width — its
+        // chips just hide into +N when squeezed, so it collapses first and the
+        // pinned chip ellipsizes only when it and the pill alone don't fit.
+        className="flex flex-1 gap-1 overflow-hidden min-w-0 items-center"
         // When a chip overflows, soften the row's right edge so that boundary
         // chip dissolves into the +N pill instead of ending on a hard clip.
         style={peekKey ? {
