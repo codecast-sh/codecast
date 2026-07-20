@@ -604,11 +604,9 @@ export async function performNeedsInputCheck(
 
   const now = Date.now();
   // Single-row mirror of enrichInboxSessionRow's derivation.
-  const agentStatus = trustedAgentStatus(session?.agent_status, conv.updated_at, now);
-  const daemonAlive =
-    agentStatus === "stopped"
-      ? false
-      : !!session?.last_heartbeat && now - session.last_heartbeat < HEARTBEAT_ALIVE_MS;
+  const heartbeatFresh = !!session?.last_heartbeat && now - session.last_heartbeat < HEARTBEAT_ALIVE_MS;
+  const agentStatus = trustedAgentStatus(session?.agent_status, conv.updated_at, now, heartbeatFresh);
+  const daemonAlive = agentStatus === "stopped" ? false : heartbeatFresh;
   const hasPending = !!conv.has_pending_messages;
 
   const lastMsg = await ctx.db
