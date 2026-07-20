@@ -8,7 +8,8 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Command as CommandPrimitive } from "cmdk";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { commitModelChange, canControlModel, modelOptionKey } from "./ModelEffortPicker";
-import { AGENT_MODEL_CONFIG, modelAgentKey } from "@codecast/shared/contracts";
+import { AGENT_MODEL_CONFIG, modelAgentKey, dynamicModelOption } from "@codecast/shared/contracts";
+import { useDynamicModels } from "../hooks/useDynamicModels";
 import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, categorizeSessions, filterInboxScope, sessionsWithPendingSend, convBucketMap, sortLabels, computeChipCounts, getProjectName, RecentVisit, resolveShowOld } from "../store/inboxStore";
 import { resolveRecentVisits, visitTimeAgo, type ResolvedVisit } from "../lib/recentVisits";
 import { PageIcon } from "./RecentlyViewedMenu";
@@ -241,6 +242,12 @@ function ActionSubmenu({
 
   const target = targets[0];
   const currentLabels = target?.labels || [];
+  // Dynamic-client (opencode/pi) live model inventory for the model mode; the
+  // hook internally skips its query for static clients.
+  const dynamicModels = useDynamicModels(
+    mode === "model" ? (target as any)?.agent_type : undefined,
+    (target as any)?.owner_device_id,
+  );
 
   useWatchEffect(() => {
     setSearch("");
@@ -426,7 +433,10 @@ function ActionSubmenu({
       const curModelKey = modelOptionKey(s0?.model, agentType);
       const curEffort = s0?.effort as string | undefined;
       const rows: any[] = [];
-      for (const m of cfg.models) {
+      // Dynamic clients: Default + the live featured head; the query also
+      // searches the device's full inventory below.
+      const models = dynamicModels.dynamic ? [cfg.models[0], ...dynamicModels.featured] : cfg.models;
+      for (const m of models) {
         if (blank && m.midSessionOnly) continue;
         rows.push({ key: `model:${m.key}`, label: m.label, sub: m.hint, active: m.key === curModelKey, icon: Cpu });
       }
@@ -434,10 +444,20 @@ function ActionSubmenu({
         const active = level === "default" ? !curEffort : level === curEffort;
         rows.push({ key: `effort:${level}`, label: `${level} effort`, active, icon: CircleDot });
       }
-      return rows.filter((r) => r.label.toLowerCase().includes(q));
+      const filtered = rows.filter((r) => r.label.toLowerCase().includes(q));
+      if (dynamicModels.dynamic && q) {
+        const seen = new Set(models.map((m) => m.key));
+        for (const id of dynamicModels.all) {
+          if (filtered.length >= 24) break;
+          if (seen.has(id) || !id.toLowerCase().includes(q)) continue;
+          const opt = dynamicModelOption(id);
+          filtered.push({ key: `model:${id}`, label: opt.label, sub: opt.hint, active: id === curModelKey, icon: Cpu });
+        }
+      }
+      return filtered;
     }
     return [];
-  }, [mode, search, target, currentLabels, teamMembers, currentUser, buckets, bucketAssignments, viewChipData, activeBucketFilter, activeProjectFilter]);
+  }, [mode, search, target, currentLabels, teamMembers, currentUser, buckets, bucketAssignments, viewChipData, activeBucketFilter, activeProjectFilter, dynamicModels]);
 
   useWatchEffect(() => { setHighlightIndex(0); }, [search]);
 
@@ -475,7 +495,12 @@ function ActionSubmenu({
       const store = useInboxStore.getState();
       const real = store.getConvexId(target._id) ?? target._id;
       const s0 = target as any;
-      const [kind, value] = String(item.key).split(":");
+      // Split on the FIRST colon only — dynamic model ids can contain ":"
+      // (openrouter variant suffixes like ":free").
+      const keyStr = String(item.key);
+      const sep = keyStr.indexOf(":");
+      const kind = keyStr.slice(0, sep);
+      const value = keyStr.slice(sep + 1);
       // commitModelChange owns the not-ready decision: a blank session records
       // the choice locally on the stub (the create carries it), only the live
       // rail needs a real id. Passing `real` (possibly still a stub) lets it
