@@ -16,6 +16,7 @@ import {
   SUBAGENT_PRODUCING_GRACE_MS,
   STATUS_TRUST_TTL_MS,
   AGENT_IDLE_GRACE_MS,
+  HEARTBEAT_ALIVE_MS,
   type ConversationDoc,
   type SessionIdleInput,
   type WorkStateInput,

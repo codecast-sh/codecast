@@ -6024,8 +6024,12 @@ export const feedForCLI = query({
       // the feed pins the session in WORKING forever even though the inbox /
       // `cast monitor` (which read the coerced value) long since moved it to
       // needs-input. This is the one place feedForCLI reads the raw managed
-      // status, so it must coerce here too or the two views drift.
-      const agentStatus = trustedAgentStatus(managed?.agent_status, conv.updated_at, now);
+      // status, so it must coerce here too or the two views drift. The
+      // heartbeatAlive leg uses the same 90s window as the inbox maps (NOT the
+      // stricter 60s liveStatusMap above) so both surfaces coerce identically.
+      const heartbeatFresh =
+        !!managed?.last_heartbeat && now - managed.last_heartbeat < INBOX_HEARTBEAT_ALIVE_MS;
+      const agentStatus = trustedAgentStatus(managed?.agent_status, conv.updated_at, now, heartbeatFresh);
       coercedStatusMap.set(conv._id.toString(), agentStatus);
       const daemonAlive = agentStatus === "stopped" ? false : isLive;
       const hasPending = !!(conv as any).has_pending_messages;
@@ -6930,14 +6934,11 @@ async function buildUserSessionMaps(
     if (s.permission_mode) permissionModeMap.set(cid, s.permission_mode);
     if (!s.agent_status) continue;
     if (s.agent_status_updated_at !== undefined) agentStatusUpdatedAtMap.set(cid, s.agent_status_updated_at);
-    const heartbeatAlive = now - s.last_heartbeat < INBOX_HEARTBEAT_ALIVE_MS;
-    if (s.agent_status === "stopped" || s.agent_status === "idle") {
-      agentStatusMap.set(cid, s.agent_status);
-    } else if (heartbeatAlive) {
-      agentStatusMap.set(cid, s.agent_status);
-    } else {
-      agentStatusMap.set(cid, "stopped");
-    }
+    // Raw status. The heartbeat-staleness coercion lives in trustedAgentStatus
+    // (consumers pass liveConvIds membership as heartbeatAlive) so it can weigh
+    // the conversation's own activity — a lapsed heartbeat on a session that is
+    // actively syncing messages must not read as dead.
+    agentStatusMap.set(cid, s.agent_status);
   }
 
   const userDaemonAlive = managedSessions.some(
@@ -6986,13 +6987,9 @@ async function mergeForeignConversationLiveness(
     if (managed.agent_status_updated_at !== undefined) {
       maps.agentStatusUpdatedAtMap.set(cid, managed.agent_status_updated_at);
     }
-    if (managed.agent_status === "stopped" || managed.agent_status === "idle") {
-      maps.agentStatusMap.set(cid, managed.agent_status);
-    } else if (heartbeatAlive) {
-      maps.agentStatusMap.set(cid, managed.agent_status);
-    } else {
-      maps.agentStatusMap.set(cid, "stopped");
-    }
+    // Raw status — same contract as buildUserSessionMaps: trustedAgentStatus
+    // applies the heartbeat coercion with conversation context.
+    maps.agentStatusMap.set(cid, managed.agent_status);
   }
 }
 
@@ -7056,6 +7053,7 @@ async function enrichInboxSessionRow(
     maps.agentStatusMap.get(conv._id.toString()),
     conv.updated_at,
     now,
+    maps.liveConvIds.has(conv._id.toString()),
   );
   // Don't let userDaemonAlive resurrect sessions we know are stopped
   const daemonAlive = agentStatus === "stopped"
@@ -7141,7 +7139,7 @@ async function enrichInboxSessionRow(
         convStatus: c.status,
         updatedAt: c.updated_at,
         isLive: maps.liveConvIds.has(cid),
-        agentStatus: trustedAgentStatus(maps.agentStatusMap.get(cid), c.updated_at, now),
+        agentStatus: trustedAgentStatus(maps.agentStatusMap.get(cid), c.updated_at, now, maps.liveConvIds.has(cid)),
         now,
       });
     })) {
@@ -7728,7 +7726,7 @@ export function deriveProducingParents(
       convStatus: c.status,
       updatedAt: c.updated_at,
       isLive: maps.liveConvIds.has(cid),
-      agentStatus: trustedAgentStatus(maps.agentStatusMap.get(cid), c.updated_at, now),
+      agentStatus: trustedAgentStatus(maps.agentStatusMap.get(cid), c.updated_at, now, maps.liveConvIds.has(cid)),
       now,
     })) {
       parents.add(c.parent_conversation_id.toString());
@@ -7812,7 +7810,7 @@ async function enrichLivenessFields(
   const dismissed = !!conv.inbox_dismissed_at;
   const stashed = !!conv.inbox_stashed_at;
 
-  const agentStatus = trustedAgentStatus(maps.agentStatusMap.get(cid), conv.updated_at, now);
+  const agentStatus = trustedAgentStatus(maps.agentStatusMap.get(cid), conv.updated_at, now, maps.liveConvIds.has(cid));
   const daemonAlive = agentStatus === "stopped"
     ? false
     : maps.liveConvIds.has(cid) ||
@@ -7872,7 +7870,7 @@ async function enrichLivenessFields(
         convStatus: c.status,
         updatedAt: c.updated_at,
         isLive: maps.liveConvIds.has(c._id.toString()),
-        agentStatus: trustedAgentStatus(maps.agentStatusMap.get(c._id.toString()), c.updated_at, now),
+        agentStatus: trustedAgentStatus(maps.agentStatusMap.get(c._id.toString()), c.updated_at, now, maps.liveConvIds.has(c._id.toString())),
         now,
       }))) {
         isIdle = false;
