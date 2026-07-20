@@ -5,6 +5,7 @@ import { initAnalytics, setupErrorToasts } from "../lib/analytics";
 import { armChunkReloadGuardReset } from "../components/ErrorBoundary";
 import { installIdleAnimationPause, isDesktop } from "../lib/desktop";
 import { hasStoredAuthToken } from "../lib/localAuth";
+import { createReloadWhenHidden } from "../lib/reloadWhenHidden";
 import { App } from "./App";
 import "../store/inboxStore";
 import "../app/globals.css";
@@ -55,6 +56,11 @@ idle(() => {
           if (!reg) return;
           setInterval(() => { reg.update().catch(() => {}); }, 60 * 60 * 1000);
         },
+        // Without this, autoUpdate hard-reloads every open window the moment
+        // the new worker activates — visibly blinking whichever window the
+        // user is looking at (and resetting the palette popup mid-compose).
+        // Defer each window's reload until it is hidden; see the helper.
+        onNeedReload: createReloadWhenHidden(),
       })
     )
     .catch(() => {});
