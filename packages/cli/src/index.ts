@@ -3441,6 +3441,21 @@ program
           session_id: sessionId,
           owner: member?.trim() || "me",
         });
+    // Owners are a set, so "remove the owner" is ambiguous — you name the one you
+    // mean. When the named target (or you, by default) isn't actually an owner,
+    // nothing is removed; a green ✓ there hid a no-op (e.g. a bot disowning a
+    // session it parked on someone else). Fail loudly and name the current
+    // owners so the fix is just re-running with the right target.
+    if (!opts.all && !(result.removed?.length > 0)) {
+      const target = member?.trim() ? `"${member.trim()}"` : "you are";
+      console.error(
+        `${c.red}✗${c.reset} ${c.cyan}${result.short_id || sessionId}${c.reset} ` +
+        `${target} not an owner — nothing removed. ` +
+        `${c.dim}current owners →${c.reset} ${c.magenta}${formatOwners(result.owners)}${c.reset}` +
+        `${result.owners?.length ? " (re-run naming one of them, or --all to clear every owner)" : ""}`
+      );
+      process.exit(1);
+    }
     console.log(
       `${c.green}✓${c.reset} ${c.cyan}${result.short_id || sessionId}${c.reset} ` +
       `${c.dim}owners →${c.reset} ${c.magenta}${formatOwners(result.owners)}${c.reset}`
