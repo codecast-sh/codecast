@@ -3704,6 +3704,38 @@ async function executeRemoteCommand(
         }
         break;
       }
+      case "release_session": {
+        // Ownership was reassigned AWAY from this device ("Run here" on another
+        // machine). Targeted at us — the previous owner — so we must NOT sit
+        // behind the SESSION_COMMANDS single-owner guard (which would skip this
+        // precisely because we no longer own the conversation). Reap every
+        // local backend so no stale tmux/agent copy keeps running here — the
+        // same teardown move_to_device runs on the source after a transfer.
+        const parsed = commandArgs ? JSON.parse(commandArgs) : {};
+        const conversationId: string | undefined = parsed.conversation_id;
+        const sessionId: string | undefined = parsed.session_id;
+        if (!conversationId) {
+          error = "release_session: missing conversation_id";
+          break;
+        }
+        // Race guard: if ownership bounced back to us (A→B→A before we polled
+        // move 1's release), this command is stale — tearing down would kill a
+        // session we rightfully run. Fail-open on lookup error: the command
+        // only exists because ownership moved away, so cleanup is the norm.
+        try {
+          const info = await syncServiceRef?.getConversationOwnerInfo(conversationId);
+          if (info?.ownerDeviceId === deviceId()) {
+            log(`[RELEASE] skipping ${conversationId.slice(0, 12)} — ownership is back on this device`);
+            result = JSON.stringify({ released: false, reason: "owner_again" });
+            break;
+          }
+        } catch { /* fall through and release */ }
+        log(`[RELEASE] releasing ${conversationId.slice(0, 12)} — ownership moved to another device`);
+        await stopLocalSessionBackends(conversationId, sessionId).catch(() => {});
+        await clearConversationDeliveryAndResumeState(conversationId, sessionId, "release_session").catch(() => {});
+        result = JSON.stringify({ released: true });
+        break;
+      }
       case "apply_snippet": {
         // Web "Agent Features" changed a setting for THIS device. Run the very CLI
         // command a human would, then heartbeat so the new state round-trips back

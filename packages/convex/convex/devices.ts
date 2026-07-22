@@ -461,6 +461,8 @@ export async function performReassignToDevice(
     .first();
   if (!device) throw new Error("Unknown device");
 
+  const prevOwner = (conv as any).owner_device_id as string | undefined;
+
   await ctx.db.patch(args.conversation_id, {
     owner_device_id: args.device_id,
     session_error: undefined,
@@ -481,6 +483,26 @@ export async function performReassignToDevice(
     created_at: Date.now(),
     target_device_id: args.device_id,
   });
+
+  // Tear down the PREVIOUS owner's local copy. Without this the old
+  // machine's tmux (and the agent inside it) keeps running after the move —
+  // "Copy tmux attach" still works there and a stale agent lingers.
+  // move_to_device does this teardown on the source daemon itself; reassign
+  // only ever talks to the destination, so the old owner needs its own
+  // targeted command. Best-effort: an offline previous owner never picks it
+  // up (the command expires after the TTL).
+  if (prevOwner && prevOwner !== args.device_id) {
+    await ctx.db.insert("daemon_commands", {
+      user_id: userId,
+      command: "release_session" as const,
+      args: JSON.stringify({
+        conversation_id: args.conversation_id,
+        ...(conv.session_id ? { session_id: conv.session_id } : {}),
+      }),
+      created_at: Date.now(),
+      target_device_id: prevOwner,
+    });
+  }
   return { ok: true, command_id: commandId, device_id: args.device_id, label: device.label };
 }
 
@@ -655,6 +677,24 @@ export async function performReparentSessionToDevice(
     created_at: Date.now(),
     target_device_id: args.device_id,
   });
+
+  // Tear down the source machine's local copy (same gap as reassign: the row
+  // handover above hides the session but the source tmux + agent keep running).
+  // The command goes in the PRE-MOVE runner's queue — a daemon only polls its
+  // own user's queue, and across an account boundary that user is not the
+  // caller. conv is the pre-patch snapshot, so conv.user_id is that runner.
+  if (priorDeviceId && deviceChanged) {
+    await ctx.db.insert("daemon_commands", {
+      user_id: conv.user_id,
+      command: "release_session" as const,
+      args: JSON.stringify({
+        conversation_id: conv._id,
+        ...(conv.session_id ? { session_id: conv.session_id } : {}),
+      }),
+      created_at: Date.now(),
+      target_device_id: priorDeviceId,
+    });
+  }
 
   return { ok: true, command_id: commandId, device_id: args.device_id, label: device.label, cross_user: crossUser };
 }
