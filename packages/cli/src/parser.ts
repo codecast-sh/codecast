@@ -782,6 +782,70 @@ export function extractCodexSessionId(content: string): string | undefined {
   return undefined;
 }
 
+export interface CodexSessionMetadata {
+  id?: string;
+  parentThreadId?: string;
+  originator?: string;
+  source?: string | { subagent?: string; custom?: string };
+}
+
+export function extractCodexSessionMetadata(content: string): CodexSessionMetadata | undefined {
+  for (const line of content.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line);
+      if (entry.type !== "session_meta") continue;
+      return {
+        id: entry.payload?.id,
+        parentThreadId: entry.payload?.parent_thread_id,
+        originator: entry.payload?.originator,
+        source: entry.payload?.source,
+      };
+    } catch {}
+  }
+  return undefined;
+}
+
+export function isCompletedStandaloneCodexReview(
+  metadata: CodexSessionMetadata | undefined,
+  content: string,
+): boolean {
+  if (metadata?.originator !== "codex_exec" || metadata.source !== "exec") return false;
+
+  let exitedReviewMode = false;
+  let taskComplete = false;
+  for (const line of content.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line);
+      if (entry.type !== "event_msg") continue;
+      if (entry.payload?.type === "exited_review_mode") exitedReviewMode = true;
+      if (entry.payload?.type === "task_complete") taskComplete = true;
+    } catch {}
+  }
+  return exitedReviewMode && taskComplete;
+}
+
+export function isCompletedNativeCodexReviewChild(
+  metadata: CodexSessionMetadata | undefined,
+  content: string,
+): boolean {
+  if (
+    metadata?.originator !== "codex_exec" ||
+    typeof metadata.source !== "object" ||
+    metadata.source.subagent !== "review"
+  ) return false;
+
+  for (const line of content.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line);
+      if (entry.type === "event_msg" && entry.payload?.type === "task_complete") return true;
+    } catch {}
+  }
+  return false;
+}
+
 // Codex Desktop forks a rollout on every resume/reopen: it writes a new file with a
 // fresh UUID, copies the prior history forward, and stacks one more session_meta record
 // at the top whose `forked_from_id` points at the parent. The whole ancestry is therefore

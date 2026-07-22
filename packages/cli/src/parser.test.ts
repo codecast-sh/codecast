@@ -1,5 +1,5 @@
 import { describe, test, expect, mock } from "bun:test";
-import { parseSessionLine, parseLine, parseCodexLine, extractMessages, parseSessionFile, parseCodexSessionFile, extractCodexForkRoot, extractTeamInfo, type ClaudeSessionEntry } from "./parser.js";
+import { parseSessionLine, parseLine, parseCodexLine, extractMessages, parseSessionFile, parseCodexSessionFile, extractCodexForkRoot, extractCodexSessionMetadata, isCompletedStandaloneCodexReview, isCompletedNativeCodexReviewChild, extractTeamInfo, type ClaudeSessionEntry } from "./parser.js";
 
 describe("Parser malformed JSON handling", () => {
   test("parseSessionLine logs warning and returns null for malformed JSON", () => {
@@ -419,6 +419,57 @@ describe("extractCodexForkRoot - collapsing resume/fork chains", () => {
     // Cycle guard: returns deterministically rather than looping forever.
     const root = extractCodexForkRoot(head);
     expect(root === "a" || root === "b").toBe(true);
+  });
+});
+
+describe("Codex review lifecycle metadata", () => {
+  test("extracts the native review child's parent thread", () => {
+    const head = JSON.stringify({
+      type: "session_meta",
+      payload: {
+        id: "review-child",
+        parent_thread_id: "review-wrapper",
+        originator: "codex_exec",
+        source: { subagent: "review" },
+      },
+    });
+    expect(extractCodexSessionMetadata(head)).toEqual({
+      id: "review-child",
+      parentThreadId: "review-wrapper",
+      originator: "codex_exec",
+      source: { subagent: "review" },
+    });
+  });
+
+  test("retires only a terminal standalone codex review wrapper", () => {
+    const metadata = {
+      id: "review-wrapper",
+      originator: "codex_exec",
+      source: "exec" as const,
+    };
+    const terminal = [
+      JSON.stringify({ type: "event_msg", payload: { type: "exited_review_mode" } }),
+      JSON.stringify({ type: "event_msg", payload: { type: "task_complete" } }),
+    ].join("\n");
+
+    expect(isCompletedStandaloneCodexReview(metadata, terminal)).toBe(true);
+    expect(isCompletedStandaloneCodexReview(metadata, terminal.replace("task_complete", "agent_message"))).toBe(false);
+    expect(isCompletedStandaloneCodexReview({ ...metadata, source: "cli" }, terminal)).toBe(false);
+    expect(isCompletedStandaloneCodexReview({ ...metadata, originator: "codecast" }, terminal)).toBe(false);
+  });
+
+  test("recognizes a terminal native review child", () => {
+    const metadata = {
+      id: "review-child",
+      parentThreadId: "review-wrapper",
+      originator: "codex_exec",
+      source: { subagent: "review" },
+    };
+    const terminal = JSON.stringify({ type: "event_msg", payload: { type: "task_complete" } });
+
+    expect(isCompletedNativeCodexReviewChild(metadata, terminal)).toBe(true);
+    expect(isCompletedNativeCodexReviewChild(metadata, terminal.replace("task_complete", "agent_message"))).toBe(false);
+    expect(isCompletedNativeCodexReviewChild({ ...metadata, source: { subagent: "worker" } }, terminal)).toBe(false);
   });
 });
 
