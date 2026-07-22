@@ -3169,6 +3169,9 @@ program
         : "";
     const teamNote = result.cross_user ? ` ${c.dim}(teammate's session)${c.reset}` : "";
     console.log(`${c.green}✓${c.reset} sent to ${c.cyan}${result.to_short_id || sessionId}${c.reset}${fromNote}${teamNote}`);
+    if (!result.from_short_id || result.from_short_id === "unknown") {
+      console.log(`${c.dim}sender session not detected — the recipient won't get a link back to this session; pass --from <your session id> to attribute it${c.reset}`);
+    }
     // The send always succeeds (it queues); warn if there's no live daemon to receive it, so the
     // caller knows it may sit until the session reconnects rather than landing now.
     if (result.target_live === false) {
