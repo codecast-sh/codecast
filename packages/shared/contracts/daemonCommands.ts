@@ -1,6 +1,6 @@
 // Single source of truth for the commands a daemon can be told to run. Mirrors
-// the daemon_commands.command union in convex/schema.ts exactly — all 21,
-// including "move_to_device".
+// the daemon_commands.command union in convex/schema.ts exactly, including
+// "move_to_device".
 //
 // DIVERGENCE NOTE: convex/users.ts sendDaemonCommand currently accepts only 17
 // of these (it omits "move_to_device" — that command is enqueued through the
@@ -51,6 +51,12 @@ export const DAEMON_COMMANDS = [
   // state round-trips back. args: { snippet: <slug>, enabled: boolean }. Old
   // daemons: "Unknown command" (the toggle just doesn't take on that machine).
   "apply_snippet",
+  // Ownership of a conversation was reassigned AWAY from this device ("Run
+  // here" on another machine). Targeted at the PREVIOUS owner: kill the local
+  // tmux + process tree so no stale copy keeps running there — the same
+  // teardown move_to_device runs on the source after a transfer. Old daemons:
+  // "Unknown command" (the stale tmux just survives on that machine).
+  "release_session",
 ] as const;
 
 export type DaemonCommand = (typeof DAEMON_COMMANDS)[number];

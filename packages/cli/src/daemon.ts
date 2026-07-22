@@ -3131,6 +3131,26 @@ async function executeRemoteCommand(
         }
         break;
       }
+      case "release_session": {
+        // Ownership was reassigned AWAY from this device ("Run here" on another
+        // machine). Targeted at us — the previous owner — so we must NOT sit
+        // behind the SESSION_COMMANDS single-owner guard (which would skip this
+        // precisely because we no longer own the conversation). Reap every
+        // local backend so no stale tmux/agent copy keeps running here — the
+        // same teardown move_to_device runs on the source after a transfer.
+        const parsed = commandArgs ? JSON.parse(commandArgs) : {};
+        const conversationId: string | undefined = parsed.conversation_id;
+        const sessionId: string | undefined = parsed.session_id;
+        if (!conversationId) {
+          error = "release_session: missing conversation_id";
+          break;
+        }
+        log(`[RELEASE] releasing ${conversationId.slice(0, 12)} — ownership moved to another device`);
+        await stopLocalSessionBackends(conversationId, sessionId).catch(() => {});
+        await clearConversationDeliveryAndResumeState(conversationId, sessionId, "release_session").catch(() => {});
+        result = JSON.stringify({ released: true });
+        break;
+      }
       case "apply_snippet": {
         // Web "Agent Features" changed a setting for THIS device. Run the very CLI
         // command a human would, then heartbeat so the new state round-trips back

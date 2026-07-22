@@ -449,6 +449,8 @@ export const reassignToDevice = mutation({
       .first();
     if (!device) throw new Error("Unknown device");
 
+    const prevOwner = (conv as any).owner_device_id as string | undefined;
+
     await ctx.db.patch(args.conversation_id, {
       owner_device_id: args.device_id,
       session_error: undefined,
@@ -470,6 +472,26 @@ export const reassignToDevice = mutation({
       created_at: Date.now(),
       target_device_id: args.device_id,
     });
+
+    // Tear down the PREVIOUS owner's local copy. Without this the old
+    // machine's tmux (and the agent inside it) keeps running after the move —
+    // "Copy tmux attach" still works there and a stale agent lingers.
+    // move_to_device does this teardown on the source daemon itself; reassign
+    // only ever talks to the destination, so the old owner needs its own
+    // targeted command. Best-effort: an offline previous owner never picks it
+    // up (the command expires after the TTL).
+    if (prevOwner && prevOwner !== args.device_id) {
+      await ctx.db.insert("daemon_commands", {
+        user_id: userId,
+        command: "release_session" as const,
+        args: JSON.stringify({
+          conversation_id: args.conversation_id,
+          ...(conv.session_id ? { session_id: conv.session_id } : {}),
+        }),
+        created_at: Date.now(),
+        target_device_id: prevOwner,
+      });
+    }
     return { ok: true, command_id: commandId, device_id: args.device_id, label: device.label };
   },
 });
