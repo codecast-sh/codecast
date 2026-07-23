@@ -31,6 +31,7 @@ import { ErrorBoundary } from "./ErrorBoundary";
 import { KeyCap, MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { toast } from "sonner";
 import { CodeBlock } from "./CodeBlock";
+import { tryRenderCastDiff, MessageIdentityProvider } from "./InlineDiff";
 import { useFullWidthExpand } from "../hooks/useFullWidthExpand";
 import { tryRenderCanvas, tryRenderHtmlMessage, looksLikeHtml } from "./HtmlSnippet";
 import { useDiffViewerStore } from "../store/diffViewerStore";
@@ -224,6 +225,8 @@ function renderMarkdownPre(node: any, children: any, props: any) {
     if (code) {
       const canvas = tryRenderCanvas(language, code);
       if (canvas) return canvas;
+      const castDiff = tryRenderCastDiff(language, code);
+      if (castDiff) return castDiff;
       return <CodeBlock code={code} language={language} />;
     }
   }
@@ -6867,12 +6870,14 @@ function AssistantBlockImpl({
                   style={!contentExpanded && isOverflowing ? { maxHeight: CONTENT_MAX_HEIGHT, overflowY: 'hidden' } : undefined}
                 >
                   {conversationId ? (
-                    <MessageReview
-                      conversationId={conversationId}
-                      messageId={messageId}
-                      content={displayContent}
-                      renderBlock={renderAssistantBody}
-                    />
+                    <MessageIdentityProvider conversationId={String(conversationId)} messageId={messageId}>
+                      <MessageReview
+                        conversationId={conversationId}
+                        messageId={messageId}
+                        content={displayContent}
+                        renderBlock={renderAssistantBody}
+                      />
+                    </MessageIdentityProvider>
                   ) : (
                     renderAssistantBody(displayContent)
                   )}
