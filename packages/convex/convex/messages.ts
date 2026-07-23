@@ -1,5 +1,5 @@
 import { mutation, query, internalMutation, type MutationCtx } from "./functions";
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
@@ -7,7 +7,13 @@ import { internal } from "./_generated/api";
 import { maybeScheduleTitleGeneration } from "./titleGeneration";
 import { canTeamMemberAccess, checkConversationAccess, teamVisibleConvTeam } from "./privacy";
 import { redactSecrets } from "./redact";
-import { markPendingDelivered } from "./pendingMessages";
+import { canSendProductMessage, markPendingDelivered } from "./pendingMessages";
+import { validateCommandId } from "./localFirstCommands";
+import {
+  MESSAGES_VIEW_CONTRACT_ID,
+  messagesGrantKey,
+  messagesViewKey,
+} from "./messageViewContracts";
 import { scheduleAutoSwitchCheck } from "./accountSwitch";
 import { nextAgentStatusOnAddMessages, isApiErrorBanner, classifyApiErrorBanner, apiErrorBatchAction, NEEDS_INPUT_AUQ_CHECK_DELAY_MS } from "./inboxFilters";
 import { classifyDocContent, extractTitleFromContent, inlineDocSourceKey } from "./docExtraction";
@@ -27,6 +33,22 @@ type DocExtractionConversation = {
   is_private?: boolean;
   team_visibility?: string;
 };
+
+/** Bound demand-scoped coverage checks independently of transcript size. */
+export const MESSAGE_COVERAGE_COMMAND_ID_LIMIT = 64;
+
+export function normalizeMessageCoverageCommandIds(
+  commandIds: readonly string[],
+): string[] {
+  if (commandIds.length > MESSAGE_COVERAGE_COMMAND_ID_LIMIT) {
+    throw new ConvexError({
+      code: "TOO_MANY_COMMAND_IDS",
+      message: `At most ${MESSAGE_COVERAGE_COMMAND_ID_LIMIT} command ids may be checked at once`,
+      limit: MESSAGE_COVERAGE_COMMAND_ID_LIMIT,
+    });
+  }
+  return [...new Set(commandIds.map(validateCommandId))].sort();
+}
 
 export function buildExistingMessagePatch(
   existing: {
@@ -355,6 +377,67 @@ function hasDocExtractionCandidate(messages: DocExtractionMessage[]): boolean {
   }
   return false;
 }
+
+/**
+ * Demand-scoped reconciliation proof for durable message sends.
+ *
+ * This is deliberately not a transcript endpoint: it returns no message rows
+ * or payload fields. A command id is covered only after the authoritative
+ * transcript has ingested a message with that id for this exact conversation.
+ * The returned grant represents current send authority, not broader link-read
+ * access, so the same opaque grant may safely retain/dispatch queued intent.
+ */
+export const getMessageCoverageV2 = query({
+  args: {
+    conversation_id: v.id("conversations"),
+    command_ids: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const contractId = MESSAGES_VIEW_CONTRACT_ID;
+    const viewKey = messagesViewKey(args.conversation_id);
+    const grantKey = messagesGrantKey(args.conversation_id);
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { contractId, viewKey, access: "unauthenticated" as const };
+
+    const commandIds = normalizeMessageCoverageCommandIds(args.command_ids);
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) {
+      return {
+        contractId,
+        viewKey,
+        access: "missing" as const,
+        releasedGrantKeys: [grantKey],
+        removals: [],
+      };
+    }
+    if (!(await canSendProductMessage(ctx, userId, conversation))) {
+      return {
+        contractId,
+        viewKey,
+        access: "forbidden" as const,
+        revokedGrantKeys: [grantKey],
+      };
+    }
+
+    const matches = await Promise.all(commandIds.map(async (commandId) =>
+      await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_client_id", (q) =>
+          q.eq("conversation_id", args.conversation_id).eq("client_id", commandId))
+        .first()));
+    const coveredCommandIds = commandIds.filter((_commandId, index) => !!matches[index]);
+    return {
+      contractId,
+      viewKey,
+      access: "granted" as const,
+      grantKeys: [grantKey],
+      coverage: {
+        kind: "command-ids" as const,
+        commandIds: coveredCommandIds,
+      },
+    };
+  },
+});
 
 export const getMessageTimestamp = query({
   args: {

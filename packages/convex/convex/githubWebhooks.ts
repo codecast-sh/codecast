@@ -127,7 +127,7 @@ export const processPROpenedEvent = internalAction({
             github_access_token: token,
           });
 
-          await ctx.runMutation(api.pull_requests.updatePRFiles, {
+          await ctx.runMutation(internal.pull_requests.updatePRFiles, {
             pr_id: result.pr_id,
             files: filesData.files,
             additions: filesData.additions,
@@ -222,7 +222,7 @@ export const processPRSynchronizeEvent = internalAction({
         github_access_token: token,
       });
 
-      await ctx.runMutation(api.pull_requests.updatePRFiles, {
+      await ctx.runMutation(internal.pull_requests.updatePRFiles, {
         pr_id: prData._id,
         files: filesData.files,
         additions: filesData.additions,
@@ -261,7 +261,7 @@ export const processPRClosedEvent = internalAction({
     const merged: boolean = pr.merged;
     const mergedAt: string | null = pr.merged_at;
 
-    await ctx.runMutation(api.pull_requests.updatePRState, {
+    await ctx.runMutation(internal.pull_requests.updatePRState, {
       github_pr_id: githubPrId,
       state: merged ? "merged" : "closed",
       merged_at: mergedAt ? new Date(mergedAt).getTime() : undefined,
