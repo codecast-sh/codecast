@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import * as fs from "fs";
 import * as path from "path";
 import { parseOpencodeSessionFile, parseTranscriptFor } from "./parser";
+import { CLIENT_ERROR_BANNER_PREFIX, classifyApiErrorBanner } from "@codecast/shared/contracts";
 
 // Fixtures are `opencode export --sanitize` output of FRESH synthetic sessions I
 // created in throwaway dirs (a one-word reply, and a trivial `cat` tool use). The
@@ -20,6 +21,42 @@ const textExport = fs.readFileSync(path.join(FIX, "session-text.sanitized.json")
 const imageExport = fs.readFileSync(path.join(FIX, "session-image.sanitized.json"), "utf-8");
 
 describe("parseOpencodeSessionFile", () => {
+  it("surfaces a failed turn (error field, no body) as a marked banner instead of dropping it", () => {
+    // A turn that stopped on a provider/setup error carries only `error` and no
+    // parts — opencode's real shape (error.name is a generic wrapper, the human
+    // text is in error.data.message). Before ct-39689 this was dropped (no body),
+    // leaving a silently blank session.
+    const session = JSON.stringify({
+      info: { id: "ses_x" },
+      messages: [
+        { info: { id: "m1", role: "user" }, parts: [{ type: "text", text: "hi" }] },
+        {
+          info: {
+            id: "m2", role: "assistant", modelID: "big-pickle",
+            error: { name: "UnknownError", data: { message: "Google Vertex location setting is missing. Pass it using the 'location' parameter or the GOOGLE_VERTEX_LOCATION environment variable." } },
+          },
+          parts: [],
+        },
+      ],
+    });
+    const msgs = parseOpencodeSessionFile(session);
+    expect(msgs.length).toBe(2);
+    const failed = msgs[1];
+    expect(failed.role).toBe("assistant");
+    expect(failed.content.startsWith(CLIENT_ERROR_BANNER_PREFIX)).toBe(true);
+    expect(failed.content).toContain("GOOGLE_VERTEX_LOCATION");
+    // The whole point: this reaches the shared classifier as an actionable auth card.
+    expect(classifyApiErrorBanner(failed.content)).toBe("auth");
+  });
+
+  it("does not emit a message for a truly empty assistant turn (no body, no error)", () => {
+    const session = JSON.stringify({
+      info: { id: "ses_y" },
+      messages: [{ info: { id: "m1", role: "assistant" }, parts: [] }],
+    });
+    expect(parseOpencodeSessionFile(session).length).toBe(0);
+  });
+
   it("maps a real tool-using session (user + tool turn + text turn) to ParsedMessages", () => {
     const msgs = parseOpencodeSessionFile(toolsExport);
     expect(msgs.length).toBe(3);

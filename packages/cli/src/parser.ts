@@ -1,4 +1,5 @@
 import type { AgentClientId } from "@codecast/shared/contracts";
+import { CLIENT_ERROR_BANNER_PREFIX } from "@codecast/shared/contracts";
 
 type ContentBlock =
   | { type: "text"; text: string }
@@ -1159,6 +1160,13 @@ interface OpencodeMessageInfo {
   time?: { created?: number; completed?: number };
   modelID?: string;
   providerID?: string;
+  // A turn that failed before producing any content — a missing/invalid provider
+  // key, a missing provider config (e.g. GOOGLE_VERTEX_LOCATION), or a provider
+  // 4xx/5xx — carries only this. opencode wraps the provider text under a generic
+  // `name` ("UnknownError"), so the human message in `data.message` is what we
+  // surface. Without this the message has no body and used to be dropped, leaving
+  // a dead session with no explanation (ct-39689).
+  error?: { name?: string; data?: { message?: string } };
 }
 
 interface OpencodeAssembledSession {
@@ -1261,7 +1269,28 @@ export function parseOpencodeSessionFile(content: string): ParsedMessage[] {
     const { content: text, thinking, toolCalls, toolResults, images } = foldOpencodeParts(entry.parts ?? []);
     const hasBody =
       text.trim().length > 0 || thinking.length > 0 || toolCalls.length > 0 || toolResults.length > 0 || images.length > 0;
-    if (!hasBody) continue;
+
+    // A failed assistant turn carries only `error` and no body. Surface the
+    // provider's message as the content (instead of dropping the message) so it
+    // syncs, the shared apiErrorBanner classifier can flag it (auth/setup errors
+    // → the "Authentication required" card, with the client-correct fix), and the
+    // user sees WHY the turn stopped rather than a silently dead session.
+    const errorText = role === "assistant" ? info.error?.data?.message?.trim() : undefined;
+    if (!hasBody) {
+      if (!errorText) continue;
+      // Stamp the shared client-error marker so the apiErrorBanner classifier
+      // treats this as a banner (auth/setup → the "Authentication required" card,
+      // other → an informative error card) — a normal reply is never marked, so it
+      // can't be mistaken for one. The marker is stripped before the card renders.
+      messages.push({
+        uuid: info.id,
+        role,
+        content: `${CLIENT_ERROR_BANNER_PREFIX} ${errorText}`,
+        timestamp: info.time?.created ?? Date.now(),
+        model: info.modelID,
+      });
+      continue;
+    }
 
     messages.push({
       uuid: info.id,

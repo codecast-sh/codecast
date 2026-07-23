@@ -298,7 +298,7 @@ function ForkCorner({ colorKey }: { colorKey: string }) {
 // for usage-limit banners, "dropped" with a bolt for connection drops — set
 // apart from the plain status dots so a stuck session reads at a glance.
 // Shared by both SessionCard variants.
-function AuthErrorBadge({ kind }: { kind?: string | null }) {
+function AuthErrorBadge({ kind, agentType }: { kind?: string | null; agentType?: string | null }) {
   // Only the parked-and-won't-heal kinds get a badge. kind "error" (statusful
   // 529/500 provider failures) self-retries — badging it paints a healthy
   // session as blocked.
@@ -329,10 +329,15 @@ function AuthErrorBadge({ kind }: { kind?: string | null }) {
       </span>
     );
   }
+  // opencode re-auths via its own CLI in a terminal; pi / Claude / Codex via /login
+  // in the session — name the right one in the tooltip.
+  const authTip = agentType === "opencode"
+    ? "Provider not authenticated — run `opencode auth login` in a terminal, then retry"
+    : "Signed out — run /login in the terminal to re-authenticate";
   return (
     <span
       className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-semibold bg-amber-500/10 text-amber-500 border border-amber-500/30"
-      title="Signed out — run /login in the terminal to re-authenticate"
+      title={authTip}
     >
       <svg className="w-2 h-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
         <circle cx="7.5" cy="15.5" r="3.5" />
@@ -527,7 +532,7 @@ function BlockedSessionsBanner({
                 className="flex min-w-0 flex-1 items-center gap-2 text-left"
                 title="Open this session"
               >
-                <AuthErrorBadge kind={sess.pending_api_error_kind} />
+                <AuthErrorBadge kind={sess.pending_api_error_kind} agentType={sess.agent_type} />
                 <span className={`min-w-0 flex-1 truncate text-[11px] ${isSubagentConversation(sess) && !includeSubs ? "text-sol-text-dim" : "text-sol-text"}`}>
                   {cleanTitle(sess.title || "") || "Untitled session"}
                 </span>
@@ -1520,7 +1525,7 @@ export const SessionCard = memo(function SessionCard({
               {isSlashCommand ? <span className="font-mono text-violet-400/80">{displayTitle}</span> : displayTitle}
             </span>
             <div className="flex items-center gap-1 flex-shrink-0">
-              {session.pending_api_error && <AuthErrorBadge kind={session.pending_api_error_kind} />}
+              {session.pending_api_error && <AuthErrorBadge kind={session.pending_api_error_kind} agentType={session.agent_type} />}
               {session.session_error && (
                 <span className="w-1.5 h-1.5 rounded-full bg-sol-red" title={session.session_error} />
               )}
@@ -1772,7 +1777,7 @@ export const SessionCard = memo(function SessionCard({
                 Gate
               </span>
             )}
-            {session.pending_api_error && <AuthErrorBadge kind={session.pending_api_error_kind} />}
+            {session.pending_api_error && <AuthErrorBadge kind={session.pending_api_error_kind} agentType={session.agent_type} />}
             {session.session_error && (
               <span className="w-1.5 h-1.5 rounded-full bg-sol-red" title={session.session_error} />
             )}

@@ -17,7 +17,7 @@ import { compressImage } from "../lib/compressImage";
 import { useStorageImageUrl, hasDecodedSrc, markSrcDecoded } from "../hooks/useStorageImageUrl";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName } from "../lib/conversationProcessor";
-import { classifyApiErrorBanner, agentSupportsFork } from "@codecast/shared/contracts";
+import { classifyApiErrorBanner, agentSupportsFork, CLIENT_ERROR_BANNER_PREFIX } from "@codecast/shared/contracts";
 import { formatToolName, isPlanWriteToolCall, truncateStr, shortenUrl, getRelativePath, stripLineNumbers, structuredPayloadSummary } from "@codecast/shared/render";
 import { getBuiltinCommands } from "../lib/builtinCommands";
 import { resolveSessionSkills } from "../lib/sessionSkills";
@@ -1627,12 +1627,40 @@ type ParsedApiError = {
   // died mid-transmission; a plain "continue" resumes it. Rendered as a
   // distinct "connection dropped" card.
   isConnection?: boolean;
+  // True for a marked opencode/pi provider error that is NOT auth (a provider 5xx
+  // or other non-actionable failure). Rendered as the generic error card with the
+  // provider's own message, so a failed turn is never a silently blank session.
+  isClientError?: boolean;
 };
+
+// The remedy for an "auth" card, per client. opencode authenticates via its own
+// CLI (`opencode auth login`) in a separate terminal; pi and Claude/Codex re-auth
+// with `/login` typed into the running session. Naming the exact fix — and letting
+// the user copy it — is what turns a dead session into a one-step recovery.
+function authRemedy(agentType?: string): { command: string; where: string; inPane: boolean } {
+  if (agentType === "opencode") {
+    return { command: "opencode auth login", where: "in a terminal", inPane: false };
+  }
+  // pi, claude_code, codex, and anything else re-auth with /login in the session.
+  return { command: "/login", where: "in its terminal", inPane: true };
+}
 
 function parseApiErrorContent(content?: string | null): ParsedApiError | null {
   if (!content) return null;
   const trimmed = content.trim();
   if (!trimmed) return null;
+
+  // Marked opencode/pi provider error: strip the marker, classify (auth vs
+  // generic), and show the provider's own text. classifyApiErrorBanner keys on the
+  // marker, so isAuth/isClientError below reflect its verdict.
+  if (trimmed.startsWith(CLIENT_ERROR_BANNER_PREFIX)) {
+    const body = trimmed.slice(CLIENT_ERROR_BANNER_PREFIX.length).trim();
+    const kind = classifyApiErrorBanner(trimmed);
+    if (kind === "auth") {
+      return { message: body || "This session needs authentication.", isAuth: true };
+    }
+    return { message: body || "The model could not complete this turn.", isClientError: true };
+  }
 
   // Banner detection (auth / limit / connection) shares the backend's
   // classifier in @codecast/shared/contracts: anchored prefixes + a length cap
@@ -1710,10 +1738,39 @@ function parseApiErrorContent(content?: string | null): ParsedApiError | null {
   return { statusCode, message, errorType, requestId, isAuth, isLimit, isConnection };
 }
 
-function ApiErrorCard({ error, compact = false }: { error: ParsedApiError; compact?: boolean }) {
-  // Auth/login banner → a distinct "re-authenticate" card. The remedy (/login)
-  // is in the user's hands, so the card leads with that instead of a request ID.
+// A copyable command chip — the command in a mono pill with a copy affordance, so
+// the fix for a stopped session is one click away.
+function CopyCommand({ command }: { command: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        copyToClipboard(command)
+          .then(() => { setCopied(true); toast.success("Command copied"); setTimeout(() => setCopied(false), 1500); })
+          .catch(() => toast.error("Couldn't copy"));
+      }}
+      title="Copy command"
+      className="inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded bg-sol-bg-alt/60 hover:bg-sol-bg-alt text-sol-text-secondary font-mono text-xs transition-colors"
+    >
+      <span>{command}</span>
+      <svg className="w-3 h-3 opacity-60" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        {copied
+          ? <path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" />
+          : <><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a2 2 0 012-2h10" strokeLinecap="round" /></>}
+      </svg>
+    </button>
+  );
+}
+
+function ApiErrorCard({ error, agentType, compact = false }: { error: ParsedApiError; agentType?: string; compact?: boolean }) {
+  // Auth/setup banner → a distinct "re-authenticate" card. The remedy is in the
+  // user's hands and DIFFERS by client (opencode → `opencode auth login` in a
+  // terminal; pi / Claude / Codex → `/login` in the session), so the card names the
+  // exact command for this client and lets the user copy it.
   if (error.isAuth) {
+    const remedy = authRemedy(agentType);
     return (
       <div className={`rounded-lg border border-amber-500/40 bg-amber-500/10 ${compact ? "px-2.5 py-2" : "px-3 py-2.5"}`}>
         <div className="flex items-center gap-2 flex-wrap">
@@ -1734,11 +1791,11 @@ function ApiErrorCard({ error, compact = false }: { error: ParsedApiError; compa
         </div>
         <p className="mt-1 text-sm text-amber-500">{error.message}</p>
         {!compact && (
-          <p className="mt-1.5 text-xs text-sol-text-dim">
-            This session was signed out. Run{" "}
-            <code className="px-1 py-0.5 rounded bg-sol-bg-alt/60 text-sol-text-secondary font-mono">/login</code>{" "}
-            in its terminal to re-authenticate, then retry.
-          </p>
+          <div className="mt-2 flex items-center gap-1.5 flex-wrap text-xs text-sol-text-dim">
+            <span>Run</span>
+            <CopyCommand command={remedy.command} />
+            <span>{remedy.where} to {remedy.inPane ? "re-authenticate" : "set up an account"}, then retry.</span>
+          </div>
         )}
       </div>
     );
@@ -6862,7 +6919,7 @@ function AssistantBlockImpl({
           <>
             <div className={parsedApiError ? "" : "text-sol-text prose prose-invert prose-sm max-w-none"}>
               {parsedApiError ? (
-                <ApiErrorCard error={parsedApiError} compact={condensed} />
+                <ApiErrorCard error={parsedApiError} agentType={agentType} compact={condensed} />
               ) : (
                 <div
                   ref={contentRef}
@@ -6938,7 +6995,7 @@ function AssistantBlockImpl({
               </div>
               <div className="prose prose-invert prose-sm max-w-none text-sol-text">
                 {parsedApiError ? (
-                  <ApiErrorCard error={parsedApiError} />
+                  <ApiErrorCard error={parsedApiError} agentType={agentType} />
                 ) : (
                   <ReactMarkdown
                     remarkPlugins={entityRemarkPlugins}
