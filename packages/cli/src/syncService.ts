@@ -141,6 +141,30 @@ export interface PendingMessageForDelivery {
   retry_count: number;
 }
 
+export type ExecutionControlMutationName =
+  | "beginLegacyQuiescence"
+  | "initializeFencedExecution"
+  | "activateAfterLegacyQuiescence"
+  | "requestExecutionSuccessor"
+  | "claimExecutionStart"
+  | "publishReadyBinding"
+  | "publishStartFailedBeforeEffect"
+  | "publishStartAmbiguous"
+  | "disposePreReadyBinding"
+  | "claimNextDelivery"
+  | "rejectHeadDelivery"
+  | "startDelivery"
+  | "releaseClaimBeforeEffect"
+  | "completeDelivery"
+  | "failDeliveryBeforeEffect"
+  | "markDeliveryAmbiguous"
+  | "resolveAmbiguousDelivery"
+  | "abandonAmbiguousAndResend"
+  | "publishRuntimeDisposition"
+  | "activateExecutionSuccessor";
+
+export type ExecutionControlQueryName = "getExecutionAuthority" | "listExecutionWork";
+
 export interface GitInfo {
   commitHash?: string;
   branch?: string;
@@ -264,6 +288,60 @@ export class SyncService {
 
   setApiToken(token: string): void {
     this.apiToken = token;
+  }
+
+  private executionApiToken(): string {
+    if (!this.apiToken) {
+      throw new AuthExpiredError("Fenced execution requires the daemon API token");
+    }
+    return this.apiToken;
+  }
+
+  /**
+   * Narrow transport used by ConvexExecutionControlPlane. It always supplies
+   * the daemon bearer explicitly; there is no browser/session auth fallback and
+   * no call can enter ConvexHttpClient's ambient mutation queue.
+   */
+  async executionControlMutation(
+    name: ExecutionControlMutationName,
+    args: Record<string, unknown>,
+  ): Promise<unknown> {
+    try {
+      return await this.mutate(`executionBindings:${name}`, {
+        ...args,
+        api_token: this.executionApiToken(),
+      });
+    } catch (error) {
+      if (isAuthError(error)) throw new AuthExpiredError();
+      throw error;
+    }
+  }
+
+  async executionControlQuery(
+    name: ExecutionControlQueryName,
+    args: Record<string, unknown>,
+  ): Promise<unknown> {
+    try {
+      return await this.client.query(`executionBindings:${name}` as any, {
+        ...args,
+        api_token: this.executionApiToken(),
+      });
+    } catch (error) {
+      if (isAuthError(error)) throw new AuthExpiredError();
+      throw error;
+    }
+  }
+
+  subscribeExecutionControlQuery(
+    name: ExecutionControlQueryName,
+    args: Record<string, unknown>,
+    onUpdate: (value: unknown) => void,
+  ): () => void {
+    return this.getSubscriptionClient().onUpdate(
+      `executionBindings:${name}` as any,
+      { ...args, api_token: this.executionApiToken() },
+      onUpdate,
+    );
   }
 
   // Enqueue a user-authored message onto a conversation's delivery rail (the
