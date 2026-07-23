@@ -86,7 +86,8 @@ async function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Promis
 async function gitTry(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Promise<string | null> {
   try {
     return await git(cwd, args, env);
-  } catch {
+  } catch (e) {
+    console.error("[wip-debug gitTry]", args.join(" "), e);
     return null;
   }
 }
@@ -149,7 +150,8 @@ export async function createWipSnapshot(
       buildSnapshotMessage({ branch, conversationId: opts.conversationId }),
     ]);
     return { sha, base: head, branch, dirty, tree };
-  } catch {
+  } catch (e) {
+    console.error("[wip-debug]", e);
     return null;
   } finally {
     try {

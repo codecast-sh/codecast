@@ -3,6 +3,18 @@ import { v } from "convex/values";
 import { api, internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createTeamFeedFilter } from "./privacy";
+import { readLocalViewRevision } from "./localFirstCommands";
+import {
+  TEAM_MEMBERS_VIEW_CONTRACT_ID,
+  TEAMS_GRANT_KEY,
+  TEAMS_VIEW_CONTRACT_ID,
+  TEAMS_VIEW_KEY,
+  projectPrincipalTeam,
+  projectTeamMembership,
+  revisionCoverage,
+  teamMembersGrantKey,
+  teamMembersViewKey,
+} from "./smallViewContracts";
 
 function generateInviteCode(): string {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -60,6 +72,43 @@ export const getUserTeams = query({
       })
     );
     return teams.filter(Boolean);
+  },
+});
+
+/** Complete principal team catalog. Empty `teams` is authoritative. */
+export const getUserTeamsV2 = query({
+  args: {},
+  handler: async (ctx) => {
+    const contractId = TEAMS_VIEW_CONTRACT_ID;
+    const viewKey = TEAMS_VIEW_KEY;
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { contractId, viewKey, access: "unauthenticated" as const };
+
+    const [memberships, viewRevision] = await Promise.all([
+      ctx.db
+        .query("team_memberships")
+        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+        .collect(),
+      readLocalViewRevision(ctx, userId, contractId, viewKey),
+    ]);
+    const projected = (await Promise.all(memberships.map(async (membership) => {
+      const team = await ctx.db.get(membership.team_id);
+      return team ? projectPrincipalTeam(team, membership) : null;
+    })))
+      .filter((team): team is NonNullable<typeof team> => team !== null)
+      .sort((left, right) =>
+        left.joined_at - right.joined_at
+        || String(left._id).localeCompare(String(right._id)));
+
+    return {
+      contractId,
+      viewKey,
+      access: "granted" as const,
+      grantKeys: [TEAMS_GRANT_KEY],
+      viewRevision,
+      coverage: revisionCoverage(viewRevision),
+      teams: projected,
+    };
   },
 });
 
@@ -200,6 +249,13 @@ export const getTeam = query({
     team_id: v.id("teams"),
   },
   handler: async (ctx, args) => {
+    const authUserId = await getAuthUserId(ctx);
+    if (!authUserId) return null;
+    const membership = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_user_team", (q) => q.eq("user_id", authUserId).eq("team_id", args.team_id))
+      .first();
+    if (!membership) return null;
     return await ctx.db.get(args.team_id);
   },
 });
@@ -298,6 +354,68 @@ export const getTeamMembers = query({
       })
     );
     return members.filter(Boolean);
+  },
+});
+
+/**
+ * Complete exact-team membership relation. It deliberately contains no user
+ * profile, daemon liveness, or recent-session joins; those have different
+ * ownership and update rates and cannot share this revision domain safely.
+ */
+export const getTeamMembersV2 = query({
+  args: { team_id: v.id("teams") },
+  handler: async (ctx, args) => {
+    const contractId = TEAM_MEMBERS_VIEW_CONTRACT_ID;
+    const viewKey = teamMembersViewKey(args.team_id);
+    const grantKey = teamMembersGrantKey(args.team_id);
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { contractId, viewKey, access: "unauthenticated" as const };
+
+    const team = await ctx.db.get(args.team_id);
+    if (!team) {
+      return {
+        contractId,
+        viewKey,
+        access: "missing" as const,
+        releasedGrantKeys: [grantKey],
+        removals: [],
+      };
+    }
+    const callerMembership = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_user_team", (q) =>
+        q.eq("user_id", userId).eq("team_id", args.team_id))
+      .unique();
+    if (!callerMembership) {
+      return {
+        contractId,
+        viewKey,
+        access: "forbidden" as const,
+        revokedGrantKeys: [grantKey],
+      };
+    }
+
+    const [memberships, viewRevision] = await Promise.all([
+      ctx.db
+        .query("team_memberships")
+        .withIndex("by_team_id", (q) => q.eq("team_id", args.team_id))
+        .collect(),
+      readLocalViewRevision(ctx, userId, contractId, viewKey),
+    ]);
+    const projected = memberships
+      .map(projectTeamMembership)
+      .sort((left, right) =>
+        left.joined_at - right.joined_at
+        || String(left._id).localeCompare(String(right._id)));
+    return {
+      contractId,
+      viewKey,
+      access: "granted" as const,
+      grantKeys: [grantKey],
+      viewRevision,
+      coverage: revisionCoverage(viewRevision),
+      memberships: projected,
+    };
   },
 });
 
