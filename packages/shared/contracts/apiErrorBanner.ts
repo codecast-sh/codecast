@@ -46,11 +46,36 @@ const LIMIT_BANNER_RE =
 const GENERIC_BANNER_RE = /^api error\b/i;
 const STATUSFUL_BANNER_RE = /^api error:?\s*\(?\d{3}\b/i;
 
+// Non-Claude clients surface a failed turn differently — not as a "Login expired"
+// banner the CLI rewinds, but as a real message carrying the provider's own error
+// text (opencode records it on the assistant message's `error` field; pi's daemon
+// pane-scrape emits it). The per-client parser/scraper — which alone knows the
+// message IS a structured error, not a normal reply that merely mentions keys —
+// stamps that message with this exact leading marker. The classifier keys on the
+// marker (never on raw phrasing), so a normal opencode/pi reply can never be
+// mistaken for a banner. The marker is stripped before the card renders.
+export const CLIENT_ERROR_BANNER_PREFIX = "⚠ Turn stopped:";
+
+// Within a marked client-error message, does the provider text point at something
+// the user fixes by setting up the account (a missing/invalid key, an
+// unauthenticated provider, a missing provider config like GOOGLE_VERTEX_LOCATION)?
+// Then it's kind "auth" and gets the "Authentication required" card with the
+// client-correct remedy; otherwise it's an informative "error".
+const CLIENT_AUTH_ERROR_RE =
+  /\b(?:api[\s_-]?key|apikey|authenticat|unauthori[sz]|not logged in|\/login\b|invalid.{0,12}(?:key|token|credential)|missing.{0,20}(?:key|token|credential|api|location)|no .{0,16}(?:api key|credential)|credential|GOOGLE_VERTEX_LOCATION|location setting is missing|oauth|permission denied|forbidden|\b401\b|\b403\b)/i;
+
 export function classifyApiErrorBanner(
   content: string | null | undefined,
 ): ApiErrorBannerKind | null {
   if (!content) return null;
   const trimmed = content.trim();
+  // Marked client-error messages (opencode/pi) — gate on the exact marker, then
+  // split auth vs generic by the provider text. Length-uncapped: provider errors
+  // can be long, and the marker already guarantees it's a real error, not prose.
+  if (trimmed.startsWith(CLIENT_ERROR_BANNER_PREFIX)) {
+    const body = trimmed.slice(CLIENT_ERROR_BANNER_PREFIX.length);
+    return CLIENT_AUTH_ERROR_RE.test(body) ? "auth" : "error";
+  }
   if (trimmed.length === 0 || trimmed.length > 400) return null;
   if (AUTH_BANNER_RE.test(trimmed)) return "auth";
   if (LIMIT_BANNER_RE.test(trimmed)) return "limit";
