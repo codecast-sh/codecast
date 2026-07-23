@@ -442,6 +442,16 @@ export default defineSchema({
     // Back-link to the owning anchors row when this conversation IS an anchor's
     // standing session (vs an ephemeral hand it spawned).
     anchor_id: v.optional(v.id("anchors")),
+    // Durable execution fencing is opt-in during the mixed-version rollout.
+    // Absence means the conversation is still served by the legacy daemon rail.
+    // `legacy-quiescing` closes every legacy claim/status endpoint while the
+    // owning supervisor proves the exact old daemon boot has stopped. `fenced`
+    // means execution_bindings + delivery_attempts are the only authority.
+    execution_protocol_state: v.optional(v.union(
+      v.literal("legacy-quiescing"),
+      v.literal("fenced"),
+    )),
+    execution_protocol_version: v.optional(v.number()),
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_updated", ["user_id", "updated_at"])
@@ -665,6 +675,7 @@ export default defineSchema({
     .index("by_conversation_id", ["conversation_id"])
     .index("by_conversation_timestamp", ["conversation_id", "timestamp"])
     .index("by_conversation_uuid", ["conversation_id", "message_uuid"])
+    .index("by_conversation_client_id", ["conversation_id", "client_id"])
     .index("by_message_uuid", ["message_uuid"])
     .index("by_timestamp", ["timestamp"])
     .index("by_conversation_role_timestamp", ["conversation_id", "role", "timestamp"])
@@ -879,6 +890,7 @@ export default defineSchema({
     client_id: v.optional(v.string()),
   })
     .index("by_conversation_id", ["conversation_id"])
+    .index("by_conversation_client_id", ["conversation_id", "client_id"])
     .index("by_message_id", ["message_id"])
     .index("by_user_id", ["user_id"])
     .index("by_parent_comment_id", ["parent_comment_id"])
@@ -976,6 +988,31 @@ export default defineSchema({
     created_at: v.number(),
     delivered_at: v.optional(v.number()),
     retry_count: v.number(),
+    // Present only after a conversation crosses the fenced-execution gate.
+    // Legacy columns remain as a UI/backward-compatible projection, but legacy
+    // daemon endpoints reject these rows. Convex assigns all four values in the
+    // enqueue transaction; clients never mint ordering or delivery authority.
+    delivery_protocol_version: v.optional(v.number()),
+    delivery_id: v.optional(v.string()),
+    conversation_sequence: v.optional(v.number()),
+    execution_epoch: v.optional(v.number()),
+    delivery_status: v.optional(v.union(
+      v.literal("pending"),
+      v.literal("claimed"),
+      v.literal("delivery-started"),
+      v.literal("delivered"),
+      v.literal("rejected"),
+      v.literal("cancelled-by-supersession"),
+      v.literal("correlated-delivered"),
+      v.literal("ambiguous"),
+      v.literal("abandoned-ambiguous"),
+    )),
+    active_delivery_attempt_id: v.optional(v.id("delivery_attempts")),
+    delivery_disposition_reason: v.optional(v.string()),
+    // Explicit risk-bearing resend provenance. The original delivery remains
+    // terminal abandoned-ambiguous; content is copied into a new logical
+    // delivery with a new client/delivery id and sequence.
+    resend_of_delivery_id: v.optional(v.string()),
   })
     .index("by_conversation_id", ["conversation_id"])
     .index("by_conversation_status", ["conversation_id", "status"])
@@ -986,7 +1023,237 @@ export default defineSchema({
     // Lets the global retryStuckMessages cron read ONLY the handful of non-terminal
     // rows instead of `.filter()`-scanning the entire table (which read-conflicts
     // with every addMessages pending-write → OCC stampede → 60s sync timeouts).
-    .index("by_status", ["status"]),
+    .index("by_status", ["status"])
+    .index("by_conversation_sequence", ["conversation_id", "conversation_sequence"])
+    .index("by_conversation_client_id", ["conversation_id", "client_id"])
+    .index("by_delivery_id", ["delivery_id"])
+    .index("by_owner_delivery_status", ["owner_user_id", "delivery_protocol_version", "delivery_status"]),
+
+  // One authoritative ordering/fencing row per conversation. Convex OCC on
+  // this row serializes enqueue, delivery-slot acquisition, terminal-prefix
+  // advancement, and epoch activation. There is deliberately one slot for the
+  // whole conversation rather than one slot per epoch.
+  conversation_execution_heads: defineTable({
+    conversation_id: v.id("conversations"),
+    owner_user_id: v.id("users"),
+    protocol_state: v.union(v.literal("legacy-quiescing"), v.literal("fenced")),
+    protocol_version: v.number(),
+    current_epoch: v.optional(v.number()),
+    pending_epoch: v.optional(v.number()),
+    admission_epoch: v.optional(v.number()),
+    next_conversation_sequence: v.number(),
+    next_nonterminal_sequence: v.number(),
+    pending_policy: v.optional(v.union(
+      v.literal("drain-current"),
+      v.literal("cancel-unstarted"),
+    )),
+    pending_requested_at_sequence: v.optional(v.number()),
+    cancelled_through_sequence: v.optional(v.number()),
+    // Browser/session-authenticated product intent. The browser can request a
+    // restart or a model/effort reconfiguration, but it never names effect
+    // authority (device/boot/runtime/operation/capabilities). Those fields are
+    // derived here from the current binding and consumed by the daemon's
+    // separate API-token-only successor proposal.
+    successor_intent: v.optional(v.object({
+      intent_id: v.string(),
+      requested_by_user_id: v.id("users"),
+      expected_current_epoch: v.number(),
+      kind: v.union(v.literal("restart"), v.literal("reconfigure")),
+      policy: v.union(v.literal("drain-current"), v.literal("cancel-unstarted")),
+      requested_model_option: v.optional(v.string()),
+      requested_effort_option: v.optional(v.string()),
+      requested_agent: v.union(
+        v.literal("claude"),
+        v.literal("codex"),
+        v.literal("cursor"),
+        v.literal("gemini"),
+        v.literal("opencode"),
+        v.literal("pi"),
+      ),
+      transport: v.union(v.literal("tmux"), v.literal("app-server"), v.literal("external")),
+      project_path: v.string(),
+      isolation: v.optional(v.object({
+        sandbox: v.optional(v.union(
+          v.literal("read-only"),
+          v.literal("workspace-write"),
+          v.literal("danger-full-access"),
+        )),
+        approval_policy: v.optional(v.union(
+          v.literal("untrusted"),
+          v.literal("on-failure"),
+          v.literal("on-request"),
+          v.literal("never"),
+        )),
+        isolated: v.optional(v.boolean()),
+        worktree_name: v.optional(v.string()),
+      })),
+      configuration_revision: v.number(),
+      model: v.optional(v.string()),
+      effort: v.optional(v.string()),
+      owner_device_id: v.string(),
+      protocol_version: v.number(),
+      required_capabilities: v.array(v.union(
+        v.literal("single-flight-binding"),
+        v.literal("delivery-permit-v1"),
+        v.literal("strict-agent-routing"),
+        v.literal("runtime-inspection-v1"),
+      )),
+      status: v.union(v.literal("pending"), v.literal("consumed"), v.literal("activated")),
+      successor_epoch: v.optional(v.number()),
+      consumed_daemon_boot_id: v.optional(v.string()),
+      created_at: v.number(),
+      consumed_at: v.optional(v.number()),
+      activated_at: v.optional(v.number()),
+    })),
+    active_delivery_attempt_id: v.optional(v.id("delivery_attempts")),
+    active_delivery_state: v.optional(v.union(
+      v.literal("claimed"),
+      v.literal("delivery-started"),
+      v.literal("ambiguous"),
+    )),
+    // The migration proof is exact to one device and one daemon incarnation;
+    // device identity alone is not a worker fence.
+    legacy_owner_device_id: v.optional(v.string()),
+    legacy_daemon_boot_id: v.optional(v.string()),
+    terminated_legacy_daemon_boot_id: v.optional(v.string()),
+    replacement_daemon_boot_id: v.optional(v.string()),
+    legacy_runtime_disposition: v.optional(v.union(
+      v.literal("stopped"),
+      v.literal("adopted"),
+      v.literal("quarantined"),
+    )),
+    termination_evidence: v.optional(v.string()),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_conversation", ["conversation_id"])
+    .index("by_owner_state", ["owner_user_id", "protocol_state"]),
+
+  // Immutable target/configuration per epoch plus the durable startup CAS.
+  // Ready-only fields are optional in storage and validated as a complete set
+  // by executionBindings.publishReadyBinding before state becomes `ready`.
+  execution_bindings: defineTable({
+    conversation_id: v.id("conversations"),
+    epoch: v.number(),
+    owner_user_id: v.id("users"),
+    owner_device_id: v.string(),
+    daemon_boot_id: v.string(),
+    requested_agent: v.union(
+      v.literal("claude"),
+      v.literal("codex"),
+      v.literal("cursor"),
+      v.literal("gemini"),
+      v.literal("opencode"),
+      v.literal("pi"),
+    ),
+    transport: v.union(v.literal("tmux"), v.literal("app-server"), v.literal("external")),
+    project_path: v.string(),
+    isolation: v.optional(v.object({
+      sandbox: v.optional(v.union(
+        v.literal("read-only"),
+        v.literal("workspace-write"),
+        v.literal("danger-full-access"),
+      )),
+      approval_policy: v.optional(v.union(
+        v.literal("untrusted"),
+        v.literal("on-failure"),
+        v.literal("on-request"),
+        v.literal("never"),
+      )),
+      isolated: v.optional(v.boolean()),
+      worktree_name: v.optional(v.string()),
+    })),
+    configuration_revision: v.number(),
+    model: v.optional(v.string()),
+    effort: v.optional(v.string()),
+    protocol_version: v.number(),
+    required_capabilities: v.array(v.union(
+      v.literal("single-flight-binding"),
+      v.literal("delivery-permit-v1"),
+      v.literal("strict-agent-routing"),
+      v.literal("runtime-inspection-v1"),
+    )),
+    state: v.union(
+      v.literal("requested"),
+      v.literal("starting"),
+      v.literal("ready"),
+      v.literal("start-failed-before-effect"),
+      v.literal("start-ambiguous"),
+      v.literal("stopped"),
+      v.literal("quarantined"),
+    ),
+    operation_id: v.optional(v.string()),
+    actual_agent: v.optional(v.union(
+      v.literal("claude"),
+      v.literal("codex"),
+      v.literal("cursor"),
+      v.literal("gemini"),
+      v.literal("opencode"),
+      v.literal("pi"),
+    )),
+    runtime_id: v.optional(v.string()),
+    handle: v.optional(v.string()),
+    applied_configuration_revision: v.optional(v.number()),
+    capabilities: v.optional(v.array(v.union(
+      v.literal("single-flight-binding"),
+      v.literal("delivery-permit-v1"),
+      v.literal("strict-agent-routing"),
+      v.literal("runtime-inspection-v1"),
+    ))),
+    failure_code: v.optional(v.string()),
+    failure_message: v.optional(v.string()),
+    failure_retryable: v.optional(v.boolean()),
+    suspected_runtime_id: v.optional(v.string()),
+    stopped_reason: v.optional(v.string()),
+    // Evidence-bearing retirement of an epoch that never reached `ready`.
+    // `no-runtime-proven` is safe only after inspection proves no external
+    // runtime exists; `runtime-quarantined` retains the suspected runtime id.
+    pre_ready_disposition: v.optional(v.union(
+      v.literal("no-runtime-proven"),
+      v.literal("runtime-quarantined"),
+    )),
+    disposition_evidence: v.optional(v.string()),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_conversation_epoch", ["conversation_id", "epoch"])
+    .index("by_owner_device_state", ["owner_user_id", "owner_device_id", "state"]),
+
+  // Every retry gets a fresh attempt row; delivery_id and sequence stay stable.
+  // An ambiguous attempt remains the conversation-global slot owner until an
+  // explicit proof/recovery decision resolves it.
+  delivery_attempts: defineTable({
+    conversation_id: v.id("conversations"),
+    message_id: v.id("pending_messages"),
+    delivery_id: v.string(),
+    conversation_sequence: v.number(),
+    execution_epoch: v.number(),
+    configuration_revision: v.number(),
+    owner_user_id: v.id("users"),
+    owner_device_id: v.string(),
+    daemon_boot_id: v.string(),
+    runtime_id: v.string(),
+    state: v.union(
+      v.literal("claimed"),
+      v.literal("delivery-started"),
+      v.literal("delivered"),
+      v.literal("failed-before-effect"),
+      v.literal("ambiguous"),
+      v.literal("correlated-delivered"),
+      v.literal("cancelled-by-supersession"),
+      v.literal("abandoned-ambiguous"),
+    ),
+    failure_code: v.optional(v.string()),
+    failure_message: v.optional(v.string()),
+    external_delivery_id: v.optional(v.string()),
+    resolution_evidence: v.optional(v.string()),
+    claimed_at: v.number(),
+    delivery_started_at: v.optional(v.number()),
+    completed_at: v.optional(v.number()),
+  })
+    .index("by_message", ["message_id"])
+    .index("by_conversation_sequence", ["conversation_id", "conversation_sequence"])
+    .index("by_conversation_state", ["conversation_id", "state"]),
 
   // One row per machine the user runs a codecast daemon on. The remote Mac is
   // just another device. device_id is a stable hash of ~/.codecast/.machine_key,
@@ -2183,6 +2450,58 @@ export default defineSchema({
     updated_at: v.number(),
   })
     .index("by_user_id", ["user_id"]),
+
+  // Strict server revisions for named local materialized-view contracts. These
+  // are deliberately independent from change_log: a revision is advanced in
+  // the same Convex transaction as every write that can affect the complete
+  // view, whereas change_log is a best-effort repair signal ordered by wall
+  // clock time. Clients compare revisions only within one exact
+  // principal+contract+view domain.
+  local_view_heads: defineTable({
+    principal_id: v.id("users"),
+    contract_id: v.string(),
+    view_key: v.string(),
+    revision: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_principal_contract_view", ["principal_id", "contract_id", "view_key"]),
+
+  // Durable, principal-scoped idempotency receipts for the v2 local command
+  // protocol. Receipts are retained indefinitely in the initial protocol; a
+  // future compactor must first negotiate a retry horizon with supported
+  // clients. A SHA-256 fingerprint of canonical validated arguments prevents a
+  // command id from being reused for different intent without retaining user
+  // payload content in this long-lived table.
+  local_command_receipts: defineTable({
+    principal_id: v.id("users"),
+    command_id: v.string(),
+    command_name: v.string(),
+    receipt_version: v.number(),
+    argument_fingerprint: v.string(),
+    status: v.union(v.literal("acknowledged"), v.literal("rejected")),
+    result: v.optional(v.any()),
+    rejection_code: v.optional(v.string()),
+    rejection_message: v.optional(v.string()),
+    correction: v.optional(v.any()),
+    coverage: v.array(v.union(
+      // Existing complete-view revision coverage (shape retained verbatim).
+      v.object({
+        contract_id: v.string(),
+        view_key: v.string(),
+        revision: v.number(),
+      }),
+      // Payload-free proof required by append/echo views such as messages.
+      v.object({
+        kind: v.literal("command-id"),
+        contract_id: v.string(),
+        view_key: v.string(),
+        command_id: v.string(),
+      }),
+    )),
+    created_at: v.number(),
+  })
+    .index("by_principal_command", ["principal_id", "command_id"])
+    .index("by_principal_created", ["principal_id", "created_at"]),
 
   daemon_logs: defineTable({
     user_id: v.id("users"),

@@ -5,13 +5,31 @@ import {
   isProtectedSyncCollection,
 } from "./clientSyncRegistry";
 import { consumeViewNav, noteViewNavApplied, recordNavEvent } from "./viewNav";
+import {
+  isPrincipalDispatchAuthorizationCurrent,
+  type DispatchAuthorizationCapture,
+} from "./local-first/dispatchGate";
 
 type DispatchFn = (action: string, args: any, patches?: any, result?: any) => Promise<any>;
-type IDBWriteFn = (patches: Patch[], state: any) => void;
+type MaybePromise<T> = T | Promise<T>;
+type IDBWriteFn = (patches: Patch[], state: any) => MaybePromise<void>;
 type OutboxEntry = { id: string; action: string; args: any; patches: any; result: any; ts: number; attempts?: number };
-type OutboxEnqueueFn = (entry: OutboxEntry) => void;
-type OutboxRemoveFn = (id: string) => void;
+type OutboxEnqueueFn = (entry: OutboxEntry) => MaybePromise<void>;
+type OutboxRemoveFn = (id: string) => MaybePromise<void>;
 type OutboxLoadFn = () => Promise<OutboxEntry[]>;
+type DispatchBinding = {
+  epoch: number;
+  fn: DispatchFn;
+  owner?: object;
+  authorization?: DispatchAuthorizationCapture;
+};
+
+export class StaleDispatchBindingError extends Error {
+  constructor() {
+    super("Dispatch binding changed while work was in flight");
+    this.name = "StaleDispatchBindingError";
+  }
+}
 
 const ACTION_FLAG = Symbol("action");
 const ASYNC_ACTION_FLAG = Symbol("asyncAction");
@@ -270,19 +288,26 @@ async function dispatchWithRetry(
   result: any,
   onError?: (action: string, error: unknown, args?: unknown) => void,
   retryDelays: number[] = RETRY_DELAYS,
+  assertCurrent: () => void = () => {},
 ): Promise<any> {
   const safeArgs = sanitizeForConvex(args);
   const safeGrouped = grouped !== undefined ? sanitizeForConvex(grouped) : undefined;
   const safeResult = result === undefined ? null : sanitizeForConvex(result);
   for (let attempt = 0; ; attempt++) {
+    assertCurrent();
     try {
-      return await fn(action, safeArgs, safeGrouped, safeResult);
+      const response = await fn(action, safeArgs, safeGrouped, safeResult);
+      assertCurrent();
+      return response;
     } catch (e) {
+      assertCurrent();
       if (attempt >= retryDelays.length || isPermanentDispatchError(e)) {
+        assertCurrent();
         onError?.(action, e, args);
         throw e;
       }
       await new Promise(r => setTimeout(r, retryDelays[attempt]));
+      assertCurrent();
     }
   }
 }
@@ -323,12 +348,21 @@ function auditViewWrites(
 export function mutativeMiddleware(config: any, opts?: { retryDelays?: number[] }): any {
   const retryDelays = opts?.retryDelays ?? RETRY_DELAYS;
   return (set: any, get: any, api: any) => {
-    let dispatchFn: DispatchFn | null = null;
+    let dispatchBinding: DispatchBinding | null = null;
+    let dispatchEpoch = 0;
     let idbWriteFn: IDBWriteFn | null = null;
     let dispatchErrorFn: ((action: string, error: unknown, args?: unknown) => void) | undefined;
     let outboxEnqueueFn: OutboxEnqueueFn | null = null;
     let outboxRemoveFn: OutboxRemoveFn | null = null;
     let outboxLoadFn: OutboxLoadFn | null = null;
+
+    const assertDispatchCurrent = (captured: DispatchBinding) => {
+      if (dispatchBinding !== captured || captured.epoch !== dispatchEpoch ||
+        (captured.authorization &&
+          !isPrincipalDispatchAuthorizationCurrent(captured.authorization))) {
+        throw new StaleDispatchBindingError();
+      }
+    };
 
     function newOutboxId(): string {
       if (typeof crypto !== "undefined" && (crypto as any).randomUUID) return (crypto as any).randomUUID();
@@ -336,17 +370,27 @@ export function mutativeMiddleware(config: any, opts?: { retryDelays?: number[] 
     }
 
     let draining = false;
+    let drainAgain = false;
     async function drainOutbox(countAttempts = true) {
-      if (!dispatchFn || !outboxLoadFn) return;
+      const captured = dispatchBinding;
+      const capturedLoad = outboxLoadFn;
+      const capturedRemove = outboxRemoveFn;
+      const capturedEnqueue = outboxEnqueueFn;
+      const capturedError = dispatchErrorFn;
+      if (!captured || !capturedLoad) return;
       // One drain at a time. drainOutbox runs at boot AND on every reconnect /
       // tab-visible / interval tick, so overlapping passes are easy to trigger;
       // serializing them keeps a single in-flight entry from being dispatched
       // twice at once (redelivery is safe — dispatch.sendMessage dedups on
       // client_id — but pointless work isn't).
-      if (draining) return;
+      if (draining) {
+        drainAgain = true;
+        return;
+      }
       draining = true;
       try {
-        const entries = await outboxLoadFn();
+        const entries = await capturedLoad();
+        assertDispatchCurrent(captured);
         // The outbox exists to survive a reload that lands in the middle of an
         // in-flight dispatch, AND to re-drive a send the live socket stranded:
         // a flaky connection can exhaust the in-session retry ladder and park
@@ -358,9 +402,21 @@ export function mutativeMiddleware(config: any, opts?: { retryDelays?: number[] 
         // so routine reconnect churn can't burn through a write's boot budget.
         for (const entry of entries) {
           try {
-            await dispatchWithRetry(dispatchFn, entry.action, entry.args, stripStalePointerFromReplay(entry.patches), entry.result, dispatchErrorFn, retryDelays);
-            outboxRemoveFn?.(entry.id);
+            await dispatchWithRetry(
+              captured.fn,
+              entry.action,
+              entry.args,
+              stripStalePointerFromReplay(entry.patches),
+              entry.result,
+              capturedError,
+              retryDelays,
+              () => assertDispatchCurrent(captured),
+            );
+            assertDispatchCurrent(captured);
+            await capturedRemove?.(entry.id);
           } catch (e) {
+            if (e instanceof StaleDispatchBindingError) return;
+            assertDispatchCurrent(captured);
             // Reported via dispatchErrorFn.
             // A permanent rejection IS delivery — the server ran the write and
             // refused it. Re-driving it every boot/reconnect/interval tick can
@@ -369,17 +425,22 @@ export function mutativeMiddleware(config: any, opts?: { retryDelays?: number[] 
             // must-deliver/boot-cap retention rules below, which exist for
             // writes the server never answered.
             if (isPermanentDispatchError(e)) {
-              outboxRemoveFn?.(entry.id);
+              await capturedRemove?.(entry.id);
               continue;
             }
             if (!countAttempts) continue;
             const disposition = outboxFailureDisposition(entry);
-            if (disposition.keep) outboxEnqueueFn?.(disposition.entry);
-            else outboxRemoveFn?.(entry.id);
+            assertDispatchCurrent(captured);
+            if (disposition.keep) await capturedEnqueue?.(disposition.entry);
+            else await capturedRemove?.(entry.id);
           }
         }
       } finally {
         draining = false;
+        if (drainAgain) {
+          drainAgain = false;
+          void drainOutbox(countAttempts);
+        }
       }
     }
 
@@ -440,7 +501,9 @@ export function mutativeMiddleware(config: any, opts?: { retryDelays?: number[] 
           // Synchronous: Dexie's bulkPut/clear/put don't block the main thread,
           // and deferring via requestIdleCallback can lose writes if the user
           // reloads before idle (e.g. dismiss → reload race).
-          idbWriteFn(finalPatches, finalState);
+          void Promise.resolve(idbWriteFn(finalPatches, finalState)).catch((error) => {
+            console.error("[local-first] failed to persist legacy compatibility state", error);
+          });
         }
 
         if (isAct || isAsyncAct) {
@@ -452,24 +515,50 @@ export function mutativeMiddleware(config: any, opts?: { retryDelays?: number[] 
           // dispatches stay queued and re-fire on next hydrate via drainOutbox.
           // Enqueued even when dispatchFn isn't wired yet — drainOutbox picks
           // them up the moment _setDispatch runs.
-          outboxEnqueueFn?.({
+          const entry = {
             id: outboxId,
             action: key,
             args,
             patches: grouped,
             result: returnValue,
             ts: Date.now(),
-          });
-          if (dispatchFn) {
-            const promise = dispatchWithRetry(
-              dispatchFn, key, args, grouped, returnValue, dispatchErrorFn, retryDelays,
-            ).then((r) => {
-              outboxRemoveFn?.(outboxId);
+          };
+          // The server call is chained behind the durable enqueue. A storage
+          // failure therefore cannot create an effect that has no replayable
+          // local record. (`action()` remains memory-first only as a temporary
+          // compatibility path; v2 materialized commands use LocalFirstEngine.)
+          const capturedDispatch = dispatchBinding;
+          const capturedRemove = outboxRemoveFn;
+          const capturedError = dispatchErrorFn;
+          if (capturedDispatch) {
+            const dispatchNow = () => dispatchWithRetry(
+              capturedDispatch.fn,
+              key,
+              args,
+              grouped,
+              returnValue,
+              capturedError,
+              retryDelays,
+              () => assertDispatchCurrent(capturedDispatch),
+            );
+            // The compatibility store historically invokes a wired dispatch
+            // synchronously (up to its first await). Preserve that behavior
+            // when no durable outbox is installed; callers and tests observe
+            // the dispatch in the same turn. Once an outbox is installed,
+            // dispatch stays strictly behind its durable enqueue.
+            const dispatched = outboxEnqueueFn
+              ? Promise.resolve(outboxEnqueueFn(entry)).then(dispatchNow)
+              : dispatchNow();
+            const promise = dispatched.then(async (r) => {
+              assertDispatchCurrent(capturedDispatch);
+              await capturedRemove?.(outboxId);
               return r;
-            }, (e) => {
+            }, async (e) => {
+              if (e instanceof StaleDispatchBindingError) throw e;
+              assertDispatchCurrent(capturedDispatch);
               // Permanent rejection: the server answered and said no — remove
               // the parked copy so the drain loops don't re-litigate it forever.
-              if (isPermanentDispatchError(e)) outboxRemoveFn?.(outboxId);
+              if (isPermanentDispatchError(e)) await capturedRemove?.(outboxId);
               throw e;
             });
             if (isAsyncAct) return promise;
@@ -481,10 +570,22 @@ export function mutativeMiddleware(config: any, opts?: { retryDelays?: number[] 
       };
     }
 
-    wrapped._setDispatch = (fn: DispatchFn) => {
-      dispatchFn = fn;
+    wrapped._setDispatch = (
+      fn: DispatchFn | null,
+      options?: { owner?: object; authorization?: DispatchAuthorizationCapture },
+    ) => {
+      dispatchEpoch++;
+      dispatchBinding = fn
+        ? { epoch: dispatchEpoch, fn, owner: options?.owner, authorization: options?.authorization }
+        : null;
       // Drain any persisted outbox entries from a prior session.
-      drainOutbox();
+      if (fn) drainOutbox();
+    };
+
+    wrapped._clearDispatch = (owner: object) => {
+      if (dispatchBinding?.owner !== owner) return;
+      dispatchEpoch++;
+      dispatchBinding = null;
     };
 
     // Opportunistic re-drive: re-attempt every parked dispatch without counting
@@ -492,14 +593,27 @@ export function mutativeMiddleware(config: any, opts?: { retryDelays?: number[] 
     // live socket stranded reaches the server WITHOUT waiting for a reload.
     wrapped._drainOutbox = () => { drainOutbox(false); };
 
-    wrapped._setIDBWrite = (fn: IDBWriteFn) => {
+    wrapped._setIDBWrite = (fn: IDBWriteFn | null) => {
       idbWriteFn = fn;
     };
 
-    wrapped._setOutbox = (enqueue: OutboxEnqueueFn, remove: OutboxRemoveFn, load: OutboxLoadFn) => {
+    wrapped._setOutbox = (
+      enqueue: OutboxEnqueueFn | null,
+      remove: OutboxRemoveFn | null,
+      load: OutboxLoadFn | null,
+    ) => {
       outboxEnqueueFn = enqueue;
       outboxRemoveFn = remove;
       outboxLoadFn = load;
+    };
+
+    wrapped._clearRuntimeBindings = () => {
+      dispatchEpoch++;
+      dispatchBinding = null;
+      idbWriteFn = null;
+      outboxEnqueueFn = null;
+      outboxRemoveFn = null;
+      outboxLoadFn = null;
     };
 
     wrapped._setDispatchError = (fn: (action: string, error: unknown, args?: unknown) => void) => {
@@ -507,8 +621,18 @@ export function mutativeMiddleware(config: any, opts?: { retryDelays?: number[] 
     };
 
     wrapped._dispatch = (action: string, args: any, patches?: any, result?: any) => {
-      if (!dispatchFn) return Promise.reject(new Error("Dispatch not wired"));
-      return dispatchWithRetry(dispatchFn, action, args, patches, result, dispatchErrorFn, retryDelays);
+      const captured = dispatchBinding;
+      if (!captured) return Promise.reject(new Error("Dispatch not wired"));
+      return dispatchWithRetry(
+        captured.fn,
+        action,
+        args,
+        patches,
+        result,
+        dispatchErrorFn,
+        retryDelays,
+        () => assertDispatchCurrent(captured),
+      );
     };
 
     // Police raw setState (writes from outside action()/sync()): the view

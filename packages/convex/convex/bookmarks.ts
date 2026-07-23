@@ -3,6 +3,93 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { Doc, Id } from "./_generated/dataModel";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
+import { requireUser } from "./lib/auth";
+import { readLocalViewRevision, runLocalCommand } from "./localFirstCommands";
+import {
+  BOOKMARKS_GRANT_KEY,
+  BOOKMARKS_VIEW_CONTRACT_ID,
+  BOOKMARKS_VIEW_KEY,
+  bookmarksCoverageTarget,
+  projectBookmark,
+  revisionCoverage,
+} from "./smallViewContracts";
+import {
+  deleteBookmarkWithRevision,
+  insertBookmarkWithRevision,
+} from "./bookmarkViewWrites";
+
+type BookmarkReadCtx = Pick<QueryCtx, "db"> | Pick<MutationCtx, "db">;
+type BookmarkFailure = {
+  status: "rejected";
+  code: string;
+  message: string;
+};
+type BookmarkTarget = {
+  conversation: Doc<"conversations">;
+  message: Doc<"messages">;
+  existing: Doc<"bookmarks"> | null;
+};
+
+async function validateBookmarkTarget(
+  ctx: BookmarkReadCtx,
+  userId: Id<"users">,
+  conversationId: Id<"conversations">,
+  messageId: Id<"messages">,
+): Promise<{ ok: true; value: BookmarkTarget } | { ok: false; failure: BookmarkFailure }> {
+  const conversation = await ctx.db.get(conversationId);
+  if (!conversation) {
+    return {
+      ok: false,
+      failure: { status: "rejected", code: "MISSING", message: "Conversation not found" },
+    };
+  }
+  if (String(conversation.user_id) !== String(userId)) {
+    return {
+      ok: false,
+      failure: {
+        status: "rejected",
+        code: "FORBIDDEN",
+        message: "Can only bookmark messages in your own conversations",
+      },
+    };
+  }
+  const message = await ctx.db.get(messageId);
+  if (!message) {
+    return {
+      ok: false,
+      failure: { status: "rejected", code: "MISSING", message: "Message not found" },
+    };
+  }
+  if (String(message.conversation_id) !== String(conversationId)) {
+    return {
+      ok: false,
+      failure: {
+        status: "rejected",
+        code: "INVALID_RELATION",
+        message: "Bookmark message does not belong to the conversation",
+      },
+    };
+  }
+
+  const candidates = await ctx.db
+    .query("bookmarks")
+    .withIndex("by_message_id", (q) => q.eq("message_id", messageId))
+    .collect();
+  const existing = candidates.find((bookmark) =>
+    String(bookmark.user_id) === String(userId)) ?? null;
+  if (existing && String(existing.conversation_id) !== String(conversationId)) {
+    return {
+      ok: false,
+      failure: {
+        status: "rejected",
+        code: "INVALID_RELATION",
+        message: "Existing bookmark is bound to a different conversation",
+      },
+    };
+  }
+  return { ok: true, value: { conversation, message, existing } };
+}
 
 export const createFromCLI = mutation({
   args: {
@@ -72,14 +159,14 @@ export const createFromCLI = mutation({
       }
     }
 
-    const bookmark = await ctx.db.insert("bookmarks", {
+    const bookmark = (await insertBookmarkWithRevision(ctx, {
       user_id: result.userId,
       conversation_id: conversation._id,
       message_id: message._id,
       name: args.name,
       note: args.note,
       created_at: Date.now(),
-    });
+    })).result;
 
     const shareToken = conversation.share_token || conversation.session_id;
     const bookmarkUrl = `https://codecast.sh/share/${shareToken}#msg-${args.message_index}`;
@@ -196,7 +283,7 @@ export const deleteFromCLI = mutation({
       return { error: "Bookmark not found" };
     }
 
-    await ctx.db.delete(bookmark._id);
+    await deleteBookmarkWithRevision(ctx, bookmark);
     return { success: true };
   },
 });
@@ -212,27 +299,20 @@ export const toggleBookmark = mutation({
       throw new Error("Unauthorized");
     }
 
-    const conversation = await ctx.db.get(args.conversation_id);
-    if (!conversation) {
-      throw new Error("Conversation not found");
-    }
+    const validated = await validateBookmarkTarget(
+      ctx,
+      authUserId,
+      args.conversation_id,
+      args.message_id,
+    );
+    if (!validated.ok) throw new Error(validated.failure.message);
 
-    if (conversation.user_id.toString() !== authUserId.toString()) {
-      throw new Error("Can only bookmark messages in your own conversations");
-    }
-
-    const existing = await ctx.db
-      .query("bookmarks")
-      .withIndex("by_message_id", (q) => q.eq("message_id", args.message_id))
-      .filter((q) => q.eq(q.field("user_id"), authUserId))
-      .first();
-
-    if (existing) {
-      await ctx.db.delete(existing._id);
+    if (validated.value.existing) {
+      await deleteBookmarkWithRevision(ctx, validated.value.existing);
       return false;
     }
 
-    await ctx.db.insert("bookmarks", {
+    await insertBookmarkWithRevision(ctx, {
       user_id: authUserId,
       conversation_id: args.conversation_id,
       message_id: args.message_id,
@@ -240,6 +320,61 @@ export const toggleBookmark = mutation({
     });
 
     return true;
+  },
+});
+
+/** Retry-safe desired-state bookmark command with relation validation. */
+export const setBookmarkV2 = mutation({
+  args: {
+    command_id: v.string(),
+    conversation_id: v.id("conversations"),
+    message_id: v.id("messages"),
+    bookmarked: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    return runLocalCommand(ctx, {
+      principalId: userId,
+      commandId: args.command_id,
+      commandName: "bookmarks.set/v2",
+      arguments: {
+        conversationId: args.conversation_id,
+        messageId: args.message_id,
+        bookmarked: args.bookmarked,
+      },
+    }, async () => {
+      const validated = await validateBookmarkTarget(
+        ctx,
+        userId,
+        args.conversation_id,
+        args.message_id,
+      );
+      if (!validated.ok) return validated.failure;
+
+      let bookmarkId = validated.value.existing?._id;
+      if (args.bookmarked && !validated.value.existing) {
+        bookmarkId = (await insertBookmarkWithRevision(ctx, {
+          user_id: userId,
+          conversation_id: validated.value.conversation._id,
+          message_id: validated.value.message._id,
+          created_at: Date.now(),
+        }, "receipt")).result;
+      } else if (!args.bookmarked && validated.value.existing) {
+        await deleteBookmarkWithRevision(ctx, validated.value.existing, "receipt");
+        bookmarkId = undefined;
+      }
+      return {
+        status: "acknowledged" as const,
+        result: {
+          conversationId: validated.value.conversation._id,
+          messageId: validated.value.message._id,
+          bookmarked: args.bookmarked,
+          ...(bookmarkId ? { bookmarkId } : {}),
+        },
+        // Positive coverage is required even when desired state already held.
+        coverageViews: [bookmarksCoverageTarget(userId)],
+      };
+    });
   },
 });
 
@@ -295,6 +430,39 @@ export const listBookmarks = query({
     return enriched
       .filter((b): b is NonNullable<typeof b> => b !== null)
       .sort((a, b) => b.created_at - a.created_at);
+  },
+});
+
+/** Complete canonical bookmark relation; enrichment remains in v1. */
+export const listBookmarksV2 = query({
+  args: {},
+  handler: async (ctx) => {
+    const contractId = BOOKMARKS_VIEW_CONTRACT_ID;
+    const viewKey = BOOKMARKS_VIEW_KEY;
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { contractId, viewKey, access: "unauthenticated" as const };
+
+    const [bookmarks, viewRevision] = await Promise.all([
+      ctx.db
+        .query("bookmarks")
+        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+        .collect(),
+      readLocalViewRevision(ctx, userId, contractId, viewKey),
+    ]);
+    const projected = bookmarks
+      .map(projectBookmark)
+      .sort((left, right) =>
+        right.created_at - left.created_at
+        || String(left._id).localeCompare(String(right._id)));
+    return {
+      contractId,
+      viewKey,
+      access: "granted" as const,
+      grantKeys: [BOOKMARKS_GRANT_KEY],
+      viewRevision,
+      coverage: revisionCoverage(viewRevision),
+      bookmarks: projected,
+    };
   },
 });
 

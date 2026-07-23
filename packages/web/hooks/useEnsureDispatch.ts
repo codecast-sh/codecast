@@ -3,7 +3,11 @@ import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
 import { isPermanentDispatchError } from "../store/mutativeMiddleware";
-import { useMountEffect } from "./useMountEffect";
+import { useWatchEffect } from "./useWatchEffect";
+import {
+  capturePrincipalDispatchAuthorization,
+  usePrincipalDispatchAllowed,
+} from "../store/local-first/dispatchGate";
 
 function deepMerge(target: any, source: any): any {
   const result = { ...target };
@@ -26,7 +30,9 @@ function deepMerge(target: any, source: any): any {
 // deep-link into a session before the inbox tab has mounted) WITHOUT also
 // spinning up the inbox subscriptions/recovery polling/soundIdle that hook owns.
 export function useEnsureDispatch() {
+  const canDispatch = usePrincipalDispatchAllowed();
   const _setDispatch = useInboxStore((s) => s._setDispatch);
+  const _clearDispatch = useInboxStore((s) => s._clearDispatch);
   const _setDispatchError = useInboxStore((s) => s._setDispatchError);
   const dispatchMutation = useMutation(api.dispatch.dispatch).withOptimisticUpdate(
     (localStore, { patches }) => {
@@ -40,10 +46,14 @@ export function useEnsureDispatch() {
   );
 
   const dispatchRef = useRef(dispatchMutation);
+  const ownerRef = useRef<object>({});
   dispatchRef.current = dispatchMutation;
 
-  useMountEffect(() => {
-    _setDispatch((action, args, patches, result) => dispatchRef.current({ action, args, patches, result }));
+  useWatchEffect(() => {
+    if (!canDispatch) {
+      _clearDispatch(ownerRef.current);
+      return;
+    }
     _setDispatchError((action, error, args) => {
       console.error(`[sync] dispatch failed after retries: ${action}`, error);
       useInboxStore.setState(s => ({ dispatchErrors: s.dispatchErrors + 1 }));
@@ -72,6 +82,15 @@ export function useEnsureDispatch() {
         }
       }
     });
+    const authorization = capturePrincipalDispatchAuthorization();
+    if (!authorization) {
+      _clearDispatch(ownerRef.current);
+      return;
+    }
+    _setDispatch(
+      (action, args, patches, result) => dispatchRef.current({ action, args, patches, result }),
+      { owner: ownerRef.current, authorization },
+    );
 
     // Re-drive any parked dispatch when the client likely has connectivity
     // again. The boot drain only fires once on load, so a send the live socket
@@ -81,7 +100,9 @@ export function useEnsureDispatch() {
     // `window` exists in React Native but has no browser event APIs (and there's
     // no `document`), so an SSR-style `typeof window === "undefined"` check passes
     // and then crashes on `window.addEventListener`. Require the real APIs.
-    if (typeof window === "undefined" || typeof document === "undefined" || typeof window.addEventListener !== "function") return;
+    if (typeof window === "undefined" || typeof document === "undefined" || typeof window.addEventListener !== "function") {
+      return () => _clearDispatch(ownerRef.current);
+    }
     // _drainOutbox is injected onto the store by mutativeMiddleware (a sibling
     // of _setDispatch); typed at the call site so the wiring lives entirely here.
     const drain = () => (useInboxStore.getState() as unknown as { _drainOutbox: () => void })._drainOutbox();
@@ -93,6 +114,7 @@ export function useEnsureDispatch() {
       window.removeEventListener("online", drain);
       document.removeEventListener("visibilitychange", onVisible);
       window.clearInterval(interval);
+      _clearDispatch(ownerRef.current);
     };
-  });
+  }, [canDispatch, _setDispatch, _clearDispatch, _setDispatchError]);
 }
