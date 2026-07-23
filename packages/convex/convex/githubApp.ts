@@ -3,6 +3,8 @@ import { mutation, query, internalMutation, internalQuery, internalAction } from
 import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { isTeamMember } from "./privacy";
+import { requireUser } from "./lib/auth";
+import { requireTeamAdmin, requireTeamMembership } from "./lib/access";
 
 const GITHUB_API_BASE = "https://api.github.com";
 
@@ -299,10 +301,8 @@ export const listInstallations = query({
     team_id: v.id("teams"),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      return [];
-    }
+    const userId = await requireUser(ctx);
+    await requireTeamMembership(ctx, userId, args.team_id);
 
     return await ctx.db
       .query("github_app_installations")
@@ -316,15 +316,13 @@ export const deleteInstallation = mutation({
     installation_id: v.id("github_app_installations"),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) {
-      throw new Error("Unauthorized");
-    }
+    const userId = await requireUser(ctx);
 
     const installation = await ctx.db.get(args.installation_id);
     if (!installation) {
       throw new Error("Installation not found");
     }
+    await requireTeamAdmin(ctx, userId, installation.team_id);
 
     await ctx.db.delete(args.installation_id);
 

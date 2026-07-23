@@ -1,10 +1,11 @@
 import { Id } from "./_generated/dataModel";
 import { resolveTeamForPath, DirectoryMapping, isTeamMember, teamVisibleConvTeam } from "./privacy";
+import { invalidScope, forbidden } from "./lib/auth";
+import { requireTeamMembership } from "./lib/access";
 
 type Workspace =
   | { type: "team"; teamId: Id<"teams"> }
-  | { type: "personal"; userId: Id<"users"> }
-  | { type: "unscoped" };
+  | { type: "personal"; userId: Id<"users"> };
 
 type DataContextOpts = {
   userId: Id<"users">;
@@ -55,9 +56,13 @@ export async function scopedFetch(
   const { userId, workspace } = opts;
   // teamId is client-supplied. Only honor it if the caller actually belongs to
   // that team — otherwise a foreign team_id would read that team's records.
-  const teamId = opts.teamId && (await isTeamMember(ctx, userId, opts.teamId))
-    ? opts.teamId
-    : undefined;
+  if (workspace === "team" && !opts.teamId) {
+    invalidScope("team_id is required for the team workspace");
+  }
+  if (opts.teamId) {
+    await requireTeamMembership(ctx, userId, opts.teamId);
+  }
+  const teamId = opts.teamId;
   const fetchLimit = opts.limit;
   const strip = opts.stripFields;
   // Hard cap prevents unbounded iteration when callers omit a limit
@@ -184,7 +189,6 @@ export async function createDataContext(ctx: { db: any }, opts: DataContextOpts)
     workspace,
     userId: opts.userId,
     projectPath,
-    raw: ctx.db,
 
     async insert(table: string, fields: Record<string, any>) {
       const now = Date.now();
@@ -205,7 +209,7 @@ export async function createDataContext(ctx: { db: any }, opts: DataContextOpts)
 
     query(table: string) {
       const applyProjectScope = SCOPED_TABLES.has(table) && projectPath;
-      if (!SCOPED_TABLES.has(table) || workspace.type === "unscoped") {
+      if (!SCOPED_TABLES.has(table)) {
         return applyProjectScope
           ? wrapProjectQuery(ctx.db.query(table), projectPath)
           : ctx.db.query(table);
@@ -245,25 +249,6 @@ export async function createDataContext(ctx: { db: any }, opts: DataContextOpts)
       return ctx.db.delete(id);
     },
 
-    get unscoped() {
-      return {
-        query: (table: string) => ctx.db.query(table),
-        get: (id: any) => ctx.db.get(id),
-        patch: (id: any, fields: Record<string, any>) =>
-          ctx.db.patch(id, { ...fields, updated_at: Date.now() }),
-        delete: (id: any) => ctx.db.delete(id),
-        insert: (table: string, fields: Record<string, any>) => {
-          const now = Date.now();
-          return ctx.db.insert(table, {
-            ...fields,
-            user_id: opts.userId,
-            created_at: fields.created_at ?? now,
-            updated_at: now,
-          });
-        },
-        raw: ctx.db,
-      };
-    },
   };
 
   return self;
@@ -274,12 +259,11 @@ async function resolveWorkspace(ctx: { db: any }, opts: DataContextOpts): Promis
     return { type: "personal", userId: opts.userId };
   }
   if (opts.workspace === "team" && opts.team_id) {
-    // team_id is client-supplied; without this gate a caller could pass any
-    // team's id and read that team's docs/plans/tasks/projects. Non-members
-    // fall through to their own (project/active-team/personal) scope.
-    if (await isTeamMember(ctx, opts.userId, opts.team_id)) {
-      return { type: "team", teamId: opts.team_id };
-    }
+    await requireTeamMembership(ctx, opts.userId, opts.team_id);
+    return { type: "team", teamId: opts.team_id };
+  }
+  if (opts.workspace === "team") {
+    invalidScope("team_id is required for the team workspace");
   }
   if (opts.project_path) {
     // Directory mappings are the whole rule: a mapped path scopes to its team,
@@ -291,16 +275,20 @@ async function resolveWorkspace(ctx: { db: any }, opts: DataContextOpts): Promis
       .withIndex("by_user_id", (q: any) => q.eq("user_id", opts.userId))
       .collect();
     const result = resolveTeamForPath(mappings, opts.project_path, undefined);
-    if (result.teamId) return { type: "team", teamId: result.teamId };
+    if (result.teamId) {
+      if (!(await isTeamMember(ctx, opts.userId, result.teamId))) {
+        forbidden("Forbidden: directory mapping points to a team the user cannot access");
+      }
+      return { type: "team", teamId: result.teamId };
+    }
     return { type: "personal", userId: opts.userId };
   }
-  return { type: "unscoped" };
+  return { type: "personal", userId: opts.userId };
 }
 
 function canAccess(doc: any, userId: Id<"users">, workspace: Workspace): boolean {
   if (String(doc.user_id) === String(userId)) return true;
   if (workspace.type === "team" && String(doc.team_id) === String(workspace.teamId)) return true;
-  if (workspace.type === "unscoped") return true;
   return false;
 }
 
@@ -321,7 +309,10 @@ function wrapPersonalQuery(inner: any): any {
       return results.filter((d: any) => !d.team_id).slice(0, n);
     },
     withIndex: (name: string, fn: any) => wrap(q.withIndex(name, fn)),
-    paginate: (opts: any) => q.paginate(opts),
+    async paginate(opts: any) {
+      const result = await q.paginate(opts);
+      return { ...result, page: result.page.filter((d: any) => !d.team_id) };
+    },
   });
   return wrap(inner);
 }
@@ -344,7 +335,10 @@ function wrapProjectQuery(inner: any, projectPath: string): any {
       return results.filter(matchesProject).slice(0, n);
     },
     withIndex: (name: string, fn: any) => wrap(q.withIndex(name, fn)),
-    paginate: (opts: any) => q.paginate(opts),
+    async paginate(opts: any) {
+      const result = await q.paginate(opts);
+      return { ...result, page: result.page.filter(matchesProject) };
+    },
   });
   return wrap(inner);
 }

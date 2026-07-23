@@ -92,3 +92,37 @@ describe("applyPatches conversation owner gate", () => {
     expect(db._tables.conversations[0].inbox_stashed_at).toBeUndefined();
   });
 });
+
+describe("applyPatches bucket coverage", () => {
+  test("a legacy generic bucket patch advances the v2 complete-view head once", async () => {
+    const userId = "users_owner";
+    const db = makeFakeDb({
+      inbox_buckets: [{ _id: "bucket_1", user_id: userId, name: "Before", updated_at: 1 }],
+      local_view_heads: [],
+    });
+    await applyPatches({ db } as any, userId as any, {
+      inbox_buckets: {
+        bucket_1: { name: "After", color: "blue" },
+      },
+    });
+    expect(db._tables.inbox_buckets[0].name).toBe("After");
+    expect(db._tables.local_view_heads).toMatchObject([{
+      principal_id: userId,
+      contract_id: "buckets.principal/v2",
+      view_key: "buckets:principal",
+      revision: 1,
+    }]);
+  });
+
+  test("a forbidden bucket patch neither writes nor advances coverage", async () => {
+    const db = makeFakeDb({
+      inbox_buckets: [{ _id: "bucket_1", user_id: "owner", name: "Before", updated_at: 1 }],
+      local_view_heads: [],
+    });
+    await applyPatches({ db } as any, "stranger" as any, {
+      inbox_buckets: { bucket_1: { name: "Stolen" } },
+    });
+    expect(db._tables.inbox_buckets[0].name).toBe("Before");
+    expect(db._tables.local_view_heads).toEqual([]);
+  });
+});
