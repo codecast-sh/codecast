@@ -4,6 +4,15 @@ import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
 import { findConversationByAnyRef } from "./conversationSessionLookup";
+import { requireUser } from "./lib/auth";
+import {
+  advanceLocalViewRevision,
+  readLocalViewRevision,
+  runLocalCommand,
+} from "./localFirstCommands";
+
+export const BUCKETS_VIEW_CONTRACT_ID = "buckets.principal/v2";
+export const BUCKETS_VIEW_KEY = "buckets:principal";
 
 // Manual session buckets are "labels" in the UI: a personal catalog of names
 // (inbox_buckets) plus exclusive per-(user, conversation) filing
@@ -33,6 +42,45 @@ export const webList = query({
       .collect();
 
     return { buckets, assignments };
+  },
+});
+
+// Versioned complete-view contract for the principal-scoped local materializer.
+// Unlike the v1 array-shaped result, auth state and authoritative coverage are
+// explicit and cannot be confused with a legitimate empty catalog.
+export const webListV2 = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) {
+      return {
+        contractId: BUCKETS_VIEW_CONTRACT_ID,
+        viewKey: BUCKETS_VIEW_KEY,
+        access: "unauthenticated" as const,
+      };
+    }
+    const [buckets, assignments, viewRevision] = await Promise.all([
+      ctx.db
+        .query("inbox_buckets")
+        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+        .collect(),
+      ctx.db
+        .query("bucket_assignments")
+        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+        .collect(),
+      readLocalViewRevision(ctx, userId, BUCKETS_VIEW_CONTRACT_ID, BUCKETS_VIEW_KEY),
+    ]);
+    return {
+      contractId: BUCKETS_VIEW_CONTRACT_ID,
+      viewKey: BUCKETS_VIEW_KEY,
+      access: "granted" as const,
+      // Opaque within the already principal-scoped store; application code must
+      // not inspect or synthesize this value.
+      grantKeys: ["bucket-catalog"],
+      viewRevision,
+      buckets,
+      assignments,
+    };
   },
 });
 
@@ -99,6 +147,16 @@ export async function createBucketForUser(
   userId: Id<"users">,
   opts: { name: string; color?: string }
 ): Promise<{ _id: Id<"inbox_buckets"> }> {
+  const result = await createBucketRow(ctx, userId, opts);
+  await advanceLocalViewRevision(ctx, userId, BUCKETS_VIEW_CONTRACT_ID, BUCKETS_VIEW_KEY);
+  return result;
+}
+
+async function createBucketRow(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+  opts: { name: string; color?: string },
+): Promise<{ _id: Id<"inbox_buckets"> }> {
   const name = (opts?.name || "").trim();
   if (!name) throw new Error("Label name required");
   const now = Date.now();
@@ -158,6 +216,16 @@ export async function assignConversationToBucketForUser(
   convId: Id<"conversations">,
   bucketId: Id<"inbox_buckets"> | null
 ): Promise<void> {
+  await assignConversationToBucketRow(ctx, userId, convId, bucketId);
+  await advanceLocalViewRevision(ctx, userId, BUCKETS_VIEW_CONTRACT_ID, BUCKETS_VIEW_KEY);
+}
+
+async function assignConversationToBucketRow(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+  convId: Id<"conversations">,
+  bucketId: Id<"inbox_buckets"> | null,
+): Promise<void> {
   const now = Date.now();
   const existing = await ctx.db
     .query("bucket_assignments")
@@ -175,6 +243,126 @@ export async function assignConversationToBucketForUser(
     });
   }
 }
+
+// ── V2 local-command surface ────────────────────────────────────────────────
+// These handlers return durable receipts rather than asking the client to infer
+// acknowledgment from a later value match. Domain rejection is data; auth
+// failures still throw before any receipt lookup or write.
+
+export const webCreateV2 = mutation({
+  args: {
+    command_id: v.string(),
+    name: v.string(),
+    color: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    return runLocalCommand(ctx, {
+      principalId: userId,
+      commandId: args.command_id,
+      commandName: "buckets.create/v2",
+      arguments: { name: args.name, color: args.color },
+    }, async () => {
+      if (!args.name.trim()) {
+        return { status: "rejected", code: "INVALID_ARGUMENT", message: "Label name required" };
+      }
+      const created = await createBucketRow(ctx, userId, { name: args.name, color: args.color });
+      return {
+        status: "acknowledged",
+        result: { bucketId: created._id },
+        coverageViews: [{ contractId: BUCKETS_VIEW_CONTRACT_ID, viewKey: BUCKETS_VIEW_KEY }],
+      };
+    });
+  },
+});
+
+export const webUpdateV2 = mutation({
+  args: {
+    command_id: v.string(),
+    bucket_id: v.id("inbox_buckets"),
+    name: v.optional(v.string()),
+    color: v.optional(v.union(v.string(), v.null())),
+    sort_order: v.optional(v.number()),
+    archived: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    const commandArgs = {
+      bucketId: args.bucket_id,
+      name: args.name,
+      color: args.color,
+      sortOrder: args.sort_order,
+      archived: args.archived,
+    };
+    return runLocalCommand(ctx, {
+      principalId: userId,
+      commandId: args.command_id,
+      commandName: "buckets.update/v2",
+      arguments: commandArgs,
+    }, async () => {
+      const bucket = await ctx.db.get(args.bucket_id);
+      if (!bucket || String(bucket.user_id) !== String(userId)) {
+        return { status: "rejected", code: "NOT_FOUND", message: "Label not found" };
+      }
+      if (args.name !== undefined && !args.name.trim()) {
+        return { status: "rejected", code: "INVALID_ARGUMENT", message: "Label name required" };
+      }
+      const patch: Record<string, unknown> = { updated_at: Date.now() };
+      if (args.name !== undefined) patch.name = args.name.trim();
+      if (args.color !== undefined) patch.color = args.color ?? undefined;
+      if (args.sort_order !== undefined) patch.sort_order = args.sort_order;
+      if (args.archived !== undefined) patch.archived_at = args.archived ? Date.now() : undefined;
+      if (Object.keys(patch).length === 1) {
+        return { status: "rejected", code: "INVALID_ARGUMENT", message: "No label fields supplied" };
+      }
+      await ctx.db.patch(args.bucket_id, patch);
+      return {
+        status: "acknowledged",
+        result: { bucketId: args.bucket_id },
+        coverageViews: [{ contractId: BUCKETS_VIEW_CONTRACT_ID, viewKey: BUCKETS_VIEW_KEY }],
+      };
+    });
+  },
+});
+
+export const webAssignV2 = mutation({
+  args: {
+    command_id: v.string(),
+    conversation_id: v.id("conversations"),
+    bucket_id: v.optional(v.id("inbox_buckets")),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    return runLocalCommand(ctx, {
+      principalId: userId,
+      commandId: args.command_id,
+      commandName: "buckets.assign/v2",
+      arguments: { conversationId: args.conversation_id, bucketId: args.bucket_id },
+    }, async () => {
+      const conversation = await ctx.db.get(args.conversation_id);
+      if (!conversation || String(conversation.user_id) !== String(userId)) {
+        return { status: "rejected", code: "NOT_FOUND", message: "Conversation not found" };
+      }
+      if (args.bucket_id) {
+        const bucket = await ctx.db.get(args.bucket_id);
+        if (!bucket || String(bucket.user_id) !== String(userId) || bucket.archived_at) {
+          return { status: "rejected", code: "NOT_FOUND", message: "Active label not found" };
+        }
+      }
+      await assignConversationToBucketRow(
+        ctx,
+        userId,
+        args.conversation_id,
+        args.bucket_id ?? null,
+      );
+      return {
+        status: "acknowledged",
+        result: { conversationId: args.conversation_id, bucketId: args.bucket_id ?? null },
+        coverageViews: [{ contractId: BUCKETS_VIEW_CONTRACT_ID, viewKey: BUCKETS_VIEW_KEY }],
+      };
+    });
+  },
+});
 
 // ── CLI surface (api_token authenticated) ─────────────────────────────────────
 // `cast label …`. Filing is personal, so every ref resolves own-only via
@@ -280,6 +468,7 @@ export const cliRenameLabel = mutation({
     const matched = matchBucketByName(buckets, args.from);
     if ("error" in matched) throw new Error(matched.error);
     await ctx.db.patch(matched._id, { name: newName, updated_at: Date.now() });
+    await advanceLocalViewRevision(ctx, userId, BUCKETS_VIEW_CONTRACT_ID, BUCKETS_VIEW_KEY);
     return { old: matched.name, new: newName };
   },
 });
@@ -302,6 +491,7 @@ export const cliArchiveLabel = mutation({
       .collect();
     const filed = assignments.filter((a) => a.bucket_id === matched._id).length;
     await ctx.db.patch(matched._id, { archived_at: Date.now(), updated_at: Date.now() });
+    await advanceLocalViewRevision(ctx, userId, BUCKETS_VIEW_CONTRACT_ID, BUCKETS_VIEW_KEY);
     return { label: matched.name, filed_count: filed };
   },
 });

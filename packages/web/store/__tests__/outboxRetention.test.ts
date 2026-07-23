@@ -1,11 +1,18 @@
 import { describe, expect, it } from "bun:test";
 import {
   action,
+  asyncAction,
   isPermanentDispatchError,
   mutativeMiddleware,
   outboxFailureDisposition,
+  StaleDispatchBindingError,
   MAX_OUTBOX_BOOT_ATTEMPTS,
 } from "../mutativeMiddleware";
+import {
+  capturePrincipalDispatchAuthorization,
+  registerPrincipalDispatchRuntime,
+  updatePrincipalDispatchCorrelation,
+} from "../local-first/dispatchGate";
 
 // The dispatch outbox is the only durable copy of a server-bound write that
 // failed in-session (e.g. the network died mid-outage). The original drain
@@ -35,6 +42,9 @@ function makeHarness(retryDelays: number[] = []) {
     () => ({
       items: {} as Record<string, any>,
       poke: action(function (this: any, id: string) {
+        this.items[id] = { _id: id };
+      }),
+      pokeAsync: asyncAction(function (this: any, id: string) {
         this.items[id] = { _id: id };
       }),
     }),
@@ -249,5 +259,71 @@ describe("opportunistic re-drive (_drainOutbox)", () => {
     await settle();
     expect(delivered).toEqual(["sendMessage"]);
     expect(outbox.size).toBe(0);
+  });
+});
+
+describe("principal-bound dispatch ownership", () => {
+  it("A→B invalidates an in-flight A dispatch without letting A cleanup clear B", async () => {
+    registerPrincipalDispatchRuntime({
+      canDispatch: true,
+      dispatchPrincipalEpoch: 1,
+      subscribe: () => () => {},
+    });
+    updatePrincipalDispatchCorrelation(1);
+
+    const { wrapped, outbox: accountAOutbox } = makeHarness();
+    const ownerA = {};
+    const authorizationA = capturePrincipalDispatchAuthorization();
+    expect(authorizationA).not.toBeNull();
+    let releaseAccountA!: () => void;
+    let markAccountAStarted!: () => void;
+    const accountAStarted = new Promise<void>((resolve) => { markAccountAStarted = resolve; });
+    const accountAResponse = new Promise<string>((resolve) => {
+      releaseAccountA = () => resolve("account-a-response");
+    });
+    wrapped._setDispatch(async () => {
+      markAccountAStarted();
+      return await accountAResponse;
+    }, { owner: ownerA, authorization: authorizationA });
+
+    const actionPromise = wrapped.pokeAsync("account-a-item") as Promise<unknown>;
+    await accountAStarted;
+    expect(accountAOutbox.size).toBe(1);
+
+    // The render-time correlation update is the synchronous security gate.
+    // Persistence and dispatch are then rebound to B's independent namespace.
+    updatePrincipalDispatchCorrelation(2);
+    const authorizationB = capturePrincipalDispatchAuthorization();
+    expect(authorizationB?.principalEpoch).toBe(2);
+    const accountBOutbox = new Map<string, Entry>();
+    wrapped._setOutbox(
+      (entry: Entry) => accountBOutbox.set(entry.id, entry),
+      (id: string) => accountBOutbox.delete(id),
+      async () => [...accountBOutbox.values()],
+    );
+    const ownerB = {};
+    const deliveredByB: string[] = [];
+    wrapped._setDispatch(async (actionName: string) => {
+      deliveredByB.push(actionName);
+      return "account-b-response";
+    }, { owner: ownerB, authorization: authorizationB });
+
+    releaseAccountA();
+    await expect(actionPromise).rejects.toBeInstanceOf(StaleDispatchBindingError);
+    // A's response cannot remove A's durable recovery entry, and it is never
+    // visible in B's separately bound outbox.
+    expect(accountAOutbox.size).toBe(1);
+    expect(accountBOutbox.size).toBe(0);
+    expect(deliveredByB).toEqual([]);
+
+    // A delayed React cleanup owns only A's binding and cannot erase the newer
+    // B binding installed by another mount.
+    wrapped._clearDispatch(ownerA);
+    await expect(wrapped._dispatch("probe-b", [])).resolves.toBe("account-b-response");
+    expect(deliveredByB).toEqual(["probe-b"]);
+
+    wrapped._clearDispatch(ownerB);
+    updatePrincipalDispatchCorrelation(null);
+    registerPrincipalDispatchRuntime(null);
   });
 });
