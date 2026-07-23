@@ -7,6 +7,7 @@ import Apple from "@auth/core/providers/apple";
 import { Resend as ResendAPI } from "resend";
 import { alphabet, generateRandomString } from "oslo/crypto";
 import { createRemoteJWKSet, jwtVerify } from "jose";
+import { advanceCurrentUserViewRevision } from "./principalViewRevisions";
 
 // Native "Sign in with Apple": the iOS app presents Apple's own system sheet
 // (expo-apple-authentication) and sends us the resulting identity token. We
@@ -143,14 +144,19 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
           }
           if (Object.keys(patch).length > 0) {
             await ctx.db.patch(existing._id, patch);
+            // Convex Auth owns this raw mutation callback, so it cannot use our
+            // wrapped mutation builder. Keep the sole exception explicit.
+            await advanceCurrentUserViewRevision(ctx.db as any, existing._id);
           }
           return existing._id;
         }
       }
-      return await ctx.db.insert("users", {
+      const userId = await ctx.db.insert("users", {
         ...(profile as any),
         created_at: Date.now(),
       });
+      await advanceCurrentUserViewRevision(ctx.db as any, userId as any);
+      return userId;
     },
   },
   providers: [
