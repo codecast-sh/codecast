@@ -4,7 +4,9 @@ import { mutativeMiddleware, action, asyncAction, sync } from "./mutativeMiddlew
 import { declareViewNav, hasViewNavigated, recordNavEvent, type ViewNavSource } from "./viewNav";
 import { applySyncTable, applySyncRecord, type PendingEntry } from "./syncProtocol";
 import { soundDismiss, soundKill } from "../lib/sounds";
-import { loadCache, writePatchesToIDB, setHydrating, loadConversationMessages, writeConversationMessages, enqueueDispatch, removeDispatch, loadOutbox, PERSISTENCE_AVAILABLE } from "./idbCache";
+import { loadCache, writePatchesToIDB, setHydrating, loadConversationMessages, writeConversationMessages, enqueueDispatch, removeDispatch, loadOutbox, PERSISTENCE_AVAILABLE, PRINCIPAL_SCOPED_PERSISTENCE, getBoundPrincipalEpoch } from "./idbCache";
+import type { PrincipalEpoch } from "./local-first/types";
+import type { DispatchAuthorizationCapture } from "./local-first/dispatchGate";
 import { HYDRATION_CRITICAL_KEYS, HYDRATION_DEFERRED_KEYS, hydrationMergeStrategy } from "./clientSyncRegistry";
 import { makeCollectionSig } from "./wakeSig";
 // Single source of truth for the agent-status contract, shared with the Convex
@@ -2190,7 +2192,11 @@ interface InboxStoreState {
   optimisticForkChildren: ForkChild[];
 
   // -- Dispatch (provided by middleware) --
-  _setDispatch: (fn: (action: string, args: any, patches?: any, result?: any) => Promise<any>) => void;
+  _setDispatch: (
+    fn: ((action: string, args: any, patches?: any, result?: any) => Promise<any>) | null,
+    options?: { owner?: object; authorization?: DispatchAuthorizationCapture },
+  ) => void;
+  _clearDispatch: (owner: object) => void;
   _setDispatchError: (fn: (action: string, error: unknown, args?: unknown) => void) => void;
   _dispatch: (action: string, args: any, patches?: any, result?: any) => Promise<any>;
   dispatchErrors: number;
@@ -4755,7 +4761,7 @@ export const useInboxStore = create<InboxStoreState>(
     this.messages[convId] = merged;
     const pag = { ...(this.pagination[convId] || DEFAULT_PAGINATION), ...meta };
     this.pagination[convId] = pag;
-    writeConversationMessages(convId, merged, pag);
+    if (PRINCIPAL_SCOPED_PERSISTENCE) writeConversationMessages(convId, merged, pag);
     evictInactiveMessages(this, convId);
   }),
 
@@ -4779,7 +4785,7 @@ export const useInboxStore = create<InboxStoreState>(
     this.messages[convId] = merged;
     const pag = meta ? { ...(this.pagination[convId] || DEFAULT_PAGINATION), ...meta } : this.pagination[convId];
     if (meta) this.pagination[convId] = pag;
-    writeConversationMessages(convId, merged, pag);
+    if (PRINCIPAL_SCOPED_PERSISTENCE) writeConversationMessages(convId, merged, pag);
     evictInactiveMessages(this, convId);
   }),
 
@@ -5640,6 +5646,43 @@ export const useInboxStore = create<InboxStoreState>(
 
 })) as any);
 
+function cloneInitialValue<T>(value: T): T {
+  if (value instanceof Set) return new Set(value) as T;
+  if (value instanceof Map) return new Map(value) as T;
+  if (Array.isArray(value)) return value.map(cloneInitialValue) as T;
+  if (value && typeof value === "object") {
+    const copy: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      copy[key] = cloneInitialValue(child);
+    }
+    return copy as T;
+  }
+  return value;
+}
+
+// Captured before any protected hydration. Functions remain installed in the
+// middleware; every data-bearing slot returns to this account-neutral floor.
+const INITIAL_INBOX_DATA = Object.fromEntries(
+  Object.entries(useInboxStore.getState())
+    .filter(([, value]) => typeof value !== "function")
+    .map(([key, value]) => [key, cloneInitialValue(value)]),
+);
+
+/** Synchronous gate used before an old principal store is closed or purged. */
+export function clearProtectedInboxMemory(): void {
+  const state = useInboxStore.getState() as any;
+  state._clearRuntimeBindings?.();
+  const reset = Object.fromEntries(
+    Object.entries(INITIAL_INBOX_DATA).map(([key, value]) => [key, cloneInitialValue(value)]),
+  ) as Record<string, any>;
+  // These few device layout preferences are explicitly account-neutral and
+  // already mirrored to localStorage; no server or principal data is retained.
+  reset.clientState = { ui: readCriticalUiPrefs() as ClientUI };
+  reset.clientStateInitialized = false;
+  useInboxStore.setState(reset);
+  _idbHydratingSet.clear();
+}
+
 // =====================
 // STORE PROXY
 // =====================
@@ -5695,6 +5738,8 @@ export function useTrackedStore(deps: Array<(s: InboxStoreState) => any>): Inbox
 // can be re-hydrated from IDB when the user switches back to them.
 const _idbHydratingSet = new Set<string>();
 export function ensureHydrated(convId: string) {
+  const capturedEpoch = getBoundPrincipalEpoch();
+  if (capturedEpoch == null) return;
   const store = useInboxStore.getState();
   // Already in memory — nothing to hydrate
   if (store.messages[convId]?.length > 0) return;
@@ -5703,10 +5748,15 @@ export function ensureHydrated(convId: string) {
   _idbHydratingSet.add(convId);
   loadConversationMessages(convId).then((cached) => {
     _idbHydratingSet.delete(convId);
+    if (getBoundPrincipalEpoch() !== capturedEpoch) return;
     if (!cached || cached.messages.length === 0) return;
     const current = useInboxStore.getState().messages[convId];
     if (current?.length > 0) return;
     useInboxStore.getState().setMessages(convId, cached.messages, cached.pagination);
+  }).catch(() => {
+    _idbHydratingSet.delete(convId);
+    // idbCache reports the failure to the principal runtime; never reinterpret
+    // a storage/fence error as an authoritative empty conversation.
   });
 }
 
@@ -5800,19 +5850,28 @@ export function seedLiveInboxIdsFromCache(cachedList: unknown) {
   useInboxStore.setState({ liveInboxIds: new Set(ids), liveInboxIdList: ids });
 }
 
-if (PERSISTENCE_AVAILABLE) {
+export async function hydratePrincipalInboxCache(options: {
+  principalEpoch: PrincipalEpoch;
+  isCurrent: () => boolean;
+}): Promise<boolean> {
+  const isCurrent = () =>
+    options.isCurrent() && getBoundPrincipalEpoch() === options.principalEpoch;
+  if (!PERSISTENCE_AVAILABLE || !isCurrent()) return false;
+
   (useInboxStore.getState() as any)._setIDBWrite(writePatchesToIDB);
   (useInboxStore.getState() as any)._setOutbox(enqueueDispatch, removeDispatch, loadOutbox);
 
   setHydrating(true);
-  void loadCache().then((cached) => {
-    if (!cached) {
-      setHydrating(false);
-      useInboxStore.setState({ clientStateInitialized: true });
-      return;
-    }
+  const cached = await loadCache();
+  if (!isCurrent()) return false;
+  if (!cached) {
+    setHydrating(false);
+    useInboxStore.setState({ clientStateInitialized: true });
+    return true;
+  }
 
     const apply = (pick: string[]) => {
+      if (!isCurrent()) return;
       const state = useInboxStore.getState();
       const updates: Record<string, any> = {};
       for (const key of pick) {
@@ -5927,6 +5986,7 @@ if (PERSISTENCE_AVAILABLE) {
     // "manual" handling, so a new key can never silently skip hydration (the
     // ct-34920 / buckets-pop-in bug class).
     apply(HYDRATION_CRITICAL_KEYS);
+    if (!isCurrent()) return false;
 
     // Seed the authoritative active set from its persisted twin (manual
     // hydration — see clientSyncRegistry). Same synchronous pass as the
@@ -5983,8 +6043,9 @@ if (PERSISTENCE_AVAILABLE) {
     // finish hydrating and never re-enable IDB writes (stuck `_hydrating`). With
     // the user running many session tabs, most are backgrounded — they must still
     // hydrate and persist. setTimeout fires (throttled) even when hidden.
-    setTimeout(() => {
-      apply(HYDRATION_DEFERRED_KEYS);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    if (!isCurrent()) return false;
+    apply(HYDRATION_DEFERRED_KEYS);
       // Re-enable IDB write-through only AFTER the deferred collections land.
       // If a live delta arrives while write-through is open but the store still
       // holds just the windowed payload (tasks' 300, sessions' ~30d), then
@@ -5994,13 +6055,13 @@ if (PERSISTENCE_AVAILABLE) {
       // back" race jx799py found). Post-hydration the store holds the full union,
       // so delta overlays never drop rows; write-through then deletes only on a
       // real removal (dismiss/kill) or the crawl's authoritative snapshot.
-      setHydrating(false);
-    }, 0);
-  });
-} else {
-  // No native persistence (ExpoSQLite module absent on this binary — e.g. an OTA
-  // landed on an app built before expo-sqlite was added). Skip hydration and
-  // write-through wiring entirely and run in-memory, but still release the init
-  // gate so the app renders against a fresh empty store instead of hanging.
+    setHydrating(false);
+    return true;
+}
+
+// Native currently has only the legacy non-transactional KV adapter. Keep the
+// UI available with fresh in-memory state, but do not hydrate protected blobs
+// until the direct SQLite principal adapter satisfies the v2 contract.
+if (!PRINCIPAL_SCOPED_PERSISTENCE) {
   useInboxStore.setState({ clientStateInitialized: true });
 }

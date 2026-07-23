@@ -1,12 +1,19 @@
 import { test, expect, describe } from "bun:test";
 import { getQuoteUnits, quoteUnitAt } from "./quoteUnits";
 
-// getQuoteUnits / quoteUnitAt only read tagName, children and parentElement, so we
-// can exercise the real list-expansion + walk-up logic with plain fake nodes — no
-// DOM environment required. (unitTop needs getBoundingClientRect; verified live.)
-type FakeEl = { tagName: string; children: FakeEl[]; parentElement: FakeEl | null; innerText?: string };
+// getQuoteUnits / quoteUnitAt only read tagName, children, parentElement and
+// hasAttribute, so we can exercise the real list-expansion + walk-up logic with
+// plain fake nodes — no DOM environment required. (unitTop needs
+// getBoundingClientRect; verified live.)
+type FakeEl = {
+  tagName: string;
+  children: FakeEl[];
+  parentElement: FakeEl | null;
+  innerText?: string;
+  hasAttribute: (name: string) => boolean;
+};
 function el(tagName: string, children: FakeEl[] = []): FakeEl {
-  const node: FakeEl = { tagName, children, parentElement: null };
+  const node: FakeEl = { tagName, children, parentElement: null, hasAttribute: () => false };
   children.forEach((c) => (c.parentElement = node));
   return node;
 }

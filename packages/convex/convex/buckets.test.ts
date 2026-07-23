@@ -5,6 +5,10 @@ import {
   resolveOrCreateBucket,
   assignConversationToBucketForUser,
   createBucketForUser,
+  webAssignV2,
+  webCreateV2,
+  webListV2,
+  webUpdateV2,
 } from "./buckets";
 
 // A tiny in-memory stand-in for Convex's ctx.db, sufficient for the bucket write
@@ -14,6 +18,9 @@ function fakeDb(seed: Record<string, any[]> = {}) {
   const tables: Record<string, any[]> = {
     inbox_buckets: [],
     bucket_assignments: [],
+    local_view_heads: [],
+    local_command_receipts: [],
+    conversations: [],
     ...seed,
   };
   let counter = 0;
@@ -35,6 +42,10 @@ function fakeDb(seed: Record<string, any[]> = {}) {
           return {
             collect: async () => rows,
             first: async () => rows[0] ?? null,
+            unique: async () => {
+              if (rows.length > 1) throw new Error("Expected a unique indexed row");
+              return rows[0] ?? null;
+            },
           };
         },
       };
@@ -61,6 +72,17 @@ function fakeDb(seed: Record<string, any[]> = {}) {
 }
 
 const USER = "user-1" as any;
+
+function webCtx(db: ReturnType<typeof fakeDb>, userId: string | null = USER) {
+  return {
+    db,
+    auth: {
+      async getUserIdentity() {
+        return userId ? { subject: `${userId}|session` } : null;
+      },
+    },
+  } as any;
+}
 
 describe("findActiveBucketByExactName", () => {
   const buckets = [
@@ -151,5 +173,82 @@ describe("matchBucketByName (existing helper, used by rename/rm)", () => {
     expect((matchBucketByName(buckets, "front") as any)._id).toBe("b2");
     const miss = matchBucketByName(buckets, "zzz");
     expect("error" in miss && miss.error).toContain("backend, frontend");
+  });
+});
+
+describe("buckets v2 complete view and command receipts", () => {
+  test("auth unavailability is explicit and cannot masquerade as an empty catalog", async () => {
+    const result = await (webListV2 as any)._handler(webCtx(fakeDb(), null), {});
+    expect(result).toEqual({
+      contractId: "buckets.principal/v2",
+      viewKey: "buckets:principal",
+      access: "unauthenticated",
+    });
+    expect("buckets" in result).toBe(false);
+  });
+
+  test("an authenticated empty catalog is a granted complete view at revision zero", async () => {
+    const result = await (webListV2 as any)._handler(webCtx(fakeDb()), {});
+    expect(result.access).toBe("granted");
+    expect(result.viewRevision).toBe(0);
+    expect(result.buckets).toEqual([]);
+    expect(result.assignments).toEqual([]);
+  });
+
+  test("create is atomic with a revision receipt and exact replay is side-effect free", async () => {
+    const db = fakeDb();
+    const ctx = webCtx(db);
+    const args = { command_id: "cmd-create", name: "Infra", color: "blue" };
+    const first = await (webCreateV2 as any)._handler(ctx, args);
+    const replay = await (webCreateV2 as any)._handler(ctx, args);
+    expect(replay).toEqual(first);
+    expect(db._tables.inbox_buckets).toHaveLength(1);
+    expect(db._tables.local_command_receipts).toHaveLength(1);
+    expect(first.coverage).toEqual([{
+      contractId: "buckets.principal/v2",
+      viewKey: "buckets:principal",
+      revision: 1,
+    }]);
+
+    const view = await (webListV2 as any)._handler(ctx, {});
+    expect(view.viewRevision).toBe(1);
+    expect(view.buckets.map((bucket: any) => bucket.name)).toEqual(["Infra"]);
+  });
+
+  test("update and assignment each cover the same complete atomic view", async () => {
+    const db = fakeDb({
+      inbox_buckets: [{ _id: "b1", user_id: USER, name: "Before", created_at: 1, updated_at: 1 }],
+      conversations: [{ _id: "c1", user_id: USER }],
+    });
+    const ctx = webCtx(db);
+    const updated = await (webUpdateV2 as any)._handler(ctx, {
+      command_id: "cmd-update",
+      bucket_id: "b1",
+      name: "After",
+    });
+    const assigned = await (webAssignV2 as any)._handler(ctx, {
+      command_id: "cmd-assign",
+      conversation_id: "c1",
+      bucket_id: "b1",
+    });
+    expect(updated.coverage[0].revision).toBe(1);
+    expect(assigned.coverage[0].revision).toBe(2);
+    expect(db._tables.bucket_assignments).toHaveLength(1);
+    expect(db._tables.inbox_buckets[0].name).toBe("After");
+  });
+
+  test("foreign relationship rejection is durable and does not move view coverage", async () => {
+    const db = fakeDb({
+      conversations: [{ _id: "foreign", user_id: "someone-else" }],
+    });
+    const ctx = webCtx(db);
+    const args = { command_id: "cmd-foreign", conversation_id: "foreign" };
+    const first = await (webAssignV2 as any)._handler(ctx, args);
+    const replay = await (webAssignV2 as any)._handler(ctx, args);
+    expect(first.status).toBe("rejected");
+    expect(first.rejection.code).toBe("NOT_FOUND");
+    expect(replay).toEqual(first);
+    expect(db._tables.bucket_assignments).toEqual([]);
+    expect(db._tables.local_view_heads).toEqual([]);
   });
 });
