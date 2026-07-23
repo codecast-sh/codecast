@@ -2,6 +2,7 @@ import { useCallback, useRef, useEffect } from "react";
 import { X, Plus } from "lucide-react";
 import { useInboxStore, useTrackedStore, type AppTab } from "../store/inboxStore";
 import { useShortcutAction, formatShortcutLabel } from "../shortcuts";
+import { pathLabel } from "../lib/pathLabel";
 
 function tabTitle(tab: AppTab, sessions: Record<string, any>): string {
   if (tab.sessionId && sessions[tab.sessionId]) {
@@ -9,25 +10,6 @@ function tabTitle(tab: AppTab, sessions: Record<string, any>): string {
     return s.title || s.session_id?.slice(0, 12) || "Session";
   }
   return tab.title || pathLabel(tab.path);
-}
-
-export function pathLabel(path: string): string {
-  if (path.startsWith("/conversation/")) return "Conversation";
-  if (path.startsWith("/tasks/")) return "Task";
-  if (path.startsWith("/docs/")) return "Doc";
-  if (path.startsWith("/plans/")) return "Plan";
-  const segments: Record<string, string> = {
-    "/tasks": "Tasks",
-    "/docs": "Docs",
-    "/plans": "Plans",
-    "/projects": "Projects",
-    "/inbox": "Inbox",
-    "/feed": "Feed",
-    "/crosstalk": "Crosstalk",
-    "/settings": "Settings",
-    "/team/activity": "Activity",
-  };
-  return segments[path] || path.split("/").pop() || "Tab";
 }
 
 export function TabBar() {
