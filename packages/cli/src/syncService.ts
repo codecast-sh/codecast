@@ -492,6 +492,25 @@ export class SyncService {
     }
   }
 
+  async killFinishedConversation(conversationId: string): Promise<void> {
+    await this.throttle();
+    try {
+      await this.mutate(
+        "conversations:cliSetSessionVisibility" as any,
+        {
+          session: conversationId,
+          action: "kill",
+          api_token: this.apiToken,
+        }
+      );
+    } catch (error) {
+      if (isAuthError(error)) {
+        throw new AuthExpiredError();
+      }
+      throw error;
+    }
+  }
+
   // Visible-child link: teammate/spawned session → the session that spawned it.
   // Unlike linkSessions this neither hides the child nor marks it a subagent —
   // it only powers the parent click-through (see conversations.linkSpawnedBy).

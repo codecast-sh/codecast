@@ -253,7 +253,7 @@ export class TaskScheduler {
       }
       const extraArgs = getAgentArgs(this.config, "claude");
       if (extraArgs) {
-        const skip = new Set(["--chrome", "--dangerously-skip-permissions"]);
+        const skip = new Set(["--dangerously-skip-permissions"]);
         const extra = extraArgs.split(/\s+/).filter(Boolean);
         for (const arg of extra) {
           if (!skip.has(arg) && !extraAgentArgs.includes(arg)) extraAgentArgs.push(arg);
