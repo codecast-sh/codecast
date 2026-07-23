@@ -22,9 +22,13 @@ import {
   CLAUDE_MODEL_OPTIONS,
   CODEX_MODEL_OPTIONS,
   OPENCODE_MODEL_OPTIONS,
+  PI_MODEL_OPTIONS,
   CLAUDE_EFFORT_LEVELS,
   CODEX_EFFORT_LEVELS,
   OPENCODE_EFFORT_LEVELS,
+  PI_EFFORT_LEVELS,
+  isDynamicModelKey,
+  dynamicModelOption,
 } from "./modelOptions";
 
 /** The single named union for a supported agent CLI client — the daemon's
@@ -93,6 +97,11 @@ export interface AgentModelConfig {
    *  the /model picker; codex's /model is interactive-only, so it applies at
    *  launch only). */
   midSession: boolean;
+  /** The client addresses an open `provider/model` namespace whose availability
+   *  is a per-device fact (opencode, pi). Any well-formed `provider/model` key is
+   *  a valid wire value — findModelOption synthesizes its option — and pickers
+   *  render from the device's heartbeat-reported model inventory. */
+  dynamic?: boolean;
 }
 
 /** How the daemon tails a client's transcripts on disk. `json-store` is reserved
@@ -190,6 +199,14 @@ const OPENCODE_MODEL: AgentModelConfig = {
   // Claude's), so opencode's model is a launch-time choice, tracked from the
   // transcript thereafter.
   midSession: false,
+  dynamic: true,
+};
+const PI_MODEL: AgentModelConfig = {
+  models: PI_MODEL_OPTIONS,
+  // pi's --thinking levels ride the effort slot (launch-time, like codex).
+  efforts: PI_EFFORT_LEVELS,
+  midSession: false,
+  dynamic: true,
 };
 
 /**
@@ -343,12 +360,12 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     // (daemon ~11284); the fresh-launch readiness site already reads it from here.
     promptReadyPattern: /\d+(?:\.\d+)?%\//,
     tmuxPrefix: "pi",
-    // No codecast-managed model picker (hence no modelConfig, like cursor/gemini). pi
-    // is multi-provider and its primary model UX is mid-session switching via its own
-    // Ctrl+P / `/model` UI, which codecast cannot drive without pi's RPC channel
-    // (phase-2 stretch, not wired). pi DOES accept `--model <pattern>` at launch, but
-    // codecast defers the model choice to pi and instead TRACKS the active model from
-    // the transcript (model_change entries + each assistant message's own `model`).
+    // Launch-time model choice via `--model <provider/model>` plus `--thinking`
+    // riding the effort slot; the picker offers the device's live inventory
+    // (dynamic). Mid-session switching stays pi's own Ctrl+P / `/model` UI, which
+    // codecast cannot drive without pi's RPC channel — the active model is TRACKED
+    // from the transcript (model_change entries + each assistant message's `model`).
+    modelConfig: PI_MODEL,
     capabilities: { panePromptMonitoring: false },
   },
 };
@@ -385,7 +402,17 @@ export function agentSupportsFork(agentType: string | undefined): boolean {
 }
 
 export function findModelOption(agentType: string | undefined, key: string): ModelOption | undefined {
-  return AGENT_MODEL_CONFIG[modelAgentKey(agentType)]?.models.find((m) => m.key === key);
+  const cfg = AGENT_MODEL_CONFIG[modelAgentKey(agentType)];
+  const hit = cfg?.models.find((m) => m.key === key);
+  if (hit) return hit;
+  // Dynamic clients (opencode, pi): any well-formed `provider/model` key is a
+  // valid wire value — synthesize its option. This one branch is what lets the
+  // web picker, convex dispatch validation, and the daemon's launch flags all
+  // accept inventory-sourced models without a per-layer allowlist. The key
+  // charset is a subset of the daemon's SAFE_ARG_RE, so the synthesized
+  // cliAlias is launch-safe by construction.
+  if (cfg?.dynamic && isDynamicModelKey(key)) return dynamicModelOption(key);
+  return undefined;
 }
 
 /**
@@ -398,6 +425,9 @@ export function findModelOption(agentType: string | undefined, key: string): Mod
 export function modelOptionKey(model: string | undefined | null, agentType: string | undefined): string {
   const cfg = AGENT_MODEL_CONFIG[modelAgentKey(agentType)];
   if (!model || !cfg) return "default";
+  // Dynamic clients store the full `provider/model` string as both the wire key
+  // and the row's model stamp — it IS the option key.
+  if (cfg.dynamic && isDynamicModelKey(model)) return model;
   const bare = model.startsWith("claude-") ? model.slice("claude-".length) : model;
   // Exact match wins over a versioned-prefix match so a longer key ("gpt-5.4-mini")
   // isn't swallowed by a shorter one that prefixes it ("gpt-5.4"); the prefix pass

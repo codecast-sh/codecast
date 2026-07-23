@@ -18,3 +18,14 @@ export const deviceSettingsValidator = v.object({
   ),
   stable_global: v.optional(v.boolean()),
 });
+
+// Daemon-reported model inventory for dynamic clients (opencode/pi): each
+// client's own listing of launchable `provider/model` ids on this device.
+// Hash-gated on both ends — the daemon resends only on change, the heartbeat
+// mutation rewrites only on a hash mismatch — so the ~10KB list never churns.
+// Keys are v.record so a future dynamic client needs no schema migration.
+export const modelInventoryValidator = v.object({
+  hash: v.string(),
+  collected_at: v.number(),
+  clients: v.record(v.string(), v.array(v.string())),
+});

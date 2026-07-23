@@ -1,5 +1,5 @@
 import { useInboxStore } from "@/store/inboxStore";
-import { pathLabel } from "@/components/TabBar";
+import { pathLabel } from "@/lib/pathLabel";
 import { settingsSectionForPath } from "@/lib/settingsSections";
 
 // Routes that live OUTSIDE the dashboard tab shell. The tab system (DashboardLayout
@@ -18,13 +18,14 @@ const NON_TAB_EXACT = new Set([
   "/security",
   "/support",
   "/terms",
+  "/pricing",
   "/login",
   "/signup",
   "/forgot-password",
   "/reset-password",
   "/palette",
 ]);
-const NON_TAB_PREFIXES = ["/settings", "/auth", "/join", "/share"];
+const NON_TAB_PREFIXES = ["/settings", "/auth", "/join", "/share", "/blog"];
 
 // Every single-segment top-level route that lives INSIDE the dashboard (a tab
 // page or a standalone shell page). Public profiles live at the root as a bare

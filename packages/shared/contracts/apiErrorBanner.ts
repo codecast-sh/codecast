@@ -24,11 +24,15 @@ const AUTH_BANNER_RE =
 //   "You've hit your session limit · resets 11:30pm (America/New_York)"
 //   "You've hit your session limit"
 //   "You've hit your monthly spend limit · raise it at claude.ai/settings/usage"
+//   "You've hit your monthly spend limit. Run /usage-credits to manage your
+//    limit and keep using Fable 5 or switch models to continue this chat."
 //   "Claude usage limit reached. Your limit will reset at 3am (America/New_York)"
 // The `[·∙]`-or-end-of-line requirement after "limit" is what rejects prose
-// that merely starts with the same words.
+// that merely starts with the same words. The one sentence-shaped variant is
+// admitted only by its "Run /usage-credits" tail — a CLI slash-command
+// reference prose doesn't produce in that position.
 const LIMIT_BANNER_RE =
-  /^(?:you['’]ve hit your [\w -]{1,40}limit(?:\s*[·∙][^\n]*)?|claude (?:ai )?usage limit reached\b[^\n]*)$/i;
+  /^(?:you['’]ve hit your [\w -]{1,40}limit(?:\s*[·∙][^\n]*|\.\s*run \/usage-credits\b[^\n]*)?|claude (?:ai )?usage limit reached\b[^\n]*)$/i;
 
 // Generic provider failure, split by whether the provider actually replied:
 // a status code ("API Error: 529 Overloaded", "API Error: 500 {...}") means an

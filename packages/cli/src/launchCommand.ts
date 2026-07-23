@@ -12,6 +12,7 @@ import {
   AGENT_CLIENTS,
   CLAUDE_EFFORT_LEVELS,
   CODEX_EFFORT_LEVELS,
+  PI_EFFORT_LEVELS,
   type AgentClientId,
 } from "@codecast/shared/contracts";
 import { getAgentArgs, type Config } from "./config/types.js";
@@ -96,9 +97,10 @@ export function buildLaunchArgs(input: LaunchArgsInput): LaunchArgsResult {
     // the user already pinned --auto in their configured args.
     if (!configuredArgs.includes("--auto")) args.push("--auto");
   } else if (agentType === "pi") {
-    // pi passes through the user's configured args (agent_args.pi) but takes no
-    // permission or model/effort launch flags — the same simplicity as cursor/gemini,
-    // which contribute nothing. Without this branch the configured args are dropped.
+    // pi passes through the user's configured args (agent_args.pi) and takes no
+    // permission flags; its model/thinking flags are per-session and appended in
+    // the model/effort block below. Without this branch the configured args are
+    // dropped.
     if (configuredArgs) args.push(...configuredArgs.split(/\s+/).filter(Boolean));
   }
   // cursor / gemini: no configured args or permission flags today.
@@ -121,6 +123,13 @@ export function buildLaunchArgs(input: LaunchArgsInput): LaunchArgsResult {
     // opencode selects a model with `-m provider/model` (the picker's cliAlias);
     // it has no reasoning-effort launch flag.
     if (input.modelAlias) args.push("-m", input.modelAlias);
+  } else if (agentType === "pi") {
+    // pi selects a model with `--model provider/model`; its `--thinking` levels
+    // ride the effort slot (launch-time only, like codex).
+    if (input.modelAlias) args.push("--model", input.modelAlias);
+    if (input.requestedEffort && (PI_EFFORT_LEVELS as readonly string[]).includes(input.requestedEffort)) {
+      args.push("--thinking", input.requestedEffort);
+    }
   }
 
   return { binaryArgs: args, notifyCodexBypass };

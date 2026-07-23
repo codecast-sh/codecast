@@ -226,6 +226,12 @@ export default function ChangelogPage() {
             <Link href="/features" className="font-medium text-sm px-3 py-1.5 hidden sm:block" style={{ color: SOL.base00 }}>
               CLI
             </Link>
+            <Link href="/pricing" className="font-medium text-sm px-3 py-1.5 hidden sm:block" style={{ color: SOL.base00 }}>
+              Pricing
+            </Link>
+            <Link href="/blog" className="font-medium text-sm px-3 py-1.5 hidden sm:block" style={{ color: SOL.base00 }}>
+              Blog
+            </Link>
             <Link href="/signup">
               <Button className="font-medium text-white text-sm" style={{ backgroundColor: SOL.base03 }}>
                 Get started
@@ -403,7 +409,7 @@ export default function ChangelogPage() {
                 Start capturing your sessions
               </div>
               <div className="text-sm mt-1" style={{ color: SOL.base1 }}>
-                One command. Works with Claude Code, Codex, Gemini, and Cursor.
+                One command. Works with Claude Code, Codex, Cursor, and Gemini.
               </div>
             </div>
             <div className="flex items-center gap-3">
@@ -429,7 +435,7 @@ export default function ChangelogPage() {
             <div>
               <Logo size="md" className="[--logo-c:#444444] text-[#002b36] mb-4" />
               <p className="text-sm" style={{ color: SOL.base00 }}>
-                The operating system for AI coding agents.
+                See, steer, and remember every coding agent session — any agent, any machine.
               </p>
             </div>
             <div>
@@ -440,6 +446,7 @@ export default function ChangelogPage() {
                 <li><Link href="/documentation" className="hover:text-[#073642]">Documentation</Link></li>
                 <li><Link href="/features" className="hover:text-[#073642]">CLI</Link></li>
                 <li><Link href="/changelog" className="hover:text-[#073642]">Changelog</Link></li>
+                <li><Link href="/pricing" className="hover:text-[#073642]">Pricing</Link></li>
                 <li><Link href="/security" className="hover:text-[#073642]">Security</Link></li>
               </ul>
             </div>
@@ -449,6 +456,7 @@ export default function ChangelogPage() {
               </h4>
               <ul className="space-y-2 text-sm" style={{ color: SOL.base00 }}>
                 <li><Link href="/about" className="hover:text-[#073642]">About</Link></li>
+                <li><Link href="/blog" className="hover:text-[#073642]">Blog</Link></li>
                 <li><Link href="/privacy" className="hover:text-[#073642]">Privacy</Link></li>
               </ul>
             </div>
@@ -464,7 +472,7 @@ export default function ChangelogPage() {
             </div>
           </div>
           <div className="border-t mt-8 pt-8 text-center text-sm" style={{ borderColor: SOL.base2, color: SOL.base0 }}>
-            &copy; 2025 Codecast
+            &copy; 2026 Codecast
           </div>
         </div>
       </footer>

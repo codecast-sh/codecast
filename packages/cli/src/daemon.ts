@@ -7,6 +7,7 @@ import { Database } from "bun:sqlite";
 import { execSync, execFileSync, exec, execFile, spawn, spawnSync } from "child_process";
 import { watch as chokidarWatch } from "chokidar";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
+import { ensureModelInventoryFresh, pendingModelInventoryPayload, markModelInventorySent } from "./modelInventory.js";
 import { deviceId, deviceLabel, isRemoteDevice } from "./remote/device.js";
 import { copyCredentialToRemoteAsync, currentBranch, loadRemoteHost, readPushableCredential, remoteHostsRegistered } from "./remote/session-move.js";
 import { reparentNotice, type ReparentCommandFacts } from "./sessionMoveNotice.js";
@@ -1843,6 +1844,11 @@ async function sendHeartbeat(): Promise<void> {
   // it — this is what makes a new `/login` show up in Settings by itself.
   maybeAutoSaveAccount();
 
+  // Dynamic-client model inventory: recollect in the background when stale; a
+  // fresh set rides a beat only until the server acks it (hash-gated).
+  ensureModelInventoryFresh();
+  const modelInventory = pendingModelInventoryPayload();
+
   try {
     const siteUrl = config.convex_url.replace(".cloud", ".site");
     // Bound the request: an untimed fetch here can hang indefinitely (observed
@@ -1870,6 +1876,9 @@ async function sendHeartbeat(): Promise<void> {
         // Installed agent-feature snippets + stable mode, so the web Settings
         // page mirrors (and can toggle) this device's setup.
         settings: buildDeviceSettingsPayload(config) ?? undefined,
+        // Live model inventory for dynamic clients (opencode/pi), hash-gated so
+        // the ~10KB list rides a beat only when it actually changed.
+        model_inventory: modelInventory,
         ...syncHealthFields(),
       }),
     });
@@ -1879,6 +1888,7 @@ async function sendHeartbeat(): Promise<void> {
       log(`Heartbeat failed: ${response.status} ${text}`);
       return;
     }
+    if (modelInventory) markModelInventorySent(modelInventory.hash);
 
     const data = await response.json();
     if (data.commands && data.commands.length > 0) {

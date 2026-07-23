@@ -1,7 +1,10 @@
+"use client";
+
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Logo } from "@/components/Logo";
 import { InstallTabs } from "@/components/install-tabs";
+import { usePageMeta } from "../pageMeta";
 
 function TerminalIcon({ className }: { className?: string }) {
   return (
@@ -69,9 +72,33 @@ function CodeBlock({ children, title }: { children: string; title?: string }) {
 
 const FEATURE_CATEGORIES = [
   {
+    title: "Session Memory",
+    problem: "Every AI session starts from scratch",
+    description: "A permanent, searchable record of every conversation your agents have had. Agents recall past decisions and search their own history, so your team stops re-solving solved problems.",
+    icon: BrainIcon,
+    color: "purple",
+    commands: [
+      { cmd: 'cast ask "how did we implement auth?"', desc: "Ask across every session" },
+      { cmd: 'cast context "add stripe"', desc: "Relevant prior sessions" },
+      { cmd: "cast handoff", desc: "Context transfer doc" },
+    ],
+  },
+  {
+    title: "Search & Blame",
+    problem: '"How did we do this before?"',
+    description: "Search every session your team has had -- full text and semantic, with time and member filters. Trace any line of code back to the conversation that wrote it with cast blame.",
+    icon: SearchIcon,
+    color: "blue",
+    commands: [
+      { cmd: 'cast search "auth" -s 7d', desc: "Search last 7 days" },
+      { cmd: "cast blame src/auth.ts", desc: "Line-level agent attribution" },
+      { cmd: "cast read abc123 10:20", desc: "Read messages 10-20" },
+    ],
+  },
+  {
     title: "Session Inbox",
-    problem: "Agents run everywhere, unsupervised",
-    description: "A triage queue for all your agent sessions. See live status, pin important work, defer noise, and respond to agents waiting for input -- all with keyboard shortcuts.",
+    problem: "Any agent, any machine",
+    description: "One inbox for the real local sessions you already run -- Claude Code, Codex, Cursor, Gemini, on any machine. See live status, pin important work, defer noise, and answer agents waiting for input.",
     icon: TerminalIcon,
     color: "amber",
     commands: [
@@ -81,27 +108,15 @@ const FEATURE_CATEGORIES = [
     ],
   },
   {
-    title: "Agent Memory",
-    problem: "Every AI session starts fresh",
-    description: "Give your AI agent persistent memory. It searches past sessions automatically when starting new work, recalls decisions, and learns from its own history.",
-    icon: BrainIcon,
-    color: "purple",
-    commands: [
-      { cmd: "cast memory", desc: "Install agent memory component" },
-      { cmd: 'cast ask "how did we implement auth?"', desc: "Natural language query" },
-      { cmd: 'cast context "add stripe"', desc: "Pre-work intelligence" },
-    ],
-  },
-  {
-    title: "Search & Browse",
-    problem: '"How did we do this before?"',
-    description: "Stop re-solving the same problems. Search your AI coding history like ripgrep -- full text, time filters, context lines. Find that one session from last month.",
+    title: "Steer From Anywhere",
+    problem: "Tied to your desk to unblock agents",
+    description: "Web dashboard, native macOS app with global shortcuts, and iOS app. Answer a permission prompt from your phone; get a push notification the moment an agent needs input.",
     icon: SearchIcon,
     color: "blue",
     commands: [
-      { cmd: 'cast search "auth" -s 7d', desc: "Search last 7 days" },
-      { cmd: "cast feed -g", desc: "Browse all sessions" },
-      { cmd: "cast read abc123 10:20", desc: "Read messages 10-20" },
+      { cmd: "Cmd+K command palette", desc: "Jump to anything" },
+      { cmd: "Desktop: Cmd+Shift+Space", desc: "Global palette" },
+      { cmd: "iOS: push notifications", desc: "Unblock from your phone" },
     ],
   },
   {
@@ -150,18 +165,6 @@ const FEATURE_CATEGORIES = [
       { cmd: "cast doc create 'Auth Design'", desc: "Create document" },
       { cmd: "cast decisions add 'Use Convex'", desc: "Record decision" },
       { cmd: "cast learn add 'http-pattern'", desc: "Save code pattern" },
-    ],
-  },
-  {
-    title: "Everywhere You Are",
-    problem: "Stuck at your desk to manage agents",
-    description: "Web dashboard, native macOS desktop app with global shortcuts, and iOS mobile app. Cmd+K command palette for instant navigation. Push notifications when agents need input.",
-    icon: SearchIcon,
-    color: "blue",
-    commands: [
-      { cmd: "Cmd+K command palette", desc: "Jump to anything" },
-      { cmd: "Desktop: Cmd+Shift+Space", desc: "Global palette" },
-      { cmd: "iOS: push notifications", desc: "Stay informed" },
     ],
   },
 ];
@@ -259,7 +262,13 @@ const COMMAND_REFERENCE = [
   },
 ];
 
+const PAGE_TITLE = "Features — Codecast";
+const PAGE_DESCRIPTION =
+  "The cast CLI and everything codecast records: a searchable memory of every agent conversation, cast blame from a line to the conversation that wrote it, a live inbox you can steer from anywhere, and the agents you already run.";
+
 export default function CLIPage() {
+  usePageMeta(PAGE_TITLE, PAGE_DESCRIPTION);
+
   return (
     <main className="min-h-screen bg-stone-50 w-full">
       {/* Nav */}
@@ -271,6 +280,12 @@ export default function CLIPage() {
           <div className="flex items-center gap-3">
             <Link href="/features" className="text-amber-600 font-medium text-sm px-3 py-1.5">
               CLI
+            </Link>
+            <Link href="/pricing" className="text-stone-600 hover:text-stone-900 font-medium text-sm px-3 py-1.5 hidden sm:block">
+              Pricing
+            </Link>
+            <Link href="/blog" className="text-stone-600 hover:text-stone-900 font-medium text-sm px-3 py-1.5 hidden sm:block">
+              Blog
             </Link>
             <Link href="/security" className="text-stone-600 hover:text-stone-900 font-medium text-sm px-3 py-1.5 hidden sm:block">
               Security
@@ -294,17 +309,18 @@ export default function CLIPage() {
         <div className="text-center max-w-3xl mx-auto">
           <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-amber-50 border border-amber-200 text-amber-700 text-sm font-medium mb-6">
             <TerminalIcon className="w-4 h-4" />
-            Platform
+            Any agent, any machine
           </div>
 
           <h1 className="text-5xl md:text-6xl font-bold text-stone-900 leading-[1.1] tracking-tight mb-6">
-            Move up a layer.<br />
-            <span className="text-stone-400">Drive your roadmap with agents.</span>
+            See, steer, and remember<br />
+            <span className="text-stone-400">every coding agent session.</span>
           </h1>
 
           <p className="text-xl text-stone-600 leading-relaxed max-w-2xl mx-auto mb-8">
-            Work at the level of plans, projects, and tasks. Agents see the bigger picture --
-            they pick up work from your roadmap, recall past decisions, and ship in parallel.
+            A permanent, searchable record of every agent conversation, the agents you already run
+            -- Claude Code, Codex, Cursor, Gemini -- on any machine, and a live inbox you can steer
+            from any device, all in one place.
           </p>
 
           <div className="mb-8">
@@ -396,11 +412,11 @@ export default function CLIPage() {
       <section className="max-w-6xl mx-auto px-6 py-20">
         <div className="text-center mb-16">
           <h2 className="text-3xl font-bold text-stone-900 mb-4">
-            The layer above your agents
+            The system of record for agent work
           </h2>
           <p className="text-lg text-stone-500 max-w-2xl mx-auto">
-            Plans, tasks, orchestration, memory, and team collaboration.
-            Everything you need to manage AI agents at the project level.
+            Remember every conversation, watch the sessions you already run on any machine,
+            and steer them from anywhere. Tasks, plans, and team collaboration build on top.
           </p>
         </div>
 
@@ -478,11 +494,12 @@ export default function CLIPage() {
               Agent Memory
             </div>
             <h2 className="text-3xl font-bold text-stone-900 mb-4">
-              Agents see the bigger picture
+              History that doesn't evaporate
             </h2>
             <p className="text-lg text-stone-600 leading-relaxed mb-6">
-              Install the memory component and your agent gains access to plans, past sessions, decisions,
-              and team context. It works at the project level, not just the current conversation.
+              Install the memory component and your agent can search past sessions, recall decisions,
+              and read team context -- not just the current conversation. Its history stops disappearing
+              when the terminal closes.
             </p>
             <ul className="space-y-3 text-stone-600">
               <li className="flex items-center gap-3">
@@ -536,10 +553,10 @@ cast blame src/auth.ts
       <section className="max-w-4xl mx-auto px-6 pb-20">
         <div className="bg-stone-900 rounded-2xl p-12 text-center">
           <h2 className="text-3xl font-bold text-white mb-4">
-            Move up a layer
+            See, steer, and remember
           </h2>
           <p className="text-lg text-stone-400 mb-8 max-w-xl mx-auto">
-            Stop managing conversations. Start managing your roadmap. Plans, tasks, orchestration, and memory -- free for individuals.
+            Every agent conversation, recorded and searchable. Every live session, steerable from anywhere. Any agent, any machine -- free for individuals.
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             <Link href="/signup">
@@ -563,7 +580,7 @@ cast blame src/auth.ts
             <div>
               <Logo size="md" className="[--logo-c:#444444] text-stone-900 mb-4" />
               <p className="text-sm text-stone-500">
-                The operating system for AI coding agents.
+                See, steer, and remember every coding agent session.
               </p>
             </div>
             <div>
@@ -571,14 +588,16 @@ cast blame src/auth.ts
               <ul className="space-y-2 text-sm text-stone-500">
                 <li><Link href="/#how-it-works" className="hover:text-stone-900">How it works</Link></li>
                 <li><Link href="/features" className="hover:text-stone-900">CLI</Link></li>
+                <li><Link href="/pricing" className="hover:text-stone-900">Pricing</Link></li>
                 <li><Link href="/security" className="hover:text-stone-900">Security</Link></li>
-                <li><Link href="/docs" className="hover:text-stone-900">Documentation</Link></li>
+                <li><Link href="/documentation" className="hover:text-stone-900">Documentation</Link></li>
               </ul>
             </div>
             <div>
               <h4 className="font-semibold text-stone-900 mb-3 text-sm">Company</h4>
               <ul className="space-y-2 text-sm text-stone-500">
                 <li><Link href="/about" className="hover:text-stone-900">About</Link></li>
+                <li><Link href="/blog" className="hover:text-stone-900">Blog</Link></li>
                 <li><Link href="/privacy" className="hover:text-stone-900">Privacy</Link></li>
               </ul>
             </div>
@@ -592,7 +611,7 @@ cast blame src/auth.ts
             </div>
           </div>
           <div className="border-t border-stone-200 mt-8 pt-8 text-center text-sm text-stone-400">
-            &copy; 2025 Codecast
+            &copy; 2026 Codecast
           </div>
         </div>
       </footer>

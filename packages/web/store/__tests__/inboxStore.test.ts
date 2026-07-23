@@ -2773,6 +2773,63 @@ describe("inboxStore local-first state mutations", () => {
     expect(s.notifications.c?.read).toBe(true);
     expect(dispatches.filter((d) => d.action === "markAllNotificationsRead").length).toBe(1);
   });
+
+  // Triage gestures on a session that was never OPENED on this client — no
+  // conversations[id] meta row exists. The gesture writes the session row, and
+  // the sessions→conversations field-whitelist dispatch mapping must carry it
+  // to the server anyway. Before that mapping, the write was silently
+  // local-only; the dismiss reconcile's CLEAR pass then read the server's
+  // silence as "restored elsewhere" and un-hid the row on every crawl — the
+  // "I keep dismissing these and they keep coming back" loop (ct-39383).
+  it("killSession on an unopened session (no conversations meta) still dispatches the dismiss", () => {
+    useInboxStore.setState({ sessions: { [CID]: { ...baseSession, _id: CID } }, conversations: {} });
+    useInboxStore.getState().killSession(CID);
+    const s = useInboxStore.getState();
+    expect(s.sessions[CID]?.inbox_dismissed_at).toBeTruthy();
+    const d = dispatches.find((d) => d.patches?.conversations?.[CID]?.inbox_dismissed_at);
+    expect(d?.patches?.conversations?.[CID]?.inbox_dismissed_at).toBeTypeOf("number");
+    // The in-flight local value stays protected until the server echo.
+    expect(s.pending[`sessions:${CID}:inbox_dismissed_at`]).toBeTruthy();
+  });
+
+  it("stashSession on an unopened session still dispatches the stash", () => {
+    useInboxStore.setState({ sessions: { [CID]: { ...baseSession, _id: CID } }, conversations: {} });
+    useInboxStore.getState().stashSession(CID);
+    const d = dispatches.find((d) => d.patches?.conversations?.[CID]?.inbox_stashed_at);
+    expect(d?.patches?.conversations?.[CID]?.inbox_stashed_at).toBeTypeOf("number");
+  });
+
+  it("pinSession on an unopened session still dispatches the pin", () => {
+    useInboxStore.setState({ sessions: { [CID]: { ...baseSession, _id: CID } }, conversations: {} });
+    useInboxStore.getState().pinSession(CID);
+    const d = dispatches.find((d) => d.patches?.conversations?.[CID]?.inbox_pinned_at !== undefined);
+    expect(d?.patches?.conversations?.[CID]?.inbox_pinned_at).toBeTypeOf("number");
+  });
+
+  it("deferSession on an unopened session still dispatches the defer", () => {
+    useInboxStore.setState({ sessions: { [CID]: { ...baseSession, _id: CID } }, conversations: {} });
+    useInboxStore.getState().deferSession(CID);
+    const d = dispatches.find((d) => d.patches?.conversations?.[CID]?.inbox_deferred_at !== undefined);
+    expect(d?.patches?.conversations?.[CID]?.inbox_deferred_at).toBeTypeOf("number");
+  });
+
+  it("restoreSession on an unopened session dispatches the un-dismiss as a null tombstone", () => {
+    useInboxStore.setState({
+      sessions: { [CID]: { ...baseSession, _id: CID, inbox_dismissed_at: 123 } },
+      conversations: {},
+    });
+    useInboxStore.getState().restoreSession(CID);
+    const d = dispatches.find((d) => d.patches?.conversations?.[CID] && "inbox_dismissed_at" in d.patches.conversations[CID]);
+    expect(d?.patches?.conversations?.[CID]?.inbox_dismissed_at).toBeNull();
+  });
+
+  it("non-triage session field writes do NOT dispatch through the sessions mapping", async () => {
+    useInboxStore.setState({ sessions: { [CID]: { ...baseSession, _id: CID } }, conversations: {} });
+    await useInboxStore.getState().convCommand(CID, "restartSession", undefined, { status: "starting" } as any);
+    for (const d of dispatches) {
+      expect(d.patches?.conversations?.[CID]?.status).toBeUndefined();
+    }
+  });
 });
 
 // The 30-day inbox window is a SERVER fetch bound only — the client never prunes.

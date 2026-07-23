@@ -286,6 +286,12 @@ export default function DocsPage() {
             <Link href="/changelog" className="font-medium text-sm px-3 py-1.5 hidden sm:block" style={{ color: SOL.base00 }}>
               Changelog
             </Link>
+            <Link href="/pricing" className="font-medium text-sm px-3 py-1.5 hidden sm:block" style={{ color: SOL.base00 }}>
+              Pricing
+            </Link>
+            <Link href="/blog" className="font-medium text-sm px-3 py-1.5 hidden sm:block" style={{ color: SOL.base00 }}>
+              Blog
+            </Link>
             <Link href="/signup">
               <Button className="font-medium text-white text-sm" style={{ backgroundColor: SOL.base03 }}>
                 Get started
@@ -309,7 +315,7 @@ export default function DocsPage() {
             <h1 className="text-4xl font-bold font-mono mb-4" style={{ color: SOL.base03 }}>Documentation</h1>
             <p className="text-lg leading-relaxed" style={{ color: SOL.base00 }}>
               Plans, tasks, orchestration, memory, and the CLI. Everything you need to manage
-              AI agents at the project level. Works with Claude Code, Codex, Gemini, and Cursor.
+              AI agents at the project level. Works with Claude Code, Codex, Cursor, and Gemini.
             </p>
           </div>
 
@@ -317,7 +323,7 @@ export default function DocsPage() {
           <Heading id="getting-started" level={2}>Getting Started</Heading>
           <p className="mb-4" style={{ color: SOL.base00 }}>
             Codecast is a CLI daemon that runs in the background, syncing your AI coding sessions to a shared database.
-            Once installed, every Claude Code, Codex, Gemini, or Cursor session is automatically captured -- searchable, shareable, and accessible from any device.
+            Once installed, every Claude Code, Codex, Cursor, or Gemini session is automatically captured -- searchable, shareable, and accessible from any device.
           </p>
 
           <Heading id="installation" level={3}>Installation</Heading>
@@ -1170,8 +1176,8 @@ $ cast bookmark --delete auth-pattern`}</Code>
             {[
               { name: "Claude Code", color: SOL.orange, desc: "Full sync with live status" },
               { name: "OpenAI Codex", color: SOL.green, desc: "Session sync and memory" },
-              { name: "Gemini CLI", color: SOL.magenta, desc: "Session sync and memory" },
               { name: "Cursor", color: SOL.blue, desc: "Session sync and memory" },
+              { name: "Gemini CLI", color: SOL.magenta, desc: "Session sync and memory" },
             ].map((tool) => (
               <div key={tool.name} className="p-3 rounded-lg" style={{ backgroundColor: `${SOL.base2}80`, borderLeft: `3px solid ${tool.color}` }}>
                 <div className="font-mono text-sm font-medium" style={{ color: SOL.base03 }}>{tool.name}</div>

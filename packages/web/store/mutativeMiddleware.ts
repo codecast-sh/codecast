@@ -153,6 +153,7 @@ export function groupPatchesByTable(
       // to its real Convex id, subsequent patches will dispatch normally.
       if (!CONVEX_ID_RE.test(docId)) continue;
       const field = String(path[2]);
+      if (mapping.fields && !mapping.fields.includes(field)) continue;
       const nested = path.slice(3);
 
       result[table][docId] ??= {};
