@@ -11,6 +11,12 @@ export default function AboutPage() {
             <Logo size="md" className="[--logo-c:#444444] text-[#002b36]" />
           </Link>
           <div className="flex items-center gap-3">
+            <Link href="/pricing" className="text-[#657b83] hover:text-[#002b36] font-medium text-sm px-3 py-1.5 hidden sm:block">
+              Pricing
+            </Link>
+            <Link href="/blog" className="text-[#657b83] hover:text-[#002b36] font-medium text-sm px-3 py-1.5 hidden sm:block">
+              Blog
+            </Link>
             <Link href="/security" className="text-[#657b83] hover:text-[#002b36] font-medium text-sm px-3 py-1.5">
               Security
             </Link>
@@ -62,7 +68,7 @@ export default function AboutPage() {
             <div>
               <Logo size="md" className="[--logo-c:#444444] text-[#002b36] mb-4" />
               <p className="text-sm text-[#657b83]">
-                Real-time sync for Claude Code, Codex, Gemini, and Cursor.
+                Real-time sync for Claude Code, Codex, Cursor, and Gemini.
               </p>
             </div>
             <div>
@@ -70,6 +76,7 @@ export default function AboutPage() {
               <ul className="space-y-2 text-sm text-[#657b83]">
                 <li><Link href="/#how-it-works" className="hover:text-[#073642]">How it works</Link></li>
                 <li><Link href="/features" className="hover:text-[#073642]">CLI</Link></li>
+                <li><Link href="/pricing" className="hover:text-[#073642]">Pricing</Link></li>
                 <li><Link href="/security" className="hover:text-[#073642]">Security</Link></li>
               </ul>
             </div>
@@ -77,6 +84,7 @@ export default function AboutPage() {
               <h4 className="font-semibold text-[#002b36] mb-3 text-sm">Company</h4>
               <ul className="space-y-2 text-sm text-[#657b83]">
                 <li><Link href="/about" className="hover:text-[#073642]">About</Link></li>
+                <li><Link href="/blog" className="hover:text-[#073642]">Blog</Link></li>
                 <li><Link href="/privacy" className="hover:text-[#073642]">Privacy</Link></li>
               </ul>
             </div>
@@ -90,7 +98,7 @@ export default function AboutPage() {
             </div>
           </div>
           <div className="border-t border-[#eee8d5] mt-8 pt-8 text-center text-sm text-[#839496]">
-            &copy; 2025 Codecast
+            &copy; 2026 Codecast
           </div>
         </div>
       </footer>

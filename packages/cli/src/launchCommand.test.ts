@@ -16,6 +16,7 @@ import {
 // from the registry, mirroring the daemon's CLAUDE/CODEX_EFFORT_LEVELS check.
 const CLAUDE_EFFORTS = AGENT_CLIENTS.claude.modelConfig!.efforts;
 const CODEX_EFFORTS = AGENT_CLIENTS.codex.modelConfig!.efforts;
+const PI_EFFORTS = AGENT_CLIENTS.pi.modelConfig!.efforts;
 
 function oracle(input: LaunchArgsInput): { binaryArgs: string[]; notifyCodexBypass: boolean } {
   const { agentType, configuredArgs, permFlags, defaultFlags } = input;
@@ -58,6 +59,9 @@ function oracle(input: LaunchArgsInput): { binaryArgs: string[]; notifyCodexBypa
     if (input.requestedEffort && (CODEX_EFFORTS as readonly string[]).includes(input.requestedEffort)) args.push("-c", `model_reasoning_effort=${input.requestedEffort}`);
   } else if (agentType === "opencode") {
     if (input.modelAlias) args.push("-m", input.modelAlias);
+  } else if (agentType === "pi") {
+    if (input.modelAlias) args.push("--model", input.modelAlias);
+    if (input.requestedEffort && (PI_EFFORTS as readonly string[]).includes(input.requestedEffort)) args.push("--thinking", input.requestedEffort);
   }
   return { binaryArgs: args, notifyCodexBypass };
 }
@@ -168,12 +172,18 @@ describe("buildLaunchArgs — targeted per-client behavior", () => {
     expect(buildLaunchArgs({ agentType: "opencode", configuredArgs: "--auto --pure", permFlags: null, defaultFlags: null }).binaryArgs).toEqual(["--auto", "--pure"]);
   });
 
-  test("pi: passes configured args, ignores perm flags and model/effort", () => {
+  test("pi: passes configured args, ignores perm flags, takes --model/--thinking", () => {
     // configured agent_args.pi flow through (the bug: without a pi branch they were dropped)...
-    expect(buildLaunchArgs({ agentType: "pi", configuredArgs: "--yolo --model foo", permFlags: "--ignored", defaultFlags: null, modelAlias: "opus", requestedEffort: "high" }).binaryArgs)
-      .toEqual(["--yolo", "--model", "foo"]);
-    // ...but default-param flags still apply to every client, and no perm/model/effort is injected.
-    expect(buildLaunchArgs({ agentType: "pi", configuredArgs: "", permFlags: "--ignored", defaultFlags: "--verbose", modelAlias: "opus" }).binaryArgs)
+    expect(buildLaunchArgs({ agentType: "pi", configuredArgs: "--yolo", permFlags: "--ignored", defaultFlags: null }).binaryArgs)
+      .toEqual(["--yolo"]);
+    // ...default-param flags still apply, and no perm flags are injected.
+    expect(buildLaunchArgs({ agentType: "pi", configuredArgs: "", permFlags: "--ignored", defaultFlags: "--verbose" }).binaryArgs)
       .toEqual(["--verbose"]);
+    // per-session model is the full provider/model id; pi's --thinking rides the
+    // effort slot and only accepts pi's own levels.
+    expect(buildLaunchArgs({ agentType: "pi", configuredArgs: "", permFlags: null, defaultFlags: null, modelAlias: "openrouter/anthropic/claude-sonnet-5", requestedEffort: "xhigh" }).binaryArgs)
+      .toEqual(["--model", "openrouter/anthropic/claude-sonnet-5", "--thinking", "xhigh"]);
+    expect(buildLaunchArgs({ agentType: "pi", configuredArgs: "", permFlags: null, defaultFlags: null, requestedEffort: "bogus" }).binaryArgs)
+      .toEqual([]);
   });
 });

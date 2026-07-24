@@ -72,6 +72,17 @@ export default defineConfig({
     port: 3000,
     host: true,
     allowedHosts: ["local.codecast.sh", "local.1.codecast.sh", "local.2.codecast.sh", "local.3.codecast.sh"],
+    // Tests run under bun, never through vite — but a single stray HTTP fetch
+    // of a test file (an agent probing the dev server) makes it a permanent
+    // orphan module in the graph, and every later save of it broadcasts a
+    // full-reload to EVERY connected window (the "popup keeps blinking on
+    // local" storm: 40+ of one afternoon's reloads were *.test.ts saves from
+    // concurrent agent sessions). Ignore them in the watcher; same for
+    // underscore-prefixed scratch .html pages parked in the served root —
+    // any html change full-reloads all clients by design.
+    watch: {
+      ignored: ["**/*.test.ts", "**/*.test.tsx", "**/__tests__/**", "**/_*.html"],
+    },
     // NOTE: server.warmup is deliberately omitted. Warming up a 10k-LOC
     // module (ConversationView.tsx) on boot kicks the optimizer into a
     // dep-discovery cycle that races real page requests, producing

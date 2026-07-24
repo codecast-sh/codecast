@@ -7,6 +7,7 @@ import { Database } from "bun:sqlite";
 import { execSync, execFileSync, exec, execFile, spawn, spawnSync } from "child_process";
 import { watch as chokidarWatch } from "chokidar";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
+import { ensureModelInventoryFresh, pendingModelInventoryPayload, markModelInventorySent } from "./modelInventory.js";
 import { deviceId, deviceLabel, isRemoteDevice } from "./remote/device.js";
 import { copyCredentialToRemoteAsync, currentBranch, loadRemoteHost, readPushableCredential, remoteHostsRegistered } from "./remote/session-move.js";
 import { reparentNotice, type ReparentCommandFacts } from "./sessionMoveNotice.js";
@@ -64,7 +65,7 @@ import {
   parsePidPpidMap,
   resolveSpawnerSessionId,
 } from "./sessionProcessMatcher.js";
-import { parseSessionFile, parseTranscriptFor, extractSlug, extractParentUuid, extractSummaryTitle, extractCwd, extractCodexCwd, extractCodexForkRoot, extractGeminiProjectHash, extractPiCwd, extractTeamInfo, detectCliFlags, type ParsedMessage } from "./parser.js";
+import { parseSessionFile, parseTranscriptFor, extractSlug, extractParentUuid, extractSummaryTitle, extractCwd, extractCodexCwd, extractCodexForkRoot, extractCodexSessionMetadata, isCompletedStandaloneCodexReview, isCompletedNativeCodexReviewChild, extractGeminiProjectHash, extractPiCwd, extractTeamInfo, detectCliFlags, type ParsedMessage } from "./parser.js";
 import { extractMessagesFromCursorDb } from "./cursorProcessor.js";
 import { getPosition, setPosition } from "./positionTracker.js";
 import { encryptToken, decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
@@ -1853,6 +1854,11 @@ async function sendHeartbeat(): Promise<void> {
   // it — this is what makes a new `/login` show up in Settings by itself.
   maybeAutoSaveAccount();
 
+  // Dynamic-client model inventory: recollect in the background when stale; a
+  // fresh set rides a beat only until the server acks it (hash-gated).
+  ensureModelInventoryFresh();
+  const modelInventory = pendingModelInventoryPayload();
+
   try {
     const siteUrl = config.convex_url.replace(".cloud", ".site");
     // Bound the request: an untimed fetch here can hang indefinitely (observed
@@ -1880,6 +1886,9 @@ async function sendHeartbeat(): Promise<void> {
         // Installed agent-feature snippets + stable mode, so the web Settings
         // page mirrors (and can toggle) this device's setup.
         settings: buildDeviceSettingsPayload(config) ?? undefined,
+        // Live model inventory for dynamic clients (opencode/pi), hash-gated so
+        // the ~10KB list rides a beat only when it actually changed.
+        model_inventory: modelInventory,
         ...syncHealthFields(),
       }),
     });
@@ -1889,6 +1898,7 @@ async function sendHeartbeat(): Promise<void> {
       log(`Heartbeat failed: ${response.status} ${text}`);
       return;
     }
+    if (modelInventory) markModelInventorySent(modelInventory.hash);
 
     const data = await response.json();
     if (data.commands && data.commands.length > 0) {
@@ -3729,6 +3739,38 @@ async function executeRemoteCommand(
         }
         break;
       }
+      case "release_session": {
+        // Ownership was reassigned AWAY from this device ("Run here" on another
+        // machine). Targeted at us — the previous owner — so we must NOT sit
+        // behind the SESSION_COMMANDS single-owner guard (which would skip this
+        // precisely because we no longer own the conversation). Reap every
+        // local backend so no stale tmux/agent copy keeps running here — the
+        // same teardown move_to_device runs on the source after a transfer.
+        const parsed = commandArgs ? JSON.parse(commandArgs) : {};
+        const conversationId: string | undefined = parsed.conversation_id;
+        const sessionId: string | undefined = parsed.session_id;
+        if (!conversationId) {
+          error = "release_session: missing conversation_id";
+          break;
+        }
+        // Race guard: if ownership bounced back to us (A→B→A before we polled
+        // move 1's release), this command is stale — tearing down would kill a
+        // session we rightfully run. Fail-open on lookup error: the command
+        // only exists because ownership moved away, so cleanup is the norm.
+        try {
+          const info = await syncServiceRef?.getConversationOwnerInfo(conversationId);
+          if (info?.ownerDeviceId === deviceId()) {
+            log(`[RELEASE] skipping ${conversationId.slice(0, 12)} — ownership is back on this device`);
+            result = JSON.stringify({ released: false, reason: "owner_again" });
+            break;
+          }
+        } catch { /* fall through and release */ }
+        log(`[RELEASE] releasing ${conversationId.slice(0, 12)} — ownership moved to another device`);
+        await stopLocalSessionBackends(conversationId, sessionId).catch(() => {});
+        await clearConversationDeliveryAndResumeState(conversationId, sessionId, "release_session").catch(() => {});
+        result = JSON.stringify({ released: true });
+        break;
+      }
       case "apply_snippet": {
         // Web "Agent Features" changed a setting for THIS device. Run the very CLI
         // command a human would, then heartbeat so the new state round-trips back
@@ -4715,6 +4757,8 @@ async function maybeLinkTeamSpawn(
 // child process may not have been visible yet), then stay first-class.
 const spawnLinkAttempts = new Map<string, number>();
 const SPAWN_LINK_MAX_ATTEMPTS = 3;
+const pendingCodexNativeParents = new Map<string, string>();
+const retiringCodexReviews = new Set<string>();
 
 function readPidRegistrySessionId(pid: number): string | null {
   try {
@@ -4791,6 +4835,56 @@ async function maybeRetrySpawnLink(
   } catch (err) {
     log(`Failed retroactive spawn link for ${sessionId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
   }
+}
+
+async function linkPendingCodexNativeChildren(
+  parentSessionId: string,
+  parentConversationId: string,
+  syncService: SyncService,
+  conversationCache: ConversationCache,
+): Promise<void> {
+  for (const [childSessionId, expectedParentSessionId] of pendingCodexNativeParents) {
+    if (expectedParentSessionId !== parentSessionId) continue;
+    const childConversationId = conversationCache[childSessionId];
+    if (!childConversationId) continue;
+    await syncService.linkSessions(parentConversationId, childConversationId, "review");
+    pendingCodexNativeParents.delete(childSessionId);
+    log(`Linked native Codex review ${childSessionId.slice(0, 8)} -> wrapper ${parentSessionId.slice(0, 8)}`);
+  }
+}
+
+function scheduleCodexReviewRetirement(
+  filePath: string,
+  sessionId: string,
+  conversationId: string,
+  syncService: SyncService,
+  attempt = 0,
+): void {
+  if (attempt === 0) {
+    if (retiringCodexReviews.has(sessionId)) return;
+    retiringCodexReviews.add(sessionId);
+  }
+
+  setTimeout(async () => {
+    const writers = await pidsWithFileOpen(filePath);
+    if (writers.length > 0 && attempt < 12) {
+      scheduleCodexReviewRetirement(filePath, sessionId, conversationId, syncService, attempt + 1);
+      return;
+    }
+    if (writers.length > 0) {
+      retiringCodexReviews.delete(sessionId);
+      log(`Skipped retiring completed Codex review ${sessionId.slice(0, 8)}: transcript still has a live writer`);
+      return;
+    }
+    try {
+      await syncService.killFinishedConversation(conversationId);
+      log(`Retired completed Codex review ${sessionId.slice(0, 8)} (${conversationId.slice(0, 12)})`);
+    } catch (err) {
+      log(`Failed to retire completed Codex review ${sessionId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      retiringCodexReviews.delete(sessionId);
+    }
+  }, attempt === 0 ? 10_000 : 5_000);
 }
 
 const bakImageRecoveryDone = new Set<string>();
@@ -6262,6 +6356,8 @@ async function processCodexSession(
       log(`Skipping app-server-managed Codex transcript ${sessionId}`);
       return;
     }
+    const codexMetadata = extractCodexSessionMetadata(readCodexSessionMetaHead(filePath));
+    const nativeParentSessionId = codexMetadata?.parentThreadId;
     const messages = parseTranscriptFor("codex", newContent);
 
     // Collapse Codex's per-resume fork chain into one conversation: every fork of a logical
@@ -6398,15 +6494,25 @@ async function processCodexSession(
           // exec`) nests under its spawner as a subagent instead of surfacing
           // as a loose first-class card. Only fresh, unmatched sessions get
           // here — started stubs and forks resolved above stay first-class.
-          let parentConversationId: string | undefined;
-          try {
-            const spawnerConvId = await resolveSpawnerConversation(filePath, sessionId, "codex", conversationCache);
-            if (spawnerConvId) {
-              parentConversationId = spawnerConvId;
-              log(`Detected spawned codex session ${sessionId.slice(0, 8)} -> parent ${spawnerConvId.slice(0, 12)} via process ancestry`);
+          let parentConversationId = nativeParentSessionId
+            ? conversationCache[nativeParentSessionId]
+            : undefined;
+          if (nativeParentSessionId) {
+            if (parentConversationId) {
+              log(`Detected native Codex review ${sessionId.slice(0, 8)} -> wrapper ${nativeParentSessionId.slice(0, 8)}`);
+            } else {
+              pendingCodexNativeParents.set(sessionId, nativeParentSessionId);
             }
-          } catch {}
-          if (!parentConversationId) spawnLinkAttempts.set(sessionId, 1);
+          } else {
+            try {
+              const spawnerConvId = await resolveSpawnerConversation(filePath, sessionId, "codex", conversationCache);
+              if (spawnerConvId) {
+                parentConversationId = spawnerConvId;
+                log(`Detected spawned codex session ${sessionId.slice(0, 8)} -> parent ${spawnerConvId.slice(0, 12)} via process ancestry`);
+              }
+            } catch {}
+            if (!parentConversationId) spawnLinkAttempts.set(sessionId, 1);
+          }
 
           conversationId = await syncService.createConversation({
             userId,
@@ -6419,9 +6525,11 @@ async function processCodexSession(
             startedAt: firstMessageTimestamp,
             parentMessageUuid: undefined,
             parentConversationId,
+            isSubagent: !!nativeParentSessionId || undefined,
             gitInfo: undefined,
           });
           setConversationCache(conversationId);
+          await linkPendingCodexNativeChildren(sessionId, conversationId, syncService, conversationCache);
           log(`Created conversation ${conversationId} for Codex session ${sessionId}${forkRoot && forkRoot !== sessionId ? ` (lineage root ${forkRoot.slice(0, 8)})` : ""}`);
 
           if ((global as any).activeSessions) {
@@ -6529,6 +6637,26 @@ async function processCodexSession(
     syncStats.messagesSynced += messages.length;
     syncStats.sessionsActive.add(sessionId);
     tryRegisterSessionProcess(sessionId, "codex");
+
+    if (conversationId) {
+      await linkPendingCodexNativeChildren(sessionId, conversationId, syncService, conversationCache);
+      // The completed-review predicates need the review's full event history, but
+      // newContent is only the bytes since the last sync position — a live-watched
+      // review delivers exited_review_mode and task_complete in different chunks.
+      // Once the terminal task_complete shows up, judge against the whole transcript.
+      if (codexMetadata?.originator === "codex_exec" && newContent.includes('"task_complete"')) {
+        let fullContent = newContent;
+        try {
+          fullContent = fs.readFileSync(filePath, "utf-8");
+        } catch {}
+        if (
+          isCompletedStandaloneCodexReview(codexMetadata, fullContent) ||
+          isCompletedNativeCodexReviewChild(codexMetadata, fullContent)
+        ) {
+          scheduleCodexReviewRetirement(filePath, sessionId, conversationId, syncService);
+        }
+      }
+    }
 
     // Spawned-child link that failed at creation (child process not visible
     // yet) — bounded retries on later passes, no-op once resolved or exhausted.

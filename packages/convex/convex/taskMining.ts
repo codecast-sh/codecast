@@ -28,34 +28,6 @@ export const mineConversationAfterInsight = internalAction({
       });
     }
 
-    // Mine session-summary doc from insight (if conversation has enough messages)
-    if (insight) {
-      const conv: any = await ctx.runQuery(internalApi.taskMining.getConversationById, { conversation_id: args.conversation_id });
-      if (conv && (conv.message_count || 0) >= 10 && insight.outcome_type !== "unknown" && insight.summary?.length >= 50) {
-        await ctx.runMutation(internalApi.taskMining.mineDocsFromSessions, {
-          user_id: args.user_id,
-          team_id: args.team_id,
-          sessions: [{
-            conversation_id: args.conversation_id,
-            title: conv.title || insight.goal || "Untitled",
-            message_count: conv.message_count || 0,
-            project_path: conv.project_path,
-            started_at: conv.started_at,
-            is_private: conv.is_private,
-            team_visibility: conv.team_visibility,
-            insight: {
-              summary: insight.summary,
-              goal: insight.goal,
-              what_changed: insight.what_changed,
-              blockers: insight.blockers,
-              outcome_type: insight.outcome_type,
-              themes: insight.themes || [],
-            },
-          }],
-        });
-      }
-    }
-
     // Mine raw markdown docs from this conversation's messages
     let afterCreation: number | undefined;
     for (let page = 0; page < 20; page++) {
@@ -74,14 +46,6 @@ export const mineConversationAfterInsight = internalAction({
       if (!batch.hasMore) break;
       afterCreation = batch.lastCreation;
     }
-  },
-});
-
-// Retrieve a single conversation by ID
-export const getConversationById = internalQuery({
-  args: { conversation_id: v.id("conversations") },
-  handler: async (ctx, args) => {
-    return await ctx.db.get(args.conversation_id);
   },
 });
 
@@ -463,97 +427,6 @@ export const mineTasksFromInsights = internalMutation({
   },
 });
 
-// Create a doc for every session that has an insight (not just >100 messages)
-export const mineDocsFromSessions = internalMutation({
-  args: {
-    user_id: v.id("users"),
-    team_id: v.optional(v.id("teams")),
-    sessions: v.array(
-      v.object({
-        conversation_id: v.id("conversations"),
-        title: v.optional(v.string()),
-        message_count: v.number(),
-        project_path: v.optional(v.string()),
-        started_at: v.optional(v.number()),
-        actor_name: v.optional(v.string()),
-        is_private: v.optional(v.boolean()),
-        team_visibility: v.optional(v.union(v.literal("summary"), v.literal("full"), v.literal("private"))),
-        insight: v.optional(
-          v.object({
-            summary: v.string(),
-            goal: v.optional(v.string()),
-            what_changed: v.optional(v.string()),
-            blockers: v.optional(v.array(v.string())),
-            outcome_type: v.string(),
-            themes: v.optional(v.array(v.string())),
-          })
-        ),
-      })
-    ),
-  },
-  handler: async (ctx, args) => {
-    let docsCreated = 0;
-
-    for (const session of args.sessions) {
-      if (!session.insight) continue;
-      const ts = session.started_at || Date.now();
-
-      const existingDocs = await ctx.db
-        .query("docs")
-        .withIndex("by_conversation_id", (q) => q.eq("conversation_id", session.conversation_id))
-        .first();
-      if (existingDocs) continue;
-
-      const docType =
-        session.insight.outcome_type === "blocked"
-          ? "investigation"
-          : session.insight.outcome_type === "shipped"
-            ? "handoff"
-            : session.insight.outcome_type === "progress"
-              ? "note"
-              : "note";
-
-      const contentParts: string[] = [];
-      if (session.insight.goal)
-        contentParts.push(`## Goal\n${session.insight.goal}`);
-      contentParts.push(`## Summary\n${session.insight.summary}`);
-      if (session.insight.what_changed)
-        contentParts.push(`## What Changed\n${session.insight.what_changed}`);
-      if (session.insight.blockers?.length)
-        contentParts.push(
-          `## Blockers\n${session.insight.blockers.map((b: string) => `- ${b}`).join("\n")}`
-        );
-      if (session.actor_name)
-        contentParts.push(`## Author\n${session.actor_name}`);
-      if (session.project_path)
-        contentParts.push(`## Project\n\`${session.project_path}\``);
-
-      const conv = await ctx.db.get(session.conversation_id);
-      // Private source session → personal doc; no active-team fallback.
-      const convTeamId = teamVisibleConvTeam(conv);
-
-      await ctx.db.insert("docs", {
-        user_id: args.user_id,
-        team_id: convTeamId,
-        title: session.title || session.insight.goal || "Untitled Session",
-        content: contentParts.join("\n\n"),
-        doc_type: docType as any,
-        source: "agent",
-        conversation_id: session.conversation_id,
-        project_path: session.project_path,
-        labels: session.insight.themes,
-        is_private: session.is_private,
-        team_visibility: session.team_visibility,
-        created_at: ts,
-        updated_at: ts,
-      });
-      docsCreated++;
-    }
-
-    return { docs_created: docsCreated };
-  },
-});
-
 const internalApi = internal as any;
 
 export const getUserTeamId = internalQuery({
@@ -607,7 +480,6 @@ export const webMineAll = action({
     const ninetyDaysAgo = Date.now() - 90 * 24 * 60 * 60 * 1000;
 
     let totalTasksCreated = 0;
-    let totalDocsCreated = 0;
     let totalInsights = 0;
 
     for (const member of members) {
@@ -660,114 +532,14 @@ export const webMineAll = action({
         totalTasksCreated += result.tasks_created;
       }
 
-      // Mine docs from sessions with substantial insights
-      const sessionsForDocs: any[] = [];
-      for (const ins of memberInsights) {
-        if (ins.outcome_type === "unknown") continue;
-        if (!ins.summary || ins.summary.length < 50) continue;
-        const conv = conversations.find((c: any) => c._id === ins.conversation_id);
-        if (!conv || (conv.message_count || 0) < 10) continue;
-        sessionsForDocs.push({
-          conversation_id: ins.conversation_id,
-          title: conv.title || ins.goal || "Untitled",
-          message_count: conv.message_count || 0,
-          project_path: conv.project_path,
-          started_at: conv.started_at,
-          actor_name: ins.actor_name,
-          is_private: conv.is_private,
-          team_visibility: conv.team_visibility,
-          insight: {
-            summary: ins.summary,
-            goal: ins.goal,
-            what_changed: ins.what_changed,
-            blockers: ins.blockers,
-            outcome_type: ins.outcome_type,
-            themes: ins.themes || [],
-          },
-        });
-      }
-      for (let i = 0; i < sessionsForDocs.length; i += BATCH_SIZE) {
-        const batch = sessionsForDocs.slice(i, i + BATCH_SIZE);
-        const result: any = await ctx.runMutation(
-          internalApi.taskMining.mineDocsFromSessions,
-          { user_id: member._id, team_id, sessions: batch }
-        );
-        totalDocsCreated += result.docs_created;
-      }
     }
 
     return {
       tasks_created: totalTasksCreated,
-      docs_created: totalDocsCreated,
+      docs_created: 0,
       insights_processed: totalInsights,
       members_processed: members.length,
     };
-  },
-});
-
-export const mineAllForUser = internalAction({
-  args: { user_id: v.id("users"), since_days: v.optional(v.number()) },
-  handler: async (ctx, args) => {
-    const internalApi = internal as any;
-    const team_id = await ctx.runQuery(internalApi.taskMining.getUserTeamId, {
-      user_id: args.user_id,
-    }) as Id<"teams"> | null;
-    if (!team_id) return { tasks_created: 0, docs_created: 0 };
-
-    const members: any[] = await ctx.runQuery(internalApi.taskMining.getTeamMembers, { team_id });
-    const ninetyDaysAgo = Date.now() - (args.since_days || 90) * 24 * 60 * 60 * 1000;
-    let totalDocsCreated = 0;
-
-    for (const member of members) {
-      const insights: any[] = await ctx.runQuery(
-        internalApi.taskMining.getTeamInsights,
-        { team_id, since: ninetyDaysAgo }
-      );
-      const memberInsights = insights.filter((i: any) => i.actor_user_id === member._id);
-      if (memberInsights.length === 0) continue;
-
-      const conversationIds = [...new Set(memberInsights.map((i: any) => i.conversation_id))];
-      const conversations: any[] = await ctx.runQuery(
-        internalApi.taskMining.getConversationsByIds,
-        { conversation_ids: conversationIds }
-      );
-
-      const sessionsForDocs: any[] = [];
-      for (const ins of memberInsights) {
-        if (ins.outcome_type === "unknown") continue;
-        if (!ins.summary || ins.summary.length < 50) continue;
-        const conv = conversations.find((c: any) => c._id === ins.conversation_id);
-        if (!conv || (conv.message_count || 0) < 10) continue;
-        sessionsForDocs.push({
-          conversation_id: ins.conversation_id,
-          title: conv.title || ins.goal || "Untitled",
-          message_count: conv.message_count || 0,
-          project_path: conv.project_path,
-          started_at: conv.started_at,
-          actor_name: ins.actor_name,
-          is_private: conv.is_private,
-          team_visibility: conv.team_visibility,
-          insight: {
-            summary: ins.summary,
-            goal: ins.goal,
-            what_changed: ins.what_changed,
-            blockers: ins.blockers,
-            outcome_type: ins.outcome_type,
-            themes: ins.themes || [],
-          },
-        });
-      }
-      const BATCH_SIZE = 25;
-      for (let i = 0; i < sessionsForDocs.length; i += BATCH_SIZE) {
-        const batch = sessionsForDocs.slice(i, i + BATCH_SIZE);
-        const result: any = await ctx.runMutation(
-          internalApi.taskMining.mineDocsFromSessions,
-          { user_id: member._id, team_id, sessions: batch }
-        );
-        totalDocsCreated += result.docs_created;
-      }
-    }
-    return { docs_created: totalDocsCreated, members_processed: members.length };
   },
 });
 
@@ -1800,38 +1572,6 @@ export const backfillAllTeams = internalAction({
         });
         totalTasks += result.tasks_created;
         totalPlansUpdated += result.plans_updated || 0;
-      }
-
-      const sessionsForDocs: any[] = [];
-      for (const ins of insights) {
-        if (ins.outcome_type === "unknown" || !ins.summary || ins.summary.length < 50) continue;
-        const conv = conversations.find((c: any) => c._id === ins.conversation_id);
-        if (!conv || (conv.message_count || 0) < 10) continue;
-        sessionsForDocs.push({
-          conversation_id: ins.conversation_id,
-          title: conv.title || ins.goal || "Untitled",
-          message_count: conv.message_count || 0,
-          project_path: conv.project_path,
-          started_at: conv.started_at,
-          is_private: conv.is_private,
-          team_visibility: conv.team_visibility,
-          insight: {
-            summary: ins.summary,
-            goal: ins.goal,
-            what_changed: ins.what_changed,
-            blockers: ins.blockers,
-            outcome_type: ins.outcome_type,
-            themes: ins.themes || [],
-          },
-        });
-      }
-      for (let i = 0; i < sessionsForDocs.length; i += BATCH_SIZE) {
-        const result: any = await ctx.runMutation(internalApi.taskMining.mineDocsFromSessions, {
-          user_id: userId,
-          team_id: teamId,
-          sessions: sessionsForDocs.slice(i, i + BATCH_SIZE),
-        });
-        totalDocs += result.docs_created;
       }
 
       // Mine raw markdown docs from recent conversations

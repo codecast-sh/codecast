@@ -12,6 +12,12 @@ export default function TermsPage() {
             <Logo size="md" className="[--logo-c:#444444] text-stone-900" />
           </Link>
           <div className="flex items-center gap-3">
+            <Link href="/pricing" className="text-stone-600 hover:text-stone-900 font-medium text-sm px-3 py-1.5 hidden sm:block">
+              Pricing
+            </Link>
+            <Link href="/blog" className="text-stone-600 hover:text-stone-900 font-medium text-sm px-3 py-1.5 hidden sm:block">
+              Blog
+            </Link>
             <Link href="/security" className="text-stone-600 hover:text-stone-900 font-medium text-sm px-3 py-1.5">
               Security
             </Link>
@@ -212,6 +218,8 @@ export default function TermsPage() {
               <h4 className="font-semibold text-stone-900 mb-3 text-sm">Product</h4>
               <ul className="space-y-2 text-sm text-stone-500">
                 <li><Link href="/#how-it-works" className="hover:text-stone-900">How it works</Link></li>
+                <li><Link href="/pricing" className="hover:text-stone-900">Pricing</Link></li>
+                <li><Link href="/blog" className="hover:text-stone-900">Blog</Link></li>
                 <li><Link href="/security" className="hover:text-stone-900">Security</Link></li>
               </ul>
             </div>
@@ -231,7 +239,7 @@ export default function TermsPage() {
             </div>
           </div>
           <div className="border-t border-stone-200 mt-8 pt-8 text-center text-sm text-stone-400">
-            &copy; 2025 Codecast
+            &copy; 2026 Codecast
           </div>
         </div>
       </footer>

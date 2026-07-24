@@ -5,8 +5,8 @@
 <h1 align="center">codecast</h1>
 
 <p align="center">
-  <strong>The operating system for AI coding agents.</strong><br/>
-  Sync, search, orchestrate, and collaborate across every agent conversation — in real time.
+  <strong>See, steer, and remember every coding agent session.</strong><br/>
+  Any agent, any machine — Claude Code, Codex, Cursor, and Gemini, on the machines you already run them.
 </p>
 
 <p align="center">
@@ -23,9 +23,11 @@
 
 ---
 
-Codecast integrates your coding agents (Claude Code, Codex CLI, OpenCode, pi, Cursor, Gemini) into a shared system with global session memory, tasks, plans, documents, and team collaboration. The CLI installs into each agent's config, giving every agent access to the full history of what your team has built — and the ability to create tasks, schedule follow-up work, and orchestrate multi-agent plans.
+Your agents' history stops evaporating when the terminal closes. Codecast keeps a permanent, searchable record of every conversation your team's agents have had — search it with `cast search`, ask questions across it with `cast ask`, and trace any line of code back to the session that wrote it with `cast blame`.
 
-A background daemon syncs every conversation in real time. You get a web dashboard, a native desktop app, a mobile app, and a CLI that works both from your terminal and from inside agent sessions.
+It records the agents you already run — Claude Code, Codex CLI, Cursor, and Gemini today, with OpenCode and pi coming — as real local terminal sessions, not just cloud runs. A background daemon watches your agent history files wherever you run them and syncs every conversation in real time.
+
+A live inbox shows every session — working, needs input, idle — steerable from web, desktop, and phone. Answer a permission prompt from the couch, or unblock an agent from your phone. Tasks, plans, documents, and multi-agent orchestration build on top.
 
 ![Codecast dashboard showing live agent sessions and conversation viewer](docs/screenshots/hero.png)
 
@@ -49,13 +51,23 @@ That's it. The installer ships a prebuilt binary — no runtime required. The da
 
 ## Features
 
+### Session Memory
+
+Your agents' history doesn't evaporate when the terminal closes. Every conversation becomes a permanent, searchable record — queryable from your terminal or from inside an agent session, so your team stops re-solving the same problems.
+
+- **Full-text and semantic search** — `cast search` across every session your team has had, with member, time, and label filters
+- **Ask the corpus** — `cast ask "how does auth work?"` answers questions across every conversation; `cast context` surfaces relevant prior sessions before you start
+- **`cast blame`** — git blame where the author column is the agent conversation that wrote each line (`cast blame src/auth.ts`), via a VS Code / Cursor extension, vim, or the CLI
+- **Handoffs** — `cast handoff` generates a context transfer document so a fresh session picks up where the last one left off
+- **Agent memory** — when an agent runs `cast search` or `cast ask`, it queries your whole team history — long-term memory that persists across sessions
+
 ### Session Sync & Inbox
 
 Codecast watches your local agent history files and syncs conversations to the server in real time. The inbox is a triage queue — sessions are categorized by status (working, idle, needs input, errored) and sorted by priority. Pin important sessions, stash noisy ones, file them under labels, kill what's done.
 
 ![Inbox triage queue: session feed grouped by label with live status, model badges, and summaries alongside the open conversation](docs/screenshots/inbox.png)
 
-- **Multi-agent support** — Claude Code, Codex CLI, OpenCode, pi, Cursor, Gemini
+- **Multi-agent support** — Claude Code, Codex CLI, Cursor, and Gemini, with OpenCode and pi coming
 - **Live status tracking** — see which agents are working, idle, waiting for input, or errored, with model badges and scheduled-run indicators
 - **Session categories** — Pinned > Working > Needs Input > Idle > Deferred, with parent/child grouping for sub-sessions
 - **Labels** — file sessions under your own labels (`Ctrl+L`), then switch between label and project views (`Ctrl+Shift+L`)
@@ -197,7 +209,7 @@ An iOS app for monitoring agent sessions on the go.
 
 ## CLI
 
-The `cast` CLI is an agentic interface that integrates your coding agents — Claude Code, Codex, OpenCode, pi, Cursor, Gemini — into a shared system with global session memory, tasks, plans, docs, and team collaboration. It installs lightweight snippets into each agent's config, giving them access to the full Codecast system from within any conversation.
+The `cast` CLI is an agentic interface that integrates your coding agents — Claude Code, Codex, Cursor, and Gemini, with OpenCode and pi coming — into a shared system with global session memory, tasks, plans, docs, and team collaboration. It installs lightweight snippets into each agent's config, giving them access to the full Codecast system from within any conversation.
 
 ### Agent Integration
 
@@ -320,6 +332,8 @@ is a registry descriptor (`packages/shared/contracts/agentClients.ts`) that
 declares only the capabilities it actually has. A capability a client lacks is
 simply absent — the session never breaks. The matrix below states the real
 per-client reality as merged; ✓ = supported, — = not available.
+
+*OpenCode and pi integration is implemented in-tree and in active testing — treat as pre-release until it ships in a release.*
 
 | Agent | History location | Launch from web | Transcript sync | `cast send` | State detection | Resume | Fork | Model control | Permissions |
 |-------|------------------|:---------------:|:---------------:|:-----------:|:---------------:|:------:|:----:|:-------------:|:-----------:|

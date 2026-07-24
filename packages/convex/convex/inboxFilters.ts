@@ -155,7 +155,7 @@ export function nextAgentStatusOnAddMessages(
 // the server can supersede them once a genuine turn follows. The classifier
 // lives in @codecast/shared/contracts as the single source of truth shared
 // with the web client's ApiErrorCard rendering.
-export { isApiErrorBanner, classifyApiErrorBanner } from "@codecast/shared/contracts";
+export { isApiErrorBanner, classifyApiErrorBanner, CLIENT_ERROR_BANNER_PREFIX } from "@codecast/shared/contracts";
 
 // Decides what an addMessages batch should do about stale API-error banners.
 //   - "supersede": a real turn arrived; delete banner(s) that precede it and

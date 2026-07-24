@@ -1,4 +1,5 @@
 import type { AgentClientId } from "@codecast/shared/contracts";
+import { CLIENT_ERROR_BANNER_PREFIX } from "@codecast/shared/contracts";
 
 type ContentBlock =
   | { type: "text"; text: string }
@@ -782,6 +783,70 @@ export function extractCodexSessionId(content: string): string | undefined {
   return undefined;
 }
 
+export interface CodexSessionMetadata {
+  id?: string;
+  parentThreadId?: string;
+  originator?: string;
+  source?: string | { subagent?: string; custom?: string };
+}
+
+export function extractCodexSessionMetadata(content: string): CodexSessionMetadata | undefined {
+  for (const line of content.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line);
+      if (entry.type !== "session_meta") continue;
+      return {
+        id: entry.payload?.id,
+        parentThreadId: entry.payload?.parent_thread_id,
+        originator: entry.payload?.originator,
+        source: entry.payload?.source,
+      };
+    } catch {}
+  }
+  return undefined;
+}
+
+export function isCompletedStandaloneCodexReview(
+  metadata: CodexSessionMetadata | undefined,
+  content: string,
+): boolean {
+  if (metadata?.originator !== "codex_exec" || metadata.source !== "exec") return false;
+
+  let exitedReviewMode = false;
+  let taskComplete = false;
+  for (const line of content.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line);
+      if (entry.type !== "event_msg") continue;
+      if (entry.payload?.type === "exited_review_mode") exitedReviewMode = true;
+      if (entry.payload?.type === "task_complete") taskComplete = true;
+    } catch {}
+  }
+  return exitedReviewMode && taskComplete;
+}
+
+export function isCompletedNativeCodexReviewChild(
+  metadata: CodexSessionMetadata | undefined,
+  content: string,
+): boolean {
+  if (
+    metadata?.originator !== "codex_exec" ||
+    typeof metadata.source !== "object" ||
+    metadata.source.subagent !== "review"
+  ) return false;
+
+  for (const line of content.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line);
+      if (entry.type === "event_msg" && entry.payload?.type === "task_complete") return true;
+    } catch {}
+  }
+  return false;
+}
+
 // Codex Desktop forks a rollout on every resume/reopen: it writes a new file with a
 // fresh UUID, copies the prior history forward, and stacks one more session_meta record
 // at the top whose `forked_from_id` points at the parent. The whole ancestry is therefore
@@ -1095,6 +1160,13 @@ interface OpencodeMessageInfo {
   time?: { created?: number; completed?: number };
   modelID?: string;
   providerID?: string;
+  // A turn that failed before producing any content — a missing/invalid provider
+  // key, a missing provider config (e.g. GOOGLE_VERTEX_LOCATION), or a provider
+  // 4xx/5xx — carries only this. opencode wraps the provider text under a generic
+  // `name` ("UnknownError"), so the human message in `data.message` is what we
+  // surface. Without this the message has no body and used to be dropped, leaving
+  // a dead session with no explanation (ct-39689).
+  error?: { name?: string; data?: { message?: string } };
 }
 
 interface OpencodeAssembledSession {
@@ -1197,7 +1269,28 @@ export function parseOpencodeSessionFile(content: string): ParsedMessage[] {
     const { content: text, thinking, toolCalls, toolResults, images } = foldOpencodeParts(entry.parts ?? []);
     const hasBody =
       text.trim().length > 0 || thinking.length > 0 || toolCalls.length > 0 || toolResults.length > 0 || images.length > 0;
-    if (!hasBody) continue;
+
+    // A failed assistant turn carries only `error` and no body. Surface the
+    // provider's message as the content (instead of dropping the message) so it
+    // syncs, the shared apiErrorBanner classifier can flag it (auth/setup errors
+    // → the "Authentication required" card, with the client-correct fix), and the
+    // user sees WHY the turn stopped rather than a silently dead session.
+    const errorText = role === "assistant" ? info.error?.data?.message?.trim() : undefined;
+    if (!hasBody) {
+      if (!errorText) continue;
+      // Stamp the shared client-error marker so the apiErrorBanner classifier
+      // treats this as a banner (auth/setup → the "Authentication required" card,
+      // other → an informative error card) — a normal reply is never marked, so it
+      // can't be mistaken for one. The marker is stripped before the card renders.
+      messages.push({
+        uuid: info.id,
+        role,
+        content: `${CLIENT_ERROR_BANNER_PREFIX} ${errorText}`,
+        timestamp: info.time?.created ?? Date.now(),
+        model: info.modelID,
+      });
+      continue;
+    }
 
     messages.push({
       uuid: info.id,
