@@ -16,7 +16,22 @@ import { resolveTeamForPath, teamVisibleConvTeam } from "./privacy";
 // Owner-or-team access check for a task. Moved to lib/access.ts (Wave-1
 // auth/access seam). Imported for local use here and re-exported so existing
 // callers keep working unchanged.
-import { canAccessTask, canAccessConversation } from "./lib/access";
+import {
+  canAccessTask,
+  canAccessConversation,
+  canAccessDoc,
+  canAccessPlan,
+  canAccessProject,
+  isSameWorkspace,
+  requireAccessibleProject,
+  requireSameWorkspace,
+  requireTeamMembership,
+  requireWorkspaceMatch,
+  workspaceForConversation,
+  workspaceForResource,
+  workspacesMatch,
+} from "./lib/access";
+import { forbidden, notFound } from "./lib/auth";
 export { canAccessTask };
 
 const VALID_TASK_STATUSES = ["backlog", "open", "in_progress", "in_review", "done", "dropped"] as const;
@@ -228,13 +243,21 @@ export async function subscribeUser(
 export async function recalcPlanProgress(ctx: any, planId: Id<"plans">, updatedTaskId: Id<"tasks">, newStatus: string) {
   const plan = await ctx.db.get(planId);
   if (!plan || !plan.task_ids) return;
+  const updatedTask = await ctx.db.get(updatedTaskId);
+  const containsUpdatedTask = plan.task_ids.some((id: Id<"tasks">) =>
+    String(id) === String(updatedTaskId));
+  if (
+    !updatedTask
+    || !containsUpdatedTask
+    || !isSameWorkspace(updatedTask, workspaceForResource(plan))
+  ) return;
 
   let total = 0, done = 0, in_progress = 0, open = 0;
   for (const tid of plan.task_ids) {
     const t = tid === updatedTaskId
-      ? { status: newStatus }
+      ? { ...updatedTask, status: newStatus }
       : await ctx.db.get(tid);
-    if (t) {
+    if (t && isSameWorkspace(t, workspaceForResource(plan))) {
       total++;
       if (t.status === "done") done++;
       else if (t.status === "in_progress" || t.status === "in_review") in_progress++;
@@ -300,14 +323,15 @@ export const create = mutation({
         .query("conversations")
         .withIndex("by_session_id", (q) => q.eq("session_id", args.conversation_id!))
         .first();
-      if (conv) {
-        conversation_ids = [conv._id];
-        created_from_conversation = conv._id;
-        // Only team-visible conversations hand their team to the task — a
-        // private session's team_id is routing, and copying it here would make
-        // the task readable by the whole team (see teamVisibleConvTeam).
-        convTeamId = teamVisibleConvTeam(conv);
+      if (!conv || !(await canAccessConversation(ctx, auth.userId, conv))) {
+        notFound("Conversation not found");
       }
+      conversation_ids = [conv._id];
+      created_from_conversation = conv._id;
+      // Only team-visible conversations hand their team to the task — a
+      // private session's team_id is routing, and copying it here would make
+      // the task readable by the whole team (see teamVisibleConvTeam).
+      convTeamId = teamVisibleConvTeam(conv);
     }
 
     const db = await createDataContext(ctx, {
@@ -321,7 +345,10 @@ export const create = mutation({
     let project_id: Id<"projects"> | undefined;
     if (args.project_id) {
       const pid = ctx.db.normalizeId("projects", args.project_id);
-      if (pid && (await ctx.db.get(pid))) project_id = pid;
+      if (!pid) notFound("Project not found");
+      const project = await requireAccessibleProject(ctx, auth.userId, pid);
+      requireSameWorkspace(project, db.workspace, "project");
+      project_id = pid;
     }
 
     let plan_id: Id<"plans"> | undefined;
@@ -330,7 +357,9 @@ export const create = mutation({
         .query("plans")
         .withIndex("by_short_id", (q) => q.eq("short_id", args.plan_id!))
         .first();
-      if (plan) plan_id = plan._id;
+      if (!plan || !(await canAccessPlan(ctx, auth.userId, plan))) notFound("Plan not found");
+      requireSameWorkspace(plan, db.workspace, "plan");
+      plan_id = plan._id;
     }
 
     const resolvedAssignee = await resolveAssigneeStr(ctx, args.assignee, auth.userId);
@@ -422,18 +451,11 @@ export const promote = mutation({
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
 
-    const db = await createDataContext(ctx, { userId: auth.userId, project_path: args.project_path });
-
     const task = await ctx.db
       .query("tasks")
       .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id))
       .first();
-    if (!task) throw new Error("Task not found");
-
-    if (task.user_id !== auth.userId) {
-      const accessed = await db.get(task._id);
-      if (!accessed) throw new Error("Task not found");
-    }
+    if (!task || !(await canAccessTask(ctx, auth.userId, task))) throw new Error("Task not found");
 
     await ctx.db.patch(task._id, { promoted: true, triage_status: "active" as const, updated_at: Date.now() });
     return { success: true };
@@ -475,6 +497,7 @@ export const snippet = query({
         .withIndex("by_session_id", (q) => q.eq("session_id", args.conversation_id!))
         .first();
       if (conv) {
+        if (!(await canAccessConversation(ctx, auth.userId, conv))) notFound("Conversation not found");
         // Fetch only this conversation's docs through the by_conversation_id
         // index. Collecting the whole team docs table (every row's full markdown
         // content — which this snippet never even returns, only titles below)
@@ -776,7 +799,28 @@ export const update = mutation({
     if (args.description !== undefined) updates.description = args.description;
     if (args.assignee !== undefined) updates.assignee = await resolveAssigneeStr(ctx, args.assignee, auth.userId) || args.assignee;
     if (args.labels) updates.labels = args.labels;
-    if (args.project_id !== undefined) updates.project_id = args.project_id || undefined;
+    const targetWorkspace = args.team_id
+      ? { type: "team" as const, teamId: args.team_id }
+      : task.team_id
+        ? { type: "team" as const, teamId: task.team_id }
+        : { type: "personal" as const, userId: task.user_id };
+    if (args.team_id) {
+      await requireTeamMembership(ctx, auth.userId, args.team_id);
+      if (task.team_id && String(task.team_id) !== String(args.team_id) && String(task.user_id) !== String(auth.userId)) {
+        forbidden("Forbidden: only the task owner may move it between teams");
+      }
+    }
+    if (args.project_id !== undefined) {
+      if (!args.project_id) {
+        updates.project_id = undefined;
+      } else {
+        const projectId = ctx.db.normalizeId("projects", args.project_id);
+        if (!projectId) notFound("Project not found");
+        const project = await requireAccessibleProject(ctx, auth.userId, projectId);
+        requireSameWorkspace(project, targetWorkspace, "project");
+        updates.project_id = projectId;
+      }
+    }
     if (args.project_path !== undefined) updates.project_path = args.project_path || undefined;
     if (args.team_id) updates.team_id = args.team_id;
     if (args.plan_id) {
@@ -784,13 +828,13 @@ export const update = mutation({
         .query("plans")
         .withIndex("by_short_id", (q) => q.eq("short_id", args.plan_id!))
         .first();
-      if (plan) {
-        updates.plan_id = plan._id;
-        const taskIds = plan.task_ids || [];
-        if (!taskIds.some((id: any) => id === task._id)) {
-          taskIds.push(task._id);
-          await ctx.db.patch(plan._id, { task_ids: taskIds, updated_at: now });
-        }
+      if (!plan || !(await canAccessPlan(ctx, auth.userId, plan))) notFound("Plan not found");
+      requireSameWorkspace(plan, targetWorkspace, "plan");
+      updates.plan_id = plan._id;
+      const taskIds = plan.task_ids || [];
+      if (!taskIds.some((id: any) => id === task._id)) {
+        taskIds.push(task._id);
+        await ctx.db.patch(plan._id, { task_ids: taskIds, updated_at: now });
       }
     }
     if (args.blocked_by) updates.blocked_by = args.blocked_by;
@@ -815,23 +859,36 @@ export const update = mutation({
         .query("conversations")
         .withIndex("by_session_id", (q) => q.eq("session_id", args.conversation_id!))
         .first();
-      if (conv) {
-        linkedConvId = conv._id;
-        const existing = task.conversation_ids || [];
-        if (!existing.some((id) => id === conv._id)) {
-          updates.conversation_ids = [...existing, conv._id];
-        }
-        // Only bind conversation to task on explicit start (cast task start)
-        if (args.status === "in_progress" && (!conv.active_task_id || conv.active_task_id === task._id)) {
-          await ctx.db.patch(conv._id, { active_task_id: task._id });
-          if (task.plan_id && !conv.active_plan_id) {
+      if (!conv || !(await canAccessConversation(ctx, auth.userId, conv))) {
+        notFound("Conversation not found");
+      }
+      requireWorkspaceMatch(
+        workspaceForConversation(conv),
+        targetWorkspace,
+        "conversation",
+      );
+      linkedConvId = conv._id;
+      const existing = task.conversation_ids || [];
+      if (!existing.some((id) => id === conv._id)) {
+        updates.conversation_ids = [...existing, conv._id];
+      }
+      // Only bind conversation to task on explicit start (cast task start)
+      if (args.status === "in_progress" && (!conv.active_task_id || conv.active_task_id === task._id)) {
+        await ctx.db.patch(conv._id, { active_task_id: task._id });
+        if (task.plan_id && !conv.active_plan_id) {
+          const relatedPlan = await ctx.db.get(task.plan_id);
+          if (
+            relatedPlan
+            && isSameWorkspace(relatedPlan, targetWorkspace)
+            && (await canAccessPlan(ctx, auth.userId, relatedPlan))
+          ) {
             await ctx.db.patch(conv._id, { active_plan_id: task.plan_id });
           }
         }
-        // Clear active_task_id when task is closed
-        if ((args.status === "done" || args.status === "dropped") && conv.active_task_id === task._id) {
-          await ctx.db.patch(conv._id, { active_task_id: undefined });
-        }
+      }
+      // Clear active_task_id when task is closed
+      if ((args.status === "done" || args.status === "dropped") && conv.active_task_id === task._id) {
+        await ctx.db.patch(conv._id, { active_task_id: undefined });
       }
     }
 
@@ -889,10 +946,18 @@ export const update = mutation({
       }
     }
 
-    return {
-      success: true,
-      plan_id: task.plan_id ? (await ctx.db.get(task.plan_id))?.short_id : undefined,
-    };
+    let planShortId: string | undefined;
+    if (task.plan_id) {
+      const plan = await ctx.db.get(task.plan_id);
+      if (
+        plan
+        && isSameWorkspace(plan, targetWorkspace)
+        && (await canAccessPlan(ctx, auth.userId, plan))
+      ) {
+        planShortId = plan.short_id;
+      }
+    }
+    return { success: true, plan_id: planShortId };
   },
 });
 
@@ -923,7 +988,15 @@ export const addComment = mutation({
         .query("conversations")
         .withIndex("by_session_id", (q) => q.eq("session_id", args.conversation_id!))
         .first();
-      if (conv) conversation_id = conv._id;
+      if (!conv || !(await canAccessConversation(ctx, auth.userId, conv))) {
+        notFound("Conversation not found");
+      }
+      requireWorkspaceMatch(
+        workspaceForConversation(conv),
+        workspaceForResource(task),
+        "conversation",
+      );
+      conversation_id = conv._id;
     }
 
     const id = await ctx.db.insert("task_comments", {
@@ -960,39 +1033,36 @@ export const addDep = mutation({
     if (!task || !(await canAccessTask(ctx, auth.userId, task))) throw new Error("Task not found");
 
     if (args.blocks) {
-      const current = task.blocks || [];
-      if (!current.includes(args.blocks)) {
-        await ctx.db.patch(task._id, { blocks: [...current, args.blocks], updated_at: Date.now() });
-      }
-      // Also add reverse dep — only on a task the caller can access, so a
-      // dependency edge can't be forced onto someone else's task.
       const other = await ctx.db
         .query("tasks")
         .withIndex("by_short_id", (q) => q.eq("short_id", args.blocks!))
         .first();
-      if (other && (await canAccessTask(ctx, auth.userId, other))) {
-        const otherBlocked = other.blocked_by || [];
-        if (!otherBlocked.includes(args.short_id)) {
-          await ctx.db.patch(other._id, { blocked_by: [...otherBlocked, args.short_id], updated_at: Date.now() });
-        }
+      if (!other || !(await canAccessTask(ctx, auth.userId, other))) notFound("Task not found");
+      requireSameWorkspace(other, workspaceForResource(task), "dependency task");
+      const current = task.blocks || [];
+      if (!current.includes(args.blocks)) {
+        await ctx.db.patch(task._id, { blocks: [...current, args.blocks], updated_at: Date.now() });
+      }
+      const otherBlocked = other.blocked_by || [];
+      if (!otherBlocked.includes(args.short_id)) {
+        await ctx.db.patch(other._id, { blocked_by: [...otherBlocked, args.short_id], updated_at: Date.now() });
       }
     }
 
     if (args.blocked_by) {
-      const current = task.blocked_by || [];
-      if (!current.includes(args.blocked_by)) {
-        await ctx.db.patch(task._id, { blocked_by: [...current, args.blocked_by], updated_at: Date.now() });
-      }
-      // Also add reverse dep — only on a task the caller can access.
       const other = await ctx.db
         .query("tasks")
         .withIndex("by_short_id", (q) => q.eq("short_id", args.blocked_by!))
         .first();
-      if (other && (await canAccessTask(ctx, auth.userId, other))) {
-        const otherBlocks = other.blocks || [];
-        if (!otherBlocks.includes(args.short_id)) {
-          await ctx.db.patch(other._id, { blocks: [...otherBlocks, args.short_id], updated_at: Date.now() });
-        }
+      if (!other || !(await canAccessTask(ctx, auth.userId, other))) notFound("Task not found");
+      requireSameWorkspace(other, workspaceForResource(task), "dependency task");
+      const current = task.blocked_by || [];
+      if (!current.includes(args.blocked_by)) {
+        await ctx.db.patch(task._id, { blocked_by: [...current, args.blocked_by], updated_at: Date.now() });
+      }
+      const otherBlocks = other.blocks || [];
+      if (!otherBlocks.includes(args.short_id)) {
+        await ctx.db.patch(other._id, { blocks: [...otherBlocks, args.short_id], updated_at: Date.now() });
       }
     }
 
@@ -1010,18 +1080,11 @@ export const context = query({
     const auth = await verifyApiToken(ctx, args.api_token, false);
     if (!auth) throw new Error("Unauthorized");
 
-    const db = await createDataContext(ctx, { userId: auth.userId, project_path: args.project_path });
-
     const task = await ctx.db
       .query("tasks")
       .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id))
       .first();
-    if (!task) return null;
-
-    if (task.user_id !== auth.userId) {
-      const accessed = await db.get(task._id);
-      if (!accessed) return null;
-    }
+    if (!task || !(await canAccessTask(ctx, auth.userId, task))) return null;
 
     const comments = await ctx.db
       .query("task_comments")
@@ -1032,6 +1095,12 @@ export const context = query({
     const sessionSummaries: string[] = [];
     if (task.conversation_ids) {
       for (const convId of task.conversation_ids.slice(-5)) {
+        const conversation = await ctx.db.get(convId);
+        if (
+          !conversation
+          || !workspacesMatch(workspaceForConversation(conversation), workspaceForResource(task))
+          || !(await canAccessConversation(ctx, auth.userId, conversation))
+        ) continue;
         const insight = await ctx.db
           .query("session_insights")
           .withIndex("by_conversation_id", (q) => q.eq("conversation_id", convId))
@@ -1045,7 +1114,12 @@ export const context = query({
     // Get project info
     let project = null;
     if (task.project_id) {
-      project = await ctx.db.get(task.project_id);
+      const candidate = await ctx.db.get(task.project_id);
+      if (
+        candidate
+        && isSameWorkspace(candidate, workspaceForResource(task))
+        && (await canAccessProject(ctx, auth.userId, candidate))
+      ) project = candidate;
     }
 
     // Get related docs/plans from linked conversations. Query by conversation_id
@@ -1055,12 +1129,22 @@ export const context = query({
     const relatedDocs: { title: string; doc_type: string; content: string }[] = [];
     if (task.conversation_ids) {
       for (const convId of task.conversation_ids.slice(-3)) {
+        const conversation = await ctx.db.get(convId);
+        if (
+          !conversation
+          || !workspacesMatch(workspaceForConversation(conversation), workspaceForResource(task))
+          || !(await canAccessConversation(ctx, auth.userId, conversation))
+        ) continue;
         const docs = await ctx.db
           .query("docs")
           .withIndex("by_conversation_id", (q) => q.eq("conversation_id", convId))
           .collect();
         for (const d of docs) {
-          if (!d.archived_at) {
+          if (
+            !d.archived_at
+            && isSameWorkspace(d, workspaceForResource(task))
+            && (await canAccessDoc(ctx, auth.userId, d))
+          ) {
             relatedDocs.push({ title: d.title, doc_type: d.doc_type, content: d.content || "" });
           }
         }
@@ -1084,7 +1168,7 @@ export const context = query({
 // reconcile crawl) so both return identical task shapes. Mutates `result` in
 // place — the spread form `{...t, ...}` doubled peak heap and was a top
 // contributor to TooMuchMemoryCarryOver on these UDFs.
-async function enrichTasks(ctx: any, result: any[]): Promise<any[]> {
+async function enrichTasks(ctx: any, userId: Id<"users">, result: any[]): Promise<any[]> {
   const allUserIds = new Set<string>();
   for (const t of result) {
     allUserIds.add(t.user_id.toString());
@@ -1109,11 +1193,27 @@ async function enrichTasks(ctx: any, result: any[]): Promise<any[]> {
   for (const t of result) {
     if (t.plan_id) planIds.add(t.plan_id.toString());
   }
-  const planMap = new Map<string, { _id: any; short_id: string; title: string; status: string }>();
+  const planMap = new Map<string, {
+    _id: any;
+    user_id: Id<"users">;
+    team_id?: Id<"teams">;
+    short_id: string;
+    title: string;
+    status: string;
+  }>();
   await Promise.all([...planIds].map(async (pid) => {
     try {
       const p = await ctx.db.get(pid as Id<"plans">);
-      if (p) planMap.set(pid, { _id: p._id, short_id: p.short_id, title: p.title, status: p.status });
+      if (p && (await canAccessPlan(ctx, userId, p))) {
+        planMap.set(pid, {
+          _id: p._id,
+          user_id: p.user_id,
+          team_id: p.team_id,
+          short_id: p.short_id,
+          title: p.title,
+          status: p.status,
+        });
+      }
     } catch {}
   }));
 
@@ -1128,7 +1228,15 @@ async function enrichTasks(ctx: any, result: any[]): Promise<any[]> {
   for (const t of result) {
     t.creator = userMap.get(t.user_id.toString()) || null;
     t.assignee_info = t.assignee ? userMap.get(t.assignee.toString()) || null : null;
-    t.plan = t.plan_id ? planMap.get(t.plan_id.toString()) || null : null;
+    const relatedPlan = t.plan_id ? planMap.get(t.plan_id.toString()) : undefined;
+    t.plan = relatedPlan && isSameWorkspace(relatedPlan, workspaceForResource(t))
+      ? {
+          _id: relatedPlan._id,
+          short_id: relatedPlan.short_id,
+          title: relatedPlan.title,
+          status: relatedPlan.status,
+        }
+      : null;
     t.session_count = (t.conversation_ids || []).length;
   }
   return result;
@@ -1158,6 +1266,10 @@ export const webList = query({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return { items: [], hasMore: false, cursor: args.since ?? 0, isDelta: !!args.since };
+    if (args.team_id) await requireTeamMembership(ctx, userId, args.team_id);
+    if (args.workspace === "team" && !args.team_id) {
+      throw new Error("team_id is required for the team workspace");
+    }
 
     const since = args.since;
     const isDelta = since !== undefined;
@@ -1193,14 +1305,21 @@ export const webList = query({
 
     let tasks: any[];
     if (args.project_id) {
+      const projectId = ctx.db.normalizeId("projects", args.project_id);
+      if (!projectId) notFound("Project not found");
+      await requireAccessibleProject(ctx, userId, projectId);
       // project_id path has no _updated index yet; fall back to collect+filter
       // (these queries are rarely the memory hot spot — they're scoped to
       // one project at a time).
       const rows = await ctx.db
         .query("tasks")
-        .withIndex("by_project_id", (q) => q.eq("project_id", args.project_id as any))
+        .withIndex("by_project_id", (q) => q.eq("project_id", projectId))
         .collect();
-      tasks = isDelta ? rows.filter((t: any) => t.updated_at > since!) : rows;
+      const authorizedRows: any[] = [];
+      for (const row of rows) {
+        if (await canAccessTask(ctx, userId, row)) authorizedRows.push(row);
+      }
+      tasks = isDelta ? authorizedRows.filter((t: any) => t.updated_at > since!) : authorizedRows;
       if (args.status) {
         tasks = tasks.filter((t) => t.status === args.status);
       } else {
@@ -1321,7 +1440,7 @@ export const webList = query({
       if (typeof t.updated_at === "number" && t.updated_at > cursor) cursor = t.updated_at;
     }
 
-    await enrichTasks(ctx, result);
+    await enrichTasks(ctx, userId, result);
     return { items: result, hasMore: false, cursor, isDelta };
   },
 });
@@ -1344,7 +1463,7 @@ export const webGetByIds = query({
       if (!task || !(await canAccessTask(ctx, userId, task))) continue;
       result.push(task);
     }
-    await enrichTasks(ctx, result);
+    await enrichTasks(ctx, userId, result);
     return { items: result };
   },
 });
@@ -1378,6 +1497,10 @@ export const webListPaginated = query({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return { page: [], isDone: true, continueCursor: "" };
+    if (args.team_id) await requireTeamMembership(ctx, userId, args.team_id);
+    if (args.workspace === "team" && !args.team_id) {
+      throw new Error("team_id is required for the team workspace");
+    }
 
     // Defensive clamp. Task docs are small (~2 KB avg, ~8 KB max observed), so
     // 1000/page is ~16 MB worst case — still well under the 64 MB query memory cap
@@ -1409,7 +1532,7 @@ export const webListPaginated = query({
     // filter hides it — otherwise it would linger in the cache forever.
     let rows = isDelta ? result.page : result.page.filter((t: any) => t.status !== "dropped");
     if (args.project_path) rows = scopeByProject(rows, args.project_path);
-    await enrichTasks(ctx, rows);
+    await enrichTasks(ctx, userId, rows);
 
     return { page: rows, isDone: result.isDone, continueCursor: result.continueCursor };
   },
@@ -1498,7 +1621,13 @@ export const webActiveSessions = query({
       if (now - s.last_heartbeat >= HEARTBEAT_ALIVE_MS) continue;
       if (!s.conversation_id) continue;
       const conv = await ctx.db.get(s.conversation_id);
-      if (!conv || !conv.active_task_id) continue;
+      if (!conv || !(await canAccessConversation(ctx, userId, conv)) || !conv.active_task_id) continue;
+      const task = await ctx.db.get(conv.active_task_id);
+      if (
+        !task
+        || !workspacesMatch(workspaceForConversation(conv), workspaceForResource(task))
+        || !(await canAccessTask(ctx, userId, task))
+      ) continue;
       map[conv.active_task_id.toString()] = {
         _id: conv._id.toString(),
         session_id: conv.session_id,
@@ -1524,6 +1653,10 @@ export const webMentionList = query({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
+    if (args.team_id) await requireTeamMembership(ctx, userId, args.team_id);
+    if (args.workspace === "team" && !args.team_id) {
+      throw new Error("team_id is required for the team workspace");
+    }
 
     // Cap to a small recent slice — the mention dropdown only renders ~6–12
     // results (top-6-per-type in useMentionQuery), and the long tail is served
@@ -1647,7 +1780,13 @@ export const webGet = query({
     let plan = null;
     if (task.plan_id) {
       const p = await ctx.db.get(task.plan_id);
-      if (p) plan = { _id: p._id, short_id: p.short_id, title: p.title, status: p.status };
+      if (
+        p
+        && isSameWorkspace(p, workspaceForResource(task))
+        && (await canAccessPlan(ctx, userId, p))
+      ) {
+        plan = { _id: p._id, short_id: p.short_id, title: p.title, status: p.status };
+      }
     }
 
     return { ...task, comments, plan };
@@ -1689,7 +1828,20 @@ export const webUpdate = mutation({
       updates.assignee = args.assignee === "me" ? userId : args.assignee;
     }
     if (args.labels) updates.labels = args.labels;
-    if (args.project_id !== undefined) updates.project_id = args.project_id || undefined;
+    if (args.project_id !== undefined) {
+      if (!args.project_id) {
+        updates.project_id = undefined;
+      } else {
+        const projectId = ctx.db.normalizeId("projects", args.project_id);
+        if (!projectId) notFound("Project not found");
+        const project = await requireAccessibleProject(ctx, userId, projectId);
+        const taskWorkspace = task.team_id
+          ? { type: "team" as const, teamId: task.team_id }
+          : { type: "personal" as const, userId: task.user_id };
+        requireSameWorkspace(project, taskWorkspace, "project");
+        updates.project_id = projectId;
+      }
+    }
     if (args.project_path !== undefined) updates.project_path = args.project_path || undefined;
     if (args.execution_status !== undefined) updates.execution_status = args.execution_status || undefined;
     if (args.triage_status) {
@@ -1821,7 +1973,17 @@ export const assignToAgent = mutation({
     const now = Date.now();
     const sessionId = crypto.randomUUID();
 
-    const workerPlanId = (task as any).plan_id as Id<"plans"> | undefined;
+    let workerPlanId: Id<"plans"> | undefined;
+    if ((task as any).plan_id) {
+      const plan = await ctx.db.get((task as any).plan_id as Id<"plans">);
+      if (
+        plan
+        && isSameWorkspace(plan, workspaceForResource(task))
+        && (await canAccessPlan(ctx, userId, plan))
+      ) {
+        workerPlanId = plan._id;
+      }
+    }
     const parentConversationId = await resolveWorkerParentConversation(ctx, userId, workerPlanId);
 
     // Without a project_path the daemon has nowhere to launch the session, so the
@@ -1942,12 +2104,14 @@ export const webCreate = mutation({
     // mapping — never from the user's active team. An unmapped project_path
     // with no explicit workspace lands personal ("Only Me"), matching sessions.
     const db = await createDataContext(ctx, { userId, workspace: args.workspace, team_id: args.team_id, project_path: args.project_path });
-    const short_id = await nextShortId(ctx.db, "ct");
 
     let project_id: Id<"projects"> | undefined;
     if (args.project_id) {
       const pid = ctx.db.normalizeId("projects", args.project_id);
-      if (pid && (await ctx.db.get(pid))) project_id = pid;
+      if (!pid) notFound("Project not found");
+      const project = await requireAccessibleProject(ctx, userId, pid);
+      requireSameWorkspace(project, db.workspace, "project");
+      project_id = pid;
     }
 
     let plan_id: Id<"plans"> | undefined;
@@ -1956,8 +2120,12 @@ export const webCreate = mutation({
         .query("plans")
         .withIndex("by_short_id", (q) => q.eq("short_id", args.plan_id!))
         .first();
-      if (plan) plan_id = plan._id;
+      if (!plan || !(await canAccessPlan(ctx, userId, plan))) notFound("Plan not found");
+      requireSameWorkspace(plan, db.workspace, "plan");
+      plan_id = plan._id;
     }
+
+    const short_id = await nextShortId(ctx.db, "ct");
 
     let resolvedAssignee = args.assignee;
     if (resolvedAssignee === "me") {
@@ -2059,18 +2227,16 @@ export const webPromote = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
 
-    const db = await createDataContext(ctx, { userId, workspace: args.workspace, team_id: args.team_id });
+    if (args.team_id) await requireTeamMembership(ctx, userId, args.team_id);
+    if (args.workspace === "team" && !args.team_id) {
+      throw new Error("team_id is required for the team workspace");
+    }
 
     const task = await ctx.db
       .query("tasks")
       .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id))
       .first();
-    if (!task) throw new Error("Task not found");
-
-    if (task.user_id !== userId) {
-      const accessed = await db.get(task._id);
-      if (!accessed) throw new Error("Task not found");
-    }
+    if (!task || !(await canAccessTask(ctx, userId, task))) throw new Error("Task not found");
 
     await ctx.db.patch(task._id, { promoted: true, triage_status: "active" as const, updated_at: Date.now() });
     return { success: true };
@@ -2545,11 +2711,16 @@ export const getReadyTasks = query({
         .query("plans")
         .withIndex("by_short_id", (q) => q.eq("short_id", args.plan_id!))
         .first();
-      if (!plan || !plan.task_ids) return [];
+      if (!plan || !(await canAccessPlan(ctx, auth.userId, plan))) throw new Error("Plan not found");
+      if (!plan.task_ids) return [];
       const planTasks: any[] = [];
       for (const tid of plan.task_ids) {
         const t = await ctx.db.get(tid);
-        if (t) planTasks.push(t);
+        if (
+          t
+          && isSameWorkspace(t, workspaceForResource(plan))
+          && (await canAccessTask(ctx, auth.userId, t))
+        ) planTasks.push(t);
       }
       tasks = planTasks;
     } else {
@@ -2588,7 +2759,7 @@ export const getDependencyChain = query({
       .query("tasks")
       .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id))
       .first();
-    if (!root) throw new Error("Task not found");
+    if (!root || !(await canAccessTask(ctx, auth.userId, root))) throw new Error("Task not found");
 
     const allTasks = await db.query("tasks").collect();
     const taskByShortId = new Map<string, any>();
@@ -2644,5 +2815,3 @@ export const getDependencyChain = query({
     };
   },
 });
-
-

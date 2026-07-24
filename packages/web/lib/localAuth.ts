@@ -18,11 +18,20 @@ import { useAuthToken } from "@convex-dev/auth/react";
 export const CONVEX_URL =
   import.meta.env.VITE_CONVEX_URL || "https://convex.codecast.sh";
 
+export const AUTH_STORAGE_NAMESPACE = CONVEX_URL.replace(/[^a-zA-Z0-9]/g, "");
+
+export function namespacedAuthStorageKey(key: string): string {
+  return `${key}_${AUTH_STORAGE_NAMESPACE}`;
+}
+
 // Mirrors @convex-dev/auth's useNamespacedStorage key layout:
 // `${key}_${namespace}` with non-alphanumerics stripped from the namespace,
 // which defaults to the deployment URL. Exported for the contract test —
 // if a package upgrade changes this layout, offline boot silently breaks.
-export const AUTH_JWT_STORAGE_KEY = `__convexAuthJWT_${CONVEX_URL.replace(/[^a-zA-Z0-9]/g, "")}`;
+export const AUTH_JWT_STORAGE_KEY = namespacedAuthStorageKey("__convexAuthJWT");
+export const AUTH_REFRESH_TOKEN_STORAGE_KEY = namespacedAuthStorageKey("__convexAuthRefreshToken");
+export const AUTH_OAUTH_VERIFIER_STORAGE_KEY = namespacedAuthStorageKey("__convexAuthOAuthVerifier");
+export const AUTH_SERVER_STATE_STORAGE_KEY = namespacedAuthStorageKey("__convexAuthServerStateFetchTime");
 
 /** Synchronous peek: is a Convex auth JWT sitting in localStorage right now? */
 export function hasStoredAuthToken(): boolean {

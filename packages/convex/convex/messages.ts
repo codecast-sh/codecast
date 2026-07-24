@@ -1,5 +1,5 @@
 import { mutation, query, internalMutation, type MutationCtx } from "./functions";
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
@@ -7,7 +7,13 @@ import { internal } from "./_generated/api";
 import { maybeScheduleTitleGeneration } from "./titleGeneration";
 import { canTeamMemberAccess, checkConversationAccess, teamVisibleConvTeam } from "./privacy";
 import { redactSecrets } from "./redact";
-import { markPendingDelivered } from "./pendingMessages";
+import { canSendProductMessage, markPendingDelivered } from "./pendingMessages";
+import { validateCommandId } from "./localFirstCommands";
+import {
+  MESSAGES_VIEW_CONTRACT_ID,
+  messagesGrantKey,
+  messagesViewKey,
+} from "./messageViewContracts";
 import { scheduleAutoSwitchCheck } from "./accountSwitch";
 import { nextAgentStatusOnAddMessages, isApiErrorBanner, classifyApiErrorBanner, apiErrorBatchAction, NEEDS_INPUT_AUQ_CHECK_DELAY_MS } from "./inboxFilters";
 import { classifyDocContent, extractTitleFromContent, inlineDocSourceKey } from "./docExtraction";
@@ -27,6 +33,22 @@ type DocExtractionConversation = {
   is_private?: boolean;
   team_visibility?: string;
 };
+
+/** Bound demand-scoped coverage checks independently of transcript size. */
+export const MESSAGE_COVERAGE_COMMAND_ID_LIMIT = 64;
+
+export function normalizeMessageCoverageCommandIds(
+  commandIds: readonly string[],
+): string[] {
+  if (commandIds.length > MESSAGE_COVERAGE_COMMAND_ID_LIMIT) {
+    throw new ConvexError({
+      code: "TOO_MANY_COMMAND_IDS",
+      message: `At most ${MESSAGE_COVERAGE_COMMAND_ID_LIMIT} command ids may be checked at once`,
+      limit: MESSAGE_COVERAGE_COMMAND_ID_LIMIT,
+    });
+  }
+  return [...new Set(commandIds.map(validateCommandId))].sort();
+}
 
 export function buildExistingMessagePatch(
   existing: {
@@ -356,6 +378,67 @@ function hasDocExtractionCandidate(messages: DocExtractionMessage[]): boolean {
   return false;
 }
 
+/**
+ * Demand-scoped reconciliation proof for durable message sends.
+ *
+ * This is deliberately not a transcript endpoint: it returns no message rows
+ * or payload fields. A command id is covered only after the authoritative
+ * transcript has ingested a message with that id for this exact conversation.
+ * The returned grant represents current send authority, not broader link-read
+ * access, so the same opaque grant may safely retain/dispatch queued intent.
+ */
+export const getMessageCoverageV2 = query({
+  args: {
+    conversation_id: v.id("conversations"),
+    command_ids: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const contractId = MESSAGES_VIEW_CONTRACT_ID;
+    const viewKey = messagesViewKey(args.conversation_id);
+    const grantKey = messagesGrantKey(args.conversation_id);
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { contractId, viewKey, access: "unauthenticated" as const };
+
+    const commandIds = normalizeMessageCoverageCommandIds(args.command_ids);
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) {
+      return {
+        contractId,
+        viewKey,
+        access: "missing" as const,
+        releasedGrantKeys: [grantKey],
+        removals: [],
+      };
+    }
+    if (!(await canSendProductMessage(ctx, userId, conversation))) {
+      return {
+        contractId,
+        viewKey,
+        access: "forbidden" as const,
+        revokedGrantKeys: [grantKey],
+      };
+    }
+
+    const matches = await Promise.all(commandIds.map(async (commandId) =>
+      await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_client_id", (q) =>
+          q.eq("conversation_id", args.conversation_id).eq("client_id", commandId))
+        .first()));
+    const coveredCommandIds = commandIds.filter((_commandId, index) => !!matches[index]);
+    return {
+      contractId,
+      viewKey,
+      access: "granted" as const,
+      grantKeys: [grantKey],
+      coverage: {
+        kind: "command-ids" as const,
+        commandIds: coveredCommandIds,
+      },
+    };
+  },
+});
+
 export const getMessageTimestamp = query({
   args: {
     conversation_id: v.id("conversations"),
@@ -537,6 +620,43 @@ export function imageEchoMatchesPending(
   return Math.abs(msgTimestamp - (pm.created_at || 0)) < 120_000;
 }
 
+// Match an agent-echoed user message to the pending row it delivered. Echoes
+// arrive in injection order, so candidates are tried in delivery order (oldest
+// first) and only among rows still awaiting proof. Newest-first over all
+// statuses cross-stamped identical-content sends: the echo of the OLDER
+// delivery matched the NEWER command, stamping its client_id on the wrong
+// transcript row and leaving the delivered command's overlay unreconcilable.
+// "failed" rows are a second tier: a late echo proves a watchdog-failed row
+// actually landed. delivered/cancelled/undeliverable never re-match.
+export function findEchoedPendingMessage<
+  T extends { _id: unknown; content: string; created_at?: number; status: string },
+>(
+  pendingMsgs: readonly T[],
+  safeContent: string | undefined,
+  msgTimestamp: number,
+  consumed?: ReadonlySet<unknown>,
+): T | undefined {
+  const c = (safeContent || "").replace(/\[Image[:\s][^\]]*\]/gi, "").trim();
+  const cFlat = c.replace(/\s+/g, " ").trim();
+  const contentMatches = (pm: T) => {
+    const pc = redactSecrets(pm.content).replace(/\[image\]/gi, "").trim();
+    const pcFlat = pc.replace(/\r?\n/g, " ").replace(/\s+/g, " ").trim();
+    const contentMatch = cFlat === pcFlat || c === pc;
+    if (!contentMatch) return false;
+    if (!cFlat && !pcFlat) {
+      return imageEchoMatchesPending(pm, safeContent || "", msgTimestamp);
+    }
+    return true;
+  };
+  const inDeliveryOrder = [...pendingMsgs].sort(
+    (a, b) => (a.created_at || 0) - (b.created_at || 0),
+  );
+  const firstMatch = (statuses: readonly string[]) => inDeliveryOrder.find(
+    (pm) => statuses.includes(pm.status) && !consumed?.has(pm._id) && contentMatches(pm),
+  );
+  return firstMatch(["pending", "injected"]) ?? firstMatch(["failed"]);
+}
+
 export const addMessage = mutation({
   args: {
     conversation_id: v.id("conversations"),
@@ -657,19 +777,7 @@ export const addMessage = mutation({
         .query("pending_messages")
         .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
         .collect();
-      const c = (safeContent || "").replace(/\[Image[:\s][^\]]*\]/gi, "").trim();
-      const cFlat = c.replace(/\s+/g, " ").trim();
-      const sorted = [...pendingMsgs].sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
-      const matchingPending = sorted.find(pm => {
-        const pc = redactSecrets(pm.content).replace(/\[image\]/gi, "").trim();
-        const pcFlat = pc.replace(/\r?\n/g, " ").replace(/\s+/g, " ").trim();
-        const contentMatch = cFlat === pcFlat || c === pc;
-        if (!contentMatch) return false;
-        if (!cFlat && !pcFlat) {
-          return imageEchoMatchesPending(pm, safeContent || "", msgTimestamp);
-        }
-        return true;
-      });
+      const matchingPending = findEchoedPendingMessage(pendingMsgs, safeContent, msgTimestamp);
       if (matchingPending) {
         contentToStore = redactSecrets(matchingPending.content);
         clientIdToStore = matchingPending.client_id;
@@ -968,7 +1076,6 @@ export const addMessages = mutation({
           .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
           .collect()
       : [];
-    const pendingSorted = [...pendingMsgs].sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
     const consumedPendingIds = new Set<Id<"pending_messages">>();
 
     for (const msg of args.messages) {
@@ -1052,20 +1159,10 @@ export const addMessages = mutation({
       let images = msg.images;
       let contentToStore = safeContent;
       let clientIdToStore: string | undefined;
-      if (msg.role === "user" && pendingSorted.length > 0) {
-        const c = (safeContent || "").replace(/\[Image[:\s][^\]]*\]/gi, "").trim();
-        const cFlat = c.replace(/\s+/g, " ").trim();
-        const matchingPending = pendingSorted.find(pm => {
-          if (consumedPendingIds.has(pm._id)) return false;
-          const pc = redactSecrets(pm.content).replace(/\[image\]/gi, "").trim();
-          const pcFlat = pc.replace(/\r?\n/g, " ").replace(/\s+/g, " ").trim();
-          const contentMatch = cFlat === pcFlat || c === pc;
-          if (!contentMatch) return false;
-          if (!cFlat && !pcFlat) {
-            return imageEchoMatchesPending(pm, safeContent || "", msgTimestamp);
-          }
-          return true;
-        });
+      if (msg.role === "user" && pendingMsgs.length > 0) {
+        const matchingPending = findEchoedPendingMessage(
+          pendingMsgs, safeContent, msgTimestamp, consumedPendingIds,
+        );
         if (matchingPending) {
           consumedPendingIds.add(matchingPending._id);
           contentToStore = redactSecrets(matchingPending.content);

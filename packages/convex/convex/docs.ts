@@ -14,7 +14,19 @@ import {
 // Owner-or-team access check for a doc. Moved to lib/access.ts (Wave-1 auth/access
 // seam). Imported for local use here and re-exported below so the web mutation
 // and the dispatch side-effect still enforce one rule, not two.
-import { canAccessDoc } from "./lib/access";
+import {
+  canAccessConversation,
+  canAccessDoc,
+  canAccessPlan,
+  canAccessTask,
+  isSameWorkspace,
+  requireAccessibleDoc,
+  requireAccessibleProject,
+  requireSameWorkspace,
+  requireTeamMembership,
+  workspaceForResource,
+} from "./lib/access";
+import { notFound } from "./lib/auth";
 import { packSnapshotContent } from "./lib/docSnapshot";
 export { canAccessDoc };
 
@@ -230,12 +242,14 @@ async function buildWebDocList(
   const planMap = new Map<string, { short_id: string; status: string }>();
   for (const pid of planIds) {
     const p = await ctx.db.get(pid as Id<"plans">);
-    if (p) planMap.set(pid, { short_id: (p as any).short_id, status: (p as any).status });
+    if (p && (await canAccessPlan(ctx, userId, p))) {
+      planMap.set(pid, { short_id: (p as any).short_id, status: (p as any).status });
+    }
   }
   const docToPlanMap = new Map<string, { short_id: string; status: string }>();
   for (const docId of docIdsNeedingPlan) {
     const p = await ctx.db.query("plans").withIndex("by_doc_id", (q: any) => q.eq("doc_id", docId)).first();
-    if (p) {
+    if (p && (await canAccessPlan(ctx, userId, p))) {
       docToPlanMap.set(docId, { short_id: p.short_id, status: p.status as string });
     }
   }
@@ -353,8 +367,33 @@ export const create = mutation({
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
 
-    const db = await createDataContext(ctx, { userId: auth.userId, project_path: args.project_path });
+    let conversation_id: Id<"conversations"> | undefined;
+    let conversationTeamId: Id<"teams"> | undefined;
+    if (args.conversation_id) {
+      const conv = await ctx.db
+        .query("conversations")
+        .withIndex("by_session_id", (q) => q.eq("session_id", args.conversation_id!))
+        .first();
+      if (!conv || !(await canAccessConversation(ctx, auth.userId, conv))) notFound("Conversation not found");
+      conversation_id = conv._id;
+      conversationTeamId = teamVisibleConvTeam(conv);
+    }
+
+    const db = await createDataContext(ctx, {
+      userId: auth.userId,
+      project_path: args.project_path,
+      ...(conversationTeamId ? { workspace: "team" as const, team_id: conversationTeamId } : {}),
+    });
     const now = Date.now();
+
+    let project_id: Id<"projects"> | undefined;
+    if (args.project_id) {
+      const projectId = ctx.db.normalizeId("projects", args.project_id);
+      if (!projectId) notFound("Project not found");
+      const project = await requireAccessibleProject(ctx, auth.userId, projectId);
+      requireSameWorkspace(project, db.workspace, "project");
+      project_id = projectId;
+    }
 
     // Check for existing doc by source_file (for upsert on plan sync)
     if (args.source_file) {
@@ -363,6 +402,7 @@ export const create = mutation({
         .withIndex("by_source_file", (q) => q.eq("source_file", args.source_file!))
         .first();
       if (existing && existing.user_id === auth.userId) {
+        requireSameWorkspace(existing, db.workspace, "existing doc");
         await ctx.db.patch(existing._id, {
           title: args.title,
           content: args.content,
@@ -376,20 +416,7 @@ export const create = mutation({
       }
     }
 
-    let conversation_id = undefined;
     let team_id = db.workspace.type === "team" ? db.workspace.teamId : undefined;
-    if (args.conversation_id) {
-      const conv = await ctx.db
-        .query("conversations")
-        .withIndex("by_session_id", (q) => q.eq("session_id", args.conversation_id!))
-        .first();
-      if (conv) {
-        conversation_id = conv._id;
-        if (!team_id) {
-          team_id = teamVisibleConvTeam(conv);
-        }
-      }
-    }
 
     const id = await ctx.db.insert("docs", {
       user_id: auth.userId,
@@ -400,7 +427,7 @@ export const create = mutation({
       source: (args.source || "human") as any,
       source_file: args.source_file,
       project_path: args.project_path,
-      project_id: args.project_id as any,
+      project_id,
       conversation_id,
       labels: args.labels,
       created_at: now,
@@ -410,7 +437,7 @@ export const create = mutation({
     // Auto-create plan entity for plan_mode docs
     let plan_short_id: string | undefined;
     if (args.source === "plan_mode") {
-      plan_short_id = await syncDocToPlanEntity(ctx, id, args.content, auth.userId, team_id, args.project_id as any, conversation_id);
+      plan_short_id = await syncDocToPlanEntity(ctx, id, args.content, auth.userId, team_id, project_id, conversation_id);
     }
 
     return { id, updated: false, plan_short_id };
@@ -602,7 +629,20 @@ export const update = mutation({
     if (args.labels) updates.labels = args.labels;
     if (args.pinned !== undefined) updates.pinned = args.pinned;
     if (args.archived !== undefined) updates.archived_at = args.archived ? Date.now() : undefined;
-    if (args.project_id !== undefined) updates.project_id = args.project_id || undefined;
+    if (args.project_id !== undefined) {
+      if (!args.project_id) {
+        updates.project_id = undefined;
+      } else {
+        const projectId = ctx.db.normalizeId("projects", args.project_id);
+        if (!projectId) notFound("Project not found");
+        const project = await requireAccessibleProject(ctx, auth.userId, projectId);
+        const docWorkspace = doc.team_id
+          ? { type: "team" as const, teamId: doc.team_id }
+          : { type: "personal" as const, userId: doc.user_id };
+        requireSameWorkspace(project, docWorkspace, "project");
+        updates.project_id = projectId;
+      }
+    }
 
     await ctx.db.patch(args.id, updates);
 
@@ -822,6 +862,7 @@ async function buildConvMapForPage(ctx: any, records: any[]): Promise<Map<string
 
 async function enrichPage(
   ctx: any,
+  userId: Id<"users">,
   records: any[],
   convMap: Map<string, any>,
   args: { doc_type?: string; project_id?: string; project_path?: string; scope?: string },
@@ -862,12 +903,16 @@ async function enrichPage(
   const planMap = new Map<string, { short_id: string; status: string }>();
   for (const pid of planIds) {
     const p = await ctx.db.get(pid as Id<"plans">);
-    if (p) planMap.set(pid, { short_id: (p as any).short_id, status: (p as any).status });
+    if (p && (await canAccessPlan(ctx, userId, p))) {
+      planMap.set(pid, { short_id: (p as any).short_id, status: (p as any).status });
+    }
   }
   const docToPlanMap = new Map<string, { short_id: string; status: string }>();
   for (const docId of docIdsNeedingPlan) {
     const p = await ctx.db.query("plans").withIndex("by_doc_id", (q: any) => q.eq("doc_id", docId)).first();
-    if (p) docToPlanMap.set(docId, { short_id: p.short_id, status: p.status as string });
+    if (p && (await canAccessPlan(ctx, userId, p))) {
+      docToPlanMap.set(docId, { short_id: p.short_id, status: p.status as string });
+    }
   }
 
   return enriched.map(extractPlanTitleForWeb).map((d: any) => {
@@ -913,10 +958,14 @@ export const webGetByIds = query({
     for (const d of rows) {
       if (d.plan_id) {
         const p = await ctx.db.get(d.plan_id as Id<"plans">);
-        if (p) planMap.set(String(d.plan_id), { short_id: (p as any).short_id, status: (p as any).status });
+        if (p && (await canAccessPlan(ctx, userId, p))) {
+          planMap.set(String(d.plan_id), { short_id: (p as any).short_id, status: (p as any).status });
+        }
       } else if (d.doc_type === "plan") {
         const p = await ctx.db.query("plans").withIndex("by_doc_id", (q: any) => q.eq("doc_id", d._id as string)).first();
-        if (p) docToPlan.set(d._id as string, { short_id: p.short_id, status: p.status as string });
+        if (p && (await canAccessPlan(ctx, userId, p))) {
+          docToPlan.set(d._id as string, { short_id: p.short_id, status: p.status as string });
+        }
       }
     }
     const docs = rows.map(extractPlanTitleForWeb).map((d: any) => {
@@ -961,6 +1010,12 @@ export const webListPaginated = query({
       ? "personal" as const
       : args.workspace;
     const isTeamView = !!resolvedTeamId && (effectiveWorkspace === "team" || !effectiveWorkspace);
+    if (isTeamView && resolvedTeamId) {
+      await requireTeamMembership(ctx, userId, resolvedTeamId);
+    }
+    if (effectiveWorkspace === "team" && !resolvedTeamId) {
+      throw new Error("team_id is required for the team workspace");
+    }
 
     // Defensive clamp: Convex returns full documents from storage before our
     // strip step runs, so a single page that includes a doc with multi-MB
@@ -1000,7 +1055,7 @@ export const webListPaginated = query({
         return !eff;
       });
 
-      const page = await enrichPage(ctx, filtered, convMap, args);
+      const page = await enrichPage(ctx, userId, filtered, convMap, args);
 
       // Primary stream still has more → stay in primary phase.
       if (!result.isDone) {
@@ -1033,7 +1088,7 @@ export const webListPaginated = query({
     const stripped = result.page.map(stripDoc);
     const convMap = await buildConvMapForPage(ctx, stripped);
     const orphans = stripped.filter((r) => !resolveEffectiveTeam(r, convMap));
-    const page = await enrichPage(ctx, orphans, convMap, args);
+    const page = await enrichPage(ctx, userId, orphans, convMap, args);
 
     return {
       page,
@@ -1076,7 +1131,7 @@ export const webGet = query({
     if (convIds.length > 0) {
       for (const cid of convIds) {
         const conv = await ctx.db.get(cid);
-        if (conv) relatedConversations.push({
+        if (conv && (await canAccessConversation(ctx, userId, conv))) relatedConversations.push({
           _id: conv._id,
           session_id: conv.session_id,
           title: conv.title,
@@ -1092,9 +1147,9 @@ export const webGet = query({
     let activePlan: WebDocActivePlan | undefined;
     if (doc.conversation_id) {
       const conv = await ctx.db.get(doc.conversation_id);
-      if (conv?.active_plan_id) {
+      if (conv?.active_plan_id && (await canAccessConversation(ctx, userId, conv))) {
         const plan = await ctx.db.get(conv.active_plan_id);
-        if (plan) {
+        if (plan && (await canAccessPlan(ctx, userId, plan))) {
           activePlan = { _id: plan._id, short_id: plan.short_id, title: plan.title, status: plan.status };
         }
       }
@@ -1364,6 +1419,10 @@ export const webMentionList = query({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return { items: [] };
+    if (args.team_id) await requireTeamMembership(ctx, userId, args.team_id);
+    if (args.workspace === "team" && !args.team_id) {
+      throw new Error("team_id is required for the team workspace");
+    }
 
     // Bound the scan to a small recent slice. The client only renders the
     // top-6-per-type "recents" (see useMentionQuery); anything beyond that is
@@ -1491,14 +1550,14 @@ export const mentionSearch = query({
     const perType = Math.max(10, Math.ceil(limit / types.length));
 
     if (types.includes("person") && teamId) {
-      const memberships = await db.raw
+      const memberships = await ctx.db
         .query("team_memberships")
         .withIndex("by_team_id", (tm: any) => tm.eq("team_id", teamId))
         .collect();
       let count = 0;
       for (const m of memberships) {
         if (count >= perType) break;
-        const u = await db.raw.get(m.user_id);
+        const u = await ctx.db.get(m.user_id);
         if (!u) continue;
         const name = (u.name || "").toLowerCase();
         const username = (u.github_username || "").toLowerCase();
@@ -1594,11 +1653,11 @@ export const mentionSearch = query({
       } else if (q) {
         // The title search index can't see source_file, so union the title-index
         // hits with filename hits from a bounded recent scan.
-        const byTitle = await db.raw
+        const byTitle = await ctx.db
           .query("docs")
           .withSearchIndex("search_docs_v2", (s: any) => s.search("title", args.query).eq("user_id", userId))
           .take(perType * 5);
-        const byFile = (await db.raw
+        const byFile = (await ctx.db
           .query("docs")
           .withIndex("by_user_id", (d: any) => d.eq("user_id", userId))
           .order("desc")
@@ -1607,7 +1666,7 @@ export const mentionSearch = query({
         const seen = new Set(byTitle.map((d: any) => String(d._id)));
         docs = [...byTitle, ...byFile.filter((d: any) => !seen.has(String(d._id)))];
       } else {
-        docs = await db.raw
+        docs = await ctx.db
           .query("docs")
           .withIndex("by_user_id", (d: any) => d.eq("user_id", userId))
           .order("desc")
@@ -1635,7 +1694,7 @@ export const mentionSearch = query({
           .order("desc")
           .take(perType * 10);
       } else {
-        plans = await db.raw
+        plans = await ctx.db
           .query("plans")
           .withIndex("by_user_id", (p: any) => p.eq("user_id", userId))
           .order("desc")
@@ -1666,7 +1725,7 @@ export const mentionSearch = query({
           .order("desc")
           .take(perType * 10);
       } else {
-        sessions = await db.raw
+        sessions = await ctx.db
           .query("conversations")
           .withIndex("by_user_updated", (c: any) => c.eq("user_id", userId))
           .order("desc")
@@ -1750,7 +1809,7 @@ export const expandMentions = query({
           const task = await ctx.db.query("tasks")
             .filter((q: any) => q.eq(q.field("short_id"), mention.shortId))
             .first();
-          if (task && task.user_id === userId) {
+          if (task && (await canAccessTask(ctx, userId, task))) {
             const comments = await ctx.db.query("task_comments")
               .withIndex("by_task_id", (c: any) => c.eq("task_id", task._id))
               .order("desc")
@@ -1797,7 +1856,7 @@ export const expandMentions = query({
           const plan = await ctx.db.query("plans")
             .filter((q: any) => q.eq(q.field("short_id"), mention.shortId))
             .first();
-          if (plan && (plan as any).user_id === userId) {
+          if (plan && (await canAccessPlan(ctx, userId, plan))) {
             let md = `\n\n---\n### Plan: ${(plan as any).title}\n`;
             md += `\`${(plan as any).short_id}\` | Status: **${(plan as any).status || "draft"}**\n\n`;
             if ((plan as any).goal) {
@@ -1811,8 +1870,12 @@ export const expandMentions = query({
               let doneCount = 0, ipCount = 0, openCount = 0;
               md += `#### Tasks (${taskIds.length})\n\n`;
               for (const tid of taskIds.slice(0, 20)) {
-                const t = await ctx.db.get(tid);
-                if (!t) continue;
+                const t: any = await ctx.db.get(tid);
+                if (
+                  !t
+                  || !isSameWorkspace(t, workspaceForResource(plan))
+                  || !(await canAccessTask(ctx, userId, t))
+                ) continue;
                 const st = (t as any).status || "open";
                 if (st === "done") doneCount++;
                 else if (st === "in_progress") ipCount++;
@@ -1863,8 +1926,13 @@ export const expandMentions = query({
             }
             // Linked doc content
             if ((plan as any).doc_id) {
-              const doc = await ctx.db.get((plan as any).doc_id);
-              if (doc && (doc as any).content) {
+              const doc: any = await ctx.db.get((plan as any).doc_id);
+              if (
+                doc
+                && isSameWorkspace(doc, workspaceForResource(plan))
+                && (await canAccessDoc(ctx, userId, doc))
+                && (doc as any).content
+              ) {
                 md += `#### Plan Document\n\n${(doc as any).content.slice(0, 3000)}${(doc as any).content.length > 3000 ? "\n\n..." : ""}\n\n`;
               }
             }
@@ -1876,7 +1944,7 @@ export const expandMentions = query({
           const sess = await ctx.db.query("conversations")
             .filter((q: any) => q.eq(q.field("short_id"), mention.shortId))
             .first();
-          if (sess && sess.user_id === userId) {
+          if (sess && (await canAccessConversation(ctx, userId, sess))) {
             let md = `\n\n---\n### Session: ${sess.title || "Untitled"}\n`;
             md += `\`${(sess as any).short_id}\` | ${(sess as any).message_count || 0} messages | ${sess.status || "active"}`;
             if ((sess as any).project_path) md += ` | ${(sess as any).project_path}`;
@@ -1913,11 +1981,15 @@ export const expandMentions = query({
             // Active task/plan context
             if ((sess as any).active_task_id) {
               const t = await ctx.db.get((sess as any).active_task_id);
-              if (t) md += `Active task: **${(t as any).title}** \`${(t as any).short_id}\`\n\n`;
+              if (t && (await canAccessTask(ctx, userId, t))) {
+                md += `Active task: **${(t as any).title}** \`${(t as any).short_id}\`\n\n`;
+              }
             }
             if ((sess as any).active_plan_id) {
               const p = await ctx.db.get((sess as any).active_plan_id);
-              if (p) md += `Active plan: **${(p as any).title}** \`${(p as any).short_id}\`\n\n`;
+              if (p && (await canAccessPlan(ctx, userId, p))) {
+                md += `Active plan: **${(p as any).title}** \`${(p as any).short_id}\`\n\n`;
+              }
             }
             md += `> \`cast read ${(sess as any).short_id}\` for full conversation transcript\n---\n`;
             results.push({ type: "session", shortId: mention.shortId, markdown: md });
@@ -1925,7 +1997,7 @@ export const expandMentions = query({
 
         } else if (mention.type === "doc" && mention.id) {
           const doc = await ctx.db.get(mention.id as Id<"docs">);
-          if (doc && doc.user_id === userId) {
+          if (doc && (await canAccessDoc(ctx, userId, doc))) {
             let md = `\n\n---\n### Doc: ${doc.title}\n`;
             md += `Type: ${doc.doc_type || "note"}`;
             if ((doc as any).labels?.length) md += ` | Labels: ${(doc as any).labels.join(", ")}`;
@@ -1964,9 +2036,17 @@ export const expandMentions = query({
             const convIds = assignments
               .filter((a: any) => String(a.bucket_id) === String(bucket._id))
               .map((a: any) => a.conversation_id);
-            const convs = (await Promise.all(convIds.slice(0, 30).map((id: any) => ctx.db.get(id))))
-              .filter((c): c is NonNullable<typeof c> => c !== null)
-              .sort((a: any, b: any) => (b.updated_at || 0) - (a.updated_at || 0));
+            const assignedConversations = await Promise.all(
+              convIds.slice(0, 30).map((id: any) =>
+                ctx.db.get(id as Id<"conversations">)),
+            );
+            const convs: any[] = [];
+            for (const conversation of assignedConversations) {
+              if (conversation && (await canAccessConversation(ctx, userId, conversation))) {
+                convs.push(conversation);
+              }
+            }
+            convs.sort((a: any, b: any) => (b.updated_at || 0) - (a.updated_at || 0));
             let md = `\n\n---\n### Label: ${(bucket as any).name}\n`;
             md += `${convs.length} session${convs.length === 1 ? "" : "s"} filed under this label\n\n`;
             for (const s of convs as any[]) {
@@ -2004,6 +2084,8 @@ export const webCreate = mutation({
     // If adding under a parent, compute sort_order as last child
     let sort_order: number | undefined;
     if (args.parent_id) {
+      const parent = await requireAccessibleDoc(ctx, userId, args.parent_id);
+      requireSameWorkspace(parent, { type: "personal", userId }, "parent doc");
       const siblings = await ctx.db
         .query("docs")
         .withIndex("by_parent_id", (q) => q.eq("parent_id", args.parent_id!))
@@ -2047,13 +2129,20 @@ export const webMoveDoc = mutation({
 
     const doc = await ctx.db.get(args.id);
     if (!doc || doc.user_id !== userId) throw new Error("Not found");
+    const docWorkspace = doc.team_id
+      ? { type: "team" as const, teamId: doc.team_id }
+      : { type: "personal" as const, userId: doc.user_id };
 
     // Prevent circular: can't parent under self or a descendant
     if (args.parent_id) {
+      const parent = await requireAccessibleDoc(ctx, userId, args.parent_id);
+      requireSameWorkspace(parent, docWorkspace, "parent doc");
       let current: Id<"docs"> | undefined = args.parent_id;
       while (current) {
         if (current === args.id) throw new Error("Cannot nest a doc under itself");
         const ancestor: any = await ctx.db.get(current);
+        if (!ancestor || !(await canAccessDoc(ctx, userId, ancestor))) notFound("Doc not found");
+        requireSameWorkspace(ancestor, docWorkspace, "ancestor doc");
         current = ancestor?.parent_id;
       }
     }
@@ -2100,6 +2189,13 @@ export const webToggleDocLink = mutation({
 
     const doc = await ctx.db.get(args.doc_id);
     if (!doc || doc.user_id !== userId) throw new Error("Not found");
+    const docWorkspace = doc.team_id
+      ? { type: "team" as const, teamId: doc.team_id }
+      : { type: "personal" as const, userId: doc.user_id };
+    if (args.action === "add") {
+      const linkedDoc = await requireAccessibleDoc(ctx, userId, args.linked_doc_id);
+      requireSameWorkspace(linkedDoc, docWorkspace, "linked doc");
+    }
 
     const existing = doc.linked_doc_ids ?? [];
     const linkedStr = String(args.linked_doc_id);
@@ -2228,10 +2324,18 @@ export const webPromoteToPlan = mutation({
     if (!userId) throw new Error("Unauthorized");
     const doc = await ctx.db.get(args.doc_id);
     if (!doc || doc.user_id !== userId) throw new Error("Doc not found");
+    if (doc.team_id) await requireTeamMembership(ctx, userId, doc.team_id);
 
     if (doc.plan_id) {
       const existing = await ctx.db.get(doc.plan_id);
-      if (existing) return { plan_id: doc.plan_id, short_id: (existing as any).short_id };
+      if (
+        existing
+        && isSameWorkspace(existing, workspaceForResource(doc))
+        && (await canAccessPlan(ctx, userId, existing))
+      ) {
+        return { plan_id: doc.plan_id, short_id: (existing as any).short_id };
+      }
+      notFound("Plan not found");
     }
 
     const { nextShortId } = await import("./counters");

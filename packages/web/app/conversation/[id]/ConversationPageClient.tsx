@@ -9,7 +9,7 @@ import { ConversationData } from "../../../components/ConversationView";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { useConversationMessages } from "../../../hooks/useConversationMessages";
 import { useInboxStore } from "../../../store/inboxStore";
-import { useLocalAuth } from "../../../lib/localAuth";
+import { usePrincipalLocalState } from "../../../components/PrincipalLocalStateProvider";
 
 /**
  * Every accessible conversation renders through the inbox — single codepath —
@@ -229,11 +229,10 @@ export default function ConversationPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const { isAuthenticated, isLoading: isAuthLoading } = useConvexAuth();
-  // Local-first: a token in local storage means this is our signed-in user —
-  // render the authed path immediately instead of holding a skeleton until
-  // the Convex WebSocket confirms (which never happens offline).
-  const localAuthed = useLocalAuth();
-  const treatAsAuthed = isAuthenticated || localAuthed;
+  const { state: principalState } = usePrincipalLocalState();
+  const treatAsAuthed = isAuthenticated ||
+    principalState.phase === "offline-ready" ||
+    principalState.phase === "server-verified";
   const id = params.id as string;
   const highlightQuery = searchParams.get("highlight") || undefined;
   const [targetMessageId] = useState<string | undefined>(() => {
@@ -245,11 +244,11 @@ export default function ConversationPage() {
     return undefined;
   });
 
-  // Local-first: resolve from inbox store instantly when available.
-  // Falls back to server resolver for shared links / external navigation.
-  const localSession = useInboxStore(s => s.sessions[id]);
   const resolved = useQuery(api.conversations.resolveConversation, id ? { id } : "skip");
-  const effective = resolved ?? (localSession ? { access_level: "owner" as const, conversation_id: localSession._id } : undefined);
+  // Cached presence is not access evidence. This public/shared route waits for
+  // the server's explicit access result until it has its own offline-capable
+  // view contract.
+  const effective = resolved;
 
   if (!id) return <NotFoundView />;
   if (effective === undefined) return <ConversationLoadingSkeleton />;
@@ -266,8 +265,7 @@ export default function ConversationPage() {
   // Wait for auth to settle before committing to a render path: while loading,
   // resolveConversation may have answered with the anonymous identity, and we
   // don't want to flash the guest view at a signed-in owner (or vice versa).
-  // A locally stored token already settles it — this is our signed-in user.
-  if (isAuthLoading && !localAuthed) return <ConversationLoadingSkeleton />;
+  if (isAuthLoading && principalState.phase !== "offline-ready") return <ConversationLoadingSkeleton />;
 
   // Unauthenticated visitor on a shared link: the inbox is behind AuthGuard
   // (it would bounce them to the marketing root), so render read-only in place.
