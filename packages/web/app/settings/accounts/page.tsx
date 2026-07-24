@@ -2,17 +2,17 @@ import { useState, Suspense } from "react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
-import { useAuthActions } from "@convex-dev/auth/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Card } from "../../../components/ui/card";
 import { AppLoader } from "../../../components/AppLoader";
+import { useCodecastSignOut } from "../../../hooks/useCodecastSignOut";
 import { Button } from "../../../components/ui/button";
 
 function AccountsContent() {
   const user = useQuery(api.users.getCurrentUser);
   const unlinkGitHub = useMutation(api.users.unlinkGitHub);
   const deleteAccount = useMutation(api.users.deleteAccount);
-  const { signOut } = useAuthActions();
+  const signOut = useCodecastSignOut();
   const [isUnlinking, setIsUnlinking] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
