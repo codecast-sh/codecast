@@ -15,7 +15,7 @@
  * present on disk at a given moment.
  */
 
-import type { AgentClientId } from "@codecast/shared/contracts";
+import type { AgentClientId, ProviderKeyStore } from "@codecast/shared/contracts";
 
 /** How aggressively a client skips approval prompts. Codex is the only client
  *  with a distinct `full_auto`; the others use `default`/`bypass`, but the union
@@ -75,6 +75,15 @@ export interface Config {
   codex_args?: string;
   agent_permission_modes?: AgentPermissionModes;
   agent_default_params?: AgentDefaultParams;
+
+  // --- Managed provider API keys (pl-207) ---
+  // provider id → API key (see PROVIDER_KEYS). The daemon injects each as the
+  // provider's env var when launching a client, so opencode/pi/etc. pick it up
+  // without touching their own auth stores. Empty/absent (the DEFAULT) = codecast
+  // manages nothing and clients use whatever auth is already on the system. Keys
+  // live on-device and sync device→device over the credential-push channel; they
+  // are never stored in plaintext in Convex. Read via getProviderKeys().
+  provider_keys?: ProviderKeyStore;
 
   // --- Update behavior ---
   // index.ts wrote `auto_update`; daemon.ts wrote `desktop_auto_update` (opt out of
@@ -147,6 +156,12 @@ export function getAgentArgs(
   if (clientId === "claude") return config?.claude_args;
   if (clientId === "codex") return config?.codex_args;
   return undefined;
+}
+
+/** The user's managed provider keys, or an empty store when none are set (the
+ *  default). Callers pass this to `providerKeyEnv()` to build launch env. */
+export function getProviderKeys(config: Config | null | undefined): ProviderKeyStore {
+  return config?.provider_keys ?? {};
 }
 
 /**
