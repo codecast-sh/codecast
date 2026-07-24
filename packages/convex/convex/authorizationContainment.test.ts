@@ -3,7 +3,6 @@ import { makeFakeDb } from "./testDb";
 import { getTeam } from "./teams";
 import { getTeamMembers as getLegacyTeamMembers } from "./users";
 import { listInstallations, deleteInstallation } from "./githubApp";
-import { getDigestsByScope } from "./sessionInsights";
 import { ensureDoc } from "./plans";
 import { getCommentCount, addComment } from "./comments";
 import {
@@ -118,15 +117,8 @@ describe("Phase 0 team boundary", () => {
       .rejects.toThrow("Forbidden");
   });
 
-  test("team digests reject a foreign team", async () => {
-    const tables = baseTables({
-      digests: [{ _id: "digest_1", team_id: TEAM, scope: "day", date: "2026-07-22", narrative: "secret", session_count: 1, generated_at: 1 }],
-    });
-    await expect((getDigestsByScope as any)._handler(ctx(STRANGER, tables), {
-      scope: "day",
-      team_id: TEAM,
-    })).rejects.toThrow("Forbidden");
-  });
+  // (Team digest queries were removed upstream along with insight-doc
+  // auto-creation, so their containment case went with them.)
 });
 
 describe("Phase 0 relationship boundary", () => {
