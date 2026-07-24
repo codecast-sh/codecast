@@ -16,6 +16,16 @@ import { ccAccountsValidator } from "./ccAccountsShared";
 import { deviceSettingsValidator } from "./deviceSettingsShared";
 import { normalizeProjectPath } from "./projectPaths";
 import { backlogFieldsPatch } from "./heartbeatBacklog";
+import { deleteCommentWithRevision } from "./commentViewWrites";
+import { deleteBookmarkWithRevision } from "./bookmarkViewWrites";
+import { readLocalViewRevision } from "./localFirstCommands";
+import {
+  CURRENT_USER_GRANT_KEY,
+  CURRENT_USER_VIEW_CONTRACT_ID,
+  CURRENT_USER_VIEW_KEY,
+  projectCurrentUserMetadata,
+  revisionCoverage,
+} from "./smallViewContracts";
 
 // Skills moved off the heartbeat-hot users doc into user_skills (see schema
 // note); overlay them back so clients keep reading currentUser.available_skills
@@ -39,6 +49,42 @@ export const getCurrentUser = query({
       return null;
     }
     return await getUserWithSkills(ctx, userId);
+  },
+});
+
+/**
+ * Complete, revisioned principal metadata projection for durable local state.
+ * V1 intentionally remains the full historical user shape; this contract
+ * excludes volatile daemon fields and secrets by explicit whitelist.
+ */
+export const getCurrentUserV2 = query({
+  args: {},
+  handler: async (ctx) => {
+    const contractId = CURRENT_USER_VIEW_CONTRACT_ID;
+    const viewKey = CURRENT_USER_VIEW_KEY;
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { contractId, viewKey, access: "unauthenticated" as const };
+
+    const user = await ctx.db.get(userId);
+    if (!user) {
+      return {
+        contractId,
+        viewKey,
+        access: "missing" as const,
+        releasedGrantKeys: [CURRENT_USER_GRANT_KEY],
+        removals: [],
+      };
+    }
+    const viewRevision = await readLocalViewRevision(ctx, userId, contractId, viewKey);
+    return {
+      contractId,
+      viewKey,
+      access: "granted" as const,
+      grantKeys: [CURRENT_USER_GRANT_KEY],
+      viewRevision,
+      coverage: revisionCoverage(viewRevision),
+      user: projectCurrentUserMetadata(user),
+    };
   },
 });
 
@@ -1778,6 +1824,14 @@ export const getTeamMembers = query({
     team_id: v.id("teams"),
   },
   handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    const membership = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", args.team_id))
+      .first();
+    if (!membership) return [];
+
     const teamMembers = await ctx.db
       .query("users")
       .filter((q) => q.eq(q.field("team_id"), args.team_id))
@@ -2781,8 +2835,7 @@ export const deleteAccount = mutation({
         .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
         .take(100);
       for (const comment of comments) {
-        await ctx.db.delete(comment._id);
-        totalDeleted++;
+        if (await deleteCommentWithRevision(ctx, comment, conv)) totalDeleted++;
       }
 
       const publicComments = await ctx.db
@@ -2825,7 +2878,7 @@ export const deleteAccount = mutation({
       .withIndex("by_user_id", (q) => q.eq("user_id", userId))
       .take(100);
     for (const b of bookmarks) {
-      await ctx.db.delete(b._id);
+      await deleteBookmarkWithRevision(ctx, b);
       totalDeleted++;
     }
 

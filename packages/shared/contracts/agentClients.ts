@@ -31,6 +31,9 @@ import {
  *  agent-type spelling and the registry key. */
 export type AgentClientId = "claude" | "codex" | "cursor" | "gemini" | "opencode" | "pi";
 
+/** Runtime transports that may create/deliver for a fenced execution binding. */
+export type AgentExecutionTransport = "tmux" | "app-server" | "external";
+
 /** The spelling the Convex schema / wire protocol stores (`conversations.agent_type`).
  *  Differs from `AgentClientId` only in `claude_code`, and carries the extra
  *  `cowork` value that has no distinct client of its own. `opencode` (phase 1)
@@ -85,6 +88,53 @@ export function fromConvexAgentType(agentType: string | null | undefined): Agent
   }
 }
 
+/**
+ * Error raised when an untrusted agent identifier reaches an execution boundary.
+ *
+ * The legacy/display parser above intentionally preserves its historical
+ * unknown-to-Claude fallback. Runtime creation and message delivery must never use
+ * that behavior: silently changing agent families is an external side effect, not
+ * a presentation default.
+ */
+export class InvalidExecutionAgentTypeError extends Error {
+  readonly code = "INVALID_EXECUTION_AGENT_TYPE" as const;
+
+  constructor(readonly agentType: unknown) {
+    super(`Unsupported execution agent type: ${formatUnknownAgentType(agentType)}`);
+    this.name = "InvalidExecutionAgentTypeError";
+  }
+}
+
+function formatUnknownAgentType(value: unknown): string {
+  if (typeof value === "string") return JSON.stringify(value);
+  if (value === null) return "null";
+  return typeof value;
+}
+
+/**
+ * Strict wire/display spelling -> execution client parser.
+ *
+ * Compatibility aliases are exhaustive and explicit. In particular, `cowork`
+ * remains an intentional alias for the Claude client, while nullish and unknown
+ * values fail closed instead of entering the historical Claude fallback.
+ */
+export function parseExecutionAgentClientId(agentType: unknown): AgentClientId {
+  switch (agentType) {
+    case "claude":
+    case "claude_code":
+    case "cowork":
+      return "claude";
+    case "codex":
+    case "cursor":
+    case "gemini":
+    case "opencode":
+    case "pi":
+      return agentType;
+    default:
+      throw new InvalidExecutionAgentTypeError(agentType);
+  }
+}
+
 /** Model/effort picker config for a client (the old `AGENT_MODEL_CONFIG` value). */
 export interface AgentModelConfig {
   models: ModelOption[];
@@ -134,6 +184,8 @@ export interface AgentClientDescriptor {
   id: AgentClientId;
   /** The spelling the Convex schema / wire protocol uses. */
   convexId: ConvexAgentType;
+  /** Exact fenced transports that are valid for this agent family. */
+  executionTransports: readonly AgentExecutionTransport[];
   /** Executable launched to start a fresh session. */
   binary: string;
   /** Static args always passed at launch, before the conditional permission /
@@ -202,6 +254,7 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
   claude: {
     id: "claude",
     convexId: "claude_code",
+    executionTransports: ["tmux"],
     binary: "claude",
     launchArgs: [],
     resumeCmd: (sessionId) => `claude --resume ${sessionId}`,
@@ -218,6 +271,7 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
   codex: {
     id: "codex",
     convexId: "codex",
+    executionTransports: ["tmux", "app-server"],
     binary: "codex",
     launchArgs: [],
     resumeCmd: (sessionId) => `codex resume ${sessionId}`,
@@ -235,6 +289,7 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
   cursor: {
     id: "cursor",
     convexId: "cursor",
+    executionTransports: ["tmux"],
     binary: "cursor-agent",
     launchArgs: [],
     // cursor-agent resumes a chat by id with its own binary (the ct-39074 fix): a
@@ -262,6 +317,7 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
   gemini: {
     id: "gemini",
     convexId: "gemini",
+    executionTransports: ["tmux"],
     binary: "gemini",
     launchArgs: [],
     // gemini resumes the most-recent session and ignores the id (daemon fact).
@@ -280,6 +336,7 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
   opencode: {
     id: "opencode",
     convexId: "opencode",
+    executionTransports: ["tmux"],
     binary: "opencode",
     launchArgs: [],
     // opencode resumes a session by id with `opencode -s <id>` (verified against
@@ -323,6 +380,7 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
   pi: {
     id: "pi",
     convexId: "pi",
+    executionTransports: ["tmux"],
     binary: "pi",
     launchArgs: [],
     // pi resumes a session by file path OR partial UUID via `--session` (README:
@@ -382,6 +440,14 @@ export function modelAgentKey(agentType: string | undefined): AgentClientId {
  *  or a registry id. */
 export function agentSupportsFork(agentType: string | undefined): boolean {
   return AGENT_CLIENTS[fromConvexAgentType(agentType)].capabilities.fork === true;
+}
+
+/** Strict fenced-runtime routing policy. There is no fallback transport. */
+export function agentSupportsExecutionTransport(
+  agent: AgentClientId,
+  transport: AgentExecutionTransport,
+): boolean {
+  return AGENT_CLIENTS[agent].executionTransports.includes(transport);
 }
 
 export function findModelOption(agentType: string | undefined, key: string): ModelOption | undefined {

@@ -7,6 +7,65 @@ import { findConversationByAnyRef, findConversationByAnyRefWhere } from "./conve
 import { checkConversationAccess } from "./privacy";
 import { hasGrantedSendAccess } from "./collab";
 import { addSessionOwnerRow, listSessionOwnerIds, syncPrimaryOwnerCache } from "./sessionOwners";
+import { requireUser } from "./lib/auth";
+import { runLocalCommand } from "./localFirstCommands";
+import { insertEnqueuedPendingMessage } from "./pendingMessageWrites";
+import {
+  messagesCommandCoverageTarget,
+} from "./messageViewContracts";
+import {
+  allocateFencedDeliveryMetadata,
+  isFencedPendingMessage,
+  legacyConversationAcceptsDaemonWork,
+} from "./executionBindings";
+
+export {
+  MESSAGES_VIEW_CONTRACT_ID,
+  messagesCommandCoverageTarget,
+  messagesGrantKey,
+  messagesViewKey,
+} from "./messageViewContracts";
+
+/** One authorization rule for runner, assigned/team collaborators, and grants. */
+export async function canSendProductMessage(
+  ctx: { db: any },
+  userId: Id<"users">,
+  conversation: any,
+): Promise<boolean> {
+  const access = await checkConversationAccess(ctx, userId, conversation);
+  if (access === "owner" || access === "team") return true;
+  return access === "shared"
+    && await hasGrantedSendAccess(ctx, conversation._id, userId);
+}
+
+function sameOptionalIds(left: unknown[] | undefined, right: unknown[] | undefined): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  return left.length === right.length
+    && left.every((value, index) => String(value) === String(right[index]));
+}
+
+/** Exact intent comparison before legacy client-id dedupe may be trusted. */
+export function pendingMessageMatchesProductIntent(
+  message: any,
+  conversation: any,
+  userId: Id<"users">,
+  intent: {
+    content: string;
+    imageStorageIds?: Id<"_storage">[];
+    clientId: string;
+  },
+): boolean {
+  return String(message.conversation_id) === String(conversation._id)
+    && String(message.from_user_id) === String(userId)
+    && String(message.owner_user_id) === String(conversation.user_id)
+    && message.content === intent.content
+    && message.client_id === intent.clientId
+    && message.image_storage_id === undefined
+    && sameOptionalIds(message.image_storage_ids, intent.imageStorageIds)
+    && message.from_conversation_id === undefined
+    && message.origin === undefined
+    && message.resend_of_delivery_id === undefined;
+}
 
 export async function getAuthenticatedUserId(
   ctx: { db: any },
@@ -56,6 +115,7 @@ async function rependPendingMessage(
   message: { _id: Id<"pending_messages">; status: string; retry_count: number },
   retryCount: number
 ): Promise<boolean> {
+  if (isFencedPendingMessage(message)) return false;
   if (isTerminalPendingStatus(message.status)) return false;
   await ctx.db.patch(message._id, {
     status: "pending" as const,
@@ -70,6 +130,7 @@ async function patchPendingMessageStatus(
   message: { _id: Id<"pending_messages">; conversation_id: Id<"conversations">; status: string },
   patch: { status: PendingStatus; delivered_at?: number }
 ): Promise<boolean> {
+  if (isFencedPendingMessage(message)) return false;
   if (isTerminalPendingStatus(message.status)) return false;
   await ctx.db.patch(message._id, patch);
   if (patch.status === "delivered" || patch.status === "cancelled") {
@@ -90,11 +151,26 @@ export function pendingMessageOwnerId(
 }
 
 export function canDaemonSeePendingMessage(
-  message: { from_user_id: Id<"users">; owner_user_id?: Id<"users">; status: string },
-  conversation: { user_id: Id<"users">; owner_device_id?: string },
+  message: {
+    from_user_id: Id<"users">;
+    owner_user_id?: Id<"users">;
+    status: string;
+    delivery_protocol_version?: number;
+  },
+  conversation: {
+    user_id: Id<"users">;
+    owner_device_id?: string;
+    execution_protocol_state?: string;
+  },
   userId: Id<"users">,
   deviceId: string
 ): boolean {
+  // Absence is the only legacy marker. Quiescing and fenced conversations are
+  // never permissive fallbacks, and a stamped row can never leak back into the
+  // legacy poll even if a conversation projection is stale.
+  if (isFencedPendingMessage(message) || !legacyConversationAcceptsDaemonWork(conversation)) {
+    return false;
+  }
   // Delivery is the TARGET owner's job, not the sender's — a teammate's message is delivered by
   // the owner's daemon. (For a self-send these are the same user.)
   if (pendingMessageOwnerId(message, conversation) !== userId.toString()) return false;
@@ -124,11 +200,13 @@ async function daemonCanMutatePendingMessage(
   userId: Id<"users">,
   deviceId?: string
 ): Promise<boolean> {
-  if (!deviceId) return true;
   // The mutating daemon must own the TARGET conversation (it's the one delivering the message),
   // not be the sender — a teammate's send is delivered & status-updated by the owner's daemon.
   const conversation = await ctx.db.get(message.conversation_id);
+  if (isFencedPendingMessage(message)) return false;
   if (!conversation || pendingMessageOwnerId(message, conversation) !== userId.toString()) return false;
+  if (!legacyConversationAcceptsDaemonWork(conversation)) return false;
+  if (!deviceId) return true;
   const owner = conversation.owner_device_id as string | undefined;
   if (owner && owner !== deviceId) return false;
   if (!owner) {
@@ -143,9 +221,10 @@ async function daemonCanMutateConversation(
   userId: Id<"users">,
   deviceId?: string
 ): Promise<boolean> {
-  if (!deviceId) return true;
   const conversation = await ctx.db.get(conversationId);
   if (!conversation || conversation.user_id.toString() !== userId.toString()) return false;
+  if (!legacyConversationAcceptsDaemonWork(conversation)) return false;
+  if (!deviceId) return true;
   const owner = conversation.owner_device_id as string | undefined;
   if (owner && owner !== deviceId) return false;
   if (!owner) {
@@ -179,6 +258,7 @@ export async function updatePendingMessageStatusForDaemon(
   const message = await ctx.db.get(messageId);
   if (!message) return { updated: false, skipped: true };
   if (isTerminalPendingStatus(message.status)) return { updated: false, skipped: true };
+  if (isFencedPendingMessage(message)) return { updated: false, skipped: true };
   if (!(await daemonCanMutatePendingMessage(ctx, message, userId, deviceId))) {
     return { updated: false, skipped: true };
   }
@@ -212,28 +292,31 @@ export async function enqueuePendingMessage(
   if (fields.client_id) {
     const existing = await ctx.db
       .query("pending_messages")
-      .withIndex("by_conversation_status", (q: any) =>
-        q.eq("conversation_id", conversation._id)
+      .withIndex("by_conversation_client_id", (q: any) =>
+        q.eq("conversation_id", conversation._id).eq("client_id", fields.client_id)
       )
-      .filter((q: any) => q.eq(q.field("client_id"), fields.client_id))
       .first();
     if (existing) return existing._id;
   }
 
-  const messageId = await ctx.db.insert("pending_messages", {
-    conversation_id: conversation._id,
-    from_user_id: fromUserId,
+  // This is the sole insertion choke point for every producer. Legacy rows are
+  // unchanged. Fenced rows require a caller-stable client_id, receive their
+  // server sequence/epoch here, and use that same id as delivery_id end-to-end.
+  const fenced = await allocateFencedDeliveryMetadata(ctx, conversation, fields.client_id);
+
+  const messageId = await insertEnqueuedPendingMessage(ctx, {
+    conversationId: conversation._id,
+    fromUserId,
     // The daemon polls by owner; for a self-send this is the sender, for a team send the teammate.
-    owner_user_id: conversation.user_id,
-    from_conversation_id: fields.from_conversation_id,
+    ownerUserId: conversation.user_id,
+    fromConversationId: fields.from_conversation_id,
     content: fields.content,
-    image_storage_id: fields.image_storage_id,
-    image_storage_ids: fields.image_storage_ids,
-    client_id: fields.client_id,
+    imageStorageId: fields.image_storage_id,
+    imageStorageIds: fields.image_storage_ids,
+    clientId: fields.client_id,
     origin: fields.origin,
-    status: "pending" as const,
-    created_at: Date.now(),
-    retry_count: 0,
+    createdAt: Date.now(),
+    delivery: fenced ?? undefined,
   });
 
   // Wake-up rules. A human send resurfaces the session everywhere: dismissed,
@@ -296,6 +379,122 @@ export const sendMessageToSession = mutation({
   },
 });
 
+/**
+ * Durable product send intent. Unlike the legacy mutation this is session-auth
+ * only, desired exactly once by command/client id, and returns a payload-free
+ * receipt whose coverage is later proven by the conversation message view.
+ */
+export const sendMessageV2 = mutation({
+  args: {
+    command_id: v.string(),
+    conversation_id: v.id("conversations"),
+    content: v.string(),
+    image_storage_ids: v.optional(v.array(v.id("_storage"))),
+    client_id: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    const imageStorageIds = args.image_storage_ids?.length
+      ? args.image_storage_ids
+      : undefined;
+    return runLocalCommand(ctx, {
+      principalId: userId,
+      commandId: args.command_id,
+      commandName: "messages.send/v2",
+      arguments: {
+        conversationId: args.conversation_id,
+        content: args.content,
+        imageStorageIds,
+        clientId: args.client_id,
+      },
+    }, async () => {
+      if (args.command_id !== args.client_id) {
+        return {
+          status: "rejected" as const,
+          code: "INVALID_ARGUMENT",
+          message: "command_id and client_id must be the same canonical id",
+        };
+      }
+
+      const conversation = await ctx.db.get(args.conversation_id);
+      if (!conversation) {
+        return {
+          status: "rejected" as const,
+          code: "MISSING",
+          message: "Conversation not found",
+        };
+      }
+      if (!(await canSendProductMessage(ctx, userId, conversation))) {
+        return {
+          status: "rejected" as const,
+          code: "FORBIDDEN",
+          message: "Conversation send access was revoked",
+        };
+      }
+
+      const existingRows = await ctx.db
+        .query("pending_messages")
+        .withIndex("by_conversation_client_id", (q) =>
+          q.eq("conversation_id", conversation._id).eq("client_id", args.client_id))
+        .collect();
+      if (existingRows.length > 1) {
+        return {
+          status: "rejected" as const,
+          code: "CLIENT_ID_INVARIANT",
+          message: "Conversation contains duplicate rows for this client id",
+        };
+      }
+      const existing = existingRows[0];
+      if (existing && !pendingMessageMatchesProductIntent(
+        existing,
+        conversation,
+        userId,
+        {
+          content: args.content,
+          imageStorageIds,
+          clientId: args.client_id,
+        },
+      )) {
+        return {
+          status: "rejected" as const,
+          code: "CLIENT_ID_REUSED",
+          message: "This client id is already bound to different message intent",
+        };
+      }
+
+      // Coverage is proven by this same id on the authoritative transcript.
+      // An old transcript row without our exact pending intent must therefore
+      // block admission; otherwise a fresh command could appear covered before
+      // its newly enqueued message was ever delivered.
+      const existingTranscriptMessage = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_client_id", (q) =>
+          q.eq("conversation_id", conversation._id).eq("client_id", args.client_id))
+        .first();
+      if (!existing && existingTranscriptMessage) {
+        return {
+          status: "rejected" as const,
+          code: "CLIENT_ID_REUSED",
+          message: "This client id is already present in the conversation transcript",
+        };
+      }
+
+      if (!existing) {
+        await enqueuePendingMessage(ctx, conversation, userId, {
+          content: args.content,
+          image_storage_ids: imageStorageIds,
+          client_id: args.client_id,
+        });
+      }
+      return {
+        status: "acknowledged" as const,
+        coverageViews: [],
+        coverageCommandIds: [messagesCommandCoverageTarget(conversation._id)],
+      };
+    });
+  },
+});
+
 // The wire format for a session→session message. The body is wrapped so the
 // receiving agent (and the web client) can tell who sent it. Keep this tag name
 // in sync with the parser in packages/web/components/ConversationView.tsx
@@ -351,10 +550,7 @@ export async function performSessionSend(
   // its owner has granted this user explicit send access for it (collab_grants), the one approved
   // path for a link recipient to run commands in someone else's session.
   const target = await findConversationByAnyRefWhere(ctx, args.to, async (conversation) => {
-    const access = await checkConversationAccess(ctx, authUserId, conversation);
-    if (access === "owner" || access === "team") return true;
-    if (access === "shared" && (await hasGrantedSendAccess(ctx, conversation._id, authUserId))) return true;
-    return false;
+    return await canSendProductMessage(ctx, authUserId, conversation);
   });
   if (!target) {
     throw new Error(`No session found for "${args.to}" (you can only message your own sessions, sessions shared with your team, or sessions whose owner granted you send access)`);
@@ -484,12 +680,12 @@ export const updateMessageStatus = mutation({
       return { success: true, skipped: result.skipped };
     }
 
-    await patchPendingMessageStatus(ctx, message, {
+    const updated = await patchPendingMessageStatus(ctx, message, {
       status: args.status,
       delivered_at: args.delivered_at,
     });
 
-    return { success: true };
+    return { success: true, skipped: !updated };
   },
 });
 
@@ -522,9 +718,9 @@ export const retryMessage = mutation({
       return { success: true, skipped: true };
     }
 
-    await rependPendingMessage(ctx, message, message.retry_count + 1);
+    const updated = await rependPendingMessage(ctx, message, message.retry_count + 1);
 
-    return { success: true };
+    return { success: true, skipped: !updated };
   },
 });
 
@@ -552,9 +748,9 @@ export const cancelPendingMessage = mutation({
       throw new Error("Unauthorized: can only cancel messages you sent or own");
     }
 
-    await patchPendingMessageStatus(ctx, message, { status: "cancelled" as const });
+    const updated = await patchPendingMessageStatus(ctx, message, { status: "cancelled" as const });
 
-    return { success: true };
+    return { success: true, skipped: !updated };
   },
 });
 
@@ -642,7 +838,7 @@ export const getPendingMessages = query({
       )
       .collect();
 
-    return messages;
+    return messages.filter((message) => !isFencedPendingMessage(message));
   },
 });
 
@@ -984,6 +1180,9 @@ export async function healAndNotifyStuckMessages(ctx: { db: any }, now: number):
     let notified = 0;
     const reflag = new Set<Id<"conversations">>();
     for (const msg of candidates) {
+      // Fenced rows use delivery attempts and permits; legacy elapsed-time
+      // healing must never reinterpret their state or synthesize a retry.
+      if (isFencedPendingMessage(msg)) continue;
       // Cross-user feedback runs regardless of the target's readiness: a teammate's message stuck
       // past the deadline should tell the sender whether it's merely delayed (target busy) or
       // failed (target offline). planCrossUserNotify no-ops on self-sends and already-notified rows.
@@ -1040,6 +1239,7 @@ export const backfillPendingOwnerUserId = internalMutation({
         .withIndex("by_status", (q: any) => q.eq("status", status))
         .collect();
       for (const row of rows) {
+        if (isFencedPendingMessage(row)) continue;
         if (row.owner_user_id) continue;
         const conversation = await ctx.db.get(row.conversation_id);
         const ownerId = conversation?.user_id ?? row.from_user_id;
@@ -1170,6 +1370,7 @@ export const cancelOldPendingMessages = internalMutation({
         .filter((q) => q.and(q.eq(q.field("status"), status), q.lt(q.field("created_at"), cutoff)))
         .collect();
       for (const r of rows) {
+        if (isFencedPendingMessage(r)) continue;
         affectedConvs.add(r.conversation_id);
         if (!args.dry_run) {
           await ctx.db.patch(r._id, { status: "cancelled" as const });

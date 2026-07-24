@@ -131,6 +131,16 @@ export async function enqueueStartSession(
   },
 ): Promise<Id<"daemon_commands">> {
   const conv = await ctx.db.get(opts.conversationId);
+  // A quiescing/fenced conversation's runtime belongs to the execution
+  // coordinator; emitting a legacy start here would spawn a second, unmanaged
+  // runtime beside the coordinator's binding (split-brain via the start
+  // channel). The daemon re-checks on delivery for commands that were already
+  // queued when the fence transitioned.
+  if (conv?.execution_protocol_state) {
+    throw new Error(
+      `EXECUTION_PROTOCOL_LEGACY_START_REFUSED: conversation is ${conv.execution_protocol_state}`,
+    );
+  }
   const projectPath = opts.projectPath ?? conv?.project_path ?? null;
   const gitRoot = opts.gitRoot ?? conv?.git_root ?? null;
 

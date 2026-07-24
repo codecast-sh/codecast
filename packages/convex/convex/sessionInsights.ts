@@ -4,6 +4,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { isConversationTeamVisible, isTeamMember, createTeamFeedFilter, teamVisibleConvTeam } from "./privacy";
+import { requireTeamMembership } from "./lib/access";
 
 type OutcomeType = "shipped" | "progress" | "blocked" | "unknown";
 type InsightGenStatus = {
@@ -1870,6 +1871,9 @@ export const getDigestsByScope = query({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
+    if (args.team_id) {
+      await requireTeamMembership(ctx, userId, args.team_id);
+    }
 
     const months = args.window_months ?? 1;
     const now = new Date();
