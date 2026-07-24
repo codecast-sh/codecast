@@ -4,6 +4,12 @@ import { verifyApiToken } from "./apiTokens";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createDataContext } from "./data";
 import { isTeamMember } from "./privacy";
+import {
+  canAccessDoc,
+  canAccessPlan,
+  canAccessTask,
+  requireTeamMembership,
+} from "./lib/access";
 
 export const create = mutation({
   args: {
@@ -64,9 +70,13 @@ export const list = query({
           .query("tasks")
           .withIndex("by_project_id", (q) => q.eq("project_id", p._id))
           .collect();
-        const total = tasks.length;
-        const done = tasks.filter((t) => t.status === "done").length;
-        const in_progress = tasks.filter((t) => t.status === "in_progress").length;
+        const authorizedTasks = [];
+        for (const task of tasks) {
+          if (await canAccessTask(ctx, auth.userId, task)) authorizedTasks.push(task);
+        }
+        const total = authorizedTasks.length;
+        const done = authorizedTasks.filter((t) => t.status === "done").length;
+        const in_progress = authorizedTasks.filter((t) => t.status === "in_progress").length;
         return { ...p, task_counts: { total, done, in_progress } };
       })
     );
@@ -91,8 +101,12 @@ export const get = query({
       .query("tasks")
       .withIndex("by_project_id", (q) => q.eq("project_id", project._id))
       .collect();
+    const authorizedTasks = [];
+    for (const task of tasks) {
+      if (await canAccessTask(ctx, auth.userId, task)) authorizedTasks.push(task);
+    }
 
-    return { ...project, tasks };
+    return { ...project, tasks: authorizedTasks };
   },
 });
 
@@ -127,12 +141,18 @@ export const update = mutation({
 
 // --- Web-facing queries ---
 
-async function enrichProject(ctx: any, p: any) {
-  const [tasks, plans, docs] = await Promise.all([
+async function enrichProject(ctx: any, userId: any, p: any) {
+  const [rawTasks, rawPlans, rawDocs] = await Promise.all([
     ctx.db.query("tasks").withIndex("by_project_id", (q: any) => q.eq("project_id", p._id)).collect(),
     ctx.db.query("plans").withIndex("by_project_id", (q: any) => q.eq("project_id", p._id)).collect(),
     ctx.db.query("docs").withIndex("by_project_id", (q: any) => q.eq("project_id", p._id)).collect(),
   ]);
+  const tasks = [];
+  const plans = [];
+  const docs = [];
+  for (const task of rawTasks) if (await canAccessTask(ctx, userId, task)) tasks.push(task);
+  for (const plan of rawPlans) if (await canAccessPlan(ctx, userId, plan)) plans.push(plan);
+  for (const doc of rawDocs) if (await canAccessDoc(ctx, userId, doc)) docs.push(doc);
   return {
     ...p,
     task_counts: {
@@ -192,7 +212,7 @@ export const webList = query({
       }
     }
 
-    return Promise.all(projects.map((p) => enrichProject(ctx, p)));
+    return Promise.all(projects.map((p) => enrichProject(ctx, userId, p)));
   },
 });
 
@@ -215,7 +235,7 @@ export const webGet = query({
       }
     }
 
-    return enrichProject(ctx, project);
+    return enrichProject(ctx, userId, project);
   },
 });
 
@@ -242,6 +262,7 @@ export const webCreate = mutation({
       .withIndex("by_user_id", (q) => q.eq("user_id", userId))
       .first();
     const team_id = clientState?.ui?.active_team_id;
+    if (team_id) await requireTeamMembership(ctx, userId, team_id);
 
     const doc: any = {
       user_id: userId,

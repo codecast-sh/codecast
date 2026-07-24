@@ -12,10 +12,33 @@
 // one shape.
 
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { ConvexError } from "convex/values";
 import { Id } from "../_generated/dataModel";
 import { verifyApiToken } from "../apiTokens";
 
 type AuthCtx = { db: any; auth?: any };
+
+export type AccessErrorCode = "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "INVALID_SCOPE";
+
+/** Stable public error envelope for authorization and scope failures. */
+export function accessError(code: AccessErrorCode, message: string): ConvexError<{
+  code: AccessErrorCode;
+  message: string;
+}> {
+  return new ConvexError({ code, message });
+}
+
+export function forbidden(message = "Forbidden"): never {
+  throw accessError("FORBIDDEN", message);
+}
+
+export function notFound(message = "Not found"): never {
+  throw accessError("NOT_FOUND", message);
+}
+
+export function invalidScope(message: string): never {
+  throw accessError("INVALID_SCOPE", message);
+}
 
 // The one canonical "must be signed in" check. Resolves the session user id and
 // throws if the caller is anonymous. Use this in any session-authed function in
@@ -23,7 +46,7 @@ type AuthCtx = { db: any; auth?: any };
 // preamble.
 export async function requireUser(ctx: AuthCtx): Promise<Id<"users">> {
   const userId = await getAuthUserId(ctx as any);
-  if (!userId) throw new Error("Unauthorized");
+  if (!userId) throw accessError("UNAUTHENTICATED", "Unauthorized");
   return userId;
 }
 
@@ -53,6 +76,6 @@ export async function requireUserOrToken(
   token?: string,
 ): Promise<Id<"users">> {
   const userId = await getUserOrToken(ctx, token);
-  if (!userId) throw new Error("Unauthorized");
+  if (!userId) throw accessError("UNAUTHENTICATED", "Unauthorized");
   return userId;
 }

@@ -1,4 +1,5 @@
 import { test, expect, describe, mock } from "bun:test";
+import { createRequire } from "node:module";
 
 // Exercises the REAL electron preload (packages/electron/preload.js) under a
 // mocked `electron` module. The bug this guards: a codecast:// deep link that
@@ -19,7 +20,7 @@ type LoadedPreload = {
 function loadPreload(): LoadedPreload {
   const ipcListeners: Record<string, Array<(e: any, url: string) => void>> = {};
   let exposed: any = null;
-  mock.module("electron", () => ({
+  const electronMock = () => ({
     contextBridge: { exposeInMainWorld: (_name: string, api: any) => { exposed = api; } },
     ipcRenderer: {
       on: (ch: string, cb: (e: any, url: string) => void) => { (ipcListeners[ch] ||= []).push(cb); },
@@ -27,8 +28,17 @@ function loadPreload(): LoadedPreload {
       send: () => {},
     },
     webFrame: { setZoomFactor: () => {} },
-  }));
+  });
   const resolved = require.resolve("../../electron/preload.js");
+  mock.module("electron", electronMock);
+  // Under bun's isolated install layout, the preload resolves "electron" through
+  // packages/electron/node_modules into the .bun store — a different path than
+  // this file's resolution, which is where mock.module keys the mock. Register
+  // it under the preload's resolution too, or the real electron (which exports
+  // only its binary path outside an electron app) leaks through.
+  try {
+    mock.module(createRequire(resolved).resolve("electron"), electronMock);
+  } catch {}
   delete require.cache[resolved];
   require(resolved);
   return {
