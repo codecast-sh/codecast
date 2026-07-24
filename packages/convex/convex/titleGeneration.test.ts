@@ -114,6 +114,15 @@ describe("buildTitlePrompt", () => {
     expect(prompt).not.toContain("current title");
     expect(prompt).toContain("AS A WHOLE");
   });
+
+  // Regression (inbox card "Not a coding session", a travel chat): the prompt
+  // hardcoded "this coding session", so Haiku titled the frame instead of the
+  // topic on non-coding sessions. The framing must stay domain-neutral.
+  test("frames the session neutrally so non-coding sessions title by topic", () => {
+    const prompt = buildTitlePrompt({ messageText: "User: villas near Lake Maggiore", messageCount: 2 });
+    expect(prompt).not.toContain("for this coding session");
+    expect(prompt).toContain("Never comment on the session's type");
+  });
 });
 
 describe("isLowSignalPrompt", () => {
