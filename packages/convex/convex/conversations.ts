@@ -32,7 +32,7 @@ import {
 } from "./privacy";
 import { batchScanConversations, paginateTeamFeed } from "./feedPagination";
 import { mergeUserMessageFeed, type FeedCandidate } from "./messageFeed";
-import { resolveLabelConvIds, matchBucketByName } from "./buckets";
+import { assignConversationToBucketForUser, resolveLabelConvIds, matchBucketByName } from "./buckets";
 import { projectOverlaps } from "./projectPaths";
 import {
   parseSearchTerms,
@@ -43,6 +43,20 @@ import {
   type ParsedTerms,
 } from "./searchCore";
 import { MIRROR_WINDOW_MS } from "./searchMirror";
+import { requireUser } from "./lib/auth";
+import { readLocalViewRevision, runLocalCommand } from "./localFirstCommands";
+import {
+  FAVORITES_GRANT_KEY,
+  FAVORITES_VIEW_CONTRACT_ID,
+  FAVORITES_VIEW_KEY,
+  projectFavoriteMembership,
+  revisionCoverage,
+} from "./smallViewContracts";
+import {
+  favoriteCoverageForConversation,
+  setFavoriteWithRevision,
+  toggleFavoriteWithRevision,
+} from "./favoriteViewWrites";
 
 // Single relevance-ranked search-index lookup shared by every message-search
 // surface (web searchConversations, searchForCLI, feedForCLI). One combined
@@ -1435,6 +1449,9 @@ export const getProjectInfo = query({
       // switched in-session has no transcript echo to re-pin from; the
       // conversation row is the only durable record.
       effort: conv.effort ?? null,
+      // Lets the daemon refuse a legacy start_session that was enqueued before
+      // this conversation crossed onto the fenced execution rail.
+      execution_protocol_state: conv.execution_protocol_state ?? null,
     };
   },
 });
@@ -3685,6 +3702,9 @@ export const searchForCLI = query({
       .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
       .collect();
     const userTeamIds = userMemberships.map(m => m.team_id);
+    if (args.team_id && !userTeamIds.some((id) => String(id) === String(args.team_id))) {
+      return { error: "Unauthorized team" };
+    }
 
     let resolvedTeamId: Id<"teams"> | undefined;
     if (args.team_id) {
@@ -4808,7 +4828,7 @@ export const _continueFork = internalMutation({
 // else's session inherits nothing unless you had labeled it yourself. Archived
 // labels don't propagate.
 async function inheritLabelAssignment(
-  ctx: { db: any },
+  ctx: MutationCtx,
   userId: Id<"users">,
   sourceConvId: Id<"conversations">,
   newConvId: Id<"conversations">,
@@ -4821,12 +4841,7 @@ async function inheritLabelAssignment(
   if (!sourceAssignment?.bucket_id) return;
   const bucket = await ctx.db.get(sourceAssignment.bucket_id);
   if (!bucket || bucket.archived_at) return;
-  await ctx.db.insert("bucket_assignments", {
-    user_id: userId,
-    conversation_id: newConvId,
-    bucket_id: sourceAssignment.bucket_id,
-    updated_at: Date.now(),
-  });
+  await assignConversationToBucketForUser(ctx, userId, newConvId, sourceAssignment.bucket_id);
 }
 
 export const forkConversation = mutation({
@@ -5457,12 +5472,55 @@ export const toggleFavorite = mutation({
       throw new Error("Can only favorite your own conversations");
     }
 
-    const newValue = !conversation.is_favorite;
-    await ctx.db.patch(args.conversation_id, {
-      is_favorite: newValue,
-    });
+    return await toggleFavoriteWithRevision(ctx, conversation);
+  },
+});
 
-    return newValue;
+/** Retry-safe desired-state favorite command; never model this as a toggle. */
+export const setFavoriteV2 = mutation({
+  args: {
+    command_id: v.string(),
+    conversation_id: v.id("conversations"),
+    is_favorite: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    return runLocalCommand(ctx, {
+      principalId: userId,
+      commandId: args.command_id,
+      commandName: "favorites.set/v2",
+      arguments: {
+        conversationId: args.conversation_id,
+        isFavorite: args.is_favorite,
+      },
+    }, async () => {
+      const conversation = await ctx.db.get(args.conversation_id);
+      if (!conversation) {
+        return {
+          status: "rejected" as const,
+          code: "MISSING",
+          message: "Conversation not found",
+        };
+      }
+      if (String(conversation.user_id) !== String(userId)) {
+        return {
+          status: "rejected" as const,
+          code: "FORBIDDEN",
+          message: "Can only favorite your own conversations",
+        };
+      }
+      await setFavoriteWithRevision(ctx, conversation, args.is_favorite, "receipt");
+      return {
+        status: "acknowledged" as const,
+        result: {
+          conversationId: conversation._id,
+          isFavorite: args.is_favorite,
+        },
+        // A no-op still advances once for this new command receipt: its
+        // optimistic overlay needs positive authoritative coverage to settle.
+        coverageViews: [favoriteCoverageForConversation(conversation)],
+      };
+    });
   },
 });
 
@@ -5511,6 +5569,39 @@ export const listFavorites = query({
         agent_type: conv.agent_type,
         is_favorite: conv.is_favorite,
       }));
+  },
+});
+
+/** Complete principal favorite relation; conversation fields live elsewhere. */
+export const listFavoritesV2 = query({
+  args: {},
+  handler: async (ctx) => {
+    const contractId = FAVORITES_VIEW_CONTRACT_ID;
+    const viewKey = FAVORITES_VIEW_KEY;
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { contractId, viewKey, access: "unauthenticated" as const };
+
+    const [favorites, viewRevision] = await Promise.all([
+      ctx.db
+        .query("conversations")
+        .withIndex("by_user_favorite", (q) =>
+          q.eq("user_id", userId).eq("is_favorite", true))
+        .collect(),
+      readLocalViewRevision(ctx, userId, contractId, viewKey),
+    ]);
+    const projected = favorites
+      .map(projectFavoriteMembership)
+      .sort((left, right) =>
+        String(left.conversation_id).localeCompare(String(right.conversation_id)));
+    return {
+      contractId,
+      viewKey,
+      access: "granted" as const,
+      grantKeys: [FAVORITES_GRANT_KEY],
+      viewRevision,
+      coverage: revisionCoverage(viewRevision),
+      favorites: projected,
+    };
   },
 });
 
@@ -5746,6 +5837,9 @@ export const feedForCLI = query({
       .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
       .collect();
     const userTeamIds = userMemberships.map(m => m.team_id);
+    if (args.team_id && !userTeamIds.some((id) => String(id) === String(args.team_id))) {
+      return { error: "Unauthorized team" };
+    }
 
     let resolvedTeamId: Id<"teams"> | undefined;
     if (args.team_id) {
@@ -9952,4 +10046,3 @@ export const getUserMessages = query({
     return collectNavigableUserMessages(ctx.db, args.conversation_id);
   },
 });
-
