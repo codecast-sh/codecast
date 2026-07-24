@@ -118,6 +118,16 @@ import type { AgentStatus, DeviceSnippetSettings, AgentClientId } from "@codecas
 import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType } from "@codecast/shared/contracts";
 import { parseModelPicker, planModelNavigation, SESSION_ONLY_COMMIT_RE, isSwitchConfirmDialog } from "./modelPicker";
 import { type Config, getAgentArgs, isOpencodeServerEnabled, opencodeServerPort } from "./config/types.js";
+import {
+  CodexAppServerRuntimeDriver,
+  FENCED_TMUX_TAG_NAMES,
+  ManagedTmuxRuntimeDriver,
+  RuntimeDriverRegistry,
+  assertLegacyDeliveryEnvelope,
+  fencedExecutionEnabled,
+  getProcessExecutionRuntime,
+  type FencedTmuxTags,
+} from "./execution/index.js";
 
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 const EXEC_TIMEOUT_MS = 10_000;
@@ -2360,6 +2370,21 @@ async function executeRemoteCommand(
         if (!parsed.project_path && isRemoteDevice()) {
           log(`[REMOTE] start_session: blank project on a remote device — staying silent`);
           break;
+        }
+
+        // A conversation on the fenced execution rail (or quiescing onto it)
+        // gets its runtime exclusively from the execution coordinator. This
+        // legacy channel spawning one anyway would be a second, unmanaged
+        // runtime beside the coordinator's binding — the split-brain the fence
+        // exists to prevent. The gate re-checks at delivery time because a
+        // start_session enqueued BEFORE the fence transition can arrive after.
+        if (conversationId && syncServiceRef) {
+          const protocolState = (await syncServiceRef.getProjectInfo(conversationId).catch(() => null))
+            ?.execution_protocol_state;
+          if (protocolState) {
+            log(`start_session refused: conversation ${conversationId} is ${protocolState} — runtime is coordinator-owned`);
+            break;
+          }
         }
 
         const shortId = Math.random().toString(36).slice(2, 8);
@@ -16305,6 +16330,132 @@ async function main(): Promise<void> {
     log(`[codex-app-server] failed to start: ${err?.message ?? err} -- codex features disabled`);
   }
 
+  // Fenced execution is an explicit local rollout only. There is no remote
+  // command/UI switch that can activate it; without the exact environment bit
+  // the legacy daemon remains byte-for-byte responsible for execution.
+  const fencedRuntime = fencedExecutionEnabled()
+    ? getProcessExecutionRuntime({
+        transport: syncService,
+        ownerDeviceId: deviceId(),
+        journalDirectory: path.join(CONFIG_DIR, "execution-journal"),
+        drivers: (() => {
+          const registry = new RuntimeDriverRegistry();
+          registry.register(new ManagedTmuxRuntimeDriver({
+            io: {
+              async createSession({ tmuxSession, cwd }) {
+                await tmuxExec(["new-session", "-d", "-s", tmuxSession, "-c", cwd]);
+              },
+              async setSessionOption({ tmuxSession, name, value }) {
+                await setTmuxSessionOption(tmuxSession, name, value);
+              },
+              async launchLiteral({ tmuxSession, command }) {
+                await tmuxExec(["send-keys", "-l", "-t", `${tmuxSession}:0.0`, command]);
+                await tmuxExec(["send-keys", "-t", `${tmuxSession}:0.0`, "Enter"]);
+              },
+              async listCandidates({ expectedTmuxSession }) {
+                let names: string[];
+                try {
+                  const { stdout } = await tmuxExec(["list-sessions", "-F", "#{session_name}"]);
+                  names = stdout.split("\n").map((name) => name.trim()).filter(Boolean);
+                } catch (error) {
+                  const message = error instanceof Error ? error.message : String(error);
+                  if (/no server running|failed to connect to server/i.test(message)) return [];
+                  throw error;
+                }
+                const candidates = [];
+                for (const tmuxSession of names) {
+                  if (tmuxSession !== expectedTmuxSession && !tmuxSession.startsWith("cc-f1-")) continue;
+                  const tags: Partial<FencedTmuxTags> = {};
+                  for (const [key, name] of Object.entries(FENCED_TMUX_TAG_NAMES) as Array<[
+                    keyof FencedTmuxTags,
+                    string,
+                  ]>) {
+                    const value = await getTmuxSessionOption(tmuxSession, name);
+                    if (value !== null) tags[key] = value;
+                  }
+                  candidates.push({
+                    tmuxSession,
+                    tmuxTarget: `${tmuxSession}:0.0`,
+                    alive: true,
+                    tags,
+                  });
+                }
+                return candidates;
+              },
+              async injectDelivery({ tmuxTarget, agent, delivery }) {
+                const text = delivery.input
+                  .map((item) => item.type === "text" ? item.text : `[Image ${item.path}]`)
+                  .filter(Boolean)
+                  .join("\n");
+                await injectViaTmux(tmuxTarget, text, agent);
+                return { state: "delivered" as const };
+              },
+              async stopSession(tmuxSession) {
+                await killTmuxSessionAndTree(tmuxSession);
+              },
+              async quarantineSession(tmuxSession) {
+                await killTmuxSessionAndTree(tmuxSession);
+              },
+            },
+            buildLaunch(target, configuration) {
+              const { binaryArgs } = buildLaunchArgs({
+                agentType: target.requestedAgent,
+                configuredArgs: getConfiguredAgentArgs(target.requestedAgent, config),
+                permFlags: getPermissionFlags(target.requestedAgent, config),
+                defaultFlags: getDefaultParamFlags(target.requestedAgent, config),
+                modelAlias: configuration.model,
+                requestedEffort: configuration.effort,
+                hasCodexPermissionMode: !!config.agent_permission_modes?.codex,
+              });
+              const tokens = [
+                "env",
+                "-u",
+                "CLAUDECODE",
+                "-u",
+                "CLAUDE_CODE_ENTRYPOINT",
+                launchBinary(target.requestedAgent),
+                ...sanitizeBinaryArgs(binaryArgs),
+              ];
+              return { command: tokens.map(shellEscapeForSh).join(" ") };
+            },
+          }));
+          if (codexAppServerInstance) {
+            registry.register(new CodexAppServerRuntimeDriver({
+              io: {
+                client: codexAppServerInstance,
+                registerThread({ conversationId, threadId, cwd, approvalPolicy }) {
+                  registerAppServerConversation(conversationId, threadId, { cwd, approvalPolicy });
+                },
+                async inspectThread(threadId) {
+                  if (!codexAppServerInstance?.running) return "unknown";
+                  return appServerThreads.has(threadId) ? "alive" : "unknown";
+                },
+                async stopThread(threadId) {
+                  const entry = appServerThreads.get(threadId);
+                  if (!entry) return;
+                  await teardownConversationBackendsLive(entry.conversationId, { interruptActiveTurn: true });
+                },
+                async quarantineThread(threadId) {
+                  const entry = appServerThreads.get(threadId);
+                  if (!entry) return;
+                  await teardownConversationBackendsLive(entry.conversationId, { interruptActiveTurn: true });
+                },
+              },
+            }));
+          }
+          return registry;
+        })(),
+        resolveImage: (storageId) => downloadImage(storageId, syncService),
+        onLog: log,
+      })
+    : null;
+  if (fencedRuntime) {
+    log(`[fenced-execution] enabled protocol=1 boot=${fencedRuntime.daemonBootId}`);
+    await fencedRuntime.start();
+  } else {
+    log("[fenced-execution] disabled (set CODECAST_FENCED_EXECUTION_V1=1 for local rollout)");
+  }
+
   // One registration path for the JSONL-dir CLI watchers (codex, gemini), which now
   // share the generic TranscriptDirWatcher. Claude's sessionWatcher and cursor's
   // SQLite watcher are different kinds and register on their own paths. Each watcher
@@ -16481,6 +16632,14 @@ async function main(): Promise<void> {
               logDelivery(`Subscription: ${messages.length} pending message(s) received`);
             }
             for (const pendingMsg of messages) {
+              try {
+                assertLegacyDeliveryEnvelope(pendingMsg);
+              } catch {
+                logDelivery(
+                  `[FENCED-BYPASS-BLOCKED] msg=${String(pendingMsg?._id ?? "unknown").slice(0, 12)} reached legacy subscription`,
+                );
+                continue;
+              }
               const claimed = await syncService.claimPendingMessageForDelivery(pendingMsg._id);
               if (!claimed) {
                 logDelivery(`Skipping msg=${pendingMsg._id.slice(0, 8)} - not owned by this daemon`);
@@ -16862,6 +17021,7 @@ async function main(): Promise<void> {
     if (unsubscribe) {
       unsubscribe();
     }
+    fencedRuntime?.stop();
 
     if (permissionUnsubscribe) {
       permissionUnsubscribe();
