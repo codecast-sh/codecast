@@ -16,8 +16,10 @@ import {
   sessionsWakeSig, pendingSendWakeSig,
 } from '@codecast/web/store/inboxStore';
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
+import { partitionTriggerInbox, type TaskRow } from '@codecast/web/components/triggerTasks';
 import { labelHexColor } from '@/lib/labelColors';
 import { SessionListSkeleton } from '@/components/SkeletonLoader';
+import { TriggerDock } from '@/components/TriggerDock';
 import { useQuery } from 'convex/react';
 
 // Stashed/Killed bucket row — the web SessionCard's hidden variants. Tap opens
@@ -649,6 +651,34 @@ export default function InboxScreen() {
   const filteredStashed = useMemo(() => chipFilter(stashedSessions), [chipFilter, stashedSessions]);
   const filteredKilled = useMemo(() => chipFilter(dismissedOnly), [chipFilter, dismissedOnly]);
 
+  // Schedules in the inbox (mirrors GlobalSessionPanel). The same per-user
+  // webList the badges/dock subscribe to (Convex dedupes), partitioned into one
+  // row per armed schedule plus the set of sessions absorbed behind those rows
+  // (resting loop homes + uneventful runs). All membership rules live in
+  // partitionTriggerInbox. schedules_seen_at is read as a scalar off clientState
+  // (never the whole singleton), same as showSubagents.
+  const scheduleTasks = useQuery(api.agentTasks.webList, {}) as TaskRow[] | undefined;
+  const schedulesSeenAt = useInboxStore((s) => s.clientState?.ui?.schedules_seen_at ?? 0);
+  const schedulePartition = useMemo(
+    () => partitionTriggerInbox(scheduleTasks, visibleSessions, {
+      sessionsWithQueuedMessages,
+      seenAt: schedulesSeenAt,
+      focusedId: currentSessionId,
+    }),
+    [scheduleTasks, visibleSessions, sessionsWithQueuedMessages, schedulesSeenAt, currentSessionId],
+  );
+  // Absorbed-filtered lists: the TRIGGERS dock renders the sessions resting
+  // behind a schedule row, so they must not double-render in the triage buckets.
+  // Flat views ("recent"/"time") stay unabsorbed, mirroring web's visualOrder.
+  const statusNeedsInput = useMemo(
+    () => filteredNeedsInput.filter((s) => !schedulePartition.absorbedIds.has(s._id)),
+    [filteredNeedsInput, schedulePartition.absorbedIds],
+  );
+  const statusWorking = useMemo(
+    () => filteredWorking.filter((s) => !schedulePartition.absorbedIds.has(s._id)),
+    [filteredWorking, schedulePartition.absorbedIds],
+  );
+
   const listData = useMemo(() => {
     const sections: React.ReactNode[] = [];
     if (Object.keys(sessions).length === 0) {
@@ -693,7 +723,7 @@ export default function InboxScreen() {
     // not theme); the active set regroups by label or plan, with unfiled
     // sessions falling to auto-derived project groups — exactly web's layout.
     if (viewMode === "bucket" || viewMode === "plan") {
-      const active = [...filteredNew, ...filteredNeedsInput, ...filteredWorking];
+      const active = [...filteredNew, ...statusNeedsInput, ...statusWorking];
       sections.push(renderSection("Pinned", filteredPinned, Theme.magenta));
       if (viewMode === "bucket") {
         const { labelGroups, projectGroups } = groupSessionsForLabelView(active, buckets, bucketByConv);
@@ -712,16 +742,21 @@ export default function InboxScreen() {
     }
     sections.push(renderSection("Pinned", filteredPinned, Theme.magenta));
     sections.push(renderSection("New", filteredNew, Theme.blue));
-    sections.push(renderSection("Needs Input", filteredNeedsInput, Theme.accent));
-    sections.push(renderSection("Working", filteredWorking, Theme.greenBright));
+    sections.push(renderSection("Needs Input", statusNeedsInput, Theme.accent));
+    sections.push(renderSection("Working", statusWorking, Theme.greenBright));
     return sections.filter(Boolean);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sessionsSig gates the sessions map; manualOrderKey gates the getState() manual-order read
-  }, [activeSessions, sessionsSig, sessionsFirstLoad, filteredPinned, filteredWorking, filteredNeedsInput, filteredNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv]);
+  }, [activeSessions, sessionsSig, sessionsFirstLoad, filteredPinned, statusWorking, statusNeedsInput, filteredNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv]);
 
   // Stashed (agent alive, kill-all) and Killed buckets — the web panel's two
   // hidden sections, collapsed by default behind count toggles.
   const ListFooter = useMemo(() => (
     <RNView>
+      <TriggerDock
+        rows={schedulePartition.rows}
+        unreadCount={schedulePartition.unreadCount}
+        nextRunAt={schedulePartition.nextRunAt}
+      />
       <RNView style={styles.hiddenToggleRow}>
         <TouchableOpacity
           style={styles.hiddenToggle}
@@ -790,7 +825,7 @@ export default function InboxScreen() {
       )}
       <RNView style={{ height: 80 }} />
     </RNView>
-  ), [showStashed, showKilled, filteredStashed, filteredKilled, router, handleRestore, confirmKill, confirmKillAllStashed]);
+  ), [schedulePartition, showStashed, showKilled, filteredStashed, filteredKilled, router, handleRestore, confirmKill, confirmKillAllStashed]);
 
   // View switcher — same options, names, and availability rules as web's
   // GlobalSessionPanel dropdown: label view appears once a label exists, plan
