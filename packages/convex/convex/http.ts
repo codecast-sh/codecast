@@ -3565,6 +3565,10 @@ cliRoute("/cli/sessions/dismiss", async (ctx, body) => ctx.runMutation(api.conve
 cliRoute("/cli/sessions/undismiss", async (ctx, body) => ctx.runMutation(api.conversations.cliSetSessionVisibility, { ...body, action: "undismiss" }));
 cliRoute("/cli/sessions/kill", async (ctx, body) => ctx.runMutation(api.conversations.cliSetSessionVisibility, { ...body, action: "kill" }));
 
+// Rename (cast rename): set a session's title with the custom flag so the
+// auto-titler never overwrites it. body: { api_token, session, title }.
+cliRoute("/cli/sessions/rename", async (ctx, body) => ctx.runMutation(api.conversations.cliRenameSession, body));
+
 cliRoute("/cli/sessions/own", async (ctx, body) => ctx.runMutation(api.sessionOwnership.addSessionOwner, body));
 cliRoute("/cli/sessions/disown", async (ctx, body) => ctx.runMutation(api.sessionOwnership.removeSessionOwner, body));
 cliRoute("/cli/sessions/owners/set", async (ctx, body) => ctx.runMutation(api.sessionOwnership.setSessionOwners, body));

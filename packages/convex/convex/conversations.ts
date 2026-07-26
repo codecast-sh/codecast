@@ -8579,6 +8579,41 @@ export const cliSetSessionVisibility = mutation({
   },
 });
 
+// Agent-facing rename (cast rename via /cli/sessions/rename). Stamps the same
+// title_is_custom flag as the web Rename control, so the auto-titlers
+// (titleGeneration, idleSummary, cleanup) never overwrite it. Access: the
+// runner or the second-party owner — same rule as cliSetSessionVisibility.
+export const cliRenameSession = mutation({
+  args: {
+    session: v.string(),
+    title: v.string(),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = args.api_token
+      ? await getAuthenticatedUserId(ctx, args.api_token)
+      : await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    const title = args.title.trim();
+    if (!title) throw new Error("Title cannot be empty");
+
+    const conv = await findConversationByAnyRefWhere(ctx, args.session, (c) =>
+      c.user_id?.toString() === userId.toString() ||
+      c.owner_user_id?.toString() === userId.toString()
+    );
+    if (!conv) {
+      throw new Error(
+        `No session found for "${args.session}" (you can only rename sessions you run or own)`
+      );
+    }
+    const shortId = conv.short_id ?? conv._id.toString().slice(0, 7);
+    const previous = conv.title ?? null;
+    await ctx.db.patch(conv._id, { title, title_is_custom: true });
+    return { ok: true as const, short_id: shortId, title, previous_title: previous };
+  },
+});
+
 // Bulk-dismiss the caller's sessions whose last activity (updated_at) is older
 // than `older_than_days` (default 30). Clears the accumulated working set without
 // deleting anything — dismissed rows stay searchable and accessible. FIRE-ONCE:
