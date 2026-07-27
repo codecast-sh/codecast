@@ -24,6 +24,9 @@ import {
   allSnippetSlugs,
   fromConvexAgentType,
   toConvexAgentType,
+  PROVIDER_KEYS,
+  getProviderKeySpec,
+  maskProviderKey,
 } from "@codecast/shared/contracts";
 import { cliFetch, cliFetchRead, cliSearchRequest } from "./cliHttp.js";
 import { listProfiles, saveProfile, useProfile, deleteProfile, getAccountsHeartbeatPayload, CcAccountError } from "./ccAccounts.js";
@@ -3273,6 +3276,142 @@ program
       ? ` ${c.dim}(empty session — cleaned up entirely)${c.reset}`
       : ` ${c.dim}— agent torn down${grouped}${canceled} (cast undismiss ${result.short_id} to resurface)${c.reset}`;
     console.log(`${c.green}ok${c.reset} killed ${c.cyan}${result.short_id}${c.reset}${note}`);
+  });
+
+// ── cast keys ─────────────────────────────────────────────────────────────────
+// Manage provider API keys codecast injects into opencode/pi launches. Keys live
+// on-device in config.json (0600); the daemon sources them into the launch env so
+// the client picks up the provider without touching its own auth store. The
+// default is to manage nothing — clients use whatever auth is already on the
+// system. See PROVIDER_KEYS / providerKeyLaunch.ts (pl-207).
+
+/** Read a secret from the tty with echo suppressed, so a pasted key never shows on
+ *  screen or lands in shell history. Falls back to piped stdin for scripting. */
+async function promptHiddenSecret(promptText: string): Promise<string> {
+  if (!process.stdin.isTTY) {
+    // Piped: read the first line of stdin.
+    const chunks: Buffer[] = [];
+    for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+    return Buffer.concat(chunks).toString("utf-8").split("\n")[0].trim();
+  }
+  process.stdout.write(promptText);
+  const stdin = process.stdin;
+  const wasRaw = stdin.isRaw;
+  stdin.setRawMode?.(true);
+  stdin.resume();
+  let value = "";
+  return await new Promise<string>((resolve) => {
+    const onData = (buf: Buffer) => {
+      const s = buf.toString("utf-8");
+      for (const ch of s) {
+        if (ch === "\r" || ch === "\n") {
+          stdin.removeListener("data", onData);
+          stdin.setRawMode?.(wasRaw ?? false);
+          stdin.pause();
+          process.stdout.write("\n");
+          resolve(value.trim());
+          return;
+        } else if (ch === "\x03") { // Ctrl-C
+          stdin.setRawMode?.(wasRaw ?? false);
+          process.stdout.write("\n");
+          process.exit(130);
+        } else if (ch === "\x7f" || ch === "\x08") { // DEL / backspace
+          value = value.slice(0, -1);
+        } else if (ch >= " ") { // append printable, ignore stray control chars
+          value += ch;
+        }
+      }
+    };
+    stdin.on("data", onData);
+  });
+}
+
+const keysCmd = program
+  .command("keys")
+  .description(
+    "Manage provider API keys for opencode/pi\n\n" +
+    "Keys are injected as the provider's env var when the daemon launches a\n" +
+    "client, so opencode/pi use them without touching their own login. Keys stay\n" +
+    "on THIS device (config.json, 0600) and never go to the server in plaintext.\n" +
+    "The default is to manage nothing — clients use whatever auth is on the system.\n\n" +
+    "Examples:\n" +
+    "  cast keys set openrouter          # paste the key at a hidden prompt\n" +
+    "  cast keys set openrouter sk-or-…  # or pass it (avoid — lands in shell history)\n" +
+    "  cast keys ls                      # what's set (masked) and what isn't\n" +
+    "  cast keys rm openrouter           # stop managing it (back to system default)"
+  )
+  .showHelpAfterError(true);
+
+keysCmd
+  .command("ls")
+  .alias("list")
+  .description("List providers — which have a managed key (masked) and which don't")
+  .option("--json", "Output as JSON")
+  .action((options: any) => {
+    const config = readConfig();
+    const store = config?.provider_keys ?? {};
+    if (options.json) {
+      console.log(JSON.stringify({
+        providers: PROVIDER_KEYS.map((p) => ({ id: p.id, label: p.label, managed: !!store[p.id] })),
+      }));
+      return;
+    }
+    console.log(`${c.dim}Managed keys inject into opencode/pi launches. Unset providers use system auth.${c.reset}\n`);
+    for (const p of PROVIDER_KEYS) {
+      const key = store[p.id];
+      const status = key
+        ? `${c.green}${maskProviderKey(key)}${c.reset}`
+        : `${c.dim}— (system default)${c.reset}`;
+      console.log(`  ${c.cyan}${p.id.padEnd(11)}${c.reset} ${p.label.padEnd(16)} ${status}`);
+    }
+  });
+
+keysCmd
+  .command("set")
+  .description("Set (or replace) a provider's API key")
+  .argument("<provider>", `Provider id (${PROVIDER_KEYS.map((p) => p.id).join(", ")})`)
+  .argument("[key]", "API key (omit to paste at a hidden prompt — keeps it out of shell history)")
+  .action(async (provider: string, key: string | undefined) => {
+    const spec = getProviderKeySpec(provider);
+    if (!spec) {
+      console.error(`${c.red}Unknown provider "${provider}".${c.reset} Known: ${PROVIDER_KEYS.map((p) => p.id).join(", ")}`);
+      process.exit(1);
+    }
+    if (key) {
+      process.stderr.write(`${c.yellow}note:${c.reset} passing the key as an argument leaves it in your shell history — prefer 'cast keys set ${provider}' and paste at the prompt.\n`);
+    } else {
+      key = await promptHiddenSecret(`Paste ${spec.label} API key (hidden): `);
+    }
+    key = key.trim();
+    if (!key) { console.error(`${c.red}No key provided.${c.reset}`); process.exit(1); }
+    if (spec.keyPrefix && !key.startsWith(spec.keyPrefix)) {
+      process.stderr.write(`${c.yellow}warning:${c.reset} ${spec.label} keys usually start with "${spec.keyPrefix}" — saving anyway.\n`);
+    }
+    const config = readConfig() ?? ({} as Config);
+    config.provider_keys = { ...(config.provider_keys ?? {}), [spec.id]: key };
+    writeConfig(config);
+    console.log(`${c.green}ok${c.reset} ${spec.label} key set (${c.dim}${maskProviderKey(key)}${c.reset}). opencode/pi launches will use it. Restart a running session to pick it up.`);
+  });
+
+keysCmd
+  .command("rm")
+  .alias("remove")
+  .alias("unset")
+  .description("Remove a provider's managed key (revert to the system default)")
+  .argument("<provider>", "Provider id")
+  .action((provider: string) => {
+    const spec = getProviderKeySpec(provider);
+    const id = spec?.id ?? provider;
+    const config = readConfig();
+    if (!config?.provider_keys?.[id]) {
+      console.log(`${c.dim}No managed key for "${id}" — nothing to remove.${c.reset}`);
+      return;
+    }
+    const next = { ...config.provider_keys };
+    delete next[id];
+    config.provider_keys = next;
+    writeConfig(config);
+    console.log(`${c.green}ok${c.reset} removed the ${spec?.label ?? id} key — reverts to system auth. Restart a running session to apply.`);
   });
 
 // ── cast label ────────────────────────────────────────────────────────────────
