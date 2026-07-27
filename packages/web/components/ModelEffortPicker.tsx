@@ -131,7 +131,11 @@ export function ModelEffortMenu({
       )}
       <DropdownMenuSeparator />
       <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-sol-text-dim">Effort</DropdownMenuLabel>
-      <div className="grid grid-flow-col auto-cols-fr gap-1 px-2 pb-1.5">
+      {/* Chips size to their label and wrap — clients with many effort levels
+          (pi: off/minimal/low/medium/high/xhigh + default = 7) flow onto a second
+          row instead of overflowing narrow equal-width columns. `grow` lets each
+          chip expand to fill its row; whitespace-nowrap keeps a label on one line. */}
+      <div className="flex flex-wrap gap-1 px-2 pb-1.5">
         {/* "default" = no pin, the agent's saved default wins. Launch rail
             only: the live picker has no session-scoped default stop (the
             /effort auto one-shot rewrites the user's GLOBAL config). */}
@@ -141,7 +145,7 @@ export function ModelEffortMenu({
             <button
               key={level}
               onClick={() => { if (!active) onSelect({ effort: level }); }}
-              className={`min-w-0 px-0.5 py-1 rounded text-[10px] border transition-colors ${
+              className={`grow whitespace-nowrap px-2 py-1 rounded text-[10px] border transition-colors ${
                 active
                   ? "border-sol-cyan/60 bg-sol-cyan/10 text-sol-cyan"
                   : "border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border"

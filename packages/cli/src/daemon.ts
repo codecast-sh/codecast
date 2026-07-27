@@ -119,6 +119,7 @@ import type { AgentStatus, DeviceSnippetSettings, AgentClientId } from "@codecas
 import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType } from "@codecast/shared/contracts";
 import { parseModelPicker, planModelNavigation, SESSION_ONLY_COMMIT_RE, isSwitchConfirmDialog } from "./modelPicker";
 import { type Config, getAgentArgs, isOpencodeServerEnabled, opencodeServerPort } from "./config/types.js";
+import { providerKeySourcePrefix } from "./providerKeyLaunch.js";
 
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 const EXEC_TIMEOUT_MS = 10_000;
@@ -2548,7 +2549,10 @@ async function executeRemoteCommand(
         const envPrefix = worktreeResult
           ? `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT AGENT_RESOURCE_INDEX=${worktreeResult.portIndex}`
           : `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT`;
-        let cmdText = `${envPrefix} ${[binary, ...binaryArgs].join(" ")}`;
+        // Managed provider keys (opencode/pi) are sourced from a 0600 file so the
+        // key never lands in `ps`/the pane; "" when nothing is managed (pl-207).
+        const keyPrefix = providerKeySourcePrefix(config, agentType, CONFIG_DIR);
+        let cmdText = `${keyPrefix}${envPrefix} ${[binary, ...binaryArgs].join(" ")}`;
 
         let codexThreadId: string | null = null;
         const codexSkipApprovals = binaryArgs.includes("--full-auto") || binaryArgs.includes("--dangerously-bypass-approvals-and-sandbox");
@@ -12150,7 +12154,10 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     // See buildResumeEnvPrefix: strips CLAUDECODE and (for Claude) suppresses the
     // "Resume from summary?" prompt that would otherwise wedge an unattended auto-resume.
     const resumeEnvPrefix = buildResumeEnvPrefix(agentType);
-    await tmuxExec(["send-keys", "-t", tmuxSession, "-l", `${resumeEnvPrefix} ${resumeCmd}`]);
+    // Same managed-key injection as a fresh launch, so a resumed opencode/pi
+    // session gets its provider key too (pl-207).
+    const resumeKeyPrefix = providerKeySourcePrefix(config, agentType, CONFIG_DIR);
+    await tmuxExec(["send-keys", "-t", tmuxSession, "-l", `${resumeKeyPrefix}${resumeEnvPrefix} ${resumeCmd}`]);
     await tmuxExec(["send-keys", "-t", tmuxSession, "Enter"]);
 
     logDelivery(`Auto-resumed ${agentType} ${shortId} in tmux=${tmuxSession} cwd=${cwd} cmd=${resumeCmd}`);
