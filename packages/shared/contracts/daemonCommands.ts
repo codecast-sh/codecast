@@ -58,6 +58,12 @@ export const DAEMON_COMMANDS = [
   // teardown move_to_device runs on the source after a transfer. Old daemons:
   // "Unknown command" (the stale tmux just survives on that machine).
   "release_session",
+  // Web set/removed a managed provider API key for THIS device (pl-207). args is a
+  // ProviderKeyCommand JSON: {op:"set", payload:<encrypted>} or {op:"remove",
+  // provider}. The key is sealed to the device's ECDH public key so Convex never
+  // sees plaintext; the daemon decrypts, updates its 0600 store, and fans out to
+  // remotes. Old daemons: "Unknown command" (the key just doesn't take there).
+  "set_provider_key",
 ] as const;
 
 export type DaemonCommand = (typeof DAEMON_COMMANDS)[number];
