@@ -17,6 +17,7 @@ import * as path from "path";
 import {
   OpencodeStorageWatcher,
   assembleOpencodeSession,
+  readOpencodeSessionLineage,
   resolveOpencodeSessionCwd,
   sessionExistsInOpencodeDb,
 } from "./opencodeStorage.js";
@@ -30,7 +31,7 @@ const FIX = path.join(__dirname, "__fixtures__", "opencode");
 /** Create the opencode schema (subset this module reads) in a fresh temp DB. */
 function createSchema(db: Database): void {
   db.run(
-    "CREATE TABLE session (id TEXT PRIMARY KEY, project_id TEXT, directory TEXT, title TEXT, version TEXT, slug TEXT, time_created INTEGER, time_updated INTEGER);" +
+    "CREATE TABLE session (id TEXT PRIMARY KEY, project_id TEXT, parent_id TEXT, agent TEXT, directory TEXT, title TEXT, version TEXT, slug TEXT, time_created INTEGER, time_updated INTEGER);" +
       "CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT);" +
       "CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT);",
   );
@@ -104,6 +105,51 @@ describe("session-id binding resolvers", () => {
     expect(resolveOpencodeSessionCwd("ses_binder", dbPath)).toBe("/tmp/proj-x");
     expect(sessionExistsInOpencodeDb("ses_binder", dbPath)).toBe(true);
     expect(sessionExistsInOpencodeDb("ses_nope", dbPath)).toBe(false);
+    fs.rmSync(dbPath, { force: true });
+  });
+});
+
+describe("readOpencodeSessionLineage (task-tool subagent nesting)", () => {
+  test("a task-tool child reports its parent session and agent profile", () => {
+    const dbPath = tmpDbPath();
+    const db = new Database(dbPath);
+    createSchema(db);
+    db.query("INSERT INTO session (id, parent_id, agent, directory, title, time_created, time_updated) VALUES (?,?,?,?,?,?,?)")
+      .run("ses_child001", "ses_parent001", "explore", "/tmp/p", "child", 1, 1);
+    db.query("INSERT INTO session (id, directory, title, time_created, time_updated) VALUES (?,?,?,?,?)")
+      .run("ses_toplevel1", "/tmp/p", "top", 1, 1);
+    db.close();
+
+    expect(readOpencodeSessionLineage("ses_child001", dbPath))
+      .toEqual({ parentSessionId: "ses_parent001", agentName: "explore" });
+    expect(readOpencodeSessionLineage("ses_toplevel1", dbPath))
+      .toEqual({ parentSessionId: undefined, agentName: undefined });
+    expect(readOpencodeSessionLineage("ses_missing", dbPath))
+      .toEqual({ parentSessionId: undefined, agentName: undefined });
+    fs.rmSync(dbPath, { force: true });
+  });
+
+  test("a malformed parent_id (externally writable column) is dropped, not surfaced", () => {
+    const dbPath = tmpDbPath();
+    const db = new Database(dbPath);
+    createSchema(db);
+    db.query("INSERT INTO session (id, parent_id, directory, title, time_created, time_updated) VALUES (?,?,?,?,?,?)")
+      .run("ses_child002", "ses_; curl x|sh #", "/tmp/p", "child", 1, 1);
+    db.close();
+
+    expect(readOpencodeSessionLineage("ses_child002", dbPath).parentSessionId).toBeUndefined();
+    fs.rmSync(dbPath, { force: true });
+  });
+
+  test("an older schema without the lineage columns degrades to no lineage (sync unharmed)", () => {
+    const dbPath = tmpDbPath();
+    const db = new Database(dbPath);
+    db.run("CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT, title TEXT, time_created INTEGER, time_updated INTEGER)");
+    db.query("INSERT INTO session (id, directory, title, time_created, time_updated) VALUES (?,?,?,?,?)")
+      .run("ses_oldschema", "/tmp/p", "t", 1, 1);
+    db.close();
+
+    expect(readOpencodeSessionLineage("ses_oldschema", dbPath)).toEqual({});
     fs.rmSync(dbPath, { force: true });
   });
 });

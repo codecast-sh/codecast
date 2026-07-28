@@ -198,6 +198,10 @@ export const daemonHeartbeat = mutation({
     is_remote_device: v.optional(v.boolean()),
     // CC account inventory (names/emails/tiers, never tokens) for the switcher.
     cc_accounts: v.optional(ccAccountsValidator),
+    // Managed-provider-key metadata (pl-207): device ECDH public key (not secret)
+    // + which providers have a key here (ids only, never the keys).
+    provider_key_pubkey: v.optional(v.string()),
+    managed_provider_ids: v.optional(v.array(v.string())),
     // Installed agent-feature snippets (by slug) + stable mode on this device.
     settings: v.optional(deviceSettingsValidator),
     // Live model inventory for dynamic clients (opencode/pi) — the daemon sends
@@ -293,6 +297,8 @@ export const daemonHeartbeat = mutation({
           ? { local_project_roots: args.local_project_roots }
           : {}),
         ...(args.cc_accounts !== undefined ? { cc_accounts: args.cc_accounts } : {}),
+        ...(args.provider_key_pubkey !== undefined ? { provider_key_pubkey: args.provider_key_pubkey } : {}),
+        ...(args.managed_provider_ids !== undefined ? { managed_provider_ids: args.managed_provider_ids } : {}),
         ...(args.settings !== undefined ? { settings: args.settings } : {}),
         // Hash-gated: the daemon only attaches this when it changed, but guard
         // against a resend loop (e.g. a failed-ack daemon) rewriting the ~10KB
@@ -329,6 +335,9 @@ export const daemonHeartbeat = mutation({
         await ctx.db.patch(stale._id, {
           executed_at: now,
           error: "expired_ttl",
+          // Never leave an unconsumed encrypted key ciphertext lying in the row
+          // (pl-207) — even expired, it's decryptable with the device's key file.
+          ...(stale.command === "set_provider_key" ? { args: undefined } : {}),
         });
       }
     }
@@ -394,6 +403,12 @@ export const reportCommandResult = mutation({
       executed_at: Date.now(),
       result: args.result,
       error: args.error,
+      // Scrub the encrypted-provider-key payload the instant the daemon acks it
+      // (pl-207): daemon_commands rows are never deleted, so leaving the ciphertext
+      // here would let a later daemon_commands dump + the device's private key file
+      // decrypt keys the user has since rotated/removed. The daemon has already
+      // applied it; the ciphertext has no further use.
+      ...(command.command === "set_provider_key" ? { args: undefined } : {}),
     });
 
     return { success: true };
@@ -546,7 +561,11 @@ export const internalExpireCommands = internalMutation({
       .withIndex("by_user_pending", q => q.eq("user_id", user._id).eq("executed_at", undefined))
       .collect();
     for (const cmd of pending) {
-      await ctx.db.patch(cmd._id, { executed_at: Date.now(), error: "expired_manual" });
+      await ctx.db.patch(cmd._id, {
+        executed_at: Date.now(),
+        error: "expired_manual",
+        ...(cmd.command === "set_provider_key" ? { args: undefined } : {}),
+      });
     }
     return { expired: pending.length, commands: pending.map(c => c.command) };
   },

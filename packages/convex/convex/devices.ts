@@ -752,6 +752,10 @@ export const listDevices = query({
         local_project_roots: d.local_project_roots ?? [],
         settings: d.settings ?? undefined,
         model_inventory: d.model_inventory ?? undefined,
+        // Managed provider keys (pl-207): the ECDH public key the web seals a key
+        // to, and which providers have a key on this device (ids only).
+        provider_key_pubkey: d.provider_key_pubkey ?? undefined,
+        managed_provider_ids: d.managed_provider_ids ?? [],
         online: now - d.last_seen < ONLINE_MS,
       }))
       .sort((a: any, b: any) => b.last_seen - a.last_seen);
@@ -815,6 +819,61 @@ export const setDeviceSnippet = mutation({
       ? { ...prev, stable_mode: mode, stable_global: args.global === true }
       : { ...prev, snippets: { ...(prev.snippets ?? {}), [args.snippet]: args.enabled } };
     await ctx.db.patch(device._id, { settings: next });
+
+    return { command_id: commandId };
+  },
+});
+
+/**
+ * Web set/removed a managed provider API key for a device (pl-207). For "set" the
+ * key arrives already SEALED to the device's ECDH public key (the web read
+ * provider_key_pubkey from listDevices and encrypted with Web Crypto) — Convex only
+ * ever holds this ciphertext, transiently, until the daemon consumes the command.
+ * Routes a `set_provider_key` command to the device, which decrypts, stores, and
+ * fans out to remotes. Optimistically mirrors managed_provider_ids so the UI
+ * reflects the change immediately; the heartbeat reconciles to the device's truth.
+ */
+export const enqueueProviderKeyCommand = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    device_id: v.string(),
+    op: v.union(v.literal("set"), v.literal("remove")),
+    provider: v.string(),
+    // Present for "set" — the encrypted payload from Web Crypto.
+    payload: v.optional(v.object({
+      provider: v.string(),
+      epk: v.string(),
+      iv: v.string(),
+      ct: v.string(),
+    })),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication required");
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", args.device_id))
+      .first();
+    if (!device) throw new Error("Unknown device");
+    if (args.op === "set" && !args.payload) throw new Error("set requires an encrypted payload");
+
+    const commandArgs = args.op === "set"
+      ? { op: "set", payload: args.payload }
+      : { op: "remove", provider: args.provider };
+    const commandId = await ctx.db.insert("daemon_commands", {
+      user_id: userId,
+      command: "set_provider_key" as const,
+      args: JSON.stringify(commandArgs),
+      created_at: Date.now(),
+      target_device_id: args.device_id,
+    });
+
+    // Optimistic mirror of the id list (never the key) — reconciled by heartbeat.
+    const prev: string[] = (device as any).managed_provider_ids ?? [];
+    const next = args.op === "set"
+      ? Array.from(new Set([...prev, args.provider])).sort()
+      : prev.filter((p) => p !== args.provider);
+    await ctx.db.patch(device._id, { managed_provider_ids: next });
 
     return { command_id: commandId };
   },

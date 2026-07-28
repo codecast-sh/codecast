@@ -426,6 +426,51 @@ export async function copyCredentialToRemoteAsync(host: RemoteHost): Promise<Cre
 }
 
 // --------------------------------------------------------------------------
+// Provider API keys (pl-207): the per-user managed-key store syncs device→device
+// exactly like the CC credential — piped over ssh stdin into the remote's 0600
+// store file, so the secret never lands on local disk or in argv, and never in
+// Convex. The remote daemon reads the file it lands in for its launch injection.
+// --------------------------------------------------------------------------
+
+/** ssh argv that writes stdin to the remote's provider-key store (0600 via umask). */
+function providerKeysPushArgs(host: RemoteHost): string[] {
+  return [...sshBase(host), `${host.user}@${host.address}`, "umask 077; mkdir -p ~/.codecast; cat > ~/.codecast/provider-keys.json"];
+}
+
+export interface ProviderKeysPushOutcome {
+  pushed: boolean;
+  reason?: string;
+}
+
+/**
+ * Copy the provider-key store blob to a remote host. `blob` is the exact serialized
+ * store (from writeProviderKeyStore); an empty/absent store passes null, which
+ * removes the remote file so a cleared key clears everywhere. Async (mirrors the
+ * credential push) with a hard 60s kill so a wedged ssh can't leak.
+ */
+export async function copyProviderKeysToRemoteAsync(host: RemoteHost, blob: string | null): Promise<ProviderKeysPushOutcome> {
+  // No local keys → remove the remote store so "cleared here" means "cleared there".
+  const argv = blob === null
+    ? [...sshBase(host), `${host.user}@${host.address}`, "rm -f ~/.codecast/provider-keys.json"]
+    : providerKeysPushArgs(host);
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn("ssh", argv, { stdio: ["pipe", "ignore", "pipe"] });
+    const timer = setTimeout(() => { child.kill("SIGKILL"); reject(new Error("provider-key push timed out")); }, 60_000);
+    let stderr = "";
+    child.stderr?.on("data", (d) => { stderr += d; });
+    child.on("error", (err) => { clearTimeout(timer); reject(err); });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve();
+      else reject(new Error(`ssh exited ${code}: ${stderr.slice(0, 200)}`));
+    });
+    if (blob !== null) { child.stdin.write(blob); }
+    child.stdin.end();
+  });
+  return { pushed: true };
+}
+
+// --------------------------------------------------------------------------
 // Push / Pull
 // --------------------------------------------------------------------------
 
