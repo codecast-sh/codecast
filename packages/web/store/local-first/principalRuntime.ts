@@ -250,15 +250,28 @@ export class PrincipalRuntime {
       onStorageFailure: (error) => this.reportStorageFailure(error),
       onStorageRecovered: () => this.reportStorageRecovery(),
     });
-    const hydrated = await this.hooks.hydrate({
-      principalEpoch,
-      isCurrent: () => this.isCurrent(input.operation, principalEpoch),
-    });
+    let hydrated = false;
+    try {
+      hydrated = await this.hooks.hydrate({
+        principalEpoch,
+        isCurrent: () => this.isCurrent(input.operation, principalEpoch),
+      });
+    } catch (error) {
+      // A fence trip inside hydration means this operation was superseded
+      // mid-flight and the successor owns the store now — treat it as a quiet
+      // non-hydration. Anything else is a real storage failure and escalates
+      // through the caller's catch.
+      if (!(error instanceof PrincipalStoreFenceError)) throw error;
+    }
     if (!hydrated || !this.isCurrent(input.operation, principalEpoch)) {
-      this.hooks.unbindPersistence(principalEpoch);
-      this.hooks.clearProtectedMemory();
-      this.engine?.close();
-      this.engine = null;
+      // Only the current operation may tear down the shared bindings/engine;
+      // a superseded one would be destroying its successor's install.
+      if (this.isCurrent(input.operation, principalEpoch)) {
+        this.hooks.unbindPersistence(principalEpoch);
+        this.hooks.clearProtectedMemory();
+        this.engine?.close();
+        this.engine = null;
+      }
       if (this.adapter === input.adapter) {
         this.adapter = null;
         this.adapterGeneration = null;
@@ -344,6 +357,18 @@ export class PrincipalRuntime {
         verified: false,
       });
     } catch (error) {
+      if (!this.isCurrent(operation)) {
+        // Superseded mid-open: the successor owns the shared bindings and
+        // engine. Release only what this operation itself opened and step
+        // aside without escalating — the successor's outcome is the truth.
+        if (this.adapter === adapter) {
+          this.adapter = null;
+          this.adapterGeneration = null;
+          this.adapterPrincipalEpoch = undefined;
+        }
+        adapter?.close();
+        return false;
+      }
       this.engine?.close();
       this.engine = null;
       this.hooks.unbindPersistence();
@@ -354,15 +379,13 @@ export class PrincipalRuntime {
         this.adapterPrincipalEpoch = undefined;
       }
       adapter?.close();
-      if (this.isCurrent(operation)) {
-        if (error instanceof PrincipalStoreFenceError) {
-          this.emit({ phase: "locked", generation: resolved.generation, reason: "offline-store-fenced" });
-          return false;
-        }
-        await this.failClosed(error instanceof PrincipalStoreIdentityError
-          ? "offline-store-identity-mismatch"
-          : "offline-store-read-failed");
+      if (error instanceof PrincipalStoreFenceError) {
+        this.emit({ phase: "locked", generation: resolved.generation, reason: "offline-store-fenced" });
+        return false;
       }
+      await this.failClosed(error instanceof PrincipalStoreIdentityError
+        ? "offline-store-identity-mismatch"
+        : "offline-store-read-failed");
       throw error;
     }
   }
@@ -412,6 +435,16 @@ export class PrincipalRuntime {
         verified: true,
       });
     } catch (error) {
+      if (!this.isCurrent(operation)) {
+        // Superseded mid-verify: release only this operation's own adapter.
+        if (this.adapter === adapter) {
+          this.adapter = null;
+          this.adapterGeneration = null;
+          this.adapterPrincipalEpoch = undefined;
+        }
+        adapter.close();
+        return false;
+      }
       this.engine?.close();
       this.engine = null;
       this.hooks.unbindPersistence();
@@ -420,10 +453,8 @@ export class PrincipalRuntime {
       this.adapterGeneration = null;
       this.adapterPrincipalEpoch = undefined;
       adapter.close();
-      if (this.isCurrent(operation)) {
-        await this.mutateLauncher(() => this.launcher.lock());
-        this.emit({ phase: "locked", generation: resolved.generation, reason: "principal-store-identity-mismatch" });
-      }
+      await this.mutateLauncher(() => this.launcher.lock());
+      this.emit({ phase: "locked", generation: resolved.generation, reason: "principal-store-identity-mismatch" });
       throw error;
     }
   }
@@ -500,7 +531,15 @@ export class PrincipalRuntime {
       }
       return;
     }
-    if (durable.generation === current.generation && current.phase === "resolving") return;
+    // An in-flight transition on the SAME durable generation is not a
+    // divergence: resolve/install is mid-flight and tearing it down here would
+    // destroy the bindings it just installed (the launcher's own subscription
+    // fires a tick after the resolve's launcher write, landing exactly in this
+    // window). Locking/purging are already converging to locked — let them
+    // finish and let the next reconcile pass true things up.
+    if (durable.generation === current.generation &&
+      (current.phase === "resolving" || current.phase === "opening")) return;
+    if (current.phase === "locking" || current.phase === "purging") return;
 
     ++this.operationEpoch;
     this.emit({ phase: "locking", generation: durable.generation, reason: "launcher-generation-changed" });
