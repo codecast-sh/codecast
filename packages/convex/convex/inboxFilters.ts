@@ -2,9 +2,9 @@ import type { Doc } from "./_generated/dataModel";
 // Single source of truth for the "agent is actively producing" set and the
 // stale-status trust TTL. Re-exported so existing `from "./inboxFilters"`
 // importers (incl. the tests) keep working unchanged.
-import { ACTIVE_AGENT_STATUSES, STATUS_TRUST_TTL_MS } from "@codecast/shared/contracts";
+import { ACTIVE_AGENT_STATUSES, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS } from "@codecast/shared/contracts";
 
-export { ACTIVE_AGENT_STATUSES, STATUS_TRUST_TTL_MS };
+export { ACTIVE_AGENT_STATUSES, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS };
 
 export type ConversationDoc = Doc<"conversations">;
 
@@ -56,10 +56,10 @@ export function isViableInboxParent(
   return shouldShowInInbox(parent);
 }
 
-// Anti-flicker grace before a finished agent is treated as idle. Mirrors the
-// "working" pill in ConversationView so the inbox bucket and the per-conversation
-// header agree for the moment right after a turn ends.
-export const AGENT_IDLE_GRACE_MS = 45 * 1000;
+// AGENT_IDLE_GRACE_MS (re-exported above) lives in @codecast/shared/contracts:
+// the anti-flicker grace before a finished agent is treated as idle, shared
+// with the web client's statusless-row sweep so both sides settle a quiet
+// session on the same clock.
 
 // A daemon-reported status that means the agent process is gone. A dead session
 // with content still needs a human (to read the result / restart it), so the

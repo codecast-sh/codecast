@@ -5,8 +5,8 @@ import {
   StyleSheet,
   TouchableOpacity,
   View as RNView,
-  Text as RNText,
 } from 'react-native';
+import { Text as RNText } from '@/components/Themed';
 import * as Haptics from 'expo-haptics';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
