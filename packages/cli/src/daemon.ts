@@ -33,6 +33,7 @@ import {
   assembleOpencodeSession,
   sessionExistsInOpencodeDb,
   resolveOpencodeSessionCwd,
+  readOpencodeSessionLineage,
 } from "./opencodeStorage.js";
 import { OpencodeServer } from "./opencodeServer.js";
 import {
@@ -4789,7 +4790,10 @@ async function maybeLinkTeamSpawn(
 // child process may not have been visible yet), then stay first-class.
 const spawnLinkAttempts = new Map<string, number>();
 const SPAWN_LINK_MAX_ATTEMPTS = 3;
-const pendingCodexNativeParents = new Map<string, string>();
+// Children whose client-native parent pointer (codex review wrapper session,
+// opencode task-tool parent_id) named a session with no conversation yet —
+// linked retroactively when the parent's conversation syncs.
+const pendingNativeParents = new Map<string, { parentSessionId: string; description?: string }>();
 const retiringCodexReviews = new Set<string>();
 
 function readPidRegistrySessionId(pid: number): string | null {
@@ -4869,19 +4873,19 @@ async function maybeRetrySpawnLink(
   }
 }
 
-async function linkPendingCodexNativeChildren(
+async function linkPendingNativeChildren(
   parentSessionId: string,
   parentConversationId: string,
   syncService: SyncService,
   conversationCache: ConversationCache,
 ): Promise<void> {
-  for (const [childSessionId, expectedParentSessionId] of pendingCodexNativeParents) {
-    if (expectedParentSessionId !== parentSessionId) continue;
+  for (const [childSessionId, pending] of pendingNativeParents) {
+    if (pending.parentSessionId !== parentSessionId) continue;
     const childConversationId = conversationCache[childSessionId];
     if (!childConversationId) continue;
-    await syncService.linkSessions(parentConversationId, childConversationId, "review");
-    pendingCodexNativeParents.delete(childSessionId);
-    log(`Linked native Codex review ${childSessionId.slice(0, 8)} -> wrapper ${parentSessionId.slice(0, 8)}`);
+    await syncService.linkSessions(parentConversationId, childConversationId, pending.description);
+    pendingNativeParents.delete(childSessionId);
+    log(`Linked native child ${childSessionId.slice(0, 8)} -> parent ${parentSessionId.slice(0, 8)}${pending.description ? ` (${pending.description})` : ""}`);
   }
 }
 
@@ -6533,7 +6537,7 @@ async function processCodexSession(
             if (parentConversationId) {
               log(`Detected native Codex review ${sessionId.slice(0, 8)} -> wrapper ${nativeParentSessionId.slice(0, 8)}`);
             } else {
-              pendingCodexNativeParents.set(sessionId, nativeParentSessionId);
+              pendingNativeParents.set(sessionId, { parentSessionId: nativeParentSessionId, description: "review" });
             }
           } else {
             try {
@@ -6561,7 +6565,7 @@ async function processCodexSession(
             gitInfo: undefined,
           });
           setConversationCache(conversationId);
-          await linkPendingCodexNativeChildren(sessionId, conversationId, syncService, conversationCache);
+          await linkPendingNativeChildren(sessionId, conversationId, syncService, conversationCache);
           log(`Created conversation ${conversationId} for Codex session ${sessionId}${forkRoot && forkRoot !== sessionId ? ` (lineage root ${forkRoot.slice(0, 8)})` : ""}`);
 
           if ((global as any).activeSessions) {
@@ -6671,7 +6675,7 @@ async function processCodexSession(
     tryRegisterSessionProcess(sessionId, "codex");
 
     if (conversationId) {
-      await linkPendingCodexNativeChildren(sessionId, conversationId, syncService, conversationCache);
+      await linkPendingNativeChildren(sessionId, conversationId, syncService, conversationCache);
       // The completed-review predicates need the review's full event history, but
       // newContent is only the bytes since the last sync position — a live-watched
       // review delivers exited_review_mode and task_complete in different chunks.
@@ -6974,6 +6978,13 @@ async function processOpencodeSession(
     let conversationId = conversationCache[sessionId];
 
     if (!conversationId) {
+      // A session spawned by another opencode session's task tool carries its
+      // spawner in session.parent_id — nest it under the spawner as a subagent
+      // (same contract as the codex native-review path). A task-tool child is
+      // never the session a user launched, so it must not claim a started stub
+      // (its cwd matches its parent's, which would collide with the cwd match).
+      const lineage = readOpencodeSessionLineage(sessionId);
+
       // Bind a freshly launched opencode session to its pending started-tmux
       // conversation. opencode's session id never appears in the launched process
       // args (it starts as a bare `opencode` TUI and mints its own id), so — unlike
@@ -6981,7 +6992,7 @@ async function processOpencodeSession(
       // map (resolveOpencodeSessionCwd), which is matchStartedConversation's cwd
       // fallback. If nothing matches, this is a fresh first-class session.
       let matchedStartedConversation: string | null = null;
-      if (startedSessionTmux.size > 0 && cwd) {
+      if (!lineage.parentSessionId && startedSessionTmux.size > 0 && cwd) {
         const startedOpencodeEntries = Array.from(startedSessionTmux.entries())
           .filter(([, entry]) => entry.agentType === "opencode");
         matchedStartedConversation = matchStartedConversation(startedOpencodeEntries, {
@@ -7008,6 +7019,11 @@ async function processOpencodeSession(
       } else {
         const firstUserMessage = allMessages.find((m) => m.role === "user");
         const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+        const parentConversationId = lineage.parentSessionId ? conversationCache[lineage.parentSessionId] : undefined;
+        if (lineage.parentSessionId && !parentConversationId) {
+          // Parent hasn't synced yet (backfill order is arbitrary) — link when it does.
+          pendingNativeParents.set(sessionId, { parentSessionId: lineage.parentSessionId, description: lineage.agentName });
+        }
         try {
           conversationId = await syncService.createConversation({
             userId,
@@ -7019,6 +7035,9 @@ async function processOpencodeSession(
             title,
             startedAt: allMessages[0]?.timestamp,
             parentMessageUuid: undefined,
+            parentConversationId,
+            isSubagent: lineage.parentSessionId ? true : undefined,
+            subagentDescription: parentConversationId ? lineage.agentName : undefined,
             gitInfo: cwd ? getGitInfo(cwd) : undefined,
           });
         } catch (err) {
@@ -7030,7 +7049,7 @@ async function processOpencodeSession(
         }
         conversationCache[sessionId] = conversationId;
         saveConversationCache(conversationCache);
-        log(`Created conversation ${conversationId} for opencode session ${sessionId}`);
+        log(`Created conversation ${conversationId} for opencode session ${sessionId}${parentConversationId ? ` (subagent of ${parentConversationId.slice(0, 12)})` : ""}`);
         if (pendingMessages[sessionId]) {
           await flushPendingMessagesBatch(pendingMessages[sessionId], conversationId, syncService, retryQueue);
           delete pendingMessages[sessionId];
@@ -7057,6 +7076,9 @@ async function processOpencodeSession(
       }
     }
     opencodeSyncedCounts.set(sessionId, allMessages.length);
+
+    // This session may be the parent a task-tool child synced ahead of.
+    await linkPendingNativeChildren(sessionId, conversationId, syncService, conversationCache);
 
     // Title: opencode names the session in its meta (info.title); mirror it.
     try {

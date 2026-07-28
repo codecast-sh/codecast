@@ -147,6 +147,34 @@ export function assembleOpencodeSession(sessionId: string, dbPath: string = open
   }
 }
 
+/** The session's task-tool lineage: `parent_id` names the opencode session that
+ *  spawned this one via the task tool (subagent runs), `agent` names the profile
+ *  it ran as (e.g. "explore"). Queried separately from assembleOpencodeSession so
+ *  an older schema without these columns degrades to "no lineage" instead of
+ *  breaking session sync. parent_id is externally writable like id, so it gets
+ *  the same shape check the watcher applies before anything downstream sees it. */
+export function readOpencodeSessionLineage(
+  sessionId: string,
+  dbPath: string = opencodeDbPath(),
+): { parentSessionId?: string; agentName?: string } {
+  const db = openDb(dbPath);
+  if (!db) return {};
+  try {
+    const row = db.query<{ parent_id: string | null; agent: string | null }, [string]>(
+      "SELECT parent_id, agent FROM session WHERE id = ?",
+    ).get(sessionId);
+    const parentSessionId = row?.parent_id ?? undefined;
+    return {
+      parentSessionId: parentSessionId && OPENCODE_SESSION_ID_RE.test(parentSessionId) ? parentSessionId : undefined,
+      agentName: row?.agent ?? undefined,
+    };
+  } catch {
+    return {};
+  } finally {
+    db.close();
+  }
+}
+
 /** The session's title straight from the DB row (cheaper than assembling), for the
  *  title-sync path. */
 export function readOpencodeSessionTitle(sessionId: string, dbPath: string = opencodeDbPath()): string | undefined {
