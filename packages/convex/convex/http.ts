@@ -2480,7 +2480,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, version, platform, pid, autostart_enabled, has_tmux, local_project_roots, pending_sync_count, oldest_pending_ms, pending_sync_messages, pending_sync_conversations, device_id, device_label, is_remote_device, cc_accounts, settings, model_inventory } = body;
+      const { api_token, version, platform, pid, autostart_enabled, has_tmux, local_project_roots, pending_sync_count, oldest_pending_ms, pending_sync_messages, pending_sync_conversations, device_id, device_label, is_remote_device, cc_accounts, provider_key_pubkey, managed_provider_ids, settings, model_inventory } = body;
 
       if (!api_token || !version || !platform) {
         return new Response(JSON.stringify({ error: "Missing required fields" }), {
@@ -2505,6 +2505,8 @@ http.route({
         device_label,
         is_remote_device,
         cc_accounts,
+        provider_key_pubkey,
+        managed_provider_ids,
         settings,
         model_inventory,
       });
