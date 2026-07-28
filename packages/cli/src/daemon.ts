@@ -9,7 +9,7 @@ import { watch as chokidarWatch } from "chokidar";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
 import { ensureModelInventoryFresh, pendingModelInventoryPayload, markModelInventorySent } from "./modelInventory.js";
 import { deviceId, deviceLabel, isRemoteDevice } from "./remote/device.js";
-import { copyCredentialToRemoteAsync, currentBranch, loadRemoteHost, readPushableCredential, remoteHostsRegistered } from "./remote/session-move.js";
+import { copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBranch, loadRemoteHost, readPushableCredential, remoteHostsRegistered } from "./remote/session-move.js";
 import { reparentNotice, type ReparentCommandFacts } from "./sessionMoveNotice.js";
 import { createWipSnapshot, defaultRemote, pushWipSnapshot, restoreWipSnapshot } from "./wipSnapshot.js";
 import {
@@ -119,6 +119,9 @@ import type { AgentStatus, DeviceSnippetSettings, AgentClientId } from "@codecas
 import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType } from "@codecast/shared/contracts";
 import { parseModelPicker, planModelNavigation, SESSION_ONLY_COMMIT_RE, isSwitchConfirmDialog } from "./modelPicker";
 import { type Config, getAgentArgs, isOpencodeServerEnabled, opencodeServerPort } from "./config/types.js";
+import { providerKeySourcePrefix } from "./providerKeyLaunch.js";
+import { providerKeyStorePath, readProviderKeyStore } from "./providerKeyStore.js";
+import { getProviderKeyPublicKey, applyProviderKeyCommand } from "./providerKeyCrypto.js";
 
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 const EXEC_TIMEOUT_MS = 10_000;
@@ -1714,6 +1717,38 @@ async function pushCredentialToRemoteHosts(
   }
 }
 
+// Provider-key store fan-out (pl-207): the same one-way primary→remote push as the
+// CC credential. The primary is canonical; a remote never originates keys. Deduped
+// by content hash so an unchanged store is a no-op. An absent local store pushes
+// `null`, which removes the remote file — clearing a key here clears it there.
+let remoteKeysPushInFlight = false;
+let lastPushedKeysHash: string | null = null;
+
+function readLocalProviderKeysBlob(): string | null {
+  try { return fs.readFileSync(providerKeyStorePath(CONFIG_DIR), "utf-8"); } catch { return null; }
+}
+
+async function pushProviderKeysToRemoteHosts(reason: string, opts: { onlyIfChanged?: boolean } = {}): Promise<void> {
+  if (isRemoteDevice() || remoteKeysPushInFlight || !remoteHostsRegistered()) return;
+  remoteKeysPushInFlight = true;
+  try {
+    const blob = readLocalProviderKeysBlob();
+    const hash = blob === null ? "∅" : createHash("sha256").update(blob).digest("hex");
+    if (opts.onlyIfChanged && hash === lastPushedKeysHash) return; // in step — the common case
+    const host = loadRemoteHost();
+    await copyProviderKeysToRemoteAsync(host, blob);
+    const changed = hash !== lastPushedKeysHash;
+    lastPushedKeysHash = hash;
+    if (changed) {
+      log(`[REMOTE-KEYS] pushed provider keys to ${host.user}@${host.address} (${reason}${blob === null ? ", cleared" : ""})`);
+    }
+  } catch (err) {
+    log(`[REMOTE-KEYS] provider-key push failed (${reason}): ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    remoteKeysPushInFlight = false;
+  }
+}
+
 // Keep THIS machine's Claude Code login from lapsing. A running `claude`
 // self-refreshes its ~8h access token from the stored refresh token; nothing
 // does when no session runs, so an idle grant eventually expires ("Login
@@ -1873,6 +1908,12 @@ async function sendHeartbeat(): Promise<void> {
         // backing files change (mtime-keyed cache), so CLI-side saves and
         // fresh /logins surface on the next beat.
         cc_accounts: getAccountsHeartbeatPayload() ?? undefined,
+        // Managed-provider-key metadata (pl-207): the device's ECDH public key
+        // (not a secret — the web encrypts a key to it) + which providers have a
+        // key here (ids only, never the keys). Lets the web show managed status
+        // and seal a new key so Convex never sees plaintext.
+        provider_key_pubkey: getProviderKeyPublicKey(CONFIG_DIR),
+        managed_provider_ids: Object.keys(readProviderKeyStore(CONFIG_DIR)).sort(),
         // Installed agent-feature snippets + stable mode, so the web Settings
         // page mirrors (and can toggle) this device's setup.
         settings: buildDeviceSettingsPayload(config) ?? undefined,
@@ -2548,7 +2589,10 @@ async function executeRemoteCommand(
         const envPrefix = worktreeResult
           ? `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT AGENT_RESOURCE_INDEX=${worktreeResult.portIndex}`
           : `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT`;
-        let cmdText = `${envPrefix} ${[binary, ...binaryArgs].join(" ")}`;
+        // Managed provider keys (opencode/pi) are sourced from a 0600 file so the
+        // key never lands in `ps`/the pane; "" when nothing is managed (pl-207).
+        const keyPrefix = providerKeySourcePrefix(agentType, CONFIG_DIR);
+        let cmdText = `${keyPrefix}${envPrefix} ${[binary, ...binaryArgs].join(" ")}`;
 
         let codexThreadId: string | null = null;
         const codexSkipApprovals = binaryArgs.includes("--full-auto") || binaryArgs.includes("--dangerously-bypass-approvals-and-sandbox");
@@ -3782,6 +3826,19 @@ async function executeRemoteCommand(
         } else {
           error = `cast ${cliArgs[0]} failed (exit ${res.code}): ${(res.stderr || res.stdout || "").trim().slice(-300)}`;
         }
+        break;
+      }
+      case "set_provider_key": {
+        // Web set/removed a managed provider key for THIS device (pl-207). A "set"
+        // arrives SEALED to this device's ECDH public key — Convex never saw
+        // plaintext. applyProviderKeyCommand decrypts + updates the 0600 store; we
+        // then fan out to remotes and heartbeat so managed_provider_ids round-trips.
+        const applied = applyProviderKeyCommand(CONFIG_DIR, commandArgs);
+        if (!applied.ok) { error = `set_provider_key: ${applied.error}`; break; }
+        log(`[KEYS] ${applied.op} ${applied.provider} (web)`);
+        result = JSON.stringify({ op: applied.op, provider: applied.provider });
+        pushProviderKeysToRemoteHosts("web set").catch(() => {});
+        await sendHeartbeat().catch(() => {});
         break;
       }
       default:
@@ -12150,7 +12207,10 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     // See buildResumeEnvPrefix: strips CLAUDECODE and (for Claude) suppresses the
     // "Resume from summary?" prompt that would otherwise wedge an unattended auto-resume.
     const resumeEnvPrefix = buildResumeEnvPrefix(agentType);
-    await tmuxExec(["send-keys", "-t", tmuxSession, "-l", `${resumeEnvPrefix} ${resumeCmd}`]);
+    // Same managed-key injection as a fresh launch, so a resumed opencode/pi
+    // session gets its provider key too (pl-207).
+    const resumeKeyPrefix = providerKeySourcePrefix(agentType, CONFIG_DIR);
+    await tmuxExec(["send-keys", "-t", tmuxSession, "-l", `${resumeKeyPrefix}${resumeEnvPrefix} ${resumeCmd}`]);
     await tmuxExec(["send-keys", "-t", tmuxSession, "Enter"]);
 
     logDelivery(`Auto-resumed ${agentType} ${shortId} in tmux=${tmuxSession} cwd=${cwd} cmd=${resumeCmd}`);
@@ -15080,6 +15140,26 @@ async function main(): Promise<void> {
   // switch, CC's own self-refresh) within ~a minute. Hash-gated, so the
   // common no-change tick costs one keychain read and no ssh.
   setInterval(() => { pushCredentialToRemoteHosts("credential_changed", { onlyIfChanged: true }).catch(() => {}); }, REMOTE_CRED_CHANGE_TICK_MS);
+
+  // Fan the provider-key store out to remotes on the same cadence (pl-207): once at
+  // start (backfill a new remote), and a hash-gated fast tick that propagates a
+  // `cast keys` change within ~a minute. A watch on the store file (below) makes the
+  // common case near-instant; this tick is the backfill/safety net.
+  setTimeout(() => { pushProviderKeysToRemoteHosts("daemon start").catch(() => {}); }, 62_000);
+  setInterval(() => { pushProviderKeysToRemoteHosts("periodic", { onlyIfChanged: true }).catch(() => {}); }, REMOTE_CRED_CHANGE_TICK_MS);
+  // Near-instant sync: when the local store file changes (a `cast keys set/rm`, or a
+  // web edit the daemon applied), push immediately. fs.watch can double-fire, so the
+  // in-flight lock + hash gate keep it to one real push.
+  try {
+    fs.mkdirSync(CONFIG_DIR, { recursive: true });
+    fs.watch(CONFIG_DIR, (_event, filename) => {
+      if (filename === "provider-keys.json") {
+        pushProviderKeysToRemoteHosts("store changed", { onlyIfChanged: true }).catch(() => {});
+      }
+    });
+  } catch (err) {
+    log(`[REMOTE-KEYS] could not watch the provider-key store: ${err instanceof Error ? err.message : String(err)}`);
+  }
 
   // Keep THIS machine's login from lapsing during idle gaps + propagate a
   // manual /login into its saved profile (primary devices only).

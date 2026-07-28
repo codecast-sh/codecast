@@ -76,6 +76,11 @@ export interface Config {
   agent_permission_modes?: AgentPermissionModes;
   agent_default_params?: AgentDefaultParams;
 
+  // Managed provider API keys (pl-207) live in their OWN 0600 file
+  // (~/.codecast/provider-keys.json, see providerKeyStore.ts) — NOT here — because
+  // config.json carries device-specific fields that must not travel between
+  // machines, whereas the key store is a per-user secret that syncs device→device.
+
   // --- Update behavior ---
   // index.ts wrote `auto_update`; daemon.ts wrote `desktop_auto_update` (opt out of
   // the daemon updating the desktop app out-of-band, default: on). Both are real
