@@ -2118,12 +2118,24 @@ ${TRIGGER_SNIPPET_HEADING}
 
 You can set triggers — follow-up work that runs autonomously after this session ends. Use them for anything that should happen later: checking CI, reviewing PRs, continuing long-running refactors, or responding to events.
 
+The prompt is the spawned agent's entire briefing, and humans read it in the dashboard (rendered as markdown). A one-line prompt is fine for a one-line job; for anything bigger, write it as structured markdown — goal, numbered steps, constraints — never as one long run-on line. Pass \`-\` as the prompt to read it from stdin:
+
 \`\`\`bash
 # Set triggers
 cast trigger add "Check if CI is green on main" --in 30m
 cast trigger add "Review open PRs and summarize findings" --every 4h
 cast trigger add "Respond to new PR review comments" --on pr_comment
 cast trigger add "Watch the funnel and report anything off" --every 4h --safe
+
+# Multi-line prompts: heredoc via stdin
+cast trigger add - --every 4h --title "Growth audit" <<'EOF'
+Audit budget allocation across markets.
+
+1. Verify the plan matches achievable yield.
+2. Measure growth per dollar for markets funded in the last 14 days.
+
+Escalate only strategic decisions to the founder.
+EOF
 
 # Report completion (when running inside a triggered run)
 cast trigger complete <trigger_id> --summary "what was done"
@@ -10620,7 +10632,7 @@ const trigger = program
 trigger
   .command("add")
   .description("Set a new trigger")
-  .argument("<prompt>", "Instruction for the agent when the trigger fires")
+  .argument("<prompt>", "Instruction for the agent when the trigger fires; '-' reads it from stdin (heredoc-friendly for multi-line markdown)")
   .option("--in <duration>", "Run after delay (e.g., 30m, 2h, 1d)")
   .option("--every <duration>", "Run on interval (e.g., 4h, 1d)")
   .option("--on <event>", "Run on event (pr_comment, pr_opened, pr_merged, push)")
@@ -10634,6 +10646,13 @@ trigger
   .option("--for <session>", "Bind the trigger to a session (short id, conversation id, or Claude session uuid): runs inject into it instead of spawning fresh agents. Defaults to the calling session when run from inside one.")
   .option("--thread", "Post results back to the current conversation thread")
   .action(async (prompt, options) => {
+    if (prompt === "-") {
+      prompt = fs.readFileSync(0, "utf-8").trim();
+      if (!prompt) {
+        console.error("Empty prompt on stdin");
+        process.exit(1);
+      }
+    }
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
       console.error("Not authenticated. Run: cast auth");
@@ -10673,7 +10692,14 @@ trigger
       run_at = Date.now();
     }
 
-    const title = options.title || prompt.slice(0, 60);
+    // Multi-line prompts: default title from the first real line (minus any
+    // markdown heading/list markers), not a 60-char slice across newlines.
+    const firstLine =
+      prompt
+        .split("\n")
+        .map((l: string) => l.replace(/^[#>*\-\s]+/, "").trim())
+        .find(Boolean) ?? prompt;
+    const title = options.title || firstLine.slice(0, 60);
     const maxRuntimeMs = options.maxRuntime ? parseDuration(options.maxRuntime) : undefined;
 
     let context_summary: string | undefined;
