@@ -1,4 +1,5 @@
-import { StyleSheet, TouchableOpacity, View, Text, Alert } from 'react-native';
+import { StyleSheet, TouchableOpacity, View, Alert } from 'react-native';
+import { Text } from '@/components/Themed';
 import { useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { Id } from '@codecast/convex/convex/_generated/dataModel';

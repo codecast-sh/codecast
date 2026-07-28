@@ -565,6 +565,9 @@ export type ClientUI = {
   plan_view?: PlanViewPrefs;
   saved_views?: SavedView[];
   show_subagents?: boolean;
+  // User-set height (px) of the trigger full-prompt viewport (TriggerPromptView
+  // drag handle). Layout pref → unstamped, per-device local_wins.
+  trigger_prompt_height?: number;
   // "Show old sessions" — reveal cached rows the live (authoritative) inbox
   // subscription no longer returns. Default hide. Successor to the removed
   // show_old_sessions key, whose blanket-local_wins sync made one browse click
