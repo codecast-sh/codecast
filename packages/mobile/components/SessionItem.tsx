@@ -1,4 +1,5 @@
-import { StyleSheet, TouchableOpacity, View as RNView, Text as RNText, Animated as RNAnimated, PanResponder } from 'react-native';
+import { StyleSheet, TouchableOpacity, View as RNView, Animated as RNAnimated, PanResponder } from 'react-native';
+import { Text as RNText } from '@/components/Themed';
 import { useRef, useCallback, useEffect, useMemo } from 'react';
 import { cleanUserMessage } from '@codecast/web/components/sessionMessage';
 import { gestureHandler } from '@/lib/gestureHandler';
