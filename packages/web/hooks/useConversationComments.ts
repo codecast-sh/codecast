@@ -7,9 +7,27 @@ import { isConvexId } from "../lib/entityLinks";
 import { useInboxStore } from "../store/inboxStore";
 import { localFirstSliceMode } from "../store/local-first/featureFlags";
 import { commentsByConversationView } from "../store/local-first/referenceContracts";
+import { useShadowEquivalence } from "../store/local-first/shadowValidation";
 import { useConvexSync } from "./useConvexSync";
 import { useLocalView } from "./useLocalView";
 import { groupComments, threadKeyFor, type Comment, type CommentThread } from "../lib/commentThread";
+
+// Project a comment onto the field set the v1 summary query delivers, so the
+// v1↔v2 digest comparison judges exactly what today's readers render. The v2
+// projection is a superset (it adds user.image); extra fields are additive
+// for readers and deliberately outside the equivalence check.
+export function comparableComment(row: any): Record<string, unknown> {
+  const { user, ...rest } = row ?? {};
+  return {
+    ...rest,
+    user: {
+      _id: user?._id,
+      name: user?.name,
+      github_username: user?.github_username,
+      github_avatar_url: user?.github_avatar_url,
+    },
+  };
+}
 
 // Comments funnel through the inboxStore cache like everything else. The feed
 // runs ONCE per open conversation (useConversationCommentsSync, mounted in
@@ -43,6 +61,20 @@ export function useConversationCommentsSync(conversationId: string | undefined):
     if (mode !== "cutover" || view.status !== "granted") return;
     syncTable("comments", viewRows.map((row) => row.value));
   }, [mode, view.status, viewRows, syncTable]);
+
+  // Cutover gate evidence: in shadow mode, digest-compare exactly what v1 is
+  // rendering against the v2 durable view, on every quiescent state.
+  useShadowEquivalence({
+    enabled: canQuery && mode === "shadow",
+    contractId: commentsByConversationView.id,
+    viewKey: `comments:conversation:${conversationId}`,
+    authoritative: useMemo(() => Array.isArray(raw)
+      ? raw.map((row: any) => ({ key: `comment:${row._id}`, value: comparableComment(row) }))
+      : null, [raw]),
+    materialized: useMemo(() => view.status === "granted"
+      ? viewRows.map((row) => ({ key: row.entityKey, value: comparableComment(row.value) }))
+      : null, [view.status, viewRows]),
+  });
 }
 
 export type CommentActions = {

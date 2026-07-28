@@ -1,9 +1,10 @@
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
 import { localFirstSliceMode } from "../store/local-first/featureFlags";
 import { bucketsPrincipalView } from "../store/local-first/referenceContracts";
+import { useShadowEquivalence } from "../store/local-first/shadowValidation";
 import { useConvexSync } from "./useConvexSync";
 import { useLocalView } from "./useLocalView";
 
@@ -36,4 +37,21 @@ export function useSyncBuckets() {
       values.filter((v) => v.kind === "assignment").map((v) => v.row),
     );
   }, [mode, view.status, viewRows, syncTable]);
+
+  // Cutover gate evidence: in shadow mode, digest-compare exactly what v1 is
+  // rendering against the v2 durable view, on every quiescent state.
+  useShadowEquivalence({
+    enabled: mode === "shadow",
+    contractId: bucketsPrincipalView.id,
+    viewKey: "buckets:principal",
+    authoritative: useMemo(() => result
+      ? [
+          ...(result.buckets ?? []).map((row: any) => ({ key: `bucket:${row._id}`, value: row })),
+          ...(result.assignments ?? []).map((row: any) => ({ key: `assignment:${row._id}`, value: row })),
+        ]
+      : null, [result]),
+    materialized: useMemo(() => view.status === "granted"
+      ? viewRows.map((row) => ({ key: row.entityKey, value: (row.value as any).row }))
+      : null, [view.status, viewRows]),
+  });
 }
