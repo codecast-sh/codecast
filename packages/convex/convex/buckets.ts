@@ -10,6 +10,7 @@ import {
   readLocalViewRevision,
   runLocalCommand,
 } from "./localFirstCommands";
+import { grantedView, unauthenticatedView } from "./smallViewContracts";
 
 export const BUCKETS_VIEW_CONTRACT_ID = "buckets.principal/v2";
 export const BUCKETS_VIEW_KEY = "buckets:principal";
@@ -51,14 +52,9 @@ export const webList = query({
 export const webListV2 = query({
   args: {},
   handler: async (ctx) => {
+    const identity = { contractId: BUCKETS_VIEW_CONTRACT_ID, viewKey: BUCKETS_VIEW_KEY };
     const userId = await getAuthUserId(ctx);
-    if (!userId) {
-      return {
-        contractId: BUCKETS_VIEW_CONTRACT_ID,
-        viewKey: BUCKETS_VIEW_KEY,
-        access: "unauthenticated" as const,
-      };
-    }
+    if (!userId) return unauthenticatedView(identity);
     const [buckets, assignments, viewRevision] = await Promise.all([
       ctx.db
         .query("inbox_buckets")
@@ -68,19 +64,14 @@ export const webListV2 = query({
         .query("bucket_assignments")
         .withIndex("by_user_id", (q) => q.eq("user_id", userId))
         .collect(),
-      readLocalViewRevision(ctx, userId, BUCKETS_VIEW_CONTRACT_ID, BUCKETS_VIEW_KEY),
+      readLocalViewRevision(ctx, userId, identity.contractId, identity.viewKey),
     ]);
-    return {
-      contractId: BUCKETS_VIEW_CONTRACT_ID,
-      viewKey: BUCKETS_VIEW_KEY,
-      access: "granted" as const,
-      // Opaque within the already principal-scoped store; application code must
-      // not inspect or synthesize this value.
-      grantKeys: ["bucket-catalog"],
-      viewRevision,
+    // Grant keys are opaque within the already principal-scoped store;
+    // application code must not inspect or synthesize them.
+    return grantedView(identity, { grantKeys: ["bucket-catalog"], viewRevision }, {
       buckets,
       assignments,
-    };
+    });
   },
 });
 

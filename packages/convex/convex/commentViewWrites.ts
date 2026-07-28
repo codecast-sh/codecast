@@ -1,9 +1,11 @@
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
+import type { ViewCoverageTarget } from "./localViewRevisions";
 import {
-  advanceLocalViewRevision,
-  type ViewCoverageTarget,
-} from "./localViewRevisions";
+  runViewTransition,
+  type RevisionMode,
+  type ViewWriter,
+} from "./lib/viewWriters";
 
 export const COMMENTS_VIEW_CONTRACT_ID = "comments.byConversation/v2";
 
@@ -31,15 +33,7 @@ export function commentsCoverageTarget(
   };
 }
 
-export type CommentViewWriter = {
-  insert: (
-    value: Omit<Doc<"comments">, "_id" | "_creationTime">,
-  ) => Promise<Id<"comments">>;
-  patch: (id: Id<"comments">, value: Partial<Doc<"comments">>) => Promise<void>;
-  delete: (id: Id<"comments">) => Promise<void>;
-};
-
-type RevisionMode = "advance" | "receipt";
+export type CommentViewWriter = ViewWriter<"comments">;
 
 /**
  * The only raw writer for the comments table.
@@ -56,55 +50,26 @@ export async function runCommentViewTransition<Result>(
   conversation: Pick<Doc<"conversations">, "_id" | "user_id">,
   revisionMode: RevisionMode,
   transition: (writer: CommentViewWriter) => Promise<Result>,
-): Promise<{ result: Result; coverageTarget?: ViewCoverageTarget }> {
-  const authoritativeConversation = await ctx.db.get(conversation._id);
-  if (!authoritativeConversation) {
+) {
+  const authoritative = await ctx.db.get(conversation._id);
+  if (!authoritative) {
     throw new Error("Cannot write comments for a missing conversation");
   }
-
-  const requireBoundComment = async (id: Id<"comments">): Promise<Doc<"comments">> => {
-    const comment = await ctx.db.get(id);
-    if (!comment) throw new Error("Cannot write a missing comment");
-    if (String(comment.conversation_id) !== String(authoritativeConversation._id)) {
-      throw new Error("Comment write crossed its bound conversation view");
-    }
-    return comment;
-  };
-
-  let writeCount = 0;
-  const writer: CommentViewWriter = {
-    async insert(value) {
-      if (String(value.conversation_id) !== String(authoritativeConversation._id)) {
+  return await runViewTransition(ctx, {
+    table: "comments",
+    label: "comment",
+    guardInsert(value) {
+      if (String(value.conversation_id) !== String(authoritative._id)) {
         throw new Error("Comment insert crossed its bound conversation view");
       }
-      writeCount++;
-      return await ctx.db.insert("comments", value);
     },
-    async patch(id, value) {
-      await requireBoundComment(id);
-      writeCount++;
-      await ctx.db.patch(id, value);
+    guardRow(row) {
+      if (String(row.conversation_id) !== String(authoritative._id)) {
+        throw new Error("Comment write crossed its bound conversation view");
+      }
     },
-    async delete(id) {
-      await requireBoundComment(id);
-      writeCount++;
-      await ctx.db.delete(id);
-    },
-  };
-
-  const result = await transition(writer);
-  if (writeCount === 0) return { result };
-
-  const coverageTarget = commentsCoverageTarget(authoritativeConversation);
-  if (revisionMode === "advance") {
-    await advanceLocalViewRevision(
-      ctx,
-      authoritativeConversation.user_id,
-      coverageTarget.contractId,
-      coverageTarget.viewKey,
-    );
-  }
-  return { result, coverageTarget };
+    coverageTarget: commentsCoverageTarget(authoritative),
+  }, revisionMode, transition);
 }
 
 export function commentPatchChanges(

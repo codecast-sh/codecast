@@ -9,11 +9,14 @@ import {
   TEAMS_GRANT_KEY,
   TEAMS_VIEW_CONTRACT_ID,
   TEAMS_VIEW_KEY,
+  forbiddenView,
+  grantedView,
+  missingView,
   projectPrincipalTeam,
   projectTeamMembership,
-  revisionCoverage,
   teamMembersGrantKey,
   teamMembersViewKey,
+  unauthenticatedView,
 } from "./smallViewContracts";
 
 function generateInviteCode(): string {
@@ -79,17 +82,16 @@ export const getUserTeams = query({
 export const getUserTeamsV2 = query({
   args: {},
   handler: async (ctx) => {
-    const contractId = TEAMS_VIEW_CONTRACT_ID;
-    const viewKey = TEAMS_VIEW_KEY;
+    const identity = { contractId: TEAMS_VIEW_CONTRACT_ID, viewKey: TEAMS_VIEW_KEY };
     const userId = await getAuthUserId(ctx);
-    if (!userId) return { contractId, viewKey, access: "unauthenticated" as const };
+    if (!userId) return unauthenticatedView(identity);
 
     const [memberships, viewRevision] = await Promise.all([
       ctx.db
         .query("team_memberships")
         .withIndex("by_user_id", (q) => q.eq("user_id", userId))
         .collect(),
-      readLocalViewRevision(ctx, userId, contractId, viewKey),
+      readLocalViewRevision(ctx, userId, identity.contractId, identity.viewKey),
     ]);
     const projected = (await Promise.all(memberships.map(async (membership) => {
       const team = await ctx.db.get(membership.team_id);
@@ -100,15 +102,9 @@ export const getUserTeamsV2 = query({
         left.joined_at - right.joined_at
         || String(left._id).localeCompare(String(right._id)));
 
-    return {
-      contractId,
-      viewKey,
-      access: "granted" as const,
-      grantKeys: [TEAMS_GRANT_KEY],
-      viewRevision,
-      coverage: revisionCoverage(viewRevision),
+    return grantedView(identity, { grantKeys: [TEAMS_GRANT_KEY], viewRevision }, {
       teams: projected,
-    };
+    });
   },
 });
 
@@ -365,57 +361,38 @@ export const getTeamMembers = query({
 export const getTeamMembersV2 = query({
   args: { team_id: v.id("teams") },
   handler: async (ctx, args) => {
-    const contractId = TEAM_MEMBERS_VIEW_CONTRACT_ID;
-    const viewKey = teamMembersViewKey(args.team_id);
+    const identity = {
+      contractId: TEAM_MEMBERS_VIEW_CONTRACT_ID,
+      viewKey: teamMembersViewKey(args.team_id),
+    };
     const grantKey = teamMembersGrantKey(args.team_id);
     const userId = await getAuthUserId(ctx);
-    if (!userId) return { contractId, viewKey, access: "unauthenticated" as const };
+    if (!userId) return unauthenticatedView(identity);
 
     const team = await ctx.db.get(args.team_id);
-    if (!team) {
-      return {
-        contractId,
-        viewKey,
-        access: "missing" as const,
-        releasedGrantKeys: [grantKey],
-        removals: [],
-      };
-    }
+    if (!team) return missingView(identity, [grantKey]);
     const callerMembership = await ctx.db
       .query("team_memberships")
       .withIndex("by_user_team", (q) =>
         q.eq("user_id", userId).eq("team_id", args.team_id))
       .unique();
-    if (!callerMembership) {
-      return {
-        contractId,
-        viewKey,
-        access: "forbidden" as const,
-        revokedGrantKeys: [grantKey],
-      };
-    }
+    if (!callerMembership) return forbiddenView(identity, [grantKey]);
 
     const [memberships, viewRevision] = await Promise.all([
       ctx.db
         .query("team_memberships")
         .withIndex("by_team_id", (q) => q.eq("team_id", args.team_id))
         .collect(),
-      readLocalViewRevision(ctx, userId, contractId, viewKey),
+      readLocalViewRevision(ctx, userId, identity.contractId, identity.viewKey),
     ]);
     const projected = memberships
       .map(projectTeamMembership)
       .sort((left, right) =>
         left.joined_at - right.joined_at
         || String(left._id).localeCompare(String(right._id)));
-    return {
-      contractId,
-      viewKey,
-      access: "granted" as const,
-      grantKeys: [grantKey],
-      viewRevision,
-      coverage: revisionCoverage(viewRevision),
+    return grantedView(identity, { grantKeys: [grantKey], viewRevision }, {
       memberships: projected,
-    };
+    });
   },
 });
 

@@ -11,8 +11,9 @@ import {
   BOOKMARKS_VIEW_CONTRACT_ID,
   BOOKMARKS_VIEW_KEY,
   bookmarksCoverageTarget,
+  grantedView,
   projectBookmark,
-  revisionCoverage,
+  unauthenticatedView,
 } from "./smallViewContracts";
 import {
   deleteBookmarkWithRevision,
@@ -437,32 +438,25 @@ export const listBookmarks = query({
 export const listBookmarksV2 = query({
   args: {},
   handler: async (ctx) => {
-    const contractId = BOOKMARKS_VIEW_CONTRACT_ID;
-    const viewKey = BOOKMARKS_VIEW_KEY;
+    const identity = { contractId: BOOKMARKS_VIEW_CONTRACT_ID, viewKey: BOOKMARKS_VIEW_KEY };
     const userId = await getAuthUserId(ctx);
-    if (!userId) return { contractId, viewKey, access: "unauthenticated" as const };
+    if (!userId) return unauthenticatedView(identity);
 
     const [bookmarks, viewRevision] = await Promise.all([
       ctx.db
         .query("bookmarks")
         .withIndex("by_user_id", (q) => q.eq("user_id", userId))
         .collect(),
-      readLocalViewRevision(ctx, userId, contractId, viewKey),
+      readLocalViewRevision(ctx, userId, identity.contractId, identity.viewKey),
     ]);
     const projected = bookmarks
       .map(projectBookmark)
       .sort((left, right) =>
         right.created_at - left.created_at
         || String(left._id).localeCompare(String(right._id)));
-    return {
-      contractId,
-      viewKey,
-      access: "granted" as const,
-      grantKeys: [BOOKMARKS_GRANT_KEY],
-      viewRevision,
-      coverage: revisionCoverage(viewRevision),
+    return grantedView(identity, { grantKeys: [BOOKMARKS_GRANT_KEY], viewRevision }, {
       bookmarks: projected,
-    };
+    });
   },
 });
 

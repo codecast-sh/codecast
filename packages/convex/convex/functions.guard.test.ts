@@ -83,18 +83,24 @@ describe("authorization boundary coverage", () => {
 
 describe("comments complete-view write choke", () => {
   test("comment inserts exist only inside the revision-aware writer", () => {
+    // The generic bound-writer factory owns the single raw insert; no module
+    // may write the comments table by literal name at all.
     const insertWriters: string[] = [];
     for (const f of readdirSync(DIR)) {
       if (!f.endsWith(".ts") || f.endsWith(".test.ts")) continue;
       const src = readFileSync(join(DIR, f), "utf8");
       if (src.includes('.insert("comments"')) insertWriters.push(f);
     }
-    expect(insertWriters).toEqual(["commentViewWrites.ts"]);
+    expect(insertWriters).toEqual([]);
 
     const writer = readFileSync(join(DIR, "commentViewWrites.ts"), "utf8");
     expect(writer).toContain("runCommentViewTransition");
-    expect(writer).toContain("advanceLocalViewRevision");
+    expect(writer).toContain('table: "comments"');
     expect(writer).toContain("revisionPrincipalId: conversation.user_id");
+
+    const factory = readFileSync(join(DIR, "lib", "viewWriters.ts"), "utf8");
+    expect(factory).toContain("advanceLocalViewRevision");
+    expect(factory).toContain("ctx.db.insert(binding.table");
   });
 
   test("every non-comment-module writer routes through the revision boundary", () => {
@@ -152,13 +158,19 @@ describe("small principal-view write chokes", () => {
   });
 
   test("bookmark row writes exist only inside the principal-bound writer", () => {
+    // The generic bound-writer factory owns the single raw insert; no module
+    // may write the bookmarks table by literal name at all.
     const insertWriters: string[] = [];
     for (const f of readdirSync(DIR)) {
       if (!f.endsWith(".ts") || f.endsWith(".test.ts")) continue;
       const src = readFileSync(join(DIR, f), "utf8");
       if (src.includes('.insert("bookmarks"')) insertWriters.push(f);
     }
-    expect(insertWriters).toEqual(["bookmarkViewWrites.ts"]);
+    expect(insertWriters).toEqual([]);
+
+    const writer = readFileSync(join(DIR, "bookmarkViewWrites.ts"), "utf8");
+    expect(writer).toContain('table: "bookmarks"');
+    expect(writer).toContain("runBookmarkViewTransition");
 
     const bookmarks = readFileSync(join(DIR, "bookmarks.ts"), "utf8");
     expect(bookmarks).not.toContain("ctx.db.delete(bookmark._id)");

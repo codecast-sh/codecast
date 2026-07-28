@@ -15,6 +15,12 @@ import {
   runLocalCommand,
 } from "./localFirstCommands";
 import {
+  forbiddenView,
+  grantedView,
+  missingView,
+  unauthenticatedView,
+} from "./smallViewContracts";
+import {
   COMMENTS_VIEW_CONTRACT_ID,
   commentsCoverageTarget,
   commentsGrantKey,
@@ -224,29 +230,18 @@ async function projectComments(
 export const getCommentsV2 = query({
   args: { conversation_id: v.id("conversations") },
   handler: async (ctx, args) => {
-    const contractId = COMMENTS_VIEW_CONTRACT_ID;
-    const viewKey = commentsViewKey(args.conversation_id);
+    const identity = {
+      contractId: COMMENTS_VIEW_CONTRACT_ID,
+      viewKey: commentsViewKey(args.conversation_id),
+    };
     const grantKey = commentsGrantKey(args.conversation_id);
     const userId = await getAuthUserId(ctx);
-    if (!userId) return { contractId, viewKey, access: "unauthenticated" as const };
+    if (!userId) return unauthenticatedView(identity);
 
     const conversation = await ctx.db.get(args.conversation_id);
-    if (!conversation) {
-      return {
-        contractId,
-        viewKey,
-        access: "missing" as const,
-        releasedGrantKeys: [grantKey],
-        removals: [],
-      };
-    }
+    if (!conversation) return missingView(identity, [grantKey]);
     if (!(await canAccessConversation(ctx, userId, conversation))) {
-      return {
-        contractId,
-        viewKey,
-        access: "forbidden" as const,
-        revokedGrantKeys: [grantKey],
-      };
+      return forbiddenView(identity, [grantKey]);
     }
 
     const [comments, viewRevision] = await Promise.all([
@@ -254,26 +249,11 @@ export const getCommentsV2 = query({
         .query("comments")
         .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
         .collect(),
-      readLocalViewRevision(
-        ctx,
-        conversation.user_id,
-        COMMENTS_VIEW_CONTRACT_ID,
-        viewKey,
-      ),
+      readLocalViewRevision(ctx, conversation.user_id, identity.contractId, identity.viewKey),
     ]);
-    return {
-      contractId,
-      viewKey,
-      access: "granted" as const,
-      grantKeys: [grantKey],
-      viewRevision,
-      coverage: {
-        kind: "view-revision" as const,
-        revision: String(viewRevision),
-        revisionOrder: viewRevision,
-      },
+    return grantedView(identity, { grantKeys: [grantKey], viewRevision }, {
       comments: await projectComments(ctx, comments),
-    };
+    });
   },
 });
 

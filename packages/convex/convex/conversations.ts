@@ -49,8 +49,9 @@ import {
   FAVORITES_GRANT_KEY,
   FAVORITES_VIEW_CONTRACT_ID,
   FAVORITES_VIEW_KEY,
+  grantedView,
   projectFavoriteMembership,
-  revisionCoverage,
+  unauthenticatedView,
 } from "./smallViewContracts";
 import {
   favoriteCoverageForConversation,
@@ -5576,10 +5577,9 @@ export const listFavorites = query({
 export const listFavoritesV2 = query({
   args: {},
   handler: async (ctx) => {
-    const contractId = FAVORITES_VIEW_CONTRACT_ID;
-    const viewKey = FAVORITES_VIEW_KEY;
+    const identity = { contractId: FAVORITES_VIEW_CONTRACT_ID, viewKey: FAVORITES_VIEW_KEY };
     const userId = await getAuthUserId(ctx);
-    if (!userId) return { contractId, viewKey, access: "unauthenticated" as const };
+    if (!userId) return unauthenticatedView(identity);
 
     const [favorites, viewRevision] = await Promise.all([
       ctx.db
@@ -5587,21 +5587,15 @@ export const listFavoritesV2 = query({
         .withIndex("by_user_favorite", (q) =>
           q.eq("user_id", userId).eq("is_favorite", true))
         .collect(),
-      readLocalViewRevision(ctx, userId, contractId, viewKey),
+      readLocalViewRevision(ctx, userId, identity.contractId, identity.viewKey),
     ]);
     const projected = favorites
       .map(projectFavoriteMembership)
       .sort((left, right) =>
         String(left.conversation_id).localeCompare(String(right.conversation_id)));
-    return {
-      contractId,
-      viewKey,
-      access: "granted" as const,
-      grantKeys: [FAVORITES_GRANT_KEY],
-      viewRevision,
-      coverage: revisionCoverage(viewRevision),
+    return grantedView(identity, { grantKeys: [FAVORITES_GRANT_KEY], viewRevision }, {
       favorites: projected,
-    };
+    });
   },
 });
 
