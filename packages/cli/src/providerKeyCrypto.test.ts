@@ -78,7 +78,11 @@ describe("provider-key web→daemon crypto", () => {
   it("the REAL web module (SubtleCrypto) round-trips against the daemon decrypt", async () => {
     // Import the actual web encrypt (not a node re-impl) so a one-sided change to
     // either crypto module breaks this test instead of silently breaking prod.
-    const { encryptProviderKey } = await import("../../web/lib/providerKeyCrypto");
+    // The path is in a variable so the CLI tsconfig (rootDir: src) doesn't try to
+    // compile the web module; bun still loads the real one at runtime, so the
+    // interop round-trip below is against production web code, not a stub.
+    const webCryptoModule = "../../web/lib/providerKeyCrypto";
+    const { encryptProviderKey } = await import(webCryptoModule);
     const dir = tmpDir();
     try {
       const pub = getProviderKeyPublicKey(dir);
