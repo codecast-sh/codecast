@@ -55,6 +55,13 @@ export type ExternalCommit = {
   fullReload: boolean;
 };
 
+/** One durable head advance observed by this engine, local or cross-tab. */
+export type EngineCommitEvent = {
+  head: number;
+  /** Empty when the affected keys are unknown (non-contiguous catch-up). */
+  affectedKeys: readonly string[];
+};
+
 export type LocalFirstEngineOptions = {
   adapter: PrincipalStoreAdapter;
   fence: PrincipalStoreFence;
@@ -86,6 +93,7 @@ export class LocalFirstEngine {
   }>();
   private observedHead: LocalCommitSequence;
   private readonly channel: BroadcastChannel | null;
+  private readonly commitListeners = new Set<(commit: EngineCommitEvent) => void>();
   private closed = false;
 
   constructor(private readonly options: LocalFirstEngineOptions) {
@@ -107,6 +115,25 @@ export class LocalFirstEngine {
 
   get principalId(): PrincipalId {
     return this.options.principalId;
+  }
+
+  /**
+   * Notifies on every observed durable head advance — this tab's commits and
+   * broadcast/reconciled cross-tab commits alike. Selector hooks re-read the
+   * durable snapshot on this signal; the engine itself stays branch-free.
+   */
+  subscribeCommits(listener: (commit: EngineCommitEvent) => void): () => void {
+    this.commitListeners.add(listener);
+    return () => this.commitListeners.delete(listener);
+  }
+
+  private notifyCommit(commit: EngineCommitEvent): void {
+    for (const listener of this.commitListeners) listener(commit);
+  }
+
+  /** Read-only durable snapshot for pure visible-state selectors. */
+  async readSnapshot() {
+    return await this.options.adapter.readSnapshot(this.options.fence);
   }
 
   async beginSource(
@@ -218,6 +245,7 @@ export class LocalFirstEngine {
     this.sources.get(token.viewKey)!.lastCommittedSequence = token.sourceSequence;
     // Disk is authoritative. Publication happens only after the transaction.
     publish(result);
+    this.notifyCommit({ head: result.head, affectedKeys: result.affectedKeys });
     this.channel?.postMessage({
       principalKey: this.options.fence.principalKey,
       head: result.head,
@@ -603,6 +631,10 @@ export class LocalFirstEngine {
     const previous = this.observedHead;
     this.observedHead = durableHead;
     const contiguous = durableHead === previous + 1 && hint?.head === durableHead;
+    this.notifyCommit({
+      head: durableHead,
+      affectedKeys: contiguous ? hint!.affectedKeys : [],
+    });
     await this.options.onExternalCommit?.({
       head: durableHead,
       affectedKeys: contiguous ? hint!.affectedKeys : [],
@@ -626,6 +658,7 @@ export class LocalFirstEngine {
 
   close(): void {
     this.closed = true;
+    this.commitListeners.clear();
     this.channel?.close();
   }
 }

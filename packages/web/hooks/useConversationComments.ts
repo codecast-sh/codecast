@@ -1,27 +1,48 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { useQuery } from "convex/react";
 import { useShallow } from "zustand/react/shallow";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { isConvexId } from "../lib/entityLinks";
 import { useInboxStore } from "../store/inboxStore";
+import { localFirstSliceMode } from "../store/local-first/featureFlags";
+import { commentsByConversationView } from "../store/local-first/referenceContracts";
 import { useConvexSync } from "./useConvexSync";
+import { useLocalView } from "./useLocalView";
 import { groupComments, threadKeyFor, type Comment, type CommentThread } from "../lib/commentThread";
 
-// Comments funnel through the inboxStore cache like everything else. The live
-// query feeds syncTable("comments", …) ONCE (useConversationCommentsSync, mounted
-// in ConversationView); every reader pulls straight from the store (instant), and
+// Comments funnel through the inboxStore cache like everything else. The feed
+// runs ONCE per open conversation (useConversationCommentsSync, mounted in
+// ConversationView); every reader pulls straight from the store (instant), and
 // writes are store actions that paint optimistically and reconcile on the echo.
 
 // Mount once per open conversation: pipe the live thread into the store.
+// The declared local-first view rolls out beside it per its slice flag:
+// "shadow" materializes the durable v2 view without touching readers;
+// "cutover" makes that durable view the store's feed.
 export function useConversationCommentsSync(conversationId: string | undefined): void {
   const canQuery = !!conversationId && isConvexId(conversationId);
+  const mode = localFirstSliceMode("comments");
+  const syncTable = useInboxStore((s) => s.syncTable);
+
   const raw = useQuery(
     api.comments.getConversationCommentSummary,
-    canQuery ? { conversation_id: conversationId as Id<"conversations"> } : "skip",
+    canQuery && mode !== "cutover"
+      ? { conversation_id: conversationId as Id<"conversations"> }
+      : "skip",
   );
-  const syncTable = useInboxStore((s) => s.syncTable);
   useConvexSync(raw, useCallback((data: any) => syncTable("comments", data ?? []), [syncTable]));
+
+  const view = useLocalView(
+    commentsByConversationView,
+    { conversationId: conversationId as Id<"conversations"> },
+    { enabled: canQuery && mode !== "off" },
+  );
+  const viewRows = view.rows;
+  useEffect(() => {
+    if (mode !== "cutover" || view.status !== "granted") return;
+    syncTable("comments", viewRows.map((row) => row.value));
+  }, [mode, view.status, viewRows, syncTable]);
 }
 
 export type CommentActions = {

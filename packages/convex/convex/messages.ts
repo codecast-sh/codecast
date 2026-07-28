@@ -14,6 +14,11 @@ import {
   messagesGrantKey,
   messagesViewKey,
 } from "./messageViewContracts";
+import {
+  forbiddenView,
+  missingView,
+  unauthenticatedView,
+} from "./smallViewContracts";
 import { scheduleAutoSwitchCheck } from "./accountSwitch";
 import { nextAgentStatusOnAddMessages, isApiErrorBanner, classifyApiErrorBanner, apiErrorBatchAction, NEEDS_INPUT_AUQ_CHECK_DELAY_MS } from "./inboxFilters";
 import { classifyDocContent, extractTitleFromContent, inlineDocSourceKey } from "./docExtraction";
@@ -393,30 +398,19 @@ export const getMessageCoverageV2 = query({
     command_ids: v.array(v.string()),
   },
   handler: async (ctx, args) => {
-    const contractId = MESSAGES_VIEW_CONTRACT_ID;
-    const viewKey = messagesViewKey(args.conversation_id);
+    const identity = {
+      contractId: MESSAGES_VIEW_CONTRACT_ID,
+      viewKey: messagesViewKey(args.conversation_id),
+    };
     const grantKey = messagesGrantKey(args.conversation_id);
     const userId = await getAuthUserId(ctx);
-    if (!userId) return { contractId, viewKey, access: "unauthenticated" as const };
+    if (!userId) return unauthenticatedView(identity);
 
     const commandIds = normalizeMessageCoverageCommandIds(args.command_ids);
     const conversation = await ctx.db.get(args.conversation_id);
-    if (!conversation) {
-      return {
-        contractId,
-        viewKey,
-        access: "missing" as const,
-        releasedGrantKeys: [grantKey],
-        removals: [],
-      };
-    }
+    if (!conversation) return missingView(identity, [grantKey]);
     if (!(await canSendProductMessage(ctx, userId, conversation))) {
-      return {
-        contractId,
-        viewKey,
-        access: "forbidden" as const,
-        revokedGrantKeys: [grantKey],
-      };
+      return forbiddenView(identity, [grantKey]);
     }
 
     const matches = await Promise.all(commandIds.map(async (commandId) =>
@@ -426,9 +420,9 @@ export const getMessageCoverageV2 = query({
           q.eq("conversation_id", args.conversation_id).eq("client_id", commandId))
         .first()));
     const coveredCommandIds = commandIds.filter((_commandId, index) => !!matches[index]);
+    // Command-id coverage, not a revision-covered row set — outside grantedView.
     return {
-      contractId,
-      viewKey,
+      ...identity,
       access: "granted" as const,
       grantKeys: [grantKey],
       coverage: {

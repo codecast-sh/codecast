@@ -23,8 +23,10 @@ import {
   CURRENT_USER_GRANT_KEY,
   CURRENT_USER_VIEW_CONTRACT_ID,
   CURRENT_USER_VIEW_KEY,
+  grantedView,
+  missingView,
   projectCurrentUserMetadata,
-  revisionCoverage,
+  unauthenticatedView,
 } from "./smallViewContracts";
 
 // Skills moved off the heartbeat-hot users doc into user_skills (see schema
@@ -60,31 +62,17 @@ export const getCurrentUser = query({
 export const getCurrentUserV2 = query({
   args: {},
   handler: async (ctx) => {
-    const contractId = CURRENT_USER_VIEW_CONTRACT_ID;
-    const viewKey = CURRENT_USER_VIEW_KEY;
+    const identity = { contractId: CURRENT_USER_VIEW_CONTRACT_ID, viewKey: CURRENT_USER_VIEW_KEY };
     const userId = await getAuthUserId(ctx);
-    if (!userId) return { contractId, viewKey, access: "unauthenticated" as const };
+    if (!userId) return unauthenticatedView(identity);
 
     const user = await ctx.db.get(userId);
-    if (!user) {
-      return {
-        contractId,
-        viewKey,
-        access: "missing" as const,
-        releasedGrantKeys: [CURRENT_USER_GRANT_KEY],
-        removals: [],
-      };
-    }
-    const viewRevision = await readLocalViewRevision(ctx, userId, contractId, viewKey);
-    return {
-      contractId,
-      viewKey,
-      access: "granted" as const,
-      grantKeys: [CURRENT_USER_GRANT_KEY],
-      viewRevision,
-      coverage: revisionCoverage(viewRevision),
+    if (!user) return missingView(identity, [CURRENT_USER_GRANT_KEY]);
+    const viewRevision = await readLocalViewRevision(
+      ctx, userId, identity.contractId, identity.viewKey);
+    return grantedView(identity, { grantKeys: [CURRENT_USER_GRANT_KEY], viewRevision }, {
       user: projectCurrentUserMetadata(user),
-    };
+    });
   },
 });
 

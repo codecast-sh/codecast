@@ -1,20 +1,38 @@
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
+import { advanceLocalViewRevision } from "./localViewRevisions";
 import {
-  advanceLocalViewRevision,
-  type ViewCoverageTarget,
-} from "./localViewRevisions";
+  runViewTransition,
+  type RevisionMode,
+  type ViewWriter,
+  type ViewWriterBinding,
+} from "./lib/viewWriters";
 import { bookmarksCoverageTarget } from "./smallViewContracts";
 
-type RevisionMode = "advance" | "receipt";
+export type BookmarkViewWriter = ViewWriter<"bookmarks">;
 
-export type BookmarkViewWriter = {
-  insert: (
-    value: Omit<Doc<"bookmarks">, "_id" | "_creationTime">,
-  ) => Promise<Id<"bookmarks">>;
-  patch: (id: Id<"bookmarks">, value: Partial<Doc<"bookmarks">>) => Promise<void>;
-  delete: (id: Id<"bookmarks">) => Promise<void>;
-};
+function bookmarkBinding(principalId: Id<"users">): ViewWriterBinding<"bookmarks"> {
+  return {
+    table: "bookmarks",
+    label: "bookmark",
+    guardInsert(value) {
+      if (String(value.user_id) !== String(principalId)) {
+        throw new Error("Bookmark insert crossed its bound principal view");
+      }
+    },
+    guardRow(row) {
+      if (String(row.user_id) !== String(principalId)) {
+        throw new Error("Bookmark write crossed its bound principal view");
+      }
+    },
+    guardPatch(_row, patch) {
+      if ("user_id" in patch && String(patch.user_id) !== String(principalId)) {
+        throw new Error("Bookmark writer cannot transfer principal ownership");
+      }
+    },
+    coverageTarget: bookmarksCoverageTarget(principalId),
+  };
+}
 
 /** The only ordinary raw write boundary for the bookmarks table. */
 export async function runBookmarkViewTransition<Result>(
@@ -22,52 +40,8 @@ export async function runBookmarkViewTransition<Result>(
   principalId: Id<"users">,
   revisionMode: RevisionMode,
   transition: (writer: BookmarkViewWriter) => Promise<Result>,
-): Promise<{ result: Result; coverageTarget?: ViewCoverageTarget }> {
-  const requireBoundBookmark = async (id: Id<"bookmarks">): Promise<Doc<"bookmarks">> => {
-    const bookmark = await ctx.db.get(id);
-    if (!bookmark) throw new Error("Cannot write a missing bookmark");
-    if (String(bookmark.user_id) !== String(principalId)) {
-      throw new Error("Bookmark write crossed its bound principal view");
-    }
-    return bookmark;
-  };
-
-  let writeCount = 0;
-  const writer: BookmarkViewWriter = {
-    async insert(value) {
-      if (String(value.user_id) !== String(principalId)) {
-        throw new Error("Bookmark insert crossed its bound principal view");
-      }
-      writeCount++;
-      return await ctx.db.insert("bookmarks", value);
-    },
-    async patch(id, value) {
-      await requireBoundBookmark(id);
-      if ("user_id" in value && String(value.user_id) !== String(principalId)) {
-        throw new Error("Bookmark writer cannot transfer principal ownership");
-      }
-      writeCount++;
-      await ctx.db.patch(id, value);
-    },
-    async delete(id) {
-      await requireBoundBookmark(id);
-      writeCount++;
-      await ctx.db.delete(id);
-    },
-  };
-
-  const result = await transition(writer);
-  if (writeCount === 0) return { result };
-  const coverageTarget = bookmarksCoverageTarget(principalId);
-  if (revisionMode === "advance") {
-    await advanceLocalViewRevision(
-      ctx,
-      principalId,
-      coverageTarget.contractId,
-      coverageTarget.viewKey,
-    );
-  }
-  return { result, coverageTarget };
+) {
+  return await runViewTransition(ctx, bookmarkBinding(principalId), revisionMode, transition);
 }
 
 export async function insertBookmarkWithRevision(

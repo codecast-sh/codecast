@@ -187,3 +187,43 @@ export function revisionCoverage(revision: number) {
     revisionOrder: revision,
   };
 }
+
+export type ViewIdentity = { contractId: string; viewKey: string };
+
+export function unauthenticatedView(identity: ViewIdentity) {
+  return { ...identity, access: "unauthenticated" as const };
+}
+
+export function missingView(identity: ViewIdentity, releasedGrantKeys: string[]) {
+  return {
+    ...identity,
+    access: "missing" as const,
+    releasedGrantKeys,
+    removals: [] as never[],
+  };
+}
+
+export function forbiddenView(identity: ViewIdentity, revokedGrantKeys: string[]) {
+  return { ...identity, access: "forbidden" as const, revokedGrantKeys };
+}
+
+/**
+ * The canonical granted envelope for revision-covered complete views:
+ * identity + grants + view revision + derived coverage + the view's domain
+ * rows under their domain-named field. Every v2 view query returns this shape
+ * so clients decode one envelope, not one per view.
+ */
+export function grantedView<Rows extends Record<string, unknown>>(
+  identity: ViewIdentity,
+  input: { grantKeys: string[]; viewRevision: number },
+  rows: Rows,
+) {
+  return {
+    ...identity,
+    access: "granted" as const,
+    grantKeys: input.grantKeys,
+    viewRevision: input.viewRevision,
+    coverage: revisionCoverage(input.viewRevision),
+    ...rows,
+  };
+}
