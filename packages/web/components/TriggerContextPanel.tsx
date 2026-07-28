@@ -21,10 +21,10 @@ import {
 import { describeTaskCadence, fmtClock, fmtDuration, taskStateLabel } from "./triggerCadence";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { ARMED_STATUSES, taskDisplayTitle, type TaskRow } from "./triggerTasks";
-import { openRunInStore, useTriggerRuns } from "./TriggerRunHistory";
+import { TriggerRunRail, useTriggerRuns } from "./TriggerRunHistory";
 import { useInboxStore } from "../store/inboxStore";
 import { useCoarseNow } from "../hooks/useCoarseNow";
-import { MarkdownRenderer } from "./tools/MarkdownRenderer";
+import { TriggerPromptView } from "./TriggerPromptView";
 
 const api = _api as any;
 
@@ -268,47 +268,22 @@ export function TriggerContextPanel({
         </div>
       </button>
 
-      {/* Run history: every run as a browseable chip, newest first — spawned
-          runs and injected turns alike. Rendered outside the expander —
-          browsing runs is the point of the strip on a run's page and shouldn't
-          cost a click. Every chip navigates to the MESSAGE that triggered that
-          run (for a run in the current conversation it scrolls there). Hidden
-          when the only run is the one being viewed (a one-chip strip says
-          nothing the inline turn doesn't). */}
+      {/* Run history: the trigger's timeline as a connected dot rail — the
+          next fire (when armed), a "now" tick, then every past run newest
+          first, spawned runs and injected turns alike. Rendered outside the
+          expander — browsing runs is the point of the strip on a run's page
+          and shouldn't cost a click. Every node navigates to the MESSAGE that
+          triggered that run (for a run in the current conversation it scrolls
+          there). Hidden when the only run is the one being viewed (a one-node
+          rail says nothing the inline turn doesn't). */}
       {runs && (runs.length > 1 || (runs.length === 1 && runs[0]._id !== conversationId)) && (
-        <div className="flex items-center gap-1.5 px-4 pb-2 overflow-x-auto">
-          <span className="text-[9px] font-semibold uppercase tracking-wider text-sol-text-dim/70 shrink-0">
-            {runs.length} run{runs.length === 1 ? "" : "s"}
-          </span>
-          {runs.map((r, i) => {
-            const isCurrent = r.kind === "spawn" && r._id === conversationId;
-            const label = `#${runs.length - i} · ${fmtDuration(Math.max(0, now - r.created_at))} ago`;
-            const tooltip = r.idle_summary ? `${r.title} — ${r.idle_summary}` : r.title;
-            const hint = isCurrent
-              ? "this session — jump to the trigger"
-              : r.trigger_message_id
-                ? "open the trigger message"
-                : undefined;
-            return (
-              <ShortcutTooltip key={r.run_key} label={tooltip} hint={hint}>
-                <button
-                  // requestNavigate pairs the conversation switch with the
-                  // scroll-to-trigger target atomically; the inbox shell
-                  // resolves cached, dismissed/folded, and unsynced runs alike
-                  // (same path as bookmarks and search hits).
-                  onClick={() => openRunInStore(r)}
-                  className={`px-1.5 py-0.5 rounded border text-[10px] font-mono shrink-0 transition-colors ${
-                    isCurrent
-                      ? "border-sol-orange/50 bg-sol-orange/10 text-sol-orange hover:bg-sol-orange/20"
-                      : "border-sol-border/50 text-sol-text-dim hover:text-sol-cyan hover:border-sol-cyan/40"
-                  }`}
-                >
-                  {label}
-                </button>
-              </ShortcutTooltip>
-            );
-          })}
-        </div>
+        <TriggerRunRail
+          runs={runs}
+          now={now}
+          conversationId={conversationId}
+          nextRunAt={primary.status === "scheduled" ? primary.run_at : undefined}
+          className="px-4 pb-2.5"
+        />
       )}
 
       {expanded && (
@@ -369,13 +344,9 @@ export function TriggerContextPanel({
             )}
           </div>
           {/* Prompts are markdown (the CLI snippet asks agents to write them
-              that way) — render them, don't dump them in a mono pre. Copy
-              still hands over the raw text. */}
-          {showPrompt && (
-            <div className="max-w-[110ch] max-h-48 overflow-y-auto rounded border border-sol-border/30 bg-sol-bg/60 p-2.5">
-              <MarkdownRenderer content={primary.prompt} className="text-xs leading-relaxed text-sol-text-muted" />
-            </div>
-          )}
+              that way) — first-class rendering in a drag-resizable viewport.
+              Copy still hands over the raw text. */}
+          {showPrompt && <TriggerPromptView prompt={primary.prompt} className="-mx-4" />}
 
           <div className="flex items-center gap-3 flex-wrap text-[10px] text-sol-text-dim">
             <span className="inline-flex items-center gap-1.5">

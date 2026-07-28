@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useRef } from "react";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import {
   Terminal, Bot, RefreshCw, User, KeyRound, Users, Plug, Monitor, Bell, Laptop, UserCog, Blocks, X,
 } from "lucide-react";
@@ -76,6 +77,23 @@ export function SettingsModal() {
   const section = s.settingsModalSection;
   const close = useCallback(() => useInboxStore.getState().closeSettingsModal(), []);
 
+  // Take focus on open and give it back on close. Without this, opening the
+  // modal from the keyboard leaves focus in the background composer and every
+  // typed character lands there, behind the dialog. Keyed on open-ness, not
+  // section, so switching sections inside the modal doesn't re-steal focus.
+  const open = !!section;
+  const panelRef = useRef<HTMLDivElement>(null);
+  const restoreFocusRef = useRef<HTMLElement | null>(null);
+  useWatchEffect(() => {
+    if (!open) return;
+    restoreFocusRef.current = document.activeElement as HTMLElement | null;
+    panelRef.current?.focus();
+    return () => {
+      const prev = restoreFocusRef.current;
+      if (prev && document.contains(prev)) prev.focus();
+    };
+  }, [open]);
+
   useEventListener(
     "keydown",
     useCallback((e: KeyboardEvent) => {
@@ -101,7 +119,7 @@ export function SettingsModal() {
       aria-modal="true"
       aria-label="Settings"
     >
-      <div className="w-full max-w-[920px] h-[min(680px,92dvh)] bg-sol-bg border border-sol-border rounded-xl shadow-2xl flex overflow-hidden animate-fadeSlideIn">
+      <div ref={panelRef} tabIndex={-1} className="w-full max-w-[920px] h-[min(680px,92dvh)] bg-sol-bg border border-sol-border rounded-xl shadow-2xl flex overflow-hidden animate-fadeSlideIn outline-none">
         <nav className="w-12 sm:w-52 shrink-0 border-r border-sol-border bg-sol-bg-alt/40 py-3 px-1.5 sm:px-2 overflow-y-auto">
           <div className="hidden sm:block px-3 pb-2 text-sm font-semibold text-sol-text">Settings</div>
           {GROUPS.map((group) => {

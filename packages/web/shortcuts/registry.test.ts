@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { SHORTCUTS, inputGuardBypass, type ShortcutAction, type ShortcutDef } from "./registry";
+import { SHORTCUTS, inputGuardBypass, hasOpenModal, type ShortcutAction, type ShortcutDef } from "./registry";
 
 // Regression guard for the "session died mysteriously" incident: a ctrl+shift+
 // backspace kill chord fired while the composer was focused (ctrl+backspace is the
@@ -65,5 +65,55 @@ describe("inputGuardBypass", () => {
     // value/content notion, so the chord must not fire there.
     expect(inputGuardBypass(def("whenEmpty"), { tagName: "DIV" })).toBe(false);
     expect(inputGuardBypass(def("whenEmpty"), null)).toBe(false);
+  });
+});
+
+// While a modal dialog is open it owns the keyboard: the dispatcher suppresses
+// every shortcut except those flagged worksInModal. The flag is reserved for
+// app-chrome actions that cannot touch the surface behind the dialog — zoom,
+// and the settings toggle (which closes the modal itself). Anything acting on
+// the session/conversation behind the dialog (switch, kill, compose.focus,
+// y/n permission answers) must never carry it: typing in a dialog input once
+// stole Ctrl+M into the background composer and let bare letters approve
+// permissions on the conversation underneath.
+describe("worksInModal is restricted to app-chrome shortcuts", () => {
+  const ALLOWED: ShortcutAction[] = ["ui.openSettings", "zoom.in", "zoom.out", "zoom.reset"];
+
+  test("only the allowlisted actions fire while a modal is open", () => {
+    const flagged = SHORTCUTS.filter((s) => s.worksInModal).map((s) => s.action);
+    for (const action of flagged) expect(ALLOWED).toContain(action);
+  });
+
+  test("background-acting shortcuts are never flagged", () => {
+    const background: ShortcutAction[] = [
+      "session.next", "session.kill", "session.stash", "compose.focus",
+      "permission.approve", "permission.deny", "msg.sendAdvance",
+    ];
+    for (const def of SHORTCUTS.filter((s) => background.includes(s.action))) {
+      expect(def.worksInModal).toBeUndefined();
+    }
+  });
+});
+
+describe("hasOpenModal", () => {
+  test("false without a document (SSR / dispatcher safety)", () => {
+    expect(hasOpenModal()).toBe(false);
+  });
+
+  test("reflects an aria-modal element that is not mid exit animation", () => {
+    const stub = (found: boolean) => ({
+      querySelector: (sel: string) => {
+        expect(sel).toBe('[aria-modal="true"]:not([data-state="closed"])');
+        return found ? {} : null;
+      },
+    });
+    (globalThis as any).document = stub(true);
+    try {
+      expect(hasOpenModal()).toBe(true);
+      (globalThis as any).document = stub(false);
+      expect(hasOpenModal()).toBe(false);
+    } finally {
+      delete (globalThis as any).document;
+    }
   });
 });

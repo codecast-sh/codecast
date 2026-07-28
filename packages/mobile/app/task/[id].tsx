@@ -1,17 +1,23 @@
-import { useState, useCallback, useMemo, useRef, useEffect } from "react";
+import {
+  useState,
+  useCallback,
+  useMemo,
+  useRef,
+  useEffect } from "react";
 import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
   View as RNView,
-  Text as RNText,
-  TextInput,
   ActionSheetIOS,
   ActivityIndicator,
-} from "react-native";
+  type TextInput as RNTextInput,
+} from 'react-native';
+import { Text as RNText, TextInput } from '@/components/Themed';
 import { useLocalSearchParams, useRouter, Stack } from "expo-router";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { Theme, Spacing } from "@/constants/Theme";
+import { Mono } from "@/constants/fonts";
 import { useInboxStore, type TaskItem } from "@codecast/web/store/inboxStore";
 import { useSyncTaskDetail } from "@codecast/web/hooks/useSyncTasks";
 import { useSyncTasks } from "@/hooks/useSyncTasks";
@@ -48,7 +54,7 @@ export default function TaskDetailScreen() {
 
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
-  const titleInputRef = useRef<TextInput>(null);
+  const titleInputRef = useRef<RNTextInput>(null);
   const [commentText, setCommentText] = useState("");
 
   useEffect(() => {
@@ -153,7 +159,7 @@ export default function TaskDetailScreen() {
           title: task.short_id,
           headerStyle: { backgroundColor: Theme.bgAlt },
           headerTintColor: Theme.text,
-          headerTitleStyle: { fontSize: 15, fontWeight: "600", color: Theme.textMuted },
+          headerTitleStyle: { fontSize: 14, fontFamily: Mono.semiBold, color: Theme.textMuted },
         }}
       />
       <ScrollView style={styles.container} contentContainerStyle={styles.content}>
