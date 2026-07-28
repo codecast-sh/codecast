@@ -18,7 +18,7 @@ import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
 import { isBlockedConversation, isSubagentConversation, nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
-import { isStatusTrustStale } from "@codecast/shared/contracts";
+import { isLivenessStale } from "@codecast/shared/contracts";
 import { TooltipProvider } from "./ui/tooltip";
 import { cleanTitle, msgCountColor, formatModel } from "../lib/conversationProcessor";
 import { getLabelColor } from "../lib/labelColors";
@@ -28,6 +28,7 @@ import { monitorRowsFor, effectiveMonitorStatus } from "./monitorRows";
 import { partitionTriggerInbox, patchTaskInWebList, taskDisplayTitle, latestLoadedTriggerMessage, type TriggerRow, type TaskRow } from "./triggerTasks";
 import { TriggerRunList, useTriggerRuns, openRunInStore, type TriggerRun } from "./TriggerRunHistory";
 import { cleanUserMessage } from "./sessionMessage";
+import { AgentTypeIcon, formatAgentType } from "./AgentTypeIcon";
 import { SharePopover } from "./SharePopover";
 import { shareOrigin } from "../lib/utils";
 import { PlanContextPanel } from "./PlanContextPanel";
@@ -1015,7 +1016,7 @@ function MonitorBars({ session, isActive, onOpen }: {
   const messages = useInboxStore((st) => st.messages[session._id]);
   const now = useCoarseNow(30_000);
   const rows = useMemo(() => monitorRowsFor(messages), [messages]);
-  if (session.agent_status === "stopped" || isStatusTrustStale(session, now)) return null;
+  if (session.agent_status === "stopped" || isLivenessStale(session, now)) return null;
   const watching = rows.filter((r) => effectiveMonitorStatus(r, now) === "watching");
   if (watching.length === 0) return null;
   return (
@@ -1357,7 +1358,7 @@ export const SessionCard = memo(function SessionCard({
   // needs-input. Past the trust TTL (keyed on updated_at, which a real working
   // agent bumps far more often) the pulse goes dark — the dot and the bucket now
   // read the SAME staleness check, so they can't disagree.
-  const isLive = !session.is_idle && session.message_count > 0 && !isStatusTrustStale(session, Date.now());
+  const isLive = !session.is_idle && session.message_count > 0 && !isLivenessStale(session, Date.now());
   // Age-gated because a restart navigated away from has no owner left to clear
   // its entry; liveness-gated so the green dot takes over the moment the
   // session is actually back. The coarse clock above keeps the age fresh.
@@ -1519,6 +1520,9 @@ export const SessionCard = memo(function SessionCard({
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
               <path strokeLinecap="round" strokeLinejoin="round" d="M14 12l4 4-4 4" />
             </svg>
+            <span className="flex-shrink-0 flex items-center opacity-70" title={formatAgentType(session.agent_type || "claude_code")}>
+              <AgentTypeIcon agentType={session.agent_type || "claude_code"} className="w-3 h-3" />
+            </span>
             <span className={`truncate text-xs leading-tight flex-1 ${
               isActive ? "text-violet-300 font-medium" : "text-gray-400 font-normal"
             }`}>
@@ -1643,6 +1647,9 @@ export const SessionCard = memo(function SessionCard({
         <div className={`flex items-center gap-1.5 leading-tight ${
           isActive ? "text-sm text-sol-text font-semibold" : isWorking ? "text-sm text-sol-text font-medium" : isStashed ? "text-sm text-sol-text" : isDismissed ? "text-sm text-sol-text-muted" : "text-sm text-sol-text"
         }`}>
+          <span className="flex-shrink-0 flex items-center" title={formatAgentType(session.agent_type || "claude_code")}>
+            <AgentTypeIcon agentType={session.agent_type || "claude_code"} className="w-3.5 h-3.5" />
+          </span>
           <span className="truncate min-w-0">{isSlashCommand ? <span className="font-mono text-sol-cyan">{displayTitle}</span> : displayTitle}</span>
           {/* Favorite affordance — AFTER the title so it never shifts the name.
               Solid (soft amber) when favorited; otherwise a very subdued star that
@@ -2844,7 +2851,7 @@ export function SessionListPanel({
     // predicate as the card's green dot (isLive) so header and rows can't
     // disagree; coarseNow keeps the trust-stale check on the panel's ticker.
     const isBucketLive = (sess: InboxSession) =>
-      !sess.is_idle && sess.message_count > 0 && !isStatusTrustStale(sess, coarseNow);
+      !sess.is_idle && sess.message_count > 0 && !isLivenessStale(sess, coarseNow);
     const liveCount = items.filter(isBucketLive).length;
     const allIds = new Set(items.map((sess) => sess._id));
     const subMap = new Map<string, InboxSession[]>();
