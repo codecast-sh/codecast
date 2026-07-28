@@ -5047,11 +5047,13 @@ function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: ToolCall;
   );
 }
 
-// Reasoning text, rendered whenever a message carries non-empty `thinking`.
-// claude/codex redact thinking server-side (empty → nothing renders, unchanged),
-// but opencode/pi carry real reasoning that would otherwise vanish — and a
-// reasoning-ONLY turn would disappear from the timeline entirely. Faded, collapsed
-// to a 2-line preview by default, click to expand.
+// Reasoning text, only mounted by the caller when the conversation's global
+// "Show thinking" toggle is on (off by default — see showThinking in
+// ConversationView). claude/codex redact thinking server-side (empty →
+// nothing renders, unchanged), but opencode/pi carry real reasoning that
+// would otherwise vanish — and a reasoning-ONLY turn would disappear from
+// the timeline entirely. Faded, collapsed to a 2-line preview by default,
+// click to expand.
 function ThinkingBlock({ content }: { content: string }) {
   const [expanded, setExpanded] = useState(false);
   const lines = content.split("\n");
@@ -6748,6 +6750,7 @@ function AssistantBlockImpl({
   content,
   timestamp,
   thinking,
+  showThinking,
   toolCalls,
   toolResults,
   images,
@@ -6788,6 +6791,7 @@ function AssistantBlockImpl({
   content?: string;
   timestamp: number;
   thinking?: string;
+  showThinking?: boolean;
   toolCalls?: ToolCall[];
   toolResults?: ToolResult[];
   images?: ImageData[];
@@ -6847,6 +6851,7 @@ function AssistantBlockImpl({
   const onlyAskUser = toolCalls && toolCalls.length > 0 && toolCalls.every(tc => tc.name === "AskUserQuestion");
   const hasContent = displayContent && displayContent.trim().length > 0 && !onlyAskUser;
   const hasThinking = !!thinking && thinking.trim().length > 0;
+  const visibleThinking = hasThinking && !!showThinking;
   const hasToolCalls = toolCalls && toolCalls.length > 0;
   const hasImages = images?.some(img => !img.tool_use_id) ?? false;
 
@@ -6901,8 +6906,8 @@ function AssistantBlockImpl({
 
   // Show Claude header for first message in sequence (regardless of content type)
   const shouldShowHeader = showHeader;
-  const onlyToolCalls = hasToolCalls && !hasContent && !hasThinking;
-  const hasVisibleContent = hasContent || hasThinking || hasToolCalls || hasImages;
+  const onlyToolCalls = hasToolCalls && !hasContent && !visibleThinking;
+  const hasVisibleContent = hasContent || visibleThinking || hasToolCalls || hasImages;
 
   // When nothing visible, hide completely
   if (!hasVisibleContent) {
@@ -6922,7 +6927,7 @@ function AssistantBlockImpl({
           <ChevronUp className="w-3 h-3" /> Collapse turn
         </button>
       )}
-      {(hasContent || hasThinking || hasToolCalls) && (
+      {(hasContent || visibleThinking || hasToolCalls) && (
         <div className={`absolute ${hasPlanWrite && onlyToolCalls ? "-top-6" : onlyToolCalls ? "top-1" : "-top-2"} right-0 transition-opacity duration-150 flex gap-0.5 z-10 bg-sol-bg rounded shadow-md px-0.5 ${shareSelectionMode ? "opacity-0 pointer-events-none" : "opacity-0 group-hover:opacity-100"}`}>
           {/* Respond actions (quote into your reply) live on each block's left
               gutter — see MessageReview. This corner is META only: a plain row
@@ -6999,9 +7004,12 @@ function AssistantBlockImpl({
       <div className={shouldShowHeader || !showHeader ? "pl-8" : "pl-0"}>
         {hasImages && images?.filter(img => !img.tool_use_id).map((img, i) => <ImageBlock key={i} image={img} />)}
 
-        {/* Condensed feed hides thinking to cut noise — EXCEPT a pure-reasoning turn,
-            where thinking is the only content and hiding it leaves an empty bubble. */}
-        {hasThinking && (!effectiveCondensed || (!hasContent && !hasToolCalls && !hasImages)) && <ThinkingBlock content={thinking!} />}
+        {/* Hidden entirely unless the global "Show thinking" toggle is on
+            (off by default) — opencode/pi carry real reasoning that's noisy
+            otherwise. Condensed feed hides it too, EXCEPT a pure-reasoning
+            turn, where thinking is the only content and hiding it leaves an
+            empty bubble. */}
+        {visibleThinking && (!effectiveCondensed || (!hasContent && !hasToolCalls && !hasImages)) && <ThinkingBlock content={thinking!} />}
 
         {hasToolCalls && toolCalls?.map((tc) => {
           if (effectiveCondensed && !isAlwaysVisibleToolCall(tc)) return null;
@@ -7985,6 +7993,11 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const sacredKeyRef = useRef(sacredKey);
   const convIdRef = useRef(conversationId);
   const cached = useInboxStore.getState().getDraft(conversationId);
+  // The exact text last seeded from a PERSISTED store draft, still untouched by
+  // the user. While set, the delayed stale re-check may heal it against the
+  // message window once messages load (the mount-time check often runs before
+  // they have). Any setMessage — typing, send, populate — voids it.
+  const seededDraftRef = useRef<string | null>(null);
   // Fallback to the conversation-keyed entry: when a new session gets its
   // session_id stamped the key flips (conv id → session id) and this component
   // remounts — the freshest text lives under the conversation id.
@@ -7995,10 +8008,20 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     // Sacred text is live user input and always restores; the persisted
     // sources go through the stale-sent-draft check (a draft with images
     // attached is kept — the images make it more than a resent copy).
-    if (!cached?.draft_image_storage_ids?.length && isStaleSentDraft(conversationId, persisted)) return "";
+    if (!cached?.draft_image_storage_ids?.length) {
+      if (isStaleSentDraft(conversationId, persisted)) return "";
+      if (cached?.draft_message) seededDraftRef.current = persisted;
+    }
     return persisted;
   });
+  // Whether the composer held text at any point while showing this conversation.
+  // Gates the durable clear on leave: an emptied composer that once had text is
+  // an explicit clear gesture; one that was never filled must not eat a draft
+  // another surface (second tab, compose popup) wrote meanwhile.
+  const hadTextRef = useRef(!!message);
   const setMessage = useCallback((val: string) => {
+    if (val) hadTextRef.current = true;
+    seededDraftRef.current = null;
     sacredInputs.set(sacredKeyRef.current, { text: val });
     // Mirror under the conversation id so the text survives the key flip above.
     if (convIdRef.current !== sacredKeyRef.current) sacredInputs.set(convIdRef.current, { text: val });
@@ -8620,9 +8643,38 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     // Uploading rows are kept: their pending upload lives in the module-level
     // registry, so a successor composer instance can restore and re-attach.
     const imgs = pastedImagesRef.current.filter(i => i.storageId || i.uploading);
-    if (!msg && imgs.length === 0) return;
+    if (!msg && imgs.length === 0) {
+      // A composer that held text and leaves empty is an explicit clear —
+      // commit it durably. Without this, delete-then-navigate loses the race
+      // against the 300ms draft debounce (cancelled on key flip below) and the
+      // persisted draft resurrects on the next app launch. hadTextRef keeps a
+      // never-filled composer (second tab on the same conversation) from
+      // eating a draft another surface wrote meanwhile.
+      if (hadTextRef.current && useInboxStore.getState().getDraft(targetId)) {
+        useInboxStore.getState().clearDraftFinal(targetId);
+      }
+      return;
+    }
     persistDraftImages(targetId, msg, imgs);
   }, [draftTextForPersist]);
+
+  // Re-check a seeded persisted draft against the message window after it has
+  // had time to load. The seed-time stale check often runs before any messages
+  // are in the store (cold visit), so a resent-copy draft shows once — this
+  // catches it, empties the composer, and retires the draft for good. Skipped
+  // the moment the user edits (seededDraftRef voids) or a fork preview is up.
+  const staleRecheckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleStaleRecheck = useCallback(() => {
+    if (staleRecheckTimerRef.current) clearTimeout(staleRecheckTimerRef.current);
+    if (!seededDraftRef.current) return;
+    staleRecheckTimerRef.current = setTimeout(() => {
+      const seed = seededDraftRef.current;
+      if (!seed || messageRef.current !== seed || prevSelectionRef.current !== null) return;
+      if (!isStaleSentDraft(convIdRef.current, seed)) return;
+      setMessage("");
+      useInboxStore.getState().clearDraftFinal(convIdRef.current);
+    }, 3000);
+  }, [setMessage]);
 
   useWatchEffect(() => {
     const keyChanged = sacredKeyRef.current !== sacredKey;
@@ -8636,14 +8688,25 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       sacredKeyRef.current = sacredKey;
       convIdRef.current = conversationId;
       const sacred = sacredInputs.get(sacredKey);
-      const storeDraft = useInboxStore.getState().getDraft(conversationId)?.draft_message;
+      const row = useInboxStore.getState().getDraft(conversationId);
+      let storeDraft = row?.draft_message;
+      // Same stale-sent check the mount seed applies — without it, a resent-copy
+      // draft that the mount heal missed re-enters the composer (and from there
+      // the sacred cache, where no heal ever looks) on every key flip.
+      if (storeDraft && !row?.draft_image_storage_ids?.length && isStaleSentDraft(conversationId, storeDraft)) {
+        useInboxStore.getState().clearDraftFinal(conversationId);
+        storeDraft = undefined;
+      }
       const newDraft = sacred?.text ?? storeDraft ?? "";
       sacredInputs.set(sacredKey, { text: newDraft });
       _setMessage(newDraft);
+      hadTextRef.current = !!newDraft;
+      seededDraftRef.current = sacred == null && storeDraft ? newDraft : null;
+      scheduleStaleRecheck();
     } else if (convIdRef.current !== conversationId) {
       convIdRef.current = conversationId;
     }
-  }, [sacredKey, conversationId, saveDraftSnapshot, draftTextForPersist]);
+  }, [sacredKey, conversationId, saveDraftSnapshot, draftTextForPersist, scheduleStaleRecheck]);
 
   useMountEffect(() => {
     // One-shot heal for drafts poisoned before draftTextForPersist existed: a
@@ -8653,8 +8716,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     if (d?.draft_message && !d.draft_image_storage_ids?.length && isStaleSentDraft(conversationId, d.draft_message)) {
       useInboxStore.getState().clearDraftFinal(conversationId);
     }
+    scheduleStaleRecheck();
     return () => {
       if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+      if (staleRecheckTimerRef.current) clearTimeout(staleRecheckTimerRef.current);
       saveDraftSnapshot(convIdRef.current);
     };
   });
@@ -8694,7 +8759,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         if (sendingRef.current) return;
         const existing = useInboxStore.getState().getDraft(conversationId);
         if (!val && !existing?.draft_image_storage_ids?.length) {
-          useInboxStore.getState().clearDraft(conversationId);
+          // Final (server-tombstoned) clear: the user explicitly emptied the
+          // box, so the draft must die everywhere, not just in this device's
+          // local store — a copy on the server would resurrect on next boot.
+          useInboxStore.getState().clearDraftFinal(conversationId);
         } else {
           useInboxStore.getState().setDraft(conversationId, { ...existing, draft_message: val || null });
         }
@@ -10050,6 +10118,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     if (expandedTurns.size) setExpandedTurns(new Set());
   }
   const [diffExpanded, setDiffExpanded] = useState(false);
+  // Global thinking visibility, off by default — opencode/pi carry real
+  // reasoning text that's otherwise noisy in the timeline. Off = ThinkingBlock
+  // doesn't render at all. On, each block still opens collapsed to a 2-line
+  // preview (ThinkingBlock's own per-message state).
+  const [showThinking, setShowThinking] = useState(false);
   const convex = useConvex();
   const convexConvId = conversation?._id && isConvexId(conversation._id) ? conversation._id as Id<"conversations"> : undefined;
   // Defer non-critical Convex queries one macrotask past a conversation switch so the
@@ -10180,6 +10253,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     setDensityState((conversation?._id && DENSITY_BY_CONVERSATION.get(conversation._id)) || "full");
     setExpandedTurns(new Set());
     setDiffExpanded(false);
+    setShowThinking(false);
     setHighlightedMessageId(null);
     setAllMatchingMessageIds([]);
     setMatchInstances([]);
@@ -10397,6 +10471,15 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       return !realAskTimes.some(rt => Math.abs(rt - m.timestamp) <= DUP_WINDOW_MS);
     });
   }, [messagesFromConv]);
+
+  // Most clients redact thinking server-side now — only opencode (and
+  // occasionally pi) still send real reasoning text. Only surface the
+  // toggle/shortcut when this conversation actually has some, loaded window
+  // included, so the menu doesn't carry a dead entry for everyone else.
+  const hasAnyThinking = useMemo(
+    () => messages.some(m => m.role === "assistant" && !!m.thinking && m.thinking.trim().length > 0),
+    [messages]
+  );
 
   const agentNameToChildMap = useMemo(() => {
     const entries = conversation?.agent_name_entries;
@@ -12012,6 +12095,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     setDiffExpanded((s) => !s);
   }, [conversation?.git_branch]));
 
+  useShortcutAction('conv.toggleThinking', useCallback(() => {
+    if (!hasAnyThinking) return;
+    setShowThinking((s) => !s);
+  }, [hasAnyThinking]));
+
   useMountEffect(() => {
     const el = headerRef.current;
     if (!el) return;
@@ -13021,7 +13109,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         if (checkMsg.role !== 'assistant') break;
         const hasVisibleContent = (checkMsg.content && stripSystemTags(checkMsg.content).trim().length > 0)
           || (checkMsg.tool_calls && checkMsg.tool_calls.length > 0)
-          || (checkMsg.thinking && checkMsg.thinking.trim().length > 0)
+          || (showThinking && checkMsg.thinking && checkMsg.thinking.trim().length > 0)
           || (checkMsg.images && checkMsg.images.length > 0);
         if (hasVisibleContent) break;
         prevIdx--;
@@ -13098,6 +13186,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           content={msg.content}
           timestamp={msg.timestamp}
           thinking={msg.thinking}
+          showThinking={showThinking}
           toolCalls={msg.tool_calls}
           toolResults={relevantToolResults}
           images={msg.images}
@@ -13588,6 +13677,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                       </DropdownMenuItem>
                     )}
                     <DropdownMenuSeparator />
+                    {hasAnyThinking && (
+                      <DropdownMenuItem onClick={() => setShowThinking((s) => !s)}>
+                        {showThinking ? "Hide thinking" : "Show thinking"}
+                        <MenuKeyCaps action="conv.toggleThinking" />
+                      </DropdownMenuItem>
+                    )}
                     <DropdownMenuItem onClick={() => {
                       const next = !stickyDisabled;
                       updateUI({ sticky_headers_disabled: next });
