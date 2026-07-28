@@ -1,5 +1,6 @@
 import React from 'react';
-import { Text as RNText, StyleSheet } from 'react-native';
+import { StyleSheet } from 'react-native';
+import { Text as RNText } from '@/components/Themed';
 import { useQuery } from 'convex/react';
 import { api as _api } from '@codecast/convex/convex/_generated/api';
 import { useRouter } from 'expo-router';
