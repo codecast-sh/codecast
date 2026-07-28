@@ -17,7 +17,7 @@ import { compressImage } from "../lib/compressImage";
 import { useStorageImageUrl, hasDecodedSrc, markSrcDecoded } from "../hooks/useStorageImageUrl";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName } from "../lib/conversationProcessor";
-import { classifyApiErrorBanner, agentSupportsFork, CLIENT_ERROR_BANNER_PREFIX } from "@codecast/shared/contracts";
+import { classifyApiErrorBanner, agentSupportsFork, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec } from "@codecast/shared/contracts";
 import { formatToolName, isPlanWriteToolCall, truncateStr, shortenUrl, getRelativePath, stripLineNumbers, structuredPayloadSummary } from "@codecast/shared/render";
 import { getBuiltinCommands } from "../lib/builtinCommands";
 import { resolveSessionSkills } from "../lib/sessionSkills";
@@ -130,7 +130,9 @@ import { parseFileChangeSummary, parseUnifiedDiffSections } from "../lib/unified
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
-import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench, Zap, Radar } from "lucide-react";
+import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench, Zap, Radar, KeyRound, ExternalLink, Loader2 } from "lucide-react";
+import { useDevices } from "./DeviceBadge";
+import { useProviderKeyCommand, deviceManagedKeys } from "../lib/useProviderKeyCommand";
 import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES, labelMentionItems, matchScore } from "../hooks/useMentionQuery";
 import { pendingBannerState, isActiveAgentStatus, isBootingAgentStatus, type LiveAgentStatus } from "../lib/pendingBanner";
@@ -1764,7 +1766,7 @@ function CopyCommand({ command }: { command: string }) {
   );
 }
 
-function ApiErrorCard({ error, agentType, compact = false }: { error: ParsedApiError; agentType?: string; compact?: boolean }) {
+function ApiErrorCard({ error, agentType, conversationId, compact = false }: { error: ParsedApiError; agentType?: string; conversationId?: string; compact?: boolean }) {
   // Auth/setup banner → a distinct "re-authenticate" card. The remedy is in the
   // user's hands and DIFFERS by client (opencode → `opencode auth login` in a
   // terminal; pi / Claude / Codex → `/login` in the session), so the card names the
@@ -1791,11 +1793,16 @@ function ApiErrorCard({ error, agentType, compact = false }: { error: ParsedApiE
         </div>
         <p className="mt-1 text-sm text-amber-500">{error.message}</p>
         {!compact && (
-          <div className="mt-2 flex items-center gap-1.5 flex-wrap text-xs text-sol-text-dim">
-            <span>Run</span>
-            <CopyCommand command={remedy.command} />
-            <span>{remedy.where} to {remedy.inPane ? "re-authenticate" : "set up an account"}, then retry.</span>
-          </div>
+          <>
+            <div className="mt-2 flex items-center gap-1.5 flex-wrap text-xs text-sol-text-dim">
+              <span>Run</span>
+              <CopyCommand command={remedy.command} />
+              <span>{remedy.where} to {remedy.inPane ? "re-authenticate" : "set up an account"}, then retry.</span>
+            </div>
+            {agentType === "opencode" && (
+              <ProviderKeyInlineEntry errorMessage={error.message} conversationId={conversationId} />
+            )}
+          </>
         )}
       </div>
     );
@@ -1889,6 +1896,139 @@ function ApiErrorCard({ error, agentType, compact = false }: { error: ParsedApiE
         <p className="mt-1 text-xs text-sol-text-dim">
           Provider-side failure. Retry the request; if it repeats, include the request ID.
         </p>
+      )}
+    </div>
+  );
+}
+
+// Guess which provider an opencode auth failure is about, from its message text.
+// opencode surfaces the provider by name ("OpenRouter", "no Anthropic API key") or
+// its short code ("OR"); when nothing matches we let the user pick from the list.
+function detectProviderFromError(message: string): string | undefined {
+  const m = message.toLowerCase();
+  if (/openrouter/.test(m) || /\bOR\b/.test(message)) return "openrouter";
+  if (/anthropic|claude/.test(m)) return "anthropic";
+  if (/openai|\bgpt\b/.test(m)) return "openai";
+  if (/vertex|gemini|google/.test(m)) return "google";
+  return undefined;
+}
+
+// Inline key entry on an opencode auth-error card. opencode fails a turn when the
+// chosen provider has no key on the machine; rather than send the user to a terminal,
+// let them drop the key right here — sealed to the session's owner device and applied
+// by its daemon. The key leaves the browser only as ciphertext (encryptProviderKey).
+// Collapsed behind an "Add a key" toggle so the amber card stays uncluttered; falls
+// back to the `cast keys set` command when the device's daemon predates managed keys.
+function ProviderKeyInlineEntry({
+  errorMessage,
+  conversationId,
+}: {
+  errorMessage: string;
+  conversationId?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const detected = useMemo(() => detectProviderFromError(errorMessage), [errorMessage]);
+  const [provider, setProvider] = useState<string>(detected ?? PROVIDER_KEYS[0].id);
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const { byId, mostRecentOnlineLocal } = useDevices();
+  const ownerDeviceId = useInboxStore((s) =>
+    conversationId ? s.sessions[conversationId]?.owner_device_id : undefined,
+  );
+  const { setKey } = useProviderKeyCommand();
+
+  // The device running this session, else the primary online machine.
+  const device = (ownerDeviceId ? byId.get(ownerDeviceId) : undefined) ?? mostRecentOnlineLocal ?? null;
+  const pubkey = device ? deviceManagedKeys(device).pubkey : undefined;
+  const spec = getProviderKeySpec(provider);
+
+  const save = async () => {
+    const key = value.trim();
+    if (!key || !pubkey || !device) return;
+    setBusy(true);
+    try {
+      await setKey(device.device_id, pubkey, provider, key);
+      toast.success("Key saved — resend to retry");
+      setValue("");
+      setOpen(false);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Couldn't save that key");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className="mt-2 inline-flex items-center gap-1 text-xs text-amber-500 hover:text-amber-400 transition-colors"
+      >
+        <KeyRound className="w-3 h-3" />
+        Add a key
+      </button>
+    );
+  }
+
+  return (
+    <div className="mt-2 rounded-md border border-amber-500/30 bg-amber-500/5 p-2.5 space-y-2">
+      {!device ? (
+        <p className="text-xs text-sol-text-dim">
+          No online machine to store a key on. Start your daemon, then try again.
+        </p>
+      ) : !pubkey ? (
+        <div className="flex items-center gap-1.5 flex-wrap text-xs text-sol-text-dim">
+          <span>This machine&apos;s daemon predates managed keys — set it from a terminal:</span>
+          <CopyCommand command={`cast keys set ${provider}`} />
+        </div>
+      ) : (
+        <>
+          <div className="flex items-center gap-2 flex-wrap">
+            <select
+              value={provider}
+              onChange={(e) => setProvider(e.target.value)}
+              className="rounded border border-sol-border bg-sol-bg px-2 py-1 text-xs text-sol-text focus:border-sol-cyan focus:outline-none"
+            >
+              {PROVIDER_KEYS.map((p) => (
+                <option key={p.id} value={p.id}>{p.label}</option>
+              ))}
+            </select>
+            {spec && (
+              <a
+                href={spec.consoleUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-cyan"
+              >
+                get a key
+                <ExternalLink className="w-3 h-3" />
+              </a>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              type="password"
+              autoFocus
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") save();
+                if (e.key === "Escape") { setOpen(false); setValue(""); }
+              }}
+              placeholder={spec?.keyPrefix ? `${spec.keyPrefix}…` : "API key"}
+              className="flex-1 min-w-0 rounded border border-sol-border bg-sol-bg px-2 py-1 text-xs text-sol-text font-mono placeholder:text-sol-base01 focus:border-sol-cyan focus:outline-none"
+            />
+            <button
+              onClick={save}
+              disabled={busy || !value.trim()}
+              className="inline-flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs text-amber-500 hover:bg-amber-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+              Save &amp; retry
+            </button>
+          </div>
+        </>
       )}
     </div>
   );
@@ -6919,7 +7059,7 @@ function AssistantBlockImpl({
           <>
             <div className={parsedApiError ? "" : "text-sol-text prose prose-invert prose-sm max-w-none"}>
               {parsedApiError ? (
-                <ApiErrorCard error={parsedApiError} agentType={agentType} compact={condensed} />
+                <ApiErrorCard error={parsedApiError} agentType={agentType} conversationId={conversationId} compact={condensed} />
               ) : (
                 <div
                   ref={contentRef}
@@ -6995,7 +7135,7 @@ function AssistantBlockImpl({
               </div>
               <div className="prose prose-invert prose-sm max-w-none text-sol-text">
                 {parsedApiError ? (
-                  <ApiErrorCard error={parsedApiError} agentType={agentType} />
+                  <ApiErrorCard error={parsedApiError} agentType={agentType} conversationId={conversationId} />
                 ) : (
                   <ReactMarkdown
                     remarkPlugins={entityRemarkPlugins}

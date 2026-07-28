@@ -1285,6 +1285,13 @@ export default defineSchema({
     // Saved CC account profiles on this machine (names/emails/tiers only,
     // never tokens) — heartbeat-reported, drives the web account switcher.
     cc_accounts: v.optional(ccAccountsValidator),
+    // Managed-provider-key metadata (pl-207), heartbeat-reported. The public half
+    // of the device's ECDH keypair — NOT a secret; the web encrypts a key to it so
+    // Convex never sees plaintext. `managed_provider_ids` is which providers have a
+    // key set here (ids only, never the keys) — drives the web's managed/unmanaged
+    // status, mirroring how cc_accounts reports names-not-tokens.
+    provider_key_pubkey: v.optional(v.string()),
+    managed_provider_ids: v.optional(v.array(v.string())),
     // Auto-switch on usage limits: when on, limit-parked sessions trigger a
     // server-side check that switches this machine to the best saved profile
     // and revives them, retrying until unblocked or every account is spent.

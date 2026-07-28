@@ -9,7 +9,7 @@ import { watch as chokidarWatch } from "chokidar";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
 import { ensureModelInventoryFresh, pendingModelInventoryPayload, markModelInventorySent } from "./modelInventory.js";
 import { deviceId, deviceLabel, isRemoteDevice } from "./remote/device.js";
-import { copyCredentialToRemoteAsync, currentBranch, loadRemoteHost, readPushableCredential, remoteHostsRegistered } from "./remote/session-move.js";
+import { copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBranch, loadRemoteHost, readPushableCredential, remoteHostsRegistered } from "./remote/session-move.js";
 import { reparentNotice, type ReparentCommandFacts } from "./sessionMoveNotice.js";
 import { createWipSnapshot, defaultRemote, pushWipSnapshot, restoreWipSnapshot } from "./wipSnapshot.js";
 import {
@@ -33,6 +33,7 @@ import {
   assembleOpencodeSession,
   sessionExistsInOpencodeDb,
   resolveOpencodeSessionCwd,
+  readOpencodeSessionLineage,
 } from "./opencodeStorage.js";
 import { OpencodeServer } from "./opencodeServer.js";
 import {
@@ -129,6 +130,9 @@ import {
   getProcessExecutionRuntime,
   type FencedTmuxTags,
 } from "./execution/index.js";
+import { providerKeySourcePrefix } from "./providerKeyLaunch.js";
+import { providerKeyStorePath, readProviderKeyStore } from "./providerKeyStore.js";
+import { getProviderKeyPublicKey, applyProviderKeyCommand } from "./providerKeyCrypto.js";
 
 const ENRICHED_PATH = [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(":");
 const EXEC_TIMEOUT_MS = 10_000;
@@ -1724,6 +1728,38 @@ async function pushCredentialToRemoteHosts(
   }
 }
 
+// Provider-key store fan-out (pl-207): the same one-way primary→remote push as the
+// CC credential. The primary is canonical; a remote never originates keys. Deduped
+// by content hash so an unchanged store is a no-op. An absent local store pushes
+// `null`, which removes the remote file — clearing a key here clears it there.
+let remoteKeysPushInFlight = false;
+let lastPushedKeysHash: string | null = null;
+
+function readLocalProviderKeysBlob(): string | null {
+  try { return fs.readFileSync(providerKeyStorePath(CONFIG_DIR), "utf-8"); } catch { return null; }
+}
+
+async function pushProviderKeysToRemoteHosts(reason: string, opts: { onlyIfChanged?: boolean } = {}): Promise<void> {
+  if (isRemoteDevice() || remoteKeysPushInFlight || !remoteHostsRegistered()) return;
+  remoteKeysPushInFlight = true;
+  try {
+    const blob = readLocalProviderKeysBlob();
+    const hash = blob === null ? "∅" : createHash("sha256").update(blob).digest("hex");
+    if (opts.onlyIfChanged && hash === lastPushedKeysHash) return; // in step — the common case
+    const host = loadRemoteHost();
+    await copyProviderKeysToRemoteAsync(host, blob);
+    const changed = hash !== lastPushedKeysHash;
+    lastPushedKeysHash = hash;
+    if (changed) {
+      log(`[REMOTE-KEYS] pushed provider keys to ${host.user}@${host.address} (${reason}${blob === null ? ", cleared" : ""})`);
+    }
+  } catch (err) {
+    log(`[REMOTE-KEYS] provider-key push failed (${reason}): ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    remoteKeysPushInFlight = false;
+  }
+}
+
 // Keep THIS machine's Claude Code login from lapsing. A running `claude`
 // self-refreshes its ~8h access token from the stored refresh token; nothing
 // does when no session runs, so an idle grant eventually expires ("Login
@@ -1883,6 +1919,12 @@ async function sendHeartbeat(): Promise<void> {
         // backing files change (mtime-keyed cache), so CLI-side saves and
         // fresh /logins surface on the next beat.
         cc_accounts: getAccountsHeartbeatPayload() ?? undefined,
+        // Managed-provider-key metadata (pl-207): the device's ECDH public key
+        // (not a secret — the web encrypts a key to it) + which providers have a
+        // key here (ids only, never the keys). Lets the web show managed status
+        // and seal a new key so Convex never sees plaintext.
+        provider_key_pubkey: getProviderKeyPublicKey(CONFIG_DIR),
+        managed_provider_ids: Object.keys(readProviderKeyStore(CONFIG_DIR)).sort(),
         // Installed agent-feature snippets + stable mode, so the web Settings
         // page mirrors (and can toggle) this device's setup.
         settings: buildDeviceSettingsPayload(config) ?? undefined,
@@ -2573,7 +2615,10 @@ async function executeRemoteCommand(
         const envPrefix = worktreeResult
           ? `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT AGENT_RESOURCE_INDEX=${worktreeResult.portIndex}`
           : `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT`;
-        let cmdText = `${envPrefix} ${[binary, ...binaryArgs].join(" ")}`;
+        // Managed provider keys (opencode/pi) are sourced from a 0600 file so the
+        // key never lands in `ps`/the pane; "" when nothing is managed (pl-207).
+        const keyPrefix = providerKeySourcePrefix(agentType, CONFIG_DIR);
+        let cmdText = `${keyPrefix}${envPrefix} ${[binary, ...binaryArgs].join(" ")}`;
 
         let codexThreadId: string | null = null;
         const codexSkipApprovals = binaryArgs.includes("--full-auto") || binaryArgs.includes("--dangerously-bypass-approvals-and-sandbox");
@@ -3809,6 +3854,19 @@ async function executeRemoteCommand(
         }
         break;
       }
+      case "set_provider_key": {
+        // Web set/removed a managed provider key for THIS device (pl-207). A "set"
+        // arrives SEALED to this device's ECDH public key — Convex never saw
+        // plaintext. applyProviderKeyCommand decrypts + updates the 0600 store; we
+        // then fan out to remotes and heartbeat so managed_provider_ids round-trips.
+        const applied = applyProviderKeyCommand(CONFIG_DIR, commandArgs);
+        if (!applied.ok) { error = `set_provider_key: ${applied.error}`; break; }
+        log(`[KEYS] ${applied.op} ${applied.provider} (web)`);
+        result = JSON.stringify({ op: applied.op, provider: applied.provider });
+        pushProviderKeysToRemoteHosts("web set").catch(() => {});
+        await sendHeartbeat().catch(() => {});
+        break;
+      }
       default:
         error = `Unknown command: ${command}`;
     }
@@ -4757,7 +4815,10 @@ async function maybeLinkTeamSpawn(
 // child process may not have been visible yet), then stay first-class.
 const spawnLinkAttempts = new Map<string, number>();
 const SPAWN_LINK_MAX_ATTEMPTS = 3;
-const pendingCodexNativeParents = new Map<string, string>();
+// Children whose client-native parent pointer (codex review wrapper session,
+// opencode task-tool parent_id) named a session with no conversation yet —
+// linked retroactively when the parent's conversation syncs.
+const pendingNativeParents = new Map<string, { parentSessionId: string; description?: string }>();
 const retiringCodexReviews = new Set<string>();
 
 function readPidRegistrySessionId(pid: number): string | null {
@@ -4837,19 +4898,19 @@ async function maybeRetrySpawnLink(
   }
 }
 
-async function linkPendingCodexNativeChildren(
+async function linkPendingNativeChildren(
   parentSessionId: string,
   parentConversationId: string,
   syncService: SyncService,
   conversationCache: ConversationCache,
 ): Promise<void> {
-  for (const [childSessionId, expectedParentSessionId] of pendingCodexNativeParents) {
-    if (expectedParentSessionId !== parentSessionId) continue;
+  for (const [childSessionId, pending] of pendingNativeParents) {
+    if (pending.parentSessionId !== parentSessionId) continue;
     const childConversationId = conversationCache[childSessionId];
     if (!childConversationId) continue;
-    await syncService.linkSessions(parentConversationId, childConversationId, "review");
-    pendingCodexNativeParents.delete(childSessionId);
-    log(`Linked native Codex review ${childSessionId.slice(0, 8)} -> wrapper ${parentSessionId.slice(0, 8)}`);
+    await syncService.linkSessions(parentConversationId, childConversationId, pending.description);
+    pendingNativeParents.delete(childSessionId);
+    log(`Linked native child ${childSessionId.slice(0, 8)} -> parent ${parentSessionId.slice(0, 8)}${pending.description ? ` (${pending.description})` : ""}`);
   }
 }
 
@@ -6501,7 +6562,7 @@ async function processCodexSession(
             if (parentConversationId) {
               log(`Detected native Codex review ${sessionId.slice(0, 8)} -> wrapper ${nativeParentSessionId.slice(0, 8)}`);
             } else {
-              pendingCodexNativeParents.set(sessionId, nativeParentSessionId);
+              pendingNativeParents.set(sessionId, { parentSessionId: nativeParentSessionId, description: "review" });
             }
           } else {
             try {
@@ -6529,7 +6590,7 @@ async function processCodexSession(
             gitInfo: undefined,
           });
           setConversationCache(conversationId);
-          await linkPendingCodexNativeChildren(sessionId, conversationId, syncService, conversationCache);
+          await linkPendingNativeChildren(sessionId, conversationId, syncService, conversationCache);
           log(`Created conversation ${conversationId} for Codex session ${sessionId}${forkRoot && forkRoot !== sessionId ? ` (lineage root ${forkRoot.slice(0, 8)})` : ""}`);
 
           if ((global as any).activeSessions) {
@@ -6639,7 +6700,7 @@ async function processCodexSession(
     tryRegisterSessionProcess(sessionId, "codex");
 
     if (conversationId) {
-      await linkPendingCodexNativeChildren(sessionId, conversationId, syncService, conversationCache);
+      await linkPendingNativeChildren(sessionId, conversationId, syncService, conversationCache);
       // The completed-review predicates need the review's full event history, but
       // newContent is only the bytes since the last sync position — a live-watched
       // review delivers exited_review_mode and task_complete in different chunks.
@@ -6942,6 +7003,13 @@ async function processOpencodeSession(
     let conversationId = conversationCache[sessionId];
 
     if (!conversationId) {
+      // A session spawned by another opencode session's task tool carries its
+      // spawner in session.parent_id — nest it under the spawner as a subagent
+      // (same contract as the codex native-review path). A task-tool child is
+      // never the session a user launched, so it must not claim a started stub
+      // (its cwd matches its parent's, which would collide with the cwd match).
+      const lineage = readOpencodeSessionLineage(sessionId);
+
       // Bind a freshly launched opencode session to its pending started-tmux
       // conversation. opencode's session id never appears in the launched process
       // args (it starts as a bare `opencode` TUI and mints its own id), so — unlike
@@ -6949,7 +7017,7 @@ async function processOpencodeSession(
       // map (resolveOpencodeSessionCwd), which is matchStartedConversation's cwd
       // fallback. If nothing matches, this is a fresh first-class session.
       let matchedStartedConversation: string | null = null;
-      if (startedSessionTmux.size > 0 && cwd) {
+      if (!lineage.parentSessionId && startedSessionTmux.size > 0 && cwd) {
         const startedOpencodeEntries = Array.from(startedSessionTmux.entries())
           .filter(([, entry]) => entry.agentType === "opencode");
         matchedStartedConversation = matchStartedConversation(startedOpencodeEntries, {
@@ -6976,6 +7044,11 @@ async function processOpencodeSession(
       } else {
         const firstUserMessage = allMessages.find((m) => m.role === "user");
         const title = firstUserMessage ? generateTitleFromMessage(firstUserMessage.content) : undefined;
+        const parentConversationId = lineage.parentSessionId ? conversationCache[lineage.parentSessionId] : undefined;
+        if (lineage.parentSessionId && !parentConversationId) {
+          // Parent hasn't synced yet (backfill order is arbitrary) — link when it does.
+          pendingNativeParents.set(sessionId, { parentSessionId: lineage.parentSessionId, description: lineage.agentName });
+        }
         try {
           conversationId = await syncService.createConversation({
             userId,
@@ -6987,6 +7060,9 @@ async function processOpencodeSession(
             title,
             startedAt: allMessages[0]?.timestamp,
             parentMessageUuid: undefined,
+            parentConversationId,
+            isSubagent: lineage.parentSessionId ? true : undefined,
+            subagentDescription: parentConversationId ? lineage.agentName : undefined,
             gitInfo: cwd ? getGitInfo(cwd) : undefined,
           });
         } catch (err) {
@@ -6998,7 +7074,7 @@ async function processOpencodeSession(
         }
         conversationCache[sessionId] = conversationId;
         saveConversationCache(conversationCache);
-        log(`Created conversation ${conversationId} for opencode session ${sessionId}`);
+        log(`Created conversation ${conversationId} for opencode session ${sessionId}${parentConversationId ? ` (subagent of ${parentConversationId.slice(0, 12)})` : ""}`);
         if (pendingMessages[sessionId]) {
           await flushPendingMessagesBatch(pendingMessages[sessionId], conversationId, syncService, retryQueue);
           delete pendingMessages[sessionId];
@@ -7025,6 +7101,9 @@ async function processOpencodeSession(
       }
     }
     opencodeSyncedCounts.set(sessionId, allMessages.length);
+
+    // This session may be the parent a task-tool child synced ahead of.
+    await linkPendingNativeChildren(sessionId, conversationId, syncService, conversationCache);
 
     // Title: opencode names the session in its meta (info.title); mirror it.
     try {
@@ -12175,7 +12254,10 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     // See buildResumeEnvPrefix: strips CLAUDECODE and (for Claude) suppresses the
     // "Resume from summary?" prompt that would otherwise wedge an unattended auto-resume.
     const resumeEnvPrefix = buildResumeEnvPrefix(agentType);
-    await tmuxExec(["send-keys", "-t", tmuxSession, "-l", `${resumeEnvPrefix} ${resumeCmd}`]);
+    // Same managed-key injection as a fresh launch, so a resumed opencode/pi
+    // session gets its provider key too (pl-207).
+    const resumeKeyPrefix = providerKeySourcePrefix(agentType, CONFIG_DIR);
+    await tmuxExec(["send-keys", "-t", tmuxSession, "-l", `${resumeKeyPrefix}${resumeEnvPrefix} ${resumeCmd}`]);
     await tmuxExec(["send-keys", "-t", tmuxSession, "Enter"]);
 
     logDelivery(`Auto-resumed ${agentType} ${shortId} in tmux=${tmuxSession} cwd=${cwd} cmd=${resumeCmd}`);
@@ -15105,6 +15187,26 @@ async function main(): Promise<void> {
   // switch, CC's own self-refresh) within ~a minute. Hash-gated, so the
   // common no-change tick costs one keychain read and no ssh.
   setInterval(() => { pushCredentialToRemoteHosts("credential_changed", { onlyIfChanged: true }).catch(() => {}); }, REMOTE_CRED_CHANGE_TICK_MS);
+
+  // Fan the provider-key store out to remotes on the same cadence (pl-207): once at
+  // start (backfill a new remote), and a hash-gated fast tick that propagates a
+  // `cast keys` change within ~a minute. A watch on the store file (below) makes the
+  // common case near-instant; this tick is the backfill/safety net.
+  setTimeout(() => { pushProviderKeysToRemoteHosts("daemon start").catch(() => {}); }, 62_000);
+  setInterval(() => { pushProviderKeysToRemoteHosts("periodic", { onlyIfChanged: true }).catch(() => {}); }, REMOTE_CRED_CHANGE_TICK_MS);
+  // Near-instant sync: when the local store file changes (a `cast keys set/rm`, or a
+  // web edit the daemon applied), push immediately. fs.watch can double-fire, so the
+  // in-flight lock + hash gate keep it to one real push.
+  try {
+    fs.mkdirSync(CONFIG_DIR, { recursive: true });
+    fs.watch(CONFIG_DIR, (_event, filename) => {
+      if (filename === "provider-keys.json") {
+        pushProviderKeysToRemoteHosts("store changed", { onlyIfChanged: true }).catch(() => {});
+      }
+    });
+  } catch (err) {
+    log(`[REMOTE-KEYS] could not watch the provider-key store: ${err instanceof Error ? err.message : String(err)}`);
+  }
 
   // Keep THIS machine's login from lapsing during idle gaps + propagate a
   // manual /login into its saved profile (primary devices only).

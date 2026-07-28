@@ -10,4 +10,6 @@ export * from "./executionBinding";
 export * from "./modelOptions";
 export * from "./workState";
 export * from "./apiErrorBanner";
+export * from "./providerKeys";
+export * from "./providerKeyCrypto";
 export * from "./snippets";

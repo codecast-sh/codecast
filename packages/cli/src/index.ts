@@ -24,6 +24,9 @@ import {
   allSnippetSlugs,
   fromConvexAgentType,
   toConvexAgentType,
+  PROVIDER_KEYS,
+  getProviderKeySpec,
+  maskProviderKey,
 } from "@codecast/shared/contracts";
 import { cliFetch, cliFetchRead, cliSearchRequest } from "./cliHttp.js";
 import { listProfiles, saveProfile, useProfile, deleteProfile, getAccountsHeartbeatPayload, CcAccountError } from "./ccAccounts.js";
@@ -86,6 +89,7 @@ import { detectRuntime, parseAgentMarkers as _parseAgentMarkers, type AgentRunti
 import { buildImplementerPrompt as _buildImplementerPrompt, buildReviewerPrompt, buildCriticPrompt, resolveTaskModel, resolveTaskModelFull, resolveFidelity, buildRetroPrompt, type FidelityLevel, type TypedRetro } from "./agents/index.js";
 import { checkbox, confirm, input, select } from "@inquirer/prompts";
 import { type Config, getAgentArgs } from "./config/types.js";
+import { readProviderKeyStore, writeProviderKeyStore } from "./providerKeyStore.js";
 
 const program = new Command();
 
@@ -2118,12 +2122,24 @@ ${TRIGGER_SNIPPET_HEADING}
 
 You can set triggers — follow-up work that runs autonomously after this session ends. Use them for anything that should happen later: checking CI, reviewing PRs, continuing long-running refactors, or responding to events.
 
+The prompt is the spawned agent's entire briefing, and humans read it in the dashboard (rendered as markdown). A one-line prompt is fine for a one-line job; for anything bigger, write it as structured markdown — goal, numbered steps, constraints — never as one long run-on line. Pass \`-\` as the prompt to read it from stdin:
+
 \`\`\`bash
 # Set triggers
 cast trigger add "Check if CI is green on main" --in 30m
 cast trigger add "Review open PRs and summarize findings" --every 4h
 cast trigger add "Respond to new PR review comments" --on pr_comment
 cast trigger add "Watch the funnel and report anything off" --every 4h --safe
+
+# Multi-line prompts: heredoc via stdin
+cast trigger add - --every 4h --title "Growth audit" <<'EOF'
+Audit budget allocation across markets.
+
+1. Verify the plan matches achievable yield.
+2. Measure growth per dollar for markets funded in the last 14 days.
+
+Escalate only strategic decisions to the founder.
+EOF
 
 # Report completion (when running inside a triggered run)
 cast trigger complete <trigger_id> --summary "what was done"
@@ -3276,6 +3292,140 @@ program
       ? ` ${c.dim}(empty session — cleaned up entirely)${c.reset}`
       : ` ${c.dim}— agent torn down${grouped}${canceled} (cast undismiss ${result.short_id} to resurface)${c.reset}`;
     console.log(`${c.green}ok${c.reset} killed ${c.cyan}${result.short_id}${c.reset}${note}`);
+  });
+
+// ── cast keys ─────────────────────────────────────────────────────────────────
+// Manage provider API keys codecast injects into opencode/pi launches. Keys live
+// on-device in ~/.codecast/provider-keys.json (0600, see providerKeyStore.ts); the
+// daemon sources them into the launch env so the client picks up the provider
+// without touching its own auth store. The
+// default is to manage nothing — clients use whatever auth is already on the
+// system. See PROVIDER_KEYS / providerKeyLaunch.ts (pl-207).
+
+/** Read a secret from the tty with echo suppressed, so a pasted key never shows on
+ *  screen or lands in shell history. Falls back to piped stdin for scripting. */
+async function promptHiddenSecret(promptText: string): Promise<string> {
+  if (!process.stdin.isTTY) {
+    // Piped: read the first line of stdin.
+    const chunks: Buffer[] = [];
+    for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+    return Buffer.concat(chunks).toString("utf-8").split("\n")[0].trim();
+  }
+  process.stdout.write(promptText);
+  const stdin = process.stdin;
+  const wasRaw = stdin.isRaw;
+  stdin.setRawMode?.(true);
+  stdin.resume();
+  let value = "";
+  return await new Promise<string>((resolve) => {
+    const onData = (buf: Buffer) => {
+      const s = buf.toString("utf-8");
+      for (const ch of s) {
+        if (ch === "\r" || ch === "\n") {
+          stdin.removeListener("data", onData);
+          stdin.setRawMode?.(wasRaw ?? false);
+          stdin.pause();
+          process.stdout.write("\n");
+          resolve(value.trim());
+          return;
+        } else if (ch === "\x03") { // Ctrl-C
+          stdin.setRawMode?.(wasRaw ?? false);
+          process.stdout.write("\n");
+          process.exit(130);
+        } else if (ch === "\x7f" || ch === "\x08") { // DEL / backspace
+          value = value.slice(0, -1);
+        } else if (ch >= " ") { // append printable, ignore stray control chars
+          value += ch;
+        }
+      }
+    };
+    stdin.on("data", onData);
+  });
+}
+
+const keysCmd = program
+  .command("keys")
+  .description(
+    "Manage provider API keys for opencode/pi\n\n" +
+    "Keys are injected as the provider's env var when the daemon launches a\n" +
+    "client, so opencode/pi use them without touching their own login. Keys stay\n" +
+    "on THIS device (~/.codecast/provider-keys.json, 0600) and never go to the server in plaintext.\n" +
+    "The default is to manage nothing — clients use whatever auth is on the system.\n\n" +
+    "Examples:\n" +
+    "  cast keys set openrouter          # paste the key at a hidden prompt\n" +
+    "  cast keys set openrouter sk-or-…  # or pass it (avoid — lands in shell history)\n" +
+    "  cast keys ls                      # what's set (masked) and what isn't\n" +
+    "  cast keys rm openrouter           # stop managing it (back to system default)"
+  )
+  .showHelpAfterError(true);
+
+keysCmd
+  .command("ls")
+  .alias("list")
+  .description("List providers — which have a managed key (masked) and which don't")
+  .option("--json", "Output as JSON")
+  .action((options: any) => {
+    const store = readProviderKeyStore(CONFIG_DIR);
+    if (options.json) {
+      console.log(JSON.stringify({
+        providers: PROVIDER_KEYS.map((p) => ({ id: p.id, label: p.label, managed: !!store[p.id] })),
+      }));
+      return;
+    }
+    console.log(`${c.dim}Managed keys inject into opencode/pi launches. Unset providers use system auth.${c.reset}\n`);
+    for (const p of PROVIDER_KEYS) {
+      const key = store[p.id];
+      const status = key
+        ? `${c.green}${maskProviderKey(key)}${c.reset}`
+        : `${c.dim}— (system default)${c.reset}`;
+      console.log(`  ${c.cyan}${p.id.padEnd(11)}${c.reset} ${p.label.padEnd(16)} ${status}`);
+    }
+  });
+
+keysCmd
+  .command("set")
+  .description("Set (or replace) a provider's API key")
+  .argument("<provider>", `Provider id (${PROVIDER_KEYS.map((p) => p.id).join(", ")})`)
+  .argument("[key]", "API key (omit to paste at a hidden prompt — keeps it out of shell history)")
+  .action(async (provider: string, key: string | undefined) => {
+    const spec = getProviderKeySpec(provider);
+    if (!spec) {
+      console.error(`${c.red}Unknown provider "${provider}".${c.reset} Known: ${PROVIDER_KEYS.map((p) => p.id).join(", ")}`);
+      process.exit(1);
+    }
+    if (key) {
+      process.stderr.write(`${c.yellow}note:${c.reset} passing the key as an argument leaves it in your shell history — prefer 'cast keys set ${provider}' and paste at the prompt.\n`);
+    } else {
+      key = await promptHiddenSecret(`Paste ${spec.label} API key (hidden): `);
+    }
+    key = key.trim();
+    if (!key) { console.error(`${c.red}No key provided.${c.reset}`); process.exit(1); }
+    if (spec.keyPrefix && !key.startsWith(spec.keyPrefix)) {
+      process.stderr.write(`${c.yellow}warning:${c.reset} ${spec.label} keys usually start with "${spec.keyPrefix}" — saving anyway.\n`);
+    }
+    const store = readProviderKeyStore(CONFIG_DIR);
+    store[spec.id] = key;
+    writeProviderKeyStore(CONFIG_DIR, store);
+    console.log(`${c.green}ok${c.reset} ${spec.label} key set (${c.dim}${maskProviderKey(key)}${c.reset}). opencode/pi launches will use it. Restart a running session to pick it up.`);
+  });
+
+keysCmd
+  .command("rm")
+  .alias("remove")
+  .alias("unset")
+  .description("Remove a provider's managed key (revert to the system default)")
+  .argument("<provider>", "Provider id")
+  .action((provider: string) => {
+    const spec = getProviderKeySpec(provider);
+    const id = spec?.id ?? provider;
+    const store = readProviderKeyStore(CONFIG_DIR);
+    if (!store[id]) {
+      console.log(`${c.dim}No managed key for "${id}" — nothing to remove.${c.reset}`);
+      return;
+    }
+    delete store[id];
+    writeProviderKeyStore(CONFIG_DIR, store);
+    console.log(`${c.green}ok${c.reset} removed the ${spec?.label ?? id} key — reverts to system auth. Restart a running session to apply.`);
   });
 
 program
@@ -10623,7 +10773,7 @@ const trigger = program
 trigger
   .command("add")
   .description("Set a new trigger")
-  .argument("<prompt>", "Instruction for the agent when the trigger fires")
+  .argument("<prompt>", "Instruction for the agent when the trigger fires; '-' reads it from stdin (heredoc-friendly for multi-line markdown)")
   .option("--in <duration>", "Run after delay (e.g., 30m, 2h, 1d)")
   .option("--every <duration>", "Run on interval (e.g., 4h, 1d)")
   .option("--on <event>", "Run on event (pr_comment, pr_opened, pr_merged, push)")
@@ -10637,6 +10787,13 @@ trigger
   .option("--for <session>", "Bind the trigger to a session (short id, conversation id, or Claude session uuid): runs inject into it instead of spawning fresh agents. Defaults to the calling session when run from inside one.")
   .option("--thread", "Post results back to the current conversation thread")
   .action(async (prompt, options) => {
+    if (prompt === "-") {
+      prompt = fs.readFileSync(0, "utf-8").trim();
+      if (!prompt) {
+        console.error("Empty prompt on stdin");
+        process.exit(1);
+      }
+    }
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
       console.error("Not authenticated. Run: cast auth");
@@ -10676,7 +10833,14 @@ trigger
       run_at = Date.now();
     }
 
-    const title = options.title || prompt.slice(0, 60);
+    // Multi-line prompts: default title from the first real line (minus any
+    // markdown heading/list markers), not a 60-char slice across newlines.
+    const firstLine =
+      prompt
+        .split("\n")
+        .map((l: string) => l.replace(/^[#>*\-\s]+/, "").trim())
+        .find(Boolean) ?? prompt;
+    const title = options.title || firstLine.slice(0, 60);
     const maxRuntimeMs = options.maxRuntime ? parseDuration(options.maxRuntime) : undefined;
 
     let context_summary: string | undefined;
