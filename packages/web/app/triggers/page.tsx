@@ -20,6 +20,7 @@ import {
 import { ShortcutTooltip } from "../../components/KeyboardShortcutsHelp";
 import { isTriggerFailing, patchTaskInWebList, taskDisplayTitle } from "../../components/triggerTasks";
 import { TriggerRunList, useTriggerRuns, openRunInStore } from "../../components/TriggerRunHistory";
+import { MarkdownRenderer } from "../../components/tools/MarkdownRenderer";
 import { SelectBox } from "../../components/ui/select-box";
 import { useInboxStore } from "../../store/inboxStore";
 import {
@@ -628,8 +629,8 @@ function TaskRow({ task, now, isNext }: { task: any; now: number; isNext?: boole
             </>
           )}
           <div className="text-[10px] uppercase tracking-widest text-sol-text-dim mt-3 mb-1">Prompt</div>
-          <div className="text-xs text-sol-text-muted font-mono whitespace-pre-wrap bg-sol-bg-alt rounded-md p-3">
-            {task.prompt}
+          <div className="bg-sol-bg-alt rounded-md p-3">
+            <MarkdownRenderer content={task.prompt} className="text-xs text-sol-text-muted" />
           </div>
 
           {task.context_summary && (
