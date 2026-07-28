@@ -10050,6 +10050,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     if (expandedTurns.size) setExpandedTurns(new Set());
   }
   const [diffExpanded, setDiffExpanded] = useState(false);
+  // Global thinking visibility, off by default — opencode/pi carry real
+  // reasoning text that's otherwise noisy in the timeline. Off = ThinkingBlock
+  // doesn't render at all. On, each block still opens collapsed to a 2-line
+  // preview (ThinkingBlock's own per-message state).
+  const [showThinking, setShowThinking] = useState(false);
   const convex = useConvex();
   const convexConvId = conversation?._id && isConvexId(conversation._id) ? conversation._id as Id<"conversations"> : undefined;
   // Defer non-critical Convex queries one macrotask past a conversation switch so the
@@ -10180,6 +10185,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     setDensityState((conversation?._id && DENSITY_BY_CONVERSATION.get(conversation._id)) || "full");
     setExpandedTurns(new Set());
     setDiffExpanded(false);
+    setShowThinking(false);
     setHighlightedMessageId(null);
     setAllMatchingMessageIds([]);
     setMatchInstances([]);
@@ -12012,6 +12018,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     setDiffExpanded((s) => !s);
   }, [conversation?.git_branch]));
 
+  useShortcutAction('conv.toggleThinking', useCallback(() => {
+    setShowThinking((s) => !s);
+  }, []));
+
   useMountEffect(() => {
     const el = headerRef.current;
     if (!el) return;
@@ -13098,6 +13108,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           content={msg.content}
           timestamp={msg.timestamp}
           thinking={msg.thinking}
+          showThinking={showThinking}
           toolCalls={msg.tool_calls}
           toolResults={relevantToolResults}
           images={msg.images}
@@ -13588,6 +13599,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                       </DropdownMenuItem>
                     )}
                     <DropdownMenuSeparator />
+                    <DropdownMenuItem onClick={() => setShowThinking((s) => !s)}>
+                      {showThinking ? "Hide thinking" : "Show thinking"}
+                      <MenuKeyCaps action="conv.toggleThinking" />
+                    </DropdownMenuItem>
                     <DropdownMenuItem onClick={() => {
                       const next = !stickyDisabled;
                       updateUI({ sticky_headers_disabled: next });
