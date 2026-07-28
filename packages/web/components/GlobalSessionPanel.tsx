@@ -18,7 +18,7 @@ import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
 import { isBlockedConversation, isSubagentConversation, nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
-import { isStatusTrustStale } from "@codecast/shared/contracts";
+import { isLivenessStale } from "@codecast/shared/contracts";
 import { TooltipProvider } from "./ui/tooltip";
 import { cleanTitle, msgCountColor, formatModel } from "../lib/conversationProcessor";
 import { getLabelColor } from "../lib/labelColors";
@@ -28,6 +28,7 @@ import { monitorRowsFor, effectiveMonitorStatus } from "./monitorRows";
 import { partitionTriggerInbox, patchTaskInWebList, taskDisplayTitle, latestLoadedTriggerMessage, type TriggerRow, type TaskRow } from "./triggerTasks";
 import { TriggerRunList, useTriggerRuns, openRunInStore, type TriggerRun } from "./TriggerRunHistory";
 import { cleanUserMessage } from "./sessionMessage";
+import { AgentTypeIcon, formatAgentType } from "./AgentTypeIcon";
 import { SharePopover } from "./SharePopover";
 import { shareOrigin } from "../lib/utils";
 import { PlanContextPanel } from "./PlanContextPanel";
@@ -437,6 +438,26 @@ function BlockedSessionsBanner({
     }
   };
 
+  // Revive on the account the machine is signed into NOW: no swap — the
+  // no-profile switch command degrades to kill (the blocked processes hold
+  // the dead token in memory) + continue, so a re-login on the same account
+  // doesn't force a switch to a different one.
+  const handleReviveCurrent = async () => {
+    setBusy("revive");
+    try {
+      const res = await requestSwitch({ include_subagents: includeSubs });
+      toast.success(
+        `Restarting ${res.conversations} blocked session${res.conversations === 1 ? "" : "s"} on the current account` +
+          (res.unreachable > 0 ? ` (${res.unreachable} unreachable: daemon offline)` : ""),
+      );
+      closeBanner();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to restart blocked sessions");
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const handleSwitch = async (profile: string) => {
     setBusy(profile);
     try {
@@ -580,6 +601,16 @@ function BlockedSessionsBanner({
         </div>
       )}
       <div className="mt-2 flex flex-wrap items-center gap-2">
+        {authCount > 0 && acted.length > 0 && (
+          <button
+            onClick={handleReviveCurrent}
+            disabled={busy !== null}
+            title="Restart the blocked processes on the account this machine is signed into now, then send 'continue' — no account change"
+            className="rounded bg-amber-500/15 px-2.5 py-1 text-[11px] font-semibold text-amber-500 transition-colors hover:bg-amber-500/25 disabled:opacity-60"
+          >
+            {busy === "revive" ? "Restarting…" : `Continue ${acted.length} on current account`}
+          </button>
+        )}
         {acted.length > 0 && switchTargets.map((target) => (
           <button
             key={target.name}
@@ -1015,7 +1046,7 @@ function MonitorBars({ session, isActive, onOpen }: {
   const messages = useInboxStore((st) => st.messages[session._id]);
   const now = useCoarseNow(30_000);
   const rows = useMemo(() => monitorRowsFor(messages), [messages]);
-  if (session.agent_status === "stopped" || isStatusTrustStale(session, now)) return null;
+  if (session.agent_status === "stopped" || isLivenessStale(session, now)) return null;
   const watching = rows.filter((r) => effectiveMonitorStatus(r, now) === "watching");
   if (watching.length === 0) return null;
   return (
@@ -1329,6 +1360,7 @@ export const SessionCard = memo(function SessionCard({
   // begins/ends.
   const restartStartedAt = useInboxStore((st) => st.restartingSessions[session._id]);
   const showModelBadge = useInboxStore((st) => st.clientState?.ui?.show_model_badge === true);
+  const showAgentIcon = useInboxStore((st) => st.clientState?.ui?.show_agent_icon !== false);
   // sessionLabel and isFavorite are now passed as scalar props (computed once in
   // the parent via labelByConv/cardIsFavorite) instead of per-card store scans —
   // see ct-37958. Only spawnedByTitle stays a local selector.
@@ -1357,7 +1389,7 @@ export const SessionCard = memo(function SessionCard({
   // needs-input. Past the trust TTL (keyed on updated_at, which a real working
   // agent bumps far more often) the pulse goes dark — the dot and the bucket now
   // read the SAME staleness check, so they can't disagree.
-  const isLive = !session.is_idle && session.message_count > 0 && !isStatusTrustStale(session, Date.now());
+  const isLive = !session.is_idle && session.message_count > 0 && !isLivenessStale(session, Date.now());
   // Age-gated because a restart navigated away from has no owner left to clear
   // its entry; liveness-gated so the green dot takes over the moment the
   // session is actually back. The coarse clock above keeps the age fresh.
@@ -1519,6 +1551,11 @@ export const SessionCard = memo(function SessionCard({
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
               <path strokeLinecap="round" strokeLinejoin="round" d="M14 12l4 4-4 4" />
             </svg>
+            {showAgentIcon && (
+              <span className="flex-shrink-0 flex items-center opacity-70" title={formatAgentType(session.agent_type || "claude_code")}>
+                <AgentTypeIcon agentType={session.agent_type || "claude_code"} className="w-3 h-3" />
+              </span>
+            )}
             <span className={`truncate text-xs leading-tight flex-1 ${
               isActive ? "text-violet-300 font-medium" : "text-gray-400 font-normal"
             }`}>
@@ -1643,6 +1680,11 @@ export const SessionCard = memo(function SessionCard({
         <div className={`flex items-center gap-1.5 leading-tight ${
           isActive ? "text-sm text-sol-text font-semibold" : isWorking ? "text-sm text-sol-text font-medium" : isStashed ? "text-sm text-sol-text" : isDismissed ? "text-sm text-sol-text-muted" : "text-sm text-sol-text"
         }`}>
+          {showAgentIcon && (
+            <span className="flex-shrink-0 flex items-center" title={formatAgentType(session.agent_type || "claude_code")}>
+              <AgentTypeIcon agentType={session.agent_type || "claude_code"} className="w-3.5 h-3.5" />
+            </span>
+          )}
           <span className="truncate min-w-0">{isSlashCommand ? <span className="font-mono text-sol-cyan">{displayTitle}</span> : displayTitle}</span>
           {/* Favorite affordance — AFTER the title so it never shifts the name.
               Solid (soft amber) when favorited; otherwise a very subdued star that
@@ -2844,7 +2886,7 @@ export function SessionListPanel({
     // predicate as the card's green dot (isLive) so header and rows can't
     // disagree; coarseNow keeps the trust-stale check on the panel's ticker.
     const isBucketLive = (sess: InboxSession) =>
-      !sess.is_idle && sess.message_count > 0 && !isStatusTrustStale(sess, coarseNow);
+      !sess.is_idle && sess.message_count > 0 && !isLivenessStale(sess, coarseNow);
     const liveCount = items.filter(isBucketLive).length;
     const allIds = new Set(items.map((sess) => sess._id));
     const subMap = new Map<string, InboxSession[]>();
