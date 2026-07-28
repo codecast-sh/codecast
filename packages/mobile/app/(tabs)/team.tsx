@@ -1,4 +1,5 @@
-import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, View as RNView, Text as RNText, ActionSheetIOS, Image } from 'react-native';
+import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, View as RNView, ActionSheetIOS, Image } from 'react-native';
+import { Text as RNText } from '@/components/Themed';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';

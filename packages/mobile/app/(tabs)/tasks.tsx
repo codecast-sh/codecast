@@ -1,19 +1,22 @@
-import { useState, useCallback, useMemo, useRef } from "react";
+import {
+  useState,
+  useCallback,
+  useMemo,
+  useRef } from "react";
 import {
   StyleSheet,
   ScrollView,
   RefreshControl,
   TouchableOpacity,
   View as RNView,
-  Text as RNText,
-  TextInput,
   Modal,
   KeyboardAvoidingView,
   Platform,
   Alert,
   ActionSheetIOS,
   ActivityIndicator,
-} from "react-native";
+} from 'react-native';
+import { Text as RNText, TextInput } from '@/components/Themed';
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { useMutation } from "convex/react";
