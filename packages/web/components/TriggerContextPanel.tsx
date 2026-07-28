@@ -24,7 +24,7 @@ import { ARMED_STATUSES, taskDisplayTitle, type TaskRow } from "./triggerTasks";
 import { openRunInStore, useTriggerRuns } from "./TriggerRunHistory";
 import { useInboxStore } from "../store/inboxStore";
 import { useCoarseNow } from "../hooks/useCoarseNow";
-import { MarkdownRenderer } from "./tools/MarkdownRenderer";
+import { TriggerPromptView } from "./TriggerPromptView";
 
 const api = _api as any;
 
@@ -369,13 +369,9 @@ export function TriggerContextPanel({
             )}
           </div>
           {/* Prompts are markdown (the CLI snippet asks agents to write them
-              that way) — render them, don't dump them in a mono pre. Copy
-              still hands over the raw text. */}
-          {showPrompt && (
-            <div className="max-w-[110ch] max-h-48 overflow-y-auto rounded border border-sol-border/30 bg-sol-bg/60 p-2.5">
-              <MarkdownRenderer content={primary.prompt} className="text-xs leading-relaxed text-sol-text-muted" />
-            </div>
-          )}
+              that way) — first-class rendering in a drag-resizable viewport.
+              Copy still hands over the raw text. */}
+          {showPrompt && <TriggerPromptView prompt={primary.prompt} className="-mx-4" />}
 
           <div className="flex items-center gap-3 flex-wrap text-[10px] text-sol-text-dim">
             <span className="inline-flex items-center gap-1.5">

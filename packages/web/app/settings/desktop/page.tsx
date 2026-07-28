@@ -135,7 +135,7 @@ function DesktopVersionSection() {
   };
 
   return (
-    <div className="flex items-center justify-between py-3 px-4 rounded-lg border border-sol-border/60 bg-sol-bg-alt/30">
+    <div className="flex items-center justify-between gap-4 py-3 px-4 rounded-lg border border-sol-border/60 bg-sol-bg-alt/30">
       <div className="min-w-0">
         <div className="text-sm font-medium text-sol-text">Codecast Desktop</div>
         <div className="text-xs text-sol-text-dim mt-0.5">
@@ -223,7 +223,7 @@ export default function DesktopSettingsPage() {
         {Object.entries(SHORTCUT_LABELS).map(([key, label]) => (
           <div
             key={key}
-            className="flex items-center justify-between py-3 px-4 rounded-lg border border-sol-border/60 bg-sol-bg-alt/30"
+            className="flex items-center justify-between gap-4 py-3 px-4 rounded-lg border border-sol-border/60 bg-sol-bg-alt/30"
           >
             <div>
               <div className="text-sm font-medium text-sol-text">{label}</div>
