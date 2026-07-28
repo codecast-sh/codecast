@@ -3413,6 +3413,35 @@ keysCmd
     console.log(`${c.green}ok${c.reset} removed the ${spec?.label ?? id} key — reverts to system auth. Restart a running session to apply.`);
   });
 
+program
+  .command("rename")
+  .description(
+    "Rename a session — set the title shown in the inbox and header\n\n" +
+    "Sets a custom title that sticks: the auto-titler never overwrites a\n" +
+    "renamed session. Works on any session you run or own (including threads\n" +
+    "handed to you via cast own). With one argument, renames the CURRENT\n" +
+    "session.\n\n" +
+    "Examples:\n" +
+    "  cast rename jx7c6zk \"Decide: dedupe policy for cold sends\"\n" +
+    "  cast rename \"Fix flaky auth test\"     # current session"
+  )
+  .argument("<sessionOrTitle>", "Session short ID — or the new title, to rename the current session")
+  .argument("[title...]", "New title (quoted, or as remaining words)")
+  .action(async (sessionOrTitle: string, titleWords: string[]) => {
+    let session: string | undefined = sessionOrTitle;
+    let title = titleWords.join(" ");
+    if (titleWords.length === 0) {
+      session = detectCurrentSessionId() ?? undefined;
+      title = sessionOrTitle;
+      if (!session) {
+        console.error("No session detected — pass one explicitly: cast rename jx7c6zk \"New title\"");
+        process.exit(1);
+      }
+    }
+    const result = await cliPost("/cli/sessions/rename", { session, title });
+    console.log(`${c.green}ok${c.reset} renamed ${c.cyan}${result.short_id}${c.reset} ${c.dim}→${c.reset} ${result.title}`);
+  });
+
 // ── cast label ────────────────────────────────────────────────────────────────
 // Labels are personal filing: a session is filed under at most ONE label, which
 // you can then filter by (cast sessions/feed/search --label <name>). The catalog
