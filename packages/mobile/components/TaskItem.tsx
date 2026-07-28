@@ -1,4 +1,5 @@
-import { StyleSheet, TouchableOpacity, View as RNView, Text as RNText, ActionSheetIOS } from "react-native";
+import { StyleSheet, TouchableOpacity, View as RNView, ActionSheetIOS } from 'react-native';
+import { Text as RNText } from '@/components/Themed';
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { Theme, Spacing } from "@/constants/Theme";
 import type { TaskItem as TaskItemType } from "@codecast/web/store/inboxStore";

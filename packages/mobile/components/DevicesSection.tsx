@@ -1,5 +1,9 @@
-import { useMemo } from 'react';
-import { View as RNView, Text as RNText, StyleSheet } from 'react-native';
+import {
+  useMemo } from 'react';
+import { View as RNView,
+  StyleSheet,
+} from 'react-native';
+import { Text as RNText } from '@/components/Themed';
 import { useQuery } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import FontAwesome from '@expo/vector-icons/FontAwesome';

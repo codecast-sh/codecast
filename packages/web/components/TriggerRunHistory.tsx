@@ -65,6 +65,15 @@ export function openRunInStore(run: TriggerRun) {
 
 const PAGE = 8;
 
+// Compact age for rail labels: the leading unit only ("22h", not "22h 3m").
+export function shortAgo(ms: number): string {
+  return fmtDuration(Math.max(0, ms)).split(" ")[0];
+}
+
+// Resting run-dot fill: mixed toward the card surface (not an alpha tint) so
+// the timeline's connector line doesn't show through the dot it passes under.
+const DOT_RESTING = "bg-[color-mix(in_srgb,var(--sol-orange)_55%,var(--sol-card))]";
+
 export function TriggerRunList({
   runs,
   now,
@@ -91,15 +100,22 @@ export function TriggerRunList({
   if (runs.length === 0) return null;
   const visible = runs.slice(0, limit);
 
-  const rowCls =
-    "group/run flex items-center gap-2 w-full min-w-0 rounded px-1.5 py-1 text-left text-[11px] hover:bg-sol-cyan/10 transition-colors";
-
   return (
     <div className={className}>
-      <div className="flex flex-col gap-px">
+      {/* Vertical timeline: a spine joins the run dots into one history,
+          fading toward the older end so the eye lands on the newest run. */}
+      <div className="relative flex flex-col">
+        <span
+          aria-hidden
+          className="absolute left-2 top-3 bottom-3 w-px -translate-x-1/2 bg-gradient-to-b from-sol-orange/50 via-sol-orange/15 to-transparent"
+        />
         {visible.map((run, i) => {
           const num = runs.length - i;
-          const here = run._id === currentConversationId;
+          const latest = i === 0;
+          // Inject runs all live in the home conversation — flagging each of
+          // them "this session" would stamp every row. Only a spawned run is
+          // distinctly the session being viewed.
+          const here = run.kind === "spawn" && run._id === currentConversationId;
           // Inject runs all live in one conversation, so its title would just
           // repeat down the list — the fire time is the informative label.
           // Spawned runs are distinct sessions worth naming.
@@ -116,21 +132,40 @@ export function TriggerRunList({
                   if (ensureInboxRoute) router.push(`/inbox?s=${run._id}`);
                   onOpened?.();
                 }}
-                className={rowCls}
+                className="group/run relative flex items-center gap-2 w-full min-w-0 rounded-md py-1 pr-1.5 text-left text-[11px] hover:bg-sol-cyan/10 transition-colors"
               >
-                <span className="shrink-0 font-mono text-[10px] text-sol-text-dim tabular-nums w-7 text-right">
+                {/* Fixed-height dot slot keeps every center on the spine even
+                    though the latest dot is a size up. */}
+                <span className="w-4 h-4 shrink-0 flex items-center justify-center">
+                  <span
+                    className={`rounded-full transition-[transform,background-color] duration-100 group-hover/run:scale-125 ${
+                      latest
+                        ? "w-2 h-2 bg-sol-orange shadow-[0_0_0_3px] shadow-sol-orange/15"
+                        : `w-[7px] h-[7px] ${DOT_RESTING} group-hover/run:bg-sol-orange`
+                    }`}
+                  />
+                </span>
+                <span
+                  className={`shrink-0 w-7 font-mono text-[10px] tabular-nums ${
+                    latest ? "text-sol-text-muted" : "text-sol-text-dim"
+                  }`}
+                >
                   #{num}
                 </span>
                 <ShortcutTooltip label={new Date(run.created_at).toLocaleString()}>
-                  <span className="shrink-0 text-sol-text-dim tabular-nums">
+                  <span className="shrink-0 w-[4.75rem] text-[10px] text-sol-text-dim tabular-nums">
                     {fmtDuration(Math.max(0, now - run.created_at))} ago
                   </span>
                 </ShortcutTooltip>
-                <span className="truncate min-w-0 text-sol-text-muted group-hover/run:text-sol-text transition-colors">
+                <span
+                  className={`truncate min-w-0 transition-colors group-hover/run:text-sol-text ${
+                    latest ? "text-sol-text" : "text-sol-text-muted"
+                  }`}
+                >
                   {label}
                 </span>
                 {here && (
-                  <span className="shrink-0 px-1 rounded border border-sol-border/60 text-[9px] text-sol-text-dim">
+                  <span className="shrink-0 px-1 rounded border border-sol-orange/40 bg-sol-orange/10 text-[9px] text-sol-orange">
                     this session
                   </span>
                 )}
@@ -146,11 +181,116 @@ export function TriggerRunList({
             e.stopPropagation();
             setLimit((l) => l + PAGE);
           }}
-          className="text-[10px] text-sol-cyan hover:underline underline-offset-2 mt-0.5 pl-1.5"
+          className="text-[10px] text-sol-cyan hover:underline underline-offset-2 mt-0.5 pl-6"
         >
           show {Math.min(PAGE, runs.length - limit)} more · {runs.length - limit} older
         </button>
       )}
+    </div>
+  );
+}
+
+// Horizontal run rail for the conversation header strip: the same history as
+// connected dots reading future → past, left to right — a hollow pulsing node
+// for the next fire (when armed), a "now" tick, then every past run newest
+// first. Each run node rides the same openRunInStore deep-link as the list.
+export function TriggerRunRail({
+  runs,
+  now,
+  conversationId,
+  nextRunAt,
+  className,
+}: {
+  runs: TriggerRun[];
+  now: number;
+  // The conversation being viewed — its own spawned run gets the ringed dot.
+  conversationId: string;
+  // Set only while the trigger is armed; renders the hollow "next" node.
+  nextRunAt?: number;
+  className?: string;
+}) {
+  if (runs.length === 0) return null;
+  const msToNext = nextRunAt !== undefined ? nextRunAt - now : undefined;
+  return (
+    <div className={`flex items-center gap-3 min-w-0 ${className ?? ""}`}>
+      {/* Axis label: total fired, big enough to anchor the rail. */}
+      <div className="shrink-0 flex flex-col items-center leading-none gap-[3px]">
+        <span className="font-mono text-[13px] font-semibold tabular-nums text-sol-text">{runs.length}</span>
+        <span className="text-[8px] font-semibold uppercase tracking-[0.14em] text-sol-text-dim">
+          {runs.length === 1 ? "run" : "runs"}
+        </span>
+      </div>
+      <div className="relative flex items-start min-w-0 overflow-x-auto">
+        {/* Connector: bright at "now", fading into the older end. */}
+        <span
+          aria-hidden
+          className="absolute left-3 right-6 top-2 h-px bg-gradient-to-r from-sol-orange/50 via-sol-orange/20 to-transparent"
+        />
+        {msToNext !== undefined && (
+          <>
+            <ShortcutTooltip label={`Next fire at ${fmtClock(nextRunAt!)}`}>
+              <div className="relative z-[1] flex flex-col items-center gap-1 px-2 shrink-0 cursor-default">
+                <span className="h-4 flex items-center">
+                  <span className="w-2.5 h-2.5 rounded-full border-[1.5px] border-sol-orange bg-sol-bg animate-pulse motion-reduce:animate-none" />
+                </span>
+                <span className="font-mono text-[9px] leading-none text-sol-orange">next</span>
+                <span className="text-[9px] leading-none text-sol-text-dim tabular-nums whitespace-nowrap">
+                  {msToNext > 0 ? shortAgo(msToNext) : "due"}
+                </span>
+              </div>
+            </ShortcutTooltip>
+            {/* "Now" tick: future to its left, history to its right. */}
+            <span aria-hidden className="relative z-[1] shrink-0 w-px h-4 bg-sol-cyan/50" />
+          </>
+        )}
+        {runs.map((r, i) => {
+          // Inject runs all share the home conversation, so only a spawned
+          // run can claim "this is the session you're looking at".
+          const here = r.kind === "spawn" && r._id === conversationId;
+          const tooltip =
+            r.kind === "inject"
+              ? `Fired ${fmtClock(r.created_at)}`
+              : r.idle_summary
+                ? `${r.title} — ${r.idle_summary}`
+                : r.title;
+          const hint = here
+            ? "this session — jump to the trigger"
+            : r.trigger_message_id
+              ? "open the trigger message"
+              : undefined;
+          return (
+            <ShortcutTooltip key={r.run_key} label={tooltip} hint={hint}>
+              <button
+                onClick={() => openRunInStore(r)}
+                className="group/node relative z-[1] flex flex-col items-center gap-1 px-2 shrink-0"
+              >
+                {/* Fixed-height slot: every dot center sits on the connector. */}
+                <span className="h-4 flex items-center">
+                  <span
+                    className={`rounded-full transition-[transform,background-color] duration-100 group-hover/node:scale-125 ${
+                      here
+                        ? "w-2.5 h-2.5 bg-sol-orange shadow-[0_0_0_3px] shadow-sol-orange/20"
+                        : i === 0
+                          ? "w-2.5 h-2.5 bg-sol-orange"
+                          : `w-2 h-2 ${DOT_RESTING} group-hover/node:bg-sol-orange`
+                    }`}
+                  />
+                </span>
+                <span
+                  className={`font-mono text-[9px] leading-none tabular-nums ${
+                    here ? "font-semibold text-sol-orange" : "text-sol-text-muted"
+                  }`}
+                >
+                  #{runs.length - i}
+                </span>
+                <span className="text-[9px] leading-none text-sol-text-dim tabular-nums whitespace-nowrap">
+                  {shortAgo(now - r.created_at)}
+                </span>
+              </button>
+            </ShortcutTooltip>
+          );
+        })}
+      </div>
     </div>
   );
 }
