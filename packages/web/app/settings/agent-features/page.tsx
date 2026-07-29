@@ -255,7 +255,7 @@ function StableCard({
       </div>
 
       <div
-        className={`mt-3 flex items-center justify-between rounded-lg border border-sol-border/60 px-3 py-2 transition-opacity ${
+        className={`mt-3 flex items-center justify-between gap-4 rounded-lg border border-sol-border/60 px-3 py-2 transition-opacity ${
           mode === "off" ? "opacity-40" : ""
         }`}
       >

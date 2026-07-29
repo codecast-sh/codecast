@@ -114,7 +114,7 @@ export default function NotificationsSettingsPage() {
     <div className="space-y-6">
       {/* Global toggle */}
       <Card className="p-6 bg-sol-bg border-sol-border">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             {enabled ? (
               <Bell className="w-5 h-5 text-sol-cyan" />
@@ -147,7 +147,7 @@ export default function NotificationsSettingsPage() {
                 </div>
                 <div className="space-y-0 divide-y divide-sol-border/40">
                   {section.items.map((item) => (
-                    <div key={item.key} className="flex items-center justify-between py-3 first:pt-0 last:pb-0">
+                    <div key={item.key} className="flex items-center justify-between gap-4 py-3 first:pt-0 last:pb-0">
                       <div>
                         <span className="text-sm font-medium text-sol-text">{item.label}</span>
                         <p className="text-xs text-sol-base1 mt-0.5">{item.desc}</p>
@@ -179,7 +179,7 @@ export default function NotificationsSettingsPage() {
                 {otherMembers.map((member) => {
                   const isMuted = mutedMembers.includes(member._id);
                   return (
-                    <div key={member._id} className="flex items-center justify-between py-3 first:pt-0 last:pb-0">
+                    <div key={member._id} className="flex items-center justify-between gap-4 py-3 first:pt-0 last:pb-0">
                       <div className="flex items-center gap-3">
                         {member.github_avatar_url ? (
                           <img

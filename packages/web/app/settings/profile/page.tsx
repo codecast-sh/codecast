@@ -110,17 +110,17 @@ export default function ProfilePage() {
       <Card className="p-6 bg-sol-bg border-sol-border">
         <h2 className="text-lg font-semibold text-sol-text mb-4">Daemon</h2>
         <div className="space-y-3">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-4">
             <span className="text-sol-base1">Status</span>
             <span className={`font-medium ${daemonConnected ? "text-sol-green" : "text-sol-orange"}`}>
               {daemonConnected ? "Connected" : "Not connected"}
             </span>
           </div>
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-4">
             <span className="text-sol-base1">Last sync</span>
             <span className="text-sol-text">{lastSeenText}</span>
           </div>
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-4">
             <span className="text-sol-base1">Last seen</span>
             <span className="text-sol-text">{lastSeenRelative}</span>
           </div>
@@ -242,7 +242,7 @@ function DesktopVersionRow() {
   }, []);
   if (!isDesktop() || !current) return null;
   return (
-    <div className="flex items-center justify-between">
+    <div className="flex items-center justify-between gap-4">
       <div>
         <span className="text-sol-base1">Desktop app</span>
         <p className="text-xs text-sol-base01 mt-0.5">
@@ -264,7 +264,7 @@ function DesktopLinksRow() {
   const updateDismissed = useInboxStore((s) => s.updateClientDismissed);
   if (!hasUsedDesktop) return null;
   return (
-    <div className="flex items-center justify-between">
+    <div className="flex items-center justify-between gap-4">
       <div>
         <span className="text-sol-base1">Open links in desktop app</span>
         <p className="text-xs text-sol-base01 mt-0.5">Hand off codecast.sh pages from the browser to the desktop app</p>

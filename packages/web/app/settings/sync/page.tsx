@@ -3,6 +3,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { Card } from "../../../components/ui/card";
 import { Input } from "../../../components/ui/input";
 import { Button } from "../../../components/ui/button";
+import { Switch } from "../../../components/ui/switch";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { GitBranch, Folder, Check, Search, Eye, EyeOff, ChevronDown, AlertTriangle } from "lucide-react";
@@ -315,18 +316,7 @@ export default function SyncPage() {
               }
             </p>
           </div>
-          <button
-            onClick={handleToggleSyncAll}
-            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-              syncAll ? "bg-sol-cyan" : "bg-sol-base02"
-            }`}
-          >
-            <span
-              className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                syncAll ? "translate-x-6" : "translate-x-1"
-              }`}
-            />
-          </button>
+          <Switch checked={syncAll} onCheckedChange={handleToggleSyncAll} />
         </div>
       </Card>
 
