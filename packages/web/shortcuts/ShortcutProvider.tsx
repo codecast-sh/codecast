@@ -3,7 +3,7 @@
 import { createContext, useContext, useCallback, useRef, ReactNode } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
-import { ShortcutAction, SHORTCUTS, matchShortcut, inputGuardBypass } from "./registry";
+import { ShortcutAction, SHORTCUTS, matchShortcut, inputGuardBypass, hasOpenModal } from "./registry";
 import { onShortcutUsed } from "../tips/useTips";
 import { setShortcutHandler } from "./listener";
 
@@ -61,9 +61,16 @@ export function ShortcutProvider({ children }: { children: ReactNode }) {
   useMountEffect(() => {
     setShortcutHandler((e: KeyboardEvent) => {
       const inInput = isInputTarget(e);
+      // An open modal dialog owns the keyboard: no global shortcut may act on
+      // the surface behind it (session switch/kill chords, compose.focus,
+      // y/n permission answers) — whether the key was pressed inside the
+      // dialog or focus escaped to body. Only worksInModal app-chrome
+      // shortcuts fire.
+      const modalOpen = hasOpenModal();
 
       for (const def of SHORTCUTS) {
         if (!matchShortcut(e, def)) continue;
+        if (modalOpen && !def.worksInModal) continue;
         if (def.when && !contextsRef.current.has(def.when)) continue;
         if (inInput && !inputGuardBypass(def, e.target as HTMLElement | null)) continue;
 
