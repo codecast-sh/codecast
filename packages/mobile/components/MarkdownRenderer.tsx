@@ -4,10 +4,10 @@ import {
   ScrollView,
   TouchableOpacity,
   View as RNView,
-  Text as RNText,
   Linking,
   Modal,
 } from 'react-native';
+import { Text as RNText } from '@/components/Themed';
 import * as Haptics from 'expo-haptics';
 import { copyToClipboard } from '@/lib/clipboard';
 import FontAwesome from '@expo/vector-icons/FontAwesome';

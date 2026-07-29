@@ -1,4 +1,5 @@
-import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, TextInput, Keyboard, KeyboardAvoidingView, Platform, Share, View as RNView, Text as RNText, Linking, Image, ActionSheetIOS, Alert, Pressable, Clipboard, Modal, Animated, Dimensions, useWindowDimensions } from 'react-native';
+import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, Keyboard, KeyboardAvoidingView, Platform, Share, View as RNView, Linking, Image, ActionSheetIOS, Alert, Pressable, Clipboard, Modal, Animated, Dimensions, useWindowDimensions } from 'react-native';
+import { TextInput, Text as RNText } from '@/components/Themed';
 import { useLocalSearchParams, Stack, useRouter, useFocusEffect } from 'expo-router';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';

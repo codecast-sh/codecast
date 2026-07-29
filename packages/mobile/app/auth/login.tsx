@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import {
+  useState } from 'react';
 import {
   StyleSheet,
-  TextInput,
   TouchableOpacity,
   KeyboardAvoidingView,
   Platform,
@@ -11,6 +11,7 @@ import {
   Image,
   View,
 } from 'react-native';
+import { TextInput } from '@/components/Themed';
 import { Text } from '@/components/Themed';
 import { useAuth } from '@/lib/auth';
 import { Link } from 'expo-router';

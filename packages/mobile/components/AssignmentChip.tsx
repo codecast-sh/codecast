@@ -1,5 +1,15 @@
-import { useCallback, useMemo, useState } from 'react';
-import { Image, Modal, Pressable, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import {
+  useCallback,
+  useMemo,
+  useState } from 'react';
+import { Image,
+  Modal,
+  Pressable,
+  StyleSheet,
+  TouchableOpacity,
+  View,
+} from 'react-native';
+import { Text } from '@/components/Themed';
 import { useMutation, useQuery } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import type { Id } from '@codecast/convex/convex/_generated/dataModel';

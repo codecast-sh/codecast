@@ -1,10 +1,15 @@
 import React from 'react';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { Tabs } from 'expo-router';
+import {
+  Tabs } from 'expo-router';
 import { useQuery } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
-import { View as RNView, Text as RNText, StyleSheet } from 'react-native';
+import { View as RNView,
+  StyleSheet,
+} from 'react-native';
+import { Text as RNText } from '@/components/Themed';
 import { Theme } from '@/constants/Theme';
+import { Mono } from '@/constants/fonts';
 import { StoreSyncBridge } from '@/components/StoreSyncBridge';
 
 function TabBarIcon(props: {
@@ -67,8 +72,8 @@ export default function TabLayout() {
           paddingBottom: 28,
         },
         tabBarLabelStyle: {
-          fontSize: 11,
-          fontWeight: '500',
+          fontSize: 10,
+          fontFamily: Mono.medium,
         },
         headerStyle: {
           backgroundColor: Theme.bgAlt,
@@ -79,8 +84,8 @@ export default function TabLayout() {
         },
         headerTitleStyle: {
           color: Theme.text,
-          fontSize: 17,
-          fontWeight: '600',
+          fontSize: 16,
+          fontFamily: Mono.semiBold,
         },
         headerTintColor: Theme.text,
       }}>
@@ -118,6 +123,9 @@ export default function TabLayout() {
         name="notifications"
         options={{
           title: 'Notifications',
+          // "Notifications" doesn't fit a 5-tab bar in mono — short label,
+          // full title stays on the screen header.
+          tabBarLabel: 'Alerts',
           tabBarIcon: ({ color }) => (
             <TabBarIcon name="bell" color={color} badge={unreadCount ?? 0} />
           ),
