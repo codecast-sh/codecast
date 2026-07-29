@@ -185,29 +185,29 @@ export function SessionItem({ session, onPress, onPin, onLongPress }: { session:
           {session.is_favorite && (
             <Feather name="star" size={11} color={Theme.accent} style={{ marginRight: 3 }} />
           )}
-          {session.is_pinned && (
-            <FontAwesome name="thumb-tack" size={10} color={Theme.magenta} style={{ marginRight: 4 }} />
-          )}
-          <RNText style={[styles.conversationTitle, session.is_pinned && { color: Theme.magenta }]} numberOfLines={1}>
+          <RNText style={styles.conversationTitle} numberOfLines={1}>
             {cleanTitle(session.title)}
           </RNText>
         </RNView>
         <RNView style={styles.rightMeta}>
           {sLabel && <RNText style={[styles.statusBadge, { color: sColor }]}>{sLabel}</RNText>}
           <RNText style={styles.timeText}>{formatRelativeTime(session.updated_at)}</RNText>
+          {session.is_pinned && (
+            <FontAwesome name="thumb-tack" size={10} color={Theme.magenta} />
+          )}
         </RNView>
       </RNView>
+
+      {(session.idle_summary || session.subtitle) && (
+        <RNText style={styles.summaryText} numberOfLines={2}>
+          {session.idle_summary || session.subtitle}
+        </RNText>
+      )}
 
       {userMessage && (
         <RNText style={styles.userMessage} numberOfLines={1}>
           <RNText style={styles.userMessageCaret}>&gt; </RNText>
           {userMessage}
-        </RNText>
-      )}
-
-      {(session.idle_summary || session.subtitle) && (
-        <RNText style={styles.summaryText} numberOfLines={2}>
-          {session.idle_summary || session.subtitle}
         </RNText>
       )}
 
@@ -465,9 +465,10 @@ export const styles = StyleSheet.create({
     color: Theme.textMuted0,
     fontWeight: '400',
   },
+  // msgs count is sol-orange on web's inbox cards — the one loud meta value.
   messageCount: {
     fontSize: 11,
-    color: Theme.textMuted0,
+    color: Theme.orange,
     fontVariant: ['tabular-nums'],
     fontWeight: '400',
   },
