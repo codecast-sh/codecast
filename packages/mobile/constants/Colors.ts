@@ -1,19 +1,20 @@
-const tintColorLight = '#2f95dc';
-const tintColorDark = '#fff';
+import { SolarizedDark, SolarizedLight } from './Theme';
 
+// Solarized-backed palette for the few legacy call sites that still read
+// Colors.light/dark. New code should import Theme from '@/constants/Theme'.
 export default {
   light: {
-    text: '#000',
-    background: '#fff',
-    tint: tintColorLight,
-    tabIconDefault: '#ccc',
-    tabIconSelected: tintColorLight,
+    text: SolarizedLight.text,
+    background: SolarizedLight.bg,
+    tint: SolarizedLight.blue,
+    tabIconDefault: SolarizedLight.tabInactive,
+    tabIconSelected: SolarizedLight.tabActive,
   },
   dark: {
-    text: '#fff',
-    background: '#000',
-    tint: tintColorDark,
-    tabIconDefault: '#ccc',
-    tabIconSelected: tintColorDark,
+    text: SolarizedDark.text,
+    background: SolarizedDark.bg,
+    tint: SolarizedDark.blue,
+    tabIconDefault: SolarizedDark.tabInactive,
+    tabIconSelected: SolarizedDark.tabActive,
   },
 };

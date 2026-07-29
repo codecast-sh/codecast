@@ -3,7 +3,14 @@ import { StyleSheet } from 'react-native';
 export const SolarizedLight = {
   bg: '#FBF5E2',
   bgAlt: '#eee8d5',
+  // Inset panel surface (tool output, code blocks) — web --sol-bg-inset,
+  // the color-mix(bg 40%, bg-alt) result baked to a hex.
+  bgInset: '#f3edda',
   bgHighlight: '#e4ddc8',
+  // Elevated card surface — web --sol-card: pure white lifts pills/cards off
+  // the cream page background.
+  card: '#ffffff',
+  cardHover: '#fffdf6',
   border: '#93a1a1',
   borderLight: '#c5c8c6',
 
@@ -51,7 +58,10 @@ export const SolarizedLight = {
 export const SolarizedDark = {
   bg: '#002b36',
   bgAlt: '#073642',
+  bgInset: '#04323d',
   bgHighlight: '#094959',
+  card: '#08404e',
+  cardHover: '#0a4c5d',
   border: '#586e75',
   borderLight: '#094959',
 
