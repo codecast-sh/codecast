@@ -369,3 +369,99 @@ describe("principal-bound dispatch ownership", () => {
     }
   });
 });
+
+// The ct-40059 black hole: a principal-runtime transition clears or stales the
+// module-level binding while the page stays interactive, and an action fired in
+// that window used to skip the durable enqueue entirely — optimistic bubble
+// renders, nothing reaches the server, no error anywhere ("Message hasn't
+// reached the agent" with an empty outbox and no Convex row). These pin the
+// durable-first contract: every action is parked regardless of binding state,
+// and a later binding delivers it.
+describe("unwired/stale-binding sends are parked, never lost", () => {
+  it("parks an action fired with no binding; the next binding delivers it", async () => {
+    const { wrapped, outbox } = makeHarness();
+    // No _setDispatch — the binding was cleared (e.g. stopProtectedIO) while
+    // the composer stayed interactive.
+    wrapped.poke("a");
+    await settle();
+    expect(outbox.size).toBe(1);
+    expect([...outbox.values()][0].action).toBe("poke");
+
+    const delivered: string[] = [];
+    wrapped._setDispatch((actionName: string) => {
+      delivered.push(actionName);
+      return Promise.resolve("ok");
+    });
+    await settle();
+    expect(delivered).toEqual(["poke"]);
+    expect(outbox.size).toBe(0);
+  });
+
+  it("parks a send fired on a stale-authorization binding; a fresh binding delivers it", async () => {
+    registerPrincipalDispatchRuntime({
+      canDispatch: true,
+      dispatchPrincipalEpoch: 1,
+      subscribe: () => () => {},
+    });
+    updatePrincipalDispatchCorrelation(1);
+    try {
+      const { wrapped, outbox } = makeHarness();
+      const owner = {};
+      const authorization = capturePrincipalDispatchAuthorization();
+      let staleDispatches = 0;
+      wrapped._setDispatch(async () => { staleDispatches++; return "ok"; }, { owner, authorization });
+
+      // The correlation moves (token re-verification, principal epoch bump)
+      // without the binding ever being reinstalled — the stranded state.
+      updatePrincipalDispatchCorrelation(2);
+      wrapped.poke("stranded");
+      await settle();
+      expect(staleDispatches).toBe(0);
+      expect(outbox.size).toBe(1);
+
+      // The ensure-wired heal re-binds with current authorization; the boot
+      // drain of the new binding delivers the parked send.
+      const delivered: string[] = [];
+      wrapped._setDispatch(async (actionName: string) => {
+        delivered.push(actionName);
+        return "ok";
+      }, { owner, authorization: capturePrincipalDispatchAuthorization() });
+      await settle();
+      expect(delivered).toEqual(["poke"]);
+      expect(outbox.size).toBe(0);
+      wrapped._clearDispatch(owner);
+    } finally {
+      updatePrincipalDispatchCorrelation(null);
+      registerPrincipalDispatchRuntime(null);
+    }
+  });
+
+  it("_isDispatchWired tracks binding presence and authorization currency", () => {
+    registerPrincipalDispatchRuntime({
+      canDispatch: true,
+      dispatchPrincipalEpoch: 1,
+      subscribe: () => () => {},
+    });
+    updatePrincipalDispatchCorrelation(1);
+    try {
+      const { wrapped } = makeHarness();
+      expect(wrapped._isDispatchWired()).toBe(false);
+
+      const owner = {};
+      wrapped._setDispatch(async () => "ok", { owner, authorization: capturePrincipalDispatchAuthorization() });
+      expect(wrapped._isDispatchWired()).toBe(true);
+
+      updatePrincipalDispatchCorrelation(2);
+      expect(wrapped._isDispatchWired()).toBe(false);
+
+      wrapped._setDispatch(async () => "ok", { owner, authorization: capturePrincipalDispatchAuthorization() });
+      expect(wrapped._isDispatchWired()).toBe(true);
+
+      wrapped._clearDispatch(owner);
+      expect(wrapped._isDispatchWired()).toBe(false);
+    } finally {
+      updatePrincipalDispatchCorrelation(null);
+      registerPrincipalDispatchRuntime(null);
+    }
+  });
+});

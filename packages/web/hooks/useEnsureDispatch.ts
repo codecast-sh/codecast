@@ -82,15 +82,19 @@ export function useEnsureDispatch() {
         }
       }
     });
-    const authorization = capturePrincipalDispatchAuthorization();
-    if (!authorization) {
-      _clearDispatch(ownerRef.current);
-      return;
-    }
-    _setDispatch(
-      (action, args, patches, result) => dispatchRef.current({ action, args, patches, result }),
-      { owner: ownerRef.current, authorization },
-    );
+    const bindDispatch = () => {
+      const authorization = capturePrincipalDispatchAuthorization();
+      if (!authorization) {
+        _clearDispatch(ownerRef.current);
+        return false;
+      }
+      _setDispatch(
+        (action, args, patches, result) => dispatchRef.current({ action, args, patches, result }),
+        { owner: ownerRef.current, authorization },
+      );
+      return true;
+    };
+    if (!bindDispatch()) return;
 
     // Re-drive any parked dispatch when the client likely has connectivity
     // again. The boot drain only fires once on load, so a send the live socket
@@ -103,9 +107,22 @@ export function useEnsureDispatch() {
     if (typeof window === "undefined" || typeof document === "undefined" || typeof window.addEventListener !== "function") {
       return () => _clearDispatch(ownerRef.current);
     }
-    // _drainOutbox is injected onto the store by mutativeMiddleware (a sibling
-    // of _setDispatch); typed at the call site so the wiring lives entirely here.
-    const drain = () => (useInboxStore.getState() as unknown as { _drainOutbox: () => void })._drainOutbox();
+    // _drainOutbox / _isDispatchWired are injected onto the store by
+    // mutativeMiddleware (siblings of _setDispatch); typed at the call site so
+    // the wiring lives entirely here. Each drain first self-heals the binding:
+    // a principal-runtime transition (stopProtectedIO → _clearRuntimeBindings)
+    // or a correlation-epoch bump can strand the module-level binding while
+    // `canDispatch` stays true — this effect never re-runs, and every send is
+    // parked in the outbox untouched. Re-binding here (capture is always
+    // current truth) delivers them within a tick instead of never.
+    const drain = () => {
+      const store = useInboxStore.getState() as unknown as {
+        _drainOutbox: () => void;
+        _isDispatchWired?: () => boolean;
+      };
+      if (store._isDispatchWired && !store._isDispatchWired() && !bindDispatch()) return;
+      store._drainOutbox();
+    };
     const onVisible = () => { if (document.visibilityState === "visible") drain(); };
     window.addEventListener("online", drain);
     document.addEventListener("visibilitychange", onVisible);
