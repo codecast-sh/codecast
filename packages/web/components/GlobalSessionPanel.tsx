@@ -28,6 +28,7 @@ import { monitorRowsFor, effectiveMonitorStatus } from "./monitorRows";
 import { partitionTriggerInbox, patchTaskInWebList, taskDisplayTitle, latestLoadedTriggerMessage, type TriggerRow, type TaskRow } from "./triggerTasks";
 import { TriggerRunList, useTriggerRuns, openRunInStore, type TriggerRun } from "./TriggerRunHistory";
 import { cleanUserMessage } from "./sessionMessage";
+import { AgentTypeIcon, formatAgentType } from "./AgentTypeIcon";
 import { SharePopover } from "./SharePopover";
 import { shareOrigin } from "../lib/utils";
 import { PlanContextPanel } from "./PlanContextPanel";
@@ -1380,6 +1381,7 @@ export const SessionCard = memo(function SessionCard({
   // begins/ends.
   const restartStartedAt = useInboxStore((st) => st.restartingSessions[session._id]);
   const showModelBadge = useInboxStore((st) => st.clientState?.ui?.show_model_badge === true);
+  const showAgentIcon = useInboxStore((st) => st.clientState?.ui?.show_agent_icon !== false);
   // sessionLabel and isFavorite are now passed as scalar props (computed once in
   // the parent via labelByConv/cardIsFavorite) instead of per-card store scans —
   // see ct-37958. Only spawnedByTitle stays a local selector.
@@ -1570,6 +1572,11 @@ export const SessionCard = memo(function SessionCard({
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
               <path strokeLinecap="round" strokeLinejoin="round" d="M14 12l4 4-4 4" />
             </svg>
+            {showAgentIcon && (
+              <span className="flex-shrink-0 flex items-center opacity-70" title={formatAgentType(session.agent_type || "claude_code")}>
+                <AgentTypeIcon agentType={session.agent_type || "claude_code"} className="w-3 h-3" />
+              </span>
+            )}
             <span className={`truncate text-xs leading-tight flex-1 ${
               isActive ? "text-violet-300 font-medium" : "text-gray-400 font-normal"
             }`}>
@@ -1694,6 +1701,11 @@ export const SessionCard = memo(function SessionCard({
         <div className={`flex items-center gap-1.5 leading-tight ${
           isActive ? "text-sm text-sol-text font-semibold" : isWorking ? "text-sm text-sol-text font-medium" : isStashed ? "text-sm text-sol-text" : isDismissed ? "text-sm text-sol-text-muted" : "text-sm text-sol-text"
         }`}>
+          {showAgentIcon && (
+            <span className="flex-shrink-0 flex items-center" title={formatAgentType(session.agent_type || "claude_code")}>
+              <AgentTypeIcon agentType={session.agent_type || "claude_code"} className="w-3.5 h-3.5" />
+            </span>
+          )}
           <span className="truncate min-w-0">{isSlashCommand ? <span className="font-mono text-sol-cyan">{displayTitle}</span> : displayTitle}</span>
           {/* Favorite affordance — AFTER the title so it never shifts the name.
               Solid (soft amber) when favorited; otherwise a very subdued star that

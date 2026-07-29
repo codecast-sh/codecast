@@ -581,6 +581,9 @@ export type ClientUI = {
   inbox_scope?: "mine" | "team";
   // Show each session's model as a badge in the inbox list. Off by default.
   show_model_badge?: boolean;
+  // Show each session's agent client icon (Claude Code, opencode, …) next to
+  // its title in the inbox list. On by default; read as `!== false`.
+  show_agent_icon?: boolean;
   // Opt in to the teammate-comment tools (the gutter "comment" handle + the
   // header toggle when a conversation has none yet). Off by default — you still
   // SEE and can reply to comments others leave regardless of this.
