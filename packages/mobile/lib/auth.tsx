@@ -1,12 +1,15 @@
-import { useEffect, useState, createContext, useContext, ReactNode } from 'react';
+import { useEffect, useRef, useState, createContext, useContext, ReactNode } from 'react';
 import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import * as LocalAuthentication from 'expo-local-authentication';
 import * as AppleAuthentication from 'expo-apple-authentication';
 import * as WebBrowser from 'expo-web-browser';
 import * as Linking from 'expo-linking';
-import { useAuthActions } from '@convex-dev/auth/react';
-import { useConvexAuth } from 'convex/react';
+import { useAuthActions, useAuthToken } from '@convex-dev/auth/react';
+import { useConvexAuth, useQuery } from 'convex/react';
+import { api } from '@codecast/convex/convex/_generated/api';
+import { clearProtectedInboxMemory } from '@codecast/web/store/inboxStore';
+import { updatePrincipalDispatchCorrelation } from '@codecast/web/store/local-first/dispatchGate';
 
 const TOKEN_KEY = 'convex_auth_token';
 const BIOMETRIC_ENABLED_KEY = 'biometric_enabled';
@@ -29,9 +32,61 @@ export interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+function parseAccessIdentity(token: string | null): { principalId: string; subject: string } | null {
+  if (!token || typeof atob !== 'function') return null;
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const decode = (value: string) => JSON.parse(atob(
+      value.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(value.length / 4) * 4, '='),
+    ));
+    const header = decode(parts[0]);
+    const payload = decode(parts[1]);
+    if (header.alg !== 'RS256' || payload.aud !== 'convex' ||
+      typeof payload.iss !== 'string' || typeof payload.sub !== 'string') return null;
+    const [principalId, sessionId, ...extra] = payload.sub.split('|');
+    if (!principalId || !sessionId || extra.length > 0) return null;
+    return { principalId, subject: payload.sub };
+  } catch {
+    return null;
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const { signIn, signOut: convexSignOut } = useAuthActions();
   const { isAuthenticated, isLoading } = useConvexAuth();
+  const accessToken = useAuthToken();
+  const accessIdentity = parseAccessIdentity(accessToken);
+  const currentUser = useQuery(api.users.getCurrentUser, isAuthenticated ? {} : 'skip');
+  const currentUserId = currentUser?._id?.toString() ?? null;
+  const [verifiedSubject, setVerifiedSubject] = useState<string | null>(null);
+  const visibleSubject = isAuthenticated && accessIdentity &&
+    verifiedSubject === accessIdentity.subject && currentUserId === accessIdentity.principalId
+    ? accessIdentity.subject
+    : null;
+  const lastVisibleSubject = useRef<string | null>(null);
+  const dispatchGeneration = useRef(0);
+
+  // This gate runs during render: a token/account change cannot wait for an
+  // effect cleanup while an old retry is still in flight.
+  if (lastVisibleSubject.current !== visibleSubject) {
+    clearProtectedInboxMemory();
+    lastVisibleSubject.current = visibleSubject;
+    dispatchGeneration.current++;
+  }
+  updatePrincipalDispatchCorrelation(
+    visibleSubject ? dispatchGeneration.current : null,
+  );
+
+  useEffect(() => {
+    if (!isAuthenticated || !accessIdentity || currentUser === undefined) {
+      if (!isAuthenticated) setVerifiedSubject(null);
+      return;
+    }
+    setVerifiedSubject(currentUserId === accessIdentity.principalId
+      ? accessIdentity.subject
+      : null);
+  }, [isAuthenticated, accessIdentity?.principalId, accessIdentity?.subject, currentUser, currentUserId]);
   const [isBiometricAvailable, setIsBiometricAvailable] = useState(false);
   const [isBiometricEnabled, setIsBiometricEnabled] = useState(false);
   const [isAppleAuthAvailable, setIsAppleAuthAvailable] = useState(false);
@@ -118,6 +173,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signOut = async () => {
+    updatePrincipalDispatchCorrelation(null);
+    clearProtectedInboxMemory();
     await convexSignOut();
     await SecureStore.deleteItemAsync(TOKEN_KEY);
   };
@@ -158,7 +215,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         authenticateWithBiometric,
       }}
     >
-      {children}
+      {isLoading || (isAuthenticated && !visibleSubject) ? null : children}
     </AuthContext.Provider>
   );
 }

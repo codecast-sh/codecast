@@ -1,6 +1,23 @@
 import { v } from "convex/values";
 import { mutation, query, action } from "./functions";
 import { api } from "./_generated/api";
+import { getAuthUserId } from "@convex-dev/auth/server";
+import { requireUser } from "./lib/auth";
+import { requireAccessiblePullRequest } from "./lib/access";
+
+async function requireReviewAccess(ctx: any, userId: any, reviewId: any) {
+  const review = await ctx.db.get(reviewId);
+  if (!review) throw new Error("Review not found");
+  await requireAccessiblePullRequest(ctx, userId, review.pull_request_id);
+  return review;
+}
+
+async function requireReviewCommentAccess(ctx: any, userId: any, commentId: any) {
+  const comment = await ctx.db.get(commentId);
+  if (!comment) throw new Error("Review comment not found");
+  await requireAccessiblePullRequest(ctx, userId, comment.pull_request_id);
+  return comment;
+}
 
 export const createReview = mutation({
   args: {
@@ -15,6 +32,11 @@ export const createReview = mutation({
     body: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    if (String(args.reviewer_user_id) !== String(userId)) {
+      throw new Error("Forbidden: reviewer must be the authenticated user");
+    }
+    await requireAccessiblePullRequest(ctx, userId, args.pull_request_id);
     const reviewId = await ctx.db.insert("reviews", {
       pull_request_id: args.pull_request_id,
       reviewer_user_id: args.reviewer_user_id,
@@ -34,10 +56,8 @@ export const addReviewComment = mutation({
     content: v.string(),
   },
   handler: async (ctx, args) => {
-    const review = await ctx.db.get(args.review_id);
-    if (!review) {
-      throw new Error(`Review with id ${args.review_id} not found`);
-    }
+    const userId = await requireUser(ctx);
+    const review = await requireReviewAccess(ctx, userId, args.review_id);
 
     const commentId = await ctx.db.insert("review_comments", {
       review_id: args.review_id,
@@ -58,6 +78,8 @@ export const resolveComment = mutation({
     comment_id: v.id("review_comments"),
   },
   handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    await requireReviewCommentAccess(ctx, userId, args.comment_id);
     await ctx.db.patch(args.comment_id, {
       resolved: true,
     });
@@ -75,6 +97,11 @@ export const updateReviewState = mutation({
     ),
   },
   handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    const review = await requireReviewAccess(ctx, userId, args.review_id);
+    if (String(review.reviewer_user_id) !== String(userId)) {
+      throw new Error("Forbidden: only the reviewer may update review state");
+    }
     await ctx.db.patch(args.review_id, {
       state: args.state,
       submitted_at: Date.now(),
@@ -87,6 +114,8 @@ export const getReviewsForPR = query({
     pull_request_id: v.id("pull_requests"),
   },
   handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    await requireAccessiblePullRequest(ctx, userId, args.pull_request_id);
     const reviews = await ctx.db
       .query("reviews")
       .withIndex("by_pull_request", (q) =>
@@ -102,6 +131,8 @@ export const getReviewComments = query({
     review_id: v.id("reviews"),
   },
   handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    await requireReviewAccess(ctx, userId, args.review_id);
     const comments = await ctx.db
       .query("review_comments")
       .withIndex("by_review", (q) =>
@@ -117,6 +148,8 @@ export const getPendingReviews = query({
     user_id: v.id("users"),
   },
   handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    if (String(args.user_id) !== String(userId)) return [];
     const reviews = await ctx.db
       .query("reviews")
       .withIndex("by_reviewer", (q) =>
@@ -133,6 +166,8 @@ export const getCommentsForPR = query({
     pull_request_id: v.id("pull_requests"),
   },
   handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    await requireAccessiblePullRequest(ctx, userId, args.pull_request_id);
     const comments = await ctx.db
       .query("review_comments")
       .withIndex("by_pull_request", (q) =>
@@ -152,10 +187,11 @@ export const addCommentToPR = mutation({
     content: v.string(),
   },
   handler: async (ctx, args) => {
-    const pr = await ctx.db.get(args.pull_request_id);
-    if (!pr) {
-      throw new Error(`Pull request with id ${args.pull_request_id} not found`);
+    const userId = await requireUser(ctx);
+    if (String(args.author_user_id) !== String(userId)) {
+      throw new Error("Forbidden: comment author must be the authenticated user");
     }
+    await requireAccessiblePullRequest(ctx, userId, args.pull_request_id);
 
     const commentId = await ctx.db.insert("review_comments", {
       pull_request_id: args.pull_request_id,
@@ -176,6 +212,8 @@ export const unresolveComment = mutation({
     comment_id: v.id("review_comments"),
   },
   handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    await requireReviewCommentAccess(ctx, userId, args.comment_id);
     await ctx.db.patch(args.comment_id, {
       resolved: false,
     });
@@ -188,6 +226,8 @@ export const getCommentsForFile = query({
     file_path: v.string(),
   },
   handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    await requireAccessiblePullRequest(ctx, userId, args.pull_request_id);
     const allComments = await ctx.db
       .query("review_comments")
       .withIndex("by_pull_request", (q) =>
@@ -219,6 +259,11 @@ export const submitReview = action({
     github_review_id: number;
     github_review_url: string;
   }> => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Unauthorized");
+    if (String(args.reviewer_user_id) !== String(userId)) {
+      throw new Error("Forbidden: reviewer must be the authenticated user");
+    }
     const pr = await ctx.runQuery(api.pull_requests.getPRById, {
       pr_id: args.pull_request_id,
     });

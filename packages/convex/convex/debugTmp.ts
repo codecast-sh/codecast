@@ -2,6 +2,8 @@
 // reappearing after dismiss: dumps dismiss-relevant fields + recent activity.
 import { internalQuery, internalMutation } from "./functions";
 import { v } from "convex/values";
+import { BUCKETS_VIEW_CONTRACT_ID, BUCKETS_VIEW_KEY } from "./buckets";
+import { advanceLocalViewRevision } from "./localFirstCommands";
 
 // TEMPORARY: insert a switch_account daemon command scoped to ONE conversation
 // — exercises the daemon's swap+kill+continue handler end-to-end without
@@ -142,6 +144,12 @@ export const unarchiveBucket = internalMutation({
     const bucket = await ctx.db.get(args.bucket_id);
     if (!bucket) return { error: "not found" };
     await ctx.db.patch(args.bucket_id, { archived_at: undefined, updated_at: Date.now() });
+    await advanceLocalViewRevision(
+      ctx,
+      bucket.user_id,
+      BUCKETS_VIEW_CONTRACT_ID,
+      BUCKETS_VIEW_KEY,
+    );
     return { name: bucket.name, was_archived_at: bucket.archived_at ?? null };
   },
 });

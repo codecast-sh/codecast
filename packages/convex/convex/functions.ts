@@ -6,8 +6,8 @@
 // also upserts that entity's row in `change_log` — see changeLog.ts. Completeness
 // comes from this ONE interception point: any mutation that imports its builder
 // from here emits automatically, no matter how it writes (direct ctx.db,
-// createDataContext, its .raw / .unscoped escape hatches — all bottom out at the
-// wrapped ctx.db). The guard test (functions.guard.test.ts) fails CI if a file
+// createDataContext — all bottom out at the wrapped ctx.db). The guard test
+// (functions.guard.test.ts) fails CI if a file
 // that writes a tracked table imports the raw builders instead, so the discipline
 // requirement is machine-checked rather than remembered.
 //
@@ -19,9 +19,13 @@ import {
   internalMutation as rawInternalMutation,
 } from "./_generated/server";
 import { makeChangeTrackedDb } from "./changeLog";
+import { makePrincipalViewTrackedDb } from "./principalViewRevisions";
 
 function withChangeLog(ctx: any): any {
-  return { ...ctx, db: makeChangeTrackedDb(ctx.db) };
+  // Compose both infrastructural write boundaries. The principal-view wrapper
+  // is outermost so it observes the final domain transition; its local head
+  // writes flow through the change-feed wrapper but are intentionally untracked.
+  return { ...ctx, db: makePrincipalViewTrackedDb(makeChangeTrackedDb(ctx.db)) };
 }
 
 function wrapDefinition(def: any): any {

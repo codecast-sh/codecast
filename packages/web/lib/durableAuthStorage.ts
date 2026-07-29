@@ -39,6 +39,37 @@ function idbGet(key: string): Promise<string | null> {
   );
 }
 
+function idbGetStrict(key: string): Promise<string | null> {
+  return openDB().then((db) => new Promise<string | null>((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, "readonly");
+    const req = tx.objectStore(STORE_NAME).get(key);
+    req.onsuccess = () => resolve((req.result as string) ?? null);
+    req.onerror = () => reject(req.error ?? new Error("Durable auth read failed"));
+    tx.onabort = () => reject(tx.error ?? new Error("Durable auth read aborted"));
+  }));
+}
+
+/** Read a namespaced auth value from either durable tier without restoring it. */
+export async function readDurableAuthValue(key: string): Promise<string | null> {
+  let localReadError: unknown;
+  try {
+    const local = localStorage.getItem(key);
+    if (local !== null) return local;
+  } catch (error) {
+    localReadError = error;
+  }
+  try {
+    const durable = await idbGetStrict(key);
+    if (durable === null && localReadError) throw localReadError;
+    return durable;
+  } catch (error) {
+    throw new AggregateError(
+      localReadError ? [localReadError, error] : [error],
+      "Failed to read durable authentication evidence",
+    );
+  }
+}
+
 function idbSet(key: string, value: string): void {
   openDB().then(
     (db) => {
@@ -57,6 +88,34 @@ function idbRemove(key: string): void {
     },
     () => {},
   );
+}
+
+async function idbRemoveMany(keys: readonly string[]): Promise<void> {
+  const db = await openDB();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, "readwrite");
+    const store = tx.objectStore(STORE_NAME);
+    for (const key of keys) store.delete(key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
+  });
+}
+
+/**
+ * Explicit logout is different from the auth library's refresh rotation.
+ * Rotation intentionally keeps an IndexedDB backup; logout must remove every
+ * copy before navigation so an old session cannot unlock a principal store.
+ */
+export async function purgeDurableAuthValues(keys: readonly string[]): Promise<void> {
+  const errors: unknown[] = [];
+  for (const key of keys) {
+    try { localStorage.removeItem(key); } catch (error) { errors.push(error); }
+  }
+  try { await idbRemoveMany(keys); } catch (error) { errors.push(error); }
+  if (errors.length > 0) {
+    throw new AggregateError(errors, "Failed to purge durable authentication residue");
+  }
 }
 
 /**
