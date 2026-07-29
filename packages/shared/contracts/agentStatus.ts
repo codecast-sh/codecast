@@ -83,3 +83,55 @@ export function isStatusTrustStale(
 ): boolean {
   return (s.message_count ?? 0) > 0 && now - (s.updated_at || 0) >= STATUS_TRUST_TTL_MS;
 }
+
+// Anti-flicker grace before a finished agent is treated as idle. Shared by the
+// backend's isSessionIdle recency gate (convex/inboxFilters.ts re-exports it)
+// and the client's statusless-row sweep below, so both sides settle a quiet
+// session on the same clock.
+export const AGENT_IDLE_GRACE_MS = 45 * 1000;
+
+// Companion to isStatusTrustStale for rows with NO claim of active work. The
+// long TTL above gives a present ACTIVE agent_status an hour of benefit of the
+// doubt; a row carrying no active status deserves none — nothing anywhere says
+// it is working, its "working" appearance is only the bucket fallthrough over a
+// null/frozen is_idle. Such a row (no active agent_status, is_idle not true, no
+// server-queued message) that has been quiet past the idle grace is settled —
+// the client mirror of the server's no-status branch of isSessionIdle. This is
+// how rows the sessionsLiveness overlay never covers (killed rows, subagent
+// rows, unmanaged imports — see shouldShowInInbox) escape the WORKING bucket:
+// their liveness fields freeze at the last synced value, but updated_at stays
+// honestly quiet.
+export function isQuietSettled(
+  s: {
+    agent_status?: string | null;
+    is_idle?: boolean | null;
+    has_pending?: boolean | null;
+    message_count?: number;
+    updated_at?: number;
+  },
+  now: number,
+): boolean {
+  if (s.agent_status && ACTIVE_AGENT_STATUSES.has(s.agent_status)) return false;
+  if (s.is_idle === true) return false; // already settled the normal way
+  if (s.has_pending) return false; // server-queued work in flight
+  return (s.message_count ?? 0) > 0 && now - (s.updated_at || 0) >= AGENT_IDLE_GRACE_MS;
+}
+
+// THE staleness test every reader of a row's live-looking fields (agent_status,
+// is_idle:false) must apply — the inbox bucket, the pulsing dot, the status
+// pill. One predicate so they can never disagree (a needs-input card with a
+// green "working" dot is the historical failure mode). True when the row's
+// liveness can no longer be believed: an active status gone quiet past the 1h
+// trust TTL, or a statusless row quiet past the 45s idle grace.
+export function isLivenessStale(
+  s: {
+    agent_status?: string | null;
+    is_idle?: boolean | null;
+    has_pending?: boolean | null;
+    message_count?: number;
+    updated_at?: number;
+  },
+  now: number,
+): boolean {
+  return isStatusTrustStale(s, now) || isQuietSettled(s, now);
+}
