@@ -87,6 +87,7 @@ import { TEST_SCRATCH_DIRNAME, isTestScratchPath, isPathExcluded, isProjectAllow
 import { TaskScheduler } from "./taskScheduler.js";
 import { hasTmux } from "./tmux.js";
 import { formatFeedResults } from "./formatter.js";
+import { buildStableContext, recordStableContext, type BuiltStableContext } from "./stableContext.js";
 import { collectSessionResources, formatResourcesLog, nextAwakeIdleMs, shouldReportMetrics, type ReportedMetrics, type SessionResources } from "./resourceMonitor.js";
 import {
   fetchExport,
@@ -116,8 +117,8 @@ import {
 } from "./resumeCommand.js";
 import { resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
 import { buildLaunchArgs, getConfiguredAgentArgs, launchBinary } from "./launchCommand.js";
-import type { AgentStatus, DeviceSnippetSettings, AgentClientId } from "@codecast/shared/contracts";
-import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType } from "@codecast/shared/contracts";
+import type { AgentStatus, DeviceSnippetSettings, AgentClientId, StableLaunchPrefs } from "@codecast/shared/contracts";
+import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType, STABLE_ENV_MODE, STABLE_ENV_GLOBAL, STABLE_ENV_EXCLUDE, STABLE_ENV_CONVERSATION_ID } from "@codecast/shared/contracts";
 import { parseModelPicker, planModelNavigation, SESSION_ONLY_COMMIT_RE, isSwitchConfirmDialog } from "./modelPicker";
 import { type Config, getAgentArgs, isOpencodeServerEnabled, opencodeServerPort } from "./config/types.js";
 import {
@@ -2414,6 +2415,16 @@ async function executeRemoteCommand(
         // passed through to the CLI.
         const requestedModelKey: string | undefined = typeof parsed.model === "string" ? parsed.model : undefined;
         const requestedEffort: string | undefined = typeof parsed.effort === "string" ? parsed.effort : undefined;
+        // Per-session stable-context prefs from the new-session page. Same
+        // ride-along contract as model/effort: unknown values dropped here.
+        const stablePrefs: StableLaunchPrefs = {
+          ...(parsed.stable_mode === "team" || parsed.stable_mode === "solo" || parsed.stable_mode === "off"
+            ? { stable_mode: parsed.stable_mode }
+            : {}),
+          ...(Array.isArray(parsed.stable_exclude)
+            ? { stable_exclude: parsed.stable_exclude.filter((x: unknown): x is string => typeof x === "string" && /^[a-z0-9-]+$/i.test(x)) }
+            : {}),
+        };
 
         // A blank-project start (quick-create) defaults to $HOME — fine on the
         // user's own Mac, wrong on a remote box (the session would mislabel as
@@ -2612,9 +2623,17 @@ async function executeRemoteCommand(
           }
         }
         let binaryArgs = sanitizeBinaryArgs(rawLaunchArgs);
+        // Export the per-session stable-context choice (and the conversation id,
+        // so the SessionStart hook records against it directly with no lookup
+        // race). Values are validated above / Convex ids — shell-safe tokens.
+        const stableEnvParts: string[] = [];
+        if (stablePrefs.stable_mode) stableEnvParts.push(`${STABLE_ENV_MODE}=${stablePrefs.stable_mode}`);
+        if (stablePrefs.stable_exclude?.length) stableEnvParts.push(`${STABLE_ENV_EXCLUDE}=${stablePrefs.stable_exclude.join(",")}`);
+        if (conversationId && /^[a-z0-9]+$/i.test(conversationId)) stableEnvParts.push(`${STABLE_ENV_CONVERSATION_ID}=${conversationId}`);
+        const stableEnv = stableEnvParts.length ? ` ${stableEnvParts.join(" ")}` : "";
         const envPrefix = worktreeResult
-          ? `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT AGENT_RESOURCE_INDEX=${worktreeResult.portIndex}`
-          : `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT`;
+          ? `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT AGENT_RESOURCE_INDEX=${worktreeResult.portIndex}${stableEnv}`
+          : `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT${stableEnv}`;
         // Managed provider keys (opencode/pi) are sourced from a 0600 file so the
         // key never lands in `ps`/the pane; "" when nothing is managed (pl-207).
         const keyPrefix = providerKeySourcePrefix(agentType, CONFIG_DIR);
@@ -2626,12 +2645,15 @@ async function executeRemoteCommand(
         if (agentType === "codex" && codexAppServerInstance?.running) {
           try {
             const sandbox = codexSkipApprovals ? "danger-full-access" as const : "workspace-write" as const;
-            const developerInstructions = await buildCodexStableContext(config, cwd);
+            const builtContext = await buildCodexStableContext(config, cwd, stablePrefs);
+            if (builtContext && conversationId) {
+              void recordStableContext(config, { conversation_id: conversationId, data: builtContext.data });
+            }
             const resp = await codexAppServerInstance.threadStart({
               cwd,
               sandbox,
               approvalPolicy: codexApprovalPolicy,
-              ...(developerInstructions ? { developerInstructions } : {}),
+              ...(builtContext ? { developerInstructions: builtContext.text } : {}),
               ...(requestedModelOpt?.cliAlias ? { model: requestedModelOpt.cliAlias } : {}),
               ...(requestedEffort && (CODEX_EFFORT_LEVELS as readonly string[]).includes(requestedEffort)
                 ? { config: { model_reasoning_effort: requestedEffort } }
@@ -3964,44 +3986,26 @@ function stripAnsi(text: string): string {
   return text.replace(ANSI_ESCAPE_RE, "");
 }
 
-export async function buildCodexStableContext(config: Config | null, cwd?: string): Promise<string | undefined> {
-  const stableMode = config?.stable_mode;
-  if (!stableMode || !config?.auth_token || !config?.convex_url) return undefined;
-
-  const projectPath = config.stable_global ? undefined : cwd;
-  const lookbackDays = stableMode === "team" ? 14 : 7;
-  const limit = stableMode === "team" ? 15 : 10;
-  const siteUrl = config.convex_url.replace(".cloud", ".site");
-
-  try {
-    const response = await fetch(`${siteUrl}/cli/feed`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        api_token: config.auth_token,
-        limit,
-        offset: 0,
-        start_time: Date.now() - lookbackDays * 24 * 60 * 60 * 1000,
-        project_path: projectPath,
-      }),
-    });
-
-    const result = await response.json() as any;
-    if (!response.ok || result?.error) return undefined;
-
-    const feed = stripAnsi(formatFeedResults(result, { projectPath }));
-    const instruction = stableMode === "team"
-      ? "This gives you bigger-picture visibility on what has been and is being worked on by the team."
-      : "This gives you bigger-picture visibility on what you have been and are currently working on.";
-
-    return `<stable-context mode="${stableMode}">
-${instruction}
-
-${feed}
-</stable-context>`;
-  } catch {
-    return undefined;
-  }
+// Codex counterpart of the Claude SessionStart hook: same shared builder, with
+// per-session launch prefs (from start_session args) overriding the machine's
+// config defaults. Returns the block text plus the structured item list the
+// caller records on the conversation.
+export async function buildCodexStableContext(
+  config: Config | null,
+  cwd?: string,
+  prefs?: StableLaunchPrefs,
+): Promise<BuiltStableContext | undefined> {
+  let mode: "team" | "solo" | null;
+  if (prefs?.stable_mode === "off") mode = null;
+  else if (prefs?.stable_mode === "team" || prefs?.stable_mode === "solo") mode = prefs.stable_mode;
+  else mode = config?.stable_mode ?? null;
+  if (!mode) return undefined;
+  return buildStableContext(config, {
+    mode,
+    global: !!config?.stable_global,
+    exclude: prefs?.stable_exclude ?? [],
+    cwd,
+  });
 }
 
 function patchConfig(updates: Partial<Config>): void {
@@ -8408,6 +8412,20 @@ export function tmuxPromptStillHasInput(paneContent: string, input: string): boo
   return normalizePromptText(fromPrompt).includes(normalizedInput);
 }
 
+// A multi-line bracketed paste can render in the composer as a collapsed chip
+// with none of the pasted text visible — Claude Code shows
+// "[Pasted text #1 +13 lines]", other agent TUIs use similar "[Pasted …]"
+// tokens. When the content we just injected was multi-line, that chip at the
+// prompt IS our message sitting in the input box: the submit-verify loop must
+// treat it exactly like visible stuck input (press Enter), not as a
+// stranger's draft to avoid stomping.
+export function tmuxPromptShowsPastePlaceholder(paneContent: string): boolean {
+  const recent = paneContent.split("\n").slice(-80).join("\n");
+  const lastPromptIndex = Math.max(recent.lastIndexOf("❯"), recent.lastIndexOf("›"));
+  if (lastPromptIndex === -1) return false;
+  return /\[[^\]\n]*pasted[^\]\n]*\]/i.test(recent.slice(lastPromptIndex));
+}
+
 // The Claude Code TUI renders its live UI (input box, or modal that replaces it) at the
 // very bottom of the pane, bracketed by box-drawing separator runs. Everything above
 // those separators is transcript — immutable history rendered as text — and must not
@@ -9077,18 +9095,24 @@ async function paneInteractiveQuestion(target: string): Promise<string | null> {
   }
 }
 
-// Paste literal text into a pane via a tmux buffer (bracketed paste — no
-// per-char typing, so CC's slash-command autocomplete never opens). Falls
-// back to send-keys -l. Shared by message injection and the /model driver.
+// Paste literal text into a pane via a tmux buffer (no per-char typing, so
+// CC's slash-command autocomplete never opens). -p emits bracketed-paste
+// markers when the pane's app has opted in (every supported agent TUI does),
+// and inside those markers the composer treats newlines as literal newlines —
+// without -p tmux converts each linefeed to a carriage return, which a TUI
+// reads as the Enter key and submits per line. Falls back to send-keys -l,
+// which is raw keystrokes with no bracketing, so the fallback alone flattens
+// newlines to spaces rather than fire one message per line. Shared by message
+// injection and the /model driver.
 async function pasteTextIntoPane(target: string, text: string): Promise<void> {
   const id = `cc-${process.pid}-${Date.now()}`;
   const tmpFile = `/tmp/${id}`;
   try {
     fs.writeFileSync(tmpFile, text);
     await tmuxExec(["load-buffer", "-b", id, tmpFile]);
-    await tmuxExec(["paste-buffer", "-t", target, "-b", id, "-d"]);
+    await tmuxExec(["paste-buffer", "-p", "-t", target, "-b", id, "-d"]);
   } catch {
-    await tmuxExec(["send-keys", "-t", target, "-l", text]);
+    await tmuxExec(["send-keys", "-t", target, "-l", text.replace(/\r?\n/g, " ")]);
   } finally {
     try { fs.unlinkSync(tmpFile); } catch {}
   }
@@ -9250,7 +9274,7 @@ export type TmuxSubmitVerifyIO = {
 
 export async function verifyTmuxSubmitAfterPaste(
   io: TmuxSubmitVerifyIO,
-  opts: { prePaste: string; pasteConfirmed: boolean; contentPrefix: string; deadlineMs?: number },
+  opts: { prePaste: string; pasteConfirmed: boolean; contentPrefix: string; multiline?: boolean; deadlineMs?: number },
 ): Promise<{ outcome: "submitted" | "timeout" | "exited"; rePasted: boolean }> {
   const TICK = 400;
   const deadlineMs = opts.deadlineMs ?? 15_000;
@@ -9285,7 +9309,8 @@ export async function verifyTmuxSubmitAfterPaste(
     // conclude "processing": both misread a TUI that simply hasn't woken up.
     if (pane === opts.prePaste) continue;
 
-    const inputStuck = tmuxPromptStillHasInput(pane, opts.contentPrefix);
+    const inputStuck = tmuxPromptStillHasInput(pane, opts.contentPrefix) ||
+      (!!opts.multiline && tmuxPromptShowsPastePlaceholder(pane));
     if (inputStuck) {
       // The TUI rendered our text but it's still in the box — earlier Enters
       // were coalesced into the paste burst or dropped during boot. The TUI
@@ -9379,7 +9404,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     }
     if (poll.text) {
       await new Promise(resolve => setTimeout(resolve, 300));
-      await tmuxExec(["send-keys", "-t", target, "-l", poll.text]);
+      await pasteTextIntoPane(target, poll.text);
       await new Promise(resolve => setTimeout(resolve, 150));
       await tmuxExec(["send-keys", "-t", target, "Enter"]);
     } else if (menuSteps.length > 0) {
@@ -9397,7 +9422,13 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     log(`Injected poll response via tmux to ${target}`);
     return;
   }
-  const sanitized = content.replace(/\r?\n/g, " ");
+  // Normalize line endings but KEEP newlines: the paste goes through
+  // paste-buffer -p (bracketed paste), where the composer receives them as
+  // literal composer newlines — flattening them to spaces (the old behavior)
+  // silently corrupted every multi-line prompt. Trailing newlines are trimmed
+  // so the discrete Enter below submits the message instead of leaving a
+  // blank composer line.
+  const sanitized = content.replace(/\r\n?/g, "\n").replace(/\n+$/, "") || " ";
 
   // Closed-loop pre-flight: classify the live UI region only (transcript ignored),
   // dispatch the correct clearing key per modal, re-classify until paste-safe.
@@ -9504,7 +9535,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
       sleep: (ms) => new Promise(resolve => setTimeout(resolve, ms)),
       log: (msg) => log(`${msg} (${target})`),
     },
-    { prePaste, pasteConfirmed, contentPrefix },
+    { prePaste, pasteConfirmed, contentPrefix, multiline: sanitized.includes("\n") },
   );
   if (verify.outcome === "exited") {
     // Propagates to deliverMessage's transient-failure backoff (the old
@@ -14995,6 +15026,17 @@ async function main(): Promise<void> {
     console.error(`Daemon already running (PID: ${existingPid}). Exiting.`);
     process.exit(0);
   }
+
+  // Refresh the SessionStart hook script on boot when stable mode is enabled:
+  // the script's contents ship with the CLI (it delegates to `codecast
+  // stable-context`), so an installed copy from an older CLI must be rewritten
+  // without waiting for the user to re-run `cast stable`. Idempotent.
+  try {
+    if (readConfig()?.stable_mode) {
+      const { installStableHook } = await import("./stableContext.js");
+      installStableHook();
+    }
+  } catch {}
 
   // Exit guard: respawn with backoff if crash looping.
   // Skip self-respawn when running under launchd (KeepAlive handles restarts).

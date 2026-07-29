@@ -143,6 +143,7 @@ const PublicProfile = lazy(() => import("@/app/u/[username]/page"));
 // Sharing
 const Share = lazy(() => import("@/app/share/[token]/page"));
 const ShareMessage = lazy(() => import("@/app/share/message/[token]/page"));
+const Artifact = lazy(() => import("@/app/a/[slug]/page"));
 
 // Code review
 const CommitView = lazy(() => import("@/app/commit/[owner]/[repo]/[sha]/page"));
@@ -239,6 +240,7 @@ export const ROUTES: RouteEntry[] = [
   // -- Sharing (no AuthGuard → public) --
   { path: "share/:token", component: cast(Share), layout: "share", guestOk: true, guestKind: "public" },
   { path: "share/message/:token", component: cast(ShareMessage), layout: "share", guestOk: true, guestKind: "public" },
+  { path: "a/:slug", component: cast(Artifact), layout: "share", guestOk: true, guestKind: "public" },
 
   // -- Code review --
   { path: "commit/:owner/:repo/:sha", component: cast(CommitView), layout: "codeReview", fullWidth: true },

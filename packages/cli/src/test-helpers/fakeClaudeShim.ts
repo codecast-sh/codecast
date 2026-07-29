@@ -75,12 +75,15 @@ emit_meta() {
 }
 
 # JSON-escape: strip control chars (ESC/NAK from daemon's pre-paste clearing
-# keys land in $line if bash read isn't in line-edit mode), then escape
-# backslashes and double-quotes so the result is safe to embed in a JSON string.
+# keys land in $line if bash read isn't in line-edit mode), escape backslashes
+# and double-quotes, then encode embedded newlines as \\n — multi-line pastes
+# produce real newlines in the message and a raw newline inside a JSON string
+# is invalid.
 json_escape() {
   printf '%s' "$1" \\
     | tr -d '\\000-\\010\\013-\\037\\177' \\
-    | sed -e 's/\\\\/\\\\\\\\/g' -e 's/"/\\\\"/g'
+    | sed -e 's/\\\\/\\\\\\\\/g' -e 's/"/\\\\"/g' \\
+    | awk 'NR>1{printf "\\\\n"} {printf "%s", $0}'
 }
 
 emit_user_message() {

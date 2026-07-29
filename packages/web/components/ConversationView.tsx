@@ -27,6 +27,7 @@ import { isResentCopyOfSentMessage } from "../lib/staleDraft";
 import type { SkillItem } from "../lib/conversationProcessor";
 import { createReducer, reducer } from "../lib/messageReducer";
 import { UsageDisplay } from "./UsageDisplay";
+import { StableContextCards, StableContextPicker } from "./StableContextCards";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { KeyCap, MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { toast } from "sonner";
@@ -518,6 +519,7 @@ export type ConversationData = {
   is_workflow_primary?: boolean;
   draft_message?: string;
   subtitle?: string | null;
+  stable_context?: string | null;
   compaction_count?: number;
   loaded_start_index?: number;
   agent_name_map?: Record<string, string>;
@@ -1421,6 +1423,11 @@ export function NewSessionView({ conversation, agentControls }: { conversation: 
         <ProjectSwitcher conversation={conversation} handleRef={projectsRef} />
       </ErrorBoundary>
       <div className="flex-1" />
+      <ErrorBoundary name="StableContextPicker" level="inline">
+        <div className="w-full px-4 mb-4">
+          <StableContextPicker conversationId={conversation._id} />
+        </div>
+      </ErrorBoundary>
       <AgentSwitcher
         conversation={conversation}
         showWorkflow={ac.showWorkflow}
@@ -13999,6 +14006,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 </span>
               </div>
             </div>
+          )}
+          {/* Context the session was started with — anchored to the transcript
+              start, so only when the whole top is loaded (never floating above a
+              mid-conversation window). */}
+          {conversation?.stable_context && !hasMoreAbove && !isLoadingOlder && (
+            <StableContextCards stableContext={conversation.stable_context} />
           )}
           {(density === "story" || density === "summary") ? (
             <div className="conv-col mx-auto px-4 sm:px-5 md:px-6">
