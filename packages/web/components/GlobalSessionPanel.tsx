@@ -18,7 +18,7 @@ import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
 import { isBlockedConversation, isSubagentConversation, nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
-import { isStatusTrustStale } from "@codecast/shared/contracts";
+import { isLivenessStale } from "@codecast/shared/contracts";
 import { TooltipProvider } from "./ui/tooltip";
 import { cleanTitle, msgCountColor, formatModel } from "../lib/conversationProcessor";
 import { getLabelColor } from "../lib/labelColors";
@@ -1015,7 +1015,7 @@ function MonitorBars({ session, isActive, onOpen }: {
   const messages = useInboxStore((st) => st.messages[session._id]);
   const now = useCoarseNow(30_000);
   const rows = useMemo(() => monitorRowsFor(messages), [messages]);
-  if (session.agent_status === "stopped" || isStatusTrustStale(session, now)) return null;
+  if (session.agent_status === "stopped" || isLivenessStale(session, now)) return null;
   const watching = rows.filter((r) => effectiveMonitorStatus(r, now) === "watching");
   if (watching.length === 0) return null;
   return (
@@ -1357,7 +1357,7 @@ export const SessionCard = memo(function SessionCard({
   // needs-input. Past the trust TTL (keyed on updated_at, which a real working
   // agent bumps far more often) the pulse goes dark — the dot and the bucket now
   // read the SAME staleness check, so they can't disagree.
-  const isLive = !session.is_idle && session.message_count > 0 && !isStatusTrustStale(session, Date.now());
+  const isLive = !session.is_idle && session.message_count > 0 && !isLivenessStale(session, Date.now());
   // Age-gated because a restart navigated away from has no owner left to clear
   // its entry; liveness-gated so the green dot takes over the moment the
   // session is actually back. The coarse clock above keeps the age fresh.
@@ -2844,7 +2844,7 @@ export function SessionListPanel({
     // predicate as the card's green dot (isLive) so header and rows can't
     // disagree; coarseNow keeps the trust-stale check on the panel's ticker.
     const isBucketLive = (sess: InboxSession) =>
-      !sess.is_idle && sess.message_count > 0 && !isStatusTrustStale(sess, coarseNow);
+      !sess.is_idle && sess.message_count > 0 && !isLivenessStale(sess, coarseNow);
     const liveCount = items.filter(isBucketLive).length;
     const allIds = new Set(items.map((sess) => sess._id));
     const subMap = new Map<string, InboxSession[]>();
