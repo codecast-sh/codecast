@@ -7994,6 +7994,11 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const sacredKeyRef = useRef(sacredKey);
   const convIdRef = useRef(conversationId);
   const cached = useInboxStore.getState().getDraft(conversationId);
+  // The exact text last seeded from a PERSISTED store draft, still untouched by
+  // the user. While set, the delayed stale re-check may heal it against the
+  // message window once messages load (the mount-time check often runs before
+  // they have). Any setMessage — typing, send, populate — voids it.
+  const seededDraftRef = useRef<string | null>(null);
   // Fallback to the conversation-keyed entry: when a new session gets its
   // session_id stamped the key flips (conv id → session id) and this component
   // remounts — the freshest text lives under the conversation id.
@@ -8004,10 +8009,20 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     // Sacred text is live user input and always restores; the persisted
     // sources go through the stale-sent-draft check (a draft with images
     // attached is kept — the images make it more than a resent copy).
-    if (!cached?.draft_image_storage_ids?.length && isStaleSentDraft(conversationId, persisted)) return "";
+    if (!cached?.draft_image_storage_ids?.length) {
+      if (isStaleSentDraft(conversationId, persisted)) return "";
+      if (cached?.draft_message) seededDraftRef.current = persisted;
+    }
     return persisted;
   });
+  // Whether the composer held text at any point while showing this conversation.
+  // Gates the durable clear on leave: an emptied composer that once had text is
+  // an explicit clear gesture; one that was never filled must not eat a draft
+  // another surface (second tab, compose popup) wrote meanwhile.
+  const hadTextRef = useRef(!!message);
   const setMessage = useCallback((val: string) => {
+    if (val) hadTextRef.current = true;
+    seededDraftRef.current = null;
     sacredInputs.set(sacredKeyRef.current, { text: val });
     // Mirror under the conversation id so the text survives the key flip above.
     if (convIdRef.current !== sacredKeyRef.current) sacredInputs.set(convIdRef.current, { text: val });
@@ -8629,9 +8644,38 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     // Uploading rows are kept: their pending upload lives in the module-level
     // registry, so a successor composer instance can restore and re-attach.
     const imgs = pastedImagesRef.current.filter(i => i.storageId || i.uploading);
-    if (!msg && imgs.length === 0) return;
+    if (!msg && imgs.length === 0) {
+      // A composer that held text and leaves empty is an explicit clear —
+      // commit it durably. Without this, delete-then-navigate loses the race
+      // against the 300ms draft debounce (cancelled on key flip below) and the
+      // persisted draft resurrects on the next app launch. hadTextRef keeps a
+      // never-filled composer (second tab on the same conversation) from
+      // eating a draft another surface wrote meanwhile.
+      if (hadTextRef.current && useInboxStore.getState().getDraft(targetId)) {
+        useInboxStore.getState().clearDraftFinal(targetId);
+      }
+      return;
+    }
     persistDraftImages(targetId, msg, imgs);
   }, [draftTextForPersist]);
+
+  // Re-check a seeded persisted draft against the message window after it has
+  // had time to load. The seed-time stale check often runs before any messages
+  // are in the store (cold visit), so a resent-copy draft shows once — this
+  // catches it, empties the composer, and retires the draft for good. Skipped
+  // the moment the user edits (seededDraftRef voids) or a fork preview is up.
+  const staleRecheckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleStaleRecheck = useCallback(() => {
+    if (staleRecheckTimerRef.current) clearTimeout(staleRecheckTimerRef.current);
+    if (!seededDraftRef.current) return;
+    staleRecheckTimerRef.current = setTimeout(() => {
+      const seed = seededDraftRef.current;
+      if (!seed || messageRef.current !== seed || prevSelectionRef.current !== null) return;
+      if (!isStaleSentDraft(convIdRef.current, seed)) return;
+      setMessage("");
+      useInboxStore.getState().clearDraftFinal(convIdRef.current);
+    }, 3000);
+  }, [setMessage]);
 
   useWatchEffect(() => {
     const keyChanged = sacredKeyRef.current !== sacredKey;
@@ -8645,14 +8689,25 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       sacredKeyRef.current = sacredKey;
       convIdRef.current = conversationId;
       const sacred = sacredInputs.get(sacredKey);
-      const storeDraft = useInboxStore.getState().getDraft(conversationId)?.draft_message;
+      const row = useInboxStore.getState().getDraft(conversationId);
+      let storeDraft = row?.draft_message;
+      // Same stale-sent check the mount seed applies — without it, a resent-copy
+      // draft that the mount heal missed re-enters the composer (and from there
+      // the sacred cache, where no heal ever looks) on every key flip.
+      if (storeDraft && !row?.draft_image_storage_ids?.length && isStaleSentDraft(conversationId, storeDraft)) {
+        useInboxStore.getState().clearDraftFinal(conversationId);
+        storeDraft = undefined;
+      }
       const newDraft = sacred?.text ?? storeDraft ?? "";
       sacredInputs.set(sacredKey, { text: newDraft });
       _setMessage(newDraft);
+      hadTextRef.current = !!newDraft;
+      seededDraftRef.current = sacred == null && storeDraft ? newDraft : null;
+      scheduleStaleRecheck();
     } else if (convIdRef.current !== conversationId) {
       convIdRef.current = conversationId;
     }
-  }, [sacredKey, conversationId, saveDraftSnapshot, draftTextForPersist]);
+  }, [sacredKey, conversationId, saveDraftSnapshot, draftTextForPersist, scheduleStaleRecheck]);
 
   useMountEffect(() => {
     // One-shot heal for drafts poisoned before draftTextForPersist existed: a
@@ -8662,8 +8717,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     if (d?.draft_message && !d.draft_image_storage_ids?.length && isStaleSentDraft(conversationId, d.draft_message)) {
       useInboxStore.getState().clearDraftFinal(conversationId);
     }
+    scheduleStaleRecheck();
     return () => {
       if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+      if (staleRecheckTimerRef.current) clearTimeout(staleRecheckTimerRef.current);
       saveDraftSnapshot(convIdRef.current);
     };
   });
@@ -8703,7 +8760,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         if (sendingRef.current) return;
         const existing = useInboxStore.getState().getDraft(conversationId);
         if (!val && !existing?.draft_image_storage_ids?.length) {
-          useInboxStore.getState().clearDraft(conversationId);
+          // Final (server-tombstoned) clear: the user explicitly emptied the
+          // box, so the draft must die everywhere, not just in this device's
+          // local store — a copy on the server would resurrect on next boot.
+          useInboxStore.getState().clearDraftFinal(conversationId);
         } else {
           useInboxStore.getState().setDraft(conversationId, { ...existing, draft_message: val || null });
         }
