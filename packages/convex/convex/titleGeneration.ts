@@ -333,13 +333,13 @@ export function buildTitlePrompt(input: {
     ? `\nThe current title is ${JSON.stringify(input.currentTitle)}. Judge it against the user requests below: if it names the goal most of the requests serve, keep it VERBATIM — do not reword a correct title. If it names only a recent step or a minority topic while most requests serve a different goal, replace it with a title for that dominant goal. Requests that refine, polish, or extend the thing built earlier in the session serve that same goal — they are NOT a reason to retitle.`
     : "";
 
-  return `Generate a title and subtitle for this coding session.
+  return `Generate a title and subtitle for this session. Most sessions are coding work, but some are not — research, planning, writing, travel, general questions. Title whatever the session is actually about, on its own terms. Never comment on the session's type: if it is not coding, just title the real topic — never emit a title like "Not a coding session".
 
 Title: 2-5 words max. Short noun phrase or verb phrase naming what the session AS A WHOLE is about — the goal most of the user's requests serve, not whatever step is in progress right now. Think git branch names but readable.${anchor}
-Examples: "Auth redirect fix", "Dark mode settings", "Replace chokidar", "Inbox card redesign", "FD leak debug"
+Examples: "Auth redirect fix", "Dark mode settings", "Replace chokidar", "Inbox card redesign", "FD leak debug", "Italy trip planning", "Q3 pricing research"
 Anti-examples (too verbose): "Investigate Non-Resumable Session Root Cause", "Implement agent-triggered community chat with leave option", "Add Sessions tab to mobile with chronological summaries"
 
-Subtitle: Bullet points (2-4 lines) describing what was done. Each bullet starts with "- ". Cover: what was built/fixed/changed, key files or components, current state. The subtitle tracks the latest work — recency belongs here, not in the title.
+Subtitle: Bullet points (2-4 lines) describing what the session covered. Each bullet starts with "- ". For coding work, cover what was built/fixed/changed, key files or components, and current state. For anything else, summarize what was asked and what was found or decided. The subtitle tracks the latest activity — recency belongs here, not in the title.
 Examples:
 "- Switched from chokidar to native fs.watch, cut FD usage 3x\n- Updated daemon.ts and fileWatcher.ts\n- Working, deployed"
 "- Fixed OAuth refresh token race condition in auth middleware\n- Added retry logic in sessionValidator.ts\n- In progress, needs testing"
