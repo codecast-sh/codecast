@@ -8,6 +8,7 @@ import { useRouter } from 'expo-router';
 import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import { Theme, Spacing } from '@/constants/Theme';
 import { NotificationListSkeleton } from '@/components/SkeletonLoader';
+import { cleanNotificationBody } from '@codecast/web/lib/notificationText';
 
 type Notification = {
   _id: Id<"notifications">;
@@ -131,7 +132,7 @@ function NotificationItem({ notification, onPress, onMarkRead }: {
           </RNView>
         )}
         <RNText style={styles.notificationMessage} numberOfLines={6}>
-          {notification.message}
+          {cleanNotificationBody(notification.message, 300)}
         </RNText>
       </RNView>
       {!notification.read && (
