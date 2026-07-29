@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { DEVICE_ONLINE_MS } from "./deviceRouting";
-import { planConversationOwnershipClaim } from "./devices";
+import { enqueueStartSession, planConversationOwnershipClaim } from "./devices";
+import { makeFakeDb } from "./testDb";
 
 const NOW = 1_000_000_000;
 const fresh = NOW - 10_000;
@@ -76,5 +77,49 @@ describe("planConversationOwnershipClaim", () => {
       claimantIsRemote: true,
       now: NOW,
     })).toEqual({ won: false, owner: "local-a" });
+  });
+});
+
+describe("enqueueStartSession execution-protocol gate", () => {
+  const USER = "users_1" as any;
+  const CONVERSATION = "conversations_1" as any;
+
+  const conversation = (execution_protocol_state?: string) => ({
+    _id: CONVERSATION,
+    user_id: USER,
+    project_path: "/work/project",
+    ...(execution_protocol_state ? { execution_protocol_state } : {}),
+  });
+
+  test.each(["fenced", "legacy-quiescing"])(
+    "refuses to emit a legacy start for a %s conversation",
+    async (state) => {
+      const db = makeFakeDb({
+        conversations: [conversation(state)],
+        devices: [],
+        daemon_commands: [],
+      });
+      await expect(
+        enqueueStartSession({ db } as any, USER, {
+          conversationId: CONVERSATION,
+          agentType: "claude",
+        }),
+      ).rejects.toThrow("EXECUTION_PROTOCOL_LEGACY_START_REFUSED");
+      expect(db._tables.daemon_commands).toEqual([]);
+    },
+  );
+
+  test("still emits for a legacy conversation", async () => {
+    const db = makeFakeDb({
+      conversations: [conversation()],
+      devices: [],
+      daemon_commands: [],
+    });
+    await enqueueStartSession({ db } as any, USER, {
+      conversationId: CONVERSATION,
+      agentType: "claude",
+    });
+    expect(db._tables.daemon_commands).toHaveLength(1);
+    expect(db._tables.daemon_commands[0].command).toBe("start_session");
   });
 });

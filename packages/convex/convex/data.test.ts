@@ -46,7 +46,7 @@ describe("createDataContext — work items follow directory→team privacy", () 
   });
 
   test("a mapped directory resolves to its team and stamps it on inserts", async () => {
-    const { ctx, inserted } = mockDb({ mappings: [mapping] });
+    const { ctx, inserted } = mockDb({ mappings: [mapping], isMember: true });
     const dc = await createDataContext(ctx, {
       userId: "u1" as any,
       project_path: "/Users/j/code/union-mobile/outreach",
@@ -56,10 +56,12 @@ describe("createDataContext — work items follow directory→team privacy", () 
     expect(inserted[0].doc.team_id).toBe(UNION as any);
   });
 
-  test("no project_path and no explicit workspace → unscoped, inserts stay personal", async () => {
+  test("no project_path and no explicit workspace defaults to personal, never raw", async () => {
     const { ctx, inserted } = mockDb();
     const dc = await createDataContext(ctx, { userId: "u1" as any });
-    expect(dc.workspace.type).toBe("unscoped");
+    expect(dc.workspace).toEqual({ type: "personal", userId: "u1" as any });
+    expect("raw" in dc).toBe(false);
+    expect("unscoped" in dc).toBe(false);
     await dc.insert("tasks", { title: "orphan" });
     expect(inserted[0].doc.team_id).toBeUndefined();
   });
@@ -74,14 +76,45 @@ describe("createDataContext — work items follow directory→team privacy", () 
     expect(dc.workspace).toEqual({ type: "team", teamId: UNION as any });
   });
 
-  test("an explicit team workspace from a NON-member falls through to the mapping rule", async () => {
+  test("an explicit team workspace from a NON-member is forbidden, never downgraded", async () => {
     const { ctx } = mockDb({ mappings: [mapping], isMember: false });
-    const dc = await createDataContext(ctx, {
+    await expect(createDataContext(ctx, {
+        userId: "u1" as any,
+        workspace: "team",
+        team_id: "t_foreign" as any,
+        project_path: "/Users/j/code/re-underwriting",
+      }))
+      .rejects.toThrow("Forbidden");
+  });
+
+  test("a team workspace without a team id is rejected", async () => {
+    const { ctx } = mockDb();
+    await expect(createDataContext(ctx, {
       userId: "u1" as any,
       workspace: "team",
-      team_id: "t_foreign" as any,
-      project_path: "/Users/j/code/re-underwriting",
+    })).rejects.toThrow("team_id");
+  });
+
+  test("pagination applies the same personal and project filters as collect", async () => {
+    const rows = [
+      { _id: "mine", user_id: "u1", project_path: "/repo/app" },
+      { _id: "team", user_id: "u1", team_id: "t1", project_path: "/repo/app" },
+      { _id: "other-project", user_id: "u1", project_path: "/elsewhere" },
+    ];
+    const builder: any = {
+      withIndex: () => builder,
+      filter: () => builder,
+      order: () => builder,
+      paginate: async () => ({ page: rows, isDone: true, continueCursor: "" }),
+      collect: async () => rows,
+    };
+    const dc = await createDataContext({ db: { query: () => builder } } as any, {
+      userId: "u1" as any,
+      workspace: "personal",
+      project_path: "/repo",
     });
-    expect(dc.workspace.type).toBe("personal");
+
+    const result = await dc.query("tasks").paginate({ numItems: 10, cursor: null });
+    expect(result.page.map((row: any) => row._id)).toEqual(["mine"]);
   });
 });

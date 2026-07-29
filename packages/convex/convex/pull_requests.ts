@@ -1,6 +1,12 @@
 import { v } from "convex/values";
-import { mutation, query } from "./functions";
+import { internalMutation, query } from "./functions";
 import { internal } from "./_generated/api";
+import { requireUser } from "./lib/auth";
+import {
+  canAccessConversation,
+  canAccessPullRequest,
+  requireTeamMembership,
+} from "./lib/access";
 
 async function resolveActorUserIdForTeam(
   ctx: any,
@@ -22,7 +28,7 @@ async function resolveActorUserIdForTeam(
   return membership ? user._id : null;
 }
 
-export const create = mutation({
+export const create = internalMutation({
   args: {
     team_id: v.id("teams"),
     github_pr_id: v.number(),
@@ -56,7 +62,7 @@ export const create = mutation({
   },
 });
 
-export const syncPRFromGitHub = mutation({
+export const syncPRFromGitHub = internalMutation({
   args: {
     team_id: v.id("teams"),
     github_pr_id: v.number(),
@@ -170,7 +176,7 @@ export const syncPRFromGitHub = mutation({
   },
 });
 
-export const linkPRToSession = mutation({
+export const linkPRToSession = internalMutation({
   args: {
     pr_id: v.id("pull_requests"),
     commit_shas: v.array(v.string()),
@@ -212,6 +218,8 @@ export const listPRsForTeam = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    await requireTeamMembership(ctx, userId, args.team_id);
     let prs = await ctx.db
       .query("pull_requests")
       .withIndex("by_team_id", (q) => q.eq("team_id", args.team_id))
@@ -241,12 +249,18 @@ export const getPRByNumber = query({
     number: v.number(),
   },
   handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    const memberships = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .collect();
+    const allowedTeams = new Set(memberships.map((m) => String(m.team_id)));
     const prs = await ctx.db
       .query("pull_requests")
       .withIndex("by_repository", (q) => q.eq("repository", args.repository))
       .collect();
 
-    return prs.find((pr) => pr.number === args.number);
+    return prs.find((pr) => pr.number === args.number && allowedTeams.has(String(pr.team_id)));
   },
 });
 
@@ -255,11 +269,18 @@ export const getPRById = query({
     pr_id: v.id("pull_requests"),
   },
   handler: async (ctx, args) => {
-    return await ctx.db.get(args.pr_id);
+    const userId = await requireUser(ctx);
+    const pr = await ctx.db.get(args.pr_id);
+    if (!pr) return null;
+    const membership = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_user_team", (q) => q.eq("user_id", userId).eq("team_id", pr.team_id))
+      .first();
+    return membership ? pr : null;
   },
 });
 
-export const updatePRFiles = mutation({
+export const updatePRFiles = internalMutation({
   args: {
     pr_id: v.id("pull_requests"),
     files: v.array(v.object({
@@ -313,7 +334,7 @@ export const updatePRFiles = mutation({
   },
 });
 
-export const updatePRState = mutation({
+export const updatePRState = internalMutation({
   args: {
     github_pr_id: v.number(),
     state: v.union(
@@ -369,8 +390,10 @@ export const getPRsForConversation = query({
     conversation_id: v.id("conversations"),
   },
   handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
     const conversation = await ctx.db.get(args.conversation_id);
     if (!conversation) return [];
+    if (!(await canAccessConversation(ctx, userId, conversation))) return [];
 
     let prs;
     if (conversation.team_id) {
@@ -381,9 +404,16 @@ export const getPRsForConversation = query({
     } else {
       prs = await ctx.db.query("pull_requests").collect();
     }
-    return prs.filter((pr) =>
-      pr.linked_session_ids.includes(args.conversation_id)
-    );
+    const visible = [];
+    for (const pr of prs) {
+      if (
+        pr.linked_session_ids.includes(args.conversation_id)
+        && (await canAccessPullRequest(ctx, userId, pr))
+      ) {
+        visible.push(pr);
+      }
+    }
+    return visible;
   },
 });
 
@@ -394,17 +424,23 @@ export const getPRsForTimeline = query({
   },
   handler: async (ctx, args) => {
     const limit = args.limit ?? 50;
-
-    let prs = await ctx.db
-      .query("pull_requests")
-      .withIndex("by_updated_at")
-      .order("desc")
-      .take(limit * 2);
+    const userId = await requireUser(ctx);
+    const memberships = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .collect();
+    let prs = (await Promise.all(memberships.map((membership) =>
+      ctx.db
+        .query("pull_requests")
+        .withIndex("by_team_id", (q: any) => q.eq("team_id", membership.team_id))
+        .collect()
+    ))).flat();
 
     if (args.repository) {
       prs = prs.filter((pr) => pr.repository === args.repository);
     }
 
+    prs.sort((a, b) => b.updated_at - a.updated_at);
     return prs.slice(0, limit);
   },
 });

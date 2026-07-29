@@ -1,9 +1,9 @@
 import { useState, useRef, useCallback } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useEventListener } from "../hooks/useEventListener";
-import { useAuthActions } from "@convex-dev/auth/react";
 import { useRouter } from "next/navigation";
 import { useInboxStore } from "../store/inboxStore";
+import { useCodecastSignOut } from "../hooks/useCodecastSignOut";
 import { copyToClipboard } from "../lib/utils";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
@@ -127,7 +127,7 @@ export function UserMenu() {
   const [open, setOpen] = useState(false);
   const [urlBarOpen, setUrlBarOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
-  const { signOut } = useAuthActions();
+  const signOut = useCodecastSignOut();
   const router = useRouter();
   const { user } = useCurrentUser();
   const toggleShortcutsPanel = useInboxStore(s => s.toggleShortcutsPanel);

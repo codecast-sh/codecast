@@ -6,11 +6,13 @@
 export function makeFakeDb(tables: Record<string, any[]>) {
   const inserted: Array<{ table: string; doc: any; _id: string }> = [];
   const patched: Array<{ _id: any; patch: any }> = [];
+  const replaced: Array<{ _id: any; doc: any }> = [];
   const deleted: any[] = [];
   const db: any = {
     _tables: tables,
     _inserted: inserted,
     _patched: patched,
+    _replaced: replaced,
     _deleted: deleted,
     query(table: string) {
       const filters: Array<[string, any]> = [];
@@ -29,6 +31,11 @@ export function makeFakeDb(tables: Record<string, any[]>) {
         filter() { return builder; },
         order() { return builder; },
         async first() { return apply()[0] ?? null; },
+        async unique() {
+          const rows = apply();
+          if (rows.length > 1) throw new Error("Query returned more than one result");
+          return rows[0] ?? null;
+        },
         async collect() { return apply(); },
         async take(n: number) { return apply().slice(0, n); },
         // Single-page paginate: all matches, always done. Enough to test logic
@@ -43,6 +50,9 @@ export function makeFakeDb(tables: Record<string, any[]>) {
       for (const rows of Object.values(tables)) { const r = rows.find((x: any) => x._id === id); if (r) return r; }
       return null;
     },
+    normalizeId(table: string, id: string) {
+      return (tables[table] ?? []).some((row: any) => String(row._id) === String(id)) ? id : null;
+    },
     async insert(table: string, doc: any) {
       const _id = `${table}_${inserted.length + 1}`;
       (tables[table] ??= []).push({ _id, ...doc });
@@ -54,6 +64,16 @@ export function makeFakeDb(tables: Record<string, any[]>) {
       for (const rows of Object.values(tables)) {
         const r = rows.find((x: any) => x._id === id);
         if (r) { Object.assign(r, patch); return; }
+      }
+    },
+    async replace(id: any, doc: any) {
+      replaced.push({ _id: id, doc });
+      for (const rows of Object.values(tables)) {
+        const i = rows.findIndex((x: any) => x._id === id);
+        if (i >= 0) {
+          rows[i] = { _id: id, ...doc };
+          return;
+        }
       }
     },
     async delete(id: any) {

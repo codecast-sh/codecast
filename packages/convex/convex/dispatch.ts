@@ -15,8 +15,17 @@ import { reactivateTasksCanceledOnKill } from "./agentTasks";
 import { canAccessDoc } from "./docs";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { findConversationBySessionReference } from "./conversationSessionLookup";
-import { createBucketForUser, assignConversationToBucketForUser } from "./buckets";
+import {
+  BUCKETS_VIEW_CONTRACT_ID,
+  BUCKETS_VIEW_KEY,
+  createBucketForUser,
+  assignConversationToBucketForUser,
+} from "./buckets";
+import { advanceLocalViewRevision } from "./localFirstCommands";
 import { isSessionOwner } from "./sessionOwners";
+import { patchCommentWithRevision } from "./commentViewWrites";
+import { canAccessConversation } from "./lib/access";
+import { patchConversationThroughFavoriteView } from "./favoriteViewWrites";
 
 type TableConfig =
   | {
@@ -77,6 +86,7 @@ const TABLE_CONFIG: Record<string, TableConfig> = {
     immutable: new Set([
       "_id", "_creationTime", "user_id", "conversation_id", "message_id", "created_at",
       "parent_comment_id", "author_kind", "agent_status", "fork_conversation_id", "client_id",
+      "github_comment_id", "pr_id", "file_path", "line_number",
     ]),
   },
 };
@@ -130,6 +140,7 @@ export async function applyPatches(
   userId: Id<"users">,
   patches: Record<string, Record<string, Record<string, any>>>
 ) {
+  let bucketViewChanged = false;
   for (const [table, docs] of Object.entries(patches)) {
     const config = TABLE_CONFIG[table];
     if (!config) continue;
@@ -159,7 +170,27 @@ export async function applyPatches(
         }
         if (!permitted) continue;
         const finalSafe = config.beforePatch ? config.beforePatch(doc, { ...safe }) : safe;
-        await ctx.db.patch(docKey as Id<any>, finalSafe);
+        // Favorite membership belongs to the conversation's runner principal,
+        // not to second-party inbox owners. Those owners may triage the row but
+        // cannot mutate somebody else's favorites relation.
+        if (
+          table === "conversations"
+          && "is_favorite" in finalSafe
+          && String(doc.user_id) !== String(userId)
+        ) {
+          delete finalSafe.is_favorite;
+        }
+        if (Object.keys(finalSafe).length === 0) continue;
+        if (table === "comments") {
+          const conversation = await ctx.db.get(doc.conversation_id as Id<"conversations">);
+          if (!conversation || !(await canAccessConversation(ctx, userId, conversation))) continue;
+          await patchCommentWithRevision(ctx as any, doc as any, finalSafe as any, conversation as any);
+        } else if (table === "conversations" && "is_favorite" in finalSafe) {
+          await patchConversationThroughFavoriteView(ctx as any, doc as any, finalSafe as any, "advance");
+        } else {
+          await ctx.db.patch(docKey as Id<any>, finalSafe);
+        }
+        if (table === "inbox_buckets") bucketViewChanged = true;
         // Lifecycle hooks on the DATA transition (a conversation patch setting
         // inbox_dismissed_at / inbox_stashed_at), not any one action, so every
         // dismiss/stash path funnels through here — the inbox shortcuts, the
@@ -207,6 +238,14 @@ export async function applyPatches(
         }
       }
     }
+  }
+  if (bucketViewChanged) {
+    await advanceLocalViewRevision(
+      ctx as any,
+      userId,
+      BUCKETS_VIEW_CONTRACT_ID,
+      BUCKETS_VIEW_KEY,
+    );
   }
 }
 

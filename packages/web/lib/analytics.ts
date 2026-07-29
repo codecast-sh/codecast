@@ -99,6 +99,10 @@ const _seenGlobalErrors = new Set<string>();
 //    has it) — we just decline to report it. See components/DetailSplitLayout.
 const IGNORED_ERROR_PATTERNS: RegExp[] = [
   /Could not find data for Group with id/,
+  // StaleDispatchBindingError: a dispatch settling after its binding was
+  // fenced (token refresh, principal switch). Expected lifecycle — the durable
+  // outbox copy redelivers under the current binding — not a failure.
+  /Dispatch binding changed while work was in flight/,
 ];
 
 function isIgnoredError(message: string | undefined): boolean {

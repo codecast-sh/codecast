@@ -1,5 +1,7 @@
 import { internalMutation } from "./functions";
 import { v } from "convex/values";
+import { patchCommentWithRevision } from "./commentViewWrites";
+import { moveBookmarkPrincipalWithRevision } from "./bookmarkViewWrites";
 
 // (table, field, indexName | null) — when indexName is present, use the
 // indexed query; otherwise fall back to a small filter scan. All app tables
@@ -196,7 +198,17 @@ export const mergeDuplicateUser = internalMutation({
       totalUpdated += rows.length;
       if (!args.dry_run) {
         for (const row of rows) {
-          await ctx.db.patch(row._id, { [field]: args.to_user_id } as any);
+          if (table === "bookmarks" && field === "user_id") {
+            await moveBookmarkPrincipalWithRevision(ctx, row, args.to_user_id);
+          } else if (table === "comments") {
+            await patchCommentWithRevision(
+              ctx,
+              row,
+              { [field]: args.to_user_id } as any,
+            );
+          } else {
+            await ctx.db.patch(row._id, { [field]: args.to_user_id } as any);
+          }
         }
       }
     }

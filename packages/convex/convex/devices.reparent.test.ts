@@ -51,13 +51,20 @@ describe("performReparentSessionToDevice", () => {
     expect(conv(db).user_id).toBe(ME); // now runs + bills under the caller
     expect(conv(db).author_user_id).toBe(JASON); // immutable author pinned to the pre-move runner
     expect(conv(db).owner_device_id).toBe("mydev");
-    // Resume enqueued in the CALLER's queue, targeted at the caller's device.
+    // Resume enqueued in the CALLER's queue, targeted at the caller's device;
+    // the PRE-MOVE runner's device gets a release_session teardown in ITS
+    // owner's queue so the source tmux + agent don't linger after the move.
     const cmds = commands(db);
-    expect(cmds.length).toBe(1);
+    expect(cmds.length).toBe(2);
     expect(cmds[0].user_id).toBe(ME);
     expect(cmds[0].command).toBe("resume_session");
     expect(cmds[0].target_device_id).toBe("mydev");
     expect(JSON.parse(cmds[0].args).reparented).toBe(true);
+    expect(cmds[1].command).toBe("release_session");
+    // (user_id is intended to be the pre-move runner's, but makeFakeDb's patch
+    // mutates the fetched row in place, so conv.user_id reads post-move here;
+    // real Convex returns snapshots and routes it to the runner's queue.)
+    expect(cmds[1].target_device_id).toBe("jasondev");
   });
 
   test("the managed-session row is handed over: stale source-account rows are dropped", async () => {
@@ -187,8 +194,11 @@ describe("performReassignToDevice", () => {
     expect(conv(db).user_id).toBe(ME);
     expect(conv(db).owner_device_id).toBe("mydev");
     const cmds = commands(db);
-    expect(cmds.length).toBe(1);
+    expect(cmds.length).toBe(2);
     expect(JSON.parse(cmds[0].args).reparented).toBeUndefined();
+    // The previous owner device still gets a release_session teardown.
+    expect(cmds[1].command).toBe("release_session");
+    expect(cmds[1].target_device_id).toBe("jasondev");
   });
 
   test("owner-but-not-runner move delegates to the cross-user reparent", async () => {

@@ -4,7 +4,12 @@ import {
   canAccessTask,
   canAccessDoc,
   canAccessPlan,
+  canAccessProject,
   canAccessConversation,
+  requireTeamMembership,
+  workspaceForConversation,
+  workspaceForResource,
+  workspacesMatch,
 } from "./access";
 
 // ── Mock ctx ──
@@ -76,6 +81,10 @@ describe("canAccessTask", () => {
     const solo = { user_id: OWNER };
     expect(await canAccessTask(mockCtx(memberships), MEMBER, solo)).toBe(false);
   });
+  test("an explicit assignee can access a team-less task", async () => {
+    const assigned = { user_id: OWNER, assignee: MEMBER.toString() };
+    expect(await canAccessTask(mockCtx(memberships), MEMBER, assigned)).toBe(true);
+  });
 });
 
 describe("canAccessDoc", () => {
@@ -106,6 +115,31 @@ describe("canAccessPlan", () => {
   });
 });
 
+describe("canAccessProject", () => {
+  const project = { user_id: OWNER, team_id: TEAM };
+
+  test("owner and team member have access", async () => {
+    expect(await canAccessProject(mockCtx(memberships), OWNER, project)).toBe(true);
+    expect(await canAccessProject(mockCtx(memberships), MEMBER, project)).toBe(true);
+  });
+
+  test("non-member is denied", async () => {
+    expect(await canAccessProject(mockCtx(memberships), STRANGER, project)).toBe(false);
+  });
+});
+
+describe("requireTeamMembership", () => {
+  test("returns the membership for a member", async () => {
+    const membership = await requireTeamMembership(mockCtx(memberships), MEMBER, TEAM);
+    expect(membership?.user_id).toBe(MEMBER);
+  });
+
+  test("throws a typed forbidden error for a non-member", async () => {
+    await expect(requireTeamMembership(mockCtx(memberships), STRANGER, TEAM))
+      .rejects.toThrow("Forbidden");
+  });
+});
+
 // ── conversations carry the faithful visibility nuance ──
 // A team member only gets access when the conversation is actually team-visible
 // (not private). team_id alone is routing, not a grant.
@@ -128,5 +162,24 @@ describe("canAccessConversation", () => {
   test("a team_visibility override reveals an otherwise-private conversation to a member", async () => {
     const overridden = { ...privateConv, team_visibility: "team" };
     expect(await canAccessConversation(mockCtx(memberships), MEMBER, overridden)).toBe(true);
+  });
+});
+
+describe("authorization workspaces", () => {
+  test("a private team-routed conversation remains in its owner's personal workspace", () => {
+    const conversation = { user_id: OWNER, team_id: TEAM, is_private: true };
+    expect(workspaceForConversation(conversation)).toEqual({ type: "personal", userId: OWNER });
+    expect(workspacesMatch(
+      workspaceForConversation(conversation),
+      workspaceForResource({ user_id: OWNER }),
+    )).toBe(true);
+  });
+
+  test("a shared conversation and a team work item share one authorization workspace", () => {
+    const conversation = { user_id: OWNER, team_id: TEAM, is_private: false };
+    expect(workspacesMatch(
+      workspaceForConversation(conversation),
+      workspaceForResource({ user_id: OWNER, team_id: TEAM }),
+    )).toBe(true);
   });
 });
