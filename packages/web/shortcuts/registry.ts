@@ -73,7 +73,23 @@ export interface ShortcutDef {
   // input only when it has no content (see inputGuardBypass); absent = never
   // fire while an input is focused.
   skipInputCheck?: boolean | 'whenEmpty';
+  // Fire even while a modal dialog is open. Reserved for app-chrome shortcuts
+  // that cannot act on the surface behind the modal (zoom, and the settings
+  // toggle — which closes the modal itself). Everything else stands down while
+  // a modal is up; see hasOpenModal.
+  worksInModal?: boolean;
   description: string;
+}
+
+// True while a modal layer is up. Radix Dialog/AlertDialog/Sheet content and
+// the custom settings modal all render with aria-modal="true"; non-modal
+// popovers and the command palette don't. :not([data-state="closed"]) keeps a
+// force-mounted dialog's exit animation from counting as open. While a modal
+// is open it owns keyboard and focus: the shortcut dispatcher stands down and
+// background focus-stealers (composer refocus, mode-cycle chords) must not run.
+export function hasOpenModal(): boolean {
+  if (typeof document === 'undefined') return false;
+  return !!document.querySelector('[aria-modal="true"]:not([data-state="closed"])');
 }
 
 // Decides whether a binding bypasses the in-input guard for the focused element.
@@ -142,8 +158,8 @@ export const SHORTCUTS: ShortcutDef[] = [
   // meta+, is the OS settings convention on mac; ctrl+, is taken by the inbox
   // view cycle above, so non-mac gets the shifted variant. shift+comma arrives
   // as ',' or '<' depending on browser/layout — register both spellings.
-  { key: 'ctrl+shift+,', mac: 'meta+,', action: 'ui.openSettings', skipInputCheck: true, description: 'Open settings' },
-  { key: 'ctrl+shift+<', mac: 'meta+,', action: 'ui.openSettings', skipInputCheck: true, description: 'Open settings' },
+  { key: 'ctrl+shift+,', mac: 'meta+,', action: 'ui.openSettings', skipInputCheck: true, worksInModal: true, description: 'Open settings' },
+  { key: 'ctrl+shift+<', mac: 'meta+,', action: 'ui.openSettings', skipInputCheck: true, worksInModal: true, description: 'Open settings' },
   { key: 'ctrl+z', action: 'ui.undo', skipInputCheck: true, description: 'Undo' },
   { key: 'ctrl+shift+z', action: 'ui.redo', skipInputCheck: true, description: 'Redo' },
 
@@ -153,10 +169,10 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'ctrl+/', action: 'search.open', skipInputCheck: true, description: 'Open search' },
   { key: 'meta+k', action: 'palette.toggle', skipInputCheck: true, description: 'Toggle command palette' },
 
-  { key: 'meta+=', action: 'zoom.in', when: 'desktop', skipInputCheck: true, description: 'Zoom in' },
-  { key: 'meta++', action: 'zoom.in', when: 'desktop', skipInputCheck: true, description: 'Zoom in' },
-  { key: 'meta+-', action: 'zoom.out', when: 'desktop', skipInputCheck: true, description: 'Zoom out' },
-  { key: 'meta+0', action: 'zoom.reset', when: 'desktop', skipInputCheck: true, description: 'Reset zoom' },
+  { key: 'meta+=', action: 'zoom.in', when: 'desktop', skipInputCheck: true, worksInModal: true, description: 'Zoom in' },
+  { key: 'meta++', action: 'zoom.in', when: 'desktop', skipInputCheck: true, worksInModal: true, description: 'Zoom in' },
+  { key: 'meta+-', action: 'zoom.out', when: 'desktop', skipInputCheck: true, worksInModal: true, description: 'Zoom out' },
+  { key: 'meta+0', action: 'zoom.reset', when: 'desktop', skipInputCheck: true, worksInModal: true, description: 'Reset zoom' },
   { key: 'meta+f', action: 'find.toggle', when: 'desktop', skipInputCheck: true, description: 'Find in page' },
 
   { key: 'd', action: 'conv.toggleDiff', when: 'conversation', description: 'Toggle diff panel' },

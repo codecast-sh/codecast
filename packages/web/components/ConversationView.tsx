@@ -6,7 +6,7 @@ import { useEffect, useLayoutEffect, useRef, useState, useMemo, useImperativeHan
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useWatchEffect } from "../hooks/useWatchEffect";
-import { useShortcutContext, useShortcutAction, isMac, getShortcutsForAction, formatShortcutParts, type ShortcutAction } from "../shortcuts";
+import { useShortcutContext, useShortcutAction, isMac, getShortcutsForAction, formatShortcutParts, hasOpenModal, type ShortcutAction } from "../shortcuts";
 import { useConvexSync } from "../hooks/useConvexSync";
 import { useShallow } from "zustand/react/shallow";
 import { createPortal } from "react-dom";
@@ -1398,6 +1398,7 @@ export function NewSessionView({ conversation, agentControls }: { conversation: 
       const up = e.code === "KeyK" || e.code === "ArrowUp";
       const down = e.code === "KeyJ" || e.code === "ArrowDown";
       if (!up && !down) return;
+      if (hasOpenModal()) return;
       e.preventDefault();
       e.stopPropagation();
       if (up) {
@@ -7882,7 +7883,7 @@ const ForkReplyInput = memo(function ForkReplyInput({ userName, userAvatar, onFo
   const [message, setMessage] = useState("");
   const [isForking, setIsForking] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  useMountEffect(() => { if (autoFocusInput && textareaRef.current) textareaRef.current.focus(); });
+  useMountEffect(() => { if (autoFocusInput && !hasOpenModal() && textareaRef.current) textareaRef.current.focus(); });
   useWatchEffect(() => {
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
@@ -8792,6 +8793,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
 
   const mountConvIdRef = useRef(conversationId);
   useWatchEffect(() => {
+    // An open dialog owns focus — never yank it down to the composer behind it.
+    if (hasOpenModal()) return;
     if (textareaRef.current) {
       const isIdTransition = mountConvIdRef.current !== conversationId;
       mountConvIdRef.current = conversationId;
@@ -10360,6 +10363,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       if (e.key !== "Tab" || !e.shiftKey) return;
       const target = e.target as HTMLElement;
       if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
+      if (hasOpenModal()) return;
       e.preventDefault();
       handleCycleMode();
     };
