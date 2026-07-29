@@ -1,5 +1,5 @@
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
+import { DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { useFonts } from 'expo-font';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
@@ -13,7 +13,8 @@ import { ConvexProvider } from 'convex/react';
 import { ConvexAuthProvider } from '@convex-dev/auth/react';
 import { useQuery } from 'convex/react';
 
-import { useColorScheme } from '@/components/useColorScheme';
+import { Theme } from '@/constants/Theme';
+import { Mono } from '@/constants/fonts';
 import { convex } from '@/lib/convex';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
@@ -139,15 +140,36 @@ function RootLayout() {
 
 export default wrapRoot(RootLayout);
 
-function RootLayoutNav() {
-  const colorScheme = useColorScheme();
+// Navigation chrome (stack headers, back buttons, tab bar) renders outside
+// our StyleSheets, so parity with web has to come through the nav theme:
+// Solarized surfaces + JetBrains Mono faces. fontWeight stays 'normal' in
+// every entry — the face carries the weight (see constants/fonts.ts).
+const SolarizedNavTheme = {
+  ...DefaultTheme,
+  colors: {
+    ...DefaultTheme.colors,
+    primary: Theme.blue,
+    background: Theme.bg,
+    card: Theme.bgAlt,
+    text: Theme.text,
+    border: Theme.borderLight,
+    notification: Theme.red,
+  },
+  fonts: {
+    regular: { fontFamily: Mono.regular, fontWeight: 'normal' },
+    medium: { fontFamily: Mono.medium, fontWeight: 'normal' },
+    bold: { fontFamily: Mono.semiBold, fontWeight: 'normal' },
+    heavy: { fontFamily: Mono.bold, fontWeight: 'normal' },
+  },
+} as const;
 
+function RootLayoutNav() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <ConvexProvider client={convex}>
         <ConvexAuthProvider client={convex} storage={secureStorage}>
           <AuthProvider>
-            <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+            <ThemeProvider value={SolarizedNavTheme}>
               <AnalyticsIdentify />
               <AuthGate>
                 <Stack>

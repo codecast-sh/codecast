@@ -10,7 +10,7 @@
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "codecast",
-    "userInterfaceStyle": "automatic",
+    "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "owner": "ashotp",
     "splash": {
