@@ -1,5 +1,19 @@
-import { useState, useCallback } from 'react';
-import { StyleSheet, TouchableOpacity, Switch, Alert, ScrollView, View as RNView, Text as RNText, TextInput, ActionSheetIOS, KeyboardAvoidingView, Platform, Share, Image } from 'react-native';
+import {
+  useState,
+  useCallback } from 'react';
+import { StyleSheet,
+  TouchableOpacity,
+  Switch,
+  Alert,
+  ScrollView,
+  View as RNView,
+  ActionSheetIOS,
+  KeyboardAvoidingView,
+  Platform,
+  Share,
+  Image,
+} from 'react-native';
+import { Text as RNText, TextInput } from '@/components/Themed';
 import { copyToClipboard } from '@/lib/clipboard';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/lib/auth';

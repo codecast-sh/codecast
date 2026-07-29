@@ -57,12 +57,16 @@ SplashScreen.preventAutoHideAsync();
 
 function RootLayout() {
   const [loaded, error] = useFonts({
-    // JetBrains Mono is the mono face on web; use it on mobile too for parity.
-    // The legacy "SpaceMono" key now points at JetBrains Mono so the existing
-    // fontFamily:'SpaceMono' call sites render it without a repo-wide rename.
+    // JetBrains Mono is the app face, same as web. One key per face — the
+    // resolver in constants/fonts.ts swaps families per fontWeight because a
+    // runtime-loaded family holds a single face (see monoStyle). The legacy
+    // "SpaceMono" key aliases Regular so old call sites keep rendering.
     SpaceMono: require('../assets/fonts/JetBrainsMono-Regular.ttf'),
     JetBrainsMono: require('../assets/fonts/JetBrainsMono-Regular.ttf'),
+    'JetBrainsMono-Medium': require('../assets/fonts/JetBrainsMono-Medium.ttf'),
+    'JetBrainsMono-SemiBold': require('../assets/fonts/JetBrainsMono-SemiBold.ttf'),
     'JetBrainsMono-Bold': require('../assets/fonts/JetBrainsMono-Bold.ttf'),
+    'JetBrainsMono-Italic': require('../assets/fonts/JetBrainsMono-Italic.ttf'),
     ...FontAwesome.font,
   });
 
