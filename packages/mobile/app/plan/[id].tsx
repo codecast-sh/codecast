@@ -1,17 +1,19 @@
-import { useMemo } from "react";
+import {
+  useMemo } from "react";
 import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
   View as RNView,
-  Text as RNText,
   ActivityIndicator,
-} from "react-native";
+} from 'react-native';
+import { Text as RNText } from '@/components/Themed';
 import { useLocalSearchParams, useRouter, Stack } from "expo-router";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { Theme, Spacing } from "@/constants/Theme";
+import { Mono } from "@/constants/fonts";
 import { useInboxStore } from "@codecast/web/store/inboxStore";
 import { computePlanProgress } from "@codecast/web/lib/liveEntities";
 import { useSyncPlans } from "@/hooks/useSyncPlans";
@@ -104,7 +106,7 @@ export default function PlanDetailScreen() {
           title: plan.short_id,
           headerStyle: { backgroundColor: Theme.bgAlt },
           headerTintColor: Theme.text,
-          headerTitleStyle: { fontSize: 15, fontWeight: "600", color: Theme.textMuted },
+          headerTitleStyle: { fontSize: 14, fontFamily: Mono.semiBold, color: Theme.textMuted },
         }}
       />
       <ScrollView style={styles.container} contentContainerStyle={styles.content}>

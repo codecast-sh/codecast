@@ -568,6 +568,100 @@ describe("categorizeSessions", () => {
     expect(needsInput.map((s) => s._id)).not.toContain("conv-stale-idle");
   });
 
+  it("sweeps a statusless quiet row (liveness never delivered) into Needs Input after the idle grace", () => {
+    // The frozen-liveness class, route four (ct-39991): a row the sessionsLiveness
+    // overlay refuses to cover (killed, subagent, unmanaged opencode import) has
+    // agent_status null and is_idle stuck at the base list's stripped null. The
+    // working bucket is a fallthrough, so without a guard the row reads WORKING
+    // until the 1h trust TTL even though no daemon ever claimed it was working.
+    // Mirror the server's no-status branch of isSessionIdle: statusless + quiet
+    // past AGENT_IDLE_GRACE_MS = settled.
+    const orphanImport: InboxSession = {
+      ...baseSession,
+      _id: "conv-statusless",
+      session_id: "session-statusless",
+      message_count: 15,
+      agent_status: undefined,
+      is_idle: null as unknown as boolean,
+      updated_at: Date.now() - 10 * 60 * 1000,
+    };
+
+    const { needsInput, working } = categorizeSessions(
+      { [orphanImport._id]: orphanImport },
+      new Set(),
+    );
+
+    expect(needsInput.map((s) => s._id)).toContain("conv-statusless");
+    expect(working.map((s) => s._id)).not.toContain("conv-statusless");
+  });
+
+  it("sweeps a quiet row frozen at is_idle=false with a non-active agent_status", () => {
+    // Same class, frozen mid-value: the overlay's last delivery before the row
+    // left its window said is_idle=false / agent_status=idle. Ten quiet minutes
+    // later nothing claims active work, so the row is settled.
+    const frozenFalse: InboxSession = {
+      ...baseSession,
+      _id: "conv-frozen-false",
+      session_id: "session-frozen-false",
+      message_count: 8,
+      agent_status: "idle",
+      is_idle: false,
+      updated_at: Date.now() - 10 * 60 * 1000,
+    };
+
+    const { needsInput, working } = categorizeSessions(
+      { [frozenFalse._id]: frozenFalse },
+      new Set(),
+    );
+
+    expect(needsInput.map((s) => s._id)).toContain("conv-frozen-false");
+    expect(working.map((s) => s._id)).not.toContain("conv-frozen-false");
+  });
+
+  it("keeps a statusless row in Working within the idle grace", () => {
+    // A brand-new unmanaged row whose liveness hasn't arrived yet must not
+    // flicker to needs-input: the grace mirrors the server's recentlyUpdated.
+    const freshImport: InboxSession = {
+      ...baseSession,
+      _id: "conv-statusless-fresh",
+      session_id: "session-statusless-fresh",
+      message_count: 2,
+      agent_status: undefined,
+      is_idle: null as unknown as boolean,
+      updated_at: Date.now() - 10 * 1000,
+    };
+
+    const { needsInput, working } = categorizeSessions(
+      { [freshImport._id]: freshImport },
+      new Set(),
+    );
+
+    expect(working.map((s) => s._id)).toContain("conv-statusless-fresh");
+    expect(needsInput.map((s) => s._id)).not.toContain("conv-statusless-fresh");
+  });
+
+  it("keeps a quiet ACTIVE agent_status in Working until the 1h trust TTL", () => {
+    // The long TTL is unchanged: a present active status earns benefit of the
+    // doubt for STATUS_TRUST_TTL_MS, not the short grace.
+    const quietWorking: InboxSession = {
+      ...baseSession,
+      _id: "conv-quiet-working",
+      session_id: "session-quiet-working",
+      message_count: 4,
+      agent_status: "working",
+      is_idle: false,
+      updated_at: Date.now() - 10 * 60 * 1000,
+    };
+
+    const { needsInput, working } = categorizeSessions(
+      { [quietWorking._id]: quietWorking },
+      new Set(),
+    );
+
+    expect(working.map((s) => s._id)).toContain("conv-quiet-working");
+    expect(needsInput.map((s) => s._id)).not.toContain("conv-quiet-working");
+  });
+
   it("classifies an open poll as Needs Input even when agent_status is raced to working", () => {
     // The bug: an AskUserQuestion poll blocks the agent on the user, but the
     // daemon races agent_status back to "working" while the poll is still open,

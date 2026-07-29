@@ -7898,9 +7898,14 @@ async function enrichLivenessFields(
 // shared scan (so the candidate set matches computeInboxSessions exactly) but enriches
 // each row through the lightweight enrichLivenessFields — NOT the full enrichInboxSessionRow
 // — so a heartbeat recompute no longer runs the plan/task/workflow gets, the acting-author
-// resolution, or a children scan for every row. Covers the whole window (dismissed/stashed
-// included) so the overlay is a superset of any row the client might hold; syncOverlay
-// ignores ids it doesn't have.
+// resolution, or a children scan for every row. Covers dismissed/stashed rows, but NOT
+// every row a client might hold: shouldShowInInbox drops killed rows and subagent rows,
+// and the scan window drops rows older than the recency cap — a client-held copy of any
+// of those keeps its last-synced liveness forever (the client store never prunes and
+// persists to IndexedDB). The client compensates with isLivenessStale
+// (@codecast/shared/contracts): a frozen ACTIVE status is distrusted past the 1h trust
+// TTL, and a statusless row settles after the 45s idle grace. syncOverlay ignores ids
+// it doesn't have.
 async function computeSessionsLiveness(
   ctx: any,
   userId: Id<"users">,

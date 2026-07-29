@@ -9,7 +9,7 @@ import { HYDRATION_CRITICAL_KEYS, HYDRATION_DEFERRED_KEYS, hydrationMergeStrateg
 import { makeCollectionSig } from "./wakeSig";
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
-import { type AgentStatus, ACTIVE_AGENT_STATUSES, isStatusTrustStale, modelOptionKey } from "@codecast/shared/contracts";
+import { type AgentStatus, ACTIVE_AGENT_STATUSES, isLivenessStale, modelOptionKey } from "@codecast/shared/contracts";
 import { isSubagentConversation, nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 
 export type { PendingEntry } from "./syncProtocol";
@@ -565,6 +565,9 @@ export type ClientUI = {
   plan_view?: PlanViewPrefs;
   saved_views?: SavedView[];
   show_subagents?: boolean;
+  // User-set height (px) of the trigger full-prompt viewport (TriggerPromptView
+  // drag handle). Layout pref → unstamped, per-device local_wins.
+  trigger_prompt_height?: number;
   // "Show old sessions" — reveal cached rows the live (authoritative) inbox
   // subscription no longer returns. Default hide. Successor to the removed
   // show_old_sessions key, whose blanket-local_wins sync made one browse click
@@ -581,6 +584,9 @@ export type ClientUI = {
   inbox_scope?: "mine" | "team";
   // Show each session's model as a badge in the inbox list. Off by default.
   show_model_badge?: boolean;
+  // Show each session's agent client icon (Claude Code, opencode, …) next to
+  // its title in the inbox list. On by default; read as `!== false`.
+  show_agent_icon?: boolean;
   // Opt in to the teammate-comment tools (the gutter "comment" handle + the
   // header toggle when a conversation has none yet). Off by default — you still
   // SEE and can reply to comments others leave regardless of this.
@@ -1343,9 +1349,14 @@ export function categorizeSessions(
   // than the TTL, so it's never caught). Date.now() here (not in the pure,
   // memoized classifySession) so the verdict re-evaluates as time passes.
   const now = Date.now();
-  // Shared staleness core (isStatusTrustStale) + the bucket's own pinned policy:
+  // Shared staleness core (isLivenessStale) + the bucket's own pinned policy:
   // pinned rows live in the Pinned group regardless, so they're never swept here.
-  const isTrustStale = (s: InboxSession) => isStatusTrustStale(s, now) && !s.is_pinned;
+  // Two speeds inside the core: an ACTIVE agent_status gone quiet keeps the 1h
+  // trust TTL, while a row with NO active status (killed / subagent / unmanaged
+  // rows the overlay never covers, whose is_idle froze at null or false) settles
+  // after the 45s idle grace — nothing ever claimed those were working, so they
+  // get no benefit of the doubt.
+  const isTrustStale = (s: InboxSession) => isLivenessStale(s, now) && !s.is_pinned;
   // Classify waiting-for-input ONCE per session (it's the costliest predicate and
   // was evaluated twice below — in the needsInput and working filters). The
   // memoized verdict (classifySession) is the no-in-flight result; an in-flight
