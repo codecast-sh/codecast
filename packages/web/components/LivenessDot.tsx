@@ -1,6 +1,6 @@
 import { cn, relTimeShort } from "@/lib/utils";
 import { useInboxStore } from "../store/inboxStore";
-import { isStatusTrustStale } from "@codecast/shared/contracts";
+import { isLivenessStale } from "@codecast/shared/contracts";
 
 export type LivenessState =
   | "active"
@@ -57,6 +57,8 @@ export function sessionLivenessState(session: {
   is_unresponsive?: boolean;
   session_error?: string;
   updated_at?: number;
+  agent_status?: string | null;
+  has_pending?: boolean;
 }): LivenessState {
   if (session.session_error) return "error";
   if (session.is_unresponsive) return "unresponsive";
@@ -64,7 +66,7 @@ export function sessionLivenessState(session: {
   // "active" only if the working status is fresh — a frozen is_idle:false on an
   // aged-out row no longer counts as live (same trust check the inbox uses), so
   // it reads idle instead of pulsing green forever.
-  const live = !session.is_idle && session.message_count > 0 && !isStatusTrustStale(session, Date.now());
+  const live = !session.is_idle && session.message_count > 0 && !isLivenessStale(session, Date.now());
   if (live) return "active";
   if (session.message_count > 0) return "idle";
   return "new";
