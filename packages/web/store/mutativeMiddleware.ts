@@ -537,6 +537,12 @@ export function mutativeMiddleware(config: any, opts?: { retryDelays?: number[] 
           const capturedDispatch = dispatchBinding;
           const capturedRemove = outboxRemoveFn;
           const capturedError = dispatchErrorFn;
+          // Parked unconditionally — a principal-runtime transition can clear
+          // the binding while the page stays interactive, and an un-parked
+          // action fired in that window would vanish with zero trace.
+          const enqueued = outboxEnqueueFn
+            ? Promise.resolve(outboxEnqueueFn(entry))
+            : null;
           if (capturedDispatch) {
             const dispatchNow = () => dispatchWithRetry(
               capturedDispatch.fn,
@@ -553,8 +559,8 @@ export function mutativeMiddleware(config: any, opts?: { retryDelays?: number[] 
             // when no durable outbox is installed; callers and tests observe
             // the dispatch in the same turn. Once an outbox is installed,
             // dispatch stays strictly behind its durable enqueue.
-            const dispatched = outboxEnqueueFn
-              ? Promise.resolve(outboxEnqueueFn(entry)).then(dispatchNow)
+            const dispatched = enqueued
+              ? enqueued.then(dispatchNow)
               : dispatchNow();
             const promise = dispatched.then(async (r) => {
               assertDispatchCurrent(capturedDispatch);
@@ -570,6 +576,9 @@ export function mutativeMiddleware(config: any, opts?: { retryDelays?: number[] 
             });
             if (isAsyncAct) return promise;
             promise.catch(() => {});
+          } else {
+            enqueued?.catch(() => {});
+            console.warn(`[sync] dispatch not wired; ${enqueued ? `parked "${key}" for later delivery` : `"${key}" was dropped (no outbox)`}`);
           }
         }
 
@@ -599,6 +608,17 @@ export function mutativeMiddleware(config: any, opts?: { retryDelays?: number[] 
     // a boot attempt. Wired to reconnect / tab-visible / interval so a send the
     // live socket stranded reaches the server WITHOUT waiting for a reload.
     wrapped._drainOutbox = () => { drainOutbox(false); };
+
+    // Whether a dispatch fired right now would actually reach the server: a
+    // binding exists and its captured authorization is still current. A false
+    // here is the only visible symptom of a binding stranded by a
+    // principal-runtime transition — useEnsureDispatch's drain ticks poll it
+    // and re-bind.
+    wrapped._isDispatchWired = () => {
+      const b = dispatchBinding;
+      if (!b || b.epoch !== dispatchEpoch) return false;
+      return !b.authorization || isPrincipalDispatchAuthorizationCurrent(b.authorization);
+    };
 
     wrapped._setIDBWrite = (fn: IDBWriteFn | null) => {
       idbWriteFn = fn;
