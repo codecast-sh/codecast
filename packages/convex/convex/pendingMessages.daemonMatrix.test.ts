@@ -341,6 +341,29 @@ describe("DEC-05 — oversized message echo", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// DOF-01 — a multi-message backlog for one conversation surfaces in creation
+// order, so the delivery loop (which iterates the array under per-conversation
+// serialization) attempts older messages first. Cross-retry reordering is only
+// reachable through undeliverable-parking → cron revival, which is the
+// documented never-drop late-arrival.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("DOF-01 — backlog ordering", () => {
+  test("deliverables for one conversation come back oldest-first and deduped across the index union", async () => {
+    const { db } = createDb({
+      conversations: [{ _id: "conv_1", user_id: "user_a" }],
+      devices: [],
+      pending_messages: [
+        // Self-sends appear under BOTH by_owner_status and by_user_status.
+        { _id: "pm_old", conversation_id: "conv_1", from_user_id: "user_a", owner_user_id: "user_a", content: "first", status: "pending", created_at: NOW - 30_000, retry_count: 0 },
+        { _id: "pm_new", conversation_id: "conv_1", from_user_id: "user_a", owner_user_id: "user_a", content: "second", status: "pending", created_at: NOW - 10_000, retry_count: 0 },
+      ],
+    });
+    const deliverable = await collectDeliverableForOwner({ db } as any, "user_a" as any, "device_live", NOW);
+    expect(deliverable.map((m: any) => m._id)).toEqual(["pm_old", "pm_new"]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // DPM-02 interlock — canDaemonSeePendingMessage stays pure and conservative:
 // without device-liveness facts it must behave exactly as before (fail closed
 // on any owner mismatch).
