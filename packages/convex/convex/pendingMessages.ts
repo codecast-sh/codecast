@@ -1464,7 +1464,11 @@ export const cancelOldPendingMessages = internalMutation({
 export async function ackInjectedForDaemon(
   ctx: { db: any },
   conversationId: Id<"conversations">,
-  pastedMessageIds?: Id<"pending_messages">[]
+  pastedMessageIds?: Id<"pending_messages">[],
+  deliveryAcks?: Array<{
+    pendingMessageId: Id<"pending_messages">;
+    transcriptMessageId: Id<"messages">;
+  }>,
 ): Promise<number> {
   const injected = await ctx.db
     .query("pending_messages")
@@ -1474,9 +1478,30 @@ export async function ackInjectedForDaemon(
     .collect();
 
   const pasted = pastedMessageIds ? new Set(pastedMessageIds.map(String)) : null;
+  const transcriptByPending = new Map(
+    (deliveryAcks ?? []).map((ack) => [
+      String(ack.pendingMessageId),
+      ack.transcriptMessageId,
+    ]),
+  );
   let acked = 0;
   for (const msg of injected) {
     if (pasted && !pasted.has(String(msg._id))) continue;
+    const transcriptMessageId = transcriptByPending.get(String(msg._id));
+    if (transcriptMessageId && msg.client_id) {
+      const transcript = await ctx.db.get(transcriptMessageId);
+      // DWB-03: the daemon-vouched ack is the only proof path for truncated or
+      // duplicate-suppressed echoes. Stamp the exact client id on its best-
+      // effort transcript relation before terminalizing the pending row.
+      if (
+        transcript &&
+        String(transcript.conversation_id) === String(conversationId) &&
+        transcript.role === "user" &&
+        (!transcript.client_id || transcript.client_id === msg.client_id)
+      ) {
+        await ctx.db.patch(transcriptMessageId, { client_id: msg.client_id });
+      }
+    }
     if (await markPendingDelivered(ctx, msg)) acked++;
   }
   return acked;
@@ -1490,6 +1515,10 @@ export const ackInjectedMessages = mutation({
     // Rows the daemon itself pasted into a live pane (delivery resolved
     // successfully in this process). Optional for old-daemon back-compat.
     message_ids: v.optional(v.array(v.id("pending_messages"))),
+    delivery_acks: v.optional(v.array(v.object({
+      pending_message_id: v.id("pending_messages"),
+      transcript_message_id: v.id("messages"),
+    }))),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -1501,7 +1530,15 @@ export const ackInjectedMessages = mutation({
       return { acked: 0, skipped: true };
     }
 
-    const acked = await ackInjectedForDaemon(ctx, args.conversation_id, args.message_ids);
+    const acked = await ackInjectedForDaemon(
+      ctx,
+      args.conversation_id,
+      args.message_ids,
+      args.delivery_acks?.map((ack) => ({
+        pendingMessageId: ack.pending_message_id,
+        transcriptMessageId: ack.transcript_message_id,
+      })),
+    );
     return { acked };
   },
 });

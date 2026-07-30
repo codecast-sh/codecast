@@ -214,6 +214,13 @@ export type CommandRecord = {
   optimisticOperations: readonly OptimisticOperation[];
 };
 
+/**
+ * Concrete optimistic operations are interpreted only by the schema version
+ * that authored them. An app upgrade must fail closed instead of folding an
+ * unknown persisted operation shape (matrix CMD-02).
+ */
+export const CURRENT_OPERATION_SCHEMA_VERSION = 1;
+
 export type CommandReceiptRecord = {
   commandId: string;
   principalId: PrincipalId;
@@ -262,6 +269,8 @@ export type LegacyOutboxRecord = {
   result: unknown;
   ts: number;
   attempts?: number;
+  /** Missing is the explicitly supported pre-gate v0 migration shape. */
+  operationSchemaVersion?: number;
 };
 
 export type StoreOperation =
@@ -374,6 +383,17 @@ export class PrincipalStoreIdentityError extends Error {
   constructor(message = "Principal store identity does not match") {
     super(message);
     this.name = "PrincipalStoreIdentityError";
+  }
+}
+
+export function assertSupportedCommandOperationSchema(
+  command: Pick<CommandRecord, "id" | "operationSchemaVersion">,
+): void {
+  if (command.operationSchemaVersion !== CURRENT_OPERATION_SCHEMA_VERSION) {
+    throw new PrincipalStoreIdentityError(
+      `Command ${command.id} uses unsupported optimistic operation schema ` +
+      `${String(command.operationSchemaVersion)}`,
+    );
   }
 }
 

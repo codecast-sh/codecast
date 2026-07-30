@@ -1718,6 +1718,8 @@ Status date: 2026-07-30. Sections 1–25 define the architecture; this section t
 
 ### Remaining
 
+**2026-07-30 direction change — combined reversible cutover.** The numbered incremental steps below remain as the original decomposition, but the release now lands their currently supported surface in one final-mode build: v3/log-ts buckets and comments reads, receipt-backed buckets/comments/message writes, must-deliver send, and a controlled fenced-execution proof. `VITE_LOCAL_FIRST_V2_ENABLED` is the single rollback rail for both reads and new writes; accepted outbox rows are never deleted or stranded. Legacy tables/handlers remain for the rollback window. CMD-02, R-01, R-11, and DWB-03 are closed in the test matrix. Small views/mobile stay fail-closed because no materializer exists there, and fenced activation stays conversation-scoped while legacy daemons coexist.
+
 **Step 1 — Read-path cutover of the reference slices** (planned 2026-07-31)
 - Gate: clean team-wide soak — `mismatchedViews: 0` across accumulated evidence.
 - Action: flip `VITE_LOCAL_FIRST_COMMENTS_MODE` and `VITE_LOCAL_FIRST_BUCKETS_MODE` to `cutover` on Railway. Rollback is reverting the vars.

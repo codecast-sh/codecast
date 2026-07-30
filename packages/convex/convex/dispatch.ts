@@ -98,7 +98,14 @@ export const dispatch = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    if (patches && typeof patches === "object") {
+    // In final mode the receipt envelope is the one durable-write rail. Do not
+    // also apply its compatibility patches as an independent server writer;
+    // rollback builds omit the envelope and resume the legacy patch path.
+    if (
+      patches &&
+      typeof patches === "object" &&
+      !(hasReceiptCommandId(result) && RECEIPT_OWNS_SERVER_WRITE.has(action))
+    ) {
       await applyPatches(ctx, userId, patches);
     }
 
@@ -136,6 +143,17 @@ function hasReceiptCommandId(result: unknown): result is ReceiptActionEnvelope {
     typeof envelope.commandId === "string" &&
     envelope.commandId.length > 0;
 }
+
+const RECEIPT_OWNS_SERVER_WRITE = new Set([
+  "createBucket",
+  "updateBucket",
+  "assignSessionToBucket",
+  "addComment",
+  "editComment",
+  "deleteComment",
+  "askAgentInThread",
+  "sendMessage",
+]);
 
 function receiptLocalResult<T>(result: unknown): T {
   return (hasReceiptCommandId(result)
@@ -689,7 +707,22 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     return conversationId;
   },
 
-  sendMessage: async (ctx, userId, [convId, content, imageIds, clientId]: [string, string, string[] | undefined, string | undefined]) => {
+  sendMessage: async (
+    ctx,
+    userId,
+    [convId, content, imageIds, clientId]: [string, string, string[] | undefined, string | undefined],
+    result,
+  ) => {
+    if (hasReceiptCommandId(result)) {
+      const commandId = receiptCommandId("sendMessage", result);
+      return await ctx.runMutation!(api.pendingMessages.sendMessageV2, {
+        command_id: commandId,
+        client_id: commandId,
+        conversation_id: convId as Id<"conversations">,
+        content,
+        ...(imageIds?.length ? { image_storage_ids: imageIds as Id<"_storage">[] } : {}),
+      });
+    }
     const conversation = await ctx.db.get(convId as Id<"conversations">);
     // Distinct error for a deleted row: the client may be sending into a cached
     // ghost (never-prune cache) and needs to surface "restore session", not a
@@ -1139,6 +1172,36 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     });
   },
 
+  updateBucket: async (
+    ctx,
+    _userId,
+    [bucketId, fields]: [
+      string,
+      {
+        name?: string;
+        color?: string;
+        sort_order?: number;
+        archived_at?: number | null;
+      },
+    ],
+    result,
+  ) => {
+    // Rollback mode has already applied the ordinary compatibility patches.
+    if (!hasReceiptCommandId(result)) return;
+    return await ctx.runMutation!(api.buckets.webUpdateV2, {
+      command_id: receiptCommandId("updateBucket", result),
+      bucket_id: bucketId as Id<"inbox_buckets">,
+      ...(fields.name !== undefined ? { name: fields.name } : {}),
+      ...(fields.color !== undefined
+        ? { color: fields.color === null ? null : fields.color }
+        : {}),
+      ...(fields.sort_order !== undefined ? { sort_order: fields.sort_order } : {}),
+      ...(fields.archived_at !== undefined
+        ? { archived: fields.archived_at !== null }
+        : {}),
+    });
+  },
+
   // Teammate comment writes delegate to receipt-backed public mutations (which
   // carry notification / mention / fork and complete-view revision logic). The
   // store has already painted the optimistic state.
@@ -1257,7 +1320,19 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // bucketId null = unassign (tombstone row, never deleted — delta sync).
   // Returns the gate it stopped at (or "ok") so a silent no-op is debuggable
   // from the client (`await store.assignSessionToBucket(...)`).
-  assignSessionToBucket: async (ctx, userId, [convId, bucketId]: [string, string | null]) => {
+  assignSessionToBucket: async (
+    ctx,
+    userId,
+    [convId, bucketId]: [string, string | null],
+    result,
+  ) => {
+    if (hasReceiptCommandId(result)) {
+      return await ctx.runMutation!(api.buckets.webAssignV2, {
+        command_id: receiptCommandId("assignSessionToBucket", result),
+        conversation_id: convId as Id<"conversations">,
+        ...(bucketId ? { bucket_id: bucketId as Id<"inbox_buckets"> } : {}),
+      });
+    }
     let conv: any = null;
     let convErr: string | null = null;
     try {

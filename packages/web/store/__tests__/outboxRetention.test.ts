@@ -34,9 +34,13 @@ type Entry = {
   result: any;
   ts: number;
   attempts?: number;
+  operationSchemaVersion?: number;
 };
 
-function makeHarness(retryDelays: number[] = []) {
+function makeHarness(
+  retryDelays: number[] = [],
+  options: { localFirstWritesEnabled?: boolean; online?: boolean } = {},
+) {
   const outbox = new Map<string, Entry>();
   const receiptRejections: Array<{ action: string; localResult: unknown }> = [];
   const receiptAcknowledgements: Array<{
@@ -59,6 +63,10 @@ function makeHarness(retryDelays: number[] = []) {
       }),
       pokeReceipt: receiptAsyncAction(function (this: any, id: string) {
         this.items[id] = { _id: id };
+      }),
+      addComment: receiptAsyncAction(function (this: any, id: string) {
+        this.items[id] = { _id: id };
+        return { id };
       }),
       toggle: action(function (this: any) {
         this.enabled = !this.enabled;
@@ -86,7 +94,11 @@ function makeHarness(retryDelays: number[] = []) {
         });
       }),
     }),
-    { retryDelays }, // default [] — fail fast, no real-time sleeps in tests
+    {
+      retryDelays,
+      localFirstWritesEnabled: () => options.localFirstWritesEnabled ?? false,
+      online: () => options.online ?? true,
+    }, // default [] — fail fast, no real-time sleeps in tests
   )(set, get, {});
   state = wrapped;
   wrapped._setOutbox(
@@ -129,6 +141,53 @@ describe("outboxFailureDisposition", () => {
 });
 
 describe("drainOutbox retention", () => {
+  it("authors the current operation schema and receipt only behind the write master", () => {
+    const legacy = makeHarness([], { localFirstWritesEnabled: false });
+    void legacy.wrapped.addComment("legacy").catch(() => {});
+    expect([...legacy.outbox.values()][0]).toMatchObject({
+      operationSchemaVersion: 1,
+      result: { id: "legacy" },
+    });
+
+    const finalMode = makeHarness([], { localFirstWritesEnabled: true });
+    void finalMode.wrapped.addComment("final").catch(() => {});
+    const entry = [...finalMode.outbox.values()][0]!;
+    expect(entry.operationSchemaVersion).toBe(1);
+    expect(entry.result).toMatchObject({
+      receiptActionVersion: 1,
+      commandId: entry.id,
+      localResult: { id: "final" },
+    });
+  });
+
+  it("rejects a final-mode offline write before optimistic paint when persistence is reduced", () => {
+    const { wrapped, outbox, getState } = makeHarness([], {
+      localFirstWritesEnabled: true,
+      online: false,
+    });
+    expect(() => wrapped.addComment("offline")).toThrow(
+      "Offline edits are unavailable",
+    );
+    expect(getState().items).toEqual({});
+    expect(outbox.size).toBe(0);
+  });
+
+  it("parks an unknown operation schema without dispatching or deleting it", async () => {
+    const { wrapped, outbox } = makeHarness();
+    outbox.set("future", seedEntry({
+      id: "future",
+      operationSchemaVersion: 99,
+    }));
+    let calls = 0;
+    wrapped._setDispatch(async () => {
+      calls++;
+      return "ok";
+    });
+    await settle();
+    expect(calls).toBe(0);
+    expect(outbox.has("future")).toBe(true);
+  });
+
   it("timestamps queued actions monotonically so dependent writes replay in call order", () => {
     const { wrapped, outbox } = makeHarness();
     const originalNow = Date.now;

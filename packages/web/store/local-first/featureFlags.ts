@@ -10,6 +10,12 @@ export type LocalFirstFeatureFlags = Readonly<Record<LocalFirstSlice, LocalFirst
 
 type ViteEnvironment = Readonly<Record<string, string | boolean | undefined>>;
 
+export type LocalFirstWriteFlags = Readonly<{
+  enabled: boolean;
+  /** One-switch rollback rail shared with every read slice. */
+  rollbackRailEnabled: boolean;
+}>;
+
 const ENV_KEYS: Readonly<Record<LocalFirstSlice, string>> = {
   buckets: "VITE_LOCAL_FIRST_BUCKETS_MODE",
   comments: "VITE_LOCAL_FIRST_COMMENTS_MODE",
@@ -50,6 +56,20 @@ export function readLocalFirstFeatureFlags(
   if (environment.VITE_LOCAL_FIRST_V2_ENABLED !== "1") {
     return Object.freeze({ buckets: "off", comments: "off", smallViews: "off", messageSend: "off" });
   }
+  // The accelerated release is built once in its coherent final posture.
+  // One rollback switch (VITE_LOCAL_FIRST_V2_ENABLED=0) still returns every
+  // supported read and write slice to the legacy paths without deleting the
+  // v3 store or its unresolved journal.
+  if (environment.VITE_LOCAL_FIRST_FINAL_MODE === "1") {
+    return Object.freeze({
+      buckets: "cutover-lts",
+      comments: "cutover-lts",
+      // Server contracts exist for small views, but no web materializer is
+      // mounted yet. "Supported" therefore remains the two reference slices.
+      smallViews: "off",
+      messageSend: "cutover-lts",
+    });
+  }
   return Object.freeze({
     buckets: mode(environment[ENV_KEYS.buckets]),
     comments: mode(environment[ENV_KEYS.comments]),
@@ -59,6 +79,25 @@ export function readLocalFirstFeatureFlags(
 }
 
 export const LOCAL_FIRST_FEATURE_FLAGS = readLocalFirstFeatureFlags();
+
+export function readLocalFirstWriteFlags(
+  environment: ViteEnvironment = import.meta.env,
+): LocalFirstWriteFlags {
+  const rollbackRailEnabled = environment.VITE_LOCAL_FIRST_V2_ENABLED === "1";
+  return Object.freeze({
+    rollbackRailEnabled,
+    enabled: rollbackRailEnabled && (
+      environment.VITE_LOCAL_FIRST_FINAL_MODE === "1" ||
+      environment.VITE_LOCAL_FIRST_WRITES_ENABLED === "1"
+    ),
+  });
+}
+
+export const LOCAL_FIRST_WRITE_FLAGS = readLocalFirstWriteFlags();
+
+export function isLocalFirstWriteEnabled(): boolean {
+  return LOCAL_FIRST_WRITE_FLAGS.enabled;
+}
 
 export function localFirstSliceMode(slice: LocalFirstSlice): LocalFirstSliceMode {
   return LOCAL_FIRST_FEATURE_FLAGS[slice];

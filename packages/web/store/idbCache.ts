@@ -24,6 +24,7 @@ export type OutboxEntry = {
   result: any;
   ts: number;
   attempts?: number;
+  operationSchemaVersion?: number;
 };
 
 export const PERSISTENCE_AVAILABLE =
