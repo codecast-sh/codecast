@@ -162,6 +162,49 @@ describe("must-deliver retention (user sends never drop)", () => {
     expect(outbox.has("e1")).toBe(true);
     expect(outbox.get("e1")?.action).toBe("sendMessage");
   });
+
+  // A fork create carries the same stakes as a send: giving it up strands a
+  // fork stub the user is already typing into (the jx79314 incident, ct-40175).
+  // It rides convCommand, so retention keys off the dispatched command name.
+  it("never gives up on a convCommand forkFromMessage entry", () => {
+    const d = outboxFailureDisposition(
+      seedEntry({
+        action: "convCommand",
+        args: ["jx7parent", "forkFromMessage", { message_uuid: "u1", session_id: "s1" }],
+        attempts: MAX_OUTBOX_BOOT_ATTEMPTS + 3,
+      }),
+    );
+    expect(d.keep).toBe(true);
+  });
+
+  it("still gives up on other convCommands at the boot cap", () => {
+    const d = outboxFailureDisposition(
+      seedEntry({ action: "convCommand", args: ["jx7c", "setTitle", {}], attempts: MAX_OUTBOX_BOOT_ATTEMPTS - 1 }),
+    );
+    expect(d.keep).toBe(false);
+  });
+});
+
+// An asyncAction contractually returns a promise of the server result. When
+// dispatch wasn't wired yet it historically returned `undefined` — callers'
+// immediate `.then(...)` then threw synchronously, skipping their own error
+// handling entirely (the fork flow lost its discard+toast this way and the
+// stub silently degraded, ct-40175). Unwired asyncActions must reject.
+describe("unwired asyncAction", () => {
+  it("returns a rejected promise (parked) instead of undefined", async () => {
+    const { wrapped, outbox } = makeHarness();
+    // No _setDispatch call — dispatch is not wired; outbox IS installed.
+    const p = wrapped.pokeAsync("x");
+    expect(p).toBeInstanceOf(Promise);
+    await expect(p).rejects.toThrow(/parked for later delivery/);
+    // The write is still durably parked for the next drain.
+    expect(outbox.size).toBe(1);
+  });
+
+  it("plain action() keeps returning its local result when unwired", () => {
+    const { wrapped } = makeHarness();
+    expect(() => wrapped.poke("y")).not.toThrow();
+  });
 });
 
 // A permanent rejection means the server RAN the write and refused it —

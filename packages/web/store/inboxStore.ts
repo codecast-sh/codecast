@@ -5088,6 +5088,29 @@ export const useInboxStore = create<InboxStoreState>(
     if (existing) return existing;
     const stub = (s.sessions[id] || s.conversations[id]) as any;
     if (!stub || isConvexId(id)) return Promise.resolve(id);
+    // A FORK stub must never be revived as a plain create: that silently
+    // converts "fork with history" into a blank session that merely inherits
+    // the parent's project path — the daemon then spawns a context-less agent
+    // and the fork lineage is gone for good. Re-issue forkFromMessage instead;
+    // it's idempotent on session_id, so if the original create actually landed
+    // this resolves to the existing fork row.
+    if (stub.forked_from) {
+      const parentId = s.getConvexId(String(stub.forked_from)) ?? String(stub.forked_from);
+      if (!isConvexId(parentId)) {
+        return Promise.reject(new Error("Fork parent unknown — fork again from the parent thread"));
+      }
+      const ready = s.convCommand(parentId, "forkFromMessage", {
+        ...(stub.parent_message_uuid ? { message_uuid: stub.parent_message_uuid } : {}),
+        session_id: id,
+      }).then((result: any) => {
+        const convexId = result?.conversation_id;
+        if (convexId && isConvexId(convexId)) get().resolveForkSessionId(id, convexId);
+        return get().getConvexId(id) ?? (isConvexId(convexId) ? convexId : id);
+      });
+      s.trackSessionCreate(id, ready);
+      ready.catch(() => {});
+      return ready;
+    }
     // Refuse to re-create a PATHLESS stub. The server would create it and ask
     // the daemon to start_session with no cwd, which falls back to spawning in
     // $HOME (daemon start fallback) — an agent running silently outside any

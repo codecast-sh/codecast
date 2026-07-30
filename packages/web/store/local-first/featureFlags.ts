@@ -22,7 +22,9 @@ function mode(value: unknown): LocalFirstSliceMode {
  * build made before review therefore keeps both the v2 queries and commands off.
  */
 export function readLocalFirstFeatureFlags(
-  environment: ViteEnvironment = import.meta.env,
+  // Hermes has no import.meta.env (mobile's babel transform shims import.meta
+  // as an empty object) — degrade to the fail-closed default rather than throw.
+  environment: ViteEnvironment = import.meta.env ?? {},
 ): LocalFirstFeatureFlags {
   if (environment.VITE_LOCAL_FIRST_V2_ENABLED !== "1") {
     return Object.freeze({ buckets: "off", comments: "off", smallViews: "off", messageSend: "off" });
