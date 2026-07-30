@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { stripCdPrefix, unwrapShellCommand, parseCastCommandString } from "./castCommand";
+import { stripCdPrefix, unwrapShellCommand, parseCastCommandString, extractSendBody } from "./castCommand";
 
 describe("stripCdPrefix", () => {
   test("strips a leading `cd <dir>;` prefix", () => {
@@ -66,6 +66,71 @@ describe("parseCastCommandString", () => {
 
   test("does not treat `castle` as `cast` (word boundary)", () => {
     expect(parseCastCommandString("castle build")).toBeNull();
+  });
+});
+
+describe("extractSendBody", () => {
+  test("double-quoted literal", () => {
+    expect(extractSendBody('"take the auth half"')).toEqual({ body: "take the auth half", kind: "literal" });
+  });
+
+  test("double-quoted literal with escaped quotes and trailing flag", () => {
+    expect(extractSendBody('"say \\"done\\"" --from jx7abcd')).toEqual({ body: 'say "done"', kind: "literal" });
+  });
+
+  test("single-quoted body is always literal, even with $ inside", () => {
+    expect(extractSendBody("'costs $(a lot)'")).toEqual({ body: "costs $(a lot)", kind: "literal" });
+  });
+
+  test("command substitution in double quotes is dynamic (the jx7bt1x misread)", () => {
+    const r = extractSendBody('"$(cat reply.md)"');
+    expect(r.kind).toBe("dynamic");
+    expect(r.body).toBe("$(cat reply.md)");
+  });
+
+  test("variable expansion in double quotes is dynamic", () => {
+    expect(extractSendBody('"done: $RESULT"').kind).toBe("dynamic");
+  });
+
+  test("escaped dollar in double quotes stays literal", () => {
+    expect(extractSendBody('"costs \\$5"').kind).toBe("literal");
+  });
+
+  test("heredoc body is extracted verbatim", () => {
+    const args = "- <<'EOF'\n# Briefing\n\n- item one\n- item two\nEOF";
+    expect(extractSendBody(args)).toEqual({ body: "# Briefing\n\n- item one\n- item two", kind: "heredoc" });
+  });
+
+  test("heredoc with unquoted tag and flags before it", () => {
+    const args = "- --from jx7abcd <<EOF\nhello\nthere\nEOF";
+    expect(extractSendBody(args)).toEqual({ body: "hello\nthere", kind: "heredoc" });
+  });
+
+  test("<<- heredoc strips leading tabs", () => {
+    const args = "- <<-EOF\n\tindented\n\tlines\n\tEOF";
+    expect(extractSendBody(args)).toEqual({ body: "indented\nlines", kind: "heredoc" });
+  });
+
+  test("a quoted message that merely mentions <<EOF is not a heredoc", () => {
+    const args = '"see the heredoc form: <<EOF\nfoo"';
+    expect(extractSendBody(args)).toEqual({ body: "see the heredoc form: <<EOF\nfoo", kind: "literal" });
+  });
+
+  test("bare - (piped/redirected stdin) is dynamic", () => {
+    expect(extractSendBody("- < notes.md").kind).toBe("dynamic");
+    expect(extractSendBody("-").kind).toBe("dynamic");
+  });
+
+  test("unquoted body drops trailing flags", () => {
+    expect(extractSendBody("done --from jx7abcd")).toEqual({ body: "done", kind: "literal" });
+  });
+
+  test("full pipeline: heredoc send parses through parseCastCommandString", () => {
+    const raw = "cast send jx7c6zk - <<'EOF'\nline one\nline two\nEOF";
+    const parsed = parseCastCommandString(raw)!;
+    expect(parsed.category).toBe("send");
+    expect(parsed.subcommand).toBe("jx7c6zk");
+    expect(extractSendBody(parsed.args)).toEqual({ body: "line one\nline two", kind: "heredoc" });
   });
 });
 

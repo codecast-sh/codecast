@@ -52,6 +52,7 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   checkForUpdate: (opts) => ipcRenderer.invoke("check-for-update", opts),
   showNotification: (title, body, data) => ipcRenderer.invoke("show-notification", { title, body, data }),
   getShortcuts: () => ipcRenderer.invoke("get-shortcuts"),
+  getShortcutConfig: () => ipcRenderer.invoke("get-shortcut-config"),
   setShortcut: (key, accelerator) => ipcRenderer.invoke("set-shortcut", key, accelerator),
   paletteNavigate: (path) => ipcRenderer.send("palette-navigate", path),
   paletteHide: () => ipcRenderer.send("palette-hide"),
@@ -74,5 +75,6 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
     return () => ipcRenderer.removeListener("compose-show", handler);
   },
   composeSubmit: (data) => ipcRenderer.send("compose-submit", data),
+  openExternal: (url) => ipcRenderer.invoke("open-external", url),
   platform: process.platform,
 });

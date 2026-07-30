@@ -3,17 +3,42 @@ import react from "@vitejs/plugin-react";
 import { sentryVitePlugin } from "@sentry/vite-plugin";
 import { VitePWA } from "vite-plugin-pwa";
 import path from "path";
+import { renderArtifactPage } from "./server/artifactPage";
+import { handoffBootPlugin } from "./plugins/handoffBoot";
 
 export default defineConfig({
   plugins: [
     react(),
+    // Inlines the browser → desktop hand-off gate into <head> so a page bound
+    // for the desktop app never loads the app at all, and re-injects the
+    // preload hints that splitting the entry (src/main.tsx → src/boot.tsx)
+    // moved out of the HTML.
+    handoffBootPlugin(),
+    // codecast.sh/a/<slug> is a server-rendered page (production: Hono route in
+    // server/index.ts). Mount the SAME renderer in dev so the page has exactly
+    // one implementation and never falls through to the SPA shell.
+    {
+      name: "artifact-page",
+      configureServer(server) {
+        server.middlewares.use((req, res, next) => {
+          const m = req.url?.match(/^\/a\/([^/?#]+)/);
+          if (!m) return next();
+          renderArtifactPage(decodeURIComponent(m[1]))
+            .then(({ status, html }) => {
+              res.writeHead(status, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache" });
+              res.end(html);
+            })
+            .catch(next);
+        });
+      },
+    },
     // Offline app shell: precache the built app so the SPA boots with zero
     // network — the desktop (Electron) shell loads codecast.sh remotely, so
     // without this an offline launch never even gets HTML. Data comes from
     // the IndexedDB-hydrated store; this only makes the shell itself local.
     VitePWA({
       registerType: "autoUpdate",
-      injectRegister: null, // registered manually from main.tsx after first paint
+      injectRegister: null, // registered manually from src/boot.tsx after first paint
       manifest: false, // offline shell only; not an installable PWA
       workbox: {
         globPatterns: ["**/*.{js,css,html,ico,png,svg,woff2}"],
@@ -23,8 +48,10 @@ export default defineConfig({
         maximumFileSizeToCacheInBytes: 15 * 1024 * 1024,
         navigateFallback: "/index.html",
         // Real server endpoints (server/index.ts) — never serve the SPA shell
-        // for these.
-        navigateFallbackDenylist: [/^\/api\//, /^\/download\//, /^\/install/],
+        // for these. /a/ is the server-rendered artifact page: without the
+        // denylist entry, a visitor with the SW installed would get the cached
+        // SPA shell instead of the static page.
+        navigateFallbackDenylist: [/^\/api\//, /^\/download\//, /^\/install/, /^\/a\//],
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/fonts\.googleapis\.com\//,
