@@ -17,7 +17,8 @@ import { compressImage } from "../lib/compressImage";
 import { useStorageImageUrl, hasDecodedSrc, markSrcDecoded } from "../hooks/useStorageImageUrl";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName } from "../lib/conversationProcessor";
-import { classifyApiErrorBanner, agentSupportsFork, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec } from "@codecast/shared/contracts";
+import { classifyApiErrorBanner, agentSupportsFork, isLivenessStale, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec } from "@codecast/shared/contracts";
+import { useCoarseNow } from "../hooks/useCoarseNow";
 import { formatToolName, isPlanWriteToolCall, truncateStr, shortenUrl, getRelativePath, stripLineNumbers, structuredPayloadSummary } from "@codecast/shared/render";
 import { getBuiltinCommands } from "../lib/builtinCommands";
 import { resolveSessionSkills } from "../lib/sessionSkills";
@@ -49,7 +50,7 @@ import { CommentDock } from "./comments/CommentDock";
 import { useConversationCommentsSync } from "../hooks/useConversationComments";
 import { parseTriggerCadence, fmtDuration, fmtClock } from "./triggerCadence";
 import { TriggerPromptView } from "./TriggerPromptView";
-import { monitorRowsFor, effectiveMonitorStatus, parseTaskNotificationBlock, isMonitorEventNotification, isMonitorEndedNotification, monitorNotificationDescription, decodeEntities, type MonitorStatus } from "./monitorRows";
+import { monitorRowsFor, effectiveMonitorStatus, isBackgroundBashToolCall, parseTaskNotificationBlock, isMonitorEventNotification, isMonitorEndedNotification, monitorNotificationDescription, decodeEntities, type MonitorStatus } from "./monitorRows";
 
 function copyMessageLink(conversationId: string | undefined, messageId: string) {
   const url = `${shareOrigin()}/conversation/${conversationId}#msg-${messageId}`;
@@ -133,7 +134,7 @@ import { parseFileChangeSummary, parseUnifiedDiffSections } from "../lib/unified
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { MessageNavButton } from "./MessageBrowserPopover";
 import type { MentionItem } from "./editor/MentionList";
-import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench, Zap, Radar, KeyRound, ExternalLink, Loader2 } from "lucide-react";
+import { CheckSquare, FileText, MessageSquare, Map as MapIcon, User, Users, Hash, FolderOpen, Keyboard, ListChecks, Target, Maximize2, Minimize2, Circle, CircleDot, CheckCircle2, ChevronDown, ChevronRight, ChevronUp, Clock, CornerDownRight, CornerUpRight, BookOpen, Check, Split, Workflow, Tag, MoveHorizontal, AlignJustify, ListCollapse, GalleryVerticalEnd, GitCommitVertical, BookOpenText, Wrench, Zap, Radar, Terminal, KeyRound, ExternalLink, Loader2 } from "lucide-react";
 import { useDevices } from "./DeviceBadge";
 import { useProviderKeyCommand, deviceManagedKeys } from "../lib/useProviderKeyCommand";
 import { ComposeEditor, type ComposeEditorHandle } from "./editor/ComposeEditor";
@@ -2979,10 +2980,10 @@ function getFileExtension(filePath: string): string | undefined {
 }
 
 function isAlwaysVisibleToolCall(tc: ToolCall): boolean {
-  // Monitor and ScheduleWakeup stay visible in condensed feeds: both are
-  // standing state the reader needs to know is armed (a watch, a loop's next
-  // fire), not a transient tool step.
-  return isPlanWriteToolCall(tc) || tc.name === "AskUserQuestion" || tc.name === "Monitor" || tc.name === "ScheduleWakeup";
+  // Monitor, background Bash, and ScheduleWakeup stay visible in condensed
+  // feeds: all are standing state the reader needs to know is armed (a watch,
+  // a detached command, a loop's next fire), not a transient tool step.
+  return isPlanWriteToolCall(tc) || tc.name === "AskUserQuestion" || tc.name === "Monitor" || tc.name === "ScheduleWakeup" || isBackgroundBashToolCall(tc);
 }
 
 interface ToolChangeRange {
@@ -4527,39 +4528,61 @@ function SkillBlock({ tool }: { tool: ToolCall }) {
   );
 }
 
-// Live status badge + latest event for a Monitor block, derived from the
-// conversation's message window (monitorRowsFor — one memoized scan shared by
-// all blocks). Same anatomy as the trigger block above: identity accent +
-// uppercase eyebrow + one-line gist, so standing machinery reads as one family.
+// Live status badge + latest event for a Monitor or background-Bash block,
+// derived from the conversation's message window (monitorRowsFor — one
+// memoized scan shared by all blocks). Same anatomy as the trigger block
+// above: identity accent + uppercase eyebrow + one-line gist, so standing
+// machinery reads as one family.
 const MONITOR_BADGE: Record<MonitorStatus, { label: string; cls: string }> = {
   watching: { label: "watching", cls: "bg-sol-green/10 text-sol-green border-sol-green/30" },
   ended: { label: "ended", cls: "bg-sol-bg-alt text-sol-text-dim border-sol-border/50" },
   timed_out: { label: "timed out", cls: "bg-sol-orange/10 text-sol-orange border-sol-orange/30" },
   stopped: { label: "stopped", cls: "bg-sol-bg-alt text-sol-text-dim border-sol-border/50" },
 };
+// A detached command "runs" rather than "watches", and finishing is its
+// purpose ("done"), not a stream folding ("ended").
+const BACKGROUND_BADGE_LABEL: Record<MonitorStatus, string> = {
+  watching: "running", ended: "done", timed_out: "timed out", stopped: "stopped",
+};
 
 function MonitorBlock({ tool, conversationId }: { tool: ToolCall; conversationId?: string }) {
+  const isBackground = tool.name !== "Monitor";
   let input: { command?: string; description?: string; timeout_ms?: number; persistent?: boolean } = {};
   try { input = JSON.parse(tool.input); } catch {}
   const [showCommand, setShowCommand] = useState(false);
   const messages = useInboxStore((s) => (conversationId ? s.messages[conversationId] : undefined));
   const row = useMemo(() => monitorRowsFor(messages).find((r) => r.toolUseId === tool.id), [messages, tool.id]);
-  const status: MonitorStatus = row ? effectiveMonitorStatus(row, Date.now()) : "watching";
-  const badge = MONITOR_BADGE[status];
+  const now = useCoarseNow(30_000);
+  // Background rows carry no timeout, so the scanner's defensive expiry never
+  // fires for them — without this gate a dead session's block would claim
+  // "running" forever. Narrow boolean subscription: re-renders only when the
+  // verdict flips, never on heartbeat churn (see store/wakeSig.ts rules).
+  const sessionDead = useInboxStore((s) => {
+    if (!conversationId) return false;
+    const sess = s.sessions[conversationId];
+    return !!sess && (sess.agent_status === "stopped" || isLivenessStale(sess, now));
+  });
+  const rawStatus: MonitorStatus = row ? effectiveMonitorStatus(row, now) : "watching";
+  const status: MonitorStatus = rawStatus === "watching" && sessionDead ? "stopped" : rawStatus;
+  const failed = isBackground && status === "ended" && (row?.exitCode ?? 0) > 0;
+  const badge = failed
+    ? { label: `exit ${row!.exitCode}`, cls: "bg-sol-red/10 text-sol-red border-sol-red/30" }
+    : { cls: MONITOR_BADGE[status].cls, label: isBackground ? BACKGROUND_BADGE_LABEL[status] : MONITOR_BADGE[status].label };
   const watching = status === "watching";
   const commandFirstLine = (input.command || "").split("\n").find((l) => l.trim()) || "";
+  const Icon = isBackground ? Terminal : Radar;
 
   return (
     <div className={`my-1 rounded border-l-2 ${watching ? "border-sol-blue/60 bg-sol-blue/5" : "border-sol-border/60 bg-sol-bg-alt/30"}`}>
       <div className="flex items-center gap-2 px-3 pt-2 pb-1 min-w-0">
-        <Radar className={`w-3.5 h-3.5 shrink-0 ${watching ? "text-sol-blue/70" : "text-sol-text-dim"}`} />
-        <span className={`text-[11px] font-medium tracking-wide uppercase shrink-0 ${watching ? "text-sol-blue/70" : "text-sol-text-dim"}`}>Monitor</span>
+        <Icon className={`w-3.5 h-3.5 shrink-0 ${watching ? "text-sol-blue/70" : "text-sol-text-dim"}`} />
+        <span className={`text-[11px] font-medium tracking-wide uppercase shrink-0 ${watching ? "text-sol-blue/70" : "text-sol-text-dim"}`}>{isBackground ? "Background" : "Monitor"}</span>
         {input.persistent && (
           <ShortcutTooltip label="Runs until TaskStop or session end — not a one-shot watch">
             <span className="px-1 py-0 rounded border text-[9px] font-semibold shrink-0 border-sol-blue/40 text-sol-blue/90 bg-sol-blue/10">persistent</span>
           </ShortcutTooltip>
         )}
-        <span className="text-xs text-sol-text truncate min-w-0">{input.description || "background watch"}</span>
+        <span className="text-xs text-sol-text truncate min-w-0">{input.description || (isBackground ? "background command" : "background watch")}</span>
         {(row?.eventCount ?? 0) > 0 && (
           <span className="ml-auto shrink-0 text-[10px] text-sol-text-dim tabular-nums">
             {row!.eventCount} event{row!.eventCount === 1 ? "" : "s"}
@@ -7110,7 +7133,7 @@ function AssistantBlockImpl({
             <WorkflowToolBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} />
           ) : tc.name === "Skill" ? (
             <SkillBlock key={tc.id} tool={tc} />
-          ) : tc.name === "Monitor" ? (
+          ) : tc.name === "Monitor" || isBackgroundBashToolCall(tc) ? (
             <MonitorBlock key={tc.id} tool={tc} conversationId={conversationId} />
           ) : tc.name === "ScheduleWakeup" ? (
             <ScheduleWakeupBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} timestamp={timestamp} />

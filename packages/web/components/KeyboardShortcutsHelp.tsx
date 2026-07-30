@@ -1,9 +1,10 @@
-import { useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { X, Keyboard } from "lucide-react";
-import { formatShortcutParts, getShortcutsForAction, getShortcutsByContext } from "../shortcuts";
+import { formatShortcutParts, formatAcceleratorParts, getShortcutsForAction, getShortcutsByContext } from "../shortcuts";
 import type { ShortcutAction, ShortcutDef } from "../shortcuts";
 import { useTrackedStore } from "../store/inboxStore";
 import { useEventListener } from "../hooks/useEventListener";
+import { DESKTOP_SHORTCUTS, getDesktopShortcutConfig } from "../lib/desktop";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
 
 const KEYCAP_FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif';
@@ -43,6 +44,22 @@ export function KeyboardShortcutsPanel() {
     }
   });
 
+  // OS-global desktop shortcuts (Electron only). Live values, not registry
+  // constants — the user can rebind or remove them in Settings → Desktop, so
+  // refetch each time the panel opens. Empty accelerator = removed, hidden.
+  const [systemRows, setSystemRows] = useState<{ description: string; parts: string[] }[]>([]);
+  useEffect(() => {
+    if (!s.shortcutsPanelOpen) return;
+    getDesktopShortcutConfig().then((cfg) => {
+      if (!cfg) return;
+      setSystemRows(
+        DESKTOP_SHORTCUTS
+          .filter((d) => cfg.shortcuts[d.key])
+          .map((d) => ({ description: d.label, parts: formatAcceleratorParts(cfg.shortcuts[d.key]) }))
+      );
+    });
+  }, [s.shortcutsPanelOpen]);
+
   const sections = useMemo(() => {
     const seen = new Set<string>();
     const result: { label: string; accent: string; shortcuts: ShortcutDef[] }[] = [];
@@ -77,6 +94,22 @@ export function KeyboardShortcutsPanel() {
         </div>
 
         <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
+          {systemRows.length > 0 && (
+            <section>
+              <div className="flex items-center gap-2 mb-2">
+                <div className="w-1.5 h-1.5 rounded-full bg-sol-magenta" />
+                <h3 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-sol-text-dim">System-wide</h3>
+              </div>
+              <div className="space-y-0.5">
+                {systemRows.map((row) => (
+                  <ShortcutRow key={row.description} description={row.description} parts={row.parts} />
+                ))}
+              </div>
+              <p className="mt-1.5 text-[10px] text-sol-text-dim">
+                Work from any app. Customize or remove in Settings → Desktop.
+              </p>
+            </section>
+          )}
           {sections.map(({ label, accent, shortcuts }) => (
             <section key={label}>
               <div className="flex items-center gap-2 mb-2">
@@ -85,7 +118,7 @@ export function KeyboardShortcutsPanel() {
               </div>
               <div className="space-y-0.5">
                 {shortcuts.map((def) => (
-                  <ShortcutRow key={def.action} def={def} />
+                  <ShortcutRow key={def.action} description={def.description} parts={formatShortcutParts(def)} />
                 ))}
               </div>
             </section>
@@ -100,11 +133,10 @@ export function KeyboardShortcutsPanel() {
   );
 }
 
-function ShortcutRow({ def }: { def: ShortcutDef }) {
-  const parts = formatShortcutParts(def);
+function ShortcutRow({ description, parts }: { description: string; parts: string[] }) {
   return (
     <div className="flex items-center justify-between py-1 group">
-      <span className="text-xs text-sol-text-muted group-hover:text-sol-text transition-colors">{def.description}</span>
+      <span className="text-xs text-sol-text-muted group-hover:text-sol-text transition-colors">{description}</span>
       <span className="ml-3 shrink-0 flex items-center gap-[3px]">
         {parts.map((part, i) => (
           <KeyCap key={i}>{part}</KeyCap>
