@@ -348,11 +348,36 @@ jobs:
             fi
           done
 
-          file /tmp/cli-release/codecast-darwin-arm64 | grep -F 'Mach-O 64-bit executable arm64'
-          file /tmp/cli-release/codecast-darwin-x64 | grep -F 'Mach-O 64-bit executable x86_64'
-          file /tmp/cli-release/codecast-linux-arm64 | grep -E 'ELF 64-bit.*(ARM aarch64|aarch64)'
-          file /tmp/cli-release/codecast-linux-x64 | grep -E 'ELF 64-bit.*(x86-64|x86_64)'
-          file /tmp/cli-release/codecast-windows-x64.exe | grep -E 'PE32\\+ executable.*x86-64'
+          assert_binary_kind() {
+            local artifact=$1
+            local format=$2
+            local architecture=$3
+            local descriptor
+            descriptor=$(file -b "/tmp/cli-release/$artifact")
+            if [[ "$descriptor" != *"$format"* ||
+              "$descriptor" != *executable* ]]; then
+              echo "::error::$artifact has unexpected file descriptor: $descriptor"
+              exit 1
+            fi
+            if [[ "$architecture" == arm64 &&
+              "$descriptor" != *arm64* &&
+              "$descriptor" != *aarch64* ]]; then
+              echo "::error::$artifact is not an arm64 executable: $descriptor"
+              exit 1
+            fi
+            if [[ "$architecture" == x64 &&
+              "$descriptor" != *x86-64* &&
+              "$descriptor" != *x86_64* ]]; then
+              echo "::error::$artifact is not an x64 executable: $descriptor"
+              exit 1
+            fi
+            echo "$artifact: $descriptor"
+          }
+          assert_binary_kind codecast-darwin-arm64 'Mach-O 64-bit' arm64
+          assert_binary_kind codecast-darwin-x64 'Mach-O 64-bit' x64
+          assert_binary_kind codecast-linux-arm64 'ELF 64-bit' arm64
+          assert_binary_kind codecast-linux-x64 'ELF 64-bit' x64
+          assert_binary_kind codecast-windows-x64.exe 'PE32+' x64
           chmod +x /tmp/cli-release/codecast-linux-x64
           actual_version=$(/tmp/cli-release/codecast-linux-x64 --version | tr -d '[:space:]')
           if [[ "$actual_version" != "$RELEASE_VERSION" ]]; then
