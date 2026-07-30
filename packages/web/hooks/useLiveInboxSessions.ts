@@ -13,6 +13,10 @@ import { useConvexSync } from "./useConvexSync";
 // recovery poll in useSyncInboxSessions can reuse it.
 export function applyLiveInboxIds(sessions: any[]) {
   const ids = sessions.map((x: any) => x._id.toString() as string);
+  // Before the change-guard: a disown reaches this client as ABSENCE from the
+  // payload, and the id set may already match (e.g. a reload after another tab
+  // recorded the new set) while a cached row still claims owned_by_me.
+  useInboxStore.getState().reconcileDisownedSessions(ids);
   const next = new Set<string>(ids);
   const prev = useInboxStore.getState().liveInboxIds;
   if (prev.size === next.size && ids.every((id) => prev.has(id))) return;

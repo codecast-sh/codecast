@@ -2173,6 +2173,13 @@ interface InboxStoreState {
   // Replace the authoritative active-inbox set (both twins) from a server
   // payload. sync(): persists, never dispatches — this is server truth.
   setLiveInboxIds: (ids: string[]) => void;
+  // Clear stale ownership claims from cached foreign-run rows the live payload
+  // no longer returns. Disowning is communicated only by ABSENCE (the server
+  // stops returning the row rather than pushing an updated one), so the
+  // never-prune cache keeps the last-seen version claiming owned_by_me forever —
+  // which defeats the "mine" scope filter and, with show-old on, renders the
+  // disowned session as a normal inbox card. Run on EVERY live payload.
+  reconcileDisownedSessions: (ids: string[]) => void;
   // "Show old sessions" — a sticky per-user view preference. Lives in
   // clientState.ui.inbox_show_old (read via resolveShowOld) so it survives
   // reloads and follows the user across devices. It was ephemeral for a while:
@@ -3660,6 +3667,24 @@ export const useInboxStore = create<InboxStoreState>(
   setLiveInboxIds: sync(function (this: Draft, ids: string[]) {
     this.liveInboxIds = new Set(ids);
     this.liveInboxIdList = ids;
+  }),
+  // sync(): the cleared flags must persist, or the stale claim resurrects from
+  // IDB on the next boot. Only foreign-run rows are touched — my own sessions
+  // age out via the old-session partition and keep their fields. A row that
+  // reappears in a later payload gets fresh server flags from the delta merge,
+  // so clearing here is always recoverable.
+  reconcileDisownedSessions: sync(function (this: Draft, ids: string[]) {
+    const meId = this.currentUser?._id?.toString?.();
+    if (!meId) return;
+    const live = new Set(ids);
+    for (const [id, s] of Object.entries(this.sessions)) {
+      if (live.has(id) || !isConvexId(id)) continue;
+      const claimsMe = s.owned_by_me || (s.owner_user_id && s.owner_user_id === meId);
+      if (!claimsMe) continue;
+      if (!s.user_id || s.user_id === meId) continue;
+      s.owned_by_me = false;
+      s.owner_user_id = null;
+    }
   }),
   setShowOldSessions: (show: boolean) => get().updateClientUI({ inbox_show_old: show }),
   _lastViewedAt: {},
