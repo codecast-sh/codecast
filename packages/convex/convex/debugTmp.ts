@@ -136,6 +136,92 @@ export const inspectConversation = internalQuery({
   },
 });
 
+// TEMPORARY one-shot repair for the 2026-07-30 Codex app-server image-path
+// corruption. The buggy mapper uploaded a base64-decoded local path on every
+// streaming rebuild, producing image-only duplicate rows. This detaches those
+// corrupt images, deletes only otherwise-empty rows, and keeps message_count in
+// sync. expected_remaining makes every bounded batch fail closed if the target
+// set changes between inspection and repair.
+export const repairCodexImagePathCorruption = internalMutation({
+  args: {
+    conversation_id: v.id("conversations"),
+    start_timestamp: v.number(),
+    end_timestamp: v.number(),
+    expected_remaining: v.number(),
+    limit: v.optional(v.number()),
+    apply: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) throw new Error("Conversation not found");
+
+    const rows = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_timestamp", (q) =>
+        q
+          .eq("conversation_id", args.conversation_id)
+          .gte("timestamp", args.start_timestamp)
+          .lte("timestamp", args.end_timestamp)
+      )
+      .collect();
+    const affected = rows.filter((message) =>
+      message.role === "assistant" && (message.images?.length ?? 0) > 0
+    );
+    if (affected.length !== args.expected_remaining) {
+      throw new Error(
+        `Repair target changed: expected ${args.expected_remaining} rows, found ${affected.length}`,
+      );
+    }
+
+    const limit = Math.max(1, Math.min(args.limit ?? 50, 100));
+    const batch = affected.slice(0, limit);
+    const summary = {
+      targetedRows: affected.length,
+      targetedImages: affected.reduce((count, message) => count + (message.images?.length ?? 0), 0),
+      batchRows: batch.length,
+      removableRows: batch.filter((message) =>
+        !message.content?.trim() &&
+        !message.thinking?.trim() &&
+        !(message.tool_calls?.length) &&
+        !(message.tool_results?.length)
+      ).length,
+    };
+    if (!args.apply) return { ...summary, applied: false, remaining: affected.length };
+
+    let removedRows = 0;
+    let clearedRows = 0;
+    let imagesDetached = 0;
+    for (const message of batch) {
+      imagesDetached += message.images?.length ?? 0;
+      const hasOtherContent =
+        !!message.content?.trim() ||
+        !!message.thinking?.trim() ||
+        !!message.tool_calls?.length ||
+        !!message.tool_results?.length;
+      if (hasOtherContent) {
+        await ctx.db.patch(message._id, { images: undefined });
+        clearedRows++;
+      } else {
+        await ctx.db.delete(message._id);
+        removedRows++;
+      }
+    }
+    if (removedRows > 0) {
+      await ctx.db.patch(conversation._id, {
+        message_count: Math.max(0, (conversation.message_count ?? 0) - removedRows),
+      });
+    }
+    return {
+      ...summary,
+      applied: true,
+      removedRows,
+      clearedRows,
+      imagesDetached,
+      remaining: affected.length - batch.length,
+    };
+  },
+});
+
 // TEMPORARY: clear archived_at on a bucket stranded by the dropped-undefined
 // dispatch bug (unarchive never reached the server). Safe to delete.
 export const unarchiveBucket = internalMutation({
