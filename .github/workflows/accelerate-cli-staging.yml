@@ -1,0 +1,163 @@
+name: Accelerate exact CLI staging artifacts
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact CLI semver embedded in the builder artifacts
+        required: true
+        type: string
+      source_commit:
+        description: Full 40-character source commit used by the builder
+        required: true
+        type: string
+      artifact_manifest:
+        description: Authoritative builder JSON with exact hashes and sizes
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cli-release-staging-accelerator
+  cancel-in-progress: false
+
+env:
+  R2_BUCKET: codecast
+  RELEASE_VERSION: ${{ inputs.version }}
+  SOURCE_COMMIT: ${{ inputs.source_commit }}
+  EXPECTED_ARTIFACTS_JSON: ${{ inputs.artifact_manifest }}
+
+jobs:
+  reproduce:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-13
+          - macos-15
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Validate exact release identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::version must be a canonical three-part semver"
+            exit 1
+          fi
+          if [[ ! "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::source_commit must be a full lowercase 40-character SHA"
+            exit 1
+          fi
+          resolved_source=$(git rev-parse "${SOURCE_COMMIT}^{commit}")
+          if [[ "$resolved_source" != "$SOURCE_COMMIT" ]]; then
+            echo "::error::source_commit did not resolve to itself"
+            exit 1
+          fi
+
+          printf '%s' "$EXPECTED_ARTIFACTS_JSON" | jq -S . > /tmp/release-expected.json
+          jq -e \
+            --arg version "$RELEASE_VERSION" \
+            --arg source "$SOURCE_COMMIT" \
+            '.version == $version and
+             .source_commit == $source and
+             (.artifacts | type == "object")' \
+            /tmp/release-expected.json >/dev/null
+          for artifact in \
+            codecast-linux-arm64 \
+            codecast-linux-x64 \
+            codecast-windows-x64.exe; do
+            jq -e \
+              --arg artifact "$artifact" \
+              '.artifacts[$artifact].sha256 |
+               type == "string" and test("^[0-9a-f]{64}$")' \
+              /tmp/release-expected.json >/dev/null
+            jq -e \
+              --arg artifact "$artifact" \
+              '.artifacts[$artifact].size |
+               type == "number" and . > 1000000 and floor == .' \
+              /tmp/release-expected.json >/dev/null
+          done
+
+      - name: Reproduce the builder artifacts at its exact path
+        shell: bash
+        run: |
+          set -euo pipefail
+          build_root=/tmp/codecast-192
+          git worktree add --detach "$build_root" "$SOURCE_COMMIT"
+          jq --arg version "$RELEASE_VERSION" '.version = $version' \
+            "$build_root/packages/cli/package.json" > /tmp/accelerator-cli-package.json
+          mv /tmp/accelerator-cli-package.json "$build_root/packages/cli/package.json"
+          (
+            cd "$build_root"
+            bun install --frozen-lockfile
+          )
+          (
+            cd "$build_root/packages/cli"
+            CODECAST_SKIP_SIGN=1 ./scripts/build-binaries.sh
+          )
+
+      - name: Upload only byte-identical staging artifacts
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v aws >/dev/null 2>&1; then
+            brew install awscli
+          fi
+          output_root=/tmp/codecast-192/packages/web/binaries
+          matched=0
+          for artifact in \
+            codecast-linux-arm64 \
+            codecast-linux-x64 \
+            codecast-windows-x64.exe; do
+            expected_sha=$(jq -r \
+              --arg artifact "$artifact" \
+              '.artifacts[$artifact].sha256' \
+              /tmp/release-expected.json)
+            expected_bytes=$(jq -r \
+              --arg artifact "$artifact" \
+              '.artifacts[$artifact].size' \
+              /tmp/release-expected.json)
+            actual_sha=$(shasum -a 256 "$output_root/$artifact" | awk '{print $1}')
+            actual_bytes=$(stat -f%z "$output_root/$artifact")
+            if [[ "$actual_sha" != "$expected_sha" || "$actual_bytes" != "$expected_bytes" ]]; then
+              echo "::notice::$artifact differs on ${{ matrix.os }}; leaving R2 untouched"
+              continue
+            fi
+
+            aws s3 cp "$output_root/$artifact" "s3://$R2_BUCKET/$artifact" \
+              --endpoint-url "$R2_ENDPOINT" \
+              --content-type application/octet-stream \
+              --no-progress
+            metadata=$(aws s3api head-object \
+              --bucket "$R2_BUCKET" \
+              --key "$artifact" \
+              --endpoint-url "$R2_ENDPOINT")
+            remote_bytes=$(jq -r '.ContentLength' <<<"$metadata")
+            if [[ "$remote_bytes" != "$expected_bytes" ]]; then
+              echo "::error::$artifact staging length changed after upload"
+              exit 1
+            fi
+            echo "::notice::$artifact reproduced exactly and uploaded from ${{ matrix.os }}"
+            matched=$((matched + 1))
+          done
+          echo "Exact artifacts uploaded by ${{ matrix.os }}: $matched"
+          echo "This workflow never writes latest.json or minimum-version state."
