@@ -27,6 +27,12 @@
 - Server: granted envelopes echo the caller's acknowledged receipt ids for the view (`echoedCommandIdsForView`, same-snapshot proof; scan 200/limit 64); all 8 v2 command handlers (5 comments + 3 buckets) attach `command-id` receipt coverage naming the v3 contracts. Both additive; guard-test-pinned.
 - Tests: 13 new client (`logTsCoverage.test.ts`: ordering, tripwire, supersession, echoed-id reconciliation both orders, stamper, stamped end-to-end with handoff), 2 new server (envelope echo filtering; guard pins), 9 updated pins (receipts carry two coverage entries; envelope carries `commandIds`). Suites: web local-first 111/111, convex 911/911, tsc clean both.
 
+## CLI / daemon / mobile impact: none (verified)
+
+- packages/cli has ZERO references to the v2/v3 view queries, command handlers, the receipts table, or the new envelope field (grep-verified). Daemon and CLI comment/bucket writes go through the server-side revision-aware writers (campaign SRV-06 audit); under v3, those writes are covered automatically by the transition timestamp — the daemon needs no coverage awareness at all. Its head advances stay only for v2/watermark-era clients and are part of the stage-4 deletion list.
+- messages.send/v2 receipts use the disjoint view-key namespace messages:conversation:* (messageViewContracts.ts); the echo filters by view key, so message receipts never appear in comment/bucket echoes and vice versa.
+- Mobile imports only the dispatch-gate correlation from local-first (lib/auth.tsx); no materializer, no useLocalView, and the flags are absent in the native environment (fail-closed off). No native work required for this rollout.
+
 ## Waiting on Convex (documented residuals — nothing blocks today's value)
 
 | item | what it unlocks | until then |
