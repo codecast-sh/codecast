@@ -405,6 +405,11 @@ type MessageFeedDensity = "full" | "condensed" | "compact";
 const FEED_DENSITY_CYCLE: MessageFeedDensity[] = ["full", "condensed", "compact"];
 // Last-chosen density per conversation, app-session scoped.
 const DENSITY_BY_CONVERSATION = new Map<string, ConversationDensity>();
+// Simple view reads calmer by default: tool activity as one-line receipts.
+// An explicit per-conversation choice (the map above) still wins.
+function defaultDensity(): ConversationDensity {
+  return useInboxStore.getState().clientState.ui?.simple_view ? "condensed" : "full";
+}
 const DENSITY_OPTIONS: Array<{ value: ConversationDensity; label: string; description: string; icon: React.ComponentType<{ className?: string }>; ai?: boolean }> = [
   { value: "full", label: "Full", description: "Everything as it happened", icon: AlignJustify },
   { value: "condensed", label: "Condensed", description: "Tool activity as one-line receipts", icon: ListCollapse },
@@ -10222,7 +10227,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   // showed the down arrow on a 2px nudge while still parked at the bottom.
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [isScrollable, setIsScrollable] = useState(false);
-  const [density, setDensityState] = useState<ConversationDensity>("full");
+  const [density, setDensityState] = useState<ConversationDensity>(defaultDensity);
   const setDensity = useCallback((d: ConversationDensity) => {
     setDensityState(d);
     if (conversation?._id) DENSITY_BY_CONVERSATION.set(conversation._id, d);
@@ -10381,7 +10386,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     userScrolledRef.current = false;
     setIsNearTop(true);
     setIsNearBottom(true);
-    setDensityState((conversation?._id && DENSITY_BY_CONVERSATION.get(conversation._id)) || "full");
+    setDensityState((conversation?._id && DENSITY_BY_CONVERSATION.get(conversation._id)) || defaultDensity());
     setExpandedTurns(new Set());
     setDiffExpanded(false);
     setShowThinking(false);
@@ -13480,23 +13485,32 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             )}
 
             {conversation && (
-              <ConversationMetadata
-                agentType={conversation.agent_type}
-                model={conversation.model}
-                effort={(conversation as any).effort}
-                startedAt={conversation.started_at}
-                messageCount={conversation.message_count}
-                shortId={conversation.short_id}
-                conversationId={conversation._id}
-                canEditModel={effectiveIsOwner}
-              />
+              // Simple view keeps the metadata cluster functional (it owns the
+              // model picker) but pulls it back visually; the plan/task badges
+              // drop away entirely.
+              <span data-simple-dim className="contents [.simple-view_&]:flex [.simple-view_&]:items-center [.simple-view_&]:gap-1">
+                <ConversationMetadata
+                  agentType={conversation.agent_type}
+                  model={conversation.model}
+                  effort={(conversation as any).effort}
+                  startedAt={conversation.started_at}
+                  messageCount={conversation.message_count}
+                  shortId={conversation.short_id}
+                  conversationId={conversation._id}
+                  canEditModel={effectiveIsOwner}
+                />
+              </span>
             )}
 
             {(conversation as any)?.active_plan && (
-              <PlanBadge plan={(conversation as any).active_plan} />
+              <span data-simple-hide className="contents">
+                <PlanBadge plan={(conversation as any).active_plan} />
+              </span>
             )}
             {(conversation as any)?.active_task && (
-              <TaskBadge task={(conversation as any).active_task} />
+              <span data-simple-hide className="contents">
+                <TaskBadge task={(conversation as any).active_task} />
+              </span>
             )}
 
             {conversation && (
