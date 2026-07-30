@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { categorizeSessions, computeNewDividerIndex, dropLatchedFeedHasMore, feedPagePersistence, findReusableBlankSession, getSessionRenderKey, isConvexId, isSessionDismissed, isSessionStashed, orchestrationGroupLabelOf, PENDING_SEND_PRUNE_GRACE_MS, pendingSendConsumed, reconcilePendingSendForSession, resolveAssigneeInfo, resolveSessionAuthor, resolveShowOld, seedLiveInboxIdsFromCache, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
+import { categorizeSessions, computeNewDividerIndex, dropLatchedFeedHasMore, feedPagePersistence, findReusableBlankSession, getSessionRenderKey, isConvexId, isSessionDismissed, isSessionStashed, orchestrationGroupLabelOf, PENDING_SEND_ECHO_CAP_MS, PENDING_SEND_PRUNE_GRACE_MS, pendingSendConsumed, reconcilePendingSendForSession, resolveAssigneeInfo, resolveSessionAuthor, resolveShowOld, seedLiveInboxIdsFromCache, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
 import { isPersistedStoreKey } from "../idbCache";
 import { declareViewNav } from "../viewNav";
 
@@ -2034,6 +2034,45 @@ describe("reconcilePendingSendForSession — prune grace window", () => {
     const pm: Record<string, any[]> = { c1: [msg({ timestamp: Date.now() - PENDING_SEND_PRUNE_GRACE_MS - 1, _isFailed: true })] };
     expect(reconcilePendingSendForSession(pm, "c1", consumedSession, null)).toBe(false);
     expect(pm.c1.length).toBe(1);
+  });
+});
+
+describe("reconcilePendingSendForSession — echo gate", () => {
+  // Regression: the session sync tick learns the send was consumed and pruned
+  // the pending entry synchronously, while the message-window back-fill for the
+  // same conversation was still a network round-trip away. Returning to the
+  // thread in that gap rendered the stale window WITHOUT the just-sent message
+  // for ~a second. A consumed send with a warm local window must survive until
+  // its echoed server row is actually visible there.
+  const consumedSession = { agent_status: "working", is_idle: false, has_pending: false, updated_at: 999_999 } as any;
+  const pastGrace = () => Date.now() - PENDING_SEND_PRUNE_GRACE_MS - 1;
+  const msg = (over: Record<string, unknown>) =>
+    ({ _id: "opt1", _clientId: "cid1", role: "user", content: "hi", _isOptimistic: true, ...over }) as any;
+  const staleWindow = [{ _id: "old1", role: "assistant", content: "earlier", timestamp: 1 }] as any[];
+
+  it("keeps a consumed send while the warm window lacks its echo", () => {
+    const pm: Record<string, any[]> = { c1: [msg({ timestamp: pastGrace() })] };
+    expect(reconcilePendingSendForSession(pm, "c1", consumedSession, null, staleWindow)).toBe(false);
+    expect(pm.c1.length).toBe(1);
+  });
+
+  it("prunes once the echoed server row (client_id match) is in the window", () => {
+    const pm: Record<string, any[]> = { c1: [msg({ timestamp: pastGrace() })] };
+    const echoed = [...staleWindow, { _id: "srv9", role: "user", content: "hi", client_id: "cid1", timestamp: 2 }] as any[];
+    expect(reconcilePendingSendForSession(pm, "c1", consumedSession, null, echoed)).toBe(true);
+    expect(pm.c1).toBeUndefined();
+  });
+
+  it("prunes a never-echoing send (e.g. a control command) after the echo cap", () => {
+    const pm: Record<string, any[]> = { c1: [msg({ timestamp: Date.now() - PENDING_SEND_ECHO_CAP_MS - 1 })] };
+    expect(reconcilePendingSendForSession(pm, "c1", consumedSession, null, staleWindow)).toBe(true);
+    expect(pm.c1).toBeUndefined();
+  });
+
+  it("prunes on the session claim alone when no local window exists (nothing stale to render)", () => {
+    const pm: Record<string, any[]> = { c1: [msg({ timestamp: pastGrace() })] };
+    expect(reconcilePendingSendForSession(pm, "c1", consumedSession, null, undefined)).toBe(true);
+    expect(pm.c1).toBeUndefined();
   });
 });
 

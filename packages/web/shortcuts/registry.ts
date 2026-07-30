@@ -50,6 +50,7 @@ export type ShortcutAction =
   | 'review.prevFile'
   | 'review.comment'
   | 'compose.focus'
+  | 'layout.cycle'
   | 'sidebar.toggleLeft'
   | 'sidebar.toggleRight'
   | 'sidebar.toggleComments'
@@ -200,6 +201,10 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'n', action: 'permission.deny', when: 'conversation', description: 'Deny permission' },
 
   { key: 'ctrl+m', action: 'compose.focus', skipInputCheck: true, description: 'Focus message input' },
+  // One key moves between the designed arrangements (Focus → Split → Triage)
+  // instead of hand-adjusting collapses and splitters. Each surface (docs,
+  // tasks, plans, …) remembers its own last mode.
+  { key: 'ctrl+;', action: 'layout.cycle', skipInputCheck: true, description: 'Cycle layout (Focus / Split / Triage)' },
   { key: 'ctrl+[', action: 'sidebar.toggleLeft', skipInputCheck: true, description: 'Toggle left sidebar' },
   { key: 'ctrl+]', action: 'sidebar.toggleRight', skipInputCheck: true, description: 'Toggle sessions panel' },
   { key: 'ctrl+\\', action: 'sidebar.toggleComments', skipInputCheck: true, description: 'Toggle comments rail' },
