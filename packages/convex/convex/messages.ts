@@ -767,6 +767,7 @@ export const addMessage = mutation({
     let images = args.images;
     let contentToStore = safeContent;
     let clientIdToStore: string | undefined;
+    let fromUserIdToStore: Id<"users"> | undefined;
     if (args.role === "user") {
       const pendingMsgs = await ctx.db
         .query("pending_messages")
@@ -776,6 +777,10 @@ export const addMessage = mutation({
       if (matchingPending) {
         contentToStore = redactSecrets(matchingPending.content);
         clientIdToStore = matchingPending.client_id;
+        // The pending row knows WHO sent this turn (a teammate's web/CLI send
+        // lands in the transcript as an anonymous user echo). Stamp the sender
+        // so the UI can attribute the message to them, not the session owner.
+        fromUserIdToStore = matchingPending.from_user_id;
         if (!images || images.length === 0) {
           const ids = matchingPending.image_storage_ids ?? (matchingPending.image_storage_id ? [matchingPending.image_storage_id] : []);
           if (ids.length > 0) {
@@ -799,6 +804,7 @@ export const addMessage = mutation({
       subtype: args.subtype,
       model: args.model,
       client_id: clientIdToStore,
+      from_user_id: fromUserIdToStore,
       timestamp: msgTimestamp,
     });
     await materializeFileChanges(ctx, args.conversation_id, messageId, msgTimestamp, safeToolCalls, safeToolResults);
@@ -1161,6 +1167,7 @@ export const addMessages = mutation({
       let images = msg.images;
       let contentToStore = safeContent;
       let clientIdToStore: string | undefined;
+      let fromUserIdToStore: Id<"users"> | undefined;
       if (msg.role === "user" && pendingMsgs.length > 0) {
         const matchingPending = findEchoedPendingMessage(
           pendingMsgs, safeContent, msgTimestamp, consumedPendingIds,
@@ -1169,6 +1176,9 @@ export const addMessages = mutation({
           consumedPendingIds.add(matchingPending._id);
           contentToStore = redactSecrets(matchingPending.content);
           clientIdToStore = matchingPending.client_id;
+          // Stamp the sender (see addMessage above): a teammate's send is
+          // otherwise indistinguishable from an owner turn in the transcript.
+          fromUserIdToStore = matchingPending.from_user_id;
           if (!images || images.length === 0) {
             const ids = matchingPending.image_storage_ids ?? (matchingPending.image_storage_id ? [matchingPending.image_storage_id] : []);
             if (ids.length > 0) {
@@ -1195,6 +1205,7 @@ export const addMessages = mutation({
         subtype: msg.subtype,
         model: msg.model,
         client_id: clientIdToStore,
+        from_user_id: fromUserIdToStore,
         timestamp: msgTimestamp,
       });
       ids.push(messageId);

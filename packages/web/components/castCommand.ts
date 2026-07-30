@@ -27,6 +27,57 @@ export interface ParsedCastCommand {
   fullCmd: string;
 }
 
+export interface SendBody {
+  body: string;
+  kind: "literal" | "heredoc" | "dynamic";
+}
+
+// Pull the message body out of a `cast send <id> …` arg string. The transcript
+// records the command AS TYPED, so what the args contain falls into three shapes:
+//   literal — a quoted string with no shell expansion: the recorded text IS the
+//             delivered message.
+//   heredoc — `- <<'EOF' … EOF`: the delivered body is recorded verbatim in the
+//             heredoc; extract it.
+//   dynamic — `"$(cat f)"`, backticks, `$VAR`, or a bare `-` fed by a pipe or
+//             `< file` redirect: the shell computed the real payload before cast
+//             ran, so the recorded text is a recipe, NOT the delivered message.
+//             Callers must not present it as the message body.
+export function extractSendBody(args: string): SendBody {
+  const t = args.trim();
+
+  // Quoted bodies first — a literal message may itself contain "<<EOF" text, and
+  // a genuine heredoc invocation never starts with a quote (it starts with `-`).
+  const dq = t.match(/^"((?:[^"\\]|\\.)*)"/);
+  if (dq) {
+    const body = dq[1].replace(/\\"/g, '"');
+    // Inside double quotes the shell expands $… and `…` before cast sees them.
+    return { body, kind: /(^|[^\\])[$`]/.test(dq[1]) ? "dynamic" : "literal" };
+  }
+  const sq = t.match(/^'((?:[^'\\]|\\.)*)'/);
+  if (sq) return { body: sq[1].replace(/\\'/g, "'"), kind: "literal" };
+
+  // Heredoc: `- <<'EOF'\n…\nEOF` (also <<EOF, <<-EOF, << 'EOF', flags between).
+  const hd = t.match(/<<(-?)\s*(?:'(\w+)'|"(\w+)"|(\w+))[^\n]*\n([\s\S]*)$/);
+  if (hd) {
+    const tag = hd[2] || hd[3] || hd[4];
+    const stripTabs = hd[1] === "-";
+    const bodyLines: string[] = [];
+    for (const line of hd[5].split("\n")) {
+      const probe = stripTabs ? line.replace(/^\t+/, "") : line;
+      if (probe === tag) break;
+      bodyLines.push(probe);
+    }
+    return { body: bodyLines.join("\n").trim(), kind: "heredoc" };
+  }
+
+  // Bare `-`: body came from a pipe or `< file` — not recorded in the command.
+  if (/^-(\s|$)/.test(t)) return { body: t, kind: "dynamic" };
+
+  // Unquoted body: drop any trailing --flags so they don't render as message text.
+  const bare = t.replace(/\s+--\w[\s\S]*$/, "").trim() || t;
+  return { body: bare, kind: /[$`]/.test(bare) ? "dynamic" : "literal" };
+}
+
 // Parse a raw shell command into its cast (category, subcommand, args), tolerating
 // a `bash -c` wrapper and a leading `cd <dir>;`/`&&` prefix. Returns null when the
 // command isn't a `cast ...` invocation.

@@ -182,7 +182,9 @@ export function App() {
             <Route path="roadmap" element={<E name="Roadmap"><Roadmap /></E>} />
             <Route path="cli" element={<E name="Cli"><Cli /></E>} />
 
-            {/* Sharing */}
+            {/* Sharing. (Published artifacts at /a/<slug> are NOT here: they're
+                a server-rendered page — Hono route in prod, vite middleware in
+                dev — so the share link never boots the SPA.) */}
             <Route path="share/:token" element={<E name="Share"><Share /></E>} />
             <Route path="share/message/:token" element={<E name="ShareMessage"><ShareMessage /></E>} />
 
