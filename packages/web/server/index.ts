@@ -133,14 +133,15 @@ app.get("/install.ps1", async (c) => {
 });
 
 // Published HTML artifacts: /a/<slug> is just the pretty alias — the document
-// itself (artifact HTML with the codecast bar injected) is served by the
-// Convex HTTP action, so redirect straight to it. No wrapper, no SPA.
-const ARTIFACT_ORIGIN = process.env.VITE_CONVEX_URL || "https://convex.codecast.sh";
+// itself (artifact HTML with the codecast bar injected) is served from the
+// Cloudflare edge (infra/artifact-edge worker at a.codecast.sh, which caches
+// the Convex origin per-PoP). No wrapper, no SPA.
+const ARTIFACT_EDGE = process.env.ARTIFACT_EDGE_URL || "https://a.codecast.sh";
 app.get("/a/:slug", (c) => {
   const slug = c.req.param("slug");
   if (!/^[A-Za-z0-9]{6,32}$/.test(slug)) return c.text("Invalid artifact link", 404);
   c.header("Cache-Control", "public, max-age=300");
-  return c.redirect(`${ARTIFACT_ORIGIN}/cli/a/${slug}`, 302);
+  return c.redirect(`${ARTIFACT_EDGE}/${slug}`, 302);
 });
 
 app.use("*", botMetaMiddleware);
