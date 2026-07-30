@@ -173,3 +173,19 @@ else
   echo "To force all remote clients to update:"
   echo "  codecast force-update $VERSION"
 fi
+
+# GitHub release: tag v$VERSION and attach the same binaries that went to R2.
+# Runs last and never fails the deploy — R2 + force-update are the real release;
+# this is the public changelog. On --no-bump redeploys the release already
+# exists, so just refresh its assets.
+echo ""
+echo "Publishing GitHub release v$VERSION..."
+# codecast-* only: the dir also holds a local `cast` convenience symlink.
+RELEASE_FILES=("$BINARIES_DIR"/codecast-* "$BINARIES_DIR"/index.js.map)
+if gh release view "v$VERSION" >/dev/null 2>&1; then
+  gh release upload "v$VERSION" "${RELEASE_FILES[@]}" --clobber \
+    || echo "  WARNING: asset refresh failed (non-fatal)"
+else
+  gh release create "v$VERSION" "${RELEASE_FILES[@]}" --generate-notes \
+    || echo "  WARNING: GitHub release failed (non-fatal) — rerun: gh release create v$VERSION with the files in $BINARIES_DIR"
+fi
