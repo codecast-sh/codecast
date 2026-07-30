@@ -18,6 +18,9 @@ declare global {
       // Compose popup (floating new-session window):
       onComposeShow: (cb: () => void) => () => void;
       composeSubmit: (data: { conversationId?: string; navigate: boolean }) => void;
+      // Open an https URL in the system default browser (used by the
+      // browser-based desktop sign-in). Absent on older builds — gate on it.
+      openExternal: (url: string) => Promise<void>;
       platform: string;
     };
   }

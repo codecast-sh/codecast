@@ -7,6 +7,8 @@ import Apple from "@auth/core/providers/apple";
 import { Resend as ResendAPI } from "resend";
 import { alphabet, generateRandomString } from "oslo/crypto";
 import { createRemoteJWKSet, jwtVerify } from "jose";
+import { internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import { advanceCurrentUserViewRevision } from "./principalViewRevisions";
 
 // Native "Sign in with Apple": the iOS app presents Apple's own system sheet
@@ -58,6 +60,27 @@ const AppleNative = ConvexCredentials({
       shouldLinkViaEmail: true,
     });
     return { userId: created.user._id };
+  },
+});
+
+// Desktop app sign-in (GitHub issue #20): the Electron window is a blank
+// browser profile — no Google/GitHub cookies — so running OAuth inside it
+// strands the user on provider login walls. Instead the desktop opens the
+// user's system browser at /auth/cli?mode=desktop with a one-time nonce; the
+// signed-in browser deposits a relay grant (cliAuth.deposit), and the desktop
+// redeems it here for a normal first-class session. The claim is single-use
+// with a short TTL, and it consumes the relayed api token in the same
+// transaction, so nothing long-lived is minted along the way.
+const DesktopRelay = ConvexCredentials({
+  id: "desktop-relay",
+  authorize: async (params: Record<string, unknown>, ctx: any) => {
+    const nonce = params.nonce;
+    if (typeof nonce !== "string" || nonce.length < 32) {
+      throw new Error("Missing desktop sign-in nonce");
+    }
+    const claimed = await ctx.runMutation(internal.cliAuth.claimForDesktop, { nonce });
+    if (!claimed) throw new Error("Desktop sign-in was not authorized");
+    return { userId: claimed.userId as Id<"users"> };
   },
 });
 
@@ -192,6 +215,7 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
       },
     }),
     AppleNative,
+    DesktopRelay,
     Password({ reset: ResendOTPPasswordReset }),
   ],
 });
