@@ -5,7 +5,6 @@ import { readFile, stat } from "fs/promises";
 import { extname, join } from "path";
 import { createRequire } from "module";
 import { botMetaMiddleware } from "./bot-meta";
-import { renderArtifactPage } from "./artifactPage";
 
 const require = createRequire(import.meta.url);
 const pkg = require("../package.json");
@@ -133,17 +132,15 @@ app.get("/install.ps1", async (c) => {
   }
 });
 
-// Published HTML artifacts — a server-rendered static wrapper, deliberately
-// outside the SPA (no bundle download, no loaders; see artifactPage.ts). The
-// vite dev server mounts the same renderer, so dev and prod render one page.
-app.get("/a/:slug", async (c) => {
-  const { status, html } = await renderArtifactPage(c.req.param("slug"));
-  c.status(status as 200);
-  // Cacheable: browsers (and any CDN in front) may reuse for a minute and
-  // revalidate in the background — republish staleness is bounded by this plus
-  // the renderer's 30s meta cache, both invisible next to "updated Xh ago".
-  c.header("Cache-Control", status === 200 ? "public, max-age=60, stale-while-revalidate=300" : "no-cache");
-  return c.html(html);
+// Published HTML artifacts: /a/<slug> is just the pretty alias — the document
+// itself (artifact HTML with the codecast bar injected) is served by the
+// Convex HTTP action, so redirect straight to it. No wrapper, no SPA.
+const ARTIFACT_ORIGIN = process.env.VITE_CONVEX_URL || "https://convex.codecast.sh";
+app.get("/a/:slug", (c) => {
+  const slug = c.req.param("slug");
+  if (!/^[A-Za-z0-9]{6,32}$/.test(slug)) return c.text("Invalid artifact link", 404);
+  c.header("Cache-Control", "public, max-age=300");
+  return c.redirect(`${ARTIFACT_ORIGIN}/cli/a/${slug}`, 302);
 });
 
 app.use("*", botMetaMiddleware);
