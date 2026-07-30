@@ -1302,6 +1302,7 @@ export const getAllMessages = query({
       messages.pop();
     }
     messages.reverse();
+    const enrichedMessages = await attachSenderIdentities(ctx, conversation.user_id, messages);
 
     const user = await ctx.db.get(conversation.user_id);
 
@@ -1379,7 +1380,7 @@ export const getAllMessages = query({
     return sanitizeConvexObjectKeys({
       ...conversation,
       title,
-      messages,
+      messages: enrichedMessages,
       user: user ? { name: user.name, email: user.email, avatar_url: user.image || user.github_avatar_url || null } : null,
       child_conversations: childConversations,
       child_conversation_map: childConversationMap,
@@ -1519,7 +1520,9 @@ export const getMessagesAroundTimestamp = query({
       messagesAfter.pop();
     }
 
-    const messages = [...messagesBefore, ...messagesAfter];
+    const messages = await attachSenderIdentities(
+      ctx, conversation.user_id, [...messagesBefore, ...messagesAfter],
+    );
 
     const user = await ctx.db.get(conversation.user_id);
 
@@ -1615,7 +1618,7 @@ export const getNewMessages = query({
     // computing it here cost O(children) queries per poll and timed out on
     // sessions with many subagent children.
     return sanitizeConvexObjectKeys({
-      messages,
+      messages: await attachSenderIdentities(ctx, conversation.user_id, messages),
       last_timestamp: messages.length > 0 ? messages[messages.length - 1].timestamp : null,
       has_more: hasMore,
       updated_at: conversation.updated_at,
@@ -1675,6 +1678,39 @@ export const copyAllMessages = query({
   },
 });
 
+// A user turn delivered by a teammate (web or `cast send` into someone else's
+// session) carries from_user_id — the sender, stamped when the echo is matched
+// to its pending row. Attach that sender's display identity so the UI renders
+// the turn as them instead of the conversation owner. Owner turns stay bare,
+// so the payload only grows for the rare cross-user message.
+export async function attachSenderIdentities<T extends { role?: string; from_user_id?: Id<"users"> }>(
+  ctx: { db: { get: (id: Id<"users">) => Promise<any> } },
+  ownerUserId: Id<"users">,
+  messages: T[],
+): Promise<T[]> {
+  const senderIds = new Set<string>();
+  for (const m of messages) {
+    if (m.role === "user" && m.from_user_id && m.from_user_id.toString() !== ownerUserId.toString()) {
+      senderIds.add(m.from_user_id.toString());
+    }
+  }
+  if (senderIds.size === 0) return messages;
+  const senders = new Map<string, { name: string; avatar_url: string | null }>();
+  for (const id of senderIds) {
+    const u = await ctx.db.get(id as Id<"users">);
+    if (u) {
+      senders.set(id, {
+        name: u.name || u.email?.split("@")[0] || "Unknown",
+        avatar_url: u.image || u.github_avatar_url || null,
+      });
+    }
+  }
+  return messages.map((m) => {
+    const sender = m.from_user_id ? senders.get(m.from_user_id.toString()) : undefined;
+    return sender ? { ...m, sender_name: sender.name, sender_avatar_url: sender.avatar_url } : m;
+  });
+}
+
 export const listMessages = query({
   args: {
     conversation_id: v.id("conversations"),
@@ -1709,7 +1745,8 @@ export const listMessages = query({
       )
       .order("desc")
       .paginate(args.paginationOpts);
-    return { ...result, page: sanitizeConvexObjectKeys(result.page) };
+    const page = await attachSenderIdentities(ctx, conversation.user_id, result.page);
+    return { ...result, page: sanitizeConvexObjectKeys(page) };
   },
 });
 
@@ -7477,6 +7514,9 @@ async function scanInboxConversations(
   // Conversations in this user's owner set — drives the owned_by_me flag during
   // enrichment without a per-row session_owners lookup.
   ownedByMeIds: Set<string>;
+  // My owner ROWS by conversation id — enrichment stamps assigned_ping off the
+  // unacknowledged handoffs (added by someone else, seen_at unset).
+  myOwnerRowById: Map<string, any>;
 }> {
   const dismissedCutoff = now - INBOX_DISMISSED_WINDOW_MS;
   const sessionWindowCutoff = now - INBOX_SESSION_WINDOW_MS;
@@ -7539,6 +7579,9 @@ async function scanInboxConversations(
     .take(200);
   const ownedByMeIds = new Set<string>(
     ownerRows.map((r: any) => r.conversation_id.toString())
+  );
+  const myOwnerRowById = new Map<string, any>(
+    ownerRows.map((r: any) => [r.conversation_id.toString(), r])
   );
 
   const byId = new Map<string, any>();
@@ -7653,7 +7696,7 @@ async function scanInboxConversations(
     }
   }
 
-  return { conversations, maps, extraIds, clusterCutoff, ownedByMeIds };
+  return { conversations, maps, extraIds, clusterCutoff, ownedByMeIds, myOwnerRowById };
 }
 
 async function computeInboxSessions(
@@ -7678,7 +7721,7 @@ async function computeInboxSessions(
   // unchanged. Default MUST stay true — inboxForCLI classifies work-state from it.
   const includeLiveness = opts.includeLiveness !== false;
   const now = Date.now();
-  const { conversations, maps, extraIds, clusterCutoff, ownedByMeIds } =
+  const { conversations, maps, extraIds, clusterCutoff, ownedByMeIds, myOwnerRowById } =
     await scanInboxConversations(ctx, userId, now, {
       includeLiveness,
       extraConvIds: opts.extraConvIds,
@@ -7718,6 +7761,18 @@ async function computeInboxSessions(
     // owner_name/email stay the PRIMARY owner's: the list row shows a single
     // chip, and the full owner set is fetched on demand by the session panel.
     row.owned_by_me = ownedByMeIds.has(conv._id.toString());
+    // Unacknowledged handoff: someone ELSE added me as an owner and I haven't
+    // acked it. Stamped on the row so the sidebar can render it prominently;
+    // ackSessionAssignment (or the in-conversation banner) clears it.
+    const myRow = myOwnerRowById.get(conv._id.toString());
+    if (myRow && !myRow.seen_at && myRow.added_by?.toString() !== userId.toString()) {
+      const byDoc = await getUserDoc(myRow.added_by);
+      row.assigned_ping = {
+        by_name: byDoc?.name ?? byDoc?.email ?? "A teammate",
+        note: myRow.note ?? null,
+        at: myRow.added_at,
+      };
+    }
     if (conv.owner_user_id) {
       const ownerDoc = await getUserDoc(conv.owner_user_id);
       row.owner_name = ownerDoc?.name ?? null;

@@ -30,7 +30,20 @@ import { notifySessionAssigned } from "./notifications";
 // paths here, a cross-user send into an UNOWNED session auto-owns it onto the
 // sender (performSessionSend).
 
-type OwnerInfo = { user_id: string; name: string | null; email: string | null };
+type OwnerInfo = {
+  user_id: string;
+  name: string | null;
+  email: string | null;
+  // Assignment provenance off the join row (absent on the wholesale-set result,
+  // which is built from user docs before rows exist): who handed it over, when,
+  // with what note, and whether the assignee has acknowledged it. Drives the
+  // "X assigned this thread to you" banner for the open session.
+  added_by?: string;
+  added_by_name?: string | null;
+  added_at?: number;
+  note?: string | null;
+  seen_at?: number | null;
+};
 
 const toOwnerInfo = (u: any): OwnerInfo => ({
   user_id: u._id.toString(),
@@ -162,9 +175,26 @@ async function listOwnerInfos(
   ctx: { db: any },
   conversationId: Id<"conversations">,
 ): Promise<OwnerInfo[]> {
-  const ids = await listSessionOwnerIds(ctx, conversationId);
-  const docs = (await Promise.all(ids.map((id) => ctx.db.get(id)))).filter(Boolean) as any[];
-  return docs.map(toOwnerInfo);
+  const rows = await ctx.db
+    .query("session_owners")
+    .withIndex("by_conversation", (q: any) => q.eq("conversation_id", conversationId))
+    .collect();
+  rows.sort((a: any, b: any) => a.added_at - b.added_at);
+  const infos: OwnerInfo[] = [];
+  for (const row of rows) {
+    const doc = await ctx.db.get(row.user_id);
+    if (!doc) continue;
+    const byDoc = row.added_by ? await ctx.db.get(row.added_by) : null;
+    infos.push({
+      ...toOwnerInfo(doc),
+      added_by: row.added_by?.toString(),
+      added_by_name: byDoc?.name ?? byDoc?.email ?? null,
+      added_at: row.added_at,
+      note: row.note ?? null,
+      seen_at: row.seen_at ?? null,
+    });
+  }
+  return infos;
 }
 
 // ── Owner mutation bodies ────────────────────────────────────────────────────
@@ -178,7 +208,7 @@ async function listOwnerInfos(
 export async function performSetSessionOwners(
   ctx: { db: any },
   authUserId: Id<"users">,
-  args: { session_id: string; owners: string[] },
+  args: { session_id: string; owners: string[]; note?: string },
 ): Promise<OwnerMutationResult> {
   const conversation = await resolveOwnableConversation(ctx, authUserId, args.session_id);
   const shortId = conversation.short_id ?? conversation._id.toString().slice(0, 7);
@@ -200,7 +230,7 @@ export async function performSetSessionOwners(
 
   const added: Id<"users">[] = [];
   for (const user of desired) {
-    if (await addSessionOwnerRow(ctx, conversation._id, user._id, authUserId)) added.push(user._id);
+    if (await addSessionOwnerRow(ctx, conversation._id, user._id, authUserId, args.note)) added.push(user._id);
   }
   const removed: Id<"users">[] = [];
   for (const ownerId of current) {
@@ -223,7 +253,7 @@ export async function performSetSessionOwners(
 export async function performAddSessionOwner(
   ctx: { db: any },
   authUserId: Id<"users">,
-  args: { session_id: string; owner: string },
+  args: { session_id: string; owner: string; note?: string },
 ): Promise<OwnerMutationResult> {
   const conversation = await resolveOwnableConversation(ctx, authUserId, args.session_id);
   const shortId = conversation.short_id ?? conversation._id.toString().slice(0, 7);
@@ -232,7 +262,7 @@ export async function performAddSessionOwner(
   assertHumanOwner(user);
 
   const added: Id<"users">[] = [];
-  if (await addSessionOwnerRow(ctx, conversation._id, user._id, authUserId)) added.push(user._id);
+  if (await addSessionOwnerRow(ctx, conversation._id, user._id, authUserId, args.note)) added.push(user._id);
   await syncPrimaryOwnerCache(ctx, conversation._id);
 
   return {
@@ -361,6 +391,7 @@ export const setSessionOwners = mutation({
   args: {
     session_id: SESSION_REF,
     owners: v.array(v.string()),
+    note: v.optional(v.string()),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -368,8 +399,9 @@ export const setSessionOwners = mutation({
     const result = await performSetSessionOwners(ctx, authUserId, {
       session_id: args.session_id,
       owners: args.owners,
+      note: args.note?.trim() || undefined,
     });
-    await notifySessionAssigned(ctx, result.conversation_id, result.added, authUserId);
+    await notifySessionAssigned(ctx, result.conversation_id, result.added, authUserId, args.note?.trim());
     return result;
   },
 });
@@ -379,6 +411,7 @@ export const addSessionOwner = mutation({
   args: {
     session_id: SESSION_REF,
     owner: v.optional(OWNER_REF), // default: claim for the caller
+    note: v.optional(v.string()), // optional handoff message shown to the assignee
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -386,9 +419,29 @@ export const addSessionOwner = mutation({
     const result = await performAddSessionOwner(ctx, authUserId, {
       session_id: args.session_id,
       owner: args.owner?.trim() || "me",
+      note: args.note?.trim() || undefined,
     });
-    await notifySessionAssigned(ctx, result.conversation_id, result.added, authUserId);
+    await notifySessionAssigned(ctx, result.conversation_id, result.added, authUserId, args.note?.trim());
     return result;
+  },
+});
+
+// The assignee acknowledges a handoff: stamps seen_at on THEIR OWN owner row,
+// which retires the "assigned to you" banner and the inbox row's assigned ping.
+// Idempotent; a no-op when the caller isn't an owner.
+export const ackSessionAssignment = mutation({
+  args: { session_id: SESSION_REF, api_token: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const authUserId = await requireAuth(ctx, args.api_token);
+    const conversation = await findOwnableConversation(ctx, authUserId, args.session_id);
+    if (!conversation) return { ok: false as const };
+    const row = await ctx.db
+      .query("session_owners")
+      .withIndex("by_conversation_user", (q: any) =>
+        q.eq("conversation_id", conversation._id).eq("user_id", authUserId))
+      .first();
+    if (row && !row.seen_at) await ctx.db.patch(row._id, { seen_at: Date.now() });
+    return { ok: true as const };
   },
 });
 

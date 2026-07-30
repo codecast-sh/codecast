@@ -105,6 +105,8 @@ export interface Config {
   visual_version?: string;
   orch_enabled?: boolean;
   orch_version?: string;
+  publish_enabled?: boolean;
+  publish_version?: string;
 
   // --- Cross-machine project-path resolution (daemon.ts) ---
   // Explicit project-path overrides for resuming sessions/forks recorded on another
