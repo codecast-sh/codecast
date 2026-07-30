@@ -38,6 +38,7 @@ type StandardViewEnvelope =
       grantKeys: readonly string[];
       viewRevision: number;
       coverage?: SourceCoverage;
+      commandIds?: readonly string[];
     };
 
 type GrantedResult<Query extends FunctionReference<"query">> =
@@ -59,6 +60,23 @@ export type QueryViewDefinition<
   entityKey(row: TRow): string;
   /** Stored value per row; the row itself when omitted. */
   projection?(row: TRow): unknown;
+  /**
+   * "stamped-log-ts" derives coverage from the delivering transition's log
+   * timestamp (a true result version) with the envelope's echoed command ids
+   * as the write-reconciliation proof. Default trusts the envelope's own
+   * view-revision watermark.
+   */
+  coverageSource?: "decoded" | "stamped-log-ts";
+  /** Predecessor contract id this contract migrates the durable view from. */
+  supersedes?: string;
+  /**
+   * The contract id the SERVER envelope identifies as, when it differs from
+   * this contract's id. A stamped-log-ts contract can satisfy a deeper
+   * guarantee than the envelope it consumes (the stamp adds the version), so
+   * a v3 contract may declare it consumes the v2 envelope. Results whose
+   * envelope id matches neither are still rejected at apply.
+   */
+  envelopeContractId?: string;
 };
 
 export type QueryViewContract<
@@ -88,23 +106,35 @@ export function defineQueryView<
     id: definition.id,
     storage: "projection",
     key: definition.key,
+    coverageSource: definition.coverageSource,
+    supersedes: definition.supersedes,
     decode(result: FunctionReturnType<Query>): CompleteViewContractResult<TRow> {
       const envelope = result as StandardViewEnvelope;
+      const expectedEnvelopeId = definition.envelopeContractId ?? definition.id;
+      // A mismatched envelope keeps its own id and fails the apply-time
+      // identity check loudly; a matched one is re-identified as this
+      // contract, which declares how the envelope satisfies it.
+      const contractId = envelope.contractId === expectedEnvelopeId
+        ? definition.id
+        : envelope.contractId;
       if (envelope.access !== "granted") {
-        return envelope as CompleteViewContractResult<TRow>;
+        return { ...envelope, contractId } as CompleteViewContractResult<TRow>;
       }
       return {
-        contractId: envelope.contractId,
+        contractId,
         viewKey: envelope.viewKey,
         access: "granted",
         grantKeys: envelope.grantKeys,
         // Servers deployed before coverage joined the granted envelope still
         // prove the same view-revision; derive the identical coverage locally.
+        // A stamped-log-ts contract ignores this in favor of the transition
+        // timestamp supplied at apply time.
         coverage: envelope.coverage ?? {
           kind: "view-revision",
           revision: String(envelope.viewRevision),
           revisionOrder: envelope.viewRevision,
         },
+        echoedCommandIds: envelope.commandIds,
         rows: definition.rows(result as GrantedResult<Query>),
       };
     },

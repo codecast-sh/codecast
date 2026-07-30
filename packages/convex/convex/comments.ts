@@ -11,6 +11,7 @@ import {
 } from "./lib/access";
 import { requireUser } from "./lib/auth";
 import {
+  echoedCommandIdsForView,
   readLocalViewRevision,
   runLocalCommand,
 } from "./localFirstCommands";
@@ -22,6 +23,7 @@ import {
 } from "./smallViewContracts";
 import {
   COMMENTS_VIEW_CONTRACT_ID,
+  commentsCommandIdCoverage,
   commentsCoverageTarget,
   commentsGrantKey,
   commentsViewKey,
@@ -244,14 +246,17 @@ export const getCommentsV2 = query({
       return forbiddenView(identity, [grantKey]);
     }
 
-    const [comments, viewRevision] = await Promise.all([
+    const [comments, viewRevision, commandIds] = await Promise.all([
       ctx.db
         .query("comments")
         .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
         .collect(),
       readLocalViewRevision(ctx, conversation.user_id, identity.contractId, identity.viewKey),
+      // Caller-scoped write-reconciliation echo for stamped-log-ts clients:
+      // same snapshot as the rows, so inclusion proves the write is in them.
+      echoedCommandIdsForView(ctx, userId, identity.viewKey),
     ]);
-    return grantedView(identity, { grantKeys: [grantKey], viewRevision }, {
+    return grantedView(identity, { grantKeys: [grantKey], viewRevision, commandIds }, {
       comments: await projectComments(ctx, comments),
     });
   },
@@ -490,6 +495,7 @@ export const addCommentV2 = mutation({
         status: "acknowledged" as const,
         result: { commentId: executed.commentId, clientId: args.client_id },
         coverageViews: executed.coverageTarget ? [executed.coverageTarget] : [],
+        coverageCommandIds: [commentsCommandIdCoverage(args.conversation_id)],
       };
     });
   },
@@ -741,6 +747,7 @@ export const updateCommentV2 = mutation({
           // Acknowledgement must carry positive coverage even when the
           // authoritative content already equals the optimistic intent.
           coverageViews: [commentsCoverageTarget(validated.value.conversation)],
+          coverageCommandIds: [commentsCommandIdCoverage(args.conversation_id)],
         };
       }
       const transition = await runCommentViewTransition(
@@ -758,6 +765,7 @@ export const updateCommentV2 = mutation({
           clientId: validated.value.comment.client_id,
         },
         coverageViews: transition.coverageTarget ? [transition.coverageTarget] : [],
+        coverageCommandIds: [commentsCommandIdCoverage(args.conversation_id)],
       };
     });
   },
@@ -792,6 +800,7 @@ export const deleteCommentV2 = mutation({
           clientId: validated.value.comment.client_id,
         },
         coverageViews: transition.coverageTarget ? [transition.coverageTarget] : [],
+        coverageCommandIds: [commentsCommandIdCoverage(args.conversation_id)],
       };
     });
   },
@@ -1109,6 +1118,7 @@ export const askAgentInThreadV2 = mutation({
           clientId: args.client_id,
         },
         coverageViews: executed.coverageTarget ? [executed.coverageTarget] : [],
+        coverageCommandIds: [commentsCommandIdCoverage(args.conversation_id)],
       };
     });
   },
