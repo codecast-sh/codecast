@@ -31,10 +31,19 @@ export function useSyncBuckets() {
   useEffect(() => {
     if (mode !== "cutover" || view.status !== "granted") return;
     const values = viewRows.map((row) => row.value);
-    syncTable("buckets", values.filter((v) => v.kind === "bucket").map((v) => v.row));
+    // The durable view is COMPLETE for the whole personal catalog, but both
+    // registry entries are isDelta (upsert-only), so absent rows — a bucket
+    // deleted or an assignment cleared on another device — would otherwise
+    // stay in the store and IDB forever (matrix VIEW-02). Prune everything
+    // the complete view no longer contains; optimistic pending stubs are
+    // protected by applySyncTable itself.
+    syncTable("buckets", values.filter((v) => v.kind === "bucket").map((v) => v.row), {
+      pruneAbsentScope: () => true,
+    });
     syncTable(
       "bucketAssignments",
       values.filter((v) => v.kind === "assignment").map((v) => v.row),
+      { pruneAbsentScope: () => true },
     );
   }, [mode, view.status, viewRows, syncTable]);
 
