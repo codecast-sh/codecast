@@ -1,4 +1,5 @@
 import { useConvexAuth, useMutation, useQuery } from "convex/react";
+import { useAuthActions } from "@convex-dev/auth/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useState, Suspense, useRef } from "react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
@@ -16,19 +17,22 @@ function CliAuthContent() {
   const depositCliAuth = useMutation(api.cliAuth.deposit);
   const searchParams = useSearchParams();
   const router = useRouter();
+  const { signIn } = useAuthActions();
   const [status, setStatus] = useState<"waiting" | "sending" | "success" | "error">("waiting");
   const [viaRelay, setViaRelay] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string>("");
-  const hasStartedAuth = useRef(false);
+  const oauthStarted = useRef(false);
 
   const nonce = searchParams.get("nonce");
   const port = searchParams.get("port");
   // The desktop app runs this same flow with mode=desktop: no localhost
-  // listener to call back (delivery is always the server relay, which the app
-  // watches via cliAuth.pendingDeposit), and delivery waits for an explicit
-  // Authorize click — an emailed link must not be able to sign a stranger's
-  // device in just by being opened.
+  // listener to call back — delivery is always the server relay, which the
+  // app watches via cliAuth.pendingDeposit.
   const isDesktopMode = searchParams.get("mode") === "desktop";
+  // Which provider button was clicked in the desktop app. When this browser
+  // has no session yet, we jump straight into that provider's OAuth instead
+  // of parking the user on the login page.
+  const provider = searchParams.get("provider");
   const device = searchParams.get("device") || (isDesktopMode ? "Codecast Desktop" : "CLI Device");
   const deviceName = decodeURIComponent(device);
 
@@ -115,12 +119,24 @@ function CliAuthContent() {
     }
 
     if (!isAuthenticated) {
+      const returnPath = `/auth/cli?${new URLSearchParams(searchParams.toString()).toString()}`;
+      // Desktop provider hint: run that provider's OAuth right here and come
+      // back to this page authed — the user already said which account kind
+      // they want, so the login page would be a pointless stop.
+      if ((provider === "apple" || provider === "github") && !oauthStarted.current) {
+        oauthStarted.current = true;
+        signIn(provider, { redirectTo: returnPath }).catch(() => {
+          router.push(`/login?return_to=${encodeURIComponent(returnPath)}`);
+        });
+        return;
+      }
+      if (oauthStarted.current) {
+        return; // OAuth redirect in flight
+      }
       // Most people running `cast auth` already have an account — send them to
       // sign-in (which links to sign-up), not the other way around. /login
       // preserves return_to and bounces back here once the session exists.
-      const params = new URLSearchParams(searchParams.toString());
-      const returnUrl = encodeURIComponent(`/auth/cli?${params.toString()}`);
-      router.push(`/login?return_to=${returnUrl}`);
+      router.push(`/login?return_to=${encodeURIComponent(returnPath)}`);
       return;
     }
 
@@ -134,42 +150,42 @@ function CliAuthContent() {
       return;
     }
 
-    // Desktop waits for the explicit Authorize click below.
-    if (isDesktopMode) {
-      return;
-    }
-
-    if (hasStartedAuth.current) {
-      return;
-    }
-    hasStartedAuth.current = true;
-
-    deliverAuth();
-  }, [isAuthenticated, isLoading, currentUser, nonce, port, device, router, createToken, depositCliAuth]);
+    // Both modes wait for the explicit Authorize click below — an emailed
+    // link must not be able to connect a stranger's device just by being
+    // opened in a signed-in browser.
+  }, [isAuthenticated, isLoading, currentUser, nonce, port, device, provider, router, signIn]);
 
   if (isLoading || !isAuthenticated) {
     return (
       <div className="min-h-screen bg-sol-bg flex items-center justify-center p-4">
         <div className="max-w-md w-full bg-sol-bg-alt/50 rounded-lg p-8 border border-sol-border">
-          <AppLoader className="min-h-0 bg-transparent" size={32} label="Redirecting to login..." />
+          <AppLoader
+            className="min-h-0 bg-transparent"
+            size={32}
+            label={
+              provider === "apple" || provider === "github"
+                ? `Continuing to ${provider === "apple" ? "Apple" : "GitHub"} sign-in...`
+                : "Redirecting to login..."
+            }
+          />
         </div>
       </div>
     );
   }
 
-  // Desktop: the browser holds the session; signing the app in is an explicit
-  // grant, so it gets a real consent step showing which account is about to be
-  // handed over — not an auto-fire on page load.
-  if (isDesktopMode && status === "waiting") {
+  // The browser holds the session; connecting a device is an explicit grant,
+  // so both modes get a real consent step showing which account is about to
+  // be handed over — never an auto-fire on page load.
+  if (status === "waiting") {
     return (
       <div className="min-h-screen bg-sol-bg flex items-center justify-center p-4">
         <div className="max-w-md w-full bg-sol-bg-alt/50 rounded-lg p-8 border border-sol-border">
           <div className="text-center">
             <h1 className="text-2xl font-semibold text-sol-text mb-2">
-              Sign in to the desktop app
+              {isDesktopMode ? "Sign in to the desktop app" : "Connect your terminal"}
             </h1>
             <p className="text-sol-text-muted mb-6">
-              {deviceName} will be signed in as{" "}
+              {deviceName} will be {isDesktopMode ? "signed in" : "connected"} as{" "}
               <span className="text-sol-text">{currentUser?.email ?? "your account"}</span>.
             </p>
             <button
@@ -179,7 +195,7 @@ function CliAuthContent() {
               Authorize
             </button>
             <p className="text-sol-text-dim text-sm mt-4">
-              Didn&apos;t request this from the Codecast app? Close this page.
+              Didn&apos;t request this from {isDesktopMode ? "the Codecast app" : "cast auth"}? Close this page.
             </p>
           </div>
         </div>
@@ -187,7 +203,7 @@ function CliAuthContent() {
     );
   }
 
-  if (status === "waiting" || status === "sending") {
+  if (status === "sending") {
     return (
       <div className="min-h-screen bg-sol-bg flex items-center justify-center p-4">
         <div className="max-w-md w-full bg-sol-bg-alt/50 rounded-lg p-8 border border-sol-border">
