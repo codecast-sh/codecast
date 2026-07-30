@@ -1,7 +1,7 @@
-# DRAFT — Upstream Convex feature request (for Samvit's review; DO NOT FILE as-is)
+# Upstream Convex feature request — FILED
 
-**Where to file:** github.com/get-convex/convex-js (issues) — or the DX Discord first, maintainers often prefer discussing API-shape asks there.
-**Status:** draft only; nothing has been filed anywhere.
+**Filed:** https://github.com/get-convex/convex-js/issues/182 (2026-07-30, approved by Samvit)
+**Status:** awaiting maintainer response; the log-ts write-path migration (see the prototype plan) unblocks when it resolves.
 
 ---
 
