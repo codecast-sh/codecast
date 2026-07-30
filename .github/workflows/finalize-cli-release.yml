@@ -1,0 +1,798 @@
+name: Finalize pre-uploaded CLI release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Semver to publish
+        required: true
+        type: string
+      previous_version:
+        description: Exact currently published predecessor
+        required: true
+        type: string
+      source_commit:
+        description: Full 40-character commit used to build the binaries
+        required: true
+        type: string
+      artifact_manifest:
+        description: Builder-produced JSON with version, source_commit, built, and exact artifact hashes/sizes
+        required: true
+        type: string
+      uploaded_after:
+        description: Ignore mutable staging objects older than this ISO-8601 timestamp
+        required: true
+        type: string
+      wait_minutes:
+        description: Maximum time to wait for the background upload
+        required: true
+        default: "180"
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cli-release
+  cancel-in-progress: false
+
+env:
+  R2_BUCKET: codecast
+  RELEASE_VERSION: ${{ inputs.version }}
+  PREVIOUS_VERSION: ${{ inputs.previous_version }}
+  SOURCE_COMMIT: ${{ inputs.source_commit }}
+  EXPECTED_ARTIFACTS_JSON: ${{ inputs.artifact_manifest }}
+  UPLOADED_AFTER: ${{ inputs.uploaded_after }}
+  WAIT_MINUTES: ${{ inputs.wait_minutes }}
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Validate immutable release identity and source
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifacts=(
+            codecast-darwin-arm64
+            codecast-darwin-x64
+            codecast-linux-arm64
+            codecast-linux-x64
+            codecast-windows-x64.exe
+          )
+
+          if [[ ! "$RELEASE_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] ||
+            [[ ! "$PREVIOUS_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::versions must be canonical three-part semvers"
+            exit 1
+          fi
+          if [[ ! "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::source_commit must be a full lowercase 40-character SHA"
+            exit 1
+          fi
+          if [[ ! "$WAIT_MINUTES" =~ ^[0-9]+$ ]]; then
+            echo "::error::wait_minutes must contain decimal digits only"
+            exit 1
+          fi
+          wait_decimal=$((10#$WAIT_MINUTES))
+          if (( wait_decimal < 1 || wait_decimal > 300 )); then
+            echo "::error::wait_minutes must be between 1 and 300"
+            exit 1
+          fi
+          date -u -d "$UPLOADED_AFTER" +%s >/dev/null
+
+          IFS=. read -r previous_major previous_minor previous_patch <<<"$PREVIOUS_VERSION"
+          IFS=. read -r release_major release_minor release_patch <<<"$RELEASE_VERSION"
+          if (( release_major != previous_major ||
+            release_minor != previous_minor ||
+            release_patch != previous_patch + 1 )); then
+            echo "::error::release version must be exactly one patch after previous_version"
+            exit 1
+          fi
+
+          git fetch origin main --tags
+          git checkout --detach origin/main
+          resolved_source=$(git rev-parse "${SOURCE_COMMIT}^{commit}")
+          if [[ "$resolved_source" != "$SOURCE_COMMIT" ]]; then
+            echo "::error::source_commit did not resolve to itself"
+            exit 1
+          fi
+          git merge-base --is-ancestor "$SOURCE_COMMIT" HEAD
+
+          printf '%s' "$EXPECTED_ARTIFACTS_JSON" | jq -S . > /tmp/release-expected.json
+          jq -e \
+            --arg version "$RELEASE_VERSION" \
+            --arg source "$SOURCE_COMMIT" \
+            '.version == $version and
+             .source_commit == $source and
+             (.built | type == "string" and length > 0) and
+             (.artifacts | type == "object")' \
+            /tmp/release-expected.json >/dev/null
+          if [[ "$(jq -r '.artifacts | keys | length' /tmp/release-expected.json)" != "5" ]]; then
+            echo "::error::artifact manifest must contain exactly five entries"
+            exit 1
+          fi
+          for artifact in "${artifacts[@]}"; do
+            jq -e \
+              --arg artifact "$artifact" \
+              '.artifacts[$artifact].sha256 |
+               type == "string" and test("^[0-9a-f]{64}$")' \
+              /tmp/release-expected.json >/dev/null
+            jq -e \
+              --arg artifact "$artifact" \
+              '.artifacts[$artifact].size |
+               type == "number" and . > 1000000 and floor == .' \
+              /tmp/release-expected.json >/dev/null
+          done
+          expected_keys=$(jq -r '.artifacts | keys[]' /tmp/release-expected.json)
+          actual_keys=$(printf '%s\n' "${artifacts[@]}" | sort)
+          if [[ "$(sort <<<"$expected_keys")" != "$actual_keys" ]]; then
+            echo "::error::artifact manifest contains an unexpected filename"
+            exit 1
+          fi
+
+          git show "$SOURCE_COMMIT:packages/cli/package.json" |
+            jq -S 'del(.version)' > /tmp/source-cli-package.json
+          jq -S 'del(.version)' packages/cli/package.json > /tmp/head-cli-package.json
+          diff -u /tmp/source-cli-package.json /tmp/head-cli-package.json
+          source_changes=$(git diff --name-only "$SOURCE_COMMIT"..HEAD -- \
+            packages/cli packages/shared bun.lock package.json |
+            grep -v '^packages/cli/package.json$' || true)
+          if [[ -n "$source_changes" ]]; then
+            echo "::error::CLI/shared build inputs changed after the binary build commit"
+            printf '%s\n' "$source_changes"
+            exit 1
+          fi
+
+          current=$(jq -r '.version' packages/cli/package.json)
+          if [[ "$current" != "$PREVIOUS_VERSION" && "$current" != "$RELEASE_VERSION" ]]; then
+            echo "::error::main package version is neither the predecessor nor the recovery target"
+            exit 1
+          fi
+
+          public_latest=$(curl -fsSL --retry 5 --retry-all-errors \
+            --connect-timeout 20 --max-time 120 \
+            -H 'Cache-Control: no-cache' \
+            "https://dl.codecast.sh/latest.json")
+          public_version=$(jq -r '.version' <<<"$public_latest")
+          if [[ "$public_version" != "$PREVIOUS_VERSION" &&
+            "$public_version" != "$RELEASE_VERSION" ]]; then
+            echo "::error::public latest.json is neither the predecessor nor the recovery target"
+            exit 1
+          fi
+
+      - name: Build exact non-macOS fallbacks while signed artifacts upload
+        shell: bash
+        run: |
+          set -euo pipefail
+          build_root=/tmp/cli-fallback-build
+          output_root=/tmp/cli-fallback
+          git worktree add --detach "$build_root" "$SOURCE_COMMIT"
+          jq --arg version "$RELEASE_VERSION" '.version = $version' \
+            "$build_root/packages/cli/package.json" > /tmp/fallback-cli-package.json
+          mv /tmp/fallback-cli-package.json "$build_root/packages/cli/package.json"
+          (
+            cd "$build_root"
+            bun install --frozen-lockfile
+          )
+          mkdir -p "$output_root"
+          (
+            cd "$build_root/packages/cli"
+            bash scripts/guard-no-src-shadow.sh
+            for target in linux-arm64 linux-x64 windows-x64; do
+              if [[ "$target" == "windows-x64" ]]; then
+                artifact="codecast-$target.exe"
+              else
+                artifact="codecast-$target"
+              fi
+              bun build src/index.ts \
+                --compile \
+                --target="bun-$target" \
+                --minify \
+                --sourcemap \
+                --outfile="$output_root/$artifact"
+            done
+          )
+
+          : > /tmp/cli-fallback-ready
+          for artifact in \
+            codecast-linux-arm64 \
+            codecast-linux-x64 \
+            codecast-windows-x64.exe; do
+            expected_sha=$(jq -r \
+              --arg artifact "$artifact" \
+              '.artifacts[$artifact].sha256' \
+              /tmp/release-expected.json)
+            expected_bytes=$(jq -r \
+              --arg artifact "$artifact" \
+              '.artifacts[$artifact].size' \
+              /tmp/release-expected.json)
+            actual_sha=$(sha256sum "$output_root/$artifact" | awk '{print $1}')
+            actual_bytes=$(stat -c %s "$output_root/$artifact")
+            if [[ "$actual_sha" == "$expected_sha" && "$actual_bytes" == "$expected_bytes" ]]; then
+              echo "$artifact" >> /tmp/cli-fallback-ready
+              echo "$artifact reproduced byte-for-byte on the release runner"
+            else
+              echo "::warning::$artifact was not byte-identical; waiting for the builder upload"
+            fi
+          done
+
+      - name: Wait for all five mutable staging objects
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifacts=(
+            codecast-darwin-arm64
+            codecast-darwin-x64
+            codecast-linux-arm64
+            codecast-linux-x64
+            codecast-windows-x64.exe
+          )
+          aws s3api head-object \
+            --bucket "$R2_BUCKET" \
+            --key latest.json \
+            --endpoint-url "$R2_ENDPOINT" >/dev/null
+
+          cutoff_epoch=$(date -u -d "$UPLOADED_AFTER" +%s)
+          wait_decimal=$((10#$WAIT_MINUTES))
+          deadline=$(( $(date +%s) + wait_decimal * 60 ))
+
+          while true; do
+            all_ready=true
+            : > /tmp/cli-object-state.txt
+            : > /tmp/cli-object-snapshot.tsv
+            for artifact in "${artifacts[@]}"; do
+              if grep -Fxq "$artifact" /tmp/cli-fallback-ready; then
+                expected_bytes=$(jq -r \
+                  --arg artifact "$artifact" \
+                  '.artifacts[$artifact].size' \
+                  /tmp/release-expected.json)
+                printf '%s ready from byte-identical runner build bytes=%s\n' \
+                  "$artifact" "$expected_bytes" \
+                  >> /tmp/cli-object-state.txt
+                printf '%s\tfallback\tfallback\tfallback\t%s\n' \
+                  "$artifact" "$expected_bytes" \
+                  >> /tmp/cli-object-snapshot.tsv
+                continue
+              fi
+              metadata=$(aws s3api head-object \
+                --bucket "$R2_BUCKET" \
+                --key "$artifact" \
+                --endpoint-url "$R2_ENDPOINT")
+              modified=$(jq -r '.LastModified' <<<"$metadata")
+              bytes=$(jq -r '.ContentLength' <<<"$metadata")
+              etag=$(jq -r '.ETag' <<<"$metadata")
+              expected_bytes=$(jq -r \
+                --arg artifact "$artifact" \
+                '.artifacts[$artifact].size' \
+                /tmp/release-expected.json)
+              modified_epoch=$(date -u -d "$modified" +%s)
+              if (( modified_epoch <= cutoff_epoch )) || [[ "$bytes" != "$expected_bytes" ]]; then
+                printf '%s waiting modified=%s bytes=%s expected=%s\n' \
+                  "$artifact" "$modified" "$bytes" "$expected_bytes" \
+                  >> /tmp/cli-object-state.txt
+                all_ready=false
+              else
+                printf '%s ready modified=%s bytes=%s\n' \
+                  "$artifact" "$modified" "$bytes" \
+                  >> /tmp/cli-object-state.txt
+              fi
+              printf '%s\tstaging\t%s\t%s\t%s\n' \
+                "$artifact" "$etag" "$modified" "$bytes" \
+                >> /tmp/cli-object-snapshot.tsv
+            done
+            cat /tmp/cli-object-state.txt
+            if [[ "$all_ready" == true ]]; then
+              break
+            fi
+            if (( $(date +%s) >= deadline )); then
+              echo "::error::timed out waiting for the background R2 upload"
+              exit 1
+            fi
+            sleep 60
+          done
+
+      - name: Download and validate the builder artifacts
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifacts=(
+            codecast-darwin-arm64
+            codecast-darwin-x64
+            codecast-linux-arm64
+            codecast-linux-x64
+            codecast-windows-x64.exe
+          )
+          mkdir -p /tmp/cli-release
+          for artifact in "${artifacts[@]}"; do
+            if grep -Fxq "$artifact" /tmp/cli-fallback-ready; then
+              cp "/tmp/cli-fallback/$artifact" "/tmp/cli-release/$artifact"
+            else
+              aws s3 cp "s3://$R2_BUCKET/$artifact" "/tmp/cli-release/$artifact" \
+                --endpoint-url "$R2_ENDPOINT" \
+                --no-progress
+            fi
+            expected_sha=$(jq -r \
+              --arg artifact "$artifact" \
+              '.artifacts[$artifact].sha256' \
+              /tmp/release-expected.json)
+            expected_bytes=$(jq -r \
+              --arg artifact "$artifact" \
+              '.artifacts[$artifact].size' \
+              /tmp/release-expected.json)
+            actual_sha=$(sha256sum "/tmp/cli-release/$artifact" | awk '{print $1}')
+            actual_bytes=$(stat -c %s "/tmp/cli-release/$artifact")
+            if [[ "$actual_sha" != "$expected_sha" || "$actual_bytes" != "$expected_bytes" ]]; then
+              echo "::error::$artifact does not match the builder manifest"
+              exit 1
+            fi
+          done
+
+          file /tmp/cli-release/codecast-darwin-arm64 | grep -F 'Mach-O 64-bit executable arm64'
+          file /tmp/cli-release/codecast-darwin-x64 | grep -F 'Mach-O 64-bit executable x86_64'
+          file /tmp/cli-release/codecast-linux-arm64 | grep -E 'ELF 64-bit.*(ARM aarch64|aarch64)'
+          file /tmp/cli-release/codecast-linux-x64 | grep -E 'ELF 64-bit.*(x86-64|x86_64)'
+          file /tmp/cli-release/codecast-windows-x64.exe | grep -E 'PE32\\+ executable.*x86-64'
+          chmod +x /tmp/cli-release/codecast-linux-x64
+          actual_version=$(/tmp/cli-release/codecast-linux-x64 --version | tr -d '[:space:]')
+          if [[ "$actual_version" != "$RELEASE_VERSION" ]]; then
+            echo "::error::linux-x64 reports version $actual_version, expected $RELEASE_VERSION"
+            exit 1
+          fi
+
+          while IFS=$'\t' read -r artifact source expected_etag expected_modified expected_bytes; do
+            [[ "$source" == "fallback" ]] && continue
+            metadata=$(aws s3api head-object \
+              --bucket "$R2_BUCKET" \
+              --key "$artifact" \
+              --endpoint-url "$R2_ENDPOINT")
+            actual_etag=$(jq -r '.ETag' <<<"$metadata")
+            actual_modified=$(jq -r '.LastModified' <<<"$metadata")
+            actual_bytes=$(jq -r '.ContentLength' <<<"$metadata")
+            if [[ "$actual_etag" != "$expected_etag" ||
+              "$actual_modified" != "$expected_modified" ||
+              "$actual_bytes" != "$expected_bytes" ]]; then
+              echo "::error::$artifact changed while the release snapshot was downloading"
+              exit 1
+            fi
+          done < /tmp/cli-object-snapshot.tsv
+
+      - name: Stage immutable release objects
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifacts=(
+            codecast-darwin-arm64
+            codecast-darwin-x64
+            codecast-linux-arm64
+            codecast-linux-x64
+            codecast-windows-x64.exe
+          )
+          prefix="cli/releases/v$RELEASE_VERSION/$SOURCE_COMMIT"
+          echo "$prefix" > /tmp/cli-release-prefix
+          cp /tmp/release-expected.json /tmp/cli-release/release.json
+
+          for artifact in "${artifacts[@]}" release.json; do
+            local_file="/tmp/cli-release/$artifact"
+            expected_sha=$(sha256sum "$local_file" | awk '{print $1}')
+            expected_bytes=$(stat -c %s "$local_file")
+            key="$prefix/$artifact"
+            if metadata=$(aws s3api head-object \
+              --bucket "$R2_BUCKET" \
+              --key "$key" \
+              --endpoint-url "$R2_ENDPOINT" 2>/tmp/immutable-head-error); then
+              actual_sha=$(jq -r '.Metadata.sha256 // ""' <<<"$metadata")
+              actual_source=$(jq -r '.Metadata["source-sha"] // ""' <<<"$metadata")
+              actual_bytes=$(jq -r '.ContentLength' <<<"$metadata")
+              if [[ "$actual_sha" != "$expected_sha" ||
+                "$actual_source" != "$SOURCE_COMMIT" ||
+                "$actual_bytes" != "$expected_bytes" ]]; then
+                echo "::error::immutable object already exists with a different identity: $key"
+                exit 1
+              fi
+              continue
+            fi
+            if ! grep -Eq '(404|Not Found|NoSuchKey)' /tmp/immutable-head-error; then
+              cat /tmp/immutable-head-error >&2
+              echo "::error::could not safely determine whether immutable object exists: $key"
+              exit 1
+            fi
+            aws s3 cp "$local_file" "s3://$R2_BUCKET/$key" \
+              --endpoint-url "$R2_ENDPOINT" \
+              --content-type application/octet-stream \
+              --cache-control "public, max-age=31536000, immutable" \
+              --metadata "sha256=$expected_sha,version=$RELEASE_VERSION,source-sha=$SOURCE_COMMIT" \
+              --no-progress
+          done
+
+      - name: Verify immutable public release bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifacts=(
+            codecast-darwin-arm64
+            codecast-darwin-x64
+            codecast-linux-arm64
+            codecast-linux-x64
+            codecast-windows-x64.exe
+            release.json
+          )
+          prefix=$(cat /tmp/cli-release-prefix)
+          mkdir -p /tmp/cli-public
+          for artifact in "${artifacts[@]}"; do
+            expected=$(sha256sum "/tmp/cli-release/$artifact" | awk '{print $1}')
+            matched=false
+            for attempt in $(seq 1 10); do
+              if curl -fsSL \
+                --retry 3 --retry-all-errors \
+                --connect-timeout 20 --max-time 900 \
+                -H 'Cache-Control: no-cache' \
+                "https://dl.codecast.sh/$prefix/$artifact" \
+                -o "/tmp/cli-public/$artifact"; then
+                actual=$(sha256sum "/tmp/cli-public/$artifact" | awk '{print $1}')
+                if [[ "$actual" == "$expected" ]]; then
+                  matched=true
+                  break
+                fi
+              fi
+              sleep 15
+            done
+            if [[ "$matched" != true ]]; then
+              echo "::error::$artifact immutable public checksum did not converge"
+              exit 1
+            fi
+          done
+
+      - name: Revalidate main and atomically publish version commit and tag
+        id: version_commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main --tags
+          git checkout main
+          git pull --ff-only origin main
+          git merge-base --is-ancestor "$SOURCE_COMMIT" HEAD
+
+          git show "$SOURCE_COMMIT:packages/cli/package.json" |
+            jq -S 'del(.version)' > /tmp/source-cli-package.json
+          jq -S 'del(.version)' packages/cli/package.json > /tmp/head-cli-package.json
+          diff -u /tmp/source-cli-package.json /tmp/head-cli-package.json
+          source_changes=$(git diff --name-only "$SOURCE_COMMIT"..HEAD -- \
+            packages/cli packages/shared bun.lock package.json |
+            grep -v '^packages/cli/package.json$' || true)
+          if [[ -n "$source_changes" ]]; then
+            echo "::error::CLI/shared build inputs changed while the release was staging"
+            printf '%s\n' "$source_changes"
+            exit 1
+          fi
+
+          current=$(jq -r '.version' packages/cli/package.json)
+          created_commit=false
+          if [[ "$current" == "$PREVIOUS_VERSION" ]]; then
+            jq --arg version "$RELEASE_VERSION" '.version = $version' \
+              packages/cli/package.json > /tmp/cli-package.json
+            mv /tmp/cli-package.json packages/cli/package.json
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add packages/cli/package.json
+            git commit -m "chore(cli): bump version to $RELEASE_VERSION"
+            release_sha=$(git rev-parse HEAD)
+            created_commit=true
+          elif [[ "$current" == "$RELEASE_VERSION" ]]; then
+            release_sha=""
+            while read -r candidate; do
+              candidate_version=$(git show "$candidate:packages/cli/package.json" | jq -r '.version')
+              parent_version=$(git show "$candidate^:packages/cli/package.json" 2>/dev/null |
+                jq -r '.version' 2>/dev/null || true)
+              if [[ "$candidate_version" == "$RELEASE_VERSION" &&
+                "$parent_version" != "$RELEASE_VERSION" ]]; then
+                release_sha="$candidate"
+                break
+              fi
+            done < <(git rev-list --reverse "$SOURCE_COMMIT"..HEAD -- packages/cli/package.json)
+            if [[ -z "$release_sha" ]]; then
+              echo "::error::could not identify the existing version bump commit"
+              exit 1
+            fi
+          else
+            echo "::error::main package version changed to unexpected $current"
+            exit 1
+          fi
+
+          tag="v$RELEASE_VERSION"
+          if git rev-parse "$tag^{commit}" >/dev/null 2>&1; then
+            tag_sha=$(git rev-parse "$tag^{commit}")
+            if [[ "$tag_sha" != "$release_sha" ]]; then
+              echo "::error::$tag points to $tag_sha instead of $release_sha"
+              exit 1
+            fi
+            if [[ "$created_commit" == true ]]; then
+              echo "::error::tag already existed before the new version commit"
+              exit 1
+            fi
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$tag" "$release_sha" -m "Codecast CLI $RELEASE_VERSION"
+          fi
+
+          if [[ "$created_commit" == true ]]; then
+            git push --atomic origin HEAD:main "refs/tags/$tag"
+          elif ! git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            git push origin "refs/tags/$tag"
+          fi
+          echo "release_sha=$release_sha" >> "$GITHUB_OUTPUT"
+          echo "Release commit: \`$release_sha\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create or verify GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifacts=(
+            codecast-darwin-arm64
+            codecast-darwin-x64
+            codecast-linux-arm64
+            codecast-linux-x64
+            codecast-windows-x64.exe
+          )
+          tag="v$RELEASE_VERSION"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            files=()
+            for artifact in "${artifacts[@]}"; do
+              files+=("/tmp/cli-release/$artifact")
+            done
+            gh release create "$tag" "${files[@]}" \
+              --verify-tag \
+              --generate-notes
+          fi
+
+          for artifact in "${artifacts[@]}"; do
+            expected_sha=$(sha256sum "/tmp/cli-release/$artifact" | awk '{print $1}')
+            expected_digest="sha256:$expected_sha"
+            asset_name=$(gh release view "$tag" --json assets --jq \
+              ".assets[] | select(.name == \"$artifact\") | .name")
+            if [[ -z "$asset_name" ]]; then
+              gh release upload "$tag" "/tmp/cli-release/$artifact"
+            fi
+
+            digest=""
+            for attempt in $(seq 1 10); do
+              digest=$(gh release view "$tag" --json assets --jq \
+                ".assets[] | select(.name == \"$artifact\") | .digest")
+              [[ -n "$digest" ]] && break
+              sleep 3
+            done
+            if [[ -z "$digest" ]]; then
+              verify_dir="/tmp/cli-github/$artifact"
+              mkdir -p "$verify_dir"
+              gh release download "$tag" \
+                --pattern "$artifact" \
+                --dir "$verify_dir"
+              downloaded_sha=$(sha256sum "$verify_dir/$artifact" | awk '{print $1}')
+              if [[ "$downloaded_sha" != "$expected_sha" ]]; then
+                echo "::error::$tag asset $artifact has unexpected downloaded bytes"
+                exit 1
+              fi
+              digest="$expected_digest"
+            fi
+            if [[ "$digest" != "$expected_digest" ]]; then
+              echo "::error::$tag asset $artifact has digest $digest, expected $expected_digest"
+              exit 1
+            fi
+          done
+
+          release_state=$(gh release view "$tag" --json isDraft,isPrerelease)
+          if [[ "$(jq -r '.isPrerelease' <<<"$release_state")" != "false" ]]; then
+            echo "::error::$tag unexpectedly exists as a prerelease"
+            exit 1
+          fi
+          if [[ "$(jq -r '.isDraft' <<<"$release_state")" == "true" ]]; then
+            gh release edit "$tag" --draft=false
+            release_state=$(gh release view "$tag" --json isDraft,isPrerelease)
+          fi
+          if [[ "$(jq -r '.isDraft' <<<"$release_state")" != "false" ]]; then
+            echo "::error::$tag did not converge to a published release"
+            exit 1
+          fi
+
+      - name: Refresh and verify legacy stable aliases
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifacts=(
+            codecast-darwin-arm64
+            codecast-darwin-x64
+            codecast-linux-arm64
+            codecast-linux-x64
+            codecast-windows-x64.exe
+          )
+          prefix=$(cat /tmp/cli-release-prefix)
+          mkdir -p /tmp/cli-alias
+          for artifact in "${artifacts[@]}"; do
+            expected=$(sha256sum "/tmp/cli-release/$artifact" | awk '{print $1}')
+            aws s3api copy-object \
+              --bucket "$R2_BUCKET" \
+              --key "$artifact" \
+              --copy-source "$R2_BUCKET/$prefix/$artifact" \
+              --metadata-directive REPLACE \
+              --metadata "sha256=$expected,version=$RELEASE_VERSION,source-sha=$SOURCE_COMMIT" \
+              --content-type application/octet-stream \
+              --cache-control "no-cache, no-store, must-revalidate" \
+              --endpoint-url "$R2_ENDPOINT" >/dev/null
+
+            matched=false
+            for attempt in $(seq 1 10); do
+              if curl -fsSL \
+                --retry 3 --retry-all-errors \
+                --connect-timeout 20 --max-time 900 \
+                -H 'Cache-Control: no-cache' \
+                "https://dl.codecast.sh/$artifact" \
+                -o "/tmp/cli-alias/$artifact"; then
+                actual=$(sha256sum "/tmp/cli-alias/$artifact" | awk '{print $1}')
+                if [[ "$actual" == "$expected" ]]; then
+                  matched=true
+                  break
+                fi
+              fi
+              sleep 15
+            done
+            if [[ "$matched" != true ]]; then
+              echo "::error::$artifact stable alias checksum did not converge"
+              exit 1
+            fi
+          done
+
+      - name: Publish latest.json last
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix=$(cat /tmp/cli-release-prefix)
+          aws s3 cp "s3://$R2_BUCKET/latest.json" /tmp/current-r2-latest.json \
+            --endpoint-url "$R2_ENDPOINT" \
+            --no-progress
+          current_public=$(curl -fsSL \
+            --retry 5 --retry-all-errors \
+            --connect-timeout 20 --max-time 120 \
+            -H 'Cache-Control: no-cache' \
+            "https://dl.codecast.sh/latest.json")
+          current_r2_version=$(jq -r '.version' /tmp/current-r2-latest.json)
+          current_public_version=$(jq -r '.version' <<<"$current_public")
+          if [[ "$current_public_version" != "$current_r2_version" ]]; then
+            echo "::error::public and authoritative latest.json versions disagree"
+            exit 1
+          fi
+          current_version="$current_r2_version"
+          if [[ "$current_version" == "$RELEASE_VERSION" ]]; then
+            released=$(jq -r '.released' /tmp/current-r2-latest.json)
+          elif [[ "$current_version" == "$PREVIOUS_VERSION" ]]; then
+            released=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          else
+            echo "::error::refusing to overwrite unexpected public version $current_version"
+            exit 1
+          fi
+
+          jq -n \
+            --arg version "$RELEASE_VERSION" \
+            --arg released "$released" \
+            --arg source "$SOURCE_COMMIT" \
+            --arg prefix "https://dl.codecast.sh/$prefix" \
+            --slurpfile expected /tmp/release-expected.json \
+            '{
+              version: $version,
+              released: $released,
+              sourceCommit: $source,
+              binaries: {
+                "darwin-arm64": {
+                  url: ($prefix + "/codecast-darwin-arm64"),
+                  sha256: $expected[0].artifacts["codecast-darwin-arm64"].sha256
+                },
+                "darwin-x64": {
+                  url: ($prefix + "/codecast-darwin-x64"),
+                  sha256: $expected[0].artifacts["codecast-darwin-x64"].sha256
+                },
+                "linux-arm64": {
+                  url: ($prefix + "/codecast-linux-arm64"),
+                  sha256: $expected[0].artifacts["codecast-linux-arm64"].sha256
+                },
+                "linux-x64": {
+                  url: ($prefix + "/codecast-linux-x64"),
+                  sha256: $expected[0].artifacts["codecast-linux-x64"].sha256
+                },
+                "windows-x64": {
+                  url: ($prefix + "/codecast-windows-x64.exe"),
+                  sha256: $expected[0].artifacts["codecast-windows-x64.exe"].sha256
+                }
+              }
+            }' > /tmp/cli-release/latest.json
+
+          aws s3 cp /tmp/cli-release/latest.json "s3://$R2_BUCKET/latest.json" \
+            --endpoint-url "$R2_ENDPOINT" \
+            --content-type application/json \
+            --cache-control "no-cache, no-store, must-revalidate" \
+            --metadata "version=$RELEASE_VERSION,source-sha=$SOURCE_COMMIT" \
+            --no-progress
+
+      - name: Verify the exact public manifest and referenced bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_manifest_sha=$(sha256sum /tmp/cli-release/latest.json | awk '{print $1}')
+          matched=false
+          for attempt in $(seq 1 20); do
+            if curl -fsSL \
+              --retry 3 --retry-all-errors \
+              --connect-timeout 20 --max-time 120 \
+              -H 'Cache-Control: no-cache' \
+              "https://dl.codecast.sh/latest.json" \
+              -o /tmp/cli-public/latest.json; then
+              actual_manifest_sha=$(sha256sum /tmp/cli-public/latest.json | awk '{print $1}')
+              if [[ "$actual_manifest_sha" == "$expected_manifest_sha" ]]; then
+                matched=true
+                break
+              fi
+            fi
+            sleep 15
+          done
+          if [[ "$matched" != true ]]; then
+            echo "::error::public latest.json did not converge to the exact release manifest"
+            exit 1
+          fi
+
+          for platform in darwin-arm64 darwin-x64 linux-arm64 linux-x64 windows-x64; do
+            url=$(jq -r --arg platform "$platform" '.binaries[$platform].url' \
+              /tmp/cli-public/latest.json)
+            expected=$(jq -r --arg platform "$platform" '.binaries[$platform].sha256' \
+              /tmp/cli-public/latest.json)
+            filename=$(basename "$url")
+            actual=$(sha256sum "/tmp/cli-public/$filename" | awk '{print $1}')
+            if [[ "$actual" != "$expected" ]]; then
+              echo "::error::$platform referenced checksum does not match verified public bytes"
+              exit 1
+            fi
+          done
+
+          {
+            echo "### CLI $RELEASE_VERSION release"
+            echo
+            echo "- Source: \`$SOURCE_COMMIT\`"
+            echo "- Manifest: \`$expected_manifest_sha\`"
+            echo "- Immutable and stable public URLs: verified"
+            echo "- GitHub release assets: verified"
+          } >> "$GITHUB_STEP_SUMMARY"
