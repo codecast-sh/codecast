@@ -18,6 +18,7 @@ import {
   isFencedPendingMessage,
   legacyConversationAcceptsDaemonWork,
 } from "./executionBindings";
+import { DEVICE_ONLINE_MS } from "./deviceRouting";
 
 export {
   MESSAGES_VIEW_CONTRACT_ID,
@@ -163,7 +164,12 @@ export function canDaemonSeePendingMessage(
     execution_protocol_state?: string;
   },
   userId: Id<"users">,
-  deviceId: string
+  deviceId: string,
+  // DPM-02: set only when the caller has PROVEN (via resolveOfflineOwnerTakeover)
+  // that the conversation's owning device is offline and this claimant is a
+  // registered local device. Without that proof the device gate fails closed on
+  // any owner mismatch, exactly as before.
+  allowOfflineOwnerTakeover?: boolean
 ): boolean {
   // Absence is the only legacy marker. Quiescing and fenced conversations are
   // never permissive fallbacks, and a stamped row can never leak back into the
@@ -175,20 +181,62 @@ export function canDaemonSeePendingMessage(
   // the owner's daemon. (For a self-send these are the same user.)
   if (pendingMessageOwnerId(message, conversation) !== userId.toString()) return false;
   if (message.status !== "pending") return false;
-  return !conversation.owner_device_id || conversation.owner_device_id === deviceId;
+  return !conversation.owner_device_id
+    || conversation.owner_device_id === deviceId
+    || allowOfflineOwnerTakeover === true;
+}
+
+async function getDeviceRow(
+  ctx: { db: any },
+  userId: Id<"users">,
+  deviceId: string
+): Promise<any | null> {
+  return await ctx.db
+    .query("devices")
+    .withIndex("by_user_device", (q: any) =>
+      q.eq("user_id", userId).eq("device_id", deviceId)
+    )
+    .first();
+}
+
+// DPM-02: may `claimantDeviceId` take over delivery for a conversation owned by
+// `ownerDeviceId`? Only when the owner device is OFFLINE (dead laptop, or the
+// same machine after a machine-key rotation minted a new device id — the old id
+// never heartbeats again) and the claimant is a REGISTERED, NON-REMOTE device of
+// the same user. Remote boxes only ever serve explicitly-moved sessions, and an
+// unregistered claimant proves nothing — both fail closed. A missing OWNER row
+// counts as offline: a device that never registered cannot be delivering.
+export async function resolveOfflineOwnerTakeover(
+  ctx: { db: any },
+  userId: Id<"users">,
+  claimantDeviceId: string,
+  ownerDeviceId: string | undefined,
+  now: number
+): Promise<boolean> {
+  if (!ownerDeviceId || ownerDeviceId === claimantDeviceId) return false;
+  const claimant = await getDeviceRow(ctx, userId, claimantDeviceId);
+  if (!claimant || claimant.is_remote) return false;
+  const owner = await getDeviceRow(ctx, userId, ownerDeviceId);
+  const ownerOnline = !!owner && now - owner.last_seen < DEVICE_ONLINE_MS;
+  return !ownerOnline;
 }
 
 export async function claimPendingMessageForDaemon(
   ctx: { db: any },
   messageId: Id<"pending_messages">,
   userId: Id<"users">,
-  deviceId: string
+  deviceId: string,
+  now: number = Date.now()
 ): Promise<any | null> {
   const message = await ctx.db.get(messageId);
   if (!message) return null;
   const conversation = await ctx.db.get(message.conversation_id);
-  if (!conversation || !canDaemonSeePendingMessage(message, conversation, userId, deviceId)) return null;
-  if (!conversation.owner_device_id) {
+  if (!conversation) return null;
+  const takeover = conversation.owner_device_id && conversation.owner_device_id !== deviceId
+    ? await resolveOfflineOwnerTakeover(ctx, userId, deviceId, conversation.owner_device_id, now)
+    : false;
+  if (!canDaemonSeePendingMessage(message, conversation, userId, deviceId, takeover)) return null;
+  if (!conversation.owner_device_id || takeover) {
     await ctx.db.patch(message.conversation_id, { owner_device_id: deviceId });
   }
   return message;
@@ -810,8 +858,8 @@ export async function clearHasPendingIfQuiet(
 export async function markPendingDelivered(
   ctx: { db: any },
   message: { _id: Id<"pending_messages">; conversation_id: Id<"conversations">; status: string }
-): Promise<void> {
-  await patchPendingMessageStatus(ctx, message, { status: "delivered" as const, delivered_at: Date.now() });
+): Promise<boolean> {
+  return await patchPendingMessageStatus(ctx, message, { status: "delivered" as const, delivered_at: Date.now() });
 }
 
 export const getPendingMessages = query({
@@ -857,7 +905,8 @@ export const getPendingMessages = query({
 export async function collectDeliverableForOwner(
   ctx: { db: any },
   ownerUserId: Id<"users">,
-  deviceId: string
+  deviceId: string,
+  now: number = Date.now()
 ): Promise<any[]> {
   const [byOwner, bySender] = await Promise.all([
     ctx.db
@@ -874,6 +923,21 @@ export async function collectDeliverableForOwner(
       .collect(),
   ]);
 
+  // DPM-02: device rows are read LAZILY, only when a candidate's conversation is
+  // owned by a different device. In the common case (no mismatch-owned rows) the
+  // reactive query therefore takes no dependency on the devices table and does
+  // not refire on every fleet heartbeat; while a mismatch-owned pending row
+  // exists, refiring as device liveness changes is exactly what re-evaluates the
+  // takeover.
+  const takeoverCache = new Map<string, boolean>();
+  const mayTakeOver = async (ownerDeviceId: string): Promise<boolean> => {
+    const cached = takeoverCache.get(ownerDeviceId);
+    if (cached !== undefined) return cached;
+    const result = await resolveOfflineOwnerTakeover(ctx, ownerUserId, deviceId, ownerDeviceId, now);
+    takeoverCache.set(ownerDeviceId, result);
+    return result;
+  };
+
   const owned = [];
   const seen = new Set<string>();
   for (const message of [...byOwner, ...bySender]) {
@@ -881,7 +945,11 @@ export async function collectDeliverableForOwner(
     if (seen.has(key)) continue;
     seen.add(key);
     const conversation = await ctx.db.get(message.conversation_id);
-    if (conversation && canDaemonSeePendingMessage(message, conversation, ownerUserId, deviceId)) {
+    if (!conversation) continue;
+    const takeover = conversation.owner_device_id && conversation.owner_device_id !== deviceId
+      ? await mayTakeOver(conversation.owner_device_id)
+      : false;
+    if (canDaemonSeePendingMessage(message, conversation, ownerUserId, deviceId, takeover)) {
       owned.push(message);
     }
   }
@@ -1387,13 +1455,41 @@ export const cancelOldPendingMessages = internalMutation({
   },
 });
 
-// Ack: mark all "injected" messages for a conversation as "delivered"
-// Called by the daemon when the user's message appears in the synced JSONL
+// Ack injected messages for a conversation as "delivered". Called by the daemon
+// when a user message appears in the synced JSONL. When the daemon supplies
+// `pastedMessageIds` (the rows IT pasted into a live pane this process), only
+// those rows are acked; rows it cannot vouch for stay `injected` for the heal
+// cron to re-pend and re-deliver. Without the list (old daemon) the legacy
+// blanket behavior applies.
+export async function ackInjectedForDaemon(
+  ctx: { db: any },
+  conversationId: Id<"conversations">,
+  pastedMessageIds?: Id<"pending_messages">[]
+): Promise<number> {
+  const injected = await ctx.db
+    .query("pending_messages")
+    .withIndex("by_conversation_status", (q: any) =>
+      q.eq("conversation_id", conversationId).eq("status", "injected")
+    )
+    .collect();
+
+  const pasted = pastedMessageIds ? new Set(pastedMessageIds.map(String)) : null;
+  let acked = 0;
+  for (const msg of injected) {
+    if (pasted && !pasted.has(String(msg._id))) continue;
+    if (await markPendingDelivered(ctx, msg)) acked++;
+  }
+  return acked;
+}
+
 export const ackInjectedMessages = mutation({
   args: {
     conversation_id: v.id("conversations"),
     api_token: v.optional(v.string()),
     device_id: v.optional(v.string()),
+    // Rows the daemon itself pasted into a live pane (delivery resolved
+    // successfully in this process). Optional for old-daemon back-compat.
+    message_ids: v.optional(v.array(v.id("pending_messages"))),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -1405,18 +1501,8 @@ export const ackInjectedMessages = mutation({
       return { acked: 0, skipped: true };
     }
 
-    const injected = await ctx.db
-      .query("pending_messages")
-      .withIndex("by_conversation_status", (q) =>
-        q.eq("conversation_id", args.conversation_id).eq("status", "injected")
-      )
-      .collect();
-
-    for (const msg of injected) {
-      await markPendingDelivered(ctx, msg);
-    }
-
-    return { acked: injected.length };
+    const acked = await ackInjectedForDaemon(ctx, args.conversation_id, args.message_ids);
+    return { acked };
   },
 });
 
