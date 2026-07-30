@@ -231,6 +231,43 @@ describe("permanent rejections", () => {
   });
 });
 
+// Actions fired while no dispatch is wired (boot, HMR rewire, account-switch
+// window). asyncAction() promises "a Promise that resolves to the server
+// dispatch result" — returning undefined here crashed the compose popup's
+// send path (beginOptimisticSession's fire() chains .then on createSession's
+// return). And the write itself must park in the outbox, per the contract the
+// enqueue comment states: drainOutbox re-drives it the moment _setDispatch runs.
+describe("actions before dispatch is wired", () => {
+  it("asyncAction still returns a Promise and parks the entry for the boot drain", async () => {
+    const { wrapped, outbox } = makeHarness();
+
+    const p = wrapped.pokeAsync("a");
+    expect(typeof p?.then).toBe("function");
+    await p;
+    expect(outbox.size).toBe(1);
+    expect([...outbox.values()][0].action).toBe("pokeAsync");
+
+    const delivered: string[] = [];
+    wrapped._setDispatch((actionName: string) => {
+      delivered.push(actionName);
+      return Promise.resolve("ok");
+    });
+    await settle();
+    expect(delivered).toEqual(["pokeAsync"]);
+    expect(outbox.size).toBe(0);
+  });
+
+  it("plain action parks the entry durably instead of dropping the write", async () => {
+    const { wrapped, outbox } = makeHarness();
+
+    wrapped.poke("a");
+    await settle();
+
+    expect(outbox.size).toBe(1);
+    expect([...outbox.values()][0].action).toBe("poke");
+  });
+});
+
 describe("opportunistic re-drive (_drainOutbox)", () => {
   it("delivers a stranded send on reconnect without a reload, counting no attempt", async () => {
     const { wrapped, outbox } = makeHarness();
