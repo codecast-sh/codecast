@@ -76,11 +76,12 @@ describe("isHandoffEligiblePath", () => {
     expect(isHandoffEligiblePath("/")).toBe(true);
   });
 
-  test("blocks auth, share, palette, download and api routes", () => {
+  test("blocks auth, share, artifact, palette, download and api routes", () => {
     expect(isHandoffEligiblePath("/login")).toBe(false);
     expect(isHandoffEligiblePath("/auth/callback")).toBe(false);
     expect(isHandoffEligiblePath("/oauth/github")).toBe(false);
     expect(isHandoffEligiblePath("/share/abc")).toBe(false);
+    expect(isHandoffEligiblePath("/a/wbYnhK4Qv9zw")).toBe(false);
     expect(isHandoffEligiblePath("/palette")).toBe(false);
     expect(isHandoffEligiblePath("/download/mac")).toBe(false);
     expect(isHandoffEligiblePath("/api/x")).toBe(false);

@@ -72,7 +72,7 @@ import { getPosition, setPosition } from "./positionTracker.js";
 import { encryptToken, decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
 import { getMachineKey } from "./machineKey.js";
 import { markSynced, updateSyncRecord, getSyncRecord, findUnsyncedFiles, type SyncRecord } from "./syncLedger.js";
-import { SyncService, AuthExpiredError } from "./syncService.js";
+import { SyncService, AuthExpiredError, type CreateConversationParams } from "./syncService.js";
 import { redactSecrets, maskToken } from "./redact.js";
 import { RetryQueue, type RetryOperation } from "./retryQueue.js";
 import { InvalidateSync, type InvalidateSyncOptions } from "./invalidateSync.js";
@@ -87,6 +87,7 @@ import { TEST_SCRATCH_DIRNAME, isTestScratchPath, isPathExcluded, isProjectAllow
 import { TaskScheduler } from "./taskScheduler.js";
 import { hasTmux } from "./tmux.js";
 import { formatFeedResults } from "./formatter.js";
+import { buildStableContext, recordStableContext, type BuiltStableContext } from "./stableContext.js";
 import { collectSessionResources, formatResourcesLog, nextAwakeIdleMs, shouldReportMetrics, type ReportedMetrics, type SessionResources } from "./resourceMonitor.js";
 import {
   fetchExport,
@@ -116,8 +117,8 @@ import {
 } from "./resumeCommand.js";
 import { resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
 import { buildLaunchArgs, getConfiguredAgentArgs, launchBinary } from "./launchCommand.js";
-import type { AgentStatus, DeviceSnippetSettings, AgentClientId } from "@codecast/shared/contracts";
-import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType } from "@codecast/shared/contracts";
+import type { AgentStatus, DeviceSnippetSettings, AgentClientId, StableLaunchPrefs } from "@codecast/shared/contracts";
+import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType, STABLE_ENV_MODE, STABLE_ENV_GLOBAL, STABLE_ENV_EXCLUDE, STABLE_ENV_CONVERSATION_ID } from "@codecast/shared/contracts";
 import { parseModelPicker, planModelNavigation, SESSION_ONLY_COMMIT_RE, isSwitchConfirmDialog } from "./modelPicker";
 import { type Config, getAgentArgs, isOpencodeServerEnabled, opencodeServerPort } from "./config/types.js";
 import {
@@ -2414,6 +2415,16 @@ async function executeRemoteCommand(
         // passed through to the CLI.
         const requestedModelKey: string | undefined = typeof parsed.model === "string" ? parsed.model : undefined;
         const requestedEffort: string | undefined = typeof parsed.effort === "string" ? parsed.effort : undefined;
+        // Per-session stable-context prefs from the new-session page. Same
+        // ride-along contract as model/effort: unknown values dropped here.
+        const stablePrefs: StableLaunchPrefs = {
+          ...(parsed.stable_mode === "team" || parsed.stable_mode === "solo" || parsed.stable_mode === "off"
+            ? { stable_mode: parsed.stable_mode }
+            : {}),
+          ...(Array.isArray(parsed.stable_exclude)
+            ? { stable_exclude: parsed.stable_exclude.filter((x: unknown): x is string => typeof x === "string" && /^[a-z0-9-]+$/i.test(x)) }
+            : {}),
+        };
 
         // A blank-project start (quick-create) defaults to $HOME — fine on the
         // user's own Mac, wrong on a remote box (the session would mislabel as
@@ -2612,9 +2623,17 @@ async function executeRemoteCommand(
           }
         }
         let binaryArgs = sanitizeBinaryArgs(rawLaunchArgs);
+        // Export the per-session stable-context choice (and the conversation id,
+        // so the SessionStart hook records against it directly with no lookup
+        // race). Values are validated above / Convex ids — shell-safe tokens.
+        const stableEnvParts: string[] = [];
+        if (stablePrefs.stable_mode) stableEnvParts.push(`${STABLE_ENV_MODE}=${stablePrefs.stable_mode}`);
+        if (stablePrefs.stable_exclude?.length) stableEnvParts.push(`${STABLE_ENV_EXCLUDE}=${stablePrefs.stable_exclude.join(",")}`);
+        if (conversationId && /^[a-z0-9]+$/i.test(conversationId)) stableEnvParts.push(`${STABLE_ENV_CONVERSATION_ID}=${conversationId}`);
+        const stableEnv = stableEnvParts.length ? ` ${stableEnvParts.join(" ")}` : "";
         const envPrefix = worktreeResult
-          ? `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT AGENT_RESOURCE_INDEX=${worktreeResult.portIndex}`
-          : `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT`;
+          ? `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT AGENT_RESOURCE_INDEX=${worktreeResult.portIndex}${stableEnv}`
+          : `env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT${stableEnv}`;
         // Managed provider keys (opencode/pi) are sourced from a 0600 file so the
         // key never lands in `ps`/the pane; "" when nothing is managed (pl-207).
         const keyPrefix = providerKeySourcePrefix(agentType, CONFIG_DIR);
@@ -2626,12 +2645,15 @@ async function executeRemoteCommand(
         if (agentType === "codex" && codexAppServerInstance?.running) {
           try {
             const sandbox = codexSkipApprovals ? "danger-full-access" as const : "workspace-write" as const;
-            const developerInstructions = await buildCodexStableContext(config, cwd);
+            const builtContext = await buildCodexStableContext(config, cwd, stablePrefs);
+            if (builtContext && conversationId) {
+              void recordStableContext(config, { conversation_id: conversationId, data: builtContext.data });
+            }
             const resp = await codexAppServerInstance.threadStart({
               cwd,
               sandbox,
               approvalPolicy: codexApprovalPolicy,
-              ...(developerInstructions ? { developerInstructions } : {}),
+              ...(builtContext ? { developerInstructions: builtContext.text } : {}),
               ...(requestedModelOpt?.cliAlias ? { model: requestedModelOpt.cliAlias } : {}),
               ...(requestedEffort && (CODEX_EFFORT_LEVELS as readonly string[]).includes(requestedEffort)
                 ? { config: { model_reasoning_effort: requestedEffort } }
@@ -3964,44 +3986,26 @@ function stripAnsi(text: string): string {
   return text.replace(ANSI_ESCAPE_RE, "");
 }
 
-export async function buildCodexStableContext(config: Config | null, cwd?: string): Promise<string | undefined> {
-  const stableMode = config?.stable_mode;
-  if (!stableMode || !config?.auth_token || !config?.convex_url) return undefined;
-
-  const projectPath = config.stable_global ? undefined : cwd;
-  const lookbackDays = stableMode === "team" ? 14 : 7;
-  const limit = stableMode === "team" ? 15 : 10;
-  const siteUrl = config.convex_url.replace(".cloud", ".site");
-
-  try {
-    const response = await fetch(`${siteUrl}/cli/feed`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        api_token: config.auth_token,
-        limit,
-        offset: 0,
-        start_time: Date.now() - lookbackDays * 24 * 60 * 60 * 1000,
-        project_path: projectPath,
-      }),
-    });
-
-    const result = await response.json() as any;
-    if (!response.ok || result?.error) return undefined;
-
-    const feed = stripAnsi(formatFeedResults(result, { projectPath }));
-    const instruction = stableMode === "team"
-      ? "This gives you bigger-picture visibility on what has been and is being worked on by the team."
-      : "This gives you bigger-picture visibility on what you have been and are currently working on.";
-
-    return `<stable-context mode="${stableMode}">
-${instruction}
-
-${feed}
-</stable-context>`;
-  } catch {
-    return undefined;
-  }
+// Codex counterpart of the Claude SessionStart hook: same shared builder, with
+// per-session launch prefs (from start_session args) overriding the machine's
+// config defaults. Returns the block text plus the structured item list the
+// caller records on the conversation.
+export async function buildCodexStableContext(
+  config: Config | null,
+  cwd?: string,
+  prefs?: StableLaunchPrefs,
+): Promise<BuiltStableContext | undefined> {
+  let mode: "team" | "solo" | null;
+  if (prefs?.stable_mode === "off") mode = null;
+  else if (prefs?.stable_mode === "team" || prefs?.stable_mode === "solo") mode = prefs.stable_mode;
+  else mode = config?.stable_mode ?? null;
+  if (!mode) return undefined;
+  return buildStableContext(config, {
+    mode,
+    global: !!config?.stable_global,
+    exclude: prefs?.stable_exclude ?? [],
+    cwd,
+  });
 }
 
 function patchConfig(updates: Partial<Config>): void {
@@ -5041,6 +5045,14 @@ export function resolvePendingSubagentLinks(
   return links;
 }
 
+// Parent session id encoded in a subagent transcript path. Covers both layouts:
+// <parent>/subagents/agent-x.jsonl and <parent>/subagents/workflows/<run>/agent-x.jsonl.
+export function subagentParentSessionFromPath(filePath: string): string | undefined {
+  const parts = filePath.split(path.sep);
+  const idx = parts.lastIndexOf("subagents");
+  return idx >= 1 ? parts[idx - 1] : undefined;
+}
+
 // Cap how many bytes a single sync pass reads from a file. A large unsynced
 // backlog (e.g. an old, image-heavy session that gets resumed) used to be re-read
 // in full every pass and synced as one all-or-nothing batch — which never completed
@@ -5054,7 +5066,7 @@ const SYNC_BYTES_PER_PASS = 4 * 1024 * 1024;
 // so a large idle backlog catches up fast instead of trickling at the 5-min watchdog.
 const MAX_SYNC_CONTINUATIONS = 6;
 
-async function processSessionFile(
+export async function processSessionFile(
   filePath: string,
   sessionId: string,
   projectPath: string,
@@ -5253,6 +5265,9 @@ async function processSessionFile(
       throw err;
     }
 
+    // The exact params the direct create attempts, kept for the catch block: a
+    // failed create must retry with THIS object, not a rebuilt reduced one.
+    let createParams: CreateConversationParams | null = null;
     try {
       const slug = extractSlug(headContent);
       const parentMessageUuid = extractParentUuid(headContent);
@@ -5272,18 +5287,13 @@ async function processSessionFile(
       // Detect parent conversation from file path (subagents/) or content (plan handoff)
       let isPlanHandoff = false;
       if (!parentConversationId) {
-        const parts = filePath.split(path.sep);
-        const isSubagentFile = parts.includes("subagents");
-        if (isSubagentFile) {
-          const subagentsIdx = parts.lastIndexOf("subagents");
-          const parentSessionId = parts[subagentsIdx - 1];
-          if (parentSessionId && conversationCache[parentSessionId]) {
-            parentConversationId = conversationCache[parentSessionId];
-            log(`Detected subagent parent for ${sessionId}: ${parentConversationId}`);
-          } else if (parentSessionId) {
-            pendingSubagentParents.set(sessionId, parentSessionId);
-            log(`Subagent ${sessionId} parent ${parentSessionId} not cached yet, queued for linking`);
-          }
+        const parentSessionId = subagentParentSessionFromPath(filePath);
+        if (parentSessionId && conversationCache[parentSessionId]) {
+          parentConversationId = conversationCache[parentSessionId];
+          log(`Detected subagent parent for ${sessionId}: ${parentConversationId}`);
+        } else if (parentSessionId) {
+          pendingSubagentParents.set(sessionId, parentSessionId);
+          log(`Subagent ${sessionId} parent ${parentSessionId} not cached yet, queued for linking`);
         }
       }
       if (!parentConversationId) {
@@ -5444,7 +5454,7 @@ async function processSessionFile(
           } catch {}
           if (!parentConversationId) spawnLinkAttempts.set(sessionId, 1);
         }
-        conversationId = await syncService.createConversation({
+        createParams = {
           userId,
           teamId,
           sessionId,
@@ -5463,7 +5473,8 @@ async function processSessionFile(
           isSubagent: isSubagent || undefined,
           agentTeamName: teamInfo?.teamName,
           agentName: teamInfo?.agentName,
-        });
+        };
+        conversationId = await syncService.createConversation(createParams);
         conversationCache[sessionId] = conversationId;
         saveConversationCache(conversationCache);
         if (isPlanHandoff && parentConversationId) {
@@ -5477,9 +5488,7 @@ async function processSessionFile(
         // Create plan entity for Plan-type subagents and bind to parent conversation
         if (subagentAgentType === "Plan" && parentConversationId && !planModeSynced.has(sessionId)) {
           planModeSynced.add(sessionId);
-          const pathParts = filePath.split(path.sep);
-          const subIdx = pathParts.lastIndexOf("subagents");
-          const parentSessionUuid = subIdx >= 1 ? pathParts[subIdx - 1] : undefined;
+          const parentSessionUuid = subagentParentSessionFromPath(filePath);
           if (parentSessionUuid) {
             syncService.syncPlanFromPlanMode({
               sessionId: parentSessionUuid,
@@ -5577,6 +5586,25 @@ async function processSessionFile(
         });
       }
 
+      // A subagent whose create failed must stay re-parentable no matter what
+      // the retry ends up sending (e.g. a stale persisted op from an older
+      // daemon): the pending-link sweep re-links it once both sides are cached.
+      // jx70pyh (2026-07-29): a network blip here minted a workflow agent as a
+      // flat, unparented conversation because the retry op dropped the parent.
+      const subagentParentSession = subagentParentSessionFromPath(filePath);
+      if (subagentParentSession) {
+        pendingSubagentParents.set(sessionId, subagentParentSession);
+      }
+
+      if (createParams) {
+        // Retry exactly what the direct call attempted — rebuilding a reduced
+        // param set here silently dropped parentConversationId/isSubagent.
+        retryQueue.add("createConversation", createParams as unknown as Record<string, unknown>, errMsg);
+        setPosition(filePath, lastPosition + bytesConsumed);
+        return;
+      }
+
+      // Create failed before the params were assembled — rebuild what we can.
       let retryHeadContent: string;
       try {
         retryHeadContent = readFileHead(filePath, 16384);
@@ -5609,6 +5637,7 @@ async function processSessionFile(
         slug,
         startedAt: firstMsgTimestamp,
         gitInfo,
+        isSubagent: isSubagent || undefined,
       }, errMsg);
 
       setPosition(filePath, lastPosition + bytesConsumed);
@@ -5875,7 +5904,7 @@ async function processSessionFile(
                     await tmuxExec(["send-keys", "-t", tmuxTarget, key]);
                     log(`Injected '${key}' via tmux for session ${sessionId.slice(0, 8)}`);
                   } else {
-                    await injectViaTerminal(proc.tty, decision.approved ? "\r" : "\x1b", proc.termProgram);
+                    await injectViaTerminal(proc.tty, decision.approved ? "\r" : "\x1b", proc.termProgram, { keystrokes: true });
                     log(`Injected '${key}' via terminal for session ${sessionId.slice(0, 8)}`);
                   }
                 } catch (err) {
@@ -8408,6 +8437,20 @@ export function tmuxPromptStillHasInput(paneContent: string, input: string): boo
   return normalizePromptText(fromPrompt).includes(normalizedInput);
 }
 
+// A multi-line bracketed paste can render in the composer as a collapsed chip
+// with none of the pasted text visible — Claude Code shows
+// "[Pasted text #1 +13 lines]", other agent TUIs use similar "[Pasted …]"
+// tokens. When the content we just injected was multi-line, that chip at the
+// prompt IS our message sitting in the input box: the submit-verify loop must
+// treat it exactly like visible stuck input (press Enter), not as a
+// stranger's draft to avoid stomping.
+export function tmuxPromptShowsPastePlaceholder(paneContent: string): boolean {
+  const recent = paneContent.split("\n").slice(-80).join("\n");
+  const lastPromptIndex = Math.max(recent.lastIndexOf("❯"), recent.lastIndexOf("›"));
+  if (lastPromptIndex === -1) return false;
+  return /\[[^\]\n]*pasted[^\]\n]*\]/i.test(recent.slice(lastPromptIndex));
+}
+
 // The Claude Code TUI renders its live UI (input box, or modal that replaces it) at the
 // very bottom of the pane, bracketed by box-drawing separator runs. Everything above
 // those separators is transcript — immutable history rendered as text — and must not
@@ -9077,18 +9120,55 @@ async function paneInteractiveQuestion(target: string): Promise<string | null> {
   }
 }
 
-// Paste literal text into a pane via a tmux buffer (bracketed paste — no
-// per-char typing, so CC's slash-command autocomplete never opens). Falls
-// back to send-keys -l. Shared by message injection and the /model driver.
-async function pasteTextIntoPane(target: string, text: string): Promise<void> {
+// ── Injected-content preparation ────────────────────────────────────────────
+// Every injection backend types a message into an agent's composer through a
+// terminal, where a newline byte is indistinguishable from the Enter key unless
+// the payload is wrapped in bracketed-paste markers (ESC[200~ … ESC[201~).
+// Inside those markers a TUI composer inserts a literal newline; outside them
+// the same byte submits the message, so an unbracketed multi-line prompt is
+// delivered as one message per line — each fragment answered separately, the
+// tail lines landing as interruptions.
+//
+// So: keep newlines when the transport can bracket the payload, flatten them to
+// spaces when it can't (a mangled-but-whole prompt beats N truncated ones).
+// Trailing newlines always go: the discrete Enter the callers send afterwards is
+// what submits, and a trailing blank composer line would swallow it.
+export function prepareInjectedContent(content: string, opts: { bracketed: boolean }): string {
+  const normalized = content.replace(/\r\n?/g, "\n").replace(/\n+$/, "");
+  const shaped = opts.bracketed ? normalized : normalized.replace(/\n/g, " ");
+  // Never return empty: an empty paste leaves the composer untouched and the
+  // trailing Enter would submit whatever the user had typed there.
+  return shaped || " ";
+}
+
+const PASTE_START = "\x1b[200~";
+const PASTE_END = "\x1b[201~";
+
+// Whether the client running in the pane turns on bracketed paste mode. An
+// unverified client gets flattened text, because newlines it doesn't bracket
+// submit a message per line. Unknown/absent type means claude, the daemon's
+// default everywhere else in this file.
+export function clientAcceptsBracketedPaste(agentType?: AgentClientId): boolean {
+  return AGENT_CLIENTS[agentType ?? "claude"].capabilities.bracketedPaste === true;
+}
+
+// Paste literal text into a pane via a tmux buffer (no per-char typing, so CC's
+// slash-command autocomplete never opens). `-p` asks tmux for the bracketed-paste
+// markers, which it emits only when the pane's program has the mode on — hence
+// `bracketed`, which must reflect that same client capability so text destined
+// for a TUI that won't bracket it gets flattened instead of split per line.
+// The send-keys fallback is raw keystrokes with no bracketing either way.
+// Preparation is idempotent, so passing already-prepared text is safe.
+async function pasteTextIntoPane(target: string, text: string, bracketed = true): Promise<void> {
+  const payload = prepareInjectedContent(text, { bracketed });
   const id = `cc-${process.pid}-${Date.now()}`;
   const tmpFile = `/tmp/${id}`;
   try {
-    fs.writeFileSync(tmpFile, text);
+    fs.writeFileSync(tmpFile, payload);
     await tmuxExec(["load-buffer", "-b", id, tmpFile]);
-    await tmuxExec(["paste-buffer", "-t", target, "-b", id, "-d"]);
+    await tmuxExec(["paste-buffer", "-p", "-t", target, "-b", id, "-d"]);
   } catch {
-    await tmuxExec(["send-keys", "-t", target, "-l", text]);
+    await tmuxExec(["send-keys", "-t", target, "-l", prepareInjectedContent(payload, { bracketed: false })]);
   } finally {
     try { fs.unlinkSync(tmpFile); } catch {}
   }
@@ -9250,7 +9330,7 @@ export type TmuxSubmitVerifyIO = {
 
 export async function verifyTmuxSubmitAfterPaste(
   io: TmuxSubmitVerifyIO,
-  opts: { prePaste: string; pasteConfirmed: boolean; contentPrefix: string; deadlineMs?: number },
+  opts: { prePaste: string; pasteConfirmed: boolean; contentPrefix: string; multiline?: boolean; deadlineMs?: number },
 ): Promise<{ outcome: "submitted" | "timeout" | "exited"; rePasted: boolean }> {
   const TICK = 400;
   const deadlineMs = opts.deadlineMs ?? 15_000;
@@ -9285,7 +9365,8 @@ export async function verifyTmuxSubmitAfterPaste(
     // conclude "processing": both misread a TUI that simply hasn't woken up.
     if (pane === opts.prePaste) continue;
 
-    const inputStuck = tmuxPromptStillHasInput(pane, opts.contentPrefix);
+    const inputStuck = tmuxPromptStillHasInput(pane, opts.contentPrefix) ||
+      (!!opts.multiline && tmuxPromptShowsPastePlaceholder(pane));
     if (inputStuck) {
       // The TUI rendered our text but it's still in the box — earlier Enters
       // were coalesced into the paste burst or dropped during boot. The TUI
@@ -9340,6 +9421,11 @@ export async function injectViaTmux(target: string, content: string, agentType?:
 }
 
 async function injectViaTmuxInner(target: string, content: string, agentType?: AgentClientId): Promise<void> {
+  // Does this client's TUI bracket a paste? Decides whether newlines in the
+  // payload survive as composer newlines or get flattened to spaces — see
+  // prepareInjectedContent. Applies to poll free-text answers too: those are
+  // usually one line, but nothing stops a user from writing several.
+  const bracketed = clientAcceptsBracketedPaste(agentType);
   const poll = parsePollMessage(content);
   if (poll) {
     // A free-text answer can't be entered into Claude Code's AUQ menu — decline the whole
@@ -9349,7 +9435,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
       await tmuxExec(["send-keys", "-t", target, "Escape"]);
       await new Promise(resolve => setTimeout(resolve, 500));
       if (declineText) {
-        await pasteTextIntoPane(target, declineText);
+        await pasteTextIntoPane(target, declineText, bracketed);
         await new Promise(resolve => setTimeout(resolve, 150));
         await tmuxExec(["send-keys", "-t", target, "Enter"]);
       }
@@ -9379,7 +9465,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     }
     if (poll.text) {
       await new Promise(resolve => setTimeout(resolve, 300));
-      await tmuxExec(["send-keys", "-t", target, "-l", poll.text]);
+      await pasteTextIntoPane(target, poll.text, bracketed);
       await new Promise(resolve => setTimeout(resolve, 150));
       await tmuxExec(["send-keys", "-t", target, "Enter"]);
     } else if (menuSteps.length > 0) {
@@ -9397,7 +9483,10 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     log(`Injected poll response via tmux to ${target}`);
     return;
   }
-  const sanitized = content.replace(/\r?\n/g, " ");
+  // Newlines survive when this client's TUI brackets the paste (`paste-buffer
+  // -p` only emits the markers for a program that asked for the mode) — see
+  // prepareInjectedContent and the bracketedPaste capability.
+  const sanitized = prepareInjectedContent(content, { bracketed });
 
   // Closed-loop pre-flight: classify the live UI region only (transcript ignored),
   // dispatch the correct clearing key per modal, re-classify until paste-safe.
@@ -9411,7 +9500,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   const captureLines = Math.max(30, contentLines + Math.ceil(sanitized.length / 60) + 10);
   const contentPrefix = sanitized.slice(0, 40);
 
-  const doPaste = () => pasteTextIntoPane(target, sanitized);
+  const doPaste = () => pasteTextIntoPane(target, sanitized, bracketed);
 
   // Clear any stale input before pasting to prevent draft text from being
   // prepended to the injected message or submitted by the trailing Enter.
@@ -9504,7 +9593,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
       sleep: (ms) => new Promise(resolve => setTimeout(resolve, ms)),
       log: (msg) => log(`${msg} (${target})`),
     },
-    { prePaste, pasteConfirmed, contentPrefix },
+    { prePaste, pasteConfirmed, contentPrefix, multiline: sanitized.includes("\n") },
   );
   if (verify.outcome === "exited") {
     // Propagates to deliverMessage's transient-failure backoff (the old
@@ -9520,6 +9609,7 @@ function buildAppleScript(
   normalizedTty: string,
   content: string,
   poll: ReturnType<typeof parsePollMessage>,
+  keystrokes = false,
 ): { script: string; args: string } {
   const isIterm = app === "iTerm2";
 
@@ -9594,7 +9684,15 @@ end run`;
     return { script, args: `'${normalizedTty}'` };
   }
 
-  const escapedContent = content.replace(/'/g, "'\\''");
+  // Bracket message text so a multi-line prompt reaches the composer as one
+  // message (see prepareInjectedContent). Both apps write the string as raw
+  // bytes, so the markers do the same job here as `tmux paste-buffer -p`. The
+  // submitting return lands after the closing marker: iTerm2 sends it as the
+  // explicit empty `write text` below, Terminal.app as `do script`'s implicit
+  // one. Keystroke payloads (an approve/deny "\r" or Escape) skip all of this —
+  // they must stay raw keys.
+  const payload = keystrokes ? content : `${PASTE_START}${prepareInjectedContent(content, { bracketed: true })}${PASTE_END}`;
+  const escapedContent = payload.replace(/'/g, "'\\''");
   const script = isIterm
     ? `on run argv
   set msgText to item 1 of argv
@@ -9652,12 +9750,12 @@ const TMUX_ONLY_TERMINALS = new Set(["ghostty", "Alacritty"]);
 
 // ── AppleScript injection (iTerm2 + Terminal.app) ──────────────────────────
 // Extracted from original injectViaTerminal — logic is identical
-async function injectViaAppleScript(tty: string, content: string, termProgram?: string): Promise<void> {
+async function injectViaAppleScript(tty: string, content: string, termProgram?: string, keystrokes = false): Promise<void> {
   const normalizedTty = normalizeTty(tty);
-  const poll = parsePollMessage(content);
+  const poll = keystrokes ? null : parsePollMessage(content);
 
   const app: "iTerm2" | "Terminal" = termProgram === "Apple_Terminal" ? "Terminal" : "iTerm2";
-  const { script, args } = buildAppleScript(app, normalizedTty, content, poll);
+  const { script, args } = buildAppleScript(app, normalizedTty, content, poll, keystrokes);
 
   const tmpFile = path.join(CONFIG_DIR, "terminal-inject.scpt");
   fs.writeFileSync(tmpFile, script);
@@ -9701,13 +9799,44 @@ async function findKittyWindowId(normalizedTty: string): Promise<number | null> 
   return null;
 }
 
-async function injectViaKitty(tty: string, content: string): Promise<void> {
+// Send message text to a kitty window as a bracketed paste so newlines land as
+// composer newlines rather than Enter keys. Two flags matter:
+//   --from-file        content is sent verbatim; passed as an argument instead,
+//                      kitty interprets escapes, so a message containing the
+//                      two characters \n would arrive as a real newline.
+//   --bracketed-paste  `auto` wraps the payload only when the program in the
+//                      window has bracketed paste mode on (every agent TUI
+//                      does; a bare shell doesn't, and there the markers would
+//                      be literal garbage).
+// The flag is newer than the oldest kitty we might meet, so an invocation that
+// fails retries flattened on the plain send-text that has always worked.
+async function kittySendText(match: string, text: string): Promise<void> {
+  const tmpFile = path.join(CONFIG_DIR, `kitty-inject-${process.pid}-${Date.now()}`);
+  try {
+    fs.writeFileSync(tmpFile, prepareInjectedContent(text, { bracketed: true }));
+    await execAsync(`kitty @ send-text ${match} --bracketed-paste=auto --from-file '${tmpFile}'`);
+  } catch (err) {
+    log(`kitty bracketed paste failed (${err instanceof Error ? err.message : String(err)}), sending flattened`);
+    const escaped = prepareInjectedContent(text, { bracketed: false }).replace(/'/g, "'\\''");
+    await execAsync(`kitty @ send-text ${match} '${escaped}'`);
+  } finally {
+    try { fs.unlinkSync(tmpFile); } catch {}
+  }
+}
+
+async function injectViaKitty(tty: string, content: string, keystrokes = false): Promise<void> {
   const normalizedTty = normalizeTty(tty);
   const windowId = await findKittyWindowId(normalizedTty);
   if (windowId === null) {
     throw new Error(`Kitty window not found for TTY ${normalizedTty}`);
   }
   const match = `--match id:${windowId}`;
+
+  if (keystrokes) {
+    const escaped = content.replace(/'/g, "'\\''");
+    await execAsync(`kitty @ send-text ${match} '${escaped}'`);
+    return;
+  }
 
   const poll = parsePollMessage(content);
   if (poll) {
@@ -9718,8 +9847,7 @@ async function injectViaKitty(tty: string, content: string): Promise<void> {
       await execAsync(`kitty @ send-key ${match} escape`);
       await new Promise(r => setTimeout(r, 500));
       if (declineText) {
-        const escaped = declineText.replace(/'/g, "'\\''");
-        await execAsync(`kitty @ send-text ${match} '${escaped}'`);
+        await kittySendText(match, declineText);
         await new Promise(r => setTimeout(r, 150));
         await execAsync(`kitty @ send-key ${match} enter`);
       }
@@ -9732,8 +9860,7 @@ async function injectViaKitty(tty: string, content: string): Promise<void> {
     }
     if (poll.text) {
       await new Promise(r => setTimeout(r, 300));
-      const escaped = poll.text.replace(/'/g, "'\\''");
-      await execAsync(`kitty @ send-text ${match} '${escaped}'`);
+      await kittySendText(match, poll.text);
       await new Promise(r => setTimeout(r, 150));
       await execAsync(`kitty @ send-key ${match} enter`);
     }
@@ -9741,8 +9868,7 @@ async function injectViaKitty(tty: string, content: string): Promise<void> {
     return;
   }
 
-  const escaped = content.replace(/'/g, "'\\''");
-  await execAsync(`kitty @ send-text ${match} '${escaped}'`);
+  await kittySendText(match, content);
   log(`Injected message via Kitty for TTY ${normalizedTty}`);
 }
 
@@ -9765,16 +9891,33 @@ async function findWezTermPaneId(normalizedTty: string): Promise<number | null> 
   return null;
 }
 
-async function weztermSendText(paneId: number, text: string): Promise<void> {
-  const escaped = text.replace(/'/g, "'\\''");
-  await execAsync(`printf '%s' '${escaped}' | wezterm cli send-text --pane-id ${paneId} --no-paste`);
+// --no-paste means "send these bytes as raw keystrokes", which is right for the
+// key sequences below and wrong for message text: raw newlines read as Enter.
+// Omitting it lets WezTerm deliver the payload as a bracketed paste when the
+// pane's program has the mode on (every agent TUI), so newlines stay newlines.
+async function weztermSendText(paneId: number, text: string, opts: { asKeystrokes?: boolean } = {}): Promise<void> {
+  const asKeystrokes = opts.asKeystrokes ?? false;
+  const payload = asKeystrokes ? text : prepareInjectedContent(text, { bracketed: true });
+  const escaped = payload.replace(/'/g, "'\\''");
+  const pasteFlag = asKeystrokes ? " --no-paste" : "";
+  await execAsync(`printf '%s' '${escaped}' | wezterm cli send-text --pane-id ${paneId}${pasteFlag}`);
 }
 
-async function injectViaWezTerm(tty: string, content: string): Promise<void> {
+// Keystrokes (Escape, Enter, arrows, menu digits) must never be bracketed.
+async function weztermSendKeys(paneId: number, keys: string): Promise<void> {
+  await weztermSendText(paneId, keys, { asKeystrokes: true });
+}
+
+async function injectViaWezTerm(tty: string, content: string, keystrokes = false): Promise<void> {
   const normalizedTty = normalizeTty(tty);
   const paneId = await findWezTermPaneId(normalizedTty);
   if (paneId === null) {
     throw new Error(`WezTerm pane not found for TTY ${normalizedTty}`);
+  }
+
+  if (keystrokes) {
+    await weztermSendKeys(paneId, content);
+    return;
   }
 
   const poll = parsePollMessage(content);
@@ -9783,26 +9926,26 @@ async function injectViaWezTerm(tty: string, content: string): Promise<void> {
     // pollDeclineText — doing it per-step spilled leftover option digits into the prompt.
     const declineText = pollDeclineText(poll);
     if (declineText !== null) {
-      await weztermSendText(paneId, "\x1b"); // Escape
+      await weztermSendKeys(paneId, "\x1b"); // Escape
       await new Promise(r => setTimeout(r, 500));
       if (declineText) {
         await weztermSendText(paneId, declineText);
         await new Promise(r => setTimeout(r, 150));
-        await weztermSendText(paneId, "\r"); // Enter
+        await weztermSendKeys(paneId, "\r"); // Enter
       }
       log(`Injected poll free-text answer (declined menu) via WezTerm for TTY ${normalizedTty}`);
       return;
     }
     for (const step of pollMenuSteps(poll)) {
       const seq = WEZTERM_KEY_SEQUENCES[step.key];
-      await weztermSendText(paneId, seq || step.key);
+      await weztermSendKeys(paneId, seq || step.key);
       await new Promise(r => setTimeout(r, 500));
     }
     if (poll.text) {
       await new Promise(r => setTimeout(r, 300));
       await weztermSendText(paneId, poll.text);
       await new Promise(r => setTimeout(r, 150));
-      await weztermSendText(paneId, "\r");
+      await weztermSendKeys(paneId, "\r");
     }
     log(`Injected poll response via WezTerm for TTY ${normalizedTty}`);
     return;
@@ -9816,18 +9959,24 @@ async function injectViaWezTerm(tty: string, content: string): Promise<void> {
 // Routes to the appropriate strategy based on TERM_PROGRAM.
 // AppleScript path (iTerm2/Terminal.app) is the default fallback for
 // unknown terminals — preserves existing behavior exactly.
-async function injectViaTerminal(tty: string, content: string, termProgram?: string): Promise<void> {
+// `keystrokes: true` marks a payload that IS keys rather than text — the
+// permission approve/deny "\r"/"\x1b" senders. Message text is delivered as a
+// bracketed paste so its newlines survive; a keystroke payload must not be,
+// because bracketing a lone carriage return would turn "approve" into a
+// literal newline the TUI ignores.
+async function injectViaTerminal(tty: string, content: string, termProgram?: string, opts: { keystrokes?: boolean } = {}): Promise<void> {
+  const keystrokes = opts.keystrokes ?? false;
   if (termProgram === "kitty") {
-    return injectViaKitty(tty, content);
+    return injectViaKitty(tty, content, keystrokes);
   }
   if (termProgram === "WezTerm") {
-    return injectViaWezTerm(tty, content);
+    return injectViaWezTerm(tty, content, keystrokes);
   }
   if (termProgram && TMUX_ONLY_TERMINALS.has(termProgram)) {
     throw new Error(`${getTerminalLabel(termProgram)} does not support direct injection — use tmux for this terminal`);
   }
   // Apple_Terminal, iTerm.app, unknown → existing AppleScript path
-  return injectViaAppleScript(tty, content, termProgram);
+  return injectViaAppleScript(tty, content, termProgram, keystrokes);
 }
 
 
@@ -14996,6 +15145,17 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
+  // Refresh the SessionStart hook script on boot when stable mode is enabled:
+  // the script's contents ship with the CLI (it delegates to `codecast
+  // stable-context`), so an installed copy from an older CLI must be rewritten
+  // without waiting for the user to re-run `cast stable`. Idempotent.
+  try {
+    if (readConfig()?.stable_mode) {
+      const { installStableHook } = await import("./stableContext.js");
+      installStableHook();
+    }
+  } catch {}
+
   // Exit guard: respawn with backoff if crash looping.
   // Skip self-respawn when running under launchd (KeepAlive handles restarts).
   const underLaunchd = isManagedByLaunchd();
@@ -15439,20 +15599,26 @@ async function main(): Promise<void> {
 
   retryQueue.setExecutor(async (op: RetryOperation): Promise<boolean> => {
     if (op.type === "createConversation") {
-      const params = op.params as {
-        userId: string;
-        teamId?: string;
-        sessionId: string;
-        agentType: "claude_code" | "codex" | "cursor";
-        projectPath: string;
-        slug?: string;
-        startedAt?: number;
-        gitInfo?: GitInfo;
-      };
+      // Ops carry the exact params the direct create attempted (including
+      // parentConversationId/isSubagent — dropping them minted flat,
+      // unparented subagent conversations, jx70pyh 2026-07-29).
+      const params = op.params as unknown as CreateConversationParams;
       const conversationId = await syncService.createConversation(params);
       conversationCache[params.sessionId] = conversationId;
       saveConversationCache(conversationCache);
       log(`Retry: Created conversation ${conversationId} for session ${params.sessionId}`);
+
+      // Mirror the direct path's pending-subagent resolution so a child whose
+      // queued op predates full params (older daemon's persisted queue) still
+      // re-parents via linkSessions.
+      for (const link of resolvePendingSubagentLinks(params.sessionId, conversationId, pendingSubagentParents, conversationCache)) {
+        syncService.linkSessions(link.parentConvId, link.childConvId, subagentDescriptions.get(link.childSessionId)).then(() => {
+          log(`Retry: Linked pending subagent ${link.childSessionId.slice(0, 8)} -> parent ${link.parentSessionId.slice(0, 8)}`);
+        }).catch((linkErr) => {
+          log(`Retry: Failed to link subagent ${link.childSessionId.slice(0, 8)}: ${linkErr}`);
+        });
+        pendingSubagentParents.delete(link.childSessionId);
+      }
 
       if (pendingMessages[params.sessionId]) {
         await flushPendingMessagesBatch(pendingMessages[params.sessionId], conversationId, syncService, retryQueue);
@@ -15851,7 +16017,7 @@ async function main(): Promise<void> {
                       if (tmuxTarget) {
                         await tmuxExec(["send-keys", "-t", tmuxTarget, key]);
                       } else {
-                        await injectViaTerminal(proc.tty, decision.approved ? "\r" : "\x1b", proc.termProgram);
+                        await injectViaTerminal(proc.tty, decision.approved ? "\r" : "\x1b", proc.termProgram, { keystrokes: true });
                       }
                       log(`Injected '${key}' for session ${sessionId.slice(0, 8)}`);
                       sendAgentStatus(syncService, convId, sessionId, "working");
@@ -17103,7 +17269,7 @@ async function main(): Promise<void> {
                   }
                   if (!injected) {
                     try {
-                      await injectViaTerminal(proc.tty, approved ? "\r" : "\x1b", proc.termProgram);
+                      await injectViaTerminal(proc.tty, approved ? "\r" : "\x1b", proc.termProgram, { keystrokes: true });
                       injected = true;
                     } catch {}
                   }

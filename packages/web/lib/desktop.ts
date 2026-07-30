@@ -9,6 +9,7 @@ declare global {
       checkForUpdate: (opts?: { manual?: boolean }) => Promise<void>;
       showNotification: (title: string, body: string, data?: { conversationId?: string }) => Promise<void>;
       getShortcuts: () => Promise<Record<string, string>>;
+      getShortcutConfig: () => Promise<DesktopShortcutConfig>;
       setShortcut: (key: string, accelerator: string) => Promise<Record<string, string>>;
       paletteNavigate: (path: string) => void;
       paletteHide: () => void;
@@ -43,6 +44,36 @@ export function bridge<K extends keyof NonNullable<Window["__CODECAST_ELECTRON__
 
 export function isDesktop(): boolean {
   return isElectron();
+}
+
+// ---------------------------------------------------------------------------
+// OS-global shortcuts (Electron globalShortcut) — the bindings that work from
+// any app, not just inside Codecast. One metadata list feeds both the desktop
+// settings page and the keyboard shortcuts help panel.
+// ---------------------------------------------------------------------------
+
+export const DESKTOP_SHORTCUTS: { key: string; label: string; description: string }[] = [
+  { key: "newSession", label: "New Session", description: "Open the new-session compose popup from any app" },
+  { key: "toggleWindow", label: "Toggle Main Window", description: "Show or hide the main Codecast window" },
+  { key: "togglePalette", label: "Quick Command Palette", description: "Open the floating command palette from anywhere" },
+  { key: "toggleEnv", label: "Switch Local / Prod", description: "Switch between local dev and production" },
+];
+
+export type DesktopShortcutConfig = {
+  shortcuts: Record<string, string>;
+  // null on older desktop builds whose preload predates get-shortcut-config —
+  // callers hide default-dependent affordances (reset) rather than guessing.
+  defaults: Record<string, string> | null;
+  // Bindings that failed to register (another app owns the accelerator).
+  issues: Record<string, string>;
+};
+
+export async function getDesktopShortcutConfig(): Promise<DesktopShortcutConfig | null> {
+  if (!isElectron()) return null;
+  const full = bridge("getShortcutConfig");
+  if (full) return await full();
+  const shortcuts = await bridge("getShortcuts")?.();
+  return shortcuts ? { shortcuts, defaults: null, issues: {} } : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -132,9 +163,10 @@ export function parseDesktopDeepLinkPath(url: string): string | null {
 }
 
 // Paths that should never auto-hand-off to the desktop app — auth/oauth flows,
-// public share pages (often opened by people without the app), the in-app
-// palette popup, downloads, and API routes.
-const HANDOFF_DENY = [/^\/login/, /^\/auth/, /^\/oauth/, /^\/share\//, /^\/palette/, /^\/download/, /^\/api\//];
+// public share pages (often opened by people without the app), published
+// artifacts (/a/<slug>, same audience), the in-app palette popup, downloads,
+// and API routes.
+const HANDOFF_DENY = [/^\/login/, /^\/auth/, /^\/oauth/, /^\/share\//, /^\/a\//, /^\/palette/, /^\/download/, /^\/api\//];
 
 export function isHandoffEligiblePath(path: string): boolean {
   if (!path) return false;

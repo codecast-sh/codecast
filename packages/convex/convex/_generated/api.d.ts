@@ -13,6 +13,7 @@ import type * as admin_mergeUser from "../admin_mergeUser.js";
 import type * as agentTasks from "../agentTasks.js";
 import type * as anchors from "../anchors.js";
 import type * as apiTokens from "../apiTokens.js";
+import type * as artifacts from "../artifacts.js";
 import type * as auth from "../auth.js";
 import type * as blame from "../blame.js";
 import type * as blameCore from "../blameCore.js";
@@ -133,6 +134,7 @@ declare const fullApi: ApiFromModules<{
   agentTasks: typeof agentTasks;
   anchors: typeof anchors;
   apiTokens: typeof apiTokens;
+  artifacts: typeof artifacts;
   auth: typeof auth;
   blame: typeof blame;
   blameCore: typeof blameCore;

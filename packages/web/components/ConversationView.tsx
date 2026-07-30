@@ -27,6 +27,7 @@ import { isResentCopyOfSentMessage } from "../lib/staleDraft";
 import type { SkillItem } from "../lib/conversationProcessor";
 import { createReducer, reducer } from "../lib/messageReducer";
 import { UsageDisplay } from "./UsageDisplay";
+import { StableContextCards, StableContextPicker } from "./StableContextCards";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { KeyCap, MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { toast } from "sonner";
@@ -96,7 +97,7 @@ import { FormattedSummary } from "./FormattedSummary";
 import { entityRemarkPlugins } from "../lib/remarkEntityIds";
 import { parseInboundSessionMessage, isTeammateFramingOnly, isMachineDeliveredMessage, isSpawnedTaskPrompt, parseSpawnedTaskPrompt } from "./sessionMessage";
 import { CollabComposer, CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
-import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, type ParsedCastCommand } from "./castCommand";
+import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, type ParsedCastCommand } from "./castCommand";
 import { ConversationTree } from "./ConversationTree";
 import { useInboxStore, isConvexId, computeNewDividerIndex, convBucketMap, type BucketItem, type ForkChild, type InboxSession, type OptimisticImage } from "../store/inboxStore";
 
@@ -518,6 +519,7 @@ export type ConversationData = {
   is_workflow_primary?: boolean;
   draft_message?: string;
   subtitle?: string | null;
+  stable_context?: string | null;
   compaction_count?: number;
   loaded_start_index?: number;
   agent_name_map?: Record<string, string>;
@@ -1421,6 +1423,11 @@ export function NewSessionView({ conversation, agentControls }: { conversation: 
         <ProjectSwitcher conversation={conversation} handleRef={projectsRef} />
       </ErrorBoundary>
       <div className="flex-1" />
+      <ErrorBoundary name="StableContextPicker" level="inline">
+        <div className="w-full px-4 mb-4">
+          <StableContextPicker conversationId={conversation._id} />
+        </div>
+      </ErrorBoundary>
       <AgentSwitcher
         conversation={conversation}
         showWorkflow={ac.showWorkflow}
@@ -4124,18 +4131,6 @@ function CastEntityCard({ type, shortId, convexId }: { type: "task" | "plan" | "
   );
 }
 
-// Pull the message body out of a `cast send <id> "<body>"` arg string, tolerating
-// embedded escaped quotes and trailing flags (e.g. `"done" --from jx7abcd`).
-function extractSendBody(args: string): string {
-  const t = args.trim();
-  const dq = t.match(/^"((?:[^"\\]|\\.)*)"/);
-  if (dq) return dq[1].replace(/\\"/g, '"');
-  const sq = t.match(/^'((?:[^'\\]|\\.)*)'/);
-  if (sq) return sq[1].replace(/\\'/g, "'");
-  // Unquoted body: drop any trailing --flags so they don't render as message text.
-  return t.replace(/\s+--\w[\s\S]*$/, "").trim() || t;
-}
-
 // Dedicated rendering for the two session-addressed cast commands:
 //   cast send <id> "<body>"   → outgoing twin of the incoming SessionMessageBlock
 //   cast read <id> <range>    → compact "read" row with a clickable target pill
@@ -4147,7 +4142,7 @@ function CastSessionRefBlock({ cat, target, args, fullCmd, output, isError }: {
   const [expanded, setExpanded] = useState(false);
 
   if (cat === "send") {
-    const body = extractSendBody(args);
+    const { body, kind } = extractSendBody(args);
     return (
       <div className="my-2 mx-1 rounded border-l-2 border-sol-blue/60 bg-sol-blue/5">
         <div className="flex items-center gap-2 px-3 pt-2 pb-1">
@@ -4160,11 +4155,21 @@ function CastSessionRefBlock({ cat, target, args, fullCmd, output, isError }: {
             <span className="text-sol-green/70 text-[10px] ml-auto shrink-0 inline-flex items-center gap-0.5"><Check className="w-3 h-3" />sent</span>
           )}
         </div>
-        <div className="px-3 pb-2 text-sm text-sol-text prose prose-invert prose-sm max-w-none">
-          <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE}
-            components={MD_COMPONENTS_NO_IMG}
-          >{body}</ReactMarkdown>
-        </div>
+        {kind === "dynamic" ? (
+          // The shell computed the real payload ($(…), $VAR, or stdin) before cast
+          // ran — the transcript only holds the recipe. Don't dress it up as the
+          // delivered message; that misled a sender into resending a 16KB briefing.
+          <div className="px-3 pb-2">
+            <code className="text-xs font-mono text-sol-text-secondary break-all">{body}</code>
+            <div className="text-[10px] text-sol-text-dim mt-1">shown as typed — the shell filled in the actual message; open the target session to read what arrived</div>
+          </div>
+        ) : (
+          <div className="px-3 pb-2 text-sm text-sol-text prose prose-invert prose-sm max-w-none">
+            <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE}
+              components={MD_COMPONENTS_NO_IMG}
+            >{body}</ReactMarkdown>
+          </div>
+        )}
       </div>
     );
   }
@@ -13999,6 +14004,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 </span>
               </div>
             </div>
+          )}
+          {/* Context the session was started with — anchored to the transcript
+              start, so only when the whole top is loaded (never floating above a
+              mid-conversation window). */}
+          {conversation?.stable_context && !hasMoreAbove && !isLoadingOlder && (
+            <StableContextCards stableContext={conversation.stable_context} />
           )}
           {(density === "story" || density === "summary") ? (
             <div className="conv-col mx-auto px-4 sm:px-5 md:px-6">

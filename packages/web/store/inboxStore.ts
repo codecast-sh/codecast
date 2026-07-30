@@ -2241,7 +2241,7 @@ interface InboxStoreState {
   resumeSession: (convId: string) => Promise<any>;
   sendEscape: (convId: string) => void;
   convCommand: (convId: string, command: string, extraArgs?: Record<string, any>, optimistic?: Record<string, any>) => Promise<any>;
-  createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; model?: string; effort?: string; isolated?: boolean; worktree_name?: string }) => Promise<any>;
+  createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[] }) => Promise<any>;
   // Create the server session for a DEFERRED stub, sourcing project + agent from
   // the LIVE stub row (the new-session pickers write it via updateSessionProject /
   // setConversationAgent) rather than a begin-time closure. This is what makes a
@@ -2329,6 +2329,11 @@ interface InboxStoreState {
   // picker). The durable value arrives via the server: rollup echo for
   // in-place switches, reconfigure/create stamps for launches.
   setConversationModel: (id: string, opts: { model?: string | null; effort?: string | null }) => void;
+  // Stamp per-session stable-context launch prefs on a NEW-session stub row
+  // (local-only; folded into createSession by createSessionFromStub, same
+  // lifecycle as the model/effort stamps). mode: "team" | "solo" | "off";
+  // exclude: conversation ids dropped from the injected feed.
+  setStableContextPrefs: (id: string, prefs: { mode?: string | null; exclude?: string[] | null }) => void;
   // In-flight set_model daemon command (ephemeral; not persisted). Set by
   // whichever surface fired the switch (header badge, launch pill, palette);
   // watched by the mounted conversation header, which reverts the optimistic
@@ -3986,7 +3991,7 @@ export const useInboxStore = create<InboxStoreState>(
     if (optimistic && this.sessions[convId]) Object.assign(this.sessions[convId], optimistic);
   }),
 
-  createSession: asyncAction(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; model?: string; effort?: string; isolated?: boolean; worktree_name?: string }) {
+  createSession: asyncAction(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[] }) {
     const sessionId = opts.session_id || (Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
     if (!opts.session_id) opts.session_id = sessionId;
     const now = Date.now();
@@ -4044,6 +4049,10 @@ export const useInboxStore = create<InboxStoreState>(
       ...(modelKey !== "default" ? { model: modelKey } : {}),
       ...(cur?.effort ? { effort: cur.effort } : {}),
       ...(s.isolatedWorktreeMode ? { isolated: true } : {}),
+      // Stable-context prefs stamped on the stub by the new-session context
+      // picker (setStableContextPrefs) — same lifecycle as model/effort.
+      ...(cur?.stable_mode ? { stable_mode: cur.stable_mode } : {}),
+      ...(cur?.stable_exclude?.length ? { stable_exclude: cur.stable_exclude } : {}),
     });
   },
 
@@ -4651,6 +4660,14 @@ export const useInboxStore = create<InboxStoreState>(
       if (!row) continue;
       if (opts.model !== undefined) row.model = opts.model ?? undefined;
       if (opts.effort !== undefined) row.effort = opts.effort ?? undefined;
+    }
+  }),
+
+  setStableContextPrefs: sync(function (this: Draft, id: string, prefs: { mode?: string | null; exclude?: string[] | null }) {
+    for (const row of [this.sessions[id], this.conversations[id]] as any[]) {
+      if (!row) continue;
+      if (prefs.mode !== undefined) row.stable_mode = prefs.mode ?? undefined;
+      if (prefs.exclude !== undefined) row.stable_exclude = prefs.exclude?.length ? prefs.exclude : undefined;
     }
   }),
 
