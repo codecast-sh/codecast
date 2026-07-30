@@ -860,6 +860,76 @@ describe("comments write-choke coverage", () => {
     expect(heads(ctx)[0]).toMatchObject({ principal_id: OWNER, revision: 1 });
   });
 
+  // Matrix SRV-05: conversations.user_id is the comments REVISION DOMAIN. A
+  // merge that remaps ownership without migrating local_view_heads resets the
+  // domain to revision 0 — every viewer's durable view then rejects the
+  // "moved backwards" coverage and freezes. Receipts must follow the
+  // principal or replayed command ids re-execute as duplicates post-merge.
+  test("merging principals migrates revision domains and command receipts", async () => {
+    const surviving = "user-surviving" as any;
+    const ctx = context(null, {
+      users: [
+        user(OTHER, "Duplicate", { email: "same@example.test" }),
+        user(surviving, "Survivor", { email: "same@example.test" }),
+      ],
+      conversations: [conversation(CONVERSATION, OTHER)],
+      local_view_heads: [
+        {
+          _id: "head-comments-from",
+          principal_id: OTHER,
+          contract_id: CONTRACT,
+          view_key: VIEW_KEY,
+          revision: 5,
+          updated_at: 1,
+        },
+        {
+          _id: "head-buckets-from",
+          principal_id: OTHER,
+          contract_id: "buckets.principal/v2",
+          view_key: "buckets:principal",
+          revision: 3,
+          updated_at: 1,
+        },
+        {
+          _id: "head-buckets-to",
+          principal_id: surviving,
+          contract_id: "buckets.principal/v2",
+          view_key: "buckets:principal",
+          revision: 7,
+          updated_at: 1,
+        },
+      ],
+      local_command_receipts: [{
+        _id: "receipt-from",
+        principal_id: OTHER,
+        command_id: "cmd-1",
+        command_name: "comments.add/v2",
+        receipt_version: 1,
+        argument_fingerprint: "sha256:x",
+        status: "acknowledged",
+        coverage: [],
+        created_at: 1,
+      }],
+    });
+    await (mergeDuplicateUser as any)._handler(ctx, {
+      from_user_id: OTHER,
+      to_user_id: surviving,
+      dry_run: false,
+      delete_source: false,
+    });
+    expect(ctx.db._tables.conversations[0].user_id).toBe(surviving);
+    // The comments head follows the conversation owner, strictly newer than
+    // anything the old domain ever served.
+    const commentsHead = heads(ctx).find((head: any) => head.view_key === VIEW_KEY);
+    expect(commentsHead).toMatchObject({ principal_id: surviving, revision: 6 });
+    // Colliding heads collapse to max(from, to) + 1 with the source removed.
+    const bucketHeads = heads(ctx).filter((head: any) => head.view_key === "buckets:principal");
+    expect(bucketHeads).toHaveLength(1);
+    expect(bucketHeads[0]).toMatchObject({ principal_id: surviving, revision: 8 });
+    // Receipts follow the principal so replayed command ids stay deduplicated.
+    expect(receipts(ctx)[0].principal_id).toBe(surviving);
+  });
+
   test("account deletion routes comment removal through the same view transition", async () => {
     const ctx = context(OWNER, {
       conversations: [conversation()],

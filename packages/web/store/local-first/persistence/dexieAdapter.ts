@@ -1102,7 +1102,12 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
       throw new PrincipalStoreIdentityError("Receipt does not match a local command");
     }
     const existing = await this.db.commandReceipts.get(receipt.commandId);
-    if (existing && !valuesEqual(existing, receipt)) {
+    // `receivedAt` is a client-side stamp: two tabs draining the same journal
+    // legitimately construct the same server receipt at different local times.
+    // Replay identity covers everything the server authored; the first stored
+    // receipt wins so the journal's record never churns.
+    const replayIdentity = (record: CommandReceiptRecord) => ({ ...record, receivedAt: 0 });
+    if (existing && !valuesEqual(replayIdentity(existing), replayIdentity(receipt))) {
       throw new PrincipalStoreIdentityError("Command receipt changed across replay");
     }
     if (receipt.outcome === "acknowledged") {
@@ -1138,7 +1143,7 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
         });
       }
     }
-    await this.db.commandReceipts.put(receipt);
+    await this.db.commandReceipts.put(existing ?? receipt);
   }
 
   private async applyOperation(
