@@ -99,6 +99,7 @@ import { CollabComposer, CollabRequestBanner, OwnerComposerPresence } from "./Co
 import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, type ParsedCastCommand } from "./castCommand";
 import { ConversationTree } from "./ConversationTree";
 import { useInboxStore, isConvexId, computeNewDividerIndex, convBucketMap, type BucketItem, type ForkChild, type InboxSession, type OptimisticImage } from "../store/inboxStore";
+import { DispatchNotWiredError } from "../store/mutativeMiddleware";
 
 
 // restartSession can answer with a DIFFERENT conversation: the ghost's live
@@ -10776,6 +10777,11 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     // resolves through awaitConvexId → pendingSessionCreates and waits here.
     useInboxStore.getState().trackSessionCreate(forkSessionId, ready);
     ready.catch((err) => {
+      // Parked-unwired is "pending", not "failed": the outbox delivers the fork
+      // create on the next drain (must-deliver) and the server row rekeys the
+      // stub via altKey sync. Discarding here would tell the user the fork
+      // failed while an agent for it spawns minutes later.
+      if (err instanceof DispatchNotWiredError && err.parked) return;
       useInboxStore.getState().discardForkStub(forkSessionId, parentId);
       toast.error(err instanceof Error ? err.message : "Failed to fork");
     });
@@ -10851,6 +10857,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
       .then((result: any) => { resolveForkSessionId(forkSessionId, result.conversation_id); return result.conversation_id as string; });
     store.trackSessionCreate(forkSessionId, ready);
     ready.catch((err: any) => {
+      // Parked-unwired keeps the stub — see doFork's catch.
+      if (err instanceof DispatchNotWiredError && err.parked) return;
       useInboxStore.getState().discardForkStub(forkSessionId, branchId);
       toast.error(err instanceof Error ? err.message : "Failed to fork");
     });

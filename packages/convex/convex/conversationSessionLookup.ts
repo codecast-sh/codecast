@@ -72,6 +72,23 @@ export const findConversationByAnyRefWhere = async (
   const trimmed = (ref ?? "").trim();
   if (!trimmed) return null;
 
+  // A full conversation id wins outright, BEFORE the short-id scan: short_id is
+  // _id.slice(0, 7), so a full id's prefix can collide with some OTHER
+  // conversation's short_id, and scanning short ids first would let a newer
+  // accepted collision shadow the id's true target (same hazard
+  // resolveConversationRefRanked documents). normalizeId also rejects ids from
+  // other tables, which string refs would otherwise pass straight to db.get.
+  // No fallback on an accept miss — re-resolving a full id as a prefix would
+  // just recreate the collision. Fake test ctxs without normalizeId fall
+  // through to the legacy last-resort db.get below.
+  if (typeof ctx.db.normalizeId === "function") {
+    const normalized = ctx.db.normalizeId("conversations", trimmed);
+    if (normalized) {
+      const byId = await ctx.db.get(normalized);
+      return byId && (await accept(byId)) ? byId : null;
+    }
+  }
+
   for (const candidate of await shortIdCandidatesNewestFirst(ctx, trimmed)) {
     if (await accept(candidate)) return candidate;
   }
@@ -92,12 +109,17 @@ export const findConversationByAnyRefWhere = async (
     if (linked && (await accept(linked))) return linked;
   }
 
-  // Last resort: the ref is a full conversation _id.
-  try {
-    const byId = await ctx.db.get(trimmed as any);
-    if (byId && (await accept(byId))) return byId;
-  } catch {
-    // not a valid id shape — fall through
+  // Last resort for fake test ctxs only: the ref may be a full conversation
+  // _id. On a real deployment normalizeId already owned this case above — an
+  // unguarded db.get here would hand back docs from OTHER tables (normalizeId
+  // returned null for the ref precisely because it isn't a conversations id).
+  if (typeof ctx.db.normalizeId !== "function") {
+    try {
+      const byId = await ctx.db.get(trimmed as any);
+      if (byId && (await accept(byId))) return byId;
+    } catch {
+      // not a valid id shape — fall through
+    }
   }
 
   return null;

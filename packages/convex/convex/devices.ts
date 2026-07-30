@@ -334,14 +334,16 @@ export const moveSessionToDevice = mutation({
 export const moveToRemote = mutation({
   args: {
     api_token: v.optional(v.string()),
-    conversation_id: v.id("conversations"),
+    // Any conversation ref — see reassignToDevice.
+    conversation_id: v.string(),
     to_device_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) throw new Error("Authentication required");
-    const conv = await ctx.db.get(args.conversation_id);
-    if (!conv || conv.user_id.toString() !== userId.toString()) throw new Error("not your conversation");
+    const conv = await findConversationByAnyRefWhere(ctx, args.conversation_id, (candidate: any) =>
+      candidate.user_id.toString() === userId.toString());
+    if (!conv) throw new Error("not your conversation");
 
     const now = Date.now();
     const devices = await ctx.db
@@ -363,7 +365,7 @@ export const moveToRemote = mutation({
     const commandId = await ctx.db.insert("daemon_commands", {
       user_id: userId,
       command: "move_to_device" as const,
-      args: JSON.stringify({ conversation_id: args.conversation_id, session_id: conv.session_id, to_device_id: dest.device_id }),
+      args: JSON.stringify({ conversation_id: conv._id, session_id: conv.session_id, to_device_id: dest.device_id }),
       created_at: now,
       target_device_id: source,
     });
@@ -519,14 +521,29 @@ export async function performReassignToDevice(
 export const reassignToDevice = mutation({
   args: {
     api_token: v.optional(v.string()),
-    conversation_id: v.id("conversations"),
+    // Any conversation ref — convex id, short id, or session UUID. The web can
+    // legitimately hold only a session UUID here: a fork page is keyed by the
+    // fork's client-minted session id until the create resolves, and a
+    // v.id() validator rejected those reassigns outright (ct-40176).
+    conversation_id: v.string(),
     device_id: v.string(),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) throw new Error("Authentication required");
+    // Runs-or-owns, matching performReassignToDevice's own routing: runners
+    // restamp in place, owners-not-runners fall through to the cross-user
+    // reparent (which re-authorizes itself).
+    const conv = await findConversationByAnyRefWhere(ctx, args.conversation_id, async (candidate: any) => {
+      const runs = candidate.user_id.toString() === userId.toString();
+      const owns =
+        candidate.owner_user_id?.toString() === userId.toString() ||
+        (await isSessionOwner(ctx, candidate._id, userId));
+      return runs || owns;
+    });
+    if (!conv) throw new Error("not your conversation");
     return performReassignToDevice(ctx, userId, {
-      conversation_id: args.conversation_id,
+      conversation_id: conv._id,
       device_id: args.device_id,
     });
   },

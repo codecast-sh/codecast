@@ -31,6 +31,23 @@ export class StaleDispatchBindingError extends Error {
   }
 }
 
+// An asyncAction fired while no dispatch binding exists. `parked: true` means
+// the write is durably queued in the outbox and WILL deliver on the next drain
+// — callers should treat that as "pending", not "failed" (don't revert local
+// state, don't toast). `parked: false` means the write is genuinely gone.
+export class DispatchNotWiredError extends Error {
+  parked: boolean;
+  constructor(action: string, parked: boolean) {
+    super(
+      parked
+        ? `Dispatch not wired — "${action}" parked for later delivery`
+        : `Dispatch not wired — "${action}" was dropped (no outbox)`,
+    );
+    this.name = "DispatchNotWiredError";
+    this.parked = parked;
+  }
+}
+
 const ACTION_FLAG = Symbol("action");
 const ASYNC_ACTION_FLAG = Symbol("asyncAction");
 const SYNC_FLAG = Symbol("sync");
@@ -256,13 +273,21 @@ export const MAX_OUTBOX_BOOT_ATTEMPTS = 5;
 // dispatch.sendMessage dedups on client_id, so unbounded retry is safe.
 export const MUST_DELIVER_ACTIONS = new Set(["sendMessage"]);
 
+// Fork creates ride convCommand, so the action name alone can't mark them —
+// but they carry the same "user-authored intent" stakes as a send: giving one
+// up silently strands a fork stub the user is already working in. Safe to
+// retry forever: forkFromMessage dedups on session_id.
+export function isMustDeliverEntry(entry: OutboxEntry): boolean {
+  if (MUST_DELIVER_ACTIONS.has(entry.action)) return true;
+  return entry.action === "convCommand" && Array.isArray(entry.args) && entry.args[1] === "forkFromMessage";
+}
+
 // What to do with an outbox entry whose boot-time replay failed: keep it for
 // the next boot with the attempt counted, or give up at the cap. User sends
-// are never dropped — see MUST_DELIVER_ACTIONS.
+// and fork creates are never dropped — see isMustDeliverEntry.
 export function outboxFailureDisposition(entry: OutboxEntry): { keep: boolean; entry: OutboxEntry } {
   const attempts = (entry.attempts ?? 0) + 1;
-  const mustDeliver = MUST_DELIVER_ACTIONS.has(entry.action);
-  return { keep: mustDeliver || attempts < MAX_OUTBOX_BOOT_ATTEMPTS, entry: { ...entry, attempts } };
+  return { keep: isMustDeliverEntry(entry) || attempts < MAX_OUTBOX_BOOT_ATTEMPTS, entry: { ...entry, attempts } };
 }
 
 // Convex rejects `undefined` anywhere in the payload. Action functions are
@@ -579,6 +604,15 @@ export function mutativeMiddleware(config: any, opts?: { retryDelays?: number[] 
           } else {
             enqueued?.catch(() => {});
             console.warn(`[sync] dispatch not wired; ${enqueued ? `parked "${key}" for later delivery` : `"${key}" was dropped (no outbox)`}`);
+            // An asyncAction promises its caller the server result. Returning
+            // the raw returnValue here (historically undefined) made callers'
+            // `.then(...)` throw synchronously — the fork-create flow lost its
+            // error handler that way and a fork could vanish with no toast and
+            // no discard (ct-40175). Reject honestly instead: the caller's
+            // catch runs now; a parked entry still delivers via drainOutbox.
+            if (isAsyncAct) {
+              return Promise.reject(new DispatchNotWiredError(key, !!enqueued));
+            }
           }
         }
 
