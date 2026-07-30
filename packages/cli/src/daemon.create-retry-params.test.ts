@@ -111,5 +111,7 @@ describe("createConversation retry preserves subagent params", () => {
     expect(queued[0].params).toEqual(directCalls[0] as unknown as Record<string, unknown>);
 
     fs.rmSync(base, { recursive: true, force: true });
-  });
+    // processSessionFile does real work per call (git probes on the scratch
+    // project, transcript reads) and runs well past bun's 5s default here.
+  }, 90_000);
 });
