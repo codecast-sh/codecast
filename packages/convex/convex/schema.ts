@@ -354,6 +354,12 @@ export default defineSchema({
     last_user_message_at: v.optional(v.number()),
     is_subagent: v.optional(v.boolean()),
     cli_flags: v.optional(v.string()),
+    // JSON snapshot (StableContextData from shared/contracts) of the stable
+    // feed injected into this session at start — mode + the session cards the
+    // agent saw. Written by conversations.recordStableContext (the SessionStart
+    // hook / Codex launch report); rendered by the web as cards at the top of
+    // the conversation. Server-set only, never optimistically written.
+    stable_context: v.optional(v.string()),
     last_message_role: v.optional(v.union(
       v.literal("user"),
       v.literal("assistant"),
@@ -527,6 +533,22 @@ export default defineSchema({
       searchField: "idle_summary",
       filterFields: ["user_id"],
     }),
+
+  // Stable-context records that arrived before their conversation existed. The
+  // SessionStart hook fires at agent boot and reports by agent session id; a
+  // terminal-started session's conversation row is only created when the daemon
+  // first syncs the transcript, seconds later. recordStableContext parks the
+  // record here and createConversation / updateSessionId consume it (patching
+  // conversations.stable_context, deleting the row). Rows are transient — any
+  // consumer also lazily prunes leftovers older than a day for its user.
+  stable_context_spool: defineTable({
+    user_id: v.id("users"),
+    session_id: v.string(),
+    data: v.string(),
+    created_at: v.number(),
+  })
+    .index("by_session_id", ["session_id"])
+    .index("by_user_created", ["user_id", "created_at"]),
 
   // ── Anchors ─────────────────────────────────────────────────────────────────
   // A standing agent member: one per team (shared) and one per user (personal).
