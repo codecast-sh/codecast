@@ -13,6 +13,7 @@ const WORKFLOW_VERSION = "1";
 const MESSAGING_VERSION = "5"; // bumped: multi-line bodies via stdin heredoc (cast send <id> -)
 const VISUAL_VERSION = "3"; // cast-canvas: broader Plot marks + declarative transforms
 const FORKS_VERSION = "2"; // bumped: --label flag on cast fork / cast spawn + default label inheritance on fork
+const PUBLISH_VERSION = "1"; // cast publish: shareable HTML artifacts
 const LATEST_URL = "https://dl.codecast.sh/latest.json";
 const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
 const UPDATE_RETRY_INTERVAL = 6 * 60 * 60 * 1000; // 6 hours
@@ -126,6 +127,10 @@ export function getVisualVersion(): string {
 
 export function getForksVersion(): string {
   return FORKS_VERSION;
+}
+
+export function getPublishVersion(): string {
+  return PUBLISH_VERSION;
 }
 
 export async function checkForUpdates(force = false): Promise<string | null> {
