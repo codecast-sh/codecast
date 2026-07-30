@@ -395,11 +395,17 @@ export interface PrincipalStoreAdapter {
   readCommand(fence: PrincipalStoreFence, commandId: string): Promise<CommandRecord | null>;
   /** Payload-free diagnostic summary suitable for a developer inspector. */
   inspect(fence: PrincipalStoreFence, now?: number): Promise<PrincipalStoreInspection>;
-  /** Atomically supersede every previous writer for this exact durable view. */
+  /**
+   * Atomically supersede every previous writer for this exact durable view.
+   * `options.supersedes` names a predecessor contract this claim may migrate
+   * away from: the old contract's content is dropped for a fresh bootstrap
+   * and the durable coverage domain resets (deliberate kind migrations only).
+   */
   claimViewWriter(
     fence: PrincipalStoreFence,
     viewKey: string,
     contractId: string,
+    options?: { supersedes?: string },
   ): Promise<WriterClaimResult>;
   commit(
     fence: PrincipalStoreFence,

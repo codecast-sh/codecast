@@ -38,12 +38,28 @@ export type CompleteViewContractResult<TRow> =
       grantKeys: readonly string[];
       coverage: SourceCoverage;
       rows: readonly TRow[];
+      /**
+       * The caller's recently-receipted command ids the server echoed inside
+       * this exact query snapshot (write-reconciliation proof #3). Carried
+       * into log-ts coverage; ignored for other coverage kinds.
+       */
+      echoedCommandIds?: readonly string[];
     };
 
 type CompleteViewDefinitionBase<TId extends string, TArgs, TServerResult, TRow> = {
   id: TId;
   key(args: TArgs): string;
   decode(result: TServerResult): CompleteViewContractResult<TRow>;
+  /**
+   * Coverage source for granted results. "decoded" (default) trusts the
+   * coverage the contract's decode produced (e.g. a server view revision).
+   * "stamped-log-ts" requires every apply to carry a transition-stamped log
+   * timestamp; the decoded coverage is replaced by
+   * `{ kind: "log-ts", ts, commandIds: echoedCommandIds }`.
+   */
+  coverageSource?: "decoded" | "stamped-log-ts";
+  /** Predecessor contract id this contract may migrate a durable view from. */
+  supersedes?: string;
 };
 
 export type CanonicalCompleteViewDefinition<
@@ -151,7 +167,9 @@ export class CompleteViewSource<TArgs, TServerResult, TRow> {
     args: TArgs,
   ): Promise<CompleteViewSource<TArgs, TServerResult, TRow>> {
     const viewKey = contract.key(args);
-    const handle = await engine.beginSource(viewKey, contract.id);
+    const handle = await engine.beginSource(viewKey, contract.id, {
+      supersedes: contract.supersedes,
+    });
     return new CompleteViewSource(engine, contract, args, handle, viewKey);
   }
 
@@ -167,6 +185,7 @@ export class CompleteViewSource<TArgs, TServerResult, TRow> {
     captured: CapturedCompleteViewResult,
     serverResult: TServerResult,
     publish: (result: CommitResult) => void = () => {},
+    options: { stampedLogTs?: string } = {},
   ): Promise<CommitResult | null> {
     if (!captured[CAPTURED_RESULT] ||
       captured.token.viewKey !== this.handle.viewKey ||
@@ -185,6 +204,24 @@ export class CompleteViewSource<TArgs, TServerResult, TRow> {
     if (result.access === "unavailable" || result.access === "unauthenticated") {
       return null;
     }
+    // A stamped-log-ts contract derives GRANTED coverage from the transition
+    // timestamp the delivery arrived at, never from anything the decode
+    // fabricated: the platform's read-set tracking is the version authority.
+    // Access transitions keep their decoded/none coverage (they carry no
+    // comparable result version by design).
+    let coverage: SourceCoverage = result.coverage ?? ({ kind: "none" } as const);
+    if (result.access === "granted" && this.contract.coverageSource === "stamped-log-ts") {
+      if (options.stampedLogTs === undefined) {
+        throw new CompleteViewContractMismatchError(
+          "A stamped-log-ts contract requires a transition timestamp for granted results",
+        );
+      }
+      coverage = {
+        kind: "log-ts",
+        ts: options.stampedLogTs,
+        commandIds: result.echoedCommandIds ?? [],
+      };
+    }
     const fence = {
       principalId: this.engine.principalId,
       principalEpoch: captured.token.principalEpoch,
@@ -192,7 +229,7 @@ export class CompleteViewSource<TArgs, TServerResult, TRow> {
       writerEpoch: captured.token.writerEpoch,
       sourceEpoch: captured.token.sourceEpoch,
       sourceSequence: captured.token.sourceSequence,
-      coverage: result.coverage ?? ({ kind: "none" } as const),
+      coverage,
       viewKey: asViewKey(this.viewKey),
     };
     let input: CompleteViewInput;

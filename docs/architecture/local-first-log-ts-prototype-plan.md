@@ -1,6 +1,6 @@
 # Read-Path Prototype Plan: `log-ts` Coverage
 
-**Status:** Plan for the pl-205 decision (2026-07-30): log-ts is the target coverage design; read-path prototype behind the existing shadow gate; write path stays on receipt machinery until the upstream ask resolves.
+**Status:** SUPERSEDED BY IMPLEMENTATION (2026-07-30, same day): the echoed-command-id realization (design §11.4 proof #3) removed the upstream dependency, so the read path AND write-path coverage shape were built immediately — see local-first-v3-rollout-pipeline.md for the implemented state and rollout stages. This document remains as the design rationale for the phases; the pipeline doc is operative.
 **Prereq reading:** local-first-log-ts-coverage-investigation.md; sync matrix rows SRV-01/02/05, R-13.
 
 ## Governing rule (from the campaign): one slice, one coverage kind, atomically
