@@ -68,6 +68,12 @@ function makeHarness(
         this.items[id] = { _id: id };
         return { id };
       }),
+      // Promoted BY final mode — demotes to action() semantics when the
+      // write master is off (see FLAG_PROMOTED_RECEIPT_ACTIONS).
+      updateBucket: receiptAsyncAction(function (this: any, id: string) {
+        this.items[id] = { _id: id };
+        return { id };
+      }),
       toggle: action(function (this: any) {
         this.enabled = !this.enabled;
       }),
@@ -141,16 +147,35 @@ describe("outboxFailureDisposition", () => {
 });
 
 describe("drainOutbox retention", () => {
-  it("authors the current operation schema and receipt only behind the write master", () => {
+  it("keeps shipped receipt actions envelope-backed in BOTH write postures", () => {
+    // addComment shipped receipt-backed before final mode; a rollback must
+    // return to that proven prod behavior, not to the pre-receipt era.
+    for (const writesEnabled of [false, true]) {
+      const harness = makeHarness([], { localFirstWritesEnabled: writesEnabled });
+      void harness.wrapped.addComment("c1").catch(() => {});
+      const entry = [...harness.outbox.values()][0]!;
+      expect(entry.operationSchemaVersion).toBe(1);
+      expect(entry.result).toMatchObject({
+        receiptActionVersion: 1,
+        commandId: entry.id,
+        localResult: { id: "c1" },
+      });
+    }
+  });
+
+  it("promotes flag-gated actions to receipts only behind the write master", () => {
+    // updateBucket is promoted BY final mode: flag off = its pre-release
+    // fire-and-forget action() semantics (no envelope, no caller promise).
     const legacy = makeHarness([], { localFirstWritesEnabled: false });
-    void legacy.wrapped.addComment("legacy").catch(() => {});
+    const legacyReturn = legacy.wrapped.updateBucket("legacy");
+    expect(legacyReturn).toEqual({ id: "legacy" });
     expect([...legacy.outbox.values()][0]).toMatchObject({
       operationSchemaVersion: 1,
       result: { id: "legacy" },
     });
 
     const finalMode = makeHarness([], { localFirstWritesEnabled: true });
-    void finalMode.wrapped.addComment("final").catch(() => {});
+    void (finalMode.wrapped.updateBucket("final") as Promise<unknown>).catch(() => {});
     const entry = [...finalMode.outbox.values()][0]!;
     expect(entry.operationSchemaVersion).toBe(1);
     expect(entry.result).toMatchObject({
