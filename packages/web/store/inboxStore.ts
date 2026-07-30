@@ -279,6 +279,11 @@ export type InboxSession = {
   // conversation fields, so acting on a teammate's card would hide it from them.
   owner_user_id?: string | null;
   owned_by_me?: boolean;
+  // Unacknowledged handoff: a teammate assigned this session to the current user
+  // and they haven't acked it yet (session_owners.seen_at unset). Stamped by
+  // computeInboxSessions; cleared by ackSessionAssignment (server) and
+  // clearAssignedPing (local-first).
+  assigned_ping?: { by_name: string; note?: string | null; at: number } | null;
   // An Anchor's session renders under its bot identity (acting_user_id), shown
   // even on the host's own row; is_anchor marks it a standing member.
   acting_user_id?: string | null;
@@ -1188,6 +1193,14 @@ export function sessionStructuralSig(s: InboxSession): string {
     nestParentIdOf(s) || "",
     s.forked_from || "",
     orchestrationGroupLabelOf(s) || "",
+    // Presence of an unacked assignment flips the row's prominent treatment.
+    // Changes only on assign/ack, never on heartbeats.
+    s.assigned_ping ? 1 : 0,
+    // Harness loop state decides trigger-set membership and absorption
+    // (partitionTriggerInbox reads it off this same subscription). Distilled to
+    // the fields that change rows; stamps once per turn end/wakeup, never on
+    // heartbeats.
+    s.loop_state ? `${s.loop_state.status}:${s.loop_state.wakeup_at}` : "",
   ].join("\x1f");
 }
 
@@ -2288,6 +2301,9 @@ interface InboxStoreState {
   // -- Generic sync --
   syncTable: (field: string, incoming: any, opts?: SyncOpts) => void;
   syncRecord: (field: string, id: string, record: any) => void;
+  // Local-first clear of a row's "assigned to you" ping (paired with the
+  // ackSessionAssignment mutation, which the caller fires separately).
+  clearAssignedPing: (conversationId: string) => void;
   syncOverlay: (field: string, overlayById: Record<string, Record<string, any>>) => void;
   syncMentionIndex: (kind: "tasks" | "docs" | "plans", items: any[]) => void;
   // -- Incremental-sync watermark (IDB-persisted, keyed by "<namespace>:<wsKey>") --
@@ -4466,6 +4482,14 @@ export const useInboxStore = create<InboxStoreState>(
         }
       }
     }
+  }),
+
+  // Local-first retire of the "assigned to you" ping: the UI clears it the
+  // moment the user acks, while the ackSessionAssignment mutation round-trips;
+  // the next inbox sync reflects the server's cleared state and agrees.
+  clearAssignedPing: sync(function (this: Draft, conversationId: string) {
+    const row = this.sessions[conversationId];
+    if (row?.assigned_ping) row.assigned_ping = null;
   }),
 
   // Merge a small high-churn map (e.g. heartbeat liveness keyed by id) onto a
