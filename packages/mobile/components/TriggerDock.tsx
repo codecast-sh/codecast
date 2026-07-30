@@ -1,4 +1,5 @@
-import { StyleSheet, TouchableOpacity, View as RNView, Text as RNText } from 'react-native';
+import { StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
+import { Text as RNText } from '@/components/Themed';
 import { useState, useCallback } from 'react';
 import { useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
