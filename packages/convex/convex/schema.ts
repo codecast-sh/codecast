@@ -2361,6 +2361,26 @@ export default defineSchema({
       filterFields: ["user_id", "doc_type", "project_id"],
     }),
 
+  // Published HTML artifacts (`cast publish` → codecast.sh/a/<slug>). The HTML
+  // body lives in file storage, not the row; the unguessable slug is the only
+  // access gate (same model as doc share links). See artifacts.ts.
+  artifacts: defineTable({
+    slug: v.string(),
+    user_id: v.id("users"),
+    title: v.string(),
+    // Publish identity: re-publishing the same absolute path updates the same
+    // artifact (stable URL). Absent for artifacts minted with --new.
+    source_path: v.optional(v.string()),
+    storage_id: v.id("_storage"),
+    size: v.number(),
+    version: v.number(),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_slug", ["slug"])
+    .index("by_user", ["user_id"])
+    .index("by_user_path", ["user_id", "source_path"]),
+
   doc_snapshots: defineTable({
     id: v.string(),
     version: v.number(),
