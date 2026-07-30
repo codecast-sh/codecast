@@ -602,8 +602,10 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             onMobileClose={onMobileClose}
             addTitle="New page"
             onAdd={async () => {
-              const result = await createDoc({ title: "", doc_type: "note" });
-              if (result?.id) router.push(`/docs/${result.id}`);
+              await createDoc(
+                { title: "", doc_type: "note" },
+                { version: 1, kind: "navigate" },
+              );
             }}
             views={docViews}
             expanded={viewSectionOverride.docs ?? (isDocs || isPlans)}

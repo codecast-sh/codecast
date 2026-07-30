@@ -124,7 +124,7 @@ export function undoableHideSession(id: string, mode: HideSessionMode) {
       animateSessionEnter(id);
       // Push the SNAPSHOT flags, not blanket nulls: undoing a dismiss of a
       // session that was stashed at the time must land it back in Stashed.
-      store._dispatch("patch", [], {
+      store.applyUndoPatches({
         conversations: Object.fromEntries(
           snap.allIds.map((sid) => {
             const prev = snap.sessions[sid] ?? (snap.conversations[sid] as any);
@@ -135,7 +135,7 @@ export function undoableHideSession(id: string, mode: HideSessionMode) {
           })
         ),
         client_state: { _: { current_conversation_id: snap.currentSessionId } },
-      }).catch(() => {});
+      });
       // Schedules the kill canceled come back with the session: the patch above
       // clears inbox_dismissed_at, and the server's un-hide transition
       // (dispatch.applyPatches) re-arms the stamped tasks authoritatively.
@@ -180,9 +180,9 @@ export function undoableDeferSession(id: string) {
         conversations: newConvos,
         pending: newPending,
       });
-      store._dispatch("patch", [], {
+      store.applyUndoPatches({
         conversations: { [id]: { inbox_deferred_at: prevConvo?.inbox_deferred_at ?? null } },
-      }).catch(() => {});
+      });
     },
     redo: () => {
       useInboxStore.getState().deferSession(id);
@@ -221,9 +221,9 @@ export function undoablePinSession(id: string) {
         conversations: newConvos,
         pending: newPending,
       });
-      store._dispatch("patch", [], {
+      store.applyUndoPatches({
         conversations: { [id]: { inbox_pinned_at: prevPinnedAt } },
-      }).catch(() => {});
+      });
     },
     redo: () => {
       useInboxStore.getState().pinSession(id);
@@ -269,9 +269,7 @@ export function undoableArchiveDoc(id: string) {
       if (detailSnap) newDetails[id] = detailSnap;
 
       useInboxStore.setState({ docs: newDocs, docDetails: newDetails });
-      store._dispatch("patch", [], {
-        docs: { [id]: { archived_at: null } },
-      }).catch(() => {});
+      store.restoreArchivedDoc(id);
     },
     redo: () => {
       useInboxStore.getState().archiveDoc(id);

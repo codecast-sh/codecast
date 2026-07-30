@@ -1,5 +1,4 @@
 import { useState, useRef } from "react";
-import { useRouter } from "next/navigation";
 import { useMentionQuery } from "../hooks/useMentionQuery";
 import { useImageUpload } from "../hooks/useImageUpload";
 import { useInboxStore } from "../store/inboxStore";
@@ -35,7 +34,6 @@ const JOIN_POLICY_OPTIONS = [
 ];
 
 export function CreateDocModal({ onClose, initialType }: { onClose: () => void; initialType?: string }) {
-  const router = useRouter();
   const createDoc = useInboxStore((s) => s.createDoc);
   const createPlan = useInboxStore((s) => s.createPlan);
   const handleMentionQuery = useMentionQuery();
@@ -67,7 +65,7 @@ export function CreateDocModal({ onClose, initialType }: { onClose: () => void; 
           : undefined;
         const desc = contentRef.current.trim();
         const goalText = [goal.trim(), desc].filter(Boolean).join("\n\n") || undefined;
-        const result = await createPlan({
+        await createPlan({
           title: title.trim(),
           goal: goalText,
           status: "active",
@@ -76,16 +74,17 @@ export function CreateDocModal({ onClose, initialType }: { onClose: () => void; 
           join_policy: joinPolicy || undefined,
           join_k: joinPolicy === "k_of_n" && joinK ? parseInt(joinK, 10) : undefined,
           acceptance_criteria: criteria,
-        });
+        }, { version: 1, kind: "navigate" });
         toast.success("Plan created");
         onClose();
-        if (result?.short_id) router.push(`/plans/${result.short_id}`);
       } else {
         const content = contentRef.current.trim();
-        const result = await createDoc({ title: title.trim(), content, doc_type: docType });
+        await createDoc(
+          { title: title.trim(), content, doc_type: docType },
+          { version: 1, kind: "navigate" },
+        );
         toast.success(`Created: ${title.trim()}`);
         onClose();
-        if (result?.id) router.push(`/docs/${result.id}`);
       }
     } catch {
       toast.error(isPlan ? "Failed to create plan" : "Failed to create doc");

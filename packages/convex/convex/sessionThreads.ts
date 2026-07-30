@@ -15,7 +15,19 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 // free so it runs on the Convex side. Pulls the sender short_id and the human body
 // out of the wire wrapper, tolerating the injection noise the daemon can prepend.
 const SESSION_MESSAGE_RE =
-  /<session-message\s+from="([^"]*)"[^>]*>([\s\S]*?)<\/session-message>/;
+  /<session-message\s+from="([^"]*)"[^>]*>([\s\S]*)<\/session-message>/;
+
+function removeLeadingFramingNewline(body: string): string {
+  if (body.startsWith("\r\n")) return body.slice(2);
+  if (body.startsWith("\n")) return body.slice(1);
+  return body;
+}
+
+function removeTrailingFramingNewline(body: string): string {
+  if (body.endsWith("\r\n")) return body.slice(0, -2);
+  if (body.endsWith("\n")) return body.slice(0, -1);
+  return body;
+}
 
 function stripInjectionNoise(text: string): string {
   return text
@@ -24,7 +36,7 @@ function stripInjectionNoise(text: string): string {
     .replace(/^[\x00-\x1f\s]+/, "");
 }
 
-function parseSessionMessage(
+export function parseSessionThreadMessage(
   raw: string | null | undefined
 ): { from: string; body: string } | null {
   if (!raw) return null;
@@ -32,7 +44,10 @@ function parseSessionMessage(
   if (!cleaned.startsWith("<session-message")) return null;
   const m = cleaned.match(SESSION_MESSAGE_RE);
   if (!m) return null;
-  return { from: (m[1] || "").trim(), body: (m[2] || "").trim() };
+  return {
+    from: (m[1] || "").trim(),
+    body: removeTrailingFramingNewline(removeLeadingFramingNewline(m[2] || "")),
+  };
 }
 
 type NodeOut = {
@@ -173,7 +188,7 @@ export const listSessionThreads = query({
 
     const links = [];
     for (const r of recent) {
-      const parsed = parseSessionMessage(r.content);
+      const parsed = parseSessionThreadMessage(r.content);
       const toConv = convCache.get(r.conversation_id.toString());
       const toId = addNode(toConv) ?? addGhost(r.conversation_id.toString().slice(0, 7));
 

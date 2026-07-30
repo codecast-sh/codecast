@@ -1,6 +1,15 @@
 import { create } from "zustand";
 import { useSyncExternalStore, useRef } from "react";
-import { mutativeMiddleware, action, asyncAction, sync } from "./mutativeMiddleware";
+import {
+  mutativeMiddleware,
+  action,
+  asyncAction,
+  receiptAsyncAction,
+  DispatchNotWiredError,
+  isParkedDispatchError,
+  sync,
+  type DurableCreateContinuation,
+} from "./mutativeMiddleware";
 import { declareViewNav, hasViewNavigated, recordNavEvent, type ViewNavSource } from "./viewNav";
 import { applySyncTable, applySyncRecord, type PendingEntry } from "./syncProtocol";
 import { soundDismiss, soundKill } from "../lib/sounds";
@@ -15,6 +24,38 @@ import { type AgentStatus, ACTIVE_AGENT_STATUSES, isLivenessStale, modelOptionKe
 import { isSubagentConversation, nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 
 export type { PendingEntry } from "./syncProtocol";
+
+// A tracked create can outlive the UI's bounded resolver window while its
+// principal outbox remains the durable owner of the command. Subclass the
+// existing parked error so every send caller keeps the optimistic message
+// pending and the normal rekey continuation can redrive it later.
+export class SessionCreatePendingError extends DispatchNotWiredError {
+  constructor() {
+    super("createSession", true);
+    this.name = "SessionCreatePendingError";
+    this.message = "Session creation is still pending durable delivery";
+  }
+}
+
+export async function awaitTrackedSessionCreateResult(
+  create: Promise<string>,
+  timeoutMs = 30_000,
+): Promise<string> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      create,
+      new Promise<string>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new SessionCreatePendingError()),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
 
 // Convex-id check lives in lib/entityLinks (the entity-routing source of truth).
 // Imported for internal use AND re-exported so the many call sites that import
@@ -172,10 +213,32 @@ export type InboxSession = {
   git_root?: string;
   git_branch?: string;
   agent_type: string;
+  // Local-only create intent for ContextChat stubs. Persisted with the stub so
+  // an outbox-cap/boot heal can reissue createSession without losing the
+  // originating task/doc/plan relation; the server row never needs this field.
+  _linkedObject?: { type: string; id: string };
+  // Local-only recovery metadata for a cross-agent continuation. The server
+  // represents it as parent_conversation_id (not forked_from), but a stranded
+  // stub must still reissue forkFromMessage with target_agent_type rather than
+  // degrade into a blank createSession.
+  _forkTargetAgentType?: string;
+  // Local-only launch intent captured when createSession is enqueued. If the
+  // create parks and the user changes a picker on the stub before it lands,
+  // rekey reconciliation compares the latest row with this frozen snapshot and
+  // durably reconfigures the blank real session before sending its first turn.
+  _launchSnapshot?: SessionLaunchSnapshot;
+  // Local-only filing intent for a session created while a label filter was
+  // focused. It survives a parked create/reload and is cleared only after the
+  // authoritative bucket-assignment row syncs back.
+  _postCreateBucketId?: string;
   // Last-known model id (e.g. "claude-opus-4-8"); conversations can switch
   // models mid-stream. Shown as an inbox badge when ui.show_model_badge is on.
   model?: string | null;
   effort?: string | null;
+  // Per-session stable-context launch override and feed exclusions. These are
+  // local-only while a new-session stub is pending, then ride create/reconfigure.
+  stable_mode?: string;
+  stable_exclude?: string[];
   message_count: number;
   idle_summary?: string;
   is_idle: boolean;
@@ -2223,6 +2286,17 @@ interface InboxStoreState {
   _clearDispatch: (owner: object) => void;
   _setDispatchError: (fn: (action: string, error: unknown, args?: unknown) => void) => void;
   _dispatch: (action: string, args: any, patches?: any, result?: any) => Promise<any>;
+  _handleReceiptRejection: (
+    actionName: string,
+    localResult: unknown,
+  ) => string[] | false;
+  _handleReceiptAcknowledgement: (
+    actionName: string,
+    continuation: DurableCreateContinuation,
+    serverResult: unknown,
+    commandId: string,
+  ) => void;
+  _clearPostCreateBucketIntent: (conversationId: string, bucketId: string) => void;
   dispatchErrors: number;
   // Last PERMANENT dispatch rejection (server ran the write and refused it) —
   // ephemeral, raw-set by the dispatch error handler; a platform-specific
@@ -2244,6 +2318,8 @@ interface InboxStoreState {
   renameSession: (id: string, title: string) => void;
   switchProject: (convId: string, path: string) => void;
   patchConversation: (id: string, fields: Record<string, any>) => void;
+  flushResolvedSessionFields: (id: string, fields: Record<string, any>) => void;
+  applyUndoPatches: (patches: Record<string, Record<string, Record<string, any>>>) => void;
   toggleFavorite: (id: string) => void;
   setPrivacy: (id: string, isPrivate: boolean) => void;
   setTeamVisibility: (id: string, visibility: "summary" | "full" | null) => void;
@@ -2254,7 +2330,7 @@ interface InboxStoreState {
   resumeSession: (convId: string) => Promise<any>;
   sendEscape: (convId: string) => void;
   convCommand: (convId: string, command: string, extraArgs?: Record<string, any>, optimistic?: Record<string, any>) => Promise<any>;
-  createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[] }) => Promise<any>;
+  createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[] }) => Promise<any>;
   // Create the server session for a DEFERRED stub, sourcing project + agent from
   // the LIVE stub row (the new-session pickers write it via updateSessionProject /
   // setConversationAgent) rather than a begin-time closure. This is what makes a
@@ -2416,6 +2492,11 @@ interface InboxStoreState {
   // had no server conversation. Returns the real id, or null if the create
   // still hasn't landed. Drives the heal-on-load sweep.
   healStrandedStub: (stubId: string) => Promise<string | null>;
+  // Hydration safety net for the tiny crash window after a stub rekeyed but
+  // before its first-message fallback could enqueue. Safe on every boot because
+  // sendMessage is idempotent on the persisted client id.
+  redrivePendingMessages: () => void;
+  resumePostCreateSessionIntents: () => void;
 
   // -- Fork navigation --
   addOptimisticFork: (fork: ForkChild) => void;
@@ -2471,13 +2552,13 @@ interface InboxStoreState {
   // -- Recently visited (sessions, chip views, pages) — newest first --
   recentVisits: RecentVisit[];
   recordRecentVisit: (visit: Omit<RecentVisit, "ts">) => void;
-  createBucket: (opts: { name: string; color?: string }) => Promise<{ _id: string }>;
+  createBucket: (opts: { name: string; color?: string }, continuation?: DurableCreateContinuation) => Promise<{ bucketId: string }>;
   updateBucket: (id: string, fields: { name?: string; color?: string; sort_order?: number; archived_at?: number | null }) => void;
   assignSessionToBucket: (conversationId: string, bucketId: string | null) => void;
 
   // Teammate comment actions (optimistic → dispatch side-effect → live-query reconcile).
   addComment: (conversationId: string, content: string, opts?: { messageId?: string; parentCommentId?: string }) => Promise<unknown>;
-  editComment: (commentId: string, content: string) => void;
+  editComment: (commentId: string, content: string) => Promise<unknown>;
   deleteComment: (commentId: string) => Promise<unknown>;
   askAgentInThread: (conversationId: string, opts?: { messageId?: string }) => Promise<unknown>;
 
@@ -2562,9 +2643,9 @@ interface InboxStoreState {
   updateTaskStatus: (shortId: string, status: string) => Promise<any>;
   updateTask: (shortId: string, fields: { status?: string; priority?: string; title?: string; description?: string; labels?: string[]; triage_status?: string; assignee?: string; execution_status?: string; project_id?: string; project_path?: string }) => Promise<any>;
   createTask: (opts: { title: string; description?: string; task_type?: string; priority?: string; status?: string; project_id?: string; labels?: string[]; assignee?: string; plan_id?: string; team_id?: string; workspace?: string; project_path?: string }) => Promise<any>;
-  createDoc: (opts: { title: string; content?: string; doc_type?: string; parent_id?: string; labels?: string[] }) => Promise<any>;
-  createPlan: (opts: { title: string; body?: string; goal?: string; acceptance_criteria?: string[]; status?: string; source?: string; project_id?: string; model_stylesheet?: string; fidelity?: string; join_policy?: string; join_k?: number; workspace?: "personal" | "team"; team_id?: string }) => Promise<any>;
-  createProject: (opts: { title: string; description?: string; status?: string; color?: string; icon?: string }) => Promise<any>;
+  createDoc: (opts: { title: string; content?: string; doc_type?: string; parent_id?: string; labels?: string[] }, continuation?: DurableCreateContinuation) => Promise<any>;
+  createPlan: (opts: { title: string; body?: string; goal?: string; acceptance_criteria?: string[]; status?: string; source?: string; project_id?: string; model_stylesheet?: string; fidelity?: string; join_policy?: string; join_k?: number; workspace?: "personal" | "team"; team_id?: string }, continuation?: DurableCreateContinuation) => Promise<any>;
+  createProject: (opts: { title: string; description?: string; status?: string; color?: string; icon?: string }, continuation?: DurableCreateContinuation) => Promise<any>;
   promoteDocToPlan: (docId: string) => Promise<any>;
   ensurePlanDoc: (planShortId: string) => Promise<any>;
   publishToDirectory: (opts: { conversation_id: string; title: string; description?: string; tags?: string[] }) => Promise<any>;
@@ -2575,6 +2656,7 @@ interface InboxStoreState {
   updateDoc: (id: string, fields: { content?: string; title?: string; doc_type?: string; labels?: string[] }) => void;
   pinDoc: (id: string, pinned: boolean) => Promise<any>;
   archiveDoc: (id: string) => Promise<any>;
+  restoreArchivedDoc: (id: string) => void;
 
   // -- Cached query data (local-first) --
   currentUser: any | null;
@@ -2897,6 +2979,7 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
     preserveFields: [
       "agent_status", "is_idle", "is_unresponsive", "awaiting_input",
       "is_connected", "tmux_session", "permission_mode",
+      "_postCreateBucketId",
     ],
     transform(draft, table, incoming) {
       for (const s of incoming as any[]) {
@@ -3054,6 +3137,189 @@ function rekeyPending(pending: Record<string, any>, oldId: string, newId: string
       delete pending[key];
     }
   }
+}
+
+type SessionLaunchSnapshot = {
+  agent_type?: string;
+  project_path?: string;
+  git_root?: string;
+  model?: string | null;
+  effort?: string | null;
+  stable_mode?: string;
+  stable_exclude?: string[];
+};
+
+function launchSnapshotFromRow(row: any): SessionLaunchSnapshot {
+  return {
+    agent_type: row?.agent_type,
+    project_path: row?.project_path,
+    git_root: row?.git_root,
+    model: row?.model,
+    effort: row?.effort,
+    stable_mode: row?.stable_mode,
+    stable_exclude: Array.isArray(row?.stable_exclude) ? [...row.stable_exclude] : undefined,
+  };
+}
+
+function launchSnapshotsEqual(a: SessionLaunchSnapshot, b: SessionLaunchSnapshot): boolean {
+  return a.agent_type === b.agent_type
+    && a.project_path === b.project_path
+    && a.git_root === b.git_root
+    && a.model === b.model
+    && a.effort === b.effort
+    && a.stable_mode === b.stable_mode
+    && JSON.stringify(a.stable_exclude ?? []) === JSON.stringify(b.stable_exclude ?? []);
+}
+
+function pendingLaunchReconfigure(row: any): Record<string, any> | null {
+  const requested = row?._launchSnapshot as SessionLaunchSnapshot | undefined;
+  if (!requested) return null;
+  const latest = launchSnapshotFromRow(row);
+  if (launchSnapshotsEqual(requested, latest)) return null;
+  const agentType = latest.agent_type || requested.agent_type || "claude_code";
+  const model = modelOptionKey(latest.model ?? undefined, agentType);
+  return {
+    agent_type: agentType,
+    ...(latest.project_path !== undefined ? { project_path: latest.project_path } : {}),
+    ...(latest.git_root !== undefined ? { git_root: latest.git_root } : {}),
+    // Explicit defaults clear a launch pin that was selected when the parked
+    // create was first enqueued and then removed on the still-local stub.
+    model,
+    effort: latest.effort || "default",
+    ...(latest.stable_mode ? { stable_mode: latest.stable_mode } : {}),
+    ...(latest.stable_exclude?.length ? { stable_exclude: latest.stable_exclude } : {}),
+  };
+}
+
+// Coalesce the normal caller continuation with the rekey safety net. The
+// caller sends in a promise microtask after resolveSessionId; the fallback runs
+// on the next task. A short in-memory window prevents a second outbox entry in
+// that healthy path, while a reload intentionally forgets it and safely
+// re-drives by client_id (the server deduplicates that id).
+const recentlyRequestedPendingMessages = new Map<string, number>();
+const PENDING_MESSAGE_REDRIVE_COALESCE_MS = 5_000;
+const resolvedSessionPreparations = new Map<string, Promise<void>>();
+
+function notePendingMessageSendRequested(clientId?: string): void {
+  if (!clientId) return;
+  const now = Date.now();
+  recentlyRequestedPendingMessages.set(clientId, now);
+  if (recentlyRequestedPendingMessages.size <= 500) return;
+  for (const [id, at] of recentlyRequestedPendingMessages) {
+    if (now - at > PENDING_MESSAGE_REDRIVE_COALESCE_MS) {
+      recentlyRequestedPendingMessages.delete(id);
+    }
+  }
+}
+
+function redrivePendingMessagesFor(convexId: string): void {
+  const store = useInboxStore.getState();
+  for (const message of store.pendingMessages[convexId] || []) {
+    if (message._isFailed) continue;
+    const clientId = message._clientId || message._id;
+    const requestedAt = recentlyRequestedPendingMessages.get(clientId);
+    if (requestedAt && Date.now() - requestedAt < PENDING_MESSAGE_REDRIVE_COALESCE_MS) continue;
+    const content = message.content || "";
+    const imageIds = (message.images || [])
+      .map((image: any) => image?.storage_id)
+      .filter((id: unknown): id is string => typeof id === "string");
+    if (!content.trim() && imageIds.length === 0) continue;
+    store.sendMessage(convexId, content, imageIds.length ? imageIds : undefined, clientId);
+  }
+}
+
+function resumePostCreateBucketIntentFor(
+  convexId: string,
+  explicitBucketId?: string,
+): void {
+  if (!isConvexId(convexId)) return;
+  const store = useInboxStore.getState();
+  const bucketId = store.sessions[convexId]?._postCreateBucketId
+    ?? (store.conversations[convexId] as any)?._postCreateBucketId;
+  if (!bucketId) return;
+  // A Promise continuation captured when the session was first summoned can
+  // run after the user has moved it elsewhere (or a later summon superseded
+  // the focused bucket). The persisted marker is the current intent; never let
+  // a stale closure recreate an older filing after that marker changed.
+  if (explicitBucketId && explicitBucketId !== bucketId) return;
+
+  const assignment = (Object.values(store.bucketAssignments) as BucketAssignmentItem[])
+    .find((row) => row.conversation_id === convexId);
+  if (assignment && isConvexId(String(assignment._id))) {
+    // Any authoritative row is newer proof than this create-time marker. It may
+    // match the original bucket, or it may represent a later manual move/unfile
+    // from this or another client. In either case the one-shot intent is spent.
+    store._clearPostCreateBucketIntent(convexId, bucketId);
+    return;
+  }
+  // The assignment action is durable and the server upsert is idempotent. Keep
+  // the marker until an authoritative (Convex-id-keyed) assignment echo lands,
+  // so a crash between this call and its outbox commit merely retries.
+  store.assignSessionToBucket(convexId, bucketId);
+}
+
+function scheduleResolvedSessionContinuations(
+  convexId: string,
+  launchReconfigure: Record<string, any> | null,
+): void {
+  const prepare = new Promise<void>((resolve) => {
+    setTimeout(() => {
+      void (async () => {
+        // If the user changed launch controls after createSession was durably
+        // parked, its frozen outbox args are stale. Reconfigure the still-blank
+        // real session before releasing any first-message waiter.
+        if (launchReconfigure) {
+          try {
+            await useInboxStore.getState().convCommand(
+              convexId,
+              "reconfigureSession",
+              launchReconfigure,
+            );
+          } catch (error) {
+            if (!isParkedDispatchError(error)) {
+              console.error("[sync] failed to reconcile parked session launch preferences", error);
+            }
+          }
+        }
+
+        // Generic action() edits made while the row still had a stub id were
+        // protected in `pending`, but groupPatchesByTable correctly refused to
+        // send a non-Convex document id. Flush those exact latest values now
+        // through a named durable action (the old raw _dispatch could vanish).
+        const state = useInboxStore.getState();
+        resumePostCreateBucketIntentFor(convexId);
+        const prefix = `conversations:${convexId}:`;
+        const fields: Record<string, any> = {};
+        for (const [key, entry] of Object.entries(state.pending || {})) {
+          if ((entry as any).type !== "field" || !key.startsWith(prefix)) continue;
+          fields[key.slice(prefix.length)] = (entry as any).value;
+        }
+        if (Object.keys(fields).length > 0) {
+          state.flushResolvedSessionFields(convexId, fields);
+        }
+      })().finally(() => {
+        resolve();
+        // A create dispatched while unwired rejects its in-memory Promise
+        // honestly, so a caller may have stopped awaiting before the
+        // by_session_id row arrived. Run the persisted-message fallback one
+        // task AFTER preparation: a healthy awaitConvexId caller resumes in the
+        // intervening microtask, sends normally, and records its clientId.
+        setTimeout(() => {
+          redrivePendingMessagesFor(convexId);
+        }, 0);
+      });
+    }, 0);
+  });
+  resolvedSessionPreparations.set(convexId, prepare);
+  void prepare.then(() => {
+    if (resolvedSessionPreparations.get(convexId) === prepare) {
+      resolvedSessionPreparations.delete(convexId);
+    }
+  });
+}
+
+async function awaitResolvedSessionPreparation(convexId: string): Promise<void> {
+  await resolvedSessionPreparations.get(convexId);
 }
 
 function rekeyId(draft: any, oldId: string, newId: string) {
@@ -3909,6 +4175,38 @@ export const useInboxStore = create<InboxStoreState>(
     Object.assign(this.conversations[id], fields);
   }),
 
+  // Rekey-only durable server flush. Stub writes are protected locally but
+  // cannot be emitted as generic Convex patches until the real document id is
+  // known. The local row already contains these values, so this action is a
+  // deliberate no-op in memory; dispatch.ts validates/applies its explicit
+  // field payload through the same generic conversation patch gate.
+  flushResolvedSessionFields: action(function (
+    _id: string,
+    _fields: Record<string, any>,
+  ) {}),
+
+  _clearPostCreateBucketIntent: sync(function (
+    this: Draft,
+    conversationId: string,
+    bucketId: string,
+  ) {
+    const clear = (row: any) => {
+      if (row?._postCreateBucketId === bucketId) {
+        delete row._postCreateBucketId;
+      }
+    };
+    clear(this.sessions[conversationId]);
+    clear(this.conversations[conversationId]);
+  }),
+
+  // Undo restores its full local snapshot in undoActions.ts. This no-op action
+  // carries only the exact authoritative field tombstones/values through the
+  // durable outbox; dispatch.ts applies them with the ordinary validated patch
+  // gate, so a reload cannot lose the undo's server half.
+  applyUndoPatches: action(function (
+    _patches: Record<string, Record<string, Record<string, any>>>,
+  ) {}),
+
   // Favorite is a plain conversation flag (server derives the favorites query
   // from is_favorite), so it rides applyPatches too. We also keep the synced
   // favorites list in sync optimistically so the sidebar updates without a
@@ -3993,6 +4291,7 @@ export const useInboxStore = create<InboxStoreState>(
   // synced pending_messages row, not a return value. Args mirror the server
   // handler: [conversation_id, content, image_storage_ids, client_id].
   sendMessage: action(function (this: Draft, _convId: string, _content: string, _imageIds?: string[], _clientId?: string) {
+    notePendingMessageSendRequested(_clientId);
     // No local mutation here: durability for the visible message comes from the
     // persisted pendingMessages map. This body exists only so the middleware
     // dispatches the args to the server and queues them in the outbox.
@@ -4014,20 +4313,26 @@ export const useInboxStore = create<InboxStoreState>(
     if (optimistic && this.sessions[convId]) Object.assign(this.sessions[convId], optimistic);
   }),
 
-  createSession: asyncAction(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[] }) {
+  createSession: asyncAction(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[] }) {
     const sessionId = opts.session_id || (Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
     if (!opts.session_id) opts.session_id = sessionId;
+    const existing = this.sessions[sessionId];
+    const linkedObject = opts.linked_object ?? existing?._linkedObject;
     const now = Date.now();
     // model/effort ride the dispatched args (the Convex createSession handler
     // forwards them to the daemon's launch flags) AND get stamped on the local
     // row so the badge keeps the launch picker's choice through the create —
     // opts.model is the contract option key ("opus"), the row wants the full id.
-    this.sessions[sessionId] = {
+    const normalizedModel = opts.model
+      ? (opts.agent_type === "claude_code" ? `claude-${opts.model}` : opts.model)
+      : existing?.model;
+    const nextSession = {
+      ...existing,
       _id: sessionId,
       session_id: sessionId,
       title: "New session",
       updated_at: now,
-      started_at: now,
+      started_at: existing?.started_at ?? now,
       project_path: opts.project_path,
       git_root: opts.git_root,
       agent_type: opts.agent_type,
@@ -4035,9 +4340,16 @@ export const useInboxStore = create<InboxStoreState>(
       is_idle: true,
       has_pending: false,
       last_user_message: null,
-      ...(opts.model ? { model: opts.agent_type === "claude_code" ? `claude-${opts.model}` : opts.model } : {}),
-      ...(opts.effort ? { effort: opts.effort } : {}),
+      ...(linkedObject ? { _linkedObject: linkedObject } : {}),
+      ...(normalizedModel ? { model: normalizedModel } : {}),
+      ...(opts.effort || existing?.effort ? { effort: opts.effort ?? existing?.effort } : {}),
+      ...(opts.stable_mode || existing?.stable_mode ? { stable_mode: opts.stable_mode ?? existing?.stable_mode } : {}),
+      ...(opts.stable_exclude?.length || existing?.stable_exclude?.length
+        ? { stable_exclude: opts.stable_exclude ?? existing?.stable_exclude }
+        : {}),
     } as InboxSession;
+    nextSession._launchSnapshot = launchSnapshotFromRow(nextSession);
+    this.sessions[sessionId] = nextSession;
   }),
 
   // Read the CURRENT project + agent off the stub row and create the server
@@ -4069,6 +4381,9 @@ export const useInboxStore = create<InboxStoreState>(
       project_path: projectPath,
       git_root: gitRoot || undefined,
       session_id: stubId,
+      ...(cur?._linkedObject?.type && cur?._linkedObject?.id
+        ? { linked_object: cur._linkedObject }
+        : {}),
       ...(modelKey !== "default" ? { model: modelKey } : {}),
       ...(cur?.effort ? { effort: cur.effort } : {}),
       ...(s.isolatedWorktreeMode ? { isolated: true } : {}),
@@ -4090,6 +4405,7 @@ export const useInboxStore = create<InboxStoreState>(
   // createSession — never 32 chars, so isConvexId() correctly treats it as local.
   beginOptimisticSession: (opts: { agentType: string; projectPath?: string; gitRoot?: string; reuse?: boolean; deferCreate?: boolean; create: (stubId: string) => Promise<string> }) => {
     const store = get();
+    const bucketAtCreate = store.activeBucketFilter;
     // Converge on the existing blank session for this project+agent instead of
     // minting another one — repeated summon/abandon cycles otherwise strand an
     // empty "New Session" row (and a pre-warmed daemon process) per summon.
@@ -4100,13 +4416,27 @@ export const useInboxStore = create<InboxStoreState>(
         const ready = pendingCreate ?? Promise.resolve(existing);
         // A reused blank summoned inside a focused bucket files there too —
         // unless it was already filed somewhere by hand.
-        const bucketAtCreate = store.activeBucketFilter;
-        if (bucketAtCreate) {
+        const existingAssignment = (
+          Object.values(store.bucketAssignments) as BucketAssignmentItem[]
+        ).find((row) => row.conversation_id === existing);
+        if (bucketAtCreate && !existingAssignment) {
+          const existingSession = store.sessions[existing];
+          const existingConversation = store.conversations[existing];
+          if (existingSession) {
+            store.syncRecord("sessions", existing, {
+              ...existingSession,
+              _postCreateBucketId: bucketAtCreate,
+            });
+          }
+          if (existingConversation) {
+            store.syncRecord("conversations", existing, {
+              ...existingConversation,
+              _postCreateBucketId: bucketAtCreate,
+            });
+          }
           ready.then((id: string) => {
             const real = get().getConvexId(id) ?? id;
-            if (isConvexId(real) && !convBucketMap(get().bucketAssignments)[real]) {
-              get().assignSessionToBucket(real, bucketAtCreate);
-            }
+            resumePostCreateBucketIntentFor(real, bucketAtCreate);
           }).catch(() => {});
         }
         return { stubId: existing, ready, materialize: () => ready };
@@ -4119,6 +4449,7 @@ export const useInboxStore = create<InboxStoreState>(
       session_id: stubId, project_path: opts.projectPath, git_root: opts.gitRoot,
       started_at: now, updated_at: now, message_count: 0, status: "active",
       title: "New session", messages: [],
+      ...(bucketAtCreate ? { _postCreateBucketId: bucketAtCreate } : {}),
     });
     // Also seed the inbox session row. The conversation page resolves a stub from
     // sessions[id] (local-first, before the server resolver loads), so without this
@@ -4131,11 +4462,11 @@ export const useInboxStore = create<InboxStoreState>(
       updated_at: now, started_at: now, project_path: opts.projectPath,
       git_root: opts.gitRoot, agent_type: opts.agentType, message_count: 0,
       is_idle: true, has_pending: false, last_user_message: null,
+      ...(bucketAtCreate ? { _postCreateBucketId: bucketAtCreate } : {}),
     });
     // Capture the focused bucket NOW: a session created while a bucket chip is
     // active belongs to that bucket. Assignment waits for the real id (the
     // server side effect can't act on stubs).
-    const bucketAtCreate = store.activeBucketFilter;
     // The actual server create — fired now, or deferred to materialize(). Wrapped
     // in a once-guard so a deferred stub's create fires exactly once no matter how
     // many times materialize() is called (e.g. typed-then-sent, or both the draft
@@ -4148,9 +4479,6 @@ export const useInboxStore = create<InboxStoreState>(
       const ready = opts.create(stubId).then((convexId: string) => {
         if (convexId) {
           store.resolveSessionId(stubId, convexId);
-          if (bucketAtCreate && isConvexId(convexId)) {
-            get().assignSessionToBucket(convexId, bucketAtCreate);
-          }
         }
         return convexId;
       });
@@ -4168,12 +4496,7 @@ export const useInboxStore = create<InboxStoreState>(
     return { stubId, ready, materialize: fire };
   },
 
-  _applyClientUI: sync(function (this: Draft, partial: Partial<ClientUI>) {
-    if (!this.clientState.ui) this.clientState.ui = {} as ClientUI;
-    Object.assign(this.clientState.ui, partial);
-  }),
-
-  updateClientUI: (partial: Partial<ClientUI>) => {
+  updateClientUI: action(function (this: Draft, partial: Partial<ClientUI>) {
     // Whitelisted per-USER keys get a flat "<key>:ts" sibling stamp so the ui
     // bag can merge them per-key LWW (mergeStampedBagLww) — the inbox view
     // follows the user across devices, and the newest toggle anywhere wins
@@ -4185,53 +4508,40 @@ export const useInboxStore = create<InboxStoreState>(
     for (const k of Object.keys(partial)) {
       if (STAMPED_UI_KEYS.has(k) && stamped[`${k}:ts`] === undefined) stamped[`${k}:ts`] = now;
     }
-    (get() as any)._applyClientUI(stamped);
-    writeCriticalUiPrefs(stamped);
-    if (Object.keys(stamped).length > 0) {
-      const dispatch = () => get()._dispatch("patch", [], { client_state: { _: { ui: stamped } } });
-      dispatch().catch(() => setTimeout(() => dispatch().catch(() => {}), 3000));
-    }
-  },
-
-  _applySavedViews: sync(function (this: Draft, views: SavedView[]) {
     if (!this.clientState.ui) this.clientState.ui = {} as ClientUI;
-    this.clientState.ui.saved_views = views;
+    Object.assign(this.clientState.ui, stamped);
+    writeCriticalUiPrefs(stamped);
+    // The server-side named handler replays this exact client-stamped payload
+    // even when Object.assign produced no local patch (already-equal state).
+    return stamped;
   }),
 
-  saveView: (view: Omit<SavedView, "id" | "created_at" | "team_id">) => {
-    const state = get();
-    const current = state.clientState.ui?.saved_views ?? [];
+  saveView: action(function (this: Draft, view: Omit<SavedView, "id" | "created_at" | "team_id">) {
+    const current = this.clientState.ui?.saved_views ?? [];
     const newView: SavedView = {
       ...view,
       id: `sv_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-      team_id: state.clientState.ui?.active_team_id,
+      team_id: this.clientState.ui?.active_team_id,
       created_at: Date.now(),
     };
     const newViews = [...current, newView];
-    (state as any)._applySavedViews(newViews);
-    const dispatch = () => get()._dispatch("patch", [], { client_state: { _: { ui: { saved_views: newViews } } } });
-    dispatch().catch(() => setTimeout(() => dispatch().catch(() => {}), 3000));
-  },
+    if (!this.clientState.ui) this.clientState.ui = {} as ClientUI;
+    this.clientState.ui.saved_views = newViews;
+    return newViews;
+  }),
 
-  deleteView: (id: string) => {
-    const state = get();
-    const current = state.clientState.ui?.saved_views ?? [];
+  deleteView: action(function (this: Draft, id: string) {
+    const current = this.clientState.ui?.saved_views ?? [];
     const newViews = current.filter((v: SavedView) => v.id !== id);
-    (state as any)._applySavedViews(newViews);
-    const dispatch = () => get()._dispatch("patch", [], { client_state: { _: { ui: { saved_views: newViews } } } });
-    dispatch().catch(() => setTimeout(() => dispatch().catch(() => {}), 3000));
-  },
+    if (!this.clientState.ui) this.clientState.ui = {} as ClientUI;
+    this.clientState.ui.saved_views = newViews;
+    return newViews;
+  }),
 
-  _applyClientLayout: sync(function (this: Draft, key: string, value: any) {
+  updateClientLayout: action(function (this: Draft, key: string, value: any) {
     if (!this.clientState.layouts) this.clientState.layouts = {};
     (this.clientState.layouts as any)[key] = value;
   }),
-
-  updateClientLayout: (key: string, value: any) => {
-    (get() as any)._applyClientLayout(key, value);
-    const dispatch = () => get()._dispatch("patch", [], { client_state: { _: { layouts: { [key]: value } } } });
-    dispatch().catch(() => setTimeout(() => dispatch().catch(() => {}), 3000));
-  },
 
   // action(): the patch rides the outbox (the old hand-rolled _dispatch had one
   // 3s retry and no replay — a failed write left this client permanently
@@ -4259,10 +4569,15 @@ export const useInboxStore = create<InboxStoreState>(
     const serverPartial = { ...partial };
     delete serverPartial._inlineSuppressed;
     if (Object.keys(serverPartial).length > 0) {
-      const dispatch = () => get()._dispatch("patch", [], { client_state: { _: { tips: serverPartial } } });
-      dispatch().catch(() => setTimeout(() => dispatch().catch(() => {}), 3000));
+      (get() as any).persistClientTips(serverPartial);
     }
   },
+
+  // The public wrapper above performs one exact local sync (including the
+  // device-only _inlineSuppressed flag). This named no-op action durably carries
+  // only the cross-device subset; dispatch.ts builds the validated client_state
+  // patch without ever leaking the local suppression bit.
+  persistClientTips: action(function (_partial: Partial<ClientTips>) {}),
 
   // =====================
   // GENERIC SYNC
@@ -4383,11 +4698,29 @@ export const useInboxStore = create<InboxStoreState>(
         if (isConvexId(oldId)) continue;
         const match = incomingByAlt.get((old as any)[config.altKey!] || oldId);
         if (match) {
+          const launchReconfigure =
+            field === "sessions" ? pendingLaunchReconfigure(old) : null;
           rekeyId(this, oldId, match._id);
           rekeyPending(pending, oldId, match._id);
           if (oldId !== match._id && table[oldId]) {
             if (!table[match._id]) {
               table[match._id] = { ...(table[oldId] as any), _id: match._id };
+            } else if (config.preserveFields) {
+              // applySyncTable can only preserve an overlay field when prev and
+              // incoming share an id. An alt-key match is the stub→real case:
+              // carry those same local-only fields across before discarding the
+              // old row, or a reload-time rekey drops durable post-create intent.
+              for (const field of config.preserveFields) {
+                if (
+                  (table[match._id] as any)[field] == null &&
+                  (table[oldId] as any)[field] != null
+                ) {
+                  table[match._id] = {
+                    ...(table[match._id] as any),
+                    [field]: (table[oldId] as any)[field],
+                  };
+                }
+              }
             }
             delete table[oldId];
           }
@@ -4399,6 +4732,12 @@ export const useInboxStore = create<InboxStoreState>(
             if (table[match._id]) {
               (table[match._id] as any)[key.slice(fp.length)] = entry.value;
             }
+          }
+          if (field === "sessions" && isConvexId(match._id)) {
+            // sync() commits after this recipe returns. A timer makes the
+            // continuation observe the rekeyed store and keeps dispatch out of
+            // the incoming-data transaction itself.
+            scheduleResolvedSessionContinuations(match._id, launchReconfigure);
           }
         } else if (!table[oldId]) {
           table[oldId] = old as any;
@@ -4425,6 +4764,20 @@ export const useInboxStore = create<InboxStoreState>(
 
     (this as any)[field] = table;
     this.pending = pending as any;
+    if (field === "bucketAssignments") {
+      for (const row of Object.values(table) as BucketAssignmentItem[]) {
+        if (!isConvexId(String(row._id))) continue;
+        const clear = (session: any) => {
+          // A real assignment row (including an explicit unfile tombstone or a
+          // different bucket selected later) supersedes the one-shot marker.
+          if (session?._postCreateBucketId) {
+            delete session._postCreateBucketId;
+          }
+        };
+        clear(this.sessions[row.conversation_id]);
+        clear(this.conversations[row.conversation_id]);
+      }
+    }
     if (config.transform) config.transform(this, table, incoming, false, prevCollection);
     if (config.extra) Object.assign(this, config.extra);
   }),
@@ -4983,12 +5336,11 @@ export const useInboxStore = create<InboxStoreState>(
     this.clientState.drafts[id] = null;
   }),
 
-  clearDraftFinal: (id: string) => {
-    get().clearDraft(id);
-    get()._dispatch("clearDraft", [id], {
-      client_state: { _: { drafts: { [id]: null } } },
-    }).catch(() => {});
-  },
+  clearDraftFinal: action(function (this: Draft, id: string) {
+    delete this.drafts[id];
+    if (!this.clientState.drafts) this.clientState.drafts = {};
+    this.clientState.drafts[id] = null;
+  }),
 
   // =====================
   // QUEUED MESSAGES
@@ -5021,20 +5373,11 @@ export const useInboxStore = create<InboxStoreState>(
   }),
 
   resolveSessionId: (sessionId: string, convexId: string) => {
+    const launchReconfigure = pendingLaunchReconfigure(
+      get().sessions[sessionId] || get().conversations[sessionId],
+    );
     (get() as any)._rekeySession(sessionId, convexId);
-    // Flush pending field changes to server. Fields modified while the
-    // session had a stub ID weren't dispatched (groupPatchesByTable
-    // skips non-Convex IDs), so send them now.
-    const state = get();
-    const prefix = `conversations:${convexId}:`;
-    const fields: Record<string, any> = {};
-    for (const [key, entry] of Object.entries(state.pending || {})) {
-      if ((entry as any).type !== "field" || !key.startsWith(prefix)) continue;
-      fields[key.slice(prefix.length)] = (entry as any).value;
-    }
-    if (Object.keys(fields).length > 0) {
-      (state as any)._dispatch("patch", [], { conversations: { [convexId]: fields } }).catch(() => {});
-    }
+    scheduleResolvedSessionContinuations(convexId, launchReconfigure);
   },
 
   getConvexId: (id: string) => {
@@ -5060,13 +5403,17 @@ export const useInboxStore = create<InboxStoreState>(
     set((s: InboxStoreState) => ({
       pendingSessionCreates: { ...s.pendingSessionCreates, [stubId]: promise },
     }));
-    promise.finally(() => {
+    const clearTrackedCreate = () => {
       set((s: InboxStoreState) => {
         if (!s.pendingSessionCreates[stubId]) return s;
         const { [stubId]: _, ...rest } = s.pendingSessionCreates;
         return { pendingSessionCreates: rest };
       });
-    });
+    };
+    // A bare finally() creates a second promise that rejects with the original
+    // error. Nobody observes that child, so an honestly parked create still
+    // surfaced as an unhandled rejection even when every caller caught `promise`.
+    void promise.then(clearTrackedCreate, clearTrackedCreate);
   },
 
   awaitSessionCreate: (stubId: string) => {
@@ -5075,7 +5422,10 @@ export const useInboxStore = create<InboxStoreState>(
 
   awaitConvexId: async (id: string): Promise<string> => {
     const resolved = get().getConvexId(id);
-    if (resolved) return resolved;
+    if (resolved) {
+      await awaitResolvedSessionPreparation(resolved);
+      return resolved;
+    }
     // Prefer the in-flight createSession promise — deterministic and surfaces
     // the real dispatch error if the server rejects. Polling is the fallback
     // for cases where the promise was lost (e.g. reload mid-flight) or the
@@ -5091,26 +5441,39 @@ export const useInboxStore = create<InboxStoreState>(
     if (!inFlight && !isConvexId(id) && (get().sessions[id] || get().conversations[id])) {
       inFlight = get().ensureSessionCreated(id);
     }
+    let parkedCreateError: unknown = null;
     if (inFlight) {
       let createError: unknown = null;
       try {
-        const convexId = await Promise.race([
-          inFlight,
-          new Promise<string>((_, rej) => setTimeout(() => rej(new Error("create timeout")), 30_000)),
-        ]);
-        if (convexId) return convexId;
+        const convexId = await awaitTrackedSessionCreateResult(inFlight);
+        if (convexId) {
+          await awaitResolvedSessionPreparation(convexId);
+          return convexId;
+        }
       } catch (e) {
-        createError = e;
+        if (isParkedDispatchError(e)) parkedCreateError = e;
+        else createError = e;
       }
       const r2 = get().getConvexId(id);
-      if (r2) return r2;
+      if (r2) {
+        await awaitResolvedSessionPreparation(r2);
+        return r2;
+      }
       if (createError) throw createError instanceof Error ? createError : new Error(String(createError));
+      // A parked create is already durable and can rekey through the live
+      // by_session_id result independently of its rejected in-memory promise.
+      // Keep polling below instead of declaring the optimistic first send
+      // failed before that resolver has a chance to land.
     }
     for (let i = 0; i < 60; i++) {
       await new Promise((r) => setTimeout(r, 250));
       const r = get().getConvexId(id);
-      if (r) return r;
+      if (r) {
+        await awaitResolvedSessionPreparation(r);
+        return r;
+      }
     }
+    if (parkedCreateError) throw parkedCreateError;
     throw new Error("Session not yet created on server");
   },
 
@@ -5140,7 +5503,11 @@ export const useInboxStore = create<InboxStoreState>(
         return Promise.reject(new Error("Fork parent unknown — fork again from the parent thread"));
       }
       const ready = s.convCommand(parentId, "forkFromMessage", {
-        ...(stub.parent_message_uuid ? { message_uuid: stub.parent_message_uuid } : {}),
+        ...(stub._forkTargetAgentType
+          ? { target_agent_type: stub._forkTargetAgentType }
+          : (stub.parent_message_uuid && stub.parent_message_uuid !== "agent-switch"
+            ? { message_uuid: stub.parent_message_uuid }
+            : {})),
         session_id: id,
       }).then((result: any) => {
         const convexId = result?.conversation_id;
@@ -5203,6 +5570,23 @@ export const useInboxStore = create<InboxStoreState>(
       get().sendMessage(realId, content, storageIds.length ? storageIds : undefined, m._clientId || m._id);
     }
     return realId;
+  },
+
+  redrivePendingMessages: () => {
+    for (const convId of Object.keys(get().pendingMessages)) {
+      if (isConvexId(convId)) redrivePendingMessagesFor(convId);
+    }
+  },
+
+  resumePostCreateSessionIntents: () => {
+    const state = get();
+    const ids = new Set([
+      ...Object.keys(state.sessions),
+      ...Object.keys(state.conversations),
+    ]);
+    for (const id of ids) {
+      if (isConvexId(id)) resumePostCreateBucketIntentFor(id);
+    }
   },
 
   // =====================
@@ -5358,11 +5742,30 @@ export const useInboxStore = create<InboxStoreState>(
   // delegate to the existing webCreate mutation, which returns the real id. We
   // intentionally do NOT add an optimistic stub: every caller awaits the result
   // and navigates to the new record's own page, and delta-synced lists don't
-  // prune, so a temp stub would linger as a duplicate. asyncAction surfaces the
-  // server result so `const r = await createDoc(...); router.push(r.id)` works.
-  createDoc: asyncAction(function (this: Draft, _opts: Record<string, any>) {}),
-  createPlan: asyncAction(function (this: Draft, _opts: Record<string, any>) {}),
-  createProject: asyncAction(function (this: Draft, _opts: Record<string, any>) {}),
+  // prune, so a temp stub would linger as a duplicate. receiptAsyncAction keeps
+  // its Promise pending across an unwired window and resolves it from the exact
+  // durable command receipt, preserving the caller's navigation continuation.
+  createDoc: receiptAsyncAction(function (
+    this: Draft,
+    _opts: Record<string, any>,
+    continuation?: DurableCreateContinuation,
+  ) {
+    return continuation ? { continuation } : undefined;
+  }),
+  createPlan: receiptAsyncAction(function (
+    this: Draft,
+    _opts: Record<string, any>,
+    continuation?: DurableCreateContinuation,
+  ) {
+    return continuation ? { continuation } : undefined;
+  }),
+  createProject: receiptAsyncAction(function (
+    this: Draft,
+    _opts: Record<string, any>,
+    continuation?: DurableCreateContinuation,
+  ) {
+    return continuation ? { continuation } : undefined;
+  }),
 
   // Low-frequency doc/plan/conversation ops: route through dispatch and delegate
   // to the existing mutations. asyncAction surfaces the server result for the
@@ -5377,7 +5780,11 @@ export const useInboxStore = create<InboxStoreState>(
   // when the server row syncs back, the buckets altKey ("name") supersedes the
   // stub — same machinery as bucketAssignments' stubs. Callers still await the
   // returned REAL _id for follow-up assignment.
-  createBucket: asyncAction(function (this: Draft, opts: { name: string; color?: string }) {
+  createBucket: receiptAsyncAction(function (
+    this: Draft,
+    opts: { name: string; color?: string },
+    continuation?: DurableCreateContinuation,
+  ) {
     const name = (opts?.name || "").trim();
     if (!name) return;
     const stubId = `bucketstub-${Math.random().toString(36).slice(2)}`;
@@ -5394,6 +5801,7 @@ export const useInboxStore = create<InboxStoreState>(
       created_at: now,
       updated_at: now,
     };
+    return { stubId, ...(continuation ? { continuation } : {}) };
   }),
 
   // Rename / color / sort / archive ride the generic patch path (inbox_buckets
@@ -5416,6 +5824,21 @@ export const useInboxStore = create<InboxStoreState>(
   // the dispatch no-ops there, and rekeyId carries the local row to the real id.
   assignSessionToBucket: action(function (this: Draft, conversationId: string, bucketId: string | null) {
     const now = Date.now();
+    // A create-time focused-bucket marker is only a fallback until the first
+    // authoritative filing. A later explicit move/unfile is newer user intent
+    // and must survive reload; clear the old marker in the same local commit.
+    // Assigning the marker's own bucket keeps it until server echo, preserving
+    // crash-after-enqueue recovery for the automatic filing.
+    const clearSupersededIntent = (row: any) => {
+      if (
+        row?._postCreateBucketId &&
+        row._postCreateBucketId !== bucketId
+      ) {
+        delete row._postCreateBucketId;
+      }
+    };
+    clearSupersededIntent(this.sessions[conversationId]);
+    clearSupersededIntent(this.conversations[conversationId]);
     const existing = (Object.values(this.bucketAssignments) as BucketAssignmentItem[])
       .find(a => a.conversation_id === conversationId);
     if (existing) {
@@ -5437,7 +5860,7 @@ export const useInboxStore = create<InboxStoreState>(
   // the comments altKey config, and the server dedups on client_id so an outbox
   // retry can't double-insert. The same-named dispatch side effect does the
   // durable write (notifications, mentions, github sync) via comments.addComment.
-  addComment: asyncAction(function (this: Draft, conversationId: string, content: string, opts?: { messageId?: string; parentCommentId?: string }) {
+  addComment: receiptAsyncAction(function (this: Draft, conversationId: string, content: string, opts?: { messageId?: string; parentCommentId?: string }) {
     const body = content.trim();
     if (!body) return;
     const clientId = `commentstub-${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
@@ -5454,24 +5877,62 @@ export const useInboxStore = create<InboxStoreState>(
       author_kind: "user",
       user: me ? { _id: me._id, name: me.name, github_username: me.github_username, github_avatar_url: me.github_avatar_url, image: me.image } : null,
     } as CommentRow;
-    return { conversationId, content: body, messageId: opts?.messageId, parentCommentId: opts?.parentCommentId, clientId };
+    return {
+      conversationId,
+      content: body,
+      messageId: opts?.messageId,
+      parentCommentId: opts?.parentCommentId,
+      clientId,
+      commandId: `legacy-comments-create:${clientId}`,
+    };
   }),
 
-  // Edit rides the generic patch path (comments is in dispatch TABLE_CONFIG with
-  // content mutable); the field is auto-protected until the server echo.
-  editComment: action(function (this: Draft, commentId: string, content: string) {
+  // Receipt-backed because a generic patch can be acknowledged as a no-op when
+  // the cached comment was deleted or access was revoked. Preserve the exact
+  // prior content so a terminal V2 rejection can release pending protection
+  // and restore what the user saw before this edit.
+  editComment: receiptAsyncAction(function (this: Draft, commentId: string, content: string) {
     const c = this.comments[commentId] as any;
+    const previousContent = typeof c?.content === "string" ? c.content : "";
+    const conversationId = typeof c?.conversation_id === "string"
+      ? c.conversation_id
+      : undefined;
+    const clientId = typeof c?.client_id === "string" ? c.client_id : undefined;
     if (c) c.content = content;
+    return {
+      ...(isConvexId(commentId) ? { commentId } : {}),
+      ...(conversationId ? { conversationId } : {}),
+      ...(clientId ? { clientId } : {}),
+      content,
+      previousContent,
+      // Only used if an envelope-era payload is replayed by an older bridge.
+      // The receipt envelope's random command id is canonical for new writes.
+      commandId: `legacy-comments-update:${clientId || commentId}:${Date.now()}`,
+    };
   }),
 
-  deleteComment: asyncAction(function (this: Draft, commentId: string) {
+  deleteComment: receiptAsyncAction(function (this: Draft, commentId: string) {
+    const comment = this.comments[commentId] as any;
+    // Values read from a mutative draft are revocable proxies. The action
+    // result is persisted and serialized after the recipe closes, so capture a
+    // plain snapshot while the proxy is still live.
+    const optimisticComment = comment
+      ? JSON.parse(JSON.stringify(comment)) as CommentRow
+      : undefined;
     delete this.comments[commentId];
-    return { commentId };
+    const clientId = comment?.client_id as string | undefined;
+    return {
+      ...(isConvexId(commentId) ? { commentId } : {}),
+      ...(comment?.conversation_id ? { conversationId: String(comment.conversation_id) } : {}),
+      ...(clientId ? { clientId } : {}),
+      ...(optimisticComment ? { optimisticComment } : {}),
+      commandId: `legacy-comments-delete:${clientId || commentId}`,
+    };
   }),
 
   // Opt-in agent reply: drop an optimistic "thinking" agent comment so the UI
   // reacts instantly; the side effect spawns/reuses the thread's fork.
-  askAgentInThread: asyncAction(function (this: Draft, conversationId: string, opts?: { messageId?: string }) {
+  askAgentInThread: receiptAsyncAction(function (this: Draft, conversationId: string, opts?: { messageId?: string }) {
     const clientId = `commentstub-agent-${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
     const me = (this as any).currentUser;
     this.comments[clientId] = {
@@ -5485,7 +5946,152 @@ export const useInboxStore = create<InboxStoreState>(
       author_kind: "agent",
       agent_status: "thinking",
     } as CommentRow;
-    return { conversationId, messageId: opts?.messageId, clientId };
+    return {
+      conversationId,
+      messageId: opts?.messageId,
+      clientId,
+      commandId: `legacy-comments-ask:${clientId}`,
+    };
+  }),
+
+  _handleReceiptAcknowledgement: sync(function (
+    this: Draft,
+    actionName: string,
+    continuation: DurableCreateContinuation,
+    serverResult: any,
+    _commandId: string,
+  ) {
+    if (
+      actionName !== "createBucket" ||
+      continuation.kind !== "assignBucket" ||
+      typeof serverResult?.bucketId !== "string"
+    ) {
+      return;
+    }
+
+    // The server applies this filing in the same transaction as the create
+    // receipt. Mirror that acknowledged state locally without dispatching a
+    // second command. Replaying after a crash updates the same per-conversation
+    // row, so effect-before-outbox-cleanup stays idempotent.
+    for (const conversationId of continuation.conversationIds) {
+      if (!isConvexId(conversationId)) continue;
+      const existing = (Object.values(this.bucketAssignments) as BucketAssignmentItem[])
+        .find((row) => row.conversation_id === conversationId);
+      if (existing) {
+        existing.bucket_id = serverResult.bucketId;
+        existing.updated_at = Date.now();
+      } else {
+        const stubId = `bucketassign-${conversationId}`;
+        this.bucketAssignments[stubId] = {
+          _id: stubId,
+          conversation_id: conversationId,
+          bucket_id: serverResult.bucketId,
+          updated_at: Date.now(),
+        };
+      }
+    }
+  }),
+
+  // Receipt-backed actions return rejections as data, not thrown Convex
+  // failures. The middleware invokes this local-only reducer for both a live
+  // response and a boot-time replay, so an optimistic row cannot remain
+  // protected after the server durably refused its command.
+  _handleReceiptRejection: sync(function (
+    this: Draft,
+    actionName: string,
+    localResult: any,
+  ) {
+    if (!localResult || typeof localResult !== "object") return false;
+
+    if (actionName === "createBucket") {
+      const stubId = localResult.stubId;
+      if (typeof stubId !== "string") return false;
+      delete this.buckets[stubId];
+      delete this.pending[`buckets:${stubId}`];
+      return ["buckets", "pending"];
+    }
+
+    if (actionName === "addComment" || actionName === "askAgentInThread") {
+      const clientId = localResult.clientId;
+      if (typeof clientId !== "string") return false;
+      for (const [id, comment] of Object.entries(this.comments)) {
+        if (id === clientId || (comment as any)?.client_id === clientId) {
+          delete this.comments[id];
+          delete this.pending[`comments:${id}`];
+        }
+      }
+      delete this.pending[`comments:${clientId}`];
+      return ["comments", "pending"];
+    }
+
+    if (actionName === "editComment") {
+      const optimisticContent = localResult.content;
+      const previousContent = localResult.previousContent;
+      const commentId = localResult.commentId;
+      const clientId = localResult.clientId;
+      if (
+        typeof optimisticContent !== "string" ||
+        typeof previousContent !== "string"
+      ) {
+        return false;
+      }
+      const found = Object.entries(this.comments).find(([id, comment]) =>
+        id === commentId ||
+        (typeof clientId === "string" &&
+          (comment as any)?.client_id === clientId));
+      const rowId = found?.[0];
+      const comment = found?.[1] as any;
+
+      // A later local edit/delete wins. Only revert the exact optimistic value
+      // this rejected receipt introduced, and only release a field lock whose
+      // protected value is that same edit.
+      if (comment?.content === optimisticContent) {
+        comment.content = previousContent;
+      }
+      const possibleIds = new Set(
+        [rowId, commentId, clientId].filter(
+          (value): value is string => typeof value === "string",
+        ),
+      );
+      for (const id of possibleIds) {
+        const key = `comments:${id}:content`;
+        if (this.pending[key]?.value === optimisticContent) {
+          delete this.pending[key];
+        }
+      }
+      return ["comments", "pending"];
+    }
+
+    if (actionName === "deleteComment") {
+      const snapshot = localResult.optimisticComment as CommentRow | undefined;
+      const clientId = localResult.clientId as string | undefined;
+      const originalId = snapshot?._id || localResult.commentId;
+      if (typeof originalId !== "string") return false;
+      delete this.pending[`comments:${originalId}`];
+      if (clientId) {
+        delete this.pending[`comments:${clientId}`];
+      }
+
+      // Deleting a just-created stub is a cancellation of that optimistic
+      // create. If the create itself was rejected there is nothing to restore;
+      // if it succeeded, its real echo (same client_id) is authoritative.
+      const existing = clientId
+        ? Object.values(this.comments).find(
+            (comment: any) => comment?.client_id === clientId,
+          )
+        : undefined;
+      if (
+        snapshot &&
+        !existing &&
+        typeof snapshot._id === "string" &&
+        !snapshot._id.startsWith("commentstub")
+      ) {
+        this.comments[snapshot._id] = snapshot;
+      }
+      return ["comments", "pending"];
+    }
+
+    return false;
   }),
 
   // Doc drag-reparent: optimistically move the node in the local tree (docs is a
@@ -5540,6 +6146,11 @@ export const useInboxStore = create<InboxStoreState>(
     delete this.docs[id];
     delete this.docDetails[id];
   }),
+
+  // undoActions restores the exact cached doc snapshots itself. This action is
+  // intentionally memory-neutral and exists to make the authoritative unarchive
+  // survive reload/offline windows through the outbox.
+  restoreArchivedDoc: action(function (_id: string) {}),
 
   // =====================
   // MESSAGE QUEUE

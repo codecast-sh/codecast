@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, createContext, useContext, ReactNode } from 'react';
-import { Platform } from 'react-native';
+import { Platform, Pressable, Text, View } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import * as LocalAuthentication from 'expo-local-authentication';
 import * as AppleAuthentication from 'expo-apple-authentication';
@@ -8,8 +8,9 @@ import * as Linking from 'expo-linking';
 import { useAuthActions, useAuthToken } from '@convex-dev/auth/react';
 import { useConvexAuth, useQuery } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
-import { clearProtectedInboxMemory } from '@codecast/web/store/inboxStore';
+import { clearProtectedInboxMemory, useInboxStore } from '@codecast/web/store/inboxStore';
 import { updatePrincipalDispatchCorrelation } from '@codecast/web/store/local-first/dispatchGate';
+import { openPrincipalDispatchOutbox } from './dispatchOutbox';
 
 const TOKEN_KEY = 'convex_auth_token';
 const BIOMETRIC_ENABLED_KEY = 'biometric_enabled';
@@ -65,7 +66,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     ? accessIdentity.subject
     : null;
   const lastVisibleSubject = useRef<string | null>(null);
+  const outboxSubject = useRef<string | null>(null);
+  const [outboxReadySubject, setOutboxReadySubject] = useState<string | null>(null);
+  const [outboxFailure, setOutboxFailure] = useState<{
+    subject: string;
+    message: string;
+  } | null>(null);
+  const [outboxOpenAttempt, setOutboxOpenAttempt] = useState(0);
   const dispatchGeneration = useRef(0);
+  const durableSubject = visibleSubject &&
+    outboxReadySubject === visibleSubject
+    ? visibleSubject
+    : null;
 
   // This gate runs during render: a token/account change cannot wait for an
   // effect cleanup while an old retry is still in flight.
@@ -75,8 +87,88 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     dispatchGeneration.current++;
   }
   updatePrincipalDispatchCorrelation(
-    visibleSubject ? dispatchGeneration.current : null,
+    durableSubject ? dispatchGeneration.current : null,
   );
+  // Close the old account's enqueue surface in the same render that closes
+  // dispatch authorization. The native SQLite rows remain intact and
+  // principal-keyed, but no click in the transition window can capture the old
+  // principal's outbox closure.
+  if (outboxSubject.current !== visibleSubject) {
+    (useInboxStore.getState() as unknown as {
+      _setOutbox(
+        enqueue: ((entry: any) => void | Promise<void>) | null,
+        remove: ((id: string) => Promise<void>) | null,
+        load: (() => Promise<any[]>) | null,
+      ): void;
+    })._setOutbox(null, null, null);
+    outboxSubject.current = visibleSubject;
+  }
+
+  useEffect(() => {
+    const subject = visibleSubject;
+    // A verified identity is necessary but not sufficient for writable UI:
+    // until its principal-keyed SQLite outbox is installed, a dispatch could
+    // reach the server without a durable replay record. Keep authorization and
+    // children closed through the entire open (and after an open failure).
+    setOutboxReadySubject(null);
+    setOutboxFailure(null);
+    if (!subject || !currentUserId) return;
+    let cancelled = false;
+    void openPrincipalDispatchOutbox(currentUserId)
+      .then((outbox) => {
+        if (
+          cancelled ||
+          outboxSubject.current !== subject ||
+          lastVisibleSubject.current !== subject
+        ) {
+          return;
+        }
+        const store = useInboxStore.getState() as unknown as {
+          _setOutbox(
+            enqueue: (entry: any) => void | Promise<void>,
+            remove: (id: string) => Promise<void>,
+            load: () => Promise<any[]>,
+          ): void;
+          _drainOutbox(): void;
+        };
+        store._setOutbox(outbox.enqueue, outbox.remove, outbox.load);
+        setOutboxReadySubject(subject);
+        // Dispatch may already have wired while SQLite was opening. Re-drive
+        // immediately so a prior-launch entry does not wait for another bind.
+        store._drainOutbox();
+      })
+      .catch((error) => {
+        if (
+          cancelled ||
+          outboxSubject.current !== subject ||
+          lastVisibleSubject.current !== subject
+        ) {
+          return;
+        }
+        // Callers still fail honestly with parked:false while storage is
+        // unavailable; never fall back to pretending the write was durable.
+        console.error('[local-first] mobile dispatch outbox unavailable', error);
+        setOutboxFailure({
+          subject,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      });
+    return () => {
+      cancelled = true;
+      setOutboxReadySubject((current) =>
+        current === subject ? null : current,
+      );
+      if (outboxSubject.current === subject) {
+        (useInboxStore.getState() as unknown as {
+          _setOutbox(
+            enqueue: ((entry: any) => void | Promise<void>) | null,
+            remove: ((id: string) => Promise<void>) | null,
+            load: (() => Promise<any[]>) | null,
+          ): void;
+        })._setOutbox(null, null, null);
+      }
+    };
+  }, [visibleSubject, currentUserId, outboxOpenAttempt]);
 
   useEffect(() => {
     if (!isAuthenticated || !accessIdentity || currentUser === undefined) {
@@ -215,7 +307,47 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         authenticateWithBiometric,
       }}
     >
-      {isLoading || (isAuthenticated && !visibleSubject) ? null : children}
+      {isLoading || (isAuthenticated && !visibleSubject)
+        ? null
+        : isAuthenticated && !durableSubject
+          ? outboxFailure?.subject === visibleSubject
+            ? (
+              <View
+                accessibilityRole="alert"
+                style={{
+                  flex: 1,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 12,
+                  padding: 24,
+                  backgroundColor: '#111827',
+                }}
+              >
+                <Text style={{ color: '#f9fafb', fontSize: 18, fontWeight: '600' }}>
+                  Local storage is unavailable
+                </Text>
+                <Text
+                  style={{ color: '#d1d5db', textAlign: 'center', maxWidth: 420 }}
+                >
+                  Codecast kept writing disabled so no work can be lost.
+                  {outboxFailure.message ? ` ${outboxFailure.message}` : ''}
+                </Text>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => setOutboxOpenAttempt((attempt) => attempt + 1)}
+                  style={{
+                    paddingHorizontal: 18,
+                    paddingVertical: 10,
+                    borderRadius: 8,
+                    backgroundColor: '#2563eb',
+                  }}
+                >
+                  <Text style={{ color: '#ffffff', fontWeight: '600' }}>Retry</Text>
+                </Pressable>
+              </View>
+            )
+            : null
+          : children}
     </AuthContext.Provider>
   );
 }

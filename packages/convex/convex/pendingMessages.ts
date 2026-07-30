@@ -590,8 +590,8 @@ export async function performSessionSend(
   target_live: boolean;
   auto_owned: boolean;
 }> {
-  const body = (args.body ?? "").trim();
-  if (!body) throw new Error("Message body is empty");
+  const body = args.body ?? "";
+  if (!body.trim()) throw new Error("Message body is empty");
 
   // Own-or-team: you can message any session the feed would let you see. A merely share-linked
   // session is read-only by default — injecting a turn is a stronger right than reading — UNLESS

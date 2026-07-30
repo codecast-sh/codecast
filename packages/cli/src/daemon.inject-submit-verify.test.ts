@@ -138,6 +138,25 @@ describe("verifyTmuxSubmitAfterPaste", () => {
     expect(actions).toEqual(["enter", "enter", "enter"]);
   });
 
+  test("collapsed multiline paste gets a discrete Enter instead of being re-pasted", async () => {
+    const PASTED_PANE = `
+────────────────────────────────────────
+❯ [Pasted text #1 +3 lines]
+────────────────────────────────────────
+  paste again to expand
+`;
+    const { io, actions } = scriptedIO([PASTED_PANE, WORKING_PANE]);
+    const res = await verifyTmuxSubmitAfterPaste(io, {
+      prePaste: BOOT_PANE,
+      pasteConfirmed: true,
+      contentPrefix: "first line that is hidden by the paste chip",
+      multiline: true,
+    });
+    expect(res.outcome).toBe("submitted");
+    expect(res.rePasted).toBe(false);
+    expect(actions).toEqual(["enter"]);
+  });
+
   test("genuinely dropped paste on a live pane re-pastes once after a grace period", async () => {
     // Pane is alive (differs from prePaste — spinnerless idle box) but our
     // text never appears anywhere.

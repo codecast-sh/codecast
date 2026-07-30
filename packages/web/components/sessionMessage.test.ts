@@ -33,6 +33,20 @@ describe("parseSessionMessage", () => {
     expect(r?.body).toBe(body);
   });
 
+  test("preserves leading indentation and intentional trailing blank lines", () => {
+    const body = "    const answer = 42;\n\n";
+    const wire = formatSessionMessage("jx7c6zk", body);
+    expect(parseSessionMessage(wire)?.body).toBe(body);
+    expect(parseMachineDeliveredMessage(wire)?.body).toBe(body);
+  });
+
+  test("uses the final closing tag when the body mentions the wire tag literally", () => {
+    const body = "Explain this literal token: </session-message>\nThen continue.";
+    const wire = formatSessionMessage("jx7c6zk", body);
+    expect(parseSessionMessage(wire)?.body).toBe(body);
+    expect(parseMachineDeliveredMessage(wire)?.body).toBe(body);
+  });
+
   test("tolerates extra attributes after from", () => {
     const r = parseSessionMessage('<session-message from="jx7c6zk" title="Auth fix">hi</session-message>');
     expect(r).toEqual({ from: "jx7c6zk", body: "hi" });

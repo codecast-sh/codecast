@@ -185,6 +185,11 @@ export interface AgentClientCapabilities {
    *  bounded — the serve /event bus is per-process, so it accelerates only sessions
    *  DRIVEN THROUGH the sidecar, not tmux-TUI sessions (see opencodeServer.ts). */
   liveEvents?: boolean;
+  /** The client's TUI enables terminal bracketed-paste mode (DECSET 2004), so
+   *  pasted newlines land in its composer instead of acting as Enter/submission.
+   *  This is opt-in because an unverified client must receive flattened text:
+   *  preserving raw newlines there could split one prompt into several turns. */
+  bracketedPaste?: boolean;
 }
 
 /** Everything the daemon, convex, and web need to know about one client. */
@@ -283,7 +288,7 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     promptReadyPattern: /❯|⏵/,
     tmuxPrefix: "cc",
     modelConfig: CLAUDE_MODEL,
-    capabilities: { panePromptMonitoring: true, fork: true },
+    capabilities: { panePromptMonitoring: true, fork: true, bracketedPaste: true },
   },
   codex: {
     id: "codex",
@@ -301,7 +306,7 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     promptReadyPattern: />\s*$/,
     tmuxPrefix: "cx",
     modelConfig: CODEX_MODEL,
-    capabilities: { panePromptMonitoring: true, fork: true },
+    capabilities: { panePromptMonitoring: true, fork: true, bracketedPaste: true },
   },
   cursor: {
     id: "cursor",
@@ -392,7 +397,13 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     //    NOT accelerate the tmux-TUI launch path; the SQLite watcher stays the
     //    authoritative state source for those. Additive, opt-in, degrades to the DB
     //    path cleanly.
-    capabilities: { panePromptMonitoring: false, fork: true, forkApi: true, liveEvents: true },
+    capabilities: {
+      panePromptMonitoring: false,
+      fork: true,
+      forkApi: true,
+      liveEvents: true,
+      bracketedPaste: true,
+    },
   },
   pi: {
     id: "pi",
@@ -424,7 +435,7 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     // codecast cannot drive without pi's RPC channel — the active model is TRACKED
     // from the transcript (model_change entries + each assistant message's `model`).
     modelConfig: PI_MODEL,
-    capabilities: { panePromptMonitoring: false },
+    capabilities: { panePromptMonitoring: false, bracketedPaste: true },
   },
 };
 

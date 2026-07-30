@@ -22,6 +22,7 @@ import { labelHexColor } from '@/lib/labelColors';
 import { SessionListSkeleton } from '@/components/SkeletonLoader';
 import { TriggerDock } from '@/components/TriggerDock';
 import { useQuery } from 'convex/react';
+import { mobileCreateFailureDisposition } from '@/lib/durableCreatePolicy';
 
 // Stashed/Killed bucket row — the web SessionCard's hidden variants. Tap opens
 // the session; explicit buttons restore (both) and kill (stashed only — a
@@ -101,9 +102,21 @@ function AgentLogo({ type, size = 20, bgColor }: { type: AgentType; size?: numbe
   );
 }
 
+function mobileCreateErrorMessage(subject: string, error: unknown): string {
+  const message = String((error as { message?: unknown })?.message ?? error ?? "");
+  if (/dispatch not wired|dropped|no outbox/i.test(message)) {
+    return `The ${subject} request was not saved. Your choices are still here—retry when the connection is ready.`;
+  }
+  return `CodeCast could not confirm the ${subject} request. Your choices are still here, and retrying is safe.`;
+}
+
 function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: boolean; onClose: () => void; onSessionCreated: (conversationId: string) => void }) {
   const [agentType, setAgentType] = useState<AgentType>("claude");
   const [projectPath, setProjectPath] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const retryStubId = useRef<string | null>(null);
+  const submitAttempt = useRef(0);
   const recentProjects = useQuery(api.users.getRecentProjectPaths, visible ? { limit: 6 } : "skip");
 
   useEffect(() => {
@@ -112,30 +125,92 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
     }
   }, [visible, recentProjects]);
 
-  // Optimistic create — mirrors web ComposeView. Seeds a local stub session and
-  // navigates to it synchronously; the real server create rides the store outbox
-  // and rekeys stub → real id in the background. No await, no spinner: the modal
-  // dismisses and the session screen renders instantly. The session screen
-  // resolves the stub local-first (useConversationMessages gates on isConvexId).
-  const handleSubmit = () => {
+  const finishSessionCreate = (conversationId: string) => {
+    retryStubId.current = null;
+    setSubmitError(null);
+    setProjectPath("");
+    onClose();
+    onSessionCreated(conversationId);
+  };
+
+  const handleClose = () => {
+    // A Convex mutation may wait across an offline window. Closing the sheet
+    // must not cause a late acknowledgement to navigate unexpectedly; the
+    // retained stub lets a later reopen resolve or retry the same intent.
+    submitAttempt.current++;
+    setSubmitting(false);
+    onClose();
+  };
+
+  // Seed the optimistic stub immediately, but do not close or navigate until
+  // the create is either server-confirmed or synchronously persisted in the
+  // native outbox. A dropped parked:false call keeps this modal and all input.
+  // Retry reuses the same session_id, which is idempotent on the server.
+  const handleSubmit = async () => {
+    if (submitting) return;
+    const attempt = ++submitAttempt.current;
+    setSubmitting(true);
+    setSubmitError(null);
     const store = useInboxStore.getState();
     const agent_type = agentType === "claude" ? "claude_code" : agentType;
     const path = projectPath.trim() || undefined;
-    const { stubId } = store.beginOptimisticSession({
-      agentType: agent_type,
-      projectPath: path,
-      gitRoot: path,
-      create: (stubId) =>
-        store.createSession({
-          agent_type,
-          project_path: path,
-          git_root: path,
-          session_id: stubId,
-        }),
-    });
-    onClose();
-    setProjectPath("");
-    onSessionCreated(stubId);
+    let stubId = retryStubId.current ?? "";
+
+    try {
+      let ready: Promise<string>;
+      if (stubId) {
+        const alreadyResolved = store.getConvexId(stubId);
+        if (alreadyResolved) {
+          ready = Promise.resolve(alreadyResolved);
+        } else {
+          ready = store.createSession({
+            agent_type,
+            project_path: path,
+            git_root: path,
+            session_id: stubId,
+          }).then((convexId: string) => {
+            if (convexId) store.resolveSessionId(stubId, convexId);
+            return convexId || stubId;
+          });
+          store.trackSessionCreate(stubId, ready);
+          ready.catch(() => {});
+        }
+      } else {
+        // Capture the stub before materializing. Native persistence is
+        // deliberately synchronous, so a full/damaged database can throw
+        // during createSession; deferCreate lets the catch below retain the
+        // exact stub and present a safe retry instead of losing the intent.
+        const started = store.beginOptimisticSession({
+          agentType: agent_type,
+          projectPath: path,
+          gitRoot: path,
+          deferCreate: true,
+          create: (createdStubId) =>
+            store.createSession({
+              agent_type,
+              project_path: path,
+              git_root: path,
+              session_id: createdStubId,
+            }),
+        });
+        stubId = started.stubId;
+        retryStubId.current = stubId;
+        ready = started.materialize();
+      }
+
+      const conversationId = await ready;
+      if (submitAttempt.current !== attempt) return;
+      finishSessionCreate(conversationId || store.getConvexId(stubId) || stubId);
+    } catch (error) {
+      if (submitAttempt.current !== attempt) return;
+      if (mobileCreateFailureDisposition(error) === "accepted-pending") {
+        finishSessionCreate(stubId);
+      } else {
+        setSubmitError(mobileCreateErrorMessage("session", error));
+      }
+    } finally {
+      if (submitAttempt.current === attempt) setSubmitting(false);
+    }
   };
 
   const agents: { type: AgentType; label: string; color: string; bgColor: string }[] = [
@@ -145,11 +220,14 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
   ];
 
   return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={handleClose}>
       <KeyboardAvoidingView style={modalStyles.container} behavior={Platform.OS === "ios" ? "padding" : undefined}>
         <RNView style={modalStyles.header}>
           <RNText style={modalStyles.title}>New Session</RNText>
-          <TouchableOpacity onPress={onClose} hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}>
+          <TouchableOpacity
+            onPress={handleClose}
+            hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
+          >
             <FontAwesome name="times" size={20} color={Theme.textMuted} />
           </TouchableOpacity>
         </RNView>
@@ -161,7 +239,11 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
               <TouchableOpacity
                 key={a.type}
                 style={[modalStyles.agentBtn, agentType === a.type && { borderColor: a.color, backgroundColor: a.color + "20" }]}
-                onPress={() => setAgentType(a.type)}
+                onPress={() => {
+                  setAgentType(a.type);
+                  setSubmitError(null);
+                }}
+                disabled={submitting}
                 activeOpacity={0.7}
               >
                 <AgentLogo type={a.type} size={20} bgColor={agentType === a.type ? a.bgColor : Theme.textMuted0} />
@@ -176,11 +258,15 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
           <TextInput
             style={modalStyles.input}
             value={projectPath}
-            onChangeText={setProjectPath}
+            onChangeText={(value) => {
+              setProjectPath(value);
+              setSubmitError(null);
+            }}
             placeholder="~/src/my-project"
             placeholderTextColor={Theme.textMuted0}
             autoCorrect={false}
             autoCapitalize="none"
+            editable={!submitting}
           />
           {recentProjects && recentProjects.length > 0 && (
             <RNView style={modalStyles.recentRow}>
@@ -188,7 +274,11 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
                 <TouchableOpacity
                   key={p.path}
                   style={[modalStyles.recentChip, projectPath === p.path && { borderColor: Theme.accent, backgroundColor: Theme.accent + "20" }]}
-                  onPress={() => setProjectPath(p.path)}
+                  onPress={() => {
+                    setProjectPath(p.path);
+                    setSubmitError(null);
+                  }}
+                  disabled={submitting}
                   activeOpacity={0.7}
                 >
                   <RNText style={[modalStyles.recentChipText, projectPath === p.path && { color: Theme.accent }]} numberOfLines={1}>
@@ -198,18 +288,31 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
               ))}
             </RNView>
           )}
+          {submitError ? (
+            <RNText style={modalStyles.errorText}>{submitError}</RNText>
+          ) : null}
         </ScrollView>
 
         <RNView style={modalStyles.footer}>
-          <TouchableOpacity style={modalStyles.cancelBtn} onPress={onClose} activeOpacity={0.7}>
-            <RNText style={modalStyles.cancelBtnText}>Cancel</RNText>
-          </TouchableOpacity>
           <TouchableOpacity
-            style={modalStyles.submitBtn}
-            onPress={handleSubmit}
+            style={modalStyles.cancelBtn}
+            onPress={handleClose}
             activeOpacity={0.7}
           >
-            <RNText style={modalStyles.submitBtnText}>Start Session</RNText>
+            <RNText style={modalStyles.cancelBtnText}>{submitting ? "Close" : "Cancel"}</RNText>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[modalStyles.submitBtn, submitting && modalStyles.disabledBtn]}
+            onPress={handleSubmit}
+            disabled={submitting}
+            activeOpacity={0.7}
+          >
+            <RNView style={modalStyles.submitContent}>
+              {submitting ? <ActivityIndicator size="small" color={Theme.bg} /> : null}
+              <RNText style={modalStyles.submitBtnText}>
+                {submitting ? "Saving…" : retryStubId.current ? "Retry" : "Start Session"}
+              </RNText>
+            </RNView>
           </TouchableOpacity>
         </RNView>
       </KeyboardAvoidingView>
@@ -266,6 +369,12 @@ const modalStyles = StyleSheet.create({
     maxWidth: 140,
   },
   recentChipText: { fontSize: 12, color: Theme.textMuted, fontWeight: "500" },
+  errorText: {
+    color: Theme.red,
+    fontSize: 13,
+    lineHeight: 18,
+    marginTop: Spacing.md,
+  },
   footer: {
     flexDirection: "row",
     justifyContent: "flex-end",
@@ -283,7 +392,9 @@ const modalStyles = StyleSheet.create({
     borderRadius: 10,
     backgroundColor: Theme.accent,
   },
+  submitContent: { flexDirection: "row", alignItems: "center", gap: 8 },
   submitBtnText: { fontSize: 15, fontWeight: "600", color: Theme.bg },
+  disabledBtn: { opacity: 0.55 },
 });
 
 type SearchResult = {
@@ -550,9 +661,35 @@ export default function InboxScreen() {
       Alert.prompt('New Label', undefined, (name) => {
         const trimmed = name?.trim();
         if (!trimmed) return;
-        store.createBucket({ name: trimmed }).then((r: any) => {
-          if (r?._id) useInboxStore.getState().assignSessionToBucket(session._id, r._id);
-        });
+        const attemptCreate = async () => {
+          try {
+            await useInboxStore.getState().createBucket(
+              { name: trimmed },
+              {
+                version: 1,
+                kind: "assignBucket",
+                conversationIds: [session._id],
+              },
+            );
+          } catch (error) {
+            if (mobileCreateFailureDisposition(error) === "accepted-pending") {
+              Alert.alert(
+                'Label queued',
+                'The label is saved for delivery and will appear when CodeCast reconnects.',
+              );
+              return;
+            }
+            Alert.alert(
+              "Couldn't create label",
+              mobileCreateErrorMessage("label", error),
+              [
+                { text: 'Cancel', style: 'cancel' },
+                { text: 'Retry', onPress: () => void attemptCreate() },
+              ],
+            );
+          }
+        };
+        void attemptCreate();
       });
     };
     if (Platform.OS === 'ios') {

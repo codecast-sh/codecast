@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { categorizeSessions, computeNewDividerIndex, dropLatchedFeedHasMore, feedPagePersistence, findReusableBlankSession, getSessionRenderKey, isConvexId, isSessionDismissed, isSessionStashed, orchestrationGroupLabelOf, PENDING_SEND_PRUNE_GRACE_MS, pendingSendConsumed, reconcilePendingSendForSession, resolveAssigneeInfo, resolveSessionAuthor, resolveShowOld, seedLiveInboxIdsFromCache, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
+import { awaitTrackedSessionCreateResult, categorizeSessions, computeNewDividerIndex, dropLatchedFeedHasMore, feedPagePersistence, findReusableBlankSession, getSessionRenderKey, isConvexId, isSessionDismissed, isSessionStashed, orchestrationGroupLabelOf, PENDING_SEND_PRUNE_GRACE_MS, pendingSendConsumed, reconcilePendingSendForSession, resolveAssigneeInfo, resolveSessionAuthor, resolveShowOld, seedLiveInboxIdsFromCache, SessionCreatePendingError, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
 import { isPersistedStoreKey } from "../idbCache";
+import { DispatchNotWiredError } from "../mutativeMiddleware";
 import { declareViewNav } from "../viewNav";
 
 // Test seeds that place the user ON a conversation via raw setState must
@@ -2412,6 +2413,53 @@ describe("inboxStore.beginOptimisticSession", () => {
     expect(await ready).toBe(REAL_ID);
   });
 
+  it("waits for by_session_id rekey when a tracked create is durably parked", async () => {
+    const store = useInboxStore.getState();
+    const { stubId } = store.beginOptimisticSession({
+      agentType: "claude_code",
+      projectPath: "/repo",
+      deferCreate: true,
+      create: async () => REAL_ID,
+    });
+    const clientId = store.addOptimisticMessage(stubId, "keep me pending");
+    const parked = Promise.reject(new DispatchNotWiredError("createSession", true));
+    // Mirror beginOptimisticSession.fire(): the rejected create remains durable
+    // in the outbox while the in-memory promise reports "pending, not failed".
+    parked.catch(() => {});
+    store.trackSessionCreate(stubId, parked);
+
+    const outcome = store.awaitConvexId(stubId).then(
+      (id) => ({ id, error: null }),
+      (error) => ({ id: null, error }),
+    );
+    // Let the rejected in-memory create settle before live sync supplies the
+    // server row. The old path rethrew immediately and never observed this rekey.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    store.syncTable("sessions", [{
+      ...baseSession,
+      _id: REAL_ID,
+      session_id: stubId,
+      project_path: "/repo",
+    }]);
+
+    expect(await outcome).toEqual({ id: REAL_ID, error: null });
+    const pending = useInboxStore.getState().pendingMessages[REAL_ID]?.[0] as any;
+    expect(pending?._clientId).toBe(clientId);
+    expect(pending?._isFailed).not.toBe(true);
+  });
+
+  it("classifies a bounded tracked-create timeout as durable pending work", async () => {
+    const neverResolves = new Promise<string>(() => {});
+    const error = await awaitTrackedSessionCreateResult(
+      neverResolves,
+      1,
+    ).catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(SessionCreatePendingError);
+    expect(error).toBeInstanceOf(DispatchNotWiredError);
+    expect(error.parked).toBe(true);
+  });
+
   // deferCreate — the new-session popup (Ctrl+N / the desktop palette) seeds a
   // local stub on open so the null-state can render, but DEFERS the server create
   // until the first send. Opening then Escaping out must strand nothing: no empty
@@ -2762,6 +2810,17 @@ describe("inboxStore local-first state mutations", () => {
     });
     useInboxStore.getState()._setDispatch(async (action, args, patches, result) => {
       dispatches.push({ action, args, patches, result });
+      if (result?.receiptActionVersion === 1) {
+        return {
+          receiptVersion: 1,
+          commandId: result.commandId,
+          commandName: `${action}/test`,
+          status: "acknowledged",
+          result: null,
+          coverage: [],
+          retryUntil: null,
+        };
+      }
       return null;
     });
   });
@@ -2866,6 +2925,251 @@ describe("inboxStore local-first state mutations", () => {
     expect(s.notifications.a?.read).toBe(true);
     expect(s.notifications.c?.read).toBe(true);
     expect(dispatches.filter((d) => d.action === "markAllNotificationsRead").length).toBe(1);
+  });
+
+  it("an optimistic add→delete keeps the client identity needed to delete after replay", async () => {
+    useInboxStore.setState({
+      comments: {},
+      currentUser: { _id: "user1", name: "Me" } as any,
+    });
+    await useInboxStore.getState().addComment(CID, "queued comment");
+    const optimistic = Object.values(useInboxStore.getState().comments)[0] as any;
+    expect(optimistic?.client_id).toMatch(/^commentstub-/);
+
+    await useInboxStore.getState().deleteComment(optimistic._id);
+    expect(useInboxStore.getState().comments[optimistic._id]).toBeUndefined();
+    const deletion = dispatches.find((d) => d.action === "deleteComment");
+    expect(deletion?.result?.localResult).toMatchObject({
+      conversationId: CID,
+      clientId: optimistic.client_id,
+      commandId: `legacy-comments-delete:${optimistic.client_id}`,
+    });
+    expect(deletion?.result?.localResult?.commentId).toBeUndefined();
+  });
+
+  it("edits a comment through a receipt without generic comment patches", async () => {
+    const comment = {
+      _id: CID,
+      client_id: "client-edit-success",
+      conversation_id: CID,
+      user_id: "user1",
+      content: "before",
+      author_kind: "user",
+      created_at: 1,
+    } as any;
+    useInboxStore.setState({ comments: { [CID]: comment }, pending: {} });
+
+    const acknowledged = useInboxStore.getState().editComment(CID, "after");
+    expect(useInboxStore.getState().comments[CID]?.content).toBe("after");
+    const edit = dispatches.find((d) => d.action === "editComment");
+    expect(edit?.patches?.comments).toBeUndefined();
+    expect(edit?.result?.localResult).toMatchObject({
+      commentId: CID,
+      conversationId: CID,
+      clientId: "client-edit-success",
+      content: "after",
+      previousContent: "before",
+    });
+    expect(
+      useInboxStore.getState().pending[`comments:${CID}:content`]?.value,
+    ).toBe("after");
+
+    await acknowledged;
+    useInboxStore.getState().syncTable("comments", [{
+      ...comment,
+      content: "after",
+    }]);
+    expect(
+      useInboxStore.getState().pending[`comments:${CID}:content`],
+    ).toBeUndefined();
+  });
+
+  it("restores the exact prior comment content when an edit receipt is rejected", async () => {
+    const comment = {
+      _id: CID,
+      client_id: "client-edit-rejected",
+      conversation_id: CID,
+      user_id: "user1",
+      content: "authoritative before",
+      author_kind: "user",
+      created_at: 1,
+    } as any;
+    useInboxStore.setState({ comments: { [CID]: comment }, pending: {} });
+    useInboxStore.getState()._setDispatch(async (_action, _args, _patches, result) => ({
+      receiptVersion: 1,
+      commandId: result.commandId,
+      commandName: "comments.update/v2",
+      status: "rejected",
+      rejection: {
+        code: "FORBIDDEN",
+        message: "Conversation access was revoked",
+      },
+      coverage: [],
+      retryUntil: null,
+    }));
+
+    const pending = useInboxStore.getState().editComment(CID, "optimistic after");
+    expect(useInboxStore.getState().comments[CID]?.content).toBe("optimistic after");
+    expect(
+      useInboxStore.getState().pending[`comments:${CID}:content`]?.value,
+    ).toBe("optimistic after");
+
+    await expect(pending).rejects.toMatchObject({
+      name: "CommandReceiptRejectedError",
+      code: "FORBIDDEN",
+    });
+    expect(useInboxStore.getState().comments[CID]?.content)
+      .toBe("authoritative before");
+    expect(
+      useInboxStore.getState().pending[`comments:${CID}:content`],
+    ).toBeUndefined();
+  });
+
+  it("does not let an older rejected edit clobber a newer optimistic edit", async () => {
+    const comment = {
+      _id: CID,
+      client_id: "client-edit-ordered",
+      conversation_id: CID,
+      user_id: "user1",
+      content: "A",
+      author_kind: "user",
+      created_at: 1,
+    } as any;
+    useInboxStore.setState({ comments: { [CID]: comment }, pending: {} });
+    useInboxStore.getState()._setDispatch(async (_action, _args, _patches, result) => {
+      const local = result.localResult;
+      return local.content === "B"
+        ? {
+            receiptVersion: 1,
+            commandId: result.commandId,
+            commandName: "comments.update/v2",
+            status: "rejected",
+            rejection: { code: "FORBIDDEN", message: "Rejected older edit" },
+            coverage: [],
+            retryUntil: null,
+          }
+        : {
+            receiptVersion: 1,
+            commandId: result.commandId,
+            commandName: "comments.update/v2",
+            status: "acknowledged",
+            result: { commentId: CID },
+            coverage: [],
+            retryUntil: null,
+          };
+    });
+
+    const older = useInboxStore.getState().editComment(CID, "B");
+    const newer = useInboxStore.getState().editComment(CID, "C");
+    await expect(older).rejects.toMatchObject({
+      name: "CommandReceiptRejectedError",
+    });
+    expect(useInboxStore.getState().comments[CID]?.content).toBe("C");
+    expect(
+      useInboxStore.getState().pending[`comments:${CID}:content`]?.value,
+    ).toBe("C");
+    await expect(newer).resolves.toMatchObject({ commentId: CID });
+  });
+
+  it("rolls back the exact optimistic comment when a V2 receipt is rejected", async () => {
+    useInboxStore.setState({
+      comments: {},
+      currentUser: { _id: "user1", name: "Me" } as any,
+      pending: {},
+    });
+    useInboxStore.getState()._setDispatch(async (_action, _args, _patches, result) => ({
+      receiptVersion: 1,
+      commandId: result.commandId,
+      commandName: "comments.create/v2",
+      status: "rejected",
+      rejection: {
+        code: "FORBIDDEN",
+        message: "Conversation access was revoked",
+      },
+      coverage: [],
+      retryUntil: null,
+    }));
+
+    const pending = useInboxStore.getState().addComment(CID, "must not ghost");
+    const optimistic = Object.values(useInboxStore.getState().comments)[0] as any;
+    expect(optimistic?.client_id).toMatch(/^commentstub-/);
+    expect(useInboxStore.getState().pending[`comments:${optimistic._id}`]).toBeTruthy();
+
+    await expect(pending).rejects.toMatchObject({
+      name: "CommandReceiptRejectedError",
+      code: "FORBIDDEN",
+    });
+    expect(useInboxStore.getState().comments[optimistic._id]).toBeUndefined();
+    expect(useInboxStore.getState().pending[`comments:${optimistic._id}`]).toBeUndefined();
+  });
+
+  it("restores an optimistically deleted real comment when its receipt is rejected", async () => {
+    const comment = {
+      _id: CID,
+      client_id: "client-real-comment",
+      conversation_id: CID,
+      user_id: "user1",
+      content: "keep me",
+      author_kind: "user",
+      created_at: 1,
+    } as any;
+    useInboxStore.setState({ comments: { [CID]: comment }, pending: {} });
+    useInboxStore.getState()._setDispatch(async (_action, _args, _patches, result) => ({
+      receiptVersion: 1,
+      commandId: result.commandId,
+      commandName: "comments.delete/v2",
+      status: "rejected",
+      rejection: {
+        code: "FORBIDDEN",
+        message: "Cannot delete this comment",
+      },
+      coverage: [],
+      retryUntil: null,
+    }));
+
+    const pending = useInboxStore.getState().deleteComment(CID);
+    expect(useInboxStore.getState().comments[CID]).toBeUndefined();
+
+    await expect(pending).rejects.toMatchObject({
+      name: "CommandReceiptRejectedError",
+      code: "FORBIDDEN",
+    });
+    expect(useInboxStore.getState().comments[CID]).toMatchObject({
+      content: "keep me",
+      client_id: "client-real-comment",
+    });
+    expect(useInboxStore.getState().pending[`comments:${CID}`]).toBeUndefined();
+  });
+
+  it("applies an acknowledged create-label assignment from its durable continuation", async () => {
+    const bucketId = "bucket00000000000000000000000000";
+    useInboxStore.setState({ buckets: {}, bucketAssignments: {}, pending: {} });
+    useInboxStore.getState()._setDispatch(async (_action, _args, _patches, result) => ({
+      receiptVersion: 1,
+      commandId: result.commandId,
+      commandName: "buckets.create/v2",
+      status: "acknowledged",
+      result: { bucketId },
+      coverage: [],
+      retryUntil: null,
+    }));
+
+    await useInboxStore.getState().createBucket(
+      { name: "Durable label" },
+      {
+        version: 1,
+        kind: "assignBucket",
+        conversationIds: [CID],
+      },
+    );
+
+    expect(
+      (Object.values(useInboxStore.getState().bucketAssignments) as any[])
+        .find((row) => row.conversation_id === CID),
+    ).toMatchObject({
+      conversation_id: CID,
+      bucket_id: bucketId,
+    });
   });
 
   // Triage gestures on a session that was never OPENED on this client — no

@@ -1,8 +1,8 @@
 "use client";
 import { useState, useRef, useCallback } from "react";
 import { ArrowUp } from "lucide-react";
-import { nanoid } from "nanoid";
 import { useInboxStore } from "../store/inboxStore";
+import { isParkedDispatchError } from "../store/mutativeMiddleware";
 import { soundNewSession } from "../lib/sounds";
 import { AgentTypeIcon } from "./AgentTypeIcon";
 import type { AgentClientId } from "@codecast/shared/contracts";
@@ -50,7 +50,7 @@ export function ContextChatInput({
     el.style.height = Math.min(el.scrollHeight, 120) + "px";
   }, []);
 
-  const handleSubmit = useCallback(async () => {
+  const handleSubmit = useCallback(() => {
     const text = message.trim();
     if (!text) return;
 
@@ -71,8 +71,6 @@ export function ContextChatInput({
     const convexAgentType = AGENT_TYPES.find(a => a.key === agentKey)?.convex || "claude_code";
 
     soundNewSession();
-    const sid = nanoid(10);
-    const now = Date.now();
 
     // Resolve linked object for optimistic rendering (task badge in header/sidebar).
     // Task's own project_path is preferred over the viewer's currentConversation, which may belong
@@ -88,40 +86,32 @@ export function ContextChatInput({
       }
     }
     const path = projectPathProp || taskDerivedPath || projectPath || gitRoot;
-
-    store.syncRecord("conversations", sid, {
-      _id: sid,
-      _creationTime: now,
-      user_id: "",
-      agent_type: convexAgentType,
-      session_id: sid,
-      project_path: path,
-      git_root: gitRoot || path,
-      started_at: now,
-      updated_at: now,
-      message_count: 0,
-      status: "active",
-      title: "New session",
-      messages: [],
-      ...(activeTask && { active_task_id: linkedObjectId, active_task: activeTask }),
+    const resolvedGitRoot = gitRoot || path;
+    const { stubId: sid } = store.beginOptimisticSession({
+      agentType: convexAgentType,
+      projectPath: path,
+      gitRoot: resolvedGitRoot,
+      create: (stubId) => store.createSession({
+        agent_type: convexAgentType,
+        project_path: path,
+        git_root: resolvedGitRoot,
+        session_id: stubId,
+        ...(linkedObjectId
+          ? { linked_object: { type: contextType, id: linkedObjectId } }
+          : {}),
+      }),
     });
 
-    store.syncRecord("sessions", sid, {
-      _id: sid,
-      session_id: sid,
-      title: "New session",
-      updated_at: now,
-      started_at: now,
-      project_path: path,
-      git_root: gitRoot || path,
-      agent_type: convexAgentType,
-      message_count: 0,
-      is_idle: true,
-      has_pending: false,
-      last_user_message: null,
-      ...(activeTask && { active_task: activeTask }),
-    });
-
+    // beginOptimisticSession owns the stub shape and rekey lifecycle. Enrich its
+    // task row only for immediate header/sidebar rendering; createSession links
+    // task/doc/plan context atomically on the server.
+    if (activeTask) {
+      store.syncRecord("conversations", sid, {
+        active_task_id: linkedObjectId,
+        active_task: activeTask,
+      });
+      store.syncRecord("sessions", sid, { active_task: activeTask });
+    }
     const clientId = store.addOptimisticMessage(sid, fullMessage);
 
     setMessage("");
@@ -132,24 +122,20 @@ export function ContextChatInput({
 
     useInboxStore.setState({ sidePanelSessionId: sid });
 
-    const convexId = await store._dispatch("createSession", [{
-      agent_type: convexAgentType,
-      project_path: path,
-      git_root: gitRoot || path,
-      session_id: sid,
-      ...(linkedObjectId ? { linked_object: { type: contextType, id: linkedObjectId } } : {}),
-    }]);
-
-    if (convexId) {
-      store.resolveSessionId(sid, convexId);
-      // Durable send via the outbox — survives a reload before the server acks.
-      store.sendMessage(convexId, fullMessage, undefined, clientId);
-      // createSession handles task linkage atomically; only docs/plans still need a separate link.
-      if (linkedObjectId && contextType !== "task") {
-        store._dispatch("linkConversation", [contextType, linkedObjectId, convexId]);
-      }
-    }
-  }, [message, contextType, contextTitle, getContextBody, agentKey, linkedObjectId]);
+    // Resolve through the shared tracked-create/by_session_id lifecycle, then
+    // issue the durable send with the SAME client id as the optimistic bubble.
+    // If the create remains parked past the resolver window, leave the message
+    // pending: the stranded-stub sweep re-creates and re-sends it idempotently.
+    void store.awaitConvexId(sid)
+      .then((convexId) => {
+        store.sendMessage(convexId, fullMessage, undefined, clientId);
+      })
+      .catch((error) => {
+        if (isParkedDispatchError(error)) return;
+        store.markOptimisticAsFailed(sid, clientId);
+        console.error("Failed to create context session", error);
+      });
+  }, [message, contextType, contextTitle, getContextBody, agentKey, linkedObjectId, projectPathProp]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {

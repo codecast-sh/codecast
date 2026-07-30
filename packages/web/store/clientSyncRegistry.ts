@@ -112,14 +112,13 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "collection", key: "bucketAssignments" },
     localFirst: true,
   },
-  // Teammate comments. Creates/deletes/agent-asks flow through dispatch side
-  // effects (comments.addComment / deleteComment / askAgentInThread); content
-  // edits ride the generic patch path, so dispatchTable enables those.
+  // Teammate comments. Every write flows through a named, receipt-backed
+  // dispatch side effect. In particular edits must not also ride generic
+  // patches: that path can silently no-op after deletion/access revocation.
   comments: {
     persistence: { kind: "collection", key: "comments" },
     hydration: { phase: "deferred" },
     localFirst: true,
-    dispatchTable: { table: "comments", kind: "collection" },
   },
   notifications: {
     localFirst: true,

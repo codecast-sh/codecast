@@ -6,15 +6,34 @@
 //   the body
 //   </session-message>
 
-const SESSION_MESSAGE_RE = /<session-message\s+from="([^"]*)"[^>]*>([\s\S]*?)<\/session-message>/;
+// Greedy body is intentional: message text is exact user/agent content and may
+// itself mention `</session-message>`. The formatter's final close tag is the
+// framing boundary.
+const SESSION_MESSAGE_RE = /<session-message\s+from="([^"]*)"[^>]*>([\s\S]*)<\/session-message>/;
 const SESSION_MESSAGE_NAME_RE = /<session-message\s+from="[^"]*"\s+name="([^"]*)"/;
+
+function removeLeadingFramingNewline(body: string): string {
+  if (body.startsWith("\r\n")) return body.slice(2);
+  if (body.startsWith("\n")) return body.slice(1);
+  return body;
+}
+
+function removeTrailingFramingNewline(body: string): string {
+  if (body.endsWith("\r\n")) return body.slice(0, -2);
+  if (body.endsWith("\n")) return body.slice(0, -1);
+  return body;
+}
+
+function removeSessionMessageFraming(body: string): string {
+  return removeTrailingFramingNewline(removeLeadingFramingNewline(body));
+}
 
 export function parseSessionMessage(text: string): { from: string; body: string; name?: string } | null {
   if (!text || typeof text !== "string") return null;
   const match = text.match(SESSION_MESSAGE_RE);
   if (!match) return null;
   const name = text.match(SESSION_MESSAGE_NAME_RE)?.[1]?.trim() || undefined;
-  return { from: match[1].trim(), body: match[2].trim(), name };
+  return { from: match[1].trim(), body: removeSessionMessageFraming(match[2]), name };
 }
 
 // Normalize the wrappers/control chars the daemon may prepend before the tag.
@@ -118,7 +137,9 @@ export function parseMachineDeliveredMessage(
     const parsed = parseInboundSessionMessage(rawContent);
     if (parsed) return { kind: "session", source: parsed.name || parsed.from, body: parsed.body };
     const open = rawContent.match(/<session-message\s+from="([^"]*)"(?:\s+name="([^"]*)")?[^>]*>([\s\S]*)$/);
-    const body = (open?.[3] ?? "").replace(/<\/session-message>[\s\S]*$/, "").trim();
+    const body = removeLeadingFramingNewline(
+      (open?.[3] ?? "").replace(/<\/session-message>[\s\S]*$/, ""),
+    );
     return { kind: "session", source: open?.[2] || open?.[1] || "session", body };
   }
   if (isTeammateMessage(rawContent)) {

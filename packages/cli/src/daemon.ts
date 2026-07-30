@@ -86,8 +86,16 @@ import { performReconciliation, repairDiscrepancies } from "./reconciliation.js"
 import { TEST_SCRATCH_DIRNAME, isTestScratchPath, isPathExcluded, isProjectAllowedToSync } from "./syncScope.js";
 import { TaskScheduler } from "./taskScheduler.js";
 import { hasTmux } from "./tmux.js";
+import {
+  PASTE_END,
+  PASTE_START,
+  clientAcceptsBracketedPaste,
+  pasteAndSubmitText,
+  pasteTextIntoPane as pasteTextIntoPaneWith,
+  prepareInjectedContent,
+} from "./tmuxPaste.js";
 import { formatFeedResults } from "./formatter.js";
-import { buildStableContext, recordStableContext, type BuiltStableContext } from "./stableContext.js";
+import { buildStableContext, ensureStableHookForLaunch, recordStableContext, type BuiltStableContext } from "./stableContext.js";
 import { collectSessionResources, formatResourcesLog, nextAwakeIdleMs, shouldReportMetrics, type ReportedMetrics, type SessionResources } from "./resourceMonitor.js";
 import {
   fetchExport,
@@ -2609,6 +2617,12 @@ async function executeRemoteCommand(
           break;
         }
 
+        // `cast stable off` removes the Claude SessionStart hook, but the
+        // new-session picker can opt one session back into Team/Solo. Install
+        // the gated hook before spawning so its exported override is actually
+        // consumed. Idempotent for machines already configured for stable mode.
+        ensureStableHookForLaunch(agentType, config.stable_mode, stablePrefs);
+
         // Binary is a registry lookup; the per-client arg construction lives in
         // launchCommand.ts (buildLaunchArgs, unit-tested per client). The daemon
         // keeps the impure pieces: reading the config accessor + flag helpers, the
@@ -2659,23 +2673,33 @@ async function executeRemoteCommand(
         let codexThreadId: string | null = null;
         const codexSkipApprovals = binaryArgs.includes("--full-auto") || binaryArgs.includes("--dangerously-bypass-approvals-and-sandbox");
         const codexApprovalPolicy: ApprovalPolicy = codexSkipApprovals ? "never" : "on-request";
-        if (agentType === "codex" && codexAppServerInstance?.running) {
+        const activeCodexAppServer = codexAppServerInstance?.running
+          ? codexAppServerInstance
+          : null;
+        if (agentType === "codex" && activeCodexAppServer) {
           try {
             const sandbox = codexSkipApprovals ? "danger-full-access" as const : "workspace-write" as const;
             const builtContext = await buildCodexStableContext(config, cwd, stablePrefs);
-            if (builtContext && conversationId) {
-              void recordStableContext(config, { conversation_id: conversationId, data: builtContext.data });
-            }
-            const resp = await codexAppServerInstance.threadStart({
-              cwd,
-              sandbox,
-              approvalPolicy: codexApprovalPolicy,
-              ...(builtContext ? { developerInstructions: builtContext.text } : {}),
-              ...(requestedModelOpt?.cliAlias ? { model: requestedModelOpt.cliAlias } : {}),
-              ...(requestedEffort && (CODEX_EFFORT_LEVELS as readonly string[]).includes(requestedEffort)
-                ? { config: { model_reasoning_effort: requestedEffort } }
-                : {}),
-            });
+            const resp = await startCodexThreadThenRecordStableContext(
+              () => activeCodexAppServer.threadStart({
+                cwd,
+                sandbox,
+                approvalPolicy: codexApprovalPolicy,
+                ...(builtContext ? { developerInstructions: builtContext.text } : {}),
+                ...(requestedModelOpt?.cliAlias ? { model: requestedModelOpt.cliAlias } : {}),
+                ...(requestedEffort && (CODEX_EFFORT_LEVELS as readonly string[]).includes(requestedEffort)
+                  ? { config: { model_reasoning_effort: requestedEffort } }
+                  : {}),
+              }),
+              builtContext && conversationId
+                ? () => {
+                    void recordStableContext(config, {
+                      conversation_id: conversationId,
+                      data: builtContext.data,
+                    });
+                  }
+                : undefined,
+            );
             codexThreadId = resp.thread.id;
             log(`[codex-app-server] pre-created thread ${codexThreadId.slice(0, 8)} (approvalPolicy=${codexApprovalPolicy})`);
           } catch (err) {
@@ -4023,6 +4047,23 @@ export async function buildCodexStableContext(
     exclude: prefs?.stable_exclude ?? [],
     cwd,
   });
+}
+
+/** A stable-context card represents context that reached a real Codex thread.
+ * Never publish it before threadStart resolves: app-server startup can fail and
+ * fall back to tmux, where no developerInstructions were injected. */
+export async function startCodexThreadThenRecordStableContext<T>(
+  startThread: () => Promise<T>,
+  record?: () => void,
+): Promise<T> {
+  const response = await startThread();
+  try {
+    record?.();
+  } catch {
+    // Recording is optional and must not turn a successful thread start into
+    // a fallback launch.
+  }
+  return response;
 }
 
 function patchConfig(updates: Partial<Config>): void {
@@ -9142,58 +9183,8 @@ async function paneInteractiveQuestion(target: string): Promise<string | null> {
   }
 }
 
-// ── Injected-content preparation ────────────────────────────────────────────
-// Every injection backend types a message into an agent's composer through a
-// terminal, where a newline byte is indistinguishable from the Enter key unless
-// the payload is wrapped in bracketed-paste markers (ESC[200~ … ESC[201~).
-// Inside those markers a TUI composer inserts a literal newline; outside them
-// the same byte submits the message, so an unbracketed multi-line prompt is
-// delivered as one message per line — each fragment answered separately, the
-// tail lines landing as interruptions.
-//
-// So: keep newlines when the transport can bracket the payload, flatten them to
-// spaces when it can't (a mangled-but-whole prompt beats N truncated ones).
-// Trailing newlines always go: the discrete Enter the callers send afterwards is
-// what submits, and a trailing blank composer line would swallow it.
-export function prepareInjectedContent(content: string, opts: { bracketed: boolean }): string {
-  const normalized = content.replace(/\r\n?/g, "\n").replace(/\n+$/, "");
-  const shaped = opts.bracketed ? normalized : normalized.replace(/\n/g, " ");
-  // Never return empty: an empty paste leaves the composer untouched and the
-  // trailing Enter would submit whatever the user had typed there.
-  return shaped || " ";
-}
-
-const PASTE_START = "\x1b[200~";
-const PASTE_END = "\x1b[201~";
-
-// Whether the client running in the pane turns on bracketed paste mode. An
-// unverified client gets flattened text, because newlines it doesn't bracket
-// submit a message per line. Unknown/absent type means claude, the daemon's
-// default everywhere else in this file.
-export function clientAcceptsBracketedPaste(agentType?: AgentClientId): boolean {
-  return AGENT_CLIENTS[agentType ?? "claude"].capabilities.bracketedPaste === true;
-}
-
-// Paste literal text into a pane via a tmux buffer (no per-char typing, so CC's
-// slash-command autocomplete never opens). `-p` asks tmux for the bracketed-paste
-// markers, which it emits only when the pane's program has the mode on — hence
-// `bracketed`, which must reflect that same client capability so text destined
-// for a TUI that won't bracket it gets flattened instead of split per line.
-// The send-keys fallback is raw keystrokes with no bracketing either way.
-// Preparation is idempotent, so passing already-prepared text is safe.
 async function pasteTextIntoPane(target: string, text: string, bracketed = true): Promise<void> {
-  const payload = prepareInjectedContent(text, { bracketed });
-  const id = `cc-${process.pid}-${Date.now()}`;
-  const tmpFile = `/tmp/${id}`;
-  try {
-    fs.writeFileSync(tmpFile, payload);
-    await tmuxExec(["load-buffer", "-b", id, tmpFile]);
-    await tmuxExec(["paste-buffer", "-p", "-t", target, "-b", id, "-d"]);
-  } catch {
-    await tmuxExec(["send-keys", "-t", target, "-l", prepareInjectedContent(payload, { bracketed: false })]);
-  } finally {
-    try { fs.unlinkSync(tmpFile); } catch {}
-  }
+  await pasteTextIntoPaneWith(tmuxExec, target, text, bracketed);
 }
 
 // --- /model picker driver ---------------------------------------------------
@@ -9626,14 +9617,28 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   log(`Injected via tmux to ${target}${pasteConfirmed ? "" : " (unconfirmed)"}${verify.rePasted ? " (re-pasted)" : ""}${verify.outcome === "timeout" ? " (submit unverified)" : ""}`)
 }
 
-function buildAppleScript(
+export function buildAppleScript(
   app: "iTerm2" | "Terminal",
   normalizedTty: string,
   content: string,
   poll: ReturnType<typeof parsePollMessage>,
   keystrokes = false,
+  bracketed = true,
 ): { script: string; args: string } {
   const isIterm = app === "iTerm2";
+  const prepareMessageText = (text: string): string => {
+    const prepared = prepareInjectedContent(text, { bracketed });
+    return bracketed ? `${PASTE_START}${prepared}${PASTE_END}` : prepared;
+  };
+  const appleScriptMessageExpression = (text: string): string => {
+    const prepared = prepareInjectedContent(text, { bracketed })
+      .replace(/\\/g, "\\\\")
+      .replace(/"/g, '\\"');
+    const literal = `"${prepared}"`;
+    return bracketed
+      ? `(ASCII character 27) & "[200~" & ${literal} & (ASCII character 27) & "[201~"`
+      : literal;
+  };
 
   if (poll) {
     // A free-text answer can't be entered into the AUQ menu: decline it once (Escape),
@@ -9665,10 +9670,11 @@ function buildAppleScript(
     // The text to type at the prompt: the declined free-text answer, or `poll.text` typed
     // into a field a menu option opened (plan feedback).
     const promptText = declineText !== null ? declineText : poll.text;
+    const promptExpression = promptText ? appleScriptMessageExpression(promptText) : "";
     const textAction = promptText
       ? isIterm
-        ? `\n            delay 0.3\n            tell s to write text "${promptText.replace(/"/g, '\\"')}" without newline\n            delay 0.15\n            tell s to write text ""`
-        : `\n          delay 0.3\n          do script "${promptText.replace(/"/g, '\\"')}" in t`
+        ? `\n            delay 0.3\n            tell s to write text ${promptExpression} without newline\n            delay 0.15\n            tell s to write text ""`
+        : `\n          delay 0.3\n          do script ${promptExpression} in t`
       : "";
 
     const script = isIterm
@@ -9713,7 +9719,7 @@ end run`;
   // explicit empty `write text` below, Terminal.app as `do script`'s implicit
   // one. Keystroke payloads (an approve/deny "\r" or Escape) skip all of this —
   // they must stay raw keys.
-  const payload = keystrokes ? content : `${PASTE_START}${prepareInjectedContent(content, { bracketed: true })}${PASTE_END}`;
+  const payload = keystrokes ? content : prepareMessageText(content);
   const escapedContent = payload.replace(/'/g, "'\\''");
   const script = isIterm
     ? `on run argv
@@ -9772,15 +9778,27 @@ const TMUX_ONLY_TERMINALS = new Set(["ghostty", "Alacritty"]);
 
 // ── AppleScript injection (iTerm2 + Terminal.app) ──────────────────────────
 // Extracted from original injectViaTerminal — logic is identical
-async function injectViaAppleScript(tty: string, content: string, termProgram?: string, keystrokes = false): Promise<void> {
+async function injectViaAppleScript(
+  tty: string,
+  content: string,
+  termProgram?: string,
+  keystrokes = false,
+  bracketed = true,
+): Promise<void> {
   const normalizedTty = normalizeTty(tty);
   const poll = keystrokes ? null : parsePollMessage(content);
 
   const app: "iTerm2" | "Terminal" = termProgram === "Apple_Terminal" ? "Terminal" : "iTerm2";
-  const { script, args } = buildAppleScript(app, normalizedTty, content, poll, keystrokes);
+  const { script, args } = buildAppleScript(
+    app,
+    normalizedTty,
+    content,
+    poll,
+    keystrokes,
+    bracketed,
+  );
 
-  const tmpFile = path.join(CONFIG_DIR, "terminal-inject.scpt");
-  fs.writeFileSync(tmpFile, script);
+  const tmpFile = writeTerminalInjectionScript(script);
   try {
     const { stdout } = await execAsync(`osascript "${tmpFile}" ${args}`);
     if (stdout.trim() === "not_found") {
@@ -9790,6 +9808,18 @@ async function injectViaAppleScript(tty: string, content: string, termProgram?: 
   } finally {
     try { fs.unlinkSync(tmpFile); } catch {}
   }
+}
+
+export function writeTerminalInjectionScript(
+  script: string,
+  directory = CONFIG_DIR,
+): string {
+  const tmpFile = path.join(
+    directory,
+    `terminal-inject-${process.pid}-${randomUUID()}.scpt`,
+  );
+  fs.writeFileSync(tmpFile, script, { flag: "wx", mode: 0o600 });
+  return tmpFile;
 }
 
 // ── Kitty injection via remote control (`kitty @`) ─────────────────────────
@@ -9821,32 +9851,59 @@ async function findKittyWindowId(normalizedTty: string): Promise<number | null> 
   return null;
 }
 
-// Send message text to a kitty window as a bracketed paste so newlines land as
-// composer newlines rather than Enter keys. Two flags matter:
+// Send message text to a kitty window as a bracketed paste for verified clients
+// so newlines land as composer newlines rather than Enter keys. Two flags matter:
 //   --from-file        content is sent verbatim; passed as an argument instead,
 //                      kitty interprets escapes, so a message containing the
 //                      two characters \n would arrive as a real newline.
 //   --bracketed-paste  `auto` wraps the payload only when the program in the
-//                      window has bracketed paste mode on (every agent TUI
-//                      does; a bare shell doesn't, and there the markers would
-//                      be literal garbage).
+//                      window has bracketed paste mode on. Unverified clients
+//                      skip it and receive text flattened before this call.
 // The flag is newer than the oldest kitty we might meet, so an invocation that
 // fails retries flattened on the plain send-text that has always worked.
-async function kittySendText(match: string, text: string): Promise<void> {
-  const tmpFile = path.join(CONFIG_DIR, `kitty-inject-${process.pid}-${Date.now()}`);
+async function kittySendText(match: string, text: string, bracketed: boolean): Promise<void> {
+  const tmpFile = writeKittyInjectionPayload(
+    prepareInjectedContent(text, { bracketed }),
+  );
   try {
-    fs.writeFileSync(tmpFile, prepareInjectedContent(text, { bracketed: true }));
-    await execAsync(`kitty @ send-text ${match} --bracketed-paste=auto --from-file '${tmpFile}'`);
-  } catch (err) {
-    log(`kitty bracketed paste failed (${err instanceof Error ? err.message : String(err)}), sending flattened`);
-    const escaped = prepareInjectedContent(text, { bracketed: false }).replace(/'/g, "'\\''");
-    await execAsync(`kitty @ send-text ${match} '${escaped}'`);
+    const pasteFlag = bracketed ? " --bracketed-paste=auto" : "";
+    try {
+      await execAsync(`kitty @ send-text ${match}${pasteFlag} --from-file '${tmpFile}'`);
+    } catch (err) {
+      log(`kitty bracketed paste failed (${err instanceof Error ? err.message : String(err)}), sending flattened`);
+      // Keep the fallback file-based too: putting arbitrary prompt text in the
+      // shell command leaks it through process listings and reintroduces escape
+      // interpretation. Flatten, overwrite our private file, and retry plainly.
+      fs.writeFileSync(
+        tmpFile,
+        prepareInjectedContent(text, { bracketed: false }),
+        { mode: 0o600 },
+      );
+      await execAsync(`kitty @ send-text ${match} --from-file '${tmpFile}'`);
+    }
   } finally {
     try { fs.unlinkSync(tmpFile); } catch {}
   }
 }
 
-async function injectViaKitty(tty: string, content: string, keystrokes = false): Promise<void> {
+export function writeKittyInjectionPayload(
+  payload: string,
+  directory = CONFIG_DIR,
+): string {
+  const tmpFile = path.join(
+    directory,
+    `kitty-inject-${process.pid}-${randomUUID()}`,
+  );
+  fs.writeFileSync(tmpFile, payload, { flag: "wx", mode: 0o600 });
+  return tmpFile;
+}
+
+async function injectViaKitty(
+  tty: string,
+  content: string,
+  keystrokes = false,
+  bracketed = true,
+): Promise<void> {
   const normalizedTty = normalizeTty(tty);
   const windowId = await findKittyWindowId(normalizedTty);
   if (windowId === null) {
@@ -9869,7 +9926,7 @@ async function injectViaKitty(tty: string, content: string, keystrokes = false):
       await execAsync(`kitty @ send-key ${match} escape`);
       await new Promise(r => setTimeout(r, 500));
       if (declineText) {
-        await kittySendText(match, declineText);
+        await kittySendText(match, declineText, bracketed);
         await new Promise(r => setTimeout(r, 150));
         await execAsync(`kitty @ send-key ${match} enter`);
       }
@@ -9882,7 +9939,7 @@ async function injectViaKitty(tty: string, content: string, keystrokes = false):
     }
     if (poll.text) {
       await new Promise(r => setTimeout(r, 300));
-      await kittySendText(match, poll.text);
+      await kittySendText(match, poll.text, bracketed);
       await new Promise(r => setTimeout(r, 150));
       await execAsync(`kitty @ send-key ${match} enter`);
     }
@@ -9890,7 +9947,10 @@ async function injectViaKitty(tty: string, content: string, keystrokes = false):
     return;
   }
 
-  await kittySendText(match, content);
+  await pasteAndSubmitText({
+    paste: () => kittySendText(match, content, bracketed),
+    submit: () => execAsync(`kitty @ send-key ${match} enter`),
+  });
   log(`Injected message via Kitty for TTY ${normalizedTty}`);
 }
 
@@ -9916,12 +9976,18 @@ async function findWezTermPaneId(normalizedTty: string): Promise<number | null> 
 // --no-paste means "send these bytes as raw keystrokes", which is right for the
 // key sequences below and wrong for message text: raw newlines read as Enter.
 // Omitting it lets WezTerm deliver the payload as a bracketed paste when the
-// pane's program has the mode on (every agent TUI), so newlines stay newlines.
-async function weztermSendText(paneId: number, text: string, opts: { asKeystrokes?: boolean } = {}): Promise<void> {
+// pane's program has the mode on, so verified clients keep newlines. Unverified
+// clients receive flattened text with --no-paste.
+async function weztermSendText(
+  paneId: number,
+  text: string,
+  opts: { asKeystrokes?: boolean; bracketed?: boolean } = {},
+): Promise<void> {
   const asKeystrokes = opts.asKeystrokes ?? false;
-  const payload = asKeystrokes ? text : prepareInjectedContent(text, { bracketed: true });
+  const bracketed = opts.bracketed ?? true;
+  const payload = asKeystrokes ? text : prepareInjectedContent(text, { bracketed });
   const escaped = payload.replace(/'/g, "'\\''");
-  const pasteFlag = asKeystrokes ? " --no-paste" : "";
+  const pasteFlag = asKeystrokes || !bracketed ? " --no-paste" : "";
   await execAsync(`printf '%s' '${escaped}' | wezterm cli send-text --pane-id ${paneId}${pasteFlag}`);
 }
 
@@ -9930,7 +9996,12 @@ async function weztermSendKeys(paneId: number, keys: string): Promise<void> {
   await weztermSendText(paneId, keys, { asKeystrokes: true });
 }
 
-async function injectViaWezTerm(tty: string, content: string, keystrokes = false): Promise<void> {
+async function injectViaWezTerm(
+  tty: string,
+  content: string,
+  keystrokes = false,
+  bracketed = true,
+): Promise<void> {
   const normalizedTty = normalizeTty(tty);
   const paneId = await findWezTermPaneId(normalizedTty);
   if (paneId === null) {
@@ -9951,7 +10022,7 @@ async function injectViaWezTerm(tty: string, content: string, keystrokes = false
       await weztermSendKeys(paneId, "\x1b"); // Escape
       await new Promise(r => setTimeout(r, 500));
       if (declineText) {
-        await weztermSendText(paneId, declineText);
+        await weztermSendText(paneId, declineText, { bracketed });
         await new Promise(r => setTimeout(r, 150));
         await weztermSendKeys(paneId, "\r"); // Enter
       }
@@ -9965,7 +10036,7 @@ async function injectViaWezTerm(tty: string, content: string, keystrokes = false
     }
     if (poll.text) {
       await new Promise(r => setTimeout(r, 300));
-      await weztermSendText(paneId, poll.text);
+      await weztermSendText(paneId, poll.text, { bracketed });
       await new Promise(r => setTimeout(r, 150));
       await weztermSendKeys(paneId, "\r");
     }
@@ -9973,7 +10044,10 @@ async function injectViaWezTerm(tty: string, content: string, keystrokes = false
     return;
   }
 
-  await weztermSendText(paneId, content);
+  await pasteAndSubmitText({
+    paste: () => weztermSendText(paneId, content, { bracketed }),
+    submit: () => weztermSendKeys(paneId, "\r"),
+  });
   log(`Injected message via WezTerm for TTY ${normalizedTty}`);
 }
 
@@ -9982,23 +10056,29 @@ async function injectViaWezTerm(tty: string, content: string, keystrokes = false
 // AppleScript path (iTerm2/Terminal.app) is the default fallback for
 // unknown terminals — preserves existing behavior exactly.
 // `keystrokes: true` marks a payload that IS keys rather than text — the
-// permission approve/deny "\r"/"\x1b" senders. Message text is delivered as a
-// bracketed paste so its newlines survive; a keystroke payload must not be,
-// because bracketing a lone carriage return would turn "approve" into a
-// literal newline the TUI ignores.
-async function injectViaTerminal(tty: string, content: string, termProgram?: string, opts: { keystrokes?: boolean } = {}): Promise<void> {
+// permission approve/deny "\r"/"\x1b" senders. Verified clients receive message
+// text as a bracketed paste; unverified clients receive one flattened prompt. A
+// keystroke payload must never be bracketed, because wrapping a lone carriage
+// return would turn "approve" into a literal newline the TUI ignores.
+async function injectViaTerminal(
+  tty: string,
+  content: string,
+  termProgram?: string,
+  opts: { keystrokes?: boolean; agentType?: AgentClientId } = {},
+): Promise<void> {
   const keystrokes = opts.keystrokes ?? false;
+  const bracketed = clientAcceptsBracketedPaste(opts.agentType);
   if (termProgram === "kitty") {
-    return injectViaKitty(tty, content, keystrokes);
+    return injectViaKitty(tty, content, keystrokes, bracketed);
   }
   if (termProgram === "WezTerm") {
-    return injectViaWezTerm(tty, content, keystrokes);
+    return injectViaWezTerm(tty, content, keystrokes, bracketed);
   }
   if (termProgram && TMUX_ONLY_TERMINALS.has(termProgram)) {
     throw new Error(`${getTerminalLabel(termProgram)} does not support direct injection — use tmux for this terminal`);
   }
   // Apple_Terminal, iTerm.app, unknown → existing AppleScript path
-  return injectViaAppleScript(tty, content, termProgram, keystrokes);
+  return injectViaAppleScript(tty, content, termProgram, keystrokes, bracketed);
 }
 
 
@@ -13448,7 +13528,9 @@ async function deliverMessage(
       // Mark "injected" best-effort (non-blocking) BEFORE the terminal paste — same ack-race
       // reasoning and same wedge-safety (fire-and-forget 8s timeout) as the tmux paths above.
       markInjectedBestEffort(syncService, messageId, undefined, { conversationId });
-      await injectViaTerminal(live.proc.tty, content, live.proc.termProgram);
+      await injectViaTerminal(live.proc.tty, content, live.proc.termProgram, {
+        agentType: detectedType,
+      });
       logDelivery(`Injected via ${termLabel} tty=${live.proc.tty}`);
       return true;
     } catch (err) {
