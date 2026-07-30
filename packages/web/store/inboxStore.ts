@@ -232,6 +232,19 @@ export type InboxSession = {
   // The schedule (agent_tasks row) that spawned this conversation as a run.
   // Lets the sidebar badge/strip attribute any historical run to its schedule.
   agent_task_id?: string | null;
+  // Harness /loop state (server-folded from ScheduleWakeup / wakeup-fire
+  // messages; see convex/loopState.ts). An armed loop rows this session into
+  // the inbox trigger set like an armed trigger. Never "stopped" here — the
+  // server projects tombstones as null.
+  loop_state?: {
+    status: "armed" | "waking";
+    wakeup_at: number;
+    armed_at: number;
+    fired_at?: number;
+    event_at: number;
+    reason?: string;
+    prompt?: string;
+  } | null;
   forked_from?: string | null;
   parent_message_uuid?: string | null;
   // Messages inherited from the parent up to the fork point. Lets the branch

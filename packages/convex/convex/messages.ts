@@ -20,6 +20,7 @@ import {
   unauthenticatedView,
 } from "./smallViewContracts";
 import { scheduleAutoSwitchCheck } from "./accountSwitch";
+import { batchHasLoopEvent, deriveLoopState } from "./loopState";
 import { nextAgentStatusOnAddMessages, isApiErrorBanner, classifyApiErrorBanner, apiErrorBatchAction, NEEDS_INPUT_AUQ_CHECK_DELAY_MS } from "./inboxFilters";
 import { classifyDocContent, extractTitleFromContent, inlineDocSourceKey } from "./docExtraction";
 import { extractFileChanges, extractCommitHashFromContent, hasFileChangeToolCall, type FileChange } from "./fileChanges/extractor";
@@ -860,6 +861,13 @@ export const addMessage = mutation({
     } else if (args.role === "user") {
       convPatch.last_user_message_at = msgTimestamp;
     }
+    // Fold harness-loop events (ScheduleWakeup / scheduled_task_fire) into the
+    // conversation's loop_state so the inbox trigger set sees the armed loop.
+    const singleMsg = [{ role: args.role, subtype: args.subtype, timestamp: msgTimestamp, tool_calls: args.tool_calls }];
+    if (batchHasLoopEvent(singleMsg)) {
+      const nextLoop = deriveLoopState(conversation.loop_state, singleMsg, now);
+      if (nextLoop) convPatch.loop_state = nextLoop;
+    }
     await ctx.db.patch(args.conversation_id, convPatch);
 
     const hasToolResultReply = args.role === "user" && !!args.tool_results && args.tool_results.length > 0;
@@ -1310,6 +1318,16 @@ export const addMessages = mutation({
 
       await maybeScheduleTitleGeneration(ctx, conversation, conversation.message_count, newMessageCount);
 
+    }
+
+    // Fold harness-loop events (ScheduleWakeup / scheduled_task_fire) into
+    // conversation.loop_state. Like the AskUserQuestion check below, this must
+    // run even when insertedCount is 0: tool_calls usually land as a PATCH to
+    // the already-synced streaming message. The batchHasLoopEvent gate keeps
+    // ordinary traffic free of the derivation.
+    if (batchHasLoopEvent(args.messages)) {
+      const nextLoop = deriveLoopState(conversation.loop_state, args.messages, Date.now());
+      if (nextLoop) await ctx.db.patch(args.conversation_id, { loop_state: nextLoop });
     }
 
     // An AskUserQuestion tool_use arriving as the batch's newest message means

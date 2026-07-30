@@ -391,6 +391,22 @@ export default defineSchema({
     // and backfilled on run completion/failure, so EVERY run — not just the
     // latest — stays attributable to its schedule (panel, badges, provenance).
     agent_task_id: v.optional(v.id("agent_tasks")),
+    // Harness /loop state, folded from the message stream at ingest (see
+    // loopState.ts): the agent scheduled its own wakeup (ScheduleWakeup) or is
+    // mid-wakeup-turn. Lets the inbox trigger set treat a self-pacing loop
+    // like an armed trigger without reading messages. "stopped" is kept as a
+    // tombstone so replayed history can't re-arm a finished loop.
+    loop_state: v.optional(
+      v.object({
+        status: v.union(v.literal("armed"), v.literal("waking"), v.literal("stopped")),
+        wakeup_at: v.number(),
+        armed_at: v.number(),
+        fired_at: v.optional(v.number()),
+        event_at: v.number(),
+        reason: v.optional(v.string()),
+        prompt: v.optional(v.string()),
+      })
+    ),
     available_skills: v.optional(v.string()),
     subagent_description: v.optional(v.string()),
     icon: v.optional(v.string()),
