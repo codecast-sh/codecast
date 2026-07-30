@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseOpencodeModels, parsePiModels } from "./modelInventory.js";
+import { parseOpencodeModels, parsePiModels, recordObservedModelInventory, pendingModelInventoryPayload } from "./modelInventory.js";
 
 // Fixtures mirror the real CLI outputs (opencode 1.18, pi 0.x) — the collectors
 // feed these straight into the heartbeat payload, so a format drift should fail
@@ -38,5 +38,45 @@ describe("parsePiModels", () => {
       "google/gemini-2.5-pro",
       "openrouter/anthropic/claude-opus-4.8",
     ]);
+  });
+});
+
+// Pushed inventory (claude): no listing command exists, so driveModelPicker
+// pushes the menu rows it parses. The pushed entry must survive collector
+// refreshes (separate source maps merged into the payload) and ride the beat
+// only when it actually changes.
+describe("recordObservedModelInventory", () => {
+  test("pushed claude rows surface in the pending payload, in menu order", () => {
+    recordObservedModelInventory("claude", [
+      "Default (recommended)",
+      "Opus (1M context)",
+      "Fable",
+      "Sonnet",
+      "Haiku",
+    ]);
+    const payload = pendingModelInventoryPayload();
+    expect(payload?.clients.claude).toEqual([
+      "Default (recommended)",
+      "Opus (1M context)",
+      "Fable",
+      "Sonnet",
+      "Haiku",
+    ]);
+  });
+
+  test("an unchanged push does not mint a new hash; a changed one does", () => {
+    recordObservedModelInventory("claude", ["Fable", "Sonnet"]);
+    const first = pendingModelInventoryPayload()?.hash;
+    recordObservedModelInventory("claude", ["Fable", "Sonnet"]);
+    expect(pendingModelInventoryPayload()?.hash).toBe(first!);
+    recordObservedModelInventory("claude", ["Fable", "Sonnet", "Haiku"]);
+    expect(pendingModelInventoryPayload()?.hash).not.toBe(first!);
+  });
+
+  test("empty or blank pushes are ignored", () => {
+    const before = pendingModelInventoryPayload()?.hash;
+    recordObservedModelInventory("claude", []);
+    recordObservedModelInventory("claude", ["  ", ""]);
+    expect(pendingModelInventoryPayload()?.hash).toBe(before!);
   });
 });
