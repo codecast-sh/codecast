@@ -409,6 +409,7 @@ export class PrincipalRuntime {
         initialHead: metadata.head,
         onExternalCommit: async () => { await this.hooks.onExternalCommit?.(); },
         onStorageFailure: (error) => this.reportStorageFailure(error),
+        onStorageRecovered: () => this.reportStorageRecovery(),
       });
       this.emit({ ...current, phase: "server-verified", head: metadata.head });
       this.hooks.onServerVerified?.();

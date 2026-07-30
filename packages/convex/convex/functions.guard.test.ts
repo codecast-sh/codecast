@@ -134,6 +134,21 @@ describe("comments complete-view write choke", () => {
     expect(merge).toContain('if (table === "comments")');
     expect(merge).toContain("patchCommentWithRevision");
   });
+
+  test("access-changing conversation mutations advance the comment view head", () => {
+    // The client refuses to re-grant a comment view at a revision it already
+    // observed before a forbidden transition (stale cached results must not
+    // resurrect revoked content). Privacy/visibility/team transitions change
+    // access without any comment write, so each must move the head forward or
+    // regained access renders a frozen empty thread (matrix SRV-02).
+    const conversations = readFileSync(join(DIR, "conversations.ts"), "utf8");
+    const advanceCalls = conversations.match(/advanceCommentsAccessRevision\(/g) ?? [];
+    // setPrivacy, setTeamVisibility, setPrivacyBySessionId, reconfigureSession,
+    // and the two internal share repairs.
+    expect(advanceCalls.length).toBeGreaterThanOrEqual(6);
+    const writer = readFileSync(join(DIR, "commentViewWrites.ts"), "utf8");
+    expect(writer).toContain("export async function advanceCommentsAccessRevision");
+  });
 });
 
 describe("small principal-view write chokes", () => {

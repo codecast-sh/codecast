@@ -618,57 +618,6 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
     return "source-ordered";
   }
 
-  private completeViewContentEqual(
-    current: ViewRecord,
-    currentMembers: readonly ViewMemberRecord[],
-    currentProjections: readonly ViewProjectionRecord[],
-    next: ViewRecord,
-    nextMembers: readonly ViewMemberRecord[],
-    nextProjections: readonly ViewProjectionRecord[],
-  ): boolean {
-    const stableView = (view: ViewRecord) => ({
-      key: view.key,
-      contractId: view.contractId,
-      grantKeys: [...view.grantKeys].sort(),
-      revision: view.revision,
-      coverage: view.coverage,
-    });
-    const stableMembers = (members: readonly ViewMemberRecord[]) => [...members]
-      .map((member) => ({ ...member, grantKeys: [...member.grantKeys].sort() }))
-      .sort((a, b) => a.key.localeCompare(b.key));
-    const stableProjections = (projections: readonly ViewProjectionRecord[]) =>
-      [...projections].sort((a, b) => a.key.localeCompare(b.key));
-    return valuesEqual(stableView(current), stableView(next)) &&
-      valuesEqual(stableMembers(currentMembers), stableMembers(nextMembers)) &&
-      valuesEqual(stableProjections(currentProjections), stableProjections(nextProjections));
-  }
-
-  private segmentContentEqual(
-    current: ViewSegmentRecord,
-    currentMembers: readonly ViewMemberRecord[],
-    currentProjections: readonly ViewProjectionRecord[],
-    next: ViewSegmentRecord,
-    nextMembers: readonly ViewMemberRecord[],
-    nextProjections: readonly ViewProjectionRecord[],
-  ): boolean {
-    const stableSegment = (segment: ViewSegmentRecord) => ({
-      key: segment.key,
-      viewKey: segment.viewKey,
-      segmentKey: segment.segmentKey,
-      segmentKind: segment.segmentKind,
-      grantKeys: [...segment.grantKeys].sort(),
-      coverage: segment.coverage,
-    });
-    const stableMembers = (members: readonly ViewMemberRecord[]) => [...members]
-      .map((member) => ({ ...member, grantKeys: [...member.grantKeys].sort() }))
-      .sort((a, b) => a.key.localeCompare(b.key));
-    const stableProjections = (projections: readonly ViewProjectionRecord[]) =>
-      [...projections].sort((a, b) => a.key.localeCompare(b.key));
-    return valuesEqual(stableSegment(current), stableSegment(next)) &&
-      valuesEqual(stableMembers(currentMembers), stableMembers(nextMembers)) &&
-      valuesEqual(stableProjections(currentProjections), stableProjections(nextProjections));
-  }
-
   private async grantIsReferenced(grantKey: string): Promise<boolean> {
     const [view, segment, member, entity, command, sync] = await Promise.all([
       this.db.views.filter((row) => row.grantKeys.includes(grantKey as any)).first(),
@@ -1306,9 +1255,8 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
           ...operation.members.flatMap((member) => [...member.grantKeys]),
         ]);
         const oldView = await this.db.views.get(operation.view.key);
-        const [oldMembers, oldProjections, oldSegments] = await Promise.all([
+        const [oldMembers, oldSegments] = await Promise.all([
           this.db.viewMembers.where("viewKey").equals(operation.view.key).toArray(),
-          this.db.viewProjections.where("viewKey").equals(operation.view.key).toArray(),
           this.db.viewSegments.where("viewKey").equals(operation.view.key).toArray(),
         ]);
         const coverageOrder = this.assertMonotonicViewCoverage(
@@ -1317,17 +1265,17 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
           writer,
           "granted",
         );
-        if (coverageOrder === "equal" && oldView &&
-          (oldSegments.length > 0 || !this.completeViewContentEqual(
-            oldView,
-            oldMembers,
-            oldProjections,
-            operation.view,
-            operation.members,
-            operation.projections,
-          ))) {
+        // Content MAY legitimately differ at an equal revision: the revision
+        // is a lower bound covering the view's own table writes, while a
+        // projection can also carry joined fields (a commenter's display name)
+        // that drift without any covered write. Every payload reaching this
+        // point already owns the durable writer fence and a strictly newer
+        // source sequence, so the latest fenced delivery is by construction
+        // the freshest authoritative content — accept it. Regressions are
+        // still impossible: older comparable coverage was rejected above.
+        if (coverageOrder === "equal" && oldView && oldSegments.length > 0) {
           throw new PrincipalStoreFenceError(
-            "Equal server view revision carried divergent complete content",
+            "Equal server view revision cannot replace a view that holds segments",
           );
         }
         const oldGrantKeys = [
@@ -1367,13 +1315,9 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
           ...operation.segment.grantKeys,
           ...operation.members.flatMap((member) => [...member.grantKeys]),
         ]);
-        const [oldSegment, oldMembers, oldProjections, otherSegments] = await Promise.all([
+        const [oldSegment, oldMembers, otherSegments] = await Promise.all([
           this.db.viewSegments.get(operation.segment.key),
           this.db.viewMembers.where("[viewKey+segmentKey]").equals([
-            operation.view.key,
-            operation.segment.segmentKey,
-          ]).toArray(),
-          this.db.viewProjections.where("[viewKey+segmentKey]").equals([
             operation.view.key,
             operation.segment.segmentKey,
           ]).toArray(),
@@ -1381,24 +1325,16 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
             .filter((segment) => segment.key !== operation.segment.key)
             .toArray(),
         ]);
-        const coverageOrder = this.assertMonotonicViewCoverage(
+        // Same rule as complete views: at equal coverage the latest fenced
+        // delivery wins — segment content can carry joined fields that drift
+        // without a covered write, and the writer/source fences above already
+        // prove this payload is the newest one this store has seen.
+        this.assertMonotonicViewCoverage(
           oldView,
           operation.view,
           writer,
           "granted",
         );
-        if (coverageOrder === "equal" && oldSegment && !this.segmentContentEqual(
-          oldSegment,
-          oldMembers,
-          oldProjections,
-          operation.segment,
-          operation.members,
-          operation.projections,
-        )) {
-          throw new PrincipalStoreFenceError(
-            "Equal server view revision carried divergent segment content",
-          );
-        }
         await Promise.all([
           this.db.viewMembers.where("[viewKey+segmentKey]").equals([
             operation.view.key,
