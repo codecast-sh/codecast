@@ -139,7 +139,10 @@ app.get("/install.ps1", async (c) => {
 app.get("/a/:slug", async (c) => {
   const { status, html } = await renderArtifactPage(c.req.param("slug"));
   c.status(status as 200);
-  c.header("Cache-Control", "no-cache");
+  // Cacheable: browsers (and any CDN in front) may reuse for a minute and
+  // revalidate in the background — republish staleness is bounded by this plus
+  // the renderer's 30s meta cache, both invisible next to "updated Xh ago".
+  c.header("Cache-Control", status === 200 ? "public, max-age=60, stale-while-revalidate=300" : "no-cache");
   return c.html(html);
 });
 
