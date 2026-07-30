@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { findConversationBySessionReference, findConversationByAnyRef, resolveConversationRefRanked } from "./conversationSessionLookup";
+import { findConversationBySessionReference, findConversationByAnyRef, findConversationByAnyRefWhere, resolveConversationRefRanked } from "./conversationSessionLookup";
 
 const createLookupCtx = ({
   conversationsBySessionId = {},
@@ -106,6 +106,66 @@ describe("findConversationBySessionReference", () => {
     );
 
     expect(result).toBeNull();
+  });
+});
+
+// Full-id-wins: on a real deployment ctx.db.normalizeId exists, and a ref that
+// normalizes to a conversations id must resolve by db.get BEFORE the short-id
+// scan — short_id is _id.slice(0,7), so a full id's prefix can collide with a
+// DIFFERENT conversation's short_id, and the scan would let a newer accepted
+// collision shadow the id's true target (the ct-40176 device-move hazard).
+describe("findConversationByAnyRefWhere full-id-wins (normalizeId present)", () => {
+  const withNormalizeId = (ctx: any, conversationsById: Record<string, any>) => {
+    ctx.db.normalizeId = (_table: string, id: string) => (conversationsById[id] ? id : null);
+    return ctx;
+  };
+
+  test("a full id resolves to its own row even when its prefix collides with another short_id", async () => {
+    const target = { _id: "jx7c6zktargettargettargettarget0", user_id: "user-1" };
+    const collider = { _id: "jx7c6zkcollider", user_id: "user-1", short_id: "jx7c6zk" };
+    const byId = { [target._id]: target };
+    const ctx = withNormalizeId(
+      createLookupCtx({ conversationsById: byId, conversationsByShortId: { "jx7c6zk": collider } }),
+      byId,
+    );
+    const result = await findConversationByAnyRefWhere(ctx, target._id, () => true);
+    expect(result).toEqual(target);
+  });
+
+  test("a full id the caller can't access returns null — never falls back to a prefix collision", async () => {
+    const target = { _id: "jx7c6zktargettargettargettarget0", user_id: "user-2" };
+    const collider = { _id: "jx7c6zkcollider", user_id: "user-1", short_id: "jx7c6zk" };
+    const byId = { [target._id]: target };
+    const ctx = withNormalizeId(
+      createLookupCtx({ conversationsById: byId, conversationsByShortId: { "jx7c6zk": collider } }),
+      byId,
+    );
+    const result = await findConversationByAnyRefWhere(
+      ctx, target._id, (c: any) => c.user_id === "user-1",
+    );
+    expect(result).toBeNull();
+  });
+
+  test("a foreign-table id (normalizeId → null) is rejected, not blindly db.get'd", async () => {
+    // db.get would happily return this doc (it's in another table); with
+    // normalizeId present the legacy last-resort must never run.
+    const foreignDoc = { _id: "kd7sometaskid0000000000000000000", user_id: "user-1" };
+    const ctx = withNormalizeId(
+      createLookupCtx({ conversationsById: { [foreignDoc._id]: foreignDoc } }),
+      {}, // normalizeId: not a conversations id
+    );
+    const result = await findConversationByAnyRefWhere(ctx, foreignDoc._id, () => true);
+    expect(result).toBeNull();
+  });
+
+  test("a non-conversation ref (normalizeId → null) still resolves via session_id", async () => {
+    const conversation = { _id: "conv-1", user_id: "user-1", session_id: "uuid-session" };
+    const ctx = withNormalizeId(
+      createLookupCtx({ conversationsBySessionId: { "uuid-session": conversation } }),
+      {},
+    );
+    const result = await findConversationByAnyRefWhere(ctx, "uuid-session", () => true);
+    expect(result).toEqual(conversation);
   });
 });
 
