@@ -195,7 +195,14 @@ export class LocalFirstEngine {
     return { ...handle, sourceSequence: asSourceSequence(++active.nextSequence) };
   }
 
-  invalidateSource(viewKey: string): void {
+  /**
+   * Without an epoch this closes whatever source currently owns the key; with
+   * one it closes only that exact source instance. A superseded source closing
+   * late must never tear down the successor that replaced it.
+   */
+  invalidateSource(viewKey: string, sourceEpoch?: SourceEpoch): void {
+    if (sourceEpoch !== undefined &&
+      this.sources.get(viewKey)?.sourceEpoch !== sourceEpoch) return;
     this.sources.delete(viewKey);
   }
 
@@ -366,7 +373,7 @@ export class LocalFirstEngine {
           },
         },
       ], publish);
-      this.invalidateSource(input.viewKey);
+      this.invalidateSource(input.viewKey, input.sourceEpoch);
       return result;
     }
     if (input.access === "missing") {
@@ -386,7 +393,7 @@ export class LocalFirstEngine {
         },
         ...this.removalOperations(input.removals),
       ], publish);
-      this.invalidateSource(input.viewKey);
+      this.invalidateSource(input.viewKey, input.sourceEpoch);
       return result;
     }
 
@@ -620,7 +627,7 @@ export class LocalFirstEngine {
       }],
       publish,
     );
-    this.invalidateSource(input.viewKey);
+    this.invalidateSource(input.viewKey, input.sourceEpoch);
     return result;
   }
 

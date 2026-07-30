@@ -609,7 +609,7 @@ export function definePrincipalStoreAdapterContract(
       }
     });
 
-    test("a successor writer cannot overwrite a newer server revision or diverge at equality", async () => {
+    test("a successor writer cannot overwrite a newer server revision; equal-revision content converges to the latest fenced delivery", async () => {
       const fixture = await makeFixture();
       const principalId = asPrincipalId("principal-a");
       const fence = { principalKey: fixture.principalKey, generation: 1 };
@@ -640,28 +640,37 @@ export function definePrincipalStoreAdapterContract(
           members: [member("view:monotonic", "projection:old", ["grant:monotonic"])],
           projections: [projection("view:monotonic", "projection:old", { value: "old" })],
         }])).rejects.toBeInstanceOf(PrincipalStoreFenceError);
-        await expect(fixture.adapter.commit(fence, [{
-          kind: "replace-complete-view",
-          view: view("view:monotonic", "monotonic/v1", successor.writerEpoch, 10, ["grant:monotonic"], "successor"),
-          members: [member("view:monotonic", "projection:divergent", ["grant:monotonic"])],
-          projections: [projection("view:monotonic", "projection:divergent", { value: "divergent" })],
-        }])).rejects.toBeInstanceOf(PrincipalStoreFenceError);
-
-        let snapshot = await fixture.adapter.readSnapshot(fence);
-        expect(snapshot.views[0].revision).toBe("10");
-        expect(snapshot.viewMembers.map((row) => row.entityKey)).toEqual(["projection:new"]);
-        expect(snapshot.viewProjections[0].value).toEqual({ value: "new" });
-
-        // Equality is permitted only as an idempotent bootstrap of the exact
-        // same authoritative content under the successor's local fences.
+        // Content at an EQUAL revision converges to the latest fenced
+        // delivery. The revision only covers the view's own table writes;
+        // joined projection fields (e.g. a commenter's display name) drift
+        // without a covered write, and freezing the view on that drift was
+        // matrix finding SRV-01. Ordering safety is unchanged: the writer and
+        // source-sequence fences above prove this is the newest payload this
+        // store has observed, and older comparable revisions remain rejected.
         await fixture.adapter.commit(fence, [{
           kind: "replace-complete-view",
           view: view("view:monotonic", "monotonic/v1", successor.writerEpoch, 10, ["grant:monotonic"], "successor"),
-          members: [member("view:monotonic", "projection:new", ["grant:monotonic"])],
-          projections: [projection("view:monotonic", "projection:new", { value: "new" })],
+          members: [member("view:monotonic", "projection:drifted", ["grant:monotonic"])],
+          projections: [projection("view:monotonic", "projection:drifted", { value: "drifted" })],
         }]);
-        snapshot = await fixture.adapter.readSnapshot(fence);
+        let snapshot = await fixture.adapter.readSnapshot(fence);
+        expect(snapshot.views[0].revision).toBe("10");
         expect(snapshot.views[0].writerEpoch).toBe(successor.writerEpoch);
+        expect(snapshot.viewMembers.map((row) => row.entityKey)).toEqual(["projection:drifted"]);
+        expect(snapshot.viewProjections[0].value).toEqual({ value: "drifted" });
+
+        // An older revision from the same successor is still fenced out.
+        await expect(fixture.adapter.commit(fence, [{
+          kind: "replace-complete-view",
+          view: {
+            ...view("view:monotonic", "monotonic/v1", successor.writerEpoch, 9, ["grant:monotonic"], "successor"),
+            sourceSequence: asSourceSequence(3),
+          },
+          members: [member("view:monotonic", "projection:old", ["grant:monotonic"])],
+          projections: [projection("view:monotonic", "projection:old", { value: "old" })],
+        }])).rejects.toBeInstanceOf(PrincipalStoreFenceError);
+        snapshot = await fixture.adapter.readSnapshot(fence);
+        expect(snapshot.viewMembers.map((row) => row.entityKey)).toEqual(["projection:drifted"]);
       } finally {
         await fixture.adapter.purge();
       }
