@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Doc, Id } from "./_generated/dataModel";
-import { isWebDocOwner, mapWebDocDetail, webGet, webUpdate } from "./docs";
+import { generateShareLink, isWebDocOwner, mapWebDocDetail, unshare, webGet, webUpdate } from "./docs";
 import { webGetDocDetail } from "./taskMining";
 
 type Patch = { id: string; patch: Record<string, unknown> };
@@ -20,7 +20,11 @@ function doc(partial: Partial<Doc<"docs">> = {}): Doc<"docs"> {
   };
 }
 
-function createWebUpdateCtx(userId: string, docs: Array<Record<string, unknown>>) {
+function createWebUpdateCtx(
+  userId: string,
+  docs: Array<Record<string, unknown>>,
+  memberships: Array<{ user_id: string; team_id: string }> = [],
+) {
   const rows = new Map(docs.map((doc) => [doc._id as string, doc]));
   const patches: Patch[] = [];
   const ctx = {
@@ -36,6 +40,26 @@ function createWebUpdateCtx(userId: string, docs: Array<Record<string, unknown>>
       async patch(id: string, patch: Record<string, unknown>) {
         patches.push({ id, patch });
         rows.set(id, { ...rows.get(id), ...patch });
+      },
+      // Just enough of the query builder for isTeamMember's
+      // team_memberships.by_user_team lookup.
+      query(table: string) {
+        if (table !== "team_memberships") throw new Error(`unexpected query on ${table}`);
+        const eqs: Record<string, string> = {};
+        const q = { eq: (field: string, value: string) => ((eqs[field] = value), q) };
+        return {
+          withIndex(_name: string, fn: (q: unknown) => unknown) {
+            fn(q);
+            return {
+              async first() {
+                return (
+                  memberships.find((m) => m.user_id === eqs.user_id && m.team_id === eqs.team_id)
+                  ?? null
+                );
+              },
+            };
+          },
+        };
       },
     },
   };
@@ -91,6 +115,68 @@ describe("webUpdate authorization", () => {
     expect(patches[0].patch.title).toBe("Patched");
     expect(typeof patches[0].patch.updated_at).toBe("number");
     expect(rows.get("doc_owner")?.title).toBe("Patched");
+  });
+});
+
+// Regression: docs are team-visible (canAccessDoc) and even team-editable
+// (webUpdate), but generateShareLink/unshare kept a strict creator-only check
+// from before that migration. Opening a teammate's doc and clicking Share threw
+// "Doc not found" in prod. Both now gate on requireAccessibleDoc (owner-or-team),
+// matching plans.generateShareLink.
+describe("share link authorization", () => {
+  const teamDoc = () => ({
+    _id: "doc_team",
+    user_id: "owner_user",
+    team_id: "team1",
+    title: "Team doc",
+    content: "Body",
+    doc_type: "note",
+    source: "human",
+    created_at: 1,
+    updated_at: 1,
+  });
+
+  test("a teammate can generate a share link for a team doc", async () => {
+    const { ctx, patches, rows } = createWebUpdateCtx("other_user", [teamDoc()], [
+      { user_id: "other_user", team_id: "team1" },
+    ]);
+
+    const result = await (generateShareLink as any)._handler(ctx, { id: "doc_team" });
+    expect(typeof result.share_token).toBe("string");
+    expect(patches).toHaveLength(1);
+    expect(rows.get("doc_team")?.share_token).toBe(result.share_token);
+  });
+
+  test("a cross-user with no shared team is still denied without patching", async () => {
+    const { ctx, patches } = createWebUpdateCtx("other_user", [teamDoc()], [
+      { user_id: "other_user", team_id: "unrelated_team" },
+    ]);
+
+    await expect(
+      (generateShareLink as any)._handler(ctx, { id: "doc_team" }),
+    ).rejects.toThrow(/Doc not found/);
+    expect(patches).toHaveLength(0);
+  });
+
+  test("the owner reuses an existing token without re-patching", async () => {
+    const doc = { ...teamDoc(), share_token: "tok-existing" };
+    const { ctx, patches } = createWebUpdateCtx("owner_user", [doc]);
+
+    const result = await (generateShareLink as any)._handler(ctx, { id: "doc_team" });
+    expect(result.share_token).toBe("tok-existing");
+    expect(patches).toHaveLength(0);
+  });
+
+  test("a teammate can unshare a team doc", async () => {
+    const doc = { ...teamDoc(), share_token: "tok-existing" };
+    const { ctx, rows } = createWebUpdateCtx("other_user", [doc], [
+      { user_id: "other_user", team_id: "team1" },
+    ]);
+
+    await expect((unshare as any)._handler(ctx, { id: "doc_team" })).resolves.toEqual({
+      success: true,
+    });
+    expect(rows.get("doc_team")?.share_token).toBeUndefined();
   });
 });
 
