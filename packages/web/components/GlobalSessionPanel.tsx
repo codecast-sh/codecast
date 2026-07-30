@@ -1852,23 +1852,23 @@ export const SessionCard = memo(function SessionCard({
             </span>
           )}
           {session.worktree_name && (
-            <span className="text-[9px] text-sol-cyan font-mono truncate max-w-[80px]" title={session.worktree_branch || session.worktree_name}>
+            <span data-simple-hide className="text-[9px] text-sol-cyan font-mono truncate max-w-[80px]" title={session.worktree_branch || session.worktree_name}>
               {session.worktree_name}
             </span>
           )}
           {showModelBadge && session.model && (
-            <span className="text-[9px] text-sol-text-dim/70 font-mono truncate max-w-[90px] flex-shrink-0" title={session.model}>
+            <span data-simple-hide className="text-[9px] text-sol-text-dim/70 font-mono truncate max-w-[90px] flex-shrink-0" title={session.model}>
               {formatModel(session.model)}
             </span>
           )}
           {session.message_count > 0 && (
-            <span className={`text-[10px] tabular-nums flex-shrink-0 ${msgCountColor(session.message_count)}`}>
+            <span data-simple-hide className={`text-[10px] tabular-nums flex-shrink-0 ${msgCountColor(session.message_count)}`}>
               {session.message_count} msg{session.message_count !== 1 ? "s" : ""}
             </span>
           )}
           <div className="flex items-center gap-1.5 flex-shrink-0 ml-auto">
             {isFork(session) && (
-              <span className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-medium bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20" title="Fork">
+              <span data-simple-hide className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-medium bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20" title="Fork">
                 <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                   <circle cx="12" cy="18" r="3" />
                   <circle cx="6" cy="6" r="3" />
@@ -1880,12 +1880,12 @@ export const SessionCard = memo(function SessionCard({
               </span>
             )}
             {session.active_plan && (
-              <span className="inline-block align-middle px-1 py-0 rounded text-[9px] font-medium bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 max-w-[120px] truncate" title={session.active_plan.title}>
+              <span data-simple-hide className="inline-block align-middle px-1 py-0 rounded text-[9px] font-medium bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 max-w-[120px] truncate" title={session.active_plan.title}>
                 {session.active_plan.title}
               </span>
             )}
             {session.active_task && (
-              <span className="inline-block align-middle px-1 py-0 rounded text-[9px] font-medium bg-sol-violet/10 text-sol-violet border border-sol-violet/20 max-w-[140px] truncate" title={session.active_task.title}>
+              <span data-simple-hide className="inline-block align-middle px-1 py-0 rounded text-[9px] font-medium bg-sol-violet/10 text-sol-violet border border-sol-violet/20 max-w-[140px] truncate" title={session.active_task.title}>
                 {session.active_task.title}
               </span>
             )}

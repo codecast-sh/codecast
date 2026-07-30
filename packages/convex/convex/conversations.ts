@@ -13,7 +13,7 @@ import { resetConversationPendingMessages } from "./pendingMessages";
 import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill } from "./agentTasks";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId } from "./daemonCommandUtils";
-import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, fromConvexAgentType, toConvexAgentType } from "@codecast/shared/contracts";
+import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, findModelOption, fromConvexAgentType, toConvexAgentType } from "@codecast/shared/contracts";
 import { shouldShowInInbox, isSessionIdle, deriveSessionActivity, classifyWorkState, normalizeWorkStateFilter, trustedAgentStatus, subagentKeepsParentWorking, type WorkState } from "./inboxFilters";
 import { subagentLinkFields } from "./ccAccountsShared";
 import { isSessionOwner } from "./sessionOwners";
@@ -8739,10 +8739,9 @@ export const cliSetSessionVisibility = mutation({
         : { inbox_stashed_at: Date.now() };
     await ctx.db.patch(conv._id, patch);
     // `conv` is the pre-patch row — applyHideTransition gates on the transition.
-    const { action: outcome, canceledSchedules } = await applyHideTransition(ctx, conv, patch);
     // The nested group (Task subagents + agent-team teammates) comes down with
-    // the card, same as the web gesture — see cascadeHideToNestedChildren.
-    const cascaded = await cascadeHideToNestedChildren(ctx, conv, patch);
+    // the card via its built-in cascade — see cascadeHideToNestedChildren.
+    const { action: outcome, canceledSchedules, cascaded } = await applyHideTransition(ctx, conv, patch);
     return { ok: true as const, short_id: shortId, action: args.action, outcome, canceled_schedules: canceledSchedules, cascaded_children: cascaded };
   },
 });
@@ -9737,7 +9736,10 @@ export const setSessionModel = mutation({
     if (!agentCfg?.midSession) {
       throw new Error(`In-place model switch not supported for ${conv.agent_type ?? "this agent"}`);
     }
-    if (args.model !== undefined && !agentCfg.models.some((m) => m.key === args.model)) {
+    // findModelOption covers curated keys AND harvested `menu:<label>` keys
+    // (claude live-menu rows) — the same check the daemon applies, so a key
+    // valid here is drivable there. The in-place rail needs a menuMatch.
+    if (args.model !== undefined && !findModelOption(conv.agent_type, args.model)?.menuMatch) {
       throw new Error(`Unknown model: ${args.model}`);
     }
     if (args.effort !== undefined && !agentCfg.efforts.includes(args.effort)) {
