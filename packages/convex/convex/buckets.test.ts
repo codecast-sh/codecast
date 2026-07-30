@@ -39,14 +39,17 @@ function fakeDb(seed: Record<string, any[]> = {}) {
           const rows = (tables[table] ?? []).filter((r) =>
             eqs.every(([f, v]) => String(r[f]) === String(v)),
           );
-          return {
+          const cursor = {
             collect: async () => rows,
             first: async () => rows[0] ?? null,
             unique: async () => {
               if (rows.length > 1) throw new Error("Expected a unique indexed row");
               return rows[0] ?? null;
             },
+            take: async (n: number) => rows.slice(0, n),
+            order: (_direction: string) => cursor,
           };
+          return cursor;
         },
       };
     },
@@ -204,11 +207,19 @@ describe("buckets v2 complete view and command receipts", () => {
     expect(replay).toEqual(first);
     expect(db._tables.inbox_buckets).toHaveLength(1);
     expect(db._tables.local_command_receipts).toHaveLength(1);
-    expect(first.coverage).toEqual([{
-      contractId: "buckets.principal/v2",
-      viewKey: "buckets:principal",
-      revision: 1,
-    }]);
+    expect(first.coverage).toEqual([
+      {
+        contractId: "buckets.principal/v2",
+        viewKey: "buckets:principal",
+        revision: 1,
+      },
+      {
+        kind: "command-id",
+        contractId: "buckets.principal/v3",
+        viewKey: "buckets:principal",
+        commandId: "cmd-create",
+      },
+    ]);
 
     const view = await (webListV2 as any)._handler(ctx, {});
     expect(view.viewRevision).toBe(1);

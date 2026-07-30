@@ -215,7 +215,17 @@ export function forbiddenView(identity: ViewIdentity, revokedGrantKeys: string[]
  */
 export function grantedView<Rows extends Record<string, unknown>>(
   identity: ViewIdentity,
-  input: { grantKeys: string[]; viewRevision: number },
+  input: {
+    grantKeys: string[];
+    viewRevision: number;
+    /**
+     * The caller's recently-receipted command ids for this view, read in the
+     * same query snapshot (see localFirstCommands.echoedCommandIdsForView) —
+     * the write-reconciliation proof for stamped-log-ts client contracts.
+     * Additive: watermark-era clients ignore it.
+     */
+    commandIds?: string[];
+  },
   rows: Rows,
 ) {
   return {
@@ -224,6 +234,7 @@ export function grantedView<Rows extends Record<string, unknown>>(
     grantKeys: input.grantKeys,
     viewRevision: input.viewRevision,
     coverage: revisionCoverage(input.viewRevision),
+    ...(input.commandIds !== undefined ? { commandIds: input.commandIds } : {}),
     ...rows,
   };
 }

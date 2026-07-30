@@ -135,6 +135,22 @@ describe("comments complete-view write choke", () => {
     expect(merge).toContain("patchCommentWithRevision");
   });
 
+  test("every v2 command handler carries the command-id echo coverage", () => {
+    // Stamped-log-ts clients retire optimistic overlays only when a view
+    // result echoes their command id (design §11.4 proof #3). A handler that
+    // forgets the command-id coverage strands its command in
+    // acknowledged-awaiting-coverage forever under the v3 contracts.
+    const comments = readFileSync(join(DIR, "comments.ts"), "utf8");
+    const commentSites = comments.match(/coverageCommandIds: \[commentsCommandIdCoverage\(/g) ?? [];
+    expect(commentSites.length).toBeGreaterThanOrEqual(5);
+    const buckets = readFileSync(join(DIR, "buckets.ts"), "utf8");
+    const bucketSites = buckets.match(/coverageCommandIds: \[\{ kind: "command-id"/g) ?? [];
+    expect(bucketSites.length).toBeGreaterThanOrEqual(3);
+    // And both view queries must echo the caller's receipts.
+    expect(comments).toContain("echoedCommandIdsForView(ctx, userId,");
+    expect(buckets).toContain("echoedCommandIdsForView(ctx, userId,");
+  });
+
   test("access-changing conversation mutations advance the comment view head", () => {
     // The client refuses to re-grant a comment view at a revision it already
     // observed before a forbidden transition (stale cached results must not

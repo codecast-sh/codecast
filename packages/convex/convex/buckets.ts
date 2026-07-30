@@ -7,12 +7,15 @@ import { findConversationByAnyRef } from "./conversationSessionLookup";
 import { requireUser } from "./lib/auth";
 import {
   advanceLocalViewRevision,
+  echoedCommandIdsForView,
   readLocalViewRevision,
   runLocalCommand,
 } from "./localFirstCommands";
 import { grantedView, unauthenticatedView } from "./smallViewContracts";
 
 export const BUCKETS_VIEW_CONTRACT_ID = "buckets.principal/v2";
+/** The stamped-log-ts client contract; same envelope, deeper coverage. */
+export const BUCKETS_VIEW_CONTRACT_ID_V3 = "buckets.principal/v3";
 export const BUCKETS_VIEW_KEY = "buckets:principal";
 
 // Manual session buckets are "labels" in the UI: a personal catalog of names
@@ -55,7 +58,7 @@ export const webListV2 = query({
     const identity = { contractId: BUCKETS_VIEW_CONTRACT_ID, viewKey: BUCKETS_VIEW_KEY };
     const userId = await getAuthUserId(ctx);
     if (!userId) return unauthenticatedView(identity);
-    const [buckets, assignments, viewRevision] = await Promise.all([
+    const [buckets, assignments, viewRevision, commandIds] = await Promise.all([
       ctx.db
         .query("inbox_buckets")
         .withIndex("by_user_id", (q) => q.eq("user_id", userId))
@@ -65,10 +68,12 @@ export const webListV2 = query({
         .withIndex("by_user_id", (q) => q.eq("user_id", userId))
         .collect(),
       readLocalViewRevision(ctx, userId, identity.contractId, identity.viewKey),
+      // Caller-scoped write-reconciliation echo for stamped-log-ts clients.
+      echoedCommandIdsForView(ctx, userId, identity.viewKey),
     ]);
     // Grant keys are opaque within the already principal-scoped store;
     // application code must not inspect or synthesize them.
-    return grantedView(identity, { grantKeys: ["bucket-catalog"], viewRevision }, {
+    return grantedView(identity, { grantKeys: ["bucket-catalog"], viewRevision, commandIds }, {
       buckets,
       assignments,
     });
@@ -262,6 +267,7 @@ export const webCreateV2 = mutation({
         status: "acknowledged",
         result: { bucketId: created._id },
         coverageViews: [{ contractId: BUCKETS_VIEW_CONTRACT_ID, viewKey: BUCKETS_VIEW_KEY }],
+        coverageCommandIds: [{ kind: "command-id" as const, contractId: BUCKETS_VIEW_CONTRACT_ID_V3, viewKey: BUCKETS_VIEW_KEY }],
       };
     });
   },
@@ -311,6 +317,7 @@ export const webUpdateV2 = mutation({
         status: "acknowledged",
         result: { bucketId: args.bucket_id },
         coverageViews: [{ contractId: BUCKETS_VIEW_CONTRACT_ID, viewKey: BUCKETS_VIEW_KEY }],
+        coverageCommandIds: [{ kind: "command-id" as const, contractId: BUCKETS_VIEW_CONTRACT_ID_V3, viewKey: BUCKETS_VIEW_KEY }],
       };
     });
   },
@@ -350,6 +357,7 @@ export const webAssignV2 = mutation({
         status: "acknowledged",
         result: { conversationId: args.conversation_id, bucketId: args.bucket_id ?? null },
         coverageViews: [{ contractId: BUCKETS_VIEW_CONTRACT_ID, viewKey: BUCKETS_VIEW_KEY }],
+        coverageCommandIds: [{ kind: "command-id" as const, contractId: BUCKETS_VIEW_CONTRACT_ID_V3, viewKey: BUCKETS_VIEW_KEY }],
       };
     });
   },
