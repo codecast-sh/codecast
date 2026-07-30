@@ -1,6 +1,6 @@
 import { ConvexError, v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
-import type { MutationCtx } from "./_generated/server";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { query } from "./_generated/server";
 import { requireUser } from "./lib/auth";
 import {
@@ -164,6 +164,42 @@ export function validateCommandId(value: string): string {
     throw new ConvexError({ code: "INVALID_COMMAND_ID", message: "commandId is too long" });
   }
   return value;
+}
+
+/**
+ * The caller's recently-receipted command ids whose coverage names `viewKey`,
+ * read inside the SAME query snapshot as the view result that embeds them —
+ * which is what makes the echo a sound write-reconciliation proof (design
+ * §11.4 proof #3): an id listed in a granted envelope proves that result
+ * includes the command's write.
+ *
+ * Bounded window: `scan` recent receipts are examined, `limit` ids returned.
+ * A command can outrun the window only if the caller receipts `scan` newer
+ * commands before ANY refire of this view reaches them — pathological for
+ * human-rate slices, and eliminated entirely once convex-js #182 exposes the
+ * mutation commit timestamp (documented in the log-ts investigation memo).
+ */
+export async function echoedCommandIdsForView(
+  ctx: Pick<QueryCtx, "db">,
+  principalId: Id<"users">,
+  viewKey: string,
+  options: { scan?: number; limit?: number } = {},
+): Promise<string[]> {
+  const scan = options.scan ?? 200;
+  const limit = options.limit ?? 64;
+  const recent = await ctx.db
+    .query("local_command_receipts")
+    .withIndex("by_principal_created", (q: any) => q.eq("principal_id", principalId))
+    .order("desc")
+    .take(scan);
+  const ids: string[] = [];
+  for (const receipt of recent) {
+    if (receipt.status !== "acknowledged") continue;
+    if (!receipt.coverage.some((entry: any) => entry.view_key === viewKey)) continue;
+    ids.push(receipt.command_id);
+    if (ids.length >= limit) break;
+  }
+  return ids;
 }
 
 /** Resolve an ambiguous client transport attempt without reissuing new intent. */
