@@ -36,8 +36,8 @@ export class LocalViewSession<TArgs, TServerResult, TRow> {
 
   constructor(
     private readonly engine: LocalFirstEngine,
-    contract: CompleteViewContract<string, TArgs, TServerResult, TRow>,
-    args: TArgs,
+    private readonly contract: CompleteViewContract<string, TArgs, TServerResult, TRow>,
+    private readonly args: TArgs,
     private readonly publish: (publication: LocalViewPublication<TRow>) => void,
   ) {
     this.viewKey = contract.key(args);
@@ -63,17 +63,90 @@ export class LocalViewSession<TArgs, TServerResult, TRow> {
   /** Results must be delivered in subscription order; application is FIFO. */
   deliver(serverResult: TServerResult): Promise<void> {
     this.queue = this.queue.then(async (source) => {
-      if (!source || this.closed) return source;
+      if (this.closed) return source;
+      if (!source) {
+        // The initial open failed (a transient storage fault at mount). Each
+        // delivery is a fresh chance to open — a dead-until-remount view is
+        // never the right outcome for a one-shot fault.
+        try {
+          source = await CompleteViewSource.open(this.engine, this.contract, this.args);
+        } catch (error) {
+          this.report("open", error);
+          return null;
+        }
+        if (this.closed) {
+          source.close();
+          return null;
+        }
+      }
       try {
         const captured = source.capture();
         await source.apply(captured, serverResult);
         await this.republish();
+        return source;
       } catch (error) {
-        this.report("apply", error);
+        if (this.closed ||
+          !isSupersession(error) ||
+          (error instanceof StaleLocalFirstSourceError && error.reason === "principal")) {
+          this.report("apply", error);
+          return source;
+        }
+        // A superseded source cannot recover by itself: its durable writer or
+        // source entry now belongs to something that no longer exists — a
+        // closed tab that held the writer, a forbidden/missing transition that
+        // retired it, or a stale close. When THIS delivery provably advances
+        // the durable view (or carries an access transition that must land),
+        // hand the view off: claim a fresh writer and re-apply once.
+        if (!(await this.shouldReopenFor(serverResult))) return source;
+        source.close();
+        let reopened: CompleteViewSource<TArgs, TServerResult, TRow>;
+        try {
+          reopened = await CompleteViewSource.open(this.engine, this.contract, this.args);
+        } catch (openError) {
+          this.report("open", openError);
+          return source;
+        }
+        if (this.closed) {
+          reopened.close();
+          return null;
+        }
+        try {
+          await reopened.apply(reopened.capture(), serverResult);
+          await this.republish();
+        } catch (retryError) {
+          this.report("apply", retryError);
+        }
+        return reopened;
       }
-      return source;
     });
     return this.settled();
+  }
+
+  /**
+   * Re-open only when this delivery moves the durable view forward. A result
+   * whose coverage the durable view already reached must not trigger a claim —
+   * otherwise two live tabs would steal the writer from each other on every
+   * subscription refire. Non-granted results always qualify: access loss must
+   * become durable even if this tab lost the writer race.
+   */
+  private async shouldReopenFor(serverResult: TServerResult): Promise<boolean> {
+    try {
+      const decoded = this.contract.decode(serverResult);
+      if (decoded.access === "unavailable" || decoded.access === "unauthenticated") return false;
+      if (decoded.access !== "granted") return true;
+      const delivered = decoded.coverage;
+      if (delivered.kind !== "view-revision" || delivered.revisionOrder === undefined) {
+        return false;
+      }
+      const snapshot = await this.engine.readSnapshot();
+      const durable = snapshot.views.find((view) => view.key === this.viewKey)?.coverage ??
+        snapshot.viewWriters.find((writer) => writer.key === this.viewKey)?.lastCoverage;
+      if (!durable) return true;
+      if (durable.kind !== "view-revision" || durable.revisionOrder === undefined) return false;
+      return delivered.revisionOrder > durable.revisionOrder;
+    } catch {
+      return false;
+    }
   }
 
   /** Resolves when every delivery accepted so far has been applied. */

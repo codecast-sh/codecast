@@ -235,6 +235,15 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
     if (metadata.principalKey !== this.principalKey || fence.principalKey !== this.principalKey) {
       throw new PrincipalStoreIdentityError();
     }
+    // A stale bundle (service-worker cache, deploy-overlap tab) must never
+    // write records a newer schema has already migrated past. Browsers
+    // normally enforce this with VersionError at open, but that guard lives
+    // outside our control; this one is ours.
+    if (metadata.schemaVersion > PRINCIPAL_STORE_SCHEMA_VERSION) {
+      throw new PrincipalStoreFenceError(
+        "Principal store schema is newer than this application bundle",
+      );
+    }
     if (metadata.fenced || metadata.activeGeneration !== fence.generation) {
       throw new PrincipalStoreFenceError();
     }
@@ -616,57 +625,6 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
       );
     }
     return "source-ordered";
-  }
-
-  private completeViewContentEqual(
-    current: ViewRecord,
-    currentMembers: readonly ViewMemberRecord[],
-    currentProjections: readonly ViewProjectionRecord[],
-    next: ViewRecord,
-    nextMembers: readonly ViewMemberRecord[],
-    nextProjections: readonly ViewProjectionRecord[],
-  ): boolean {
-    const stableView = (view: ViewRecord) => ({
-      key: view.key,
-      contractId: view.contractId,
-      grantKeys: [...view.grantKeys].sort(),
-      revision: view.revision,
-      coverage: view.coverage,
-    });
-    const stableMembers = (members: readonly ViewMemberRecord[]) => [...members]
-      .map((member) => ({ ...member, grantKeys: [...member.grantKeys].sort() }))
-      .sort((a, b) => a.key.localeCompare(b.key));
-    const stableProjections = (projections: readonly ViewProjectionRecord[]) =>
-      [...projections].sort((a, b) => a.key.localeCompare(b.key));
-    return valuesEqual(stableView(current), stableView(next)) &&
-      valuesEqual(stableMembers(currentMembers), stableMembers(nextMembers)) &&
-      valuesEqual(stableProjections(currentProjections), stableProjections(nextProjections));
-  }
-
-  private segmentContentEqual(
-    current: ViewSegmentRecord,
-    currentMembers: readonly ViewMemberRecord[],
-    currentProjections: readonly ViewProjectionRecord[],
-    next: ViewSegmentRecord,
-    nextMembers: readonly ViewMemberRecord[],
-    nextProjections: readonly ViewProjectionRecord[],
-  ): boolean {
-    const stableSegment = (segment: ViewSegmentRecord) => ({
-      key: segment.key,
-      viewKey: segment.viewKey,
-      segmentKey: segment.segmentKey,
-      segmentKind: segment.segmentKind,
-      grantKeys: [...segment.grantKeys].sort(),
-      coverage: segment.coverage,
-    });
-    const stableMembers = (members: readonly ViewMemberRecord[]) => [...members]
-      .map((member) => ({ ...member, grantKeys: [...member.grantKeys].sort() }))
-      .sort((a, b) => a.key.localeCompare(b.key));
-    const stableProjections = (projections: readonly ViewProjectionRecord[]) =>
-      [...projections].sort((a, b) => a.key.localeCompare(b.key));
-    return valuesEqual(stableSegment(current), stableSegment(next)) &&
-      valuesEqual(stableMembers(currentMembers), stableMembers(nextMembers)) &&
-      valuesEqual(stableProjections(currentProjections), stableProjections(nextProjections));
   }
 
   private async grantIsReferenced(grantKey: string): Promise<boolean> {
@@ -1153,7 +1111,12 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
       throw new PrincipalStoreIdentityError("Receipt does not match a local command");
     }
     const existing = await this.db.commandReceipts.get(receipt.commandId);
-    if (existing && !valuesEqual(existing, receipt)) {
+    // `receivedAt` is a client-side stamp: two tabs draining the same journal
+    // legitimately construct the same server receipt at different local times.
+    // Replay identity covers everything the server authored; the first stored
+    // receipt wins so the journal's record never churns.
+    const replayIdentity = (record: CommandReceiptRecord) => ({ ...record, receivedAt: 0 });
+    if (existing && !valuesEqual(replayIdentity(existing), replayIdentity(receipt))) {
       throw new PrincipalStoreIdentityError("Command receipt changed across replay");
     }
     if (receipt.outcome === "acknowledged") {
@@ -1189,7 +1152,7 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
         });
       }
     }
-    await this.db.commandReceipts.put(receipt);
+    await this.db.commandReceipts.put(existing ?? receipt);
   }
 
   private async applyOperation(
@@ -1306,9 +1269,8 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
           ...operation.members.flatMap((member) => [...member.grantKeys]),
         ]);
         const oldView = await this.db.views.get(operation.view.key);
-        const [oldMembers, oldProjections, oldSegments] = await Promise.all([
+        const [oldMembers, oldSegments] = await Promise.all([
           this.db.viewMembers.where("viewKey").equals(operation.view.key).toArray(),
-          this.db.viewProjections.where("viewKey").equals(operation.view.key).toArray(),
           this.db.viewSegments.where("viewKey").equals(operation.view.key).toArray(),
         ]);
         const coverageOrder = this.assertMonotonicViewCoverage(
@@ -1317,17 +1279,17 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
           writer,
           "granted",
         );
-        if (coverageOrder === "equal" && oldView &&
-          (oldSegments.length > 0 || !this.completeViewContentEqual(
-            oldView,
-            oldMembers,
-            oldProjections,
-            operation.view,
-            operation.members,
-            operation.projections,
-          ))) {
+        // Content MAY legitimately differ at an equal revision: the revision
+        // is a lower bound covering the view's own table writes, while a
+        // projection can also carry joined fields (a commenter's display name)
+        // that drift without any covered write. Every payload reaching this
+        // point already owns the durable writer fence and a strictly newer
+        // source sequence, so the latest fenced delivery is by construction
+        // the freshest authoritative content — accept it. Regressions are
+        // still impossible: older comparable coverage was rejected above.
+        if (coverageOrder === "equal" && oldView && oldSegments.length > 0) {
           throw new PrincipalStoreFenceError(
-            "Equal server view revision carried divergent complete content",
+            "Equal server view revision cannot replace a view that holds segments",
           );
         }
         const oldGrantKeys = [
@@ -1367,13 +1329,9 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
           ...operation.segment.grantKeys,
           ...operation.members.flatMap((member) => [...member.grantKeys]),
         ]);
-        const [oldSegment, oldMembers, oldProjections, otherSegments] = await Promise.all([
+        const [oldSegment, oldMembers, otherSegments] = await Promise.all([
           this.db.viewSegments.get(operation.segment.key),
           this.db.viewMembers.where("[viewKey+segmentKey]").equals([
-            operation.view.key,
-            operation.segment.segmentKey,
-          ]).toArray(),
-          this.db.viewProjections.where("[viewKey+segmentKey]").equals([
             operation.view.key,
             operation.segment.segmentKey,
           ]).toArray(),
@@ -1381,24 +1339,16 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
             .filter((segment) => segment.key !== operation.segment.key)
             .toArray(),
         ]);
-        const coverageOrder = this.assertMonotonicViewCoverage(
+        // Same rule as complete views: at equal coverage the latest fenced
+        // delivery wins — segment content can carry joined fields that drift
+        // without a covered write, and the writer/source fences above already
+        // prove this payload is the newest one this store has seen.
+        this.assertMonotonicViewCoverage(
           oldView,
           operation.view,
           writer,
           "granted",
         );
-        if (coverageOrder === "equal" && oldSegment && !this.segmentContentEqual(
-          oldSegment,
-          oldMembers,
-          oldProjections,
-          operation.segment,
-          operation.members,
-          operation.projections,
-        )) {
-          throw new PrincipalStoreFenceError(
-            "Equal server view revision carried divergent segment content",
-          );
-        }
         await Promise.all([
           this.db.viewMembers.where("[viewKey+segmentKey]").equals([
             operation.view.key,
@@ -1640,10 +1590,46 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
   }
 }
 
+export class PrincipalStoreOpenTimeoutError extends Error {
+  constructor(message = "Principal storage did not open within its deadline") {
+    super(message);
+    this.name = "PrincipalStoreOpenTimeoutError";
+  }
+}
+
+/**
+ * IndexedDB `open()` can hang FOREVER with no success/error/blocked event on
+ * real browsers (WebKit #226547 first-open-after-cold-start on iOS; Chromium
+ * #242115 after a stuck versionchange). An unbounded await here strands the
+ * principal runtime in "opening" with the protected gate never resolving —
+ * the hang variant of the failure LIF-05 fixed for thrown opens. Bounding the
+ * open converts the hang into the ordinary fail-closed path.
+ */
+export async function boundStorageOpen<T>(
+  open: Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return await open;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      open,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new PrincipalStoreOpenTimeoutError()), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const DEFAULT_STORE_OPEN_TIMEOUT_MS = 15_000;
+
 export class DexiePrincipalStoreFactory implements PrincipalStoreFactory {
   constructor(
     private readonly deploymentKey: string,
     private readonly injectFault?: DexieFaultInjector,
+    private readonly openTimeoutMs: number = DEFAULT_STORE_OPEN_TIMEOUT_MS,
   ) {}
 
   private name(principalKey: OpaquePrincipalKey): string {
@@ -1651,7 +1637,7 @@ export class DexiePrincipalStoreFactory implements PrincipalStoreFactory {
   }
 
   async exists(principalKey: OpaquePrincipalKey): Promise<boolean> {
-    return await Dexie.exists(this.name(principalKey));
+    return await boundStorageOpen(Dexie.exists(this.name(principalKey)), this.openTimeoutMs);
   }
 
   async open(principalKey: OpaquePrincipalKey): Promise<PrincipalStoreAdapter> {
@@ -1660,7 +1646,12 @@ export class DexiePrincipalStoreFactory implements PrincipalStoreFactory {
       principalKey,
       this.injectFault,
     );
-    await adapter.ensureOpen();
+    try {
+      await boundStorageOpen(adapter.ensureOpen(), this.openTimeoutMs);
+    } catch (error) {
+      adapter.close();
+      throw error;
+    }
     return adapter;
   }
 }

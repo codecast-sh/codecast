@@ -409,6 +409,7 @@ export class PrincipalRuntime {
         initialHead: metadata.head,
         onExternalCommit: async () => { await this.hooks.onExternalCommit?.(); },
         onStorageFailure: (error) => this.reportStorageFailure(error),
+        onStorageRecovered: () => this.reportStorageRecovery(),
       });
       this.emit({ ...current, phase: "server-verified", head: metadata.head });
       this.hooks.onServerVerified?.();
@@ -423,7 +424,16 @@ export class PrincipalRuntime {
       this.launcher.activateVerified(input.credentialBinding));
     if (!this.isCurrent(operation)) return false;
     this.emit({ phase: "opening", generation: resolved.generation, principalKey: resolved.principalKey });
-    const adapter = await this.stores.open(resolved.principalKey);
+    let adapter: PrincipalStoreAdapter;
+    try {
+      adapter = await this.stores.open(resolved.principalKey);
+    } catch (error) {
+      // Storage that cannot even open must fail CLOSED — never strand the
+      // runtime in "opening" with the protected gate waiting forever.
+      if (!this.isCurrent(operation)) return false;
+      await this.failClosed("principal-store-open-failed");
+      throw error;
+    }
     try {
       const metadata = await adapter.activateVerified(resolved.generation, input.principalId);
       return await this.installStore({
