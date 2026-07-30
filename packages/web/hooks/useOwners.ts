@@ -20,7 +20,17 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { isConvexId } from "../lib/entityLinks";
 import { useWatchEffect } from "./useWatchEffect";
 
-type OwnerInfo = { user_id: string; name: string | null; email: string | null };
+type OwnerInfo = {
+  user_id: string;
+  name: string | null;
+  email: string | null;
+  // Assignment provenance off the session_owners row (see sessionOwnership).
+  added_by?: string;
+  added_by_name?: string | null;
+  added_at?: number;
+  note?: string | null;
+  seen_at?: number | null;
+};
 
 export type OwnersEnv = {
   teamMembers: any[] | undefined;
@@ -41,6 +51,7 @@ export function useOwners(conversationId: string, env: OwnersEnv) {
   );
   const addOwner = useMutation(api.sessionOwnership.addSessionOwner);
   const removeOwner = useMutation(api.sessionOwnership.removeSessionOwner);
+  const ackAssignment = useMutation(api.sessionOwnership.ackSessionAssignment);
 
   // In-flight optimistic overrides: user_id -> desired membership. Each entry is
   // dropped once the reactive query confirms it (reconcile effect), so the chip
@@ -83,7 +94,7 @@ export function useOwners(conversationId: string, env: OwnersEnv) {
     });
   }, [serverIds]);
 
-  const toggle = async (id: string) => {
+  const toggle = async (id: string, note?: string) => {
     const wasOwner = ownerIds.has(id);
     const disp = displayFor(id);
     setOverrides((o) => ({ ...o, [id]: !wasOwner })); // optimistic
@@ -91,7 +102,7 @@ export function useOwners(conversationId: string, env: OwnersEnv) {
       if (wasOwner) {
         await removeOwner({ session_id: conversationId, owner: id });
       } else {
-        await addOwner({ session_id: conversationId, owner: id });
+        await addOwner({ session_id: conversationId, owner: id, note: note?.trim() || undefined });
         notify?.(`Assigned to ${disp.name}`, "success");
       }
       // Leave the override; the reconcile effect clears it when the query catches up.
@@ -115,7 +126,26 @@ export function useOwners(conversationId: string, env: OwnersEnv) {
   const selectable = (teamMembers || []).filter((m: any) => m && !m.is_bot);
   const ownerList = Array.from(ownerIds);
 
-  return { ownerIds, ownerList, displayFor, toggle, clearAll, selectable, currentUser };
+  // The current user's own UNACKED handoff (someone else assigned them, no
+  // seen_at) — drives the "assigned to you" banner. Locally-acked state hides
+  // it instantly while the mutation round-trips.
+  const [ackedLocally, setAckedLocally] = useState(false);
+  const meId = currentUser?._id?.toString?.();
+  const myRow = meId ? (data?.owners ?? []).find((o: OwnerInfo) => o.user_id === meId) : undefined;
+  const myAssignment =
+    !ackedLocally && myRow && !myRow.seen_at && myRow.added_by && myRow.added_by !== meId
+      ? myRow
+      : null;
+  const ack = async () => {
+    setAckedLocally(true);
+    try {
+      await ackAssignment({ session_id: conversationId });
+    } catch {
+      setAckedLocally(false);
+    }
+  };
+
+  return { ownerIds, ownerList, displayFor, toggle, clearAll, selectable, currentUser, myAssignment, ack };
 }
 
 export type OwnersApi = ReturnType<typeof useOwners>;

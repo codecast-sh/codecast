@@ -1,27 +1,20 @@
 import { useRef, useState } from "react";
 import { Monitor, X } from "lucide-react";
+import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import {
   buildDesktopDeepLink,
   isDesktop,
   isForegroundTab,
+  isFreshNavigation,
+  readSkippedUrl,
   shouldAttemptHandoff,
+  skipHandoffForUrl,
+  takePendingPreferBrowser,
+  writeHandoffMirror,
   type HandoffContext,
 } from "../lib/desktop";
 import { useTrackedStore } from "../store/inboxStore";
-
-// A clicked/typed link reads as "navigate"; reload / back-forward should be
-// left in the browser. Unknown (no entry) is treated as fresh.
-function isFreshNavigation(): boolean {
-  try {
-    const nav = performance.getEntriesByType("navigation")[0] as
-      | PerformanceNavigationTiming
-      | undefined;
-    return nav ? nav.type === "navigate" : true;
-  } catch {
-    return true;
-  }
-}
 
 /**
  * When a codecast.sh page is opened in a foreground browser tab and the user
@@ -31,6 +24,13 @@ function isFreshNavigation(): boolean {
  * sticky "always open in browser"). Pure gating lives in `shouldAttemptHandoff`;
  * this collects the context, re-checks on focus for background-opened tabs, and
  * renders the screen.
+ *
+ * Most handoffs never get here: the same gate runs inlined in index.html's
+ * <head> against a localStorage mirror of the two synced preferences, firing the
+ * deep link before any app chunk loads (lib/desktopHandoff.ts). This component
+ * covers what that path can't know — a first visit before the mirror exists, and
+ * a tab that only reaches the foreground later — and it is what keeps the mirror
+ * honest.
  */
 export function OpenInDesktopHandoff() {
   const s = useTrackedStore([
@@ -53,8 +53,13 @@ export function OpenInDesktopHandoff() {
   };
 
   // Use the browser for THIS page only — does not change the sticky preference,
-  // so the next fresh visit still hands off to the app.
-  const stayHereOnce = () => setVisible(false);
+  // so the next fresh visit still hands off to the app. Recorded for the tab so
+  // the pre-boot gate honors it too (a reload of this page would otherwise
+  // bounce straight back to the app).
+  const stayHereOnce = () => {
+    skipHandoffForUrl(window.location.pathname + window.location.search);
+    setVisible(false);
+  };
 
   // Permanent opt-out: never hand off again (synced per-user). One click both
   // persists and dismisses, so it's never a two-step choice.
@@ -62,6 +67,28 @@ export function OpenInDesktopHandoff() {
     s.updateClientDismissed("prefer_browser_links", true);
     setVisible(false);
   };
+
+  // The pre-boot screen can take the permanent opt-out before the app exists, so
+  // it parks the choice for whoever boots next; only the store can reach the
+  // server with it.
+  useMountEffect(() => {
+    if (takePendingPreferBrowser()) s.updateClientDismissed("prefer_browser_links", true);
+  });
+
+  // Keep the pre-boot mirror in step with the synced preferences. This is the
+  // only writer: the mirror stands for "a browser on this device should hand
+  // off", so the desktop app itself must never write one (its renderer runs the
+  // same inlined gate).
+  useWatchEffect(() => {
+    if (isDesktop() || !s.clientStateInitialized) return;
+    const hasUsedDesktop = s.clientState.dismissed?.has_used_desktop ?? false;
+    const preferBrowser = s.clientState.dismissed?.prefer_browser_links ?? false;
+    writeHandoffMirror(hasUsedDesktop && !preferBrowser);
+  }, [
+    s.clientStateInitialized,
+    s.clientState.dismissed?.has_used_desktop,
+    s.clientState.dismissed?.prefer_browser_links,
+  ]);
 
   useWatchEffect(() => {
     if (attemptedRef.current || typeof window === "undefined") return;
@@ -77,6 +104,7 @@ export function OpenInDesktopHandoff() {
       freshNavigation: isFreshNavigation(),
       path: window.location.pathname,
       search: window.location.search,
+      skippedUrl: readSkippedUrl(),
     });
 
     const tryHandoff = (): boolean => {
