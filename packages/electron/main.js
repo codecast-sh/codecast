@@ -139,11 +139,16 @@ if (gotLock) {
   });
 }
 
-// Deep link protocol
-if (process.defaultApp) {
-  app.setAsDefaultProtocolClient("codecast", process.execPath, [app.getAppPath()]);
-} else {
+// Deep link protocol. Packaged builds only: a from-source run must NOT claim
+// the scheme — on macOS every node_modules Electron.app shares the bundle id
+// com.github.Electron, so a dev run registering codecast:// rebinds the
+// user's links to whichever bare Electron shell Launch Services finds first
+// (observed: links opening footage-app's Electron welcome screen). Set
+// CODECAST_CLAIM_PROTOCOL=1 to opt a dev run in deliberately.
+if (app.isPackaged) {
   app.setAsDefaultProtocolClient("codecast");
+} else if (process.env.CODECAST_CLAIM_PROTOCOL) {
+  app.setAsDefaultProtocolClient("codecast", process.execPath, [app.getAppPath()]);
 }
 
 app.on("open-url", (e, url) => {
