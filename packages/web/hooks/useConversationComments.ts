@@ -7,7 +7,7 @@ import { isConvexId } from "../lib/entityLinks";
 import { useInboxStore } from "../store/inboxStore";
 import { localFirstSliceMode } from "../store/local-first/featureFlags";
 import { commentsByConversationView } from "../store/local-first/referenceContracts";
-import { useShadowEquivalence } from "../store/local-first/shadowValidation";
+import { useCutoverSpotCheck, useShadowEquivalence } from "../store/local-first/shadowValidation";
 import { useConvexSync } from "./useConvexSync";
 import { useLocalView } from "./useLocalView";
 import { groupComments, threadKeyFor, type Comment, type CommentThread } from "../lib/commentThread";
@@ -43,13 +43,24 @@ export function useConversationCommentsSync(conversationId: string | undefined):
   const mode = localFirstSliceMode("comments");
   const syncTable = useInboxStore((s) => s.syncTable);
 
+  // Standing divergence monitor after cutover (matrix SHD-03): a sampled
+  // fraction of mounts briefly re-subscribes v1 purely for digest comparison.
+  const spotCheck = useCutoverSpotCheck(
+    canQuery && mode === "cutover",
+    `comments:${conversationId}`,
+  );
   const raw = useQuery(
     api.comments.getConversationCommentSummary,
-    canQuery && mode !== "cutover"
+    canQuery && (mode !== "cutover" || spotCheck)
       ? { conversation_id: conversationId as Id<"conversations"> }
       : "skip",
   );
-  useConvexSync(raw, useCallback((data: any) => syncTable("comments", data ?? []), [syncTable]));
+  useConvexSync(raw, useCallback((data: any) => {
+    // In cutover the durable view owns the store; a sampled v1 result feeds
+    // only the digest comparison below.
+    if (mode === "cutover") return;
+    syncTable("comments", data ?? []);
+  }, [syncTable, mode]));
 
   const view = useLocalView(
     commentsByConversationView,
@@ -70,10 +81,9 @@ export function useConversationCommentsSync(conversationId: string | undefined):
     });
   }, [mode, view.status, viewRows, syncTable, conversationId]);
 
-  // Cutover gate evidence: in shadow mode, digest-compare exactly what v1 is
-  // rendering against the v2 durable view, on every quiescent state.
+  // Cutover gate evidence in shadow mode; sampled standing monitor in cutover.
   useShadowEquivalence({
-    enabled: canQuery && mode === "shadow",
+    enabled: canQuery && (mode === "shadow" || spotCheck),
     contractId: commentsByConversationView.id,
     viewKey: `comments:conversation:${conversationId}`,
     authoritative: useMemo(() => Array.isArray(raw)
