@@ -60,12 +60,7 @@ const BASE_URL =
 // app.whenReady) — production validation is left fully intact.
 const LOCAL_DEV_HOST = "local.codecast.sh";
 
-const DEFAULT_SHORTCUTS = {
-  toggleWindow: "CommandOrControl+Alt+Space",
-  togglePalette: "Control+Alt+Space",
-  newSession: "Control+Shift+N",
-  toggleEnv: "CommandOrControl+Alt+L",
-};
+const { DEFAULT_SHORTCUTS, mergeShortcuts, diffOverrides } = require("./shortcutSettings");
 
 let mainWindow = null;
 let paletteWindow = null;
@@ -89,14 +84,7 @@ function loadFullSettings() {
 }
 
 function loadSettings() {
-  const s = loadFullSettings();
-  const merged = { ...DEFAULT_SHORTCUTS, ...s.shortcuts };
-  // Migrate renamed key
-  if (merged.toggleCompose && !s.shortcuts?.newSession) {
-    merged.newSession = merged.toggleCompose;
-  }
-  delete merged.toggleCompose;
-  return merged;
+  return mergeShortcuts(loadFullSettings().shortcuts);
 }
 
 function updateSettings(patch) {
@@ -105,7 +93,7 @@ function updateSettings(patch) {
 }
 
 function saveSettings(shortcuts) {
-  updateSettings({ shortcuts });
+  updateSettings({ shortcuts: diffOverrides(shortcuts) });
 }
 
 
@@ -139,11 +127,16 @@ if (gotLock) {
   });
 }
 
-// Deep link protocol
-if (process.defaultApp) {
-  app.setAsDefaultProtocolClient("codecast", process.execPath, [app.getAppPath()]);
-} else {
+// Deep link protocol. Packaged builds only: a from-source run must NOT claim
+// the scheme — on macOS every node_modules Electron.app shares the bundle id
+// com.github.Electron, so a dev run registering codecast:// rebinds the
+// user's links to whichever bare Electron shell Launch Services finds first
+// (observed: links opening footage-app's Electron welcome screen). Set
+// CODECAST_CLAIM_PROTOCOL=1 to opt a dev run in deliberately.
+if (app.isPackaged) {
   app.setAsDefaultProtocolClient("codecast");
+} else if (process.env.CODECAST_CLAIM_PROTOCOL) {
+  app.setAsDefaultProtocolClient("codecast", process.execPath, [app.getAppPath()]);
 }
 
 app.on("open-url", (e, url) => {
@@ -274,13 +267,12 @@ function createWindow() {
   });
 
 
-  // Open external links in browser
+  // Every window.open/target=_blank goes to the default browser — the app is a
+  // single window that navigates in place, so a same-origin link here (e.g. a
+  // published artifact at codecast.sh/a/…) still means "open outside the app".
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (!url.startsWith(currentBaseUrl)) {
-      shell.openExternal(url);
-      return { action: "deny" };
-    }
-    return { action: "allow" };
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+    return { action: "deny" };
   });
 
   mainWindow.on("closed", () => {
@@ -323,6 +315,12 @@ function createPaletteWindow() {
   const win = paletteWindow;
 
   win.loadURL(`${currentBaseUrl}/palette`);
+
+  // Same rule as the main window: new-window links open in the default browser.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+    return { action: "deny" };
+  });
 
   win.webContents.on("did-finish-load", () => {
     if (!win.isDestroyed()) {
@@ -932,44 +930,59 @@ ipcMain.on("compose-submit", (_e, data) => {
 
 // Settings IPC
 ipcMain.handle("get-shortcuts", () => loadSettings());
+// Richer readout for the settings UI: current bindings, the defaults (so the
+// web can offer "reset to default" without hardcoding them), and which
+// bindings failed to register (owned by another app / malformed).
+ipcMain.handle("get-shortcut-config", () => ({
+  shortcuts: loadSettings(),
+  defaults: DEFAULT_SHORTCUTS,
+  issues: shortcutIssues,
+}));
 ipcMain.handle("set-shortcut", (_e, key, accelerator) => {
   const shortcuts = loadSettings();
   shortcuts[key] = accelerator;
   saveSettings(shortcuts);
   registerShortcuts();
-  return shortcuts;
+  return loadSettings();
 });
+
+const SHORTCUT_HANDLERS = {
+  toggleWindow: () => {
+    if (!mainWindow) return;
+    if (mainWindow.isVisible() && mainWindow.isFocused()) {
+      mainWindow.hide();
+    } else {
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  },
+  togglePalette: () => togglePalette(),
+  newSession: () => showCompose(),
+  toggleEnv: () => toggleEnvironment(),
+};
+
+// Bindings that failed their last registration attempt, keyed by shortcut key
+// with the offending accelerator as value. Surfaced to the settings UI so a
+// dead shortcut is diagnosable instead of silent.
+let shortcutIssues = {};
 
 function registerShortcuts() {
   globalShortcut.unregisterAll();
   const shortcuts = loadSettings();
+  shortcutIssues = {};
 
-  if (shortcuts.toggleWindow) {
-    globalShortcut.register(shortcuts.toggleWindow, () => {
-      if (!mainWindow) return;
-      if (mainWindow.isVisible() && mainWindow.isFocused()) {
-        mainWindow.hide();
-      } else {
-        mainWindow.show();
-        mainWindow.focus();
-      }
-    });
-  }
-
-  if (shortcuts.togglePalette) {
-    globalShortcut.register(shortcuts.togglePalette, () => {
-      togglePalette();
-    });
-  }
-
-  if (shortcuts.newSession) {
-    globalShortcut.register(shortcuts.newSession, () => {
-      showCompose();
-    });
-  }
-
-  if (shortcuts.toggleEnv) {
-    globalShortcut.register(shortcuts.toggleEnv, () => toggleEnvironment());
+  for (const [key, handler] of Object.entries(SHORTCUT_HANDLERS)) {
+    const acc = shortcuts[key];
+    if (!acc) continue; // "" = binding removed by the user
+    let ok = false;
+    // register() returns false when another app already holds the accelerator
+    // and throws on a malformed one — both must land in issues, not crash.
+    try {
+      ok = globalShortcut.register(acc, handler);
+    } catch {
+      ok = false;
+    }
+    if (!ok) shortcutIssues[key] = acc;
   }
 }
 

@@ -6,7 +6,11 @@ import {
   shouldAttemptHandoff,
   extractDeepLinkIntent,
   shouldApplyAutoDeepLink,
+  shouldAttemptPreBootHandoff,
+  conversationIdFromPath,
+  HANDOFF_MIRROR_DEV,
   type HandoffContext,
+  type PreBootHandoffContext,
 } from "./desktop";
 
 // A context that passes every gate; each test overrides one field to prove that
@@ -22,6 +26,7 @@ const PASSING: HandoffContext = {
   freshNavigation: true,
   path: "/conversation/jx7c89",
   search: "",
+  skippedUrl: null,
 };
 
 describe("buildDesktopDeepLink", () => {
@@ -76,11 +81,12 @@ describe("isHandoffEligiblePath", () => {
     expect(isHandoffEligiblePath("/")).toBe(true);
   });
 
-  test("blocks auth, share, palette, download and api routes", () => {
+  test("blocks auth, share, artifact, palette, download and api routes", () => {
     expect(isHandoffEligiblePath("/login")).toBe(false);
     expect(isHandoffEligiblePath("/auth/callback")).toBe(false);
     expect(isHandoffEligiblePath("/oauth/github")).toBe(false);
     expect(isHandoffEligiblePath("/share/abc")).toBe(false);
+    expect(isHandoffEligiblePath("/a/wbYnhK4Qv9zw")).toBe(false);
     expect(isHandoffEligiblePath("/palette")).toBe(false);
     expect(isHandoffEligiblePath("/download/mac")).toBe(false);
     expect(isHandoffEligiblePath("/api/x")).toBe(false);
@@ -137,6 +143,59 @@ describe("shouldAttemptHandoff", () => {
   test("skips oauth callbacks carrying code + state", () => {
     expect(shouldAttemptHandoff({ ...PASSING, path: "/", search: "?code=abc&state=xyz" })).toBe(false);
   });
+
+  test("respects 'use the browser for this page', matched on the full url", () => {
+    const c = { ...PASSING, path: "/conversation/jx7c89", search: "?m=5" };
+    expect(shouldAttemptHandoff({ ...c, skippedUrl: "/conversation/jx7c89?m=5" })).toBe(false);
+    // A different page in the same tab still hands off.
+    expect(shouldAttemptHandoff({ ...c, skippedUrl: "/conversation/other" })).toBe(true);
+  });
+});
+
+// The gate that runs inlined in <head>, before any app chunk is fetched. It
+// reads a localStorage mirror of the two synced preferences because those don't
+// exist yet — the whole point is that the app never boots.
+describe("shouldAttemptPreBootHandoff", () => {
+  const PRE: PreBootHandoffContext = {
+    mirror: "1",
+    isDesktopShell: false,
+    isTopWindow: true,
+    foreground: true,
+    host: "codecast.sh",
+    freshNavigation: true,
+    path: "/conversation/jx7c89",
+    search: "",
+    skippedUrl: null,
+  };
+
+  test("fires when the mirror says this browser owns the app", () => {
+    expect(shouldAttemptPreBootHandoff(PRE)).toBe(true);
+  });
+
+  test("never fires without a mirror — the React path handles the first visit", () => {
+    expect(shouldAttemptPreBootHandoff({ ...PRE, mirror: null })).toBe(false);
+    expect(shouldAttemptPreBootHandoff({ ...PRE, mirror: "" })).toBe(false);
+  });
+
+  test("never fires inside the desktop app, which loads this same html", () => {
+    expect(shouldAttemptPreBootHandoff({ ...PRE, isDesktopShell: true })).toBe(false);
+  });
+
+  test("the 'dev' mirror value opts a local host in, for verification only", () => {
+    expect(shouldAttemptPreBootHandoff({ ...PRE, host: "local.codecast.sh" })).toBe(false);
+    expect(shouldAttemptPreBootHandoff({ ...PRE, host: "local.codecast.sh", mirror: HANDOFF_MIRROR_DEV })).toBe(true);
+  });
+
+  // Everything else is the full gate's business; spot-check that it is really
+  // delegating rather than re-deciding.
+  test("inherits the full gate's rules", () => {
+    expect(shouldAttemptPreBootHandoff({ ...PRE, foreground: false })).toBe(false);
+    expect(shouldAttemptPreBootHandoff({ ...PRE, freshNavigation: false })).toBe(false);
+    expect(shouldAttemptPreBootHandoff({ ...PRE, isTopWindow: false })).toBe(false);
+    expect(shouldAttemptPreBootHandoff({ ...PRE, path: "/share/abc" })).toBe(false);
+    expect(shouldAttemptPreBootHandoff({ ...PRE, path: "/", search: "?code=a&state=b" })).toBe(false);
+    expect(shouldAttemptPreBootHandoff({ ...PRE, skippedUrl: "/conversation/jx7c89" })).toBe(false);
+  });
 });
 
 // Auto-handoff deep links carry a marker so the DESKTOP can apply policy: a
@@ -166,5 +225,19 @@ describe("auto-handoff deep-link intent", () => {
     const now = 1_000_000;
     expect(shouldApplyAutoDeepLink(now, now - 5_000)).toBe(false);  // user mid-work
     expect(shouldApplyAutoDeepLink(now, now - 60_000)).toBe(true);  // idle desktop
+  });
+});
+
+describe("conversationIdFromPath", () => {
+  test("extracts the id from a conversation path, dropping query and hash", () => {
+    expect(conversationIdFromPath("/conversation/jx7abc123")).toBe("jx7abc123");
+    expect(conversationIdFromPath("/conversation/jx7abc123?m=5")).toBe("jx7abc123");
+    expect(conversationIdFromPath("/conversation/jx7abc123#msg-1")).toBe("jx7abc123");
+  });
+
+  test("returns null for non-conversation pages", () => {
+    expect(conversationIdFromPath("/tasks/ct-1")).toBeNull();
+    expect(conversationIdFromPath("/conversation/")).toBeNull();
+    expect(conversationIdFromPath("/")).toBeNull();
   });
 });
