@@ -35,6 +35,8 @@ export interface Harness {
   jsonlPath: string;
   capturePane(): string;
   paneHasPrompt(): boolean;
+  /** Exit code for a retained dead pane, or null while the pane is alive/gone. */
+  paneExitCode(): number | null;
   tearDown(): void;
 }
 
@@ -46,6 +48,7 @@ export function spawnHarness(opts: HarnessOptions = {}): Harness {
   const cwd = opts.cwd ?? fs.mkdtempSync(path.join(os.tmpdir(), "codecast-test-cwd-"));
   const sessionId = opts.sessionId ?? randomUUID();
   const shimPath = writeShimScript({ ...opts, sessionId });
+  const shellQuote = (value: string): string => `'${value.replace(/'/g, "'\\''")}'`;
 
   // The shim must be discoverable as `claude` on PATH so an invocation of
   // `claude` lands on it. We do this by symlinking (or copying) it to a
@@ -62,11 +65,17 @@ export function spawnHarness(opts: HarnessOptions = {}): Harness {
   // Pass the shim path explicitly so a missing PATH hop (sometimes seen under
   // bun:test's spawnSync env handling) doesn't silently produce an empty pane.
   const sessionAlive = (): boolean => tmuxRun(["has-session", "-t", tmuxSession]).status === 0;
+  // Fatal-mode intentionally exits before the normal liveness probe. Retain
+  // that pane so the test can prove the shim ran and inspect its real status;
+  // unrelated bash/tmux startup failures still make the session disappear.
+  const shimCommand = opts.fatal
+    ? `tmux set-option -p remain-on-exit on && exec ${shellQuote(shimPath)}`
+    : `exec ${shellQuote(shimPath)}`;
   const spawnOnce = (): { status: number | null; stderr: string; stdout: string } => tmuxRun([
     "new-session", "-d", "-s", tmuxSession,
     "-x", "200", "-y", "50",
     "-c", cwd,
-    "bash", "-c", `FAKE_CLAUDE_SESSION_ID='${sessionId}' exec '${shimPath}'`
+    "bash", "-c", `FAKE_CLAUDE_SESSION_ID=${shellQuote(sessionId)} ${shimCommand}`
   ], { env });
   // Up to 3 spawn attempts. Under heavy load we observe the inner bash dying
   // before reaching the shim (tmux PTY setup race). Verify "alive after 250ms"
@@ -113,6 +122,16 @@ export function spawnHarness(opts: HarnessOptions = {}): Harness {
     paneHasPrompt(): boolean {
       const content = this.capturePane();
       return /❯|⏵/.test(content);
+    },
+    paneExitCode(): number | null {
+      const state = tmuxRun([
+        "display-message", "-p", "-t", `${tmuxSession}:0.0`,
+        "#{pane_dead}:#{pane_dead_status}",
+      ]);
+      if (state.status !== 0) return null;
+      const [dead, rawCode] = state.stdout.trim().split(":");
+      const code = Number.parseInt(rawCode ?? "", 10);
+      return dead === "1" && Number.isInteger(code) ? code : null;
     },
     tearDown(): void {
       tmuxRun(["kill-session", "-t", tmuxSession]);
