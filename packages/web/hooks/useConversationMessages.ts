@@ -72,6 +72,19 @@ type Message = {
   client_id?: string;
 };
 
+// Convex patches the active streaming message in place, so its id and the list
+// length stay fixed while content/thinking/tools grow. Keep the cheap structural
+// guard, but include the full live tail so partial and final same-id updates are
+// never mistaken for an unchanged page.
+export function messagePageSyncKey(conversationId: string, messages: Message[]): string {
+  return JSON.stringify([
+    conversationId,
+    messages.length,
+    messages[0]?._id,
+    messages[messages.length - 1],
+  ]);
+}
+
 export function useConversationMessages(
   requestedConversationId: string,
   targetMessageId?: string,
@@ -213,17 +226,16 @@ export function useConversationMessages(
   // Sync Convex paginated results → Zustand store.
   // Guard: skip setMessages when the message list is unchanged to break the
   // re-render loop (setMessages → Zustand notify → re-render → effect → …).
-  const lastSyncedRef = useRef<{ id: string; len: number; first?: string; last?: string } | null>(null);
+  const lastSyncedRef = useRef<string | null>(null);
 
   useConvexSync(
     useNormalMode && paginationStatus !== "LoadingFirstPage" ? descResults : undefined,
     useCallback((results: any) => {
       if (forkCopying && (useInboxStore.getState().messages[conversationId]?.length ?? 0) > 0) return;
       const messages: Message[] = [...results].reverse();
-      const sig = { id: conversationId, len: messages.length, first: messages[0]?._id, last: messages[messages.length - 1]?._id };
-      const prev = lastSyncedRef.current;
-      if (prev && prev.id === sig.id && prev.len === sig.len && prev.first === sig.first && prev.last === sig.last) return;
-      lastSyncedRef.current = sig;
+      const syncKey = messagePageSyncKey(conversationId, messages);
+      if (lastSyncedRef.current === syncKey) return;
+      lastSyncedRef.current = syncKey;
       useInboxStore.getState().setMessages(conversationId, messages, {
         hasMoreAbove: paginationStatusRef.current === "CanLoadMore" || paginationStatusRef.current === "LoadingMore",
         initialized: true,
