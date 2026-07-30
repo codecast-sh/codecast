@@ -48,8 +48,13 @@ export const MESSAGING_SNIPPET = `
 
 It lands as a new turn attributed to you; inbound arrives wrapped as \`<session-message from="jx7c6zk">…</session-message>\` — reply to its ID.
 
+For anything multi-line, pass \`-\` and feed the body via heredoc — never \`"$(cat file)"\`, which mangles formatting and records only the substitution in the transcript.
+
 \`\`\`bash
 cast send <session_id> "<text>"            # Message a teammate session
+cast send <session_id> - <<'EOF'           # Multi-line body from stdin
+…markdown, code blocks, exact newlines…
+EOF
 \`\`\`
 
 ### Inbox visibility

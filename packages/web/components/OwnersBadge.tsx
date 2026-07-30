@@ -9,8 +9,9 @@
  * reactive listOwners query, so the chip never flickers back mid-round-trip.
  */
 
+import { useState } from "react";
 import { toast } from "sonner";
-import { X } from "lucide-react";
+import { X, UserCheck } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { useOwners, type OwnersApi } from "../hooks/useOwners";
 import {
@@ -50,6 +51,10 @@ export function useOwnersFromStore(conversationId: string): OwnersApi {
  */
 export function OwnerMenuItems({ owners }: { owners: OwnersApi }) {
   const { ownerIds, ownerList, displayFor, toggle, clearAll, selectable, currentUser } = owners;
+  // Optional handoff note, sent along with the NEXT assignment made from this
+  // menu. It rides the notification (push + inbox row) and the assignee's
+  // "assigned to you" banner, then clears once used.
+  const [note, setNote] = useState("");
   return (
     <>
       <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">
@@ -64,7 +69,12 @@ export function OwnerMenuItems({ owners }: { owners: OwnersApi }) {
           <DropdownMenuCheckboxItem
             key={m._id}
             checked={ownerIds.has(m._id)}
-            onSelect={(e) => { e.preventDefault(); toggle(m._id); }}
+            onSelect={(e) => {
+              e.preventDefault();
+              const wasOwner = ownerIds.has(m._id);
+              toggle(m._id, wasOwner ? undefined : note);
+              if (!wasOwner) setNote("");
+            }}
             className="text-xs gap-2"
           >
             <OwnerAvatar name={m.name || m.email || "?"} image={m.image || m.github_avatar_url} />
@@ -75,6 +85,18 @@ export function OwnerMenuItems({ owners }: { owners: OwnersApi }) {
           </DropdownMenuCheckboxItem>
         );
       })}
+      {selectable.some((m: any) => !currentUser || m._id !== currentUser._id) && (
+        <div className="px-2 pt-1 pb-1.5">
+          <input
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            // The dropdown's typeahead would otherwise swallow letter keys.
+            onKeyDown={(e) => e.stopPropagation()}
+            placeholder="Add a note with the assignment…"
+            className="w-full px-1.5 py-1 text-[11px] rounded border border-sol-border/50 bg-sol-bg text-sol-text placeholder:text-sol-text-dim/60 outline-none focus:border-sol-cyan/60"
+          />
+        </div>
+      )}
       {ownerList.length > 0 && (
         <>
           <DropdownMenuSeparator />
@@ -87,5 +109,43 @@ export function OwnerMenuItems({ owners }: { owners: OwnersApi }) {
         </>
       )}
     </>
+  );
+}
+
+/**
+ * The can't-miss handoff strip shown at the top of an open conversation the
+ * current user was assigned by someone ELSE and hasn't acknowledged. Shows the
+ * assigner + their optional note; "Got it" acks (server) and clears the inbox
+ * row's assigned ping (local-first), so both surfaces retire together.
+ */
+export function AssignedToYouBanner({ conversationId }: { conversationId: string }) {
+  const owners = useOwnersFromStore(conversationId);
+  const a = owners.myAssignment;
+  if (!a) return null;
+  const by = a.added_by_name || "A teammate";
+  return (
+    <div className="flex items-start gap-2.5 mx-3 mt-2 px-3 py-2.5 rounded-lg border border-sol-cyan/50 bg-sol-cyan/10 shadow-[0_0_12px_rgba(42,161,152,0.15)]">
+      <UserCheck className="w-4 h-4 text-sol-cyan flex-shrink-0 mt-0.5" />
+      <div className="flex-1 min-w-0">
+        <div className="text-xs font-semibold text-sol-text">
+          {by} assigned this thread to you
+        </div>
+        {a.note && (
+          <div className="text-xs text-sol-text-muted mt-0.5 whitespace-pre-wrap break-words">
+            “{a.note}”
+          </div>
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={() => {
+          owners.ack();
+          useInboxStore.getState().clearAssignedPing(conversationId);
+        }}
+        className="flex-shrink-0 px-2.5 py-1 rounded-md text-[11px] font-medium bg-sol-cyan/20 text-sol-cyan border border-sol-cyan/40 hover:bg-sol-cyan/30 transition-colors"
+      >
+        Got it
+      </button>
+    </div>
   );
 }

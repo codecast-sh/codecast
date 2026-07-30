@@ -37,7 +37,7 @@ import { toast } from "sonner";
 import { animatedHideSession } from "../store/undoActions";
 import { soundKill } from "../lib/sounds";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
-import { X, ChevronsLeft, ChevronsRight, ChevronRight, ChevronDown, List, Clock, Tag, GitFork, History, Star, Activity, Workflow, Play, Pause, Settings2, Users } from "lucide-react";
+import { X, ChevronsLeft, ChevronsRight, ChevronRight, ChevronDown, List, Clock, Tag, GitFork, History, Star, Activity, Workflow, Play, Pause, Settings2, Users, UserCheck } from "lucide-react";
 import { FilterOptionList } from "./FilterDropdown";
 import { LabelChipsRow } from "./LabelChipsRow";
 import { TaskStatusBadge } from "./TaskStatusBadge";
@@ -1068,6 +1068,11 @@ function TriggerRowItem({ row, activeSessionId, onOpen, attached, highlighted, p
 // than guessed state. "Watching" is only claimed while the session itself is
 // believable: not stopped, and inside the shared status-trust TTL — the same
 // predicate the card's own "working" claims use, so the two can't disagree.
+// A card with many live watchers (a deploy fanning out `until grep` shells
+// can stand eight at once) would stack that many bars — cap the stack and
+// fold the rest behind a count row.
+const MAX_MONITOR_BARS = 3;
+
 function MonitorBars({ session, isActive, onOpen }: {
   session: InboxSession;
   isActive: boolean;
@@ -1076,12 +1081,21 @@ function MonitorBars({ session, isActive, onOpen }: {
   const messages = useInboxStore((st) => st.messages[session._id]);
   const now = useCoarseNow(30_000);
   const rows = useMemo(() => monitorRowsFor(messages), [messages]);
+  const [expanded, setExpanded] = useState(false);
   if (session.agent_status === "stopped" || isLivenessStale(session, now)) return null;
   const watching = rows.filter((r) => effectiveMonitorStatus(r, now) === "watching");
   if (watching.length === 0) return null;
+  const shown = expanded ? watching : watching.slice(0, MAX_MONITOR_BARS);
+  const hiddenCount = watching.length - shown.length;
   return (
     <>
-      {watching.map((row) => (
+      {shown.map((row) => {
+        const isBackground = row.kind === "background";
+        const family = isBackground ? "Background" : "Monitor";
+        const ariaLabel = isBackground
+          ? "Background command — running inside this session"
+          : "Monitor — watching inside this session";
+        return (
         <div key={row.toolUseId} className={`group/monrow relative transition-colors ${isActive ? "bg-sol-cyan/[0.10]" : ""}`}>
           <button
             className="w-full text-left cursor-pointer pr-3 pl-2 py-1 hover:bg-sol-blue/[0.05] transition-colors"
@@ -1090,9 +1104,9 @@ function MonitorBars({ session, isActive, onOpen }: {
             <div className="flex gap-1.5 min-w-0">
               {/* Same corner arrow the schedule/subagent child rows carry, in
                   monitor blue: this watch runs inside the card above. */}
-              <span className="flex items-center mt-[2px] shrink-0 text-sol-blue/70" role="img" aria-label="Monitor — watching inside this session">
+              <span className="flex items-center mt-[2px] shrink-0 text-sol-blue/70" role="img" aria-label={ariaLabel}>
                 <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                  <title>Monitor — watching inside this session</title>
+                  <title>{ariaLabel}</title>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
                   <path strokeLinecap="round" strokeLinejoin="round" d="M14 12l4 4-4 4" />
                 </svg>
@@ -1101,16 +1115,16 @@ function MonitorBars({ session, isActive, onOpen }: {
                 {/* Header line: identity eyebrow, what's being watched, and the
                     live badge with how long the watch has been standing. */}
                 <div className="flex items-center gap-1.5 min-w-0">
-                  <span className="text-[9px] font-semibold uppercase tracking-wider text-sol-blue/70 shrink-0">Monitor</span>
+                  <span className="text-[9px] font-semibold uppercase tracking-wider text-sol-blue/70 shrink-0">{family}</span>
                   <span className="text-xs truncate min-w-0 text-gray-400 font-normal">{row.description}</span>
                   {/* Header carries ONLY identity + badge — the bar is
                       space-starved (esp. with the panel narrow), so event/time
                       meta lives on the subrow and the persistent chip rides
                       the badge tooltip; the conversation block keeps the chip. */}
-                  <ShortcutTooltip label={row.persistent ? "Persistent watch — runs until TaskStop or session end" : `One-shot watch${row.timeoutMs !== undefined ? ` — times out after ${fmtDuration(row.timeoutMs)}` : ""}`}>
+                  <ShortcutTooltip label={isBackground ? "Background command — runs until it exits or is stopped, then wakes the agent" : row.persistent ? "Persistent watch — runs until TaskStop or session end" : `One-shot watch${row.timeoutMs !== undefined ? ` — times out after ${fmtDuration(row.timeoutMs)}` : ""}`}>
                     <span className="ml-auto shrink-0 inline-flex items-center gap-1 justify-center min-w-[46px] px-1 py-0 rounded text-[9px] font-semibold border bg-sol-green/10 text-sol-green border-sol-green/30">
                       <span className="w-1 h-1 rounded-full bg-sol-green animate-pulse motion-reduce:animate-none" />
-                      watching
+                      {isBackground ? "running" : "watching"}
                     </span>
                   </ShortcutTooltip>
                 </div>
@@ -1138,7 +1152,16 @@ function MonitorBars({ session, isActive, onOpen }: {
             </div>
           </button>
         </div>
-      ))}
+        );
+      })}
+      {(hiddenCount > 0 || watching.length > MAX_MONITOR_BARS) && (
+        <button
+          className="w-full text-left cursor-pointer pr-3 pl-7 py-0.5 text-[10px] text-sol-text-dim hover:text-sol-text-muted transition-colors"
+          onClick={() => setExpanded((v) => !v)}
+        >
+          {hiddenCount > 0 ? `+${hiddenCount} more running` : "show fewer"}
+        </button>
+      )}
     </>
   );
 }
@@ -1696,6 +1719,8 @@ export const SessionCard = memo(function SessionCard({
       onDragLeave={handleFileDragLeave}
       onDrop={handleFileDrop}
       className={`relative group transition-all overflow-hidden ${isDraggingCard ? "opacity-35 scale-[0.99]" : ""} ${isDragOver ? "ring-1 ring-inset ring-sol-cyan bg-sol-cyan/10" : ""} ${
+        session.assigned_ping ? "ring-1 ring-inset ring-sol-cyan/50 bg-sol-cyan/[0.06]" : ""
+      } ${
         isActive
           ? "bg-sol-cyan/15 border-l-[3px] border-l-sol-cyan shadow-[inset_0_0_16px_rgba(42,161,152,0.12)]"
           : isWorking
@@ -1742,6 +1767,19 @@ export const SessionCard = memo(function SessionCard({
             </button>
           </ShortcutTooltip>
         </div>
+        {session.assigned_ping && (
+          <div className="flex items-start gap-1.5 mt-1 px-1.5 py-1 rounded-md bg-sol-cyan/15 border border-sol-cyan/30">
+            <UserCheck className="w-3 h-3 text-sol-cyan flex-shrink-0 mt-0.5" />
+            <div className="min-w-0 text-[11px] leading-snug">
+              <span className="font-semibold text-sol-cyan">
+                {session.assigned_ping.by_name} assigned this to you
+              </span>
+              {session.assigned_ping.note && (
+                <div className="text-sol-text-muted truncate">“{session.assigned_ping.note}”</div>
+              )}
+            </div>
+          </div>
+        )}
         {cardSummary && !session.implementation_session && (
           <div className="text-[11px] text-sol-text-muted mt-0.5 line-clamp-2 leading-snug whitespace-pre-line">
             <FormattedSummary text={cardSummary} />
