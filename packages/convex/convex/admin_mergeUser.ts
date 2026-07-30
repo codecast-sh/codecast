@@ -43,6 +43,14 @@ const USER_REFS: Array<{ table: string; field: string; index: string | null }> =
   { table: "daemon_logs", field: "user_id", index: "by_user_timestamp" },
   { table: "plan_templates", field: "user_id", index: "by_user_id" },
   { table: "entity_subscriptions", field: "user_id", index: "by_user" },
+  // v2 local-first substrate. Comment view revisions live in the conversation
+  // OWNER's domain, so remapping conversations.user_id without migrating these
+  // heads resets every merged conversation's revision to 0 for viewers —
+  // clients then reject the "moved backwards" coverage and their durable
+  // comment views freeze (matrix SRV-05). Receipts must follow the principal
+  // or replayed command ids re-execute as duplicates after a merge.
+  { table: "local_view_heads", field: "principal_id", index: "by_principal_contract_view" },
+  { table: "local_command_receipts", field: "principal_id", index: "by_principal_command" },
   { table: "authSessions", field: "userId", index: "userId" },
   { table: "authAccounts", field: "userId", index: "userIdAndProvider" },
   { table: "pending_messages", field: "from_user_id", index: "by_user_status" },
@@ -73,6 +81,38 @@ const SKIPPED_LARGE_TABLES: Array<{ table: string; field: string; reason: string
 // because each call pays for a full-table read up to FILTER_SCAN_LIMIT.
 const INDEXED_LIMIT = 1000;
 const FILTER_SCAN_LIMIT = 200;
+
+// Two revision domains collapse into one when principals merge. The merged
+// head must be STRICTLY newer than anything either domain ever served —
+// clients hold durable coverage from the old domain, and both an equal and a
+// lower merged revision would wedge them (equal blocks access transitions by
+// design; lower is rejected as moved-backwards). max(from, to) + 1 satisfies
+// both, and the +1 also forces a refresh where content may have re-based.
+async function mergeLocalViewHead(
+  ctx: { db: any },
+  row: { _id: string; contract_id: string; view_key: string; revision: number },
+  toUserId: string,
+): Promise<void> {
+  const existing = await ctx.db
+    .query("local_view_heads")
+    .withIndex("by_principal_contract_view", (q: any) =>
+      q
+        .eq("principal_id", toUserId)
+        .eq("contract_id", row.contract_id)
+        .eq("view_key", row.view_key))
+    .unique();
+  const revision = Math.max(row.revision, existing?.revision ?? 0) + 1;
+  if (existing) {
+    await ctx.db.patch(existing._id, { revision, updated_at: Date.now() });
+    await ctx.db.delete(row._id);
+  } else {
+    await ctx.db.patch(row._id, {
+      principal_id: toUserId,
+      revision,
+      updated_at: Date.now(),
+    });
+  }
+}
 
 // Lift any fields present on `from` but missing on `to` over to `to`. Used
 // before the row-rewrite step so the surviving user inherits everything
@@ -206,6 +246,8 @@ export const mergeDuplicateUser = internalMutation({
               row,
               { [field]: args.to_user_id } as any,
             );
+          } else if (table === "local_view_heads") {
+            await mergeLocalViewHead(ctx, row as any, args.to_user_id);
           } else {
             await ctx.db.patch(row._id, { [field]: args.to_user_id } as any);
           }

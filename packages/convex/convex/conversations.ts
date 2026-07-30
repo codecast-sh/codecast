@@ -33,6 +33,7 @@ import {
 import { batchScanConversations, paginateTeamFeed } from "./feedPagination";
 import { mergeUserMessageFeed, type FeedCandidate } from "./messageFeed";
 import { assignConversationToBucketForUser, resolveLabelConvIds, matchBucketByName } from "./buckets";
+import { advanceCommentsAccessRevision } from "./commentViewWrites";
 import { projectOverlaps } from "./projectPaths";
 import {
   parseSearchTerms,
@@ -3273,6 +3274,9 @@ export const setPrivacy = mutation({
       : await buildShareUpdate(ctx, conversation, authUserId);
 
     await ctx.db.patch(args.conversation_id, updates);
+    // Access inputs changed without a comment write: move the comment view
+    // head so viewers who regain access can re-materialize (matrix SRV-02).
+    await advanceCommentsAccessRevision(ctx, conversation);
   },
 });
 
@@ -3302,6 +3306,7 @@ export const setTeamVisibility = mutation({
       ...updates,
       team_visibility: args.team_visibility ?? undefined,
     });
+    await advanceCommentsAccessRevision(ctx, conversation);
   },
 });
 
@@ -3335,6 +3340,7 @@ export const setPrivacyBySessionId = mutation({
       ? { is_private: true as const, team_visibility: "private" as const }
       : await buildShareUpdate(ctx, conversation, authUserId);
     await ctx.db.patch(conversation._id, updates);
+    await advanceCommentsAccessRevision(ctx, conversation);
 
     if (args.api_token) {
       await ctx.db.patch(authUserId, {
@@ -6759,6 +6765,8 @@ export const backfillAutoSharedConversations = internalMutation({
 
       if (!args.dry_run) {
         await ctx.db.patch(conv._id, { is_private: false });
+        // Grants teammate access without a comment write (matrix SRV-02).
+        await advanceCommentsAccessRevision(ctx, conv);
       }
       fixed++;
     }
@@ -6814,6 +6822,8 @@ export const revertBackfilledTeamVisibility = internalMutation({
       if (conv.auto_shared && conv.team_visibility === "full" && conv.is_private === false) {
         if (!args.dry_run) {
           await ctx.db.patch(conv._id, { team_visibility: undefined });
+          // Team visibility is an access input (matrix SRV-02).
+          await advanceCommentsAccessRevision(ctx, conv);
         }
         fixed++;
       }
@@ -8973,6 +8983,14 @@ export const reconfigureSession = mutation({
     }
 
     await ctx.db.patch(args.conversation_id, patch);
+    // A project-path change re-resolves team/privacy; if the access inputs
+    // actually moved, advance the comment view head (matrix SRV-02). Guarded
+    // because reconfigure runs on every relaunch with unchanged access.
+    if (args.project_path !== undefined &&
+      (patch.is_private !== conv.is_private ||
+        (patch.team_id !== undefined && patch.team_id !== conv.team_id))) {
+      await advanceCommentsAccessRevision(ctx, conv);
+    }
 
     // start_session is now idempotent on the daemon: it kills any tmux with the
     // deterministic name `cc-<agent>-<convId-suffix>` and respawns it. One

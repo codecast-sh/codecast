@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import {
   compareShadowRows,
   type ShadowComparison,
@@ -83,6 +83,37 @@ export async function recordShadowComparison(input: {
 
 /** Milliseconds both feeds must hold still before a state counts as quiescent. */
 const QUIESCENCE_MS = 600;
+
+/** Fraction of cutover mounts that run a one-shot v1 spot-check. */
+const SPOT_CHECK_PROBABILITY = 0.1;
+/** How long the sampled v1 subscription stays alive before unsubscribing. */
+const SPOT_CHECK_WINDOW_MS = 10_000;
+
+/**
+ * Post-cutover, v1 unsubscribes and continuous digest evidence stops — and the
+ * adapter's equal-revision divergence tripwire was deliberately retired
+ * (matrix SRV-01), so these digests are the standing divergence monitor. A
+ * sampled fraction of cutover mounts briefly re-subscribes the v1 query,
+ * digest-compares one quiescent state, then unsubscribes. The sampled v1
+ * result feeds ONLY the comparison, never the store.
+ */
+export function useCutoverSpotCheck(enabled: boolean, sampleKey: string): boolean {
+  const [active, setActive] = useState(false);
+  useEffect(() => {
+    if (!enabled) {
+      setActive(false);
+      return;
+    }
+    if (Math.random() >= SPOT_CHECK_PROBABILITY) return;
+    setActive(true);
+    const timer = setTimeout(() => setActive(false), SPOT_CHECK_WINDOW_MS);
+    return () => {
+      clearTimeout(timer);
+      setActive(false);
+    };
+  }, [enabled, sampleKey]);
+  return active;
+}
 
 /**
  * Compare the two live feeds whenever they reach a quiescent state. The v1

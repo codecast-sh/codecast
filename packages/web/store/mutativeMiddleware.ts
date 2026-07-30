@@ -509,7 +509,7 @@ export function mutativeMiddleware(config: any, opts?: { retryDelays?: number[] 
           // and deferring via requestIdleCallback can lose writes if the user
           // reloads before idle (e.g. dismiss → reload race).
           void Promise.resolve(idbWriteFn(finalPatches, finalState)).catch((error) => {
-            console.error("[local-first] failed to persist legacy compatibility state", error);
+            console.error(`[local-first] failed to persist legacy compatibility state (action=${key})`, error);
           });
         }
 

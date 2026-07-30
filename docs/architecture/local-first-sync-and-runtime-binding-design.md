@@ -1699,3 +1699,58 @@ The following files are the primary current boundaries to replace or wrap:
 - [`packages/shared/contracts/agentClients.ts`](../../packages/shared/contracts/agentClients.ts) — shared agent registry and currently permissive normalization.
 
 The first code change after approval should add failing security and deterministic interleaving tests, not a broad synchronization subsystem.
+
+---
+
+## 26. Rollout execution checklist (living)
+
+Status date: 2026-07-30. Sections 1–25 define the architecture; this section tracks execution against it. Update it as stages complete — it is the authoritative "what remains" list, and nothing ships or gets deleted except through it.
+
+### Completed
+
+- **Phase 0 security** — server query authorization closures; principal-scoped persistence (per-principal Dexie stores, launcher, generation fencing, logout purge, legacy quarantine).
+- **Track B1 — principal store v2** — shipped, including the supersession fix (`55d7de45`): a superseded resolve/open releases only its own adapter and never tears down its successor's install.
+- **Track B2 — typed materializer in shadow** — engine, adapter contract, source epochs, branch-free apply boundary. Reference slices (buckets, per-conversation comments) materialize durably.
+- **Boilerplate consolidation** (`6363d49b`) — generic bound-writer factory (`convex/lib/viewWriters.ts`), standard view envelopes (`grantedView`/`missingView`/`forbiddenView`/`unauthenticatedView`), `defineQueryView` (server result types derived from query references), `useLocalView` + `LocalViewSession`. CI choke guards enforce the single-writer boundary.
+- **Live digest validator** (`413a0e87`) — in shadow mode every quiescent state digest-compares the v1 render against the v2 durable view; evidence at `window.__CODECAST_SHADOW_VALIDATION__()`. Payload-free.
+- **Server substrate live** on the shared backend: `local_view_heads`, `local_command_receipts`, typed view writers, v2 queries for buckets/comments/bookmarks/favorites/current-user/teams/team-members, `messages.send/v2`, and the four execution tables (dormant).
+- **Prod shadow soak** running since 2026-07-29 (`VITE_LOCAL_FIRST_V2_ENABLED=1`, comments+buckets `shadow` on Railway `web`). First samples digest-equal, zero mismatches. Cold-start convergence (including deletion-while-closed, zero tombstones) demonstrated live 2026-07-29.
+
+### Remaining
+
+**Step 1 — Read-path cutover of the reference slices** (planned 2026-07-31)
+- Gate: clean team-wide soak — `mismatchedViews: 0` across accumulated evidence.
+- Action: flip `VITE_LOCAL_FIRST_COMMENTS_MODE` and `VITE_LOCAL_FIRST_BUCKETS_MODE` to `cutover` on Railway. Rollback is reverting the vars.
+- [ ] Decide post-cutover equivalence monitoring before the flip: once v1 unsubscribes, digest evidence stops for cut-over slices. Cheapest continuous option is a sampled one-shot v1 spot-check.
+
+**Step 2 — Write-path cutover for the reference slices (Track B3 remainder)**
+Reads coming from the durable view still leaves comment/bucket writes on the legacy optimistic-dispatch path (the path that produced a live ghost-duplicate on 2026-07-29). This step:
+- [ ] Route bucket and comment create/edit/delete through the client durable command journal (`commands.execute`) against the existing receipt-backed server handlers.
+- [ ] Implement/verify acknowledgment, rejection, rollback, coalescing, and degraded-storage behavior in product flows.
+- [ ] Satisfy the Section 20 slice-cutover gate, then **disable the legacy inbound writer and dispatch path for each slice**.
+
+**Step 3 — Must-deliver send proof**
+- [ ] Wire one user-message send flow through `messages.send/v2` (delivery-ordered echo matching) as the durability proof. Message-window synchronization is explicitly not redesigned in this step.
+
+**Step 4 — Delete reference-slice legacy paths** (task ct-39702; gated on steps 1–3)
+- [ ] Remove the slices' `syncTable` feeds, feed branches, pending-merge logic, and repair handling. Two correctness systems must not remain active indefinitely.
+
+**Step 5 — Fenced execution rail live validation and rollout** (rest of ct-39703; independent workstream)
+- [ ] Daemon run with `CODECAST_FENCED_EXECUTION_V1=1`; driver path that moves one conversation onto the fenced protocol.
+- [ ] E2E: fenced conversation → `messages.send/v2` → coordinator → delivery permit → runtime; restart/orphan recovery exercised live.
+- [ ] Mixed-version daemon compatibility (other machines run legacy daemons).
+- [ ] Default-on rollout, then delete the daemon's legacy runtime-resolution fallbacks.
+
+**Step 6 — Track B4: per-collection conformance** (repeat the reference-slice march per collection: contract → shadow → digest gate → cutover → delete legacy)
+- [ ] Favorites (v2 query already live)
+- [ ] Current user (v2 query already live)
+- [ ] Teams + team members (v2 queries already live)
+- [ ] Plans — first canonical-storage candidate, after stripping liveness fields and fixing access parity
+- Inbox, tasks, and docs remain query-owned until their contracts are normalized; that is a legitimate end state, not a backlog item.
+
+**Step 7 — Track B5: ordered delta tail (conditional)**
+- Only if a measured offline-completeness requirement cannot be met by complete views. Requires its own RFC before any client code. Default assumption: never built.
+
+**Step 8 — Final: repair-machinery removal and definition-of-done walk**
+- [ ] Delete remaining superseded crawls, ghost sweeps, timers, tombstone bookkeeping, pending merge rules, and unjournaled dispatch across migrated slices.
+- [ ] Walk the Section 24 definition-of-done checklist item by item and record the evidence for each.

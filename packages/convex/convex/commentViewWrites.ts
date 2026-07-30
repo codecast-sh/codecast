@@ -1,6 +1,9 @@
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
-import type { ViewCoverageTarget } from "./localViewRevisions";
+import {
+  advanceLocalViewRevision,
+  type ViewCoverageTarget,
+} from "./localViewRevisions";
 import {
   runViewTransition,
   type RevisionMode,
@@ -34,6 +37,31 @@ export function commentsCoverageTarget(
 }
 
 export type CommentViewWriter = ViewWriter<"comments">;
+
+/**
+ * Advance a conversation's comment view head when an ACCESS input changed
+ * (privacy, team, team visibility) without any comment-table write.
+ *
+ * The client's durable view refuses to re-grant at a revision it already
+ * observed before a forbidden transition — a stale cached query result must
+ * never resurrect revoked content. That safety rule means every mutation that
+ * can change `canAccessConversation`'s outcome must move this head forward,
+ * or a viewer who lost and then regained access with zero comment writes in
+ * between keeps a frozen (empty) durable comment view until someone comments.
+ * (Adversarial sync matrix, finding SRV-02.)
+ */
+export async function advanceCommentsAccessRevision(
+  ctx: MutationCtx,
+  conversation: Pick<Doc<"conversations">, "_id" | "user_id">,
+): Promise<void> {
+  const target = commentsCoverageTarget(conversation);
+  await advanceLocalViewRevision(
+    ctx,
+    target.revisionPrincipalId!,
+    target.contractId,
+    target.viewKey,
+  );
+}
 
 /**
  * The only raw writer for the comments table.

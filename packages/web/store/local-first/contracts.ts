@@ -256,6 +256,6 @@ export class CompleteViewSource<TArgs, TServerResult, TRow> {
   }
 
   close(): void {
-    this.engine.invalidateSource(this.viewKey);
+    this.engine.invalidateSource(this.viewKey, this.handle.sourceEpoch);
   }
 }

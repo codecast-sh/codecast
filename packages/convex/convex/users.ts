@@ -732,16 +732,21 @@ export const storePushToken = mutation({
     if (!userId) {
       throw new Error("Not authenticated");
     }
+    const user = await ctx.db.get(userId);
+    // Token registration runs on every app launch — seed notification defaults
+    // only for first-time registration, never overwrite saved preferences.
     await ctx.db.patch(userId, {
       push_token: args.push_token,
-      notifications_enabled: true,
-      notification_preferences: {
-        team_session_start: true,
-        mention: true,
-        permission_request: true,
-        session_idle: true,
-        session_error: true,
-      },
+      ...(user?.notifications_enabled === undefined && { notifications_enabled: true }),
+      ...(user?.notification_preferences === undefined && {
+        notification_preferences: {
+          team_session_start: true,
+          mention: true,
+          permission_request: true,
+          session_idle: true,
+          session_error: true,
+        },
+      }),
     });
   },
 });
