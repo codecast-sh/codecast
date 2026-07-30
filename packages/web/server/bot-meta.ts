@@ -91,10 +91,26 @@ async function getShareMessageMeta(token: string) {
   }
 }
 
+async function getArtifactMeta(slug: string) {
+  try {
+    const meta = await convex.query(api.artifacts.getShared, { slug });
+    if (!meta) return null;
+    const author = meta.user?.name ? ` by ${meta.user.name}` : "";
+    return {
+      title: `${meta.title} - codecast`,
+      description: `An HTML artifact published${author} with codecast`,
+      url: `${BASE_URL}/a/${slug}`,
+    };
+  } catch {
+    return null;
+  }
+}
+
 const ROUTES: Array<{ pattern: RegExp; handler: (match: RegExpMatchArray) => Promise<{ title: string; description: string; url: string } | null> }> = [
   { pattern: /^\/conversation\/([a-z0-9]{32})$/, handler: (m) => getConversationMeta(m[1]) },
   { pattern: /^\/share\/message\/(.+)$/, handler: (m) => getShareMessageMeta(m[1]) },
   { pattern: /^\/share\/(.+)$/, handler: (m) => getShareMeta(m[1]) },
+  { pattern: /^\/a\/([A-Za-z0-9]+)$/, handler: (m) => getArtifactMeta(m[1]) },
 ];
 
 const STATIC_META: Record<string, { title: string; description: string }> = {

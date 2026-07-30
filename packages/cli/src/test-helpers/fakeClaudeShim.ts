@@ -75,12 +75,15 @@ emit_meta() {
 }
 
 # JSON-escape: strip control chars (ESC/NAK from daemon's pre-paste clearing
-# keys land in $line if bash read isn't in line-edit mode), then escape
-# backslashes and double-quotes so the result is safe to embed in a JSON string.
+# keys land in $line if bash read isn't in line-edit mode), escape backslashes
+# and double-quotes, then encode embedded newlines as \\n — multi-line pastes
+# produce real newlines in the message and a raw newline inside a JSON string
+# is invalid.
 json_escape() {
   printf '%s' "$1" \\
     | tr -d '\\000-\\010\\013-\\037\\177' \\
-    | sed -e 's/\\\\/\\\\\\\\/g' -e 's/"/\\\\"/g'
+    | sed -e 's/\\\\/\\\\\\\\/g' -e 's/"/\\\\"/g' \\
+    | awk 'NR>1{printf "\\\\n"} {printf "%s", $0}'
 }
 
 emit_user_message() {
@@ -124,30 +127,54 @@ fi
 
 emit_meta
 
-# Disable bracketed paste in this terminal. tmux 3.x defaults bracketed paste
-# on, which wraps long pastes with ESC[200~ ... ESC[201~. plain bash read
-# treats those bytes as part of the line and never sees a clean LF terminator
-# for very long pastes — so the user message would never make it into JSONL
-# even though the bytes are sitting in the input buffer.
-printf '\\033[?2004l'
+# REQUEST bracketed paste, the way every real agent TUI does. tmux only emits
+# the ESC[200~ / ESC[201~ wrapper (and only preserves newlines inside a paste)
+# when the pane's application has asked for the mode, so a shim that disables
+# it cannot exercise the daemon's multi-line injection at all — the linefeeds
+# arrive as carriage returns and each line submits as its own message. With the
+# mode on, the loop below accumulates every line between the markers into ONE
+# message, mirroring a composer that renders a pasted block as one prompt.
+printf '\\033[?2004h'
 
-# Strip bracketed-paste wrapper bytes if any slip through (defensive).
+has_paste_start() { case "$1" in *$'\\033'"[200~"*) return 0 ;; *) return 1 ;; esac; }
+has_paste_end() { case "$1" in *$'\\033'"[201~"*) return 0 ;; *) return 1 ;; esac; }
+
+# Strip bracketed-paste wrapper bytes, leaving the pasted payload.
 strip_paste_markers() {
   printf '%s' "$1" | LC_ALL=C sed -e 's/\\x1b\\[200~//g' -e 's/\\x1b\\[201~//g'
 }
 
-# Main loop: print prompt, read line, append to JSONL, echo a reply.
+submit() {
+  [ -z "$1" ] && return 0
+  emit_user_message "$1"
+  # Echo back so daemon JSONL watcher has something to sync. Single-line only:
+  # a multi-line echo would make the pane's own output look like stuck input to
+  # the daemon's prompt scraper.
+  emit_assistant_reply "got it: $(printf '%s' "$1" | head -1)"
+}
+
+# Main loop: print prompt, read a line (or a whole bracketed paste), append to
+# JSONL, echo a reply. `read -r -t` inside the paste keeps a truncated paste
+# (no end marker, e.g. the pane died mid-burst) from hanging the shim forever.
 trap 'exit 0' INT TERM
 while true; do
   printf '\\n❯ '
   if ! IFS= read -r line; then
     exit 0
   fi
-  line=$(strip_paste_markers "$line")
-  if [ -z "$line" ]; then continue; fi
-  emit_user_message "$line"
-  # Echo back so daemon JSONL watcher has something to sync.
-  emit_assistant_reply "got it: $line"
+  if has_paste_start "$line"; then
+    pasted="$(strip_paste_markers "$line")"
+    if ! has_paste_end "$line"; then
+      while IFS= read -r -t 5 more; do
+        pasted="$pasted
+$(strip_paste_markers "$more")"
+        has_paste_end "$more" && break
+      done
+    fi
+    submit "$pasted"
+    continue
+  fi
+  submit "$(strip_paste_markers "$line")"
 done
 `;
 }

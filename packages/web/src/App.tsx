@@ -42,6 +42,7 @@ const Conversation = lazy(() => import("@/app/conversation/[id]/page"));
 const ConversationDiff = lazy(() => import("@/app/conversation/[id]/diff/page"));
 const Share = lazy(() => import("@/app/share/[token]/page"));
 const ShareMessage = lazy(() => import("@/app/share/message/[token]/page"));
+const Artifact = lazy(() => import("@/app/a/[slug]/page"));
 const PublicProfile = lazy(() => import("@/app/u/[username]/page"));
 
 const CommitView = lazy(() => import("@/app/commit/[owner]/[repo]/[sha]/page"));
@@ -185,6 +186,7 @@ export function App() {
             {/* Sharing */}
             <Route path="share/:token" element={<E name="Share"><Share /></E>} />
             <Route path="share/message/:token" element={<E name="ShareMessage"><ShareMessage /></E>} />
+            <Route path="a/:slug" element={<E name="Artifact"><Artifact /></E>} />
 
             {/* Code review */}
             <Route path="commit/:owner/:repo/:sha" element={<E name="CommitView"><CommitView /></E>} />
