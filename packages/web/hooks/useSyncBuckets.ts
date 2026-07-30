@@ -2,8 +2,16 @@ import { useCallback, useEffect, useMemo } from "react";
 import { useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
-import { localFirstSliceMode } from "../store/local-first/featureFlags";
-import { bucketsPrincipalView } from "../store/local-first/referenceContracts";
+import {
+  isCutoverMode,
+  isLogTsMode,
+  isShadowMode,
+  localFirstSliceMode,
+} from "../store/local-first/featureFlags";
+import {
+  bucketsPrincipalView,
+  bucketsPrincipalViewV3,
+} from "../store/local-first/referenceContracts";
 import { useCutoverSpotCheck, useShadowEquivalence } from "../store/local-first/shadowValidation";
 import { useConvexSync } from "./useConvexSync";
 import { useLocalView } from "./useLocalView";
@@ -17,11 +25,12 @@ const api = _api as any;
 // that durable view the store's feed.
 export function useSyncBuckets() {
   const mode = localFirstSliceMode("buckets");
+  const cutover = isCutoverMode(mode);
   // Standing divergence monitor after cutover (matrix SHD-03).
-  const spotCheck = useCutoverSpotCheck(mode === "cutover", "buckets:principal");
+  const spotCheck = useCutoverSpotCheck(cutover, "buckets:principal");
   const result = useQuery(
     api.buckets.webList,
-    mode !== "cutover" || spotCheck ? {} : "skip",
+    !cutover || spotCheck ? {} : "skip",
   );
   const syncTable = useInboxStore((s) => s.syncTable);
 
@@ -29,15 +38,17 @@ export function useSyncBuckets() {
     if (!data) return;
     // In cutover the durable view owns the store; a sampled v1 result feeds
     // only the digest comparison below.
-    if (mode === "cutover") return;
+    if (cutover) return;
     syncTable("buckets", data.buckets ?? []);
     syncTable("bucketAssignments", data.assignments ?? []);
-  }, [syncTable, mode]));
+  }, [syncTable, cutover]));
 
-  const view = useLocalView(bucketsPrincipalView, {}, { enabled: mode !== "off" });
+  // The -lts modes run the v3 stamped-log-ts contract.
+  const viewContract = isLogTsMode(mode) ? bucketsPrincipalViewV3 : bucketsPrincipalView;
+  const view = useLocalView(viewContract, {}, { enabled: mode !== "off" });
   const viewRows = view.rows;
   useEffect(() => {
-    if (mode !== "cutover" || view.status !== "granted") return;
+    if (!cutover || view.status !== "granted") return;
     const values = viewRows.map((row) => row.value);
     // The durable view is COMPLETE for the whole personal catalog, but both
     // registry entries are isDelta (upsert-only), so absent rows — a bucket
@@ -53,12 +64,12 @@ export function useSyncBuckets() {
       values.filter((v) => v.kind === "assignment").map((v) => v.row),
       { pruneAbsentScope: () => true },
     );
-  }, [mode, view.status, viewRows, syncTable]);
+  }, [cutover, view.status, viewRows, syncTable]);
 
   // Cutover gate evidence in shadow mode; sampled standing monitor in cutover.
   useShadowEquivalence({
-    enabled: mode === "shadow" || spotCheck,
-    contractId: bucketsPrincipalView.id,
+    enabled: isShadowMode(mode) || spotCheck,
+    contractId: viewContract.id,
     viewKey: "buckets:principal",
     authoritative: useMemo(() => result
       ? [

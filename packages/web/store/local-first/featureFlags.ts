@@ -1,5 +1,10 @@
 export type LocalFirstSlice = "buckets" | "comments" | "smallViews" | "messageSend";
-export type LocalFirstSliceMode = "off" | "shadow" | "cutover";
+/**
+ * Plain modes run the v2 (view-revision watermark) contracts; the `-lts`
+ * modes run the v3 stamped-log-ts contracts, which migrate the durable view
+ * via contract supersession on first claim.
+ */
+export type LocalFirstSliceMode = "off" | "shadow" | "cutover" | "shadow-lts" | "cutover-lts";
 
 export type LocalFirstFeatureFlags = Readonly<Record<LocalFirstSlice, LocalFirstSliceMode>>;
 
@@ -13,7 +18,25 @@ const ENV_KEYS: Readonly<Record<LocalFirstSlice, string>> = {
 };
 
 function mode(value: unknown): LocalFirstSliceMode {
-  return value === "shadow" || value === "cutover" ? value : "off";
+  return value === "shadow" || value === "cutover" ||
+    value === "shadow-lts" || value === "cutover-lts"
+    ? value
+    : "off";
+}
+
+/** The slice's rendered store feed comes from the durable v2 view. */
+export function isCutoverMode(value: LocalFirstSliceMode): boolean {
+  return value === "cutover" || value === "cutover-lts";
+}
+
+/** The slice digest-compares v1 against the durable view without cutting over. */
+export function isShadowMode(value: LocalFirstSliceMode): boolean {
+  return value === "shadow" || value === "shadow-lts";
+}
+
+/** The slice runs the v3 stamped-log-ts contract instead of v2. */
+export function isLogTsMode(value: LocalFirstSliceMode): boolean {
+  return value === "shadow-lts" || value === "cutover-lts";
 }
 
 /**
@@ -46,5 +69,5 @@ export function isLocalFirstShadowEnabled(slice: LocalFirstSlice): boolean {
 }
 
 export function isLocalFirstCutoverEnabled(slice: LocalFirstSlice): boolean {
-  return localFirstSliceMode(slice) === "cutover";
+  return isCutoverMode(localFirstSliceMode(slice));
 }

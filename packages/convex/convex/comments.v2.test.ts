@@ -22,6 +22,7 @@ const OTHER = "user-other" as any;
 const TEAM = "team-main" as any;
 const CONVERSATION = "conversation-main" as any;
 const CONTRACT = "comments.byConversation/v2";
+const CONTRACT_V3 = "comments.byConversation/v3";
 const VIEW_KEY = `comments:conversation:${CONVERSATION}`;
 const GRANT_KEY = `comments:conversation-grant:${CONVERSATION}`;
 
@@ -161,8 +162,40 @@ describe("comments v2 complete-view envelopes", () => {
       grantKeys: [GRANT_KEY],
       viewRevision: 0,
       coverage: { kind: "view-revision", revision: "0", revisionOrder: 0 },
+      commandIds: [],
       comments: [],
     });
+  });
+
+  // Write-reconciliation echo (design §11.4 proof #3): the envelope lists the
+  // CALLER's acknowledged receipts for this view, read in the same snapshot.
+  test("the granted envelope echoes only the caller's acknowledged receipts for this view", async () => {
+    const receiptRow = (id: string, principal: string, viewKey: string, status = "acknowledged") => ({
+      _id: `receipt-${id}`,
+      principal_id: principal,
+      command_id: id,
+      command_name: "comments.create/v2",
+      receipt_version: 1,
+      argument_fingerprint: "sha256:x",
+      status,
+      coverage: [{ contract_id: CONTRACT, view_key: viewKey, revision: 1 }],
+      created_at: 1,
+    });
+    const ctx = context(MEMBER, {
+      conversations: [sharedConversation()],
+      team_memberships: memberships(),
+      local_command_receipts: [
+        receiptRow("mine-here", MEMBER, VIEW_KEY),
+        receiptRow("mine-rejected", MEMBER, VIEW_KEY, "rejected"),
+        receiptRow("mine-elsewhere", MEMBER, "comments:conversation:other"),
+        receiptRow("owners-here", OWNER, VIEW_KEY),
+      ],
+    });
+    const result = await (getCommentsV2 as any)._handler(ctx, {
+      conversation_id: CONVERSATION,
+    });
+    expect(result.access).toBe("granted");
+    expect(result.commandIds).toEqual(["mine-here"]);
   });
 
   test("a teammate reads the owner's revision domain and gets a deterministic projection", async () => {
@@ -263,7 +296,10 @@ describe("comments v2 create receipts and containment", () => {
       commandName: "comments.create/v2",
       status: "acknowledged",
       result: { clientId: "optimistic-comment-1" },
-      coverage: [{ contractId: CONTRACT, viewKey: VIEW_KEY, revision: 1 }],
+      coverage: [
+        { contractId: CONTRACT, viewKey: VIEW_KEY, revision: 1 },
+        { kind: "command-id", contractId: CONTRACT_V3, viewKey: VIEW_KEY, commandId: expect.any(String) },
+      ],
       retryUntil: null,
     });
     expect(commentsFor(ctx)).toHaveLength(1);
@@ -304,7 +340,10 @@ describe("comments v2 create receipts and containment", () => {
     expect(accepted).toMatchObject({
       status: "acknowledged",
       result: { commentId: "comment-existing", clientId: "stable-client-id" },
-      coverage: [{ contractId: CONTRACT, viewKey: VIEW_KEY, revision: 1 }],
+      coverage: [
+        { contractId: CONTRACT, viewKey: VIEW_KEY, revision: 1 },
+        { kind: "command-id", contractId: CONTRACT_V3, viewKey: VIEW_KEY, commandId: expect.any(String) },
+      ],
     });
     expect(commentsFor(ctx)).toHaveLength(1);
     expect(heads(ctx)[0]).toMatchObject({ principal_id: OWNER, revision: 1 });
@@ -492,7 +531,10 @@ describe("comments v2 dependent edit and delete", () => {
     expect(updated).toMatchObject({
       status: "acknowledged",
       result: { commentId: "comment-edit", clientId: "optimistic-edit" },
-      coverage: [{ contractId: CONTRACT, viewKey: VIEW_KEY, revision: 1 }],
+      coverage: [
+        { contractId: CONTRACT, viewKey: VIEW_KEY, revision: 1 },
+        { kind: "command-id", contractId: CONTRACT_V3, viewKey: VIEW_KEY, commandId: expect.any(String) },
+      ],
     });
     expect(ctx.db._tables.comments.find((row: any) => row._id === "comment-edit").content)
       .toBe("after");
@@ -505,7 +547,10 @@ describe("comments v2 dependent edit and delete", () => {
     expect(deleted).toMatchObject({
       status: "acknowledged",
       result: { commentId: "comment-delete", clientId: "optimistic-delete" },
-      coverage: [{ contractId: CONTRACT, viewKey: VIEW_KEY, revision: 2 }],
+      coverage: [
+        { contractId: CONTRACT, viewKey: VIEW_KEY, revision: 2 },
+        { kind: "command-id", contractId: CONTRACT_V3, viewKey: VIEW_KEY, commandId: expect.any(String) },
+      ],
     });
     expect(ctx.db._tables.comments.some((row: any) => row._id === "comment-delete"))
       .toBe(false);
@@ -539,7 +584,10 @@ describe("comments v2 dependent edit and delete", () => {
     });
     expect(receipt).toMatchObject({
       status: "acknowledged",
-      coverage: [{ contractId: CONTRACT, viewKey: VIEW_KEY, revision: 1 }],
+      coverage: [
+        { contractId: CONTRACT, viewKey: VIEW_KEY, revision: 1 },
+        { kind: "command-id", contractId: CONTRACT_V3, viewKey: VIEW_KEY, commandId: expect.any(String) },
+      ],
     });
     expect(heads(ctx)[0]).toMatchObject({ principal_id: OWNER, revision: 1 });
     expect(ctx.db._patched).toHaveLength(0);
@@ -669,7 +717,10 @@ describe("comments write-choke coverage", () => {
         forkConversationId: forkId,
         clientId: "optimistic-agent-reply",
       },
-      coverage: [{ contractId: CONTRACT, viewKey: VIEW_KEY, revision: 1 }],
+      coverage: [
+        { contractId: CONTRACT, viewKey: VIEW_KEY, revision: 1 },
+        { kind: "command-id", contractId: CONTRACT_V3, viewKey: VIEW_KEY, commandId: expect.any(String) },
+      ],
     });
     expect(forkCalls).toBe(1);
     expect(commentsFor(ctx)).toHaveLength(1);
@@ -689,7 +740,10 @@ describe("comments write-choke coverage", () => {
     });
     expect(duplicateClientReceipt).toMatchObject({
       status: "acknowledged",
-      coverage: [{ contractId: CONTRACT, viewKey: VIEW_KEY, revision: 2 }],
+      coverage: [
+        { contractId: CONTRACT, viewKey: VIEW_KEY, revision: 2 },
+        { kind: "command-id", contractId: CONTRACT_V3, viewKey: VIEW_KEY, commandId: expect.any(String) },
+      ],
     });
     expect(forkCalls).toBe(1);
     expect(commentsFor(ctx)).toHaveLength(1);

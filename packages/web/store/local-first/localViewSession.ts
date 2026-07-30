@@ -2,9 +2,11 @@ import {
   CompleteViewSource,
   type CompleteViewContract,
 } from "./contracts";
+import { compareSourceCoverage } from "./coverage";
 import { LocalFirstEngine, StaleLocalFirstSourceError } from "./engine";
 import { PrincipalStoreFenceError } from "./persistence/adapter";
 import { selectVisibleMaterializedView } from "./visibleView";
+import type { SourceCoverage } from "./types";
 
 export type LocalViewStatus = "loading" | "granted" | "forbidden" | "missing" | "unknown";
 
@@ -62,6 +64,19 @@ export class LocalViewSession<TArgs, TServerResult, TRow> {
 
   /** Results must be delivered in subscription order; application is FIFO. */
   deliver(serverResult: TServerResult): Promise<void> {
+    return this.enqueue(serverResult, undefined);
+  }
+
+  /**
+   * Delivery from the transition stamper: the result plus the backend log
+   * timestamp it is valid at. Required for stamped-log-ts contracts, whose
+   * granted coverage is the timestamp rather than anything the envelope says.
+   */
+  deliverStamped(serverResult: TServerResult, logTs: string): Promise<void> {
+    return this.enqueue(serverResult, logTs);
+  }
+
+  private enqueue(serverResult: TServerResult, stampedLogTs: string | undefined): Promise<void> {
     this.queue = this.queue.then(async (source) => {
       if (this.closed) return source;
       if (!source) {
@@ -81,7 +96,7 @@ export class LocalViewSession<TArgs, TServerResult, TRow> {
       }
       try {
         const captured = source.capture();
-        await source.apply(captured, serverResult);
+        await source.apply(captured, serverResult, undefined, { stampedLogTs });
         await this.republish();
         return source;
       } catch (error) {
@@ -97,7 +112,7 @@ export class LocalViewSession<TArgs, TServerResult, TRow> {
         // retired it, or a stale close. When THIS delivery provably advances
         // the durable view (or carries an access transition that must land),
         // hand the view off: claim a fresh writer and re-apply once.
-        if (!(await this.shouldReopenFor(serverResult))) return source;
+        if (!(await this.shouldReopenFor(serverResult, stampedLogTs))) return source;
         source.close();
         let reopened: CompleteViewSource<TArgs, TServerResult, TRow>;
         try {
@@ -111,7 +126,7 @@ export class LocalViewSession<TArgs, TServerResult, TRow> {
           return null;
         }
         try {
-          await reopened.apply(reopened.capture(), serverResult);
+          await reopened.apply(reopened.capture(), serverResult, undefined, { stampedLogTs });
           await this.republish();
         } catch (retryError) {
           this.report("apply", retryError);
@@ -129,21 +144,28 @@ export class LocalViewSession<TArgs, TServerResult, TRow> {
    * subscription refire. Non-granted results always qualify: access loss must
    * become durable even if this tab lost the writer race.
    */
-  private async shouldReopenFor(serverResult: TServerResult): Promise<boolean> {
+  private async shouldReopenFor(
+    serverResult: TServerResult,
+    stampedLogTs: string | undefined,
+  ): Promise<boolean> {
     try {
       const decoded = this.contract.decode(serverResult);
       if (decoded.access === "unavailable" || decoded.access === "unauthenticated") return false;
       if (decoded.access !== "granted") return true;
-      const delivered = decoded.coverage;
-      if (delivered.kind !== "view-revision" || delivered.revisionOrder === undefined) {
-        return false;
-      }
+      const delivered: SourceCoverage =
+        this.contract.coverageSource === "stamped-log-ts" && stampedLogTs !== undefined
+          ? { kind: "log-ts", ts: stampedLogTs }
+          : decoded.coverage;
       const snapshot = await this.engine.readSnapshot();
       const durable = snapshot.views.find((view) => view.key === this.viewKey)?.coverage ??
         snapshot.viewWriters.find((writer) => writer.key === this.viewKey)?.lastCoverage;
       if (!durable) return true;
-      if (durable.kind !== "view-revision" || durable.revisionOrder === undefined) return false;
-      return delivered.revisionOrder > durable.revisionOrder;
+      const order = compareSourceCoverage(durable, delivered);
+      if (order === "newer") return true;
+      // Incomparable coverage against a live delivery means the durable view
+      // belongs to a predecessor coverage domain (contract migration): the
+      // re-open performs the supersession claim, which resets the domain.
+      return order === "incomparable" && this.contract.supersedes !== undefined;
     } catch {
       return false;
     }

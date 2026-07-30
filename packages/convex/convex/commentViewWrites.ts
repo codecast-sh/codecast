@@ -11,6 +11,8 @@ import {
 } from "./lib/viewWriters";
 
 export const COMMENTS_VIEW_CONTRACT_ID = "comments.byConversation/v2";
+/** The stamped-log-ts client contract; same envelope, deeper coverage. */
+export const COMMENTS_VIEW_CONTRACT_ID_V3 = "comments.byConversation/v3";
 
 export function commentsViewKey(conversationId: Id<"conversations">): string {
   return `comments:conversation:${conversationId}`;
@@ -37,6 +39,23 @@ export function commentsCoverageTarget(
 }
 
 export type CommentViewWriter = ViewWriter<"comments">;
+
+/**
+ * Receipt coverage for stamped-log-ts clients (design §11.4 proof #3): the
+ * receipt names this command id against the v3 contract, and the view query
+ * echoes the caller's receipted ids from the same snapshot, so the client
+ * retires the optimistic overlay exactly when a result provably containing
+ * the write lands.
+ */
+export function commentsCommandIdCoverage(
+  conversationId: Id<"conversations">,
+): { kind: "command-id"; contractId: string; viewKey: string } {
+  return {
+    kind: "command-id",
+    contractId: COMMENTS_VIEW_CONTRACT_ID_V3,
+    viewKey: commentsViewKey(conversationId),
+  };
+}
 
 /**
  * Advance a conversation's comment view head when an ACCESS input changed
