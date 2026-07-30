@@ -88,7 +88,23 @@ describe("SyncService.uploadImage timeout regression", () => {
   // wedged the file-watcher: its position never advanced past the image and every
   // later turn stopped syncing (session 2a081608 — web frozen ~1h behind tmux).
   // Each network leg is now time-boxed so a hang degrades to null instead.
-  const smallPng = "aGVsbG8="; // "hello" — tiny, well under MAX_IMAGE_SIZE
+  const smallPng = Buffer.from([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+  ]).toString("base64"); // Minimal signature fixture, well under MAX_IMAGE_SIZE.
+
+  it("rejects a base64-encoded local path before requesting an upload URL", async () => {
+    const sync = new SyncService({ convexUrl: "http://localhost:0", userId: "u", authToken: "t" });
+    let mutations = 0;
+    (sync as any).client = { mutation: async () => { mutations++; return "unused"; } };
+
+    const result = await (sync as any).uploadImage(
+      Buffer.from("/Users/example/screenshot.png").toString("base64"),
+      "image/png",
+    );
+
+    expect(result).toBeNull();
+    expect(mutations).toBe(0);
+  });
 
   it("returns null (does not hang) when generateUploadUrl never resolves", async () => {
     const sync = new SyncService({ convexUrl: "http://localhost:0", userId: "u", authToken: "t" });
@@ -136,8 +152,11 @@ describe("SyncService.offloadImages", () => {
   // small and stops every retry re-uploading the same image. A 511KB inline
   // screenshot persisted as raw base64 grew the retry queue to 16MB and, fighting
   // for the conversation hot-doc, drove the 283-op stall.
-  const smallImg = "aGVsbG8="; // 5 decoded bytes
-  const hugeImg = "A".repeat(700_000); // ~525KB decoded, over MAX_INLINE_IMAGE_SIZE (500KB)
+  const pngSignature = Buffer.from([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+  ]);
+  const smallImg = pngSignature.toString("base64");
+  const hugeImg = Buffer.concat([pngSignature, Buffer.alloc(525_000)]).toString("base64");
 
   function make(authToken = "t") {
     return new SyncService({ convexUrl: "http://localhost:0", userId: "u", authToken });

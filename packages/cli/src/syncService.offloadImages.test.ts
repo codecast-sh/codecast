@@ -1,8 +1,17 @@
 import { describe, it, expect } from "bun:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { SyncService } from "./syncService.js";
 
 function makeService(): SyncService {
   return new SyncService({ convexUrl: "http://localhost:0", userId: "u", authToken: "t" });
+}
+
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+function pngBase64(size: number): string {
+  return Buffer.concat([PNG_SIGNATURE, Buffer.alloc(Math.max(0, size - PNG_SIGNATURE.length))]).toString("base64");
 }
 
 describe("SyncService.offloadImages", () => {
@@ -41,8 +50,8 @@ describe("SyncService.offloadImages", () => {
     const sync = makeService();
     (sync as any).uploadImage = async () => null; // upload always fails
 
-    const small = Buffer.alloc(1000).toString("base64");
-    const huge = Buffer.alloc(600_000).toString("base64"); // > MAX_INLINE_IMAGE_SIZE
+    const small = pngBase64(1000);
+    const huge = pngBase64(600_000); // > MAX_INLINE_IMAGE_SIZE
     const messages = [
       { images: [{ mediaType: "image/png", data: small }] },
       { images: [{ mediaType: "image/png", data: huge }] },
@@ -54,6 +63,53 @@ describe("SyncService.offloadImages", () => {
     expect(messages[0].images?.[0].data).toBe(small);
     // …oversized one dropped → images cleared to undefined.
     expect(messages[1].images).toBeUndefined();
+  });
+
+  it("reads Codex local image paths as bytes and reuses the uploaded object", async () => {
+    const sync = makeService();
+    const dir = await mkdtemp(join(tmpdir(), "codecast-image-"));
+    const imagePath = join(dir, "capture.png");
+    const bytes = Buffer.concat([PNG_SIGNATURE, Buffer.from("image-body")]);
+    await writeFile(imagePath, bytes);
+    const uploads: Array<{ data: string; mediaType: string }> = [];
+    (sync as any).uploadImage = async (data: string, mediaType: string) => {
+      uploads.push({ data, mediaType });
+      return "sid-local";
+    };
+
+    try {
+      const first = [{ images: [{ mediaType: "image/png", localPath: imagePath }] }];
+      const second = [{ images: [{ mediaType: "image/png", localPath: imagePath }] }];
+      await sync.offloadImages(first);
+      await sync.offloadImages(second);
+
+      expect(uploads).toEqual([{ data: bytes.toString("base64"), mediaType: "image/png" }]);
+      expect(first[0].images).toEqual([{ mediaType: "image/png", storageId: "sid-local" }] as any);
+      expect(second[0].images).toEqual([{ mediaType: "image/png", storageId: "sid-local" }] as any);
+    } finally {
+      await rm(dir, { recursive: true });
+    }
+  });
+
+  it("drops an invalid local image instead of uploading its path or bytes", async () => {
+    const sync = makeService();
+    const dir = await mkdtemp(join(tmpdir(), "codecast-image-"));
+    const imagePath = join(dir, "not-an-image.png");
+    await writeFile(imagePath, imagePath);
+    let uploads = 0;
+    (sync as any).uploadImage = async () => {
+      uploads++;
+      return "should-not-upload";
+    };
+
+    try {
+      const messages = [{ images: [{ mediaType: "image/png", localPath: imagePath }] }];
+      await sync.offloadImages(messages);
+      expect(uploads).toBe(0);
+      expect(messages[0].images).toBeUndefined();
+    } finally {
+      await rm(dir, { recursive: true });
+    }
   });
 
   it("uploads concurrently rather than serially", async () => {

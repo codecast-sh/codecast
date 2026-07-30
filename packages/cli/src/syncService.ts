@@ -1,4 +1,5 @@
 import { ConvexHttpClient, ConvexClient } from "convex/browser";
+import { readFile, stat } from "node:fs/promises";
 import { redactSecrets } from "./redact.js";
 import { deviceId } from "./remote/device.js";
 import { hashPath } from "./hash.js";
@@ -60,6 +61,78 @@ export class AuthExpiredError extends Error {
 function truncate(str: string, maxLen: number): string {
   if (str.length <= maxLen) return str;
   return str.slice(0, maxLen) + `\n... [truncated ${str.length - maxLen} chars]`;
+}
+
+function detectImageMediaType(data: Buffer): string | null {
+  if (
+    data.length >= 8 &&
+    data[0] === 0x89 &&
+    data[1] === 0x50 &&
+    data[2] === 0x4e &&
+    data[3] === 0x47 &&
+    data[4] === 0x0d &&
+    data[5] === 0x0a &&
+    data[6] === 0x1a &&
+    data[7] === 0x0a
+  ) {
+    return "image/png";
+  }
+  if (data.length >= 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff) {
+    return "image/jpeg";
+  }
+  if (data.length >= 6) {
+    const signature = data.subarray(0, 6).toString("ascii");
+    if (signature === "GIF87a" || signature === "GIF89a") return "image/gif";
+  }
+  if (
+    data.length >= 12 &&
+    data.subarray(0, 4).toString("ascii") === "RIFF" &&
+    data.subarray(8, 12).toString("ascii") === "WEBP"
+  ) {
+    return "image/webp";
+  }
+  if (data.length >= 2 && data[0] === 0x42 && data[1] === 0x4d) {
+    return "image/bmp";
+  }
+  if (
+    data.length >= 4 &&
+    (
+      (data[0] === 0x49 && data[1] === 0x49 && data[2] === 0x2a && data[3] === 0x00) ||
+      (data[0] === 0x4d && data[1] === 0x4d && data[2] === 0x00 && data[3] === 0x2a)
+    )
+  ) {
+    return "image/tiff";
+  }
+  if (
+    data.length >= 12 &&
+    data.subarray(4, 8).toString("ascii") === "ftyp" &&
+    ["avif", "avis"].includes(data.subarray(8, 12).toString("ascii"))
+  ) {
+    return "image/avif";
+  }
+  const textPrefix = data.subarray(0, Math.min(data.length, 1024)).toString("utf8")
+    .replace(/^\uFEFF/, "")
+    .trimStart();
+  if (/^(?:<\?xml[\s\S]*?\?>\s*)?<svg(?:\s|>)/i.test(textPrefix)) {
+    return "image/svg+xml";
+  }
+  return null;
+}
+
+function decodeImageBase64(base64Data: string): { data: Buffer; mediaType: string } | null {
+  const normalized = base64Data.replace(/\s/g, "");
+  if (
+    normalized.length === 0 ||
+    normalized.length % 4 === 1 ||
+    !/^[A-Za-z0-9+/]*={0,2}$/.test(normalized)
+  ) {
+    return null;
+  }
+  const data = Buffer.from(normalized, "base64");
+  const roundTrip = data.toString("base64").replace(/=+$/, "");
+  if (roundTrip !== normalized.replace(/=+$/, "")) return null;
+  const mediaType = detectImageMediaType(data);
+  return mediaType ? { data, mediaType } : null;
 }
 
 /**
@@ -220,6 +293,15 @@ export class SyncService {
   // Per-network-leg deadline for image uploads. A field (not the bare constant)
   // only so tests can shorten it; production always uses UPLOAD_IMAGE_TIMEOUT_MS.
   private imageUploadTimeoutMs = UPLOAD_IMAGE_TIMEOUT_MS;
+  // App-server progress is re-materialized after every item, so the same local
+  // image path can be seen repeatedly during one turn. Reuse its storage object
+  // while the file's size/mtime are unchanged.
+  private localImageUploads = new Map<string, {
+    size: number;
+    mtimeMs: number;
+    mediaType: string;
+    storageId: string;
+  }>();
   // Serializes addMessages per conversation. The server's addMessages reads+patches
   // the conversation document on every batch, so two addMessages for the SAME
   // conversation running at once collide on that one doc — Convex OCC-retries the
@@ -400,9 +482,9 @@ export class SyncService {
   // queue file) and stops every retry from re-uploading the same image. Idempotent:
   // images that already carry a storageId are left untouched.
   async offloadImages(
-    messages: Array<{ images?: Array<{ mediaType: string; data?: string; storageId?: string; toolUseId?: string }> }>,
+    messages: Array<{ images?: Array<{ mediaType: string; data?: string; localPath?: string; storageId?: string; toolUseId?: string }> }>,
   ): Promise<void> {
-    type Img = { mediaType: string; data?: string; storageId?: string; toolUseId?: string };
+    type Img = { mediaType: string; data?: string; localPath?: string; storageId?: string; toolUseId?: string };
 
     // Simple counting semaphore so uploads run with bounded concurrency across the
     // whole batch instead of one image at a time.
@@ -428,19 +510,87 @@ export class SyncService {
     // Resolve a single image to its persisted form (or null = drop). Order-preserving
     // because callers map over the original array.
     const resolveImage = async (img: Img): Promise<Img | null> => {
-      if (img.storageId || !img.data) return img;
+      if (img.storageId) return img;
+
+      let candidate = img;
+      let localFile: { path: string; size: number; mtimeMs: number } | undefined;
+      if (img.localPath) {
+        try {
+          const fileStat = await stat(img.localPath);
+          if (!fileStat.isFile()) {
+            console.warn(`[SyncService] Local image is not a file: ${img.localPath}`);
+            return null;
+          }
+          if (fileStat.size > MAX_IMAGE_SIZE) {
+            console.warn(`[SyncService] Local image too large: ${fileStat.size} bytes > ${MAX_IMAGE_SIZE}`);
+            return null;
+          }
+          const cached = this.localImageUploads.get(img.localPath);
+          if (cached && cached.size === fileStat.size && cached.mtimeMs === fileStat.mtimeMs) {
+            return {
+              mediaType: cached.mediaType,
+              storageId: cached.storageId,
+              toolUseId: img.toolUseId,
+            };
+          }
+          const bytes = await readFile(img.localPath);
+          const detectedMediaType = detectImageMediaType(bytes);
+          if (!detectedMediaType) {
+            console.warn(`[SyncService] Local image has an unsupported or invalid payload: ${img.localPath}`);
+            return null;
+          }
+          candidate = {
+            mediaType: detectedMediaType,
+            data: bytes.toString("base64"),
+            toolUseId: img.toolUseId,
+          };
+          localFile = {
+            path: img.localPath,
+            size: fileStat.size,
+            mtimeMs: fileStat.mtimeMs,
+          };
+        } catch (err) {
+          console.warn(`[SyncService] Failed to read local image ${img.localPath}: ${err instanceof Error ? err.message : String(err)}`);
+          return null;
+        }
+      }
+
+      if (!candidate.data) return null;
       await acquire();
       let storageId: string | null;
       try {
-        storageId = await this.uploadImage(img.data, img.mediaType);
+        storageId = await this.uploadImage(candidate.data, candidate.mediaType);
       } finally {
         release();
       }
       if (storageId) {
-        return { mediaType: img.mediaType, storageId, toolUseId: img.toolUseId };
+        if (localFile) {
+          this.localImageUploads.set(localFile.path, {
+            size: localFile.size,
+            mtimeMs: localFile.mtimeMs,
+            mediaType: candidate.mediaType,
+            storageId,
+          });
+        }
+        return {
+          mediaType: candidate.mediaType,
+          storageId,
+          toolUseId: candidate.toolUseId,
+        };
       }
-      const dataBytes = Buffer.from(img.data, "base64").length;
-      if (dataBytes <= MAX_INLINE_IMAGE_SIZE) return img;
+      const decoded = decodeImageBase64(candidate.data);
+      if (!decoded) {
+        console.warn("[SyncService] Image dropped at offload: invalid image payload");
+        return null;
+      }
+      const dataBytes = decoded.data.length;
+      if (dataBytes <= MAX_INLINE_IMAGE_SIZE) {
+        return {
+          mediaType: decoded.mediaType,
+          data: candidate.data,
+          toolUseId: candidate.toolUseId,
+        };
+      }
       console.warn(`[SyncService] Image dropped at offload: upload failed and too large for inline (${dataBytes} bytes)`);
       return null;
     };
@@ -462,7 +612,21 @@ export class SyncService {
       console.warn("[SyncService] uploadImage called with no data");
       return null;
     }
+    const decoded = decodeImageBase64(base64Data);
+    if (!decoded) {
+      console.warn("[SyncService] Image upload rejected: unsupported or invalid image payload");
+      return null;
+    }
+    if (!mediaType.startsWith("image/")) {
+      console.warn(`[SyncService] Image upload rejected: invalid media type ${mediaType}`);
+      return null;
+    }
     try {
+      const binaryData = decoded.data;
+      if (binaryData.length > MAX_IMAGE_SIZE) {
+        console.warn(`[SyncService] Image too large: ${binaryData.length} bytes > ${MAX_IMAGE_SIZE}`);
+        return null;
+      }
       const uploadUrl = await withTimeout(
         this.mutate(
           "images:generateUploadUrl" as any,
@@ -471,16 +635,11 @@ export class SyncService {
         this.imageUploadTimeoutMs,
         "images:generateUploadUrl",
       );
-      const binaryData = Buffer.from(base64Data, "base64");
-      if (binaryData.length > MAX_IMAGE_SIZE) {
-        console.warn(`[SyncService] Image too large: ${binaryData.length} bytes > ${MAX_IMAGE_SIZE}`);
-        return null;
-      }
       const response = await withTimeout(
         fetch(uploadUrl, {
           method: "POST",
-          headers: { "Content-Type": mediaType },
-          body: binaryData,
+          headers: { "Content-Type": decoded.mediaType },
+          body: new Uint8Array(binaryData),
         }),
         this.imageUploadTimeoutMs,
         "image upload fetch",
@@ -744,11 +903,15 @@ export class SyncService {
     thinking?: string;
     toolCalls?: Array<{ id: string; name: string; input: Record<string, unknown> }>;
     toolResults?: Array<{ toolUseId: string; content: string; isError?: boolean }>;
-    images?: Array<{ mediaType: string; data: string; toolUseId?: string }>;
+    images?: Array<{ mediaType: string; data?: string; localPath?: string; storageId?: string; toolUseId?: string }>;
     subtype?: string;
     model?: string;
   }): Promise<string> {
     await this.throttle();
+    const imageHolder = [{
+      images: params.images ? params.images.map((image) => ({ ...image })) : undefined,
+    }];
+    await this.offloadImages(imageHolder);
     const redactedContent = truncate(redactSecrets(params.content), MAX_CONTENT_SIZE);
     const redactedThinking = params.thinking
       ? truncate(redactSecrets(params.thinking), MAX_CONTENT_SIZE)
@@ -772,16 +935,21 @@ export class SyncService {
     }));
 
     const images: Array<{ media_type: string; storage_id?: string; data?: string; tool_use_id?: string }> = [];
-    if (params.images && params.images.length > 0) {
-      const imagesToProcess = params.images.slice(0, MAX_IMAGES_PER_MESSAGE);
+    if (imageHolder[0].images && imageHolder[0].images.length > 0) {
+      const imagesToProcess = imageHolder[0].images.slice(0, MAX_IMAGES_PER_MESSAGE);
       for (const img of imagesToProcess) {
+        if (img.storageId) {
+          images.push({ media_type: img.mediaType, storage_id: img.storageId, tool_use_id: img.toolUseId });
+          continue;
+        }
+        if (!img.data) continue;
         const storageId = await this.uploadImage(img.data, img.mediaType);
         if (storageId) {
           images.push({ media_type: img.mediaType, storage_id: storageId, tool_use_id: img.toolUseId });
         } else {
-          const dataBytes = Buffer.from(img.data, "base64").length;
-          if (dataBytes <= MAX_INLINE_IMAGE_SIZE) {
-            images.push({ media_type: img.mediaType, data: img.data, tool_use_id: img.toolUseId });
+          const decoded = decodeImageBase64(img.data);
+          if (decoded && decoded.data.length <= MAX_INLINE_IMAGE_SIZE) {
+            images.push({ media_type: decoded.mediaType, data: img.data, tool_use_id: img.toolUseId });
           }
         }
       }
@@ -824,7 +992,7 @@ export class SyncService {
       thinking?: string;
       toolCalls?: Array<{ id: string; name: string; input: Record<string, unknown> }>;
       toolResults?: Array<{ toolUseId: string; content: string; isError?: boolean }>;
-      images?: Array<{ mediaType: string; data?: string; storageId?: string; toolUseId?: string }>;
+      images?: Array<{ mediaType: string; data?: string; localPath?: string; storageId?: string; toolUseId?: string }>;
       subtype?: string;
       model?: string;
     }>;
@@ -833,6 +1001,7 @@ export class SyncService {
     if (params.messages.length === 0) {
       return { inserted: 0, ids: [] };
     }
+    await this.offloadImages(params.messages);
 
     const roleMap: Record<string, "user" | "assistant" | "system" | "tool"> = {
       human: "user",
@@ -871,11 +1040,16 @@ export class SyncService {
           if (storageId) {
             images.push({ media_type: img.mediaType, storage_id: storageId, tool_use_id: img.toolUseId });
           } else {
-            const dataBytes = Buffer.from(img.data, "base64").length;
-            if (dataBytes <= MAX_INLINE_IMAGE_SIZE) {
-              images.push({ media_type: img.mediaType, data: img.data, tool_use_id: img.toolUseId });
+            const decoded = decodeImageBase64(img.data);
+            const dataBytes = decoded?.data.length;
+            if (decoded && dataBytes !== undefined && dataBytes <= MAX_INLINE_IMAGE_SIZE) {
+              images.push({ media_type: decoded.mediaType, data: img.data, tool_use_id: img.toolUseId });
             } else {
-              console.warn(`[SyncService] Image dropped: upload failed and too large for inline (${dataBytes} bytes)`);
+              console.warn(
+                decoded
+                  ? `[SyncService] Image dropped: upload failed and too large for inline (${dataBytes} bytes)`
+                  : "[SyncService] Image dropped: unsupported or invalid image payload",
+              );
             }
           }
         }

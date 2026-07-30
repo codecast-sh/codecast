@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { approvalResultForMethod, threadItemsToMessages } from "./codexAppServer.js";
+import { approvalResultForMethod, threadItemToMessage, threadItemsToMessages } from "./codexAppServer.js";
 
 describe("approvalResultForMethod", () => {
   test("returns a decision for command execution approvals", () => {
@@ -24,6 +24,37 @@ describe("approvalResultForMethod", () => {
 });
 
 describe("threadItemsToMessages", () => {
+  test("keeps Codex image paths as local files instead of treating paths as base64", () => {
+    const path = "/tmp/screenshot.webp";
+    const single = threadItemToMessage({
+      type: "imageView",
+      id: "image-1",
+      path,
+    } as any);
+    const grouped = threadItemsToMessages([
+      { type: "agentMessage", id: "msg-1", text: "Screenshot:", phase: "commentary" },
+      { type: "imageView", id: "image-1", path },
+    ] as any[]);
+
+    expect(single?.images).toEqual([{ mediaType: "image/webp", localPath: path }]);
+    expect(grouped[0]?.uuid).toBe("msg-1");
+    expect(grouped[0]?.images).toEqual([{ mediaType: "image/webp", localPath: path }]);
+    expect(grouped[0]?.images?.[0].data).toBeUndefined();
+  });
+
+  test("gives image-only groups a stable item uuid across progress rebuilds", () => {
+    const first = threadItemsToMessages([
+      { type: "imageView", id: "image-1", path: "/tmp/one.png" },
+    ] as any[]);
+    const rebuilt = threadItemsToMessages([
+      { type: "imageView", id: "image-1", path: "/tmp/one.png" },
+      { type: "commandExecution", id: "cmd-1", command: "true", cwd: "/tmp", status: "completed" },
+    ] as any[]);
+
+    expect(first[0]?.uuid).toBe("image-1");
+    expect(rebuilt[0]?.uuid).toBe("image-1");
+  });
+
   test("preserves live codex text/tool/text ordering for streamed items", () => {
     const items = [
       { type: "agentMessage", id: "msg-1", text: "Tracing the existing flow.", phase: "commentary" },

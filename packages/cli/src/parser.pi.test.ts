@@ -76,7 +76,7 @@ describe("parsePiSessionFile — thinking, multiple tools, and an image tool res
     expect(withImage).toBeDefined();
     expect(withImage!.images![0].mediaType).toBe("image/png");
     // truncated fixture payload is still a non-empty base64 string
-    expect(withImage!.images![0].data.length).toBeGreaterThan(0);
+    expect(withImage!.images![0].data?.length).toBeGreaterThan(0);
   });
 
   test("collects every tool call across the branch (bash + read)", () => {
