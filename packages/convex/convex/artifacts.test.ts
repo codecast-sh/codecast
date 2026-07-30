@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { newSlug, upsertFromPublish, deleteFromCLI } from "./artifacts";
+import { newSlug, upsertFromPublish, deleteFromCLI, brandArtifactHtml } from "./artifacts";
 
 // Minimal hand-rolled ctx in the style of docs.test.ts: enough db surface for
 // the handlers under test, recording writes so assertions can inspect them.
@@ -195,5 +195,36 @@ describe("deleteFromCLI", () => {
     const { ctx } = ctxWithAuth([{ ...existingRow }]);
     const result = await (deleteFromCLI as any)._handler(ctx, { api_token: "t", target: "nope" });
     expect(result.error).toContain("No artifact matches");
+  });
+});
+
+describe("brandArtifactHtml", () => {
+  const opts = { title: "Q3 <Report>", author: "Ashot", updatedAt: 1700000000000, shareUrl: "https://codecast.sh/a/x1" };
+
+  test("injects the bar after <body> and og meta after <head>", () => {
+    const out = brandArtifactHtml("<html><head><title>T</title></head><body class=\"x\"><h1>hi</h1></body></html>", opts);
+    expect(out.indexOf("og:title")).toBeGreaterThan(out.indexOf("<head>"));
+    expect(out.indexOf("og:title")).toBeLessThan(out.indexOf("<title>"));
+    expect(out.indexOf("__cc_bar")).toBeGreaterThan(out.indexOf("<body"));
+    expect(out.indexOf('id="__cc_bar"')).toBeLessThan(out.indexOf("<h1>"));
+    expect(out).toContain("<title>T</title>");
+  });
+
+  test("escapes the title everywhere it appears", () => {
+    const out = brandArtifactHtml("<body></body>", opts);
+    expect(out).toContain("Q3 &lt;Report&gt;");
+    expect(out).not.toContain("Q3 <Report>");
+  });
+
+  test("prepends the bar when there is no body tag", () => {
+    const out = brandArtifactHtml("<div>fragment</div>", opts);
+    expect(out.startsWith("\n<style id=\"__cc_style\">")).toBe(true);
+    expect(out).toContain("<div>fragment</div>");
+    expect(out).not.toContain("og:title");
+  });
+
+  test("carries the share url into the copy button", () => {
+    const out = brandArtifactHtml("<body></body>", opts);
+    expect(out).toContain('data-url="https://codecast.sh/a/x1"');
   });
 });
