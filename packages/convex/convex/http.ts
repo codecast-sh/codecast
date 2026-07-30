@@ -858,6 +858,61 @@ http.route({
   }),
 });
 
+// Record the stable-context feed a session was started with (posted by
+// `cast stable-context` / the daemon's Codex launch). Body: { api_token,
+// conversation_id? | session_id?, data: StableContextData JSON }.
+http.route({
+  path: "/cli/stable-context",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+    };
+    try {
+      const body = await request.json();
+      const { api_token, conversation_id, session_id, data } = body;
+      if (!api_token || typeof data !== "string") {
+        return new Response(JSON.stringify({ error: "Missing api_token or data" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json", ...corsHeaders },
+        });
+      }
+      const result = await ctx.runMutation(api.conversations.recordStableContext, {
+        api_token,
+        conversation_id,
+        session_id,
+        data,
+      });
+      return new Response(JSON.stringify(result), {
+        status: 200,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    } catch (error) {
+      return new Response(JSON.stringify({ error: error instanceof Error ? error.message : "Internal error" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    }
+  }),
+});
+
+http.route({
+  path: "/cli/stable-context",
+  method: "OPTIONS",
+  handler: httpAction(async () => {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+      },
+    });
+  }),
+});
+
 http.route({
   path: "/cli/inbox",
   method: "POST",
@@ -3587,5 +3642,114 @@ cliRoute("/cli/accounts/switch", async (ctx, body) => ctx.runMutation(api.accoun
 cliRoute("/cli/accounts/continue-blocked", async (ctx, body) => ctx.runMutation(api.accountSwitch.continueAllBlocked, body));
 cliRoute("/cli/accounts/save", async (ctx, body) => ctx.runMutation(api.accountSwitch.saveAccountProfile, body));
 cliRoute("/cli/accounts/publish", async (ctx, body) => ctx.runMutation(api.accountSwitch.publishDeviceAccounts, body));
+
+// --- Published HTML artifacts (cast publish → codecast.sh/a/<slug>) ---
+// Publish can't ride cliRoute's mutation passthrough: storing the HTML blob
+// needs ctx.storage.store, which only exists in actions. Verify the token
+// FIRST so an unauthorized call never strands a storage object.
+http.route({
+  path: "/cli/artifacts/publish",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+    };
+    const json = (body: unknown, status = 200) =>
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { "Content-Type": "application/json", ...corsHeaders },
+      });
+    try {
+      const body = await request.json();
+      const { api_token, content, title, source_path, force_new } = body;
+      if (!api_token || typeof content !== "string" || !title) {
+        return json({ error: "Missing api_token, content, or title" }, 400);
+      }
+      const size = new TextEncoder().encode(content).byteLength;
+      if (size > 8 * 1024 * 1024) {
+        return json({ error: `Artifact is ${(size / 1024 / 1024).toFixed(1)}MB — the limit is 8MB. Inline fewer assets or split the page.` }, 413);
+      }
+      const who = await ctx.runQuery(internal.artifacts.verify, { api_token });
+      if (!who) return json({ error: "Unauthorized" }, 401);
+
+      const storageId = await ctx.storage.store(
+        new Blob([content], { type: "text/html; charset=utf-8" }),
+      );
+      const result = await ctx.runMutation(internal.artifacts.upsertFromPublish, {
+        user_id: who.user_id,
+        storage_id: storageId,
+        title,
+        size,
+        source_path: source_path || undefined,
+        force_new: !!force_new,
+      });
+      return json(result);
+    } catch (error) {
+      return json({ error: error instanceof Error ? error.message : "Internal error" }, 500);
+    }
+  }),
+});
+http.route({
+  path: "/cli/artifacts/publish",
+  method: "OPTIONS",
+  handler: httpAction(async () => {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+      },
+    });
+  }),
+});
+
+cliRoute("/cli/artifacts/list", async (ctx, body) => ctx.runQuery(api.artifacts.listFromCLI, body));
+cliRoute("/cli/artifacts/delete", async (ctx, body) => ctx.runMutation(api.artifacts.deleteFromCLI, body));
+
+// Raw artifact HTML. Lives under /cli/ because the Caddy proxy in front of the
+// self-hosted backend forwards only that prefix (plus auth/webhooks) to the
+// HTTP-action upstream — a new top-level path would need a proxy redeploy.
+// The wrapper page at codecast.sh/a/<slug> iframes this URL.
+//
+// CSP `sandbox` makes the document an opaque origin even when opened directly:
+// scripts run, but the page can never touch convex.codecast.sh state.
+http.route({
+  pathPrefix: "/cli/a/",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const slug = new URL(request.url).pathname.replace(/^\/cli\/a\//, "").replace(/\/+$/, "");
+    const artifact = slug ? await ctx.runQuery(internal.artifacts.bySlug, { slug }) : null;
+    if (!artifact) {
+      return new Response("Artifact not found", {
+        status: 404,
+        headers: { "Content-Type": "text/plain; charset=utf-8" },
+      });
+    }
+    const blob = await ctx.storage.get(artifact.storage_id);
+    if (!blob) {
+      return new Response("Artifact content missing", {
+        status: 404,
+        headers: { "Content-Type": "text/plain; charset=utf-8" },
+      });
+    }
+    return new Response(blob, {
+      status: 200,
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+        "Content-Security-Policy":
+          "sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads allow-pointer-lock",
+        "X-Robots-Tag": "noindex",
+        // Re-publishes swap the blob behind a stable slug, so viewers must
+        // revalidate — but a shared link being clicked around a team benefits
+        // from a short shared cache.
+        "Cache-Control": "public, max-age=60",
+        "Access-Control-Allow-Origin": "*",
+      },
+    });
+  }),
+});
 
 export default http;

@@ -322,3 +322,135 @@ describe("visualOrderSessions absorbed projection", () => {
     expect(order.sort()).toEqual(["ni", "resting", "run"]);
   });
 });
+
+// Pseudo rows: harness loops (ScheduleWakeup) and live subagents projected
+// into the same trigger set. See loopTaskRow/subagentTaskRow in triggerTasks.
+describe("loop and subagent pseudo rows", () => {
+  const NOW = Date.now();
+  const loop = (extra: Record<string, unknown> = {}) => ({
+    status: "armed" as const,
+    wakeup_at: NOW + 20 * 60_000,
+    armed_at: NOW - 60_000,
+    event_at: NOW - 60_000,
+    reason: "watching CI run",
+    prompt: "/loop check ci",
+    ...extra,
+  });
+
+  it("an armed loop rows into the trigger set and absorbs its idle home", () => {
+    const p = partitionTriggerInbox(undefined, { home: session("home", { loop_state: loop() }) }, { now: NOW });
+    expect(p.rows).toHaveLength(1);
+    expect(p.rows[0].kind).toBe("loop");
+    expect(p.rows[0].openId).toBe("home");
+    expect(p.rows[0].task.status).toBe("scheduled");
+    expect(p.rows[0].task.run_at).toBe(NOW + 20 * 60_000);
+    expect(p.rows[0].task.title).toBe("watching CI run");
+    expect(p.absorbedIds.has("home")).toBe(true);
+    expect(p.nextRunAt).toBe(NOW + 20 * 60_000);
+  });
+
+  it("a human-engaged home (working, still armed) keeps its triage card", () => {
+    const p = partitionTriggerInbox(
+      undefined,
+      { home: session("home", { loop_state: loop(), is_idle: false, agent_status: "working" }) },
+      { now: NOW },
+    );
+    expect(p.rows).toHaveLength(1);
+    expect(p.absorbedIds.has("home")).toBe(false);
+  });
+
+  it("a waking loop (machine's own turn) stays absorbed and reads running", () => {
+    const p = partitionTriggerInbox(
+      undefined,
+      {
+        home: session("home", {
+          loop_state: loop({ status: "waking", fired_at: NOW - 30_000 }),
+          is_idle: false,
+          agent_status: "working",
+        }),
+      },
+      { now: NOW },
+    );
+    expect(p.rows[0].task.status).toBe("running");
+    expect(p.absorbedIds.has("home")).toBe(true);
+  });
+
+  it("a long-overdue armed wakeup is a dead harness — no row, no absorption", () => {
+    const p = partitionTriggerInbox(
+      undefined,
+      { home: session("home", { loop_state: loop({ wakeup_at: NOW - 20 * 60_000 }) }) },
+      { now: NOW },
+    );
+    expect(p.rows).toHaveLength(0);
+    expect(p.absorbedIds.size).toBe(0);
+  });
+
+  it("dismissing the home retires its loop row; stash keeps it", () => {
+    const dismissed = partitionTriggerInbox(
+      undefined,
+      { home: session("home", { loop_state: loop(), inbox_dismissed_at: NOW }) },
+      { now: NOW },
+    );
+    expect(dismissed.rows).toHaveLength(0);
+    const stashed = partitionTriggerInbox(
+      undefined,
+      { home: session("home", { loop_state: loop(), inbox_stashed_at: NOW }) },
+      { now: NOW },
+    );
+    expect(stashed.rows).toHaveLength(1);
+    // Already out of triage — absorption is moot for a hidden session.
+    expect(stashed.absorbedIds.has("home")).toBe(false);
+  });
+
+  it("the focused home is never absorbed", () => {
+    const p = partitionTriggerInbox(undefined, { home: session("home", { loop_state: loop() }) }, { now: NOW, focusedId: "home" });
+    expect(p.rows).toHaveLength(1);
+    expect(p.absorbedIds.has("home")).toBe(false);
+  });
+
+  it("a live subagent rows in as running; an idle one does not", () => {
+    const p = partitionTriggerInbox(
+      undefined,
+      {
+        live: session("live", { is_subagent: true, is_idle: false, agent_status: "working", updated_at: NOW }),
+        done: session("done", { is_subagent: true, is_idle: true }),
+      },
+      { now: NOW },
+    );
+    expect(p.rows).toHaveLength(1);
+    expect(p.rows[0].kind).toBe("subagent");
+    expect(p.rows[0].task.status).toBe("running");
+    expect(p.rows[0].openId).toBe("live");
+  });
+
+  it("a subagent sleeping on its own loop is represented once, as the loop", () => {
+    const p = partitionTriggerInbox(
+      undefined,
+      {
+        sub: session("sub", {
+          is_subagent: true,
+          loop_state: loop({ status: "waking", fired_at: NOW - 30_000 }),
+          is_idle: false,
+          agent_status: "working",
+          updated_at: NOW,
+        }),
+      },
+      { now: NOW },
+    );
+    expect(p.rows).toHaveLength(1);
+    expect(p.rows[0].kind).toBe("loop");
+  });
+
+  it("pseudo rows compose with real trigger rows and sort by tier", () => {
+    const p = partitionTriggerInbox(
+      [task("t1", { run_at: NOW + 3_600_000 })],
+      {
+        home: session("home", { loop_state: loop() }),
+        worker: session("worker", { is_subagent: true, is_idle: false, agent_status: "working", updated_at: NOW }),
+      },
+      { now: NOW },
+    );
+    // running subagent first, then soonest fire (the loop at +20m), then t1.
+    expect(p.rows.map((r) => r.kind ?? "trigger")).toEqual(["subagent", "loop", "trigger"]);
+  });
+});

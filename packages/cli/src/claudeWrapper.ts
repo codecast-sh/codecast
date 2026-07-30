@@ -4,6 +4,7 @@ import * as path from "path";
 import * as os from "os";
 import { ConvexHttpClient } from "convex/browser";
 import { hasTmux, tmuxExecSync } from "./tmux.js";
+import { clientAcceptsBracketedPaste, pasteTextIntoPane } from "./tmuxPaste.js";
 import { decryptToken, isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
 import type { Config } from "./config/types.js";
 
@@ -211,7 +212,7 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
                 }
                 if (poll.text) {
                   await sleep(300);
-                  tmuxExecSync(["send-keys", "-t", tmuxSessionName!, "-l", poll.text]);
+                  await pasteIntoPane(tmuxSessionName!, poll.text);
                   await sleep(150);
                   tmuxExecSync(["send-keys", "-t", tmuxSessionName!, "Enter"]);
                 }
@@ -222,10 +223,14 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
                 await sleep(100);
                 tmuxExecSync(["send-keys", "-t", tmuxSessionName!, "C-u"]);
                 await sleep(100);
-                tmuxExecSync(["send-keys", "-t", tmuxSessionName!, msg.content]);
+                // Paste rather than send-keys the message: send-keys reads its
+                // argument as key names (so text could be interpreted, not typed)
+                // and turns newlines into Enter, which submitted a multi-line
+                // message one line at a time.
+                await pasteIntoPane(tmuxSessionName!, msg.content);
                 await sleep(150);
                 tmuxExecSync(["send-keys", "-t", tmuxSessionName!, "Enter"]);
-                log(`Injected via tmux send-keys to session ${tmuxSessionName}`);
+                log(`Injected via tmux paste to session ${tmuxSessionName}`);
               }
 
               await client.mutation("managedSessions:markMessageDelivered" as any, {
@@ -360,7 +365,7 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
           }
           if (poll.text) {
             await sleep(300);
-            tmuxExecSync(["send-keys", "-t", tmuxPane, "-l", poll.text]);
+            await pasteIntoPane(tmuxPane, poll.text);
             await sleep(150);
             tmuxExecSync(["send-keys", "-t", tmuxPane, "Enter"]);
           }
@@ -371,7 +376,8 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
           await sleep(100);
           tmuxExecSync(["send-keys", "-t", tmuxPane, "C-u"]);
           await sleep(100);
-          tmuxExecSync(["send-keys", "-t", tmuxPane, content]);
+          // Paste, not send-keys — see the note in the polling loop above.
+          await pasteIntoPane(tmuxPane, content);
           await sleep(150);
           tmuxExecSync(["send-keys", "-t", tmuxPane, "Enter"]);
           log(`Injected via tmux send-keys to pane ${tmuxPane}`);

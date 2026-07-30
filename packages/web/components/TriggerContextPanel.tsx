@@ -20,7 +20,8 @@ import {
 } from "lucide-react";
 import { describeTaskCadence, fmtClock, fmtDuration, taskStateLabel } from "./triggerCadence";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
-import { ARMED_STATUSES, taskDisplayTitle, type TaskRow } from "./triggerTasks";
+import { ARMED_STATUSES, isLoopFresh, loopTaskRow, taskDisplayTitle, type TaskRow } from "./triggerTasks";
+import type { InboxSession } from "../store/inboxStore";
 import { TriggerRunRail, useTriggerRuns } from "./TriggerRunHistory";
 import { useInboxStore } from "../store/inboxStore";
 import { useCoarseNow } from "../hooks/useCoarseNow";
@@ -135,8 +136,26 @@ export function TriggerContextPanel({
 
   // The switcher override wins while its schedule still matches; a stale
   // selection (schedule finished/cancelled out of `matched`) falls back.
-  const primary =
+  const taskPrimary =
     (selectedId && matched.find((t) => t._id === selectedId)) || autoPrimary;
+
+  // Coarse countdown clock — the shared 30s clock the ScheduleBadge cards ride
+  // (one timer total, however many subscribers). Data churn re-renders are
+  // separate (Convex subscription).
+  const now = useCoarseNow(30_000);
+
+  // Harness /loop on this session (server-folded loop_state; see loopState.ts).
+  // With no agent_tasks match, the loop IS the strip: same anatomy via the
+  // pseudo TaskRow, minus the verbs — you can't pause a harness loop from here.
+  // Narrow selectors (never the whole row) so heartbeat churn can't re-render.
+  const loopState = useInboxStore((st) => st.sessions[conversationId]?.loop_state ?? null);
+  const sessionTitle = useInboxStore((st) => st.sessions[conversationId]?.title);
+  const loopRow =
+    !taskPrimary && loopState && isLoopFresh(loopState, now)
+      ? loopTaskRow({ _id: conversationId, title: sessionTitle } as InboxSession, loopState)
+      : null;
+  const primary = taskPrimary ?? loopRow ?? undefined;
+  const isLoop = !!loopRow && primary === loopRow;
 
   // All per-schedule transient state dies when the displayed schedule changes
   // — however it changes (switcher click OR reactive re-pick). Without this an
@@ -150,17 +169,13 @@ export function TriggerContextPanel({
     setSummarizing(false);
   }, [primaryId]);
 
-  // Coarse countdown clock — the shared 30s clock the ScheduleBadge cards ride
-  // (one timer total, however many subscribers). Data churn re-renders are
-  // separate (Convex subscription).
-  const now = useCoarseNow(30_000);
-
   // Every run of this schedule, newest first — spawned runs (server-joined on
   // the sparse by_agent_task index, so folded/aged-out runs the inbox no longer
   // syncs stay browseable) AND injected runs (the <scheduled-task> turns in the
   // home conversation). Each carries the message that triggered it, so a chip
-  // click lands the user on the exact trigger.
-  const runs = useTriggerRuns(primary?._id ?? null);
+  // click lands the user on the exact trigger. Loops have no run rows — the
+  // pseudo id must never reach the query.
+  const runs = useTriggerRuns(taskPrimary?._id ?? null);
 
   if (!primary) return null;
 
@@ -168,7 +183,7 @@ export function TriggerContextPanel({
     (agentTaskId === primary._id ||
       primary.last_run_conversation_id === conversationId ||
       (!!sessionId && primary.last_run_session_uuid === sessionId));
-  const cadence = describeTaskCadence(primary);
+  const cadence = isLoop ? "self-paced loop" : describeTaskCadence(primary);
   const msUntil = primary.run_at !== undefined ? primary.run_at - now : undefined;
   const extraCount = matched.length - 1;
 
@@ -258,6 +273,13 @@ export function TriggerContextPanel({
             run
           </span>
         )}
+        {isLoop && (
+          <ShortcutTooltip label="The agent paces itself with scheduled wakeups (ScheduleWakeup)">
+            <span className="px-1 py-0 rounded bg-sol-orange/10 border border-sol-orange/30 text-sol-orange text-[9px] font-semibold flex-shrink-0">
+              loop
+            </span>
+          </ShortcutTooltip>
+        )}
         <div className="flex items-center gap-1.5 ml-auto flex-shrink-0">
           {rightStatus}
           {expanded ? (
@@ -328,7 +350,7 @@ export function TriggerContextPanel({
                 {promptCopied ? "Copied" : "Copy"}
               </button>
             )}
-            {!primary.display_summary?.trim() && (
+            {!primary.display_summary?.trim() && !isLoop && (
               <ShortcutTooltip label="Distill the prompt above into a short plain-words briefing">
                 <button
                   disabled={summarizing}
@@ -395,7 +417,7 @@ export function TriggerContextPanel({
               <div className="flex items-center gap-1.5 text-[10px]">
                 <outcome.Icon className={`w-3 h-3 flex-shrink-0 ${outcome.tone}`} />
                 <span className="font-semibold uppercase tracking-wider text-sol-text-dim/70">
-                  Last run
+                  {isLoop ? "Last wakeup" : "Last run"}
                 </span>
                 {primary.last_run_at && (
                   <ShortcutTooltip label={new Date(primary.last_run_at).toLocaleString()}>
@@ -452,7 +474,7 @@ export function TriggerContextPanel({
           )}
 
           <div className="flex items-center gap-1.5 pt-0.5 flex-wrap">
-            {ARMED_STATUSES.has(primary.status) && (
+            {!isLoop && ARMED_STATUSES.has(primary.status) && (
               <>
                 <ShortcutTooltip label="Queue a run immediately — doesn't shift the regular cadence">
                   <button
@@ -567,7 +589,13 @@ export function TriggerContextPanel({
               the UI says so at the moment of choice. */}
           {ARMED_STATUSES.has(primary.status) && (
             <p className="text-[10px] leading-relaxed text-sol-text-dim/80 border-t border-sol-border/20 pt-1.5">
-              {primary.originating_conversation_id === conversationId ? (
+              {isLoop ? (
+                <>
+                  The agent set its own wakeup and controls this loop from inside the session — message it to steer or stop it.{" "}
+                  <span className="text-sol-text-dim font-medium">Stash</span> keeps it looping quietly out of your queue;{" "}
+                  <span className="text-sol-text-dim font-medium">dismiss/kill</span> tears the session — and its loop — down.
+                </>
+              ) : primary.originating_conversation_id === conversationId ? (
                 <>
                   <span className="text-sol-text-dim font-medium">Stash</span> keeps this session running quietly — the trigger still fires here, out of your queue.{" "}
                   <span className="text-sol-text-dim font-medium">Dismiss/kill</span> retires the session and cancels this schedule.
