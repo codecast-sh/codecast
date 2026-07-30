@@ -434,6 +434,19 @@ export const LOCAL_FIRST_WRITE_ACTIONS = new Set([
   "sendMessage",
 ]);
 
+// Actions promoted to receipt envelopes BY the final-mode release. With the
+// write master off they demote to their pre-release fire-and-forget action()
+// semantics, so the rollback posture is exactly the last shipped prod build.
+// The other receipt actions (comments, createBucket, create*) shipped
+// envelope-backed long before final mode and keep their envelopes in BOTH
+// postures — regressing them on rollback would drop the receipt-rejection
+// reconciliation that is already load-bearing in production.
+export const FLAG_PROMOTED_RECEIPT_ACTIONS = new Set([
+  "updateBucket",
+  "assignSessionToBucket",
+  "sendMessage",
+]);
+
 export const CURRENT_OUTBOX_OPERATION_SCHEMA_VERSION = 1;
 
 export class UnsupportedOutboxOperationSchemaError extends Error {
@@ -1002,7 +1015,11 @@ export function mutativeMiddleware(config: any, opts?: {
             ? callerStableMessageId
             : newOutboxId();
           const usesReceiptEnvelope = isReceiptAsyncAct &&
-            (!LOCAL_FIRST_WRITE_ACTIONS.has(key) || finalWrite);
+            (!FLAG_PROMOTED_RECEIPT_ACTIONS.has(key) || finalWrite);
+          // A demoted promotion behaves exactly like its pre-release action():
+          // fire-and-forget, no caller-facing promise, park-and-drain delivery.
+          const demotedToLegacyAction = isReceiptAsyncAct && !usesReceiptEnvelope;
+          const returnsPromise = isAsyncAct && !demotedToLegacyAction;
           const dispatchResult: unknown = usesReceiptEnvelope
             ? {
                 receiptActionVersion: 1,
@@ -1151,7 +1168,7 @@ export function mutativeMiddleware(config: any, opts?: {
               if (isPermanentDispatchError(e)) await capturedRemove?.(outboxId);
               throw e;
             });
-            if (isAsyncAct) return promise;
+            if (returnsPromise) return promise;
             promise.catch(() => {});
           } else {
             // No live binding (boot, HMR rewire, account-switch window): the
@@ -1165,7 +1182,9 @@ export function mutativeMiddleware(config: any, opts?: {
             // error handler that way and a fork could vanish with no toast and
             // no discard (ct-40175). Reject honestly instead: the caller's
             // catch runs now; a parked entry still delivers via drainOutbox.
-            if (isAsyncAct) {
+            // A demoted promotion is not an asyncAction to its callers: it
+            // parks fire-and-forget below, exactly like the action() it was.
+            if (returnsPromise) {
               if (usesReceiptEnvelope && receiptWaiter && enqueued) {
                 void enqueued.then(
                   () => {
