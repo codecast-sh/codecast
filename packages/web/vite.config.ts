@@ -16,8 +16,8 @@ export default defineConfig({
         server.middlewares.use((req, res, next) => {
           const m = req.url?.match(/^\/a\/([A-Za-z0-9]{6,32})(?:[/?#]|$)/);
           if (!m) return next();
-          const origin = process.env.VITE_CONVEX_URL || "https://convex.codecast.sh";
-          res.writeHead(302, { Location: `${origin}/cli/a/${m[1]}` });
+          const edge = process.env.ARTIFACT_EDGE_URL || "https://a.codecast.sh";
+          res.writeHead(302, { Location: `${edge}/${m[1]}` });
           res.end();
         });
       },

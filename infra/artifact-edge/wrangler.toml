@@ -1,0 +1,18 @@
+# Edge cache for published HTML artifacts (cast publish).
+#
+# a.codecast.sh/<slug> serves the branded artifact document from Cloudflare's
+# edge, fetching https://convex.codecast.sh/cli/a/<slug> on miss and caching it
+# per-PoP for 60s. This is the CDN layer: the convex origin stays untouched
+# (still DNS-only to Railway), so no existing API/websocket traffic is affected.
+#
+# Deploy: npx wrangler deploy   (from this directory; needs the codecast.sh
+# zone in the same Cloudflare account — the custom domain below auto-creates
+# its DNS record and cert on first deploy.)
+name = "codecast-artifact-edge"
+main = "worker.js"
+compatibility_date = "2026-07-01"
+workers_dev = false
+
+routes = [
+  { pattern = "a.codecast.sh", custom_domain = true },
+]
