@@ -25,6 +25,7 @@ import { TriggerContextPanel } from "../../components/TriggerContextPanel";
 import { toast } from "sonner";
 import { animatedHideSession } from "../../store/undoActions";
 import { cleanUserMessage } from "../../components/GlobalSessionPanel";
+import { isParkedDispatchError } from "../../store/mutativeMiddleware";
 
 const InboxConversation = memo(function InboxConversation({ sessionId: liveSessionId, isIdle, onSendAndAdvance, onSendAndDismiss, lastUserMessage, sessionError, onBack, targetMessageId, targetTimestamp, highlightQuery, onClearHighlight }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; onSendAndDismiss?: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string; targetTimestamp?: number; highlightQuery?: string; onClearHighlight?: () => void }) {
   // Non-blocking switch: the heavy work of a session switch is mounting the new
@@ -86,7 +87,10 @@ const InboxConversation = memo(function InboxConversation({ sessionId: liveSessi
         try {
           await convCommand(sessionId, "restartSession");
           setResumeState("sent");
-        } catch {
+        } catch (err) {
+          // The outbox owns delivery now. Stay in the pending recovery state;
+          // a later response-dependent redirect cannot be fabricated here.
+          if (isParkedDispatchError(err)) return;
           setResumeState("failed");
         }
       } else {
@@ -100,7 +104,13 @@ const InboxConversation = memo(function InboxConversation({ sessionId: liveSessi
     setResumeState("resuming");
     convCommand(sessionId, "resumeSession")
       .then(() => setResumeState("sent"))
-      .catch(() => setResumeState("failed"));
+      .catch((err) => {
+        if (isParkedDispatchError(err)) {
+          setResumeState("sent");
+          return;
+        }
+        setResumeState("failed");
+      });
   }, [sessionId, convCommand]);
 
   if (!conversation) {

@@ -1,6 +1,7 @@
 import type { PrincipalId } from "./types";
 import {
   ALLOWED_COMMAND_TRANSITIONS,
+  assertSupportedCommandOperationSchema,
   PrincipalStoreFenceError,
   type CommandReceiptRecord,
   type CommandRecord,
@@ -37,6 +38,7 @@ export function transitionCommand(command: CommandRecord, status: CommandStatus)
 export function activeOptimisticOperations(
   commands: readonly CommandRecord[],
 ): OptimisticOperation[] {
+  for (const command of commands) assertSupportedCommandOperationSchema(command);
   return [...commands]
     .filter((command) => command.optimisticActive)
     .sort((a, b) => a.localSequence - b.localSequence)
@@ -93,6 +95,7 @@ export class LocalFirstCommandRuntime {
     publish: (command: CommandRecord, commit: CommitResult) => void = () => {},
   ): Promise<CommandRecord> {
     if (!input.conflictKey.trim()) throw new Error("Durable commands require a conflict key");
+    assertSupportedCommandOperationSchema(input);
     const record = {
       ...input,
       principalId: this.principalId,
@@ -179,7 +182,9 @@ export class LocalFirstCommandRuntime {
     "acknowledged-awaiting-coverage",
     "ambiguous",
   ]): Promise<CommandRecord[]> {
-    return await this.adapter.readCommands(this.fence, statuses);
+    const commands = await this.adapter.readCommands(this.fence, statuses);
+    for (const command of commands) assertSupportedCommandOperationSchema(command);
+    return commands;
   }
 
   /**

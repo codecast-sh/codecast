@@ -43,6 +43,7 @@ import { LabelChipsRow } from "./LabelChipsRow";
 import { TaskStatusBadge } from "./TaskStatusBadge";
 import { useTipActions, checkMilestone } from "../tips";
 import { RESTART_GIVE_UP_AFTER_MS } from "../hooks/useSessionRestart";
+import { isParkedDispatchError } from "../store/mutativeMiddleware";
 
 // Moved to sessionMessage.ts (pure module) so the mobile bundle can share it;
 // re-exported here for existing importers.
@@ -106,7 +107,10 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
         try {
           await convCommand(sessionId, "restartSession");
           setResumeState("sent");
-        } catch {
+        } catch (err) {
+          // A parked restart is still pending. Keep the recovery state and let
+          // the liveness/timeout ladder decide whether it ultimately worked.
+          if (isParkedDispatchError(err)) return;
           setResumeState("failed");
         }
       } else if (!reconstitutionAttemptedRef.current && isConvexId(sessionId)) {
@@ -115,7 +119,8 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
         try {
           await convCommand(sessionId, "repairSession");
           setResumeState("reconstituting");
-        } catch {
+        } catch (err) {
+          if (isParkedDispatchError(err)) return;
           setResumeState("failed");
         }
       } else {
@@ -137,7 +142,13 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
     setResumeState("resuming");
     convCommand(sessionId, "resumeSession")
       .then(() => setResumeState("sent"))
-      .catch(() => setResumeState("failed"));
+      .catch((err) => {
+        if (isParkedDispatchError(err)) {
+          setResumeState("sent");
+          return;
+        }
+        setResumeState("failed");
+      });
   }, [sessionId, convCommand]);
 
   if (!conversation) {
@@ -2289,7 +2300,10 @@ export function SessionListPanel({
       // when its local conversation mapping (or the server row) is gone.
       const sessionId = (store.sessions[id] as any)?.session_id;
       store.convCommand(id, "killSession", { mark_completed: true, session_id: sessionId })
-        .catch((err: unknown) => toast.error(`Kill failed: ${err instanceof Error ? err.message : String(err)}`));
+        .catch((err: unknown) => {
+          if (isParkedDispatchError(err)) return;
+          toast.error(`Kill failed: ${err instanceof Error ? err.message : String(err)}`);
+        });
     }
     // Route the local removal through markKilling (an action that deletes the row
     // inside a draft) rather than a raw setState. The middleware then plants a

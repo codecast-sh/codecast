@@ -317,7 +317,7 @@ describe("DEC-01 — scoped injected-ack", () => {
 // rescue path together.
 // ─────────────────────────────────────────────────────────────────────────────
 describe("DEC-05 — oversized message echo", () => {
-  test("a truncated echo does not content-match, and the scoped ack is the rescue", async () => {
+  test("a truncated echo is scoped-acked and stamped for send/v2 coverage", async () => {
     const fullContent = "x".repeat(500) + " tail that will be cut";
     const truncatedEcho = fullContent.slice(0, 500) + "\n... [truncated 22 chars]";
     const pendingRow = {
@@ -332,11 +332,67 @@ describe("DEC-05 — oversized message echo", () => {
     // …so the scoped bulk ack (daemon-reported paste) must be what delivers it.
     const { db, tables } = createDb({
       conversations: [{ _id: "conv_1", user_id: "user_a" }],
-      pending_messages: [{ ...pendingRow, conversation_id: "conv_1", from_user_id: "user_a", retry_count: 0 }],
+      pending_messages: [{
+        ...pendingRow,
+        conversation_id: "conv_1",
+        from_user_id: "user_a",
+        client_id: "command_big",
+        retry_count: 0,
+      }],
+      messages: [{
+        _id: "message_truncated",
+        conversation_id: "conv_1",
+        role: "user",
+        content: truncatedEcho,
+        timestamp: NOW,
+      }],
     });
-    const acked = await ackInjectedForDaemon({ db } as any, "conv_1" as any, ["pm_big" as any]);
+    const acked = await ackInjectedForDaemon(
+      { db } as any,
+      "conv_1" as any,
+      ["pm_big" as any],
+      [{
+        pendingMessageId: "pm_big" as any,
+        transcriptMessageId: "message_truncated" as any,
+      }],
+    );
     expect(acked).toBe(1);
     expect(tables.pending_messages[0].status).toBe("delivered");
+    expect(tables.messages[0].client_id).toBe("command_big");
+  });
+
+  test("a daemon ack never overwrites a transcript owned by another command", async () => {
+    const { db, tables } = createDb({
+      conversations: [{ _id: "conv_1", user_id: "user_a" }],
+      pending_messages: [{
+        _id: "pm_new",
+        conversation_id: "conv_1",
+        from_user_id: "user_a",
+        client_id: "command_new",
+        content: "same",
+        status: "injected",
+        created_at: NOW,
+        retry_count: 0,
+      }],
+      messages: [{
+        _id: "message_old",
+        conversation_id: "conv_1",
+        role: "user",
+        content: "same",
+        client_id: "command_old",
+        timestamp: NOW,
+      }],
+    });
+    await ackInjectedForDaemon(
+      { db } as any,
+      "conv_1" as any,
+      ["pm_new" as any],
+      [{
+        pendingMessageId: "pm_new" as any,
+        transcriptMessageId: "message_old" as any,
+      }],
+    );
+    expect(tables.messages[0].client_id).toBe("command_old");
   });
 });
 

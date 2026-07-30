@@ -19,9 +19,10 @@ import {
   BUCKETS_VIEW_CONTRACT_ID,
   BUCKETS_VIEW_KEY,
   createBucketForUser,
+  createBucketWithAssignmentsV2ForUser,
   assignConversationToBucketForUser,
 } from "./buckets";
-import { advanceLocalViewRevision } from "./localFirstCommands";
+import { advanceLocalViewRevision, runLocalCommand } from "./localFirstCommands";
 import { isSessionOwner } from "./sessionOwners";
 import { patchCommentWithRevision } from "./commentViewWrites";
 import { canAccessConversation } from "./lib/access";
@@ -77,9 +78,9 @@ const TABLE_CONFIG: Record<string, TableConfig> = {
     ownerField: "user_id",
     immutable: new Set(["_id", "_creationTime", "user_id", "created_at"]),
   },
-  // Comment content edits ride the generic patch path; everything structural is
-  // immutable. Creation, deletion and the agent-reply ask need inserts/forks, so
-  // they live in SIDE_EFFECTS (addComment / deleteComment / askAgentInThread).
+  // Kept for backward compatibility with already-persisted generic edit
+  // outbox rows. Current comment writes use named receipt-backed side effects;
+  // everything structural remains immutable here.
   comments: {
     kind: "collection",
     ownerField: "user_id",
@@ -97,7 +98,14 @@ export const dispatch = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    if (patches && typeof patches === "object") {
+    // In final mode the receipt envelope is the one durable-write rail. Do not
+    // also apply its compatibility patches as an independent server writer;
+    // rollback builds omit the envelope and resume the legacy patch path.
+    if (
+      patches &&
+      typeof patches === "object" &&
+      !(hasReceiptCommandId(result) && RECEIPT_OWNS_SERVER_WRITE.has(action))
+    ) {
       await applyPatches(ctx, userId, patches);
     }
 
@@ -110,6 +118,132 @@ export const dispatch = mutation({
 
 type HandlerCtx = { db: any; storage?: any; runMutation?: any };
 type HandlerFn = (ctx: HandlerCtx, userId: Id<"users">, args: any, result?: any) => Promise<any>;
+
+type ReceiptActionEnvelope = {
+  receiptActionVersion: 1;
+  commandId: string;
+  localResult?: unknown;
+};
+
+function receiptCommandId(action: string, result: unknown): string {
+  const envelope = result as Partial<ReceiptActionEnvelope> | null;
+  if (
+    envelope?.receiptActionVersion !== 1 ||
+    typeof envelope.commandId !== "string" ||
+    !envelope.commandId
+  ) {
+    throw new Error(`${action} requires a durable command receipt id`);
+  }
+  return envelope.commandId;
+}
+
+function hasReceiptCommandId(result: unknown): result is ReceiptActionEnvelope {
+  const envelope = result as Partial<ReceiptActionEnvelope> | null;
+  return envelope?.receiptActionVersion === 1 &&
+    typeof envelope.commandId === "string" &&
+    envelope.commandId.length > 0;
+}
+
+const RECEIPT_OWNS_SERVER_WRITE = new Set([
+  "createBucket",
+  "updateBucket",
+  "assignSessionToBucket",
+  "addComment",
+  "editComment",
+  "deleteComment",
+  "askAgentInThread",
+  "sendMessage",
+]);
+
+function receiptLocalResult<T>(result: unknown): T {
+  return (hasReceiptCommandId(result)
+    ? result.localResult
+    : result) as T;
+}
+
+function receiptOrLegacyCommandId(
+  action: string,
+  result: unknown,
+  legacyCommandId: string,
+): string {
+  if (hasReceiptCommandId(result)) return receiptCommandId(action, result);
+  const payload = result as { commandId?: unknown } | null;
+  return typeof payload?.commandId === "string" && payload.commandId
+    ? payload.commandId
+    : legacyCommandId;
+}
+
+type DurableCreateContinuation =
+  | { version: 1; kind: "navigate" }
+  | { version: 1; kind: "assignBucket"; conversationIds: string[] };
+
+function validatedCreateContinuation(
+  action: string,
+  result: unknown,
+): DurableCreateContinuation | null {
+  if (!hasReceiptCommandId(result)) return null;
+  const localResult = result.localResult;
+  if (!localResult || typeof localResult !== "object") return null;
+  const raw = (localResult as { continuation?: unknown }).continuation;
+  if (raw === undefined) return null;
+  if (!raw || typeof raw !== "object") {
+    throw new Error(`Invalid ${action} continuation`);
+  }
+  const continuation = raw as Record<string, unknown>;
+  if (
+    continuation.version === 1 &&
+    continuation.kind === "navigate" &&
+    (action === "createDoc" ||
+      action === "createPlan" ||
+      action === "createProject")
+  ) {
+    return { version: 1, kind: "navigate" };
+  }
+  if (
+    continuation.version === 1 &&
+    continuation.kind === "assignBucket" &&
+    action === "createBucket" &&
+    Array.isArray(continuation.conversationIds) &&
+    continuation.conversationIds.length > 0 &&
+    continuation.conversationIds.length <= 100 &&
+    continuation.conversationIds.every(
+      (id) => typeof id === "string" && id.length > 0,
+    )
+  ) {
+    return {
+      version: 1,
+      kind: "assignBucket",
+      conversationIds: [...new Set(continuation.conversationIds as string[])],
+    };
+  }
+  throw new Error(`Invalid ${action} continuation`);
+}
+
+async function runReceiptBackedCreate(
+  ctx: HandlerCtx,
+  userId: Id<"users">,
+  input: {
+    action: string;
+    commandName: string;
+    arguments: unknown;
+    result: unknown;
+    create: () => Promise<unknown>;
+  },
+) {
+  return await runLocalCommand(ctx as any, {
+    principalId: userId,
+    commandId: receiptCommandId(input.action, input.result),
+    commandName: input.commandName,
+    arguments: input.arguments,
+  }, async () => ({
+    status: "acknowledged",
+    result: await input.create(),
+    // Docs/plans/projects still use their legacy paginated sync surfaces. The
+    // receipt provides exact create dedupe/result recovery; those lists do not
+    // yet expose a revision or command-id coverage contract to name here.
+    coverageViews: [],
+  }));
+}
 
 function deepMergeField(existing: any, incoming: any): any {
   if (
@@ -249,7 +383,145 @@ export async function applyPatches(
   }
 }
 
+async function linkConversationToObject(
+  ctx: HandlerCtx,
+  userId: Id<"users">,
+  objectType: string,
+  objectId: string,
+  conversationId: Id<"conversations">,
+): Promise<void> {
+  const conv = await ctx.db.get(conversationId);
+  if (!conv || conv.user_id.toString() !== userId.toString()) {
+    throw new Error("Unauthorized");
+  }
+
+  if (objectType === "doc") {
+    const doc = await ctx.db.get(objectId as Id<"docs">);
+    if (!doc || doc.user_id.toString() !== userId.toString()) return;
+    const existing = doc.related_conversation_ids || (doc.conversation_id ? [doc.conversation_id] : []);
+    if (!existing.some((id: any) => id.toString() === conversationId.toString())) {
+      await ctx.db.patch(objectId as Id<"docs">, {
+        related_conversation_ids: [...existing, conversationId],
+      });
+    }
+    return;
+  }
+
+  if (objectType === "task") {
+    const task = await ctx.db.get(objectId as Id<"tasks">);
+    if (!task) return;
+    if (task.user_id.toString() !== userId.toString()) {
+      if (!task.team_id) return;
+      const membership = await ctx.db
+        .query("team_memberships")
+        .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", task.team_id))
+        .first();
+      if (!membership) return;
+    }
+    const existing = task.conversation_ids || [];
+    if (!existing.some((id: any) => id.toString() === conversationId.toString())) {
+      await ctx.db.patch(objectId as Id<"tasks">, {
+        conversation_ids: [...existing, conversationId],
+      });
+    }
+    await ctx.db.patch(conversationId, {
+      active_task_id: objectId as Id<"tasks">,
+    });
+    return;
+  }
+
+  if (objectType === "plan") {
+    const plan = await ctx.db.get(objectId as Id<"plans">);
+    if (!plan || plan.user_id.toString() !== userId.toString()) return;
+    const existing = plan.session_ids || [];
+    if (!existing.some((id: any) => id.toString() === conversationId.toString())) {
+      await ctx.db.patch(objectId as Id<"plans">, {
+        session_ids: [...existing, conversationId],
+      });
+    }
+  }
+}
+
 const SIDE_EFFECTS: Record<string, HandlerFn> = {
+  flushResolvedSessionFields: async (
+    ctx,
+    userId,
+    [conversationId, fields]: [string, Record<string, any>],
+  ) => {
+    // Reuse the generic conversation patch gate so ownership, immutable fields,
+    // null tombstones, and secondary-owner rules stay identical to ordinary
+    // local-first patches. The named action exists solely to make the
+    // stub→real flush durable in the legacy outbox.
+    await applyPatches(ctx, userId, {
+      conversations: { [conversationId]: fields || {} },
+    });
+  },
+
+  applyUndoPatches: async (
+    ctx,
+    userId,
+    [patches]: [Record<string, Record<string, Record<string, any>>>],
+  ) => {
+    // Undo values use the same allowlists, ownership checks, immutable-field
+    // filtering, and null-tombstone semantics as ordinary optimistic patches.
+    await applyPatches(ctx, userId, patches || {});
+  },
+
+  updateClientUI: async (ctx, userId, _args, result) => {
+    if (!result || typeof result !== "object" || Array.isArray(result)) return;
+    // `result` is the exact client-stamped partial. Replaying it preserves LWW
+    // time and still lands when the local value was already equal (and thus
+    // action() generated no automatic patch).
+    await applyPatches(ctx, userId, {
+      client_state: { _: { ui: result as Record<string, any> } },
+    });
+  },
+
+  saveView: async (ctx, userId, _args, result) => {
+    if (!Array.isArray(result)) return;
+    await applyPatches(ctx, userId, {
+      client_state: { _: { ui: { saved_views: result } } },
+    });
+  },
+
+  deleteView: async (ctx, userId, _args, result) => {
+    if (!Array.isArray(result)) return;
+    await applyPatches(ctx, userId, {
+      client_state: { _: { ui: { saved_views: result } } },
+    });
+  },
+
+  updateClientLayout: async (
+    ctx,
+    userId,
+    [key, value]: [string, any],
+  ) => {
+    if (typeof key !== "string" || !key) return;
+    await applyPatches(ctx, userId, {
+      client_state: { _: { layouts: { [key]: value } } },
+    });
+  },
+
+  persistClientTips: async (
+    ctx,
+    userId,
+    [partial]: [Record<string, any>],
+  ) => {
+    // `_inlineSuppressed` is deliberately removed by the client wrapper. Build
+    // the singleton patch here so its exact local update can remain one sync()
+    // while this cross-device subset still rides a named durable action.
+    await applyPatches(ctx, userId, {
+      client_state: { _: { tips: partial || {} } },
+    });
+  },
+
+  clearDraftFinal: async (ctx, userId, [conversationId]: [string]) => {
+    if (typeof conversationId !== "string" || !conversationId) return;
+    await applyPatches(ctx, userId, {
+      client_state: { _: { drafts: { [conversationId]: null } } },
+    });
+  },
+
   switchProject: async (ctx, userId, [convId, path]: [string, string]) => {
     const conv = await ctx.db.get(convId as Id<"conversations">);
     if (!conv || conv.user_id !== userId) throw new Error("Not authorized");
@@ -288,7 +560,21 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     // reviving an already-created session shouldn't count against the quota.
     if (opts.session_id) {
       const existing = await findConversationBySessionReference(ctx, sessionId, userId);
-      if (existing) return existing._id;
+      if (existing) {
+        // Older ContextChat created first and linked in a second dispatch. If
+        // that follow-up was lost, an idempotent replay must repair the source
+        // relation instead of returning before it has a chance to converge.
+        if (opts.linked_object?.id) {
+          await linkConversationToObject(
+            ctx,
+            userId,
+            opts.linked_object.type,
+            opts.linked_object.id,
+            existing._id,
+          );
+        }
+        return existing._id;
+      }
     }
     await checkRateLimit(ctx as any, userId, "createConversation");
     const now = Date.now();
@@ -373,13 +659,18 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
 
     await ctx.db.patch(conversationId, { short_id: conversationId.toString().slice(0, 7) });
 
-    if (linkedTask) {
-      const existing = linkedTask.conversation_ids || [];
-      if (!existing.some((id: any) => id.toString() === conversationId.toString())) {
-        await ctx.db.patch(linkedTask._id, {
-          conversation_ids: [...existing, conversationId],
-        });
-      }
+    // Context-launched sessions keep their source relation in the SAME
+    // transaction as creation. A parked asyncAction has no later Promise result
+    // for the client to hang a link continuation from, so post-create linking
+    // would lose doc/plan context across an unwired window.
+    if (opts.linked_object?.id) {
+      await linkConversationToObject(
+        ctx,
+        userId,
+        opts.linked_object.type,
+        opts.linked_object.id,
+        conversationId,
+      );
     }
 
     const daemonType = fromConvexAgentType(agentType);
@@ -409,21 +700,29 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       ...(opts.worktree_name ? { worktreeName: opts.worktree_name } : {}),
       ...(requestedModel ? { model: requestedModel } : {}),
       ...(effortOk ? { effort: opts.effort } : {}),
-      // Stable-context prefs from the new-session page (mode override +
-      // excluded feed cards) — the daemon exports them into the session env
-      // for the SessionStart hook / Codex launch.
-      ...(opts.stable_mode === "team" || opts.stable_mode === "solo" || opts.stable_mode === "off"
-        ? { stableMode: opts.stable_mode }
-        : {}),
-      ...(Array.isArray(opts.stable_exclude) && opts.stable_exclude.length
-        ? { stableExclude: opts.stable_exclude.filter((x) => typeof x === "string" && /^[a-z0-9-]+$/i.test(x)).slice(0, 40) }
-        : {}),
+      ...(opts.stable_mode ? { stableMode: opts.stable_mode } : {}),
+      ...(opts.stable_exclude?.length ? { stableExclude: opts.stable_exclude } : {}),
     });
 
     return conversationId;
   },
 
-  sendMessage: async (ctx, userId, [convId, content, imageIds, clientId]: [string, string, string[] | undefined, string | undefined]) => {
+  sendMessage: async (
+    ctx,
+    userId,
+    [convId, content, imageIds, clientId]: [string, string, string[] | undefined, string | undefined],
+    result,
+  ) => {
+    if (hasReceiptCommandId(result)) {
+      const commandId = receiptCommandId("sendMessage", result);
+      return await ctx.runMutation!(api.pendingMessages.sendMessageV2, {
+        command_id: commandId,
+        client_id: commandId,
+        conversation_id: convId as Id<"conversations">,
+        content,
+        ...(imageIds?.length ? { image_storage_ids: imageIds as Id<"_storage">[] } : {}),
+      });
+    }
     const conversation = await ctx.db.get(convId as Id<"conversations">);
     // Distinct error for a deleted row: the client may be sending into a cached
     // ghost (never-prune cache) and needs to surface "restore session", not a
@@ -534,48 +833,13 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   },
 
   linkConversation: async (ctx, userId, [objectType, objectId, conversationId]: [string, string, string]) => {
-    const conv = await ctx.db.get(conversationId as Id<"conversations">);
-    if (!conv || conv.user_id.toString() !== userId.toString()) throw new Error("Unauthorized");
-
-    if (objectType === "doc") {
-      const doc = await ctx.db.get(objectId as Id<"docs">);
-      if (!doc || doc.user_id.toString() !== userId.toString()) return;
-      const existing = doc.related_conversation_ids || (doc.conversation_id ? [doc.conversation_id] : []);
-      if (!existing.some((id: any) => id.toString() === conversationId)) {
-        await ctx.db.patch(objectId as Id<"docs">, {
-          related_conversation_ids: [...existing, conversationId as Id<"conversations">],
-        });
-      }
-    } else if (objectType === "task") {
-      const task = await ctx.db.get(objectId as Id<"tasks">);
-      if (!task) return;
-      if (task.user_id.toString() !== userId.toString()) {
-        if (!task.team_id) return;
-        const membership = await ctx.db
-          .query("team_memberships")
-          .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", task.team_id))
-          .first();
-        if (!membership) return;
-      }
-      const existing = task.conversation_ids || [];
-      if (!existing.some((id: any) => id.toString() === conversationId)) {
-        await ctx.db.patch(objectId as Id<"tasks">, {
-          conversation_ids: [...existing, conversationId as Id<"conversations">],
-        });
-      }
-      await ctx.db.patch(conversationId as Id<"conversations">, {
-        active_task_id: objectId as Id<"tasks">,
-      });
-    } else if (objectType === "plan") {
-      const plan = await ctx.db.get(objectId as Id<"plans">);
-      if (!plan || plan.user_id.toString() !== userId.toString()) return;
-      const existing = plan.session_ids || [];
-      if (!existing.some((id: any) => id.toString() === conversationId)) {
-        await ctx.db.patch(objectId as Id<"plans">, {
-          session_ids: [...existing, conversationId as Id<"conversations">],
-        });
-      }
-    }
+    await linkConversationToObject(
+      ctx,
+      userId,
+      objectType,
+      objectId,
+      conversationId as Id<"conversations">,
+    );
   },
 
   sendEscape: async (ctx, userId, [convId]: [string]) => {
@@ -831,6 +1095,15 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     await ctx.db.patch(doc._id, { archived_at: Date.now(), updated_at: Date.now() });
   },
 
+  restoreArchivedDoc: async (ctx, userId, [docId]: [string]) => {
+    const doc = await ctx.db.get(docId as Id<"docs">);
+    if (!doc) throw new Error("Doc not found");
+    if (!(await canAccessDoc(ctx, userId, doc))) throw new Error("Unauthorized");
+    // Preserve the undo snapshot's exact metadata: only clear the archive flag;
+    // do not synthesize a new updated_at that would reorder the restored doc.
+    await ctx.db.patch(doc._id, { archived_at: undefined });
+  },
+
   updateDoc: async (ctx, userId, [docId, fields]: [string, { content?: string; title?: string; doc_type?: string; labels?: string[] }]) => {
     const doc = await ctx.db.get(docId as Id<"docs">);
     if (!doc) throw new Error("Doc not found");
@@ -870,20 +1143,83 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     return await (ctx as any).runMutation(api.notifications.markAllAsRead, {});
   },
 
-  // Creates delegate to the existing webCreate mutations (which own short-id
-  // allocation, team resolution, history, etc.) and return their {id,...} so
-  // the awaiting caller can navigate to the new record.
-  createBucket: async (ctx, userId, [opts]: [{ name: string; color?: string }]) => {
-    // Shared with the CLI's `cast label create` — see buckets.createBucketForUser.
-    return await createBucketForUser(ctx as any, userId, opts);
+  // Result-dependent creates carry a client-minted command id in their durable
+  // outbox result. Exact replay returns the stored receipt instead of inserting
+  // a duplicate, and the receipt's canonical id resumes navigation/assignment.
+  createBucket: async (ctx, userId, [opts]: [{ name: string; color?: string }], result) => {
+    // Backward compatibility for an outbox entry persisted by an older client,
+    // before receiptActionVersion existed. New calls always take the V2 path.
+    if (!hasReceiptCommandId(result)) {
+      return await createBucketForUser(ctx as any, userId, opts);
+    }
+    const continuation = validatedCreateContinuation("createBucket", result);
+    if (continuation?.kind === "assignBucket") {
+      return await createBucketWithAssignmentsV2ForUser(
+        ctx as any,
+        userId,
+        {
+          commandId: receiptCommandId("createBucket", result),
+          name: opts.name,
+          color: opts.color,
+          conversationIds: continuation.conversationIds as Id<"conversations">[],
+        },
+      );
+    }
+    return await ctx.runMutation!(api.buckets.webCreateV2, {
+      command_id: receiptCommandId("createBucket", result),
+      name: opts.name,
+      ...(opts.color ? { color: opts.color } : {}),
+    });
   },
 
-  // Teammate comment create/delete/agent-ask delegate to the public comment
-  // mutations (which carry the notification / mention / fork logic). The store
-  // optimistic stub already painted; the real row supersedes it via client_id.
+  updateBucket: async (
+    ctx,
+    _userId,
+    [bucketId, fields]: [
+      string,
+      {
+        name?: string;
+        color?: string;
+        sort_order?: number;
+        archived_at?: number | null;
+      },
+    ],
+    result,
+  ) => {
+    // Rollback mode has already applied the ordinary compatibility patches.
+    if (!hasReceiptCommandId(result)) return;
+    return await ctx.runMutation!(api.buckets.webUpdateV2, {
+      command_id: receiptCommandId("updateBucket", result),
+      bucket_id: bucketId as Id<"inbox_buckets">,
+      ...(fields.name !== undefined ? { name: fields.name } : {}),
+      ...(fields.color !== undefined
+        ? { color: fields.color === null ? null : fields.color }
+        : {}),
+      ...(fields.sort_order !== undefined ? { sort_order: fields.sort_order } : {}),
+      ...(fields.archived_at !== undefined
+        ? { archived: fields.archived_at !== null }
+        : {}),
+    });
+  },
+
+  // Teammate comment writes delegate to receipt-backed public mutations (which
+  // carry notification / mention / fork and complete-view revision logic). The
+  // store has already painted the optimistic state.
   addComment: async (ctx, _userId, _args, result) => {
-    const r = result as { conversationId: string; content: string; messageId?: string; parentCommentId?: string; clientId: string };
-    return ctx.runMutation!(api.comments.addComment, {
+    const r = receiptLocalResult<{
+      conversationId: string;
+      content: string;
+      messageId?: string;
+      parentCommentId?: string;
+      clientId: string;
+      commandId?: string;
+    }>(result);
+    return ctx.runMutation!(api.comments.addCommentV2, {
+      command_id: receiptOrLegacyCommandId(
+        "addComment",
+        result,
+        `legacy-comments-create:${r.clientId}`,
+      ),
       conversation_id: r.conversationId as Id<"conversations">,
       content: r.content,
       message_id: r.messageId ? (r.messageId as Id<"messages">) : undefined,
@@ -891,15 +1227,89 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       client_id: r.clientId,
     });
   },
+  editComment: async (ctx, _userId, args, result) => {
+    // Backward compatibility for a generic editComment entry persisted before
+    // this action became receipt-aware. It has no rollback snapshot or
+    // conversation/client identity, so use the original authoritative mutation.
+    if (!hasReceiptCommandId(result)) {
+      const [commentId, content] = args as [string, string];
+      if (!commentId || commentId.startsWith("commentstub")) return;
+      return ctx.runMutation!(api.comments.updateComment, {
+        comment_id: commentId as Id<"comments">,
+        content,
+      });
+    }
+    const r = receiptLocalResult<{
+      commentId?: string;
+      conversationId?: string;
+      clientId?: string;
+      content: string;
+      previousContent: string;
+      commandId?: string;
+    }>(result);
+    if (!r?.conversationId || (!r.commentId && !r.clientId)) {
+      return {
+        receiptVersion: 1,
+        commandId: receiptCommandId("editComment", result),
+        commandName: "comments.update/v2",
+        status: "rejected",
+        rejection: {
+          code: "MISSING_LOCAL_CONTEXT",
+          message: "The comment is no longer available to edit",
+        },
+        coverage: [],
+        retryUntil: null,
+      };
+    }
+    return ctx.runMutation!(api.comments.updateCommentV2, {
+      command_id: receiptCommandId("editComment", result),
+      conversation_id: r.conversationId as Id<"conversations">,
+      ...(r.commentId ? { comment_id: r.commentId as Id<"comments"> } : {}),
+      ...(r.clientId ? { client_id: r.clientId } : {}),
+      content: r.content,
+    });
+  },
   deleteComment: async (ctx, _userId, _args, result) => {
-    const r = result as { commentId: string };
-    // A stub id (optimistic create not yet landed) has nothing to delete server-side.
+    const r = receiptLocalResult<{
+      commentId?: string;
+      conversationId?: string;
+      clientId?: string;
+      commandId?: string;
+    }>(result);
+    // New optimistic deletes retain the conversation/client identity, allowing
+    // an add→delete pair parked in one outbox to delete the real row after the
+    // idempotent add lands. Legacy cached rows without that context still use
+    // the original id-based mutation.
+    if (r.conversationId && (r.commentId || r.clientId)) {
+      return ctx.runMutation!(api.comments.deleteCommentV2, {
+        command_id: receiptOrLegacyCommandId(
+          "deleteComment",
+          result,
+          `legacy-comments-delete:${r.clientId || r.commentId}`,
+        ),
+        conversation_id: r.conversationId as Id<"conversations">,
+        ...(r.commentId ? { comment_id: r.commentId as Id<"comments"> } : {}),
+        ...(r.clientId ? { client_id: r.clientId } : {}),
+      });
+    }
     if (!r.commentId || r.commentId.startsWith("commentstub")) return;
-    return ctx.runMutation!(api.comments.deleteComment, { comment_id: r.commentId as Id<"comments"> });
+    return ctx.runMutation!(api.comments.deleteComment, {
+      comment_id: r.commentId as Id<"comments">,
+    });
   },
   askAgentInThread: async (ctx, _userId, _args, result) => {
-    const r = result as { conversationId: string; messageId?: string; clientId: string };
-    return ctx.runMutation!(api.comments.askAgentInThread, {
+    const r = receiptLocalResult<{
+      conversationId: string;
+      messageId?: string;
+      clientId: string;
+      commandId?: string;
+    }>(result);
+    return ctx.runMutation!(api.comments.askAgentInThreadV2, {
+      command_id: receiptOrLegacyCommandId(
+        "askAgentInThread",
+        result,
+        `legacy-comments-ask:${r.clientId}`,
+      ),
       conversation_id: r.conversationId as Id<"conversations">,
       message_id: r.messageId ? (r.messageId as Id<"messages">) : undefined,
       client_id: r.clientId,
@@ -910,7 +1320,19 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // bucketId null = unassign (tombstone row, never deleted — delta sync).
   // Returns the gate it stopped at (or "ok") so a silent no-op is debuggable
   // from the client (`await store.assignSessionToBucket(...)`).
-  assignSessionToBucket: async (ctx, userId, [convId, bucketId]: [string, string | null]) => {
+  assignSessionToBucket: async (
+    ctx,
+    userId,
+    [convId, bucketId]: [string, string | null],
+    result,
+  ) => {
+    if (hasReceiptCommandId(result)) {
+      return await ctx.runMutation!(api.buckets.webAssignV2, {
+        command_id: receiptCommandId("assignSessionToBucket", result),
+        conversation_id: convId as Id<"conversations">,
+        ...(bucketId ? { bucket_id: bucketId as Id<"inbox_buckets"> } : {}),
+      });
+    }
     let conv: any = null;
     let convErr: string | null = null;
     try {
@@ -934,14 +1356,44 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     return { gate: "ok" };
   },
 
-  createDoc: async (ctx, userId, [opts]: [any]) => {
-    return await (ctx as any).runMutation(api.docs.webCreate, opts);
+  createDoc: async (ctx, userId, [opts]: [any], result) => {
+    if (!hasReceiptCommandId(result)) {
+      return await ctx.runMutation!(api.docs.webCreate, opts);
+    }
+    validatedCreateContinuation("createDoc", result);
+    return await runReceiptBackedCreate(ctx, userId, {
+      action: "createDoc",
+      commandName: "docs.create/v2",
+      arguments: opts,
+      result,
+      create: () => ctx.runMutation!(api.docs.webCreate, opts),
+    });
   },
-  createPlan: async (ctx, userId, [opts]: [any]) => {
-    return await (ctx as any).runMutation(api.plans.webCreate, opts);
+  createPlan: async (ctx, userId, [opts]: [any], result) => {
+    if (!hasReceiptCommandId(result)) {
+      return await ctx.runMutation!(api.plans.webCreate, opts);
+    }
+    validatedCreateContinuation("createPlan", result);
+    return await runReceiptBackedCreate(ctx, userId, {
+      action: "createPlan",
+      commandName: "plans.create/v2",
+      arguments: opts,
+      result,
+      create: () => ctx.runMutation!(api.plans.webCreate, opts),
+    });
   },
-  createProject: async (ctx, userId, [opts]: [any]) => {
-    return await (ctx as any).runMutation(api.projects.webCreate, opts);
+  createProject: async (ctx, userId, [opts]: [any], result) => {
+    if (!hasReceiptCommandId(result)) {
+      return await ctx.runMutation!(api.projects.webCreate, opts);
+    }
+    validatedCreateContinuation("createProject", result);
+    return await runReceiptBackedCreate(ctx, userId, {
+      action: "createProject",
+      commandName: "projects.create/v2",
+      arguments: opts,
+      result,
+      create: () => ctx.runMutation!(api.projects.webCreate, opts),
+    });
   },
   promoteDocToPlan: async (ctx, userId, [docId]: [string]) => {
     return await (ctx as any).runMutation(api.docs.webPromoteToPlan, { doc_id: docId });

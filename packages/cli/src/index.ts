@@ -35,10 +35,10 @@ import { AuthServer } from "./authServer.js";
 import { startRelayPoller } from "./authRelay.js";
 import { c, fmt, icons } from "./colors.js";
 import { ensureTmux, tryInstallTmux, tmuxRun } from "./tmux.js";
-import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure } from "./update.js";
+import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure } from "./update.js";
 import { type SnippetTarget, getSnippetTargets, MESSAGING_SNIPPET_END, installMessagingSnippet, ensureMessagingForMemory } from "./snippets.js";
-import { PUBLISH_MAX_BYTES, isHtmlPath, resolveArtifactTitle, formatBytes } from "./publishCommand.js";
-import { installStableHook, removeStableHook } from "./stableContext.js";
+import { installStableHook, removeStableHook, runStableContextHook } from "./stableContext.js";
+import { prepareSessionSendBody } from "./sendBody.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
 import { glob } from "glob";
 import { getPosition, setPosition } from "./positionTracker.js";
@@ -94,6 +94,8 @@ import { type Config, getAgentArgs } from "./config/types.js";
 import { readProviderKeyStore, writeProviderKeyStore } from "./providerKeyStore.js";
 
 const program = new Command();
+const isStableContextFastPath =
+  process.argv.length === 3 && process.argv[2] === "stable-context";
 
 // Get the real cwd - CODECAST_CWD is set by the dev wrapper script
 // to preserve the original directory when running via bun run
@@ -2371,26 +2373,6 @@ function installForksSnippet(update = false): { installed: boolean; updated: boo
   return installMarkedSnippet("## Forks & Sessions", FORKS_SNIPPET_END, FORKS_SNIPPET, update);
 }
 
-const PUBLISH_SNIPPET_END = "<!-- /codecast-publish -->";
-const PUBLISH_SNIPPET = `
-## Publishing HTML artifacts
-
-When you produce a standalone HTML deliverable — a report, dashboard, mockup, visualization — publish it with \`cast publish <file.html>\` and put the returned URL inline in your reply. The page gets a clean shareable link with the artifact rendered full-screen.
-
-Re-publishing the same file updates the same URL, so links stay stable across revisions; pass \`--new\` only when you deliberately want a separate URL. Links are unlisted but viewable by anyone who has them — if a deliverable is sensitive, say so in one line and let the human decide instead of silently skipping.
-
-\`\`\`bash
-cast publish report.html          # → https://codecast.sh/a/<id>  (stable per file)
-cast publish ls                   # list your published artifacts
-cast publish rm <id|file>         # unpublish
-\`\`\`
-${PUBLISH_SNIPPET_END}
-`;
-
-function installPublishSnippet(update = false): { installed: boolean; updated: boolean } {
-  return installMarkedSnippet("## Publishing HTML artifacts", PUBLISH_SNIPPET_END, PUBLISH_SNIPPET, update);
-}
-
 // MESSAGING_SNIPPET + MESSAGING_SNIPPET_END live in ./snippets.ts (shared with the daemon).
 
 // SnippetTarget + getSnippetTargets live in ./snippets.ts (shared with the daemon).
@@ -2837,15 +2819,6 @@ async function promptMemoryEnablement(): Promise<void> {
       console.log(`Workflow snippet updated to latest version in ${targets.map(t => t.label).join(", ")}.`);
     }
   }
-  if (config.publish_enabled && config.publish_version !== getPublishVersion()) {
-    const result = installPublishSnippet(true);
-    config.publish_version = getPublishVersion();
-    writeConfig(config);
-    if (result.updated) {
-      const targets = getSnippetTargets();
-      console.log(`Publish snippet updated to latest version in ${targets.map(t => t.label).join(", ")}.`);
-    }
-  }
 
   if (config.memory_enabled !== undefined && config.memory_version === getMemoryVersion()) {
     if (config.memory_enabled) {
@@ -3203,11 +3176,12 @@ program
   .argument("<text>", "Message text; '-' reads it from stdin (heredoc-friendly for multi-line markdown)")
   .option("--from <id>", "Override sender session (default: detect current session)")
   .action(async (sessionId: string, text: string, options: any) => {
-    if (text === "-") {
+    const fromStdin = text === "-";
+    if (fromStdin) {
       text = fs.readFileSync(0, "utf-8");
     }
-    const body = (text ?? "").trim();
-    if (!body) {
+    const body = prepareSessionSendBody(text ?? "", fromStdin);
+    if (!body.trim()) {
       console.error("Message text is empty");
       process.exit(1);
     }
@@ -3493,106 +3467,6 @@ program
     }
     const result = await cliPost("/cli/sessions/rename", { session, title });
     console.log(`${c.green}ok${c.reset} renamed ${c.cyan}${result.short_id}${c.reset} ${c.dim}→${c.reset} ${result.title}`);
-  });
-
-// ── cast publish ──────────────────────────────────────────────────────────────
-// Shareable HTML artifacts: publish a local .html file to codecast.sh/a/<slug>.
-// The slug is an unguessable secret (unlisted; anyone with the link can view),
-// and re-publishing the same file keeps the same URL — like Claude artifacts.
-program
-  .command("publish")
-  .description(
-    "Publish an HTML file to a shareable codecast URL\n\n" +
-    "The link renders the page full-screen with a small share control. It is\n" +
-    "unlisted but viewable by anyone who has it. Re-publishing the same file\n" +
-    "updates the same URL, so links stay stable across revisions.\n\n" +
-    "Examples:\n" +
-    "  cast publish report.html          Publish (or update) an artifact\n" +
-    "  cast publish report.html --new    Mint a separate URL for the same file\n" +
-    "  cast publish ls                   List your published artifacts\n" +
-    "  cast publish rm <slug|file>       Unpublish"
-  )
-  .argument("[target]", "An .html file — or `ls` / `rm`")
-  .argument("[arg]", "For rm: the artifact slug or file to unpublish")
-  .option("--new", "Mint a new URL instead of updating this file's existing artifact")
-  .option("--title <title>", "Override the title (default: the <title> tag, else the filename)")
-  .option("--open", "Open the published URL in your browser")
-  .option("--json", "Output JSON")
-  .action(async (target: string | undefined, arg: string | undefined, options) => {
-    if (!target) {
-      console.error("Usage: cast publish <file.html> | cast publish ls | cast publish rm <slug|file>");
-      process.exit(1);
-    }
-
-    if (target === "ls" || target === "list") {
-      const result = await cliPost("/cli/artifacts/list", {});
-      const artifacts = result.artifacts || [];
-      if (options.json) {
-        console.log(JSON.stringify(artifacts, null, 2));
-        return;
-      }
-      if (artifacts.length === 0) {
-        console.log(`No published artifacts yet. ${fmt.muted("cast publish <file.html>")}`);
-        return;
-      }
-      for (const a of artifacts) {
-        const when = new Date(a.updated_at).toISOString().slice(0, 10);
-        const version = a.version > 1 ? ` ${fmt.muted(`v${a.version}`)}` : "";
-        console.log(`${fmt.id(a.slug)}  ${a.title}${version}`);
-        console.log(`  ${fmt.accent(a.url)}`);
-        console.log(`  ${fmt.muted(`${formatBytes(a.size)} · updated ${when}${a.source_path ? ` · ${a.source_path}` : ""}`)}`);
-      }
-      return;
-    }
-
-    if (target === "rm" || target === "delete" || target === "unpublish") {
-      if (!arg) {
-        console.error("Usage: cast publish rm <slug|file>");
-        process.exit(1);
-      }
-      const result = await cliPost("/cli/artifacts/delete", { target: arg });
-      console.log(`${c.green}ok${c.reset} Unpublished ${fmt.id(result.deleted.slug)} ${fmt.muted(result.deleted.title)}`);
-      return;
-    }
-
-    const filePath = path.resolve(target);
-    if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
-      console.error(`File not found: ${filePath}`);
-      process.exit(1);
-    }
-    if (!isHtmlPath(filePath)) {
-      console.error(`cast publish takes an .html file (got ${path.basename(filePath)}). For markdown, use cast doc.`);
-      process.exit(1);
-    }
-    const content = fs.readFileSync(filePath, "utf-8");
-    const size = Buffer.byteLength(content);
-    if (size > PUBLISH_MAX_BYTES) {
-      console.error(`${path.basename(filePath)} is ${formatBytes(size)} — the limit is ${formatBytes(PUBLISH_MAX_BYTES)}. Inline fewer assets or split the page.`);
-      process.exit(1);
-    }
-    const title = resolveArtifactTitle(content, filePath, options.title);
-    const result = await cliPost("/cli/artifacts/publish", {
-      content,
-      title,
-      source_path: filePath,
-      force_new: !!options.new,
-    });
-    if (options.json) {
-      console.log(JSON.stringify(result, null, 2));
-      return;
-    }
-    const verb = result.updated ? `Updated (v${result.version})` : "Published";
-    console.log(`${c.green}ok${c.reset} ${verb} ${title}`);
-    console.log(`  ${fmt.accent(result.url)}`);
-    if (!result.updated) {
-      console.log(fmt.muted("  Republishing this file keeps the URL; --new mints a fresh one. Anyone with the link can view."));
-    }
-    if (options.open) {
-      const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
-      try {
-        spawn(opener, [result.url], { detached: true, stdio: "ignore" }).unref();
-      } catch {}
-    }
   });
 
 // ── cast label ────────────────────────────────────────────────────────────────
@@ -8625,7 +8499,6 @@ program
       workflows: { getVersion: getWorkflowVersion, install: installWorkflowSnippet, reEnable: "cast workflow install" },
       visual: { getVersion: getVisualVersion, install: installVisualSnippet, reEnable: "cast install" },
       orchestration: { getVersion: getWorkVersion, install: installOrchestration, reEnable: "cast install" },
-      publish: { getVersion: getPublishVersion, install: installPublishSnippet, reEnable: "cast install publish" },
     };
     const snippets = SNIPPET_CATALOG.map((d) => ({ ...d, ...SNIPPET_BEHAVIOR[d.slug] }));
     // Single-snippet path: `cast install workflows` (+ --disable to turn off).
@@ -8670,7 +8543,9 @@ program
       for (const s of snippets) {
         (config as any)[s.enabledKey] = false;
       }
-      writeConfig(config);
+      // Stable is not in SNIPPET_CATALOG because it is a SessionStart hook,
+      // but "all snippets" includes it in the UI and help text.
+      applyStableMode(config, "off", false);
       console.log("All snippets disabled.");
       console.log(`Run ${fmt.cmd("cast install")} to re-enable.`);
       return;
@@ -14812,49 +14687,7 @@ program
 program
   .command("stable-context", { hidden: true })
   .description("SessionStart hook: print the stable-context feed and record what was injected (internal use)")
-  .action(async () => {
-    const { buildStableContext, recordStableContext } = await import("./stableContext.js");
-    const { resolveStableLaunch } = await import("@codecast/shared/contracts");
-    const config = readConfig();
-
-    // Hook payload on stdin: { session_id, cwd, source, ... }. Manual TTY runs
-    // have no payload — fall back to process.cwd() and record by nothing.
-    let payload: { session_id?: string; cwd?: string } = {};
-    if (!process.stdin.isTTY) {
-      try {
-        const chunks: Buffer[] = [];
-        for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
-        const raw = Buffer.concat(chunks).toString("utf-8").trim();
-        if (raw) payload = JSON.parse(raw);
-      } catch {
-        // Malformed payload — still inject from defaults.
-      }
-    }
-
-    // Env overrides (exported by the daemon from the new-session page's choice)
-    // beat the machine config; no mode from either → nothing to inject.
-    const launch = resolveStableLaunch(process.env, config ?? {});
-    if (!launch.mode) return;
-
-    const built = await buildStableContext(config, {
-      mode: launch.mode,
-      global: launch.global,
-      exclude: launch.exclude,
-      cwd: payload.cwd || process.cwd(),
-    });
-    if (!built) return;
-
-    console.log(built.text);
-    // Record what was injected so the web renders it as cards at the top of
-    // the conversation. Prefer the daemon-exported conversation id (no lookup
-    // race); terminal-started sessions fall back to the agent session id,
-    // which the server spools until the conversation registers.
-    await recordStableContext(config, {
-      conversation_id: launch.conversationId,
-      session_id: payload.session_id,
-      data: built.data,
-    });
-  });
+  .action(async () => runStableContextHook(readConfig()));
 
 program
   .command("claude")
@@ -15299,8 +15132,10 @@ messaging
     }
   });
 
-// Check for updates in background (non-blocking)
-checkForUpdates().then(async (available) => {
+// Check for updates in background (non-blocking). The SessionStart hook is an
+// output protocol: even a cached notice would become part of Claude's prompt,
+// so its hidden fast path never enters this lifecycle.
+if (!isStableContextFastPath) checkForUpdates().then(async (available) => {
   if (!available) return;
 
   // Source checkouts can't self-update (performUpdate refuses in dev mode);
@@ -15384,7 +15219,12 @@ program.hook('preAction', (thisCommand, actionCommand) => {
 // <git args…>`. The git argv carries flags commander would mis-parse, and this
 // runs on every :Gblame, so bypass commander (and its daemon/alias side
 // effects) entirely and stream the rewritten blame straight out.
-if (process.argv[2] === "__fugitive_blame@@") {
+if (isStableContextFastPath) {
+  // Bypass Commander, preAction logging/daemon startup, alias repair, env
+  // autobinding, and every other global CLI side effect. Hook stdout must be
+  // exactly one stable-context block (or empty).
+  runStableContextHook(readConfig()).catch(() => {});
+} else if (process.argv[2] === "__fugitive_blame@@") {
   import("./blame.js")
     .then(({ runFugitiveBlame }) => runFugitiveBlame(process.argv.slice(3), readConfig() ?? {}))
     .catch((err) => {

@@ -1,7 +1,19 @@
 # v3 (log-ts) Rollout Pipeline
 
-**Status:** Proposed to the deploy owner (jx7et9e) 2026-07-30; implementation of every today-buildable piece is committed (see "Implemented state").
-**Division of labor:** this doc + the build = ct-40178; review, push, every deploy, and every flag flip = jx7et9e, recorded on pl-205.
+**Status:** Combined reversible final-mode release candidate, 2026-07-30.
+**Deploy owner:** jx7d2nm, directly authorized by Samvit to replace the incremental sequence with one production cutover.
+
+## Accelerated combined cutover
+
+The staged sequence below is retained as historical context but is superseded for this release. The candidate switches every currently supported web slice directly to v3/log-ts reads, routes supported product writes through the durable receipt outbox, includes must-deliver `messages.send/v2`, and ships the fenced execution rail for controlled activation. Legacy tables and handlers stay intact.
+
+One fail-closed rail controls the web cutover:
+
+- `VITE_LOCAL_FIRST_V2_ENABLED=1` plus `VITE_LOCAL_FIRST_FINAL_MODE=1` enables final reads and writes.
+- `VITE_LOCAL_FIRST_V2_ENABLED=0` returns every supported slice to legacy reads and new-write dispatch in one build rollback. Existing accepted outbox rows remain durable and continue draining; no rollback state is deleted.
+- Small views and native/mobile remain off because no client materializer is mounted there. This is the boundary of “supported,” not a partial activation.
+
+Final-mode release gates are closed: R-01 persistent-storage posture, CMD-02 operation-schema fold gate, R-11 dependent-command authoring, and DWB-03 daemon coverage stamping. Fenced execution remains conversation-scoped for mixed-version safety; only a ready conversation with a current flagged daemon is activated.
 
 ## Response to the sequencing proposal
 
@@ -9,7 +21,7 @@
 
 **One correction to "run v3 shadow beside the current v2 shadow":** the two contracts cannot run concurrently *in one browser for the same view* — they share the view key, and the durable writer pins one contract per key (a v3 claim supersedes the v2 writer; the v2 session then fences out). The flags therefore SWITCH a slice's contract rather than adding one: `shadow-lts` **replaces** `shadow` for that slice. The digest gate is uninterrupted — the comparison stays v1-vs-durable-view, with the v3 contract underneath — but v2-shadow and v3-shadow evidence accumulate sequentially per slice (or in parallel across user cohorts/slices, never within one browser+view). The soak clock intentionally resets at the switch: coverage semantics are contract semantics (§20).
 
-## Stages (each gate = jx7et9e flag flip after review)
+## Superseded staged sequence (reference only)
 
 1. **v3 shadow** — flip `VITE_LOCAL_FIRST_COMMENTS_MODE` / `VITE_LOCAL_FIRST_BUCKETS_MODE` from `shadow` to `shadow-lts`. First mount in each browser migrates the durable view via contract supersession (one-time fresh bootstrap; durable v2 rows for the slice are dropped and rebuilt — invisible to users since v1 still renders). Evidence: existing digest equality (`__CODECAST_SHADOW_VALIDATION__`) PLUS the log-ts invariants now enforced durably (monotonic ts; equal-ts divergence rejected loudly — watch `PrincipalStoreIdentityError` counts, which are zero-tolerance signals).
 2. **Read cutover v1→v3** — flip to `cutover-lts` once the v3 soak matches the §20 gate. Rollback = revert the env var (v1 query resumes feeding the store; the durable v3 view stays consistent for a later retry).

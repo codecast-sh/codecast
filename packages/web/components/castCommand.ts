@@ -32,6 +32,101 @@ export interface SendBody {
   kind: "literal" | "heredoc" | "dynamic";
 }
 
+/**
+ * Decode the first shell word in an argument string. Shell words can be made
+ * from adjacent quoted and unquoted segments (`'it'\''s ready'`,
+ * `"hello "'world'`), so matching only the first quote pair can silently show
+ * a truncated message. Unsupported/expanded syntax is marked dynamic; callers
+ * must never present that decoded recipe as the payload that actually arrived.
+ */
+function scanShellWord(source: string): { body: string; dynamic: boolean } {
+  let body = "";
+  let dynamic = false;
+  let quote: "single" | "double" | null = null;
+
+  for (let i = 0; i < source.length; i += 1) {
+    const ch = source[i];
+
+    if (quote === "single") {
+      if (ch === "'") quote = null;
+      else body += ch;
+      continue;
+    }
+
+    if (quote === "double") {
+      if (ch === '"') {
+        quote = null;
+        continue;
+      }
+      if (ch === "\\") {
+        const next = source[i + 1];
+        if (next === undefined) {
+          body += "\\";
+          dynamic = true;
+          continue;
+        }
+        if (next === "\n") {
+          i += 1;
+          continue;
+        }
+        if (next === "$" || next === "`" || next === '"' || next === "\\") {
+          body += next;
+          i += 1;
+          continue;
+        }
+        body += `\\${next}`;
+        i += 1;
+        continue;
+      }
+      if (ch === "$" || ch === "`") dynamic = true;
+      body += ch;
+      continue;
+    }
+
+    if (/\s/.test(ch)) break;
+    if (ch === "'") {
+      quote = "single";
+      continue;
+    }
+    if (ch === '"') {
+      quote = "double";
+      continue;
+    }
+    if (ch === "\\") {
+      const next = source[i + 1];
+      if (next === undefined) {
+        body += "\\";
+        dynamic = true;
+      } else if (next === "\n") {
+        i += 1;
+      } else {
+        body += next;
+        i += 1;
+      }
+      continue;
+    }
+
+    // These constructs are expanded by the shell or terminate/reshape the
+    // command. Keep the visible recipe, but never call it the delivered body.
+    if (
+      ch === "$" ||
+      ch === "`" ||
+      ch === "*" ||
+      ch === "?" ||
+      ch === "[" ||
+      ch === "{" ||
+      (ch === "~" && body.length === 0) ||
+      /[;&|<>()]/.test(ch)
+    ) {
+      dynamic = true;
+    }
+    body += ch;
+  }
+
+  if (quote !== null) dynamic = true;
+  return { body, dynamic };
+}
+
 // Pull the message body out of a `cast send <id> …` arg string. The transcript
 // records the command AS TYPED, so what the args contain falls into three shapes:
 //   literal — a quoted string with no shell expansion: the recorded text IS the
@@ -45,37 +140,40 @@ export interface SendBody {
 export function extractSendBody(args: string): SendBody {
   const t = args.trim();
 
-  // Quoted bodies first — a literal message may itself contain "<<EOF" text, and
-  // a genuine heredoc invocation never starts with a quote (it starts with `-`).
-  const dq = t.match(/^"((?:[^"\\]|\\.)*)"/);
-  if (dq) {
-    const body = dq[1].replace(/\\"/g, '"');
-    // Inside double quotes the shell expands $… and `…` before cast sees them.
-    return { body, kind: /(^|[^\\])[$`]/.test(dq[1]) ? "dynamic" : "literal" };
-  }
-  const sq = t.match(/^'((?:[^'\\]|\\.)*)'/);
-  if (sq) return { body: sq[1].replace(/\\'/g, "'"), kind: "literal" };
-
   // Heredoc: `- <<'EOF'\n…\nEOF` (also <<EOF, <<-EOF, << 'EOF', flags between).
-  const hd = t.match(/<<(-?)\s*(?:'(\w+)'|"(\w+)"|(\w+))[^\n]*\n([\s\S]*)$/);
+  const hd = /^-(?:\s|$)/.test(t)
+    ? t.match(
+        /<<(-?)\s*(?:'([^'\n]+)'|"([^"\\\n]+)"|([A-Za-z0-9_.-]+))[^\n]*\n([\s\S]*)$/,
+      )
+    : null;
   if (hd) {
     const tag = hd[2] || hd[3] || hd[4];
     const stripTabs = hd[1] === "-";
+    const quotedDelimiter = Boolean(hd[2] || hd[3]);
     const bodyLines: string[] = [];
+    let foundDelimiter = false;
     for (const line of hd[5].split("\n")) {
       const probe = stripTabs ? line.replace(/^\t+/, "") : line;
-      if (probe === tag) break;
+      if (probe === tag) {
+        foundDelimiter = true;
+        break;
+      }
       bodyLines.push(probe);
     }
-    return { body: bodyLines.join("\n").trim(), kind: "heredoc" };
+    return {
+      body: bodyLines.join("\n"),
+      // Unquoted heredocs undergo parameter, command, and arithmetic expansion.
+      // A missing closing delimiter never executed, so don't claim its recorded
+      // source was a delivered literal either.
+      kind: quotedDelimiter && foundDelimiter ? "heredoc" : "dynamic",
+    };
   }
 
   // Bare `-`: body came from a pipe or `< file` — not recorded in the command.
   if (/^-(\s|$)/.test(t)) return { body: t, kind: "dynamic" };
 
-  // Unquoted body: drop any trailing --flags so they don't render as message text.
-  const bare = t.replace(/\s+--\w[\s\S]*$/, "").trim() || t;
-  return { body: bare, kind: /[$`]/.test(bare) ? "dynamic" : "literal" };
+  const { body, dynamic } = scanShellWord(t);
+  return { body: body || t, kind: dynamic ? "dynamic" : "literal" };
 }
 
 // Parse a raw shell command into its cast (category, subcommand, args), tolerating

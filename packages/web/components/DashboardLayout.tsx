@@ -61,6 +61,9 @@ import { useTipActions } from "../tips";
 interface DashboardLayoutProps {
   children: ReactNode;
   hideSidebar?: boolean;
+  // Public conversation links have no principal cache to hydrate. The shell
+  // opts them into the chrome-less guest branch once auth has settled.
+  allowUnhydratedGuest?: boolean;
 }
 
 const DEFAULT_LAYOUT = { sidebar: 25, main: 75 };
@@ -150,6 +153,7 @@ const ActiveAgentsBadge = memo(function ActiveAgentsBadge({ isOnInboxPage }: { i
 
 export function DashboardLayout(props: DashboardLayoutProps) {
   const isNested = useContext(DashboardNestCtx);
+  const { isAuthenticated, isLoading: isAuthLoading } = useConvexAuth();
   // Hold the boot loader until the IDB hydration pass lands (clientStateInitialized
   // flips true even when the cache is empty or unreadable, so this can't hang).
   // Without it, React's first frame races loadCache(): the shell mounts on an
@@ -157,8 +161,13 @@ export function DashboardLayout(props: DashboardLayoutProps) {
   // before cached content pops in. AppLoader is pixel-identical to the static
   // #boot-shell in index.html, so the user sees one continuous loader → content.
   const hydrated = useInboxStore((s) => s.clientStateInitialized);
+  const isSettledGuest = props.allowUnhydratedGuest &&
+    !isAuthenticated && !isAuthLoading;
   if (isNested) return <>{props.children}</>;
-  if (!hydrated) return <AppLoader />;
+  // A settled anonymous share viewer intentionally has no principal store, so
+  // `clientStateInitialized` will remain false forever. Let only that explicit
+  // route reach DashboardLayoutInner's read-only guest branch.
+  if (!hydrated && !isSettledGuest) return <AppLoader />;
   return (
     <DashboardNestCtx.Provider value={true}>
       <DashboardLayoutInner {...props} />
@@ -199,7 +208,6 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     s => s.viewingDismissedId,
     s => s.commentRailOpen,
     s => s.clientState.ui?.comments_enabled ?? false,
-    s => s.clientState.ui?.simple_view === true,
     // Re-render the header toggle when comments change, so a teammate's comment on
     // the viewed conversation surfaces the toggle even with the tools off. Subscribe
     // to the comments map REF (O(1) Object.is compare), not a full scan: comments is
@@ -320,12 +328,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // Right session list, collapsed: no persistent rail — a right-edge hover-peek
   // slides the full list out, mirroring the left sidebar's collapsed behavior.
   const rightPeekEnabled = !s.sidePanelOpen && !isMobile;
-  // A session peeked beside a page no longer opens its own column — it lives as
-  // a tab of the ONE right rail (UnifiedRightRail), so the rail must be out
-  // whenever either the session list or a peeked conversation wants the space.
-  const showConversationColumn = !!s.sidePanelSessionId && !isOnInboxPage && !isOnConversationPage && !isOnSettingsPage && !isMobile;
-  const showSessionList = (s.sidePanelOpen || showConversationColumn) && !isMobile;
+  const showSessionList = s.sidePanelOpen && !isMobile;
   const showMobileSessionList = s.sidePanelOpen && isMobile;
+  const showConversationColumn = !!s.sidePanelSessionId && !isOnInboxPage && !isOnConversationPage && !isOnSettingsPage && !isMobile;
 
   // Clear stale conversation-column session on full conversation pages so the
   // column doesn't reappear when navigating away. Only clear the session ID;
@@ -683,6 +688,13 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     }
   }, [showSessionList]);
 
+  // Must be above the isGuest early return — React requires stable hook count across renders
+  const conversationPanel = useMemo(() => (
+    <Panel id="conversation-column" minSize="20%" maxSize="70%" defaultSize="40%">
+      <ErrorBoundary name="ConversationColumn" level="panel"><ConversationColumn /></ErrorBoundary>
+    </Panel>
+  ), []);
+
   // Guest/unauthenticated: minimal layout, no top header — branding lives in the bottom bar
   if (isGuest) {
     return (
@@ -703,21 +715,27 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     <PageShell pathname={pathname ?? ""}>{content}</PageShell>
   );
 
-  // ONE right rail, ever. The session list and a peeked conversation share it as
-  // tabs (UnifiedRightRail) instead of stacking as separate columns — the old
-  // page + conversation column + session list pileup is unrepresentable now.
-  // Group is always rendered; the rail Panel collapses to 0 when not in use.
+  const mainContent = showConversationColumn ? (
+    <Group orientation="horizontal" className="h-full" defaultLayout={{ "main-content": 60, "conversation-column": 40 }}>
+      <Panel id="main-content" minSize="20%">{pageContent}</Panel>
+      <Separator className={separatorClass} />
+      {conversationPanel}
+    </Group>
+  ) : pageContent;
+
+  // Group is always rendered; the session-list Panel collapses to 0 when not in use.
+  // The collapsed rail renders alongside (outside the Group) when the panel is hidden.
   const rightArea = (
     <div className="h-full flex">
       <div className="flex-1 min-w-0 h-full">
         <Group orientation="horizontal" className="h-full" defaultLayout={{ "right-content": showSessionList ? 70 : 100, "session-list": showSessionList ? 30 : 0 }}>
-          <Panel id="right-content" minSize={400}><div className="h-full">{pageContent}</div></Panel>
+          <Panel id="right-content" minSize={400}><div className="h-full">{mainContent}</div></Panel>
           <Separator className={`${separatorClass} ${showSessionList ? "" : "invisible"}`} />
           <Panel
             id="session-list"
             panelRef={sessionListPanelRef}
             minSize={200}
-            maxSize="60%"
+            maxSize="50%"
             defaultSize={showSessionList ? 30 : 0}
             collapsible
             collapsedSize={0}
@@ -729,12 +747,13 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
           >
             {!isMobile && (
               <ErrorBoundary name="SessionList" level="panel">
-                <UnifiedRightRail
-                  onSessionSelect={sessionListOnSelect}
-                  activeSessionId={sessionListActiveId}
-                  onCollapse={s.toggleSidePanel}
-                  conversationTabAvailable={showConversationColumn}
-                />
+                <div className="w-full h-full border-l border-sol-border/30">
+                  <SessionListPanel
+                    onSessionSelect={sessionListOnSelect}
+                    activeSessionId={sessionListActiveId}
+                    onCollapse={() => s.toggleSidePanel()}
+                  />
+                </div>
               </ErrorBoundary>
             )}
           </Panel>
@@ -744,7 +763,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   );
 
   return (
-    <div className={`bg-sol-bg flex flex-col overflow-hidden${s.clientState.ui?.simple_view ? " simple-view" : ""}`} style={{ height: zoomHeight }}>
+    <div className="bg-sol-bg flex flex-col overflow-hidden" style={{ height: zoomHeight }}>
       <ErrorBoundary name="DashboardSync" level="inline" fallback={null}>
         <DashboardSyncEffects />
       </ErrorBoundary>
@@ -909,7 +928,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
               <SessionListPanel
                 onSessionSelect={sessionListOnSelect}
                 activeSessionId={sessionListActiveId}
-                onCollapse={s.toggleSidePanel}
+                onCollapse={() => s.toggleSidePanel()}
               />
             </div>
           </ErrorBoundary>
@@ -984,13 +1003,13 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       {/* Mobile session list overlay — single render point for SessionListPanel on small screens */}
       {showMobileSessionList && (
         <>
-          <div className="fixed inset-0 z-40 bg-black/50" onClick={s.toggleSidePanel} />
+          <div className="fixed inset-0 z-40 bg-black/50" onClick={() => s.toggleSidePanel()} />
           <div className="fixed inset-y-0 right-0 z-50 w-[80vw] max-w-xs shadow-xl animate-slide-in-right">
             <ErrorBoundary name="SessionList" level="panel">
               <SessionListPanel
                 onSessionSelect={sessionListOnSelect}
                 activeSessionId={sessionListActiveId}
-                onCollapse={s.toggleSidePanel}
+                onCollapse={() => s.toggleSidePanel()}
               />
             </ErrorBoundary>
           </div>
@@ -1021,65 +1040,3 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     </div>
   );
 }
-
-// The single right rail: the session list and a peeked conversation share one
-// slot as tabs instead of opening as separate columns. Selecting a session from
-// the list promotes it to the conversation tab; closing it drops back to the
-// list — things swap, they never accumulate. Both stay MOUNTED across tab
-// switches (visibility, not display — display:none would clobber preserved
-// scroll offsets) so flipping tabs never re-subscribes or flashes a loader.
-const UnifiedRightRail = memo(function UnifiedRightRail({
-  onSessionSelect,
-  activeSessionId,
-  onCollapse,
-  conversationTabAvailable,
-}: {
-  onSessionSelect: (id: string) => void;
-  activeSessionId: string | null;
-  onCollapse: () => void;
-  conversationTabAvailable: boolean;
-}) {
-  const s = useTrackedStore([
-    (st) => st.sidePanelSessionId,
-    // Tab label only — the row's other fields (heartbeats etc.) must not re-render the rail.
-    (st) => st.sessions[st.sidePanelSessionId ?? ""]?.title,
-  ]);
-  const convAvailable = conversationTabAvailable && !!s.sidePanelSessionId;
-  const [tab, setTab] = useState<"sessions" | "conversation">(convAvailable ? "conversation" : "sessions");
-  // Selecting a session promotes it; clearing it retreats to the list.
-  useWatchEffect(() => {
-    setTab(convAvailable ? "conversation" : "sessions");
-  }, [convAvailable, s.sidePanelSessionId]);
-  const showConv = convAvailable && tab === "conversation";
-  const title = s.sidePanelSessionId ? (s.sessions[s.sidePanelSessionId]?.title || "Session") : "Session";
-  const tabClass = (on: boolean) =>
-    `px-2.5 py-1 rounded-t-md border border-b-0 text-[11px] max-w-[55%] truncate transition-colors ${
-      on
-        ? "bg-sol-bg border-sol-border/30 text-sol-text font-medium"
-        : "bg-transparent border-transparent text-sol-text-dim hover:text-sol-text"
-    }`;
-  return (
-    <div className="w-full h-full border-l border-sol-border/30 flex flex-col">
-      {convAvailable && (
-        <div className="flex items-end gap-1 px-1.5 pt-1.5 border-b border-sol-border/20 bg-sol-bg-alt/40 flex-shrink-0">
-          <button className={tabClass(!showConv)} onClick={() => setTab("sessions")}>Sessions</button>
-          <button className={tabClass(showConv)} onClick={() => setTab("conversation")} title={title}>{title}</button>
-        </div>
-      )}
-      <div className="relative flex-1 min-h-0">
-        <div className="absolute inset-0" style={{ visibility: showConv ? "hidden" : "visible" }}>
-          <SessionListPanel
-            onSessionSelect={onSessionSelect}
-            activeSessionId={activeSessionId}
-            onCollapse={onCollapse}
-          />
-        </div>
-        {convAvailable && (
-          <div className="absolute inset-0 bg-sol-bg" style={{ visibility: showConv ? "visible" : "hidden" }}>
-            <ErrorBoundary name="ConversationColumn" level="panel"><ConversationColumn /></ErrorBoundary>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-});

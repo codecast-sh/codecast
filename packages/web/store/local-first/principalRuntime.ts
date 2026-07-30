@@ -17,6 +17,10 @@ import {
   type PrincipalStoreMetadata,
 } from "./persistence/adapter";
 import type { LauncherStore } from "./persistence/launcher";
+import {
+  getStoragePersistenceStatus,
+  type StoragePersistenceStatus,
+} from "./storagePersistence";
 
 /** Health restorations allowed per activation before degradation is permanent. */
 const MAX_STORAGE_RECOVERIES = 3;
@@ -49,6 +53,7 @@ export type PrincipalRuntimeInspection = {
     generation: number;
     principalEpoch: number | null;
     storageHealth: "healthy" | "degraded" | "unavailable";
+    persistence: StoragePersistenceStatus;
     head: number | null;
   };
   store: PrincipalStoreInspection | null;
@@ -145,6 +150,7 @@ export class PrincipalRuntime {
         generation: state.generation,
         principalEpoch: active ? state.principalEpoch : null,
         storageHealth: active ? state.storageHealth : "unavailable",
+        persistence: getStoragePersistenceStatus(),
         head: active ? state.head : null,
       },
       store,

@@ -147,6 +147,7 @@ export function LocalFirstInspector({ runtime }: { runtime: PrincipalRuntime }) 
             <section className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               <Metric label="Gate" value={lifecycle?.phase ?? "unknown"} />
               <Metric label="Storage" value={lifecycle?.storageHealth ?? "unknown"} />
+              <Metric label="Persistence" value={lifecycle?.persistence ?? "unknown"} />
               <Metric label="Head" value={lifecycle?.head ?? "—"} />
               <Metric label="Schema" value={store?.schemaVersion ?? "—"} />
               <Metric label="Generation" value={lifecycle?.generation ?? "—"} />

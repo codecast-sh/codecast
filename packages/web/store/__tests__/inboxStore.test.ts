@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { categorizeSessions, computeNewDividerIndex, dropLatchedFeedHasMore, feedPagePersistence, findReusableBlankSession, getSessionRenderKey, isConvexId, isSessionDismissed, isSessionStashed, orchestrationGroupLabelOf, PENDING_SEND_ECHO_CAP_MS, PENDING_SEND_PRUNE_GRACE_MS, pendingSendConsumed, reconcilePendingSendForSession, resolveAssigneeInfo, resolveSessionAuthor, resolveShowOld, seedLiveInboxIdsFromCache, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
+import { awaitTrackedSessionCreateResult, categorizeSessions, computeNewDividerIndex, dropLatchedFeedHasMore, feedPagePersistence, findReusableBlankSession, getSessionRenderKey, isConvexId, isSessionDismissed, isSessionStashed, orchestrationGroupLabelOf, PENDING_SEND_PRUNE_GRACE_MS, pendingSendConsumed, reconcilePendingSendForSession, resolveAssigneeInfo, resolveSessionAuthor, resolveShowOld, seedLiveInboxIdsFromCache, SessionCreatePendingError, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, type InboxSession } from "../inboxStore";
 import { isPersistedStoreKey } from "../idbCache";
+import { DispatchNotWiredError } from "../mutativeMiddleware";
 import { declareViewNav } from "../viewNav";
 
 // Test seeds that place the user ON a conversation via raw setState must
@@ -2037,45 +2038,6 @@ describe("reconcilePendingSendForSession — prune grace window", () => {
   });
 });
 
-describe("reconcilePendingSendForSession — echo gate", () => {
-  // Regression: the session sync tick learns the send was consumed and pruned
-  // the pending entry synchronously, while the message-window back-fill for the
-  // same conversation was still a network round-trip away. Returning to the
-  // thread in that gap rendered the stale window WITHOUT the just-sent message
-  // for ~a second. A consumed send with a warm local window must survive until
-  // its echoed server row is actually visible there.
-  const consumedSession = { agent_status: "working", is_idle: false, has_pending: false, updated_at: 999_999 } as any;
-  const pastGrace = () => Date.now() - PENDING_SEND_PRUNE_GRACE_MS - 1;
-  const msg = (over: Record<string, unknown>) =>
-    ({ _id: "opt1", _clientId: "cid1", role: "user", content: "hi", _isOptimistic: true, ...over }) as any;
-  const staleWindow = [{ _id: "old1", role: "assistant", content: "earlier", timestamp: 1 }] as any[];
-
-  it("keeps a consumed send while the warm window lacks its echo", () => {
-    const pm: Record<string, any[]> = { c1: [msg({ timestamp: pastGrace() })] };
-    expect(reconcilePendingSendForSession(pm, "c1", consumedSession, null, staleWindow)).toBe(false);
-    expect(pm.c1.length).toBe(1);
-  });
-
-  it("prunes once the echoed server row (client_id match) is in the window", () => {
-    const pm: Record<string, any[]> = { c1: [msg({ timestamp: pastGrace() })] };
-    const echoed = [...staleWindow, { _id: "srv9", role: "user", content: "hi", client_id: "cid1", timestamp: 2 }] as any[];
-    expect(reconcilePendingSendForSession(pm, "c1", consumedSession, null, echoed)).toBe(true);
-    expect(pm.c1).toBeUndefined();
-  });
-
-  it("prunes a never-echoing send (e.g. a control command) after the echo cap", () => {
-    const pm: Record<string, any[]> = { c1: [msg({ timestamp: Date.now() - PENDING_SEND_ECHO_CAP_MS - 1 })] };
-    expect(reconcilePendingSendForSession(pm, "c1", consumedSession, null, staleWindow)).toBe(true);
-    expect(pm.c1).toBeUndefined();
-  });
-
-  it("prunes on the session claim alone when no local window exists (nothing stale to render)", () => {
-    const pm: Record<string, any[]> = { c1: [msg({ timestamp: pastGrace() })] };
-    expect(reconcilePendingSendForSession(pm, "c1", consumedSession, null, undefined)).toBe(true);
-    expect(pm.c1).toBeUndefined();
-  });
-});
-
 describe("session-view recording (MRU order + unread divider anchor)", () => {
   const realNow = Date.now;
   let clock = 1000;
@@ -2451,6 +2413,53 @@ describe("inboxStore.beginOptimisticSession", () => {
     expect(await ready).toBe(REAL_ID);
   });
 
+  it("waits for by_session_id rekey when a tracked create is durably parked", async () => {
+    const store = useInboxStore.getState();
+    const { stubId } = store.beginOptimisticSession({
+      agentType: "claude_code",
+      projectPath: "/repo",
+      deferCreate: true,
+      create: async () => REAL_ID,
+    });
+    const clientId = store.addOptimisticMessage(stubId, "keep me pending");
+    const parked = Promise.reject(new DispatchNotWiredError("createSession", true));
+    // Mirror beginOptimisticSession.fire(): the rejected create remains durable
+    // in the outbox while the in-memory promise reports "pending, not failed".
+    parked.catch(() => {});
+    store.trackSessionCreate(stubId, parked);
+
+    const outcome = store.awaitConvexId(stubId).then(
+      (id) => ({ id, error: null }),
+      (error) => ({ id: null, error }),
+    );
+    // Let the rejected in-memory create settle before live sync supplies the
+    // server row. The old path rethrew immediately and never observed this rekey.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    store.syncTable("sessions", [{
+      ...baseSession,
+      _id: REAL_ID,
+      session_id: stubId,
+      project_path: "/repo",
+    }]);
+
+    expect(await outcome).toEqual({ id: REAL_ID, error: null });
+    const pending = useInboxStore.getState().pendingMessages[REAL_ID]?.[0] as any;
+    expect(pending?._clientId).toBe(clientId);
+    expect(pending?._isFailed).not.toBe(true);
+  });
+
+  it("classifies a bounded tracked-create timeout as durable pending work", async () => {
+    const neverResolves = new Promise<string>(() => {});
+    const error = await awaitTrackedSessionCreateResult(
+      neverResolves,
+      1,
+    ).catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(SessionCreatePendingError);
+    expect(error).toBeInstanceOf(DispatchNotWiredError);
+    expect(error.parked).toBe(true);
+  });
+
   // deferCreate — the new-session popup (Ctrl+N / the desktop palette) seeds a
   // local stub on open so the null-state can render, but DEFERS the server create
   // until the first send. Opening then Escaping out must strand nothing: no empty
@@ -2801,6 +2810,17 @@ describe("inboxStore local-first state mutations", () => {
     });
     useInboxStore.getState()._setDispatch(async (action, args, patches, result) => {
       dispatches.push({ action, args, patches, result });
+      if (result?.receiptActionVersion === 1) {
+        return {
+          receiptVersion: 1,
+          commandId: result.commandId,
+          commandName: `${action}/test`,
+          status: "acknowledged",
+          result: null,
+          coverage: [],
+          retryUntil: null,
+        };
+      }
       return null;
     });
   });
@@ -2905,6 +2925,251 @@ describe("inboxStore local-first state mutations", () => {
     expect(s.notifications.a?.read).toBe(true);
     expect(s.notifications.c?.read).toBe(true);
     expect(dispatches.filter((d) => d.action === "markAllNotificationsRead").length).toBe(1);
+  });
+
+  it("an optimistic add→delete keeps the client identity needed to delete after replay", async () => {
+    useInboxStore.setState({
+      comments: {},
+      currentUser: { _id: "user1", name: "Me" } as any,
+    });
+    await useInboxStore.getState().addComment(CID, "queued comment");
+    const optimistic = Object.values(useInboxStore.getState().comments)[0] as any;
+    expect(optimistic?.client_id).toMatch(/^commentstub-/);
+
+    await useInboxStore.getState().deleteComment(optimistic._id);
+    expect(useInboxStore.getState().comments[optimistic._id]).toBeUndefined();
+    const deletion = dispatches.find((d) => d.action === "deleteComment");
+    expect(deletion?.result?.localResult).toMatchObject({
+      conversationId: CID,
+      clientId: optimistic.client_id,
+      commandId: `legacy-comments-delete:${optimistic.client_id}`,
+    });
+    expect(deletion?.result?.localResult?.commentId).toBeUndefined();
+  });
+
+  it("edits a comment through a receipt without generic comment patches", async () => {
+    const comment = {
+      _id: CID,
+      client_id: "client-edit-success",
+      conversation_id: CID,
+      user_id: "user1",
+      content: "before",
+      author_kind: "user",
+      created_at: 1,
+    } as any;
+    useInboxStore.setState({ comments: { [CID]: comment }, pending: {} });
+
+    const acknowledged = useInboxStore.getState().editComment(CID, "after");
+    expect(useInboxStore.getState().comments[CID]?.content).toBe("after");
+    const edit = dispatches.find((d) => d.action === "editComment");
+    expect(edit?.patches?.comments).toBeUndefined();
+    expect(edit?.result?.localResult).toMatchObject({
+      commentId: CID,
+      conversationId: CID,
+      clientId: "client-edit-success",
+      content: "after",
+      previousContent: "before",
+    });
+    expect(
+      useInboxStore.getState().pending[`comments:${CID}:content`]?.value,
+    ).toBe("after");
+
+    await acknowledged;
+    useInboxStore.getState().syncTable("comments", [{
+      ...comment,
+      content: "after",
+    }]);
+    expect(
+      useInboxStore.getState().pending[`comments:${CID}:content`],
+    ).toBeUndefined();
+  });
+
+  it("restores the exact prior comment content when an edit receipt is rejected", async () => {
+    const comment = {
+      _id: CID,
+      client_id: "client-edit-rejected",
+      conversation_id: CID,
+      user_id: "user1",
+      content: "authoritative before",
+      author_kind: "user",
+      created_at: 1,
+    } as any;
+    useInboxStore.setState({ comments: { [CID]: comment }, pending: {} });
+    useInboxStore.getState()._setDispatch(async (_action, _args, _patches, result) => ({
+      receiptVersion: 1,
+      commandId: result.commandId,
+      commandName: "comments.update/v2",
+      status: "rejected",
+      rejection: {
+        code: "FORBIDDEN",
+        message: "Conversation access was revoked",
+      },
+      coverage: [],
+      retryUntil: null,
+    }));
+
+    const pending = useInboxStore.getState().editComment(CID, "optimistic after");
+    expect(useInboxStore.getState().comments[CID]?.content).toBe("optimistic after");
+    expect(
+      useInboxStore.getState().pending[`comments:${CID}:content`]?.value,
+    ).toBe("optimistic after");
+
+    await expect(pending).rejects.toMatchObject({
+      name: "CommandReceiptRejectedError",
+      code: "FORBIDDEN",
+    });
+    expect(useInboxStore.getState().comments[CID]?.content)
+      .toBe("authoritative before");
+    expect(
+      useInboxStore.getState().pending[`comments:${CID}:content`],
+    ).toBeUndefined();
+  });
+
+  it("does not let an older rejected edit clobber a newer optimistic edit", async () => {
+    const comment = {
+      _id: CID,
+      client_id: "client-edit-ordered",
+      conversation_id: CID,
+      user_id: "user1",
+      content: "A",
+      author_kind: "user",
+      created_at: 1,
+    } as any;
+    useInboxStore.setState({ comments: { [CID]: comment }, pending: {} });
+    useInboxStore.getState()._setDispatch(async (_action, _args, _patches, result) => {
+      const local = result.localResult;
+      return local.content === "B"
+        ? {
+            receiptVersion: 1,
+            commandId: result.commandId,
+            commandName: "comments.update/v2",
+            status: "rejected",
+            rejection: { code: "FORBIDDEN", message: "Rejected older edit" },
+            coverage: [],
+            retryUntil: null,
+          }
+        : {
+            receiptVersion: 1,
+            commandId: result.commandId,
+            commandName: "comments.update/v2",
+            status: "acknowledged",
+            result: { commentId: CID },
+            coverage: [],
+            retryUntil: null,
+          };
+    });
+
+    const older = useInboxStore.getState().editComment(CID, "B");
+    const newer = useInboxStore.getState().editComment(CID, "C");
+    await expect(older).rejects.toMatchObject({
+      name: "CommandReceiptRejectedError",
+    });
+    expect(useInboxStore.getState().comments[CID]?.content).toBe("C");
+    expect(
+      useInboxStore.getState().pending[`comments:${CID}:content`]?.value,
+    ).toBe("C");
+    await expect(newer).resolves.toMatchObject({ commentId: CID });
+  });
+
+  it("rolls back the exact optimistic comment when a V2 receipt is rejected", async () => {
+    useInboxStore.setState({
+      comments: {},
+      currentUser: { _id: "user1", name: "Me" } as any,
+      pending: {},
+    });
+    useInboxStore.getState()._setDispatch(async (_action, _args, _patches, result) => ({
+      receiptVersion: 1,
+      commandId: result.commandId,
+      commandName: "comments.create/v2",
+      status: "rejected",
+      rejection: {
+        code: "FORBIDDEN",
+        message: "Conversation access was revoked",
+      },
+      coverage: [],
+      retryUntil: null,
+    }));
+
+    const pending = useInboxStore.getState().addComment(CID, "must not ghost");
+    const optimistic = Object.values(useInboxStore.getState().comments)[0] as any;
+    expect(optimistic?.client_id).toMatch(/^commentstub-/);
+    expect(useInboxStore.getState().pending[`comments:${optimistic._id}`]).toBeTruthy();
+
+    await expect(pending).rejects.toMatchObject({
+      name: "CommandReceiptRejectedError",
+      code: "FORBIDDEN",
+    });
+    expect(useInboxStore.getState().comments[optimistic._id]).toBeUndefined();
+    expect(useInboxStore.getState().pending[`comments:${optimistic._id}`]).toBeUndefined();
+  });
+
+  it("restores an optimistically deleted real comment when its receipt is rejected", async () => {
+    const comment = {
+      _id: CID,
+      client_id: "client-real-comment",
+      conversation_id: CID,
+      user_id: "user1",
+      content: "keep me",
+      author_kind: "user",
+      created_at: 1,
+    } as any;
+    useInboxStore.setState({ comments: { [CID]: comment }, pending: {} });
+    useInboxStore.getState()._setDispatch(async (_action, _args, _patches, result) => ({
+      receiptVersion: 1,
+      commandId: result.commandId,
+      commandName: "comments.delete/v2",
+      status: "rejected",
+      rejection: {
+        code: "FORBIDDEN",
+        message: "Cannot delete this comment",
+      },
+      coverage: [],
+      retryUntil: null,
+    }));
+
+    const pending = useInboxStore.getState().deleteComment(CID);
+    expect(useInboxStore.getState().comments[CID]).toBeUndefined();
+
+    await expect(pending).rejects.toMatchObject({
+      name: "CommandReceiptRejectedError",
+      code: "FORBIDDEN",
+    });
+    expect(useInboxStore.getState().comments[CID]).toMatchObject({
+      content: "keep me",
+      client_id: "client-real-comment",
+    });
+    expect(useInboxStore.getState().pending[`comments:${CID}`]).toBeUndefined();
+  });
+
+  it("applies an acknowledged create-label assignment from its durable continuation", async () => {
+    const bucketId = "bucket00000000000000000000000000";
+    useInboxStore.setState({ buckets: {}, bucketAssignments: {}, pending: {} });
+    useInboxStore.getState()._setDispatch(async (_action, _args, _patches, result) => ({
+      receiptVersion: 1,
+      commandId: result.commandId,
+      commandName: "buckets.create/v2",
+      status: "acknowledged",
+      result: { bucketId },
+      coverage: [],
+      retryUntil: null,
+    }));
+
+    await useInboxStore.getState().createBucket(
+      { name: "Durable label" },
+      {
+        version: 1,
+        kind: "assignBucket",
+        conversationIds: [CID],
+      },
+    );
+
+    expect(
+      (Object.values(useInboxStore.getState().bucketAssignments) as any[])
+        .find((row) => row.conversation_id === CID),
+    ).toMatchObject({
+      conversation_id: CID,
+      bucket_id: bucketId,
+    });
   });
 
   // Triage gestures on a session that was never OPENED on this client — no
@@ -3881,5 +4146,87 @@ describe("liveInboxIds persistence + synced show-old", () => {
     // client_state docs. resolveShowOld must ignore them forever.
     useInboxStore.getState().syncTable("clientState", { ui: { show_old_sessions: true } });
     expect(resolveShowOld(useInboxStore.getState().clientState.ui)).toBe(false);
+  });
+});
+
+describe("reconcileDisownedSessions — stale ownership cleared by payload absence", () => {
+  // Disowning reaches a client only as ABSENCE from the live payload, so the
+  // never-prune cache would otherwise claim owned_by_me forever — defeating the
+  // "mine" scope filter and, with show-old on, rendering the disowned session
+  // as a normal inbox card (the jx78xak incident, 2026-07-30).
+  const ME = "kd77bg600000000000000000000000me";
+  const BOT = "kd7e0g100000000000000000000000bt";
+  const DISOWNED = "jx78xak0000000000000000000000aaa";
+  const STILL_MINE = "jx7still000000000000000000000bbb";
+  const MY_OWN_RUN = "jx7mine0000000000000000000000ccc";
+
+  const foreignOwned = (id: string): InboxSession => ({
+    ...baseSession,
+    _id: id,
+    user_id: BOT,
+    owned_by_me: true,
+    owner_user_id: ME,
+  });
+
+  beforeEach(() => {
+    useInboxStore.setState({
+      currentUser: { _id: ME } as any,
+      liveInboxIds: new Set<string>(),
+      liveInboxIdList: [],
+      sessions: {
+        [DISOWNED]: foreignOwned(DISOWNED),
+        [STILL_MINE]: foreignOwned(STILL_MINE),
+        [MY_OWN_RUN]: { ...baseSession, _id: MY_OWN_RUN, user_id: ME, owned_by_me: true, owner_user_id: ME },
+      },
+    });
+  });
+
+  it("clears owned_by_me and owner_user_id on a foreign-run row absent from the payload", () => {
+    useInboxStore.getState().reconcileDisownedSessions([STILL_MINE]);
+    const s = useInboxStore.getState().sessions;
+    expect(s[DISOWNED].owned_by_me).toBe(false);
+    expect(s[DISOWNED].owner_user_id).toBeNull();
+    // Present row keeps its claim untouched.
+    expect(s[STILL_MINE].owned_by_me).toBe(true);
+    expect(s[STILL_MINE].owner_user_id).toBe(ME);
+  });
+
+  it("never touches my own-run sessions — they age out via the old partition, not disowning", () => {
+    useInboxStore.getState().reconcileDisownedSessions([]);
+    const s = useInboxStore.getState().sessions;
+    expect(s[MY_OWN_RUN].owned_by_me).toBe(true);
+    expect(s[MY_OWN_RUN].owner_user_id).toBe(ME);
+  });
+
+  it("leaves foreign rows without an ownership claim alone (team-mode / deep-link rows)", () => {
+    const PLAIN = "jx7plain00000000000000000000ddd0";
+    useInboxStore.setState({
+      sessions: { [PLAIN]: { ...baseSession, _id: PLAIN, user_id: BOT, owner_user_id: "kd74rxrw000000000000000000000sam" } },
+    });
+    useInboxStore.getState().reconcileDisownedSessions([]);
+    // Another user's ownership info is server truth about THEM — not ours to clear.
+    expect(useInboxStore.getState().sessions[PLAIN].owner_user_id).toBe("kd74rxrw000000000000000000000sam");
+  });
+
+  it("no-ops when the current user is unknown (cold boot before the user query lands)", () => {
+    useInboxStore.setState({ currentUser: null });
+    useInboxStore.getState().reconcileDisownedSessions([]);
+    expect(useInboxStore.getState().sessions[DISOWNED].owned_by_me).toBe(true);
+  });
+
+  it("skips optimistic stubs (non-Convex ids) — they are always mine", () => {
+    const STUB = "11111111-2222-4333-8444-555555555555";
+    useInboxStore.setState({
+      sessions: { [STUB]: { ...baseSession, _id: STUB, user_id: BOT, owned_by_me: true } },
+    });
+    useInboxStore.getState().reconcileDisownedSessions([]);
+    expect(useInboxStore.getState().sessions[STUB].owned_by_me).toBe(true);
+  });
+
+  it("after reconcile, the disowned row is dropped by the mine-scope filter even with show-old on", async () => {
+    const { filterInboxScope } = await import("../inboxStore");
+    useInboxStore.getState().reconcileDisownedSessions([STILL_MINE]);
+    const scoped = filterInboxScope(useInboxStore.getState().sessions, "mine", ME);
+    expect(Object.keys(scoped).sort()).toEqual([MY_OWN_RUN, STILL_MINE].sort());
   });
 });

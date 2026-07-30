@@ -17,19 +17,26 @@
  */
 
 import { useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, Layers, X, Undo2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Layers, Undo2, X } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import {
+  isExcludedStableItem,
   parseStableContext,
+  type StableMode,
   type StableContextData,
   type StableContextItem,
 } from "@codecast/shared/contracts";
+import { relTimeShort } from "@/lib/utils";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useInboxStore, useTrackedStore } from "../store/inboxStore";
 import { useDevices } from "./DeviceBadge";
 import { LivenessDot, type LivenessState } from "./LivenessDot";
 import { SegmentedToggle } from "./SegmentedToggle";
-import { relTimeShort } from "@/lib/utils";
+import {
+  resolveStableContextPreview,
+  selectStableContextPreviewItems,
+  stableContextPreviewFeedParams,
+} from "./stableContextPreview";
 
 function livenessFor(item: StableContextItem): LivenessState {
   if (item.work_state === "working" || item.is_live) return "active";
@@ -44,8 +51,8 @@ function projectName(path?: string | null): string | null {
 /** ISO string (feed) or epoch — the record stores whatever the feed returned. */
 function toEpoch(ts?: string | number): number | null {
   if (ts == null) return null;
-  const n = typeof ts === "number" ? ts : Date.parse(ts);
-  return Number.isFinite(n) ? n : null;
+  const value = typeof ts === "number" ? ts : Date.parse(ts);
+  return Number.isFinite(value) ? value : null;
 }
 
 function ContextSessionCard({
@@ -76,6 +83,17 @@ function ContextSessionCard({
       } ${onOpen ? "cursor-pointer" : ""}`}
       onClick={onOpen}
       role={onOpen ? "button" : undefined}
+      tabIndex={onOpen ? 0 : undefined}
+      onKeyDown={
+        onOpen
+          ? (event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                onOpen();
+              }
+            }
+          : undefined
+      }
     >
       <div className="flex items-center gap-1.5 min-w-0">
         <LivenessDot state={livenessFor(item)} size="xs" className="flex-shrink-0" />
@@ -84,10 +102,10 @@ function ContextSessionCard({
         </span>
       </div>
       <div className="mt-1 flex items-center gap-1.5 text-[10px] text-sol-text-dim font-mono truncate">
-        {meta.map((m, i) => (
-          <span key={i} className="flex items-center gap-1.5 flex-shrink-0">
-            {i > 0 && <span className="opacity-50">·</span>}
-            {m}
+        {meta.map((value, index) => (
+          <span key={`${value}-${index}`} className="flex items-center gap-1.5 flex-shrink-0">
+            {index > 0 && <span className="opacity-50">·</span>}
+            {value}
           </span>
         ))}
         {author && (
@@ -99,8 +117,9 @@ function ContextSessionCard({
       </div>
       {onToggleExclude && (
         <button
-          onClick={(e) => {
-            e.stopPropagation();
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
             onToggleExclude();
           }}
           title={excluded ? "Include in context" : "Exclude from context"}
@@ -143,7 +162,9 @@ export function StableContextCards({ stableContext }: { stableContext?: string |
   return (
     <div className="conv-col mx-auto px-4 sm:px-5 md:px-6 pt-2 pb-1">
       <button
-        onClick={() => setOpen((v) => !v)}
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
         className="flex items-center gap-1.5 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors mb-1.5"
       >
         {open ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
@@ -166,18 +187,6 @@ export function StableContextCards({ stableContext }: { stableContext?: string |
   );
 }
 
-// Mirrors the CLI's feed params (stableContext.ts buildStableContext) so the
-// preview and the injection can't drift: solo = 10 sessions / 7d, team = 15 / 14d.
-function feedParamsFor(mode: "team" | "solo", projectPath?: string) {
-  const lookbackDays = mode === "team" ? 14 : 7;
-  return {
-    limit: mode === "team" ? 15 : 10,
-    // Floor to the hour so the subscription args stay stable across renders.
-    start_time: Math.floor((Date.now() - lookbackDays * 24 * 60 * 60 * 1000) / 3_600_000) * 3_600_000,
-    ...(projectPath ? { project_path: projectPath } : {}),
-  };
-}
-
 const MODE_ITEMS = [
   { key: "auto", label: "Auto", title: "Use this machine's default (cast stable)" },
   { key: "team", label: "Team", title: "Team's recent sessions (14d)" },
@@ -191,15 +200,18 @@ const MODE_ITEMS = [
  */
 export function StableContextPicker({ conversationId }: { conversationId: string }) {
   const [open, setOpen] = useState(false);
-  const s = useTrackedStore([
-    (st) => (st.sessions[conversationId] as any)?.stable_mode,
-    (st) => (st.sessions[conversationId] as any)?.stable_exclude,
-    (st) => (st.sessions[conversationId] as any)?.project_path ?? (st.conversations[conversationId] as any)?.project_path,
+  const state = useTrackedStore([
+    (store) => store.sessions[conversationId]?.stable_mode,
+    (store) => store.sessions[conversationId]?.stable_exclude,
+    (store) => store.sessions[conversationId]?.project_path ?? store.conversations[conversationId]?.project_path,
   ]);
-  const row = (s.sessions[conversationId] ?? s.conversations[conversationId]) as any;
-  const chosenMode: string | undefined = row?.stable_mode;
-  const exclude: string[] = row?.stable_exclude ?? [];
-  const projectPath: string | undefined = row?.project_path || undefined;
+  const row = state.sessions[conversationId] ?? state.conversations[conversationId];
+  const chosenMode: StableMode | undefined =
+    row?.stable_mode === "team" || row?.stable_mode === "solo" || row?.stable_mode === "off"
+      ? row.stable_mode
+      : undefined;
+  const exclude = row?.stable_exclude ?? [];
+  const projectPath = row?.project_path || undefined;
 
   // "Auto" = whatever the machine that spawns the session has configured.
   // Auto-routing lands on the most-recently-active local device, so its
@@ -208,55 +220,75 @@ export function StableContextPicker({ conversationId }: { conversationId: string
   const deviceDefault = mostRecentOnlineLocal?.settings?.stable_mode ?? "off";
   const deviceGlobal = mostRecentOnlineLocal?.settings?.stable_global === true;
 
-  const effectiveMode = (chosenMode ?? deviceDefault) as "team" | "solo" | "off";
-  const globalScope = chosenMode ? false : deviceGlobal;
+  const { effectiveMode, globalScope } = resolveStableContextPreview(
+    chosenMode,
+    deviceDefault,
+    deviceGlobal,
+  );
 
   const feedArgs = useMemo(
     () =>
       effectiveMode === "off"
         ? ("skip" as const)
-        : feedParamsFor(effectiveMode, globalScope ? undefined : projectPath),
-    [effectiveMode, globalScope, projectPath],
+        : stableContextPreviewFeedParams(
+            effectiveMode,
+            globalScope ? undefined : projectPath,
+            exclude.length,
+          ),
+    [effectiveMode, globalScope, projectPath, exclude.length],
   );
-  const { data: feed, error: feedError } = useQueryNoThrow(api.conversations.feedForCLI, feedArgs, { breakAfterMs: 20_000 });
+  const { data: feed, error: feedError } = useQueryNoThrow(
+    api.conversations.feedForCLI,
+    feedArgs,
+    { breakAfterMs: 20_000 },
+  );
 
   const items: StableContextItem[] = useMemo(() => {
-    const convs: any[] = (feed as any)?.conversations ?? [];
-    return convs.map((conv) => ({
-      id: String(conv.id),
-      title: String(conv.title ?? "Untitled"),
-      project_path: conv.project_path ?? null,
-      updated_at: conv.updated_at,
-      message_count: conv.message_count,
-      work_state: conv.work_state,
-      is_live: conv.is_live,
-      user_name: conv.user?.name ?? conv.user?.email ?? null,
-      owned_by_me: conv.owned_by_me,
+    const conversations: any[] = (feed as any)?.conversations ?? [];
+    return conversations.map((conversation) => ({
+      id: String(conversation.id),
+      title: String(conversation.title ?? "Untitled"),
+      project_path: conversation.project_path ?? null,
+      updated_at: conversation.updated_at,
+      message_count: conversation.message_count,
+      work_state: conversation.work_state,
+      is_live: conversation.is_live,
+      user_name: conversation.user?.name ?? conversation.user?.email ?? null,
+      owned_by_me: conversation.owned_by_me,
     }));
   }, [feed]);
+  const previewItems = useMemo(
+    () =>
+      effectiveMode === "off"
+        ? []
+        : selectStableContextPreviewItems(items, effectiveMode, exclude),
+    [items, effectiveMode, exclude],
+  );
 
   const setPrefs = (prefs: { mode?: string | null; exclude?: string[] | null }) =>
     useInboxStore.getState().setStableContextPrefs(conversationId, prefs);
 
   const toggleExclude = (id: string) => {
     const short = id.slice(0, 7);
-    const isExcluded = exclude.some((e) => id.startsWith(e) || e === short);
+    const isExcluded = isExcludedStableItem(id, exclude);
     setPrefs({
       exclude: isExcluded
-        ? exclude.filter((e) => !id.startsWith(e) && e !== short)
+        ? exclude.filter((value) => !isExcludedStableItem(id, [value]))
         : [...exclude, short],
     });
   };
 
-  const includedCount = items.filter(
-    (it) => !exclude.some((e) => it.id.startsWith(e) || e === it.id.slice(0, 7)),
+  const includedCount = previewItems.filter(
+    (item) => !isExcludedStableItem(item.id, exclude),
   ).length;
 
   return (
     <div className="w-full max-w-2xl mx-auto mt-4">
       <div className="flex items-center justify-between gap-3 mb-2">
         <button
-          onClick={() => setOpen((v) => !v)}
+          type="button"
+          onClick={() => setOpen((value) => !value)}
+          aria-expanded={open}
           className="flex items-center gap-1.5 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors"
         >
           {open ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
@@ -274,42 +306,43 @@ export function StableContextPicker({ conversationId }: { conversationId: string
           items={MODE_ITEMS}
         />
       </div>
-      {open && (effectiveMode === "off" ? (
-        <div className="text-[11px] text-sol-text-dim/70 border border-dashed border-sol-border/50 rounded-md px-3 py-2">
-          {chosenMode === "off"
-            ? "No session history will be injected into this session."
-            : "Stable context is off on your machine — pick Team or Solo to inject recent session history for this session."}
-        </div>
-      ) : items.length > 0 ? (
-        <CardRow>
-          {items.map((item) => {
-            const short = item.id.slice(0, 7);
-            const isExcluded = exclude.some((e) => item.id.startsWith(e) || e === short);
-            return (
-              <ContextSessionCard
-                key={item.id}
-                item={item}
-                excluded={isExcluded}
-                onToggleExclude={() => toggleExclude(item.id)}
-              />
-            );
-          })}
-        </CardRow>
-      ) : feedError || (feed as any)?.error ? (
-        <div className="text-[11px] text-sol-text-dim/70 border border-dashed border-sol-border/50 rounded-md px-3 py-2">
-          Context preview unavailable right now — the session will still start with your machine's configured context.
-        </div>
-      ) : feed === undefined ? (
-        <div className="flex gap-2">
-          {[0, 1, 2].map((i) => (
-            <div key={i} className="w-[13.5rem] h-[3.25rem] rounded-md border border-sol-border/40 bg-sol-bg-alt/40 animate-pulse" />
-          ))}
-        </div>
-      ) : (
-        <div className="text-[11px] text-sol-text-dim/70 border border-dashed border-sol-border/50 rounded-md px-3 py-2">
-          No recent sessions to inject{projectPath ? " for this project" : ""}.
-        </div>
-      ))}
+      {open && (
+        effectiveMode === "off" ? (
+          <div className="text-[11px] text-sol-text-dim/70 border border-dashed border-sol-border/50 rounded-md px-3 py-2">
+            {chosenMode === "off"
+              ? "No session history will be injected into this session."
+              : "Stable context is off on your machine — pick Team or Solo to inject recent session history for this session."}
+          </div>
+        ) : previewItems.length > 0 ? (
+          <CardRow>
+            {previewItems.map((item) => {
+              const isExcluded = isExcludedStableItem(item.id, exclude);
+              return (
+                <ContextSessionCard
+                  key={item.id}
+                  item={item}
+                  excluded={isExcluded}
+                  onToggleExclude={() => toggleExclude(item.id)}
+                />
+              );
+            })}
+          </CardRow>
+        ) : feedError || (feed as any)?.error ? (
+          <div className="text-[11px] text-sol-text-dim/70 border border-dashed border-sol-border/50 rounded-md px-3 py-2">
+            Context preview unavailable right now — the session will still start with your machine&apos;s configured context.
+          </div>
+        ) : feed === undefined ? (
+          <div className="flex gap-2">
+            {[0, 1, 2].map((index) => (
+              <div key={index} className="w-[13.5rem] h-[3.25rem] rounded-md border border-sol-border/40 bg-sol-bg-alt/40 animate-pulse" />
+            ))}
+          </div>
+        ) : (
+          <div className="text-[11px] text-sol-text-dim/70 border border-dashed border-sol-border/50 rounded-md px-3 py-2">
+            No recent sessions to inject{projectPath ? " for this project" : ""}.
+          </div>
+        )
+      )}
     </div>
   );
 }

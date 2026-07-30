@@ -84,7 +84,7 @@ export function LabelChipsRow({
     if (!name) return;
     useInboxStore.getState().createBucket({ name })
       .then((r: any) => {
-        if (r?._id) setFreshLabelIds((prev) => new Set(prev).add(r._id));
+        if (r?.bucketId) setFreshLabelIds((prev) => new Set(prev).add(r.bucketId));
         toast.success(`Created label "${name}"`);
       })
       .catch(() => toast.error("Couldn't create label"));

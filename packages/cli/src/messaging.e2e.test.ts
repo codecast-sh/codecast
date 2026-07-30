@@ -319,14 +319,17 @@ describe("messaging e2e — failure modes", () => {
   }, 30_000);
 
   test("Scenario 9: shim exits immediately (FATAL) — JSONL never appears", async () => {
-    const h = track(spawnHarness({ fatal: "fake-claude: simulated startup failure" }));
-    // The pane should NOT show a normal ❯ prompt within the budget.
-    let sawPrompt = false;
-    try {
-      await waitFor(() => h.paneHasPrompt(), { timeoutMs: 2_000, label: "no prompt expected" });
-      sawPrompt = true;
-    } catch {}
-    expect(sawPrompt).toBe(false);
+    const fatalMessage = "fake-claude: simulated startup failure";
+    const h = track(spawnHarness({ fatal: fatalMessage }));
+    await waitFor(() => h.paneExitCode() === 1, {
+      timeoutMs: 2_000,
+      label: "fatal shim exit",
+    });
+    // The retained dead pane proves the intended shim ran. An unrelated
+    // tmux/bash startup failure cannot satisfy these negative assertions.
+    expect(h.paneExitCode()).toBe(1);
+    expect(h.capturePane()).toContain(fatalMessage);
+    expect(h.paneHasPrompt()).toBe(false);
     expect(fs.existsSync(h.jsonlPath)).toBe(false);
   }, 10_000);
 });

@@ -29,6 +29,7 @@ import {
   resolveVisibilityMode,
   buildShareUpdate,
   buildPathRestampUpdate,
+  type AccessLevel,
 } from "./privacy";
 import { batchScanConversations, paginateTeamFeed } from "./feedPagination";
 import { mergeUserMessageFeed, type FeedCandidate } from "./messageFeed";
@@ -538,6 +539,22 @@ function sanitizeConvexObjectKeys<T>(value: T): T {
     return out as T;
   }
   return value;
+}
+
+/**
+ * Stable context is a snapshot of the owner's recent solo/team feed, not part
+ * of the shared conversation itself. It can contain unrelated session titles,
+ * teammate names, full project paths, and private conversation ids. Preserve it
+ * for authenticated owner/team views, but never let a share token turn that
+ * feed snapshot into public data.
+ */
+export function conversationForAccess<T extends Record<string, any>>(
+  conversation: T,
+  access: AccessLevel,
+): T {
+  if (access === "owner" || access === "team") return conversation;
+  const { stable_context: _stableContext, ...publicConversation } = conversation;
+  return publicConversation as T;
 }
 
 function matchChildByPrompt(
@@ -1192,7 +1209,7 @@ export const getConversation = query({
     if (!conversation) {
       return null;
     }
-    const isOwner = authUserId && conversation.user_id.toString() === authUserId.toString();
+    const isOwner = !!authUserId && conversation.user_id.toString() === authUserId.toString();
     const isShared = !!conversation.share_token;
     let hasTeamAccess = false;
     if (authUserId && !isOwner) {
@@ -1201,6 +1218,11 @@ export const getConversation = query({
     if (!isOwner && !hasTeamAccess && !isShared) {
       return null;
     }
+    const accessLevel: AccessLevel = isOwner
+      ? "owner"
+      : hasTeamAccess
+        ? "team"
+        : "shared";
 
     const limit = args.limit ?? 100;
     // Fetch most recent messages (descending), then reverse for display
@@ -1250,7 +1272,7 @@ export const getConversation = query({
     }
 
     return sanitizeConvexObjectKeys({
-      ...conversation,
+      ...conversationForAccess(conversation, accessLevel),
       title,
       messages: sortedMessages,
       user: user ? { name: user.name, email: user.email } : null,
@@ -1275,7 +1297,8 @@ export const getAllMessages = query({
       return null;
     }
 
-    if ((await checkConversationAccess(ctx, authUserId, conversation)) === "denied") {
+    const accessLevel = await checkConversationAccess(ctx, authUserId, conversation);
+    if (accessLevel === "denied") {
       return null;
     }
 
@@ -1378,7 +1401,7 @@ export const getAllMessages = query({
     const oldestTimestamp = messages.length > 0 ? messages[0].timestamp : null;
 
     return sanitizeConvexObjectKeys({
-      ...conversation,
+      ...conversationForAccess(conversation, accessLevel),
       title,
       messages: enrichedMessages,
       user: user ? { name: user.name, email: user.email, avatar_url: user.image || user.github_avatar_url || null } : null,
@@ -1476,7 +1499,7 @@ export const getMessagesAroundTimestamp = query({
       return null;
     }
 
-    const isOwner = authUserId && conversation.user_id.toString() === authUserId.toString();
+    const isOwner = !!authUserId && conversation.user_id.toString() === authUserId.toString();
     const isShared = !!conversation.share_token;
     let hasTeamAccess = false;
 
@@ -1487,6 +1510,11 @@ export const getMessagesAroundTimestamp = query({
     if (!isOwner && !hasTeamAccess && !isShared) {
       return null;
     }
+    const accessLevel: AccessLevel = isOwner
+      ? "owner"
+      : hasTeamAccess
+        ? "team"
+        : "shared";
 
     const limitBefore = Math.min(args.limit_before ?? 50, 100);
     const limitAfter = Math.min(args.limit_after ?? 50, 100);
@@ -1564,7 +1592,7 @@ export const getMessagesAroundTimestamp = query({
         : { children: [], map: {}, agentNameEntries: [] };
 
     return sanitizeConvexObjectKeys({
-      ...conversation,
+      ...conversationForAccess(conversation, accessLevel),
       title,
       messages,
       user: user ? { name: user.name, email: user.email, avatar_url: user.image || user.github_avatar_url || null } : null,
@@ -1840,7 +1868,10 @@ export const getConversationWithMeta = query({
 
     // Strip the large on-demand field (available_skills). git_diff /
     // git_diff_staged now live in conversation_git_diffs, not on the doc.
-    const { available_skills: _convSkills, ...conversationLight } = conversation;
+    const {
+      available_skills: _convSkills,
+      ...conversationLight
+    } = conversationForAccess(conversation, access);
 
     return sanitizeConvexObjectKeys({
       ...conversationLight,
@@ -2757,7 +2788,7 @@ export const getSharedConversation = query({
       || "New Session";
 
     return sanitizeConvexObjectKeys({
-      ...conversation,
+      ...conversationForAccess(conversation, "shared"),
       title,
       messages: sortedMessages,
       user: user ? { name: user.name, email: user.email } : null,
@@ -2897,7 +2928,7 @@ export const getConversationPublic = query({
     return sanitizeConvexObjectKeys({
       access_level: accessLevel,
       conversation: {
-        ...conversation,
+        ...conversationForAccess(conversation, accessLevel),
         title,
         messages: sortedMessages,
         user: user ? { name: user.name, email: user.email, avatar_url: user.image || user.github_avatar_url || null } : null,
@@ -8989,6 +9020,11 @@ export const reconfigureSession = mutation({
     // until the first assistant turn confirms.
     model: v.optional(v.string()),
     effort: v.optional(v.string()),
+    // A parked create can land with an earlier stable-context selection than
+    // the still-local stub. Rekey reconciliation relaunches the blank session
+    // through this mutation with the latest values before its first message.
+    stable_mode: v.optional(v.string()),
+    stable_exclude: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -9073,6 +9109,8 @@ export const reconfigureSession = mutation({
       isolated: args.isolated,
       ...(stampedModelKey ? { model: stampedModelKey } : {}),
       ...(updated.effort && launchCfg?.efforts.includes(updated.effort) ? { effort: updated.effort } : {}),
+      ...(args.stable_mode ? { stableMode: args.stable_mode } : {}),
+      ...(args.stable_exclude?.length ? { stableExclude: args.stable_exclude } : {}),
     });
   },
 });

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   capturePrincipalDispatchAuthorization,
+  getPrincipalDispatchCorrelationEpoch,
   isPrincipalDispatchAuthorizationCurrent,
   subscribePrincipalDispatchCorrelation,
   updatePrincipalDispatchCorrelation,
@@ -17,6 +18,17 @@ afterEach(async () => {
 });
 
 describe("native principal dispatch correlation", () => {
+  test("changes the allowed snapshot identity when correlation epoch changes", () => {
+    updatePrincipalDispatchCorrelation(10);
+    const accountA = getPrincipalDispatchCorrelationEpoch();
+    updatePrincipalDispatchCorrelation(11);
+    const accountB = getPrincipalDispatchCorrelationEpoch();
+
+    expect(accountA).not.toBeNull();
+    expect(accountB).not.toBeNull();
+    expect(accountB).not.toBe(accountA);
+  });
+
   test("subject changes deny stale work immediately and notify mounted consumers", async () => {
     updatePrincipalDispatchCorrelation(10);
     await flushNotification();

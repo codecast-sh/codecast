@@ -103,7 +103,7 @@ import { CollabComposer, CollabRequestBanner, OwnerComposerPresence } from "./Co
 import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, type ParsedCastCommand } from "./castCommand";
 import { ConversationTree } from "./ConversationTree";
 import { useInboxStore, isConvexId, computeNewDividerIndex, convBucketMap, type BucketItem, type ForkChild, type InboxSession, type OptimisticImage } from "../store/inboxStore";
-import { DispatchNotWiredError } from "../store/mutativeMiddleware";
+import { DispatchNotWiredError, isParkedDispatchError } from "../store/mutativeMiddleware";
 
 
 // restartSession can answer with a DIFFERENT conversation: the ghost's live
@@ -942,6 +942,7 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
       git_root: trimmed,
       isolated: (forceIsolated ?? isolated) || undefined,
     }).catch((err) => {
+      if (isParkedDispatchError(err)) return;
       if (prevPath) useInboxStore.getState().updateSessionProject(convexId!, prevPath);
       toast.error(err instanceof Error ? err.message : "Failed to switch project");
     });
@@ -1175,7 +1176,10 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
       if (isConvexId(id)) {
         convCommand(id, "reconfigureSession", {
           agent_type: agentType,
-        }).catch(() => {});
+        }).catch((err) => {
+          if (isParkedDispatchError(err)) return;
+          toast.error(err instanceof Error ? err.message : "Failed to switch agent");
+        });
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to switch agent");
@@ -8657,6 +8661,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         await resumeSessionMutation({ conversation_id: conversationId as Id<"conversations"> });
       }
     } catch (err) {
+      // A parked request is durable but has no response from which to infer a
+      // ghost-restore redirect. Leave the recovery indicators active.
+      if (isParkedDispatchError(err)) return;
       const msg = err instanceof Error ? err.message : String(err);
       // The server row is gone (cached ghost) — escalate to the restore path,
       // which targets the live twin / recreates the row before resuming.
@@ -8666,6 +8673,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
           handleRestartResult(await convCommand(conversationId, "restartSession", ghostRestartContext()));
           return;
         } catch (err2) {
+          if (isParkedDispatchError(err2)) return;
           useInboxStore.getState().markServerDeleted(conversationId);
           toast.error("This conversation no longer exists on the server and couldn't be restored automatically");
           setIsResuming(false);
@@ -8745,6 +8753,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     convCommand(conversationId, "restartSession", ghostRestartContext())
       .then((res) => { handleRestartResult(res); setIsResuming(true); })
       .catch((err) => {
+        if (isParkedDispatchError(err)) return;
         setIsRestarting(false);
         const msg = err instanceof Error ? err.message : String(err);
         if (/conversation_deleted/i.test(msg)) {
@@ -9183,6 +9192,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         setSentAt(Date.now());
         sentContentRef.current = content;
       } catch (error) {
+        // The fork/create and this optimistic rewrite are still durable. Live
+        // session-id reconciliation will rekey the stub and redrive the pending
+        // message; reporting failure here would lie and invite a duplicate retry.
+        if (isParkedDispatchError(error)) return;
         toast.error(error instanceof Error ? error.message : "Failed to send rewrite");
       }
       return;
@@ -9236,6 +9249,13 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         sentContentRef.current = trimmed;
         setShowStuckBanner(false);
       } catch (error) {
+        // `parked` means createSession is already in the durable outbox. Keep
+        // the optimistic bubble pending; the rekey continuation sends it with
+        // the same clientId once the real conversation row arrives.
+        if (isParkedDispatchError(error)) {
+          setOptimisticSending(false);
+          return;
+        }
         toast.error(error instanceof Error ? error.message : "Failed to send message");
         useInboxStore.getState().markOptimisticAsFailed(targetConvId, clientId);
         setOptimisticSending(false);
@@ -10532,7 +10552,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     // convexConvId is undefined until the session exists server-side; a not-yet-started
     // draft carries a stub id and has no live process to receive keystrokes.
     if (!conversation || !effectiveIsOwner || conversation.status !== "active" || !convexConvId) return;
-    convCommand(convexConvId, "sendKeysToSession", { keys: "BTab" });
+    void convCommand(convexConvId, "sendKeysToSession", { keys: "BTab" }).catch((err) => {
+      if (isParkedDispatchError(err)) return;
+      toast.error(err instanceof Error ? err.message : "Failed to change permission mode");
+    });
     const currentMode = optimisticMode || managedSession?.permission_mode || "default";
     const nextIdx = (CC_MODE_ORDER.indexOf(currentMode) + 1) % CC_MODE_ORDER.length;
     setOptimisticMode(CC_MODE_ORDER[nextIdx]);
@@ -10549,7 +10572,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     const steps = (targetIdx - currentIdx + CC_MODE_ORDER.length) % CC_MODE_ORDER.length;
     if (steps === 0) return;
     const keys = Array(steps).fill("BTab").join(" ");
-    convCommand(convexConvId, "sendKeysToSession", { keys });
+    void convCommand(convexConvId, "sendKeysToSession", { keys }).catch((err) => {
+      if (isParkedDispatchError(err)) return;
+      toast.error(err instanceof Error ? err.message : "Failed to enable bypass permissions");
+    });
     setOptimisticMode("bypassPermissions");
     clearTimeout(optimisticTimerRef.current);
     optimisticTimerRef.current = setTimeout(() => setOptimisticMode(null), 8000);
@@ -11185,8 +11211,16 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
   );
   const handleSendEscape = useCallback(() => {
     if (!conversation || !effectiveIsOwner || conversation.status !== "active" || !convexConvId) return;
-    convCommand(convexConvId, "sendEscapeToSession");
-    toast.info("Escape sent to session");
+    void convCommand(convexConvId, "sendEscapeToSession").then(
+      () => toast.info("Escape sent to session"),
+      (err) => {
+        if (isParkedDispatchError(err)) {
+          toast.info("Escape queued — it will send when the connection recovers");
+          return;
+        }
+        toast.error(err instanceof Error ? err.message : "Failed to send Escape");
+      },
+    );
   }, [conversation, effectiveIsOwner, convCommand, convexConvId]);
 
   const handleMessageSent = useCallback(() => {
@@ -11211,7 +11245,10 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     if (!conversation) return;
     handleForkFromMessage(messageUuid);
     if (effectiveIsOwner && conversation.status === "active" && convexConvId) {
-      convCommand(convexConvId, "rewindSession", { steps_back: indexFromEnd + 1 });
+      void convCommand(convexConvId, "rewindSession", { steps_back: indexFromEnd + 1 }).catch((err) => {
+        if (isParkedDispatchError(err)) return;
+        toast.error(err instanceof Error ? err.message : "Failed to rewind session");
+      });
     }
   }, [handleForkFromMessage, conversation, effectiveIsOwner, convCommand, convexConvId]);
 
@@ -13892,19 +13929,66 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                                 <DropdownMenuItem
                                   key={t}
                                   onClick={() => {
-                                    convCommand(conversation._id.toString(), "forkFromMessage", {
+                                    const parentId = conversation._id.toString();
+                                    const forkSessionId =
+                                      typeof crypto !== "undefined" && crypto.randomUUID
+                                        ? crypto.randomUUID()
+                                        : "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+                                            const r = (Math.random() * 16) | 0;
+                                            return (c === "x" ? r : (r & 0x3) | 0x8).toString(16);
+                                          });
+                                    const now = Date.now();
+                                    const store = useInboxStore.getState();
+
+                                    // Agent switches are full-history forks. Seed and
+                                    // navigate to the client-id stub immediately, then
+                                    // rekey it exactly like every other fork. Without a
+                                    // client session_id, a parked replay spawned an
+                                    // invisible sibling and the draft continuation was
+                                    // permanently lost.
+                                    store.syncRecord("conversations", forkSessionId, {
+                                      _id: forkSessionId,
+                                      session_id: forkSessionId,
+                                      title: conversation.title,
+                                      agent_type: t,
+                                      project_path: conversation.project_path ?? undefined,
+                                      git_root: conversation.git_root ?? undefined,
+                                      started_at: now,
+                                      updated_at: now,
+                                      status: "active",
+                                      message_count: 0,
+                                      forked_from: parentId,
+                                      parent_conversation_id: parentId,
+                                      parent_message_uuid: "agent-switch",
+                                      fork_status: "copying",
+                                      _forkTargetAgentType: t,
+                                    });
+                                    seedForkSession(forkSessionId, {
+                                      session_id: forkSessionId,
+                                      title: conversation.title,
+                                      started_at: now,
+                                      agent_type: t,
+                                      forked_from: parentId,
+                                      parent_conversation_id: parentId,
+                                      parent_message_uuid: "agent-switch",
+                                      _forkTargetAgentType: t,
+                                    } as any);
+                                    moveDraft(parentId, forkSessionId);
+
+                                    const ready = convCommand(parentId, "forkFromMessage", {
                                       target_agent_type: t,
+                                      session_id: forkSessionId,
                                     }).then((result) => {
-                                      moveDraft(conversation._id.toString(), result.conversation_id);
-                                      // Agent-switch forks are siblings (parent_conversation_id, not
-                                      // forked_from). Switch instantly from local state — same no-reload
-                                      // path as doFork.
-                                      seedForkSession(result.conversation_id, {
-                                        agent_type: t,
-                                        parent_conversation_id: conversation._id.toString(),
-                                        parent_message_uuid: "agent-switch",
-                                      });
-                                    }).catch((err) => {
+                                      resolveForkSessionId(forkSessionId, result.conversation_id);
+                                      return result.conversation_id as string;
+                                    });
+                                    store.trackSessionCreate(forkSessionId, ready);
+                                    ready.catch((err) => {
+                                      if (isParkedDispatchError(err)) return;
+                                      // Ordinary failures never consume the original
+                                      // draft or strand a navigated local fork.
+                                      useInboxStore.getState().moveDraft(forkSessionId, parentId);
+                                      useInboxStore.getState().discardForkStub(forkSessionId, parentId);
                                       toast.error(err instanceof Error ? err.message : "Failed to switch agent");
                                     });
                                   }}

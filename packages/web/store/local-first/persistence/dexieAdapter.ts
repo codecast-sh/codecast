@@ -11,6 +11,7 @@ import {
   PRINCIPAL_STORE_SCHEMA_VERSION,
   PrincipalStoreFenceError,
   PrincipalStoreIdentityError,
+  assertSupportedCommandOperationSchema,
   type CommandReceiptRecord,
   type CommandRecord,
   type CommandStatus,
@@ -44,6 +45,22 @@ import {
 
 export type DexieFaultPoint = "after-operations" | "after-head-write";
 export type DexieFaultInjector = (point: DexieFaultPoint) => void | Promise<void>;
+
+/**
+ * IndexedDB may auto-commit a transaction as soon as its request queue drains.
+ * Never `await` an absent optional hook here: even `await undefined` yields to a
+ * native microtask with no IDB request keeping the transaction alive, which
+ * real browsers surface as Dexie's PrematureCommitError. Async test hooks must
+ * use Dexie's explicit keep-alive primitive for the same reason.
+ */
+function transactionFault(
+  injectFault: DexieFaultInjector | undefined,
+  point: DexieFaultPoint,
+): Promise<void> | null {
+  if (!injectFault) return null;
+  const pending = injectFault(point);
+  return pending ? Dexie.waitFor(pending) : null;
+}
 
 /**
  * Kept as an exported fixture so migration tests create the exact schema that
@@ -343,6 +360,9 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
         this.db.syncMetadata.toArray(),
         this.db.deltaCursors.toArray(),
       ]);
+      for (const command of commands) {
+        assertSupportedCommandOperationSchema(command);
+      }
       return {
         metadata: metadata!,
         entities,
@@ -422,14 +442,16 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
         lastCoverage: migrated ? undefined : current?.lastCoverage,
         lastAccess: migrated ? undefined : current?.lastAccess,
       });
-      await this.injectFault?.("after-operations");
+      const operationFault = transactionFault(this.injectFault, "after-operations");
+      if (operationFault) await operationFault;
       const next: PrincipalStoreMetadata = {
         ...metadata!,
         head: asCommitSequence(metadata!.head + 1),
         updatedAt: Date.now(),
       };
       await this.db.meta.put(next);
-      await this.injectFault?.("after-head-write");
+      const headFault = transactionFault(this.injectFault, "after-head-write");
+      if (headFault) await headFault;
       return {
         writerEpoch,
         head: next.head,
@@ -451,6 +473,9 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
       const commands = statuses
         ? await this.db.commands.filter((row) => statuses.includes(row.status)).toArray()
         : await this.db.commands.toArray();
+      for (const command of commands) {
+        assertSupportedCommandOperationSchema(command);
+      }
       return commands.sort((a, b) =>
         a.localSequence - b.localSequence || a.createdAt - b.createdAt || a.id.localeCompare(b.id));
     });
@@ -464,7 +489,9 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
     return await this.db.transaction("r", [this.db.meta, this.db.commands], async () => {
       const metadata = await this.db.meta.get("store");
       this.assertFence(metadata, fence);
-      return (await this.db.commands.get(commandId)) ?? null;
+      const command = (await this.db.commands.get(commandId)) ?? null;
+      if (command) assertSupportedCommandOperationSchema(command);
+      return command;
     });
   }
 
@@ -1513,6 +1540,7 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
       case "release-grant": await this.releaseGrant(operation.grantKey); return;
       case "put-command": {
         if (operation.record.principalId !== principalId) throw new PrincipalStoreIdentityError();
+        assertSupportedCommandOperationSchema(operation.record);
         const current = await this.db.commands.get(operation.record.id);
         if (!current) throw new PrincipalStoreFenceError("Command must be durably queued before update");
         if (current.principalId !== operation.record.principalId ||
@@ -1537,6 +1565,7 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
       }
       case "queue-command": {
         if (operation.record.principalId !== principalId) throw new PrincipalStoreIdentityError();
+        assertSupportedCommandOperationSchema(operation.record);
         if (operation.record.status !== "queued" || !operation.record.optimisticActive) {
           throw new PrincipalStoreFenceError("A new command must enter as an active queued command");
         }
@@ -1601,14 +1630,16 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
       // including canonical write sets whose proof is not owned by a view row.
       await this.reconcileAcknowledgedCommands();
       guard?.();
-      await this.injectFault?.("after-operations");
+      const operationFault = transactionFault(this.injectFault, "after-operations");
+      if (operationFault) await operationFault;
       const next: PrincipalStoreMetadata = {
         ...metadata!,
         head: asCommitSequence(metadata!.head + 1),
         updatedAt: Date.now(),
       };
       await this.db.meta.put(next);
-      await this.injectFault?.("after-head-write");
+      const headFault = transactionFault(this.injectFault, "after-head-write");
+      if (headFault) await headFault;
       return {
         head: next.head,
         affectedKeys: [...new Set(operations.map(affectedKey))],

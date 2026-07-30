@@ -24,7 +24,7 @@ export default function DashboardShell() {
   const guestOk = /^\/conversation\//.test(location.pathname);
   return (
     <AuthGuard guestOk={guestOk}>
-      <DashboardLayout>
+      <DashboardLayout allowUnhydratedGuest={guestOk}>
         <Outlet />
       </DashboardLayout>
     </AuthGuard>

@@ -140,6 +140,31 @@ describe("team send — authorization", () => {
     expect(row.content).toContain("can you take the auth half?");
   });
 
+  test("preserves an exact multi-line body instead of trimming code or blank lines", async () => {
+    const { ctx, tables } = world({ now: Date.now() });
+    const body = "    const answer = 42;\n\n";
+    await performSessionSend(ctx as any, "uAlice" as any, {
+      to: "jxbob01",
+      from: "jxalice",
+      body,
+    });
+
+    expect(tables.pending_messages[0].content).toBe(
+      `<session-message from="jxalice">\n${body}\n</session-message>`,
+    );
+  });
+
+  test("rejects a whitespace-only body without normalizing valid bodies", async () => {
+    const { ctx } = world({ now: Date.now() });
+    await expect(
+      performSessionSend(ctx as any, "uAlice" as any, {
+        to: "jxbob01",
+        from: "jxalice",
+        body: " \n\t ",
+      }),
+    ).rejects.toThrow("Message body is empty");
+  });
+
   test("Alice CANNOT send to Bob's PRIVATE session (not team-visible)", async () => {
     const { ctx } = world({ now: 1_000_000_000_000 });
     await expect(

@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { buildCodexStableContext } from "./daemon.js";
+import {
+  buildCodexStableContext,
+  startCodexThreadThenRecordStableContext,
+} from "./daemon.js";
 
 const originalFetch = globalThis.fetch;
 
@@ -135,5 +138,40 @@ describe("buildCodexStableContext", () => {
     expect(context?.text).toContain("Keep me");
     expect(context?.text).not.toContain("Drop me");
     expect(context?.data.items.map((i) => i.title)).toEqual(["Keep me"]);
+  });
+});
+
+describe("Codex stable-context recording order", () => {
+  test("does not record when app-server threadStart fails and falls back", async () => {
+    const calls: string[] = [];
+
+    await expect(startCodexThreadThenRecordStableContext(
+      async () => {
+        calls.push("threadStart");
+        throw new Error("app-server unavailable");
+      },
+      () => {
+        calls.push("record");
+      },
+    )).rejects.toThrow("app-server unavailable");
+
+    expect(calls).toEqual(["threadStart"]);
+  });
+
+  test("records only after a successful app-server threadStart", async () => {
+    const calls: string[] = [];
+
+    const response = await startCodexThreadThenRecordStableContext(
+      async () => {
+        calls.push("threadStart");
+        return { thread: { id: "thread-123" } };
+      },
+      () => {
+        calls.push("record");
+      },
+    );
+
+    expect(response.thread.id).toBe("thread-123");
+    expect(calls).toEqual(["threadStart", "record"]);
   });
 });

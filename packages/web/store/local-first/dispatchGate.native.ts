@@ -56,12 +56,20 @@ export function isPrincipalDispatchAuthorizationCurrent(
     capture.principalEpoch === authorizedPrincipalEpoch;
 }
 
-export function usePrincipalDispatchAllowed(): boolean {
+export function getPrincipalDispatchCorrelationEpoch(): number | null {
+  return authorizedPrincipalEpoch === null ? null : correlationEpoch;
+}
+
+export function usePrincipalDispatchCorrelationEpoch(): number | null {
   return useSyncExternalStore(
     (listener) => {
       return subscribePrincipalDispatchCorrelation(listener);
     },
-    () => authorizedPrincipalEpoch !== null,
-    () => false,
+    getPrincipalDispatchCorrelationEpoch,
+    () => null,
   );
+}
+
+export function usePrincipalDispatchAllowed(): boolean {
+  return usePrincipalDispatchCorrelationEpoch() !== null;
 }

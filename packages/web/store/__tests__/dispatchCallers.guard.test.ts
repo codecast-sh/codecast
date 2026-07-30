@@ -1,0 +1,113 @@
+import { describe, expect, test } from "bun:test";
+
+describe("durable dispatch call-site guards", () => {
+  test("side-panel click surfaces never pass React events into the store action", async () => {
+    const source = await Bun.file(
+      new URL("../../components/DashboardLayout.tsx", import.meta.url),
+    ).text();
+
+    expect(source).not.toContain("onCollapse={s.toggleSidePanel}");
+    expect(source).not.toContain("onClick={s.toggleSidePanel}");
+  });
+
+  test("context session creation never bypasses the durable action outbox", async () => {
+    const source = await Bun.file(
+      new URL("../../components/ContextChatInput.tsx", import.meta.url),
+    ).text();
+
+    expect(source).not.toContain('_dispatch("createSession"');
+    expect(source).not.toContain('_dispatch("linkConversation"');
+    expect(source).toContain("beginOptimisticSession");
+    expect(source).toContain("awaitConvexId");
+    expect(source).toContain("linked_object");
+    expect(source).toContain("sendMessage(convexId, fullMessage, undefined, clientId)");
+  });
+
+  test("standalone palette never exposes writable surfaces before its principal outbox opens", async () => {
+    const source = await Bun.file(
+      new URL("../../app/palette/page.tsx", import.meta.url),
+    ).text();
+
+    expect(source).toContain('state.phase === "offline-ready"');
+    expect(source).toContain('state.phase === "server-verified"');
+    expect(source).toContain("if (!durablePrincipalReady)");
+    expect(source).toContain("return <ReadyPaletteRoot />");
+    expect(source.indexOf("if (!durablePrincipalReady)")).toBeLessThan(
+      source.indexOf("function ReadyPaletteRoot()"),
+    );
+  });
+
+  test("anonymous shared conversations bypass a principal hydration that can never occur", async () => {
+    const layout = await Bun.file(
+      new URL("../../components/DashboardLayout.tsx", import.meta.url),
+    ).text();
+    const shell = await Bun.file(
+      new URL("../../src/layouts/DashboardShell.tsx", import.meta.url),
+    ).text();
+
+    expect(shell).toContain("<DashboardLayout allowUnhydratedGuest={guestOk}>");
+    expect(layout).toContain(
+      "props.allowUnhydratedGuest &&",
+    );
+    expect(layout).toContain(
+      "if (!hydrated && !isSettledGuest) return <AppLoader />;",
+    );
+  });
+
+  test("agent-switch forks use a client id, local stub, and tracked rekey lifecycle", async () => {
+    const source = await Bun.file(
+      new URL("../../components/ConversationView.tsx", import.meta.url),
+    ).text();
+
+    expect(source).toContain("target_agent_type: t,");
+    expect(source).toContain("session_id: forkSessionId,");
+    expect(source).toContain("_forkTargetAgentType: t");
+    expect(source).toContain("trackSessionCreate(forkSessionId, ready)");
+  });
+
+  test("result-dependent creates use durable receipts and persist their post-create intent", async () => {
+    const store = await Bun.file(
+      new URL("../inboxStore.ts", import.meta.url),
+    ).text();
+    for (const action of [
+      "createDoc",
+      "createPlan",
+      "createProject",
+      "createBucket",
+      "updateBucket",
+      "assignSessionToBucket",
+      "sendMessage",
+    ]) {
+      expect(store).toContain(`${action}: receiptAsyncAction(`);
+    }
+
+    const palette = await Bun.file(
+      new URL("../../components/CommandPalette.tsx", import.meta.url),
+    ).text();
+    const chips = await Bun.file(
+      new URL("../../components/LabelChipsRow.tsx", import.meta.url),
+    ).text();
+    const modal = await Bun.file(
+      new URL("../../components/CreateDocModal.tsx", import.meta.url),
+    ).text();
+    const docsPage = await Bun.file(
+      new URL("../../app/docs/page.tsx", import.meta.url),
+    ).text();
+    const sidebar = await Bun.file(
+      new URL("../../components/Sidebar.tsx", import.meta.url),
+    ).text();
+    // Inline label management still needs the canonical id to keep a fresh
+    // zero-count chip visible. Session assignment callers, however, persist the
+    // dependent filing intent in the create receipt instead of chaining it from
+    // that ephemeral result.
+    expect(chips).toContain("r.bucketId");
+    expect(palette).toContain('kind: "assignBucket"');
+    expect(palette).toContain("conversationIds");
+    expect(palette).not.toContain("store.assignSessionToBucket(convId, r._id)");
+    for (const source of [modal, docsPage, sidebar]) {
+      expect(source).toContain('{ version: 1, kind: "navigate" }');
+    }
+    expect(modal).not.toContain("router.push(`/docs/");
+    expect(modal).not.toContain("router.push(`/plans/");
+  });
+});

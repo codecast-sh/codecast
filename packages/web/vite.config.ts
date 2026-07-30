@@ -4,16 +4,10 @@ import { sentryVitePlugin } from "@sentry/vite-plugin";
 import { VitePWA } from "vite-plugin-pwa";
 import path from "path";
 import { renderArtifactPage } from "./server/artifactPage";
-import { handoffBootPlugin } from "./plugins/handoffBoot";
 
 export default defineConfig({
   plugins: [
     react(),
-    // Inlines the browser → desktop hand-off gate into <head> so a page bound
-    // for the desktop app never loads the app at all, and re-injects the
-    // preload hints that splitting the entry (src/main.tsx → src/boot.tsx)
-    // moved out of the HTML.
-    handoffBootPlugin(),
     // codecast.sh/a/<slug> is a server-rendered page (production: Hono route in
     // server/index.ts). Mount the SAME renderer in dev so the page has exactly
     // one implementation and never falls through to the SPA shell.

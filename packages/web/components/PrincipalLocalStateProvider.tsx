@@ -27,6 +27,7 @@ import {
   registerPrincipalDispatchRuntime,
   updatePrincipalDispatchCorrelation,
 } from "@/store/local-first/dispatchGate";
+import { requestPersistentStorage } from "@/store/local-first/storagePersistence";
 import { asPrincipalId, type PrincipalLifecycle } from "@/store/local-first/types";
 
 let runtimeSingleton: PrincipalRuntime | null = null;
@@ -198,10 +199,18 @@ export function PrincipalLocalStateProvider({ children }: { children: React.Reac
             { _probe: ++principalVerificationProbe },
           ),
           isCurrent: isCurrentCapture,
-          verify: async (credentialBinding, principalId) => await runtime.verify({
-            credentialBinding,
-            principalId: asPrincipalId(principalId),
-          }),
+          verify: async (credentialBinding, principalId) => {
+            const verified = await runtime.verify({
+              credentialBinding,
+              principalId: asPrincipalId(principalId),
+            });
+            // Persistence capability is important for offline writes, but it
+            // must not extend the auth/boot dispatch window. Until this settles,
+            // offline writes fail closed while reads and online dispatch remain
+            // available.
+            if (verified) void requestPersistentStorage();
+            return verified;
+          },
           failClosed: async (reason) => await runtime.failClosed(reason),
         });
         if (isCurrentCapture() && outcome.kind !== "stale") {

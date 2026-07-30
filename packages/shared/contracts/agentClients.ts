@@ -29,8 +29,6 @@ import {
   PI_EFFORT_LEVELS,
   isDynamicModelKey,
   dynamicModelOption,
-  isClaudeMenuKey,
-  claudeMenuOption,
 } from "./modelOptions";
 
 /** The single named union for a supported agent CLI client — the daemon's
@@ -154,11 +152,6 @@ export interface AgentModelConfig {
    *  a valid wire value — findModelOption synthesizes its option — and pickers
    *  render from the device's heartbeat-reported model inventory. */
   dynamic?: boolean;
-  /** The client's LIVE model list comes from its own in-session picker menu,
-   *  harvested by the daemon and heartbeat-reported (claude). `menu:<label>`
-   *  keys are valid wire values for the in-place switch rail —
-   *  findModelOption synthesizes an exact-label option; they never launch. */
-  menuDynamic?: boolean;
 }
 
 /** How the daemon tails a client's transcripts on disk. `json-store` is reserved
@@ -192,18 +185,10 @@ export interface AgentClientCapabilities {
    *  bounded — the serve /event bus is per-process, so it accelerates only sessions
    *  DRIVEN THROUGH the sidecar, not tmux-TUI sessions (see opencodeServer.ts). */
   liveEvents?: boolean;
-  /** The client's TUI turns on bracketed paste mode (DECSET 2004), so a pasted
-   *  block arrives wrapped in ESC[200~ … ESC[201~ and its newlines land in the
-   *  composer as literal newlines. Without the mode a pasted newline reaches the
-   *  TUI as the Enter key and submits, splitting one multi-line prompt into a
-   *  message per line — so the daemon flattens newlines to spaces for any client
-   *  not marked here (see prepareInjectedContent in daemon.ts).
-   *
-   *  Verify by hand before flipping this on for a client: launch it in tmux,
-   *  `tmux load-buffer` a two-line payload, `tmux paste-buffer -p`, and confirm
-   *  BOTH lines sit in the composer with nothing submitted. tmux only emits the
-   *  markers when the foreground program asked for the mode, so this is exactly
-   *  what the daemon's paste does. */
+  /** The client's TUI enables terminal bracketed-paste mode (DECSET 2004), so
+   *  pasted newlines land in its composer instead of acting as Enter/submission.
+   *  This is opt-in because an unverified client must receive flattened text:
+   *  preserving raw newlines there could split one prompt into several turns. */
   bracketedPaste?: boolean;
 }
 
@@ -258,7 +243,6 @@ const CLAUDE_MODEL: AgentModelConfig = {
   models: CLAUDE_MODEL_OPTIONS,
   efforts: CLAUDE_EFFORT_LEVELS,
   midSession: true,
-  menuDynamic: true,
 };
 const CODEX_MODEL: AgentModelConfig = {
   models: CODEX_MODEL_OPTIONS,
@@ -304,8 +288,6 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     promptReadyPattern: /❯|⏵/,
     tmuxPrefix: "cc",
     modelConfig: CLAUDE_MODEL,
-    // bracketedPaste verified 2026-07-30: a two-line `paste-buffer -p` sits in the
-    // composer (long blocks collapse to a "[Pasted text #1 +N lines]" chip).
     capabilities: { panePromptMonitoring: true, fork: true, bracketedPaste: true },
   },
   codex: {
@@ -324,7 +306,6 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     promptReadyPattern: />\s*$/,
     tmuxPrefix: "cx",
     modelConfig: CODEX_MODEL,
-    // bracketedPaste verified 2026-07-30 on codex 0.145.0.
     capabilities: { panePromptMonitoring: true, fork: true, bracketedPaste: true },
   },
   cursor: {
@@ -353,8 +334,6 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     // cursor resume panes get their own `cu-` prefix (the ct-39074 fix) so they
     // never collide with claude's `cc-`. Consumed by resumeTmuxPrefix.
     tmuxPrefix: "cu",
-    // bracketedPaste UNVERIFIED (no signed-in cursor-agent to test against), so
-    // multi-line prompts are flattened here rather than risk one turn per line.
     capabilities: { panePromptMonitoring: false },
   },
   gemini: {
@@ -374,7 +353,6 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     // per-client code actually uses at launch.
     promptReadyPattern: />\s*$|gemini/i,
     tmuxPrefix: "gm",
-    // bracketedPaste UNVERIFIED (gemini not installed here) — flattened for now.
     capabilities: { panePromptMonitoring: false },
   },
   opencode: {
@@ -419,8 +397,13 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     //    NOT accelerate the tmux-TUI launch path; the SQLite watcher stays the
     //    authoritative state source for those. Additive, opt-in, degrades to the DB
     //    path cleanly.
-    // bracketedPaste verified 2026-07-30 on opencode 1.18.8.
-    capabilities: { panePromptMonitoring: false, fork: true, forkApi: true, liveEvents: true, bracketedPaste: true },
+    capabilities: {
+      panePromptMonitoring: false,
+      fork: true,
+      forkApi: true,
+      liveEvents: true,
+      bracketedPaste: true,
+    },
   },
   pi: {
     id: "pi",
@@ -452,7 +435,6 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     // codecast cannot drive without pi's RPC channel — the active model is TRACKED
     // from the transcript (model_change entries + each assistant message's `model`).
     modelConfig: PI_MODEL,
-    // bracketedPaste verified 2026-07-30 on pi 0.73.x.
     capabilities: { panePromptMonitoring: false, bracketedPaste: true },
   },
 };
@@ -507,10 +489,6 @@ export function findModelOption(agentType: string | undefined, key: string): Mod
   // charset is a subset of the daemon's SAFE_ARG_RE, so the synthesized
   // cliAlias is launch-safe by construction.
   if (cfg?.dynamic && isDynamicModelKey(key)) return dynamicModelOption(key);
-  // Menu-dynamic clients (claude): a `menu:<label>` key addresses a harvested
-  // /model picker row by exact label — valid for the in-place switch rail only
-  // (no cliAlias, so the launch path ignores it).
-  if (cfg?.menuDynamic && isClaudeMenuKey(key)) return claudeMenuOption(key);
   return undefined;
 }
 
@@ -528,10 +506,6 @@ export function modelOptionKey(model: string | undefined | null, agentType: stri
   // and the row's model stamp — it IS the option key.
   if (cfg.dynamic && isDynamicModelKey(model)) return model;
   const bare = model.startsWith("claude-") ? model.slice("claude-".length) : model;
-  // A menu-key optimistic stamp ("claude-menu:<label>") IS its own option key,
-  // like dynamic `provider/model` stamps; the rollup replaces it with the real
-  // model id from the switch echo.
-  if (cfg.menuDynamic && isClaudeMenuKey(bare)) return bare;
   // Exact match wins over a versioned-prefix match so a longer key ("gpt-5.4-mini")
   // isn't swallowed by a shorter one that prefixes it ("gpt-5.4"); the prefix pass
   // then resolves "opus-4-8" → "opus".

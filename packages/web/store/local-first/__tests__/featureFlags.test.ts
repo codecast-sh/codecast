@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { readLocalFirstFeatureFlags } from "../featureFlags";
+import {
+  readLocalFirstFeatureFlags,
+  readLocalFirstWriteFlags,
+} from "../featureFlags";
 
 describe("local-first rollout flags", () => {
   test("defaults every rail off", () => {
@@ -35,6 +38,41 @@ describe("local-first rollout flags", () => {
       comments: "cutover",
       smallViews: "off",
       messageSend: "off",
+    });
+  });
+
+  test("one final-mode build activates every currently supported slice", () => {
+    const environment = {
+      VITE_LOCAL_FIRST_V2_ENABLED: "1",
+      VITE_LOCAL_FIRST_FINAL_MODE: "1",
+    };
+    expect(readLocalFirstFeatureFlags(environment)).toEqual({
+      buckets: "cutover-lts",
+      comments: "cutover-lts",
+      smallViews: "off",
+      messageSend: "cutover-lts",
+    });
+    expect(readLocalFirstWriteFlags(environment)).toEqual({
+      rollbackRailEnabled: true,
+      enabled: true,
+    });
+  });
+
+  test("the global rollback rail disables final reads and writes together", () => {
+    const environment = {
+      VITE_LOCAL_FIRST_V2_ENABLED: "0",
+      VITE_LOCAL_FIRST_FINAL_MODE: "1",
+      VITE_LOCAL_FIRST_WRITES_ENABLED: "1",
+    };
+    expect(readLocalFirstFeatureFlags(environment)).toEqual({
+      buckets: "off",
+      comments: "off",
+      smallViews: "off",
+      messageSend: "off",
+    });
+    expect(readLocalFirstWriteFlags(environment)).toEqual({
+      rollbackRailEnabled: false,
+      enabled: false,
     });
   });
 });

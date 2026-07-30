@@ -93,14 +93,11 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// Message text goes into the composer as a bracketed paste, the same way the
-// daemon delivers it (./tmuxPaste.ts) — that is what keeps a multi-line prompt a
-// single message. This wrapper only ever hosts claude, hence the fixed client.
-async function pasteIntoPane(target: string, text: string): Promise<void> {
+async function pasteClaudeMessage(target: string, content: string): Promise<void> {
   await pasteTextIntoPane(
     async (args) => tmuxExecSync(args),
     target,
-    text,
+    content,
     clientAcceptsBracketedPaste("claude"),
   );
 }
@@ -213,7 +210,7 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
                   if (step.text) {
                     tmuxExecSync(["send-keys", "-t", tmuxSessionName!, "Escape"]);
                     await sleep(500);
-                    tmuxExecSync(["send-keys", "-t", tmuxSessionName!, "-l", step.text]);
+                    await pasteClaudeMessage(tmuxSessionName!, step.text);
                     await sleep(150);
                     tmuxExecSync(["send-keys", "-t", tmuxSessionName!, "Enter"]);
                     await sleep(500);
@@ -224,7 +221,7 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
                 }
                 if (poll.text) {
                   await sleep(300);
-                  await pasteIntoPane(tmuxSessionName!, poll.text);
+                  await pasteClaudeMessage(tmuxSessionName!, poll.text);
                   await sleep(150);
                   tmuxExecSync(["send-keys", "-t", tmuxSessionName!, "Enter"]);
                 }
@@ -235,11 +232,7 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
                 await sleep(100);
                 tmuxExecSync(["send-keys", "-t", tmuxSessionName!, "C-u"]);
                 await sleep(100);
-                // Paste rather than send-keys the message: send-keys reads its
-                // argument as key names (so text could be interpreted, not typed)
-                // and turns newlines into Enter, which submitted a multi-line
-                // message one line at a time.
-                await pasteIntoPane(tmuxSessionName!, msg.content);
+                await pasteClaudeMessage(tmuxSessionName!, msg.content);
                 await sleep(150);
                 tmuxExecSync(["send-keys", "-t", tmuxSessionName!, "Enter"]);
                 log(`Injected via tmux paste to session ${tmuxSessionName}`);
@@ -366,7 +359,7 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
             if (step.text) {
               tmuxExecSync(["send-keys", "-t", tmuxPane, "Escape"]);
               await sleep(500);
-              tmuxExecSync(["send-keys", "-t", tmuxPane, "-l", step.text]);
+              await pasteClaudeMessage(tmuxPane, step.text);
               await sleep(150);
               tmuxExecSync(["send-keys", "-t", tmuxPane, "Enter"]);
               await sleep(500);
@@ -377,7 +370,7 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
           }
           if (poll.text) {
             await sleep(300);
-            await pasteIntoPane(tmuxPane, poll.text);
+            await pasteClaudeMessage(tmuxPane, poll.text);
             await sleep(150);
             tmuxExecSync(["send-keys", "-t", tmuxPane, "Enter"]);
           }
@@ -388,11 +381,10 @@ export async function runClaudeWrapper(args: string[]): Promise<void> {
           await sleep(100);
           tmuxExecSync(["send-keys", "-t", tmuxPane, "C-u"]);
           await sleep(100);
-          // Paste, not send-keys — see the note in the polling loop above.
-          await pasteIntoPane(tmuxPane, content);
+          await pasteClaudeMessage(tmuxPane, content);
           await sleep(150);
           tmuxExecSync(["send-keys", "-t", tmuxPane, "Enter"]);
-          log(`Injected via tmux send-keys to pane ${tmuxPane}`);
+          log(`Injected via tmux paste to pane ${tmuxPane}`);
         }
         return true;
       } catch (err) {

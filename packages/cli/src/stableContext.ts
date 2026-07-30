@@ -10,9 +10,13 @@ import fs from "fs";
 import path from "path";
 import {
   isExcludedStableItem,
+  resolveStableLaunch,
+  type AgentClientId,
   type StableContextData,
   type StableContextItem,
   type StableFeedMode,
+  type StableLaunchPrefs,
+  type StableMode,
 } from "@codecast/shared/contracts";
 import { formatFeedResults } from "./formatter.js";
 
@@ -25,6 +29,8 @@ function stripAnsi(text: string): string {
 export interface StableContextConfig {
   auth_token?: string;
   convex_url?: string;
+  stable_mode?: StableMode;
+  stable_global?: boolean;
 }
 
 export interface BuildStableContextOptions {
@@ -66,6 +72,9 @@ export async function buildStableContext(
         start_time: Date.now() - lookbackDays * 24 * 60 * 60 * 1000,
         project_path: projectPath,
       }),
+      // Stable context is optional and must never hold up agent startup
+      // indefinitely when the network or backend is unhealthy.
+      signal: AbortSignal.timeout(15_000),
     });
 
     const result = (await response.json()) as any;
@@ -135,6 +144,51 @@ export async function recordStableContext(
   }
 }
 
+/** Run the hidden SessionStart command without Commander or any of the CLI's
+ * global lifecycle hooks. Stdout is reserved for the injected block because
+ * Claude consumes it as hook output. */
+export async function runStableContextHook(
+  config: StableContextConfig | null,
+): Promise<void> {
+  // Hook payload on stdin: { session_id, cwd, source, ... }. Manual TTY runs
+  // have no payload — fall back to process.cwd() and record by nothing.
+  let payload: { session_id?: string; cwd?: string } = {};
+  if (!process.stdin.isTTY) {
+    try {
+      const chunks: Buffer[] = [];
+      for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
+      const raw = Buffer.concat(chunks).toString("utf-8").trim();
+      if (raw) payload = JSON.parse(raw);
+    } catch {
+      // Malformed payload — still inject from defaults.
+    }
+  }
+
+  // Env overrides (exported by the daemon from the new-session page's choice)
+  // beat the machine config; no mode from either → nothing to inject.
+  const launch = resolveStableLaunch(process.env, config ?? {});
+  if (!launch.mode) return;
+
+  const built = await buildStableContext(config, {
+    mode: launch.mode,
+    global: launch.global,
+    exclude: launch.exclude,
+    cwd: payload.cwd || process.cwd(),
+  });
+  if (!built) return;
+
+  process.stdout.write(`${built.text}\n`);
+  // Record what was injected so the web renders it as cards at the top of
+  // the conversation. Prefer the daemon-exported conversation id (no lookup
+  // race); terminal-started sessions fall back to the agent session id,
+  // which the server spools until the conversation registers.
+  await recordStableContext(config, {
+    conversation_id: launch.conversationId,
+    session_id: payload.session_id,
+    data: built.data,
+  });
+}
+
 // ─── SessionStart hook install ────────────────────────────────────────────────
 // The mode/scope resolution, feed build, exclusion filtering, and the record of
 // what was injected all live in `codecast stable-context` — the script only
@@ -171,6 +225,9 @@ export function installStableHook(): void {
   try {
     fs.mkdirSync(hooksDir, { recursive: true });
     fs.writeFileSync(hookFile, STABLE_FEED_HOOK, { mode: 0o755 });
+    // writeFileSync's mode only applies when creating a file. A pre-existing
+    // hook may have lost its executable bit, so repair it on every refresh.
+    fs.chmodSync(hookFile, 0o755);
 
     let settings: any = {};
     if (fs.existsSync(settingsFile)) {
@@ -200,18 +257,52 @@ export function installStableHook(): void {
   }
 }
 
+/**
+ * Ensure a Claude launch that will actually inject stable context has the
+ * SessionStart hook installed. This is intentionally evaluated per launch:
+ * an explicit Team/Solo session can opt in on a machine whose configured
+ * stable mode is off (and therefore had its hook removed).
+ */
+export function ensureStableHookForLaunch(
+  agentType: AgentClientId,
+  configuredMode: StableMode | undefined,
+  prefs: StableLaunchPrefs,
+  installHook: () => void = installStableHook,
+): boolean {
+  const effectiveMode = prefs.stable_mode ?? configuredMode;
+  if (agentType !== "claude" || (effectiveMode !== "team" && effectiveMode !== "solo")) {
+    return false;
+  }
+  installHook();
+  return true;
+}
+
 export function removeStableHook(): void {
   const home = process.env.HOME || "";
+  const hookFile = path.join(home, ".claude", "hooks", "stable-feed.sh");
   const settingsFile = path.join(home, ".claude", "settings.json");
+
+  // The script contains no user data and is owned solely by Codecast. Removing
+  // it as well as its settings entry makes `stable off` an actual uninstall.
+  try {
+    fs.unlinkSync(hookFile);
+  } catch {}
 
   if (!fs.existsSync(settingsFile)) return;
 
-  const settings = JSON.parse(fs.readFileSync(settingsFile, "utf-8"));
+  let settings: any;
+  try {
+    settings = JSON.parse(fs.readFileSync(settingsFile, "utf-8"));
+  } catch {
+    return;
+  }
   if (!settings.hooks?.SessionStart) return;
 
   for (const matcher of settings.hooks.SessionStart) {
     if (matcher.hooks) {
-      matcher.hooks = matcher.hooks.filter((h: any) => !h.command?.includes("stable-feed.sh"));
+      // installStableHook writes this exact absolute path. Match it exactly so
+      // an unrelated SessionStart integration with a similar filename survives.
+      matcher.hooks = matcher.hooks.filter((h: any) => h.command !== hookFile);
     }
   }
   settings.hooks.SessionStart = settings.hooks.SessionStart.filter(

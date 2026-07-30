@@ -5,6 +5,7 @@ import { useInboxStore } from "../../store/inboxStore";
 import { AuthGuard } from "../../components/AuthGuard";
 import Link from "next/link";
 import type { FunctionReturnType } from "convex/server";
+import { toast } from "sonner";
 // Reuse the inbox's canonical state predicates so /sessions and /inbox never
 // disagree about what "needs input" / "idle" means.
 import {
@@ -14,6 +15,7 @@ import {
   isSessionHidden,
   type InboxSession,
 } from "../../store/inboxStore";
+import { isParkedDispatchError } from "../../store/mutativeMiddleware";
 
 type Session = FunctionReturnType<typeof api.managedSessions.listActiveSessions>[number];
 // Cleanup-oriented buckets, computed from liveness + sleep-aware idle — NOT from
@@ -425,7 +427,12 @@ function SessionsView() {
     (s: ClassifiedSession) => {
       if (!s.conversation_id) return;
       markBusy(s.session_id);
-      convCommand(s.conversation_id, "killSession");
+      void convCommand(s.conversation_id, "killSession").catch((err: unknown) => {
+        // The kill remains durably queued; only a genuine failure should use
+        // the existing error channel.
+        if (isParkedDispatchError(err)) return;
+        toast.error(`Kill failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
     },
     [convCommand, markBusy]
   );
