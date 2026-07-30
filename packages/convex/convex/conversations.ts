@@ -899,6 +899,9 @@ export const createConversation = mutation({
     });
     // git_diff blobs live off the hot doc in conversation_git_diffs.
     await setConvGitDiff(ctx, conversationId, args.git_diff, args.git_diff_staged);
+    // Terminal-started sessions: the SessionStart hook usually reports the
+    // injected stable context before this registration — attach the parked record.
+    await consumeStableContextSpool(ctx, args.user_id, args.session_id, conversationId);
 
     // Auto-dismiss parent only for plan handoffs (clear context -> implementation session)
     if (parentConversationId && args.parent_message_uuid === "plan-handoff") {
@@ -5795,7 +5798,10 @@ export const clearParentMessageUuid = mutation({
 
 export const feedForCLI = query({
   args: {
-    api_token: v.string(),
+    // Optional so the WEB can call this too (session auth) — the new-session
+    // page previews exactly what the stable-context hook will inject, from the
+    // same query with the same params. The CLI always passes a token.
+    api_token: v.optional(v.string()),
     limit: v.optional(v.number()),
     offset: v.optional(v.number()),
     start_time: v.optional(v.number()),
@@ -9278,7 +9284,112 @@ export const updateSessionId = mutation({
     }
 
     await ctx.db.patch(args.conversation_id, patch);
+    // A stable-context record posted under the REAL agent session id before
+    // this rebind (web-started sessions briefly carry the client stub id)
+    // is waiting in the spool — attach it now.
+    await consumeStableContextSpool(ctx, userId, args.session_id, args.conversation_id);
     return { updated: true };
+  },
+});
+
+/**
+ * Attach a spooled stable-context record (parked by recordStableContext when
+ * no conversation carried the session id yet) to its now-known conversation.
+ * Doesn't clobber an existing record — the direct recordStableContext patch is
+ * fresher. Also lazily prunes this user's stale spool rows so the transient
+ * table can't grow unbounded.
+ */
+export async function consumeStableContextSpool(
+  ctx: { db: any },
+  userId: Id<"users">,
+  sessionId: string,
+  conversationId: Id<"conversations">,
+): Promise<void> {
+  const spooled = await ctx.db
+    .query("stable_context_spool")
+    .withIndex("by_session_id", (q: any) => q.eq("session_id", sessionId))
+    .filter((q: any) => q.eq(q.field("user_id"), userId))
+    .first();
+  if (spooled) {
+    const conv = await ctx.db.get(conversationId);
+    if (conv && !conv.stable_context) {
+      await ctx.db.patch(conversationId, { stable_context: spooled.data });
+    }
+    await ctx.db.delete(spooled._id);
+  }
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  const stale = await ctx.db
+    .query("stable_context_spool")
+    .withIndex("by_user_created", (q: any) => q.eq("user_id", userId).lt("created_at", cutoff))
+    .take(20);
+  for (const row of stale) {
+    if (row.created_at < cutoff) await ctx.db.delete(row._id);
+  }
+}
+
+/**
+ * Record the stable-context feed injected into a session at start (called by
+ * `cast stable-context` — the SessionStart hook — and the daemon's Codex
+ * launch). `data` is a StableContextData JSON string, rendered by the web as
+ * cards at the top of the conversation. Keyed by conversation_id when the
+ * daemon exported it into the session env; else by agent session id, spooled
+ * until the conversation registers (createConversation / updateSessionId).
+ */
+export const recordStableContext = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    conversation_id: v.optional(v.string()),
+    session_id: v.optional(v.string()),
+    data: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Unauthorized");
+    // Sanity-cap: the record is a trimmed feed snapshot, never a transcript.
+    if (args.data.length > 64_000) throw new Error("stable_context too large");
+
+    if (args.conversation_id) {
+      let conv = null;
+      try {
+        conv = await ctx.db.get(args.conversation_id as Id<"conversations">);
+      } catch {}
+      if (conv && conv.user_id.toString() === userId.toString()) {
+        await ctx.db.patch(conv._id, { stable_context: args.data });
+        return { recorded: "conversation" };
+      }
+    }
+
+    if (args.session_id) {
+      const conv = await ctx.db
+        .query("conversations")
+        .withIndex("by_session_id", (q) => q.eq("session_id", args.session_id!))
+        .filter((q) => q.eq(q.field("user_id"), userId))
+        .first();
+      if (conv) {
+        await ctx.db.patch(conv._id, { stable_context: args.data });
+        return { recorded: "conversation" };
+      }
+      // No conversation yet (hook fired before the daemon registered the
+      // transcript) — park it; the registration paths consume the spool.
+      const existing = await ctx.db
+        .query("stable_context_spool")
+        .withIndex("by_session_id", (q) => q.eq("session_id", args.session_id!))
+        .filter((q) => q.eq(q.field("user_id"), userId))
+        .first();
+      if (existing) {
+        await ctx.db.patch(existing._id, { data: args.data, created_at: Date.now() });
+      } else {
+        await ctx.db.insert("stable_context_spool", {
+          user_id: userId,
+          session_id: args.session_id,
+          data: args.data,
+          created_at: Date.now(),
+        });
+      }
+      return { recorded: "spool" };
+    }
+
+    return { recorded: "none" };
   },
 });
 
