@@ -4,6 +4,7 @@ import {
   modelOptionKey,
 } from "@codecast/shared/contracts";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
+import { DispatchNotWiredError } from "../store/mutativeMiddleware";
 
 // modelOptionKey ("claude-opus-4-8" → "opus") is pure contract logic — it lives
 // in @codecast/shared/contracts now (the store's create path needs it too). Kept
@@ -109,6 +110,10 @@ export async function commitModelChange(opts: {
       }
     }
   } catch (err) {
+    // Parked-unwired means the write is queued and WILL apply on the next
+    // outbox drain — reverting the local stamp here would make the UI disagree
+    // with the server the moment it lands. Keep the choice; stay quiet.
+    if (err instanceof DispatchNotWiredError && err.parked) return;
     store.setConversationModel(conversationId, prev);
     notify(err instanceof Error ? err.message : "Failed to switch model");
   }
