@@ -1093,6 +1093,17 @@ export const addMessages = mutation({
         ...tr,
         content: redactSecrets(tr.content),
       }));
+      // Resolve the exact pending intent before duplicate suppression. Two
+      // identical user sends with different client ids are distinct durable
+      // commands and need distinct transcript relations for v2 coverage.
+      const matchingPending = msg.role === "user" && pendingMsgs.length > 0
+        ? findEchoedPendingMessage(
+            pendingMsgs,
+            safeContent,
+            msgTimestamp,
+            consumedPendingIds,
+          )
+        : undefined;
 
       if (msg.message_uuid) {
         const existing = await ctx.db
@@ -1138,7 +1149,8 @@ export const addMessages = mutation({
               redactSecrets(r.content || "").trim() === (safeContent || "").trim() &&
               Math.abs(msgTimestamp - r.timestamp) < (hasContent ? 5 * 60 * 1000 : 30_000)
           );
-          if (dup) {
+          if (dup && (!matchingPending?.client_id ||
+            dup.client_id === matchingPending.client_id)) {
             // If incoming message has images/tool_results that the existing doesn't, patch them in.
             // This handles the race where a fast sync path stores the message without images,
             // and the image-aware sync arrives later matching by content dedup.
@@ -1152,6 +1164,13 @@ export const addMessages = mutation({
             if (Object.keys(patch).length > 0) {
               await ctx.db.patch(dup._id, patch);
             }
+            if (matchingPending) {
+              consumedPendingIds.add(matchingPending._id);
+              if (!dup.client_id && matchingPending.client_id) {
+                await ctx.db.patch(dup._id, { client_id: matchingPending.client_id });
+              }
+              await markPendingDelivered(ctx, matchingPending);
+            }
             ids.push(dup._id);
             continue;
           }
@@ -1161,11 +1180,7 @@ export const addMessages = mutation({
       let images = msg.images;
       let contentToStore = safeContent;
       let clientIdToStore: string | undefined;
-      if (msg.role === "user" && pendingMsgs.length > 0) {
-        const matchingPending = findEchoedPendingMessage(
-          pendingMsgs, safeContent, msgTimestamp, consumedPendingIds,
-        );
-        if (matchingPending) {
+      if (matchingPending) {
           consumedPendingIds.add(matchingPending._id);
           contentToStore = redactSecrets(matchingPending.content);
           clientIdToStore = matchingPending.client_id;
@@ -1180,7 +1195,6 @@ export const addMessages = mutation({
           // so the ack can't be missed by a fire-and-forget side-channel or a non-acking sync
           // path. delivered is terminal, so the 120s stuck-message reset stops re-injecting it.
           await markPendingDelivered(ctx, matchingPending);
-        }
       }
 
       const messageId = await ctx.db.insert("messages", {

@@ -9,11 +9,22 @@ import {
   isPrincipalDispatchAuthorizationCurrent,
   type DispatchAuthorizationCapture,
 } from "./local-first/dispatchGate";
+import { isLocalFirstWriteEnabled } from "./local-first/featureFlags";
+import { assertDurableOfflineWriteCapability } from "./local-first/storagePersistence";
 
 type DispatchFn = (action: string, args: any, patches?: any, result?: any) => Promise<any>;
 type MaybePromise<T> = T | Promise<T>;
 type IDBWriteFn = (patches: Patch[], state: any) => MaybePromise<void>;
-type OutboxEntry = { id: string; action: string; args: any; patches: any; result: any; ts: number; attempts?: number };
+type OutboxEntry = {
+  id: string;
+  action: string;
+  args: any;
+  patches: any;
+  result: any;
+  ts: number;
+  attempts?: number;
+  operationSchemaVersion?: number;
+};
 type OutboxEnqueueFn = (entry: OutboxEntry) => MaybePromise<void>;
 type OutboxRemoveFn = (id: string) => MaybePromise<void>;
 type OutboxLoadFn = () => Promise<OutboxEntry[]>;
@@ -411,6 +422,36 @@ const LEGACY_RECEIPT_ACTIONS = new Set([
   "askAgentInThread",
 ]);
 
+/** Slices governed by the combined read/write rollback rail. */
+export const LOCAL_FIRST_WRITE_ACTIONS = new Set([
+  "createBucket",
+  "updateBucket",
+  "assignSessionToBucket",
+  "addComment",
+  "editComment",
+  "deleteComment",
+  "askAgentInThread",
+  "sendMessage",
+]);
+
+export const CURRENT_OUTBOX_OPERATION_SCHEMA_VERSION = 1;
+
+export class UnsupportedOutboxOperationSchemaError extends Error {
+  constructor(readonly entryId: string, readonly schemaVersion: number) {
+    super(`Outbox ${entryId} uses unsupported operation schema ${schemaVersion}`);
+    this.name = "UnsupportedOutboxOperationSchemaError";
+  }
+}
+
+function assertSupportedOutboxOperationSchema(entry: OutboxEntry): void {
+  // Version 0 is the explicitly supported migration route for rows written
+  // before the field existed. Version 1 is the concrete current shape.
+  const version = entry.operationSchemaVersion ?? 0;
+  if (version !== 0 && version !== CURRENT_OUTBOX_OPERATION_SCHEMA_VERSION) {
+    throw new UnsupportedOutboxOperationSchemaError(entry.id, version);
+  }
+}
+
 // Comment commands were briefly persisted with their optimistic payload as
 // `result`, before receiptAsyncAction added an envelope. New servers still
 // return a V2 command receipt for those rows. Interpret a terminal rejection
@@ -575,8 +616,15 @@ function auditViewWrites(
   return revert;
 }
 
-export function mutativeMiddleware(config: any, opts?: { retryDelays?: number[] }): any {
+export function mutativeMiddleware(config: any, opts?: {
+  retryDelays?: number[];
+  localFirstWritesEnabled?: () => boolean;
+  online?: () => boolean;
+}): any {
   const retryDelays = opts?.retryDelays ?? RETRY_DELAYS;
+  const localFirstWritesEnabled = opts?.localFirstWritesEnabled ?? isLocalFirstWriteEnabled;
+  const online = opts?.online ?? (() =>
+    typeof navigator === "undefined" ? true : navigator.onLine);
   return (set: any, get: any, api: any) => {
     let dispatchBinding: DispatchBinding | null = null;
     let dispatchEpoch = 0;
@@ -771,6 +819,7 @@ export function mutativeMiddleware(config: any, opts?: { retryDelays?: number[] 
         // so routine reconnect churn can't burn through a write's boot budget.
         for (const entry of entries) {
           try {
+            assertSupportedOutboxOperationSchema(entry);
             const response = await dispatchWithRetry(
               captured.fn,
               entry.action,
@@ -823,6 +872,12 @@ export function mutativeMiddleware(config: any, opts?: { retryDelays?: number[] 
           } catch (e) {
             if (e instanceof StaleDispatchBindingError) return;
             assertDispatchCurrent(captured);
+            if (e instanceof UnsupportedOutboxOperationSchemaError) {
+              capturedError?.(entry.action, e, entry.args);
+              // Explicit migration is required. Keep the row intact and do not
+              // reinterpret, attempt-count, or dispatch it under this bundle.
+              continue;
+            }
             // Reported via dispatchErrorFn.
             // Receipt-backed writes are terminal ONLY when the server returns a
             // validated rejected receipt (handled above). A thrown "Uncaught",
@@ -886,6 +941,9 @@ export function mutativeMiddleware(config: any, opts?: { retryDelays?: number[] 
 
       wrapped[key] = (...args: any[]) => {
         const actionArgs = normalizeZeroArgumentEventCall(val as Function, args);
+        const finalWrite = LOCAL_FIRST_WRITE_ACTIONS.has(key) &&
+          localFirstWritesEnabled();
+        if (finalWrite) assertDurableOfflineWriteCapability(online());
         const state = get();
         let returnValue: any;
         const [nextState, patches] = mutativeCreate(
@@ -936,8 +994,16 @@ export function mutativeMiddleware(config: any, opts?: { retryDelays?: number[] 
         if (isAct || isAsyncAct) {
           const grouped =
             patches.length > 0 ? groupPatchesByTable(patches, finalState) : undefined;
-          const outboxId = newOutboxId();
-          const dispatchResult: unknown = isReceiptAsyncAct
+          const callerStableMessageId = key === "sendMessage" &&
+            typeof actionArgs[3] === "string" && actionArgs[3].trim()
+            ? actionArgs[3].trim()
+            : null;
+          const outboxId = finalWrite && callerStableMessageId
+            ? callerStableMessageId
+            : newOutboxId();
+          const usesReceiptEnvelope = isReceiptAsyncAct &&
+            (!LOCAL_FIRST_WRITE_ACTIONS.has(key) || finalWrite);
+          const dispatchResult: unknown = usesReceiptEnvelope
             ? {
                 receiptActionVersion: 1,
                 commandId: outboxId,
@@ -955,6 +1021,7 @@ export function mutativeMiddleware(config: any, opts?: { retryDelays?: number[] 
             args: actionArgs,
             patches: grouped,
             result: dispatchResult,
+            operationSchemaVersion: CURRENT_OUTBOX_OPERATION_SCHEMA_VERSION,
             // legacyOutbox replays by this index. Strict monotonicity preserves
             // causal call order even when several dependent actions (create →
             // delete, fork → send) are queued in the same millisecond.
@@ -967,7 +1034,7 @@ export function mutativeMiddleware(config: any, opts?: { retryDelays?: number[] 
           const capturedDispatch = dispatchBinding;
           const capturedRemove = outboxRemoveFn;
           const capturedError = dispatchErrorFn;
-          const receiptWaiter = isReceiptAsyncAct ? receiptWaiterFor(outboxId) : null;
+          const receiptWaiter = usesReceiptEnvelope ? receiptWaiterFor(outboxId) : null;
           let enqueueCompleted = false;
           // Parked unconditionally — a principal-runtime transition can clear
           // the binding while the page stays interactive, and an un-parked
@@ -996,7 +1063,7 @@ export function mutativeMiddleware(config: any, opts?: { retryDelays?: number[] 
             const dispatched = enqueued
               ? enqueued.then(dispatchNow)
               : dispatchNow();
-            if (isReceiptAsyncAct && receiptWaiter) {
+            if (usesReceiptEnvelope && receiptWaiter) {
               void dispatched.then(async (response) => {
                 assertDispatchCurrent(capturedDispatch);
                 let completed = false;
@@ -1099,7 +1166,7 @@ export function mutativeMiddleware(config: any, opts?: { retryDelays?: number[] 
             // no discard (ct-40175). Reject honestly instead: the caller's
             // catch runs now; a parked entry still delivers via drainOutbox.
             if (isAsyncAct) {
-              if (isReceiptAsyncAct && receiptWaiter && enqueued) {
+              if (usesReceiptEnvelope && receiptWaiter && enqueued) {
                 void enqueued.then(
                   () => {
                     // Wiring can race the IndexedDB commit: its boot drain may
@@ -1114,7 +1181,7 @@ export function mutativeMiddleware(config: any, opts?: { retryDelays?: number[] 
                 );
                 return receiptWaiter.promise;
               }
-              if (isReceiptAsyncAct) {
+              if (usesReceiptEnvelope) {
                 rejectReceiptWaiter(
                   outboxId,
                   new DispatchNotWiredError(key, false),

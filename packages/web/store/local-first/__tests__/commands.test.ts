@@ -121,6 +121,31 @@ async function makeRuntime() {
 }
 
 describe("durable command runtime", () => {
+  test("refuses to author or fold an unknown optimistic-operation schema", async () => {
+    const fixture = await makeRuntime();
+    try {
+      await expect(fixture.runtime.queue({
+        id: "future-schema",
+        contractId: "commands.command/v1",
+        commandType: "commands.change/v1",
+        conflictKey: "view:commands",
+        operationSchemaVersion: 2,
+        targetGrantKeys: [fixture.grantKey],
+        targetEntityKeys: [],
+        replayPolicy: "server-deduplicated",
+        payload: {},
+        requiredCoverage: {
+          kind: "view-revision",
+          contractId: "commands.view/v1",
+          viewKey: "view:commands",
+        },
+        optimisticOperations: [],
+      })).rejects.toThrow("unsupported optimistic operation schema");
+    } finally {
+      await fixture.close();
+    }
+  });
+
   test("receipt-before-view and view-before-receipt both retire optimism only after coverage", async () => {
     const fixture = await makeRuntime();
     try {

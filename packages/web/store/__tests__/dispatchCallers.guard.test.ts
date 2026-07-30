@@ -69,7 +69,15 @@ describe("durable dispatch call-site guards", () => {
     const store = await Bun.file(
       new URL("../inboxStore.ts", import.meta.url),
     ).text();
-    for (const action of ["createDoc", "createPlan", "createProject", "createBucket"]) {
+    for (const action of [
+      "createDoc",
+      "createPlan",
+      "createProject",
+      "createBucket",
+      "updateBucket",
+      "assignSessionToBucket",
+      "sendMessage",
+    ]) {
       expect(store).toContain(`${action}: receiptAsyncAction(`);
     }
 

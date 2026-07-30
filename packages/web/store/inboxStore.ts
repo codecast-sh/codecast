@@ -4315,7 +4315,7 @@ export const useInboxStore = create<InboxStoreState>(
   // server echoes it back. Fire-and-forget — status is read back from the
   // synced pending_messages row, not a return value. Args mirror the server
   // handler: [conversation_id, content, image_storage_ids, client_id].
-  sendMessage: action(function (this: Draft, _convId: string, _content: string, _imageIds?: string[], _clientId?: string) {
+  sendMessage: receiptAsyncAction(function (this: Draft, _convId: string, _content: string, _imageIds?: string[], _clientId?: string) {
     notePendingMessageSendRequested(_clientId);
     // No local mutation here: durability for the visible message comes from the
     // persisted pendingMessages map. This body exists only so the middleware
@@ -5831,14 +5831,17 @@ export const useInboxStore = create<InboxStoreState>(
 
   // Rename / color / sort / archive ride the generic patch path (inbox_buckets
   // is in dispatch TABLE_CONFIG); fields are auto-protected until server echo.
-  updateBucket: action(function (this: Draft, id: string, fields: { name?: string; color?: string; sort_order?: number; archived_at?: number | null }) {
+  updateBucket: receiptAsyncAction(function (this: Draft, id: string, fields: { name?: string; color?: string; sort_order?: number; archived_at?: number | null }) {
     const bucket = this.buckets[id] as any;
     if (!bucket) return;
+    const previous: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(fields)) {
       if (v === undefined) continue;
+      previous[k] = bucket[k];
       bucket[k] = v === null ? undefined : v;
     }
     bucket.updated_at = Date.now();
+    return { bucketId: id, fields, previous };
   }),
 
   // Exclusive filing: upsert the one assignment row for this conversation.
@@ -5847,7 +5850,7 @@ export const useInboxStore = create<InboxStoreState>(
   // effect performs the durable upsert. A stub conversation id is allowed when
   // the server reaches the same assignment on its own (fork label inheritance):
   // the dispatch no-ops there, and rekeyId carries the local row to the real id.
-  assignSessionToBucket: action(function (this: Draft, conversationId: string, bucketId: string | null) {
+  assignSessionToBucket: receiptAsyncAction(function (this: Draft, conversationId: string, bucketId: string | null) {
     const now = Date.now();
     // A create-time focused-bucket marker is only a fallback until the first
     // authoritative filing. A later explicit move/unfile is newer user intent
@@ -5866,6 +5869,13 @@ export const useInboxStore = create<InboxStoreState>(
     clearSupersededIntent(this.conversations[conversationId]);
     const existing = (Object.values(this.bucketAssignments) as BucketAssignmentItem[])
       .find(a => a.conversation_id === conversationId);
+    const previous = existing
+      ? {
+          rowId: String(existing._id),
+          bucketId: existing.bucket_id ?? null,
+          updatedAt: existing.updated_at,
+        }
+      : null;
     if (existing) {
       existing.bucket_id = bucketId ?? undefined;
       existing.updated_at = now;
@@ -5878,6 +5888,12 @@ export const useInboxStore = create<InboxStoreState>(
         updated_at: now,
       };
     }
+    return {
+      conversationId,
+      bucketId,
+      previous,
+      optimisticRowId: String(existing?._id ?? `bucketassign-${conversationId}`),
+    };
   }),
 
   // -- Teammate comments --
@@ -6034,6 +6050,53 @@ export const useInboxStore = create<InboxStoreState>(
       delete this.buckets[stubId];
       delete this.pending[`buckets:${stubId}`];
       return ["buckets", "pending"];
+    }
+
+    if (actionName === "updateBucket") {
+      const bucketId = localResult.bucketId;
+      const fields = localResult.fields;
+      const previous = localResult.previous;
+      const bucket = typeof bucketId === "string" ? this.buckets[bucketId] as any : null;
+      if (!bucket || !fields || !previous) return false;
+      for (const [field, optimisticValue] of Object.entries(fields)) {
+        const normalizedOptimistic = optimisticValue === null ? undefined : optimisticValue;
+        // A later edit wins; rollback only the exact rejected value.
+        if (bucket[field] !== normalizedOptimistic) continue;
+        const prior = previous[field];
+        if (prior === undefined) delete bucket[field];
+        else bucket[field] = prior;
+        delete this.pending[`buckets:${bucketId}:${field}`];
+      }
+      return ["buckets", "pending"];
+    }
+
+    if (actionName === "assignSessionToBucket") {
+      const conversationId = localResult.conversationId;
+      const requestedBucketId = localResult.bucketId ?? null;
+      const optimisticRowId = localResult.optimisticRowId;
+      if (typeof conversationId !== "string" || typeof optimisticRowId !== "string") {
+        return false;
+      }
+      const found = Object.entries(this.bucketAssignments).find(([, row]) =>
+        (row as any)?.conversation_id === conversationId);
+      const current = found?.[1] as any;
+      if ((current?.bucket_id ?? null) !== requestedBucketId) {
+        return ["bucketAssignments", "pending"];
+      }
+      const previous = localResult.previous;
+      if (previous && typeof previous.rowId === "string") {
+        const rowId = found?.[0] ?? previous.rowId;
+        if (current) {
+          current.bucket_id = previous.bucketId ?? undefined;
+          current.updated_at = previous.updatedAt;
+        }
+        delete this.pending[`bucketAssignments:${rowId}:bucket_id`];
+      } else if (found) {
+        delete this.bucketAssignments[found[0]];
+        delete this.pending[`bucketAssignments:${found[0]}`];
+      }
+      delete this.pending[`bucketAssignments:${optimisticRowId}:bucket_id`];
+      return ["bucketAssignments", "pending"];
     }
 
     if (actionName === "addComment" || actionName === "askAgentInThread") {

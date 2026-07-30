@@ -11,6 +11,7 @@ import {
   PRINCIPAL_STORE_SCHEMA_VERSION,
   PrincipalStoreFenceError,
   PrincipalStoreIdentityError,
+  assertSupportedCommandOperationSchema,
   type CommandReceiptRecord,
   type CommandRecord,
   type CommandStatus,
@@ -359,6 +360,9 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
         this.db.syncMetadata.toArray(),
         this.db.deltaCursors.toArray(),
       ]);
+      for (const command of commands) {
+        assertSupportedCommandOperationSchema(command);
+      }
       return {
         metadata: metadata!,
         entities,
@@ -469,6 +473,9 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
       const commands = statuses
         ? await this.db.commands.filter((row) => statuses.includes(row.status)).toArray()
         : await this.db.commands.toArray();
+      for (const command of commands) {
+        assertSupportedCommandOperationSchema(command);
+      }
       return commands.sort((a, b) =>
         a.localSequence - b.localSequence || a.createdAt - b.createdAt || a.id.localeCompare(b.id));
     });
@@ -482,7 +489,9 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
     return await this.db.transaction("r", [this.db.meta, this.db.commands], async () => {
       const metadata = await this.db.meta.get("store");
       this.assertFence(metadata, fence);
-      return (await this.db.commands.get(commandId)) ?? null;
+      const command = (await this.db.commands.get(commandId)) ?? null;
+      if (command) assertSupportedCommandOperationSchema(command);
+      return command;
     });
   }
 
@@ -1531,6 +1540,7 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
       case "release-grant": await this.releaseGrant(operation.grantKey); return;
       case "put-command": {
         if (operation.record.principalId !== principalId) throw new PrincipalStoreIdentityError();
+        assertSupportedCommandOperationSchema(operation.record);
         const current = await this.db.commands.get(operation.record.id);
         if (!current) throw new PrincipalStoreFenceError("Command must be durably queued before update");
         if (current.principalId !== operation.record.principalId ||
@@ -1555,6 +1565,7 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
       }
       case "queue-command": {
         if (operation.record.principalId !== principalId) throw new PrincipalStoreIdentityError();
+        assertSupportedCommandOperationSchema(operation.record);
         if (operation.record.status !== "queued" || !operation.record.optimisticActive) {
           throw new PrincipalStoreFenceError("A new command must enter as an active queued command");
         }

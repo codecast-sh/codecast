@@ -4606,7 +4606,7 @@ async function syncMessagesBatch(
     return { authExpired: false, conversationNotFound: false };
   }
   try {
-    await syncService.addMessages({
+    const synced = await syncService.addMessages({
       conversationId,
       messages: prepared,
     });
@@ -4619,7 +4619,24 @@ async function syncMessagesBatch(
     // historical user turn — e.g. an auto-resume resyncing a fresh JSONL from
     // position 0 — from terminalizing rows that never landed (DEC-01).
     if (messages.some(m => m.role === "user")) {
-      syncService.ackInjectedMessages(conversationId, collectPastedInjectedIds(conversationId)).catch(logConvexFailure);
+      const pastedIds = collectPastedInjectedIds(conversationId);
+      const transcriptIds = synced.ids.filter((_, index) => messages[index]?.role === "user");
+      // The rows this process pasted and the user turns just committed are both
+      // ordered. Pair the newest common suffix: older un-echoed pastes remain
+      // injected for healing, while each daemon-vouched echo can stamp the
+      // exact client_id needed by messages.send/v2 coverage (DWB-03).
+      const pairCount = Math.min(pastedIds.length, transcriptIds.length);
+      const deliveryAcks = pairCount === 0
+        ? []
+        : pastedIds.slice(-pairCount).map((pendingMessageId, index) => ({
+            pendingMessageId,
+            transcriptMessageId: transcriptIds[transcriptIds.length - pairCount + index]!,
+          }));
+      syncService.ackInjectedMessages(
+        conversationId,
+        pastedIds,
+        deliveryAcks,
+      ).catch(logConvexFailure);
     }
     return { authExpired: false, conversationNotFound: false };
   } catch (err) {
