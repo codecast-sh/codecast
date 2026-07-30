@@ -18,8 +18,10 @@ function installFakeDispatch(): { calls: DispatchCall[] } {
   store._setDispatch((action: string, args: any[]) => {
     calls.push({ action, args });
     // The real server returns the conversation id for createSession; mirror that
-    // so ensureSessionCreated can rekey explicitly.
+    // so ensureSessionCreated can rekey explicitly. forkFromMessage returns
+    // { conversation_id } (see convex forkFromMessage) — mirror that too.
     if (action === "createSession") return Promise.resolve(REAL_ID);
+    if (action === "convCommand" && args[1] === "forkFromMessage") return Promise.resolve({ conversation_id: REAL_ID });
     return Promise.resolve(undefined);
   });
   return { calls };
@@ -103,6 +105,52 @@ describe("healStrandedStub", () => {
     seedStrandedStub(stubId);
     const resolved = await useInboxStore.getState().awaitConvexId(stubId);
     expect(resolved).toBe(REAL_ID);
+  });
+
+  // Regression coverage for ct-40174 — the jx79314 incident: a fork whose
+  // forkFromMessage dispatch was lost left a stranded FORK stub, and the heal
+  // revived it as a plain createSession — a blank session that inherited the
+  // parent's project_path but none of its history or fork lineage. The user's
+  // seed message then landed in a context-less agent. The heal must re-issue
+  // forkFromMessage (idempotent on session_id), never a plain create.
+  it("re-issues forkFromMessage for a stranded FORK stub, not a plain create", async () => {
+    const stubId = "68f6f6b9-b22b-47ad-82e5-23bd5d66a81e"; // fork stubs are session UUIDs
+    const parentId = "jx7000000000000000000000000paren";
+    const { calls } = installFakeDispatch();
+    seedStrandedStub(stubId);
+    useInboxStore.setState((s: any) => ({
+      sessions: { [stubId]: { ...s.sessions[stubId], forked_from: parentId, parent_message_uuid: "uuid-fork-point" } },
+      conversations: { [stubId]: { ...s.conversations[stubId], forked_from: parentId, parent_message_uuid: "uuid-fork-point" } },
+    } as any));
+
+    const realId = await useInboxStore.getState().healStrandedStub(stubId);
+    expect(realId).toBe(REAL_ID);
+
+    // The heal forked — it did NOT mint an amnesiac plain session.
+    expect(calls.filter((c) => c.action === "createSession")).toHaveLength(0);
+    const fork = calls.find((c) => c.action === "convCommand" && c.args[1] === "forkFromMessage");
+    expect(fork).toBeTruthy();
+    expect(fork!.args[0]).toBe(parentId);
+    expect(fork!.args[2]).toEqual({ message_uuid: "uuid-fork-point", session_id: stubId });
+
+    // Stub rekeyed to the real fork row; the stuck seed message re-sent to it.
+    expect(useInboxStore.getState().sessions[stubId]).toBeUndefined();
+    const send = calls.find((c) => c.action === "sendMessage");
+    expect(send).toBeTruthy();
+    expect(send!.args[0]).toBe(REAL_ID);
+  });
+
+  it("rejects a fork stub whose parent is unknown instead of degrading to a plain create", async () => {
+    const stubId = "0f0f0f0f-aaaa-4bbb-8ccc-ddddeeee0000";
+    const { calls } = installFakeDispatch();
+    seedStrandedStub(stubId);
+    useInboxStore.setState((s: any) => ({
+      sessions: { [stubId]: { ...s.sessions[stubId], forked_from: "someotherstubid", parent_message_uuid: "u1" } },
+      conversations: { [stubId]: { ...s.conversations[stubId], forked_from: "someotherstubid", parent_message_uuid: "u1" } },
+    } as any));
+
+    await expect(useInboxStore.getState().ensureSessionCreated(stubId)).rejects.toThrow(/fork parent unknown/i);
+    expect(calls.filter((c) => c.action === "createSession")).toHaveLength(0);
   });
 
   it("refuses to re-create a PATHLESS stub (would spawn the daemon in $HOME)", async () => {

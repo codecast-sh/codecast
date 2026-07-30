@@ -10,8 +10,8 @@
 import { useMemo } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { toast } from "sonner";
+import { useInboxStore } from "../store/inboxStore";
 import {
   DropdownMenuItem,
   DropdownMenuLabel,
@@ -186,15 +186,21 @@ export function RunOnDeviceItems({
   const reassign = useMutation(api.devices.reassignToDevice);
   const moveToRemote = useMutation(api.devices.moveToRemote);
 
+  // On a fork/new-session stub page `conversationId` is the client-minted
+  // session UUID until the create resolves — follow the store's stub→real
+  // mapping when it exists. The server accepts any ref (id / short id /
+  // session UUID), so an unmapped UUID still resolves once the create lands.
+  const realConvId = () => useInboxStore.getState().getConvexId(conversationId) ?? conversationId;
+
   const runHere = (d: Device) => {
     toast.info(`Moving session to ${deviceDisplayName(d)}…`);
-    reassign({ conversation_id: conversationId as Id<"conversations">, device_id: d.device_id })
+    reassign({ conversation_id: realConvId(), device_id: d.device_id })
       .then(() => toast.success(`Now running on ${deviceDisplayName(d)}`))
       .catch((e: any) => toast.error(e?.message || "Move failed"));
   };
   const toRemote = (d: Device) => {
     toast.info("Moving session to remote Mac…");
-    moveToRemote({ conversation_id: conversationId as Id<"conversations">, to_device_id: d.device_id })
+    moveToRemote({ conversation_id: realConvId(), to_device_id: d.device_id })
       .then(() => toast.success("Moving to remote Mac…"))
       .catch((e: any) => toast.error(e?.message || "Move failed"));
   };

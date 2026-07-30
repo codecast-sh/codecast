@@ -103,6 +103,11 @@ const IGNORED_ERROR_PATTERNS: RegExp[] = [
   // fenced (token refresh, principal switch). Expected lifecycle — the durable
   // outbox copy redelivers under the current binding — not a failure.
   /Dispatch binding changed while work was in flight/,
+  // DispatchNotWiredError (parked): an asyncAction fired in the window where
+  // no dispatch binding exists; the write is parked in the outbox and delivers
+  // on the next drain. Same "redelivers, not a failure" rationale as above.
+  // The dropped (no-outbox) variant is NOT ignored — that write really is gone.
+  /Dispatch not wired — .* parked for later delivery/,
 ];
 
 function isIgnoredError(message: string | undefined): boolean {
