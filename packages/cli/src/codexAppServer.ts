@@ -99,6 +99,17 @@ export type ThreadItem =
   | ImageGenerationItem
   | ContextCompactionItem;
 
+function imageMediaTypeForPath(imagePath: string): string {
+  const cleanPath = imagePath.split(/[?#]/, 1)[0].toLowerCase();
+  if (cleanPath.endsWith(".jpg") || cleanPath.endsWith(".jpeg")) return "image/jpeg";
+  if (cleanPath.endsWith(".gif")) return "image/gif";
+  if (cleanPath.endsWith(".webp")) return "image/webp";
+  if (cleanPath.endsWith(".bmp")) return "image/bmp";
+  if (cleanPath.endsWith(".svg")) return "image/svg+xml";
+  if (cleanPath.endsWith(".avif")) return "image/avif";
+  return "image/png";
+}
+
 export interface ApprovalRequest {
   id: number | string;
   method: string;
@@ -595,7 +606,10 @@ export function threadItemToMessage(item: ThreadItem, timestamp = Date.now()): P
         if (input.type === "text") {
           texts.push(input.text);
         } else if (input.type === "localImage") {
-          images.push({ mediaType: "image/png", data: input.path });
+          images.push({
+            mediaType: imageMediaTypeForPath(input.path),
+            localPath: input.path,
+          });
         }
       }
       return {
@@ -784,7 +798,10 @@ export function threadItemToMessage(item: ThreadItem, timestamp = Date.now()): P
         role: "assistant",
         content: "",
         timestamp,
-        images: [{ mediaType: "image/png", data: item.path }],
+        images: [{
+          mediaType: imageMediaTypeForPath(item.path),
+          localPath: item.path,
+        }],
       };
     }
 
@@ -866,7 +883,14 @@ export function threadItemsToMessages(items: ThreadItem[]): ParsedMessage[] {
     }
 
     if (item.type === "imageView") {
-      currentImages.push({ mediaType: "image/png", data: item.path });
+      currentImages.push({
+        mediaType: imageMediaTypeForPath(item.path),
+        localPath: item.path,
+      });
+      // Progress sync rebuilds the whole completed-item list after every item.
+      // Without a stable uuid an image-only group is inserted again on every
+      // rebuild instead of patching the same message.
+      lastUuid = lastUuid || item.id;
       continue;
     }
 

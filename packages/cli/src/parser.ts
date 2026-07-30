@@ -61,7 +61,10 @@ export interface ToolResult {
 
 export interface ImageBlock {
   mediaType: string;
-  data: string;
+  /** Inline base64 payload. Mutually exclusive with localPath. */
+  data?: string;
+  /** Local image file emitted by the Codex app-server. Read before syncing. */
+  localPath?: string;
   toolUseId?: string;
 }
 

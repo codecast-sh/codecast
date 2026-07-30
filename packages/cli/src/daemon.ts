@@ -726,7 +726,7 @@ interface PendingMessages {
     thinking?: string;
     toolCalls?: Array<{ id: string; name: string; input: Record<string, unknown> }>;
     toolResults?: Array<{ toolUseId: string; content: string; isError?: boolean }>;
-    images?: Array<{ mediaType: string; data: string }>;
+    images?: Array<{ mediaType: string; data?: string; localPath?: string; storageId?: string }>;
     subtype?: string;
     model?: string;
   }>;
@@ -5062,8 +5062,12 @@ function recoverImagesFromBackup(
   for (const bm of bakMessages) {
     if (!bm.images) continue;
     for (const img of bm.images) {
-      if (img.toolUseId && unavailableToolIds.has(img.toolUseId)) {
-        imageMap.set(img.toolUseId, img);
+      if (img.data && img.toolUseId && unavailableToolIds.has(img.toolUseId)) {
+        imageMap.set(img.toolUseId, {
+          mediaType: img.mediaType,
+          data: img.data,
+          toolUseId: img.toolUseId,
+        });
       }
     }
   }
@@ -15794,7 +15798,7 @@ async function main(): Promise<void> {
         thinking?: string;
         toolCalls?: Array<{ id: string; name: string; input: Record<string, unknown> }>;
         toolResults?: Array<{ toolUseId: string; content: string; isError?: boolean }>;
-        images?: Array<{ mediaType: string; data: string }>;
+        images?: Array<{ mediaType: string; data?: string; localPath?: string; storageId?: string }>;
         subtype?: string;
       };
       await syncService.addMessage(params);
