@@ -21,7 +21,16 @@ export type SourceCoverage =
   | { kind: "none" }
   | { kind: "view-revision"; revision: string; revisionOrder?: number }
   | { kind: "command-ids"; commandIds: readonly string[] }
-  | { kind: "coverage-token"; token: string };
+  | { kind: "coverage-token"; token: string }
+  /**
+   * The backend log position (u64 as a decimal string) at which this result
+   * is valid — a TRUE result version derived from Convex's read-set tracking,
+   * stamped client-side from the transition that delivered the result.
+   * `commandIds` carries the caller's recently-receipted command ids echoed by
+   * the server inside the same query snapshot: an id listed here PROVES this
+   * result includes that command's write (design §11.4 proof #3).
+   */
+  | { kind: "log-ts"; ts: string; commandIds?: readonly string[] };
 
 export type ExplicitEntityRemoval = {
   entityType: string;

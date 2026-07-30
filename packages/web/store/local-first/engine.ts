@@ -139,6 +139,7 @@ export class LocalFirstEngine {
   async beginSource(
     viewKey: string,
     contractId: string,
+    options?: { supersedes?: string },
   ): Promise<SourceHandle> {
     const capturedPrincipalEpoch = this.principalEpoch;
     if (this.closed) throw new StaleLocalFirstSourceError("principal");
@@ -148,6 +149,7 @@ export class LocalFirstEngine {
         this.options.fence,
         viewKey,
         contractId,
+        options,
       );
     } catch (error) {
       if (!(error instanceof PrincipalStoreFenceError)) this.options.onStorageFailure?.(error);
@@ -348,6 +350,7 @@ export class LocalFirstEngine {
       case "view-revision": return coverage.revision;
       case "coverage-token": return coverage.token;
       case "command-ids": return coverage.commandIds.join(",");
+      case "log-ts": return coverage.ts;
       case "none": return "none";
     }
   }

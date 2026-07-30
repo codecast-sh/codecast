@@ -5,8 +5,16 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { isConvexId } from "../lib/entityLinks";
 import { useInboxStore } from "../store/inboxStore";
-import { localFirstSliceMode } from "../store/local-first/featureFlags";
-import { commentsByConversationView } from "../store/local-first/referenceContracts";
+import {
+  isCutoverMode,
+  isLogTsMode,
+  isShadowMode,
+  localFirstSliceMode,
+} from "../store/local-first/featureFlags";
+import {
+  commentsByConversationView,
+  commentsByConversationViewV3,
+} from "../store/local-first/referenceContracts";
 import { useCutoverSpotCheck, useShadowEquivalence } from "../store/local-first/shadowValidation";
 import { useConvexSync } from "./useConvexSync";
 import { useLocalView } from "./useLocalView";
@@ -41,35 +49,41 @@ export function comparableComment(row: any): Record<string, unknown> {
 export function useConversationCommentsSync(conversationId: string | undefined): void {
   const canQuery = !!conversationId && isConvexId(conversationId);
   const mode = localFirstSliceMode("comments");
+  const cutover = isCutoverMode(mode);
   const syncTable = useInboxStore((s) => s.syncTable);
 
   // Standing divergence monitor after cutover (matrix SHD-03): a sampled
   // fraction of mounts briefly re-subscribes v1 purely for digest comparison.
   const spotCheck = useCutoverSpotCheck(
-    canQuery && mode === "cutover",
+    canQuery && cutover,
     `comments:${conversationId}`,
   );
   const raw = useQuery(
     api.comments.getConversationCommentSummary,
-    canQuery && (mode !== "cutover" || spotCheck)
+    canQuery && (!cutover || spotCheck)
       ? { conversation_id: conversationId as Id<"conversations"> }
       : "skip",
   );
   useConvexSync(raw, useCallback((data: any) => {
     // In cutover the durable view owns the store; a sampled v1 result feeds
     // only the digest comparison below.
-    if (mode === "cutover") return;
+    if (cutover) return;
     syncTable("comments", data ?? []);
-  }, [syncTable, mode]));
+  }, [syncTable, cutover]));
 
+  // The -lts modes run the v3 stamped-log-ts contract (same server query,
+  // coverage from the delivering transition's log timestamp).
+  const viewContract = isLogTsMode(mode)
+    ? commentsByConversationViewV3
+    : commentsByConversationView;
   const view = useLocalView(
-    commentsByConversationView,
+    viewContract,
     { conversationId: conversationId as Id<"conversations"> },
     { enabled: canQuery && mode !== "off" },
   );
   const viewRows = view.rows;
   useEffect(() => {
-    if (mode !== "cutover" || view.status !== "granted") return;
+    if (!cutover || view.status !== "granted") return;
     // The durable view is COMPLETE for this conversation, so a row absent from
     // it is deleted, not merely unsynced. The comments registry entry is
     // isDelta (one conversation's feed must not prune another's), so without
@@ -79,12 +93,12 @@ export function useConversationCommentsSync(conversationId: string | undefined):
     syncTable("comments", viewRows.map((row) => row.value), {
       pruneAbsentScope: (row: any) => row.conversation_id === conversationId,
     });
-  }, [mode, view.status, viewRows, syncTable, conversationId]);
+  }, [cutover, view.status, viewRows, syncTable, conversationId]);
 
   // Cutover gate evidence in shadow mode; sampled standing monitor in cutover.
   useShadowEquivalence({
-    enabled: canQuery && (mode === "shadow" || spotCheck),
-    contractId: commentsByConversationView.id,
+    enabled: canQuery && (isShadowMode(mode) || spotCheck),
+    contractId: viewContract.id,
     viewKey: `comments:conversation:${conversationId}`,
     authoritative: useMemo(() => Array.isArray(raw)
       ? raw.map((row: any) => ({ key: `comment:${row._id}`, value: comparableComment(row) }))
