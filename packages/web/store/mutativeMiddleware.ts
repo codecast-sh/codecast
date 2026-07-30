@@ -434,6 +434,19 @@ export const LOCAL_FIRST_WRITE_ACTIONS = new Set([
   "sendMessage",
 ]);
 
+// Actions promoted to receipt envelopes BY the final-mode release. With the
+// write master off they demote to their pre-release fire-and-forget action()
+// semantics, so the rollback posture is exactly the last shipped prod build.
+// The other receipt actions (comments, createBucket, create*) shipped
+// envelope-backed long before final mode and keep their envelopes in BOTH
+// postures — regressing them on rollback would drop the receipt-rejection
+// reconciliation that is already load-bearing in production.
+export const FLAG_PROMOTED_RECEIPT_ACTIONS = new Set([
+  "updateBucket",
+  "assignSessionToBucket",
+  "sendMessage",
+]);
+
 export const CURRENT_OUTBOX_OPERATION_SCHEMA_VERSION = 1;
 
 export class UnsupportedOutboxOperationSchemaError extends Error {
