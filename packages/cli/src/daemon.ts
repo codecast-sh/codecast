@@ -86,6 +86,13 @@ import { performReconciliation, repairDiscrepancies } from "./reconciliation.js"
 import { TEST_SCRATCH_DIRNAME, isTestScratchPath, isPathExcluded, isProjectAllowedToSync } from "./syncScope.js";
 import { TaskScheduler } from "./taskScheduler.js";
 import { hasTmux } from "./tmux.js";
+import {
+  PASTE_START,
+  PASTE_END,
+  clientAcceptsBracketedPaste,
+  prepareInjectedContent,
+  pasteTextIntoPane as pasteTextIntoPaneWith,
+} from "./tmuxPaste.js";
 import { formatFeedResults } from "./formatter.js";
 import { buildStableContext, recordStableContext, type BuiltStableContext } from "./stableContext.js";
 import { collectSessionResources, formatResourcesLog, nextAwakeIdleMs, shouldReportMetrics, type ReportedMetrics, type SessionResources } from "./resourceMonitor.js";
@@ -119,7 +126,7 @@ import { resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, pickPr
 import { buildLaunchArgs, getConfiguredAgentArgs, launchBinary } from "./launchCommand.js";
 import type { AgentStatus, DeviceSnippetSettings, AgentClientId, StableLaunchPrefs } from "@codecast/shared/contracts";
 import { findModelOption, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, SNIPPET_CATALOG, snippetBySlug, AGENT_CLIENTS, fromConvexAgentType, STABLE_ENV_MODE, STABLE_ENV_GLOBAL, STABLE_ENV_EXCLUDE, STABLE_ENV_CONVERSATION_ID } from "@codecast/shared/contracts";
-import { parseModelPicker, planModelNavigation, SESSION_ONLY_COMMIT_RE, isSwitchConfirmDialog } from "./modelPicker";
+import { parseModelPicker, planModelNavigation, SESSION_ONLY_COMMIT_RE, countSessionOnlyCommits, isSwitchConfirmDialog, isStrandedModelCommand, type PickerState } from "./modelPicker";
 import { type Config, getAgentArgs, isOpencodeServerEnabled, opencodeServerPort } from "./config/types.js";
 import {
   CodexAppServerRuntimeDriver,
@@ -9142,59 +9149,11 @@ async function paneInteractiveQuestion(target: string): Promise<string | null> {
   }
 }
 
-// ── Injected-content preparation ────────────────────────────────────────────
-// Every injection backend types a message into an agent's composer through a
-// terminal, where a newline byte is indistinguishable from the Enter key unless
-// the payload is wrapped in bracketed-paste markers (ESC[200~ … ESC[201~).
-// Inside those markers a TUI composer inserts a literal newline; outside them
-// the same byte submits the message, so an unbracketed multi-line prompt is
-// delivered as one message per line — each fragment answered separately, the
-// tail lines landing as interruptions.
-//
-// So: keep newlines when the transport can bracket the payload, flatten them to
-// spaces when it can't (a mangled-but-whole prompt beats N truncated ones).
-// Trailing newlines always go: the discrete Enter the callers send afterwards is
-// what submits, and a trailing blank composer line would swallow it.
-export function prepareInjectedContent(content: string, opts: { bracketed: boolean }): string {
-  const normalized = content.replace(/\r\n?/g, "\n").replace(/\n+$/, "");
-  const shaped = opts.bracketed ? normalized : normalized.replace(/\n/g, " ");
-  // Never return empty: an empty paste leaves the composer untouched and the
-  // trailing Enter would submit whatever the user had typed there.
-  return shaped || " ";
-}
-
-const PASTE_START = "\x1b[200~";
-const PASTE_END = "\x1b[201~";
-
-// Whether the client running in the pane turns on bracketed paste mode. An
-// unverified client gets flattened text, because newlines it doesn't bracket
-// submit a message per line. Unknown/absent type means claude, the daemon's
-// default everywhere else in this file.
-export function clientAcceptsBracketedPaste(agentType?: AgentClientId): boolean {
-  return AGENT_CLIENTS[agentType ?? "claude"].capabilities.bracketedPaste === true;
-}
-
-// Paste literal text into a pane via a tmux buffer (no per-char typing, so CC's
-// slash-command autocomplete never opens). `-p` asks tmux for the bracketed-paste
-// markers, which it emits only when the pane's program has the mode on — hence
-// `bracketed`, which must reflect that same client capability so text destined
-// for a TUI that won't bracket it gets flattened instead of split per line.
-// The send-keys fallback is raw keystrokes with no bracketing either way.
-// Preparation is idempotent, so passing already-prepared text is safe.
-async function pasteTextIntoPane(target: string, text: string, bracketed = true): Promise<void> {
-  const payload = prepareInjectedContent(text, { bracketed });
-  const id = `cc-${process.pid}-${Date.now()}`;
-  const tmpFile = `/tmp/${id}`;
-  try {
-    fs.writeFileSync(tmpFile, payload);
-    await tmuxExec(["load-buffer", "-b", id, tmpFile]);
-    await tmuxExec(["paste-buffer", "-p", "-t", target, "-b", id, "-d"]);
-  } catch {
-    await tmuxExec(["send-keys", "-t", target, "-l", prepareInjectedContent(payload, { bracketed: false })]);
-  } finally {
-    try { fs.unlinkSync(tmpFile); } catch {}
-  }
-}
+// Injected-content preparation and the tmux paste primitive live in
+// ./tmuxPaste.ts, shared with the `cast claude` wrapper's own delivery loop.
+// See that module for why newlines only survive a bracketed paste.
+const pasteTextIntoPane = (target: string, text: string, bracketed = true) =>
+  pasteTextIntoPaneWith(tmuxExec, target, text, bracketed);
 
 // --- /model picker driver ---------------------------------------------------
 // Opens Claude Code's /model picker in the target pane, navigates the model
@@ -9216,7 +9175,29 @@ async function capturePaneText(target: string, lines: number): Promise<string> {
   return stdout.replace(/[\s\n]+$/, "");
 }
 
+// Concurrent switches against one pane destroy each other: every opener starts
+// with an Escape + composer clear, which closes the picker the other driver is
+// mid-navigation in (observed live 2026-07-30 — two set_model commands 1.5s
+// apart, "Lost the model picker while navigating" + "Could not land on the
+// requested model row"). Serialize per tmux target; queued switches run in
+// arrival order, each a full open→commit cycle, so the last one wins.
+const modelPickerQueue = new Map<string, Promise<unknown>>();
+
 export async function driveModelPicker(
+  target: string,
+  opts: { menuMatch?: string; effort?: string },
+): Promise<string> {
+  const prev = modelPickerQueue.get(target) ?? Promise.resolve();
+  const run = prev.catch(() => {}).then(() => driveModelPickerExclusive(target, opts));
+  modelPickerQueue.set(target, run);
+  try {
+    return await run;
+  } finally {
+    if (modelPickerQueue.get(target) === run) modelPickerQueue.delete(target);
+  }
+}
+
+async function driveModelPickerExclusive(
   target: string,
   opts: { menuMatch?: string; effort?: string },
 ): Promise<string> {
@@ -9241,17 +9222,17 @@ export async function driveModelPicker(
 
   // Clear any composer draft (same dance as message injection: a lone C-u is
   // not reliable on CC 2.1.x), then open the picker.
+  const clearComposer = async () => {
+    for (let i = 0; i < 3; i++) {
+      await tmuxExec(["send-keys", "-t", target, "C-a"]);
+      await new Promise((r) => setTimeout(r, 20));
+      await tmuxExec(["send-keys", "-t", target, "C-k"]);
+      await new Promise((r) => setTimeout(r, 20));
+    }
+  };
   await tmuxExec(["send-keys", "-t", target, "Escape"]);
   await new Promise((r) => setTimeout(r, 50));
-  for (let i = 0; i < 3; i++) {
-    await tmuxExec(["send-keys", "-t", target, "C-a"]);
-    await new Promise((r) => setTimeout(r, 20));
-    await tmuxExec(["send-keys", "-t", target, "C-k"]);
-    await new Promise((r) => setTimeout(r, 20));
-  }
-  await pasteTextIntoPane(target, "/model");
-  await new Promise((r) => setTimeout(r, 150));
-  await tmuxExec(["send-keys", "-t", target, "Enter"]);
+  await clearComposer();
 
   // Failure cleanup must unwind BOTH layers a commit can be stuck in (cache
   // confirm dialog over the picker), so Escape twice with a beat between.
@@ -9261,10 +9242,55 @@ export async function driveModelPicker(
     await tmuxExec(["send-keys", "-t", target, "Escape"]).catch(() => {});
   };
 
-  const state0 = await waitFor(async () => {
-    const st = parseModelPicker(await capturePaneText(target, 45));
-    return st.visible ? st : null;
-  }, 5000);
+  // Open the picker, closed loop. CC can eat the Enter that submits "/model" —
+  // the slash-command popup absorbs it as a completion-select, and a mid-render
+  // CC coalesces it into the paste burst (the class verifyTmuxSubmitAfterPaste
+  // handles for message injection; observed live 2026-07-30 as "Model picker
+  // did not open"). Only the provably-stranded composer earns a re-paste; a
+  // bare timeout never earns a blind Enter — if the submit DID land, a stray
+  // Enter inside the menu commits the highlighted row as the GLOBAL default.
+  let state0: PickerState | null = null;
+  for (let attempt = 0; attempt < 3 && !state0; attempt++) {
+    if (attempt > 0) {
+      // The prior submit may have surfaced late — never re-open over a live menu.
+      const late = parseModelPicker(await capturePaneText(target, 45));
+      if (late.visible) {
+        state0 = late;
+        break;
+      }
+      await clearComposer();
+    }
+    await pasteTextIntoPane(target, "/model");
+    await new Promise((r) => setTimeout(r, 150));
+    // Same guard against a late-surfacing menu: pasted letters are inert in
+    // the picker, but Enter is not.
+    const preEnter = parseModelPicker(await capturePaneText(target, 45));
+    if (preEnter.visible) {
+      state0 = preEnter;
+      break;
+    }
+    await tmuxExec(["send-keys", "-t", target, "Enter"]);
+
+    let strandedSince = 0;
+    const deadline = Date.now() + 4000;
+    while (Date.now() < deadline) {
+      const text = await capturePaneText(target, 45);
+      const st = parseModelPicker(text);
+      if (st.visible) {
+        state0 = st;
+        break;
+      }
+      if (isStrandedModelCommand(text.split("\n").slice(-6).join("\n"))) {
+        // Grace period: right at submit the same "❯ /model" renders for a
+        // frame as the transcript echo of the command we just ran.
+        if (!strandedSince) strandedSince = Date.now();
+        else if (Date.now() - strandedSince > 1000) break;
+      } else {
+        strandedSince = 0;
+      }
+      await new Promise((r) => setTimeout(r, 300));
+    }
+  }
   if (!state0) {
     await closePicker();
     throw new Error("Model picker did not open");
@@ -9272,14 +9298,16 @@ export async function driveModelPicker(
 
   try {
     if (opts.menuMatch) {
+      // One row per press, re-parsed after every keystroke. Batch presses
+      // verified only at the end can catch the highlight mid-move and give up
+      // while keystrokes are still landing (run-to-run flake observed live on
+      // CC 2.1.220); stepwise, a stale parse just presses once more and the
+      // next parse corrects course.
       let delta = planModelNavigation(state0, opts.menuMatch);
       if (delta === null) throw new Error("Requested model is not in this session's picker");
-      for (let attempt = 0; attempt < 2 && delta !== 0; attempt++) {
-        const key = delta > 0 ? "Down" : "Up";
-        for (let i = 0; i < Math.abs(delta); i++) {
-          await tmuxExec(["send-keys", "-t", target, key]);
-          await new Promise((r) => setTimeout(r, 120));
-        }
+      for (let press = 0; delta !== 0 && press < 12; press++) {
+        await tmuxExec(["send-keys", "-t", target, delta > 0 ? "Down" : "Up"]);
+        await new Promise((r) => setTimeout(r, 150));
         const st = parseModelPicker(await capturePaneText(target, 45));
         delta = planModelNavigation(st, opts.menuMatch);
         if (delta === null) throw new Error("Lost the model picker while navigating");
@@ -9288,12 +9316,19 @@ export async function driveModelPicker(
     }
 
     if (opts.effort) {
-      // The effort row wraps (low→medium→high→max→low), so Right-only always
-      // converges within one lap plus slack.
+      // The effort row wraps (low→medium→high→xhigh→max→ultracode→low on CC
+      // 2.1.220), so Right-only always converges within one lap plus slack.
       let reached = false;
-      for (let i = 0; i < 6; i++) {
+      let unsupported = false;
+      for (let i = 0; i < 8; i++) {
         const st = parseModelPicker(await capturePaneText(target, 45));
         if (!st.visible) throw new Error("Lost the model picker while adjusting effort");
+        if (st.effortUnsupported) {
+          // The selected model takes no effort at all ("Effort not supported
+          // for Haiku") — commit the model switch rather than failing it.
+          unsupported = true;
+          break;
+        }
         if (st.effort === opts.effort) {
           reached = true;
           break;
@@ -9301,19 +9336,29 @@ export async function driveModelPicker(
         await tmuxExec(["send-keys", "-t", target, "Right"]);
         await new Promise((r) => setTimeout(r, 250));
       }
-      if (!reached) throw new Error(`Could not reach ${opts.effort} effort in the picker`);
+      if (!reached && !unsupported) throw new Error(`Could not reach ${opts.effort} effort in the picker`);
     }
 
-    // `s` = session-only commit (Enter would save as the user's GLOBAL default).
+    // `s` = session-only commit (Enter would save as the user's GLOBAL
+    // default). Confirmation must be a NEW echo, not a present one: echoes of
+    // earlier switches linger in scrollback, and on a short transcript the
+    // fresh echo renders far above the composer — a fixed bottom-lines grep
+    // misread a committed switch as failed (the web then reverted its chip
+    // while the tmux session silently ran the new model). Count before, wait
+    // for the count to rise, return the bottom-most (= newest) echo.
+    const echoesBefore = countSessionOnlyCommits(await capturePaneText(target, 45));
     await tmuxExec(["send-keys", "-t", target, "-l", "s"]);
     // On a conversation with history, the commit first pops a cache warning
     // ("❯ 1. Yes, switch to … / 2. No, go back") — confirm it. Enter is safe
     // HERE (it accepts the highlighted Yes; the menu underneath is gone).
     let confirmedDialog = false;
     const echo = await waitFor(async () => {
-      const tail = (await capturePaneText(target, 20)).split("\n").slice(-12).join("\n");
-      const m = tail.match(SESSION_ONLY_COMMIT_RE);
-      if (m) return m[0];
+      const text = await capturePaneText(target, 45);
+      if (countSessionOnlyCommits(text) > echoesBefore) {
+        const all = text.match(new RegExp(SESSION_ONLY_COMMIT_RE.source, "gi"))!;
+        return all[all.length - 1];
+      }
+      const tail = text.split("\n").slice(-12).join("\n");
       if (!confirmedDialog && isSwitchConfirmDialog(tail)) {
         confirmedDialog = true;
         await tmuxExec(["send-keys", "-t", target, "Enter"]);

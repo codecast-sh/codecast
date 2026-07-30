@@ -194,6 +194,34 @@ describe("messaging e2e — content edge cases", () => {
     expect(pane).toContain(endMarker);
   }, 30_000);
 
+  test("Scenario 4b: multi-line message arrives as ONE message with newlines intact", async () => {
+    // The regression this guards: injection used to flatten every newline to a
+    // space, because an unbracketed linefeed reaches a TUI as the Enter key and
+    // would submit one message per line. `paste-buffer -p` brackets the payload
+    // instead, so the newlines are delivered as composer newlines. The shim
+    // requests bracketed paste exactly like a real agent TUI and reassembles a
+    // bracketed burst into a single message.
+    const h = track(spawnHarness());
+    await waitFor(() => h.paneHasPrompt(), { timeoutMs: BUDGET_PROMPT_READY_MS });
+
+    const target = `${h.tmuxSession}:0.0`;
+    const content = "multiline-marker: first line\nsecond line\n\nfourth after blank";
+    await injectViaTmux(target, content);
+
+    await waitFor(() => {
+      const msgs = readJsonlMessages(h.jsonlPath);
+      return msgs.some(m => m.type === "user" && m.text?.startsWith("multiline-marker:"));
+    }, { timeoutMs: BUDGET_JSONL_SYNC_MS, label: "multi-line content in JSONL" });
+
+    const userMsgs = readJsonlMessages(h.jsonlPath).filter(
+      m => m.type === "user" && m.text?.includes("marker"),
+    );
+    // One message, not four: a per-line submit would leave "second line" and
+    // "fourth after blank" as separate user turns.
+    expect(userMsgs.length).toBe(1);
+    expect(userMsgs[0].text).toBe(content);
+  }, 30_000);
+
   test("Scenario 5: message with shell-special characters does not break paste", async () => {
     const h = track(spawnHarness());
     await waitFor(() => h.paneHasPrompt(), { timeoutMs: BUDGET_PROMPT_READY_MS });
