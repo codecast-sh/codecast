@@ -279,6 +279,11 @@ export type InboxSession = {
   // conversation fields, so acting on a teammate's card would hide it from them.
   owner_user_id?: string | null;
   owned_by_me?: boolean;
+  // Unacknowledged handoff: a teammate assigned this session to the current user
+  // and they haven't acked it yet (session_owners.seen_at unset). Stamped by
+  // computeInboxSessions; cleared by ackSessionAssignment (server) and
+  // clearAssignedPing (local-first).
+  assigned_ping?: { by_name: string; note?: string | null; at: number } | null;
   // An Anchor's session renders under its bot identity (acting_user_id), shown
   // even on the host's own row; is_anchor marks it a standing member.
   acting_user_id?: string | null;
@@ -975,6 +980,25 @@ export function pendingSendConsumed(
 // fast path on the very next sync tick, before the server ever rejected it.
 export const PENDING_SEND_PRUNE_GRACE_MS = 15_000;
 
+// Echo hard cap. The session claiming a send consumed does NOT mean the local
+// message window holds the echoed server row yet — the window back-fills via an
+// async fetch (bgSyncMessages) that the same sync tick merely kicks off. Pruning
+// on the claim alone makes the message vanish from a stale cached window until
+// that fetch lands (~a second) when the user returns to the thread. So a consumed
+// send with a warm local window is kept until its echo is visible there — but only
+// up to this cap, because some sends never echo as a user-message row at all
+// (control commands like /model) and a phantom pending pill would otherwise pin
+// an idle session in Working forever.
+export const PENDING_SEND_ECHO_CAP_MS = 60_000;
+
+// True when the pending send's server row is already visible in the local
+// message window (matched by client_id echo or direct _id).
+function pendingSendEchoed(msg: Message, localMessages: Message[]): boolean {
+  return localMessages.some(
+    (m) => m._id === msg._id || (!!msg._clientId && m.client_id === msg._clientId),
+  );
+}
+
 // Prune consumed/stale optimistic sends for a synced session. The conversation
 // currently being viewed is left to setMessages (echo-based prune) so a just-sent
 // message stays visible in the open thread until its real row syncs in. Failed
@@ -984,6 +1008,9 @@ export function reconcilePendingSendForSession(
   convId: string,
   session: Pick<InboxSession, "agent_status" | "is_idle" | "has_pending" | "updated_at"> | undefined,
   focusedConvId: string | null,
+  // The conversation's locally cached message window, when one exists. Gates the
+  // prune on the echoed server row being visible there (see PENDING_SEND_ECHO_CAP_MS).
+  localMessages?: Message[],
 ): boolean {
   if (convId === focusedConvId) return false;
   const pending = pendingMessages[convId];
@@ -1000,7 +1027,17 @@ export function reconcilePendingSendForSession(
   }
   if (newestSentAt && Date.now() - newestSentAt < PENDING_SEND_PRUNE_GRACE_MS) return false;
   if (!pendingSendConsumed(session, baseline)) return false;
-  const kept = pending.filter((m) => m._isFailed);
+  const kept = pending.filter((m) => {
+    if (m._isFailed) return true;
+    // Echo gate: with a warm local window, hold the send until its server row
+    // is visible there (or the cap passes) so a return to the thread never
+    // renders a stale window with the message missing.
+    return (
+      !!localMessages?.length &&
+      Date.now() - m.timestamp < PENDING_SEND_ECHO_CAP_MS &&
+      !pendingSendEchoed(m, localMessages)
+    );
+  });
   if (kept.length === pending.length) return false;
   if (kept.length === 0) delete pendingMessages[convId];
   else pendingMessages[convId] = kept;
@@ -1188,6 +1225,14 @@ export function sessionStructuralSig(s: InboxSession): string {
     nestParentIdOf(s) || "",
     s.forked_from || "",
     orchestrationGroupLabelOf(s) || "",
+    // Presence of an unacked assignment flips the row's prominent treatment.
+    // Changes only on assign/ack, never on heartbeats.
+    s.assigned_ping ? 1 : 0,
+    // Harness loop state decides trigger-set membership and absorption
+    // (partitionTriggerInbox reads it off this same subscription). Distilled to
+    // the fields that change rows; stamps once per turn end/wakeup, never on
+    // heartbeats.
+    s.loop_state ? `${s.loop_state.status}:${s.loop_state.wakeup_at}` : "",
   ].join("\x1f");
 }
 
@@ -2288,6 +2333,9 @@ interface InboxStoreState {
   // -- Generic sync --
   syncTable: (field: string, incoming: any, opts?: SyncOpts) => void;
   syncRecord: (field: string, id: string, record: any) => void;
+  // Local-first clear of a row's "assigned to you" ping (paired with the
+  // ackSessionAssignment mutation, which the caller fires separately).
+  clearAssignedPing: (conversationId: string) => void;
   syncOverlay: (field: string, overlayById: Record<string, Record<string, any>>) => void;
   syncMentionIndex: (kind: "tasks" | "docs" | "plans", items: any[]) => void;
   // -- Incremental-sync watermark (IDB-persisted, keyed by "<namespace>:<wsKey>") --
@@ -2908,6 +2956,7 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
           s._id,
           (table[s._id] as InboxSession | undefined) ?? s,
           draft.currentSessionId,
+          draft.messages[s._id],
         );
       }
       if (!draft.currentSessionId && !draft.showMySessions &&
@@ -4466,6 +4515,14 @@ export const useInboxStore = create<InboxStoreState>(
         }
       }
     }
+  }),
+
+  // Local-first retire of the "assigned to you" ping: the UI clears it the
+  // moment the user acks, while the ackSessionAssignment mutation round-trips;
+  // the next inbox sync reflects the server's cleared state and agrees.
+  clearAssignedPing: sync(function (this: Draft, conversationId: string) {
+    const row = this.sessions[conversationId];
+    if (row?.assigned_ping) row.assigned_ping = null;
   }),
 
   // Merge a small high-churn map (e.g. heartbeat liveness keyed by id) onto a
