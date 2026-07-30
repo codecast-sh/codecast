@@ -731,6 +731,10 @@ function TriggerRowItem({ row, activeSessionId, onOpen, attached, highlighted, p
   onNavigated?: () => void;
 }) {
   const { task, unread } = row;
+  // Pseudo rows (harness loops, live subagents) wear the same anatomy but
+  // carry no server verbs — there's no agent_tasks row to pause or cancel,
+  // and no run history to query. See triggerTasks.ts.
+  const isPseudo = !!row.kind;
   const now = useCoarseNow(30_000);
   // Every verb patches the local webList cache in the same write (local-first):
   // the row flips the instant it's clicked; the server echo reconciles.
@@ -768,7 +772,7 @@ function TriggerRowItem({ row, activeSessionId, onOpen, attached, highlighted, p
   // open, so a resting roster costs nothing; each entry navigates to the
   // message that triggered that run.
   const [runsOpen, setRunsOpen] = useState(false);
-  const runs = useTriggerRuns(runsOpen ? task._id : null);
+  const runs = useTriggerRuns(runsOpen && !isPseudo ? task._id : null);
   return (
     <div
       data-schedrow={task._id}
@@ -808,9 +812,9 @@ function TriggerRowItem({ row, activeSessionId, onOpen, attached, highlighted, p
             alone marks it as a schedule — no extra identity icon. */}
         <div className="flex gap-1.5 min-w-0">
         {attached && (
-          <span className="flex items-center mt-[2px] shrink-0 text-sol-orange/70" role="img" aria-label="Trigger — fires into this session">
+          <span className="flex items-center mt-[2px] shrink-0 text-sol-orange/70" role="img" aria-label={row.kind === "loop" ? "Loop — the agent wakes itself in this session" : "Trigger — fires into this session"}>
             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-              <title>Trigger — fires into this session</title>
+              <title>{row.kind === "loop" ? "Loop — the agent wakes itself in this session" : "Trigger — fires into this session"}</title>
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
               <path strokeLinecap="round" strokeLinejoin="round" d="M14 12l4 4-4 4" />
             </svg>
@@ -850,7 +854,9 @@ function TriggerRowItem({ row, activeSessionId, onOpen, attached, highlighted, p
               <span className="shrink-0 px-1 rounded-full bg-sol-orange text-sol-bg text-[9px] font-semibold">new</span>
             </ShortcutTooltip>
           )}
-          <span className="ml-auto shrink-0 text-[10px] font-medium text-sol-text-muted">{describeTaskCadence(task)}</span>
+          <span className="ml-auto shrink-0 text-[10px] font-medium text-sol-text-muted">
+            {row.kind === "loop" ? "loop" : row.kind === "subagent" ? "subagent" : describeTaskCadence(task)}
+          </span>
           {(() => {
             const badge = (
               <span className={`shrink-0 inline-flex items-center justify-center min-w-[46px] px-1 py-0 rounded text-[9px] font-semibold tabular-nums border transition-colors ${schedBadgeTone(task, now)}`}>
@@ -872,7 +878,7 @@ function TriggerRowItem({ row, activeSessionId, onOpen, attached, highlighted, p
             A fresh schedule whose Haiku gist hasn't landed yet shows the raw
             prompt with a pulse. */}
         {(() => {
-          const sparkle = !task.display_summary && now - task.created_at < 5 * 60_000 && (
+          const sparkle = !isPseudo && !task.display_summary && now - task.created_at < 5 * 60_000 && (
             <ShortcutTooltip label="Haiku is distilling a summary of this prompt">
               <span className="text-sol-orange/70 animate-pulse motion-reduce:animate-none">✦ </span>
             </ShortcutTooltip>
@@ -965,7 +971,9 @@ function TriggerRowItem({ row, activeSessionId, onOpen, attached, highlighted, p
       {/* Hover action rail — same idiom as the inbox session cards: a right-hand
           strip that fades in over a gradient (so it reads as "revealed", not a
           box dropped on top), holding compact icon verbs. Absolute + full-height
-          so revealing it never changes the row's height. */}
+          so revealing it never changes the row's height. Pseudo rows (loops,
+          subagents) have no rail: their verbs live inside the session itself. */}
+      {!isPseudo && (
       <div className="absolute top-0 bottom-0 right-0 flex items-center gap-0.5 pl-12 pr-2 opacity-0 group-hover/schedrow:opacity-100 transition-opacity duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] bg-gradient-to-r from-transparent via-sol-bg-alt/80 to-sol-bg-alt">
         <ShortcutTooltip label={runsOpen ? "Hide run history" : "Run history"} hint="every run links to its trigger message" side="top">
           <button
@@ -1026,10 +1034,11 @@ function TriggerRowItem({ row, activeSessionId, onOpen, attached, highlighted, p
           </button>
         </ShortcutTooltip>
       </div>
+      )}
       </div>
       {/* Past runs, inline: every run of this schedule, newest first, each
           entry landing on the message that triggered it. */}
-      {runsOpen && (
+      {runsOpen && !isPseudo && (
         <div className={`${attached ? "pl-6" : "pl-2.5"} pr-2 pb-1.5`} onClick={(e) => e.stopPropagation()}>
           {runs === undefined ? (
             <div className="text-[10px] text-sol-text-dim py-1 pl-1.5">Loading runs…</div>
@@ -1205,9 +1214,15 @@ function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen }: 
     if (!open) setCursor(-1);
   }, [open]);
   if (rows.length === 0) return null;
-  const recurringCount = rows.filter((r) => r.task.schedule_type !== "once").length;
-  const oneTimeCount = rows.length - recurringCount;
-  const overdueCount = rows.filter((r) => isTaskOverdue(r.task, now)).length;
+  // Real triggers keep the recurring/one-time split; loops and subagents get
+  // their own words — calling a self-pacing loop "recurring" would be a lie
+  // about what the user can edit.
+  const realRows = rows.filter((r) => !r.kind);
+  const loopCount = rows.filter((r) => r.kind === "loop").length;
+  const subagentCount = rows.filter((r) => r.kind === "subagent").length;
+  const recurringCount = realRows.filter((r) => r.task.schedule_type !== "once").length;
+  const oneTimeCount = realRows.length - recurringCount;
+  const overdueCount = rows.filter((r) => !r.kind && isTaskOverdue(r.task, now)).length;
   const runningCount = rows.filter((r) => r.task.status === "running").length;
   // Project chips only when the roster actually mixes projects — a
   // single-project roster doesn't need every row stamped with the same name.
@@ -1235,6 +1250,8 @@ function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen }: 
                 {rows.length} armed
                 {recurringCount > 0 ? ` · ${recurringCount} recurring` : ""}
                 {oneTimeCount > 0 ? ` · ${oneTimeCount} one-time` : ""}
+                {loopCount > 0 ? ` · ${loopCount} loop${loopCount === 1 ? "" : "s"}` : ""}
+                {subagentCount > 0 ? ` · ${subagentCount} subagent${subagentCount === 1 ? "" : "s"}` : ""}
               </span>
               <span className="ml-auto flex items-center gap-2.5">
                 <Link href="/triggers?new=1" onClick={close} className="text-sol-cyan hover:underline">+ New</Link>
@@ -2326,8 +2343,11 @@ export function SessionListPanel({
       sessionsWithQueuedMessages: s.sessionsWithQueuedMessages,
       seenAt: schedulesSeenAt,
       focusedId,
+      // Coarse clock so loop/subagent row membership (wakeup freshness,
+      // liveness staleness) re-evaluates without data churn.
+      now: coarseNow,
     }),
-    [scheduleTasks, visibleSessions, s.sessionsWithQueuedMessages, schedulesSeenAt, focusedId],
+    [scheduleTasks, visibleSessions, s.sessionsWithQueuedMessages, schedulesSeenAt, focusedId, coarseNow],
   );
   // Kill-gesture handlers read the partition through a ref so their identities
   // stay stable (SessionCard is memoized on them).
@@ -2451,7 +2471,9 @@ export function SessionListPanel({
       return;
     }
     st.setScheduleStripExpand({ convId: sess._id, nonce: Date.now() });
-    const hasRun = row.task.run_count > 0 || row.task.last_run_at !== undefined;
+    // Pseudo rows (loops/subagents) have no agent_tasks runs to land on — the
+    // fake task id must never reach webListRuns.
+    const hasRun = !row.kind && (row.task.run_count > 0 || row.task.last_run_at !== undefined);
     const local = hasRun ? latestLoadedTriggerMessage(st.messages[sess._id], row.task._id) : undefined;
     if (local) {
       st.requestNavigate(sess._id, {
@@ -2486,6 +2508,10 @@ export function SessionListPanel({
     const rows = schedulePartitionRef.current.rows;
     const out: TriggerRow[] = [];
     for (const r of rows) {
+      // Loop rows attach like inject triggers (they name this card's standing
+      // intent); a subagent row under the subagent's own card would only
+      // repeat what the card already shows — skip it.
+      if (r.kind === "subagent") continue;
       if (
         r.task.originating_conversation_id === sess._id ||
         (!!sess.agent_task_id && r.task._id === sess.agent_task_id)
