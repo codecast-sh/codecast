@@ -19,8 +19,9 @@ import {
   extractDeepLinkIntent,
   installDesktopInputTracker,
   shouldApplyAutoDeepLink,
+  conversationIdFromPath,
 } from "../lib/desktop";
-import { toast } from "sonner";
+import { showBrowserHandoffToast } from "./BrowserHandoffToast";
 import { cleanNotificationBody } from "../lib/notificationText";
 import { useInboxStore } from "../store/inboxStore";
 import { useNeedsInputCount } from "../hooks/useNeedsInputCount";
@@ -119,9 +120,8 @@ export function DesktopProvider() {
     const goTo = (path: string | undefined) => {
       if (!path) return;
 
-      const convMatch = path.match(/^\/conversation\/([^/?#]+)/);
-      if (convMatch) {
-        const convId = convMatch[1];
+      const convId = conversationIdFromPath(path);
+      if (convId) {
         useInboxStore.getState().navigateToSession(convId, "deeplink");
 
         const cur = window.location.pathname;
@@ -143,14 +143,13 @@ export function DesktopProvider() {
         // clicking an "Open in desktop" button) may not move the view while
         // the user is actively working in the desktop — agent-driven Chrome
         // tabs satisfy every browser-side gate and used to yank the app to
-        // whatever the agent had open. Offer it instead.
+        // whatever the agent had open. Offer it instead, unless the user is
+        // already looking at the target.
         if (auto && !shouldApplyAutoDeepLink()) {
-          const convMatch = path.match(/^\/conversation\/([^/?#]+)/);
-          const title = convMatch ? useInboxStore.getState().sessions[convMatch[1]]?.title : null;
-          toast.info(`Browser handed off ${title ? `“${title}”` : "a page"}`, {
-            action: { label: "Open", onClick: () => goTo(path) },
-            duration: 10_000,
-          });
+          const convId = conversationIdFromPath(path);
+          if (!convId || useInboxStore.getState().currentSessionId !== convId) {
+            showBrowserHandoffToast(path, goTo);
+          }
           continue;
         }
         goTo(path);
