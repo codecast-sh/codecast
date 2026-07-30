@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   CLI_AUTH_TTL_MS,
   claimCliAuthRequest,
+  claimDesktopAuthExchange,
   sweepExpiredCliAuthRequests,
 } from "./cliAuth";
 import { hashToken } from "./apiTokens";
@@ -96,6 +97,37 @@ describe("claimCliAuthRequest", () => {
 
     expect(await claimCliAuthRequest({ db }, NONCE, now)).toBeNull();
     expect(db._deleted.length).toBe(1);
+  });
+});
+
+describe("claimDesktopAuthExchange", () => {
+  test("returns the user and consumes both the relay row and the api token", async () => {
+    const now = Date.now();
+    const db = await seededDb({ createdAt: now });
+
+    const result = await claimDesktopAuthExchange({ db }, NONCE, now);
+    expect(result).toEqual({ userId: "users:1" });
+    // Relay row + api_tokens row both die in the exchange.
+    expect(db._deleted.length).toBe(2);
+
+    // Single use: nothing left for a second redemption.
+    expect(await claimDesktopAuthExchange({ db }, NONCE, now)).toBeNull();
+  });
+
+  test("expired deposit yields no session", async () => {
+    const now = Date.now();
+    const db = await seededDb({ createdAt: now - CLI_AUTH_TTL_MS - 1 });
+
+    expect(await claimDesktopAuthExchange({ db }, NONCE, now)).toBeNull();
+    // Only the relay row dies (claim semantics); the sweep revokes the token.
+    expect(db._deleted.length).toBe(1);
+  });
+
+  test("token revoked since deposit yields no session", async () => {
+    const now = Date.now();
+    const db = await seededDb({ createdAt: now, withApiToken: false });
+
+    expect(await claimDesktopAuthExchange({ db }, NONCE, now)).toBeNull();
   });
 });
 

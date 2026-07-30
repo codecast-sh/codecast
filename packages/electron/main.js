@@ -871,6 +871,14 @@ ipcMain.handle("show-notification", (_e, { title, body, data }) => {
   });
 });
 
+// Sign-in hands its OAuth flow to the user's real browser (issue #20): the
+// embedded window has no Google/GitHub sessions. https-only — the renderer
+// only ever passes app-origin auth URLs, and anything else has no business
+// being launched from here.
+ipcMain.handle("open-external", (_e, url) => {
+  if (typeof url === "string" && /^https:\/\//i.test(url)) shell.openExternal(url);
+});
+
 // Palette IPC
 // The palette renderer has painted a face (compose/search) — reveal the window
 // if it's the one we asked for.

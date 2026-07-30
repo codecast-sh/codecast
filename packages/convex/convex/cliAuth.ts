@@ -8,7 +8,7 @@
 // nonce, and the CLI (which polls /cli/claim-auth alongside its localhost
 // wait) claims it. Rows are single-use and short-lived: deleted on claim,
 // or swept — with their orphaned api_token revoked — after CLI_AUTH_TTL_MS.
-import { mutation, internalMutation } from "./functions";
+import { mutation, internalMutation, query } from "./functions";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { hashToken } from "./apiTokens";
@@ -90,6 +90,55 @@ export async function claimCliAuthRequest(
 export const claim = internalMutation({
   args: { nonce: v.string() },
   handler: async (ctx, args) => claimCliAuthRequest(ctx, args.nonce),
+});
+
+// Live "has the browser deposited yet?" signal for the desktop sign-in flow.
+// The desktop login page subscribes to this while the user completes auth in
+// their system browser, then redeems via the desktop-relay auth provider the
+// moment it flips true. Unauthenticated by design: it returns only a boolean,
+// keyed by the caller's own high-entropy one-time nonce.
+export const pendingDeposit = query({
+  args: { nonce: v.string() },
+  handler: async (ctx, args) => {
+    const nonceHash = await hashToken(args.nonce);
+    const row = await ctx.db
+      .query("cli_auth_requests")
+      .withIndex("by_nonce_hash", (q) => q.eq("nonce_hash", nonceHash))
+      .first();
+    return !!row && Date.now() - row.created_at <= CLI_AUTH_TTL_MS;
+  },
+});
+
+// Exported for tests. Desktop redemption of a relay deposit: same single-use
+// claim as the CLI, except the desktop app wants a first-class auth session,
+// not an api token — so the relayed token is consumed (deleted) in the same
+// transaction and only the user id travels on to the auth provider. Nothing
+// long-lived is left behind: a completed desktop sign-in leaves no api_tokens
+// row, and an abandoned one is revoked by the existing sweep.
+export async function claimDesktopAuthExchange(
+  ctx: { db: any },
+  nonce: string,
+  now: number = Date.now()
+): Promise<{ userId: string } | null> {
+  const claimed = await claimCliAuthRequest(ctx, nonce, now);
+  if (!claimed) return null;
+
+  // deposit() verified the token existed and belonged to the depositor; a
+  // missing or mismatched row now means it was revoked since — refuse.
+  const tokenHash = await hashToken(claimed.auth_token);
+  const tokenDoc = await ctx.db
+    .query("api_tokens")
+    .withIndex("by_token_hash", (q: any) => q.eq("token_hash", tokenHash))
+    .first();
+  if (!tokenDoc || tokenDoc.user_id !== claimed.user_id) return null;
+  await ctx.db.delete(tokenDoc._id);
+
+  return { userId: claimed.user_id };
+}
+
+export const claimForDesktop = internalMutation({
+  args: { nonce: v.string() },
+  handler: async (ctx, args) => claimDesktopAuthExchange(ctx, args.nonce),
 });
 
 // Exported for tests; deletes expired relay rows and revokes the tokens they

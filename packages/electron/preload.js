@@ -74,5 +74,6 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
     return () => ipcRenderer.removeListener("compose-show", handler);
   },
   composeSubmit: (data) => ipcRenderer.send("compose-submit", data),
+  openExternal: (url) => ipcRenderer.invoke("open-external", url),
   platform: process.platform,
 });
