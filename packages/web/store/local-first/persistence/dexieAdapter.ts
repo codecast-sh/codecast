@@ -1,4 +1,5 @@
 import Dexie, { type Table, type Transaction } from "dexie";
+import { compareSourceCoverage, CoverageIntegrityError } from "../coverage";
 import {
   asCommitSequence,
   asWriterEpoch,
@@ -364,14 +365,48 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
     fence: PrincipalStoreFence,
     viewKey: string,
     contractId: string,
+    options?: { supersedes?: string },
   ): Promise<WriterClaimResult> {
     await this.ensureOpen();
-    return await this.db.transaction("rw", [this.db.meta, this.db.viewWriters], async () => {
+    return await this.db.transaction("rw", [
+      this.db.meta,
+      this.db.viewWriters,
+      this.db.views,
+      this.db.viewSegments,
+      this.db.viewMembers,
+      this.db.viewProjections,
+      this.db.grants,
+      this.db.commands,
+      this.db.syncMetadata,
+    ], async () => {
       const metadata = await this.db.meta.get("store");
       this.assertFence(metadata, fence);
       const current = await this.db.viewWriters.get(viewKey);
+      let migrated = false;
       if (current && current.contractId !== contractId) {
-        throw new PrincipalStoreIdentityError("Durable view writer contract changed");
+        if (options?.supersedes !== current.contractId) {
+          throw new PrincipalStoreIdentityError("Durable view writer contract changed");
+        }
+        // Deliberate contract supersession (e.g. a coverage-kind migration).
+        // This is local storage lifecycle, never a security event: the old
+        // contract's content is dropped and re-bootstrapped from the new
+        // contract's first authoritative result, its grants are released
+        // (reference-counted — commands still holding one keep it), and the
+        // durable coverage domain resets so the successor kind starts
+        // "initial" instead of colliding with an incomparable high-water mark.
+        const oldView = await this.db.views.get(viewKey);
+        const [oldMembers, oldSegments] = await Promise.all([
+          this.db.viewMembers.where("viewKey").equals(viewKey).toArray(),
+          this.db.viewSegments.where("viewKey").equals(viewKey).toArray(),
+        ]);
+        const oldGrantKeys = [...new Set([
+          ...(oldView?.grantKeys ?? []),
+          ...oldMembers.flatMap((member) => [...member.grantKeys]),
+          ...oldSegments.flatMap((segment) => [...segment.grantKeys]),
+        ])];
+        await this.deleteView(viewKey);
+        await this.pruneUnreferencedGrants(oldGrantKeys);
+        migrated = true;
       }
       const writerEpoch = asWriterEpoch((current?.writerEpoch ?? 0) + 1);
       await this.db.viewWriters.put({
@@ -381,9 +416,10 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
         // Content can be deleted by a forbidden/missing transition, but its
         // causal high-water mark must survive. Otherwise a newly claimed
         // writer could resurrect a pre-clear cached result as if it were the
-        // first payload this store had ever seen.
-        lastCoverage: current?.lastCoverage,
-        lastAccess: current?.lastAccess,
+        // first payload this store had ever seen. A contract supersession is
+        // the one exception: the coverage domain intentionally resets.
+        lastCoverage: migrated ? undefined : current?.lastCoverage,
+        lastAccess: migrated ? undefined : current?.lastAccess,
       });
       await this.injectFault?.("after-operations");
       const next: PrincipalStoreMetadata = {
@@ -396,7 +432,9 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
       return {
         writerEpoch,
         head: next.head,
-        affectedKeys: [`view-writer:${viewKey}`],
+        affectedKeys: migrated
+          ? [`view-writer:${viewKey}`, `view:${viewKey}`]
+          : [`view-writer:${viewKey}`],
       };
     });
   }
@@ -566,22 +604,14 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
     current: SourceCoverage,
     next: SourceCoverage,
   ): "older" | "equal" | "newer" | "incomparable" {
-    if (current.kind !== "view-revision" || next.kind !== "view-revision") {
-      return valuesEqual(current, next) ? "equal" : "incomparable";
-    }
-    const currentOrder = current.revisionOrder;
-    const nextOrder = next.revisionOrder;
-    if (current.revision === next.revision) {
-      if (currentOrder !== undefined && nextOrder !== undefined && currentOrder !== nextOrder) {
-        throw new PrincipalStoreIdentityError("One server revision has conflicting order values");
+    try {
+      return compareSourceCoverage(current, next);
+    } catch (error) {
+      if (error instanceof CoverageIntegrityError) {
+        throw new PrincipalStoreIdentityError(error.message);
       }
-      return "equal";
+      throw error;
     }
-    if (currentOrder === undefined || nextOrder === undefined) return "incomparable";
-    if (currentOrder === nextOrder) {
-      throw new PrincipalStoreIdentityError("One server revision order names different revisions");
-    }
-    return nextOrder < currentOrder ? "older" : "newer";
   }
 
   private assertMonotonicViewCoverage(
@@ -605,6 +635,15 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
     }
     if (comparison === "equal") {
       if (previousAccess !== undefined && previousAccess !== nextAccess) {
+        // For a log-ts coverage this is a genuine corruption signal: equal
+        // log positions are the same snapshot, and one snapshot has one
+        // access outcome. For watermark coverage it is the conservative
+        // security rule (a stale cached result must not resurrect access).
+        if (next.coverage.kind === "log-ts") {
+          throw new PrincipalStoreIdentityError(
+            "Equal log-ts coverage delivered a different access state",
+          );
+        }
         throw new PrincipalStoreFenceError(
           "Equal server coverage cannot change authoritative access state",
         );
@@ -612,6 +651,15 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
       return "equal";
     }
     if (comparison === "newer") return "newer";
+    // Cross-KIND coverage on a granted payload is a migration bug, not a
+    // stale source: kind changes travel only through contract supersession,
+    // which resets the durable coverage domain ("initial" above).
+    if (nextAccess === "granted" && durableCoverage.kind !== next.coverage.kind &&
+      (durableCoverage.kind === "log-ts" || next.coverage.kind === "log-ts")) {
+      throw new PrincipalStoreIdentityError(
+        "View coverage kind changed without contract supersession",
+      );
+    }
     if (!current || current.writerEpoch !== next.writerEpoch) {
       // A forbidden/missing transition only deletes: accepting it from a
       // successor writer cannot resurrect stale data, and rejecting it would
@@ -625,6 +673,34 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
       );
     }
     return "source-ordered";
+  }
+
+  /**
+   * Full-strength divergence tripwire, applicable ONLY to log-ts coverage:
+   * equal log positions are the same server snapshot, so divergent content is
+   * corruption by definition (the retired view-revision tripwire fired on
+   * legitimate join drift — matrix SRV-01 — because a watermark under-covers;
+   * a log position cannot).
+   */
+  private assertEqualLogTsContent(
+    next: Pick<ViewRecord, "coverage">,
+    currentMembers: readonly ViewMemberRecord[],
+    currentProjections: readonly ViewProjectionRecord[],
+    nextMembers: readonly ViewMemberRecord[],
+    nextProjections: readonly ViewProjectionRecord[],
+  ): void {
+    if (next.coverage.kind !== "log-ts") return;
+    const stableMembers = (members: readonly ViewMemberRecord[]) => [...members]
+      .map((member) => ({ ...member, grantKeys: [...member.grantKeys].sort() }))
+      .sort((a, b) => a.key.localeCompare(b.key));
+    const stableProjections = (projections: readonly ViewProjectionRecord[]) =>
+      [...projections].sort((a, b) => a.key.localeCompare(b.key));
+    if (!valuesEqual(stableMembers(currentMembers), stableMembers(nextMembers)) ||
+      !valuesEqual(stableProjections(currentProjections), stableProjections(nextProjections))) {
+      throw new PrincipalStoreIdentityError(
+        "Equal log-ts coverage delivered divergent content",
+      );
+    }
   }
 
   private async grantIsReferenced(grantKey: string): Promise<boolean> {
@@ -1269,8 +1345,9 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
           ...operation.members.flatMap((member) => [...member.grantKeys]),
         ]);
         const oldView = await this.db.views.get(operation.view.key);
-        const [oldMembers, oldSegments] = await Promise.all([
+        const [oldMembers, oldProjections, oldSegments] = await Promise.all([
           this.db.viewMembers.where("viewKey").equals(operation.view.key).toArray(),
+          this.db.viewProjections.where("viewKey").equals(operation.view.key).toArray(),
           this.db.viewSegments.where("viewKey").equals(operation.view.key).toArray(),
         ]);
         const coverageOrder = this.assertMonotonicViewCoverage(
@@ -1279,17 +1356,24 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
           writer,
           "granted",
         );
-        // Content MAY legitimately differ at an equal revision: the revision
-        // is a lower bound covering the view's own table writes, while a
-        // projection can also carry joined fields (a commenter's display name)
-        // that drift without any covered write. Every payload reaching this
-        // point already owns the durable writer fence and a strictly newer
-        // source sequence, so the latest fenced delivery is by construction
-        // the freshest authoritative content — accept it. Regressions are
-        // still impossible: older comparable coverage was rejected above.
+        // Equal-coverage semantics follow the coverage kind's guarantee
+        // strength. view-revision is a WATERMARK: it under-covers joined
+        // fields (a commenter's display name drifts without a covered write),
+        // so the latest fenced delivery wins — matrix SRV-01. log-ts is a
+        // RESULT VERSION: equal log positions are the same server snapshot,
+        // so divergent content is corruption and rejected loudly.
         if (coverageOrder === "equal" && oldView && oldSegments.length > 0) {
           throw new PrincipalStoreFenceError(
-            "Equal server view revision cannot replace a view that holds segments",
+            "Equal server view coverage cannot replace a view that holds segments",
+          );
+        }
+        if (coverageOrder === "equal" && oldView) {
+          this.assertEqualLogTsContent(
+            operation.view,
+            oldMembers,
+            oldProjections,
+            operation.members,
+            operation.projections,
           );
         }
         const oldGrantKeys = [
@@ -1329,9 +1413,13 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
           ...operation.segment.grantKeys,
           ...operation.members.flatMap((member) => [...member.grantKeys]),
         ]);
-        const [oldSegment, oldMembers, otherSegments] = await Promise.all([
+        const [oldSegment, oldMembers, oldProjections, otherSegments] = await Promise.all([
           this.db.viewSegments.get(operation.segment.key),
           this.db.viewMembers.where("[viewKey+segmentKey]").equals([
+            operation.view.key,
+            operation.segment.segmentKey,
+          ]).toArray(),
+          this.db.viewProjections.where("[viewKey+segmentKey]").equals([
             operation.view.key,
             operation.segment.segmentKey,
           ]).toArray(),
@@ -1339,16 +1427,25 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
             .filter((segment) => segment.key !== operation.segment.key)
             .toArray(),
         ]);
-        // Same rule as complete views: at equal coverage the latest fenced
-        // delivery wins — segment content can carry joined fields that drift
-        // without a covered write, and the writer/source fences above already
-        // prove this payload is the newest one this store has seen.
-        this.assertMonotonicViewCoverage(
+        // Watermark coverage (view-revision): at equal coverage the latest
+        // fenced delivery wins — a watermark under-covers joined fields, so
+        // equal-coverage drift is legitimate (matrix SRV-01). Log-ts coverage
+        // is a true result version, so its equal case is verified strictly.
+        const segmentCoverageOrder = this.assertMonotonicViewCoverage(
           oldView,
           operation.view,
           writer,
           "granted",
         );
+        if (segmentCoverageOrder === "equal" && oldSegment) {
+          this.assertEqualLogTsContent(
+            operation.view,
+            oldMembers,
+            oldProjections,
+            operation.members,
+            operation.projections,
+          );
+        }
         await Promise.all([
           this.db.viewMembers.where("[viewKey+segmentKey]").equals([
             operation.view.key,
