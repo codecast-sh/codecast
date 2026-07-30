@@ -59,8 +59,16 @@ export function useConversationCommentsSync(conversationId: string | undefined):
   const viewRows = view.rows;
   useEffect(() => {
     if (mode !== "cutover" || view.status !== "granted") return;
-    syncTable("comments", viewRows.map((row) => row.value));
-  }, [mode, view.status, viewRows, syncTable]);
+    // The durable view is COMPLETE for this conversation, so a row absent from
+    // it is deleted, not merely unsynced. The comments registry entry is
+    // isDelta (one conversation's feed must not prune another's), so without
+    // this scoped prune a teammate's deletion would upsert-only into the store
+    // and the ghost row would render forever (matrix VIEW-02). Pending local
+    // optimistic rows are protected by applySyncTable itself.
+    syncTable("comments", viewRows.map((row) => row.value), {
+      pruneAbsentScope: (row: any) => row.conversation_id === conversationId,
+    });
+  }, [mode, view.status, viewRows, syncTable, conversationId]);
 
   // Cutover gate evidence: in shadow mode, digest-compare exactly what v1 is
   // rendering against the v2 durable view, on every quiescent state.
