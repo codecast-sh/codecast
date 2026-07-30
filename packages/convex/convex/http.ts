@@ -3709,13 +3709,16 @@ http.route({
 cliRoute("/cli/artifacts/list", async (ctx, body) => ctx.runQuery(api.artifacts.listFromCLI, body));
 cliRoute("/cli/artifacts/delete", async (ctx, body) => ctx.runMutation(api.artifacts.deleteFromCLI, body));
 
-// Raw artifact HTML. Lives under /cli/ because the Caddy proxy in front of the
-// self-hosted backend forwards only that prefix (plus auth/webhooks) to the
-// HTTP-action upstream — a new top-level path would need a proxy redeploy.
-// The wrapper page at codecast.sh/a/<slug> iframes this URL.
+// Raw artifact HTML — THE shared document (codecast.sh/a/<slug> 302s here).
+// Lives under /cli/ because the Caddy proxy in front of the self-hosted
+// backend forwards only that prefix (plus auth/webhooks) to the HTTP-action
+// upstream — a new top-level path would need a proxy redeploy.
 //
-// CSP `sandbox` makes the document an opaque origin even when opened directly:
-// scripts run, but the page can never touch convex.codecast.sh state.
+// The codecast chrome (sticky top bar + og meta) is injected into the HTML at
+// serve time by brandArtifactHtml — no wrapper page, no iframe, one response.
+//
+// CSP `sandbox` makes the document an opaque origin: scripts run, but the
+// page can never touch convex.codecast.sh state.
 http.route({
   pathPrefix: "/cli/a/",
   method: "GET",
@@ -3735,17 +3738,23 @@ http.route({
         headers: { "Content-Type": "text/plain; charset=utf-8" },
       });
     }
-    return new Response(blob, {
+    const { brandArtifactHtml } = await import("./artifacts");
+    const html = brandArtifactHtml(await blob.text(), {
+      title: artifact.title,
+      author: artifact.author_name,
+      updatedAt: artifact.updated_at,
+      shareUrl: `${process.env.SITE_URL || "https://codecast.sh"}/a/${artifact.slug}`,
+    });
+    return new Response(html, {
       status: 200,
       headers: {
         "Content-Type": "text/html; charset=utf-8",
         "Content-Security-Policy":
           "sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads allow-pointer-lock",
         "X-Robots-Tag": "noindex",
-        // Re-publishes swap the blob behind a stable slug, so viewers must
-        // revalidate — but a shared link being clicked around a team benefits
-        // from a short shared cache.
-        "Cache-Control": "public, max-age=60",
+        // Cacheable by browsers (and any CDN put in front later); republish
+        // staleness is bounded at a minute.
+        "Cache-Control": "public, max-age=60, stale-while-revalidate=300",
         "Access-Control-Allow-Origin": "*",
       },
     });

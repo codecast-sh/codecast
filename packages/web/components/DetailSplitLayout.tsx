@@ -64,19 +64,20 @@ export function DetailSplitLayout({
         <div className="h-full cq-container">{list}</div>
         {hasDetail && (
           <div className="peek-overlay absolute inset-y-0 right-0 z-30 w-[62%] min-w-[420px] max-w-[960px] bg-sol-bg border-l border-sol-border/40 flex flex-col">
-            {/* Slim affordance strip — pin (promote to split) and close. The
-                detail's own header keeps its usual controls. */}
-            <div className="absolute top-2 right-2 z-40 flex items-center gap-1">
+            {/* Peek affordances ride the overlay's left EDGE (mirroring the
+                split separator's buttons) so they never collide with the
+                detail's own header controls. */}
+            <div className="absolute top-3 left-0 z-40 flex flex-col gap-1.5">
               <button
                 onClick={() => setMode(surface, "split")}
-                className="p-1.5 rounded-md bg-sol-bg-alt/90 border border-sol-border/40 text-sol-text-dim hover:text-sol-cyan transition-colors shadow-sm"
+                className="p-1.5 bg-sol-bg-alt border border-sol-border/40 border-l-0 rounded-r-md text-sol-text-dim hover:text-sol-cyan transition-colors shadow-sm"
                 title="Pin to a split"
               >
                 <Pin className="w-3.5 h-3.5" />
               </button>
               <button
                 onClick={() => router.push(closeHref)}
-                className="p-1.5 rounded-md bg-sol-bg-alt/90 border border-sol-border/40 text-sol-text-dim hover:text-sol-red transition-colors shadow-sm"
+                className="p-1.5 bg-sol-bg-alt border border-sol-border/40 border-l-0 rounded-r-md text-sol-text-dim hover:text-sol-red transition-colors shadow-sm"
                 title="Close (Esc)"
               >
                 <X className="w-3.5 h-3.5" />
