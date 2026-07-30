@@ -12,8 +12,10 @@ import {
   type PrincipalStoreFence,
 } from "../persistence/adapter";
 import {
+  boundStorageOpen,
   DexiePrincipalStoreAdapter,
   PRINCIPAL_DEXIE_V2_STORES,
+  PrincipalStoreOpenTimeoutError,
   principalDatabaseName,
   type DexieFaultPoint,
 } from "../persistence/dexieAdapter";
@@ -108,6 +110,19 @@ describe("lifecycle matrix", () => {
       launcher.close();
       await Dexie.delete(launcherDatabaseName(deployment));
     }
+  });
+
+  // Matrix R-10: indexedDB.open() can hang forever with no event (WebKit
+  // #226547, Chromium #242115). A bounded open converts the hang into the
+  // ordinary fail-closed path instead of stranding the runtime in "opening".
+  test("a hung storage open times out into the fail-closed path", async () => {
+    const hang = new Promise<never>(() => {});
+    await expect(boundStorageOpen(hang, 30))
+      .rejects.toBeInstanceOf(PrincipalStoreOpenTimeoutError);
+    // A healthy open passes through untouched and the timer is cleared.
+    expect(await boundStorageOpen(Promise.resolve("opened"), 30)).toBe("opened");
+    // No deadline means no race — legacy behavior preserved when disabled.
+    expect(await boundStorageOpen(Promise.resolve("opened"), 0)).toBe("opened");
   });
 
   // Matrix LIF-02: a transient failure during the session's initial source

@@ -1590,10 +1590,46 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
   }
 }
 
+export class PrincipalStoreOpenTimeoutError extends Error {
+  constructor(message = "Principal storage did not open within its deadline") {
+    super(message);
+    this.name = "PrincipalStoreOpenTimeoutError";
+  }
+}
+
+/**
+ * IndexedDB `open()` can hang FOREVER with no success/error/blocked event on
+ * real browsers (WebKit #226547 first-open-after-cold-start on iOS; Chromium
+ * #242115 after a stuck versionchange). An unbounded await here strands the
+ * principal runtime in "opening" with the protected gate never resolving —
+ * the hang variant of the failure LIF-05 fixed for thrown opens. Bounding the
+ * open converts the hang into the ordinary fail-closed path.
+ */
+export async function boundStorageOpen<T>(
+  open: Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return await open;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      open,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new PrincipalStoreOpenTimeoutError()), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const DEFAULT_STORE_OPEN_TIMEOUT_MS = 15_000;
+
 export class DexiePrincipalStoreFactory implements PrincipalStoreFactory {
   constructor(
     private readonly deploymentKey: string,
     private readonly injectFault?: DexieFaultInjector,
+    private readonly openTimeoutMs: number = DEFAULT_STORE_OPEN_TIMEOUT_MS,
   ) {}
 
   private name(principalKey: OpaquePrincipalKey): string {
@@ -1601,7 +1637,7 @@ export class DexiePrincipalStoreFactory implements PrincipalStoreFactory {
   }
 
   async exists(principalKey: OpaquePrincipalKey): Promise<boolean> {
-    return await Dexie.exists(this.name(principalKey));
+    return await boundStorageOpen(Dexie.exists(this.name(principalKey)), this.openTimeoutMs);
   }
 
   async open(principalKey: OpaquePrincipalKey): Promise<PrincipalStoreAdapter> {
@@ -1610,7 +1646,12 @@ export class DexiePrincipalStoreFactory implements PrincipalStoreFactory {
       principalKey,
       this.injectFault,
     );
-    await adapter.ensureOpen();
+    try {
+      await boundStorageOpen(adapter.ensureOpen(), this.openTimeoutMs);
+    } catch (error) {
+      adapter.close();
+      throw error;
+    }
     return adapter;
   }
 }
