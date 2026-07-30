@@ -40,8 +40,11 @@ const git = (cwd: string, args: string[]) =>
 function repo(): { cwd: string; remote: string } {
   const cwd = tmpdir("src");
   const remote = tmpdir("remote") + "/origin.git";
-  execFileSync("git", ["init", "-q", "--bare", remote]);
-  git(cwd, ["init", "-q"]);
+  // Never inherit init.defaultBranch from the developer/runner. The fixture
+  // pushes main below, so the bare remote's HEAD must name main as well or a
+  // plain clone has no checkout (Git's built-in default is still master).
+  execFileSync("git", ["init", "-q", "--bare", "-b", "main", remote]);
+  git(cwd, ["init", "-q", "-b", "main"]);
   git(cwd, ["config", "user.email", "t@t.t"]);
   git(cwd, ["config", "user.name", "t"]);
   fs.writeFileSync(path.join(cwd, ".gitignore"), ".env\n");
