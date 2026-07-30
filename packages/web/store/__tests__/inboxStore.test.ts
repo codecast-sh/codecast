@@ -4148,3 +4148,85 @@ describe("liveInboxIds persistence + synced show-old", () => {
     expect(resolveShowOld(useInboxStore.getState().clientState.ui)).toBe(false);
   });
 });
+
+describe("reconcileDisownedSessions — stale ownership cleared by payload absence", () => {
+  // Disowning reaches a client only as ABSENCE from the live payload, so the
+  // never-prune cache would otherwise claim owned_by_me forever — defeating the
+  // "mine" scope filter and, with show-old on, rendering the disowned session
+  // as a normal inbox card (the jx78xak incident, 2026-07-30).
+  const ME = "kd77bg600000000000000000000000me";
+  const BOT = "kd7e0g100000000000000000000000bt";
+  const DISOWNED = "jx78xak0000000000000000000000aaa";
+  const STILL_MINE = "jx7still000000000000000000000bbb";
+  const MY_OWN_RUN = "jx7mine0000000000000000000000ccc";
+
+  const foreignOwned = (id: string): InboxSession => ({
+    ...baseSession,
+    _id: id,
+    user_id: BOT,
+    owned_by_me: true,
+    owner_user_id: ME,
+  });
+
+  beforeEach(() => {
+    useInboxStore.setState({
+      currentUser: { _id: ME } as any,
+      liveInboxIds: new Set<string>(),
+      liveInboxIdList: [],
+      sessions: {
+        [DISOWNED]: foreignOwned(DISOWNED),
+        [STILL_MINE]: foreignOwned(STILL_MINE),
+        [MY_OWN_RUN]: { ...baseSession, _id: MY_OWN_RUN, user_id: ME, owned_by_me: true, owner_user_id: ME },
+      },
+    });
+  });
+
+  it("clears owned_by_me and owner_user_id on a foreign-run row absent from the payload", () => {
+    useInboxStore.getState().reconcileDisownedSessions([STILL_MINE]);
+    const s = useInboxStore.getState().sessions;
+    expect(s[DISOWNED].owned_by_me).toBe(false);
+    expect(s[DISOWNED].owner_user_id).toBeNull();
+    // Present row keeps its claim untouched.
+    expect(s[STILL_MINE].owned_by_me).toBe(true);
+    expect(s[STILL_MINE].owner_user_id).toBe(ME);
+  });
+
+  it("never touches my own-run sessions — they age out via the old partition, not disowning", () => {
+    useInboxStore.getState().reconcileDisownedSessions([]);
+    const s = useInboxStore.getState().sessions;
+    expect(s[MY_OWN_RUN].owned_by_me).toBe(true);
+    expect(s[MY_OWN_RUN].owner_user_id).toBe(ME);
+  });
+
+  it("leaves foreign rows without an ownership claim alone (team-mode / deep-link rows)", () => {
+    const PLAIN = "jx7plain00000000000000000000ddd0";
+    useInboxStore.setState({
+      sessions: { [PLAIN]: { ...baseSession, _id: PLAIN, user_id: BOT, owner_user_id: "kd74rxrw000000000000000000000sam" } },
+    });
+    useInboxStore.getState().reconcileDisownedSessions([]);
+    // Another user's ownership info is server truth about THEM — not ours to clear.
+    expect(useInboxStore.getState().sessions[PLAIN].owner_user_id).toBe("kd74rxrw000000000000000000000sam");
+  });
+
+  it("no-ops when the current user is unknown (cold boot before the user query lands)", () => {
+    useInboxStore.setState({ currentUser: null });
+    useInboxStore.getState().reconcileDisownedSessions([]);
+    expect(useInboxStore.getState().sessions[DISOWNED].owned_by_me).toBe(true);
+  });
+
+  it("skips optimistic stubs (non-Convex ids) — they are always mine", () => {
+    const STUB = "11111111-2222-4333-8444-555555555555";
+    useInboxStore.setState({
+      sessions: { [STUB]: { ...baseSession, _id: STUB, user_id: BOT, owned_by_me: true } },
+    });
+    useInboxStore.getState().reconcileDisownedSessions([]);
+    expect(useInboxStore.getState().sessions[STUB].owned_by_me).toBe(true);
+  });
+
+  it("after reconcile, the disowned row is dropped by the mine-scope filter even with show-old on", async () => {
+    const { filterInboxScope } = await import("../inboxStore");
+    useInboxStore.getState().reconcileDisownedSessions([STILL_MINE]);
+    const scoped = filterInboxScope(useInboxStore.getState().sessions, "mine", ME);
+    expect(Object.keys(scoped).sort()).toEqual([MY_OWN_RUN, STILL_MINE].sort());
+  });
+});
