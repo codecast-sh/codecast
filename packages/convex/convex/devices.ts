@@ -128,6 +128,11 @@ export async function enqueueStartSession(
     // they ride the payload so old daemons just ignore them.
     model?: string;
     effort?: string;
+    // Stable-context launch prefs from the new-session page: override the
+    // machine's stable mode for this session ("off" suppresses injection) and
+    // drop specific feed cards. Same ride-along contract as model/effort.
+    stableMode?: string;
+    stableExclude?: string[];
   },
 ): Promise<Id<"daemon_commands">> {
   const conv = await ctx.db.get(opts.conversationId);
@@ -168,6 +173,8 @@ export async function enqueueStartSession(
   if (opts.prompt) args.prompt = opts.prompt;
   if (opts.model) args.model = opts.model;
   if (opts.effort) args.effort = opts.effort;
+  if (opts.stableMode) args.stable_mode = opts.stableMode;
+  if (opts.stableExclude?.length) args.stable_exclude = opts.stableExclude;
 
   return await ctx.db.insert("daemon_commands", {
     user_id: userId,
