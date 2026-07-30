@@ -185,6 +185,19 @@ export interface AgentClientCapabilities {
    *  bounded — the serve /event bus is per-process, so it accelerates only sessions
    *  DRIVEN THROUGH the sidecar, not tmux-TUI sessions (see opencodeServer.ts). */
   liveEvents?: boolean;
+  /** The client's TUI turns on bracketed paste mode (DECSET 2004), so a pasted
+   *  block arrives wrapped in ESC[200~ … ESC[201~ and its newlines land in the
+   *  composer as literal newlines. Without the mode a pasted newline reaches the
+   *  TUI as the Enter key and submits, splitting one multi-line prompt into a
+   *  message per line — so the daemon flattens newlines to spaces for any client
+   *  not marked here (see prepareInjectedContent in daemon.ts).
+   *
+   *  Verify by hand before flipping this on for a client: launch it in tmux,
+   *  `tmux load-buffer` a two-line payload, `tmux paste-buffer -p`, and confirm
+   *  BOTH lines sit in the composer with nothing submitted. tmux only emits the
+   *  markers when the foreground program asked for the mode, so this is exactly
+   *  what the daemon's paste does. */
+  bracketedPaste?: boolean;
 }
 
 /** Everything the daemon, convex, and web need to know about one client. */
@@ -283,7 +296,9 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     promptReadyPattern: /❯|⏵/,
     tmuxPrefix: "cc",
     modelConfig: CLAUDE_MODEL,
-    capabilities: { panePromptMonitoring: true, fork: true },
+    // bracketedPaste verified 2026-07-30: a two-line `paste-buffer -p` sits in the
+    // composer (long blocks collapse to a "[Pasted text #1 +N lines]" chip).
+    capabilities: { panePromptMonitoring: true, fork: true, bracketedPaste: true },
   },
   codex: {
     id: "codex",
@@ -301,7 +316,8 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     promptReadyPattern: />\s*$/,
     tmuxPrefix: "cx",
     modelConfig: CODEX_MODEL,
-    capabilities: { panePromptMonitoring: true, fork: true },
+    // bracketedPaste verified 2026-07-30 on codex 0.145.0.
+    capabilities: { panePromptMonitoring: true, fork: true, bracketedPaste: true },
   },
   cursor: {
     id: "cursor",
@@ -329,6 +345,8 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     // cursor resume panes get their own `cu-` prefix (the ct-39074 fix) so they
     // never collide with claude's `cc-`. Consumed by resumeTmuxPrefix.
     tmuxPrefix: "cu",
+    // bracketedPaste UNVERIFIED (no signed-in cursor-agent to test against), so
+    // multi-line prompts are flattened here rather than risk one turn per line.
     capabilities: { panePromptMonitoring: false },
   },
   gemini: {
@@ -348,6 +366,7 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     // per-client code actually uses at launch.
     promptReadyPattern: />\s*$|gemini/i,
     tmuxPrefix: "gm",
+    // bracketedPaste UNVERIFIED (gemini not installed here) — flattened for now.
     capabilities: { panePromptMonitoring: false },
   },
   opencode: {
@@ -392,7 +411,8 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     //    NOT accelerate the tmux-TUI launch path; the SQLite watcher stays the
     //    authoritative state source for those. Additive, opt-in, degrades to the DB
     //    path cleanly.
-    capabilities: { panePromptMonitoring: false, fork: true, forkApi: true, liveEvents: true },
+    // bracketedPaste verified 2026-07-30 on opencode 1.18.8.
+    capabilities: { panePromptMonitoring: false, fork: true, forkApi: true, liveEvents: true, bracketedPaste: true },
   },
   pi: {
     id: "pi",
@@ -424,7 +444,8 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     // codecast cannot drive without pi's RPC channel — the active model is TRACKED
     // from the transcript (model_change entries + each assistant message's `model`).
     modelConfig: PI_MODEL,
-    capabilities: { panePromptMonitoring: false },
+    // bracketedPaste verified 2026-07-30 on pi 0.73.x.
+    capabilities: { panePromptMonitoring: false, bracketedPaste: true },
   },
 };
 
