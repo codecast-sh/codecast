@@ -542,12 +542,16 @@ function ActionSubmenu({
         applyBucket(null);
       } else if (item.key === "__create__") {
         const name = search.trim();
-        store.createBucket({ name }).then((r: any) => {
-          if (!r?._id) return;
-          for (const t of targets) {
-            const convId = resolveConvId(t);
-            if (convId) store.assignSessionToBucket(convId, r._id);
-          }
+        const conversationIds = targets
+          .map(resolveConvId)
+          .filter((id): id is string => !!id);
+        store.createBucket(
+          { name },
+          conversationIds.length > 0
+            ? { version: 1, kind: "assignBucket", conversationIds }
+            : undefined,
+        ).then((r: any) => {
+          if (!r?.bucketId) return;
           toast.success(`Created label "${name}"`);
         }).catch(() => toast.error("Couldn't create label"));
       } else {

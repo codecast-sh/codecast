@@ -1,5 +1,6 @@
 import { describe, expect, it, beforeEach } from "bun:test";
 import { useInboxStore, isConvexId } from "./inboxStore";
+import { DispatchNotWiredError } from "./mutativeMiddleware";
 
 // Regression coverage for ct-37441 — a "New Session" whose createSession was
 // given up (offline / outage / createConversation rate-limit) strands a stub
@@ -52,7 +53,14 @@ function seedStrandedStub(stubId: string) {
 
 describe("healStrandedStub", () => {
   beforeEach(() => {
-    useInboxStore.setState({ sessions: {}, conversations: {}, pendingMessages: {}, pendingSessionCreates: {} } as any);
+    useInboxStore.setState({
+      sessions: {},
+      conversations: {},
+      pendingMessages: {},
+      pendingSessionCreates: {},
+      bucketAssignments: {},
+      activeBucketFilter: null,
+    } as any);
   });
 
   it("re-creates the conversation and re-sends the stuck message", async () => {
@@ -107,6 +115,491 @@ describe("healStrandedStub", () => {
     expect(resolved).toBe(REAL_ID);
   });
 
+  it("redrives an unsent optimistic first message when live sync rekeys its parked create", async () => {
+    const stubId = "parkedfirstmessageaaaa";
+    const { calls } = installFakeDispatch();
+    seedStrandedStub(stubId);
+    useInboxStore.setState((s: any) => ({
+      pendingMessages: {
+        ...s.pendingMessages,
+        [stubId]: s.pendingMessages[stubId].map((m: any) => {
+          const { _isFailed, ...pending } = m;
+          return { ...pending, _id: "opt-rekey", _clientId: "client-rekey" };
+        }),
+      },
+    }));
+
+    useInboxStore.getState().syncTable("sessions", [{
+      _id: REAL_ID,
+      session_id: stubId,
+      title: "New session",
+      agent_type: "claude_code",
+      project_path: "/Users/me/proj",
+      git_root: "/Users/me/proj",
+      message_count: 0,
+      is_idle: true,
+      has_pending: false,
+      updated_at: Date.now(),
+    } as any]);
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const sends = calls.filter((c) => c.action === "sendMessage");
+    expect(sends).toHaveLength(1);
+    expect(sends[0]?.args).toEqual([REAL_ID, "deliver me", null, "client-rekey"]);
+  });
+
+  it("coalesces the normal await-and-send path with the rekey fallback", async () => {
+    const stubId = "healthyfirstmessageaaaa";
+    const { calls } = installFakeDispatch();
+    seedStrandedStub(stubId);
+    useInboxStore.setState((s: any) => ({
+      pendingMessages: {
+        ...s.pendingMessages,
+        [stubId]: [{
+          ...s.pendingMessages[stubId][0],
+          _id: "opt-normal",
+          _clientId: "client-normal",
+          _isFailed: undefined,
+        }],
+      },
+    }));
+
+    useInboxStore.getState().syncTable("sessions", [{
+      _id: REAL_ID,
+      session_id: stubId,
+      title: "New session",
+      agent_type: "claude_code",
+      project_path: "/Users/me/proj",
+      git_root: "/Users/me/proj",
+      message_count: 0,
+      is_idle: true,
+      has_pending: false,
+      updated_at: Date.now(),
+    } as any]);
+
+    const resolved = await useInboxStore.getState().awaitConvexId(stubId);
+    useInboxStore.getState().sendMessage(resolved, "deliver me", undefined, "client-normal");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(calls.filter((c) => c.action === "sendMessage")).toHaveLength(1);
+  });
+
+  it("redrives a persisted real-id pending message after hydration", () => {
+    const { calls } = installFakeDispatch();
+    useInboxStore.setState({
+      sessions: {
+        [REAL_ID]: {
+          _id: REAL_ID,
+          session_id: "rekeyed-before-crash",
+          agent_type: "claude_code",
+          project_path: "/repo",
+          message_count: 0,
+          is_idle: true,
+          has_pending: false,
+          updated_at: Date.now(),
+        } as any,
+      },
+      conversations: { [REAL_ID]: { _id: REAL_ID } as any },
+      pendingMessages: {
+        [REAL_ID]: [{
+          _id: "opt-hydrated",
+          _clientId: "client-hydrated",
+          _isOptimistic: true,
+          role: "user",
+          content: "survived the crash",
+          timestamp: Date.now(),
+        } as any],
+      },
+      pendingSessionCreates: {},
+    } as any);
+
+    useInboxStore.getState().redrivePendingMessages();
+
+    expect(calls.find((c) => c.action === "sendMessage")?.args)
+      .toEqual([REAL_ID, "survived the crash", null, "client-hydrated"]);
+  });
+
+  it("reconfigures a rekeyed parked create with the latest stub launch preferences", async () => {
+    const stubId = "parkedlaunchprefsaaaaaa";
+    const { calls } = installFakeDispatch();
+    seedStrandedStub(stubId);
+    useInboxStore.setState((s: any) => ({
+      sessions: {
+        ...s.sessions,
+        [stubId]: {
+          ...s.sessions[stubId],
+          agent_type: "codex",
+          project_path: "/Users/me/new-proj",
+          git_root: "/Users/me/new-proj",
+          model: "gpt-5.4",
+          effort: "high",
+          stable_mode: "solo",
+          stable_exclude: ["jx7000000000000000000000000skip"],
+          _launchSnapshot: {
+            agent_type: "claude_code",
+            project_path: "/Users/me/proj",
+            git_root: "/Users/me/proj",
+          },
+        },
+      },
+    }));
+
+    useInboxStore.getState().syncTable("sessions", [{
+      _id: REAL_ID,
+      session_id: stubId,
+      title: "New session",
+      agent_type: "claude_code",
+      project_path: "/Users/me/proj",
+      git_root: "/Users/me/proj",
+      message_count: 0,
+      is_idle: true,
+      has_pending: false,
+      updated_at: Date.now(),
+    } as any]);
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const reconfigure = calls.find(
+      (c) => c.action === "convCommand" && c.args[1] === "reconfigureSession",
+    );
+    expect(reconfigure?.args[0]).toBe(REAL_ID);
+    expect(reconfigure?.args[2]).toEqual({
+      agent_type: "codex",
+      project_path: "/Users/me/new-proj",
+      git_root: "/Users/me/new-proj",
+      model: "gpt-5.4",
+      effort: "high",
+      stable_mode: "solo",
+      stable_exclude: ["jx7000000000000000000000000skip"],
+    });
+  });
+
+  it("reconfigures a parked {solo, excluded} launch back to device defaults", async () => {
+    const stubId = "parkedstableclearaaaaa";
+    const { calls } = installFakeDispatch();
+    seedStrandedStub(stubId);
+    useInboxStore.setState((s: any) => ({
+      sessions: {
+        ...s.sessions,
+        [stubId]: {
+          ...s.sessions[stubId],
+          _launchSnapshot: {
+            agent_type: "claude_code",
+            project_path: "/Users/me/proj",
+            git_root: "/Users/me/proj",
+            stable_mode: "solo",
+            stable_exclude: ["jx7000000000000000000000000skip"],
+          },
+          stable_mode: undefined,
+          stable_exclude: undefined,
+        },
+      },
+    }));
+
+    useInboxStore.getState().syncTable("sessions", [{
+      _id: REAL_ID,
+      session_id: stubId,
+      title: "New session",
+      agent_type: "claude_code",
+      project_path: "/Users/me/proj",
+      git_root: "/Users/me/proj",
+      message_count: 0,
+      is_idle: true,
+      has_pending: false,
+      updated_at: Date.now(),
+    } as any]);
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const reconfigure = calls.find(
+      (call) =>
+        call.action === "convCommand" &&
+        call.args[1] === "reconfigureSession",
+    );
+    expect(reconfigure?.args[2]).toMatchObject({
+      agent_type: "claude_code",
+      model: "default",
+      effort: "default",
+    });
+    expect(reconfigure?.args[2]).not.toHaveProperty("stable_mode");
+    expect(reconfigure?.args[2]).not.toHaveProperty("stable_exclude");
+  });
+
+  it("files a durably parked create into the bucket captured on its stub", async () => {
+    const bucketId = "bucket00000000000000000000000000";
+    const { calls } = installFakeDispatch();
+    useInboxStore.setState({ activeBucketFilter: bucketId });
+
+    const started = useInboxStore.getState().beginOptimisticSession({
+      agentType: "claude_code",
+      projectPath: "/Users/me/proj",
+      gitRoot: "/Users/me/proj",
+      create: async () => {
+        throw new DispatchNotWiredError("createSession", true);
+      },
+    });
+    await expect(started.ready).rejects.toMatchObject({ parked: true });
+    expect(
+      useInboxStore.getState().sessions[started.stubId]?._postCreateBucketId,
+    ).toBe(bucketId);
+
+    // Simulate the next launch: the in-memory promise continuation is gone,
+    // but by_session_id sync still rekeys the persisted stub.
+    useInboxStore.getState().syncTable("sessions", [{
+      _id: REAL_ID,
+      session_id: started.stubId,
+      title: "New session",
+      agent_type: "claude_code",
+      project_path: "/Users/me/proj",
+      git_root: "/Users/me/proj",
+      message_count: 0,
+      is_idle: true,
+      has_pending: false,
+      updated_at: Date.now(),
+    } as any]);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const assignment = calls.find(
+      (call) => call.action === "assignSessionToBucket",
+    );
+    expect(assignment?.args).toEqual([REAL_ID, bucketId]);
+    expect(
+      useInboxStore.getState().sessions[REAL_ID]?._postCreateBucketId,
+    ).toBe(bucketId);
+  });
+
+  it("redrives a persisted real-id bucket intent after hydration", () => {
+    const bucketId = "bucket00000000000000000000000000";
+    const { calls } = installFakeDispatch();
+    useInboxStore.setState({
+      sessions: {
+        [REAL_ID]: {
+          _id: REAL_ID,
+          session_id: "created-before-reload",
+          agent_type: "claude_code",
+          message_count: 0,
+          is_idle: true,
+          has_pending: false,
+          updated_at: Date.now(),
+          _postCreateBucketId: bucketId,
+        } as any,
+      },
+      conversations: { [REAL_ID]: { _id: REAL_ID } as any },
+      bucketAssignments: {},
+    } as any);
+
+    useInboxStore.getState().resumePostCreateSessionIntents();
+
+    expect(
+      calls.find((call) => call.action === "assignSessionToBucket")?.args,
+    ).toEqual([REAL_ID, bucketId]);
+  });
+
+  it("clears the persisted bucket intent only after an authoritative assignment echo", () => {
+    const bucketId = "bucket00000000000000000000000000";
+    useInboxStore.setState({
+      sessions: {
+        [REAL_ID]: {
+          _id: REAL_ID,
+          session_id: "created-before-reload",
+          _postCreateBucketId: bucketId,
+          updated_at: Date.now(),
+        } as any,
+      },
+      conversations: {
+        [REAL_ID]: {
+          _id: REAL_ID,
+          _postCreateBucketId: bucketId,
+        } as any,
+      },
+      bucketAssignments: {
+        [`bucketassign-${REAL_ID}`]: {
+          _id: `bucketassign-${REAL_ID}`,
+          conversation_id: REAL_ID,
+          bucket_id: bucketId,
+          updated_at: Date.now(),
+        },
+      } as any,
+    } as any);
+
+    // A local optimistic row is not proof that its outbox write committed.
+    useInboxStore.getState().resumePostCreateSessionIntents();
+    expect(
+      useInboxStore.getState().sessions[REAL_ID]?._postCreateBucketId,
+    ).toBe(bucketId);
+
+    useInboxStore.getState().syncTable("bucketAssignments", [{
+      _id: "assign00000000000000000000000000",
+      conversation_id: REAL_ID,
+      bucket_id: bucketId,
+      updated_at: Date.now() + 1,
+    } as any]);
+
+    expect(
+      useInboxStore.getState().sessions[REAL_ID]?._postCreateBucketId,
+    ).toBeUndefined();
+    expect(
+      (useInboxStore.getState().conversations[REAL_ID] as any)
+        ?._postCreateBucketId,
+    ).toBeUndefined();
+  });
+
+  it("treats any authoritative filing as newer than a persisted create-time intent", () => {
+    const capturedBucket = "bucket00000000000000000000000000";
+    const newerBucket = "bucket11111111111111111111111111";
+    const { calls } = installFakeDispatch();
+    useInboxStore.setState({
+      sessions: {
+        [REAL_ID]: {
+          _id: REAL_ID,
+          session_id: "created-before-reload",
+          _postCreateBucketId: capturedBucket,
+          updated_at: Date.now(),
+        } as any,
+      },
+      conversations: {
+        [REAL_ID]: {
+          _id: REAL_ID,
+          _postCreateBucketId: capturedBucket,
+        } as any,
+      },
+      bucketAssignments: {
+        assign11111111111111111111111111: {
+          _id: "assign11111111111111111111111111",
+          conversation_id: REAL_ID,
+          bucket_id: newerBucket,
+          updated_at: Date.now(),
+        },
+      } as any,
+    } as any);
+
+    useInboxStore.getState().resumePostCreateSessionIntents();
+
+    expect(
+      calls.filter((call) => call.action === "assignSessionToBucket"),
+    ).toHaveLength(0);
+    expect(
+      useInboxStore.getState().sessions[REAL_ID]?._postCreateBucketId,
+    ).toBeUndefined();
+    expect(
+      (useInboxStore.getState().conversations[REAL_ID] as any)
+        ?._postCreateBucketId,
+    ).toBeUndefined();
+  });
+
+  it("a manual move supersedes the create-time bucket intent across a reboot", () => {
+    const capturedBucket = "bucket00000000000000000000000000";
+    const newerBucket = "bucket11111111111111111111111111";
+    const { calls } = installFakeDispatch();
+    useInboxStore.setState({
+      sessions: {
+        [REAL_ID]: {
+          _id: REAL_ID,
+          session_id: "created-before-reload",
+          _postCreateBucketId: capturedBucket,
+          updated_at: Date.now(),
+        } as any,
+      },
+      conversations: {
+        [REAL_ID]: {
+          _id: REAL_ID,
+          _postCreateBucketId: capturedBucket,
+        } as any,
+      },
+      bucketAssignments: {},
+    } as any);
+
+    useInboxStore.getState().assignSessionToBucket(REAL_ID, newerBucket);
+    expect(
+      useInboxStore.getState().sessions[REAL_ID]?._postCreateBucketId,
+    ).toBeUndefined();
+
+    // Simulate the boot redrive after the manual action's local state persisted:
+    // only the newer filing may dispatch; the captured bucket must not reappear.
+    useInboxStore.getState().resumePostCreateSessionIntents();
+    const assignments = calls.filter(
+      (call) => call.action === "assignSessionToBucket",
+    );
+    expect(assignments).toHaveLength(1);
+    expect(assignments[0].args).toEqual([REAL_ID, newerBucket]);
+  });
+
+  it("does not move a reused blank that is already filed by hand", async () => {
+    const focusedBucket = "bucket00000000000000000000000000";
+    const existingBucket = "bucket11111111111111111111111111";
+    const { calls } = installFakeDispatch();
+    useInboxStore.setState({
+      activeBucketFilter: focusedBucket,
+      sessions: {
+        [REAL_ID]: {
+          _id: REAL_ID,
+          session_id: REAL_ID,
+          agent_type: "claude_code",
+          project_path: "/Users/me/proj",
+          message_count: 0,
+          is_idle: true,
+          has_pending: false,
+          started_at: Date.now() - 1_000,
+          updated_at: Date.now(),
+        } as any,
+      },
+      conversations: { [REAL_ID]: { _id: REAL_ID } as any },
+      bucketAssignments: {
+        assign11111111111111111111111111: {
+          _id: "assign11111111111111111111111111",
+          conversation_id: REAL_ID,
+          bucket_id: existingBucket,
+          updated_at: Date.now(),
+        },
+      } as any,
+    } as any);
+
+    const reused = useInboxStore.getState().beginOptimisticSession({
+      agentType: "claude_code",
+      projectPath: "/Users/me/proj",
+      reuse: true,
+      create: async () => {
+        throw new Error("must not create");
+      },
+    });
+    await reused.ready;
+    await Promise.resolve();
+
+    expect(reused.stubId).toBe(REAL_ID);
+    expect(
+      useInboxStore.getState().sessions[REAL_ID]?._postCreateBucketId,
+    ).toBeUndefined();
+    expect(
+      calls.filter((call) => call.action === "assignSessionToBucket"),
+    ).toHaveLength(0);
+  });
+
+  it("durably flushes protected stub fields after an alt-key rekey", async () => {
+    const stubId = "parkedfieldpatchaaaaaaa";
+    const { calls } = installFakeDispatch();
+    seedStrandedStub(stubId);
+    useInboxStore.getState().updateSessionProject(stubId, "/Users/me/latest");
+
+    useInboxStore.getState().syncTable("sessions", [{
+      _id: REAL_ID,
+      session_id: stubId,
+      title: "New session",
+      agent_type: "claude_code",
+      project_path: "/Users/me/proj",
+      git_root: "/Users/me/proj",
+      message_count: 0,
+      is_idle: true,
+      has_pending: false,
+      updated_at: Date.now(),
+    } as any]);
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const flush = calls.find((c) => c.action === "flushResolvedSessionFields");
+    expect(flush?.args[0]).toBe(REAL_ID);
+    expect(flush?.args[1]).toMatchObject({
+      project_path: "/Users/me/latest",
+      git_root: "/Users/me/latest",
+    });
+  });
+
   // Regression coverage for ct-40174 — the jx79314 incident: a fork whose
   // forkFromMessage dispatch was lost left a stranded FORK stub, and the heal
   // revived it as a plain createSession — a blank session that inherited the
@@ -138,6 +631,41 @@ describe("healStrandedStub", () => {
     const send = calls.find((c) => c.action === "sendMessage");
     expect(send).toBeTruthy();
     expect(send!.args[0]).toBe(REAL_ID);
+  });
+
+  it("reissues a stranded agent-switch fork with its target agent", async () => {
+    const stubId = "0a0a0a0a-bbbb-4ccc-8ddd-eeeeffff1111";
+    const parentId = "jx7000000000000000000000000paren";
+    const { calls } = installFakeDispatch();
+    seedStrandedStub(stubId);
+    useInboxStore.setState((s: any) => ({
+      sessions: {
+        [stubId]: {
+          ...s.sessions[stubId],
+          forked_from: parentId,
+          parent_conversation_id: parentId,
+          parent_message_uuid: "agent-switch",
+          _forkTargetAgentType: "codex",
+        },
+      },
+      conversations: {
+        [stubId]: {
+          ...s.conversations[stubId],
+          forked_from: parentId,
+          parent_conversation_id: parentId,
+          parent_message_uuid: "agent-switch",
+          _forkTargetAgentType: "codex",
+        },
+      },
+    } as any));
+
+    expect(await useInboxStore.getState().healStrandedStub(stubId)).toBe(REAL_ID);
+    const fork = calls.find((c) => c.action === "convCommand");
+    expect(fork?.args[2]).toEqual({
+      target_agent_type: "codex",
+      session_id: stubId,
+    });
+    expect(calls.filter((c) => c.action === "createSession")).toHaveLength(0);
   });
 
   it("rejects a fork stub whose parent is unknown instead of degrading to a plain create", async () => {

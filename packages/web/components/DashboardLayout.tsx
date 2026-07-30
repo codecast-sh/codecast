@@ -61,6 +61,9 @@ import { useTipActions } from "../tips";
 interface DashboardLayoutProps {
   children: ReactNode;
   hideSidebar?: boolean;
+  // Public conversation links have no principal cache to hydrate. The shell
+  // opts them into the chrome-less guest branch once auth has settled.
+  allowUnhydratedGuest?: boolean;
 }
 
 const DEFAULT_LAYOUT = { sidebar: 25, main: 75 };
@@ -150,6 +153,7 @@ const ActiveAgentsBadge = memo(function ActiveAgentsBadge({ isOnInboxPage }: { i
 
 export function DashboardLayout(props: DashboardLayoutProps) {
   const isNested = useContext(DashboardNestCtx);
+  const { isAuthenticated, isLoading: isAuthLoading } = useConvexAuth();
   // Hold the boot loader until the IDB hydration pass lands (clientStateInitialized
   // flips true even when the cache is empty or unreadable, so this can't hang).
   // Without it, React's first frame races loadCache(): the shell mounts on an
@@ -157,8 +161,13 @@ export function DashboardLayout(props: DashboardLayoutProps) {
   // before cached content pops in. AppLoader is pixel-identical to the static
   // #boot-shell in index.html, so the user sees one continuous loader → content.
   const hydrated = useInboxStore((s) => s.clientStateInitialized);
+  const isSettledGuest = props.allowUnhydratedGuest &&
+    !isAuthenticated && !isAuthLoading;
   if (isNested) return <>{props.children}</>;
-  if (!hydrated) return <AppLoader />;
+  // A settled anonymous share viewer intentionally has no principal store, so
+  // `clientStateInitialized` will remain false forever. Let only that explicit
+  // route reach DashboardLayoutInner's read-only guest branch.
+  if (!hydrated && !isSettledGuest) return <AppLoader />;
   return (
     <DashboardNestCtx.Provider value={true}>
       <DashboardLayoutInner {...props} />
@@ -742,7 +751,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
                   <SessionListPanel
                     onSessionSelect={sessionListOnSelect}
                     activeSessionId={sessionListActiveId}
-                    onCollapse={s.toggleSidePanel}
+                    onCollapse={() => s.toggleSidePanel()}
                   />
                 </div>
               </ErrorBoundary>
@@ -919,7 +928,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
               <SessionListPanel
                 onSessionSelect={sessionListOnSelect}
                 activeSessionId={sessionListActiveId}
-                onCollapse={s.toggleSidePanel}
+                onCollapse={() => s.toggleSidePanel()}
               />
             </div>
           </ErrorBoundary>
@@ -994,13 +1003,13 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       {/* Mobile session list overlay — single render point for SessionListPanel on small screens */}
       {showMobileSessionList && (
         <>
-          <div className="fixed inset-0 z-40 bg-black/50" onClick={s.toggleSidePanel} />
+          <div className="fixed inset-0 z-40 bg-black/50" onClick={() => s.toggleSidePanel()} />
           <div className="fixed inset-y-0 right-0 z-50 w-[80vw] max-w-xs shadow-xl animate-slide-in-right">
             <ErrorBoundary name="SessionList" level="panel">
               <SessionListPanel
                 onSessionSelect={sessionListOnSelect}
                 activeSessionId={sessionListActiveId}
-                onCollapse={s.toggleSidePanel}
+                onCollapse={() => s.toggleSidePanel()}
               />
             </ErrorBoundary>
           </div>

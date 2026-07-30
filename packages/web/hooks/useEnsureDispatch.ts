@@ -6,8 +6,9 @@ import { isPermanentDispatchError } from "../store/mutativeMiddleware";
 import { useWatchEffect } from "./useWatchEffect";
 import {
   capturePrincipalDispatchAuthorization,
-  usePrincipalDispatchAllowed,
+  usePrincipalDispatchCorrelationEpoch,
 } from "../store/local-first/dispatchGate";
+import { installBrowserDispatchSelfHeal } from "./dispatchRecovery";
 
 function deepMerge(target: any, source: any): any {
   const result = { ...target };
@@ -30,7 +31,8 @@ function deepMerge(target: any, source: any): any {
 // deep-link into a session before the inbox tab has mounted) WITHOUT also
 // spinning up the inbox subscriptions/recovery polling/soundIdle that hook owns.
 export function useEnsureDispatch() {
-  const canDispatch = usePrincipalDispatchAllowed();
+  const dispatchCorrelationEpoch = usePrincipalDispatchCorrelationEpoch();
+  const canDispatch = dispatchCorrelationEpoch !== null;
   const _setDispatch = useInboxStore((s) => s._setDispatch);
   const _clearDispatch = useInboxStore((s) => s._clearDispatch);
   const _setDispatchError = useInboxStore((s) => s._setDispatchError);
@@ -94,8 +96,6 @@ export function useEnsureDispatch() {
       );
       return true;
     };
-    if (!bindDispatch()) return;
-
     // Re-drive any parked dispatch when the client likely has connectivity
     // again. The boot drain only fires once on load, so a send the live socket
     // stranded (in-session retries exhausted with no reload in sight) would sit
@@ -104,32 +104,27 @@ export function useEnsureDispatch() {
     // `window` exists in React Native but has no browser event APIs (and there's
     // no `document`), so an SSR-style `typeof window === "undefined"` check passes
     // and then crashes on `window.addEventListener`. Require the real APIs.
-    if (typeof window === "undefined" || typeof document === "undefined" || typeof window.addEventListener !== "function") {
-      return () => _clearDispatch(ownerRef.current);
-    }
-    // _drainOutbox / _isDispatchWired are injected onto the store by
-    // mutativeMiddleware (siblings of _setDispatch); typed at the call site so
-    // the wiring lives entirely here. Each drain first self-heals the binding:
-    // a principal-runtime transition can clear or stale it while `canDispatch`
-    // stays true (so this effect never re-runs), leaving sends parked in the
-    // outbox — re-binding with a fresh capture delivers them within a tick.
-    const drain = () => {
+    const getDispatchRecoveryStore = () => {
       const store = useInboxStore.getState() as unknown as {
         _drainOutbox: () => void;
         _isDispatchWired: () => boolean;
       };
-      if (!store._isDispatchWired() && !bindDispatch()) return;
-      store._drainOutbox();
+      return store;
     };
-    const onVisible = () => { if (document.visibilityState === "visible") drain(); };
-    window.addEventListener("online", drain);
-    document.addEventListener("visibilitychange", onVisible);
-    const interval = window.setInterval(drain, 30_000);
-    return () => {
-      window.removeEventListener("online", drain);
-      document.removeEventListener("visibilitychange", onVisible);
-      window.clearInterval(interval);
-      _clearDispatch(ownerRef.current);
-    };
-  }, [canDispatch, _setDispatch, _clearDispatch, _setDispatchError]);
+    // _drainOutbox / _isDispatchWired are injected onto the store by
+    // mutativeMiddleware (siblings of _setDispatch). The correlation epoch is
+    // an effect dependency, so authorization changes rebind immediately; these
+    // browser signals remain the recovery path for socket/connectivity stalls.
+    return installBrowserDispatchSelfHeal({
+      bindDispatch,
+      isDispatchWired: () => getDispatchRecoveryStore()._isDispatchWired(),
+      drainOutbox: () => getDispatchRecoveryStore()._drainOutbox(),
+      clearDispatch: () => _clearDispatch(ownerRef.current),
+      browserWindow:
+        typeof window !== "undefined" && typeof window.addEventListener === "function"
+          ? window
+          : null,
+      browserDocument: typeof document !== "undefined" ? document : null,
+    });
+  }, [canDispatch, dispatchCorrelationEpoch, _setDispatch, _clearDispatch, _setDispatchError]);
 }

@@ -66,7 +66,13 @@ export function isPrincipalDispatchAuthorizationCurrent(
     correlationEpoch === capture.correlationEpoch;
 }
 
-export function usePrincipalDispatchAllowed(): boolean {
+export function getPrincipalDispatchCorrelationEpoch(): number | null {
+  return runtime?.canDispatch === true && correlatedPrincipalEpoch !== null
+    ? correlationEpoch
+    : null;
+}
+
+export function usePrincipalDispatchCorrelationEpoch(): number | null {
   return useSyncExternalStore(
     (listener) => {
       const unsubscribeCorrelation = subscribePrincipalDispatchCorrelation(listener);
@@ -76,7 +82,11 @@ export function usePrincipalDispatchAllowed(): boolean {
         unsubscribe?.();
       };
     },
-    () => runtime?.canDispatch === true && correlatedPrincipalEpoch !== null,
-    () => false,
+    getPrincipalDispatchCorrelationEpoch,
+    () => null,
   );
+}
+
+export function usePrincipalDispatchAllowed(): boolean {
+  return usePrincipalDispatchCorrelationEpoch() !== null;
 }

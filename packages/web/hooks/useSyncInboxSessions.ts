@@ -378,6 +378,17 @@ export function useSyncInboxSessions() {
   // hydration so it resumes from the restored watermark, durably throttled so a
   // relaunch within the window serves the hydrated cache. Reuses runReconcileCrawl.
   const hydrated = useInboxStore((s) => s.clientStateInitialized);
+  const redroveHydratedPendingRef = useRef(false);
+  useEffect(() => {
+    if (!hydrated || redroveHydratedPendingRef.current) return;
+    redroveHydratedPendingRef.current = true;
+    // Covers the crash-sized gap between a parked create's by_session_id rekey
+    // and the timer that queues its first message. Pending bubbles are persisted
+    // with client ids, so boot redelivery is safe and server-idempotent.
+    const store = useInboxStore.getState();
+    store.redrivePendingMessages();
+    store.resumePostCreateSessionIntents();
+  }, [hydrated]);
   // Stable crawl namespace — the live arg no longer varies, so the watermark
   // never resets on a show/hide-old toggle.
   const sessWsKey = "inbox";

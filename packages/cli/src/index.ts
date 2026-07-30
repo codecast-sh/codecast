@@ -37,6 +37,8 @@ import { c, fmt, icons } from "./colors.js";
 import { ensureTmux, tryInstallTmux, tmuxRun } from "./tmux.js";
 import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure } from "./update.js";
 import { type SnippetTarget, getSnippetTargets, MESSAGING_SNIPPET_END, installMessagingSnippet, ensureMessagingForMemory } from "./snippets.js";
+import { installStableHook, removeStableHook, runStableContextHook } from "./stableContext.js";
+import { prepareSessionSendBody } from "./sendBody.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
 import { glob } from "glob";
 import { getPosition, setPosition } from "./positionTracker.js";
@@ -92,6 +94,8 @@ import { type Config, getAgentArgs } from "./config/types.js";
 import { readProviderKeyStore, writeProviderKeyStore } from "./providerKeyStore.js";
 
 const program = new Command();
+const isStableContextFastPath =
+  process.argv.length === 3 && process.argv[2] === "stable-context";
 
 // Get the real cwd - CODECAST_CWD is set by the dev wrapper script
 // to preserve the original directory when running via bun run
@@ -3162,14 +3166,22 @@ program
     "queued and the cron tells your session if it can't be delivered.\n\n" +
     "Examples:\n" +
     "  cast send jx7c6zk \"can you take the auth half?\"\n" +
-    "  cast send jx7c6zk \"done\" --from jx7abcd"
+    "  cast send jx7c6zk \"done\" --from jx7abcd\n" +
+    "  cast send jx7c6zk - <<'EOF'\n" +
+    "  Multi-line briefing with headings and code blocks,\n" +
+    "  delivered exactly as written.\n" +
+    "  EOF"
   )
   .argument("<session_id>", "Target session short ID (e.g. jx7c6zk)")
-  .argument("<text>", "Message text")
+  .argument("<text>", "Message text; '-' reads it from stdin (heredoc-friendly for multi-line markdown)")
   .option("--from <id>", "Override sender session (default: detect current session)")
   .action(async (sessionId: string, text: string, options: any) => {
-    const body = (text ?? "").trim();
-    if (!body) {
+    const fromStdin = text === "-";
+    if (fromStdin) {
+      text = fs.readFileSync(0, "utf-8");
+    }
+    const body = prepareSessionSendBody(text ?? "", fromStdin);
+    if (!body.trim()) {
       console.error("Message text is empty");
       process.exit(1);
     }
@@ -8531,7 +8543,9 @@ program
       for (const s of snippets) {
         (config as any)[s.enabledKey] = false;
       }
-      writeConfig(config);
+      // Stable is not in SNIPPET_CATALOG because it is a SessionStart hook,
+      // but "all snippets" includes it in the UI and help text.
+      applyStableMode(config, "off", false);
       console.log("All snippets disabled.");
       console.log(`Run ${fmt.cmd("cast install")} to re-enable.`);
       return;
@@ -14587,107 +14601,8 @@ plan
 
 // --- Stable Mode ---
 
-const STABLE_FEED_HOOK = `#!/bin/bash
-# CodeCast Stable Mode - injects recent session history on SessionStart
-set -uo pipefail
-
-CONFIG_FILE="$HOME/.codecast/config.json"
-[ -f "$CONFIG_FILE" ] || exit 0
-
-# Ensure codecast is on PATH (hooks run non-interactively)
-export PATH="$HOME/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
-
-STABLE_MODE=$(python3 -c "import sys,json; print(json.load(open('$CONFIG_FILE')).get('stable_mode',''))" 2>/dev/null)
-[ -z "$STABLE_MODE" ] || [ "$STABLE_MODE" = "null" ] && exit 0
-
-STABLE_GLOBAL=$(python3 -c "import sys,json; print(json.load(open('$CONFIG_FILE')).get('stable_global',False))" 2>/dev/null)
-
-GLOBAL_FLAG=""
-if [ "$STABLE_GLOBAL" = "True" ]; then
-  GLOBAL_FLAG="-g"
-fi
-
-if [ "$STABLE_MODE" = "team" ]; then
-  FEED=$(codecast feed $GLOBAL_FLAG -n 15 -s 14d 2>/dev/null | sed 's/\\x1b\\[[0-9;]*m//g')
-else
-  FEED=$(codecast feed $GLOBAL_FLAG -n 10 -s 7d 2>/dev/null | sed 's/\\x1b\\[[0-9;]*m//g')
-fi
-
-[ -z "$FEED" ] && exit 0
-
-if [ "$STABLE_MODE" = "team" ]; then
-  INSTRUCTION="This gives you bigger-picture visibility on what has been and is being worked on by the team."
-else
-  INSTRUCTION="This gives you bigger-picture visibility on what you have been and are currently working on."
-fi
-
-cat <<EOF
-<stable-context mode="$STABLE_MODE">
-$INSTRUCTION
-
-$FEED
-</stable-context>
-EOF
-`;
-
-function installStableHook(): void {
-  const home = process.env.HOME || "";
-  const hooksDir = path.join(home, ".claude", "hooks");
-  const hookFile = path.join(hooksDir, "stable-feed.sh");
-  const settingsFile = path.join(home, ".claude", "settings.json");
-
-  try {
-    fs.mkdirSync(hooksDir, { recursive: true });
-    fs.writeFileSync(hookFile, STABLE_FEED_HOOK, { mode: 0o755 });
-
-    let settings: any = {};
-    if (fs.existsSync(settingsFile)) {
-      settings = JSON.parse(fs.readFileSync(settingsFile, "utf-8"));
-    }
-    if (!settings.hooks) settings.hooks = {};
-    if (!settings.hooks.SessionStart) settings.hooks.SessionStart = [];
-
-    const hookArray = settings.hooks.SessionStart as any[];
-    const alreadyPresent = hookArray.some((matcher: any) =>
-      (matcher.hooks || []).some((h: any) => h.command?.includes("stable-feed.sh"))
-    );
-
-    if (!alreadyPresent) {
-      const hookEntry = { type: "command", command: hookFile, timeout: 30 };
-      if (hookArray.length > 0 && hookArray[0].matcher === "") {
-        hookArray[0].hooks = hookArray[0].hooks || [];
-        hookArray[0].hooks.push(hookEntry);
-      } else {
-        hookArray.unshift({ matcher: "", hooks: [hookEntry] });
-      }
-    }
-
-    fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 4));
-  } catch {
-    // Ignore errors - hook is optional enhancement
-  }
-}
-
-function removeStableHook(): void {
-  const home = process.env.HOME || "";
-  const settingsFile = path.join(home, ".claude", "settings.json");
-
-  if (!fs.existsSync(settingsFile)) return;
-
-  const settings = JSON.parse(fs.readFileSync(settingsFile, "utf-8"));
-  if (!settings.hooks?.SessionStart) return;
-
-  for (const matcher of settings.hooks.SessionStart) {
-    if (matcher.hooks) {
-      matcher.hooks = matcher.hooks.filter((h: any) => !h.command?.includes("stable-feed.sh"));
-    }
-  }
-  settings.hooks.SessionStart = settings.hooks.SessionStart.filter(
-    (m: any) => m.hooks && m.hooks.length > 0
-  );
-
-  fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 4));
-}
+// Hook script + installer live in stableContext.ts (imported at top) so the
+// daemon can refresh an already-installed hook file on boot.
 
 // Apply a stable-mode choice: persist config keys and sync the SessionStart hook.
 // Shared by the `cast stable` command and the `cast install` flow.
@@ -14768,6 +14683,11 @@ program
     }
     console.log(`  ${fmt.muted("Run")} ${fmt.cmd("cast stable off")} ${fmt.muted("to disable")}`);
   });
+
+program
+  .command("stable-context", { hidden: true })
+  .description("SessionStart hook: print the stable-context feed and record what was injected (internal use)")
+  .action(async () => runStableContextHook(readConfig()));
 
 program
   .command("claude")
@@ -15212,8 +15132,10 @@ messaging
     }
   });
 
-// Check for updates in background (non-blocking)
-checkForUpdates().then(async (available) => {
+// Check for updates in background (non-blocking). The SessionStart hook is an
+// output protocol: even a cached notice would become part of Claude's prompt,
+// so its hidden fast path never enters this lifecycle.
+if (!isStableContextFastPath) checkForUpdates().then(async (available) => {
   if (!available) return;
 
   // Source checkouts can't self-update (performUpdate refuses in dev mode);
@@ -15297,7 +15219,12 @@ program.hook('preAction', (thisCommand, actionCommand) => {
 // <git args…>`. The git argv carries flags commander would mis-parse, and this
 // runs on every :Gblame, so bypass commander (and its daemon/alias side
 // effects) entirely and stream the rewritten blame straight out.
-if (process.argv[2] === "__fugitive_blame@@") {
+if (isStableContextFastPath) {
+  // Bypass Commander, preAction logging/daemon startup, alias repair, env
+  // autobinding, and every other global CLI side effect. Hook stdout must be
+  // exactly one stable-context block (or empty).
+  runStableContextHook(readConfig()).catch(() => {});
+} else if (process.argv[2] === "__fugitive_blame@@") {
   import("./blame.js")
     .then(({ runFugitiveBlame }) => runFugitiveBlame(process.argv.slice(3), readConfig() ?? {}))
     .catch((err) => {

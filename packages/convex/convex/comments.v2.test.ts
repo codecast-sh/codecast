@@ -538,6 +538,14 @@ describe("comments v2 dependent edit and delete", () => {
     });
     expect(ctx.db._tables.comments.find((row: any) => row._id === "comment-edit").content)
       .toBe("after");
+    const updatedReplay = await (updateCommentV2 as any)._handler(ctx, {
+      command_id: "edit-by-client",
+      conversation_id: CONVERSATION,
+      client_id: "optimistic-edit",
+      content: "after",
+    });
+    expect(updatedReplay).toEqual(updated);
+    expect(heads(ctx)[0].revision).toBe(1);
 
     const deleted = await (deleteCommentV2 as any)._handler(ctx, {
       command_id: "delete-by-client",

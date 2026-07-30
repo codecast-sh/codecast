@@ -240,6 +240,93 @@ async function assignConversationToBucketRow(
   }
 }
 
+/**
+ * Receipt-backed label creation plus its dependent filing intent. Keeping both
+ * writes inside runLocalCommand's callback makes a replay a pure receipt read:
+ * a crash after commit cannot reapply an older filing over a newer manual one.
+ */
+export async function createBucketWithAssignmentsV2ForUser(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+  args: {
+    commandId: string;
+    name: string;
+    color?: string;
+    conversationIds: Id<"conversations">[];
+  },
+) {
+  return runLocalCommand(ctx, {
+    principalId: userId,
+    commandId: args.commandId,
+    commandName: "buckets.create/v2",
+    arguments: {
+      name: args.name,
+      color: args.color,
+      assignConversationIds: args.conversationIds,
+    },
+  }, async () => {
+    if (!args.name.trim()) {
+      return {
+        status: "rejected",
+        code: "INVALID_ARGUMENT",
+        message: "Label name required",
+      };
+    }
+    for (const conversationId of args.conversationIds) {
+      let conversation;
+      try {
+        conversation = await ctx.db.get(conversationId);
+      } catch {
+        return {
+          status: "rejected",
+          code: "INVALID_ARGUMENT",
+          message: "A selected session id is invalid",
+        };
+      }
+      if (!conversation) {
+        return {
+          status: "rejected",
+          code: "MISSING",
+          message: "A session selected for this label no longer exists",
+        };
+      }
+      if (String(conversation.user_id) !== String(userId)) {
+        return {
+          status: "rejected",
+          code: "FORBIDDEN",
+          message: "A selected session is not owned by this account",
+        };
+      }
+    }
+
+    const created = await createBucketRow(ctx, userId, {
+      name: args.name,
+      color: args.color,
+    });
+    for (const conversationId of args.conversationIds) {
+      await assignConversationToBucketRow(
+        ctx,
+        userId,
+        conversationId,
+        created._id,
+      );
+    }
+    return {
+      status: "acknowledged",
+      result: { bucketId: created._id },
+      coverageViews: [{
+        contractId: BUCKETS_VIEW_CONTRACT_ID,
+        viewKey: BUCKETS_VIEW_KEY,
+      }],
+      coverageCommandIds: [{
+        kind: "command-id" as const,
+        contractId: BUCKETS_VIEW_CONTRACT_ID_V3,
+        viewKey: BUCKETS_VIEW_KEY,
+      }],
+    };
+  });
+}
+
 // ── V2 local-command surface ────────────────────────────────────────────────
 // These handlers return durable receipts rather than asking the client to infer
 // acknowledgment from a later value match. Domain rejection is data; auth

@@ -2,6 +2,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
+import { isParkedDispatchError } from "../store/mutativeMiddleware";
 import { useWatchEffect } from "./useWatchEffect";
 
 // How long the resume ladder gets to bring a session live before the merged
@@ -193,6 +194,10 @@ export function useSessionRestart(opts: {
     convCommand(conversationId, "restartSession", ghostContext())
       .then((res: unknown) => { if (!onRestored?.(res)) notify("success", "Restarting session…"); })
       .catch((err: unknown) => {
+        // The request is already durable. Keep the recovery ladder armed so
+        // liveness/progress (or the give-up backstop) settles it; there is no
+        // response yet from which an onRestored redirect can be inferred.
+        if (isParkedDispatchError(err)) return;
         const msg = err instanceof Error ? err.message : String(err);
         if (/conversation_deleted|Conversation not found/i.test(msg)) {
           useInboxStore.getState().markServerDeleted(conversationId);
@@ -257,7 +262,12 @@ export function useSessionRestart(opts: {
       notify("info", "Resume didn't take — rebuilding the session from history…");
       convCommand(conversationId, "repairSession", ghostContext())
         .then((res: unknown) => onRestored?.(res))
-        .catch(() => { /* the give-up backstop below reports the failure */ });
+        .catch((err: unknown) => {
+          // Both parked and ordinary repair failures remain owned by the
+          // existing give-up backstop; spelling out parked documents that it
+          // is pending rather than a terminal request failure.
+          if (isParkedDispatchError(err)) return;
+        });
     };
     // Daemon says resume/repair/reconstitute all fell through — rebuild now.
     const resumeRow = [...(restartProgress ?? [])]

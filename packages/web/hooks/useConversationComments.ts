@@ -5,6 +5,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { isConvexId } from "../lib/entityLinks";
 import { useInboxStore } from "../store/inboxStore";
+import { isParkedDispatchError } from "../store/mutativeMiddleware";
 import {
   isCutoverMode,
   isLogTsMode,
@@ -19,6 +20,7 @@ import { useCutoverSpotCheck, useShadowEquivalence } from "../store/local-first/
 import { useConvexSync } from "./useConvexSync";
 import { useLocalView } from "./useLocalView";
 import { groupComments, threadKeyFor, type Comment, type CommentThread } from "../lib/commentThread";
+import { toast } from "sonner";
 
 // Project a comment onto the field set the v1 summary query delivers, so the
 // v1↔v2 digest comparison judges exactly what today's readers render. The v2
@@ -121,21 +123,41 @@ export function useCommentActions(conversationId: string | undefined): CommentAc
   const addComment = useCallback(
     async (input: { content: string; messageId?: string; parentCommentId?: string }) => {
       if (!input.content.trim() || !canQuery) return;
-      await useInboxStore.getState().addComment(conversationId!, input.content, {
-        messageId: input.messageId,
-        parentCommentId: input.parentCommentId,
-      });
+      try {
+        await useInboxStore.getState().addComment(conversationId!, input.content, {
+          messageId: input.messageId,
+          parentCommentId: input.parentCommentId,
+        });
+      } catch (error) {
+        if (!isParkedDispatchError(error)) throw error;
+      }
     },
     [conversationId, canQuery],
   );
   const editComment = useCallback((commentId: string, content: string) => {
-    if (content.trim()) useInboxStore.getState().editComment(commentId, content.trim());
+    const next = content.trim();
+    if (!next) return;
+    void useInboxStore.getState().editComment(commentId, next).catch((error) => {
+      if (isParkedDispatchError(error)) return;
+      toast.error(
+        error instanceof Error ? error.message : "Couldn't edit comment",
+      );
+    });
   }, []);
   const deleteComment = useCallback(async (commentId: string) => {
-    await useInboxStore.getState().deleteComment(commentId);
+    try {
+      await useInboxStore.getState().deleteComment(commentId);
+    } catch (error) {
+      if (!isParkedDispatchError(error)) throw error;
+    }
   }, []);
   const askAgent = useCallback(async (messageId?: string) => {
-    if (canQuery) await useInboxStore.getState().askAgentInThread(conversationId!, { messageId });
+    if (!canQuery) return;
+    try {
+      await useInboxStore.getState().askAgentInThread(conversationId!, { messageId });
+    } catch (error) {
+      if (!isParkedDispatchError(error)) throw error;
+    }
   }, [conversationId, canQuery]);
   return { addComment, editComment, deleteComment, askAgent };
 }

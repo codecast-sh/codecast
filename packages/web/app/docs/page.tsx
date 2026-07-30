@@ -458,8 +458,10 @@ export function DocListContent() {
       emptyIcon={<FileText className="w-8 h-8 opacity-30" />}
       emptyMessage="No documents found"
       onCreate={async () => {
-        const result = await createDoc({ title: "", doc_type: docType || "note" });
-        if (result?.id) router.push(`/docs/${result.id}`);
+        await createDoc(
+          { title: "", doc_type: docType || "note" },
+          { version: 1, kind: "navigate" },
+        );
       }}
       paletteShortcuts={[
         { key: "t", mode: "type", label: "type" },
