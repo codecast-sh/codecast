@@ -67,6 +67,11 @@ R2_BUCKET="codecast"
 : "${R2_ENDPOINT:?Set R2_ENDPOINT (e.g. https://<account-id>.r2.cloudflarestorage.com)}"
 export AWS_DEFAULT_REGION="auto"
 BINARIES_DIR="../web/binaries"
+# The exact outputs of one build-binaries.sh run. Every consumer (R2 upload,
+# prewarm, GitHub release) iterates this list — never glob the dir, which
+# accumulates strays across runs (a local `cast` symlink once shipped to R2
+# as a duplicate object).
+ARTIFACTS=(codecast-darwin-arm64 codecast-darwin-x64 codecast-linux-arm64 codecast-linux-x64 codecast-windows-x64.exe)
 
 # Version bump (package.json is the single source of truth — update.ts imports it)
 if [[ "$NO_BUMP" == "true" ]]; then
@@ -95,10 +100,9 @@ echo "Building binaries..."
 # Upload binaries
 echo ""
 echo "Uploading binaries to R2..."
-for file in "$BINARIES_DIR"/*; do
-  filename=$(basename "$file")
+for filename in "${ARTIFACTS[@]}" index.js.map; do
   echo "  $filename"
-  aws s3 cp "$file" "s3://$R2_BUCKET/$filename" \
+  aws s3 cp "$BINARIES_DIR/$filename" "s3://$R2_BUCKET/$filename" \
     --endpoint-url "$R2_ENDPOINT" \
     --content-type "application/octet-stream" \
     --quiet
@@ -153,7 +157,7 @@ echo "  https://dl.codecast.sh/latest.json"
 # through the public domain caches at this edge and, with Tiered Cache enabled
 # on the zone, at the upper tier all other edges fill from. Best-effort.
 echo "Prewarming CDN..."
-for b in codecast-darwin-arm64 codecast-darwin-x64 codecast-linux-arm64 codecast-linux-x64 codecast-windows-x64.exe; do
+for b in "${ARTIFACTS[@]}"; do
   curl -so /dev/null --max-time 300 -w "  $b: %{speed_download} B/s\n" "https://dl.codecast.sh/$b" || echo "  $b: prewarm failed (non-fatal)"
 done
 
@@ -180,9 +184,10 @@ fi
 # exists, so just refresh its assets.
 echo ""
 echo "Publishing GitHub release v$VERSION..."
-# codecast-* only: the dir also holds a local `cast` convenience symlink.
-RELEASE_FILES=("$BINARIES_DIR"/codecast-* "$BINARIES_DIR"/index.js.map)
+RELEASE_FILES=("${ARTIFACTS[@]/#/$BINARIES_DIR/}" "$BINARIES_DIR/index.js.map")
 if gh release view "v$VERSION" >/dev/null 2>&1; then
+  # A --no-bump rerun after a failed partial deploy refreshes these assets
+  # while R2 may still hold the old bytes; R2 is authoritative mid-incident.
   gh release upload "v$VERSION" "${RELEASE_FILES[@]}" --clobber \
     || echo "  WARNING: asset refresh failed (non-fatal)"
 else
