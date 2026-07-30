@@ -468,6 +468,7 @@ export async function notifySessionAssigned(
   conversationId: any,
   recipientIds: any[],
   actorUserId: any,
+  note?: string,
 ): Promise<number> {
   if (recipientIds.length === 0) return 0;
   const conversation = await ctx.db.get(conversationId);
@@ -489,7 +490,7 @@ export async function notifySessionAssigned(
       conversationId,
       "session_assigned",
       "Session assigned to you",
-      `${actorName} assigned you "${label}"`,
+      `${actorName} assigned you "${label}"${note ? ` — “${note}”` : ""}`,
     );
     if (ok) delivered++;
   }

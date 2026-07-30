@@ -43,6 +43,7 @@ export async function addSessionOwnerRow(
   conversationId: Id<"conversations">,
   userId: Id<"users">,
   addedBy: Id<"users">,
+  note?: string,
 ): Promise<boolean> {
   if (await isSessionOwner(ctx, conversationId, userId)) return false;
   await ctx.db.insert("session_owners", {
@@ -50,6 +51,9 @@ export async function addSessionOwnerRow(
     user_id: userId,
     added_by: addedBy,
     added_at: Date.now(),
+    ...(note ? { note } : {}),
+    // Self-claims are pre-acknowledged — the ping is for handoffs from others.
+    ...(userId.toString() === addedBy.toString() ? { seen_at: Date.now() } : {}),
   });
   return true;
 }
