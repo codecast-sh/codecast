@@ -46,6 +46,22 @@ export type DexieFaultPoint = "after-operations" | "after-head-write";
 export type DexieFaultInjector = (point: DexieFaultPoint) => void | Promise<void>;
 
 /**
+ * IndexedDB may auto-commit a transaction as soon as its request queue drains.
+ * Never `await` an absent optional hook here: even `await undefined` yields to a
+ * native microtask with no IDB request keeping the transaction alive, which
+ * real browsers surface as Dexie's PrematureCommitError. Async test hooks must
+ * use Dexie's explicit keep-alive primitive for the same reason.
+ */
+function transactionFault(
+  injectFault: DexieFaultInjector | undefined,
+  point: DexieFaultPoint,
+): Promise<void> | null {
+  if (!injectFault) return null;
+  const pending = injectFault(point);
+  return pending ? Dexie.waitFor(pending) : null;
+}
+
+/**
  * Kept as an exported fixture so migration tests create the exact schema that
  * shipped, rather than a hand-written approximation that can drift silently.
  */
@@ -422,14 +438,16 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
         lastCoverage: migrated ? undefined : current?.lastCoverage,
         lastAccess: migrated ? undefined : current?.lastAccess,
       });
-      await this.injectFault?.("after-operations");
+      const operationFault = transactionFault(this.injectFault, "after-operations");
+      if (operationFault) await operationFault;
       const next: PrincipalStoreMetadata = {
         ...metadata!,
         head: asCommitSequence(metadata!.head + 1),
         updatedAt: Date.now(),
       };
       await this.db.meta.put(next);
-      await this.injectFault?.("after-head-write");
+      const headFault = transactionFault(this.injectFault, "after-head-write");
+      if (headFault) await headFault;
       return {
         writerEpoch,
         head: next.head,
@@ -1601,14 +1619,16 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
       // including canonical write sets whose proof is not owned by a view row.
       await this.reconcileAcknowledgedCommands();
       guard?.();
-      await this.injectFault?.("after-operations");
+      const operationFault = transactionFault(this.injectFault, "after-operations");
+      if (operationFault) await operationFault;
       const next: PrincipalStoreMetadata = {
         ...metadata!,
         head: asCommitSequence(metadata!.head + 1),
         updatedAt: Date.now(),
       };
       await this.db.meta.put(next);
-      await this.injectFault?.("after-head-write");
+      const headFault = transactionFault(this.injectFault, "after-head-write");
+      if (headFault) await headFault;
       return {
         head: next.head,
         affectedKeys: [...new Set(operations.map(affectedKey))],
