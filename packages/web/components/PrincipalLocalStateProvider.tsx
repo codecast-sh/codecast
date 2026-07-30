@@ -68,7 +68,19 @@ function getRuntime(): PrincipalRuntime {
   );
   runtimeSingleton = runtime;
   registerPrincipalDispatchRuntime(runtime);
-  setPrincipalPersistenceErrorHandler((error) => runtime.reportStorageFailure(error));
+  setPrincipalPersistenceErrorHandler((error) => {
+    // Payload-free identity for a failure class we can't reproduce on demand
+    // (first-boot only, ct-40156). Dexie hides the subclass behind a factory
+    // constructor and wraps the underlying IDB error in `.inner`, so the raw
+    // object alone doesn't identify the failure in a captured console.
+    const e = error as { name?: string; message?: string; inner?: { name?: string; message?: string } };
+    const inner = e?.inner ? ` inner=${e.inner.name}: ${e.inner.message}` : "";
+    console.error(
+      `[local-first] principal persistence failed: ${e?.name}: ${e?.message}${inner} ` +
+      `phase=${runtime.getSnapshot().phase} sinceLoadMs=${Math.round(performance.now())}`,
+    );
+    runtime.reportStorageFailure(error);
+  });
   void inspectLegacyQuarantine().then((status) => {
     if (status.status === "quarantined") void launcher.markLegacyQuarantined();
   }).catch(() => {
