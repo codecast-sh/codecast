@@ -3,26 +3,22 @@ import react from "@vitejs/plugin-react";
 import { sentryVitePlugin } from "@sentry/vite-plugin";
 import { VitePWA } from "vite-plugin-pwa";
 import path from "path";
-import { renderArtifactPage } from "./server/artifactPage";
 
 export default defineConfig({
   plugins: [
     react(),
-    // codecast.sh/a/<slug> is a server-rendered page (production: Hono route in
-    // server/index.ts). Mount the SAME renderer in dev so the page has exactly
-    // one implementation and never falls through to the SPA shell.
+    // codecast.sh/a/<slug> is a redirect to the branded artifact document the
+    // Convex HTTP action serves (production: Hono route in server/index.ts).
+    // Same behavior in dev so the path never falls through to the SPA shell.
     {
-      name: "artifact-page",
+      name: "artifact-redirect",
       configureServer(server) {
         server.middlewares.use((req, res, next) => {
-          const m = req.url?.match(/^\/a\/([^/?#]+)/);
+          const m = req.url?.match(/^\/a\/([A-Za-z0-9]{6,32})(?:[/?#]|$)/);
           if (!m) return next();
-          renderArtifactPage(decodeURIComponent(m[1]))
-            .then(({ status, html }) => {
-              res.writeHead(status, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache" });
-              res.end(html);
-            })
-            .catch(next);
+          const origin = process.env.VITE_CONVEX_URL || "https://convex.codecast.sh";
+          res.writeHead(302, { Location: `${origin}/cli/a/${m[1]}` });
+          res.end();
         });
       },
     },
