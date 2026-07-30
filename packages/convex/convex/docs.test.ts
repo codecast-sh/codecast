@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Doc, Id } from "./_generated/dataModel";
-import { generateShareLink, isWebDocOwner, mapWebDocDetail, unshare, webGet, webUpdate } from "./docs";
+import { generateShareLink, get, isWebDocOwner, mapWebDocDetail, search, unshare, webGet, webUpdate } from "./docs";
 import { webGetDocDetail } from "./taskMining";
 
 type Patch = { id: string; patch: Record<string, unknown> };
@@ -290,5 +290,105 @@ describe("doc-by-id queries tolerate a cross-table id", () => {
     const res = await (webGet as any)._handler(ctx, { id: "doc_1" });
     expect(res?._id).toBe("doc_1");
     expect(res?.title).toBe("Unified Value Scoring");
+  });
+});
+
+// A teammate reading a team doc through the CLI (`cast doc show` / `cast doc
+// search`) used to get "Doc not found" while the same doc opened fine in the
+// browser: the api_token endpoints were creator-only, and the title search was
+// pinned to the caller's own user_id via the index filter field.
+function createCliCtx(opts: {
+  userId: string;
+  docs: Array<Record<string, unknown>>;
+  memberships?: Array<{ user_id: string; team_id: string }>;
+}) {
+  const memberships = opts.memberships ?? [];
+  const rows = new Map(opts.docs.map((d) => [d._id as string, d]));
+  return {
+    db: {
+      async get(id: string) {
+        return rows.get(id) ?? null;
+      },
+      query(table: string) {
+        if (table === "api_tokens") {
+          return {
+            withIndex() {
+              return { async first() { return { _id: "tok1", user_id: opts.userId }; } };
+            },
+          };
+        }
+        if (table === "team_memberships") {
+          const eqs: Record<string, string> = {};
+          const q = { eq: (field: string, value: string) => ((eqs[field] = value), q) };
+          return {
+            withIndex(_name: string, fn: (q: unknown) => unknown) {
+              fn(q);
+              return {
+                async first() {
+                  return memberships.find(
+                    (m) => m.user_id === eqs.user_id && m.team_id === eqs.team_id,
+                  ) ?? null;
+                },
+              };
+            },
+          };
+        }
+        if (table === "docs") {
+          return {
+            withSearchIndex(_name: string, fn: (q: any) => unknown) {
+              const q: any = { search: () => q, eq: () => q };
+              fn(q);
+              return { async take() { return [...rows.values()]; } };
+            },
+          };
+        }
+        throw new Error(`unexpected query on ${table}`);
+      },
+    },
+  };
+}
+
+describe("CLI doc access is owner-or-team", () => {
+  const teamDoc = {
+    _id: "doc_team",
+    user_id: "owner_user",
+    team_id: "team_1",
+    title: "Goanna Receive Layer",
+    content: "body",
+    doc_type: "plan",
+    source: "agent",
+    created_at: 1,
+    updated_at: 2,
+  };
+
+  test("get returns a teammate's team doc", async () => {
+    const ctx = createCliCtx({
+      userId: "mate_user",
+      docs: [teamDoc],
+      memberships: [{ user_id: "mate_user", team_id: "team_1" }],
+    });
+    const res = await (get as any)._handler(ctx, { api_token: "t", id: "doc_team" });
+    expect(res?._id).toBe("doc_team");
+  });
+
+  test("get still denies a non-member", async () => {
+    const ctx = createCliCtx({ userId: "stranger", docs: [teamDoc] });
+    const res = await (get as any)._handler(ctx, { api_token: "t", id: "doc_team" });
+    expect(res).toBeNull();
+  });
+
+  test("search surfaces a teammate's team doc and hides a stranger's", async () => {
+    const privateDoc = { ...teamDoc, _id: "doc_private", team_id: undefined, title: "Private Note" };
+    const mate = createCliCtx({
+      userId: "mate_user",
+      docs: [teamDoc, privateDoc],
+      memberships: [{ user_id: "mate_user", team_id: "team_1" }],
+    });
+    const mateRes = await (search as any)._handler(mate, { api_token: "t", query: "Goanna" });
+    expect(mateRes.map((d: any) => d._id)).toEqual(["doc_team"]);
+
+    const stranger = createCliCtx({ userId: "stranger", docs: [teamDoc, privateDoc] });
+    const strangerRes = await (search as any)._handler(stranger, { api_token: "t", query: "Goanna" });
+    expect(strangerRes).toEqual([]);
   });
 });
