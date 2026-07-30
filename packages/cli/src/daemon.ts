@@ -1006,6 +1006,23 @@ export function markInjectedBestEffort(
   });
 }
 
+// DEC-01: the rows THIS process pasted into a live pane for a conversation —
+// an injectedMessageTs entry whose delivery has resolved (not in-flight; failed
+// deliveries delete their entry). This is what scopes the injected-ack: the
+// server only terminalizes rows the daemon can vouch for, so a stranded
+// injected row (paste never landed, or a previous daemon process died) is left
+// for the heal cron to re-pend and re-deliver instead of being falsely marked
+// delivered by an unrelated (or historical, resync-from-0) user-turn echo.
+export function collectPastedInjectedIds(conversationId: string): string[] {
+  const ids: string[] = [];
+  for (const [id, entry] of injectedMessageTs) {
+    if (entry.conversationId !== conversationId) continue;
+    if (messagesInFlight.has(id)) continue;
+    ids.push(id);
+  }
+  return ids;
+}
+
 export function clearMessageDeliveryStateForConversation(conversationId: string): { inFlight: number; dedup: number; preserved: number } {
   let inFlight = 0;
   let dedup = 0;
@@ -4549,10 +4566,15 @@ async function syncMessagesBatch(
       messages: prepared,
     });
     resetAuthFailureCount();
-    // If we just synced a user message from the JSONL, ack any injected pending messages
-    // This confirms the session received the injected text
+    // If we just synced a user message from the JSONL, ack the injected pending
+    // messages THIS process pasted (scoped — see collectPastedInjectedIds). The
+    // content-matched ack in addMessages remains the reliable per-row path; this
+    // covers pastes whose echo can't content-match (poll conversions, truncated
+    // oversized content). Passing the explicit id list (even empty) stops a
+    // historical user turn — e.g. an auto-resume resyncing a fresh JSONL from
+    // position 0 — from terminalizing rows that never landed (DEC-01).
     if (messages.some(m => m.role === "user")) {
-      syncService.ackInjectedMessages(conversationId).catch(logConvexFailure);
+      syncService.ackInjectedMessages(conversationId, collectPastedInjectedIds(conversationId)).catch(logConvexFailure);
     }
     return { authExpired: false, conversationNotFound: false };
   } catch (err) {
