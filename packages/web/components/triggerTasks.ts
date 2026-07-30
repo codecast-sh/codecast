@@ -18,6 +18,8 @@
 import type { InboxSession } from "../store/inboxStore";
 import { isSessionHardBlocked, isSessionHidden } from "../store/inboxStore";
 import { isMachineDeliveredMessage } from "./sessionMessage";
+import { isLivenessStale } from "@codecast/shared/contracts";
+import { nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 
 export const ARMED_STATUSES = new Set(["scheduled", "running", "paused"]);
 
@@ -158,6 +160,74 @@ export interface TriggerRow {
   openId?: string;
   // The latest outcome landed after the user's read watermark.
   unread: boolean;
+  // Pseudo rows synthesized from sessions rather than agent_tasks: a harness
+  // /loop sleeping on a ScheduleWakeup, or a live subagent worker. They wear
+  // the same row anatomy but carry no server verbs (pause/run-now/cancel) —
+  // you can't reach inside a harness from here. Absent = a real trigger.
+  kind?: "loop" | "subagent";
+}
+
+// -- Pseudo rows: loops and subagents projected into the trigger set --
+//
+// The trigger set models one axis — "a machine will act here on its own" — and
+// agent_tasks are only one source of that intent. A session sleeping on a
+// ScheduleWakeup (/loop) and a live subagent worker are the same standing
+// intent, so they get rows in the same roster, mapped through the TaskRow
+// shape every trigger surface already renders.
+
+// An armed wakeup whose fire time passed this long ago is a dead harness (the
+// fire lands within seconds normally) — drop the row instead of showing a
+// forever-"due" loop.
+export const LOOP_OVERDUE_GRACE_MS = 15 * 60_000;
+// A wakeup turn that hasn't re-armed or stopped within this window ended
+// without telling us (session killed mid-turn) — stop showing "running".
+export const LOOP_WAKING_TTL_MS = 30 * 60_000;
+
+export type LoopStateLike = NonNullable<InboxSession["loop_state"]>;
+
+// Is this loop still a live standing intent (worth a row) at `now`?
+export function isLoopFresh(loop: LoopStateLike, now: number): boolean {
+  return loop.status === "waking"
+    ? now - (loop.fired_at ?? loop.event_at) < LOOP_WAKING_TTL_MS
+    : loop.wakeup_at > now - LOOP_OVERDUE_GRACE_MS;
+}
+
+export function loopTaskRow(sess: InboxSession, loop: LoopStateLike): TaskRow {
+  return {
+    _id: `loop:${sess._id}`,
+    // The reason IS the row's name ("watching CI run"); the session title
+    // rides the gist line so the row stays attributable.
+    title: loop.reason?.trim() || sess.title || "Self-paced loop",
+    display_summary: loop.reason?.trim() ? sess.title : undefined,
+    prompt: loop.prompt || loop.reason || "",
+    status: loop.status === "waking" ? "running" : "scheduled",
+    // "apply" is the unmarked norm — anything else grows a read-only chip,
+    // which would be a false claim about a harness loop.
+    mode: "apply",
+    schedule_type: "recurring",
+    run_at: loop.status === "armed" ? loop.wakeup_at : undefined,
+    project_path: sess.project_path,
+    run_count: 0,
+    created_at: loop.armed_at,
+    last_run_at: loop.fired_at,
+    originating_conversation_id: sess._id,
+  };
+}
+
+export function subagentTaskRow(sess: InboxSession): TaskRow {
+  return {
+    _id: `sub:${sess._id}`,
+    title: sess.title || "Subagent",
+    display_summary: sess.subtitle || undefined,
+    prompt: sess.last_user_message || "",
+    status: "running",
+    mode: "apply",
+    schedule_type: "once",
+    project_path: sess.project_path,
+    run_count: 0,
+    created_at: sess.started_at ?? sess.updated_at,
+    originating_conversation_id: sess._id,
+  };
 }
 
 export interface TriggerInboxPartition {
@@ -192,14 +262,25 @@ export function partitionTriggerInbox(
     // partitionOldSessions/blank-hiding: the session you're viewing always has
     // a card, so selection highlight and auto-scroll can land on it.
     focusedId?: string | null;
+    // Clock for loop-freshness membership (armed wakeup overdue, waking turn
+    // aged out). Callers pass a coarse clock so membership re-evaluates on it;
+    // countdown text inside rows rides its own render-time clock.
+    now?: number;
   } = {},
 ): TriggerInboxPartition {
-  if (!tasks?.length) return EMPTY;
   const seenAt = opts.seenAt ?? 0;
+  const now = opts.now ?? Date.now();
+  const sessList = Object.values(sessions);
+  if (
+    !tasks?.length &&
+    !sessList.some((s) => s.loop_state || s.is_subagent || nestParentIdOf(s))
+  ) {
+    return EMPTY;
+  }
 
   // Index visible runs once: agent_task_id → top-level, non-hidden sessions.
   const runsByTask = new Map<string, InboxSession[]>();
-  for (const s of Object.values(sessions)) {
+  for (const s of sessList) {
     if (!s.agent_task_id || isSessionHidden(s) || s.parent_conversation_id) continue;
     let arr = runsByTask.get(s.agent_task_id);
     if (!arr) runsByTask.set(s.agent_task_id, (arr = []));
@@ -215,7 +296,7 @@ export function partitionTriggerInbox(
   let unreadCount = 0;
   let nextRunAt: number | undefined;
 
-  for (const task of tasks) {
+  for (const task of tasks ?? []) {
     if (!ARMED_STATUSES.has(task.status)) continue;
 
     const unread = !!task.last_run_at && task.last_run_at > seenAt;
@@ -274,6 +355,46 @@ export function partitionTriggerInbox(
       if (!newestAbsorbed) newestAbsorbed = run;
     }
     rows.push({ task, openId: newestAbsorbed?._id ?? task.last_run_conversation_id, unread });
+  }
+
+  // -- Pseudo rows: loops and live subagents from the session cache --
+  const loopRowIds = new Set<string>();
+  for (const sess of sessList) {
+    const loop = sess.loop_state;
+    if (!loop || !isLoopFresh(loop, now)) continue;
+    // Dismiss/kill retires the session AND its loop (the harness dies with the
+    // tmux); a stashed home keeps its row — stash is the standing-loop home.
+    if (sess.inbox_dismissed_at) continue;
+    loopRowIds.add(sess._id);
+    rows.push({ task: loopTaskRow(sess, loop), openId: sess._id, unread: false, kind: "loop" });
+    if (loop.status === "armed" && (nextRunAt === undefined || loop.wakeup_at < nextRunAt)) {
+      nextRunAt = loop.wakeup_at;
+    }
+    // Same resting rule as inject-trigger homes: the machine is driving, so the
+    // session lives behind its row. "Waking" is the machine's own turn; an
+    // armed loop rests only while the agent is actually asleep (is_idle) —
+    // a human-initiated turn surfaces the card like any other conversation.
+    if (
+      sess._id !== opts.focusedId &&
+      !sess.is_pinned &&
+      sess.message_count > 0 &&
+      !isSessionHidden(sess) &&
+      !sess.has_pending &&
+      !isSessionHardBlocked(sess, opts.sessionsWithQueuedMessages) &&
+      (loop.status === "waking" || sess.is_idle)
+    ) {
+      absorbedIds.add(sess._id);
+    }
+  }
+  // Live subagent workers: same standing-machine-intent axis. Only genuinely
+  // producing ones get a row (idle/stale children are done — their results
+  // already flowed to the parent). A subagent sleeping on its own loop is
+  // represented by its loop row above, not twice.
+  for (const sess of sessList) {
+    if (!(sess.is_subagent || nestParentIdOf(sess))) continue;
+    if (loopRowIds.has(sess._id) || isSessionHidden(sess)) continue;
+    if (sess.is_idle || sess.message_count === 0 || isLivenessStale(sess, now)) continue;
+    rows.push({ task: subagentTaskRow(sess), openId: sess._id, unread: false, kind: "subagent" });
   }
 
   // Ordered in tiers of "what's happening now → what's happening next → what's
