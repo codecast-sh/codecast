@@ -91,6 +91,8 @@ async function getShareMessageMeta(token: string) {
   }
 }
 
+// /a/<slug> (published artifacts) is absent on purpose: that page is
+// server-rendered by artifactPage.ts and carries its own og tags.
 const ROUTES: Array<{ pattern: RegExp; handler: (match: RegExpMatchArray) => Promise<{ title: string; description: string; url: string } | null> }> = [
   { pattern: /^\/conversation\/([a-z0-9]{32})$/, handler: (m) => getConversationMeta(m[1]) },
   { pattern: /^\/share\/message\/(.+)$/, handler: (m) => getShareMessageMeta(m[1]) },
