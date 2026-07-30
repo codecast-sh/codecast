@@ -27,19 +27,28 @@ export interface PickerRow {
 export interface PickerState {
   visible: boolean;
   rows: PickerRow[];
-  /** Lowercased effort label ("low" | "medium" | "high" | "max") or null. */
+  /** Lowercased effort label ("low" | "medium" | "high" | "xhigh" | "max" |
+   * "ultracode" on CC 2.1.220+) or null. */
   effort: string | null;
+  /** The highlighted model takes no effort at all ("○ Effort not supported
+   * for Haiku" on CC 2.1.220) — the switch should commit the model and skip
+   * the effort adjustment, not fail. */
+  effortUnsupported: boolean;
 }
 
 // A menu row: optional ❯ highlight marker, number, dot, label. The label runs
 // until a 2+ space column gap (the description column) or end-of-line on
 // narrow panes. Wrapped description lines carry no "N." and are skipped.
 const ROW_RE = /^\s*(❯)?\s*(\d+)\.\s+(.+?)(?:\s{2,}.*)?$/;
-const EFFORT_ROW_RE = /^\s*[^\w\s]?\s*(low|medium|high|max)\s+effort\b/i;
+// CC 2.1.220 grew two picker-only stops: low → medium → high → xHigh → max →
+// Ultracode (wrapping). All six must parse or the Right-press effort walk
+// reads null on the new stops and can misjudge the ladder.
+const EFFORT_ROW_RE = /^\s*[^\w\s]?\s*(low|medium|xhigh|high|max|ultracode)\s+effort\b/i;
 
 export function parseModelPicker(paneText: string): PickerState {
   const rows: PickerRow[] = [];
   let effort: string | null = null;
+  let effortUnsupported = false;
   let sawHeader = false;
   for (const line of paneText.split("\n")) {
     if (/Select model/i.test(line)) {
@@ -48,12 +57,19 @@ export function parseModelPicker(paneText: string): PickerState {
       // higher in the scrollback; only rows after the LAST header count.
       rows.length = 0;
       effort = null;
+      effortUnsupported = false;
       continue;
     }
     if (!sawHeader) continue;
+    if (/Effort not supported/i.test(line)) {
+      effortUnsupported = true;
+      effort = null;
+      continue;
+    }
     const effortMatch = line.match(EFFORT_ROW_RE);
     if (effortMatch) {
       effort = effortMatch[1].toLowerCase();
+      effortUnsupported = false;
       continue;
     }
     const m = line.match(ROW_RE);
@@ -67,7 +83,7 @@ export function parseModelPicker(paneText: string): PickerState {
       current,
     });
   }
-  return { visible: sawHeader && rows.length >= 2, rows, effort };
+  return { visible: sawHeader && rows.length >= 2, rows, effort, effortUnsupported };
 }
 
 /**
@@ -83,9 +99,35 @@ export function planModelNavigation(state: PickerState, menuMatch: string): numb
   return targetIdx - hiIdx;
 }
 
+/**
+ * The submitted "/model" stranded in the composer: CC eats the Enter meant to
+ * submit it — the slash-command popup absorbs it as a completion-select, or a
+ * mid-render CC coalesces it into the paste burst (the same class
+ * verifyTmuxSubmitAfterPaste handles for message injection). Test only the
+ * last few pane lines: the transcript echo of an earlier /model run renders
+ * the identical "❯ /model" higher up.
+ */
+export const STRANDED_MODEL_COMMAND_RE = /^\s*[❯›]\s*\/model\s*$/m;
+
+export function isStrandedModelCommand(paneTail: string): boolean {
+  return STRANDED_MODEL_COMMAND_RE.test(paneTail);
+}
+
 /** The session-only commit echo, tolerant of ANSI bold wrapping. */
 export const SESSION_ONLY_COMMIT_RE =
   /Set model to .*for this session only/i;
+
+/**
+ * How many session-only commit echoes the pane shows. "Is the echo present"
+ * is ambiguous — echoes of earlier switches linger in scrollback, and on a
+ * short transcript the fresh echo renders far above the composer (observed on
+ * CC 2.1.220: a committed switch was misread as failed, so the web reverted
+ * its optimistic chip while the tmux session silently ran the new model).
+ * Callers count before committing and wait for the count to increase.
+ */
+export function countSessionOnlyCommits(paneText: string): number {
+  return (paneText.match(new RegExp(SESSION_ONLY_COMMIT_RE.source, "gi")) ?? []).length;
+}
 
 // Committing a model switch on a conversation WITH HISTORY pops a cache
 // warning before applying ("This conversation is cached for the current
