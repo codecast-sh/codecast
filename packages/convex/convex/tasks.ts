@@ -26,7 +26,6 @@ import {
   requireAccessibleProject,
   requireSameWorkspace,
   requireTeamMembership,
-  requireWorkspaceMatch,
   workspaceForConversation,
   workspaceForResource,
   workspacesMatch,
@@ -862,18 +861,19 @@ export const update = mutation({
       if (!conv || !(await canAccessConversation(ctx, auth.userId, conv))) {
         notFound("Conversation not found");
       }
-      requireWorkspaceMatch(
-        workspaceForConversation(conv),
-        targetWorkspace,
-        "conversation",
-      );
-      linkedConvId = conv._id;
-      const existing = task.conversation_ids || [];
-      if (!existing.some((id) => id === conv._id)) {
-        updates.conversation_ids = [...existing, conv._id];
+      // A conversation in another workspace may still drive the write (an agent
+      // working a cross-workspace task); only the conversation↔task linkage is
+      // skipped, since relationships may not join authorization domains.
+      const convMatchesWorkspace = workspacesMatch(workspaceForConversation(conv), targetWorkspace);
+      if (convMatchesWorkspace) {
+        linkedConvId = conv._id;
+        const existing = task.conversation_ids || [];
+        if (!existing.some((id) => id === conv._id)) {
+          updates.conversation_ids = [...existing, conv._id];
+        }
       }
       // Only bind conversation to task on explicit start (cast task start)
-      if (args.status === "in_progress" && (!conv.active_task_id || conv.active_task_id === task._id)) {
+      if (convMatchesWorkspace && args.status === "in_progress" && (!conv.active_task_id || conv.active_task_id === task._id)) {
         await ctx.db.patch(conv._id, { active_task_id: task._id });
         if (task.plan_id && !conv.active_plan_id) {
           const relatedPlan = await ctx.db.get(task.plan_id);
@@ -991,12 +991,11 @@ export const addComment = mutation({
       if (!conv || !(await canAccessConversation(ctx, auth.userId, conv))) {
         notFound("Conversation not found");
       }
-      requireWorkspaceMatch(
-        workspaceForConversation(conv),
-        workspaceForResource(task),
-        "conversation",
-      );
-      conversation_id = conv._id;
+      // Cross-workspace commenters still get their text recorded; only the
+      // conversation back-link is dropped (relationships stay within one domain).
+      if (workspacesMatch(workspaceForConversation(conv), workspaceForResource(task))) {
+        conversation_id = conv._id;
+      }
     }
 
     const id = await ctx.db.insert("task_comments", {
