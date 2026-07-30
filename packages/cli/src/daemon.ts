@@ -7,7 +7,7 @@ import { Database } from "bun:sqlite";
 import { execSync, execFileSync, exec, execFile, spawn, spawnSync } from "child_process";
 import { watch as chokidarWatch } from "chokidar";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
-import { ensureModelInventoryFresh, pendingModelInventoryPayload, markModelInventorySent } from "./modelInventory.js";
+import { ensureModelInventoryFresh, pendingModelInventoryPayload, markModelInventorySent, recordObservedModelInventory } from "./modelInventory.js";
 import { deviceId, deviceLabel, isRemoteDevice } from "./remote/device.js";
 import { copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBranch, loadRemoteHost, readPushableCredential, remoteHostsRegistered } from "./remote/session-move.js";
 import { reparentNotice, type ReparentCommandFacts } from "./sessionMoveNotice.js";
@@ -9295,6 +9295,12 @@ async function driveModelPickerExclusive(
     await closePicker();
     throw new Error("Model picker did not open");
   }
+
+  // Harvest the live menu: CC's model list changes across releases, and this
+  // parse is the only honest source of what THIS binary offers. The labels ride
+  // the heartbeat as the device's claude model inventory, so the web's live
+  // rail renders CC's actual menu instead of the curated fallback.
+  recordObservedModelInventory("claude", state0.rows.map((r) => r.label));
 
   try {
     if (opts.menuMatch) {

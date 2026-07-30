@@ -6,6 +6,7 @@ import {
   conversationHasNoWork,
   reapEmptyConversation,
   cascadeHideToNestedChildren,
+  applyHideTransition,
 } from "./cleanup";
 
 // Minimal in-memory ctx.db honoring the .withIndex(name, q => q.eq(field,val))
@@ -292,5 +293,49 @@ describe("cascadeHideToNestedChildren", () => {
     expect(row("conv_mate").inbox_killed_at).toBeUndefined();
     expect(row("conv_sub").status).toBeUndefined();
     expect(db._inserted.filter((i: any) => i.table === "daemon_commands")).toHaveLength(0);
+  });
+
+  // The cascade is built into applyHideTransition itself, so EVERY hide
+  // surface gets it — most importantly the web dispatch hook, which used to
+  // rely on the client patching each child and silently stranded teammates
+  // whenever the client couldn't (unsynced rows, or the owner gate dropping a
+  // second-party owner's child patches on an assigned session).
+  test("applyHideTransition cascades to the nested group by default", async () => {
+    const tables = mkTables();
+    const db = makeFakeDb(tables);
+    const lead = tables.conversations[0];
+
+    const patch = { inbox_dismissed_at: 444 };
+    await db.patch(LEAD, patch);
+    const { cascaded } = await applyHideTransition({ db }, lead, patch);
+    expect(cascaded).toBe(2);
+    const row = (id: string) => tables.conversations.find((r: any) => r._id === id)!;
+    expect(row("conv_sub").inbox_dismissed_at).toBe(444);
+    expect(row("conv_mate").inbox_dismissed_at).toBe(444);
+  });
+
+  test("a stash through applyHideTransition also takes the group (action is 'none')", async () => {
+    const tables = mkTables();
+    const db = makeFakeDb(tables);
+    const lead = tables.conversations[0];
+
+    const patch = { inbox_stashed_at: 555 };
+    await db.patch(LEAD, patch);
+    const { action, cascaded } = await applyHideTransition({ db }, lead, patch);
+    expect(action).toBe("none");
+    expect(cascaded).toBe(2);
+    expect(tables.conversations.find((r: any) => r._id === "conv_mate")!.inbox_stashed_at).toBe(555);
+  });
+
+  test("cascade: false keeps the per-child transition single-level", async () => {
+    const tables = mkTables();
+    const db = makeFakeDb(tables);
+    const lead = tables.conversations[0];
+
+    const patch = { inbox_dismissed_at: 666 };
+    await db.patch(LEAD, patch);
+    const { cascaded } = await applyHideTransition({ db }, lead, patch, { cascade: false });
+    expect(cascaded).toBe(0);
+    expect(tables.conversations.find((r: any) => r._id === "conv_sub")!.inbox_dismissed_at).toBeUndefined();
   });
 });
