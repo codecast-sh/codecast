@@ -1231,12 +1231,13 @@ export class SyncService {
     }
   }
 
-  async ackInjectedMessages(conversationId: string): Promise<void> {
+  async ackInjectedMessages(conversationId: string, pastedMessageIds?: string[]): Promise<void> {
     try {
       await this.mutate("pendingMessages:ackInjectedMessages" as any, {
         conversation_id: conversationId,
         api_token: this.apiToken,
         device_id: deviceId(),
+        ...(pastedMessageIds ? { message_ids: pastedMessageIds } : {}),
       });
     } catch (error) {
       if (isAuthError(error)) {
