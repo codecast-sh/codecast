@@ -5,6 +5,7 @@ import { readFile, stat } from "fs/promises";
 import { extname, join } from "path";
 import { createRequire } from "module";
 import { botMetaMiddleware } from "./bot-meta";
+import { renderArtifactPage } from "./artifactPage";
 
 const require = createRequire(import.meta.url);
 const pkg = require("../package.json");
@@ -130,6 +131,19 @@ app.get("/install.ps1", async (c) => {
   } catch {
     return c.text("Install script not found", 404);
   }
+});
+
+// Published HTML artifacts — a server-rendered static wrapper, deliberately
+// outside the SPA (no bundle download, no loaders; see artifactPage.ts). The
+// vite dev server mounts the same renderer, so dev and prod render one page.
+app.get("/a/:slug", async (c) => {
+  const { status, html } = await renderArtifactPage(c.req.param("slug"));
+  c.status(status as 200);
+  // Cacheable: browsers (and any CDN in front) may reuse for a minute and
+  // revalidate in the background — republish staleness is bounded by this plus
+  // the renderer's 30s meta cache, both invisible next to "updated Xh ago".
+  c.header("Cache-Control", status === 200 ? "public, max-age=60, stale-while-revalidate=300" : "no-cache");
+  return c.html(html);
 });
 
 app.use("*", botMetaMiddleware);
