@@ -291,8 +291,10 @@ describe("lifecycle matrix", () => {
       release?.();
       const commitOutcome = await inFlight.then(() => "committed", () => "rejected");
       await fencePromise;
-      // Either outcome is coherent; what must hold: post-fence commits fail...
-      expect(["committed", "rejected"]).toContain(commitOutcome);
+      // Dexie.waitFor keeps the parked test hook inside the live transaction;
+      // the queued fence therefore runs only after this atomic commit finishes.
+      expect(commitOutcome).toBe("committed");
+      // Once the queued fence lands, post-fence commits fail...
       await expect(adapter.commit(fence, [{
         kind: "put-grant",
         record: { key: asGrantKey("grant:late"), contractId: "race/v1", scopeKey: "view:race", grantedAt: 2 },
