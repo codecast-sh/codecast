@@ -3121,6 +3121,16 @@ function rekeyId(draft: any, oldId: string, newId: string) {
     if (t.path === `/inbox?s=${oldId}`) t.path = `/inbox?s=${newId}`;
     else if (t.path === `/conversation/${oldId}`) t.path = `/conversation/${newId}`;
   }
+  // The parent's branch-map chip for an optimistic fork follows the rekey too.
+  // This matters on the altKey-supersede path (a parked fork create that lands
+  // via the outbox never runs resolveForkSessionId): left keyed by the dead
+  // stub id, the chip can't be pruned against server fork_children and
+  // dead-ends when clicked.
+  if (Array.isArray(draft.optimisticForkChildren)) {
+    for (const f of draft.optimisticForkChildren) {
+      if (f._id === oldId) f._id = newId;
+    }
+  }
 }
 
 // Record "where the user is" in two places with one gate:
@@ -5118,6 +5128,29 @@ export const useInboxStore = create<InboxStoreState>(
     if (existing) return existing;
     const stub = (s.sessions[id] || s.conversations[id]) as any;
     if (!stub || isConvexId(id)) return Promise.resolve(id);
+    // A FORK stub must never be revived as a plain create: that silently
+    // converts "fork with history" into a blank session that merely inherits
+    // the parent's project path — the daemon then spawns a context-less agent
+    // and the fork lineage is gone for good. Re-issue forkFromMessage instead;
+    // it's idempotent on session_id, so if the original create actually landed
+    // this resolves to the existing fork row.
+    if (stub.forked_from) {
+      const parentId = s.getConvexId(String(stub.forked_from)) ?? String(stub.forked_from);
+      if (!isConvexId(parentId)) {
+        return Promise.reject(new Error("Fork parent unknown — fork again from the parent thread"));
+      }
+      const ready = s.convCommand(parentId, "forkFromMessage", {
+        ...(stub.parent_message_uuid ? { message_uuid: stub.parent_message_uuid } : {}),
+        session_id: id,
+      }).then((result: any) => {
+        const convexId = result?.conversation_id;
+        if (convexId && isConvexId(convexId)) get().resolveForkSessionId(id, convexId);
+        return get().getConvexId(id) ?? (isConvexId(convexId) ? convexId : id);
+      });
+      s.trackSessionCreate(id, ready);
+      ready.catch(() => {});
+      return ready;
+    }
     // Refuse to re-create a PATHLESS stub. The server would create it and ask
     // the daemon to start_session with no cwd, which falls back to spawning in
     // $HOME (daemon start fallback) — an agent running silently outside any
@@ -5195,14 +5228,11 @@ export const useInboxStore = create<InboxStoreState>(
   resolveForkSessionId: (sessionId: string, convexId: string) => {
     if (sessionId === convexId) return;
     // Full stub→real rekey (sessions, conversations, messages, drafts, pending,
-    // currentSessionId, …) — the fork stub is navigated to immediately, so every
-    // pointer the new-session stub convention moves must move here too.
+    // currentSessionId, optimistic fork chips, …) — the fork stub is navigated
+    // to immediately, so every pointer the new-session stub convention moves
+    // must move here too. rekeyId owns the whole set, including
+    // optimisticForkChildren (shared with the altKey-supersede path).
     (get() as any)._rekeySession(sessionId, convexId);
-    const state = get();
-    const newOptimistic = state.optimisticForkChildren.map((f: ForkChild) =>
-      f._id === sessionId ? { ...f, _id: convexId } : f
-    );
-    set({ optimisticForkChildren: newOptimistic });
   },
 
   discardForkStub: sync(function (this: Draft, stubId: string, parentId?: string) {
