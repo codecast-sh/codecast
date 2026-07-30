@@ -7330,6 +7330,10 @@ async function enrichInboxSessionRow(
     // sidebar badge and the schedule strip attribute ANY run, not just the
     // latest one webList can resolve from last_run_session_uuid.
     agent_task_id: conv.agent_task_id?.toString() || null,
+    // Harness /loop state (see loopState.ts) — an armed self-wakeup makes this
+    // session a standing machine intent, so the trigger set can row it like an
+    // armed trigger. Stopped loops are a server-side tombstone only.
+    loop_state: conv.loop_state && conv.loop_state.status !== "stopped" ? conv.loop_state : null,
     forked_from: conv.forked_from?.toString() || null,
     // Parent-link fields so a session emitted via THIS top-level scan self-identifies
     // as a subagent and nests under its parent (a subagent active in the last 30d is
