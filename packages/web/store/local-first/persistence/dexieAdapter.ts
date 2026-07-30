@@ -235,6 +235,15 @@ export class DexiePrincipalStoreAdapter implements PrincipalStoreAdapter {
     if (metadata.principalKey !== this.principalKey || fence.principalKey !== this.principalKey) {
       throw new PrincipalStoreIdentityError();
     }
+    // A stale bundle (service-worker cache, deploy-overlap tab) must never
+    // write records a newer schema has already migrated past. Browsers
+    // normally enforce this with VersionError at open, but that guard lives
+    // outside our control; this one is ours.
+    if (metadata.schemaVersion > PRINCIPAL_STORE_SCHEMA_VERSION) {
+      throw new PrincipalStoreFenceError(
+        "Principal store schema is newer than this application bundle",
+      );
+    }
     if (metadata.fenced || metadata.activeGeneration !== fence.generation) {
       throw new PrincipalStoreFenceError();
     }

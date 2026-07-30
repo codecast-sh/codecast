@@ -243,9 +243,15 @@ export function PrincipalLocalStateProvider({ children }: { children: React.Reac
     };
     window.addEventListener("focus", reconcile);
     document.addEventListener("visibilitychange", reconcile);
+    // bfcache restore: the canonical signal is pageshow (persisted=true). A
+    // restored tab may have missed launcher-generation broadcasts and commit
+    // notifications while frozen; durable commits are already fenced, but the
+    // RENDERED state must reconcile before the user reads it.
+    window.addEventListener("pageshow", reconcile);
     return () => {
       window.removeEventListener("focus", reconcile);
       document.removeEventListener("visibilitychange", reconcile);
+      window.removeEventListener("pageshow", reconcile);
     };
   }, [runtime]);
 

@@ -63,7 +63,22 @@ export class LocalViewSession<TArgs, TServerResult, TRow> {
   /** Results must be delivered in subscription order; application is FIFO. */
   deliver(serverResult: TServerResult): Promise<void> {
     this.queue = this.queue.then(async (source) => {
-      if (!source || this.closed) return source;
+      if (this.closed) return source;
+      if (!source) {
+        // The initial open failed (a transient storage fault at mount). Each
+        // delivery is a fresh chance to open — a dead-until-remount view is
+        // never the right outcome for a one-shot fault.
+        try {
+          source = await CompleteViewSource.open(this.engine, this.contract, this.args);
+        } catch (error) {
+          this.report("open", error);
+          return null;
+        }
+        if (this.closed) {
+          source.close();
+          return null;
+        }
+      }
       try {
         const captured = source.capture();
         await source.apply(captured, serverResult);
