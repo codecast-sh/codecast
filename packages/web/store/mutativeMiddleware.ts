@@ -577,8 +577,17 @@ export function mutativeMiddleware(config: any, opts?: { retryDelays?: number[] 
             if (isAsyncAct) return promise;
             promise.catch(() => {});
           } else {
-            enqueued?.catch(() => {});
+            // No live binding (boot, HMR rewire, account-switch window): the
+            // durable enqueue above already parked the entry — drainOutbox
+            // re-drives it the moment _setDispatch runs. asyncAction must keep
+            // its Promise contract even here: callers chain .then on the return
+            // value (beginOptimisticSession's fire()), so returning the bare
+            // returnValue crashes them. They get the local result; the server's
+            // answer lands later via sync once the replayed dispatch resolves.
             console.warn(`[sync] dispatch not wired; ${enqueued ? `parked "${key}" for later delivery` : `"${key}" was dropped (no outbox)`}`);
+            const parked = (enqueued ?? Promise.resolve()).then(() => returnValue);
+            if (isAsyncAct) return parked;
+            parked.catch(() => {});
           }
         }
 
