@@ -2375,8 +2375,9 @@ export const generateShareLink = mutation({
       ? (await verifyApiToken(ctx, args.api_token))?.userId
       : await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
-    const doc = await ctx.db.get(args.id);
-    if (!doc || doc.user_id !== userId) throw new Error("Doc not found");
+    // Owner-or-team, matching plans.generateShareLink and webUpdate: docs are
+    // team-visible/editable, so a teammate can mint the share link too.
+    const doc = await requireAccessibleDoc(ctx, userId, args.id);
     if (doc.share_token) return { share_token: doc.share_token };
     const share_token = crypto.randomUUID();
     await ctx.db.patch(args.id, { share_token });
@@ -2391,8 +2392,7 @@ export const unshare = mutation({
       ? (await verifyApiToken(ctx, args.api_token))?.userId
       : await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
-    const doc = await ctx.db.get(args.id);
-    if (!doc || doc.user_id !== userId) throw new Error("Doc not found");
+    await requireAccessibleDoc(ctx, userId, args.id);
     await ctx.db.patch(args.id, { share_token: undefined });
     return { success: true };
   },
