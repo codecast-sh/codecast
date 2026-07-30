@@ -5,6 +5,7 @@ import { useConvexAuth } from "convex/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Logo } from "../../components/Logo";
 import { AppLoader } from "../../components/AppLoader";
+import { DesktopBrowserSignIn, canUseDesktopBrowserSignIn } from "../../components/DesktopBrowserSignIn";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useLocalAuth } from "../../lib/localAuth";
 
@@ -97,6 +98,12 @@ function LoginForm() {
         </div>
 
         <div className="bg-sol-bg-alt backdrop-blur-sm border border-sol-border rounded-xl p-8 shadow-xl">
+          {/* In the desktop app, OAuth must run in the user's real browser —
+              the embedded window has no provider sessions (issue #20). */}
+          {canUseDesktopBrowserSignIn() ? (
+            <DesktopBrowserSignIn />
+          ) : (
+          <>
           <button
             onClick={handleAppleSignIn}
             disabled={loading}
@@ -118,6 +125,8 @@ function LoginForm() {
             </svg>
             Sign in with GitHub
           </button>
+          </>
+          )}
 
           <div className="relative my-6">
             <div className="absolute inset-0 flex items-center">

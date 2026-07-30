@@ -27,6 +27,7 @@ import { isResentCopyOfSentMessage } from "../lib/staleDraft";
 import type { SkillItem } from "../lib/conversationProcessor";
 import { createReducer, reducer } from "../lib/messageReducer";
 import { UsageDisplay } from "./UsageDisplay";
+import { StableContextCards, StableContextPicker } from "./StableContextCards";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { KeyCap, MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { toast } from "sonner";
@@ -46,7 +47,8 @@ import { ReviewBar } from "./ReviewBar";
 import { ReviewComposerContext } from "./reviewContext";
 import { CommentDock } from "./comments/CommentDock";
 import { useConversationCommentsSync } from "../hooks/useConversationComments";
-import { parseTriggerCadence, fmtDuration } from "./triggerCadence";
+import { parseTriggerCadence, fmtDuration, fmtClock } from "./triggerCadence";
+import { TriggerPromptView } from "./TriggerPromptView";
 import { monitorRowsFor, effectiveMonitorStatus, parseTaskNotificationBlock, isMonitorEventNotification, isMonitorEndedNotification, monitorNotificationDescription, decodeEntities, type MonitorStatus } from "./monitorRows";
 
 function copyMessageLink(conversationId: string | undefined, messageId: string) {
@@ -96,7 +98,7 @@ import { FormattedSummary } from "./FormattedSummary";
 import { entityRemarkPlugins } from "../lib/remarkEntityIds";
 import { parseInboundSessionMessage, isTeammateFramingOnly, isMachineDeliveredMessage, isSpawnedTaskPrompt, parseSpawnedTaskPrompt } from "./sessionMessage";
 import { CollabComposer, CollabRequestBanner, OwnerComposerPresence } from "./CollabComposer";
-import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, type ParsedCastCommand } from "./castCommand";
+import { parseCastCommandString, stripCdPrefix, unwrapShellCommand, extractSendBody, type ParsedCastCommand } from "./castCommand";
 import { ConversationTree } from "./ConversationTree";
 import { useInboxStore, isConvexId, computeNewDividerIndex, convBucketMap, type BucketItem, type ForkChild, type InboxSession, type OptimisticImage } from "../store/inboxStore";
 
@@ -518,6 +520,7 @@ export type ConversationData = {
   is_workflow_primary?: boolean;
   draft_message?: string;
   subtitle?: string | null;
+  stable_context?: string | null;
   compaction_count?: number;
   loaded_start_index?: number;
   agent_name_map?: Record<string, string>;
@@ -1421,6 +1424,11 @@ export function NewSessionView({ conversation, agentControls }: { conversation: 
         <ProjectSwitcher conversation={conversation} handleRef={projectsRef} />
       </ErrorBoundary>
       <div className="flex-1" />
+      <ErrorBoundary name="StableContextPicker" level="inline">
+        <div className="w-full px-4 mb-4">
+          <StableContextPicker conversationId={conversation._id} />
+        </div>
+      </ErrorBoundary>
       <AgentSwitcher
         conversation={conversation}
         showWorkflow={ac.showWorkflow}
@@ -2970,9 +2978,10 @@ function getFileExtension(filePath: string): string | undefined {
 }
 
 function isAlwaysVisibleToolCall(tc: ToolCall): boolean {
-  // Monitor stays visible in condensed feeds: it's standing state the reader
-  // needs to know is armed, not a transient tool step.
-  return isPlanWriteToolCall(tc) || tc.name === "AskUserQuestion" || tc.name === "Monitor";
+  // Monitor and ScheduleWakeup stay visible in condensed feeds: both are
+  // standing state the reader needs to know is armed (a watch, a loop's next
+  // fire), not a transient tool step.
+  return isPlanWriteToolCall(tc) || tc.name === "AskUserQuestion" || tc.name === "Monitor" || tc.name === "ScheduleWakeup";
 }
 
 interface ToolChangeRange {
@@ -4124,18 +4133,6 @@ function CastEntityCard({ type, shortId, convexId }: { type: "task" | "plan" | "
   );
 }
 
-// Pull the message body out of a `cast send <id> "<body>"` arg string, tolerating
-// embedded escaped quotes and trailing flags (e.g. `"done" --from jx7abcd`).
-function extractSendBody(args: string): string {
-  const t = args.trim();
-  const dq = t.match(/^"((?:[^"\\]|\\.)*)"/);
-  if (dq) return dq[1].replace(/\\"/g, '"');
-  const sq = t.match(/^'((?:[^'\\]|\\.)*)'/);
-  if (sq) return sq[1].replace(/\\'/g, "'");
-  // Unquoted body: drop any trailing --flags so they don't render as message text.
-  return t.replace(/\s+--\w[\s\S]*$/, "").trim() || t;
-}
-
 // Dedicated rendering for the two session-addressed cast commands:
 //   cast send <id> "<body>"   → outgoing twin of the incoming SessionMessageBlock
 //   cast read <id> <range>    → compact "read" row with a clickable target pill
@@ -4147,7 +4144,7 @@ function CastSessionRefBlock({ cat, target, args, fullCmd, output, isError }: {
   const [expanded, setExpanded] = useState(false);
 
   if (cat === "send") {
-    const body = extractSendBody(args);
+    const { body, kind } = extractSendBody(args);
     return (
       <div className="my-2 mx-1 rounded border-l-2 border-sol-blue/60 bg-sol-blue/5">
         <div className="flex items-center gap-2 px-3 pt-2 pb-1">
@@ -4160,11 +4157,21 @@ function CastSessionRefBlock({ cat, target, args, fullCmd, output, isError }: {
             <span className="text-sol-green/70 text-[10px] ml-auto shrink-0 inline-flex items-center gap-0.5"><Check className="w-3 h-3" />sent</span>
           )}
         </div>
-        <div className="px-3 pb-2 text-sm text-sol-text prose prose-invert prose-sm max-w-none">
-          <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE}
-            components={MD_COMPONENTS_NO_IMG}
-          >{body}</ReactMarkdown>
-        </div>
+        {kind === "dynamic" ? (
+          // The shell computed the real payload ($(…), $VAR, or stdin) before cast
+          // ran — the transcript only holds the recipe. Don't dress it up as the
+          // delivered message; that misled a sender into resending a 16KB briefing.
+          <div className="px-3 pb-2">
+            <code className="text-xs font-mono text-sol-text-secondary break-all">{body}</code>
+            <div className="text-[10px] text-sol-text-dim mt-1">shown as typed — the shell filled in the actual message; open the target session to read what arrived</div>
+          </div>
+        ) : (
+          <div className="px-3 pb-2 text-sm text-sol-text prose prose-invert prose-sm max-w-none">
+            <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE}
+              components={MD_COMPONENTS_NO_IMG}
+            >{body}</ReactMarkdown>
+          </div>
+        )}
       </div>
     );
   }
@@ -5657,6 +5664,70 @@ function ScheduledTaskBlock({ content: rawContent, timestamp }: { content: strin
   );
 }
 
+// The /loop heartbeat, in the trigger family's visual language. A
+// ScheduleWakeup call is the agent arming its own next fire — standing intent,
+// same anatomy as the trigger blocks above (violet accent, Zap identity) so a
+// self-pacing loop reads as what it is instead of a raw tool row. stop:true is
+// the loop's deliberate end. The tool result adds nothing the input doesn't
+// already say (the fire time), so it only surfaces on error.
+function ScheduleWakeupBlock({ tool, result, timestamp }: { tool: ToolCall; result?: ToolResult; timestamp: number }) {
+  const [showPrompt, setShowPrompt] = useState(false);
+  let input: { delaySeconds?: number; reason?: string; prompt?: string; stop?: boolean } = {};
+  try {
+    input = JSON.parse(tool.input || "{}");
+  } catch { /* malformed input renders as an empty arm */ }
+
+  if (input.stop) {
+    return (
+      <div className="mb-2 mx-1 rounded border-l-2 border-sol-violet/40 bg-sol-violet/5">
+        <div className="flex items-center gap-2 px-3 py-1.5">
+          <Zap className="w-3.5 h-3.5 text-sol-violet/50 shrink-0" />
+          <span className="text-[11px] font-medium tracking-wide uppercase text-sol-violet/60 shrink-0">Loop ended</span>
+          <span className="text-xs text-sol-text-muted truncate">the agent stopped scheduling wakeups</span>
+          <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+        </div>
+      </div>
+    );
+  }
+
+  const delayMs = Math.max(0, (input.delaySeconds ?? 0) * 1000);
+  const wakeAt = timestamp + delayMs;
+  return (
+    <div className="mb-2 mx-1 rounded border-l-2 border-sol-violet/60 bg-sol-violet/5">
+      <div className="flex items-center gap-2 px-3 pt-2 pb-1">
+        <Zap className="w-3.5 h-3.5 text-sol-violet/70 shrink-0" />
+        <span className="text-[11px] font-medium tracking-wide uppercase text-sol-violet/70 shrink-0">Wakeup</span>
+        {delayMs > 0 && (
+          <ShortcutTooltip label={`Fires at ${fmtClock(wakeAt)}`}>
+            <span className="px-1 py-0 rounded border text-[9px] font-semibold shrink-0 tabular-nums border-sol-violet/40 text-sol-violet/90 bg-sol-violet/10">
+              in {fmtDuration(delayMs)}
+            </span>
+          </ShortcutTooltip>
+        )}
+        {input.reason && <span className="text-xs text-sol-text-muted truncate">{input.reason}</span>}
+        <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+      </div>
+      {result?.is_error && (
+        <div className="mx-3 mb-2 rounded border border-sol-red/30 bg-sol-red/5 px-2 py-1.5 text-[11px] leading-relaxed text-sol-red/90">
+          {result.content.slice(0, 300)}
+        </div>
+      )}
+      {input.prompt && (
+        <div className="px-3 pb-2">
+          <button
+            onClick={() => setShowPrompt(!showPrompt)}
+            className="flex items-center gap-1 text-[10px] text-sol-text-dim hover:text-sol-text-muted transition-colors"
+          >
+            {showPrompt ? <ChevronDown className="w-2.5 h-2.5" /> : <ChevronRight className="w-2.5 h-2.5" />}
+            wakeup prompt
+          </button>
+          {showPrompt && <TriggerPromptView prompt={input.prompt} className="mt-1" />}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SessionMessageBlock({ from, name, body, timestamp, pendingStatus, recipientActive, variant = "session", color, summary, linkToConversationId }: { from: string; name?: string; body: string; timestamp?: number; pendingStatus?: string; recipientActive?: boolean; variant?: "session" | "teammate"; color?: string; summary?: string; linkToConversationId?: string }) {
   // pendingStatus set ⇒ this is a server-side pending_messages row that hasn't reached the
   // recipient's transcript yet (queued — typically because the recipient is mid-turn).
@@ -7040,6 +7111,8 @@ function AssistantBlockImpl({
             <SkillBlock key={tc.id} tool={tc} />
           ) : tc.name === "Monitor" ? (
             <MonitorBlock key={tc.id} tool={tc} conversationId={conversationId} />
+          ) : tc.name === "ScheduleWakeup" ? (
+            <ScheduleWakeupBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} timestamp={timestamp} />
           ) : tc.name === "EnterPlanMode" || tc.name === "ExitPlanMode" ? (
             <PlanModeBlock key={tc.id} tool={tc} result={toolResultMap[tc.id]} conversationId={conversationId} messageId={messageId} onSendMessage={onSendInlineMessage} />
           ) : parseCastCommand(tc) ? (
@@ -7214,6 +7287,25 @@ function SystemBlockImpl({ content, subtype, timestamp, messageUuid, messageId, 
 
   if (subtype === "scheduled_task_prompt" && content) {
     return <ScheduledTaskBlock content={content} timestamp={timestamp || Date.now()} />;
+  }
+
+  // A /loop wakeup firing ("Claude resuming /loop wakeup (Jul 29 5:07pm)") —
+  // the harness-side twin of a trigger injection, so it wears the same violet
+  // trigger anatomy as ScheduledTaskBlock/ScheduleWakeupBlock instead of the
+  // generic gray system row.
+  if (subtype === "scheduled_task_fire" && content) {
+    return (
+      <div className="mb-2 mx-1 rounded border-l-2 border-sol-violet/60 bg-sol-violet/5">
+        <div className="flex items-center gap-2 px-3 py-1.5">
+          <Zap className="w-3.5 h-3.5 text-sol-violet/70 shrink-0" />
+          <span className="text-[11px] font-medium tracking-wide uppercase text-sol-violet/70 shrink-0">Wakeup fired</span>
+          <span className="text-xs text-sol-text-muted truncate">{stripAnsiCodes(content)}</span>
+          {timestamp && (
+            <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+          )}
+        </div>
+      </div>
+    );
   }
 
   if (subtype === "compaction_summary" && content) {
@@ -13999,6 +14091,12 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 </span>
               </div>
             </div>
+          )}
+          {/* Context the session was started with — anchored to the transcript
+              start, so only when the whole top is loaded (never floating above a
+              mid-conversation window). */}
+          {conversation?.stable_context && !hasMoreAbove && !isLoadingOlder && (
+            <StableContextCards stableContext={conversation.stable_context} />
           )}
           {(density === "story" || density === "summary") ? (
             <div className="conv-col mx-auto px-4 sm:px-5 md:px-6">

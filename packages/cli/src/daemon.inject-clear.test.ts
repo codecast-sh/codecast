@@ -98,11 +98,63 @@ describe.skipIf(!CAN_RUN)("injectViaTmux clears stale draft before pasting", () 
       `--session-id=${sessionUuid}`;
     tmux(["new", "-d", "-s", tmuxSession, "-x", "200", "-y", "50", cmd]);
 
-    // Workspace trust dialog appears first; press Enter to accept it.
-    await sleep(3500);
-    tmux(["send-keys", "-t", target, "Enter"]);
-    await sleep(2000);
-  }, 30_000);
+    // Wait for the TUI to actually render, rather than sleeping a fixed 3.5s:
+    // on a loaded machine Claude Code can take longer than that to paint, and
+    // injecting into a blank pane makes the daemon (correctly) defer with
+    // AGENT_UNKNOWN_STATE — which failed this test for reasons that had nothing
+    // to do with the clearing behavior it exercises. Dismiss the workspace-trust
+    // dialog if the build shows one, then wait for the input prompt.
+    const paneReady = async (pattern: RegExp, budgetMs: number): Promise<boolean> => {
+      const until = Date.now() + budgetMs;
+      while (Date.now() < until) {
+        const pane = tmuxRun(["capture-pane", "-p", "-J", "-t", target, "-S", "-40"]).stdout;
+        if (pattern.test(pane)) return true;
+        await sleep(250);
+      }
+      return false;
+    };
+    if (await paneReady(/trust (the )?(contents|files)|Do you trust/i, 8_000)) {
+      tmux(["send-keys", "-t", target, "Enter"]);
+    }
+    // An unrecognized ANTHROPIC_API_KEY makes current builds ask for approval
+    // before showing the composer; decline it (the highlighted row) and carry on
+    // — the test only needs the input box, never a model call.
+    if (await paneReady(/Do you want to use this API key/i, 8_000)) {
+      tmux(["send-keys", "-t", target, "Enter"]);
+    }
+    // Wait for the input box's own ❯ — NOT the footer's ⏵⏵ mode indicator, which
+    // paints while the TUI is still drawing and left this wait passing on a pane
+    // the daemon can't classify yet.
+    if (!(await paneReady(/❯/, 25_000))) {
+      throw new Error(`Claude Code never rendered an input prompt in ${target}`);
+    }
+
+    // Painting the input box does NOT mean stdin is being read: Claude Code
+    // starts consuming keys seconds later, and keys sent into that window get
+    // recorded as literal text instead of acted on — the daemon's own C-a/C-k
+    // clearing keys then show up inside the submitted message as \x01/\x0b.
+    // That boot race is a separate defect from the draft-clearing behavior under
+    // test here, so prove consumption first: type a character, wait for it to
+    // appear at the prompt, then remove it.
+    const consuming = async (): Promise<boolean> => {
+      const until = Date.now() + 25_000;
+      while (Date.now() < until) {
+        tmux(["send-keys", "-t", target, "-l", "Z"]);
+        for (let i = 0; i < 8; i++) {
+          await sleep(250);
+          const pane = tmuxRun(["capture-pane", "-p", "-J", "-t", target, "-S", "-40"]).stdout;
+          const promptLine = pane.split("\n").reverse().find((l) => l.includes("❯")) ?? "";
+          if (promptLine.slice(promptLine.indexOf("❯") + 1).includes("Z")) return true;
+        }
+      }
+      return false;
+    };
+    if (!(await consuming())) {
+      throw new Error(`Claude Code never started consuming keys in ${target}`);
+    }
+    tmux(["send-keys", "-t", target, "BSpace"]);
+    await sleep(300);
+  }, 60_000);
 
   afterAll(() => {
     tmuxRun(["kill-session", "-t", tmuxSession]);
@@ -122,13 +174,24 @@ describe.skipIf(!CAN_RUN)("injectViaTmux clears stale draft before pasting", () 
     }
   });
 
+  // Claude Code appends to the JSONL on submit, but how soon depends on machine
+  // load, so wait for the count rather than sleeping a fixed interval and hoping.
+  const waitForMessages = async (count: number, budgetMs = 20_000): Promise<string[]> => {
+    const until = Date.now() + budgetMs;
+    let msgs = getUserMessages(jsonlPath);
+    while (msgs.length < count && Date.now() < until) {
+      await sleep(300);
+      msgs = getUserMessages(jsonlPath);
+    }
+    return msgs;
+  };
+
   test("recalled prompt is fully cleared; second injection lands clean", async () => {
     // 1. Inject a first prompt. After Claude Code records it, the input box is
     //    empty (Claude Code clears the input on submit).
     await injectViaTmux(target, "first prompt that will be recalled");
-    await sleep(3000);
 
-    let userMessages = getUserMessages(jsonlPath);
+    let userMessages = await waitForMessages(1);
     expect(userMessages).toEqual(["first prompt that will be recalled"]);
 
     // 2. Simulate the user (or any path that puts stale text in the box):
@@ -142,9 +205,8 @@ describe.skipIf(!CAN_RUN)("injectViaTmux clears stale draft before pasting", () 
     //    paste-buffer content concatenates with it. With a correct clear,
     //    only "follow-up content" lands.
     await injectViaTmux(target, "follow-up content");
-    await sleep(3000);
 
-    userMessages = getUserMessages(jsonlPath);
+    userMessages = await waitForMessages(2);
     expect(userMessages.length).toBeGreaterThanOrEqual(2);
     const second = userMessages[1];
 

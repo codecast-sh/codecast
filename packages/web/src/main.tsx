@@ -1,91 +1,21 @@
-import React from "react";
-import ReactDOM from "react-dom/client";
-import { BrowserRouter } from "react-router";
-import { initAnalytics, setupErrorToasts } from "../lib/analytics";
-import { armChunkReloadGuardReset } from "../components/ErrorBoundary";
-import { installIdleAnimationPause, isDesktop } from "../lib/desktop";
-import { hasStoredAuthToken } from "../lib/localAuth";
-import { createReloadWhenHidden } from "../lib/reloadWhenHidden";
-import { App } from "./App";
-import "../store/inboxStore";
+import { registerAppBoot } from "../lib/desktopHandoff";
 import "../app/globals.css";
 
-setupErrorToasts();
-// Stop compositing infinite animations while the desktop window is backgrounded.
-installIdleAnimationPause();
-
-ReactDOM.createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>
-    <BrowserRouter>
-      <App />
-    </BrowserRouter>
-  </React.StrictMode>
-);
-
-// Defer non-critical work until after first paint. The timeout is load-bearing:
-// Chrome starves idle callbacks entirely in hidden/occluded windows, and the
-// desktop app often boots minimized — without it, everything deferred here
-// (analytics, the offline-shell registration, route warmup) never runs until
-// the window is first focused.
-const idle: (cb: () => void) => void =
-  typeof window !== "undefined" && (window as any).requestIdleCallback
-    ? (cb) => (window as any).requestIdleCallback(cb, { timeout: 15_000 })
-    : (cb) => setTimeout(cb, 1);
-
-idle(() => initAnalytics());
-
-// Install the offline app shell (service worker precache) once the app is
-// interactive. First visit installs it in the background; every later boot —
-// including fully offline desktop launches — serves the shell from it.
-// Only for app users (signed in, or the desktop shell): the precache pulls the
-// whole bundle, which anonymous share-link visitors shouldn't pay for.
-// No-op in dev (vite-plugin-pwa only emits the worker on build).
-idle(() => {
-  if (!hasStoredAuthToken() && !isDesktop()) return;
-  import("virtual:pwa-register")
-    .then(({ registerSW }) =>
-      registerSW({
-        immediate: true,
-        // Browsers only look for a new sw.js on navigation (or every 24h),
-        // and the desktop window stays open for days without navigating — a
-        // stale shell would pin users to old bundles across deploys. Poll so
-        // the new worker (skipWaiting+clientsClaim) takes over unprompted;
-        // any stale lazy-chunk fetch after the swap is healed by the chunk
-        // reload guard in ErrorBoundary.
-        onRegisteredSW(_url, reg) {
-          if (!reg) return;
-          setInterval(() => { reg.update().catch(() => {}); }, 60 * 60 * 1000);
-        },
-        // Without this, autoUpdate hard-reloads every open window the moment
-        // the new worker activates — visibly blinking whichever window the
-        // user is looking at (and resetting the palette popup mid-compose).
-        // Defer each window's reload until it is hidden; see the helper.
-        onNeedReload: createReloadWhenHidden(),
-      })
-    )
-    .catch(() => {});
-});
-
-// If this load stays up (no immediate chunk re-crash), clear the auto-reload
-// guard so a future stale-chunk crash in this tab can recover on its own.
-armChunkReloadGuardReset();
-
-// Warm the cache for the most-visited app routes so the first navigation
-// (or direct landing) doesn't pay a chunk-fetch waterfall. Skip for visitors
-// who almost certainly won't enter the app (no auth, on a marketing path).
-idle(() => {
-  const path = window.location.pathname;
-  const onAppPath = !/^\/($|about|features|documentation|changelog|privacy|security|support|terms|login|signup|forgot-password|reset-password)(\/|$)/.test(path);
-  const hasAuth = (() => {
-    try {
-      for (let i = 0; i < localStorage.length; i++) {
-        const k = localStorage.key(i);
-        if (k && k.includes("convex") && k.toLowerCase().includes("auth")) return true;
-      }
-    } catch {}
-    return false;
-  })();
-  if (!onAppPath && !hasAuth) return;
-  void import("@/app/inbox/page");
-  void import("@/app/team/activity/page");
+/**
+ * The app entry is deliberately almost empty. Everything real lives in
+ * ./boot.tsx behind a dynamic import, because a browser page that is about to
+ * hand itself off to the desktop app must not load the app at all: the module
+ * bodies of the store, the Convex client and React run on import, so an early
+ * `return` in a heavyweight entry would still have paid for a socket, an
+ * IndexedDB hydration and a render nobody sees.
+ *
+ * The gate that decides this already ran, inlined in index.html's <head>
+ * (plugins/handoffBoot.ts). registerAppBoot either boots immediately or parks
+ * the boot function for the static screen's "Open in browser" escape hatch.
+ *
+ * globals.css stays imported here so the stylesheet remains a plain <link> in
+ * the built HTML, fetched in parallel on every load.
+ */
+registerAppBoot(() => {
+  void import("./boot");
 });
