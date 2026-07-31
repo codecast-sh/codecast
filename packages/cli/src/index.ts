@@ -9672,13 +9672,15 @@ program
     "Examples:\n" +
     "  cast spawn \"audit the auth flow\" \"audit the billing flow\"\n" +
     "  cast spawn -C ~/src/api \"port the v1 routes to v2\"\n" +
-    "  cast spawn --isolated \"refactor the store\" \"rewrite the router\"   # parallel worktrees"
+    "  cast spawn --isolated \"refactor the store\" \"rewrite the router\"   # parallel worktrees\n" +
+    "  cast spawn --device nose \"run the nightly backfill\"   # start it on a specific machine"
   )
   .argument("<prompts...>", "One task per session; each starts working on it immediately")
   .option("-C, --dir <path>", "Working directory (default: current project)")
     .option("--agent <type>", "Agent: claude (default), codex, cursor, gemini, opencode, pi", "claude")
   .option("--model <model>", "Model override (e.g. opus, sonnet)")
   .option("--isolated", "Give each session its own git worktree")
+  .option("--device <name>", "Machine to start on (label or device id, e.g. nose); falls back to an online machine with the repo if it's offline")
   .option("--label <name>", "File each spawned session under a label (created if new)")
   .option("--json", "Machine-readable output")
   .action(async (rawPrompts: string[], options: any) => {
@@ -9723,6 +9725,7 @@ program
           agent_type: agentType,
           model: options.model,
           isolated: options.isolated || undefined,
+          device: options.device,
         }),
       });
       if (!resp.ok) {
