@@ -106,6 +106,7 @@ import {
   handleTerminalHttp,
   type TerminalServerOptions,
 } from "./terminal/terminalServer.js";
+import { attachVaultServer, handleVaultHttp, type VaultServerOptions } from "./vault/vaultServer.js";
 import { buildStableContext, ensureStableHookForLaunch, recordStableContext, type BuiltStableContext } from "./stableContext.js";
 import { collectSessionResources, formatResourcesLog, nextAwakeIdleMs, shouldReportMetrics, type ReportedMetrics, type SessionResources } from "./resourceMonitor.js";
 import {
@@ -1267,9 +1268,16 @@ let hookServerPort = 0;
 // remote code execution for any page the user visits.
 const terminalToken = generateTerminalToken();
 let terminalServerHandle: { close(): void } | null = null;
+let vaultServerHandle: { close(): void } | null = null;
 
 function terminalServerOptions(): TerminalServerOptions {
   return { token: terminalToken, log };
+}
+
+// The vault routes ride the same loopback server and the same per-boot token;
+// they only additionally need to know where the vault registry lives.
+function vaultServerOptions(): VaultServerOptions {
+  return { ...terminalServerOptions(), configDir: CONFIG_DIR };
 }
 
 function startHookServer(
@@ -1313,12 +1321,14 @@ function startHookServer(
     }
 
     if (handleTerminalHttp(req, res, terminalServerOptions())) return;
+    if (handleVaultHttp(req, res, vaultServerOptions())) return;
 
     res.writeHead(404);
     res.end();
   });
 
   terminalServerHandle = attachTerminalServer(server, terminalServerOptions());
+  vaultServerHandle = attachVaultServer(server, vaultServerOptions());
 
   server.listen(0, "127.0.0.1", () => {
     const addr = server.address();
@@ -1342,6 +1352,10 @@ function stopHookServer(): void {
   if (terminalServerHandle) {
     terminalServerHandle.close();
     terminalServerHandle = null;
+  }
+  if (vaultServerHandle) {
+    vaultServerHandle.close();
+    vaultServerHandle = null;
   }
   if (hookServer) {
     hookServer.close();

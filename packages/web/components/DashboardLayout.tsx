@@ -56,6 +56,7 @@ import { TabBar } from "./TabBar";
 import { pathLabel } from "../lib/pathLabel";
 import { TabContent } from "./TabContent";
 import { TerminalDock } from "./terminal/TerminalDock";
+import { VaultQuickSwitcherDock } from "./vault/VaultQuickSwitcherDock";
 import { isFullWidthRoute, PageShell } from "../lib/pageLayout";
 import { useTipActions } from "../tips";
 
@@ -294,6 +295,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   const isOnSchedulesPage = pathname === "/schedules" || (pathname?.startsWith("/schedules/") ?? false);
   const isOnPlansPage = pathname === "/plans" || (pathname?.startsWith("/plans/") ?? false);
   const isOnDocsPage = pathname === "/docs" || (pathname?.startsWith("/docs/") ?? false);
+  const isOnVaultPage = pathname === "/vault" || (pathname?.startsWith("/vault/") ?? false);
   const isOnProjectsPage = pathname === "/projects" || (pathname?.startsWith("/projects/") ?? false);
   const isOnWindowsPage = pathname === "/windows";
   const isOnCrosstalkPage = pathname === "/crosstalk";
@@ -304,7 +306,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // isFullWidthRoute folds in the self-contained full-bleed pages (sessions,
   // admin) so the non-tab path matches the tab shell; the inbox check stays
   // explicit because it is source-aware, not just path-based.
-  const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnRoutinesPage || isOnTriggersPage || isOnSchedulesPage || isOnPlansPage || isOnDocsPage || isOnProjectsPage || isOnWindowsPage || isOnCrosstalkPage || isFullWidthRoute(pathname ?? "");
+  const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnRoutinesPage || isOnTriggersPage || isOnSchedulesPage || isOnPlansPage || isOnDocsPage || isOnVaultPage || isOnProjectsPage || isOnWindowsPage || isOnCrosstalkPage || isFullWidthRoute(pathname ?? "");
 
   // The teammate comment rail is a conversation-scoped overlay, so its header
   // toggle only makes sense when a conversation is actually on screen.
@@ -749,7 +751,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
                 <UnifiedRightRail
                   onSessionSelect={sessionListOnSelect}
                   activeSessionId={sessionListActiveId}
-                  onCollapse={s.toggleSidePanel}
+                  onCollapse={() => s.toggleSidePanel()}
                   conversationTabAvailable={showConversationColumn}
                 />
               </ErrorBoundary>
@@ -982,6 +984,11 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       {!isMobile && (
         <ErrorBoundary name="TerminalPanel" level="panel">
           <TerminalDock />
+        </ErrorBoundary>
+      )}
+      {!isMobile && (
+        <ErrorBoundary name="VaultQuickSwitcher" level="panel">
+          <VaultQuickSwitcherDock />
         </ErrorBoundary>
       )}
 

@@ -65,7 +65,8 @@ export type ShortcutAction =
   | 'list.preview'
   | 'list.search'
   | 'list.edit'
-  | 'list.actions';
+  | 'list.actions'
+  | 'vault.quickSwitch';
 
 export interface ShortcutDef {
   key: string;
@@ -209,6 +210,9 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'ctrl+[', action: 'sidebar.toggleLeft', skipInputCheck: true, description: 'Toggle left sidebar' },
   { key: 'ctrl+]', action: 'sidebar.toggleRight', skipInputCheck: true, description: 'Toggle sessions panel' },
   { key: 'ctrl+`', action: 'terminal.toggle', skipInputCheck: true, description: 'Toggle terminal' },
+  // Cmd+O mirrors Obsidian's quick switcher. The handler declines when no
+  // vault is connected, so the chord costs nothing in vault-less workspaces.
+  { key: 'ctrl+o', mac: 'meta+o', action: 'vault.quickSwitch', skipInputCheck: true, description: 'Open vault note' },
   { key: 'ctrl+\\', action: 'sidebar.toggleComments', skipInputCheck: true, description: 'Toggle comments rail' },
 
   { key: 'j', action: 'review.nextFile', when: 'review', description: 'Next file' },

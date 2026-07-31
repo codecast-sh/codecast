@@ -1,0 +1,514 @@
+// `cast publish` — shareable HTML/markdown/bundle artifacts (codecast.sh/a/<slug>).
+//
+// Registered from index.ts via registerPublishCommand(program, deps). Deps are
+// handed in (doctor.ts pattern) because index.ts owns config decryption and
+// session detection, and this module must stay importable by tests — index.ts
+// runs program.parse() on import, so nothing here may import from it.
+//
+// Pure, testable logic (flag mapping, bundle selection, table formatting) lives
+// in publishCommand.ts; this file owns IO: fs walks, HTTP, Chrome screenshots,
+// the fs.watch loop, and output.
+
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { spawnSync } from "node:child_process";
+import type { Command } from "commander";
+import open from "open";
+import { cliFetch, cliFetchRead } from "./cliHttp.js";
+import { c, fmt, icons } from "./colors.js";
+import {
+  buildAccessPayload,
+  bundleSizeError,
+  describeAccess,
+  filterBundlePaths,
+  formatArtifactTable,
+  isHtmlPath,
+  isMarkdownPath,
+  parseExpires,
+  pickBundleEntry,
+  resolveArtifactTitle,
+  resolveMarkdownTitle,
+  type AccessFlagValues,
+  type ArtifactLsRow,
+} from "./publishCommand.js";
+
+export interface PublishDeps {
+  getCliEndpoint: () => { siteUrl: string; apiToken: string };
+  detectCurrentSessionId: () => string | null;
+}
+
+const WATCH_DEBOUNCE_MS = 400;
+const THUMB_TIMEOUT_MS = 10_000;
+
+// ── backend calls ────────────────────────────────────────────────────────────
+
+async function apiPost(
+  deps: PublishDeps,
+  urlPath: string,
+  body: Record<string, unknown>,
+  opts: { read?: boolean; exitOnError?: boolean } = {},
+): Promise<any> {
+  const { siteUrl, apiToken } = deps.getCliEndpoint();
+  const doFetch = opts.read ? cliFetchRead : cliFetch;
+  const response = await doFetch(`${siteUrl}${urlPath}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ api_token: apiToken, ...body }),
+  });
+  const text = await response.text();
+  let result: any;
+  try {
+    result = JSON.parse(text);
+  } catch {
+    if (opts.exitOnError === false) throw new Error(`API error (${response.status}): ${text.slice(0, 200)}`);
+    console.error(`API error (${response.status}): ${text.slice(0, 200)}`);
+    process.exit(1);
+  }
+  if (result?.error) {
+    if (opts.exitOnError === false) throw new Error(String(result.error));
+    console.error(`Error: ${result.error}`);
+    process.exit(1);
+  }
+  return result;
+}
+
+// ── bundle walk ──────────────────────────────────────────────────────────────
+
+/** Every file under dir as sorted relative posix paths, skip rules applied. */
+export function walkBundleDir(dir: string): string[] {
+  const out: string[] = [];
+  const visit = (rel: string) => {
+    for (const entry of fs.readdirSync(path.join(dir, rel), { withFileTypes: true })) {
+      const relPath = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) visit(relPath);
+      else if (entry.isFile()) out.push(relPath);
+    }
+  };
+  visit("");
+  return filterBundlePaths(out);
+}
+
+// ── thumbnail capture ────────────────────────────────────────────────────────
+
+export function findChrome(): string | null {
+  const absolute = [
+    process.env.CHROME_PATH,
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Chromium.app/Contents/MacOS/Chromium",
+    "/usr/bin/google-chrome",
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+  ].filter((p): p is string => !!p);
+  for (const candidate of absolute) {
+    try {
+      if (fs.existsSync(candidate)) return candidate;
+    } catch {}
+  }
+  for (const name of ["google-chrome", "chromium", "chromium-browser"]) {
+    try {
+      const found = spawnSync("which", [name], { encoding: "utf-8" }).stdout?.trim();
+      if (found) return found;
+    } catch {}
+  }
+  return null;
+}
+
+/** Headless-Chrome 1200x630 screenshot of a local html file → base64 png.
+ * ANY failure (no Chrome, timeout, bad exit) returns null silently — a
+ * thumbnail must never block or delay a publish beyond its timeout. */
+export function captureThumb(entryHtmlAbsPath: string): string | null {
+  try {
+    const chrome = findChrome();
+    if (!chrome) return null;
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cast-thumb-"));
+    const outPng = path.join(tmpDir, "thumb.png");
+    try {
+      const run = spawnSync(
+        chrome,
+        [
+          "--headless=new",
+          `--screenshot=${outPng}`,
+          "--window-size=1200,630",
+          "--hide-scrollbars",
+          "--disable-gpu",
+          "--no-first-run",
+          `file://${entryHtmlAbsPath}`,
+        ],
+        { timeout: THUMB_TIMEOUT_MS, stdio: "ignore" },
+      );
+      if (run.status !== 0 || !fs.existsSync(outPng)) return null;
+      return fs.readFileSync(outPng).toString("base64");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  } catch {
+    return null;
+  }
+}
+
+// ── publish payload assembly ─────────────────────────────────────────────────
+
+interface PublishPayload {
+  title: string;
+  source_path: string;
+  kind?: "markdown" | "bundle";
+  content?: string;
+  files?: Array<{ path: string; content_b64: string }>;
+  /** Local path of the html document a thumbnail should render. */
+  entryHtmlPath?: string;
+}
+
+/** Read the file/dir into the /cli/artifacts/publish payload. Throws with a
+ * legible message on anything the user must fix (missing entry, size cap). */
+export function buildPublishPayload(absPath: string, titleOverride?: string): PublishPayload {
+  const stat = fs.statSync(absPath);
+  if (stat.isDirectory()) {
+    const relPaths = walkBundleDir(absPath);
+    const entry = pickBundleEntry(relPaths);
+    if (!entry.entry) throw new Error(entry.error);
+    const files: Array<{ path: string; content_b64: string }> = [];
+    const sizes: Array<{ path: string; size: number }> = [];
+    for (const rel of relPaths) {
+      const bytes = fs.readFileSync(path.join(absPath, rel));
+      files.push({ path: rel, content_b64: bytes.toString("base64") });
+      sizes.push({ path: rel, size: bytes.byteLength });
+    }
+    const sizeError = bundleSizeError(sizes);
+    if (sizeError) throw new Error(sizeError);
+    const entryHtml = fs.readFileSync(path.join(absPath, entry.entry), "utf-8");
+    return {
+      title: resolveArtifactTitle(entryHtml, absPath, titleOverride),
+      source_path: absPath,
+      kind: "bundle",
+      files,
+      entryHtmlPath: path.join(absPath, entry.entry),
+    };
+  }
+  const content = fs.readFileSync(absPath, "utf-8");
+  if (isMarkdownPath(absPath)) {
+    return {
+      title: resolveMarkdownTitle(content, absPath, titleOverride),
+      source_path: absPath,
+      kind: "markdown",
+      content,
+    };
+  }
+  if (!isHtmlPath(absPath)) {
+    throw new Error(`Can't publish ${path.basename(absPath)} — publish an .html or .md file, or a directory bundle`);
+  }
+  return {
+    title: resolveArtifactTitle(content, absPath, titleOverride),
+    source_path: absPath,
+    content,
+    entryHtmlPath: absPath,
+  };
+}
+
+// ── output ───────────────────────────────────────────────────────────────────
+
+function versionLine(result: { version: number; updated?: boolean; unchanged?: boolean }): string {
+  if (result.unchanged) return fmt.muted(`unchanged (v${result.version})`);
+  return `${fmt.number(`v${result.version}`)} ${icons.arrow} ${result.updated ? "updated" : "published"}`;
+}
+
+function printPublishResult(
+  result: { url: string; version: number; updated?: boolean; unchanged?: boolean; manage_url?: string; edit_url?: string | null },
+  title: string,
+  access?: Record<string, unknown>,
+): void {
+  console.log(`${fmt.success(icons.check)} ${fmt.highlight(title)}  ${versionLine(result)}`);
+  console.log(`  ${fmt.accent(result.url)}`);
+  if (result.manage_url && result.manage_url !== result.url) {
+    console.log(`  ${fmt.label("manage (owner link — keep private):")} ${result.manage_url}`);
+  }
+  if (result.edit_url) {
+    console.log(`  ${fmt.label("edit:")} ${result.edit_url}`);
+  }
+  if (access) {
+    console.log(`  ${fmt.label("gates:")} ${describeAccess(access)}`);
+  }
+}
+
+// ── option → flag mapping ────────────────────────────────────────────────────
+
+function accessFromOptions(options: {
+  password?: string | boolean;
+  emailGate?: boolean;
+  expires?: string;
+  editMode?: string;
+}): Record<string, unknown> | undefined {
+  const flags: AccessFlagValues = {};
+  // commander: undefined = untouched, string = --password P, false = --no-password
+  if (options.password !== undefined) flags.password = options.password as string | false;
+  if (options.emailGate !== undefined) flags.emailGate = options.emailGate;
+  if (options.expires !== undefined) {
+    const parsed = parseExpires(options.expires);
+    if ("error" in parsed) {
+      console.error(fmt.error(parsed.error));
+      process.exit(1);
+    }
+    flags.expiresMs = parsed.ms;
+  }
+  if (options.editMode !== undefined) flags.editMode = options.editMode;
+  const built = buildAccessPayload(flags);
+  if (built.error) {
+    console.error(fmt.error(built.error));
+    process.exit(1);
+  }
+  return built.payload;
+}
+
+// ── subcommand actions ───────────────────────────────────────────────────────
+
+async function runLs(deps: PublishDeps, json: boolean): Promise<void> {
+  const result = await apiPost(deps, "/cli/artifacts/list", {}, { read: true });
+  if (json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  const rows: ArtifactLsRow[] = result.artifacts ?? [];
+  for (const line of formatArtifactTable(rows)) console.log(line);
+}
+
+async function runRm(deps: PublishDeps, target: string, json: boolean): Promise<void> {
+  const abs = fs.existsSync(target) ? path.resolve(target) : target;
+  const result = await apiPost(deps, "/cli/artifacts/delete", { target: abs });
+  if (json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  const deleted = result.deleted;
+  console.log(`${fmt.success(icons.check)} Unpublished ${fmt.highlight(deleted?.title ?? target)} ${fmt.muted(`(${deleted?.slug ?? target})`)}`);
+}
+
+async function runRollback(deps: PublishDeps, target: string, versionArg: string, json: boolean): Promise<void> {
+  const version = parseInt(versionArg, 10);
+  if (!Number.isFinite(version) || version < 1) {
+    console.error(fmt.error(`Invalid version "${versionArg}" — pass the version number to restore, e.g. 3`));
+    process.exit(1);
+  }
+  const abs = fs.existsSync(target) ? path.resolve(target) : target;
+  const result = await apiPost(deps, "/cli/artifacts/rollback", { target: abs, version });
+  if (json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+  console.log(`${fmt.success(icons.check)} Rolled back to v${version} — now ${fmt.number(`v${result.version}`)}`);
+  console.log(`  ${fmt.accent(result.url)}`);
+}
+
+async function runOpen(deps: PublishDeps, target: string, json: boolean): Promise<void> {
+  const result = await apiPost(deps, "/cli/artifacts/list", {}, { read: true });
+  const rows: ArtifactLsRow[] = result.artifacts ?? [];
+  const abs = fs.existsSync(target) ? path.resolve(target) : null;
+  const suffix = target.startsWith("/") ? target : `/${target}`;
+  const row = rows.find(
+    (r: any) => r.slug === target || r.source_path === abs || r.source_path === target || r.source_path?.endsWith(suffix),
+  );
+  if (!row) {
+    console.error(fmt.error(`No artifact matches "${target}" — see cast publish ls`));
+    process.exit(1);
+  }
+  if (json) {
+    console.log(JSON.stringify(row, null, 2));
+    return;
+  }
+  console.log(row.url);
+  await open(row.url).catch(() => {});
+}
+
+// ── publish + watch ──────────────────────────────────────────────────────────
+
+interface PublishOptions {
+  title?: string;
+  new?: boolean;
+  json?: boolean;
+  watch?: boolean;
+  password?: string | boolean;
+  emailGate?: boolean;
+  expires?: string;
+  editMode?: string;
+  thumb?: boolean;
+  open?: boolean;
+}
+
+async function publishOnce(
+  deps: PublishDeps,
+  absPath: string,
+  options: PublishOptions,
+  extra: { access?: Record<string, unknown>; sessionRef?: string; withThumb: boolean; forceNew: boolean; exitOnError: boolean },
+): Promise<{ result: any; title: string }> {
+  const payload = buildPublishPayload(absPath, options.title);
+  let thumbB64: string | undefined;
+  if (extra.withThumb && options.thumb !== false && payload.entryHtmlPath) {
+    thumbB64 = captureThumb(payload.entryHtmlPath) ?? undefined;
+  }
+  const result = await apiPost(
+    deps,
+    "/cli/artifacts/publish",
+    {
+      title: payload.title,
+      source_path: payload.source_path,
+      ...(payload.kind ? { kind: payload.kind } : {}),
+      ...(payload.content !== undefined ? { content: payload.content } : {}),
+      ...(payload.files ? { files: payload.files } : {}),
+      ...(extra.forceNew ? { force_new: true } : {}),
+      ...(extra.access ? { access: extra.access } : {}),
+      ...(extra.sessionRef ? { session_ref: extra.sessionRef } : {}),
+      ...(thumbB64 ? { thumb_b64: thumbB64 } : {}),
+    },
+    { exitOnError: extra.exitOnError },
+  );
+  return { result, title: payload.title };
+}
+
+async function runPublish(deps: PublishDeps, target: string, options: PublishOptions): Promise<void> {
+  const absPath = path.resolve(target);
+  if (!fs.existsSync(absPath)) {
+    console.error(fmt.error(`No such file or directory: ${target}`));
+    process.exit(1);
+  }
+  const access = accessFromOptions(options);
+  const sessionRef = deps.detectCurrentSessionId() ?? undefined;
+
+  let result: any;
+  let title: string;
+  try {
+    ({ result, title } = await publishOnce(deps, absPath, options, {
+      access,
+      sessionRef,
+      withThumb: true,
+      forceNew: !!options.new,
+      exitOnError: false,
+    }));
+  } catch (err) {
+    console.error(fmt.error(err instanceof Error ? err.message : String(err)));
+    process.exit(1);
+  }
+
+  if (options.json) {
+    console.log(JSON.stringify(result, null, 2));
+  } else {
+    printPublishResult(result, title, access);
+  }
+  if (options.open && result?.url) await open(result.url).catch(() => {});
+  if (!options.watch) return;
+
+  // ── watch loop: debounce fs events, republish, print version bumps ────────
+  console.log(fmt.muted(`\nwatching ${target} — Ctrl+C to stop`));
+  console.log(fmt.muted(`live view: ${result.url}?live=1`));
+
+  const isDir = fs.statSync(absPath).isDirectory();
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let publishing = false;
+  let dirty = false;
+
+  const republish = async () => {
+    if (publishing) {
+      dirty = true;
+      return;
+    }
+    publishing = true;
+    try {
+      // Access flags applied on the first publish; watch republishes content only.
+      // Thumbnails are also first-publish-only so the loop stays fast.
+      const { result: r } = await publishOnce(deps, absPath, options, {
+        sessionRef,
+        withThumb: false,
+        forceNew: false,
+        exitOnError: false,
+      });
+      console.log(`  ${new Date().toLocaleTimeString()}  ${versionLine(r)}`);
+    } catch (err) {
+      console.error(`  ${fmt.error(err instanceof Error ? err.message : String(err))}`);
+    } finally {
+      publishing = false;
+      if (dirty) {
+        dirty = false;
+        void republish();
+      }
+    }
+  };
+
+  const schedule = () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => void republish(), WATCH_DEBOUNCE_MS);
+  };
+
+  // Watch the parent dir for single files (editors rename-replace on save,
+  // which kills a direct file watch); recursive watch for bundles.
+  const watcher = isDir
+    ? fs.watch(absPath, { recursive: true }, () => schedule())
+    : fs.watch(path.dirname(absPath), (_event, filename) => {
+        if (!filename || filename === path.basename(absPath)) schedule();
+      });
+
+  await new Promise<void>((resolve) => {
+    process.on("SIGINT", () => {
+      watcher.close();
+      console.log(fmt.muted("\nstopped"));
+      resolve();
+    });
+  });
+}
+
+// ── registration ─────────────────────────────────────────────────────────────
+
+export function registerPublishCommand(program: Command, deps: PublishDeps): void {
+  program
+    .command("publish")
+    .description(
+      "Publish an HTML/markdown file or a directory bundle to a shareable codecast.sh/a/<slug> URL\n\n" +
+        "Re-publishing the same path updates the same URL (version history kept).\n\n" +
+        "Subcommands:\n" +
+        "  cast publish ls                          List your published artifacts\n" +
+        "  cast publish rm <slug|path>              Unpublish\n" +
+        "  cast publish rollback <slug|path> <n>    Restore version n as a new version\n" +
+        "  cast publish open <slug|path>            Print + open the share URL",
+    )
+    .argument("[target]", "file.html, file.md, or a directory — or a subcommand: ls | rm | rollback | open")
+    .argument("[args...]", "subcommand arguments")
+    .option("--title <title>", "Override the artifact title (default: <title> tag / first heading / filename)")
+    .option("--new", "Publish under a fresh URL even if this path was published before")
+    .option("--json", "Emit the raw JSON response")
+    .option("--watch", "Keep watching the file/directory and republish on change")
+    .option("--password <password>", "Require a password to view")
+    .option("--no-password", "Clear the password gate")
+    .option("--email-gate", "Require an email address to view")
+    .option("--no-email-gate", "Clear the email gate")
+    .option("--expires <duration>", "Expire the link after e.g. 30m, 24h, 7d — or never")
+    .option("--edit-mode <mode>", "Who can edit in the browser: owner | link | team")
+    .option("--no-thumb", "Skip the headless-Chrome thumbnail screenshot")
+    .option("--open", "Open the published URL in the browser")
+    .action(async (target: string | undefined, args: string[], options: PublishOptions) => {
+      const json = !!options.json;
+      if (!target) {
+        console.error(fmt.error("Usage: cast publish <file.html|file.md|dir> — or: ls | rm <target> | rollback <target> <version> | open <target>"));
+        process.exit(1);
+      }
+      if (target === "ls") return runLs(deps, json);
+      if (target === "rm") {
+        if (!args[0]) {
+          console.error(fmt.error("Usage: cast publish rm <slug|path>"));
+          process.exit(1);
+        }
+        return runRm(deps, args[0], json);
+      }
+      if (target === "rollback") {
+        if (!args[0] || !args[1]) {
+          console.error(fmt.error("Usage: cast publish rollback <slug|path> <version>"));
+          process.exit(1);
+        }
+        return runRollback(deps, args[0], args[1], json);
+      }
+      if (target === "open" && !fs.existsSync(target)) {
+        if (!args[0]) {
+          console.error(fmt.error("Usage: cast publish open <slug|path>"));
+          process.exit(1);
+        }
+        return runOpen(deps, args[0], json);
+      }
+      return runPublish(deps, target, options);
+    });
+}

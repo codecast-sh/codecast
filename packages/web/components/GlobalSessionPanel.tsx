@@ -1110,7 +1110,20 @@ function MonitorBars({ session, isActive, onOpen }: {
         <div key={row.toolUseId} className={`group/monrow relative transition-colors ${isActive ? "bg-sol-cyan/[0.10]" : ""}`}>
           <button
             className="w-full text-left cursor-pointer pr-3 pl-2 py-1 hover:bg-sol-blue/[0.05] transition-colors"
-            onClick={() => onOpen(session)}
+            onClick={() => {
+              // Land on the tool call that armed this watch, not the tail —
+              // the click means "show me this watch in context". Rows always
+              // derive from the loaded window, so the id is normally present;
+              // fall back to a plain open if it somehow isn't.
+              if (row.startMessageId) {
+                useInboxStore.getState().requestNavigate(session._id, {
+                  scrollToMessageId: row.startMessageId,
+                  scrollToMessageTimestamp: row.startedAt,
+                });
+              } else {
+                onOpen(session);
+              }
+            }}
           >
             <div className="flex gap-1.5 min-w-0">
               {/* Same corner arrow the schedule/subagent child rows carry, in
@@ -1598,7 +1611,7 @@ export const SessionCard = memo(function SessionCard({
               : isWorking
                 ? "hover:bg-violet-500/[0.06] border-l border-l-violet-400/25"
                 : isStashed
-                  ? "opacity-60 hover:opacity-100 hover:bg-violet-500/[0.04]"
+                  ? "opacity-45 hover:opacity-65 hover:bg-violet-500/[0.04]"
                   : isDismissed
                     ? "opacity-40 hover:opacity-60 hover:bg-violet-500/[0.04]"
                     : "hover:bg-violet-500/[0.06] border-l border-l-violet-500/15"
@@ -1733,11 +1746,11 @@ export const SessionCard = memo(function SessionCard({
         session.assigned_ping ? "ring-1 ring-inset ring-sol-cyan/50 bg-sol-cyan/[0.06]" : ""
       } ${
         isActive
-          ? "bg-sol-cyan/15 border-l-[3px] border-l-sol-cyan shadow-[inset_0_0_16px_rgba(42,161,152,0.12)]"
+          ? "bg-sol-cyan/[0.12] border-l-[3px] border-l-sol-cyan ring-1 ring-inset ring-sol-cyan/45 shadow-[0_1px_10px_-2px_rgba(42,161,152,0.35)]"
           : isWorking
             ? "bg-sol-green/[0.04] border-l-2 border-l-sol-green/40 hover:bg-sol-green/[0.08]"
             : isStashed
-              ? "opacity-75 hover:opacity-100 hover:bg-sol-bg-alt/80"
+              ? "opacity-65 hover:opacity-85 hover:bg-sol-bg-alt/80"
               : isDismissed
                 ? "opacity-60 hover:opacity-80 hover:bg-sol-bg-alt/80"
                 : "hover:bg-sol-bg-alt/80"
@@ -1752,7 +1765,7 @@ export const SessionCard = memo(function SessionCard({
         className="w-full text-left cursor-pointer px-2.5 sm:px-3 py-1.5 sm:py-2"
       >
         <div className={`flex items-center gap-1.5 leading-tight ${
-          isActive ? "text-sm text-sol-text font-semibold" : isWorking ? "text-sm text-sol-text font-medium" : isStashed ? "text-sm text-sol-text" : isDismissed ? "text-sm text-sol-text-muted" : "text-sm text-sol-text"
+          isActive ? "text-sm text-sol-text font-semibold" : isWorking ? "text-sm text-sol-text font-medium" : isStashed ? "text-sm text-sol-text-muted" : isDismissed ? "text-sm text-sol-text-muted" : "text-sm text-sol-text"
         }`}>
           {showAgentIcon && (
             <span className="flex-shrink-0 flex items-center" title={formatAgentType(session.agent_type || "claude_code")}>
@@ -3467,6 +3480,18 @@ export function SessionListPanel({
           >
             <Star className="w-3 h-3" fill={favoritesView ? "currentColor" : "none"} />
           </button>
+          {/* Standard close: every column dismisses with an X in its top-right. */}
+          {onCollapse && (
+            <button
+              onClick={onCollapse}
+              title="Close panel"
+              className="px-1 py-[3px] rounded-[5px] text-sol-text-dim/70 hover:text-sol-red transition-colors"
+            >
+              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          )}
         </div>
         </div>
       </div>
