@@ -991,21 +991,56 @@ async function deleteArtifactCascade(ctx: MutationCtx, artifact: Doc<"artifacts"
 }
 
 // ---------------------------------------------------------------------------
-// Web app (authed user) — the gallery. The WEB track extends these.
+// Web app (authed user) — the gallery.
 // ---------------------------------------------------------------------------
+
+/** User ids sharing at least one team with `userId` (excluding the user). */
+async function usersSharingTeam(ctx: { db: QueryCtx["db"] }, userId: Id<"users">): Promise<Id<"users">[]> {
+  const memberships = await ctx.db
+    .query("team_memberships")
+    .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+    .collect();
+  const seen = new Set<string>();
+  for (const m of memberships) {
+    const teamMembers = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_team_id", (q) => q.eq("team_id", m.team_id))
+      .collect();
+    for (const tm of teamMembers) {
+      if (tm.user_id !== userId) seen.add(tm.user_id);
+    }
+  }
+  return [...seen] as Id<"users">[];
+}
 
 export const listForWeb = query({
   args: {},
   handler: async (ctx) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return { artifacts: [] };
-    const rows = await ctx.db
+
+    const mine = await ctx.db
       .query("artifacts")
       .withIndex("by_user", (q) => q.eq("user_id", userId))
       .collect();
-    rows.sort((a, b) => b.updated_at - a.updated_at);
-    const out = [];
-    for (const row of rows) {
+
+    // Teammates' artifacts: visible in the gallery, but WITHOUT the secrets —
+    // manage/edit keys belong to the owner alone. Team edit rights flow
+    // through editForWeb (authed), not through key possession.
+    const teammates = await usersSharingTeam(ctx, userId);
+    const team: Array<{ row: Doc<"artifacts">; author: { name: string | null; image: string | null } }> = [];
+    for (const uid of teammates) {
+      const theirs = await ctx.db
+        .query("artifacts")
+        .withIndex("by_user", (q) => q.eq("user_id", uid))
+        .collect();
+      if (!theirs.length) continue;
+      const user = await ctx.db.get(uid);
+      const author = { name: user?.name ?? null, image: user?.image ?? null };
+      for (const row of theirs) team.push({ row, author });
+    }
+
+    const shape = async (row: Doc<"artifacts">, isMine: boolean, author?: { name: string | null; image: string | null }) => {
       const stats = await ctx.db
         .query("artifact_stats")
         .withIndex("by_artifact", (q) => q.eq("artifact_id", row._id))
@@ -1014,15 +1049,66 @@ export const listForWeb = query({
         .query("artifact_comments")
         .withIndex("by_artifact", (q) => q.eq("artifact_id", row._id))
         .collect();
-      out.push({
-        ...toCliRow(row),
+      const base = toCliRow(row);
+      return {
+        ...base,
+        // Secrets stay with the owner.
+        manage_url: isMine ? base.manage_url : null,
+        edit_url: isMine ? base.edit_url : null,
+        mine: isMine,
+        author: author ?? null,
+        can_team_edit: !isMine && row.edit_mode === "team",
         has_thumb: !!row.thumb_storage_id,
         views: stats?.view_count ?? 0,
         last_viewed_at: stats?.last_viewed_at ?? null,
         comments_open: comments.filter((c) => c.status === "open").length,
-      });
-    }
+      };
+    };
+
+    const out = [];
+    for (const row of mine) out.push(await shape(row, true));
+    for (const { row, author } of team) out.push(await shape(row, false, author));
+    out.sort((a, b) => b.updated_at - a.updated_at);
     return { artifacts: out };
+  },
+});
+
+export const deleteForWeb = mutation({
+  args: { slug: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { error: "Not signed in" };
+    const artifact = await ctx.db
+      .query("artifacts")
+      .withIndex("by_slug", (q) => q.eq("slug", args.slug))
+      .first();
+    if (!artifact || artifact.user_id !== userId) return { error: "Not found" };
+    await deleteArtifactCascade(ctx, artifact);
+    return { ok: true };
+  },
+});
+
+// Auth check for a signed-in web user editing an artifact: the owner always
+// may; a teammate only when edit_mode is "team" and they share a team.
+export const teamEditAuth = internalQuery({
+  args: { slug: v.string(), editor_user_id: v.id("users") },
+  handler: async (ctx, args) => {
+    const artifact = await ctx.db
+      .query("artifacts")
+      .withIndex("by_slug", (q) => q.eq("slug", args.slug))
+      .first();
+    if (!artifact) return null;
+    if (artifact.user_id !== args.editor_user_id) {
+      if (artifact.edit_mode !== "team") return null;
+      const teammates = await usersSharingTeam(ctx, artifact.user_id);
+      if (!teammates.includes(args.editor_user_id)) return null;
+    }
+    const editor = await ctx.db.get(args.editor_user_id);
+    return {
+      artifact,
+      is_owner: artifact.user_id === args.editor_user_id,
+      editor_name: editor?.name ?? editor?.github_username ?? "teammate",
+    };
   },
 });
 
