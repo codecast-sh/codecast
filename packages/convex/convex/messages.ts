@@ -803,6 +803,7 @@ export const addMessage = mutation({
     let images = args.images;
     let contentToStore = safeContent;
     let clientIdToStore: string | undefined;
+    let fromUserIdToStore: Id<"users"> | undefined;
     if (args.role === "user") {
       const pendingMsgs = await ctx.db
         .query("pending_messages")
@@ -812,6 +813,10 @@ export const addMessage = mutation({
       if (matchingPending) {
         contentToStore = redactSecrets(matchingPending.content);
         clientIdToStore = matchingPending.client_id;
+        // Attribute the stored message to whoever enqueued the send — the
+        // transcript echo itself carries no sender identity, so this is the
+        // only point where "who typed it" is known.
+        fromUserIdToStore = matchingPending.from_user_id;
         if (!images || images.length === 0) {
           const ids = matchingPending.image_storage_ids ?? (matchingPending.image_storage_id ? [matchingPending.image_storage_id] : []);
           if (ids.length > 0) {
@@ -825,6 +830,7 @@ export const addMessage = mutation({
 
     const messageId = await ctx.db.insert("messages", {
       conversation_id: args.conversation_id,
+      from_user_id: fromUserIdToStore,
       message_uuid: args.message_uuid,
       role: args.role,
       content: contentToStore,
@@ -1258,9 +1264,16 @@ export const addMessages = mutation({
             }
             if (matchingPending) {
               consumedPendingIds.add(matchingPending._id);
+              const dupPatch: Record<string, unknown> = {};
               if (!dup.client_id && matchingPending.client_id) {
+                dupPatch.client_id = matchingPending.client_id;
+              }
+              if (!dup.from_user_id && matchingPending.from_user_id) {
+                dupPatch.from_user_id = matchingPending.from_user_id;
+              }
+              if (Object.keys(dupPatch).length > 0) {
                 await ctx.db.patch(dup._id, {
-                  client_id: matchingPending.client_id,
+                  ...dupPatch,
                   transcript_revision: advanceTranscriptRevision(),
                 });
                 if (Object.keys(patch).length === 0) changedCount++;
@@ -1295,6 +1308,10 @@ export const addMessages = mutation({
 
       const messageId = await ctx.db.insert("messages", {
         conversation_id: args.conversation_id,
+        // Sender identity comes from the echoed pending row (team sends, cast
+        // send); owner-typed terminal messages have no pending row and stay
+        // unattributed, which the UI reads as "the owner".
+        from_user_id: matchingPending?.from_user_id,
         message_uuid: msg.message_uuid,
         source_device_id: msg.source_device_id,
         source_revision: msg.source_revision,

@@ -472,6 +472,9 @@ function formatMessagePartsForCopy(
 type Message = {
   _id: string;
   message_uuid?: string;
+  // Sender of a user message when it differs from the conversation owner
+  // (team sends, cast send, fork replies). Absent = the owner typed it.
+  from_user_id?: string;
   role: string;
   content?: string;
   timestamp: number;
@@ -10553,6 +10556,37 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
 
   const { user: currentUser } = useCurrentUser();
   const effectiveIsOwner = isOwner;
+  // Per-message sender attribution. A user message carries from_user_id when
+  // someone other than the conversation owner sent it (team send into a
+  // teammate's daemon, fork replies); resolve it against the cached team
+  // roster so the prompt shows the actual sender, falling back to the
+  // conversation owner for owner-typed and legacy messages.
+  const teamRoster = useInboxStore((s) => s.teamMembers) as any[] | null;
+  const senderById = useMemo(() => {
+    const m = new Map<string, { name?: string; avatar_url?: string | null }>();
+    for (const mem of teamRoster || []) {
+      if (!mem?._id) continue;
+      m.set(String(mem._id), {
+        name: mem.name || mem.email?.split("@")[0],
+        avatar_url: mem.image || mem.github_avatar_url || null,
+      });
+    }
+    const me = currentUser as any;
+    if (me?._id && !m.has(String(me._id))) {
+      m.set(String(me._id), {
+        name: me.name || me.email?.split("@")[0],
+        avatar_url: me.image || me.github_avatar_url || null,
+      });
+    }
+    return m;
+  }, [teamRoster, currentUser]);
+  const resolveMsgSender = useCallback((msg: Message): { name?: string; avatar_url?: string | null } | undefined => {
+    // Locally-created optimistic rows have no server from_user_id yet, but the
+    // sender is by definition the viewer.
+    const senderId = msg.from_user_id ?? ((msg._isOptimistic || msg._isQueued) ? (currentUser as any)?._id : undefined);
+    if (!senderId) return undefined;
+    return senderById.get(String(senderId));
+  }, [senderById, currentUser]);
   // Width reserved on the right by the teammate comment rail (per-conversation, so
   // multiple tab panes don't fight). Pads the transcript/composer and nudges the
   // scroll affordances left so nothing hides under the panel.
@@ -13306,7 +13340,8 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
         case 'poll_response':
           return null;
         case 'command': {
-          return <CommandMessageBlock key={msg._id} messageId={msg._id} content={msg.content!} expansion={commandExpansionMap.byCommand.get(msg._id)} timestamp={msg.timestamp} userName={conversation?.user?.name || conversation?.user?.email?.split("@")[0]} avatarUrl={conversation?.user?.avatar_url} agentType={conversation?.agent_type} />;
+          const cmdSender = resolveMsgSender(msg);
+          return <CommandMessageBlock key={msg._id} messageId={msg._id} content={msg.content!} expansion={commandExpansionMap.byCommand.get(msg._id)} timestamp={msg.timestamp} userName={cmdSender?.name || conversation?.user?.name || conversation?.user?.email?.split("@")[0]} avatarUrl={cmdSender ? cmdSender.avatar_url : conversation?.user?.avatar_url} agentType={conversation?.agent_type} />;
         }
         case 'interrupt':
           return <InterruptStatusLine key={msg._id} label={kind.tone === 'amber' ? "turn aborted" : undefined} tone={kind.tone} />;
@@ -13333,8 +13368,9 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           return <TeammateEventsBlock key={msg._id} content={msg.content || ""} timestamp={msg.timestamp} spawnedByConversationId={(conversation as any)?.spawned_by_conversation_id} />;
         case 'normal': {
           if (!msg.content?.trim() && !msg.images?.some(img => !img.tool_use_id)) return null;
-          const userName = conversation?.user?.name || conversation?.user?.email?.split("@")[0];
-          return <UserPrompt key={msg._id} content={msg.content || ""} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={false} userName={userName} avatarUrl={conversation?.user?.avatar_url} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={handleToggleMessageSelection} onStartShareSelection={handleStartShareSelection} onForkFromMessage={forkHandler} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={handleBranchSwitch} activeBranchId={activeBranchId} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} agentStatus={isSessionDisconnected || conversation?.status !== "active" ? undefined : (managedSession?.agent_status as LiveAgentStatus | undefined)} mainMessageCount={msg.message_uuid ? conversation?.main_message_counts_by_fork?.[msg.message_uuid] : undefined} mainDivergentPreview={msg.message_uuid ? conversation?.main_divergent_previews_by_fork?.[msg.message_uuid] : undefined} />;
+          const msgSender = resolveMsgSender(msg);
+          const userName = msgSender?.name || conversation?.user?.name || conversation?.user?.email?.split("@")[0];
+          return <UserPrompt key={msg._id} content={msg.content || ""} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={false} userName={userName} avatarUrl={msgSender ? msgSender.avatar_url : conversation?.user?.avatar_url} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={handleToggleMessageSelection} onStartShareSelection={handleStartShareSelection} onForkFromMessage={forkHandler} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={handleBranchSwitch} activeBranchId={activeBranchId} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} agentStatus={isSessionDisconnected || conversation?.status !== "active" ? undefined : (managedSession?.agent_status as LiveAgentStatus | undefined)} mainMessageCount={msg.message_uuid ? conversation?.main_message_counts_by_fork?.[msg.message_uuid] : undefined} mainDivergentPreview={msg.message_uuid ? conversation?.main_divergent_previews_by_fork?.[msg.message_uuid] : undefined} />;
         }
       }
     }

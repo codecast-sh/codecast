@@ -140,6 +140,26 @@ describe("advanceForkCopy", () => {
     expect((h.conversations.get("fork1") as Record<string, unknown>).fork_daemon_args).toBeUndefined();
   });
 
+  test("per-message sender attribution (from_user_id) survives the copy", async () => {
+    const messages = makeMessages(4);
+    // A teammate's send into the source session — attribution must follow the
+    // message into the fork, and owner-typed rows must stay unattributed.
+    messages[2].from_user_id = "teammate_user";
+    const source = { _id: "srcAttr", messages };
+    const h = makeHarness(source, {
+      _id: "forkAttr",
+      user_id: "u1",
+      forked_from: "srcAttr",
+      fork_cutoff_timestamp: 9_999_999,
+      fork_daemon_args: JSON.stringify({}),
+    });
+
+    await advanceForkCopy(h.ctx, "forkAttr");
+    const copied = h.insertedMessagesByFork.get("forkAttr")!;
+    expect(copied[2].from_user_id).toBe("teammate_user");
+    expect(copied[0].from_user_id).toBeUndefined();
+  });
+
   test("exactly FORK_BATCH_DOCS messages completes in two rounds (one extra empty batch)", async () => {
     const source = { _id: "src2", messages: makeMessages(FORK_BATCH_DOCS) };
     const h = makeHarness(source, {
