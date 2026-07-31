@@ -99,7 +99,7 @@ describe("SyncService.addMessages timeout regression", () => {
         return { inserted: 1, ids: ["m1"] };
       },
     };
-    const message = {
+    const message: Parameters<SyncService["addMessages"]>[0]["messages"][number] = {
       messageUuid: "same-message",
       role: "assistant" as const,
       content: "partial",
