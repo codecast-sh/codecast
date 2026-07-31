@@ -84,8 +84,10 @@ describe("collectOldLegacyPendingMessages", () => {
 // configurable set of "other" rows still in flight for the conversation.
 const createCtx = ({
   remainingByStatus = {},
+  conversationExists = true,
 }: {
   remainingByStatus?: Record<string, any>;
+  conversationExists?: boolean;
 }) => {
   const patches: Array<{ id: string; patch: Record<string, unknown> }> = [];
   const ctx = {
@@ -111,6 +113,9 @@ const createCtx = ({
       },
       async patch(id: string, patch: Record<string, unknown>) {
         patches.push({ id, patch });
+      },
+      async get(id: string) {
+        return conversationExists ? { _id: id } : null;
       },
     },
   };
@@ -152,6 +157,24 @@ describe("markPendingDelivered", () => {
       status: "cancelled",
     });
     expect(patches).toHaveLength(0);
+  });
+
+  test("terminalizes an orphaned message without patching a deleted conversation", async () => {
+    const { ctx, patches } = createCtx({
+      remainingByStatus: {},
+      conversationExists: false,
+    });
+    await markPendingDelivered(ctx as any, {
+      _id: "m-orphan" as any,
+      conversation_id: "c-missing" as any,
+      status: "injected",
+    });
+
+    expect(patches).toHaveLength(1);
+    expect(patches[0]).toMatchObject({
+      id: "m-orphan",
+      patch: { status: "delivered" },
+    });
   });
 
   test("does NOT clear the conversation flag while another pending message remains", async () => {
