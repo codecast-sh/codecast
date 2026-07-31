@@ -21,7 +21,7 @@ import { TeamIcon } from "./TeamIcon";
 import { isDesktop } from "../lib/desktop";
 import { CreateTaskModal } from "./CreateTaskModal";
 import { CreateDocModal } from "./CreateDocModal";
-import { Workflow, Zap } from "lucide-react";
+import { Globe, Workflow, Zap } from "lucide-react";
 
 const api = _api as any;
 
@@ -333,6 +333,8 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const isTasks = pathname === "/tasks" || pathname?.startsWith("/tasks/");
   const isPlans = pathname === "/plans" || pathname?.startsWith("/plans/");
   const isDocs = pathname === "/docs" || pathname?.startsWith("/docs/");
+  const isVault = pathname === "/vault" || pathname?.startsWith("/vault/");
+  const isArtifacts = pathname === "/artifacts" || pathname?.startsWith("/artifacts/");
   const isWorkflows = pathname === "/workflows" || pathname?.startsWith("/workflows/");
   const isTriggers = pathname === "/triggers" || pathname?.startsWith("/triggers/") ||
     pathname === "/schedules" || pathname?.startsWith("/schedules/"); // /schedules = pre-rename alias
@@ -619,6 +621,34 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             }
           />
           <Link
+            href="/vault"
+            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none ${
+              isVault
+                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
+                : "text-sol-text-muted hover:bg-sol-bg-highlight hover:text-sol-text border-l-2 border-transparent"
+            }`}
+            onClick={onMobileClose}
+          >
+            <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 13h6m-6 3h4" />
+            </svg>
+            {!isNarrow && <span className="text-sm">Vault</span>}
+          </Link>
+          <Link
+            href="/artifacts"
+            className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none ${
+              isArtifacts
+                ? "bg-sol-bg-highlight text-sol-text border-l-2 border-sol-cyan"
+                : "text-sol-text-muted hover:bg-sol-bg-highlight hover:text-sol-text border-l-2 border-transparent"
+            }`}
+            onClick={onMobileClose}
+            data-simple-hide
+          >
+            <Globe className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />
+            {!isNarrow && <span className="text-sm">Artifacts</span>}
+          </Link>
+          <Link
             href="/workflows"
             className={`w-full flex items-center ${isNarrow ? 'justify-center' : 'gap-3'} px-4 py-2.5 transition-colors motion-reduce:transition-none ${
               isWorkflows
@@ -843,6 +873,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
 
   return (
     <nav
+      data-sv-nav
       className={`
         h-full w-full py-3 sm:py-4 flex flex-col bg-sol-bg-alt select-none
         ${isMobileOpen ? 'shadow-xl' : 'hidden md:flex'}

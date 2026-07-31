@@ -35,6 +35,8 @@ interface TermInstance {
   resizeObserver: ResizeObserver | null;
   /** queued while the socket is still connecting */
   pendingResize: { cols: number; rows: number } | null;
+  /** kill asked for before the session was ready; honored on ready */
+  killRequested?: boolean;
 }
 
 const instances = new Map<string, TermInstance>();
@@ -96,16 +98,10 @@ export function applyTerminalTheme(theme: ITheme, fontFamily?: string): void {
   }
 }
 
-async function loadWebgl(term: Terminal): Promise<void> {
-  try {
-    const { WebglAddon } = await import("@xterm/addon-webgl");
-    const addon = new WebglAddon();
-    addon.onContextLoss(() => addon.dispose()); // fall back to DOM renderer
-    term.loadAddon(addon);
-  } catch {
-    // DOM renderer is fine — WebGL is a fast path, not a requirement.
-  }
-}
+// No WebGL addon, deliberately: a background tab that gets its GPU context
+// evicted (observed: frozen renderer during a Vite reload storm) comes back
+// with xterm silently painting nothing. The DOM renderer has no such failure
+// mode and is easily fast enough at bottom-panel size.
 
 export interface OpenTerminalOptions {
   endpoint: TerminalEndpoint;
@@ -151,9 +147,11 @@ export function openTerminal(opts: OpenTerminalOptions): string {
     macOptionIsMeta: true,
     theme: currentTheme,
   });
-  // App-level shortcuts that must win over the terminal: the panel toggle.
-  // Returning false tells xterm not to consume it, so the global shortcut
-  // listener sees the event.
+  // The panel toggle is the ONE chord the app keeps while the terminal is
+  // focused. The app's capture-phase listener actually intercepts it before
+  // xterm runs (see ShortcutProvider's inTerminal guard); this handler is the
+  // backstop for when that shortcut isn't registered — without it xterm would
+  // feed the chord to the shell.
   term.attachCustomKeyEventHandler((e) => {
     if (e.ctrlKey && !e.metaKey && !e.altKey && e.key === "`") return false;
     return true;
@@ -164,7 +162,6 @@ export function openTerminal(opts: OpenTerminalOptions): string {
     // Plain click opens; keeps text selection unaffected.
     if (!event.defaultPrevented) window.open(uri, "_blank", "noopener");
   }));
-  void loadWebgl(term);
 
   const inst: TermInstance = {
     state: {
@@ -199,19 +196,19 @@ function connect(inst: TermInstance, opts: OpenTerminalOptions): void {
   const encoder = new TextEncoder();
 
   ws.onopen = () => {
-    ws.send(
-      JSON.stringify({
-        type: "hello",
-        token: opts.endpoint.token,
-        mode: opts.kind === "attach" ? "attach" : "create",
-        name: opts.kind === "shell" ? inst.state.sessionName : undefined,
-        cwd: opts.cwd,
-        target: opts.target,
-        interactive: opts.interactive,
-        cols: inst.term.cols,
-        rows: inst.term.rows,
-      }),
-    );
+    const hello = {
+      type: "hello",
+      token: opts.endpoint.token,
+      mode: opts.kind === "attach" ? "attach" : "create",
+      name: opts.kind === "shell" ? inst.state.sessionName : undefined,
+      cwd: opts.cwd,
+      target: opts.target,
+      interactive: opts.interactive,
+      cols: inst.term.cols,
+      rows: inst.term.rows,
+    };
+    logHello({ tabId: inst.state.id, ...hello });
+    ws.send(JSON.stringify(hello));
   };
 
   ws.onmessage = (ev) => {
@@ -222,6 +219,13 @@ function connect(inst: TermInstance, opts: OpenTerminalOptions): void {
           inst.state.status = "open";
           inst.state.sessionName = msg.sessionName;
           inst.state.readOnly = !!msg.readOnly;
+          // Kill requested while we were still connecting: now that the
+          // session exists server-side, follow through instead of leaking it.
+          if (inst.killRequested) {
+            ws.send(JSON.stringify({ type: "kill" }));
+            bump();
+            return;
+          }
           if (inst.state.kind === "shell" && !opts.title) {
             inst.state.title = shortTitle(msg.sessionName, inst.state.cwd);
           }
@@ -251,6 +255,13 @@ function connect(inst: TermInstance, opts: OpenTerminalOptions): void {
   };
 
   ws.onclose = () => {
+    if (inst.killRequested) {
+      // Deferred kill completed (or died trying): the user asked for this tab
+      // to be gone — remove it rather than leaving an "exited" husk.
+      inst.ws = null;
+      closeTab(inst.state.id);
+      return;
+    }
     if (inst.state.status === "connecting") {
       inst.state.status = "error";
       inst.state.statusDetail ??= "connection failed";
@@ -329,9 +340,35 @@ export function attachToContainer(id: string, el: HTMLElement): void {
 export function closeTab(id: string, opts?: { killSession?: boolean }): void {
   const inst = instances.get(id);
   if (!inst) return;
-  if (opts?.killSession && inst.ws?.readyState === WebSocket.OPEN) {
-    inst.ws.send(JSON.stringify({ type: "kill" }));
+
+  if (opts?.killSession && inst.ws) {
+    if (inst.ws.readyState === WebSocket.CONNECTING || inst.state.status === "connecting") {
+      // Session may not exist server-side yet; defer the kill to the ready
+      // handler so it can't be skipped. The tab stays until the server
+      // confirms (its close event lands back here without killSession).
+      inst.killRequested = true;
+      bump();
+      return;
+    }
+    if (inst.ws.readyState === WebSocket.OPEN) {
+      // Send kill but let the SERVER close the socket after the tmux session
+      // is actually dead — closing from this side races the daemon's control
+      // client teardown against the in-flight kill-session command. The
+      // detached socket force-closes on a timer in case the server never
+      // answers.
+      const ws = inst.ws;
+      inst.ws = null;
+      ws.onmessage = null;
+      const deadline = setTimeout(() => {
+        try {
+          ws.close();
+        } catch {}
+      }, 2500);
+      ws.onclose = () => clearTimeout(deadline);
+      ws.send(JSON.stringify({ type: "kill" }));
+    }
   }
+
   try {
     inst.ws?.close();
   } catch {}
@@ -353,4 +390,19 @@ export function findTabBySession(sessionName: string): string | null {
     if (inst.state.sessionName === sessionName) return id;
   }
   return null;
+}
+
+// Dev console access, mirroring window.__inboxStore: inspect tab states and
+// the hello each socket sent when debugging connect issues.
+if (typeof window !== "undefined" && import.meta.env?.DEV) {
+  (window as any).__termDebug = {
+    tabs: () => listTabs().map((t) => ({ ...t })),
+    active: () => activeId,
+    hellos: () => helloLog.slice(),
+  };
+}
+const helloLog: Array<Record<string, unknown>> = [];
+export function logHello(entry: Record<string, unknown>): void {
+  helloLog.push({ ...entry, token: "<redacted>", at: Date.now() });
+  if (helloLog.length > 20) helloLog.shift();
 }

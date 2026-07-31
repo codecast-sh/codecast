@@ -1064,13 +1064,41 @@ pre[class*="language-"] {
    theme-aware via a warm tint over the page background. [id^="msg-"] scopes
    to the message BLOCKS and leaves small inline chips that share the
    bg-sol-blue/10 tint alone. */
-.simple-view [data-sv-feed] [id^="msg-"][class*="bg-sol-blue/10"] {
-  background: color-mix(in srgb, var(--sol-yellow) 7%, var(--sol-bg)) !important;
+.simple-view [data-sv-feed] [id^="msg-"][class*="bg-sol-blue/10"],
+.simple-view [data-sv-sticky] {
+  /* The mock's note card: warm white, distinctly lighter than the page. */
+  background: color-mix(in srgb, var(--sol-yellow) 6%, #ffffff) !important;
   border: 1px solid color-mix(in srgb, var(--sol-text) 11%, transparent) !important;
   border-radius: 9px;
+  box-shadow: none;
+}
+/* Dark theme has no "white": the card lifts a step ABOVE the page instead. */
+.dark .simple-view [data-sv-feed] [id^="msg-"][class*="bg-sol-blue/10"],
+.dark .simple-view [data-sv-sticky] {
+  background: color-mix(in srgb, var(--sol-text) 7%, var(--sol-bg)) !important;
+}
+.simple-view [data-sv-feed] [id^="msg-"][class*="bg-sol-blue/10"] {
   padding: 9px 12px;
   margin-bottom: 16px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+/* The sticky pinned copy keeps its own paddings but flattens to the same
+   card: square top (it hangs from the header), no blur halo. It lives OUTSIDE
+   the [data-sv-feed] scroller, so it needs the same type scale restated. */
+.simple-view [data-sv-sticky] {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+  backdrop-filter: none;
+  font-size: 12.5px;
+}
+.simple-view [data-sv-sticky] .prose { font-size: 12.5px; line-height: 1.6; }
+.simple-view [data-sv-sticky] .text-sm { font-size: 12px; }
+.simple-view [data-sv-sticky] .text-xs { font-size: 10.5px; }
+
+/* Author name on the cream cards: solarized blue fights the warm ground —
+   orange is the solarized accent that belongs on it. */
+.simple-view [data-sv-sticky] .text-sol-blue,
+.simple-view [data-sv-feed] [id^="msg-"][class*="bg-sol-blue/10"] .text-sol-blue {
+  color: var(--sol-orange);
 }
 /* The message body indent under the avatar row flattens — the card itself
    is the container now. */
@@ -1137,9 +1165,67 @@ pre[class*="language-"] {
 .simple-view [data-sv-rail] [data-session-id][class*="border-l-"] {
   border-left-width: 1px;
 }
-.simple-view [data-sv-rail] [data-session-id][class*="bg-sol-cyan/15"] {
-  box-shadow: 0 0 0 1px var(--sol-cyan) inset;
-  background: var(--sol-bg);
+/* Selected card: on the tile ground, selection = a solid cyan outline plus a
+   faint wash — unmistakable next to hairline-bordered neighbors without
+   turning the card into a color block. */
+.simple-view [data-sv-rail] [data-session-id][class*="ring-sol-cyan"] {
+  box-shadow: 0 0 0 1.5px var(--sol-cyan) inset;
+  background: color-mix(in srgb, var(--sol-cyan) 6%, var(--sol-bg));
+  border-color: transparent;
+}
+
+/* Section headers float in negative space (the mock's NEEDS INPUT / WORKING
+   rows): tiny letterspaced label, no bar, no border — the whitespace IS the
+   separator. */
+.simple-view [data-sv-rail] [data-sv-sec] {
+  background: transparent;
+  border-bottom: none;
+  padding: 12px 12px 4px;
+}
+.simple-view [data-sv-rail] [data-sv-sec] span {
+  font-size: 9px;
+  letter-spacing: 0.13em;
+}
+/* The chip/filter strip above the list quiets down until you reach for it. */
+.simple-view [data-sv-rail] > div:first-child {
+  opacity: 0.75;
+  transition: opacity 0.15s;
+}
+.simple-view [data-sv-rail] > div:first-child:hover {
+  opacity: 1;
+}
+
+/* ---- Left sidebar: smaller sections, counts pushed right, more air ---- */
+.simple-view [data-sv-nav] {
+  font-size: 12px;
+}
+.simple-view [data-sv-nav] .uppercase {
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  opacity: 0.65;
+  margin-top: 4px;
+}
+/* Nav rows tighten; the mock's 5px rhythm. */
+.simple-view [data-sv-nav] button.w-full,
+.simple-view [data-sv-nav] a.w-full {
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+.simple-view [data-sv-nav] .w-5 {
+  width: 15px;
+  height: 15px;
+}
+/* Count badges hug the right edge (mock: badge margin-left auto), and shrink
+   from pill to whisper. Scoped to the count pills, not avatar/dot circles. */
+.simple-view [data-sv-nav] span.rounded-full[class*="bg-sol-cyan"],
+.simple-view [data-sv-nav] span.rounded-full[class*="bg-teal"] {
+  margin-left: auto;
+  min-width: 16px;
+  height: 16px;
+  font-size: 9.5px;
+  background: color-mix(in srgb, var(--sol-cyan) 18%, transparent);
+  color: var(--sol-cyan);
+  font-weight: 600;
 }
 
 /* Window manager: hide input area on unfocused windows */
@@ -2018,4 +2104,37 @@ pre[class*="language-"] {
 @keyframes ccMsgFlash {
   0%, 25% { background: color-mix(in srgb, var(--cc-accent) 16%, transparent); }
   100% { background: transparent; }
+}
+
+/* -- Vault: wiki links in the reading view ------------------------------- */
+.vault-prose .wiki-link {
+  color: var(--sol-cyan);
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--sol-cyan) 35%, transparent);
+  cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+.vault-prose .wiki-link:hover {
+  color: color-mix(in srgb, var(--sol-cyan) 80%, var(--sol-text));
+  background: color-mix(in srgb, var(--sol-cyan) 10%, transparent);
+  border-bottom-color: var(--sol-cyan);
+}
+/* Unresolved: faded — the classic dangling link; click creates the note. */
+.vault-prose .wiki-link-unresolved {
+  color: color-mix(in srgb, var(--sol-cyan) 45%, var(--sol-text-dim));
+  border-bottom-style: dashed;
+  border-bottom-color: color-mix(in srgb, var(--sol-cyan) 20%, transparent);
+}
+/* Ambiguous basename (two notes share the name): subtle warning underline. */
+.vault-prose .wiki-link-ambiguous {
+  border-bottom-color: color-mix(in srgb, var(--sol-yellow) 55%, transparent);
+}
+/* Obsidian-style plain blockquotes: no decorative curly quotes, no forced italics
+   (Tailwind typography adds both). */
+.vault-prose blockquote p:first-of-type::before,
+.vault-prose blockquote p:last-of-type::after {
+  content: none;
+}
+.vault-prose blockquote {
+  font-style: normal;
 }

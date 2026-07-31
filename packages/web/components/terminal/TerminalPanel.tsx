@@ -12,7 +12,8 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useConvex } from "convex/react";
 import { Plus, X, Trash2, ChevronDown, ChevronUp, RotateCw, TerminalSquare, Eye } from "lucide-react";
-import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
+import { useInboxStore } from "../../store/inboxStore";
+import { setTerminalHeight, setTerminalOpen, useTerminalPanelPrefs } from "../../lib/terminal/panelPrefs";
 import {
   getTerminalEndpoint,
   probeEndpoint,
@@ -25,6 +26,7 @@ import {
   attachToContainer,
   closeTab,
   getActiveTabId,
+  getInstance,
   getTerminalsVersion,
   listTabs,
   openTerminal,
@@ -45,12 +47,7 @@ type EndpointState =
   | { phase: "unavailable"; reason: string };
 
 export function TerminalPanel() {
-  const s = useTrackedStore([
-    (st) => st.clientState.ui?.terminal_open,
-    (st) => st.clientState.ui?.terminal_height,
-  ]);
-  const open = s.clientState.ui?.terminal_open ?? false;
-  const storedHeight = s.clientState.ui?.terminal_height ?? DEFAULT_HEIGHT;
+  const { open, height: storedHeight } = useTerminalPanelPrefs();
 
   const convex = useConvex();
   const [ep, setEp] = useState<EndpointState>({ phase: "idle" });
@@ -112,6 +109,9 @@ export function TerminalPanel() {
         const existing = (await probeEndpoint(endpoint)) ?? [];
         const openNames = new Set(listTabs().map((t) => t.sessionName));
         for (const sess of existing) {
+          // Belt-and-braces: never try to restore a name the daemon would
+          // reject (guards against list-format skew between versions).
+          if (!/^cast-term-[A-Za-z0-9_-]+$/.test(sess.name)) continue;
           if (!openNames.has(sess.name)) {
             openShellTab(endpoint, { name: sess.name, cwd: sess.path || undefined });
           }
@@ -137,27 +137,34 @@ export function TerminalPanel() {
     (e: React.PointerEvent) => {
       if (maximized) return;
       e.preventDefault();
-      const handle = e.currentTarget as HTMLElement;
-      handle.setPointerCapture(e.pointerId);
       const startY = e.clientY;
       const startHeight = heightRef.current;
       const maxH = Math.round(window.innerHeight * 0.8);
       let latest = startHeight;
+      // Window-level listeners (not pointer capture): the terminal body is an
+      // iframe-free but event-hungry surface, and window listeners keep the
+      // drag alive wherever the cursor goes, including outside the viewport.
       const onMove = (ev: PointerEvent) => {
         latest = Math.min(Math.max(startHeight + (startY - ev.clientY), MIN_HEIGHT), maxH);
         setDragHeight(latest);
       };
       const onUp = () => {
-        handle.removeEventListener("pointermove", onMove);
-        handle.removeEventListener("pointerup", onUp);
-        handle.removeEventListener("pointercancel", onUp);
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        window.removeEventListener("pointercancel", onUp);
+        document.body.style.userSelect = "";
+        document.body.style.cursor = "";
         heightRef.current = latest;
         setDragHeight(null);
-        useInboxStore.getState().updateClientUI({ terminal_height: latest });
+        if (latest !== startHeight) setTerminalHeight(latest);
       };
-      handle.addEventListener("pointermove", onMove);
-      handle.addEventListener("pointerup", onUp);
-      handle.addEventListener("pointercancel", onUp);
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+      window.addEventListener("pointercancel", onUp);
+      // Suppress text selection and keep the row-resize cursor for the whole
+      // drag, even while the pointer crosses xterm's selection layer.
+      document.body.style.userSelect = "none";
+      document.body.style.cursor = "row-resize";
     },
     [maximized],
   );
@@ -168,8 +175,6 @@ export function TerminalPanel() {
   const height = maximized
     ? Math.round(typeof window !== "undefined" ? window.innerHeight * 0.75 : 600)
     : (dragHeight ?? storedHeight);
-
-  const setOpen = (value: boolean) => useInboxStore.getState().updateClientUI({ terminal_open: value });
 
   const endpoint = ep.phase === "ready" ? ep.endpoint : null;
 
@@ -299,7 +304,7 @@ export function TerminalPanel() {
             {maximized ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronUp className="w-3.5 h-3.5" />}
           </button>
           <button
-            onClick={() => setOpen(false)}
+            onClick={() => setTerminalOpen(false)}
             title="Hide terminal (ctrl+`)"
             className="p-1 rounded text-sol-text-dim/50 hover:text-sol-text-muted transition-colors"
           >
@@ -309,7 +314,24 @@ export function TerminalPanel() {
       </div>
 
       {/* body */}
-      <div className="relative flex-1 min-h-0">
+      <div
+        className="relative flex-1 min-h-0"
+        onMouseDown={(e) => {
+          // Click anywhere in the body (including margins below a short
+          // buffer) focuses the active terminal — a click that misses xterm
+          // by a few pixels must never leave keystrokes routed to whatever
+          // input the app focused last (that's how a stray Enter can send a
+          // drafted message). Skip real controls (Retry button etc.).
+          if ((e.target as HTMLElement).closest("button, a, input, textarea")) return;
+          if (activeId) {
+            const inst = getInstance(activeId);
+            if (inst && inst.state.status === "open") {
+              e.preventDefault();
+              inst.term.focus();
+            }
+          }
+        }}
+      >
         {ep.phase === "resolving" && (
           <CenteredNote>
             <span className="inline-block w-3 h-3 border border-sol-text-dim/40 border-t-sol-cyan rounded-full animate-spin align-middle mr-2" />

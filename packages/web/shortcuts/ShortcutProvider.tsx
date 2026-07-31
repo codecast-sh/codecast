@@ -68,7 +68,16 @@ export function ShortcutProvider({ children }: { children: ReactNode }) {
       // shortcuts fire.
       const modalOpen = hasOpenModal();
 
+      // The integrated terminal owns the keyboard harder than any input: a
+      // shell lives on Ctrl chords (Ctrl+C/L/P/R/K...), and this listener runs
+      // capture-phase on window — BEFORE xterm — so any match here silently
+      // eats the key from the shell. skipInputCheck can't help (it exists to
+      // let chords fire IN inputs). Only the panel toggle may act; everything
+      // else falls through to the terminal.
+      const inTerminal = !!(e.target as HTMLElement | null)?.closest?.("[data-terminal-panel]");
+
       for (const def of SHORTCUTS) {
+        if (inTerminal && def.action !== "terminal.toggle") continue;
         if (!matchShortcut(e, def)) continue;
         if (modalOpen && !def.worksInModal) continue;
         if (def.when && !contextsRef.current.has(def.when)) continue;
