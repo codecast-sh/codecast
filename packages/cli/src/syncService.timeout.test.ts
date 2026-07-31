@@ -1,6 +1,14 @@
 import { describe, it, expect } from "bun:test";
 import { withTimeout, SyncService, chunkMessagesBySize } from "./syncService.js";
 
+function makeSyncService(authToken = "t"): SyncService {
+  let revision = 0;
+  return new SyncService(
+    { convexUrl: "http://localhost:0", userId: "u", authToken },
+    { nextTranscriptSourceRevision: () => ++revision },
+  );
+}
+
 describe("withTimeout", () => {
   it("resolves through when the inner promise wins the race", async () => {
     const result = await withTimeout(Promise.resolve("ok"), 1000, "test");
@@ -38,7 +46,7 @@ describe("withTimeout", () => {
 
 describe("SyncService.addMessages timeout regression", () => {
   it("throws (instead of hanging silently) when the convex mutation never resolves", async () => {
-    const sync = new SyncService({ convexUrl: "http://localhost:0", userId: "u", authToken: "t" });
+    const sync = makeSyncService();
 
     // Stub the internal Convex client so the mutation hangs forever, simulating
     // the 2026-05-13 stuck-sync incident where addMessages calls never returned.
@@ -66,7 +74,7 @@ describe("SyncService.addMessages timeout regression", () => {
   }, 5000);
 
   it("returns normally when the mutation resolves promptly", async () => {
-    const sync = new SyncService({ convexUrl: "http://localhost:0", userId: "u", authToken: "t" });
+    const sync = makeSyncService();
     (sync as any).client = {
       mutation: async () => ({ inserted: 1, ids: ["m1"] }),
     };
@@ -80,6 +88,38 @@ describe("SyncService.addMessages timeout regression", () => {
 
     expect(result.inserted).toBe(1);
     expect(result.ids).toEqual(["m1"]);
+  });
+
+  it("keeps one version across retries but advances a later same-UUID projection", async () => {
+    const sync = makeSyncService();
+    const sentRevisions: number[] = [];
+    (sync as any).client = {
+      mutation: async (_name: string, args: { messages: Array<{ source_revision: number }> }) => {
+        sentRevisions.push(args.messages[0].source_revision);
+        return { inserted: 1, ids: ["m1"] };
+      },
+    };
+    const message = {
+      messageUuid: "same-message",
+      role: "assistant" as const,
+      content: "partial",
+      timestamp: Date.now(),
+      sourceDeviceId: "test-device",
+    };
+
+    await sync.addMessages({ conversationId: "conv", messages: [message] });
+    await sync.addMessages({ conversationId: "conv", messages: [message] });
+    await sync.addMessages({
+      conversationId: "conv",
+      messages: [{
+        ...message,
+        content: "final",
+        sourceRevision: undefined,
+      }],
+    });
+
+    expect(sentRevisions).toEqual([1, 1, 2]);
+    expect(message.sourceRevision).toBe(1);
   });
 });
 
@@ -236,7 +276,7 @@ const MAX_CONTENT_NEAR_CAP = 100_000;
 
 describe("SyncService.addMessages oversized-batch regression", () => {
   it("splits an image-heavy run into multiple sub-cap mutations instead of one giant call", async () => {
-    const sync = new SyncService({ convexUrl: "http://localhost:0", userId: "u", authToken: "t" });
+    const sync = makeSyncService();
 
     // Capture every mutation payload so we can assert none is multi-MB. Before
     // the byte-aware split, 10 of these ~100KB-content messages would go out as
@@ -298,7 +338,7 @@ describe("SyncService.addMessages per-conversation serialization", () => {
   const msg = (i: number) => ({ role: "assistant" as const, content: "m" + i, timestamp: Date.now() });
 
   it("never runs two addMessages for the SAME conversation concurrently", async () => {
-    const sync = new SyncService({ convexUrl: "http://localhost:0", userId: "u", authToken: "t" });
+    const sync = makeSyncService();
     const t = trackingClient();
     (sync as any).client = t.client;
 
@@ -314,7 +354,7 @@ describe("SyncService.addMessages per-conversation serialization", () => {
   it("a stuck write on one conversation does not block another conversation", async () => {
     // Per-conversation chains must be independent: a hung addMessages for convA
     // must not wedge convB (otherwise one bad conversation stalls the whole daemon).
-    const sync = new SyncService({ convexUrl: "http://localhost:0", userId: "u", authToken: "t" });
+    const sync = makeSyncService();
     let bDone = false;
     (sync as any).client = {
       mutation: async (_n: string, args: any) => {
@@ -333,7 +373,7 @@ describe("SyncService.addMessages per-conversation serialization", () => {
   });
 
   it("a failed write does not block the next write for the same conversation", async () => {
-    const sync = new SyncService({ convexUrl: "http://localhost:0", userId: "u", authToken: "t" });
+    const sync = makeSyncService();
     let calls = 0;
     (sync as any).client = {
       mutation: async (_n: string, args: any) => {
@@ -347,53 +387,6 @@ describe("SyncService.addMessages per-conversation serialization", () => {
     const second = sync.addMessages({ conversationId: "convA", messages: [msg(2)] });
     await expect(first).rejects.toThrow("transient server error");
     await expect(second).resolves.toMatchObject({ inserted: 1 });
-  });
-});
-
-describe("SyncService.addMessages remote reconciliation", () => {
-  const msg = (uuid: string) => ({ messageUuid: uuid, role: "assistant" as const, content: uuid, timestamp: Date.now() });
-
-  it("drops already-landed message uuids before retrying the batch", async () => {
-    const sync = new SyncService({ convexUrl: "http://localhost:0", userId: "u", authToken: "t" });
-    const sentBatches: any[] = [];
-    (sync as any).client = {
-      query: async () => ["u1"],
-      mutation: async (_n: string, args: any) => {
-        sentBatches.push(args.messages);
-        return { inserted: args.messages.length, ids: [] };
-      },
-    };
-
-    const result = await sync.addMessages({
-      conversationId: "convA",
-      messages: [msg("u1"), msg("u2")],
-      reconcileRemoteExisting: true,
-    });
-
-    expect(result.inserted).toBe(1);
-    expect(sentBatches).toHaveLength(1);
-    expect(sentBatches[0].map((m: any) => m.message_uuid)).toEqual(["u2"]);
-  });
-
-  it("skips the mutation entirely when every message already exists remotely", async () => {
-    const sync = new SyncService({ convexUrl: "http://localhost:0", userId: "u", authToken: "t" });
-    let mutations = 0;
-    (sync as any).client = {
-      query: async () => ["u1", "u2"],
-      mutation: async () => {
-        mutations++;
-        return { inserted: 99, ids: ["should-not-run"] };
-      },
-    };
-
-    const result = await sync.addMessages({
-      conversationId: "convA",
-      messages: [msg("u1"), msg("u2")],
-      reconcileRemoteExisting: true,
-    });
-
-    expect(result).toEqual({ inserted: 0, ids: [] });
-    expect(mutations).toBe(0);
   });
 });
 

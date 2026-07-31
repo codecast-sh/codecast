@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   getAddMessagesAgentStatusProjection,
+  shouldApplyMessageSourceRevision,
   shouldApplyAddMessagesAgentStatusProjection,
 } from "./messages";
 
@@ -45,5 +46,57 @@ describe("shouldApplyAddMessagesAgentStatusProjection", () => {
 
   test("skips when a newer daemon status update landed after scheduling", () => {
     expect(shouldApplyAddMessagesAgentStatusProjection(101, 100)).toBe(false);
+  });
+});
+
+describe("shouldApplyMessageSourceRevision", () => {
+  test("accepts a newer revision and rejects equal or stale retries", () => {
+    const stored = { source_device_id: "device-a", source_revision: 11 };
+    expect(shouldApplyMessageSourceRevision(
+      stored,
+      { source_device_id: "device-a", source_revision: 12 },
+      "device-a",
+    )).toBe(true);
+    expect(shouldApplyMessageSourceRevision(
+      stored,
+      { source_device_id: "device-a", source_revision: 11 },
+      "device-a",
+    )).toBe(false);
+    expect(shouldApplyMessageSourceRevision(
+      stored,
+      { source_device_id: "device-a", source_revision: 10 },
+      "device-a",
+    )).toBe(false);
+  });
+
+  test("fences a stale daemon after conversation ownership moves devices", () => {
+    expect(shouldApplyMessageSourceRevision(
+      { source_device_id: "old-device", source_revision: 500 },
+      { source_device_id: "old-device", source_revision: 501 },
+      "new-device",
+    )).toBe(false);
+    expect(shouldApplyMessageSourceRevision(
+      { source_device_id: "old-device", source_revision: 500 },
+      { source_device_id: "new-device", source_revision: 1 },
+      "new-device",
+    )).toBe(true);
+  });
+
+  test("legacy writers remain compatible but cannot overwrite revisioned rows", () => {
+    expect(shouldApplyMessageSourceRevision(
+      {},
+      {},
+      "device-a",
+    )).toBe(true);
+    expect(shouldApplyMessageSourceRevision(
+      {},
+      { source_device_id: "device-a", source_revision: 1 },
+      "device-a",
+    )).toBe(true);
+    expect(shouldApplyMessageSourceRevision(
+      { source_device_id: "device-a", source_revision: 1 },
+      {},
+      "device-a",
+    )).toBe(false);
   });
 });
