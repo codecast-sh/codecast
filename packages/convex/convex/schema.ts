@@ -213,6 +213,8 @@ export default defineSchema({
     user_id: v.id("users"), // the human owner (bots may never be owners)
     added_by: v.id("users"), // who assigned them — provenance + "X assigned you" notif
     added_at: v.number(),
+    note: v.optional(v.string()), // assigner's optional handoff message
+    seen_at: v.optional(v.number()), // when the assignee acknowledged the handoff
   })
     // Powers the owner's inbox merge: newest-first owner rows for a user, then
     // hydrate the conversations and filter by the activity window in JS.
@@ -2393,6 +2395,32 @@ export default defineSchema({
     // sha-256 of the current content — republishing identical bytes is a no-op
     // instead of a junk history entry. Absent on rows from before history.
     content_hash: v.optional(v.string()),
+    // "html" (default when absent) | "markdown" (source_storage_id holds the raw
+    // md; storage_id holds the rendered reading-theme HTML) | "bundle" (assets in
+    // artifact_assets, storage_id holds the entry HTML).
+    kind: v.optional(v.string()),
+    source_storage_id: v.optional(v.id("_storage")),
+    // Provenance: the session that published this artifact.
+    session_short_id: v.optional(v.string()),
+    session_conversation_id: v.optional(v.id("conversations")),
+    // Secrets. owner_key grants in-page management (travels only in the URL
+    // fragment, #o=). edit_key grants collaborative editing when edit_mode is
+    // "link". Both are unguessable random strings, like the slug itself.
+    owner_key: v.optional(v.string()),
+    edit_key: v.optional(v.string()),
+    // Who may publish new versions: absent/"owner" (api_token or owner_key),
+    // "link" (edit_key holders too), "team" (owner's team members via web).
+    edit_mode: v.optional(v.string()),
+    // Access gates, all optional: password (sha256(password + ":" + slug)),
+    // email capture wall, expiry.
+    password_hash: v.optional(v.string()),
+    email_gate: v.optional(v.boolean()),
+    expires_at: v.optional(v.number()),
+    thumb_storage_id: v.optional(v.id("_storage")),
+    // Who created the CURRENT version when it came from a link/team editor
+    // (absent for owner publishes). Carried into artifact_versions when the
+    // next bump snapshots this version.
+    last_edited_by: v.optional(v.string()),
     created_at: v.number(),
     updated_at: v.number(),
   })
@@ -2402,7 +2430,8 @@ export default defineSchema({
 
   // Superseded artifact versions: on republish the previous blob is snapshotted
   // here (instead of deleted) so past versions stay openable. Bounded — see
-  // MAX_ARTIFACT_HISTORY in artifacts.ts.
+  // MAX_ARTIFACT_HISTORY in artifacts.ts. Invariant: every storage_id in the
+  // artifact tables is referenced by exactly ONE row (rollback copies blobs).
   artifact_versions: defineTable({
     artifact_id: v.id("artifacts"),
     version: v.number(),
@@ -2410,7 +2439,58 @@ export default defineSchema({
     storage_id: v.id("_storage"),
     size: v.number(),
     published_at: v.number(),
+    kind: v.optional(v.string()),
+    source_storage_id: v.optional(v.id("_storage")),
+    session_short_id: v.optional(v.string()),
+    // Name of the link/team collaborator who published this version via the
+    // in-browser editor; absent for owner publishes.
+    edited_by: v.optional(v.string()),
   }).index("by_artifact", ["artifact_id", "version"]),
+
+  // Files of a bundle artifact, one row per (version, path). Pruned with their
+  // version. Paths are normalized relative ("img/chart.png", no leading slash).
+  artifact_assets: defineTable({
+    artifact_id: v.id("artifacts"),
+    version: v.number(),
+    path: v.string(),
+    storage_id: v.id("_storage"),
+    content_type: v.string(),
+    size: v.number(),
+  }).index("by_artifact_version", ["artifact_id", "version", "path"]),
+
+  // Viewer comments. A batch_id groups the comments one viewer submitted
+  // together (they arrive in the publishing session as ONE message).
+  artifact_comments: defineTable({
+    artifact_id: v.id("artifacts"),
+    batch_id: v.string(),
+    author_name: v.string(),
+    author_email: v.optional(v.string()),
+    text: v.string(),
+    // Opaque anchor JSON from the viewer page (selector/snippet/position);
+    // the server never interprets it.
+    anchor: v.optional(v.string()),
+    version: v.number(),
+    status: v.string(), // "open" | "resolved"
+    delivered: v.boolean(),
+    created_at: v.number(),
+  }).index("by_artifact", ["artifact_id", "created_at"]),
+
+  // View counters, isolated from the artifacts row so beacon writes never churn
+  // the row that queries/pages watch.
+  artifact_stats: defineTable({
+    artifact_id: v.id("artifacts"),
+    view_count: v.number(),
+    last_viewed_at: v.number(),
+  }).index("by_artifact", ["artifact_id"]),
+
+  // Email-gate audit: who has seen a gated artifact, per email.
+  artifact_viewers: defineTable({
+    artifact_id: v.id("artifacts"),
+    email: v.string(),
+    first_seen: v.number(),
+    last_seen: v.number(),
+    view_count: v.number(),
+  }).index("by_artifact_email", ["artifact_id", "email"]),
 
   doc_snapshots: defineTable({
     id: v.string(),
