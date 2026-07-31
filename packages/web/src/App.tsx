@@ -50,6 +50,8 @@ const ReviewView = lazy(() => import("@/app/review/[id]/page"));
 const ReviewBatch = lazy(() => import("@/app/review/batch/page"));
 
 const Docs = lazy(() => import("@/app/docs/page"));
+const Vault = lazy(() => import("@/app/vault/page"));
+const Artifacts = lazy(() => import("@/app/artifacts/page"));
 const DocDetail = lazy(() => import("@/app/docs/[id]/page"));
 const Plans = lazy(() => import("@/app/plans/page"));
 const PlanDetail = lazy(() => import("@/app/plans/[id]/page"));
@@ -152,6 +154,8 @@ export function App() {
               <Route path="conversation/:id" element={<E name="Conversation"><Conversation /></E>} />
               <Route path="conversation/:id/diff" element={<E name="ConversationDiff"><ConversationDiff /></E>} />
               <Route path="docs" element={<E name="Docs"><Docs /></E>} />
+              <Route path="vault" element={<E name="Vault"><Vault /></E>} />
+              <Route path="artifacts" element={<E name="Artifacts"><Artifacts /></E>} />
               <Route path="docs/:id" element={<E name="DocDetail"><DocDetail /></E>} />
               <Route path="plans" element={<E name="Plans"><Plans /></E>} />
               <Route path="plans/:id" element={<E name="PlanDetail"><PlanDetail /></E>} />

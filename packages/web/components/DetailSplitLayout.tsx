@@ -2,7 +2,7 @@
 import { ReactNode, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Panel, Group, Separator, usePanelRef } from "react-resizable-panels";
-import { PanelLeftOpen, Pin, PinOff, X } from "lucide-react";
+import { Maximize2, PanelLeftOpen, Pin, PinOff, X } from "lucide-react";
 import { useTrackedStore, useInboxStore, resolveLayoutMode } from "../store/inboxStore";
 import { hasOpenModal } from "../shortcuts/registry";
 import { useTabContext } from "./TabContent";
@@ -42,6 +42,9 @@ export function DetailSplitLayout({
   const isTabActive = (tabCtx as { isActive?: boolean } | null)?.isActive !== false;
   const listPanelRef = usePanelRef();
   const [isCollapsed, setIsCollapsed] = useState(false);
+  // Peek-local "full" toggle: the overlay widens to 100% without changing the
+  // stored mode — it resets when the peek closes or the selection changes.
+  const [peekFull, setPeekFull] = useState(false);
   // No detail (e.g. /tasks with nothing selected) → the list fills the width.
   // The list Panel is ALWAYS rendered in the same position — across selection
   // changes AND across mode switches — so neither ever re-mounts the list.
@@ -66,6 +69,10 @@ export function DetailSplitLayout({
     return () => document.removeEventListener("keydown", onKey);
   }, [peeking, closeHref, router]);
 
+  useEffect(() => {
+    if (!peeking) setPeekFull(false);
+  }, [peeking]);
+
   const setMode = useInboxStore.getState().setLayoutMode;
   const showSplitDetail = hasDetail && !focusMode;
 
@@ -89,7 +96,7 @@ export function DetailSplitLayout({
           <div className="h-full cq-container">{list}</div>
         </Panel>
         {showSplitDetail && (
-          <Separator className={separatorClass}>
+          <Separator className={`${separatorClass} group/sep`}>
             {isCollapsed && (
               <button
                 onClick={(e) => { e.stopPropagation(); listPanelRef.current?.expand(); }}
@@ -99,9 +106,12 @@ export function DetailSplitLayout({
                 <PanelLeftOpen className="w-3.5 h-3.5" />
               </button>
             )}
+            {/* Hover-only: an always-visible control floating over the detail's
+                content read as clutter. It appears when the pointer is at the
+                divider — where a layout gesture starts anyway. */}
             <button
               onClick={(e) => { e.stopPropagation(); setMode(surface, "focus"); }}
-              className="absolute top-12 -right-px z-20 p-1.5 bg-sol-bg-alt border border-sol-border/40 border-l-0 rounded-r-md text-sol-text-dim hover:text-sol-cyan transition-colors shadow-sm"
+              className="absolute top-12 -right-px z-20 p-1.5 bg-sol-bg-alt border border-sol-border/40 border-l-0 rounded-r-md text-sol-text-dim hover:text-sol-cyan opacity-0 group-hover/sep:opacity-100 focus-visible:opacity-100 transition-opacity shadow-sm"
               title="Unpin — full-width list with the item as a peek"
             >
               <PinOff className="w-3.5 h-3.5" />
@@ -115,21 +125,27 @@ export function DetailSplitLayout({
         )}
       </Group>
       {focusMode && hasDetail && (
-        <div className="peek-overlay absolute inset-y-0 right-0 z-30 w-[62%] min-w-[min(420px,100%)] max-w-full bg-sol-bg border-l border-sol-border/40 flex flex-col">
-          {/* Peek affordances ride the overlay's left EDGE (mirroring the
-              split separator's buttons) so they never collide with the
-              detail's own header controls. */}
-          <div className="absolute top-3 left-0 z-40 flex flex-col gap-1.5">
+        <div className={`peek-overlay absolute inset-y-0 right-0 z-30 bg-sol-bg border-l border-sol-border/40 flex flex-col transition-[width] duration-200 ${peekFull ? "w-full" : "w-[62%] min-w-[min(420px,100%)] max-w-full"}`}>
+          {/* Slim header strip (the mockup's phead): pin / full / close live
+              together at the top, not floating over content. */}
+          <div className="flex items-center justify-end gap-1 px-2 py-1 border-b border-sol-border/20 bg-sol-bg-alt/50 flex-shrink-0">
             <button
               onClick={() => setMode(surface, "split")}
-              className="p-1.5 bg-sol-bg-alt border border-sol-border/40 border-l-0 rounded-r-md text-sol-text-dim hover:text-sol-cyan transition-colors shadow-sm"
-              title="Pin to a split"
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md border border-sol-border/40 bg-sol-bg text-[10.5px] text-sol-text-dim hover:text-sol-cyan hover:border-sol-cyan/40 transition-colors"
+              title="Pin — keep list and item side by side"
             >
-              <Pin className="w-3.5 h-3.5" />
+              <Pin className="w-3 h-3" /> pin
+            </button>
+            <button
+              onClick={() => setPeekFull(f => !f)}
+              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md border text-[10.5px] transition-colors ${peekFull ? "border-sol-cyan/50 text-sol-cyan bg-sol-cyan/10" : "border-sol-border/40 bg-sol-bg text-sol-text-dim hover:text-sol-cyan hover:border-sol-cyan/40"}`}
+              title={peekFull ? "Back to peek width" : "Full width"}
+            >
+              <Maximize2 className="w-3 h-3" /> full
             </button>
             <button
               onClick={() => router.push(closeHref)}
-              className="p-1.5 bg-sol-bg-alt border border-sol-border/40 border-l-0 rounded-r-md text-sol-text-dim hover:text-sol-red transition-colors shadow-sm"
+              className="inline-flex items-center px-1.5 py-0.5 rounded-md border border-sol-border/40 bg-sol-bg text-sol-text-dim hover:text-sol-red hover:border-sol-red/40 transition-colors"
               title="Close (Esc)"
             >
               <X className="w-3.5 h-3.5" />

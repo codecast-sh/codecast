@@ -10,10 +10,10 @@ const TASK_VERSION = "4"; // bumped: --spawn (fresh session per run, linked to t
 const WORK_VERSION = "6"; // bumped: messaging docs split out into MESSAGING_SNIPPET
 const PLAN_VERSION = "2";
 const WORKFLOW_VERSION = "1";
-const MESSAGING_VERSION = "5"; // bumped: multi-line bodies via stdin heredoc (cast send <id> -)
+const MESSAGING_VERSION = "6"; // bumped: send with judgment — interruptions aren't free
 const VISUAL_VERSION = "3"; // cast-canvas: broader Plot marks + declarative transforms
 const FORKS_VERSION = "2"; // bumped: --label flag on cast fork / cast spawn + default label inheritance on fork
-const PUBLISH_VERSION = "1"; // cast publish: shareable HTML artifacts
+const PUBLISH_VERSION = "2"; // bumped: markdown/bundle publishes, --watch + ?live=1, gates, rollback/diff, comments as session messages
 const LATEST_URL = "https://dl.codecast.sh/latest.json";
 const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
 const UPDATE_RETRY_INTERVAL = 6 * 60 * 60 * 1000; // 6 hours

@@ -133,6 +133,8 @@ const NAV_PAGES = [
   { label: "Dashboard", path: "/team/activity", icon: "grid", keywords: "home sessions main activity feed team" },
   { label: "Tasks", path: "/tasks", icon: "check", keywords: "todo work items" },
   { label: "Documents", path: "/docs", icon: "file", keywords: "notes plans specs" },
+  { label: "Vault", path: "/vault", icon: "folder", keywords: "notes markdown obsidian files vault" },
+  { label: "Artifacts", path: "/artifacts", icon: "file", keywords: "published html pages share cast publish gallery" },
   { label: "Inbox", path: "/inbox", icon: "inbox", keywords: "idle queue waiting" },
   { label: "Search", path: "/search", icon: "search", keywords: "find query" },
   { label: "Settings", path: "/settings", icon: "settings", keywords: "preferences config profile general" },

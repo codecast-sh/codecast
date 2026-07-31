@@ -14462,7 +14462,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
           }}
         >
           <div className="conv-col mx-auto">
-            <div className="bg-sol-blue/10 px-4 py-3 rounded-b-lg border border-sol-blue/30 backdrop-blur-md shadow-lg relative group">
+            <div data-sv-sticky className="bg-sol-blue/10 px-4 py-3 rounded-b-lg border border-sol-blue/30 backdrop-blur-md shadow-lg relative group">
               <div className="absolute top-1.5 right-1.5 flex items-center gap-0.5">
                 {(stickyClamped || stickyExpanded) && (
                   <button
