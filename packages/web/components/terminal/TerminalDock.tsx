@@ -5,15 +5,14 @@
 // mounted (hidden when closed) so live terminals survive close/reopen.
 
 import { Suspense, lazy, useRef } from "react";
-import { useTrackedStore } from "../../store/inboxStore";
+import { useTerminalPanelPrefs } from "../../lib/terminal/panelPrefs";
 
 const TerminalPanel = lazy(() =>
   import("./TerminalPanel").then((m) => ({ default: m.TerminalPanel })),
 );
 
 export function TerminalDock() {
-  const s = useTrackedStore([(st) => st.clientState.ui?.terminal_open]);
-  const open = s.clientState.ui?.terminal_open ?? false;
+  const { open } = useTerminalPanelPrefs();
   const everOpened = useRef(false);
   if (open) everOpened.current = true;
   if (!everOpened.current) return null;
