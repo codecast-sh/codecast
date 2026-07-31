@@ -3645,182 +3645,48 @@ cliRoute("/cli/accounts/save", async (ctx, body) => ctx.runMutation(api.accountS
 cliRoute("/cli/accounts/publish", async (ctx, body) => ctx.runMutation(api.accountSwitch.publishDeviceAccounts, body));
 
 // --- Published HTML artifacts (cast publish → codecast.sh/a/<slug>) ---
-// Publish can't ride cliRoute's mutation passthrough: storing the HTML blob
-// needs ctx.storage.store, which only exists in actions. Verify the token
-// FIRST so an unauthorized call never strands a storage object.
-http.route({
-  path: "/cli/artifacts/publish",
-  method: "POST",
-  handler: httpAction(async (ctx, request) => {
-    const corsHeaders = {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type",
-    };
-    const json = (body: unknown, status = 200) =>
-      new Response(JSON.stringify(body), {
-        status,
-        headers: { "Content-Type": "application/json", ...corsHeaders },
-      });
-    try {
-      const body = await request.json();
-      const { api_token, content, title, source_path, force_new } = body;
-      if (!api_token || typeof content !== "string" || !title) {
-        return json({ error: "Missing api_token, content, or title" }, 400);
-      }
-      const size = new TextEncoder().encode(content).byteLength;
-      if (size > 8 * 1024 * 1024) {
-        return json({ error: `Artifact is ${(size / 1024 / 1024).toFixed(1)}MB — the limit is 8MB. Inline fewer assets or split the page.` }, 413);
-      }
-      const who = await ctx.runQuery(internal.artifacts.verify, { api_token });
-      if (!who) return json({ error: "Unauthorized" }, 401);
+// All handlers live in artifactsHttp.ts (they need Web Crypto + storage.store,
+// which only actions have). Pages/presentation: artifactPages.ts. Data:
+// artifacts.ts. Every POST here is callable from the sandboxed artifact pages
+// (opaque origin), so each registers a CORS preflight too.
 
-      // Content hash lets the mutation turn a byte-identical republish into a
-      // no-op instead of a junk history version.
-      const hashBytes = new Uint8Array(
-        await crypto.subtle.digest("SHA-256", new TextEncoder().encode(content)),
-      );
-      const contentHash = Array.from(hashBytes, (b) => b.toString(16).padStart(2, "0")).join("");
+import {
+  publish as artifactPublish,
+  serve as artifactServe,
+  unlock as artifactUnlock,
+  emailUnlock as artifactEmailUnlock,
+  manage as artifactManage,
+  rollback as artifactRollback,
+  edit as artifactEdit,
+  comment as artifactComment,
+  view as artifactView,
+  corsPreflight as artifactCors,
+} from "./artifactsHttp";
 
-      const storageId = await ctx.storage.store(
-        new Blob([content], { type: "text/html; charset=utf-8" }),
-      );
-      const result = await ctx.runMutation(internal.artifacts.upsertFromPublish, {
-        user_id: who.user_id,
-        storage_id: storageId,
-        title,
-        size,
-        source_path: source_path || undefined,
-        force_new: !!force_new,
-        content_hash: contentHash,
-      });
-      return json(result);
-    } catch (error) {
-      return json({ error: error instanceof Error ? error.message : "Internal error" }, 500);
-    }
-  }),
-});
-http.route({
-  path: "/cli/artifacts/publish",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+const artifactPost = (path: string, handler: typeof artifactPublish) => {
+  http.route({ path, method: "POST", handler });
+  http.route({ path, method: "OPTIONS", handler: artifactCors });
+};
+
+artifactPost("/cli/artifacts/publish", artifactPublish);
+artifactPost("/cli/artifacts/unlock", artifactUnlock);
+artifactPost("/cli/artifacts/email-unlock", artifactEmailUnlock);
+artifactPost("/cli/artifacts/manage", artifactManage);
+artifactPost("/cli/artifacts/rollback", artifactRollback);
+artifactPost("/cli/artifacts/edit", artifactEdit);
+artifactPost("/cli/artifacts/comment", artifactComment);
+artifactPost("/cli/artifacts/view", artifactView);
 
 cliRoute("/cli/artifacts/list", async (ctx, body) => ctx.runQuery(api.artifacts.listFromCLI, body));
 cliRoute("/cli/artifacts/delete", async (ctx, body) => ctx.runMutation(api.artifacts.deleteFromCLI, body));
 
-// Raw artifact HTML. Lives under /cli/ because the Caddy proxy in front of the
-// self-hosted backend forwards only that prefix (plus auth/webhooks) to the
-// HTTP-action upstream — a new top-level path would need a proxy redeploy.
-// The wrapper page at codecast.sh/a/<slug> iframes this URL.
+// Raw artifact HTML + assets. Lives under /cli/ because the Caddy proxy in
+// front of the self-hosted backend forwards only that prefix (plus
+// auth/webhooks) to the HTTP-action upstream. codecast.sh/a/<slug> 302s to the
+// a.codecast.sh edge cache, which fetches this origin.
 //
 // CSP `sandbox` makes the document an opaque origin even when opened directly:
 // scripts run, but the page can never touch convex.codecast.sh state.
-http.route({
-  pathPrefix: "/cli/a/",
-  method: "GET",
-  handler: httpAction(async (ctx, request) => {
-    const url = new URL(request.url);
-    const slug = url.pathname.replace(/^\/cli\/a\//, "").replace(/\/+$/, "");
-    const notFound = (msg: string) =>
-      new Response(msg, { status: 404, headers: { "Content-Type": "text/plain; charset=utf-8" } });
-    if (!slug) return notFound("Artifact not found");
-
-    // ?meta=1 — version metadata for the in-page bar (new-version badge poll +
-    // history panel). Never cached: staleness here is exactly what the badge
-    // exists to detect. The document itself stays on the lean bySlug path.
-    if (url.searchParams.get("meta") === "1") {
-      const art = await ctx.runQuery(internal.artifacts.historyBySlug, { slug });
-      if (!art) return notFound("Artifact not found");
-      return new Response(
-        JSON.stringify({
-          version: art.version,
-          updated_at: art.updated_at,
-          versions: art.versions.map((v) => ({ version: v.version, title: v.title, size: v.size, published_at: v.published_at })),
-        }),
-        {
-          status: 200,
-          headers: {
-            "Content-Type": "application/json",
-            "Cache-Control": "no-store",
-            "Access-Control-Allow-Origin": "*",
-          },
-        },
-      );
-    }
-
-    // ?v=N — a superseded version out of artifact_versions; anything else (or
-    // N = current) serves the live row.
-    const vParam = url.searchParams.get("v");
-    const wanted = vParam && /^\d+$/.test(vParam) ? parseInt(vParam, 10) : null;
-
-    const withHistory =
-      wanted === null ? null : await ctx.runQuery(internal.artifacts.historyBySlug, { slug });
-    const artifact =
-      wanted === null ? await ctx.runQuery(internal.artifacts.bySlug, { slug }) : withHistory;
-    if (!artifact) return notFound("Artifact not found");
-
-    let storageId = artifact.storage_id;
-    let title = artifact.title;
-    let updatedAt = artifact.updated_at;
-    let version = artifact.version;
-    if (wanted !== null && wanted !== artifact.version) {
-      const past = withHistory?.versions.find((v) => v.version === wanted);
-      if (!past) return notFound(`Version ${wanted} of this artifact is no longer available`);
-      storageId = past.storage_id;
-      title = past.title;
-      updatedAt = past.published_at;
-      version = past.version;
-    }
-
-    const blob = await ctx.storage.get(storageId);
-    if (!blob) return notFound("Artifact content missing");
-
-    // This IS the shared document (codecast.sh/a/<slug> 302s here): inject the
-    // codecast chrome — a sticky in-flow top bar + og meta — straight into the
-    // artifact's HTML. No wrapper page, no iframe, one response.
-    const { brandArtifactHtml } = await import("./artifacts");
-    const html = brandArtifactHtml(await blob.text(), {
-      title,
-      author: artifact.author_name,
-      updatedAt,
-      shareUrl: `${process.env.SITE_URL || "https://codecast.sh"}/a/${artifact.slug}`,
-      version,
-      currentVersion: artifact.version,
-      // Polling goes straight at this origin, not the edge cache — url.origin
-      // is convex.codecast.sh even when the document reached the viewer via
-      // a.codecast.sh, because the edge worker fetches this origin directly.
-      // TLS terminates at the proxy in front of us, so request.url says http;
-      // force https for any non-local host or the page's fetch is blocked as
-      // mixed content.
-      metaUrl: `${/^(localhost|127\.)/.test(url.hostname) ? url.origin : `https://${url.host}`}/cli/a/${artifact.slug}?meta=1`,
-    });
-    return new Response(html, {
-      status: 200,
-      headers: {
-        "Content-Type": "text/html; charset=utf-8",
-        "Content-Security-Policy":
-          "sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads allow-pointer-lock",
-        "X-Robots-Tag": "noindex",
-        // Current doc: cacheable, republish staleness bounded at a minute.
-        // Past versions are immutable — cache them harder.
-        "Cache-Control":
-          version < artifact.version
-            ? "public, max-age=3600, stale-while-revalidate=86400"
-            : "public, max-age=60, stale-while-revalidate=300",
-        "Access-Control-Allow-Origin": "*",
-      },
-    });
-  }),
-});
+http.route({ pathPrefix: "/cli/a/", method: "GET", handler: artifactServe });
 
 export default http;
