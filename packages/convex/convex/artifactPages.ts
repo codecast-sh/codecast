@@ -198,6 +198,10 @@ function barHtml(o: BrandOpts): string {
     z-index: 2147483647; background: #1a1a18; color: #ffffff; padding: 11px 18px; border-radius: 999px;
     font: 500 12px/1 ui-monospace, Menlo, monospace; box-shadow: 0 6px 20px rgba(0,0,0,.3); white-space: nowrap; }
   html.__cc_pinmode, html.__cc_pinmode * { cursor: crosshair !important; }
+  /* Bottom-sheet mode. The media query catches real narrow layout viewports;
+     the .__cc_sheet class is the same rules applied by JS from screen.width,
+     because an artifact WITHOUT a viewport meta lays out at ~980px on phones
+     and the media query alone would never fire there. */
   @media (max-width: 640px) {
     #__cc_bar .__cc_when { display: none; }
     .__cc_panel { left: 0; right: 0; top: auto; bottom: 0; max-width: none; min-width: 0; max-height: 78vh;
@@ -213,6 +217,14 @@ function barHtml(o: BrandOpts): string {
     .__cc_panel .__cc_send { padding: 13px 12px; }
     .__cc_panel .__cc_ta { min-height: 56px; }
   }
+  .__cc_panel.__cc_sheet { left: 0; right: 0; top: auto; bottom: 0; max-width: none; min-width: 0; max-height: 78vh;
+    border-radius: 16px 16px 0 0; padding: 8px 10px calc(14px + env(safe-area-inset-bottom));
+    box-shadow: 0 -8px 32px rgba(0,0,0,.2); transform: translateY(24px); }
+  .__cc_panel.__cc_sheet::before { content: ""; display: block; width: 38px; height: 4px; border-radius: 2px;
+    background: rgba(0,0,0,.16); margin: 2px auto 10px; }
+  .__cc_panel.__cc_sheet.__cc_in { transform: none; }
+  .__cc_panel.__cc_sheet .__cc_row { padding: 11px 8px; }
+  .__cc_panel.__cc_sheet .__cc_send { padding: 13px 12px; }
   @media (max-width: 480px) {
     #__cc_bar { gap: 5px; }
     #__cc_bar .__cc_sess { display: none; }
@@ -275,6 +287,12 @@ function barHtml(o: BrandOpts): string {
   if(latest)latest.setAttribute("href",verUrl(CC.currentVersion,true));
   // --- panel machinery: dropdowns on desktop, bottom sheets on mobile ---
   var panels=["__cc_hist","__cc_menupanel","__cc_cpanel","__cc_mgr"].map(function(id){return document.getElementById(id);});
+  // Sheet mode from the PHYSICAL screen, not the layout viewport: a document
+  // without a viewport meta lays out at ~980px on phones, so a media query
+  // alone would keep desktop dropdowns on mobile.
+  if((screen.width||9999)<=680||matchMedia("(max-width: 640px)").matches){
+    panels.forEach(function(p){if(p)p.classList.add("__cc_sheet");});
+  }
   var closeAll=function(){panels.forEach(function(p){if(p){p.hidden=true;p.classList.remove("__cc_in");}});};
   var show=function(p){
     panels.forEach(function(q){if(q&&q!==p){q.hidden=true;q.classList.remove("__cc_in");}});

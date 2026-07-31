@@ -2,8 +2,10 @@
 // ctx.storage.store lives here as httpActions; http.ts just routes to these.
 // Data logic is artifacts.ts, presentation is artifactPages.ts.
 
-import { httpAction } from "./_generated/server";
+import { httpAction, action } from "./_generated/server";
 import { internal, api } from "./_generated/api";
+import { v } from "convex/values";
+import { getAuthUserId } from "@convex-dev/auth/server";
 import { marked } from "marked";
 import {
   MAX_ARTIFACT_BYTES,
@@ -564,6 +566,88 @@ export const edit = httpAction(async (ctx, request) => {
   } catch (error) {
     return json({ error: error instanceof Error ? error.message : "Bad request" }, 400);
   }
+});
+
+// ---------------------------------------------------------------------------
+// Web team editing — an authed convex action (the signed-in gallery calls it
+// directly, so no keys ever reach a teammate). Owner always may edit; a
+// teammate only when the artifact's edit_mode is "team" and they share a team.
+// ---------------------------------------------------------------------------
+
+export const editForWeb = action({
+  args: { slug: v.string(), content: v.string(), editor_name: v.optional(v.string()) },
+  handler: async (ctx, args): Promise<{ version?: number; unchanged?: boolean; error?: string }> => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { error: "Not signed in" };
+    const auth = await ctx.runQuery(internal.artifacts.teamEditAuth, { slug: args.slug, editor_user_id: userId });
+    if (!auth) return { error: "You don't have edit access to this artifact" };
+    const artifact = auth.artifact;
+    const kind = artifact.kind ?? "html";
+
+    let docHtml: string;
+    let contentHash: string;
+    let sourceStorageId;
+    if (kind === "markdown") {
+      contentHash = await sha256Hex(args.content);
+      docHtml = await renderMarkdown(args.content, artifact.title);
+      sourceStorageId = await ctx.storage.store(new Blob([args.content], { type: "text/markdown; charset=utf-8" }));
+    } else {
+      docHtml = args.content;
+      contentHash = await sha256Hex(docHtml);
+    }
+    const size = new TextEncoder().encode(docHtml).byteLength;
+    if (size > MAX_ARTIFACT_BYTES) return { error: "Content exceeds the 8MB limit" };
+    if (artifact.content_hash === contentHash && kind !== "bundle") {
+      if (sourceStorageId) await ctx.storage.delete(sourceStorageId).catch(() => {});
+      return { version: artifact.version, unchanged: true };
+    }
+    const storageId = await ctx.storage.store(new Blob([docHtml], { type: "text/html; charset=utf-8" }));
+
+    const assets = [];
+    if (kind === "bundle") {
+      const current = await ctx.runQuery(internal.artifacts.assetsForVersion, {
+        artifact_id: artifact._id,
+        version: artifact.version,
+      });
+      for (const a of current) {
+        const blob = await ctx.storage.get(a.storage_id);
+        if (!blob) continue;
+        const buf = await blob.arrayBuffer();
+        const id = await ctx.storage.store(new Blob([buf], { type: a.content_type }));
+        assets.push({ path: a.path, storage_id: id, content_type: a.content_type, size: a.size });
+      }
+    }
+
+    const result: { version: number } = await ctx.runMutation(internal.artifacts.appendVersion, {
+      artifact_id: artifact._id,
+      storage_id: storageId,
+      size,
+      kind,
+      source_storage_id: sourceStorageId,
+      content_hash: contentHash,
+      edited_by: auth.is_owner ? undefined : (args.editor_name?.trim().slice(0, 80) || auth.editor_name),
+      assets: assets as never,
+    });
+    return { version: result.version };
+  },
+});
+
+// Source text for the authed web editor (teammates can't use ?src=raw on a
+// password-gated artifact — this path is authed instead of token-gated).
+export const sourceForWeb = action({
+  args: { slug: v.string() },
+  handler: async (ctx, args): Promise<{ source?: string; kind?: string; version?: number; error?: string }> => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { error: "Not signed in" };
+    const auth = await ctx.runQuery(internal.artifacts.teamEditAuth, { slug: args.slug, editor_user_id: userId });
+    if (!auth) return { error: "You don't have edit access to this artifact" };
+    const artifact = auth.artifact;
+    const kind = artifact.kind ?? "html";
+    const id = kind === "markdown" && artifact.source_storage_id ? artifact.source_storage_id : artifact.storage_id;
+    const blob = await ctx.storage.get(id);
+    if (!blob) return { error: "Source missing" };
+    return { source: await blob.text(), kind, version: artifact.version };
+  },
 });
 
 // ---------------------------------------------------------------------------
