@@ -254,6 +254,11 @@ export default defineSchema({
     started_at: v.number(),
     updated_at: v.number(),
     message_count: v.number(),
+    // Monotonic server watermark for material transcript changes. Unlike
+    // message_count it advances for inserts AND same-UUID patches, so clients
+    // can recover a streaming message that finalized while their subscription
+    // was stalled.
+    transcript_revision: v.optional(v.number()),
     is_private: v.boolean(),
     team_visibility: v.optional(v.union(v.literal("summary"), v.literal("full"), v.literal("private"))),
     status: v.union(v.literal("active"), v.literal("completed")),
@@ -668,6 +673,12 @@ export default defineSchema({
     conversation_id: v.id("conversations"),
     from_user_id: v.optional(v.id("users")),
     message_uuid: v.optional(v.string()),
+    // Source ordering prevents an older durable retry from overwriting a newer
+    // projection of the same logical message. Legacy clients omit both fields.
+    source_device_id: v.optional(v.string()),
+    source_revision: v.optional(v.number()),
+    // Conversation-scoped server watermark at which this row last changed.
+    transcript_revision: v.optional(v.number()),
     role: v.union(
       v.literal("user"),
       v.literal("assistant"),
@@ -712,6 +723,7 @@ export default defineSchema({
   })
     .index("by_conversation_id", ["conversation_id"])
     .index("by_conversation_timestamp", ["conversation_id", "timestamp"])
+    .index("by_conversation_transcript_revision", ["conversation_id", "transcript_revision"])
     .index("by_conversation_uuid", ["conversation_id", "message_uuid"])
     .index("by_conversation_client_id", ["conversation_id", "client_id"])
     .index("by_message_uuid", ["message_uuid"])
