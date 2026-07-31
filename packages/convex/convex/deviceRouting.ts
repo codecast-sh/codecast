@@ -37,9 +37,14 @@ export type RoutableDevice = {
  *
  * Priority:
  *   1. The device the user explicitly picked (`targetDeviceId`), if online — a
- *      machine chosen by hand outranks every heuristic, remote included. An
- *      offline pick falls through instead of queueing: the rungs below route to a
- *      live machine that has the checkout.
+ *      machine chosen by hand outranks every heuristic, remote included.
+ *   1b. A KNOWN pick that's offline narrows the fallback to machines that can
+ *      actually serve it: a live machine holding the checkout (local first, then
+ *      remote), else the command QUEUES for the picked machine until it wakes.
+ *      Never the checkout-less most-recent local — the picker scoped the folder
+ *      list to the picked machine's roots, so that fallback would strand the
+ *      session in a directory it doesn't have. An UNKNOWN pick (garbage or a
+ *      foreign device id) is ignored and the normal ladder decides.
  *   2. The conversation's existing owner, if still online (sticky ownership). This
  *      preserves an explicit "move to remote": a remote owner stays the owner.
  *   3. The online LOCAL device whose `local_project_roots` contain the project path
@@ -68,8 +73,28 @@ export function pickOwnerDevice(
 ): string | null {
   const online = devices.filter((d) => now - d.last_seen < DEVICE_ONLINE_MS);
 
+  const paths = [opts.gitRoot, opts.projectPath].filter((p): p is string => !!p);
+  const hasCheckout = (d: RoutableDevice) =>
+    (d.local_project_roots ?? []).some((r) => paths.some((p) => pathUnderRoot(p, r)));
+
   // 1. Explicit pick, if online.
   if (opts.targetDeviceId && online.some((d) => d.device_id === opts.targetDeviceId)) {
+    return opts.targetDeviceId;
+  }
+
+  // 1b. Explicit pick, offline but KNOWN: only a machine that can actually open
+  //     the picked machine's folder may substitute — the folder list was scoped
+  //     to the pick's roots, so the generic most-recent-local rung would land in
+  //     a directory it doesn't have (blank session, empty error banner). A live
+  //     checkout holder serves now (local outranks remote); otherwise the
+  //     command queues for the pick, same semantics as rung 6's sleeping Mac.
+  //     An unknown id (garbage, another user's device) gets no such trust.
+  if (opts.targetDeviceId && devices.some((d) => d.device_id === opts.targetDeviceId)) {
+    if (paths.length > 0) {
+      const liveHolders = online.filter(hasCheckout).sort((a, b) =>
+        Number(a.is_remote) - Number(b.is_remote) || b.last_seen - a.last_seen);
+      if (liveHolders.length > 0) return liveHolders[0].device_id;
+    }
     return opts.targetDeviceId;
   }
 
@@ -82,10 +107,6 @@ export function pickOwnerDevice(
   // when it provably has the checkout (rung 5) or nothing else exists (rung 7).
   const locals = devices.filter((d) => !d.is_remote);
   const onlineLocals = locals.filter((d) => now - d.last_seen < DEVICE_ONLINE_MS);
-
-  const paths = [opts.gitRoot, opts.projectPath].filter((p): p is string => !!p);
-  const hasCheckout = (d: RoutableDevice) =>
-    (d.local_project_roots ?? []).some((r) => paths.some((p) => pathUnderRoot(p, r)));
 
   // 3. Online local device that has the checkout.
   if (paths.length > 0) {

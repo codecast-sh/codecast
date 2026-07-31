@@ -41,7 +41,13 @@ export function defaultMachineId(
   const owner = ownerDeviceId ? devices.find((d) => d.device_id === ownerDeviceId) : undefined;
   if (owner?.online) return owner.device_id;
 
-  const hasCheckout = (d: MachineCandidate) => !!projectPath && !!d.local_project_roots?.includes(projectPath);
+  // Prefix semantics, mirroring the server's pathUnderRoot: a session in a repo
+  // SUBDIR (~/code/app/packages/web) still belongs to the machine holding the
+  // repo root. Exact `includes` under-matched, so the prediction disagreed with
+  // routing and the picker stamped picks it didn't need to.
+  const hasCheckout = (d: MachineCandidate) =>
+    !!projectPath &&
+    !!d.local_project_roots?.some((r) => projectPath === r || projectPath.startsWith(r.endsWith("/") ? r : r + "/"));
 
   const onlineLocals = devices.filter((d) => !d.is_remote && d.online);
   if (onlineLocals.length > 0) {

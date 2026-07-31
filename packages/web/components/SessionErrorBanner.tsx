@@ -39,7 +39,12 @@ export function SessionErrorBanner({
   const canMoveElsewhere =
     !!projectPath &&
     devices.some(
-      (d) => d.online && d.device_id !== ownerDeviceId && d.local_project_roots?.includes(projectPath),
+      (d) =>
+        d.online &&
+        d.device_id !== ownerDeviceId &&
+        // Prefix, not exact: a repo-subdir session still moves to the machine
+        // holding the repo root (same rule as routing's pathUnderRoot).
+        d.local_project_roots?.some((r) => projectPath === r || projectPath.startsWith(r.endsWith("/") ? r : r + "/")),
     );
 
   return (

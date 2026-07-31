@@ -203,6 +203,9 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
       )}
       {sessionError && resumeState === "idle" && (
         <SessionErrorBanner
+          // Remount per session: the dismiss state is keyed by error TEXT, and
+          // two sessions can fail with the identical message.
+          key={conversation._id}
           error={sessionError}
           projectPath={conversation.project_path || conversation.git_root}
           ownerDeviceId={(conversation as any).owner_device_id}
