@@ -19,7 +19,7 @@ import { PermissionCard } from '@/components/PermissionCard';
 import { AssignmentChip } from '@/components/AssignmentChip';
 import { ModelSwitcherChip } from '@/components/ModelSwitcherChip';
 import { agentSupportsFork } from '@codecast/shared/contracts';
-import { renderInlineMarkdown, MarkdownContent, MarkdownTextBlock, CodeBlockWithCopy, CodeBlockFullscreen, HighlightedCodeText } from '@/components/MarkdownRenderer';
+import { renderInlineMarkdown, MarkdownContent, MarkdownTextBlock, CodeBlockWithCopy, HighlightedCodeText } from '@/components/MarkdownRenderer';
 import { EntityPill } from '@/components/EntityPill';
 import { CastCanvas, canvasAvailable, looksLikeHtmlMessage } from '@/components/CastCanvas';
 import { useSessionRestart, ghostRestartContextFor } from '@codecast/web/hooks/useSessionRestart';
@@ -265,13 +265,66 @@ type ConversationData = {
 };
 
 // --- Markdown rendering ---
+// The red/green wrapped diff rows, shared between the inline preview and the
+// fullscreen view so both render the edit identically.
+function DiffRows({ oldLines, newLines }: { oldLines: string[]; newLines: string[] }) {
+  return (
+    <RNView style={{ borderRadius: 4, overflow: 'hidden' }}>
+      {oldLines.map((line, i) => (
+        <RNView key={`o${i}`} style={{ flexDirection: 'row', backgroundColor: Theme.red + '12', paddingHorizontal: 6, paddingVertical: 1 }}>
+          <RNText style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.red, width: 14 }}>-</RNText>
+          <HighlightedCodeText content={line || ' '} style={{ flex: 1, fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
+        </RNView>
+      ))}
+      {newLines.map((line, i) => (
+        <RNView key={`n${i}`} style={{ flexDirection: 'row', backgroundColor: Theme.green + '12', paddingHorizontal: 6, paddingVertical: 1 }}>
+          <RNText style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.green, width: 14 }}>+</RNText>
+          <HighlightedCodeText content={line || ' '} style={{ flex: 1, fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
+        </RNView>
+      ))}
+    </RNView>
+  );
+}
+
+// Fullscreen, vertically scrollable view of a whole edit — same wrapped colored
+// rows as inline, so long diffs are readable instead of clipped in the transcript.
+function DiffFullscreen({ oldStr, newStr, filePath, visible, onClose }: { oldStr: string; newStr: string; filePath: string; visible: boolean; onClose: () => void }) {
+  const [copied, setCopied] = useState(false);
+  if (!visible) return null;
+  const oldLines = oldStr.split('\n');
+  const newLines = newStr.split('\n');
+  const handleCopy = () => {
+    Clipboard.setString(newStr);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+  return (
+    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
+      <RNView style={styles.planFullscreen}>
+        <RNView style={styles.planFullscreenHeader}>
+          <FontAwesome name="pencil" size={14} color={Theme.orange} style={{ marginRight: 8 }} />
+          <RNText style={styles.planFullscreenTitle} numberOfLines={1}>{filePath.split('/').pop() || 'Edit'}</RNText>
+          <TouchableOpacity onPress={handleCopy} style={{ padding: 6 }} activeOpacity={0.7}>
+            {copied ? <FontAwesome name="check" size={16} color={Theme.green} /> : <FontAwesome name="clipboard" size={16} color={Theme.textMuted} />}
+          </TouchableOpacity>
+          <TouchableOpacity onPress={onClose} style={{ padding: 6 }} activeOpacity={0.7}>
+            <FontAwesome name="close" size={18} color={Theme.textMuted} />
+          </TouchableOpacity>
+        </RNView>
+        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 12, paddingBottom: 60 }}>
+          <DiffRows oldLines={oldLines} newLines={newLines} />
+        </ScrollView>
+      </RNView>
+    </Modal>
+  );
+}
+
 function DiffBlock({ oldStr, newStr, filePath }: { oldStr: string; newStr: string; filePath: string }) {
   const [fullscreen, setFullscreen] = useState(false);
   const [copied, setCopied] = useState(false);
   const oldLines = oldStr.split('\n');
   const newLines = newStr.split('\n');
-  const lang = filePath ? (getFileExtension(filePath) || 'diff') : 'diff';
-  const unifiedContent = oldLines.map(l => `- ${l}`).join('\n') + '\n' + newLines.map(l => `+ ${l}`).join('\n');
 
   const handleCopy = () => {
     Clipboard.setString(newStr);
@@ -292,20 +345,7 @@ function DiffBlock({ oldStr, newStr, filePath }: { oldStr: string; newStr: strin
           tiny scrub) and — nested in the message list with nestedScrollEnabled —
           reserved a tall empty vertical band. Wrapping shows the whole edit, fills
           the row background full width, and removes that phantom gap. */}
-      <RNView style={{ borderRadius: 4, overflow: 'hidden' }}>
-        {displayOldLines.map((line, i) => (
-          <RNView key={`o${i}`} style={{ flexDirection: 'row', backgroundColor: Theme.red + '12', paddingHorizontal: 6, paddingVertical: 1 }}>
-            <RNText style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.red, width: 14 }}>-</RNText>
-            <HighlightedCodeText content={line || ' '} style={{ flex: 1, fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
-          </RNView>
-        ))}
-        {displayNewLines.map((line, i) => (
-          <RNView key={`n${i}`} style={{ flexDirection: 'row', backgroundColor: Theme.green + '12', paddingHorizontal: 6, paddingVertical: 1 }}>
-            <RNText style={{ fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.green, width: 14 }}>+</RNText>
-            <HighlightedCodeText content={line || ' '} style={{ flex: 1, fontSize: 11, fontFamily: 'SpaceMono', lineHeight: 16, color: Theme.textSecondary }} />
-          </RNView>
-        ))}
-      </RNView>
+      <DiffRows oldLines={displayOldLines} newLines={displayNewLines} />
       <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 2 }}>
         {isTall && (
           <TouchableOpacity onPress={() => setFullscreen(true)} activeOpacity={0.6} style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
@@ -322,7 +362,7 @@ function DiffBlock({ oldStr, newStr, filePath }: { oldStr: string; newStr: strin
           {copied ? <FontAwesome name="check" size={10} color={Theme.green} /> : <FontAwesome name="clipboard" size={11} color={Theme.textDim} />}
         </TouchableOpacity>
       </RNView>
-      <CodeBlockFullscreen content={unifiedContent} language={lang} visible={fullscreen} onClose={() => setFullscreen(false)} />
+      <DiffFullscreen oldStr={oldStr} newStr={newStr} filePath={filePath} visible={fullscreen} onClose={() => setFullscreen(false)} />
     </RNView>
   );
 }
@@ -2225,9 +2265,11 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
 
   const TOOL_CONTENT_MAX_HEIGHT = 350;
   const MD_COLLAPSED_HEIGHT = 350;
+  const hasDiff = isEdit && !!parsedInput.old_string && !!parsedInput.new_string;
   const [mdOverflowing, setMdOverflowing] = useState(false);
   const [mdExpanded, setMdExpanded] = useState(false);
   const [mdFullscreen, setMdFullscreen] = useState(false);
+  const [diffFullscreen, setDiffFullscreen] = useState(false);
   const [toolContentOverflowing, setToolContentOverflowing] = useState(false);
   const [toolContentFullExpanded, setToolContentFullExpanded] = useState(false);
 
@@ -2286,7 +2328,7 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
       )}
       {expanded && (
         <RNView
-          onLayout={(e) => { if (!toolContentFullExpanded) setToolContentOverflowing(e.nativeEvent.layout.height >= TOOL_CONTENT_MAX_HEIGHT); }}
+          onLayout={(e) => { if (!toolContentFullExpanded) setToolContentOverflowing(e.nativeEvent.layout.height >= TOOL_CONTENT_MAX_HEIGHT - 1); }}
           style={[styles.toolCallContent, result?.is_error && styles.toolCallContentError, !toolContentFullExpanded && { maxHeight: TOOL_CONTENT_MAX_HEIGHT, overflow: 'hidden' as const }]}>
 
           {language && !isBash && !(isEdit && parsedInput.old_string && parsedInput.new_string) && (
@@ -2328,7 +2370,7 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
               <>
                 <RNView
                   style={!mdExpanded && mdOverflowing ? { maxHeight: MD_COLLAPSED_HEIGHT, overflow: 'hidden' } : undefined}
-                  onLayout={(e) => { if (!mdExpanded) setMdOverflowing(e.nativeEvent.layout.height >= MD_COLLAPSED_HEIGHT); }}
+                  onLayout={(e) => { if (!mdExpanded) setMdOverflowing(e.nativeEvent.layout.height >= MD_COLLAPSED_HEIGHT - 1); }}
                 >
                   <MarkdownContent text={String(parsedInput.content)} baseStyle={styles.toolCallResult} isUser={false} />
                   {!mdExpanded && mdOverflowing && (
@@ -2377,10 +2419,21 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
       )}
       {expanded && toolContentOverflowing && (
         <RNView style={{ flexDirection: 'row', gap: 12, paddingTop: 4, paddingHorizontal: 4 }}>
-          <TouchableOpacity onPress={() => setToolContentFullExpanded(!toolContentFullExpanded)} activeOpacity={0.7}>
-            <RNText style={{ fontSize: 11, color: Theme.cyan, fontWeight: '600' }}>{toolContentFullExpanded ? 'Collapse' : 'Expand'}</RNText>
+          {/* Edits expand into a fullscreen scrollable modal instead of inline:
+              a long diff expanded in place makes the transcript unscannable. */}
+          <TouchableOpacity onPress={() => hasDiff ? setDiffFullscreen(true) : setToolContentFullExpanded(!toolContentFullExpanded)} activeOpacity={0.7}>
+            <RNText style={{ fontSize: 11, color: Theme.cyan, fontWeight: '600' }}>{!hasDiff && toolContentFullExpanded ? 'Collapse' : 'Expand'}</RNText>
           </TouchableOpacity>
         </RNView>
+      )}
+      {hasDiff && (
+        <DiffFullscreen
+          oldStr={String(parsedInput.old_string)}
+          newStr={String(parsedInput.new_string)}
+          filePath={filePath}
+          visible={diffFullscreen}
+          onClose={() => setDiffFullscreen(false)}
+        />
       )}
       {mdFullscreen && (
         <Modal visible={mdFullscreen} animationType="slide" onRequestClose={() => setMdFullscreen(false)}>
