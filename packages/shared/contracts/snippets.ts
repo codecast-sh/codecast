@@ -104,8 +104,9 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     desc: "Delayed, recurring, and event-driven agent runs (cast trigger)",
     detail:
       "Adds `cast trigger` so agents can queue follow-up work. For example, an agent " +
-      "finishes a PR and sets a trigger to \"check CI in 30m\" — a new session spawns " +
-      "later to verify. Agents only set triggers when they have a reason to.",
+      "finishes a PR and sets a trigger to \"check CI in 30m\" — the follow-up runs " +
+      "later in the same session, or in a fresh linked session with --spawn. Agents " +
+      "only set triggers when they have a reason to.",
     writesTo: "CLAUDE.md — a ## Triggers section with trigger commands",
     enabledKey: "task_enabled",
     versionKey: "task_version",
@@ -137,6 +138,20 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     writesTo: "CLAUDE.md — a ## Visual Canvas section with the format",
     enabledKey: "visual_enabled",
     versionKey: "visual_version",
+  },
+  {
+    slug: "publish",
+    aliases: ["artifacts", "artifact", "htmlpub"],
+    name: "Publish",
+    desc: "Shareable HTML artifacts (cast publish)",
+    detail:
+      "Adds `cast publish <file.html>` so agents can publish HTML deliverables — reports, " +
+      "dashboards, mockups — to a stable codecast.sh/a/<id> URL you can open and share. " +
+      "Re-publishing the same file keeps the same link; links are unlisted but viewable " +
+      "by anyone who has them.",
+    writesTo: "CLAUDE.md — a ## Publishing HTML artifacts section with the command",
+    enabledKey: "publish_enabled",
+    versionKey: "publish_version",
   },
   {
     slug: "orchestration",

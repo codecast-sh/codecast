@@ -87,6 +87,101 @@
         100% { transform: translateX(124px); }
       }
       #root:not(:empty) ~ #boot-shell { opacity: 0; pointer-events: none; }
+
+      /* Desktop hand-off screen. Shown when the inlined pre-boot gate
+         (lib/desktopHandoff.ts) sends this page to the desktop app: the app
+         itself never loads, so this is plain markup revealed by one attribute
+         on <html> rather than the React dialog in OpenInDesktopHandoff.tsx —
+         keep the two looking the same. */
+      #cc-handoff { display: none; }
+      html[data-cc-handoff] #boot-shell { display: none; }
+      html[data-cc-handoff] #cc-handoff {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        padding: 1rem;
+        background: #FBF5E2;
+        font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+        z-index: 2147483647;
+      }
+      html.dark[data-cc-handoff] #cc-handoff { background: #002b36; }
+      #cc-handoff .card {
+        position: relative;
+        width: 100%;
+        max-width: 24rem;
+        padding: 1.5rem;
+        border: 1px solid rgba(42, 161, 152, 0.3);
+        border-radius: 0.75rem;
+        background: #eee8d5;
+        color: #002b36;
+        box-shadow: 0 25px 50px -12px rgba(42, 161, 152, 0.1);
+        animation: cc-handoff-in 200ms cubic-bezier(0.4, 0, 0.2, 1);
+      }
+      html.dark #cc-handoff .card { background: #073642; color: #fdf6e3; }
+      @keyframes cc-handoff-in {
+        from { opacity: 0; transform: scale(0.95); }
+        to { opacity: 1; transform: scale(1); }
+      }
+      #cc-handoff .head { display: flex; align-items: center; gap: 0.75rem; }
+      #cc-handoff .icon {
+        display: grid;
+        place-items: center;
+        flex-shrink: 0;
+        width: 2.5rem;
+        height: 2.5rem;
+        border-radius: 0.5rem;
+        background: rgba(42, 161, 152, 0.1);
+        color: #2aa198;
+      }
+      #cc-handoff .title { font-size: 0.875rem; font-weight: 500; line-height: 1.25; }
+      #cc-handoff .sub { font-size: 0.75rem; line-height: 1.25; color: #657b83; }
+      #cc-handoff .actions { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 1.25rem; }
+      #cc-handoff button {
+        font: inherit;
+        cursor: pointer;
+        border-radius: 0.375rem;
+        padding: 0.5rem 0.75rem;
+        font-size: 0.75rem;
+      }
+      #cc-handoff .primary {
+        border: 0;
+        background: #2aa198;
+        color: #FBF5E2;
+        font-weight: 500;
+        transition: opacity 150ms;
+      }
+      #cc-handoff .primary:hover { opacity: 0.9; }
+      #cc-handoff .secondary {
+        border: 1px solid #93a1a1;
+        background: transparent;
+        color: #657b83;
+        transition: color 150ms, border-color 150ms;
+      }
+      html.dark #cc-handoff .secondary { border-color: #586e75; }
+      #cc-handoff .secondary:hover { color: inherit; border-color: rgba(42, 161, 152, 0.4); }
+      #cc-handoff .dismiss {
+        position: absolute;
+        top: 0.5rem;
+        right: 0.5rem;
+        border: 0;
+        background: transparent;
+        color: #657b83;
+        line-height: 1;
+        padding: 0.25rem 0.5rem;
+      }
+      #cc-handoff .dismiss:hover { color: inherit; }
+      #cc-handoff .always {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-top: 1rem;
+        font-size: 11px;
+        color: #657b83;
+        cursor: pointer;
+        user-select: none;
+      }
+      #cc-handoff .always input { accent-color: #2aa198; cursor: pointer; }
     </style>
   </head>
   <body class="font-mono">
@@ -97,6 +192,35 @@
         <path fill="currentColor" d="M595.160889,540.159180 C602.995361,532.661072 610.436890,525.255066 618.219727,518.227051 C621.594788,515.179443 621.862915,513.288818 618.369263,510.015167 C605.976135,498.402374 593.950073,486.398682 581.638672,474.697052 C578.746277,471.947968 577.631470,469.026062 577.653381,465.050171 C577.786804,440.902161 577.692810,416.752869 577.674988,392.604004 C577.673828,390.969238 577.674927,389.334503 577.674927,387.822937 C580.475952,386.927032 581.524963,388.753571 582.754211,389.949341 C611.163818,417.584045 639.573853,445.218567 667.919434,472.919006 C680.901062,485.605255 693.661133,498.519287 706.712463,511.132599 C709.948914,514.260376 709.647461,516.128052 706.514099,519.115662 C674.820679,549.334167 643.279907,579.712769 611.649353,609.997375 C601.908936,619.323242 592.027832,628.502197 582.202148,637.738831 C581.252808,638.631287 580.419067,639.758240 578.788452,639.713379 C577.032288,638.391235 577.739929,636.409241 577.736206,634.708374 C577.682861,610.393066 577.748169,586.077332 577.625610,561.762512 C577.608215,558.319458 578.534119,555.799866 581.153076,553.487549 C585.892944,549.302612 590.338135,544.783875 595.160889,540.159180z"/>
       </svg>
       <div class="bar"></div>
+    </div>
+    <div id="cc-handoff">
+      <div class="card" role="dialog" aria-label="Opened in Codecast desktop">
+        <button class="dismiss" data-cc-handoff-action="browser" aria-label="Dismiss">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <path d="M18 6 6 18M6 6l12 12" />
+          </svg>
+        </button>
+        <div class="head">
+          <span class="icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect width="20" height="14" x="2" y="3" rx="2" />
+              <path d="M8 21h8M12 17v4" />
+            </svg>
+          </span>
+          <div>
+            <div class="title">Opened in Codecast desktop</div>
+            <div class="sub">This page was sent to the app.</div>
+          </div>
+        </div>
+        <div class="actions">
+          <button class="primary" data-cc-handoff-action="browser">Open in browser</button>
+          <button class="secondary" data-cc-handoff-action="retry">Didn&rsquo;t open? Reopen desktop app</button>
+        </div>
+        <label class="always">
+          <input type="checkbox" data-cc-handoff-action="always" />
+          Always open Codecast links in browser
+        </label>
+      </div>
     </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

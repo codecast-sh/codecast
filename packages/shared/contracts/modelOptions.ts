@@ -41,6 +41,41 @@ export const CLAUDE_MODEL_OPTIONS: ModelOption[] = [
 export const CLAUDE_EFFORT_LEVELS = ["low", "medium", "high", "max"] as const;
 export type ClaudeEffortLevel = (typeof CLAUDE_EFFORT_LEVELS)[number];
 
+// ---------------------------------------------------------------------------
+// Claude live-menu keys ("menu:<label>")
+//
+// Claude has no model-listing command, and its /model menu changes with every
+// Claude Code release (2.1.220 dropped Sonnet 1M and made Opus the 1M row) —
+// so a curated list alone drifts: phantom options that error, new models that
+// never appear. The honest source for a LIVE session is the menu itself: the
+// daemon harvests the row labels whenever it drives the picker and heartbeats
+// them as the device's claude model inventory. Harvested rows that match a
+// curated option render as that option (stable key, hint, old-server compat);
+// a row nothing curates yet gets this synthesized key — `menu:` + the verbatim
+// row label — which navigates by exact label match. Menu keys can never
+// launch (no cliAlias, midSessionOnly): they exist only for the in-place
+// picker rail.
+// ---------------------------------------------------------------------------
+
+export const CLAUDE_MENU_KEY_PREFIX = "menu:";
+
+export function isClaudeMenuKey(key: string): boolean {
+  return (
+    key.startsWith(CLAUDE_MENU_KEY_PREFIX) &&
+    key.length > CLAUDE_MENU_KEY_PREFIX.length &&
+    key.length <= 80
+  );
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function claudeMenuOption(key: string): ModelOption {
+  const label = key.slice(CLAUDE_MENU_KEY_PREFIX.length);
+  return { key, label, menuMatch: `^${escapeRegExp(label)}$`, midSessionOnly: true };
+}
+
 export const CODEX_MODEL_OPTIONS: ModelOption[] = [
   { key: "default", label: "Default", hint: "Your config.toml model" },
   { key: "gpt-5.6-sol", label: "GPT-5.6 Sol", hint: "Latest frontier coding model", cliAlias: "gpt-5.6-sol" },
@@ -99,13 +134,17 @@ export type PiEffortLevel = (typeof PI_EFFORT_LEVELS)[number];
 // daemon's launch flags all accept it without any per-layer allowlist.
 // ---------------------------------------------------------------------------
 
-/** Per-device model inventory, heartbeat-reported and stored on the devices row. */
+/** Per-device model inventory, heartbeat-reported and stored on the devices row.
+ *  opencode/pi entries are `provider/model` ids from each client's listing
+ *  command; the claude entry is the /model picker's row labels in menu order,
+ *  harvested by the daemon whenever it drives the picker (claude has no
+ *  listing command). */
 export interface DeviceModelInventory {
   /** Stable hash of `clients` — the daemon resends and the server rewrites only
    *  when it changes. */
   hash: string;
   collected_at: number;
-  clients: { opencode?: string[]; pi?: string[] };
+  clients: { opencode?: string[]; pi?: string[]; claude?: string[] };
 }
 
 // Conservative shape for a dynamic model key: `provider/model` (aggregators nest,

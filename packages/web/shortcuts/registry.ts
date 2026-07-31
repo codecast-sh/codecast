@@ -50,6 +50,7 @@ export type ShortcutAction =
   | 'review.prevFile'
   | 'review.comment'
   | 'compose.focus'
+  | 'layout.cycle'
   | 'sidebar.toggleLeft'
   | 'sidebar.toggleRight'
   | 'sidebar.toggleComments'
@@ -200,6 +201,10 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'n', action: 'permission.deny', when: 'conversation', description: 'Deny permission' },
 
   { key: 'ctrl+m', action: 'compose.focus', skipInputCheck: true, description: 'Focus message input' },
+  // One key moves between the designed arrangements (Focus → Split → Triage)
+  // instead of hand-adjusting collapses and splitters. Each surface (docs,
+  // tasks, plans, …) remembers its own last mode.
+  { key: 'ctrl+;', action: 'layout.cycle', skipInputCheck: true, description: 'Cycle layout (Focus / Split / Triage)' },
   { key: 'ctrl+[', action: 'sidebar.toggleLeft', skipInputCheck: true, description: 'Toggle left sidebar' },
   { key: 'ctrl+]', action: 'sidebar.toggleRight', skipInputCheck: true, description: 'Toggle sessions panel' },
   { key: 'ctrl+\\', action: 'sidebar.toggleComments', skipInputCheck: true, description: 'Toggle comments rail' },
@@ -280,26 +285,41 @@ export function getShortcutsForAction(action: ShortcutAction): ShortcutDef[] {
   return SHORTCUTS.filter(s => s.action === action);
 }
 
+function formatPart(part: string): string {
+  switch (part.toLowerCase()) {
+    case 'ctrl': return isMac ? '\u2303' : 'Ctrl';
+    case 'meta': return isMac ? '\u2318' : 'Ctrl';
+    case 'alt': return isMac ? '\u2325' : 'Alt';
+    case 'shift': return isMac ? '\u21e7' : 'Shift';
+    case 'backspace': return isMac ? '\u232b' : 'Bksp';
+    case 'escape': return 'Esc';
+    case 'enter': return isMac ? '\u21a9' : 'Enter';
+    case 'tab': return isMac ? '\u21e5' : 'Tab';
+    case 'arrowup': return '\u2191';
+    case 'arrowdown': return '\u2193';
+    case 'arrowleft': return '\u2190';
+    case 'arrowright': return '\u2192';
+    case 'space': return '\u2423';
+    case 'delete': return isMac ? '\u2326' : 'Del';
+    default: return part.toUpperCase();
+  }
+}
+
 export function formatShortcutParts(def: ShortcutDef): string[] {
   const combo = (isMac && def.mac) ? def.mac : def.key;
-  return combo.split('+').map(part => {
-    switch (part.toLowerCase()) {
-      case 'ctrl': return isMac ? '\u2303' : 'Ctrl';
-      case 'meta': return isMac ? '\u2318' : 'Ctrl';
-      case 'alt': return isMac ? '\u2325' : 'Alt';
-      case 'shift': return isMac ? '\u21e7' : 'Shift';
-      case 'backspace': return isMac ? '\u232b' : 'Bksp';
-      case 'escape': return 'Esc';
-      case 'enter': return isMac ? '\u21a9' : 'Enter';
-      case 'tab': return isMac ? '\u21e5' : 'Tab';
-      case 'arrowup': return '\u2191';
-      case 'arrowdown': return '\u2193';
-      case 'arrowleft': return '\u2190';
-      case 'arrowright': return '\u2192';
-      case 'space': return '\u2423';
-      case 'delete': return isMac ? '\u2326' : 'Del';
-      default: return part.toUpperCase();
-    }
+  return combo.split('+').map(formatPart);
+}
+
+// Electron accelerator ("CommandOrControl+Shift+N") \u2192 the same display parts as
+// formatShortcutParts, so OS-global desktop shortcuts render identically to
+// in-app ones. CommandOrControl resolves per platform, like Electron does.
+export function formatAcceleratorParts(accelerator: string): string[] {
+  return accelerator.split('+').map(p => {
+    const norm = p === 'CommandOrControl' || p === 'CmdOrCtrl' ? (isMac ? 'meta' : 'ctrl')
+      : p === 'Command' || p === 'Cmd' || p === 'Super' ? 'meta'
+      : p === 'Control' ? 'ctrl'
+      : p;
+    return formatPart(norm);
   });
 }
 

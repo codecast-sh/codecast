@@ -49,6 +49,20 @@ let lastCollectedAt = 0;
 let lastSentHash: string | null = null;
 let inFlight = false;
 
+// Two inventory sources merge into `cached`: collector clients run a listing
+// command on a refresh cadence; pushed clients (claude) have no listing
+// command, so the daemon pushes what it observes — the /model picker rows
+// harvested whenever driveModelPicker parses the live menu.
+let collectedClients: DeviceModelInventory["clients"] = {};
+let pushedClients: DeviceModelInventory["clients"] = {};
+
+function rebuildCached(): void {
+  const clients = { ...collectedClients, ...pushedClients };
+  if (Object.keys(clients).length === 0) return;
+  const hash = crypto.createHash("sha1").update(JSON.stringify(clients)).digest("hex").slice(0, 16);
+  cached = { hash, collected_at: Date.now(), clients };
+}
+
 /** Collect every installed dynamic client's listing. Exported for tests/doctor. */
 export async function collectModelInventory(): Promise<DeviceModelInventory | null> {
   const clients: DeviceModelInventory["clients"] = {};
@@ -75,11 +89,26 @@ export function ensureModelInventoryFresh(): void {
   void collectModelInventory()
     .then((inv) => {
       lastCollectedAt = Date.now();
-      if (inv) cached = inv;
+      if (inv) collectedClients = inv.clients;
+      rebuildCached();
     })
     .finally(() => {
       inFlight = false;
     });
+}
+
+/** Push an observed inventory for a client with no listing command (claude:
+ *  /model picker row labels, in menu order — order is meaningful, unsorted).
+ *  Rides the next heartbeat via the same hash-change gate as collections. */
+export function recordObservedModelInventory(
+  client: keyof DeviceModelInventory["clients"],
+  ids: string[],
+): void {
+  const clean = ids.map((s) => s.trim()).filter(Boolean).slice(0, MAX_IDS_PER_CLIENT);
+  if (clean.length === 0) return;
+  if (JSON.stringify(pushedClients[client]) === JSON.stringify(clean)) return;
+  pushedClients[client] = clean;
+  rebuildCached();
 }
 
 /** The inventory to attach to this beat — only when the server hasn't seen it. */

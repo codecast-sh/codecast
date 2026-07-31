@@ -26,6 +26,7 @@
     "productName": "Codecast",
     "files": [
       "main.js",
+      "shortcutSettings.js",
       "updaterNet.js",
       "preload.js",
       "assets/icon.png",

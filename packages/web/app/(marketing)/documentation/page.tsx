@@ -819,16 +819,19 @@ $ cast workflow run ct-a1b2
             triggers fire after a delay, recurring triggers fire on an interval, and event
             triggers fire in response to GitHub webhooks.
           </p>
+          <p className="mb-4" style={{ color: SOL.base00 }}>
+            A trigger created inside a session binds to it: each run continues that session
+            as a new turn, with its full history. Pass <code>--spawn</code> to start a fresh
+            session per run instead — no history, just your prompt, with a link back to the
+            trigger at the top of each run&apos;s conversation.
+          </p>
 
           <Heading id="trigger-commands" level={3}>Commands</Heading>
-          <Code>{`# One-shot: check CI in 30 minutes
+          <Code>{`# One-shot: check CI in 30 minutes (continues the current session)
 $ cast trigger add "Check if CI is green on main" --in 30m
 
-# Recurring: review PRs every 4 hours
-$ cast trigger add "Review open PRs and summarize" --every 4h
-
-# With context from current session
-$ cast trigger add "Continue auth refactor" --in 2h --context current --mode apply
+# Recurring, fresh session per run, linked back to the trigger
+$ cast trigger add "Review open PRs and summarize" --every 4h --spawn
 
 # Manage triggers
 $ cast trigger ls                 # list active
@@ -857,7 +860,8 @@ $ cast trigger add "Check for broken tests" --on push`}</Code>
             <Param name="--in <duration>" desc="Delay before run: 30m, 2h, 1d" />
             <Param name="--every <duration>" desc="Recurring interval" />
             <Param name="--on <event>" desc="GitHub event: pr_comment, pr_opened, pr_merged, push" />
-            <Param name="--context current" desc="Capture current session context for the run" />
+            <Param name="--spawn" desc="Fresh session per run, no history — linked back to the trigger" />
+            <Param name="--for <session>" desc="Bind runs to a specific session (defaults to the one you're in)" />
             <Param name="--safe" desc="Read-only run: investigate and report, never modify (default: the run can act)" />
             <Param name="--max-runtime <dur>" desc="Override max runtime (default: 10m)" />
           </CmdTable>

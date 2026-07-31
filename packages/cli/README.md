@@ -57,6 +57,7 @@ cast plan create "Overhaul" -g "goal"
 cast plan orchestrate <id>        # run plan tasks in waves across agents
 cast overview                     # top-down view of plans and tasks
 cast trigger add "Check CI" --in 30m
+cast trigger add "Audit deps" --every 1d --spawn   # fresh session per run
 ```
 
 ### Handoff & Tracking

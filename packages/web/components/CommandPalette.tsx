@@ -434,8 +434,13 @@ function ActionSubmenu({
       const curEffort = s0?.effort as string | undefined;
       const rows: any[] = [];
       // Dynamic clients: Default + the live featured head; the query also
-      // searches the device's full inventory below.
-      const models = dynamicModels.dynamic ? [cfg.models[0], ...dynamicModels.featured] : cfg.models;
+      // searches the device's full inventory below. Menu-dynamic (claude) on a
+      // live session: Default + the harvested /model menu rows.
+      const models = dynamicModels.dynamic
+        ? [cfg.models[0], ...dynamicModels.featured]
+        : !blank && dynamicModels.menuRows.length > 0
+          ? [cfg.models[0], ...dynamicModels.menuRows]
+          : cfg.models;
       for (const m of models) {
         if (blank && m.midSessionOnly) continue;
         rows.push({ key: `model:${m.key}`, label: m.label, sub: m.hint, active: m.key === curModelKey, icon: Cpu });

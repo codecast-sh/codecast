@@ -1022,6 +1022,126 @@ pre[class*="language-"] {
   width: var(--sidebar-frozen-w, 100%);
 }
 
+/* Focus-mode peek (DetailSplitLayout): the selected item slides in OVER the
+   full-width list. The shadow separates it from the list still living under. */
+.peek-overlay {
+  box-shadow: -24px 0 48px rgba(0, 0, 0, 0.18);
+  animation: peek-slide-in 280ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+@keyframes peek-slide-in {
+  from { transform: translateX(24px); opacity: 0.6; }
+  to { transform: none; opacity: 1; }
+}
+
+/* ============================================================
+   SIMPLE VIEW — the minimal reskin.
+   Design source: the layout-directions prototype — small type, cream
+   user cards, one-line tool receipts, flat calm chrome. Elements opt
+   OUT of simple view via data attributes ([data-simple-hide] /
+   [data-simple-dim]); regions opt IN via [data-sv-feed] (conversation
+   scroller), [data-sv-convhead] (conversation header), [data-sv-composer]
+   (input area), [data-sv-rail] (session list panel).
+   ============================================================ */
+.simple-view [data-simple-hide] {
+  display: none !important;
+}
+.simple-view [data-simple-dim] {
+  opacity: 0.55;
+}
+
+/* ---- Conversation feed: smaller, quieter type ---- */
+.simple-view [data-sv-feed] {
+  font-size: 12.5px;
+}
+.simple-view [data-sv-feed] .prose {
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+.simple-view [data-sv-feed] .text-sm { font-size: 12px; }
+.simple-view [data-sv-feed] .text-xs { font-size: 10.5px; }
+
+/* User messages: small cream cards (the mock's #fff8e6 note-card look),
+   theme-aware via a warm tint over the page background. [id^="msg-"] scopes
+   to the message BLOCKS and leaves small inline chips that share the
+   bg-sol-blue/10 tint alone. */
+.simple-view [data-sv-feed] [id^="msg-"][class*="bg-sol-blue/10"] {
+  background: color-mix(in srgb, var(--sol-yellow) 7%, var(--sol-bg)) !important;
+  border: 1px solid color-mix(in srgb, var(--sol-text) 11%, transparent) !important;
+  border-radius: 9px;
+  padding: 9px 12px;
+  margin-bottom: 16px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+/* The message body indent under the avatar row flattens — the card itself
+   is the container now. */
+.simple-view [data-sv-feed] [id^="msg-"] .pl-8 {
+  padding-left: 0;
+}
+
+/* Assistant turns sit closer together; the receipt chips go flatter (the
+   mock's plain "Bash …" line and one-line edit receipts). */
+.simple-view [data-sv-feed] button[class*="border-dashed"] {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--sol-text) 8%, transparent);
+  background: transparent;
+}
+
+/* Hover toolbars and per-message affordances stay away until hover, and even
+   then quieter. */
+.simple-view [data-sv-feed] .group:hover [class*="opacity-0"] {
+  opacity: 0.7;
+}
+
+/* ---- Conversation header: one slim line ---- */
+.simple-view [data-sv-convhead] {
+  font-size: 11px;
+}
+.simple-view [data-sv-convhead] .px-2 {
+  padding-left: 8px;
+  padding-right: 8px;
+}
+.simple-view [data-sv-convhead] button,
+.simple-view [data-sv-convhead] a {
+  opacity: 0.75;
+}
+.simple-view [data-sv-convhead] button:hover,
+.simple-view [data-sv-convhead] a:hover {
+  opacity: 1;
+}
+
+/* ---- Composer: the mock's single rounded pill ---- */
+.simple-view [data-sv-composer] textarea,
+.simple-view [data-sv-composer] [data-chat-input] {
+  font-size: 12.5px;
+}
+.simple-view [data-sv-composer] [class*="rounded-"] {
+  border-radius: 14px;
+}
+
+/* ---- Session rail: calm cards on a quiet ground ---- */
+.simple-view [data-sv-rail] {
+  font-size: 10.5px;
+}
+/* Cards float: rounded, hairline border, page-colored surface — replacing
+   the row-divider look. */
+.simple-view [data-sv-rail] [data-session-id] {
+  border-radius: 9px;
+  margin: 3px 6px;
+  background: var(--sol-bg);
+  border: 1px solid color-mix(in srgb, var(--sol-text) 9%, transparent);
+}
+.simple-view [data-sv-rail] div:has(> [data-session-id]) {
+  border-bottom-color: transparent !important;
+}
+/* Active/working accents survive but soften to the mock's weight. */
+.simple-view [data-sv-rail] [data-session-id][class*="border-l-"] {
+  border-left-width: 1px;
+}
+.simple-view [data-sv-rail] [data-session-id][class*="bg-sol-cyan/15"] {
+  box-shadow: 0 0 0 1px var(--sol-cyan) inset;
+  background: var(--sol-bg);
+}
+
 /* Window manager: hide input area on unfocused windows */
 .session-window--blurred [data-chat-input] {
   display: none;

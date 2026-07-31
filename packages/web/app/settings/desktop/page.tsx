@@ -1,39 +1,22 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
+import { RotateCcw, X } from "lucide-react";
 import { useEventListener } from "../../../hooks/useEventListener";
 import { useMountEffect } from "../../../hooks/useMountEffect";
 import {
   isElectron,
+  bridge,
   getAppVersion,
   checkDesktopUpdate,
   onUpdateStatus,
   restartForUpdate,
   checkForUpdate,
+  getDesktopShortcutConfig,
+  DESKTOP_SHORTCUTS,
+  type DesktopShortcutConfig,
 } from "../../../lib/desktop";
 import { AppLoader } from "../../../components/AppLoader";
-
-const SHORTCUT_LABELS: Record<string, string> = {
-  toggleWindow: "Toggle Main Window",
-  togglePalette: "Quick Command Palette",
-  newSession: "New Session",
-  toggleEnv: "Switch Local / Prod",
-};
-
-const SHORTCUT_DESCRIPTIONS: Record<string, string> = {
-  toggleWindow: "Show or hide the main Codecast window",
-  togglePalette: "Open the floating command palette from anywhere",
-  newSession: "Show the main window and create a new session",
-  toggleEnv: "Switch between local dev and production",
-};
-
-function formatAccelerator(acc: string): string {
-  return acc
-    .replace("CommandOrControl", "\u2318")
-    .replace("Control", "\u2303")
-    .replace("Alt", "\u2325")
-    .replace("Shift", "\u21E7")
-    .replace("Space", "Space")
-    .replace(/\+/g, " ");
-}
+import { KeyCap } from "../../../components/KeyboardShortcutsHelp";
+import { formatAcceleratorParts } from "../../../shortcuts";
 
 function ShortcutRecorder({
   value,
@@ -86,13 +69,23 @@ function ShortcutRecorder({
   return (
     <button
       onClick={() => setRecording(!recording)}
-      className={`px-3 py-1.5 rounded-md border text-sm font-mono transition-colors min-w-[140px] text-center ${
+      className={`px-3 py-1.5 rounded-md border text-sm transition-colors min-w-[140px] ${
         recording
           ? "border-sol-cyan bg-sol-cyan/10 text-sol-cyan animate-pulse"
           : "border-sol-border bg-sol-bg-alt text-sol-text hover:border-sol-text-dim"
       }`}
     >
-      {recording ? "Press shortcut..." : formatAccelerator(value)}
+      {recording ? (
+        "Press shortcut..."
+      ) : value ? (
+        <span className="flex items-center justify-center gap-[3px]">
+          {formatAcceleratorParts(value).map((part, i) => (
+            <KeyCap key={i}>{part}</KeyCap>
+          ))}
+        </span>
+      ) : (
+        <span className="text-sol-text-dim">Not set</span>
+      )}
     </button>
   );
 }
@@ -174,20 +167,24 @@ function DesktopVersionSection() {
 }
 
 export default function DesktopSettingsPage() {
-  const [shortcuts, setShortcuts] = useState<Record<string, string> | null>(null);
-  const [saving, setSaving] = useState<string | null>(null);
+  const [cfg, setCfg] = useState<DesktopShortcutConfig | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
+  const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useMountEffect(() => {
     if (!isElectron()) return;
-    window.__CODECAST_ELECTRON__?.getShortcuts?.().then(setShortcuts);
+    getDesktopShortcutConfig().then(setCfg);
   });
 
+  // "" removes the binding; the default value restores it. Re-fetch the full
+  // config afterward so registration conflicts (issues) reflect the new state.
   const updateShortcut = useCallback(async (key: string, accelerator: string) => {
     if (!isElectron()) return;
-    setSaving(key);
-    const updated = await window.__CODECAST_ELECTRON__?.setShortcut?.(key, accelerator);
-    if (updated) setShortcuts(updated);
-    setSaving(null);
+    await bridge("setShortcut")?.(key, accelerator);
+    setCfg(await getDesktopShortcutConfig());
+    setSaved(key);
+    if (savedTimer.current) clearTimeout(savedTimer.current);
+    savedTimer.current = setTimeout(() => setSaved(null), 1500);
   }, []);
 
   if (!isElectron()) {
@@ -198,7 +195,7 @@ export default function DesktopSettingsPage() {
     );
   }
 
-  if (!shortcuts) {
+  if (!cfg) {
     return <AppLoader className="min-h-0 bg-transparent py-10" size={28} />;
   }
 
@@ -220,32 +217,54 @@ export default function DesktopSettingsPage() {
       </div>
 
       <div className="space-y-3">
-        {Object.entries(SHORTCUT_LABELS).map(([key, label]) => (
-          <div
-            key={key}
-            className="flex items-center justify-between gap-4 py-3 px-4 rounded-lg border border-sol-border/60 bg-sol-bg-alt/30"
-          >
-            <div>
-              <div className="text-sm font-medium text-sol-text">{label}</div>
-              <div className="text-xs text-sol-text-dim mt-0.5">
-                {SHORTCUT_DESCRIPTIONS[key]}
+        {DESKTOP_SHORTCUTS.map(({ key, label, description }) => {
+          const value = cfg.shortcuts[key] || "";
+          const conflict = !!cfg.issues[key];
+          const isDefault = cfg.defaults ? value === cfg.defaults[key] : true;
+          return (
+            <div
+              key={key}
+              className="flex items-center justify-between gap-4 py-3 px-4 rounded-lg border border-sol-border/60 bg-sol-bg-alt/30"
+            >
+              <div>
+                <div className="text-sm font-medium text-sol-text">{label}</div>
+                <div className="text-xs text-sol-text-dim mt-0.5">{description}</div>
+                {conflict && (
+                  <div className="text-xs text-sol-orange mt-0.5">
+                    Couldn't register — another app may be using this shortcut.
+                  </div>
+                )}
+              </div>
+              <div className="flex items-center gap-1.5">
+                {saved === key && <span className="text-xs text-sol-cyan">Saved</span>}
+                <ShortcutRecorder value={value} onChange={(acc) => updateShortcut(key, acc)} />
+                {!isDefault && cfg.defaults && (
+                  <button
+                    onClick={() => updateShortcut(key, cfg.defaults![key])}
+                    aria-label="Reset to default"
+                    title="Reset to default"
+                    className="p-1.5 rounded-md text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                  </button>
+                )}
+                <button
+                  onClick={() => updateShortcut(key, "")}
+                  aria-label="Remove shortcut"
+                  title="Remove shortcut"
+                  disabled={!value}
+                  className="p-1.5 rounded-md text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors disabled:opacity-30 disabled:pointer-events-none"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
               </div>
             </div>
-            <div className="flex items-center gap-2">
-              <ShortcutRecorder
-                value={shortcuts[key] || ""}
-                onChange={(acc) => updateShortcut(key, acc)}
-              />
-              {saving === key && (
-                <span className="text-xs text-sol-cyan">Saved</span>
-              )}
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <p className="text-xs text-sol-text-dim">
-        Click a shortcut to re-record it. Press Escape to cancel.
+        Click a shortcut to re-record it, press Escape to cancel, or remove it with the × button.
       </p>
     </div>
   );

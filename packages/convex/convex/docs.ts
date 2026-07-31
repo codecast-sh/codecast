@@ -598,7 +598,9 @@ export const get = query({
     if (!auth) throw new Error("Unauthorized");
 
     const doc = await ctx.db.get(args.id);
-    if (!doc || doc.user_id !== auth.userId) return null;
+    // Owner-or-team, matching web (docs.webGet) — the CLI must see exactly what
+    // the same human sees in the browser.
+    if (!doc || !(await canAccessDoc(ctx, auth.userId, doc))) return null;
     return doc;
   },
 });
@@ -619,8 +621,7 @@ export const update = mutation({
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
 
-    const doc = await ctx.db.get(args.id);
-    if (!doc || doc.user_id !== auth.userId) throw new Error("Doc not found");
+    const doc = await requireAccessibleDoc(ctx, auth.userId, args.id);
 
     const updates: any = { updated_at: Date.now() };
     if (args.title) updates.title = args.title;
@@ -667,8 +668,7 @@ export const addComment = mutation({
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
 
-    const doc = await ctx.db.get(args.id);
-    if (!doc || doc.user_id !== auth.userId) throw new Error("Doc not found");
+    const doc = await requireAccessibleDoc(ctx, auth.userId, args.id);
 
     const entries = (doc as any).entries || [];
     const entry: Record<string, any> = {
@@ -696,10 +696,9 @@ export const resetSync = mutation({
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
-    // Owner-only, matching the sibling `patch` mutation. Without this, any caller
+    // Owner-or-team, matching the sibling `patch` mutation. Without this, any caller
     // could wipe a doc's deltas and overwrite its snapshot content by id.
-    const target = await ctx.db.get(args.id);
-    if (!target || target.user_id !== auth.userId) throw new Error("Doc not found");
+    await requireAccessibleDoc(ctx, auth.userId, args.id);
     const docId = args.id as string;
     const snapshots = await ctx.db
       .query("doc_snapshots")
@@ -744,8 +743,7 @@ export const patch = mutation({
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
 
-    const doc = await ctx.db.get(args.id);
-    if (!doc || doc.user_id !== auth.userId) throw new Error("Doc not found");
+    const doc = await requireAccessibleDoc(ctx, auth.userId, args.id);
 
     const content = doc.content || "";
     const idx = content.indexOf(args.old_string);
@@ -778,16 +776,26 @@ export const search = query({
     const auth = await verifyApiToken(ctx, args.api_token, false);
     if (!auth) throw new Error("Unauthorized");
 
+    // Search the whole title index, then apply the owner-or-team gate — the
+    // user_id filter field would hide teammates' team docs that `cast doc show`
+    // (and the web) will happily open. Overfetch so the gate doesn't starve the page.
+    const limit = args.limit || 20;
     const results = await ctx.db
       .query("docs")
       .withSearchIndex("search_docs_v2", (q) => {
-        let search = q.search("title", args.query).eq("user_id", auth.userId);
+        let search = q.search("title", args.query);
         if (args.doc_type) search = search.eq("doc_type", args.doc_type as any);
         return search;
       })
-      .take(args.limit || 20);
+      .take(limit * 5);
 
-    return results.filter((d) => !d.archived_at);
+    const visible: typeof results = [];
+    for (const d of results) {
+      if (d.archived_at) continue;
+      if (await canAccessDoc(ctx, auth.userId, d)) visible.push(d);
+      if (visible.length >= limit) break;
+    }
+    return visible;
   },
 });
 
@@ -2375,8 +2383,9 @@ export const generateShareLink = mutation({
       ? (await verifyApiToken(ctx, args.api_token))?.userId
       : await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
-    const doc = await ctx.db.get(args.id);
-    if (!doc || doc.user_id !== userId) throw new Error("Doc not found");
+    // Owner-or-team, matching plans.generateShareLink and webUpdate: docs are
+    // team-visible/editable, so a teammate can mint the share link too.
+    const doc = await requireAccessibleDoc(ctx, userId, args.id);
     if (doc.share_token) return { share_token: doc.share_token };
     const share_token = crypto.randomUUID();
     await ctx.db.patch(args.id, { share_token });
@@ -2391,8 +2400,7 @@ export const unshare = mutation({
       ? (await verifyApiToken(ctx, args.api_token))?.userId
       : await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
-    const doc = await ctx.db.get(args.id);
-    if (!doc || doc.user_id !== userId) throw new Error("Doc not found");
+    await requireAccessibleDoc(ctx, userId, args.id);
     await ctx.db.patch(args.id, { share_token: undefined });
     return { success: true };
   },

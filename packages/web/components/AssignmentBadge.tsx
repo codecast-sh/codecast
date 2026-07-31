@@ -13,7 +13,6 @@
  * overflow-hidden actions row.
  */
 
-import { Users } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -49,7 +48,20 @@ export function AssignmentBadge({
   const { byId, loaded } = useDevices();
   const owners = useOwnersFromStore(conversationId);
   const d = ownerDeviceId ? byId.get(ownerDeviceId) : undefined;
-  const { ownerList, displayFor } = owners;
+  const { ownerList, displayFor, currentUser } = owners;
+
+  // The default case — no explicit owners (implicitly yours) or just you —
+  // renders CONDENSED: avatar only, no name, no "Assign" text. Full names are
+  // reserved for the interesting case: the thread living in someone else's inbox.
+  const meId = currentUser?._id?.toString?.();
+  const selfOnly =
+    ownerList.length === 0 || (ownerList.length === 1 && ownerList[0] === meId);
+  const selfDisp = currentUser
+    ? {
+        name: currentUser.name || currentUser.email?.split("@")[0] || "You",
+        image: currentUser.image || currentUser.github_avatar_url,
+      }
+    : null;
 
   const deviceTitle = d
     ? `Runs on ${deviceDisplayName(d)} (${deviceKindLabel(d)}) — ${d.online ? "online" : `last seen ${relativeSeen(d.last_seen)}`}`
@@ -81,12 +93,13 @@ export function AssignmentBadge({
           )}
           <span
             className={`inline-flex items-center gap-1.5 pl-1.5 pr-2 py-0.5 max-w-[150px] ${
-              ownerList.length
-                ? "bg-sol-cyan/10 text-sol-cyan"
-                : "text-sol-text-dim hover:text-sol-text"
+              selfOnly ? "text-sol-text-dim hover:text-sol-text" : "bg-sol-cyan/10 text-sol-cyan"
             }`}
+            title={selfOnly ? `Assigned to you${ownerList.length === 0 ? " (default)" : ""} — click to reassign` : undefined}
           >
-            {ownerList.length ? (
+            {selfOnly ? (
+              selfDisp && <OwnerAvatar name={selfDisp.name} image={selfDisp.image} />
+            ) : (
               <>
                 <span className="flex -space-x-1.5">
                   {ownerList.slice(0, 3).map((id) => {
@@ -97,11 +110,6 @@ export function AssignmentBadge({
                 <span className="truncate">
                   {ownerList.length === 1 ? displayFor(ownerList[0]).name : `${ownerList.length} owners`}
                 </span>
-              </>
-            ) : (
-              <>
-                <Users className="w-3 h-3" />
-                <span>Assign</span>
               </>
             )}
           </span>

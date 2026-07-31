@@ -9,6 +9,7 @@ declare global {
       checkForUpdate: (opts?: { manual?: boolean }) => Promise<void>;
       showNotification: (title: string, body: string, data?: { conversationId?: string }) => Promise<void>;
       getShortcuts: () => Promise<Record<string, string>>;
+      getShortcutConfig: () => Promise<DesktopShortcutConfig>;
       setShortcut: (key: string, accelerator: string) => Promise<Record<string, string>>;
       paletteNavigate: (path: string) => void;
       paletteHide: () => void;
@@ -49,47 +50,76 @@ export function isDesktop(): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Deep links (codecast:// custom protocol)
-//
-// The desktop app registers the `codecast://` scheme. A web page running in a
-// browser hands off to the app by navigating to one of these links; the app's
-// native layer forwards the raw URL to the renderer, where `parseDesktopDeepLinkPath`
-// turns it back into an in-app route.
+// OS-global shortcuts (Electron globalShortcut) — the bindings that work from
+// any app, not just inside Codecast. One metadata list feeds both the desktop
+// settings page and the keyboard shortcuts help panel.
 // ---------------------------------------------------------------------------
 
-const DEEP_LINK_HOST = "open";
+export const DESKTOP_SHORTCUTS: { key: string; label: string; description: string }[] = [
+  { key: "newSession", label: "New Session", description: "Open the new-session compose popup from any app" },
+  { key: "toggleWindow", label: "Toggle Main Window", description: "Show or hide the main Codecast window" },
+  { key: "togglePalette", label: "Quick Command Palette", description: "Open the floating command palette from anywhere" },
+  { key: "toggleEnv", label: "Switch Local / Prod", description: "Switch between local dev and production" },
+];
 
-// Build a codecast:// deep link for a root-relative in-app path
-// ("/conversation/x?foo=1" → "codecast://open/conversation/x?foo=1").
-//
-// The real route is nested under a fixed `open` host so the path survives a
-// round trip: a bare `codecast://conversation/x` parses "conversation" as the
-// URL host and drops it, landing the app on the wrong page.
-//
-// `auto: true` marks a machine-initiated handoff (the browser page redirecting
-// itself on load) as opposed to the user clicking an "Open in desktop"
-// affordance. The desktop treats auto arrivals with suspicion — see
-// shouldApplyAutoDeepLink — because nothing distinguishes a user-clicked link
-// from an automation-driven tab on the sending side.
-export const AUTO_HANDOFF_PARAM = "cc_handoff";
+export type DesktopShortcutConfig = {
+  shortcuts: Record<string, string>;
+  // null on older desktop builds whose preload predates get-shortcut-config —
+  // callers hide default-dependent affordances (reset) rather than guessing.
+  defaults: Record<string, string> | null;
+  // Bindings that failed to register (another app owns the accelerator).
+  issues: Record<string, string>;
+};
 
-export function buildDesktopDeepLink(pathWithSearch: string, opts?: { auto?: boolean }): string {
-  const p = pathWithSearch.startsWith("/") ? pathWithSearch : `/${pathWithSearch}`;
-  if (!opts?.auto) return `codecast://${DEEP_LINK_HOST}${p}`;
-  const sep = p.includes("?") ? "&" : "?";
-  return `codecast://${DEEP_LINK_HOST}${p}${sep}${AUTO_HANDOFF_PARAM}=auto`;
+export async function getDesktopShortcutConfig(): Promise<DesktopShortcutConfig | null> {
+  if (!isElectron()) return null;
+  const full = bridge("getShortcutConfig");
+  if (full) return await full();
+  const shortcuts = await bridge("getShortcuts")?.();
+  return shortcuts ? { shortcuts, defaults: null, issues: {} } : null;
 }
 
-// Split an incoming deep-link path into the navigable path and whether it was
-// an auto handoff (stripping the marker so it never reaches the router).
-export function extractDeepLinkIntent(pathWithSearch: string): { path: string; auto: boolean } {
-  const qIdx = pathWithSearch.indexOf("?");
-  if (qIdx === -1) return { path: pathWithSearch, auto: false };
-  const sp = new URLSearchParams(pathWithSearch.slice(qIdx + 1));
-  const auto = sp.get(AUTO_HANDOFF_PARAM) === "auto";
-  sp.delete(AUTO_HANDOFF_PARAM);
-  const rest = sp.toString();
-  return { path: pathWithSearch.slice(0, qIdx) + (rest ? `?${rest}` : ""), auto };
+// ---------------------------------------------------------------------------
+// Browser → desktop hand-off (codecast:// deep links).
+//
+// The contract — link format, the gate that decides whether a browser page
+// should redirect into the app, the localStorage mirror, and the pre-boot runner
+// that fires the link before any app chunk is fetched — lives in
+// ./desktopHandoff, which stays import-free because it is ALSO inlined into
+// index.html's <head>. Re-exported here so callers keep a single desktop entry
+// point.
+// ---------------------------------------------------------------------------
+
+export {
+  AUTO_HANDOFF_PARAM,
+  buildDesktopDeepLink,
+  extractDeepLinkIntent,
+  parseDesktopDeepLinkPath,
+  isHandoffEligiblePath,
+  isAutoHandoffHost,
+  isForegroundTab,
+  isFreshNavigation,
+  shouldAttemptHandoff,
+  shouldAttemptPreBootHandoff,
+  writeHandoffMirror,
+  skipHandoffForUrl,
+  readSkippedUrl,
+  takePendingPreferBrowser,
+  handoffTookOverBoot,
+  runPreBootHandoff,
+  HANDOFF_MIRROR_KEY,
+  HANDOFF_MIRROR_DEV,
+  HANDOFF_SKIP_KEY,
+  HANDOFF_PERSIST_KEY,
+  type HandoffContext,
+  type PreBootHandoffContext,
+} from "./desktopHandoff";
+
+// The conversation a root-relative in-app path points at, or null for any
+// other page. Shared by deep-link navigation and the handoff notice so the
+// two can't disagree about what a path targets.
+export function conversationIdFromPath(path: string): string | null {
+  return path.match(/^\/conversation\/([^/?#]+)/)?.[1] ?? null;
 }
 
 // --- Desktop user-activity tracker -----------------------------------------
@@ -112,99 +142,6 @@ const AUTO_DEEPLINK_QUIET_MS = 30_000;
 // that moving the view cannot interrupt anything.
 export function shouldApplyAutoDeepLink(now: number = Date.now(), lastInputAt: number = lastDesktopInputAt): boolean {
   return now - lastInputAt > AUTO_DEEPLINK_QUIET_MS;
-}
-
-// Inverse of buildDesktopDeepLink: turn an incoming codecast:// URL into a
-// root-relative in-app path, or null when there's nothing navigable. Tolerates
-// the legacy host-as-segment shape (codecast://conversation/x) by folding a
-// non-sentinel host back into the path.
-export function parseDesktopDeepLinkPath(url: string): string | null {
-  let u: URL;
-  try {
-    u = new URL(url);
-  } catch {
-    return null;
-  }
-  let path = u.pathname || "";
-  const host = u.hostname;
-  if (host && host !== DEEP_LINK_HOST) {
-    path = `/${host}${path === "/" ? "" : path}`;
-  }
-  if (!path || path === "/") return null;
-  return path + (u.search || "");
-}
-
-// Paths that should never auto-hand-off to the desktop app — auth/oauth flows,
-// public share pages (often opened by people without the app), the in-app
-// palette popup, downloads, and API routes.
-const HANDOFF_DENY = [/^\/login/, /^\/auth/, /^\/oauth/, /^\/share\//, /^\/palette/, /^\/download/, /^\/api\//];
-
-export function isHandoffEligiblePath(path: string): boolean {
-  if (!path) return false;
-  return !HANDOFF_DENY.some((re) => re.test(path));
-}
-
-function isOAuthCallback(search: string): boolean {
-  const sp = new URLSearchParams(search || "");
-  return sp.has("code") && sp.has("state");
-}
-
-// Auto-handoff fires only from the production host. Dev/local origins
-// (local.codecast.sh, localhost) host agent-driven Chrome tabs — automation
-// that activates a tab in a frontmost window satisfies foreground + fresh
-// navigation, and a deep link from there show()+focus()es the desktop app
-// onto whatever the agent had open. Manual "open in desktop" affordances
-// (buildDesktopDeepLink call sites) are unaffected.
-export function isAutoHandoffHost(host: string): boolean {
-  return /^(www\.)?codecast\.sh$/i.test(host);
-}
-
-// A genuine foreground tab: visible AND the window holds OS focus. The handoff
-// gate requires this so it stays inert in background or automated tabs — e.g.
-// agent/headless browser tabs that load app pages with no human looking. Those
-// must never yank the desktop app to the front (the "Codecast keeps jumping to
-// random sessions" bug: every background page-load was firing a deep link).
-export function isForegroundTab(): boolean {
-  if (typeof document === "undefined") return false;
-  return document.visibilityState === "visible" && document.hasFocus();
-}
-
-export type HandoffContext = {
-  isDesktop: boolean;
-  initialized: boolean;
-  hasUsedDesktop: boolean;
-  preferBrowser: boolean;
-  isTopWindow: boolean;
-  foreground: boolean;
-  host: string;
-  freshNavigation: boolean;
-  path: string;
-  search: string;
-};
-
-// Whether a browser page should auto-redirect into the desktop app. Pure so the
-// full gate is unit-testable; the component just gathers the context.
-//
-// Fires only when: not already in the app, synced prefs have loaded, the user
-// owns the app, they haven't opted to stay in the browser, we're the top-level
-// foreground window on the PRODUCTION host (never local dev — see
-// isAutoHandoffHost), this is a fresh navigation (a clicked/typed link, not a
-// reload or back/forward), and the path isn't an auth/share/etc. route.
-// `foreground` is split out because the component re-checks the gate on
-// focus/visibility: a tab opened in the background (cmd-click) hands off only
-// once the user looks at it.
-export function shouldAttemptHandoff(c: HandoffContext): boolean {
-  if (c.isDesktop) return false;
-  if (!c.initialized) return false;
-  if (!c.hasUsedDesktop) return false;
-  if (c.preferBrowser) return false;
-  if (!c.isTopWindow) return false;
-  if (!c.foreground) return false;
-  if (!isAutoHandoffHost(c.host)) return false;
-  if (!c.freshNavigation) return false;
-  if (!isHandoffEligiblePath(c.path)) return false;
-  if (isOAuthCallback(c.search)) return false;
-  return true;
 }
 
 export function hasBrowserNotificationPermission(): boolean {
