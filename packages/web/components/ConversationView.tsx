@@ -18,7 +18,18 @@ import { useStorageImageUrl, hasDecodedSrc, markSrcDecoded } from "../hooks/useS
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, getCommandType, cleanContent, cleanTitle, isSkillExpansion, extractSkillInfo, extractFilePaths, isSystemMessage, isImportNotice, formatModel, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName } from "../lib/conversationProcessor";
 import { classifyApiErrorBanner, agentSupportsFork, CLIENT_ERROR_BANNER_PREFIX, PROVIDER_KEYS, getProviderKeySpec } from "@codecast/shared/contracts";
-import { formatToolName, isPlanWriteToolCall, truncateStr, shortenUrl, getRelativePath, stripLineNumbers, structuredPayloadSummary } from "@codecast/shared/render";
+import {
+  extractCodexExecActions,
+  formatToolName,
+  isPlanWriteToolCall,
+  shortenUrl,
+  stripLineNumbers,
+  structuredPayloadSummary,
+  summarizeCodexExecActions,
+  toolSummary as sharedToolSummary,
+  truncateStr,
+  getRelativePath,
+} from "@codecast/shared/render";
 import { getBuiltinCommands } from "../lib/builtinCommands";
 import { resolveSessionSkills } from "../lib/sessionSkills";
 import { entityRoute } from "../lib/entityLinks";
@@ -3051,6 +3062,11 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
     parsedInput = JSON.parse(tool.input);
   } catch {}
   const rawToolInput = tool.input || "";
+  const codexExecActions = useMemo(
+    () => extractCodexExecActions(tool),
+    [tool.name, rawToolInput],
+  );
+  const isCodexExec = tool.name === "exec";
 
   // claude uses file_path, codex uses path, opencode/pi use filePath (camelCase).
   const filePath = String(parsedInput.file_path || parsedInput.filePath || parsedInput.path || "");
@@ -3127,6 +3143,19 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
   }, [codeFullscreen]);
 
   const getToolSummary = () => {
+    if (isCodexExec) {
+      if (codexExecActions.length === 1) {
+        const inner = codexExecActions[0];
+        if (inner.name === "exec_command" || inner.name === "shell_command" || inner.name === "shell" || inner.name === "container.exec" || inner.name === "commandExecution") {
+          let innerInput: Record<string, unknown> = {};
+          try { innerInput = JSON.parse(inner.input); } catch {}
+          const cmd = unwrapShellCommand(String(innerInput.command || innerInput.cmd || ""));
+          if (cmd) return summarizeBashCommand(cmd);
+        }
+        return sharedToolSummary(inner);
+      }
+      return summarizeCodexExecActions(codexExecActions);
+    }
     if (isStandardEdit || isRead) return relativePath;
     if (isBash) {
       const cmd = unwrapShellCommand(String(parsedInput.command || parsedInput.cmd || ""));
@@ -3301,6 +3330,9 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
 
   const summary = getToolSummary();
   const resultSummary = getResultSummary();
+  const displayToolName = isCodexExec && codexExecActions.length === 1
+    ? formatToolName(codexExecActions[0].name)
+    : formatToolName(tool.name);
 
   const executedTabId = useMemo(() => {
     if (!tool.name.startsWith("mcp__claude-in-chrome__")) return null;
@@ -3481,7 +3513,7 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
         }`}
         onClick={handleClick}
       >
-        <span className={`font-mono flex-shrink-0 group-hover:underline ${toolColor}`}>{formatToolName(tool.name)}</span>
+        <span className={`font-mono flex-shrink-0 group-hover:underline ${toolColor}`}>{displayToolName}</span>
         {summary && (
           <span className="text-sol-text-muted font-mono truncate min-w-0">{summary}</span>
         )}
@@ -3553,7 +3585,34 @@ function ToolBlock({ tool, result, changeIndex, changeRange, shareSelectionMode,
               </div>
             </div>
           )}
-          {isEdit && !!parsedInput.old_string && !!parsedInput.new_string ? (
+          {isCodexExec ? (
+            <div className="max-h-80 overflow-auto">
+              {codexExecActions.length > 0 ? (
+                <div className="divide-y divide-sol-border/20 border-b border-sol-border/20 bg-sol-bg-highlight/20">
+                  {codexExecActions.map((action, index) => {
+                    const actionSummary = sharedToolSummary(action);
+                    return (
+                      <div key={`${action.name}-${index}`} className="flex items-start gap-2 px-2 py-1.5 text-xs font-mono">
+                        <span className="shrink-0 text-sol-cyan/80">{formatToolName(action.name)}</span>
+                        {actionSummary && <span className="min-w-0 break-words text-sol-text-muted">{actionSummary}</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <pre className="border-b border-sol-border/20 bg-sol-bg-highlight/20 p-2 text-xs font-mono overflow-x-auto whitespace-pre-wrap text-sol-text-muted">
+                  {String(parsedInput.input || parsedInput.code || parsedInput.script || "Codex action")}
+                </pre>
+              )}
+              {processedContent && processedContent.trim() ? (
+                <pre className={`p-2 text-xs font-mono overflow-x-auto whitespace-pre-wrap ${result?.is_error ? "text-sol-red" : "text-sol-text-secondary"}`}>
+                  {renderAnsi(processedContent)}
+                </pre>
+              ) : (
+                <div className="p-2 text-xs text-sol-text-dim">No output</div>
+              )}
+            </div>
+          ) : isEdit && !!parsedInput.old_string && !!parsedInput.new_string ? (
             <DiffView
               oldStr={String(parsedInput.old_string)}
               newStr={String(parsedInput.new_string)}
@@ -6746,18 +6805,42 @@ function ThreadSummaryView({ conversationId, userName, avatarUrl, onJump }: { co
 function describeToolGroup(rawName: string, count: number): string {
   const n = count;
   switch (rawName) {
-    case "Read": return n === 1 ? "read 1 file" : `read ${n} files`;
+    case "Read":
+    case "read":
+    case "file_read": return n === 1 ? "read 1 file" : `read ${n} files`;
     case "Edit":
+    case "edit":
+    case "file_edit":
+    case "apply_patch":
+    case "fileChange":
     case "NotebookEdit": return n === 1 ? "1 edit" : `${n} edits`;
-    case "Write": return n === 1 ? "wrote 1 file" : `wrote ${n} files`;
-    case "Bash": return n === 1 ? "ran 1 command" : `ran ${n} commands`;
+    case "Write":
+    case "write":
+    case "file_write": return n === 1 ? "wrote 1 file" : `wrote ${n} files`;
+    case "Bash":
+    case "bash":
+    case "shell":
+    case "shell_command":
+    case "exec_command":
+    case "container.exec":
+    case "commandExecution": return n === 1 ? "ran 1 command" : `ran ${n} commands`;
     case "Grep":
-    case "Glob": return n === 1 ? "1 search" : `${n} searches`;
+    case "grep":
+    case "Glob":
+    case "glob":
+    case "code_search":
+    case "code_analysis": return n === 1 ? "1 search" : `${n} searches`;
     case "WebFetch":
-    case "WebSearch": return n === 1 ? "1 web lookup" : `${n} web lookups`;
+    case "web_fetch":
+    case "WebSearch":
+    case "web_search":
+    case "web__run": return n === 1 ? "1 web lookup" : `${n} web lookups`;
     case "Task":
     case "Agent": return n === 1 ? "ran 1 agent" : `ran ${n} agents`;
     case "TodoWrite": return "updated todos";
+    case "update_plan": return "updated plan";
+    case "view_image": return n === 1 ? "viewed 1 image" : `viewed ${n} images`;
+    case "image_gen__imagegen": return n === 1 ? "generated 1 image" : `generated ${n} images`;
     default: {
       const label = formatToolName(rawName) || rawName;
       return n === 1 ? label : `${label} ×${n}`;
@@ -6772,7 +6855,13 @@ function describeToolGroup(rawName: string, count: number): string {
 const CondensedToolsLine = memo(function CondensedToolsLine({ tools, expanded, onToggle }: { tools: ToolCall[]; expanded: boolean; onToggle: () => void }) {
   const { summary, total } = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const tc of tools) counts.set(tc.name, (counts.get(tc.name) ?? 0) + 1);
+    for (const tc of tools) {
+      const nested = extractCodexExecActions(tc);
+      const represented = nested.length > 0 ? nested : [tc];
+      for (const action of represented) {
+        counts.set(action.name, (counts.get(action.name) ?? 0) + 1);
+      }
+    }
     return {
       summary: [...counts.entries()].map(([name, count]) => describeToolGroup(name, count)).join(" · "),
       total: tools.length,

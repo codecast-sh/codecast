@@ -24,7 +24,11 @@ import { EntityPill } from '@/components/EntityPill';
 import { CastCanvas, canvasAvailable, looksLikeHtmlMessage } from '@/components/CastCanvas';
 import { useSessionRestart, ghostRestartContextFor } from '@codecast/web/hooks/useSessionRestart';
 import { Theme, Spacing, chipShell, chipText, chipTint, CHROME_FONT_CAP } from '@/constants/Theme';
-import { structuredPayloadSummary } from '@codecast/shared/render';
+import {
+  extractCodexExecActions,
+  structuredPayloadSummary,
+  toolSummary as sharedToolSummary,
+} from '@codecast/shared/render';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 // A real gradient WITHOUT a native module: expo-linear-gradient's native side
 // ("ExpoLinearGradient") isn't linked into the dev/standalone binaries, so importing
@@ -505,10 +509,12 @@ const mcpToolNames: Record<string, string> = {
 };
 
 const codexToolNames: Record<string, string> = {
+  exec: "Actions",
   shell_command: "Terminal",
   shell: "Terminal",
   exec_command: "Terminal",
   "container.exec": "Terminal",
+  commandExecution: "Terminal",
   apply_patch: "Patch",
   file_read: "Read",
   file_write: "Write",
@@ -647,7 +653,8 @@ function getRelativePath(fullPath: string): string {
 }
 
 function toolIcon(name: string): { icon: React.ComponentProps<typeof FontAwesome>['name']; color: string } {
-  if (name === 'Bash' || name === 'shell_command' || name === 'shell' || name === 'exec_command' || name === 'container.exec') return { icon: 'terminal', color: Theme.green };
+  if (name === 'Bash' || name === 'shell_command' || name === 'shell' || name === 'exec_command' || name === 'container.exec' || name === 'commandExecution') return { icon: 'terminal', color: Theme.green };
+  if (name === 'exec') return { icon: 'cog', color: Theme.cyan };
   if (name === 'Read' || name === 'file_read') return { icon: 'file-code-o', color: Theme.blue };
   if (name === 'Glob' || name === 'Grep') return { icon: 'search', color: Theme.violet };
   if (name === 'Edit' || name === 'Write' || name === 'file_write' || name === 'file_edit' || name === 'apply_patch') return { icon: 'pencil', color: Theme.orange };
@@ -2085,8 +2092,14 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
   globalImageMap?: Record<string, ImageData>;
   openGallery?: (image: ImageData) => void;
 }) {
-  const { color } = toolIcon(toolCall.name);
-  const summary = toolSummary(toolCall);
+  const codexExecActions = extractCodexExecActions(toolCall);
+  const displayToolName = toolCall.name === 'exec' && codexExecActions.length === 1
+    ? codexExecActions[0].name
+    : toolCall.name;
+  const { color } = toolIcon(displayToolName);
+  const summary = toolCall.name === 'exec'
+    ? sharedToolSummary(codexExecActions.length === 1 ? codexExecActions[0] : toolCall)
+    : toolSummary(toolCall);
   const [viewMode, setViewMode] = useState<'raw' | 'rendered'>('rendered');
 
   // Format input nicely - parse JSON and extract relevant fields
@@ -2258,7 +2271,7 @@ function ToolCallItem({ toolCall, result, expanded, onToggle, images, globalImag
   return (
     <Pressable onPress={onToggle} style={styles.toolCallContainer}>
       <RNText style={styles.toolCallHeader} numberOfLines={expanded ? undefined : 1}>
-        <RNText style={[styles.toolCallName, { color }]}>{formatToolName(toolCall.name)}</RNText>
+        <RNText style={[styles.toolCallName, { color }]}>{formatToolName(displayToolName)}</RNText>
         {summary ? (
           <RNText style={styles.toolCallSummary}> {summary}</RNText>
         ) : null}

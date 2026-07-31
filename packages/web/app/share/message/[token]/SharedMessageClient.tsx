@@ -5,7 +5,12 @@ import Link from "next/link";
 import { CodeBlock } from "@/components/CodeBlock";
 import { MarkdownRenderer, isMarkdownFile, isPlanFile } from "@/components/tools/MarkdownRenderer";
 import { tryRenderHtmlMessage } from "@/components/HtmlSnippet";
-import { formatToolName, structuredPayloadSummary } from "@codecast/shared/render";
+import {
+  extractCodexExecActions,
+  formatToolName,
+  structuredPayloadSummary,
+  toolSummary as sharedToolSummary,
+} from "@codecast/shared/render";
 import { AppLoader } from "@/components/AppLoader";
 
 function formatRelativeTime(ts: number): string {
@@ -47,6 +52,11 @@ function ClaudeIcon() {
 }
 
 function getToolSummary(tool: any): string | null {
+  if (tool.name === "exec") {
+    const nested = extractCodexExecActions(tool);
+    return sharedToolSummary(nested.length === 1 ? nested[0] : tool) || null;
+  }
+
   let parsedInput: Record<string, unknown> = {};
   try {
     parsedInput = JSON.parse(tool.input);
@@ -182,12 +192,20 @@ function MarkdownContentBlock({ content, label, timestamp }: { content: string; 
 
 function ToolCallBlock({ tool }: { tool: any }) {
   const summary = getToolSummary(tool);
-  const color = toolColors[tool.name] || (tool.name.startsWith("mcp__") ? "text-sol-cyan/80" : "text-sol-text-dim");
+  const nested = extractCodexExecActions(tool);
+  const displayName = tool.name === "exec" && nested.length === 1 ? nested[0].name : tool.name;
+  const color = toolColors[displayName] || (
+    displayName === "exec_command" || displayName === "shell_command" || displayName === "commandExecution"
+      ? "text-sol-green/80"
+      : displayName.startsWith("mcp__")
+        ? "text-sol-cyan/80"
+        : "text-sol-text-dim"
+  );
 
   return (
     <div className="my-0.5 pl-7">
       <div className="flex items-center gap-1.5 text-xs">
-        <span className={`font-mono ${color}`}>{formatToolName(tool.name)}</span>
+        <span className={`font-mono ${color}`}>{formatToolName(displayName)}</span>
         {summary && (
           <span className="text-sol-text-muted font-mono truncate">{summary}</span>
         )}
