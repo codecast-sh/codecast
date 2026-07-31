@@ -796,7 +796,7 @@ function restorePickerFocus(prev: HTMLElement | null) {
 }
 
 function ProjectSwitcher({ conversation, handleRef }: { conversation: ConversationData; handleRef?: React.MutableRefObject<PickerHandle | null> }) {
-  const freshProjects = useQuery(api.users.getRecentProjectPaths, { limit: 15 });
+  const freshProjects = useQuery(api.users.getRecentProjectPaths, { limit: 50 });
   const cachedProjects = useInboxStore((s) => s.recentProjects);
   const setRecentProjects = useInboxStore((s) => s.setRecentProjects);
   // Narrowed: only _id/project_path/git_root are read here, none of which change on
@@ -851,9 +851,9 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
     [currentPath, recentProjects, homeDir],
   );
 
-  // While navigating with the keyboard: the default visible chips, or — once the
-  // user types — a live filter across ALL recent projects, so the "other"
-  // overflow is reachable without the mouse. Reuses the modal's match rule. When
+  // While navigating with the keyboard: ALL recent projects (current first —
+  // the full fetched list, not just the 6 default chips), or — once the user
+  // types — a live filter across them. Reuses the modal's match rule. When
   // the text instead NAMES a directory, a synthetic "open this folder" entry
   // rides at the end so ANY folder is reachable, not just previously-used ones:
   // an explicit path (absolute or ~/…) always offers it; a bare name resolves
@@ -872,8 +872,8 @@ function ProjectSwitcher({ conversation, handleRef }: { conversation: Conversati
       });
     }
     const base: { path: string }[] = currentPath ? [{ path: currentPath }] : [];
-    return base.concat(visibleProjects);
-  }, [filter, recentProjects, currentPath, visibleProjects, homeDir, projectBase]);
+    return base.concat(otherProjects);
+  }, [filter, recentProjects, currentPath, otherProjects, homeDir, projectBase]);
 
   // Distinguish "you typed the folder you're already in" from a real miss.
   const filterIsCurrent = !!currentPath && resolveCustomPath(filter, homeDir, projectBase) === currentPath;

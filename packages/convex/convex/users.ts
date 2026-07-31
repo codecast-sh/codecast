@@ -2727,14 +2727,14 @@ export const getRecentProjectPaths = query({
       return [];
     }
     const limit = args.limit ?? 10;
-    const threeWeeksAgo = Date.now() - 21 * 24 * 60 * 60 * 1000;
+    const windowStart = Date.now() - 30 * 24 * 60 * 60 * 1000;
     const conversations = await ctx.db
       .query("conversations")
       .withIndex("by_user_updated", (q) =>
-        q.eq("user_id", userId).gte("updated_at", threeWeeksAgo)
+        q.eq("user_id", userId).gte("updated_at", windowStart)
       )
       .order("desc")
-      .take(200);
+      .take(500);
 
     // Hide paths none of the user's machines can see locally. Read the union of
     // online devices' roots (NOT the per-user field, which every daemon clobbers
@@ -2763,7 +2763,7 @@ export const getRecentProjectPaths = query({
     const entries = Array.from(pathCounts.entries());
     const maxCount = Math.max(1, ...entries.map(([, s]) => s.count));
     const now = Date.now();
-    const ageRange = now - threeWeeksAgo;
+    const ageRange = now - windowStart;
 
     return entries
       .map(([path, stats]) => ({
@@ -2772,7 +2772,7 @@ export const getRecentProjectPaths = query({
         lastActive: stats.lastActive,
         score:
           0.65 * (stats.count / maxCount) +
-          0.35 * ((stats.lastActive - threeWeeksAgo) / ageRange),
+          0.35 * ((stats.lastActive - windowStart) / ageRange),
       }))
       .sort((a, b) => b.score - a.score)
       .slice(0, limit)
