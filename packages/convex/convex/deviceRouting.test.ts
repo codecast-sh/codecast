@@ -20,21 +20,11 @@ const remote = (id: string, over: Partial<RoutableDevice> = {}): RoutableDevice 
   ...over,
 });
 
-describe("pickOwnerDevice — the remote box is never auto-owned over a local", () => {
+describe("pickOwnerDevice — a remote without the checkout is never auto-owned over a local", () => {
   test("laptop asleep, only the remote Mac online → the OFFLINE laptop, not the remote", () => {
     // The exact bug: a blank iOS session while the laptop sleeps must queue for
     // the laptop (it wakes and serves), never land on the remote's $HOME.
     const devices = [local("L1", { last_seen: stale }), remote("r1")];
-    expect(pickOwnerDevice(devices, { projectPath: "/Users/ashot/src/app" }, NOW)).toBe("L1");
-  });
-
-  test("a remote with a matching project root still loses to an offline local", () => {
-    // A remote whose roots happen to contain the path still must not auto-own;
-    // only an explicit move (sticky owner) puts a session on the remote.
-    const devices = [
-      local("L1", { last_seen: stale }),
-      remote("r1", { local_project_roots: ["/Users/ashot/src/app"] }),
-    ];
     expect(pickOwnerDevice(devices, { projectPath: "/Users/ashot/src/app" }, NOW)).toBe("L1");
   });
 
@@ -118,6 +108,85 @@ describe("pickOwnerDevice — most-recently-active local (the mobile rule)", () 
       remote("r1", { last_seen: fresh }),
     ];
     expect(pickOwnerDevice(devices, { projectPath: "/x", ownerDeviceId: "L1" }, NOW)).toBe("L1");
+  });
+});
+
+describe("pickOwnerDevice — an explicit pick outranks the heuristics", () => {
+  test("an online local target wins over a more-recent peer and the sticky owner", () => {
+    const devices = [
+      local("L1", { last_seen: NOW - 90_000, local_project_roots: ["/x"] }),
+      local("L2", { last_seen: fresh }),
+    ];
+    const r = pickOwnerDevice(
+      devices,
+      { projectPath: "/x", ownerDeviceId: "L2", targetDeviceId: "L1" },
+      NOW,
+    );
+    expect(r).toBe("L1");
+  });
+
+  test("an online REMOTE target wins even with a local online and no matching root", () => {
+    // Picking a machine by hand is the explicit consent the invariant asks for.
+    const devices = [local("L1"), remote("r1")];
+    const r = pickOwnerDevice(devices, { projectPath: "/x", targetDeviceId: "r1" }, NOW);
+    expect(r).toBe("r1");
+  });
+
+  test("an OFFLINE target falls through to the normal rungs, it does not queue", () => {
+    const devices = [
+      local("L1", { last_seen: stale, local_project_roots: ["/x"] }),
+      local("L2", { last_seen: fresh, local_project_roots: ["/x"] }),
+    ];
+    const r = pickOwnerDevice(devices, { projectPath: "/x", targetDeviceId: "L1" }, NOW);
+    expect(r).toBe("L2");
+  });
+
+  test("an unknown target device id is ignored", () => {
+    const devices = [local("L1")];
+    expect(pickOwnerDevice(devices, { projectPath: "/x", targetDeviceId: "ghost" }, NOW)).toBe("L1");
+  });
+});
+
+describe("pickOwnerDevice — an online remote with the checkout beats a sleeping local", () => {
+  test("no local online + remote holds the checkout → the remote serves now", () => {
+    const devices = [
+      local("L1", { last_seen: stale }),
+      remote("r1", { local_project_roots: ["/Users/ashot/src/app"] }),
+    ];
+    const r = pickOwnerDevice(devices, { projectPath: "/Users/ashot/src/app/packages/web" }, NOW);
+    expect(r).toBe("r1");
+  });
+
+  test("the remote's root must actually match — otherwise queue for the local", () => {
+    const devices = [
+      local("L1", { last_seen: stale }),
+      remote("r1", { local_project_roots: ["/Users/ashot/src/other"] }),
+    ];
+    expect(pickOwnerDevice(devices, { projectPath: "/Users/ashot/src/app" }, NOW)).toBe("L1");
+  });
+
+  test("no path hint → no root match is possible, so the sleeping local still wins", () => {
+    const devices = [
+      local("L1", { last_seen: stale }),
+      remote("r1", { local_project_roots: ["/Users/ashot/src/app"] }),
+    ];
+    expect(pickOwnerDevice(devices, {}, NOW)).toBe("L1");
+  });
+
+  test("a local is online → the rung never fires, even though the remote has the checkout", () => {
+    const devices = [
+      local("L1", { local_project_roots: [] }),
+      remote("r1", { local_project_roots: ["/Users/ashot/src/app"] }),
+    ];
+    expect(pickOwnerDevice(devices, { projectPath: "/Users/ashot/src/app" }, NOW)).toBe("L1");
+  });
+
+  test("an OFFLINE remote with the checkout loses to the sleeping local", () => {
+    const devices = [
+      local("L1", { last_seen: stale }),
+      remote("r1", { last_seen: stale, local_project_roots: ["/Users/ashot/src/app"] }),
+    ];
+    expect(pickOwnerDevice(devices, { projectPath: "/Users/ashot/src/app" }, NOW)).toBe("L1");
   });
 });
 

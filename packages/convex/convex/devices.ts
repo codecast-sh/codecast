@@ -36,7 +36,12 @@ async function getAuthenticatedUserId(
 export async function resolveOwnerDevice(
   ctx: { db: any },
   userId: Id<"users">,
-  opts: { projectPath?: string | null; gitRoot?: string | null; ownerDeviceId?: string | null },
+  opts: {
+    projectPath?: string | null;
+    gitRoot?: string | null;
+    ownerDeviceId?: string | null;
+    targetDeviceId?: string | null;
+  },
 ): Promise<string | null> {
   const devices = await ctx.db
     .query("devices")
@@ -76,6 +81,26 @@ export async function getOnlineLocalRoots(
     for (const r of d.local_project_roots ?? []) roots.add(r);
   }
   return Array.from(roots);
+}
+
+/**
+ * One device's `local_project_roots`, or null if the user has no such device.
+ *
+ * Deliberately ignores `last_seen`: roots are stored state, and a session
+ * targeted at a sleeping machine still routes (rung 6) or falls back to a live
+ * one, so an offline machine's directories stay pickable.
+ */
+export async function getDeviceLocalRoots(
+  ctx: { db: any },
+  userId: Id<"users">,
+  deviceId: string,
+): Promise<string[] | null> {
+  const device = await ctx.db
+    .query("devices")
+    .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", deviceId))
+    .first();
+  if (!device) return null;
+  return device.local_project_roots ?? [];
 }
 
 type ClaimDevice = { is_remote?: boolean; last_seen?: number } | null | undefined;
@@ -118,6 +143,9 @@ export async function enqueueStartSession(
     agentType: AgentClientId;
     projectPath?: string | null;
     gitRoot?: string | null;
+    // The machine the user picked by hand. Honoured when it's online, otherwise
+    // routing falls back to whatever is alive and has the checkout.
+    targetDeviceId?: string | null;
     sessionId?: string;
     isolated?: boolean;
     worktreeName?: string;
@@ -153,6 +181,7 @@ export async function enqueueStartSession(
     projectPath,
     gitRoot,
     ownerDeviceId: conv?.owner_device_id ?? null,
+    targetDeviceId: opts.targetDeviceId ?? null,
   });
 
   // Keep ownership in lockstep with routing: the machine we route to becomes the
