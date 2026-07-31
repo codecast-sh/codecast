@@ -66,24 +66,23 @@ describe("mobile machine picker", () => {
     expect(inboxSource).toContain("deviceId ? { device_id: deviceId } : {}");
     expect(inboxSource).toContain("devices.length > 1 &&");
 
-    const apply = sourceBetween("const applyMachinePick", "const finishSessionCreate");
     // Stamping the default would short-circuit routing past the rung that
     // prefers the machine holding the checkout, so it must stay unsent.
-    expect(apply).toContain("if (!deviceId || deviceId === defaultDeviceId) return;");
-    expect(apply).toContain("target_device_id: deviceId");
+    const pick = sourceBetween("const machinePickForCreate", "const finishSessionCreate");
+    expect(pick).toContain("deviceId && deviceId !== defaultDeviceId ? deviceId : undefined");
   });
 
-  // A just-created row can still carry a local stub id, so the pick must follow
-  // it to its real one (the web ProjectSwitcher's chain) instead of dropping.
-  test("an explicit pick resolves a stub id before commanding the session", () => {
-    const apply = sourceBetween("const applyMachinePick", "const finishSessionCreate");
-    const cached = apply.indexOf("store.getConvexId(id)");
-    const inFlight = apply.indexOf("store.awaitSessionCreate(id)");
-    const command = apply.indexOf('"reconfigureSession"');
-
-    expect(cached).toBeGreaterThanOrEqual(0);
-    expect(inFlight).toBeGreaterThan(cached);
-    expect(command).toBeGreaterThan(inFlight);
+  // The pick must ride the create mutation itself. A create-then-reconfigure
+  // sequence enqueues TWO start_sessions — the auto-routed machine spawns
+  // before the retarget lands, and two daemons end up bound to one
+  // conversation (pl-224 review finding). Every createSession call in the
+  // sheet must carry the stamp, and no reconfigure path may exist.
+  test("the pick rides every create and never a follow-up reconfigure", () => {
+    const creates = inboxSource.split("store.createSession(").length - 1;
+    const stamped = inboxSource.split("target_device_id: machinePickForCreate()").length - 1;
+    expect(creates).toBeGreaterThan(0);
+    expect(stamped).toBe(creates);
+    expect(inboxSource).not.toContain('"reconfigureSession"');
   });
 });
 

@@ -11,7 +11,7 @@ import {
   formatRelativeTime, projectName, styles as sessionStyles,
 } from '@/components/SessionItem';
 import {
-  useInboxStore, isConvexId, type InboxSession, type InboxViewMode, type BucketItem, categorizeSessions, partitionOldSessions, sessionsWithPendingSend,
+  useInboxStore, type InboxSession, type InboxViewMode, type BucketItem, categorizeSessions, partitionOldSessions, sessionsWithPendingSend,
   chipMatchesSession, getProjectName, resolveInboxViewMode, resolveShowOld, flatViewSessions, convBucketMap,
   groupSessionsForLabelView, groupSessionsByPlan, sortLabels, computeChipCounts,
   sessionsWakeSig, pendingSendWakeSig,
@@ -122,16 +122,24 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
   // picks the machine (deviceRouting) and the folder list stays the union across
   // online devices — the behaviour before this row existed.
   const [deviceId, setDeviceId] = useState<string | null>(null);
-  const devices = (useQuery(api.devices.listDevices, visible ? {} : "skip") ?? []) as Device[];
+  const rawDevices = (useQuery(api.devices.listDevices, visible ? {} : "skip") ?? []) as Device[];
+  // listDevices is last_seen-sorted, so heartbeats would reshuffle the chips
+  // under the user's thumb. Hold them still: locals first, then by name.
+  const devices = useMemo(
+    () => [...rawDevices].sort((a, b) =>
+      Number(a.is_remote) - Number(b.is_remote) || deviceDisplayName(a).localeCompare(deviceDisplayName(b))),
+    [rawDevices],
+  );
   // What auto-routing would choose, so the highlighted chip matches where the
   // session actually lands: the most-recently-active online local machine, or —
   // when no local is up — the most-recently-seen one, which routing queues for
   // rather than handing the session to an always-awake remote (deviceRouting
-  // rungs 4 and 6). listDevices is last_seen-sorted, so first match wins.
+  // rungs 4 and 6). Reads rawDevices — the last_seen-sorted wire order — so
+  // first match wins; the display sort above must not leak into the prediction.
   const defaultDeviceId = useMemo(() => {
-    const locals = devices.filter((d) => !d.is_remote);
+    const locals = rawDevices.filter((d) => !d.is_remote);
     return (locals.find((d) => d.online) ?? locals[0])?.device_id;
-  }, [devices]);
+  }, [rawDevices]);
   const selectedDeviceId = deviceId ?? defaultDeviceId;
   const recentProjects = useQuery(
     api.users.getRecentProjectPaths,
@@ -145,29 +153,16 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
   }, [visible, recentProjects]);
 
   // Deliver an explicit machine pick to the session the sheet just created.
-  // createSession takes no target, so the pick rides the same reconfigure the
-  // web ProjectSwitcher uses for a folder change — including its stub->real
-  // handling: a just-created row may still carry a local stub id, so resolve
-  // the Convex id (cache, then the in-flight create) before commanding it.
-  // Routing falls back on its own when a pick is offline, so losing this costs
-  // the choice, never the session.
-  const applyMachinePick = async (id: string) => {
-    // Never stamp the machine routing would have chosen anyway. An explicit
-    // target short-circuits at rung 1, skipping the rung that prefers whichever
-    // online machine actually holds the checkout — so stamping the default can
-    // pin a session to a machine that lacks the folder. Re-checked here because
-    // heartbeats can reorder the devices between the pick and the submit.
-    if (!deviceId || deviceId === defaultDeviceId) return;
-    const store = useInboxStore.getState();
-    let convexId = isConvexId(id) ? id : store.getConvexId(id);
-    if (!convexId) {
-      const pending = store.awaitSessionCreate(id);
-      if (pending) convexId = await pending.catch(() => undefined);
-    }
-    if (!convexId || !isConvexId(convexId)) return;
-    await store.convCommand(convexId, "reconfigureSession", { target_device_id: deviceId })
-      .catch(() => {});
-  };
+  // The pick must ride the CREATE itself, never a follow-up reconfigure: the
+  // create's server side already enqueues a start_session at whatever routing
+  // chose, so retargeting afterwards races a second spawn against the first —
+  // two machines can each claim the same conversation (review finding, pl-224).
+  // Never stamp the machine routing would have chosen anyway: an explicit
+  // target short-circuits at rung 1, skipping the rung that prefers whichever
+  // online machine actually holds the checkout. Re-checked at submit time
+  // because heartbeats can reorder the devices between the pick and the send.
+  const machinePickForCreate = () =>
+    deviceId && deviceId !== defaultDeviceId ? deviceId : undefined;
 
   const finishSessionCreate = (conversationId: string) => {
     retryStubId.current = null;
@@ -213,6 +208,7 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
             project_path: path,
             git_root: path,
             session_id: stubId,
+            target_device_id: machinePickForCreate(),
           }).then((convexId: string) => {
             if (convexId) store.resolveSessionId(stubId, convexId);
             return convexId || stubId;
@@ -236,6 +232,7 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
               project_path: path,
               git_root: path,
               session_id: createdStubId,
+              target_device_id: machinePickForCreate(),
             }),
         });
         stubId = started.stubId;
@@ -245,15 +242,11 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
 
       const conversationId = await ready;
       if (submitAttempt.current !== attempt) return;
-      const resolvedId = conversationId || store.getConvexId(stubId) || stubId;
-      void applyMachinePick(resolvedId);
-      finishSessionCreate(resolvedId);
+      finishSessionCreate(conversationId || store.getConvexId(stubId) || stubId);
     } catch (error) {
       if (submitAttempt.current !== attempt) return;
       if (mobileCreateFailureDisposition(error) === "accepted-pending") {
-        // The create is durably queued, not lost: the pick waits on the same
-        // in-flight promise and commands the session once it has a real id.
-        void applyMachinePick(stubId);
+        // The create is durably queued, not lost — and it carries the pick.
         finishSessionCreate(stubId);
       } else {
         setSubmitError(mobileCreateErrorMessage("session", error));
