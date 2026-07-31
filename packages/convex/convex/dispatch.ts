@@ -1188,9 +1188,28 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   ) => {
     // Rollback mode has already applied the ordinary compatibility patches.
     if (!hasReceiptCommandId(result)) return;
+    // An edit against a still-optimistic label stub (created, then renamed /
+    // archived / reordered before its server row landed) can never land: the
+    // args froze the stub id, which no server row will ever carry. Reject it
+    // as data — the store rolls the field back — instead of letting the v.id
+    // validator throw a permanent error on a must-deliver receipt entry that
+    // would then re-fire on every boot forever.
+    const realBucketId = ctx.db.normalizeId("inbox_buckets", bucketId);
+    if (!realBucketId) {
+      return await runLocalCommand(ctx as any, {
+        principalId: _userId,
+        commandId: receiptCommandId("updateBucket", result),
+        commandName: "buckets.update/v2",
+        arguments: { bucketId, fields },
+      }, async () => ({
+        status: "rejected",
+        code: "NOT_FOUND",
+        message: "Label not found",
+      }));
+    }
     return await ctx.runMutation!(api.buckets.webUpdateV2, {
       command_id: receiptCommandId("updateBucket", result),
-      bucket_id: bucketId as Id<"inbox_buckets">,
+      bucket_id: realBucketId,
       ...(fields.name !== undefined ? { name: fields.name } : {}),
       ...(fields.color !== undefined
         ? { color: fields.color === null ? null : fields.color }
@@ -1327,10 +1346,31 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     result,
   ) => {
     if (hasReceiptCommandId(result)) {
+      // Client stub ids reach this dispatch by design (fork label inheritance
+      // sends the local fork id; the server files the fork itself via
+      // inheritLabelAssignment). They must not hit webAssignV2's v.id
+      // validators: an ArgumentValidationError is permanent AND receipt
+      // entries are must-deliver, so the outbox would re-fire the refusal —
+      // and its error toast — on every boot forever. Acknowledge the no-op
+      // with a durable receipt instead, mirroring the legacy gate results.
+      const realConvId = ctx.db.normalizeId("conversations", convId);
+      const realBucketId = bucketId ? ctx.db.normalizeId("inbox_buckets", bucketId) : null;
+      if (!realConvId || (bucketId && !realBucketId)) {
+        return await runLocalCommand(ctx as any, {
+          principalId: userId,
+          commandId: receiptCommandId("assignSessionToBucket", result),
+          commandName: "buckets.assign/v2",
+          arguments: { conversationId: convId, bucketId: bucketId ?? undefined },
+        }, async () => ({
+          status: "acknowledged",
+          result: { gate: !realConvId ? "conv_not_found" : "bucket_not_owned" },
+          coverageViews: [],
+        }));
+      }
       return await ctx.runMutation!(api.buckets.webAssignV2, {
         command_id: receiptCommandId("assignSessionToBucket", result),
-        conversation_id: convId as Id<"conversations">,
-        ...(bucketId ? { bucket_id: bucketId as Id<"inbox_buckets"> } : {}),
+        conversation_id: realConvId,
+        ...(realBucketId ? { bucket_id: realBucketId } : {}),
       });
     }
     let conv: any = null;
