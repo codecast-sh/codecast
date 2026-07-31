@@ -13,6 +13,8 @@ import {
   toolIcon,
   structuredPayloadSummary,
   structuredPayloadKeysFromRaw,
+  extractCodexExecActions,
+  summarizeCodexExecActions,
 } from "./index";
 
 const tc = (name: string, input: unknown) => ({
@@ -169,6 +171,70 @@ describe("toolSummary", () => {
   });
   it("falls back to the method segment for an unknown mcp tool", () => {
     expect(toolSummary(tc("mcp__svc__do_thing", {}))).toBe("do thing");
+  });
+});
+
+describe("Codex exec envelopes", () => {
+  it("recovers a single nested command and its argument from JSON-style source", () => {
+    const outer = tc("exec", {
+      input: 'const r = await tools.exec_command({"cmd":"rg -n \\"broker\\" backend/src","workdir":"/tmp"});\ntext(r.output);',
+    });
+
+    const actions = extractCodexExecActions(outer);
+    expect(actions).toHaveLength(1);
+    expect(actions[0].name).toBe("exec_command");
+    expect(JSON.parse(actions[0].input)).toMatchObject({
+      cmd: 'rg -n "broker" backend/src',
+      workdir: "/tmp",
+    });
+    expect(toolSummary(outer)).toBe('Terminal · rg -n "broker" backend/src');
+  });
+
+  it("recovers parallel calls from ordinary JS object literals", () => {
+    const outer = tc("exec", {
+      input: `const results = await Promise.all([
+        tools.exec_command({cmd: "git status --short", workdir: "/repo"}),
+        tools.view_image({path: "/tmp/codecast/images/screenshot.png", detail: "original"}),
+        tools.mcp__node_repl__js({code: "inspect()", title: "Inspect session UI"})
+      ]);`,
+    });
+
+    const actions = extractCodexExecActions(outer);
+    expect(actions.map(action => action.name)).toEqual([
+      "exec_command",
+      "view_image",
+      "mcp__node_repl__js",
+    ]);
+    expect(JSON.parse(actions[0].input).cmd).toBe("git status --short");
+    expect(JSON.parse(actions[1].input).path).toBe("/tmp/codecast/images/screenshot.png");
+    expect(JSON.parse(actions[2].input).title).toBe("Inspect session UI");
+    expect(summarizeCodexExecActions(actions)).toBe("3 actions · Terminal · Image · Browser");
+    expect(toolSummary(outer)).toBe("3 actions · Terminal · Image · Browser");
+  });
+
+  it("does not mistake tool-looking text inside strings or comments for actions", () => {
+    const outer = tc("exec", {
+      input: `const sample = "tools.fake({cmd: 'nope'})";
+        // tools.also_fake({})
+        const r = await tools.exec_command({cmd: "echo tools.still_fake()"});`,
+    });
+
+    expect(extractCodexExecActions(outer).map(action => action.name)).toEqual(["exec_command"]);
+  });
+
+  it("preserves a direct string argument for nested custom tools", () => {
+    const patch = "*** Begin Patch\\n*** Update File: src/a.ts\\n*** End Patch";
+    const outer = tc("exec", {
+      input: `await tools.apply_patch("${patch.replace(/\\/g, "\\\\")}");`,
+    });
+    const actions = extractCodexExecActions(outer);
+    expect(actions).toHaveLength(1);
+    expect(JSON.parse(actions[0].input).input).toBe(patch);
+  });
+
+  it("falls back to Actions when exec source is not present", () => {
+    expect(formatToolName("exec")).toBe("Actions");
+    expect(toolSummary(tc("exec", {}))).toBe("");
   });
 });
 

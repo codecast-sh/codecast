@@ -17,6 +17,7 @@
 
 // Friendly labels for the in-app browser (claude-in-chrome) MCP tools.
 export const mcpToolNames: Record<string, string> = {
+  "mcp__node_repl__js": "Browser",
   "mcp__claude-in-chrome__computer": "Browser",
   "mcp__claude-in-chrome__navigate": "Navigate",
   "mcp__claude-in-chrome__read_page": "Read Page",
@@ -40,6 +41,10 @@ export const mcpToolNames: Record<string, string> = {
 // aliases — `commandExecution`, `fileChange` — which the mobile fork lacked; the
 // superset is harmless to mobile since those ids simply never appear there).
 export const codexToolNames: Record<string, string> = {
+  // Newer Codex runtimes wrap one or more real tool invocations in a custom
+  // `exec` program. Renderers inspect its input to recover the inner actions;
+  // this is the honest fallback when that source cannot be decoded.
+  exec: "Actions",
   shell_command: "Terminal",
   shell: "Terminal",
   exec_command: "Terminal",
@@ -54,6 +59,14 @@ export const codexToolNames: Record<string, string> = {
   web_fetch: "Fetch",
   code_search: "Search",
   code_analysis: "Analyze",
+  view_image: "Image",
+  write_stdin: "Terminal",
+  wait: "Wait",
+  update_plan: "Plan",
+  request_user_input: "Question",
+  tool_search: "Find Tool",
+  web__run: "Web",
+  image_gen__imagegen: "Generate Image",
 };
 
 // Turn a raw tool id into a short human-readable label. Looks up the curated
