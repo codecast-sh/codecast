@@ -254,7 +254,11 @@ export function classifyFeedMessage(content: string | null | undefined): FeedDis
 export function formatModel(model?: string): string {
   if (!model) return "";
   if (model.startsWith("claude-")) {
-    return model.slice("claude-".length).replace("-20", "-'");
+    const bare = model.slice("claude-".length);
+    // Optimistic stamp of a harvested-menu switch ("menu:<row label>") — show
+    // the label; the rollup replaces it with the real model id on the echo.
+    if (bare.startsWith("menu:")) return bare.slice("menu:".length);
+    return bare.replace("-20", "-'");
   }
   return model;
 }
