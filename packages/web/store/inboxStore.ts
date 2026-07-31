@@ -387,6 +387,12 @@ export type Message = {
   _isQueued?: true;
   _clientId?: string;
   _isFailed?: true;
+  // The exact content the durable send dispatched for this row (mention
+  // expansion appends context the bubble's raw `content` doesn't have). The
+  // server fingerprints command args by client id, so every redrive/resend must
+  // replay these bytes — rebuilding from `content` makes the server refuse the
+  // replay as COMMAND_ID_REUSED and falsely fail an already-delivered message.
+  _dispatchContent?: string;
   client_id?: string;
   // Server-assigned conversation watermark at which this row last changed.
   // Higher wins when a stalled subscription races revision recovery.
@@ -685,6 +691,10 @@ export type ClientUI = {
   // User-set height (px) of the trigger full-prompt viewport (TriggerPromptView
   // drag handle). Layout pref → unstamped, per-device local_wins.
   trigger_prompt_height?: number;
+  // Integrated terminal panel (bottom dock). Layout prefs → unstamped,
+  // per-device local_wins like the sidebar.
+  terminal_open?: boolean;
+  terminal_height?: number;
   // "Show old sessions" — reveal cached rows the live (authoritative) inbox
   // subscription no longer returns. Default hide. Successor to the removed
   // show_old_sessions key, whose blanket-local_wins sync made one browse click
@@ -2581,6 +2591,9 @@ interface InboxStoreState {
   // Swap an optimistic message's still-uploading images for their resolved
   // server records (drops the spinner) once a backgrounded upload completes.
   resolvePendingUploads: (convId: string, clientId: string, images: Array<OptimisticImage>) => void;
+  // Record the exact bytes the durable send dispatched for a pending row (see
+  // Message._dispatchContent) so redrives replay them instead of re-deriving.
+  stampPendingDispatchContent: (convId: string, clientId: string, dispatchContent: string) => void;
   setPagination: (convId: string, update: Partial<PaginationState>) => void;
   initPagination: (convId: string) => void;
 
@@ -3402,7 +3415,10 @@ function redrivePendingMessagesFor(convexId: string): void {
     const clientId = message._clientId || message._id;
     const requestedAt = recentlyRequestedPendingMessages.get(clientId);
     if (requestedAt && Date.now() - requestedAt < PENDING_MESSAGE_REDRIVE_COALESCE_MS) continue;
-    const content = message.content || "";
+    // Replay the exact bytes the original send dispatched: the server dedupes
+    // this client id by argument fingerprint, so a rebuilt payload (raw content
+    // without the mention-expansion context) is refused as COMMAND_ID_REUSED.
+    const content = message._dispatchContent || message.content || "";
     const imageIds = (message.images || [])
       .map((image: any) => image?.storage_id)
       .filter((id: unknown): id is string => typeof id === "string");
@@ -5538,6 +5554,14 @@ export const useInboxStore = create<InboxStoreState>(
     );
   }),
 
+  stampPendingDispatchContent: sync(function (this: Draft, convId: string, clientId: string, dispatchContent: string) {
+    const pending = this.pendingMessages[convId];
+    if (!pending) return;
+    this.pendingMessages[convId] = pending.map((m) =>
+      m._clientId === clientId || m._id === clientId ? { ...m, _dispatchContent: dispatchContent } : m
+    );
+  }),
+
   setPagination: action(function (this: Draft, convId: string, update: Partial<PaginationState>) {
     this.pagination = {
       ...this.pagination,
@@ -5826,7 +5850,9 @@ export const useInboxStore = create<InboxStoreState>(
     if (!isConvexId(realId)) return null;
     const pending = get().pendingMessages[realId] || [];
     for (const m of pending as any[]) {
-      const content = m.content || "";
+      // Prefer the recorded dispatch bytes (see redrivePendingMessagesFor) —
+      // a row that already sent once must replay identically to dedupe.
+      const content = m._dispatchContent || m.content || "";
       const storageIds = (m.images || [])
         .map((im: any) => im.storage_id)
         .filter((sid: any): sid is string => typeof sid === "string");

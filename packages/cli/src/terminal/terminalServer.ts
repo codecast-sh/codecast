@@ -1,0 +1,329 @@
+import crypto from "crypto";
+import type http from "http";
+import type { Duplex } from "stream";
+import { WebSocketServer, WebSocket } from "ws";
+import { TmuxControlClient, shellSafe, type ControlClientMode } from "./controlClient.js";
+import { tmuxRun, hasTmux } from "../tmux.js";
+import { isManagedTmuxName } from "../resumeCommand.js";
+
+export const TERM_SESSION_PREFIX = "cast-term-";
+const WS_PATH = "/term/ws";
+// Above this many unsent bytes on the socket we stop reading tmux output
+// (backpressure) instead of buffering a runaway `yes`-style flood in memory.
+const HIGH_WATER_BYTES = 1_000_000;
+const DRAIN_POLL_MS = 50;
+
+// Origins allowed to open terminal sockets. The WS handshake is NOT subject to
+// CORS, so this server-side check is the only thing standing between an
+// arbitrary web page and a shell on the user's machine. Keep it tight.
+const ALLOWED_ORIGIN = /^https:\/\/(local\.(\d+\.)?)?codecast\.sh$|^https?:\/\/localhost:\d+$|^https?:\/\/127\.0\.0\.1:\d+$/;
+
+export interface TerminalServerOptions {
+  token: string;
+  log: (msg: string) => void;
+  /** Extra origin check on top of the built-in allowlist (dev override). */
+  allowOrigin?: (origin: string) => boolean;
+}
+
+interface HelloMessage {
+  type: "hello";
+  token: string;
+  mode: "create" | "attach";
+  /** create: reattach this session (else a new one is created) */
+  name?: string;
+  /** create: working directory for a new session */
+  cwd?: string;
+  /** attach: tmux session name (from managed_sessions.tmux_session) */
+  target?: string;
+  /** attach: request write access (default read-only) */
+  interactive?: boolean;
+  cols: number;
+  rows: number;
+}
+
+export interface TerminalSessionInfo {
+  name: string;
+  path: string;
+  command: string;
+  created: number;
+  attached: number;
+}
+
+/** List the panel's own tmux sessions (cast-term-*). */
+export function listTerminalSessions(): TerminalSessionInfo[] {
+  const r = tmuxRun([
+    "list-sessions",
+    "-F",
+    "#{session_name}\t#{session_path}\t#{session_created}\t#{session_attached}",
+  ]);
+  if (r.status !== 0) return [];
+  const out: TerminalSessionInfo[] = [];
+  for (const line of r.stdout.split("\n")) {
+    const [name, path, created, attached] = line.split("\t");
+    if (!name || !name.startsWith(TERM_SESSION_PREFIX)) continue;
+    // Pane command comes from a second query to keep the first one cheap.
+    const cmd = tmuxRun(["display-message", "-p", "-t", name, "-F", "#{pane_current_command}"]);
+    out.push({
+      name,
+      path: path ?? "",
+      command: cmd.status === 0 ? cmd.stdout.trim() : "",
+      created: (parseInt(created ?? "", 10) || 0) * 1000,
+      attached: parseInt(attached ?? "", 10) || 0,
+    });
+  }
+  return out.sort((a, b) => a.created - b.created);
+}
+
+export function killTerminalSession(name: string): boolean {
+  if (!name.startsWith(TERM_SESSION_PREFIX)) return false;
+  try {
+    shellSafe(name);
+  } catch {
+    return false;
+  }
+  return tmuxRun(["kill-session", "-t", name]).status === 0;
+}
+
+function timingSafeEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ab.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ab, bb);
+}
+
+function originAllowed(origin: string | undefined, opts: TerminalServerOptions): boolean {
+  if (!origin) return false;
+  if (ALLOWED_ORIGIN.test(origin)) return true;
+  return opts.allowOrigin?.(origin) ?? false;
+}
+
+export function corsHeaders(origin: string | undefined, opts: TerminalServerOptions): Record<string, string> {
+  if (!originAllowed(origin, opts)) return {};
+  return {
+    "Access-Control-Allow-Origin": origin!,
+    "Access-Control-Allow-Headers": "Authorization, Content-Type",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    // Chrome Private Network Access: a public https page fetching loopback
+    // must see this on the preflight or the request is blocked.
+    "Access-Control-Allow-Private-Network": "true",
+    "Vary": "Origin",
+  };
+}
+
+/**
+ * HTTP endpoints for the terminal feature, mounted on the daemon's existing
+ * loopback hook server. Returns true when the request was handled.
+ */
+export function handleTerminalHttp(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  opts: TerminalServerOptions,
+): boolean {
+  const url = req.url ?? "";
+  if (!url.startsWith("/term/")) return false;
+  const origin = req.headers.origin;
+  const headers = { "Content-Type": "application/json", ...corsHeaders(origin, opts) };
+
+  if (req.method === "OPTIONS") {
+    res.writeHead(204, headers);
+    res.end();
+    return true;
+  }
+
+  const auth = req.headers.authorization ?? "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  if (!originAllowed(origin, opts) || !timingSafeEqual(token, opts.token)) {
+    res.writeHead(403, headers);
+    res.end(JSON.stringify({ error: "forbidden" }));
+    return true;
+  }
+
+  if (req.method === "GET" && url.startsWith("/term/sessions")) {
+    res.writeHead(200, headers);
+    res.end(JSON.stringify({ sessions: listTerminalSessions(), tmux: hasTmux() }));
+    return true;
+  }
+
+  if (req.method === "POST" && url.startsWith("/term/kill")) {
+    const name = new URL(url, "http://localhost").searchParams.get("name") ?? "";
+    const ok = killTerminalSession(name);
+    res.writeHead(ok ? 200 : 400, headers);
+    res.end(JSON.stringify({ ok }));
+    return true;
+  }
+
+  res.writeHead(404, headers);
+  res.end(JSON.stringify({ error: "not found" }));
+  return true;
+}
+
+/** Wire the terminal WebSocket endpoint onto an existing HTTP server. */
+export function attachTerminalServer(server: http.Server, opts: TerminalServerOptions): { close(): void } {
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
+
+  const onUpgrade = (req: http.IncomingMessage, socket: Duplex, head: Buffer) => {
+    const url = req.url ?? "";
+    if (!url.startsWith(WS_PATH)) {
+      socket.destroy();
+      return;
+    }
+    if (!originAllowed(req.headers.origin, opts)) {
+      opts.log(`[TERM] Rejected WS from origin ${req.headers.origin ?? "(none)"}`);
+      socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+    wss.handleUpgrade(req, socket, head, (ws) => handleConnection(ws, opts));
+  };
+
+  server.on("upgrade", onUpgrade);
+  return {
+    close() {
+      server.off("upgrade", onUpgrade);
+      for (const ws of wss.clients) ws.terminate();
+      wss.close();
+    },
+  };
+}
+
+function handleConnection(ws: WebSocket, opts: TerminalServerOptions): void {
+  let client: TmuxControlClient | null = null;
+  let drainTimer: NodeJS.Timeout | null = null;
+  let closed = false;
+
+  const sendJson = (obj: unknown) => {
+    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+  };
+  const fail = (message: string) => {
+    sendJson({ type: "error", message });
+    ws.close(4000, message.slice(0, 100));
+  };
+  const cleanup = () => {
+    if (closed) return;
+    closed = true;
+    if (drainTimer) clearInterval(drainTimer);
+    client?.close();
+    client = null;
+  };
+
+  // The first message must be the hello; nothing is spawned until the token
+  // inside it checks out.
+  const helloTimeout = setTimeout(() => fail("hello timeout"), 10_000);
+  helloTimeout.unref?.();
+
+  ws.once("message", (raw, isBinary) => {
+    clearTimeout(helloTimeout);
+    if (isBinary) return fail("expected hello");
+    let hello: HelloMessage;
+    try {
+      hello = JSON.parse(raw.toString("utf8"));
+    } catch {
+      return fail("bad hello");
+    }
+    if (hello.type !== "hello" || typeof hello.token !== "string") return fail("bad hello");
+    if (!timingSafeEqual(hello.token, opts.token)) return fail("forbidden");
+    if (!hasTmux()) return fail("tmux is not installed on this machine");
+
+    const cols = clampDim(hello.cols, 200);
+    const rows = clampDim(hello.rows, 50);
+
+    let mode: ControlClientMode;
+    if (hello.mode === "create") {
+      let name = hello.name ?? `${TERM_SESSION_PREFIX}${crypto.randomBytes(3).toString("hex")}`;
+      try {
+        name = shellSafe(name);
+      } catch {
+        return fail("bad session name");
+      }
+      if (!name.startsWith(TERM_SESSION_PREFIX)) return fail("bad session name");
+      const cwd = typeof hello.cwd === "string" && hello.cwd.startsWith("/") ? hello.cwd : undefined;
+      mode = { kind: "create", sessionName: name, cwd };
+    } else if (hello.mode === "attach") {
+      const target = hello.target ?? "";
+      // Attach only to sessions this product owns: agent sessions the daemon
+      // manages, or the panel's own terminals. Never arbitrary tmux sessions.
+      if (!/^[a-zA-Z0-9_.:-]+$/.test(target)) return fail("bad target");
+      if (!isManagedTmuxName(target) && !target.startsWith(TERM_SESSION_PREFIX)) return fail("target not allowed");
+      if (tmuxRun(["has-session", "-t", target]).status !== 0) return fail("session not found");
+      mode = { kind: "attach", target, readOnly: !hello.interactive };
+    } else {
+      return fail("bad mode");
+    }
+
+    client = new TmuxControlClient(mode, {
+      onOutput(data) {
+        if (ws.readyState !== WebSocket.OPEN) return;
+        ws.send(data);
+        if (ws.bufferedAmount > HIGH_WATER_BYTES && client && !drainTimer) {
+          client.pauseOutput();
+          drainTimer = setInterval(() => {
+            if (ws.bufferedAmount < HIGH_WATER_BYTES / 4) {
+              if (drainTimer) clearInterval(drainTimer);
+              drainTimer = null;
+              client?.resumeOutput();
+            }
+          }, DRAIN_POLL_MS);
+          drainTimer.unref?.();
+        }
+      },
+      onExit(reason) {
+        sendJson({ type: "exit", reason });
+        ws.close(1000);
+        cleanup();
+      },
+    });
+
+    client
+      .start(cols, rows)
+      .then(({ cols: c, rows: r, seed, sessionName }) => {
+        if (ws.readyState !== WebSocket.OPEN) return cleanup();
+        sendJson({
+          type: "ready",
+          cols: c,
+          rows: r,
+          sessionName,
+          readOnly: client?.isReadOnly ?? false,
+          mode: hello.mode,
+        });
+        if (seed.length > 0) ws.send(seed);
+        opts.log(`[TERM] ${hello.mode} ${sessionName} (${c}x${r}${client?.isReadOnly ? ", read-only" : ""})`);
+      })
+      .catch((err) => {
+        opts.log(`[TERM] start failed: ${err?.message ?? err}`);
+        fail("failed to start terminal");
+      });
+
+    ws.on("message", (data, isBinary) => {
+      if (!client) return;
+      if (isBinary) {
+        client.sendInput(Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer));
+        return;
+      }
+      try {
+        const msg = JSON.parse(data.toString("utf8"));
+        if (msg.type === "resize") {
+          client.resize(clampDim(msg.cols, 500), clampDim(msg.rows, 200));
+        } else if (msg.type === "kill") {
+          void client.killSession().then(() => {
+            sendJson({ type: "exit", reason: "killed" });
+            ws.close(1000);
+            cleanup();
+          });
+        }
+      } catch {}
+    });
+  });
+
+  ws.on("close", cleanup);
+  ws.on("error", cleanup);
+}
+
+function clampDim(value: unknown, max: number): number {
+  const n = typeof value === "number" ? Math.floor(value) : NaN;
+  if (!Number.isFinite(n)) return 80;
+  return Math.min(Math.max(n, 2), max);
+}
+
+export function generateTerminalToken(): string {
+  return crypto.randomBytes(32).toString("hex");
+}
