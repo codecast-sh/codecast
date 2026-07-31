@@ -83,6 +83,13 @@ export default function ProfilePage() {
           </div>
           <div className="flex items-center justify-between gap-4">
             <div>
+              <span className="text-sol-base1">Simple view</span>
+              <p className="text-xs text-sol-base01 mt-0.5">Calmer conversations and inbox cards — secondary badges, counts and meta rows drop away</p>
+            </div>
+            <SimpleViewToggle />
+          </div>
+          <div className="flex items-center justify-between gap-4">
+            <div>
               <span className="text-sol-base1">Agent icon</span>
               <p className="text-xs text-sol-base01 mt-0.5">Show each session's agent client (Claude Code, opencode, …) next to its title in the inbox session list</p>
             </div>
@@ -284,6 +291,17 @@ function SoundsToggle() {
     <Switch
       checked={soundsEnabled}
       onCheckedChange={(v) => updateUI({ sounds_enabled: v })}
+    />
+  );
+}
+
+function SimpleViewToggle() {
+  const enabled = useInboxStore((s) => s.clientState?.ui?.simple_view === true);
+  const updateUI = useInboxStore((s) => s.updateClientUI);
+  return (
+    <Switch
+      checked={enabled}
+      onCheckedChange={(v) => updateUI({ simple_view: v })}
     />
   );
 }
