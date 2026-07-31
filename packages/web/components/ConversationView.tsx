@@ -11623,7 +11623,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
     return null;
   }, [serverUserMessages, timeline, hasMoreAbove, processedServerMsgIds]);
 
-  const [activeStickyMsg, setActiveStickyMsgRaw] = useState<{ index: number; content: string; id: string } | null>(null);
+  const [activeStickyMsg, setActiveStickyMsgRaw] = useState<{ index: number; content: string; id: string; fromUserId?: string } | null>(null);
   const setActiveStickyMsg = useCallback((val: { index: number; content: string; id: string } | null) => {
     setActiveStickyMsgRaw(prev => {
       if (prev === val) return prev;
@@ -12523,7 +12523,7 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
             stickyGapRef.current = null;
           }
         }
-        setActiveStickyMsg({ index: bestIdx, content: msg.content!, id: msgId });
+        setActiveStickyMsg({ index: bestIdx, content: msg.content!, id: msgId, fromUserId: msg.from_user_id });
         setStickyMsgVisible(!inGap && !hideForNextMsg);
       } else if (serverStickyFallback && scrollTop > headerHeight + 40) {
         prevStickyMsgIdRef.current = serverStickyFallback.id;
@@ -14238,8 +14238,15 @@ export const ConversationView = forwardRef<ConversationViewHandle, ConversationV
                 </button>
               </div>
               <div className="flex items-center gap-2 mb-1">
-                <UserIcon avatarUrl={conversation?.user?.avatar_url} />
-                <span className="text-sol-blue text-xs font-medium">{conversation?.user?.name || conversation?.user?.email?.split("@")[0] || "You"}</span>
+                {(() => {
+                  const stickySender = activeStickyMsg.fromUserId ? senderById.get(String(activeStickyMsg.fromUserId)) : undefined;
+                  return (
+                    <>
+                      <UserIcon avatarUrl={stickySender ? stickySender.avatar_url : conversation?.user?.avatar_url} />
+                      <span className="text-sol-blue text-xs font-medium">{stickySender?.name || conversation?.user?.name || conversation?.user?.email?.split("@")[0] || "You"}</span>
+                    </>
+                  );
+                })()}
               </div>
               <div
                 ref={stickyTextRef}
