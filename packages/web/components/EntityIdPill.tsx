@@ -317,7 +317,10 @@ function SessionSummaryBlock({ session, className = "" }: { session: any; classN
   );
 }
 
-function SessionHoverContent({ session }: { session: any }) {
+// Exported for reuse beyond the hover popover — the browser-handoff notice
+// (BrowserHandoffToast) embeds the same card so a handed-off session previews
+// identically to a session reference.
+export function SessionHoverContent({ session }: { session: any }) {
   const isActive = session.status === "active";
   const model = abbrevModel(session.model);
   const projectName = session.project_path?.split("/").pop() ?? null;
