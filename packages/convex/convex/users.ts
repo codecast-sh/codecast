@@ -484,6 +484,38 @@ export const requestDesktopUpdate = mutation({
   },
 });
 
+// Integrated terminal: ask this user's live daemons for their loopback
+// terminal endpoints. One targeted command per recently-seen device; the web
+// polls each command's result and connects to whichever endpoint answers on
+// 127.0.0.1 (only the machine the browser is on is reachable, so multi-device
+// resolution needs no server-side smarts).
+export const requestTerminalEndpoints = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+
+    const devices = await ctx.db
+      .query("devices")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .collect();
+    const now = Date.now();
+    const live = devices.filter((d) => now - d.last_seen < 5 * 60 * 1000);
+
+    const commands: Array<{ command_id: Id<"daemon_commands">; device_id: string; label: string }> = [];
+    for (const device of live) {
+      const commandId = await ctx.db.insert("daemon_commands", {
+        user_id: userId,
+        command: "get_terminal_endpoint" as const,
+        created_at: now,
+        target_device_id: device.device_id,
+      });
+      commands.push({ command_id: commandId, device_id: device.device_id, label: device.label });
+    }
+    return { commands };
+  },
+});
+
 export const sendDaemonCommandToAll = mutation({
   args: {
     command: v.union(

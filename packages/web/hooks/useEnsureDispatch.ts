@@ -58,6 +58,14 @@ export function useEnsureDispatch() {
     }
     _setDispatchError((action, error, args) => {
       console.error(`[sync] dispatch failed after retries: ${action}`, error);
+      // COMMAND_ID_REUSED on a send means the server already holds a receipt
+      // for this client id — the message was delivered; only a redrive that
+      // rebuilt the payload with different bytes (e.g. a pending row persisted
+      // before mention expansion was recorded) got refused. Surfacing it would
+      // toast "didn't go through" and mark a delivered bubble as failed.
+      if (action === "sendMessage" && /COMMAND_ID_REUSED/.test(String((error as Error)?.message ?? error))) {
+        return;
+      }
       useInboxStore.setState(s => ({ dispatchErrors: s.dispatchErrors + 1 }));
       // A permanent rejection is dropped from the outbox (no re-drive will
       // land it), so it's the user's only chance to hear their action didn't

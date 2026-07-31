@@ -55,6 +55,7 @@ import { SessionSwitcher } from "./SessionSwitcher";
 import { TabBar } from "./TabBar";
 import { pathLabel } from "../lib/pathLabel";
 import { TabContent } from "./TabContent";
+import { TerminalDock } from "./terminal/TerminalDock";
 import { isFullWidthRoute, PageShell } from "../lib/pageLayout";
 import { useTipActions } from "../tips";
 
@@ -974,6 +975,15 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         </div>
         <KeyboardShortcutsPanel />
       </div>
+
+      {/* Integrated terminal, docked across the bottom (ctrl+`). Mounts lazily
+          on first open, then stays mounted (hidden) so terminals survive
+          close/reopen. Desktop-only surface. */}
+      {!isMobile && (
+        <ErrorBoundary name="TerminalPanel" level="panel">
+          <TerminalDock />
+        </ErrorBoundary>
+      )}
 
       <ErrorBoundary name="SettingsModal" level="panel">
         <SettingsModal />
