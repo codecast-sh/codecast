@@ -4,6 +4,7 @@ import {
   buildCodexUserTurnMessage,
   isTmuxSessionMetadataMatch,
   removeAppServerThreadRegistration,
+  selectChangedAppServerMessages,
   upsertAppServerThreadRegistration,
 } from "./daemon.js";
 
@@ -43,6 +44,46 @@ describe("buildAppServerStreamingTailMessages", () => {
 
   test("skips whitespace-only streaming tails", () => {
     expect(buildAppServerStreamingTailMessages([], [{ itemId: "msg-1", content: "   " }])).toEqual([]);
+  });
+});
+
+describe("selectChangedAppServerMessages", () => {
+  const message = (uuid: string, content: string) => ({
+    uuid,
+    role: "assistant",
+    content,
+    timestamp: 1,
+  });
+
+  test("emits a same-UUID projection again only when its payload changes", () => {
+    const signatures = new Map<string, string>();
+    const partial = selectChangedAppServerMessages(
+      [message("stream-1", "partial")],
+      signatures,
+    );
+    for (const change of partial) signatures.set(change.key, change.signature);
+
+    expect(selectChangedAppServerMessages(
+      [message("stream-1", "partial")],
+      signatures,
+    )).toHaveLength(0);
+    expect(selectChangedAppServerMessages(
+      [message("stream-1", "complete")],
+      signatures,
+    ).map((change) => change.message.content)).toEqual(["complete"]);
+  });
+
+  test("keeps a 300-item growing turn to O(n) message writes", () => {
+    const signatures = new Map<string, string>();
+    let writes = 0;
+    const all: ReturnType<typeof message>[] = [];
+    for (let i = 0; i < 300; i++) {
+      all.push(message(`message-${i}`, `content-${i}`));
+      const changed = selectChangedAppServerMessages(all, signatures);
+      writes += changed.length;
+      for (const change of changed) signatures.set(change.key, change.signature);
+    }
+    expect(writes).toBe(300);
   });
 });
 
