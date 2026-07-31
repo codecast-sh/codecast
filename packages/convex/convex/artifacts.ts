@@ -50,8 +50,12 @@ function barHtml(o: BrandOpts): string {
   const when = new Date(o.updatedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
   return `
 <style id="__cc_style">
-  #__cc_bar { position: sticky; top: 0; z-index: 2147483647; display: flex; align-items: center; gap: 10px;
-    box-sizing: border-box; width: 100%; padding: 7px 14px;
+  /* Pinned to the viewport top; the html margin reserves exactly the bar's
+     height so the artifact's content starts below it — pinned, not overlaying. */
+  html { margin-top: 36px !important; }
+  #__cc_bar { position: fixed; top: 0; left: 0; right: 0; height: 36px; z-index: 2147483647;
+    display: flex; align-items: center; gap: 10px;
+    box-sizing: border-box; padding: 0 14px;
     font: 500 12px/1 ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
     background: #ffffff; color: #52524e; box-shadow: 0 1px 6px rgba(0,0,0,.08);
     text-align: left; }
