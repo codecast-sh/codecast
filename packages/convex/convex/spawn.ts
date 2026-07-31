@@ -21,6 +21,30 @@ async function getAuthenticatedUserId(
   return null;
 }
 
+/**
+ * Resolve a `cast spawn --device <value>` selector against the user's devices.
+ * The value is whatever the human typed: a device_id, or the label they see in
+ * the UI (matched case-insensitively, so `--device nose` finds "Nose").
+ * device_id wins outright — a label that happens to equal another machine's id
+ * must not shadow the id.
+ *
+ * Throws on an unknown value rather than falling back to auto-routing: a typo'd
+ * `--device` silently starting the session on the laptop is exactly the failure
+ * the flag exists to prevent.
+ */
+export function resolveDeviceSelector(
+  devices: { device_id: string; label?: string }[],
+  value: string,
+): string {
+  const wanted = value.trim();
+  const byId = devices.find((d) => d.device_id === wanted);
+  if (byId) return byId.device_id;
+  const byLabel = devices.find((d) => (d.label ?? "").toLowerCase() === wanted.toLowerCase());
+  if (byLabel) return byLabel.device_id;
+  const known = devices.map((d) => d.label || d.device_id).join(", ") || "(none registered)";
+  throw new Error(`Unknown device "${wanted}". Your devices: ${known}`);
+}
+
 // createSessionFromCli — start a fresh, inbox-visible session (NOT a subagent)
 // and optionally seed its first turn. The backend for `cast spawn`.
 //
@@ -49,6 +73,9 @@ export const createSessionFromCli = mutation({
     model: v.optional(v.string()),
     isolated: v.optional(v.boolean()),
     worktree_name: v.optional(v.string()),
+    // A device_id or label; routes start_session at that machine (see
+    // resolveDeviceSelector).
+    device: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -59,6 +86,15 @@ export const createSessionFromCli = mutation({
     const now = Date.now();
     const sessionId = crypto.randomUUID();
     const agentType = args.agent_type || "claude_code";
+
+    let targetDeviceId: string | null = null;
+    if (args.device) {
+      const devices = await ctx.db
+        .query("devices")
+        .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+        .collect();
+      targetDeviceId = resolveDeviceSelector(devices, args.device);
+    }
 
     const privacy = await resolveCreationPrivacy(ctx, userId, args.git_root || args.project_path);
 
@@ -89,6 +125,7 @@ export const createSessionFromCli = mutation({
       worktreeName: args.worktree_name,
       model: args.model,
       createdAt: now,
+      targetDeviceId,
     });
 
     // Seed the first turn as a plain user message (raw, not wrapped as a
