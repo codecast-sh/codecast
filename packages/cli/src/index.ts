@@ -3,6 +3,7 @@ import { Command } from "commander";
 import { randomUUID } from "node:crypto";
 import { registerWorkspaceCommand } from "./workspace/cli.js";
 import { registerRemoteCommand } from "./remote/cli.js";
+import { registerPublishCommand } from "./publish.js";
 import open from "open";
 import * as fs from "fs";
 import * as path from "path";
@@ -97,6 +98,7 @@ import { buildImplementerPrompt as _buildImplementerPrompt, buildReviewerPrompt,
 import { checkbox, confirm, input, select } from "@inquirer/prompts";
 import { type Config, getAgentArgs } from "./config/types.js";
 import { readProviderKeyStore, writeProviderKeyStore } from "./providerKeyStore.js";
+import { addVault, listVaults, removeVault } from "./vault/vaultRegistry.js";
 
 const program = new Command();
 const isStableContextFastPath =
@@ -2192,6 +2194,8 @@ You operate within a structured work tracking system. A human monitors your prog
 
 **Create a plan** when the user describes work with multiple distinct parts — a feature with frontend and backend changes, a refactor that touches several subsystems, a bug that needs investigation then fixing. Run \`cast plan create "Title" -g "goal"\` and add tasks with \`cast task create "Title" --plan <plan_id>\`. Don't create plans for single-task work.
 
+**Bind before you build.** For any larger piece of work, default to working under a task or plan with your session bound to it — \`cast task start <id>\` claims a task, \`cast plan bind <plan_id>\` attaches to a plan. Binding is one command and it keeps your session, its progress, and the work item connected in the dashboard; sizable work done unbound is invisible to the human tracking it.
+
 **Check existing work first.** Your context includes an overview of active tasks and plans. Before creating new ones, check if your work already has a task or fits under an existing plan. When the user names a topic, search by it directly — \`cast task ls -q "<topic>"\` and \`cast plan ls -q "<topic>"\` filter by title/description so you don't have to scan a wall of IDs. Use \`cast task ready\` (optionally \`-q\`) for unclaimed work. Claim existing tasks with \`cast task start <id>\` rather than creating duplicates.
 
 ### Working on tasks
@@ -3149,6 +3153,7 @@ program
 
 registerWorkspaceCommand(program);
 registerRemoteCommand(program);
+registerPublishCommand(program, { getCliEndpoint, detectCurrentSessionId });
 
 program
   .command("auth")
@@ -3451,6 +3456,77 @@ keysCmd
     delete store[id];
     writeProviderKeyStore(CONFIG_DIR, store);
     console.log(`${c.green}ok${c.reset} removed the ${spec?.label ?? id} key — reverts to system auth. Restart a running session to apply.`);
+  });
+
+// ── cast vault ────────────────────────────────────────────────────────────────
+// A vault is a local directory of markdown the browser can browse and edit over
+// the daemon's loopback bridge. Registering it here is what gives it an id; the
+// files never leave this machine.
+const vaultCmd = program
+  .command("vault")
+  .alias("vaults")
+  .description(
+    "Register directories of markdown to browse in codecast\n\n" +
+    "The daemon serves a registered vault to the web app over its local\n" +
+    "127.0.0.1 bridge — the files stay on this machine and the browser reads\n" +
+    "and writes them directly. Registration is per-device.\n\n" +
+    "Examples:\n" +
+    "  cast vault add ~/notes\n" +
+    "  cast vault add ~/work/wiki --name Wiki\n" +
+    "  cast vault ls\n" +
+    "  cast vault rm ~/notes"
+  )
+  .showHelpAfterError(true);
+
+vaultCmd
+  .command("add")
+  .description("Register a directory as a vault")
+  .argument("<dir>", "Directory of markdown files")
+  .option("--name <name>", "Display name (defaults to the directory name)")
+  .action((dir: string, options: any) => {
+    try {
+      const vault = addVault(CONFIG_DIR, dir, options.name);
+      console.log(`${c.green}ok${c.reset} ${c.cyan}${vault.name}${c.reset} ${c.dim}${vault.root} (${vault.id})${c.reset}`);
+      console.log(`${c.dim}Restart is not needed — the daemon picks it up on the next request.${c.reset}`);
+    } catch (err: any) {
+      console.error(`${c.red}${err?.message ?? err}${c.reset}`);
+      process.exit(1);
+    }
+  });
+
+vaultCmd
+  .command("ls")
+  .alias("list")
+  .description("List registered vaults")
+  .option("--json", "Output as JSON")
+  .action((options: any) => {
+    const vaults = listVaults(CONFIG_DIR);
+    if (options.json) {
+      console.log(JSON.stringify({ vaults }));
+      return;
+    }
+    if (vaults.length === 0) {
+      console.log(`${c.dim}No vaults registered. Add one with: cast vault add ~/notes${c.reset}`);
+      return;
+    }
+    for (const v of vaults) {
+      const notes = v.note_count === undefined ? "" : ` ${c.dim}${v.note_count} notes${c.reset}`;
+      console.log(`  ${c.cyan}${v.id}${c.reset} ${v.name}${notes}\n    ${c.dim}${v.root}${c.reset}`);
+    }
+  });
+
+vaultCmd
+  .command("rm")
+  .alias("remove")
+  .description("Unregister a vault (the directory itself is untouched)")
+  .argument("<dirOrId>", "Vault directory or id")
+  .action((dirOrId: string) => {
+    const removed = removeVault(CONFIG_DIR, dirOrId);
+    if (!removed) {
+      console.error(`${c.red}No vault matching "${dirOrId}".${c.reset} List them with: cast vault ls`);
+      process.exit(1);
+    }
+    console.log(`${c.green}ok${c.reset} unregistered ${c.cyan}${removed.name}${c.reset} ${c.dim}${removed.root}${c.reset}`);
   });
 
 program

@@ -51,15 +51,20 @@ export interface TerminalSessionInfo {
 
 /** List the panel's own tmux sessions (cast-term-*). */
 export function listTerminalSessions(): TerminalSessionInfo[] {
+  // NB: separators must be printable — tmux sanitizes control chars (tabs
+  // included) to "_" in format output. Fixed-width fields come first; the
+  // path goes LAST and is re-joined, since it's the one field that may itself
+  // contain the separator.
   const r = tmuxRun([
     "list-sessions",
     "-F",
-    "#{session_name}\t#{session_path}\t#{session_created}\t#{session_attached}",
+    "#{session_name}|#{session_created}|#{session_attached}|#{session_path}",
   ]);
   if (r.status !== 0) return [];
   const out: TerminalSessionInfo[] = [];
   for (const line of r.stdout.split("\n")) {
-    const [name, path, created, attached] = line.split("\t");
+    const [name, created, attached, ...pathParts] = line.split("|");
+    const path = pathParts.join("|");
     if (!name || !name.startsWith(TERM_SESSION_PREFIX)) continue;
     // Pane command comes from a second query to keep the first one cheap.
     const cmd = tmuxRun(["display-message", "-p", "-t", name, "-F", "#{pane_current_command}"]);
@@ -84,6 +89,32 @@ export function killTerminalSession(name: string): boolean {
   return tmuxRun(["kill-session", "-t", name]).status === 0;
 }
 
+// Panel terminals outlive their tabs by design (close = detach), so without a
+// reaper every "+" ever clicked accumulates as a live tmux session forever —
+// and the panel restores all of them on open. Reap sessions nobody is attached
+// to once they've been idle past the TTL; an attached client or recent
+// activity always keeps a session alive. Callers: daemon boot + periodic.
+const REAP_IDLE_MS = 3 * 24 * 60 * 60 * 1000;
+
+export function reapStaleTerminalSessions(log?: (msg: string) => void): number {
+  const r = tmuxRun(["list-sessions", "-F", "#{session_name}|#{session_attached}|#{session_activity}"]);
+  if (r.status !== 0) return 0;
+  const now = Date.now();
+  let reaped = 0;
+  for (const line of r.stdout.split("\n")) {
+    const [name, attached, activity] = line.split("|");
+    if (!name || !name.startsWith(TERM_SESSION_PREFIX)) continue;
+    if ((parseInt(attached ?? "", 10) || 0) > 0) continue;
+    const lastActivity = (parseInt(activity ?? "", 10) || 0) * 1000;
+    if (now - lastActivity < REAP_IDLE_MS) continue;
+    if (killTerminalSession(name)) {
+      reaped++;
+      log?.(`[TERM] Reaped idle terminal session ${name} (idle ${Math.round((now - lastActivity) / 3_600_000)}h)`);
+    }
+  }
+  return reaped;
+}
+
 function timingSafeEqual(a: string, b: string): boolean {
   const ab = Buffer.from(a);
   const bb = Buffer.from(b);
@@ -91,23 +122,69 @@ function timingSafeEqual(a: string, b: string): boolean {
   return crypto.timingSafeEqual(ab, bb);
 }
 
-function originAllowed(origin: string | undefined, opts: TerminalServerOptions): boolean {
+export function originAllowed(origin: string | undefined, opts: TerminalServerOptions): boolean {
   if (!origin) return false;
   if (ALLOWED_ORIGIN.test(origin)) return true;
   return opts.allowOrigin?.(origin) ?? false;
+}
+
+/** Constant-time check of a token presented on a WS hello frame. */
+export function tokenMatches(token: unknown, opts: TerminalServerOptions): boolean {
+  return typeof token === "string" && timingSafeEqual(token, opts.token);
+}
+
+/** The whole auth envelope for one loopback HTTP request: an allowed origin AND
+ *  the per-boot bearer token. Every feature mounted on this server (terminal,
+ *  vault) goes through this one check — a route that authenticated differently
+ *  would be the hole in a server that can read the user's disk. */
+export function authorizeLocalRequest(req: http.IncomingMessage, opts: TerminalServerOptions): boolean {
+  const auth = req.headers.authorization ?? "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  return originAllowed(req.headers.origin, opts) && timingSafeEqual(token, opts.token);
 }
 
 export function corsHeaders(origin: string | undefined, opts: TerminalServerOptions): Record<string, string> {
   if (!originAllowed(origin, opts)) return {};
   return {
     "Access-Control-Allow-Origin": origin!,
-    "Access-Control-Allow-Headers": "Authorization, Content-Type",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    // If-Match / X-Vault-Base-Mtime are the vault write guards: a preflight that
+    // doesn't list them makes every conflict-checked PUT fail in the browser.
+    "Access-Control-Allow-Headers": "Authorization, Content-Type, If-Match, X-Vault-Base-Mtime",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, OPTIONS",
+    // The browser can only read these off a cross-origin response if they're
+    // exposed; the vault's write guard depends on the client seeing the ETag.
+    "Access-Control-Expose-Headers": "ETag, X-Vault-Mtime, X-Vault-Size",
     // Chrome Private Network Access: a public https page fetching loopback
     // must see this on the preflight or the request is blocked.
     "Access-Control-Allow-Private-Network": "true",
     "Vary": "Origin",
   };
+}
+
+type UpgradeHandler = (req: http.IncomingMessage, socket: Duplex, head: Buffer) => void;
+
+// One 'upgrade' listener per HTTP server, routing by path prefix. Node hands an
+// upgrade to EVERY listener, so two features each installing their own listener
+// would have the first one destroying the second one's sockets. Registering
+// through here keeps that impossible, and keeps "nobody claimed it" a single
+// decision rather than a race between listeners.
+const upgradeRouters = new WeakMap<http.Server, Map<string, UpgradeHandler>>();
+
+export function onWsUpgrade(server: http.Server, prefix: string, handler: UpgradeHandler): () => void {
+  let routes = upgradeRouters.get(server);
+  if (!routes) {
+    routes = new Map();
+    upgradeRouters.set(server, routes);
+    server.on("upgrade", (req, socket, head) => {
+      const url = req.url ?? "";
+      for (const [routePrefix, routeHandler] of routes!) {
+        if (url.startsWith(routePrefix)) return routeHandler(req, socket, head);
+      }
+      socket.destroy();
+    });
+  }
+  routes.set(prefix, handler);
+  return () => routes!.delete(prefix);
 }
 
 /**
@@ -130,9 +207,7 @@ export function handleTerminalHttp(
     return true;
   }
 
-  const auth = req.headers.authorization ?? "";
-  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-  if (!originAllowed(origin, opts) || !timingSafeEqual(token, opts.token)) {
+  if (!authorizeLocalRequest(req, opts)) {
     res.writeHead(403, headers);
     res.end(JSON.stringify({ error: "forbidden" }));
     return true;
@@ -161,12 +236,7 @@ export function handleTerminalHttp(
 export function attachTerminalServer(server: http.Server, opts: TerminalServerOptions): { close(): void } {
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
 
-  const onUpgrade = (req: http.IncomingMessage, socket: Duplex, head: Buffer) => {
-    const url = req.url ?? "";
-    if (!url.startsWith(WS_PATH)) {
-      socket.destroy();
-      return;
-    }
+  const detach = onWsUpgrade(server, WS_PATH, (req, socket, head) => {
     if (!originAllowed(req.headers.origin, opts)) {
       opts.log(`[TERM] Rejected WS from origin ${req.headers.origin ?? "(none)"}`);
       socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
@@ -174,12 +244,11 @@ export function attachTerminalServer(server: http.Server, opts: TerminalServerOp
       return;
     }
     wss.handleUpgrade(req, socket, head, (ws) => handleConnection(ws, opts));
-  };
+  });
 
-  server.on("upgrade", onUpgrade);
   return {
     close() {
-      server.off("upgrade", onUpgrade);
+      detach();
       for (const ws of wss.clients) ws.terminate();
       wss.close();
     },
@@ -220,8 +289,8 @@ function handleConnection(ws: WebSocket, opts: TerminalServerOptions): void {
     } catch {
       return fail("bad hello");
     }
-    if (hello.type !== "hello" || typeof hello.token !== "string") return fail("bad hello");
-    if (!timingSafeEqual(hello.token, opts.token)) return fail("forbidden");
+    if (hello.type !== "hello") return fail("bad hello");
+    if (!tokenMatches(hello.token, opts)) return fail("forbidden");
     if (!hasTmux()) return fail("tmux is not installed on this machine");
 
     const cols = clampDim(hello.cols, 200);

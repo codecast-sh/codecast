@@ -44,7 +44,7 @@ export const MESSAGING_SNIPPET_END = "<!-- /codecast-messaging -->";
 export const MESSAGING_SNIPPET = `
 ## Messaging
 
-\`cast send <session_id> "<text>"\` reaches any session — old or active — by its short ID. Each is a teammate: be the boss (hand a dormant one a task; it resumes with full context and runs it) or a peer (trade updates on a shared problem). Ask one to ping you when it's done or blocked, then act on the reply yourself.
+\`cast send <session_id> "<text>"\` reaches any session — old or active — by its short ID. Each is a teammate: be the boss (hand a dormant one a task; it resumes with full context and runs it) or a peer (trade updates on a shared problem). Ask one to ping you when it's done or blocked, then act on the reply yourself. Collaboration is the default, but interruptions aren't free — use judgment.
 
 It lands as a new turn attributed to you; inbound arrives wrapped as \`<session-message from="jx7c6zk">…</session-message>\` — reply to its ID.
 
@@ -73,6 +73,67 @@ cast kill <session_id>         # Tear the agent down, mark completed, cancel its
 Dismiss is reversible and keeps the agent alive; kill is the deliberate "done with it". When you hide or kill sessions on the human's behalf, tell them which ones and why.
 ${MESSAGING_SNIPPET_END}
 `;
+
+export const PUBLISH_SNIPPET_END = "<!-- /codecast-publish -->";
+export const PUBLISH_SNIPPET = `
+## Publishing artifacts (cast publish)
+
+When you produce a standalone deliverable — a report, dashboard, mockup, visualization — publish it and put the returned URL inline in your reply:
+
+\`\`\`bash
+cast publish report.html          # → https://codecast.sh/a/<slug>  (stable per file)
+cast publish notes.md             # markdown renders as a clean reading page
+cast publish dist/                # directory bundle (needs index.html; assets keep relative paths)
+cast publish app.html --watch     # republish on every save; viewers on <url>?live=1 auto-reload
+cast publish ls | rm <target> | rollback <target> <version> | open <target>
+\`\`\`
+
+Re-publishing the same path updates the same URL and keeps version history — past versions stay viewable (\`?v=N\`), diffable (\`?diff=A..B\`), and restorable with \`rollback\`. \`--new\` mints a separate URL; \`--title\` overrides the title.
+
+Access gates: \`--password <p>\` (\`--no-password\` clears), \`--email-gate\` asks viewers for their email (\`--no-email-gate\` clears), \`--expires 7d|24h|30m|never\`. \`--edit-mode owner|link|team\` controls in-browser editing.
+
+The publish output includes a manage URL (the \`#o=\` owner link — full owner powers: stats, seen-by, gates, rollback; keep it private) and, in link edit mode, an edit URL that grants editing to whoever holds it.
+
+Viewers can comment on the page; comments arrive in this session as messages — respond by revising and republishing. Links are unlisted but viewable by anyone who has them: if a deliverable is sensitive, gate it or say so and let the human decide.
+${PUBLISH_SNIPPET_END}
+`;
+
+/** Generic marked-snippet installer: header check + end-marker replace, else append. */
+function installMarkedSnippetToTargets(
+  header: string,
+  endMarker: string,
+  snippet: string,
+  update: boolean,
+): { installed: boolean; updated: boolean } {
+  let anyInstalled = false;
+  let anyUpdated = false;
+  for (const target of getSnippetTargets()) {
+    if (!fs.existsSync(target.dirPath)) {
+      fs.mkdirSync(target.dirPath, { recursive: true });
+    }
+    let existing = fs.existsSync(target.filePath) ? fs.readFileSync(target.filePath, "utf-8") : "";
+    const has = existing.includes(header) && existing.includes(endMarker);
+    if (has && !update) continue;
+    if (has) {
+      const start = existing.indexOf(header);
+      const markerIdx = existing.indexOf(endMarker, start);
+      let end = markerIdx !== -1 ? markerIdx + endMarker.length : existing.length;
+      if (existing[end] === "\n") end++;
+      existing = existing.slice(0, start) + existing.slice(end);
+      fs.writeFileSync(target.filePath, existing.trimEnd() + "\n" + snippet, { mode: 0o600 });
+      anyInstalled = true;
+      anyUpdated = true;
+    } else {
+      fs.writeFileSync(target.filePath, existing + snippet, { mode: 0o600 });
+      anyInstalled = true;
+    }
+  }
+  return { installed: anyInstalled, updated: anyUpdated };
+}
+
+export function installPublishSnippet(update = false): { installed: boolean; updated: boolean } {
+  return installMarkedSnippetToTargets("## Publishing artifacts", PUBLISH_SNIPPET_END, PUBLISH_SNIPPET, update);
+}
 
 function installMessagingSnippetToFile(filePath: string, dirPath: string, update: boolean): { installed: boolean; updated: boolean } {
   if (!fs.existsSync(dirPath)) {

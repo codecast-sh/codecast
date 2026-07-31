@@ -31,6 +31,10 @@ export type MonitorRow = {
   // but the lifecycle machinery is shared.
   kind: "monitor" | "background";
   toolUseId: string;
+  // The message that armed the watch (the tool_use turn) — lets surfaces jump
+  // the conversation to where this row was born. Present whenever the scanned
+  // messages carry ids (the store window does; test fixtures may not).
+  startMessageId?: string;
   // Parsed from the "Monitor started (task <id> …)" result; undefined while
   // the result hasn't landed (or on agents that never echoed it).
   taskId?: string;
@@ -55,6 +59,7 @@ export type MonitorRow = {
 // The minimal structural shape shared by the store's Message and
 // ConversationView's local Message type.
 type ScanMessage = {
+  _id?: string;
   role: string;
   content?: string;
   timestamp: number;
@@ -163,6 +168,7 @@ export function monitorRowsFor(messages: readonly ScanMessage[] | undefined): Mo
         const row: MonitorRow = {
           kind,
           toolUseId: tc.id,
+          startMessageId: msg._id,
           description: (input?.description && String(input.description)) || (kind === "monitor" ? "background watch" : "background command"),
           command: (input?.command && String(input.command)) || "",
           persistent: !!input?.persistent,

@@ -44,6 +44,8 @@ const TeamMember = lazy(() => import("@/app/team/[username]/page"));
 const Search = lazy(() => import("@/app/search/page"));
 const Windows = lazy(() => import("@/app/windows/page"));
 const ConfigPage = lazy(() => import("@/app/config/page"));
+const Vault = lazy(() => import("@/app/vault/page"));
+const Artifacts = lazy(() => import("@/app/artifacts/page"));
 const Notifications = lazy(() => import("@/app/notifications/page"));
 const AdminDaemonLogs = lazy(() => import("@/app/admin/daemon-logs/page"));
 
@@ -81,6 +83,8 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/anchor$/, paramNames: [], component: Anchor },
   { pattern: /^\/team$/, paramNames: [], component: Team },
   { pattern: /^\/search$/, paramNames: [], component: Search },
+  { pattern: /^\/vault$/, paramNames: [], component: Vault },
+  { pattern: /^\/artifacts$/, paramNames: [], component: Artifacts },
   { pattern: /^\/windows$/, paramNames: [], component: Windows },
   { pattern: /^\/config$/, paramNames: [], component: ConfigPage },
   { pattern: /^\/notifications$/, paramNames: [], component: Notifications },

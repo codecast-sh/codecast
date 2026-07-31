@@ -201,8 +201,7 @@ export function useGlobalShortcutActions() {
   }, []));
 
   useShortcutAction('terminal.toggle', useCallback(() => {
-    const store = useInboxStore.getState();
-    store.updateClientUI({ terminal_open: !(store.clientState.ui?.terminal_open ?? false) });
+    void import("../lib/terminal/panelPrefs").then((m) => m.toggleTerminalOpen());
   }, []));
 
   useShortcutAction('ui.undo', useCallback(() => {

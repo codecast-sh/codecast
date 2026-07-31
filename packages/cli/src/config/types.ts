@@ -15,7 +15,7 @@
  * present on disk at a given moment.
  */
 
-import type { AgentClientId } from "@codecast/shared/contracts";
+import type { AgentClientId, VaultInfo } from "@codecast/shared/contracts";
 
 /** How aggressively a client skips approval prompts. Codex is the only client
  *  with a distinct `full_auto`; the others use `default`/`bypass`, but the union
@@ -129,6 +129,12 @@ export interface Config {
   // the plain DB-polling path; set `port` to pin the sidecar (0/omitted =
   // OS-chosen, self-discovered from the server's announce line).
   opencode_server?: { enabled?: boolean; port?: number };
+
+  // --- Vaults (index.ts `cast vault`, daemon /vault/* routes) ---
+  // Directories of markdown the user registered for browsing over the loopback
+  // bridge. Managed through vault/vaultRegistry.ts — never hand-edited elsewhere,
+  // since the id is derived from the root path.
+  vaults?: VaultInfo[];
 
   // --- Server-stamped bookkeeping (index.ts) ---
   created_at?: string;

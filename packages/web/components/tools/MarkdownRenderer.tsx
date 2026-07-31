@@ -222,7 +222,9 @@ const MD_REHYPE_PLUGINS = [rehypeHighlight];
 // including those inside generated pills. Module scope keeps the identity
 // stable, matching the perf note above.
 const MD_REMARK_PLUGINS = [...entityRemarkPlugins, remarkSanitizeInvisibleUnicode];
-const MD_COMPONENTS: Components = {
+// Exported for surfaces that reuse this component set with a few overrides
+// (the vault reading view swaps `a`/`img` for wiki-link-aware variants).
+export const MD_COMPONENTS: Components = {
           code: EntityAwareCode,
           a: EntityAwareLink,
           pre: ({ node, children, ...props }) => {

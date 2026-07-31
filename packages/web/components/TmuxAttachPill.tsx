@@ -12,7 +12,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { useConvex } from "convex/react";
+import { SquareTerminal } from "lucide-react";
 import { copyToClipboard } from "../lib/utils";
+import { openAgentTerminal } from "../lib/terminal/openAttach";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { DeviceDot } from "./DeviceBadge";
 
@@ -20,6 +23,19 @@ export function TmuxAttachPill({ tmuxSession, isLive }: { tmuxSession?: string |
   // undefined = first render: never animate what was already there on mount.
   const prev = useRef<string | null | undefined>(undefined);
   const [anim, setAnim] = useState<"tmux-pill-in" | "tmux-pill-change" | null>(null);
+  const [opening, setOpening] = useState(false);
+  const convex = useConvex();
+
+  const openInPanel = async () => {
+    if (!tmuxSession || opening) return;
+    setOpening(true);
+    try {
+      const res = await openAgentTerminal(convex, tmuxSession);
+      if (!res.ok) toast.error(res.reason ?? "Couldn't open terminal");
+    } finally {
+      setOpening(false);
+    }
+  };
 
   useEffect(() => {
     const p = prev.current;
@@ -32,23 +48,34 @@ export function TmuxAttachPill({ tmuxSession, isLive }: { tmuxSession?: string |
   if (!tmuxSession) return null;
 
   const attach = `tmux attach -t '${tmuxSession}'`;
+  const pillColors = isLive
+    ? "bg-sol-green/10 text-sol-green border-sol-green/30 hover:bg-sol-green/20"
+    : "bg-gray-500/10 text-gray-400 border-gray-500/25 hover:bg-gray-500/20";
   return (
-    <ShortcutTooltip label={isLive ? `Copy ${attach}` : `Copy ${attach} — session not connected`} side="bottom">
-      <button
-        onClick={() => { copyToClipboard(attach).then(() => toast.success("tmux attach copied")).catch(() => toast.error("Failed to copy")); }}
-        onAnimationEnd={() => setAnim(null)}
-        className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] border transition-colors ${
-          isLive
-            ? "bg-sol-green/10 text-sol-green border-sol-green/30 hover:bg-sol-green/20"
-            : "bg-gray-500/10 text-gray-400 border-gray-500/25 hover:bg-gray-500/20"
-        } ${anim ?? ""}`}
-      >
-        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-        </svg>
-        tmux
-        <DeviceDot online={isLive} />
-      </button>
-    </ShortcutTooltip>
+    <span className={`inline-flex items-stretch rounded border overflow-hidden ${isLive ? "border-sol-green/30" : "border-gray-500/25"} ${anim ?? ""}`} onAnimationEnd={() => setAnim(null)}>
+      <ShortcutTooltip label={isLive ? `Copy ${attach}` : `Copy ${attach} — session not connected`} side="bottom">
+        <button
+          onClick={() => { copyToClipboard(attach).then(() => toast.success("tmux attach copied")).catch(() => toast.error("Failed to copy")); }}
+          className={`inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] transition-colors border-0 ${pillColors}`}
+        >
+          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+          </svg>
+          tmux
+          <DeviceDot online={isLive} />
+        </button>
+      </ShortcutTooltip>
+      {isLive && (
+        <ShortcutTooltip label="Watch this agent's terminal in the panel (read-only)" side="bottom">
+          <button
+            onClick={openInPanel}
+            className={`inline-flex items-center px-1 py-0.5 text-[10px] transition-colors border-0 border-l ${isLive ? "border-l-sol-green/30" : "border-l-gray-500/25"} ${pillColors} ${opening ? "opacity-50" : ""}`}
+            aria-label="Open agent terminal in panel"
+          >
+            <SquareTerminal className="w-3 h-3" />
+          </button>
+        </ShortcutTooltip>
+      )}
+    </span>
   );
 }

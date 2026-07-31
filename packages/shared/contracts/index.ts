@@ -14,3 +14,4 @@ export * from "./providerKeys";
 export * from "./providerKeyCrypto";
 export * from "./snippets";
 export * from "./stableContext";
+export * from "./vaultProtocol";

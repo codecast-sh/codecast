@@ -152,6 +152,12 @@ export interface AgentModelConfig {
    *  a valid wire value — findModelOption synthesizes its option — and pickers
    *  render from the device's heartbeat-reported model inventory. */
   dynamic?: boolean;
+  /** The client's own model picker is the source of truth for what a RUNNING
+   *  session can switch to; the daemon harvests its menu rows on a switch and
+   *  devices heartbeat them as label strings. Pickers render the harvested rows
+   *  (matched to curated options via `menuMatch`) instead of a static list.
+   *  Unset = pickers use the curated `models` list only. */
+  menuDynamic?: boolean;
 }
 
 /** How the daemon tails a client's transcripts on disk. `json-store` is reserved

@@ -669,7 +669,7 @@ export function resolveLayoutMode(
 // still moves the rail there.
 export function layoutSurfaceFromPath(pathname: string): string {
   const seg = pathname.split("/")[1] ?? "";
-  return seg === "docs" || seg === "tasks" || seg === "plans" ? seg : "global";
+  return seg === "docs" || seg === "tasks" || seg === "plans" || seg === "vault" ? seg : "global";
 }
 
 export type ClientUI = {
@@ -691,10 +691,6 @@ export type ClientUI = {
   // User-set height (px) of the trigger full-prompt viewport (TriggerPromptView
   // drag handle). Layout pref → unstamped, per-device local_wins.
   trigger_prompt_height?: number;
-  // Integrated terminal panel (bottom dock). Layout prefs → unstamped,
-  // per-device local_wins like the sidebar.
-  terminal_open?: boolean;
-  terminal_height?: number;
   // "Show old sessions" — reveal cached rows the live (authoritative) inbox
   // subscription no longer returns. Default hide. Successor to the removed
   // show_old_sessions key, whose blanket-local_wins sync made one browse click
