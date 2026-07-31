@@ -18,6 +18,7 @@ import { shareOrigin } from "../../lib/utils";
 import { useConversationMessages } from "../../hooks/useConversationMessages";
 import { useInboxStore, useTrackedStore, isConvexId, sortSessions, sessionsWakeSig, isInterruptControlMessage, ensureHydrated } from "../../store/inboxStore";
 import { SharePopover } from "../../components/SharePopover";
+import { SessionErrorBanner } from "../../components/SessionErrorBanner";
 import { ActivityFeed } from "../../components/ActivityFeed";
 import { PlanContextPanel } from "../../components/PlanContextPanel";
 import { WorkflowContextPanel } from "../../components/WorkflowContextPanel";
@@ -158,15 +159,12 @@ const InboxConversation = memo(function InboxConversation({ sessionId: liveSessi
         </div>
       )}
       {isOwnSession && sessionError && resumeState === "idle" && (
-        // Normal flow (not an absolute overlay) so it can't be clipped behind the
-        // conversation header's higher-z elements; persistent so it earns its row.
-        <div className="shrink-0 flex items-center gap-2 px-4 py-1.5 bg-sol-red/90 text-sol-bg text-xs backdrop-blur-sm">
-          <span className="w-1.5 h-1.5 rounded-full bg-sol-bg flex-shrink-0" />
-          <span className="truncate min-w-0 flex-1" title={sessionError}>{sessionError}</span>
-          <button onClick={handleManualResume} className="ml-1 px-1.5 py-0.5 rounded bg-sol-bg/20 hover:bg-sol-bg/30 transition-colors flex-shrink-0">
-            Resume
-          </button>
-        </div>
+        <SessionErrorBanner
+          error={sessionError}
+          projectPath={conversation.project_path || conversation.git_root}
+          ownerDeviceId={(conversation as any).owner_device_id}
+          onResume={handleManualResume}
+        />
       )}
       {isOwnSession && looksAbandoned && !sessionError && resumeState === "idle" && (
         <div className="absolute top-0 left-0 right-0 z-10 flex items-center gap-2 px-4 py-1.5 bg-sol-bg-alt/90 border-b border-sol-border/50 text-sol-text-dim text-xs backdrop-blur-sm">

@@ -546,7 +546,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     });
   },
 
-  createSession: async (ctx, userId, [opts]: [{ agent_type?: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[] }]) => {
+  createSession: async (ctx, userId, [opts]: [{ agent_type?: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string }]) => {
     const sessionId = opts.session_id || crypto.randomUUID();
     // Idempotent on (user, session_id). The optimistic web client keys a New
     // Session by a client-minted stub id and passes it as session_id, then
@@ -698,6 +698,11 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       // worktree" toggle silently did nothing until a later project switch.
       ...(opts.isolated ? { isolated: true } : {}),
       ...(opts.worktree_name ? { worktreeName: opts.worktree_name } : {}),
+      // The machine picked on the new-session page. Web creates are deferred to
+      // the first send, so the pick rides the create itself — there is no blank
+      // conversation to reconfigure beforehand (reconfigureSession serves the
+      // eager-create surfaces, e.g. mobile).
+      ...(opts.target_device_id ? { targetDeviceId: opts.target_device_id } : {}),
       ...(requestedModel ? { model: requestedModel } : {}),
       ...(effortOk ? { effort: opts.effort } : {}),
       ...(opts.stable_mode ? { stableMode: opts.stable_mode } : {}),

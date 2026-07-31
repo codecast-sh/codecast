@@ -61,6 +61,7 @@ export async function awaitTrackedSessionCreateResult(
 // Imported for internal use AND re-exported so the many call sites that import
 // `isConvexId` from the store keep working.
 import { isConvexId } from "../lib/entityLinks";
+import { defaultMachineId, type MachineCandidate } from "../lib/machinePicker";
 export { isConvexId };
 
 // Canonical entity-derivation helpers live in lib/liveEntities. Re-exported here
@@ -326,6 +327,11 @@ export type InboxSession = {
   // Which device currently runs this session (null = unassigned; auto-routing
   // picks the most-recently-active local machine on next send).
   owner_device_id?: string | null;
+  // LOCAL-ONLY, blank sessions only: the machine the user picked in the
+  // new-session row. A request, not a fact — it rides the create (see
+  // createSessionFromStub) and routing may still fall back, after which
+  // owner_device_id is the truth. Never written to the server as a field.
+  target_device_id?: string | null;
   // The session's author (conversation.user_id). The inbox is user-scoped, so a
   // synced row is always the current user's own — but a teammate's session can be
   // INJECTED into this same cache (deep-link / search / command-palette open). The
@@ -2454,6 +2460,7 @@ interface InboxStoreState {
   injectSession: (session: InboxSession) => void;
   preloadForkSessions: (forks: ForkChild[], forkedFrom?: string) => void;
   updateSessionProject: (id: string, projectPath: string) => void;
+  setSessionTargetDevice: (id: string, deviceId: string | null) => void;
   patchSession: (id: string, fields: Partial<InboxSession>) => void;
   setConversationAgent: (id: string, agentType: string) => void;
   // Local-only optimistic model/effort stamp (header picker / new-session
@@ -2570,6 +2577,14 @@ interface InboxStoreState {
   // -- Recent projects cache --
   recentProjects: Array<{ path: string; count: number; lastActive: number }>;
   setRecentProjects: (projects: Array<{ path: string; count: number; lastActive: number }>) => void;
+
+  // -- Machine roster (non-persisted; mirrors the live devices query) --
+  // Only exists so the create path can re-check, at the moment it fires, whether
+  // a picked machine is still the one routing would choose anyway. Deliberately
+  // NOT persisted: a stale roster from a previous session would make that check
+  // worse than not having it.
+  machineRoster: MachineCandidate[];
+  setMachineRoster: (devices: MachineCandidate[]) => void;
 
   // -- Active project scope (non-persisted, resets on reload) --
   activeProjectPath: string | null;
@@ -3911,6 +3926,10 @@ export const useInboxStore = create<InboxStoreState>(
   setRecentProjects: action(function (this: Draft, projects: Array<{ path: string; count: number; lastActive: number }>) {
     this.recentProjects = projects;
   }),
+  machineRoster: [],
+  setMachineRoster: sync(function (this: Draft, devices: MachineCandidate[]) {
+    this.machineRoster = devices;
+  }),
   activeProjectPath: null,
   activeProjectFilter: null,
   setActiveProjectFilter: action(function (this: Draft, name: string | null, path?: string | null) {
@@ -4414,7 +4433,7 @@ export const useInboxStore = create<InboxStoreState>(
     if (optimistic && this.sessions[convId]) Object.assign(this.sessions[convId], optimistic);
   }),
 
-  createSession: asyncAction(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[] }) {
+  createSession: asyncAction(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string }) {
     const sessionId = opts.session_id || (Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
     if (!opts.session_id) opts.session_id = sessionId;
     const existing = this.sessions[sessionId];
@@ -4477,11 +4496,26 @@ export const useInboxStore = create<InboxStoreState>(
     // key ("opus") — findModelOption matches on key. A model left on a different
     // agent's id (after an agent switch) resolves to "default" and is dropped.
     const modelKey = modelOptionKey(cur?.model, agentType);
+    // The machine the user picked in the new-session row — re-checked HERE, at
+    // the moment the create fires, not at pick time. Devices go offline and
+    // reorder in between, and a stamp that has since become the machine routing
+    // would choose anyway is worse than no stamp: an explicit target wins the
+    // FIRST rung of deviceRouting, jumping the queue ahead of the rung that
+    // prefers whichever machine actually holds the checkout. An empty roster
+    // (query hasn't landed yet) can't prove that, so the user's pick stands.
+    const targetDeviceId = cur?.target_device_id as string | null | undefined;
+    const routedAnyway = targetDeviceId
+      ? targetDeviceId === defaultMachineId(s.machineRoster, {
+          ownerDeviceId: cur?.owner_device_id ?? null,
+          projectPath: projectPath ?? gitRoot ?? null,
+        })
+      : false;
     return s.createSession({
       agent_type: agentType,
       project_path: projectPath,
       git_root: gitRoot || undefined,
       session_id: stubId,
+      ...(targetDeviceId && !routedAnyway ? { target_device_id: targetDeviceId } : {}),
       ...(cur?._linkedObject?.type && cur?._linkedObject?.id
         ? { linked_object: cur._linkedObject }
         : {}),
@@ -5128,6 +5162,14 @@ export const useInboxStore = create<InboxStoreState>(
   patchSession: sync(function (this: Draft, id: string, fields: Partial<InboxSession>) {
     if (!this.sessions[id]) return;
     Object.assign(this.sessions[id], fields);
+  }),
+
+  // The machine row's stamp. Local-only (`sync`): the conversations table has no
+  // such column — the value's only job is to survive on the stub row until
+  // createSessionFromStub reads it. Null clears a pick the user reverted.
+  setSessionTargetDevice: sync(function (this: Draft, id: string, deviceId: string | null) {
+    if (this.sessions[id]) this.sessions[id].target_device_id = deviceId;
+    if (this.conversations[id]) (this.conversations[id] as any).target_device_id = deviceId;
   }),
 
   setConversationAgent: sync(function (this: Draft, id: string, agentType: string) {

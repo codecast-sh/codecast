@@ -5,6 +5,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useRouter } from "next/navigation";
 import { ConversationDiffLayout } from "./ConversationDiffLayout";
+import { SessionErrorBanner } from "./SessionErrorBanner";
 import { AppLoader } from "./AppLoader";
 import { ConversationData } from "./ConversationView";
 import { FormattedSummary } from "./FormattedSummary";
@@ -201,16 +202,12 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
         </div>
       )}
       {sessionError && resumeState === "idle" && (
-        // In normal flow (not an absolute overlay) so it can't be clipped behind
-        // the conversation header's higher-z elements. Persistent until resolved,
-        // unlike the transient resuming/failed bars above, so it earns its own row.
-        <div className="shrink-0 flex items-center gap-2 px-4 py-1.5 bg-sol-red/90 text-sol-bg text-xs backdrop-blur-sm">
-          <span className="w-1.5 h-1.5 rounded-full bg-sol-bg flex-shrink-0" />
-          <span className="truncate min-w-0 flex-1" title={sessionError}>{sessionError}</span>
-          <button onClick={handleManualResume} className="ml-1 px-1.5 py-0.5 rounded bg-sol-bg/20 hover:bg-sol-bg/30 transition-colors flex-shrink-0">
-            Resume
-          </button>
-        </div>
+        <SessionErrorBanner
+          error={sessionError}
+          projectPath={conversation.project_path || conversation.git_root}
+          ownerDeviceId={(conversation as any).owner_device_id}
+          onResume={handleManualResume}
+        />
       )}
       {looksAbandoned && !sessionError && resumeState === "idle" && (
         <div className="absolute top-0 left-0 right-0 z-10 flex items-center gap-2 px-4 py-1.5 bg-sol-bg-alt/90 border-b border-sol-border/50 text-sol-text-dim text-xs backdrop-blur-sm">
