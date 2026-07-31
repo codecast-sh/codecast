@@ -106,10 +106,13 @@ export function DeviceDot({ online, className = "" }: { online: boolean; classNa
   );
 }
 
+// Stable identity for the pre-query render, so useMemo deps don't churn.
+const NO_DEVICES: Device[] = [];
+
 /** Load the user's devices, with helpers for routing-aware decisions. */
 export function useDevices() {
   const fresh = useQuery(api.devices.listDevices, {}) as Device[] | undefined;
-  const devices = fresh ?? [];
+  const devices = fresh ?? NO_DEVICES;
   // Mirror the roster into the store so the create path can re-check a picked
   // machine against live routing at the moment it fires (createSessionFromStub).
   // Every surface that shows a device chip keeps this warm; nothing persists it.
