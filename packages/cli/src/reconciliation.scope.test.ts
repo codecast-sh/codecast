@@ -2,8 +2,12 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { performReconciliation } from "./reconciliation.js";
+import {
+  isTranscriptFileInSyncScope,
+  performReconciliation,
+} from "./reconciliation.js";
 import { TEST_SCRATCH_DIRNAME } from "./syncScope.js";
+import type { Config } from "./config/types.js";
 
 // Regression for the phantom "stuck syncs … last sync 20618 days ago" alarm.
 //
@@ -63,6 +67,64 @@ describe("reconciliation honors the sync-scope rule (skips test-scratch transcri
       // never become a discrepancy — and therefore never a zombie ledger entry.
       expect(queried).not.toContain(scratchSid);
       expect(result.discrepancies.some(d => d.sessionId === scratchSid)).toBe(false);
+    } finally {
+      process.env.HOME = realHome;
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    }
+  });
+
+  test("selected mode queries only transcripts whose recorded cwd is selected", async () => {
+    const realHome = process.env.HOME;
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "cc-reconcile-selected-"));
+    const projects = path.join(tmpHome, ".claude", "projects");
+    const selectedRoot = path.join(tmpHome, "selected");
+    const excludedRoot = path.join(tmpHome, "excluded");
+    const selectedDir = path.join(projects, "-selected");
+    const excludedDir = path.join(projects, "-excluded");
+    const selectedSid = uuid("c");
+    const excludedSid = uuid("d");
+
+    fs.mkdirSync(selectedRoot, { recursive: true });
+    fs.mkdirSync(excludedRoot, { recursive: true });
+    fs.mkdirSync(selectedDir, { recursive: true });
+    fs.mkdirSync(excludedDir, { recursive: true });
+    const transcript = (cwd: string) => JSON.stringify({
+      type: "user",
+      cwd,
+      sessionId: "session",
+      message: { role: "user", content: "hi" },
+    }) + "\n";
+    const selectedFile = path.join(selectedDir, `${selectedSid}.jsonl`);
+    const excludedFile = path.join(excludedDir, `${excludedSid}.jsonl`);
+    fs.writeFileSync(selectedFile, transcript(selectedRoot));
+    fs.writeFileSync(excludedFile, transcript(excludedRoot));
+
+    const config = {
+      sync_mode: "selected",
+      sync_projects: [selectedRoot],
+    } as Config;
+    let queried: string[] = [];
+    const fakeSyncService = {
+      async getMessageCountsForReconciliation(sessionIds: string[]) {
+        queried = sessionIds;
+        return [];
+      },
+    } as any;
+
+    try {
+      process.env.HOME = tmpHome;
+      expect(isTranscriptFileInSyncScope(selectedFile, config)).toBe(true);
+      expect(isTranscriptFileInSyncScope(excludedFile, config)).toBe(false);
+
+      const result = await performReconciliation(
+        fakeSyncService,
+        () => {},
+        {},
+        50,
+        config,
+      );
+      expect(queried).toEqual([selectedSid]);
+      expect(result.discrepancies.map((d) => d.sessionId)).toEqual([selectedSid]);
     } finally {
       process.env.HOME = realHome;
       fs.rmSync(tmpHome, { recursive: true, force: true });

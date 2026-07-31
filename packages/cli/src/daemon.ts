@@ -82,7 +82,11 @@ import { handlePermissionRequest } from "./permissionHandler.js";
 import { getVersion, performUpdate, ensureCastAlias } from "./update.js";
 import { ensureMessagingForMemory } from "./snippets.js";
 import { checkForDesktopUpdate } from "./desktopUpdate.js";
-import { performReconciliation, repairDiscrepancies } from "./reconciliation.js";
+import {
+  isTranscriptFileInSyncScope,
+  performReconciliation,
+  repairDiscrepancies,
+} from "./reconciliation.js";
 import { TEST_SCRATCH_DIRNAME, isTestScratchPath, isPathExcluded, isProjectAllowedToSync } from "./syncScope.js";
 import { TaskScheduler } from "./taskScheduler.js";
 import { hasTmux } from "./tmux.js";
@@ -14797,9 +14801,13 @@ function maybeUpdateDesktopApp(syncService: SyncService): void {
   })().catch(() => {});
 }
 
-function logHealthReport(retryQueue: RetryQueue): void {
+function logHealthReport(retryQueue: RetryQueue, config: Config): void {
   const claudeProjectsDir = path.join(process.env.HOME || "", ".claude", "projects");
-  const unsyncedFiles = findUnsyncedFiles(claudeProjectsDir);
+  const unsyncedFiles = findUnsyncedFiles(
+    claudeProjectsDir,
+    undefined,
+    (filePath) => isTranscriptFileInSyncScope(filePath, config),
+  );
   const droppedOps = retryQueue.getDroppedOperations();
   const queueSize = retryQueue.getLogicalQueueSize();
 
@@ -14813,7 +14821,8 @@ function logHealthReport(retryQueue: RetryQueue): void {
 function startReconciliation(
   syncService: SyncService,
   retryQueue: RetryQueue,
-  conversationCache: ConversationCache
+  conversationCache: ConversationCache,
+  config: Config,
 ): NodeJS.Timeout {
   log("Reconciliation scheduler started (runs every hour)");
 
@@ -14821,12 +14830,14 @@ function startReconciliation(
   setTimeout(async () => {
     try {
       // Log health report
-      logHealthReport(retryQueue);
+      logHealthReport(retryQueue, config);
 
       const result = await performReconciliation(
         syncService,
         (msg, level) => log(msg, level || "info"),
-        conversationCache
+        conversationCache,
+        50,
+        config,
       );
 
       if (result.discrepancies.length > 0) {
@@ -14855,12 +14866,14 @@ function startReconciliation(
 
     try {
       // Log health report
-      logHealthReport(retryQueue);
+      logHealthReport(retryQueue, config);
 
       const result = await performReconciliation(
         syncService,
         (msg, level) => log(msg, level || "info"),
-        conversationCache
+        conversationCache,
+        50,
+        config,
       );
 
       if (result.discrepancies.length > 0) {
@@ -16369,7 +16382,11 @@ async function main(): Promise<void> {
 
     let unsyncedFiles: string[] = [];
     try {
-      unsyncedFiles = findUnsyncedFiles(claudeProjectsDir);
+      unsyncedFiles = findUnsyncedFiles(
+        claudeProjectsDir,
+        undefined,
+        (filePath) => isTranscriptFileInSyncScope(filePath, config),
+      );
     } catch (err) {
       logError(`${reason} failed to find unsynced files`, err instanceof Error ? err : new Error(String(err)));
       return;
@@ -16561,7 +16578,7 @@ async function main(): Promise<void> {
   });
 
   const versionCheckInterval = startVersionChecker(syncService);
-  const reconciliationInterval = startReconciliation(syncService, retryQueue, conversationCache);
+  const reconciliationInterval = startReconciliation(syncService, retryQueue, conversationCache, config);
 
   const cursorWatcher = new CursorWatcher();
   const cursorSyncs = new Map<string, InvalidateSync>();

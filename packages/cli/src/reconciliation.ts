@@ -1,10 +1,15 @@
 import * as fs from "fs";
 import * as path from "path";
-import { parseSessionFile } from "./parser.js";
+import { extractCwd, parseSessionFile } from "./parser.js";
 import { SyncService } from "./syncService.js";
 import { setPosition } from "./positionTracker.js";
 import { updateSyncRecord } from "./syncLedger.js";
-import { isTestScratchPath } from "./syncScope.js";
+import {
+  isPathExcluded,
+  isProjectAllowedToSync,
+  isTestScratchPath,
+} from "./syncScope.js";
+import type { Config } from "./config/types.js";
 
 const CONFIG_DIR = process.env.HOME + "/.codecast";
 const RECONCILIATION_FILE = path.join(CONFIG_DIR, "last-reconciliation.json");
@@ -64,11 +69,56 @@ function extractSessionIdFromPath(filePath: string): string {
   return path.basename(filePath, ".jsonl");
 }
 
+function readTranscriptCwd(filePath: string): string | undefined {
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(filePath, "r");
+    const buffer = Buffer.alloc(64 * 1024);
+    const bytes = fs.readSync(fd, buffer, 0, buffer.length, 0);
+    let head = buffer.toString("utf-8", 0, bytes);
+    // A bounded read can end halfway through a large JSONL record. The parser
+    // correctly reports malformed lines, but diagnostics should not emit a
+    // wall of false parse errors merely because their own read was truncated.
+    if (bytes === buffer.length) {
+      const lastCompleteLine = head.lastIndexOf("\n");
+      head = lastCompleteLine >= 0 ? head.slice(0, lastCompleteLine + 1) : "";
+    }
+    return head ? extractCwd(head) : undefined;
+  } catch {
+    return undefined;
+  } finally {
+    if (fd !== undefined) {
+      try { fs.closeSync(fd); } catch { /* ignore */ }
+    }
+  }
+}
+
+/**
+ * Match the daemon's selected-project and exclusion gates before diagnostics,
+ * repair, or a manual sync can treat a transcript as expected backend data.
+ */
+export function isTranscriptFileInSyncScope(
+  filePath: string,
+  config?: Config,
+): boolean {
+  if (isTestScratchPath(filePath)) return false;
+  if (!config) return true;
+
+  const recordedCwd = readTranscriptCwd(filePath);
+  // A selected-project configuration must fail closed when a new/partial file
+  // has not recorded its cwd yet. The live watcher can reconsider it once the
+  // cwd row arrives; diagnostics must not "repair" it into a zombie ledger row.
+  if (!recordedCwd) return config.sync_mode !== "selected";
+  return isProjectAllowedToSync(recordedCwd, config)
+    && !isPathExcluded(recordedCwd, config.excluded_paths);
+}
+
 export async function performReconciliation(
   syncService: SyncService,
   log: (message: string, level?: "info" | "warn" | "error") => void,
   conversationCache: Record<string, string> = {},
-  maxFiles: number = 50
+  maxFiles: number = 50,
+  config?: Config,
 ): Promise<ReconciliationResult> {
   const result: ReconciliationResult = {
     timestamp: Date.now(),
@@ -95,13 +145,11 @@ export async function performReconciliation(
         if (entry.isDirectory()) {
           scanDir(fullPath);
         } else if (entry.name.endsWith(".jsonl") && !entry.name.startsWith("agent-")) {
-          // Skip subagent files for now, focus on main sessions.
-          // Skip files the sync loop refuses to sync (test-scratch transcripts):
-          // the backend will never have them, so reconciliation would forever flag
-          // them `missing_backend` and "repair" them into zombie zero-position
-          // ledger entries that surface as phantom "stuck syncs". Reconciliation
-          // must honor the same scope rule as the sync loop.
-          if (isTestScratchPath(fullPath)) continue;
+          // Skip subagent files for now, focus on main sessions. More
+          // importantly, honor the exact same selected/excluded scope as the
+          // sync loop: an out-of-scope transcript is correctly absent from the
+          // backend and must never be "repaired" into a zombie ledger entry.
+          if (!isTranscriptFileInSyncScope(fullPath, config)) continue;
           try {
             const stats = fs.statSync(fullPath);
             if (now - stats.mtimeMs < maxAgeMs) {

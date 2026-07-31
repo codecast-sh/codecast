@@ -1420,6 +1420,40 @@ export const restoreCancelledMessages = internalMutation({
   },
 });
 
+const NON_TERMINAL_PENDING_STATUSES = [
+  "pending",
+  "injected",
+  "failed",
+  "undeliverable",
+] as const;
+
+/**
+ * Read only the indexed non-terminal queue before applying the operator's age
+ * cutoff. The pending_messages table is dominated by terminal delivered rows;
+ * a table-level filter scans that entire history and makes even a small manual
+ * cleanup time out before it can report a dry run.
+ */
+export async function collectOldLegacyPendingMessages(
+  ctx: { db: any },
+  cutoff: number,
+  perStatusLimit = 500,
+): Promise<any[]> {
+  const matches: any[] = [];
+  for (const status of NON_TERMINAL_PENDING_STATUSES) {
+    const rows = await ctx.db
+      .query("pending_messages")
+      .withIndex("by_status", (q: any) => q.eq("status", status))
+      .order("asc")
+      .take(perStatusLimit);
+    for (const row of rows) {
+      if (row.created_at < cutoff && !isFencedPendingMessage(row)) {
+        matches.push(row);
+      }
+    }
+  }
+  return matches;
+}
+
 // EXPLICIT, USER-INITIATED bulk cancel. The cardinal rule forbids the system from EVER dropping a
 // user message on its own — but the user can choose to stop messages, and this is the bulk form of
 // that (cancel = the same terminal state as the per-message cancelPendingMessage button). It is
@@ -1427,23 +1461,22 @@ export const restoreCancelledMessages = internalMutation({
 // never wired into a cron. Cancels non-terminal messages older than `older_than_ms` and clears the
 // conversation flag. dry_run reports the count without mutating.
 export const cancelOldPendingMessages = internalMutation({
-  args: { older_than_ms: v.number(), dry_run: v.optional(v.boolean()) },
+  args: {
+    older_than_ms: v.number(),
+    dry_run: v.optional(v.boolean()),
+    limit: v.optional(v.number()),
+  },
   handler: async (ctx, args) => {
     const cutoff = Date.now() - args.older_than_ms;
+    const limit = Math.max(1, Math.min(Math.floor(args.limit ?? 200), 500));
+    const matches = await collectOldLegacyPendingMessages(ctx, cutoff, limit);
+    matches.sort((a, b) => a.created_at - b.created_at);
+    const selected = matches.slice(0, limit);
     const affectedConvs = new Set<Id<"conversations">>();
-    let cancelled = 0;
-    for (const status of ["pending", "injected", "failed", "undeliverable"] as const) {
-      const rows = await ctx.db
-        .query("pending_messages")
-        .filter((q) => q.and(q.eq(q.field("status"), status), q.lt(q.field("created_at"), cutoff)))
-        .collect();
-      for (const r of rows) {
-        if (isFencedPendingMessage(r)) continue;
-        affectedConvs.add(r.conversation_id);
-        if (!args.dry_run) {
-          await ctx.db.patch(r._id, { status: "cancelled" as const });
-        }
-        cancelled++;
+    for (const row of selected) {
+      affectedConvs.add(row.conversation_id);
+      if (!args.dry_run) {
+        await ctx.db.patch(row._id, { status: "cancelled" as const });
       }
     }
     if (!args.dry_run) {
@@ -1451,7 +1484,13 @@ export const cancelOldPendingMessages = internalMutation({
         await clearHasPendingIfQuiet(ctx, convId);
       }
     }
-    return { cancelled, conversations: affectedConvs.size, dry_run: !!args.dry_run };
+    return {
+      cancelled: selected.length,
+      matched: matches.length,
+      conversations: affectedConvs.size,
+      has_more: matches.length > selected.length,
+      dry_run: !!args.dry_run,
+    };
   },
 });
 

@@ -312,7 +312,7 @@ describe("Phase 0 task boundary", () => {
     expect(result.plan).toBeNull();
   });
 
-  test("dependency and comment relationships cannot cross workspaces", async () => {
+  test("dependencies stay contained while cross-workspace comments drop the relationship", async () => {
     const token = "task-relation-token";
     const tables = baseTables({
       api_tokens: [{ _id: "token_task_relation", user_id: MEMBER, token_hash: await hashToken(token) }],
@@ -334,9 +334,14 @@ describe("Phase 0 task boundary", () => {
       short_id: "ct-personal",
       text: "poison",
       conversation_id: "team-session",
-    })).rejects.toThrow("Forbidden");
+    })).resolves.toBeDefined();
     expect((testCtx.db as any)._patched).toHaveLength(0);
-    expect(tables.task_comments).toHaveLength(0);
+    expect(tables.task_comments).toHaveLength(1);
+    expect(tables.task_comments[0]).toMatchObject({
+      task_id: "task_personal",
+      text: "poison",
+      conversation_id: undefined,
+    });
   });
 
   test("plan progress ignores a one-way poisoned task relation", async () => {
