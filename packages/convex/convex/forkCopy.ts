@@ -21,6 +21,7 @@ export const FORK_BATCH_MAX_BYTES = 8 * 1024 * 1024;
 
 export type ForkMessage = {
   message_uuid?: string;
+  from_user_id?: string;
   role: string;
   content?: string;
   thinking?: string;
@@ -152,6 +153,7 @@ export async function advanceForkCopy(
     if (copied > 0 && bytes + sz > FORK_BATCH_MAX_BYTES) break;
     await ctx.db.insertMessage({
       conversation_id: forkId,
+      from_user_id: msg.from_user_id,
       message_uuid: msg.message_uuid,
       role: msg.role,
       content: msg.content,

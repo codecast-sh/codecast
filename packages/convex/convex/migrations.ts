@@ -98,6 +98,52 @@ function looksLikeUserMessage(content: string | undefined): boolean {
   return false;
 }
 
+// Backfill messages.from_user_id from the delivered pending_messages rows that
+// produced them. addMessage/addMessages now stamp the sender when the daemon
+// echoes a send back into the transcript, but rows written before that stamp
+// existed render as the conversation owner. Joins messages.client_id ->
+// pending_messages.client_id within one conversation and patches the missing
+// sender; bumps transcript_revision so open clients pull the changed rows.
+//   npx convex run migrations:backfillMessageSenders '{"conversation_id":"...","dryRun":false}'
+export const backfillMessageSenders = internalMutation({
+  args: {
+    conversation_id: v.id("conversations"),
+    dryRun: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const dryRun = args.dryRun ?? true;
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) return { error: "conversation not found" };
+    const pending = await ctx.db
+      .query("pending_messages")
+      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
+      .collect();
+    let revision = conversation.transcript_revision ?? 0;
+    let matched = 0;
+    let patched = 0;
+    for (const pm of pending) {
+      if (!pm.client_id || !pm.from_user_id) continue;
+      const clientId = pm.client_id;
+      const msg = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_client_id", (q) =>
+          q.eq("conversation_id", args.conversation_id).eq("client_id", clientId))
+        .first();
+      if (!msg) continue;
+      matched++;
+      if (msg.from_user_id) continue;
+      if (!dryRun) {
+        await ctx.db.patch(msg._id, { from_user_id: pm.from_user_id, transcript_revision: ++revision });
+      }
+      patched++;
+    }
+    if (!dryRun && revision !== (conversation.transcript_revision ?? 0)) {
+      await ctx.db.patch(args.conversation_id, { transcript_revision: revision });
+    }
+    return { dryRun, pendingRows: pending.length, matched, patched };
+  },
+});
+
 export const setAdminRole = internalMutation({
   args: {
     email: v.string(),
