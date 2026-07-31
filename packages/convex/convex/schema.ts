@@ -2390,12 +2390,27 @@ export default defineSchema({
     storage_id: v.id("_storage"),
     size: v.number(),
     version: v.number(),
+    // sha-256 of the current content — republishing identical bytes is a no-op
+    // instead of a junk history entry. Absent on rows from before history.
+    content_hash: v.optional(v.string()),
     created_at: v.number(),
     updated_at: v.number(),
   })
     .index("by_slug", ["slug"])
     .index("by_user", ["user_id"])
     .index("by_user_path", ["user_id", "source_path"]),
+
+  // Superseded artifact versions: on republish the previous blob is snapshotted
+  // here (instead of deleted) so past versions stay openable. Bounded — see
+  // MAX_ARTIFACT_HISTORY in artifacts.ts.
+  artifact_versions: defineTable({
+    artifact_id: v.id("artifacts"),
+    version: v.number(),
+    title: v.string(),
+    storage_id: v.id("_storage"),
+    size: v.number(),
+    published_at: v.number(),
+  }).index("by_artifact", ["artifact_id", "version"]),
 
   doc_snapshots: defineTable({
     id: v.string(),

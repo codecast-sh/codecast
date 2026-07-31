@@ -17,6 +17,12 @@ import { verifyApiToken } from "./apiTokens";
 
 export const MAX_ARTIFACT_BYTES = 8 * 1024 * 1024;
 
+// Superseded versions kept per artifact (beyond the current one). Old blobs
+// are snapshotted into artifact_versions on republish; past this cap the
+// oldest snapshot (row + blob) is pruned so auto-republish loops can't grow
+// storage without bound.
+export const MAX_ARTIFACT_HISTORY = 20;
+
 // ---------------------------------------------------------------------------
 // Serve-time branding: the raw artifact HTML is the document users share, so
 // the codecast chrome is injected INTO it — a slim sticky header that occupies
@@ -40,6 +46,12 @@ export interface BrandOpts {
   author?: string | null;
   updatedAt: number;
   shareUrl: string;
+  // Version of the document being served, the artifact's current version, and
+  // the absolute URL of the ?meta=1 JSON. When metaUrl is absent the bar
+  // renders without the version chip, history panel, or new-version polling.
+  version?: number;
+  currentVersion?: number;
+  metaUrl?: string;
 }
 
 // Everything is id-prefixed __cc_ and the styles are scoped to those ids, so
@@ -48,6 +60,15 @@ export interface BrandOpts {
 // it) and stays visible on scroll — never an overlay.
 function barHtml(o: BrandOpts): string {
   const when = new Date(o.updatedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  const version = o.version ?? 1;
+  const currentVersion = o.currentVersion ?? version;
+  const viewingOld = version < currentVersion;
+  const verChip = o.metaUrl
+    ? `<button id="__cc_ver" type="button" title="Version history"${viewingOld ? ' class="__cc_old"' : ""}>v${version}${viewingOld ? " (old)" : ""} ▾</button>`
+    : "";
+  const latestLink = viewingOld
+    ? `<a id="__cc_latest" href="#">Latest ↗</a>`
+    : "";
   return `
 <style id="__cc_style">
   /* Pinned to the viewport top; the html margin reserves exactly the bar's
@@ -65,18 +86,41 @@ function barHtml(o: BrandOpts): string {
   #__cc_bar .__cc_when { opacity: .5; font-weight: 400; white-space: nowrap; }
   #__cc_bar button { all: unset; cursor: pointer; padding: 4px 8px; border-radius: 6px; font: inherit; white-space: nowrap; }
   #__cc_bar button:hover { background: rgba(0,0,0,.06); }
+  /* all:unset above beats the UA's [hidden]{display:none} — restore it. */
+  #__cc_bar button[hidden] { display: none; }
+  #__cc_bar #__cc_ver.__cc_old { color: #b3661f; }
+  #__cc_bar #__cc_new { background: #e86c5d; color: #ffffff; font-weight: 600; margin-left: 2px; }
+  #__cc_bar #__cc_new:hover { background: #d85b4c; }
+  #__cc_bar #__cc_latest { color: #1a63c4; text-decoration: none; padding: 4px 8px; border-radius: 6px; white-space: nowrap; }
+  #__cc_bar #__cc_latest:hover { background: rgba(0,0,0,.06); }
+  #__cc_hist { position: fixed; top: 38px; right: 10px; z-index: 2147483647; min-width: 240px; max-height: 60vh; overflow-y: auto;
+    background: #ffffff; color: #52524e; border-radius: 8px; box-shadow: 0 4px 18px rgba(0,0,0,.18);
+    font: 400 12px/1.3 ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace; padding: 6px; text-align: left; }
+  #__cc_hist[hidden] { display: none; }
+  #__cc_hist a { display: flex; justify-content: space-between; gap: 14px; align-items: baseline;
+    color: inherit; text-decoration: none; padding: 6px 8px; border-radius: 6px; }
+  #__cc_hist a:hover { background: rgba(0,0,0,.06); }
+  #__cc_hist .__cc_vlabel { font-weight: 600; color: #1a1a18; }
+  #__cc_hist a.__cc_cur .__cc_vlabel::after { content: " · current"; font-weight: 400; color: #3d8a3d; }
+  #__cc_hist a.__cc_viewing { background: rgba(232,108,93,.12); }
+  #__cc_hist .__cc_vwhen { opacity: .55; white-space: nowrap; }
+  #__cc_hist .__cc_note { padding: 6px 8px; opacity: .55; }
 </style>
 <div id="__cc_bar">
   <a class="__cc_brand" href="https://codecast.sh" target="_blank" rel="noopener noreferrer" title="Published with codecast"><svg width="22" height="22" viewBox="290 340 440 340" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path fill="currentColor" d="${LOGO_C}"/><path fill="#e86c5d" d="${LOGO_ARROW}"/></svg></a>
   <span class="__cc_title">${escAttr(o.title)}</span>
+  ${latestLink}<button id="__cc_new" type="button" hidden></button>
   <span class="__cc_when" id="__cc_when" data-ts="${o.updatedAt}">updated ${escAttr(when)}</span>
+  ${verChip}
   <button id="__cc_copy" type="button" data-url="${escAttr(o.shareUrl)}">Copy link</button>
 </div>
+<div id="__cc_hist" hidden></div>
 <script>(function(){
+  var CC=${JSON.stringify({ metaUrl: o.metaUrl ?? "", version, currentVersion })};
+  var rel=function(ts){var s=Math.max(0,(Date.now()-ts)/1e3);
+    return s<60?"just now":s<3600?Math.floor(s/60)+"m ago":s<86400?Math.floor(s/3600)+"h ago":s<2592e3?Math.floor(s/86400)+"d ago":new Date(ts).toLocaleDateString();};
   var w=document.getElementById("__cc_when");
-  if(w){var ts=+w.getAttribute("data-ts");var rel=function(){var s=Math.max(0,(Date.now()-ts)/1e3);
-    w.textContent="updated "+(s<60?"just now":s<3600?Math.floor(s/60)+"m ago":s<86400?Math.floor(s/3600)+"h ago":s<2592e3?Math.floor(s/86400)+"d ago":new Date(ts).toLocaleDateString());};
-    rel();setInterval(rel,6e4);}
+  if(w){var ts=+w.getAttribute("data-ts");var tick=function(){w.textContent="updated "+rel(ts);};tick();setInterval(tick,6e4);}
   var b=document.getElementById("__cc_copy");
   if(b)b.addEventListener("click",function(){
     var u=b.getAttribute("data-url");
@@ -85,6 +129,57 @@ function barHtml(o: BrandOpts): string {
       document.body.appendChild(t);t.select();try{document.execCommand("copy");done();}catch(e){window.prompt("Copy link:",u);}t.remove();};
     if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(u).then(done,fallback);}else{fallback();}
   });
+  if(!CC.metaUrl)return;
+  // Version links stay on whatever host is serving this document. The r param
+  // is a cache-buster: it changes the URL per version so the 60s edge/browser
+  // cache can't hand back the document the user is trying to reload away from.
+  var verUrl=function(n,current){return location.pathname+(current?"?r=":"?v=")+n;};
+  var latest=document.getElementById("__cc_latest");
+  if(latest)latest.setAttribute("href",verUrl(CC.currentVersion,true));
+  var chip=document.getElementById("__cc_ver");
+  var panel=document.getElementById("__cc_hist");
+  var fetchMeta=function(cb){
+    fetch(CC.metaUrl,{cache:"no-store"}).then(function(r){return r.json();}).then(cb,function(){});
+  };
+  if(chip&&panel){
+    var render=function(m){
+      panel.innerHTML="";
+      (m.versions||[]).forEach(function(v){
+        var a=document.createElement("a");
+        a.href=verUrl(v.version,v.version===m.version);
+        if(v.version===m.version)a.className="__cc_cur";
+        if(v.version===CC.version)a.className+=(a.className?" ":"")+"__cc_viewing";
+        var l=document.createElement("span");l.className="__cc_vlabel";l.textContent="v"+v.version;
+        var t=document.createElement("span");t.className="__cc_vwhen";t.textContent=rel(v.published_at);
+        a.appendChild(l);a.appendChild(t);panel.appendChild(a);
+      });
+      if(!panel.childNodes.length){var n=document.createElement("div");n.className="__cc_note";n.textContent="No history yet";panel.appendChild(n);}
+    };
+    chip.addEventListener("click",function(e){
+      e.stopPropagation();
+      if(!panel.hidden){panel.hidden=true;return;}
+      var n=document.createElement("div");n.className="__cc_note";n.textContent="Loading…";
+      panel.innerHTML="";panel.appendChild(n);panel.hidden=false;
+      fetchMeta(render);
+    });
+    document.addEventListener("click",function(){panel.hidden=true;});
+    panel.addEventListener("click",function(e){e.stopPropagation();});
+  }
+  // New-version badge: only meaningful when viewing the version that was
+  // current at load; an old-version view already shows the Latest link.
+  if(CC.version===CC.currentVersion){
+    var badge=document.getElementById("__cc_new");
+    var poll=function(){
+      fetchMeta(function(m){
+        if(m&&m.version>CC.version&&badge){
+          badge.textContent="v"+m.version+" published — reload";
+          badge.hidden=false;
+          badge.onclick=function(){location.href=verUrl(m.version,true);};
+        }
+      });
+    };
+    setInterval(poll,3e4);
+  }
 })();</script>`;
 }
 
@@ -173,9 +268,38 @@ export const bySlug = internalQuery({
   },
 });
 
+// Artifact + its superseded versions, for the ?meta=1 JSON (the in-page badge
+// polls it) and for serving a past version via ?v=N. History is capped at
+// MAX_ARTIFACT_HISTORY rows, so returning all of them is fine.
+export const historyBySlug = internalQuery({
+  args: { slug: v.string() },
+  handler: async (ctx, args) => {
+    const artifact = await ctx.db
+      .query("artifacts")
+      .withIndex("by_slug", (q) => q.eq("slug", args.slug))
+      .first();
+    if (!artifact) return null;
+    const user = await ctx.db.get(artifact.user_id);
+    const history = await ctx.db
+      .query("artifact_versions")
+      .withIndex("by_artifact", (q) => q.eq("artifact_id", artifact._id))
+      .collect();
+    return {
+      ...artifact,
+      author_name: user?.name ?? null,
+      versions: [
+        { version: artifact.version, title: artifact.title, size: artifact.size, published_at: artifact.updated_at, storage_id: artifact.storage_id },
+        ...history
+          .map((h) => ({ version: h.version, title: h.title, size: h.size, published_at: h.published_at, storage_id: h.storage_id }))
+          .sort((a, b) => b.version - a.version),
+      ],
+    };
+  },
+});
+
 // Called by the publish HTTP action after it has stored the blob. Updates the
-// existing artifact for this (user, source_path) in place — deleting the
-// superseded blob — or creates a new row.
+// existing artifact for this (user, source_path) in place — snapshotting the
+// superseded blob into artifact_versions — or creates a new row.
 export const upsertFromPublish = internalMutation({
   args: {
     user_id: v.id("users"),
@@ -184,6 +308,7 @@ export const upsertFromPublish = internalMutation({
     size: v.number(),
     source_path: v.optional(v.string()),
     force_new: v.optional(v.boolean()),
+    content_hash: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const existing =
@@ -199,15 +324,48 @@ export const upsertFromPublish = internalMutation({
     const now = Date.now();
 
     if (existing) {
+      // Identical bytes → no-op: drop the freshly stored blob rather than
+      // minting a version whose diff is empty.
+      if (args.content_hash && existing.content_hash === args.content_hash) {
+        await ctx.storage.delete(args.storage_id).catch(() => {});
+        return {
+          slug: existing.slug,
+          url: artifactUrl(existing.slug),
+          version: existing.version,
+          updated: true,
+          unchanged: true,
+        };
+      }
+
       const version = existing.version + 1;
-      await ctx.storage.delete(existing.storage_id).catch(() => {});
+      await ctx.db.insert("artifact_versions", {
+        artifact_id: existing._id,
+        version: existing.version,
+        title: existing.title,
+        storage_id: existing.storage_id,
+        size: existing.size,
+        published_at: existing.updated_at,
+      });
       await ctx.db.patch(existing._id, {
         storage_id: args.storage_id,
         title: args.title,
         size: args.size,
         version,
+        content_hash: args.content_hash,
         updated_at: now,
       });
+
+      // Prune history beyond the cap, oldest first (rows come back in
+      // ascending version order from the index).
+      const history = await ctx.db
+        .query("artifact_versions")
+        .withIndex("by_artifact", (q) => q.eq("artifact_id", existing._id))
+        .collect();
+      for (const old of history.slice(0, Math.max(0, history.length - MAX_ARTIFACT_HISTORY))) {
+        await ctx.storage.delete(old.storage_id).catch(() => {});
+        await ctx.db.delete(old._id);
+      }
+
       return { slug: existing.slug, url: artifactUrl(existing.slug), version, updated: true };
     }
 
@@ -226,6 +384,7 @@ export const upsertFromPublish = internalMutation({
       storage_id: args.storage_id,
       size: args.size,
       version: 1,
+      content_hash: args.content_hash,
       created_at: now,
       updated_at: now,
     });
@@ -285,6 +444,14 @@ export const deleteFromCLI = mutation({
 
     if (!match) return { error: `No artifact matches "${args.target}"` };
 
+    const history = await ctx.db
+      .query("artifact_versions")
+      .withIndex("by_artifact", (q) => q.eq("artifact_id", match._id))
+      .collect();
+    for (const old of history) {
+      await ctx.storage.delete(old.storage_id).catch(() => {});
+      await ctx.db.delete(old._id);
+    }
     await ctx.storage.delete(match.storage_id).catch(() => {});
     await ctx.db.delete(match._id);
     return { deleted: toCliRow(match) };

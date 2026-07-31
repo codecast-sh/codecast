@@ -85,7 +85,7 @@ describe("newSlug", () => {
 });
 
 describe("upsertFromPublish", () => {
-  test("republishing the same path updates in place and deletes the old blob", async () => {
+  test("republishing the same path updates in place and snapshots the old version", async () => {
     const { ctx, patches, storageDeletes, inserts } = makeCtx([{ ...existingRow }]);
     const result = await (upsertFromPublish as any)._handler(ctx, {
       user_id: "u1",
@@ -93,14 +93,76 @@ describe("upsertFromPublish", () => {
       title: "New title",
       size: 200,
       source_path: "/tmp/report.html",
+      content_hash: "hash_new",
     });
     expect(result.slug).toBe("abcdefghijkl");
     expect(result.updated).toBe(true);
     expect(result.version).toBe(4);
     expect(result.url).toContain("/a/abcdefghijkl");
-    expect(storageDeletes).toEqual(["st_old"]);
+    // The superseded blob survives as a history row instead of being deleted.
+    expect(storageDeletes).toEqual([]);
+    expect(inserts.length).toBe(1);
+    expect(inserts[0]).toMatchObject({
+      artifact_id: "a1",
+      version: 3,
+      title: "Old title",
+      storage_id: "st_old",
+      size: 100,
+      published_at: 2000,
+    });
+    expect(patches[0].patch).toMatchObject({
+      storage_id: "st_new",
+      title: "New title",
+      size: 200,
+      version: 4,
+      content_hash: "hash_new",
+    });
+  });
+
+  test("byte-identical republish is a no-op that drops the new blob", async () => {
+    const { ctx, patches, storageDeletes, inserts } = makeCtx([
+      { ...existingRow, content_hash: "same" },
+    ]);
+    const result = await (upsertFromPublish as any)._handler(ctx, {
+      user_id: "u1",
+      storage_id: "st_new",
+      title: "New title",
+      size: 100,
+      source_path: "/tmp/report.html",
+      content_hash: "same",
+    });
+    expect(result.version).toBe(3);
+    expect(result.unchanged).toBe(true);
+    expect(storageDeletes).toEqual(["st_new"]);
+    expect(patches.length).toBe(0);
     expect(inserts.length).toBe(0);
-    expect(patches[0].patch).toMatchObject({ storage_id: "st_new", title: "New title", size: 200, version: 4 });
+  });
+
+  test("history beyond the cap prunes the oldest snapshots", async () => {
+    const versionRows = Array.from({ length: 21 }, (_, i) => ({
+      _id: `v${i + 1}`,
+      artifact_id: "a1",
+      version: i + 1,
+      title: `T${i + 1}`,
+      storage_id: `st_v${i + 1}`,
+      size: 10,
+      published_at: 1000 + i,
+    }));
+    const { ctx, deletes, storageDeletes } = makeCtx([
+      { ...existingRow, version: 22 },
+      ...versionRows,
+    ]);
+    await (upsertFromPublish as any)._handler(ctx, {
+      user_id: "u1",
+      storage_id: "st_new",
+      title: "New",
+      size: 5,
+      source_path: "/tmp/report.html",
+      content_hash: "h",
+    });
+    // 21 existing + 1 new snapshot = 22 → two oldest pruned down to the cap of 20.
+    expect(deletes).toEqual(["v1", "v2"]);
+    expect(storageDeletes).toEqual(["st_v1", "st_v2"]);
   });
 
   test("a different user's identical path creates a separate artifact", async () => {
@@ -175,6 +237,14 @@ describe("deleteFromCLI", () => {
     expect(storageDeletes).toEqual(["st_old"]);
   });
 
+  test("delete also removes history rows and their blobs", async () => {
+    const past = { _id: "v1", artifact_id: "a1", version: 2, title: "Old", storage_id: "st_v2", size: 10, published_at: 1500 };
+    const { ctx, deletes, storageDeletes } = ctxWithAuth([{ ...existingRow }, past]);
+    await (deleteFromCLI as any)._handler(ctx, { api_token: "t", target: "abcdefghijkl" });
+    expect(deletes.sort()).toEqual(["a1", "v1"]);
+    expect(storageDeletes.sort()).toEqual(["st_old", "st_v2"]);
+  });
+
   test("deletes by path basename when unambiguous", async () => {
     const { ctx, deletes } = ctxWithAuth([{ ...existingRow }]);
     const result = await (deleteFromCLI as any)._handler(ctx, { api_token: "t", target: "report.html" });
@@ -226,5 +296,37 @@ describe("brandArtifactHtml", () => {
   test("carries the share url into the copy button", () => {
     const out = brandArtifactHtml("<body></body>", opts);
     expect(out).toContain('data-url="https://codecast.sh/a/x1"');
+  });
+
+  test("without metaUrl there is no version chip and no polling config", () => {
+    const out = brandArtifactHtml("<body></body>", opts);
+    expect(out).not.toContain('id="__cc_ver"');
+    expect(out).toContain('"metaUrl":""');
+  });
+
+  test("with metaUrl renders the version chip and embeds versions for the script", () => {
+    const out = brandArtifactHtml("<body></body>", {
+      ...opts,
+      version: 5,
+      currentVersion: 5,
+      metaUrl: "https://convex.codecast.sh/cli/a/x1?meta=1",
+    });
+    expect(out).toContain('id="__cc_ver"');
+    expect(out).toContain(">v5 ▾<");
+    expect(out).toContain('"metaUrl":"https://convex.codecast.sh/cli/a/x1?meta=1"');
+    expect(out).toContain('"version":5');
+    expect(out).toContain('"currentVersion":5');
+    expect(out).not.toContain('id="__cc_latest"');
+  });
+
+  test("an old version shows the old marker and the latest link", () => {
+    const out = brandArtifactHtml("<body></body>", {
+      ...opts,
+      version: 2,
+      currentVersion: 5,
+      metaUrl: "https://convex.codecast.sh/cli/a/x1?meta=1",
+    });
+    expect(out).toContain(">v2 (old) ▾<");
+    expect(out).toContain('id="__cc_latest"');
   });
 });
