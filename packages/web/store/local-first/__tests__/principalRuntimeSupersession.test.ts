@@ -6,6 +6,7 @@ import { DexiePrincipalStoreFactory } from "../persistence/dexieAdapter";
 import {
   DexieLauncherStore,
   launcherDatabaseName,
+  type LauncherStore,
 } from "../persistence/launcher";
 import { PrincipalStoreFenceError } from "../persistence/adapter";
 import { PrincipalRuntime, type PrincipalRuntimeHooks } from "../principalRuntime";
@@ -22,7 +23,7 @@ type HydrateBehavior = (input: {
   isCurrent: () => boolean;
 }) => Promise<boolean>;
 
-function makeRuntime(launcher: DexieLauncherStore, deployment: string) {
+function makeRuntime(launcher: LauncherStore, deployment: string) {
   const hydrateQueue: HydrateBehavior[] = [];
   const calls = { bind: 0, unbind: 0 };
   const hooks: PrincipalRuntimeHooks = {
@@ -74,6 +75,48 @@ async function waitFor(
 }
 
 describe("PrincipalRuntime supersession discipline", () => {
+  test("a same-binding launcher observation cannot cancel startup before generation adoption", async () => {
+    const deployment = `runtime-startup-echo-${randomUUID()}`;
+    const principalKey = randomUUID() as OpaquePrincipalKey;
+    const launcher = new DexieLauncherStore(deployment, () => principalKey);
+    const credential = randomUUID() as CredentialBinding;
+    await verifyThenSimulateReload(launcher, deployment, credential);
+    let releaseResolve!: () => void;
+    const resolveGate = new Promise<void>((resolve) => { releaseResolve = resolve; });
+    const delayedLauncher: LauncherStore = {
+      read: async () => await launcher.read(),
+      resolveOffline: async (binding) => {
+        await resolveGate;
+        return await launcher.resolveOffline(binding);
+      },
+      activateVerified: async (binding) => await launcher.activateVerified(binding),
+      lock: async (options) => await launcher.lock(options),
+      markLegacyQuarantined: async () => await launcher.markLegacyQuarantined(),
+      setLegacyQuarantineStatus: async (status) => await launcher.setLegacyQuarantineStatus(status),
+      subscribe: (listener) => launcher.subscribe(listener),
+      close: () => launcher.close(),
+    };
+    const { runtime } = makeRuntime(delayedLauncher, deployment);
+    try {
+      const opened = runtime.resolveOffline(credential);
+      await waitFor(() => runtime.getSnapshot().phase === "resolving", "phase resolving");
+
+      // This is the fresh-tab window: the runtime still says generation 0,
+      // while the durable same-binding launcher is already on a later one.
+      await runtime.reconcileLauncherGeneration();
+      expect(runtime.getSnapshot().phase).toBe("resolving");
+      releaseResolve();
+
+      expect(await opened).toBe(true);
+      expect(runtime.getSnapshot().phase).toBe("offline-ready");
+    } finally {
+      releaseResolve();
+      await runtime.lock({ purge: true, removeActiveBinding: true, reason: "test-cleanup" });
+      runtime.close();
+      await Dexie.delete(launcherDatabaseName(deployment));
+    }
+  });
+
   // The launcher's own subscription echoes a tick after resolve touches the
   // launcher, landing while the install is mid-hydration in phase "opening".
   // Reconciliation against an UNCHANGED durable generation must leave the
